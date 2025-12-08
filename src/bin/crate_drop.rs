@@ -31,12 +31,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     visible: true,
                     ..default()
                 }),
+                primary_cursor_options: None,
                 exit_condition: ExitCondition::OnPrimaryClosed,
                 close_when_requested: true,
             })
         )
         .add_plugins((
-            EguiPlugin { enable_multipass_for_primary_context: true },
+            EguiPlugin::default(),
         ))
         .init_resource::<State>()
         .add_systems(EguiPrimaryContextPass, ui)
@@ -66,8 +67,8 @@ fn ui(
     mut state: ResMut<State>,
     mut contexts: EguiContexts,
 ) {
-    let ctx = contexts.try_ctx_mut();
-    if ctx.is_none() {
+    let ctx = contexts.ctx_mut();
+    if ctx.is_err() {
         return;
     }
     let ctx = ctx.unwrap();
