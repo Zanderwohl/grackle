@@ -1,8 +1,8 @@
  use bevy::app::App;
  use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
  use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, PrimaryWindow};
-use bevy_egui::{egui, EguiContextPass, EguiContexts};
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use crate::editor::input::{CurrentKeyboardInput, CurrentMouseInput};
 use crate::editor::multicam::Multicam;
 use crate::get;
@@ -17,29 +17,23 @@ impl Plugin for MovementPlugin {
                 Self::handle,
                 )
             )
-            .add_systems(EguiContextPass, Self::debug_window)
+            .add_systems(EguiPrimaryContextPass, Self::debug_window)
         ;
     }
 }
 
 impl MovementPlugin {
     fn handle(
-        mut window: Query<&mut Window, With<PrimaryWindow>>,
+        mut cursor_options: Single<&mut CursorOptions, With<PrimaryWindow>>,
         settings: Res<MovementSettings>,
         mouse_input: Res<CurrentMouseInput>,
         keyboard_input: Res<CurrentKeyboardInput>,
         mut cameras: Query<(Entity, &mut Transform, &GlobalTransform, &Multicam, &mut Projection, &Camera)>,
-        mut evr_scroll: EventReader<MouseWheel>,
+        mut evr_scroll: MessageReader<MouseWheel>,
     ) {
-        let mut window = window.single_mut();
-        if window.is_err() {
-            return;
-        }
-        let mut window = window.unwrap();
-        
         if mouse_input.started_in_camera.is_none() {
-            window.cursor_options.grab_mode = CursorGrabMode::None;
-            window.cursor_options.visible = true;
+            cursor_options.grab_mode = CursorGrabMode::None;
+            cursor_options.visible = true;
         }
 
         // For now, let's make middle click orbit for 3d cams and turn for 2d cam
@@ -48,8 +42,8 @@ impl MovementPlugin {
             if let Some(button) = mouse_input.pressed {
                 if button == MouseButton::Middle {
                     // grab and hold mouse
-                    window.cursor_options.grab_mode = CursorGrabMode::Locked;
-                    window.cursor_options.visible = false;
+                    cursor_options.grab_mode = CursorGrabMode::Locked;
+                    cursor_options.visible = false;
 
                     for (entity, mut transform, global_transform, multicam, mut projection, camera) in &mut cameras {
                         if cam_id == entity {
@@ -156,8 +150,8 @@ impl MovementPlugin {
         mut contexts: EguiContexts,
         mut settings: ResMut<MovementSettings>,
     ) {
-        let ctx = contexts.try_ctx_mut();
-        if ctx.is_none() { return; }
+        let ctx = contexts.ctx_mut();
+        if ctx.is_err() { return; }
         let ctx = ctx.unwrap();
         
         if !settings.debug_window {

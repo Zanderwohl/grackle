@@ -1,6 +1,6 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContextPass, EguiContexts};
+use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use bevy_egui::egui::{Context, Widget};
 use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
@@ -20,7 +20,7 @@ impl Plugin for EditorStepsPlugin {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<EditorActions>()
-            .add_systems(EguiContextPass, EditorActions::floating_ui)
+            .add_systems(EguiPrimaryContextPass, EditorActions::floating_ui)
         ;
     }
 }
@@ -116,8 +116,8 @@ impl EditorActions {
     }
     
     fn floating_ui(mut contexts: EguiContexts, mut actions: ResMut<Self>, mut gizmos: Gizmos,) {
-        let ctx = contexts.try_ctx_mut();
-        if ctx.is_none() {
+        let ctx = contexts.ctx_mut();
+        if ctx.is_err() {
             return;
         }
         let ctx = ctx.unwrap();

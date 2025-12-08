@@ -1,6 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContextPass, EguiContexts};
+use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use bevy_egui::egui::Ui;
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter};
@@ -28,7 +28,7 @@ impl Plugin for ToolPlugin {
             .add_plugins(MovementPlugin)
             .add_plugins(SelectionPlugin)
             // .add_plugins(RoomPlugin)
-            // .add_systems(EguiContextPass, Self::toolbar)
+            // .add_systems(EguiPrimaryContextPass, Self::toolbar)
         ;
     }
 }
@@ -67,8 +67,8 @@ impl ToolPlugin {
         current_tool: Res<State<Tools>>,
         mut next_tool: ResMut<NextState<Tools>>,
     ) {
-        let ctx = contexts.try_ctx_mut();
-        if ctx.is_none() { return; }
+        let ctx = contexts.ctx_mut();
+        if ctx.is_err() { return; }
         let ctx = ctx.unwrap();
 
         egui::Window::new(get!("tools.title")).show(ctx, |ui| {

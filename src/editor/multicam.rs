@@ -1,12 +1,13 @@
-use bevy::core_pipeline::bloom::Bloom;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::diagnostic::FrameCount;
 use bevy::ecs::query::QuerySingleError;
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
-use bevy::render::camera::Viewport;
-use bevy::render::view::RenderLayers;
+use bevy::camera::{Viewport};
+use bevy::camera::visibility::RenderLayers;
+use bevy::render::view::Hdr;
 use bevy::window::{PrimaryWindow, WindowResized};
-use bevy_egui::{egui, EguiContextPass, EguiContexts};
+use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use bevy_vector_shapes::prelude::*;
 use crate::common::painter;
 use crate::tool::selection::EditorSelectable;
@@ -77,8 +78,8 @@ impl Plugin for MulticamPlugin {
                 Self::debug_boxes,
             ))
             // Global transforms are propagated from transforms during PostUpdate, so we need to draw the camera after that.
-            .add_systems(PostUpdate, Self::draw_camera_gizmos.after(TransformSystem::TransformPropagate))
-            .add_systems(EguiContextPass, Self::debug_window)
+            .add_systems(PostUpdate, Self::draw_camera_gizmos.after(TransformSystems::Propagate))
+            .add_systems(EguiPrimaryContextPass, Self::debug_window)
         ;
     }
 }
@@ -116,10 +117,10 @@ impl MulticamPlugin {
             Camera2d::default(),
             GlobalTransform::default(),
             Camera {
-                hdr: true,
                 order: (cameras_len + 1) as isize,
                 ..Default::default()
             },
+            Hdr,
             RenderLayers::layer(31)
             /*Multicam {
                 name: get!("viewport.ui"),
@@ -133,10 +134,10 @@ impl MulticamPlugin {
                 .spawn((
                     Camera3d::default(),
                     Camera {
-                        hdr: true,
                         order: (cameras_len - idx) as isize,
                         ..Default::default()
                     },
+                    Hdr,
                     camera_pos,
                     Bloom::NATURAL,
                     Tonemapping::TonyMcMapface,
@@ -281,7 +282,7 @@ impl MulticamPlugin {
 
     fn set_camera_viewports(
         windows: Query<&Window, With<PrimaryWindow>>,
-        mut resize_events: EventReader<WindowResized>,
+        mut resize_events: MessageReader<WindowResized>,
         mut cameras: Query<(&mut Camera, &Multicam)>,
         state: Res<MulticamState>,
         frames: Res<FrameCount>,
@@ -342,8 +343,8 @@ impl MulticamPlugin {
         mut state: ResMut<MulticamState>,
         mut contexts: EguiContexts,
     ) {
-        let ctx = contexts.try_ctx_mut();
-        if ctx.is_none() { return; }
+        let ctx = contexts.ctx_mut();
+        if ctx.is_err() { return; }
         let ctx = ctx.unwrap();
         
         if !state.debug_window {
@@ -406,8 +407,8 @@ impl MulticamPlugin {
         mut painter: ShapePainter,
         mut contexts: EguiContexts,
     ) {
-        let ctx = contexts.try_ctx_mut();
-        if ctx.is_none() { return; }
+        let ctx = contexts.ctx_mut();
+        if ctx.is_err() { return; }
         let ctx = ctx.unwrap();
         
         if ctx.is_pointer_over_area() || ctx.wants_pointer_input() {

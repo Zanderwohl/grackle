@@ -3,7 +3,7 @@ use grackle::common;
 
 use bevy::prelude::*;
 use bevy::window::{ExitCondition, PresentMode};
-use bevy_egui::{egui, EguiContextPass, EguiContexts, EguiPlugin};
+use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts, EguiPlugin};
 use bevy_egui::egui::{Frame, ScrollArea, Sense, UiBuilder};
 use grackle::common::item::item::Item;
 use grackle::unlock::{unlock, UnlockProblem};
@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             EguiPlugin { enable_multipass_for_primary_context: true },
         ))
         .init_resource::<State>()
-        .add_systems(EguiContextPass, ui)
+        .add_systems(EguiPrimaryContextPass, ui)
         .run();
     ;
     Ok(())
