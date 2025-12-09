@@ -19,7 +19,7 @@ impl ShowPlugin {
         mut multicam_state: ResMut<MulticamState>,
     ) {
         let ctx = contexts.ctx_mut();
-        if ctx.is_err() { return; }
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
         
         egui::Window::new(get!("show.title")).show(ctx, |ui| {

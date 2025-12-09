@@ -125,9 +125,7 @@ impl EditorPanels {
         mut editor_actions: ResMut<EditorActions>,
     ) -> Result {
         let ctx = contexts.ctx_mut();
-        if ctx.is_err() {
-            return Ok(());
-        }
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return Ok(()); }
         let ctx = ctx.unwrap();
         
         let mut viewer = TabViewerAndResources  {

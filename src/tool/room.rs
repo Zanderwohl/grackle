@@ -555,7 +555,7 @@ impl RoomTool {
         mut create_room: MessageWriter<CreateRoom>,
     ) {
         let ctx = contexts.ctx_mut();
-        if ctx.is_err() { return; }
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
 
         if let (Some(min), Some(max)) = (tool.active_min, tool.active_max) {
@@ -577,7 +577,7 @@ impl RoomTool {
         mut tool: ResMut<Self>,
     ) {
         let ctx = contexts.ctx_mut();
-        if ctx.is_err() { return; }
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
         
         if !tool.debug_window {

@@ -68,9 +68,7 @@ fn ui(
     mut contexts: EguiContexts,
 ) {
     let ctx = contexts.ctx_mut();
-    if ctx.is_err() {
-        return;
-    }
+    if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
     let ctx = ctx.unwrap();
     
     egui::SidePanel::left("left_panel").show(ctx, |ui| {

@@ -68,7 +68,7 @@ impl ToolPlugin {
         mut next_tool: ResMut<NextState<Tools>>,
     ) {
         let ctx = contexts.ctx_mut();
-        if ctx.is_err() { return; }
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
 
         egui::Window::new(get!("tools.title")).show(ctx, |ui| {

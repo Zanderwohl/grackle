@@ -344,7 +344,7 @@ impl MulticamPlugin {
         mut contexts: EguiContexts,
     ) {
         let ctx = contexts.ctx_mut();
-        if ctx.is_err() { return; }
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
         
         if !state.debug_window {
@@ -408,7 +408,7 @@ impl MulticamPlugin {
         mut contexts: EguiContexts,
     ) {
         let ctx = contexts.ctx_mut();
-        if ctx.is_err() { return; }
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
         
         if ctx.is_pointer_over_area() || ctx.wants_pointer_input() {

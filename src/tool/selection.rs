@@ -31,6 +31,7 @@ impl SelectionPlugin {
             state.hovered = None;
             return;
         }
+        info!("select");
         
         let filter = |entity| selectables.get(entity).is_ok();
         let settings = MeshRayCastSettings::default().with_filter(&filter);

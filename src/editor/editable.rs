@@ -117,9 +117,7 @@ impl EditorActions {
     
     fn floating_ui(mut contexts: EguiContexts, mut actions: ResMut<Self>, mut gizmos: Gizmos,) {
         let ctx = contexts.ctx_mut();
-        if ctx.is_err() {
-            return;
-        }
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
         
         if let Some(selected_id) = actions.selected_action {

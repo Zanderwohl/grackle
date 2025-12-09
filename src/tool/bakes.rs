@@ -20,8 +20,8 @@ impl BakePlugin {
         mut room_events: MessageWriter<CalculateRoomGeometry>
     ) {
         let ctx = contexts.ctx_mut();
-        if ctx.is_err() { return; }
-        let ctx = ctx.unwrap();
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
+        let ctx = ctx. unwrap();
         
         egui::Window::new(get!("bakes.title")).show(ctx, |ui| {
            ui.vertical(|ui| {
