@@ -140,6 +140,10 @@ impl EditorPanels {
             .show(ctx, |ui| {
                 DockArea::new(&mut panels.top_tabs)
                     .id(egui::Id::new("egui_dock::DockArea::top"))
+                    .show_close_buttons(false)
+                    .show_leaf_close_all_buttons(false)
+                    .show_leaf_collapse_buttons(false)
+                    .draggable_tabs(false)
                     .show_inside(ui, &mut viewer);
                 //ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::hover());
             })
@@ -151,6 +155,10 @@ impl EditorPanels {
             .show(ctx, |ui| {
                 DockArea::new(&mut panels.left_tabs)
                     .id(egui::Id::new("egui_dock::DockArea::left"))
+                    .show_close_buttons(false)
+                    .show_leaf_close_all_buttons(false)
+                    .show_leaf_collapse_buttons(false)
+                    .draggable_tabs(false)
                     .show_inside(ui, &mut viewer);
                 ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::hover());
             })
@@ -162,6 +170,10 @@ impl EditorPanels {
             .show(ctx, |ui| {
                 DockArea::new(&mut panels.right_tabs)
                     .id(egui::Id::new("egui_dock::DockArea::right"))
+                    .show_close_buttons(false)
+                    .show_leaf_close_all_buttons(false)
+                    .show_leaf_collapse_buttons(false)
+                    .draggable_tabs(false)
                     .show_inside(ui, &mut viewer);
                 ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::hover());
             })
@@ -173,6 +185,10 @@ impl EditorPanels {
             .show(ctx, |ui| {
                 DockArea::new(&mut panels.bottom_tabs)
                     .id(egui::Id::new("egui_dock::DockArea::bottom"))
+                    .show_close_buttons(false)
+                    .show_leaf_close_all_buttons(false)
+                    .show_leaf_collapse_buttons(false)
+                    .draggable_tabs(false)
                     .show_inside(ui, &mut viewer);
                 //ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::hover());
             })
