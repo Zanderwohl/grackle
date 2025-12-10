@@ -286,25 +286,15 @@ impl MulticamPlugin {
     }
 
     fn set_camera_viewports(
-        windows: Query<&Window, With<PrimaryWindow>>,
+        window: Single<&Window, With<PrimaryWindow>>,
         mut resize_events: MessageReader<WindowResized>,
         mut cameras: Query<(&mut Camera, &Multicam)>,
         state: Res<MulticamState>,
         frames: Res<FrameCount>,
     ) {
-        for resize_event in resize_events.read() {
-            if let Ok(window) = windows.get(resize_event.window) {
-                Self::calculate_resize(&mut cameras, &state, window);
-            }
-        }
-        if state.is_changed() {
-            if let Ok(window) = windows.single() {
-                Self::calculate_resize(&mut cameras, &state, window);
-            }
-        }
-        if frames.0 < 3 {
-            let window = windows.single().unwrap();
-            Self::calculate_resize(&mut cameras, &state, window);
+        if frames.0 < 3 || state.is_changed() || !resize_events.is_empty() {
+            resize_events.clear();
+            Self::calculate_resize(&mut cameras, &state, &window);
         }
     }
     
