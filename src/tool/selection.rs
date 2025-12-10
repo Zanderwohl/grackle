@@ -27,12 +27,11 @@ impl SelectionPlugin {
         mut gizmos: Gizmos,
         cursor_options: Single<&CursorOptions, With<PrimaryWindow>>,
     ) {
-        if cursor_options.visible {
+        if !cursor_options.visible {
             state.hovered = None;
             return;
         }
-        info!("select");
-        
+
         let filter = |entity| selectables.get(entity).is_ok();
         let settings = MeshRayCastSettings::default().with_filter(&filter);
         
@@ -128,9 +127,19 @@ pub struct EditorSelectable {
     pub bounding_box: Cuboid,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct SelectionState {
     pub hovered: Option<Entity>,
     pub selected: Option<Entity>,
     debug_probe: bool,
+}
+
+impl Default for SelectionState {
+    fn default() -> Self {
+        Self {
+            hovered: None,
+            selected: None,
+            debug_probe: false,
+        }
+    }
 }
