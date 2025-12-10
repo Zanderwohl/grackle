@@ -148,20 +148,21 @@ impl EditorInputPlugin {
     fn mouse_input(
         mut egui_contexts: EguiContexts,
         primary_window_entity: Query<Entity, With<PrimaryWindow>>,
-        primary_window: Query<&Window, With<PrimaryWindow>>,
+        window: Single<&Window, With<PrimaryWindow>>,
         mouse_buttons: Res<ButtonInput<MouseButton>>,
         mut current_input: ResMut<CurrentMouseInput>,
         cameras: Query<(Entity, &Camera, &GlobalTransform, &Multicam)>,
         pointers: Query<(&PointerId, &PointerLocation)>,
-        mut evr_motion: EventReader<MouseMotion>,
+        mut evr_motion: MessageReader<MouseMotion>,
     ) {
         // We don't want to grab mouse input while over egui windows or panels.
         let ctx = egui_contexts.ctx_mut();
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
+        let ctx = ctx.unwrap();
         if ctx.is_pointer_over_area() || ctx.wants_pointer_input() {
             return;
         }
 
-        let window = primary_window.single().unwrap();
         let (just_pressed, pressed, released) = mouse_precedence(mouse_buttons);
         current_input.just_pressed = just_pressed;
         current_input.pressed = pressed;

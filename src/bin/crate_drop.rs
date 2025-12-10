@@ -3,7 +3,7 @@ use grackle::common;
 
 use bevy::prelude::*;
 use bevy::window::{ExitCondition, PresentMode};
-use bevy_egui::{egui, EguiContextPass, EguiContexts, EguiPlugin};
+use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts, EguiPlugin};
 use bevy_egui::egui::{Frame, ScrollArea, Sense, UiBuilder};
 use grackle::common::item::item::Item;
 use grackle::unlock::{unlock, UnlockProblem};
@@ -31,15 +31,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     visible: true,
                     ..default()
                 }),
+                primary_cursor_options: None,
                 exit_condition: ExitCondition::OnPrimaryClosed,
                 close_when_requested: true,
             })
         )
         .add_plugins((
-            EguiPlugin { enable_multipass_for_primary_context: true },
+            EguiPlugin::default(),
         ))
         .init_resource::<State>()
-        .add_systems(EguiContextPass, ui)
+        .add_systems(EguiPrimaryContextPass, ui)
         .run();
     ;
     Ok(())
@@ -66,10 +67,8 @@ fn ui(
     mut state: ResMut<State>,
     mut contexts: EguiContexts,
 ) {
-    let ctx = contexts.try_ctx_mut();
-    if ctx.is_none() {
-        return;
-    }
+    let ctx = contexts.ctx_mut();
+    if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
     let ctx = ctx.unwrap();
     
     egui::SidePanel::left("left_panel").show(ctx, |ui| {

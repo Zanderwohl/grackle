@@ -1,6 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy::window::{CursorOptions, PrimaryWindow};
 use crate::editor::input::CurrentMouseInput;
 use crate::tool::Tools;
 
@@ -25,19 +25,13 @@ impl SelectionPlugin {
         selectables: Query<&EditorSelectable>,
         mut ray_cast: MeshRayCast,
         mut gizmos: Gizmos,
-        window: Query<&Window, With<PrimaryWindow>>,
+        cursor_options: Single<&CursorOptions, With<PrimaryWindow>>,
     ) {
-        let window = window.single();
-        if window.is_err() {
-            return;
-        }
-        let window = window.unwrap();
-        
-        if !window.cursor_options.visible {
+        if !cursor_options.visible {
             state.hovered = None;
             return;
         }
-        
+
         let filter = |entity| selectables.get(entity).is_ok();
         let settings = MeshRayCastSettings::default().with_filter(&filter);
         
@@ -133,9 +127,19 @@ pub struct EditorSelectable {
     pub bounding_box: Cuboid,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct SelectionState {
     pub hovered: Option<Entity>,
     pub selected: Option<Entity>,
     debug_probe: bool,
+}
+
+impl Default for SelectionState {
+    fn default() -> Self {
+        Self {
+            hovered: None,
+            selected: None,
+            debug_probe: false,
+        }
+    }
 }

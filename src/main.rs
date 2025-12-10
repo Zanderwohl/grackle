@@ -39,12 +39,13 @@ fn main() {
                    visible: true,
                    ..default()
                }),
+                primary_cursor_options: None,
                 exit_condition: ExitCondition::OnPrimaryClosed,
                 close_when_requested: true,
             }),
         )
         .add_plugins((
-            EguiPlugin { enable_multipass_for_primary_context: true },
+            EguiPlugin::default(),
             Shape2dPlugin::default(),
         ))
         .add_plugins((

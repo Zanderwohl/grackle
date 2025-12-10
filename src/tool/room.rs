@@ -2,7 +2,7 @@ use std::cmp::PartialEq;
 use bevy::app::App;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_egui::{egui, EguiContextPass, EguiContexts};
+use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use crate::get;
 use crate::editor::input::{CurrentKeyboardInput, CurrentMouseInput};
 use crate::editor::multicam::{CameraAxis, Multicam};
@@ -14,8 +14,8 @@ impl Plugin for RoomPlugin {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<RoomTool>()
-            .add_event::<CreateRoom>()
-            .add_systems(EguiContextPass, (
+            .add_message::<CreateRoom>()
+            .add_systems(EguiPrimaryContextPass, (
                 RoomTool::debug_window,
                 RoomTool::confirm_window,
             ).run_if(in_state(Tools::Room)))
@@ -110,7 +110,7 @@ impl RoomTool {
         mut tool: ResMut<Self>,
         mut commands: Commands,
         keyboard_input: Res<CurrentKeyboardInput>,
-        mut create_events: EventReader<CreateRoom>,
+        mut create_events: MessageReader<CreateRoom>,
         meshes: ResMut<Assets<Mesh>>,
         materials: ResMut<Assets<StandardMaterial>>,
     ) {
@@ -552,10 +552,10 @@ impl RoomTool {
     fn confirm_window(
         mut tool: ResMut<Self>,
         mut contexts: EguiContexts,
-        mut create_room: EventWriter<CreateRoom>,
+        mut create_room: MessageWriter<CreateRoom>,
     ) {
-        let ctx = contexts.try_ctx_mut();
-        if ctx.is_none() { return; }
+        let ctx = contexts.ctx_mut();
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
 
         if let (Some(min), Some(max)) = (tool.active_min, tool.active_max) {
@@ -576,8 +576,8 @@ impl RoomTool {
         mut contexts: EguiContexts,
         mut tool: ResMut<Self>,
     ) {
-        let ctx = contexts.try_ctx_mut();
-        if ctx.is_none() { return; }
+        let ctx = contexts.ctx_mut();
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
         
         if !tool.debug_window {
@@ -727,13 +727,13 @@ impl Room {
         
         let mut mesh = Mesh::new(
             bevy::render::render_resource::PrimitiveTopology::TriangleList,
-            bevy::render::render_asset::RenderAssetUsages::default(),
+            bevy::asset::RenderAssetUsages::default(),
         );
         
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-        mesh.insert_indices(bevy::render::mesh::Indices::U32(indices));
+        mesh.insert_indices(bevy::mesh::Indices::U32(indices));
         
         mesh
     }
@@ -798,10 +798,10 @@ pub enum IntersectionResult {
     Intersection,
 }
 
-#[derive(Event)]
+#[derive(Message)]
 pub struct CalculateRoomGeometry;
 
-#[derive(Event)]
+#[derive(Message)]
 pub struct CreateRoom;
 
 #[cfg(test)]
@@ -812,8 +812,8 @@ mod tests {
     
     #[test]
     fn test_no_messages() {
-        let a = Entity::from_raw(23);
-        let b = Entity::from_raw(45);
+        let a = Entity::from_bits(23);
+        let b = Entity::from_bits(45);
 
         let good_room = Room::default();
         let no_messages = good_room.messages(a);
@@ -822,8 +822,8 @@ mod tests {
 
     #[test]
     fn test_ghost_message() {
-        let a = Entity::from_raw(23);
-        let b = Entity::from_raw(45);
+        let a = Entity::from_bits(23);
+        let b = Entity::from_bits(45);
         
         let mut ghost_room = Room::default();
         ghost_room.ghost = Some(b);

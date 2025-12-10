@@ -1,7 +1,7 @@
 use bevy_egui::egui::Context;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_egui::{egui, EguiContext, EguiContextPass, EguiContexts};
+use bevy_egui::{egui, EguiContext, EguiPrimaryContextPass, EguiContexts};
 use bevy_egui::egui::{Ui, WidgetText};
 use egui_dock::{DockArea, DockState, TabViewer};
 use strum_macros::Display;
@@ -55,7 +55,7 @@ impl Plugin for EditorPanelPlugin {
         app
             .init_resource::<EditorPanels>()
             .add_systems(Startup, EditorPanels::set_multicam_size)
-            .add_systems(EguiContextPass, EditorPanels::ui)
+            .add_systems(EguiPrimaryContextPass, EditorPanels::ui)
         ;
     }
 }
@@ -124,10 +124,8 @@ impl EditorPanels {
         mut next_tool: ResMut<NextState<Tools>>,
         mut editor_actions: ResMut<EditorActions>,
     ) -> Result {
-        let ctx = contexts.try_ctx_mut();
-        if ctx.is_none() {
-            return Ok(());
-        }
+        let ctx = contexts.ctx_mut();
+        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return Ok(()); }
         let ctx = ctx.unwrap();
         
         let mut viewer = TabViewerAndResources  {
