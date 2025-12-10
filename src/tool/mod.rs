@@ -7,6 +7,7 @@ use strum_macros::{Display, EnumIter};
 use crate::get;
 use crate::tool::bakes::BakePlugin;
 use crate::tool::movement::MovementPlugin;
+use crate::tool::room::RoomPlugin;
 use crate::tool::selection::SelectionPlugin;
 use crate::tool::show::ShowPlugin;
 
@@ -27,8 +28,8 @@ impl Plugin for ToolPlugin {
             .add_plugins(BakePlugin)
             .add_plugins(MovementPlugin)
             .add_plugins(SelectionPlugin)
-            // .add_plugins(RoomPlugin)
-            // .add_systems(EguiPrimaryContextPass, Self::toolbar)
+            .add_plugins(RoomPlugin)
+            .add_systems(EguiPrimaryContextPass, Self::toolbar)
         ;
     }
 }

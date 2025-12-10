@@ -7,7 +7,7 @@ use bevy::camera::{Viewport};
 use bevy::camera::visibility::RenderLayers;
 use bevy::render::view::Hdr;
 use bevy::window::{PrimaryWindow, WindowResized};
-use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
+use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts, EguiGlobalSettings, PrimaryEguiContext};
 use bevy_vector_shapes::prelude::*;
 use crate::common::painter;
 use crate::tool::selection::EditorSelectable;
@@ -72,7 +72,10 @@ impl Plugin for MulticamPlugin {
                 test_scene: self.test_scene,
                 ..Default::default()
             })
-            .add_systems(Startup, Self::setup)
+            .add_systems(Startup, (
+                Self::setup_first_camera,
+                Self::setup.after(Self::setup_first_camera),
+            ))
             .add_systems(Update, (
                 Self::set_camera_viewports,
                 Self::debug_boxes,
@@ -85,12 +88,19 @@ impl Plugin for MulticamPlugin {
 }
 
 impl MulticamPlugin {
+    fn setup_first_camera(mut commands: Commands) {
+
+    }
+
     fn setup(
         mut commands: Commands,
         state: Res<MulticamState>,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
+        mut egui_global_settings: ResMut<EguiGlobalSettings>,
     ) {
+        egui_global_settings.auto_create_primary_context = false;
+
         let perspective = Projection::Perspective(PerspectiveProjection {
             fov: 120.0,
             ..Default::default()
@@ -112,22 +122,6 @@ impl MulticamPlugin {
             (get!("viewport.right"), Transform::from_xyz(0.0, 0.0, dist).looking_at(Vec3::ZERO, Vec3::Y), &orthographic, CameraAxis::Z),
         ];
         let cameras_len = cameras.len();
-
-        commands.spawn((
-            Camera2d::default(),
-            GlobalTransform::default(),
-            Camera {
-                order: (cameras_len + 1) as isize,
-                ..Default::default()
-            },
-            Hdr,
-            RenderLayers::layer(31)
-            /*Multicam {
-                name: get!("viewport.ui"),
-                screen_pos: UVec2::new(0u32, 0u32),
-                id: cameras_len as u32 + 1,
-            },*/
-        ));
 
         for (idx, (camera_name, camera_pos, projection, axis)) in cameras.into_iter().enumerate() {
             let camera = commands
@@ -172,6 +166,18 @@ impl MulticamPlugin {
                         ));
                     });
         }
+
+        commands.spawn((
+            PrimaryEguiContext,
+            Camera2d::default(),
+            GlobalTransform::default(),
+            Camera {
+                order: isize::MAX,
+                ..Default::default()
+            },
+            Hdr,
+            RenderLayers::layer(31)
+        ));
 
         // Only spawn the test cube if test_scene is true
         if state.test_scene {
