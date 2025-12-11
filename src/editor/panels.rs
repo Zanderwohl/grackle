@@ -8,10 +8,15 @@ use strum_macros::Display;
 use crate::editor::editable::EditorActions;
 use crate::editor::multicam::MulticamState;
 use crate::tool::Tools;
+use crate::tool::bakes::{BakePlugin, BakeCommands};
+use crate::tool::show::ShowPlugin;
+use crate::tool::room::CalculateRoomGeometry;
 
 enum TabKinds {
     Empty(String),
     Tools,
+    Bakes,
+    Show,
     Timeline,
 }
 
@@ -19,6 +24,8 @@ struct TabViewerAndResources<'a> {
     current_tool: &'a State<Tools>,
     next_tool: &'a mut NextState<Tools>,
     editor_actions: &'a mut EditorActions,
+    multicam_state: &'a mut MulticamState,
+    bake_commands: &'a mut BakeCommands,
     gizmos: Gizmos<'a, 'a>,
 }
 
@@ -29,6 +36,8 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
         match tab {
             TabKinds::Empty(name) => { name.as_str().into() }
             TabKinds::Tools => { "Tools".into() }
+            TabKinds::Bakes => { "Bake Operations".into() }
+            TabKinds::Show => { "Show/Hide".into() }
             TabKinds::Timeline => { "Timeline".into() }
         }
     }
@@ -39,7 +48,13 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 ui.label(format!("Empty: {}", name));
             }
             TabKinds::Tools => {
-                ui.label("Tools.");
+                Tools::ui(ui, self.current_tool, self.next_tool);
+            }
+            TabKinds::Bakes => {
+                *self.bake_commands = BakePlugin::ui(ui);
+            }
+            TabKinds::Show => {
+                ShowPlugin::ui(ui, self.multicam_state);
             }
             TabKinds::Timeline => {
                 ui.label("Timeline.");
@@ -95,9 +110,9 @@ impl Default for EditorPanels {
 
 impl EditorPanels {
     pub fn new() -> Self {
-        let default_top_tabs = vec![TabKinds::Tools];
-        let default_left_tabs = vec![TabKinds::Timeline, TabKinds::Empty("Alpha".to_owned())];
-        let default_right_tabs = vec![TabKinds::Empty("Beta".to_owned()), TabKinds::Empty("Gamma".to_owned())];
+        let default_top_tabs = vec![TabKinds::Tools,];
+        let default_left_tabs = vec![TabKinds::Timeline, TabKinds::Bakes,];
+        let default_right_tabs = vec![TabKinds::Show, TabKinds::Empty("Beta".to_owned()),];
         let default_bottom_tabs = vec![TabKinds::Empty("Delta".to_owned()), TabKinds::Empty("Epsilon".to_owned())];
         
         Self {
@@ -116,23 +131,28 @@ impl EditorPanels {
     fn ui(
         mut panels: ResMut<Self>,
         mut contexts: EguiContexts,
-        multicam_state: ResMut<MulticamState>,
+        mut multicam_state: ResMut<MulticamState>,
         windows: Query<&Window, With<PrimaryWindow>>,
         
         current_tool: Res<State<Tools>>,
         mut gizmos: Gizmos,
         mut next_tool: ResMut<NextState<Tools>>,
         mut editor_actions: ResMut<EditorActions>,
+        mut room_events: MessageWriter<CalculateRoomGeometry>,
     ) -> Result {
         let ctx = contexts.ctx_mut();
         if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return Ok(()); }
         let ctx = ctx.unwrap();
+        
+        let mut bake_commands = BakeCommands::default();
         
         let mut viewer = TabViewerAndResources  {
             current_tool: & *current_tool,
             gizmos,
             next_tool: &mut *next_tool,
             editor_actions: &mut *editor_actions,
+            multicam_state: &mut *multicam_state,
+            bake_commands: &mut bake_commands,
         };
 
         panels.top_height = egui::TopBottomPanel::top("top_panel")
@@ -195,6 +215,11 @@ impl EditorPanels {
             .response
             .rect
             .height();
+
+        // Handle bake commands
+        if bake_commands.calculate_room_geometry {
+            room_events.write(CalculateRoomGeometry);
+        }
 
         Self::set_multicam_size(panels, multicam_state, windows)
     }

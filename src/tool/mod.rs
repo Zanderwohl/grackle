@@ -1,7 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
-use bevy_egui::egui::Ui;
+use bevy_egui::egui;
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter};
 use crate::get;
@@ -14,8 +13,8 @@ use crate::tool::show::ShowPlugin;
 pub mod selection;
 pub mod room;
 pub mod movement;
-mod bakes;
-mod show;
+pub mod bakes;
+pub mod show;
 
 pub struct ToolPlugin;
 
@@ -29,7 +28,8 @@ impl Plugin for ToolPlugin {
             .add_plugins(MovementPlugin)
             .add_plugins(SelectionPlugin)
             .add_plugins(RoomPlugin)
-            .add_systems(EguiPrimaryContextPass, Self::toolbar)
+            // Toolbar moved to panels.rs Tools tab
+            // .add_systems(EguiPrimaryContextPass, Self::toolbar)
         ;
     }
 }
@@ -54,15 +54,38 @@ pub enum Tools {
 }
 
 impl Tools {
-    fn name(&self) -> String {
+    pub fn name(&self) -> String {
         match self {
             Self::Select => get!("tools.select"),
             Self::Room => get!("tools.room"),
         }
     }
+    
+    pub fn ui(
+        ui: &mut egui::Ui,
+        current_tool: &State<Self>,
+        next_tool: &mut NextState<Self>,
+    ) {
+        egui::Grid::new("tools").show(ui, |ui| {
+            for item in Self::iter() {
+                if current_tool.eq(&item) {
+                    ui.scope(|ui| {
+                        ui.disable();
+                        let _ = ui.button(item.name());
+                    });
+                } else {
+                    if ui.button(item.name()).clicked() {
+                        next_tool.set(item);
+                    }
+                }
+            }
+        });
+    }
 }
 
 impl ToolPlugin {
+    // Toolbar UI moved to panels.rs Tools tab
+    /*
     fn toolbar(
         mut contexts: EguiContexts,
         current_tool: Res<State<Tools>>,
@@ -89,4 +112,5 @@ impl ToolPlugin {
            })
         });
     }
+    */
 }
