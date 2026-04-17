@@ -3,6 +3,7 @@ use std::f32::consts::FRAC_PI_2;
 use bevy::prelude::*;
 use crate::editor::editable::{EditEvent, EditorActionId, EditorActions};
 use crate::editor::input::CurrentMouseInput;
+use crate::tool::tool_helpers::closest_param_on_axis;
 
 pub struct PointDragPlugin;
 
@@ -32,24 +33,6 @@ pub struct PointDragState {
     highlight_materials: [Option<Handle<StandardMaterial>>; 3],
     grabbed_axis: Option<u8>,
     grab_offset: Option<f32>,
-}
-
-fn closest_param_on_axis(ray: Ray3d, axis_origin: Vec3, axis_dir: Vec3) -> Option<f32> {
-    let d1 = *ray.direction;
-    let d2 = axis_dir;
-    let w = ray.origin - axis_origin;
-
-    let a = d1.dot(d1);
-    let b = d1.dot(d2);
-    let c = d2.dot(d2);
-    let d = d1.dot(w);
-    let e = d2.dot(w);
-
-    let denom = a * c - b * b;
-    if denom.abs() < 1e-6 {
-        return None;
-    }
-    Some((a * e - b * d) / denom)
 }
 
 const AXIS_DIRS: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];

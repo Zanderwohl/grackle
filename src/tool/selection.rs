@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use crate::editor::editable::{EditorActionId, EditorActions};
 use crate::editor::input::CurrentMouseInput;
 use crate::tool::point_drag::PointDragState;
+use crate::tool::room::RoomDragState;
 use crate::tool::show::GizmoVisibility;
 use crate::tool::tool_helpers::*;
 use crate::tool::Tools;
@@ -27,7 +28,8 @@ impl SelectionPlugin {
         mouse_input: Res<CurrentMouseInput>,
         mut actions: ResMut<EditorActions>,
         visibility: Res<GizmoVisibility>,
-        drag_state: Res<PointDragState>,
+        point_drag: Res<PointDragState>,
+        room_drag: Res<RoomDragState>,
     ) {
         state.hovered = None;
 
@@ -36,7 +38,8 @@ impl SelectionPlugin {
                 state.hovered = Some((action_id, hit_pos));
             }
 
-            if mouse_input.released == Some(MouseButton::Left) && !drag_state.is_dragging() {
+            let any_drag = point_drag.is_dragging() || room_drag.is_dragging();
+            if mouse_input.released == Some(MouseButton::Left) && !any_drag {
                 let selection = state.hovered.map(|(id, _)| id);
                 actions.select(selection);
             }

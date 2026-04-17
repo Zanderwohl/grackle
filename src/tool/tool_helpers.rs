@@ -8,6 +8,26 @@ use crate::tool::show::GizmoVisibility;
 pub const PICK_RADIUS: f32 = 0.1;
 const SELECT_POINT_RADIUS: f32 = 0.3;
 
+/// Given a camera ray and an infinite line through `axis_origin` in direction
+/// `axis_dir`, returns the parameter `s` such that `axis_origin + s * axis_dir`
+/// is the closest point on that line to the ray.
+/// Returns `None` when the ray is nearly parallel to the axis.
+pub fn closest_param_on_axis(ray: Ray3d, axis_origin: Vec3, axis_dir: Vec3) -> Option<f32> {
+    let d1 = *ray.direction;
+    let d2 = axis_dir;
+    let w = ray.origin - axis_origin;
+    let a = d1.dot(d1);
+    let b = d1.dot(d2);
+    let c = d2.dot(d2);
+    let d = d1.dot(w);
+    let e = d2.dot(w);
+    let denom = a * c - b * b;
+    if denom.abs() < 1e-6 {
+        return None;
+    }
+    Some((a * e - b * d) / denom)
+}
+
 pub fn snap_vec3(v: Vec3, granularity: f32) -> Vec3 {
     Vec3::new(
         f32::ceil(v.x / granularity) * granularity,

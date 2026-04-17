@@ -314,17 +314,20 @@ impl HandleAxis {
 }
 
 #[derive(Resource, Default)]
-struct RoomDragState {
+pub struct RoomDragState {
     handle_mesh: Option<Handle<Mesh>>,
     idle_material: Option<Handle<StandardMaterial>>,
     highlight_material: Option<Handle<StandardMaterial>>,
     tracked_action: Option<EditorActionId>,
-    drag_start: Option<Vec3>,
-    drag_handle_entity: Option<Entity>,
-    drag_handle_start: Option<Vec3>,
+    grabbed_handle: Option<HandleAxis>,
+    grab_offset: Option<f32>,
 }
 
 impl RoomDragState {
+    pub fn is_dragging(&self) -> bool {
+        self.grabbed_handle.is_some()
+    }
+
     fn ensure_assets(
         &mut self,
         meshes: &mut Assets<Mesh>,
@@ -366,9 +369,8 @@ impl RoomDragState {
                 commands.entity(entity).despawn();
             }
             state.tracked_action = should_track;
-            state.drag_start = None;
-            state.drag_handle_entity = None;
-            state.drag_handle_start = None;
+            state.grabbed_handle = None;
+            state.grab_offset = None;
 
             if let (Some(_action_id), Some((min, max))) = (should_track, bounds) {
                 state.ensure_assets(&mut meshes, &mut materials);
@@ -408,7 +410,7 @@ impl RoomDragState {
     }
 
     fn handle_dragging(
-        mut handles: Query<(Entity, &RoomDragHandle, &mut Transform)>,
+        handles: Query<(Entity, &RoomDragHandle)>,
         mut ray_cast: MeshRayCast,
         mouse_input: Res<CurrentMouseInput>,
         mut commands: Commands,
@@ -422,107 +424,116 @@ impl RoomDragState {
         let highlight = state.highlight_material.clone();
         let (Some(idle), Some(highlight)) = (idle, highlight) else { return; };
 
-        let filter = |entity| handles.get(entity).is_ok();
-        let settings = MeshRayCastSettings::default().with_filter(&filter);
+        let ray = mouse_input.world_pos;
+        let mouse_released = mouse_input.released == Some(MouseButton::Left);
+        let mouse_just_pressed = mouse_input.just_pressed && mouse_input.pressed == Some(MouseButton::Left);
 
-        let mut cursor_point = None;
+        if mouse_released || ray.is_none() {
+            if state.grabbed_handle.is_some() {
+                state.grabbed_handle = None;
+                state.grab_offset = None;
+            }
+            Self::restore_all_materials(&handles, &idle, &mut commands);
+            return;
+        }
 
-        if let Some(ray) = mouse_input.world_pos {
-            if let Some((hit_entity, hit_data)) = ray_cast
-                .cast_ray(ray, &settings)
-                .first()
-            {
-                if mouse_input.pressed == Some(MouseButton::Left) {
-                    if state.drag_start.is_none() && mouse_input.just_pressed {
-                        state.drag_handle_entity = Some(*hit_entity);
-                        state.drag_start = Some(hit_data.point);
-                        if let Ok((_, _, tfm)) = handles.get(*hit_entity) {
-                            state.drag_handle_start = Some(tfm.translation);
+        let ray = ray.unwrap();
+
+        if let Some(handle_axis) = state.grabbed_handle {
+            let axis_index = handle_axis.axis_index();
+            let axis_dir = match axis_index {
+                0 => Vec3::X,
+                1 => Vec3::Y,
+                _ => Vec3::Z,
+            };
+
+            let Some((current_min, current_max)) = actions.get_action(&action_id)
+                .and_then(|a| a.object().drag_handle_bounds()) else { return; };
+
+            let face_center = HandleAxis::face_centers(current_min, current_max)
+                .into_iter()
+                .find(|(_, a)| *a == handle_axis)
+                .map(|(pos, _)| pos)
+                .unwrap_or(Vec3::ZERO);
+
+            let axis_origin = face_center - axis_dir * face_center.dot(axis_dir);
+
+            let Some(projected) = closest_param_on_axis(ray, axis_origin, axis_dir) else { return; };
+
+            let offset = match state.grab_offset {
+                Some(off) => off,
+                None => {
+                    let current_value = face_center.dot(axis_dir);
+                    let off = projected - current_value;
+                    state.grab_offset = Some(off);
+                    off
+                }
+            };
+
+            let g = DEFAULT_SNAP_GRANULARITY;
+            let raw = projected - offset;
+            let new_value = match handle_axis {
+                HandleAxis::MinX | HandleAxis::MinY | HandleAxis::MinZ =>
+                    f32::min((raw / g).ceil() * g, match axis_index { 0 => current_max.x, 1 => current_max.y, _ => current_max.z } - g),
+                HandleAxis::MaxX | HandleAxis::MaxY | HandleAxis::MaxZ =>
+                    f32::max((raw / g).ceil() * g, match axis_index { 0 => current_min.x, 1 => current_min.y, _ => current_min.z } + g),
+            };
+
+            if let Some(mut action) = actions.actions_mut().remove(&action_id) {
+                let modified = action.object_mut().drag_handle(
+                    handle_axis.is_max(),
+                    axis_index,
+                    new_value,
+                );
+                if modified {
+                    if let Some(entity) = action.object().entity() {
+                        action.object_mut().apply_to_entity(&mut commands, entity);
+                        edit_events.write(EditEvent {
+                            editor_id: action_id._id(),
+                            action_id,
+                            entity,
+                        });
+                    }
+                }
+                actions.actions_mut().insert(action_id, action);
+            }
+        } else {
+            let filter = |entity: Entity| handles.get(entity).is_ok();
+            let settings = MeshRayCastSettings::default().with_filter(&filter);
+
+            if let Some((hit_entity, _)) = ray_cast.cast_ray(ray, &settings).first() {
+                if let Ok((_, handle)) = handles.get(*hit_entity) {
+                    commands.entity(*hit_entity)
+                        .remove::<MeshMaterial3d<StandardMaterial>>()
+                        .insert(MeshMaterial3d(highlight.clone()));
+                    for (entity, _) in &handles {
+                        if entity != *hit_entity {
+                            commands.entity(entity)
+                                .remove::<MeshMaterial3d<StandardMaterial>>()
+                                .insert(MeshMaterial3d(idle.clone()));
                         }
                     }
-                } else {
-                    state.drag_start = None;
-                    state.drag_handle_entity = None;
-                    state.drag_handle_start = None;
-                }
 
-                cursor_point = Some(hit_data.point);
-
-                commands.entity(*hit_entity)
-                    .remove::<MeshMaterial3d<StandardMaterial>>()
-                    .insert(MeshMaterial3d(highlight.clone()));
-                for (entity, _, _) in &handles {
-                    if entity != *hit_entity {
-                        commands.entity(entity)
-                            .remove::<MeshMaterial3d<StandardMaterial>>()
-                            .insert(MeshMaterial3d(idle.clone()));
+                    if mouse_just_pressed {
+                        state.grabbed_handle = Some(handle.axis);
+                        state.grab_offset = None;
                     }
                 }
             } else {
-                if mouse_input.pressed.is_none() {
-                    state.drag_start = None;
-                    state.drag_handle_entity = None;
-                    state.drag_handle_start = None;
-                }
-                for (entity, _, _) in &handles {
-                    commands.entity(entity)
-                        .remove::<MeshMaterial3d<StandardMaterial>>()
-                        .insert(MeshMaterial3d(idle.clone()));
-                }
-            }
-        } else {
-            state.drag_start = None;
-            state.drag_handle_entity = None;
-            state.drag_handle_start = None;
-            for (entity, _, _) in &handles {
-                commands.entity(entity)
-                    .remove::<MeshMaterial3d<StandardMaterial>>()
-                    .insert(MeshMaterial3d(idle.clone()));
+                Self::restore_all_materials(&handles, &idle, &mut commands);
             }
         }
+    }
 
-        let (Some(drag_start), Some(drag_entity), Some(drag_handle_start)) =
-            (state.drag_start, state.drag_handle_entity, state.drag_handle_start) else { return; };
-
-        let cursor_point = cursor_point.or_else(|| mouse_input.world_pos.map(|r| r.origin));
-        let Some(cursor_point) = cursor_point else { return; };
-
-        let diff = drag_start - cursor_point;
-        let Ok((_, handle, _)) = handles.get(drag_entity) else { return; };
-        let handle_axis = handle.axis;
-
-        let g = DEFAULT_SNAP_GRANULARITY;
-        let raw = drag_handle_start.clone();
-        let other_bound = actions.get_action(&action_id)
-            .and_then(|a| a.object().drag_handle_bounds());
-        let Some((current_min, current_max)) = other_bound else { return; };
-
-        let new_value = match handle_axis {
-            HandleAxis::MinX => f32::min(f32::ceil((raw.x - diff.x) / g) * g, current_max.x - g),
-            HandleAxis::MaxX => f32::max(f32::ceil((raw.x - diff.x) / g) * g, current_min.x + g),
-            HandleAxis::MinY => f32::min(f32::ceil((raw.y - diff.y) / g) * g, current_max.y - g),
-            HandleAxis::MaxY => f32::max(f32::ceil((raw.y - diff.y) / g) * g, current_min.y + g),
-            HandleAxis::MinZ => f32::min(f32::ceil((raw.z - diff.z) / g) * g, current_max.z - g),
-            HandleAxis::MaxZ => f32::max(f32::ceil((raw.z - diff.z) / g) * g, current_min.z + g),
-        };
-
-        if let Some(mut action) = actions.actions_mut().remove(&action_id) {
-            let modified = action.object_mut().drag_handle(
-                handle_axis.is_max(),
-                handle_axis.axis_index(),
-                new_value,
-            );
-            if modified {
-                if let Some(entity) = action.object().entity() {
-                    action.object_mut().apply_to_entity(&mut commands, entity);
-                    edit_events.write(EditEvent {
-                        editor_id: action_id._id(),
-                        action_id,
-                        entity,
-                    });
-                }
-            }
-            actions.actions_mut().insert(action_id, action);
+    fn restore_all_materials(
+        handles: &Query<(Entity, &RoomDragHandle)>,
+        idle: &Handle<StandardMaterial>,
+        commands: &mut Commands,
+    ) {
+        for (entity, _) in handles.iter() {
+            commands.entity(entity)
+                .remove::<MeshMaterial3d<StandardMaterial>>()
+                .insert(MeshMaterial3d(idle.clone()));
         }
     }
 
@@ -535,9 +546,8 @@ impl RoomDragState {
             commands.entity(entity).despawn();
         }
         state.tracked_action = None;
-        state.drag_start = None;
-        state.drag_handle_entity = None;
-        state.drag_handle_start = None;
+        state.grabbed_handle = None;
+        state.grab_offset = None;
     }
 }
 
