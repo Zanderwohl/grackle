@@ -48,12 +48,10 @@ title = "Ein-/Ausblenden"
 cameras = "Kameras"
 ortho_cameras = "Orthografische Kameras"
 perspective_cameras = "Perspektivkameras"
-gizmos = "Gizmos"
-
-[show.gizmos]
-points = "Punkte"
-rooms = "Räume"
-point_lights = "Punktlichter"
+gizmos_title = "Gizmos"
+gizmos_points = "Punkte"
+gizmos_rooms = "Räume"
+gizmos_point_lights = "Punktlichter"
 
 [room.messages]
 ghost = "Raum { me } ist vollständig in { other } enthalten und wird nicht angezeigt!"

@@ -49,12 +49,10 @@ title = "Show/Hide"
 cameras = "Cameras"
 ortho_cameras = "Orthographic Cameras"
 perspective_cameras = "Perspective Cameras"
-gizmos = "Gizmos"
-
-[show.gizmos]
-points = "Points"
-rooms = "Rooms"
-point_lights = "Point Lights"
+gizmos_title = "Gizmos"
+gizmos_points = "Points"
+gizmos_rooms = "Rooms"
+gizmos_point_lights = "Point Lights"
 
 [room.messages]
 ghost = "Room { me } is fully inside { other } and will not appear!"

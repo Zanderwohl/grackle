@@ -43,10 +43,10 @@ impl ShowPlugin {
         ui.checkbox(&mut multicam_state.draw_perspective_cameras, get!("show.perspective_cameras"));
 
         ui.separator();
-        ui.heading(get!("show.gizmos"));
-        ui.checkbox(&mut gizmo_visibility.points, get!("show.gizmos.points"));
-        ui.checkbox(&mut gizmo_visibility.rooms, get!("show.gizmos.rooms"));
-        ui.checkbox(&mut gizmo_visibility.point_lights, get!("show.gizmos.point_lights"));
+        ui.heading(get!("show.gizmos_title"));
+        ui.checkbox(&mut gizmo_visibility.points, get!("show.gizmos_points"));
+        ui.checkbox(&mut gizmo_visibility.rooms, get!("show.gizmos_rooms"));
+        ui.checkbox(&mut gizmo_visibility.point_lights, get!("show.gizmos_point_lights"));
     }
 
     fn draw_visible_gizmos(
