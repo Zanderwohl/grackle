@@ -19,6 +19,7 @@ pub mod room;
 pub mod movement;
 pub mod bakes;
 pub mod show;
+pub mod tool_helpers;
 
 pub struct ToolPlugin;
 
