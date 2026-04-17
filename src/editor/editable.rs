@@ -41,7 +41,7 @@ pub struct EditorObjectTag {
 pub trait EditorObject: Send + Sync {
     fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError>;
     /// Returns true if the object was modified this frame.
-    fn editor_ui(&mut self, ctx: &mut Context) -> bool;
+    fn editor_ui(&mut self, ctx: &mut Context, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool;
     fn type_name(&self) -> String;
     fn debug_gizmos(&self, gizmos: &mut Gizmos);
     fn entity(&self) -> Option<Entity>;
@@ -51,6 +51,8 @@ pub trait EditorObject: Send + Sync {
     fn resolve_references(&mut self, actions: &HashMap<EditorActionId, EditorAction>);
     /// Return the EditorActionIds this object's PointRefs depend on.
     fn parent_ids(&self) -> Vec<EditorActionId>;
+    /// Return the named points this object exposes for referencing.
+    fn available_point_keys(&self) -> Vec<(String, String)>;
 }
 
 #[derive(Message)]
@@ -93,6 +95,9 @@ impl Default for EditorActions {
         
         let p1 = a.take_action(Box::new(GlobalPoint::new(-3.0, 0.0, -3.0)));
         let p2 = a.take_action(Box::new(GlobalPoint::new(3.0, 3.0, 3.0)));
+        a.take_action(Box::new(GlobalPoint::from_point_ref(
+            PointRef::reference_with_offset(p1, 2.0, 5.0, 1.0),
+        )));
         a.take_action(Box::new(EditorRoom::from_points(p1, p2)));
         
         a
@@ -268,16 +273,27 @@ impl EditorActions {
         let ctx = ctx.unwrap();
         
         if let Some(selected_id) = actions.selected_action {
-            let is_active = actions.action_order.iter()
-                .position(|id| *id == selected_id)
-                .is_some_and(|idx| (idx as u64) < actions.cursor);
+            let selected_idx = actions.action_order.iter()
+                .position(|id| *id == selected_id);
+            let is_active = selected_idx.is_some_and(|idx| (idx as u64) < actions.cursor);
 
             if is_active {
-                let action = actions.actions.get_mut(&selected_id).unwrap();
-                let was_edited = action.object.editor_ui(ctx);
+                let selected_idx = selected_idx.unwrap();
+                let prior_order: Vec<EditorActionId> = actions.action_order[..selected_idx].to_vec();
+
+                let mut action = actions.actions.remove(&selected_id).unwrap();
+                let was_edited = action.object.editor_ui(ctx, &actions.actions, &prior_order);
 
                 if was_edited {
-                    if let Some(entity) = action.object.entity() {
+                    action.parents = action.object.parent_ids();
+                }
+                let entity_for_event = if was_edited { action.object.entity() } else { None };
+
+                actions.actions.insert(selected_id, action);
+
+                if was_edited {
+                    actions.select(Some(selected_id));
+                    if let Some(entity) = entity_for_event {
                         edit_events.write(EditEvent {
                             editor_id: selected_id._id(),
                             action_id: selected_id,
@@ -403,96 +419,265 @@ impl EditorAction {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
-pub enum Axis { X, Y, Z }
-
 #[derive(Serialize, Deserialize, Clone)]
 pub enum AxisRef {
     Absolute(f32),
-    Relative {
-        action: EditorActionId,
-        point_key: String,
-        axis: Axis,
-        offset: f32,
-    },
+    Relative(f32),
 }
 
 impl AxisRef {
-    pub fn resolve(&self, actions: &HashMap<EditorActionId, EditorAction>) -> Result<f32, PointResolutionError> {
+    pub fn resolve_with_base(&self, base: Option<f32>) -> Result<f32, PointResolutionError> {
         match self {
             AxisRef::Absolute(v) => Ok(*v),
-            AxisRef::Relative { action, point_key, axis, offset } => {
-                let a = actions.get(action).ok_or(PointResolutionError::NoSuchReferent)?;
-                let point = a.object.get_point(point_key)?;
-                let base = match axis {
-                    Axis::X => point.x,
-                    Axis::Y => point.y,
-                    Axis::Z => point.z,
-                };
-                Ok(base + offset)
-            }
+            AxisRef::Relative(offset) => Ok(base.ok_or(PointResolutionError::NoSuchReferent)? + offset),
         }
     }
 
     pub fn value_mut(&mut self) -> &mut f32 {
         match self {
             AxisRef::Absolute(v) => v,
-            AxisRef::Relative { offset, .. } => offset,
+            AxisRef::Relative(offset) => offset,
         }
     }
 
     pub fn value(&self) -> f32 {
         match self {
             AxisRef::Absolute(v) => *v,
-            AxisRef::Relative { offset, .. } => *offset,
+            AxisRef::Relative(offset) => *offset,
         }
     }
 
-    pub fn referenced_action(&self) -> Option<EditorActionId> {
-        match self {
-            AxisRef::Absolute(_) => None,
-            AxisRef::Relative { action, .. } => Some(*action),
-        }
+    pub fn is_relative(&self) -> bool {
+        matches!(self, AxisRef::Relative(_))
     }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct PointRef {
+    pub reference: Option<EditorActionId>,
+    pub point_key: String,
     pub x: AxisRef,
     pub y: AxisRef,
     pub z: AxisRef,
+    #[serde(skip)]
+    resolved_reference: Option<Vec3>,
 }
 
 impl PointRef {
     pub fn absolute(x: f32, y: f32, z: f32) -> Self {
         Self {
+            reference: None,
+            point_key: String::new(),
             x: AxisRef::Absolute(x),
             y: AxisRef::Absolute(y),
             z: AxisRef::Absolute(z),
+            resolved_reference: None,
         }
     }
 
     pub fn reference(action: EditorActionId) -> Self {
+        Self::reference_with_offset(action, 0.0, 0.0, 0.0)
+    }
+
+    pub fn reference_with_offset(action: EditorActionId, dx: f32, dy: f32, dz: f32) -> Self {
         Self {
-            x: AxisRef::Relative { action, point_key: String::new(), axis: Axis::X, offset: 0.0 },
-            y: AxisRef::Relative { action, point_key: String::new(), axis: Axis::Y, offset: 0.0 },
-            z: AxisRef::Relative { action, point_key: String::new(), axis: Axis::Z, offset: 0.0 },
+            reference: Some(action),
+            point_key: String::new(),
+            x: AxisRef::Relative(dx),
+            y: AxisRef::Relative(dy),
+            z: AxisRef::Relative(dz),
+            resolved_reference: None,
         }
     }
 
-    pub fn resolve(&self, actions: &HashMap<EditorActionId, EditorAction>) -> Result<Vec3, PointResolutionError> {
+    pub fn resolve(&mut self, actions: &HashMap<EditorActionId, EditorAction>) -> Result<Vec3, PointResolutionError> {
+        let base = self.reference
+            .and_then(|id| actions.get(&id))
+            .map(|a| a.object.get_point(&self.point_key))
+            .transpose()?;
+        self.resolved_reference = base;
         Ok(Vec3::new(
-            self.x.resolve(actions)?,
-            self.y.resolve(actions)?,
-            self.z.resolve(actions)?,
+            self.x.resolve_with_base(base.map(|b| b.x))?,
+            self.y.resolve_with_base(base.map(|b| b.y))?,
+            self.z.resolve_with_base(base.map(|b| b.z))?,
         ))
     }
 
     pub fn referenced_actions(&self) -> Vec<EditorActionId> {
-        let mut set = HashSet::new();
-        if let Some(id) = self.x.referenced_action() { set.insert(id); }
-        if let Some(id) = self.y.referenced_action() { set.insert(id); }
-        if let Some(id) = self.z.referenced_action() { set.insert(id); }
-        set.into_iter().collect()
+        self.reference.into_iter().collect()
+    }
+
+    pub fn editor_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        label: &str,
+        actions: &HashMap<EditorActionId, EditorAction>,
+        prior_action_order: &[EditorActionId],
+    ) -> bool {
+        let mut changed = false;
+
+        ui.label(egui::RichText::new(label).strong());
+
+        // Reference action dropdown
+        let ref_label = self.reference
+            .and_then(|id| actions.get(&id))
+            .map(|a| a.type_name_with_id())
+            .unwrap_or_else(|| "None".to_string());
+
+        let mut new_reference = self.reference;
+        let mut ref_changed = false;
+
+        egui::ComboBox::from_id_salt(format!("{}_ref", label))
+            .selected_text(&ref_label)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(self.reference.is_none(), "None").clicked() && self.reference.is_some() {
+                    new_reference = None;
+                    ref_changed = true;
+                }
+                for &id in prior_action_order {
+                    if let Some(action) = actions.get(&id) {
+                        let is_selected = self.reference == Some(id);
+                        if ui.selectable_label(is_selected, action.type_name_with_id()).clicked() && !is_selected {
+                            new_reference = Some(id);
+                            ref_changed = true;
+                        }
+                    }
+                }
+            });
+
+        if ref_changed {
+            let old_base = self.resolved_reference.unwrap_or(Vec3::ZERO);
+
+            if new_reference.is_none() {
+                for (axis, base_val) in [(&mut self.x, old_base.x), (&mut self.y, old_base.y), (&mut self.z, old_base.z)] {
+                    if axis.is_relative() {
+                        *axis = AxisRef::Absolute(base_val + axis.value());
+                    }
+                }
+                self.resolved_reference = None;
+            } else {
+                let new_base = new_reference
+                    .and_then(|id| actions.get(&id))
+                    .map(|a| a.object.get_point(&self.point_key).unwrap_or(Vec3::ZERO))
+                    .unwrap_or(Vec3::ZERO);
+                for (axis, old_b, new_b) in [(&mut self.x, old_base.x, new_base.x), (&mut self.y, old_base.y, new_base.y), (&mut self.z, old_base.z, new_base.z)] {
+                    if axis.is_relative() {
+                        *axis = AxisRef::Relative(axis.value() + old_b - new_b);
+                    }
+                }
+                self.resolved_reference = Some(new_base);
+            }
+            self.reference = new_reference;
+            changed = true;
+        }
+
+        // Point key dropdown (only when a reference is set and it has multiple keys)
+        if let Some(ref_id) = self.reference {
+            if let Some(ref_action) = actions.get(&ref_id) {
+                let keys = ref_action.object.available_point_keys();
+                if keys.len() > 1 {
+                    let current_display = keys.iter()
+                        .find(|(k, _)| k == &self.point_key)
+                        .map(|(_, d)| d.as_str())
+                        .unwrap_or("Default");
+
+                    let mut new_key = self.point_key.clone();
+                    let mut key_changed = false;
+
+                    egui::ComboBox::from_id_salt(format!("{}_key", label))
+                        .selected_text(current_display)
+                        .show_ui(ui, |ui| {
+                            for (key, display) in &keys {
+                                if ui.selectable_label(&self.point_key == key, display).clicked() && &self.point_key != key {
+                                    new_key = key.clone();
+                                    key_changed = true;
+                                }
+                            }
+                        });
+
+                    if key_changed {
+                        let old_base = self.resolved_reference.unwrap_or(Vec3::ZERO);
+                        let new_base = ref_action.object.get_point(&new_key).unwrap_or(Vec3::ZERO);
+                        for (axis, old_b, new_b) in [(&mut self.x, old_base.x, new_base.x), (&mut self.y, old_base.y, new_base.y), (&mut self.z, old_base.z, new_base.z)] {
+                            if axis.is_relative() {
+                                *axis = AxisRef::Relative(axis.value() + old_b - new_b);
+                            }
+                        }
+                        self.point_key = new_key;
+                        self.resolved_reference = Some(new_base);
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        // Per-axis rows: checkbox (relative toggle) + slider
+        let has_ref = self.reference.is_some();
+        let base = self.resolved_reference.unwrap_or(Vec3::ZERO);
+        changed |= axis_row(ui, &mut self.x, "X", has_ref, base.x);
+        changed |= axis_row(ui, &mut self.y, "Y", has_ref, base.y);
+        changed |= axis_row(ui, &mut self.z, "Z", has_ref, base.z);
+
+        changed
+    }
+
+    /// Draw a taxicab path from the reference point to the resolved point,
+    /// stepping along X then Z then Y, with per-axis colored dashed lines.
+    pub fn debug_gizmos(&self, resolved: Vec3, gizmos: &mut Gizmos) {
+        let Some(base) = self.resolved_reference else { return; };
+        const DASH: f32 = 0.15;
+        const GAP: f32 = 0.1;
+
+        let segments: [(&AxisRef, Vec3, Color); 3] = [
+            (&self.x, Vec3::X, Color::srgb_u8(255, 80, 80)),
+            (&self.z, Vec3::Z, Color::srgb_u8(80, 80, 255)),
+            (&self.y, Vec3::Y, Color::srgb_u8(80, 255, 80)),
+        ];
+
+        let mut cursor = base;
+        for (axis_ref, unit, color) in segments {
+            if let AxisRef::Relative(offset) = axis_ref {
+                if offset.abs() < f32::EPSILON { continue; }
+                let next = cursor + unit * *offset;
+                dashed_line(gizmos, cursor, next, color, DASH, GAP);
+                cursor = next;
+            }
+        }
+    }
+}
+
+fn axis_row(ui: &mut egui::Ui, axis_ref: &mut AxisRef, label: &str, has_ref: bool, base_val: f32) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        let mut is_rel = axis_ref.is_relative();
+        if ui.add_enabled(has_ref, egui::Checkbox::new(&mut is_rel, "")).changed() {
+            if is_rel {
+                let abs_val = axis_ref.value();
+                *axis_ref = AxisRef::Relative(abs_val - base_val);
+            } else {
+                let offset = axis_ref.value();
+                *axis_ref = AxisRef::Absolute(base_val + offset);
+            }
+            changed = true;
+        }
+        changed |= ui.add(egui::Slider::new(axis_ref.value_mut(), -100.0..=100.0)
+            .text(label)
+            .clamping(egui::SliderClamping::Never)
+            .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 })
+        ).changed();
+    });
+    changed
+}
+
+fn dashed_line(gizmos: &mut Gizmos, start: Vec3, end: Vec3, color: Color, dash: f32, gap: f32) {
+    let dir = end - start;
+    let len = dir.length();
+    if len < 0.001 { return; }
+    let norm = dir / len;
+    let mut t = 0.0;
+    while t < len {
+        let dash_end = (t + dash).min(len);
+        gizmos.line(start + norm * t, start + norm * dash_end, color);
+        t = dash_end + gap;
     }
 }

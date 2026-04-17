@@ -166,7 +166,7 @@ impl EditorObject for GrackleCuboid {
         Ok(point.resolve_in_bounds(self.min, self.max))
     }
 
-    fn editor_ui(&mut self, ctx: &mut Context) -> bool {
+    fn editor_ui(&mut self, ctx: &mut Context, _actions: &HashMap<EditorActionId, EditorAction>, _prior_action_order: &[EditorActionId]) -> bool {
         egui::Window::new(self.type_name()).show(ctx, |_ui| {
         });
         false
@@ -216,5 +216,25 @@ impl EditorObject for GrackleCuboid {
 
     fn parent_ids(&self) -> Vec<EditorActionId> {
         vec![]
+    }
+
+    fn available_point_keys(&self) -> Vec<(String, String)> {
+        vec![
+            ("centroid".into(), "Centroid".into()),
+            ("top_plane_center".into(), "Top".into()),
+            ("bottom_plane_center".into(), "Bottom".into()),
+            ("front_plane_center".into(), "Front".into()),
+            ("back_plane_center".into(), "Back".into()),
+            ("left_plane_center".into(), "Left".into()),
+            ("right_plane_center".into(), "Right".into()),
+            ("front_bottom_left_corner".into(), "Front Bottom Left".into()),
+            ("front_bottom_right_corner".into(), "Front Bottom Right".into()),
+            ("front_top_left_corner".into(), "Front Top Left".into()),
+            ("front_top_right_corner".into(), "Front Top Right".into()),
+            ("back_bottom_left_corner".into(), "Back Bottom Left".into()),
+            ("back_bottom_right_corner".into(), "Back Bottom Right".into()),
+            ("back_top_left_corner".into(), "Back Top Left".into()),
+            ("back_top_right_corner".into(), "Back Top Right".into()),
+        ]
     }
 }

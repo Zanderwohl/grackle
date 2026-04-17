@@ -42,14 +42,25 @@ impl EditorObject for EditorRoom {
         }
     }
 
-    fn editor_ui(&mut self, ctx: &mut Context) -> bool {
+    fn editor_ui(&mut self, ctx: &mut Context, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool {
+        let mut changed = false;
         egui::Window::new(self.type_name()).show(ctx, |ui| {
-            ui.label(format!("Min: {}", self.resolved_min));
-            ui.label(format!("Max: {}", self.resolved_max));
             let size = self.resolved_max - self.resolved_min;
             ui.label(format!("Size: {}", size));
+            ui.separator();
+            changed |= self.min.editor_ui(ui, "Min", actions, prior_action_order);
+            ui.separator();
+            changed |= self.max.editor_ui(ui, "Max", actions, prior_action_order);
         });
-        false
+        if changed {
+            if let Ok(v) = self.min.resolve(actions) {
+                self.resolved_min = v;
+            }
+            if let Ok(v) = self.max.resolve(actions) {
+                self.resolved_max = v;
+            }
+        }
+        changed
     }
 
     fn type_name(&self) -> String {
@@ -61,23 +72,23 @@ impl EditorObject for EditorRoom {
         let max = self.resolved_max;
         let color = Color::srgb_u8(200, 200, 200);
 
-        // Bottom face (z = min.z)
         gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(max.x, min.y, min.z), color);
         gizmos.line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, max.y, min.z), color);
         gizmos.line(Vec3::new(max.x, max.y, min.z), Vec3::new(min.x, max.y, min.z), color);
         gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, min.y, min.z), color);
 
-        // Top face (z = max.z)
         gizmos.line(Vec3::new(min.x, min.y, max.z), Vec3::new(max.x, min.y, max.z), color);
         gizmos.line(Vec3::new(max.x, min.y, max.z), Vec3::new(max.x, max.y, max.z), color);
         gizmos.line(Vec3::new(max.x, max.y, max.z), Vec3::new(min.x, max.y, max.z), color);
         gizmos.line(Vec3::new(min.x, max.y, max.z), Vec3::new(min.x, min.y, max.z), color);
 
-        // Vertical edges
         gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(min.x, min.y, max.z), color);
         gizmos.line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, min.y, max.z), color);
         gizmos.line(Vec3::new(max.x, max.y, min.z), Vec3::new(max.x, max.y, max.z), color);
         gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, max.y, max.z), color);
+
+        self.min.debug_gizmos(self.resolved_min, gizmos);
+        self.max.debug_gizmos(self.resolved_max, gizmos);
     }
 
     fn entity(&self) -> Option<Entity> {
@@ -113,5 +124,13 @@ impl EditorObject for EditorRoom {
             }
         }
         ids
+    }
+
+    fn available_point_keys(&self) -> Vec<(String, String)> {
+        vec![
+            ("".into(), "Center".into()),
+            ("min".into(), "Min".into()),
+            ("max".into(), "Max".into()),
+        ]
     }
 }

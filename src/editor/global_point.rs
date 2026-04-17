@@ -1,8 +1,7 @@
 use bevy::prelude::*;
 use bevy::platform::collections::HashMap;
 use bevy_egui::egui;
-use bevy_egui::egui::{Context, Slider, SliderClamping};
-use bevy_egui::egui::style::HandleShape;
+use bevy_egui::egui::Context;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
 use crate::editor::editable::{EditorAction, EditorActionId, EditorObject, PointRef};
@@ -23,31 +22,15 @@ impl EditorObject for GlobalPoint {
         Ok(self.resolved_location)
     }
 
-    fn editor_ui(&mut self, ctx: &mut Context) -> bool {
+    fn editor_ui(&mut self, ctx: &mut Context, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool {
         let mut changed = false;
         egui::Window::new(self.type_name()).show(ctx, |ui| {
-            changed |= ui.add(Slider::new(self.location.x.value_mut(), -100.0..=100.0)
-                .text("x")
-                .clamping(SliderClamping::Never)
-                .handle_shape(HandleShape::Rect { aspect_ratio: 1.0 })
-            ).changed();
-            changed |= ui.add(Slider::new(self.location.y.value_mut(), -100.0..=100.0)
-                .text("y")
-                .clamping(SliderClamping::Never)
-                .handle_shape(HandleShape::Rect { aspect_ratio: 1.0 })
-            ).changed();
-            changed |= ui.add(Slider::new(self.location.z.value_mut(), -100.0..=100.0)
-                .text("z")
-                .clamping(SliderClamping::Never)
-                .handle_shape(HandleShape::Rect { aspect_ratio: 1.0 })
-            ).changed();
+            changed |= self.location.editor_ui(ui, "Location", actions, prior_action_order);
         });
         if changed {
-            self.resolved_location = Vec3::new(
-                self.location.x.value(),
-                self.location.y.value(),
-                self.location.z.value(),
-            );
+            if let Ok(v) = self.location.resolve(actions) {
+                self.resolved_location = v;
+            }
         }
         changed
     }
@@ -58,6 +41,7 @@ impl EditorObject for GlobalPoint {
     
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         gizmos.sphere(Isometry3d::from_translation(self.resolved_location), 0.2, Color::srgb_u8(0, 255, 0));
+        self.location.debug_gizmos(self.resolved_location, gizmos);
     }
 
     fn entity(&self) -> Option<Entity> {
@@ -81,6 +65,10 @@ impl EditorObject for GlobalPoint {
     fn parent_ids(&self) -> Vec<EditorActionId> {
         self.location.referenced_actions()
     }
+
+    fn available_point_keys(&self) -> Vec<(String, String)> {
+        vec![("".into(), "Point".into())]
+    }
 }
 
 impl GlobalPoint {
@@ -88,6 +76,14 @@ impl GlobalPoint {
         Self {
             location: PointRef::absolute(x, y, z),
             resolved_location: Vec3::new(x, y, z),
+            entity: None,
+        }
+    }
+
+    pub fn from_point_ref(location: PointRef) -> Self {
+        Self {
+            location,
+            resolved_location: Vec3::ZERO,
             entity: None,
         }
     }
