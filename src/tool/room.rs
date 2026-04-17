@@ -1,14 +1,14 @@
-use std::cmp::PartialEq;
 use bevy::app::App;
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
-use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
-use crate::common::cuboid::CuboidPoint;
-use crate::get;
-use crate::editor::editable::{EditorActions, EditorObjectTag};
-use crate::editor::input::{CurrentKeyboardInput, CurrentMouseInput};
+use crate::editor::editable::{EditorActionId, EditorActions, PointRef};
+use crate::editor::editor_room::EditorRoom;
+use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::{CameraAxis, Multicam};
+use crate::get;
 use crate::tool::Tools;
+
+const PICK_RADIUS: f32 = 0.1;
+const DEFAULT_SNAP_GRANULARITY: f32 = 0.1;
 
 pub struct RoomPlugin;
 
@@ -16,612 +16,363 @@ impl Plugin for RoomPlugin {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<RoomTool>()
-            .add_message::<CreateRoom>()
-            .add_systems(EguiPrimaryContextPass, (
-                RoomTool::debug_window,
-                RoomTool::confirm_window,
-            ).run_if(in_state(Tools::Room)))
-            .add_systems(Startup, RoomTool::init)
             .add_systems(Update, (
                 RoomTool::interface,
-                RoomTool::draw_active,
-                RoomTool::draw_handles,
+                RoomTool::draw_gizmos,
                 RoomTool::draw_room_bounds,
-                RoomTool::handle_dragging,
-                RoomTool::cancel,
-                RoomTool::create_active_room,
-                ).run_if(in_state(Tools::Room)))
-            .add_systems(OnExit(Tools::Room), RoomTool::despawn_handles)
+            ).chain().run_if(in_state(Tools::Room)))
+            .add_systems(OnExit(Tools::Room), RoomTool::on_exit)
         ;
     }
 }
 
+#[derive(Clone)]
+enum RoomCornerMode {
+    Normal,
+    Picking,
+    RelativeSelected {
+        reference_action: EditorActionId,
+        reference_key: String,
+        reference_resolved: Vec3,
+    },
+}
+
+enum RoomToolMode {
+    PlacingMin(RoomCornerMode),
+    PlacingMax(RoomCornerMode),
+}
+
 #[derive(Resource)]
 struct RoomTool {
-    debug_window: bool,
-    debug_show_points: bool,
-    debug_show_cursor: bool,
+    mode: RoomToolMode,
     last_min: Vec3,
     last_max: Vec3,
-    active_min: Option<Vec3>,
-    active_max: Option<Vec3>,
-    handles_active: bool,
-    handle_mesh: Option<Handle<Mesh>>,
-    handle_idle_material: Option<Handle<StandardMaterial>>,
-    handle_highlight_material: Option<Handle<StandardMaterial>>,
+    cursor: Option<Vec3>,
+    hovered_point: Option<(EditorActionId, String, Vec3)>,
+    min_point: Option<PointRef>,
+    min_resolved: Option<Vec3>,
     snap: bool,
     snap_granularity: f32,
-    drag_start: Option<Vec3>,
-    drag_handle_entity: Option<Entity>,
-    drag_handle_start: Option<Vec3>,
 }
 
 impl Default for RoomTool {
     fn default() -> Self {
         Self {
-            debug_window: true,
-            debug_show_points: false,
-            debug_show_cursor: false,
-            last_min: Vec3::ZERO,
-            last_max: Vec3::new(10., 10., 10.),
-            active_min: None,
-            active_max: None,
-            handles_active: false,
-            handle_mesh: None,
-            handle_idle_material: None,
-            handle_highlight_material: None,
+            mode: RoomToolMode::PlacingMin(RoomCornerMode::Normal),
+            last_min: Vec3::new(-1.0, 0.0, -1.0),
+            last_max: Vec3::new(1.0, 2.0, 1.0),
+            cursor: None,
+            hovered_point: None,
+            min_point: None,
+            min_resolved: None,
             snap: true,
-            snap_granularity: 0.1,
-            drag_start: None,
-            drag_handle_entity: None,
-            drag_handle_start: None,
+            snap_granularity: DEFAULT_SNAP_GRANULARITY,
         }
     }
 }
 
 impl RoomTool {
-    fn init(mut tool: ResMut<Self>) {
-        tool.last_min = Vec3::new(-1.0, 0.0, -1.0);
-        tool.last_max = Vec3::new(1.0, 2.0, 1.0);
+    fn on_exit(mut tool: ResMut<Self>) {
+        tool.mode = RoomToolMode::PlacingMin(RoomCornerMode::Normal);
+        tool.cursor = None;
+        tool.hovered_point = None;
+        tool.min_point = None;
+        tool.min_resolved = None;
     }
-    
-    fn clear(&mut self) {
-        self.active_min = None;
-        self.active_max = None;
-    }
-    
-    fn cancel(mut tool: ResMut<Self>, keyboard_input: Res<CurrentKeyboardInput>) {
-        if keyboard_input.cancel {
-            if tool.active_max.is_some() {
-                tool.active_max = None;
-            } else if tool.active_min.is_some() {
-                tool.active_min = None;
-            }
+
+    fn suggestion(&self) -> Vec3 {
+        match &self.mode {
+            RoomToolMode::PlacingMin(_) => self.last_min,
+            RoomToolMode::PlacingMax(_) => self.last_max,
         }
     }
-    
-    fn create_active_room(
-        mut tool: ResMut<Self>,
-        mut commands: Commands,
-        keyboard_input: Res<CurrentKeyboardInput>,
-        mut create_events: MessageReader<CreateRoom>,
-        mut editor_actions: ResMut<EditorActions>,
-    ) {
-        if !create_events.is_empty() || keyboard_input.confirm {
-            create_events.clear();
-            let new_room = tool.create();
-            if let Some(new_room) = new_room {
-                let id = editor_actions.next_id();
-                commands.spawn((
-                    new_room,
-                    EditorObjectTag { editor_id: id._id() },
-                ));
-            }
-        }
-    }
-    
-    fn create(&mut self) -> Option<Room> {
-        let room = match (self.active_min, self.active_max) {
-            (Some(min), Some(max)) => Some(Room::new(min, max)),
-            _ => None,
-        };
-        if let Some(active_min) = self.active_min {
-            self.last_min = active_min;
-        }
-        if let Some(active_max) = self.active_max {
-            self.last_max = active_max;
-        }
-        self.clear();
-        room
-    }
-    
-    fn set_min(&mut self, x: Option<f32>, y: Option<f32>, z: Option<f32>) {
-        let min = Vec3::new(
-            x.unwrap_or(self.last_min.x),
-            y.unwrap_or(self.last_min.y),
-            z.unwrap_or(self.last_min.z),
-        );
-        self.active_min = Some(min);
-    }
-    
-    fn set_max(&mut self, x: Option<f32>, y: Option<f32>, z: Option<f32>) {
-        if self.active_min.is_none() {
-            self.active_min = Some(self.last_min);
-        }
-        
-        let max = Vec3::new(
-            x.unwrap_or(self.last_max.x),
-            y.unwrap_or(self.last_max.y),
-            z.unwrap_or(self.last_max.z),
-        );
-        self.active_max = Some(max);
-    }
-    
+
     fn interface(
         mut tool: ResMut<Self>,
-        mut gizmos: Gizmos,
-        cameras: Query<(Entity, &Transform, &GlobalTransform, &Multicam, &Projection, &Camera)>,
+        cameras: Query<(Entity, &Multicam)>,
         mouse_input: Res<CurrentMouseInput>,
+        keys: Res<ButtonInput<KeyCode>>,
+        mut actions: ResMut<EditorActions>,
     ) {
-        if tool.debug_show_points {
-            let last_color = Color::srgb_u8(0, 255, 0);
-            let active_color = Color::srgb_u8(0, 255, 255);
-            gizmos.sphere(tool.last_min, 0.1, last_color);
-            gizmos.sphere(tool.last_max, 0.1, last_color);
-            if let Some(active_min) = tool.active_min {
-                gizmos.sphere(active_min, 0.1, active_color);
-            }
-            if let Some(active_max) = tool.active_max {
-                gizmos.sphere(active_max, 0.1, active_color);
-            }
-        }
-        
-        let suggestion = if tool.active_min.is_some() {
-            tool.last_max
-        } else {
-            tool.last_min
-        };
+        let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        let shift_just_pressed = keys.just_pressed(KeyCode::ShiftLeft) || keys.just_pressed(KeyCode::ShiftRight);
+
+        let suggestion = tool.suggestion();
+
+        // Cursor computation
+        tool.cursor = None;
         if let Some(camera_entity) = mouse_input.in_camera {
             if let Some(world_pos) = mouse_input.world_pos {
-                for (entity, tfm, g_tfm, multicam, _, cam) in cameras {
+                for (entity, multicam) in &cameras {
                     if camera_entity == entity && multicam.axis != CameraAxis::None {
-                        let world_pos = world_pos.origin;
-                        if tool.debug_show_cursor {
-                            let color = Color::srgb_u8(0, 0, 255);
-                            gizmos.sphere(world_pos, 0.1, color);
-                        }
-                        
+                        let origin = world_pos.origin;
                         let cursor = match multicam.axis {
-                            CameraAxis::None => panic!("{}", get!("debug.room.invalid_cursor")),
-                            CameraAxis::X => Vec3::new(suggestion.x, world_pos.y, world_pos.z),
-                            CameraAxis::Y => Vec3::new(world_pos.x, suggestion.y, world_pos.z),
-                            CameraAxis::Z => Vec3::new(world_pos.x, world_pos.y, suggestion.z),
+                            CameraAxis::None => unreachable!(),
+                            CameraAxis::X => Vec3::new(suggestion.x, origin.y, origin.z),
+                            CameraAxis::Y => Vec3::new(origin.x, suggestion.y, origin.z),
+                            CameraAxis::Z => Vec3::new(origin.x, origin.y, suggestion.z),
                         };
                         let cursor = if tool.snap {
                             let g = tool.snap_granularity;
                             Vec3::new(
                                 f32::ceil(cursor.x / g) * g,
                                 f32::ceil(cursor.y / g) * g,
-                                f32::ceil(cursor.z / g) * g
+                                f32::ceil(cursor.z / g) * g,
                             )
                         } else {
                             cursor
                         };
-                        if let Some(min) = tool.active_min {
-                            if tool.active_max.is_none() {
-                                let color = Color::srgb_u8(40, 40, 200);
-                                Self::bounds_gizmo(&mut gizmos, min, cursor, color);
-                            }
-                        }
-                        
-                        let color = Color::srgb_u8(255, 0, 0);
-                        if tool.active_min.is_none() {
-                            gizmos.sphere(cursor, 0.2, color);
-                        }
+                        tool.cursor = Some(cursor);
+                    }
+                }
+            }
+        }
 
-                        if let Some(button) = mouse_input.released {
-                            if button == MouseButton::Left {
-                                if tool.active_min.is_none() {
-                                    tool.active_min = Some(cursor);
-                                } else if tool.active_max.is_none() {
-                                    tool.active_max = Some(cursor);
-                                    
-                                    // if anything any min > max, swap them.
-                                    if let (Some(min), Some(max)) = (tool.active_min, tool.active_max) {
-                                        let new_min = Vec3::new(
-                                            f32::min(min.x, max.x),
-                                            f32::min(min.y, max.y),
-                                            f32::min(min.z, max.z),
-                                        );
-                                        let new_max = Vec3::new(
-                                            f32::max(min.x, max.x),
-                                            f32::max(min.y, max.y),
-                                            f32::max(min.z, max.z),
-                                        );
-                                        tool.active_min = Some(new_min);
-                                        tool.active_max = Some(new_max);
-                                    }
-                                }
+        // ESC while placing max: discard min and reset to PlacingMin(Normal)
+        if matches!(tool.mode, RoomToolMode::PlacingMax(_))
+            && keys.just_pressed(KeyCode::Escape)
+        {
+            tool.mode = RoomToolMode::PlacingMin(RoomCornerMode::Normal);
+            tool.min_point = None;
+            tool.min_resolved = None;
+            tool.hovered_point = None;
+            return;
+        }
+
+        // Extract the corner mode (cloned to avoid holding a borrow on tool.mode)
+        let is_placing_min = matches!(tool.mode, RoomToolMode::PlacingMin(_));
+        let corner_mode = match &tool.mode {
+            RoomToolMode::PlacingMin(cm) | RoomToolMode::PlacingMax(cm) => cm.clone(),
+        };
+
+        fn set_mode(tool: &mut RoomTool, is_min: bool, cm: RoomCornerMode) {
+            tool.mode = if is_min {
+                RoomToolMode::PlacingMin(cm)
+            } else {
+                RoomToolMode::PlacingMax(cm)
+            };
+        }
+
+        match corner_mode {
+            RoomCornerMode::Normal => {
+                if shift_held {
+                    set_mode(&mut tool, is_placing_min, RoomCornerMode::Picking);
+                    tool.hovered_point = None;
+                } else if let Some(cursor) = tool.cursor {
+                    if mouse_input.released == Some(MouseButton::Left) {
+                        let pr = PointRef::absolute(cursor.x, cursor.y, cursor.z);
+                        if is_placing_min {
+                            tool.min_point = Some(pr);
+                            tool.min_resolved = Some(cursor);
+                            tool.last_min = cursor;
+                            tool.mode = RoomToolMode::PlacingMax(RoomCornerMode::Normal);
+                        } else {
+                            Self::create_room(&mut tool, &mut actions, pr, cursor);
+                        }
+                    }
+                }
+            }
+            RoomCornerMode::Picking => {
+                if !shift_held {
+                    set_mode(&mut tool, is_placing_min, RoomCornerMode::Normal);
+                    tool.hovered_point = None;
+                    return;
+                }
+
+                tool.hovered_point = None;
+                if let Some(ray) = mouse_input.world_pos {
+                    let mut best_dist = PICK_RADIUS;
+                    let mut best: Option<(EditorActionId, String, Vec3)> = None;
+
+                    for (action_id, action) in actions.active_actions() {
+                        let points = action.object().reference_points_for_ray(&ray);
+                        for (key, pos) in points {
+                            let dist = ray_point_distance(&ray, pos);
+                            if dist < best_dist {
+                                best_dist = dist;
+                                best = Some((action_id, key, pos));
                             }
+                        }
+                    }
+                    tool.hovered_point = best;
+                }
+
+                if mouse_input.released == Some(MouseButton::Left) {
+                    if let Some((action_id, key, resolved)) = tool.hovered_point.take() {
+                        set_mode(&mut tool, is_placing_min, RoomCornerMode::RelativeSelected {
+                            reference_action: action_id,
+                            reference_key: key,
+                            reference_resolved: resolved,
+                        });
+                    }
+                }
+            }
+            RoomCornerMode::RelativeSelected { reference_action, reference_key, reference_resolved } => {
+                if shift_just_pressed {
+                    set_mode(&mut tool, is_placing_min, RoomCornerMode::Normal);
+                    return;
+                }
+
+                if let Some(cursor) = tool.cursor {
+                    if mouse_input.released == Some(MouseButton::Left) {
+                        let d = cursor - reference_resolved;
+                        let mut pr = PointRef::reference_with_offset(reference_action, d.x, d.y, d.z);
+                        if !reference_key.is_empty() {
+                            pr.point_key = reference_key.clone();
+                        }
+                        if is_placing_min {
+                            tool.min_point = Some(pr);
+                            tool.min_resolved = Some(cursor);
+                            tool.last_min = cursor;
+                            tool.mode = RoomToolMode::PlacingMax(RoomCornerMode::Normal);
+                        } else {
+                            Self::create_room(&mut tool, &mut actions, pr, cursor);
                         }
                     }
                 }
             }
         }
     }
-    
+
+    fn create_room(
+        tool: &mut ResMut<Self>,
+        actions: &mut ResMut<EditorActions>,
+        max_point: PointRef,
+        max_resolved: Vec3,
+    ) {
+        if let Some(min_point) = tool.min_point.take() {
+            let room = EditorRoom::from_point_refs(min_point, max_point);
+            let id = actions.take_action(Box::new(room));
+            actions.select(Some(id));
+            tool.last_max = max_resolved;
+            tool.min_resolved = None;
+            tool.mode = RoomToolMode::PlacingMin(RoomCornerMode::Normal);
+        }
+    }
+
+    fn draw_gizmos(
+        tool: Res<RoomTool>,
+        actions: Res<EditorActions>,
+        mouse_input: Res<CurrentMouseInput>,
+        mut gizmos: Gizmos,
+    ) {
+        let corner_mode = match &tool.mode {
+            RoomToolMode::PlacingMin(cm) | RoomToolMode::PlacingMax(cm) => cm,
+        };
+        let is_relative = matches!(corner_mode, RoomCornerMode::RelativeSelected { .. });
+
+        // Preview sphere at cursor
+        if let Some(cursor) = tool.cursor {
+            let color = if is_relative {
+                Color::srgb_u8(0, 220, 220)
+            } else {
+                Color::srgb_u8(255, 220, 0)
+            };
+            gizmos.sphere(Isometry3d::from_translation(cursor), 0.15, color);
+
+            // When placing max, draw the min point and a bounds preview
+            if let (RoomToolMode::PlacingMax(_), Some(min_resolved)) = (&tool.mode, tool.min_resolved) {
+                let min_color = Color::srgb_u8(100, 255, 100);
+                gizmos.sphere(Isometry3d::from_translation(min_resolved), 0.15, min_color);
+                let preview_color = Color::srgb_u8(40, 40, 200);
+                bounds_gizmo(&mut gizmos, min_resolved, cursor, preview_color);
+            }
+
+            // In RelativeSelected mode, draw taxicab dashed path from reference to cursor
+            if let RoomCornerMode::RelativeSelected { reference_resolved, .. } = corner_mode {
+                let base = *reference_resolved;
+                const DASH: f32 = 0.15;
+                const GAP: f32 = 0.1;
+
+                let d = cursor - base;
+                let segments: [(f32, Vec3, Color); 3] = [
+                    (d.x, Vec3::X, Color::srgb_u8(255, 80, 80)),
+                    (d.z, Vec3::Z, Color::srgb_u8(80, 80, 255)),
+                    (d.y, Vec3::Y, Color::srgb_u8(80, 255, 80)),
+                ];
+
+                let mut pos = base;
+                for (offset, unit, seg_color) in segments {
+                    if offset.abs() < f32::EPSILON { continue; }
+                    let next = pos + unit * offset;
+                    dashed_line(&mut gizmos, pos, next, seg_color, DASH, GAP);
+                    pos = next;
+                }
+            }
+        }
+
+        // In Picking mode, draw all reference point candidates
+        if matches!(corner_mode, RoomCornerMode::Picking) {
+            if let Some(ray) = mouse_input.world_pos {
+                let dim_color = Color::srgba(0.5, 0.5, 0.5, 0.4);
+                let highlight_color = Color::srgb_u8(180, 240, 255);
+
+                for (action_id, action) in actions.active_actions() {
+                    let points = action.object().reference_points_for_ray(&ray);
+                    for (key, pos) in &points {
+                        let is_hovered = tool.hovered_point.as_ref()
+                            .is_some_and(|(hid, hkey, _)| *hid == action_id && hkey == key);
+                        let color = if is_hovered { highlight_color } else { dim_color };
+                        gizmos.sphere(Isometry3d::from_translation(*pos), 0.1, color);
+                    }
+                }
+            }
+        }
+    }
+
     fn draw_room_bounds(
         mut gizmos: Gizmos,
         rooms: Query<(Entity, &Room)>,
     ) {
         let color = Color::srgb_u8(100, 100, 100);
         for (_, room) in rooms {
-            Self::bounds_gizmo(&mut gizmos, room.min, room.max, color);
+            bounds_gizmo(&mut gizmos, room.min, room.max, color);
         }
-    }
-
-    fn draw_active(
-        tool: Res<RoomTool>,
-        mut gizmos: Gizmos,
-    ) {
-        match (tool.active_min, tool.active_max) {
-            (Some(min), Some(max)) => {
-                let color = Color::srgb_u8(200, 200, 200);
-                Self::bounds_gizmo(&mut gizmos, min, max, color);
-            }
-            _ => {}
-        }
-    }
-
-    fn bounds_gizmo(gizmos: &mut Gizmos, min: Vec3, max: Vec3, color: Color) {
-        // Bottom face (z = min.z)
-        gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(max.x, min.y, min.z), color);
-        gizmos.line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, max.y, min.z), color);
-        gizmos.line(Vec3::new(max.x, max.y, min.z), Vec3::new(min.x, max.y, min.z), color);
-        gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, min.y, min.z), color);
-
-        // Top face (z = max.z)
-        gizmos.line(Vec3::new(min.x, min.y, max.z), Vec3::new(max.x, min.y, max.z), color);
-        gizmos.line(Vec3::new(max.x, min.y, max.z), Vec3::new(max.x, max.y, max.z), color);
-        gizmos.line(Vec3::new(max.x, max.y, max.z), Vec3::new(min.x, max.y, max.z), color);
-        gizmos.line(Vec3::new(min.x, max.y, max.z), Vec3::new(min.x, min.y, max.z), color);
-
-        // Vertical edges connecting bottom and top faces
-        gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(min.x, min.y, max.z), color);
-        gizmos.line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, min.y, max.z), color);
-        gizmos.line(Vec3::new(max.x, max.y, min.z), Vec3::new(max.x, max.y, max.z), color);
-        gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, max.y, max.z), color);
-    }
-
-    fn centroid(&self) -> Option<Vec3> {
-        match (self.active_min, self.active_max) {
-            (Some(min), Some(max)) => Some((max + min) / 2.0),
-            _ => None,
-        }
-    }
-
-    fn size(&self) -> Vec3 {
-        match (self.active_min, self.active_max) {
-            (Some(min), Some(max)) => max - min,
-            _ => Vec3::ZERO,
-        }
-    }
-
-    fn face_centers(&self) -> Vec<(Vec3, HandleAxis)> {
-        let mut face_centers: Vec<(Vec3, HandleAxis)> = Vec::new();
-        self.centroid().map(|centroid| {
-            let half_size = self.size() / 2.0;
-
-            face_centers.push((Vec3::new(centroid.x + half_size.x, centroid.y, centroid.z), HandleAxis::MaxX));
-            face_centers.push((Vec3::new(centroid.x - half_size.x, centroid.y, centroid.z), HandleAxis::MinX));
-
-            face_centers.push((Vec3::new(centroid.x, centroid.y + half_size.y, centroid.z), HandleAxis::MaxY));
-            face_centers.push((Vec3::new(centroid.x, centroid.y - half_size.y, centroid.z), HandleAxis::MinY));
-
-            face_centers.push((Vec3::new(centroid.x, centroid.y, centroid.z + half_size.z), HandleAxis::MaxZ));
-            face_centers.push((Vec3::new(centroid.x, centroid.y, centroid.z - half_size.z), HandleAxis::MinZ));
-        });
-        face_centers
-    }
-
-    fn draw_handles(
-        mut tool: ResMut<Self>,
-        handles: Query<Entity, With<RoomToolHandle>>,
-        mut gizmos: Gizmos,
-        mut commands: Commands,
-        mut meshes: ResMut<Assets<Mesh>>,
-        mut materials: ResMut<Assets<StandardMaterial>>,
-    ) {
-        let face_centers = tool.face_centers();
-        
-        if let (Some(min), Some(max)) = (tool.active_min, tool.active_max) {
-            // spawn handles
-            if !tool.handles_active {
-                tool.handles_active = true;
-                for (center, axis) in face_centers {
-                    if tool.handle_mesh.is_none() {
-                        let mesh = meshes.add(Cuboid::new(0.3, 0.3, 0.3));
-                        //let idle_material = materials.add(Color::srgb_u8(180, 230, 180));
-                        let idle_material = materials.add(StandardMaterial {
-                            base_color: Color::srgb_u8(180, 230, 180),
-                            emissive: LinearRgba::rgb(0.2, 0.3, 0.2),
-                            ..Default::default()
-                        });
-                        let highlight_material = materials.add(StandardMaterial {
-                            base_color: Color::srgb_u8(220, 255, 255),
-                            emissive: LinearRgba::rgb(0.3, 0.4, 0.4),
-                            ..Default::default()
-                        });
-                        tool.handle_mesh = Some(mesh);
-                        tool.handle_idle_material = Some(idle_material);
-                        tool.handle_highlight_material = Some(highlight_material);
-                    }
-                    
-                    match (&tool.handle_mesh, &tool.handle_idle_material) {
-                        (Some(mesh), Some(color)) => {
-                            commands.spawn((
-                                RoomToolHandle { axis },
-                                Mesh3d(mesh.clone()),
-                                MeshMaterial3d(color.clone()),
-                                Transform::from_translation(center),
-                            ));
-                        }
-                        _ => panic!("{}", get!("room.missing_material"))
-                    }
-                    
-                }
-            }
-        }
-        
-        // Despawn handles as appropriate
-        if tool.active_min.is_none() || tool.active_max.is_none() {
-            tool.handles_active = false;
-            crate::common::systems::despawn_entities_with::<RoomToolHandle>(commands, handles);
-        }
-    }
-    
-    fn handle_dragging(
-        mut handles: Query<(Entity, &RoomToolHandle, &mut Transform)>,
-        window: Query<&Window, With<PrimaryWindow>>,
-        mut ray_cast: MeshRayCast,
-        mouse_input: Res<CurrentMouseInput>,
-        mut commands: Commands,
-        mut tool: ResMut<Self>,
-    ) {
-        let window = window.single();
-        if window.is_err() {
-            return;
-        }
-        let window = window.unwrap();
-        
-        let filter = |entity| handles.get(entity).is_ok();
-        let settings = MeshRayCastSettings::default().with_filter(&filter);
-
-        let mut cursor_point = None;
-
-        if let (Some(idle), Some(highlight)) = (tool.handle_idle_material.clone(), tool.handle_highlight_material.clone()) {
-            if let Some(ray) = mouse_input.world_pos {
-                if let Some((hit_entity, hit_data)) = ray_cast
-                    .cast_ray(ray, &settings)
-                    .first() {
-                    if mouse_input.pressed == Some(MouseButton::Left) {
-                        if tool.drag_start.is_none() && mouse_input.just_pressed {
-                            tool.drag_handle_entity = Some(*hit_entity);
-                            tool.drag_start = Some(hit_data.point);
-                            if let Ok((_, _, tfm)) = handles.get(*hit_entity) {
-                                tool.drag_handle_start = Some(tfm.translation);
-                            }
-                        }
-                    } else { // This is for when the mouse is released
-                        tool.drag_start = None;
-                        tool.drag_handle_entity = None;
-                        tool.drag_handle_start = None;
-                    }
-
-                    cursor_point = Some(hit_data.point);
-
-                    commands.entity(*hit_entity)
-                        .remove::<MeshMaterial3d<StandardMaterial>>()
-                        .insert(MeshMaterial3d(highlight));
-                    for (handle_entity, handle, tfm) in &mut handles {
-                        if handle_entity != *hit_entity {
-                            commands.entity(handle_entity)
-                                .remove::<MeshMaterial3d<StandardMaterial>>()
-                                .insert(MeshMaterial3d(idle.clone()));
-                        }
-                    }
-                } else { // This occurs when the ray hits nothing.
-                    if mouse_input.pressed == None {
-                        tool.drag_start = None;
-                        tool.drag_handle_entity = None;
-                        tool.drag_handle_start = None;
-                        for (handle, _, _) in &handles {
-                            commands.entity(handle)
-                                .remove::<MeshMaterial3d<StandardMaterial>>()
-                                .insert(MeshMaterial3d(idle.clone()));
-                        }
-                    }
-
-                }
-            } else { // this occurs when the mouse is outside and there is no ray.
-                tool.drag_start = None;
-                tool.drag_handle_entity = None;
-                tool.drag_handle_start = None;
-                for (handle, _, _) in &handles {
-                    commands.entity(handle)
-                        .remove::<MeshMaterial3d<StandardMaterial>>()
-                        .insert(MeshMaterial3d(idle.clone()));
-                }
-            }
-        }
-        
-        if let (Some(drag_start), Some(drag_handle_entity), Some(drag_handle_start)) = (tool.drag_start, tool.drag_handle_entity, tool.drag_handle_start) {
-            let cursor_point = match cursor_point {
-                Some(point) => Some(point),
-                None => mouse_input.world_pos.map(|ray| { ray.origin })
-            };
-            if let Some(cursor_point) = cursor_point {
-                let diff = drag_start - cursor_point;
-                for (handle_entity, handle, mut tfm) in &mut handles {
-                    if handle_entity == drag_handle_entity {
-                        info!("{}", diff);
-                        let active_min = tool.active_min.clone().unwrap();
-                        let active_max = tool.active_max.clone().unwrap();
-                        let g = tool.snap_granularity;
-                        match &handle.axis {
-                            HandleAxis::MinX => {
-                                let new_x = f32::min(f32::ceil((drag_handle_start.x - diff.x) / g) * g, active_max.x - g);
-                                info!("{}", new_x);
-                                tool.active_min = Some(Vec3::new(
-                                    new_x,
-                                    active_min.y,
-                                    active_min.z,
-                                ));
-                                tfm.translation.x = new_x;
-                            },
-                            HandleAxis::MaxX => {
-                                let new_x = f32::max(f32::ceil((drag_handle_start.x - diff.x) / g) * g, active_min.x + g);
-                                info!("{}", new_x);
-                                tool.active_max = Some(Vec3::new(
-                                    new_x,
-                                    active_max.y,
-                                    active_max.z,
-                                ));
-                                tfm.translation.x = new_x;
-                            },
-                            HandleAxis::MinY => {
-                                let new_y = f32::min(f32::ceil((drag_handle_start.y - diff.y) / g) * g, active_max.y - g);
-                                info!("{}", new_y);
-                                tool.active_min = Some(Vec3::new(
-                                    active_min.x,
-                                    new_y,
-                                    active_min.z,
-                                ));
-                                tfm.translation.y = new_y;
-                            },
-                            HandleAxis::MaxY => {
-                                let new_y = f32::max(f32::ceil((drag_handle_start.y - diff.y) / g) * g, active_min.y + g);
-                                info!("{}", new_y);
-                                tool.active_max = Some(Vec3::new(
-                                    active_max.x,
-                                    new_y,
-                                    active_max.z,
-                                ));
-                                tfm.translation.y = new_y;
-                            },
-                            HandleAxis::MinZ => {
-                                let new_z = f32::min(f32::ceil((drag_handle_start.z - diff.z) / g) * g, active_max.z - g);
-                                info!("{}", new_z);
-                                tool.active_min = Some(Vec3::new(
-                                    active_min.x,
-                                    active_min.y,
-                                    new_z,
-                                ));
-                                tfm.translation.z = new_z;
-                            },
-                            HandleAxis::MaxZ => {
-                                let new_z = f32::max(f32::ceil((drag_handle_start.z - diff.z) / g) * g, active_min.z + g);
-                                info!("{}", new_z);
-                                tool.active_max = Some(Vec3::new(
-                                    active_max.x,
-                                    active_max.y,
-                                    new_z,
-                                ));
-                                tfm.translation.z = new_z;
-                            },
-                            _ => {}
-                        };
-                        // TODO tfm.translation =
-                    }
-                }
-                let points = tool.face_centers();
-                for (handle_entity, handle, mut tfm) in &mut handles {
-                    for (a, b) in &points {
-                        if b == &handle.axis {
-                            tfm.translation = *a;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn confirm_window(
-        mut tool: ResMut<Self>,
-        mut contexts: EguiContexts,
-        mut create_room: MessageWriter<CreateRoom>,
-    ) {
-        let ctx = contexts.ctx_mut();
-        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
-        let ctx = ctx.unwrap();
-
-        if let (Some(min), Some(max)) = (tool.active_min, tool.active_max) {
-            egui::Window::new(get!("room.confirm.title")).show(ctx, |ui| {
-                if ui.button(get!("room.confirm.confirm")).clicked() {
-                    create_room.write(CreateRoom);
-                }
-            });
-        }
-    }
-
-    fn despawn_handles(handles: Query<Entity, With<RoomToolHandle>>, mut commands: Commands, mut tool: ResMut<Self>) {
-        crate::common::systems::despawn_entities_with::<RoomToolHandle>(commands, handles);
-        tool.handles_active = false;
-    }
-    
-    fn debug_window(
-        mut contexts: EguiContexts,
-        mut tool: ResMut<Self>,
-    ) {
-        let ctx = contexts.ctx_mut();
-        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
-        let ctx = ctx.unwrap();
-        
-        if !tool.debug_window {
-            return;
-        }
-        
-        let active_min = tool.active_min.map(|m| format!("{}", m)).unwrap_or("None".to_owned());
-        let active_max = tool.active_max.map(|m| format!("{}", m)).unwrap_or("None".to_owned());
-        
-        egui::Window::new(get!("debug.room.title")).show(ctx, |ui| {
-            ui.heading(get!("debug.room.state"));
-            ui.label(get!("debug.room.last_min", "x", tool.last_min));
-            ui.label(get!("debug.room.last_max", "x", tool.last_max));
-            ui.label(get!("debug.room.active_min", "x", active_min));
-            ui.label(get!("debug.room.active_max", "x", active_max));
-            
-            ui.heading(get!("debug.room.gizmos"));
-            ui.checkbox(&mut tool.debug_show_points, get!("debug.room.show_points"));
-            ui.checkbox(&mut tool.debug_show_cursor, get!("debug.room.show_cursor"));
-            
-            ui.heading(get!("debug.room.snap.title"));
-            ui.checkbox(&mut tool.snap, get!("debug.room.snap.active"));
-            ui.add(egui::Slider::new(&mut tool.snap_granularity, 0.0..=0.2).text(get!("debug.room.snap.granularity")));
-        });
     }
 }
 
-#[derive(Component)]
-pub struct RoomToolHandle {
-    axis: HandleAxis,
+fn bounds_gizmo(gizmos: &mut Gizmos, min: Vec3, max: Vec3, color: Color) {
+    gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(max.x, min.y, min.z), color);
+    gizmos.line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, max.y, min.z), color);
+    gizmos.line(Vec3::new(max.x, max.y, min.z), Vec3::new(min.x, max.y, min.z), color);
+    gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, min.y, min.z), color);
+
+    gizmos.line(Vec3::new(min.x, min.y, max.z), Vec3::new(max.x, min.y, max.z), color);
+    gizmos.line(Vec3::new(max.x, min.y, max.z), Vec3::new(max.x, max.y, max.z), color);
+    gizmos.line(Vec3::new(max.x, max.y, max.z), Vec3::new(min.x, max.y, max.z), color);
+    gizmos.line(Vec3::new(min.x, max.y, max.z), Vec3::new(min.x, min.y, max.z), color);
+
+    gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(min.x, min.y, max.z), color);
+    gizmos.line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, min.y, max.z), color);
+    gizmos.line(Vec3::new(max.x, max.y, min.z), Vec3::new(max.x, max.y, max.z), color);
+    gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, max.y, max.z), color);
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub enum HandleAxis {
-    MinX,
-    MinY,
-    MinZ,
-    MaxX,
-    MaxY,
-    MaxZ,
+fn ray_point_distance(ray: &Ray3d, point: Vec3) -> f32 {
+    let to_point = point - ray.origin;
+    let dir = Vec3::from(ray.direction);
+    let cross = to_point.cross(dir);
+    cross.length() / dir.length()
+}
+
+fn dashed_line(gizmos: &mut Gizmos, start: Vec3, end: Vec3, color: Color, dash: f32, gap: f32) {
+    let dir = end - start;
+    let len = dir.length();
+    if len < 0.001 { return; }
+    let norm = dir / len;
+    let mut t = 0.0;
+    while t < len {
+        let dash_end = (t + dash).min(len);
+        gizmos.line(start + norm * t, start + norm * dash_end, color);
+        t = dash_end + gap;
+    }
 }
 
 #[derive(Component)]
 pub struct Room {
-    min: Vec3,
-    max: Vec3,
-    ghost: Option<Entity>,  // This is set if this room is completely inside another room.
+    pub min: Vec3,
+    pub max: Vec3,
+    ghost: Option<Entity>,
 }
 
 impl Default for Room {
@@ -641,29 +392,20 @@ impl Room {
     
     
     pub fn mesh(&self) -> Mesh {
-        // Create a mesh which is a rectangular prism
-        // with two corners self.min and self.max
-        // the faces have their normals facing inward.
-        
         let min = self.min;
         let max = self.max;
         
-        // Define the 8 vertices of the box
         let vertices = vec![
-            // Front face (z = min.z)
             [min.x, min.y, min.z], // 0: bottom-left-front
             [max.x, min.y, min.z], // 1: bottom-right-front
             [max.x, max.y, min.z], // 2: top-right-front
             [min.x, max.y, min.z], // 3: top-left-front
-            // Back face (z = max.z)
             [min.x, min.y, max.z], // 4: bottom-left-back
             [max.x, min.y, max.z], // 5: bottom-right-back
             [max.x, max.y, max.z], // 6: top-right-back
             [min.x, max.y, max.z], // 7: top-left-back
         ];
         
-        // Define indices for triangles with inward-facing normals
-        // (counter-clockwise winding when viewed from inside)
         let indices = vec![
             // Front face (z = min.z) - normal points toward +z (inward)
             0, 1, 2, 0, 2, 3,
@@ -679,22 +421,17 @@ impl Room {
             3, 2, 6, 3, 6, 7,
         ];
         
-        // Calculate inward-facing normals for each vertex
-        // Since we want inward normals, we negate the typical outward normals
         let normals = vec![
-            // Front face vertices - inward normal is +z
             [0.0, 0.0, 1.0], // 0
             [0.0, 0.0, 1.0], // 1
             [0.0, 0.0, 1.0], // 2
             [0.0, 0.0, 1.0], // 3
-            // Back face vertices - inward normal is -z
             [0.0, 0.0, -1.0], // 4
             [0.0, 0.0, -1.0], // 5
             [0.0, 0.0, -1.0], // 6
             [0.0, 0.0, -1.0], // 7
         ];
         
-        // Simple UV coordinates - could be improved for better texture mapping
         let uvs = vec![
             [0.0, 0.0], // 0
             [1.0, 0.0], // 1
@@ -748,6 +485,7 @@ impl Room {
         
         extremes
     }
+
     pub fn count_points_inside(&self, points: &Vec<Vec3>) -> usize {
         points.iter().map(|p| self.point_inside(p.clone()) as usize).sum() 
     }
@@ -782,9 +520,6 @@ pub enum IntersectionResult {
 #[derive(Message)]
 pub struct CalculateRoomGeometry;
 
-#[derive(Message)]
-pub struct CreateRoom;
-
 #[cfg(test)]
 mod tests {
     use bevy::ecs::relationship::RelationshipSourceCollection;
@@ -794,7 +529,7 @@ mod tests {
     #[test]
     fn test_no_messages() {
         let a = Entity::from_bits(23);
-        let b = Entity::from_bits(45);
+        let _b = Entity::from_bits(45);
 
         let good_room = Room::default();
         let no_messages = good_room.messages(a);

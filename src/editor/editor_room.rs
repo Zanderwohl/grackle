@@ -32,6 +32,16 @@ impl EditorRoom {
             entity: None,
         }
     }
+
+    pub fn from_point_refs(min: PointRef, max: PointRef) -> Self {
+        Self {
+            min,
+            max,
+            resolved_min: Vec3::ZERO,
+            resolved_max: Vec3::ZERO,
+            entity: None,
+        }
+    }
 }
 
 #[typetag::serde(name = "editor_room")]
