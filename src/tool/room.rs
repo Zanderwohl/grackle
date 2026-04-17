@@ -646,7 +646,7 @@ fn dashed_line(gizmos: &mut Gizmos, start: Vec3, end: Vec3, color: Color, dash: 
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Clone)]
 pub struct Room {
     pub min: Vec3,
     pub max: Vec3,
@@ -667,70 +667,65 @@ impl Room {
             ghost: None,
         }
     }
-    
-    
-    pub fn mesh(&self) -> Mesh {
-        let min = self.min;
-        let max = self.max;
-        
-        let vertices = vec![
-            [min.x, min.y, min.z], // 0: bottom-left-front
-            [max.x, min.y, min.z], // 1: bottom-right-front
-            [max.x, max.y, min.z], // 2: top-right-front
-            [min.x, max.y, min.z], // 3: top-left-front
-            [min.x, min.y, max.z], // 4: bottom-left-back
-            [max.x, min.y, max.z], // 5: bottom-right-back
-            [max.x, max.y, max.z], // 6: top-right-back
-            [min.x, max.y, max.z], // 7: top-left-back
-        ];
-        
-        let indices = vec![
-            // Front face (z = min.z) - normal points toward +z (inward)
-            0, 1, 2, 0, 2, 3,
-            // Back face (z = max.z) - normal points toward -z (inward)
-            4, 6, 5, 4, 7, 6,
-            // Left face (x = min.x) - normal points toward +x (inward)
-            4, 0, 3, 4, 3, 7,
-            // Right face (x = max.x) - normal points toward -x (inward)
-            1, 5, 2, 5, 6, 2,
-            // Bottom face (y = min.y) - normal points toward +y (inward)
-            4, 1, 0, 4, 5, 1,
-            // Top face (y = max.y) - normal points toward -y (inward)
-            3, 2, 6, 3, 6, 7,
-        ];
-        
-        let normals = vec![
-            [0.0, 0.0, 1.0], // 0
-            [0.0, 0.0, 1.0], // 1
-            [0.0, 0.0, 1.0], // 2
-            [0.0, 0.0, 1.0], // 3
-            [0.0, 0.0, -1.0], // 4
-            [0.0, 0.0, -1.0], // 5
-            [0.0, 0.0, -1.0], // 6
-            [0.0, 0.0, -1.0], // 7
-        ];
-        
-        let uvs = vec![
-            [0.0, 0.0], // 0
-            [1.0, 0.0], // 1
-            [1.0, 1.0], // 2
-            [0.0, 1.0], // 3
-            [0.0, 0.0], // 4
-            [1.0, 0.0], // 5
-            [1.0, 1.0], // 6
-            [0.0, 1.0], // 7
-        ];
-        
+
+    /// Bake this room's wall geometry, carving openings where other rooms
+    /// overlap or share walls. Returns a single Mesh with inward-facing normals.
+    pub fn bake_faces(&self, others: &[Room]) -> Mesh {
+        use crate::common::rect_subtract::{Rect2D, subtract_rects};
+
+        let mut vertices: Vec<[f32; 3]> = Vec::new();
+        let mut normals: Vec<[f32; 3]> = Vec::new();
+        let mut uvs: Vec<[f32; 2]> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+
+        for face in RoomFace::enumerate(self) {
+            let mut holes = Vec::new();
+            for other in others {
+                if let Some(clip) = face.clip_rect(other) {
+                    holes.push(clip);
+                }
+            }
+
+            let solid_rects = subtract_rects(&face.rect, &holes);
+
+            for rect in &solid_rects {
+                let base = vertices.len() as u32;
+                let (p0, p1, p2, p3) = face.rect_to_3d(rect);
+                vertices.push(p0.into());
+                vertices.push(p1.into());
+                vertices.push(p2.into());
+                vertices.push(p3.into());
+                let n: [f32; 3] = face.normal.into();
+                normals.extend_from_slice(&[n, n, n, n]);
+
+                let face_u_span = face.rect.max_u - face.rect.min_u;
+                let face_v_span = face.rect.max_v - face.rect.min_v;
+                let u0 = if face_u_span > 0.0 { (rect.min_u - face.rect.min_u) / face_u_span } else { 0.0 };
+                let u1 = if face_u_span > 0.0 { (rect.max_u - face.rect.min_u) / face_u_span } else { 1.0 };
+                let v0 = if face_v_span > 0.0 { (rect.min_v - face.rect.min_v) / face_v_span } else { 0.0 };
+                let v1 = if face_v_span > 0.0 { (rect.max_v - face.rect.min_v) / face_v_span } else { 1.0 };
+                uvs.push([u0, v0]);
+                uvs.push([u1, v0]);
+                uvs.push([u1, v1]);
+                uvs.push([u0, v1]);
+
+                // Two triangles per quad, winding matches the face's inward normal
+                if face.winding_flip {
+                    indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+                } else {
+                    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+                }
+            }
+        }
+
         let mut mesh = Mesh::new(
             bevy::render::render_resource::PrimitiveTopology::TriangleList,
             bevy::asset::RenderAssetUsages::default(),
         );
-        
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
         mesh.insert_indices(bevy::mesh::Indices::U32(indices));
-        
         mesh
     }
     
@@ -784,6 +779,152 @@ impl Room {
             return IntersectionResult::RightEngulfsLeft
         }
         IntersectionResult::Intersection
+    }
+}
+
+/// Represents one face of a room cuboid, projected into a 2D coordinate system.
+struct RoomFace {
+    /// Which axis is fixed (0=X, 1=Y, 2=Z)
+    fixed_axis: u8,
+    /// The value on the fixed axis where this face lives
+    fixed_value: f32,
+    /// The opposite end of the room on the fixed axis
+    opposite_value: f32,
+    /// Whether this is the min or max face on that axis
+    is_max: bool,
+    /// The 2D rectangle in (u, v) space for the two remaining axes
+    rect: crate::common::rect_subtract::Rect2D,
+    /// The inward-facing normal
+    normal: Vec3,
+    /// Whether the triangle winding needs to be flipped for this face
+    winding_flip: bool,
+}
+
+impl RoomFace {
+    fn enumerate(room: &Room) -> [RoomFace; 6] {
+        use crate::common::rect_subtract::Rect2D;
+        [
+            // -X face (left wall), normal +X (inward)
+            RoomFace {
+                fixed_axis: 0, fixed_value: room.min.x, opposite_value: room.max.x, is_max: false,
+                rect: Rect2D::new(room.min.z, room.min.y, room.max.z, room.max.y),
+                normal: Vec3::X,
+                winding_flip: true,
+            },
+            // +X face (right wall), normal -X (inward)
+            RoomFace {
+                fixed_axis: 0, fixed_value: room.max.x, opposite_value: room.min.x, is_max: true,
+                rect: Rect2D::new(room.min.z, room.min.y, room.max.z, room.max.y),
+                normal: Vec3::NEG_X,
+                winding_flip: false,
+            },
+            // -Y face (floor), normal +Y (inward)
+            RoomFace {
+                fixed_axis: 1, fixed_value: room.min.y, opposite_value: room.max.y, is_max: false,
+                rect: Rect2D::new(room.min.x, room.min.z, room.max.x, room.max.z),
+                normal: Vec3::Y,
+                winding_flip: true,
+            },
+            // +Y face (ceiling), normal -Y (inward)
+            RoomFace {
+                fixed_axis: 1, fixed_value: room.max.y, opposite_value: room.min.y, is_max: true,
+                rect: Rect2D::new(room.min.x, room.min.z, room.max.x, room.max.z),
+                normal: Vec3::NEG_Y,
+                winding_flip: false,
+            },
+            // -Z face (front wall), normal +Z (inward)
+            RoomFace {
+                fixed_axis: 2, fixed_value: room.min.z, opposite_value: room.max.z, is_max: false,
+                rect: Rect2D::new(room.min.x, room.min.y, room.max.x, room.max.y),
+                normal: Vec3::Z,
+                winding_flip: false,
+            },
+            // +Z face (back wall), normal -Z (inward)
+            RoomFace {
+                fixed_axis: 2, fixed_value: room.max.z, opposite_value: room.min.z, is_max: true,
+                rect: Rect2D::new(room.min.x, room.min.y, room.max.x, room.max.y),
+                normal: Vec3::NEG_Z,
+                winding_flip: true,
+            },
+        ]
+    }
+
+    /// Returns the 2D clipping rectangle if `other` room overlaps this face.
+    /// Covers both shared-wall (coplanar) and penetration cases,
+    /// but rejects engulfment (other room fully contains this room on the fixed axis).
+    fn clip_rect(&self, other: &Room) -> Option<crate::common::rect_subtract::Rect2D> {
+        let (other_min_fixed, other_max_fixed, other_min_u, other_max_u, other_min_v, other_max_v) =
+            match self.fixed_axis {
+                0 => (other.min.x, other.max.x, other.min.z, other.max.z, other.min.y, other.max.y),
+                1 => (other.min.y, other.max.y, other.min.x, other.max.x, other.min.z, other.max.z),
+                2 => (other.min.z, other.max.z, other.min.x, other.max.x, other.min.y, other.max.y),
+                _ => unreachable!(),
+            };
+
+        // The other room must cross through this face from the exterior side.
+        //
+        // For a max face (e.g., +X at F, interior toward opposite_value < F):
+        //   Shared wall:  other starts at the face and extends outward (other_min == F, other_max > F)
+        //   Penetration:  other straddles the face (other_min < F < other_max)
+        //   Reject if:    other fully contains the room on this axis
+        //                 (other_min <= opposite_value AND other_max >= F)
+        //                 because that means the room is engulfed, not connected.
+        //
+        // For a min face (e.g., -X at F, interior toward opposite_value > F):
+        //   Shared wall:  other_max == F, other_min < F
+        //   Penetration:  other_min < F < other_max
+        //   Same engulfment rejection.
+
+        let straddles = if self.is_max {
+            other_min_fixed <= self.fixed_value && other_max_fixed > self.fixed_value
+        } else {
+            other_min_fixed < self.fixed_value && other_max_fixed >= self.fixed_value
+        };
+
+        if !straddles {
+            return None;
+        }
+
+        // Reject engulfment: other room fully contains this room on the fixed axis
+        let engulfs = if self.is_max {
+            other_min_fixed <= self.opposite_value && other_max_fixed >= self.fixed_value
+        } else {
+            other_min_fixed <= self.fixed_value && other_max_fixed >= self.opposite_value
+        };
+
+        if engulfs {
+            return None;
+        }
+
+        let clip = crate::common::rect_subtract::Rect2D::new(
+            other_min_u, other_min_v,
+            other_max_u, other_max_v,
+        );
+
+        self.rect.intersection(&clip)
+    }
+
+    /// Convert a 2D sub-rectangle back into four 3D vertices on this face's plane.
+    /// Returns corners in order: (min_u, min_v), (max_u, min_v), (max_u, max_v), (min_u, max_v)
+    fn rect_to_3d(&self, r: &crate::common::rect_subtract::Rect2D) -> (Vec3, Vec3, Vec3, Vec3) {
+        match self.fixed_axis {
+            0 => {
+                let x = self.fixed_value;
+                (Vec3::new(x, r.min_v, r.min_u), Vec3::new(x, r.min_v, r.max_u),
+                 Vec3::new(x, r.max_v, r.max_u), Vec3::new(x, r.max_v, r.min_u))
+            }
+            1 => {
+                let y = self.fixed_value;
+                (Vec3::new(r.min_u, y, r.min_v), Vec3::new(r.max_u, y, r.min_v),
+                 Vec3::new(r.max_u, y, r.max_v), Vec3::new(r.min_u, y, r.max_v))
+            }
+            2 => {
+                let z = self.fixed_value;
+                (Vec3::new(r.min_u, r.min_v, z), Vec3::new(r.max_u, r.min_v, z),
+                 Vec3::new(r.max_u, r.max_v, z), Vec3::new(r.min_u, r.max_v, z))
+            }
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -841,5 +982,96 @@ mod tests {
         assert!(!room.point_inside(Vec3::new(0.5, -1.1, 0.5)));
         assert!(!room.point_inside(Vec3::new(-1.1, 0.5, 0.5)));
         assert!(!room.point_inside(Vec3::new(0.5, 0.5, -1.1)));
+    }
+
+    fn triangle_count(mesh: &Mesh) -> usize {
+        match mesh.indices() {
+            Some(bevy::mesh::Indices::U32(v)) => v.len() / 3,
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn bake_isolated_room_has_12_tris() {
+        let room = Room::new(Vec3::ZERO, Vec3::new(10.0, 3.0, 10.0));
+        let mesh = room.bake_faces(&[]);
+        // 6 faces * 1 quad each * 2 tris/quad = 12
+        assert_eq!(triangle_count(&mesh), 12);
+    }
+
+    #[test]
+    fn bake_shared_full_wall_removes_both_faces() {
+        // Two rooms sharing the x=10 / x=10 wall with identical y/z extents
+        let a = Room::new(Vec3::ZERO, Vec3::new(10.0, 3.0, 10.0));
+        let b = Room::new(Vec3::new(10.0, 0.0, 0.0), Vec3::new(20.0, 3.0, 10.0));
+
+        let mesh_a = a.bake_faces(&[b.clone()]);
+        let mesh_b = b.bake_faces(&[a.clone()]);
+
+        // Each room should have 5 full faces = 10 tris (the shared wall is fully carved)
+        assert_eq!(triangle_count(&mesh_a), 10);
+        assert_eq!(triangle_count(&mesh_b), 10);
+    }
+
+    #[test]
+    fn bake_partial_wall_carves_opening() {
+        // Room B only covers part of room A's +X face
+        let a = Room::new(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0));
+        let b = Room::new(Vec3::new(10.0, 2.0, 2.0), Vec3::new(20.0, 8.0, 8.0));
+
+        let mesh_a = a.bake_faces(&[b.clone()]);
+
+        // A's +X face had a 6x6 hole carved in a 10x10 face.
+        // The remaining area produces multiple quads, so more than 12 tris total.
+        // 5 unmodified faces = 10 tris. The carved face should have at least 2 tris (1 quad).
+        let tris = triangle_count(&mesh_a);
+        assert!(tris > 12, "expected more than 12 tris due to carving, got {}", tris);
+        // But should have fewer tris than 12 + 8 (4 border quads from the frame)
+        // since the greedy merge keeps it efficient.
+        // The carved face has a frame: up to 4 rectangles = 8 tris.
+        // Total: 10 + 8 = 18 max for optimal merge.
+        assert!(tris <= 18, "expected at most 18 tris, got {}", tris);
+    }
+
+    #[test]
+    fn bake_overlap_penetration() {
+        // Room B penetrates through Room A's +X face
+        let a = Room::new(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0));
+        let b = Room::new(Vec3::new(5.0, 3.0, 3.0), Vec3::new(15.0, 7.0, 7.0));
+
+        let mesh_a = a.bake_faces(&[b.clone()]);
+
+        // A's +X face has a 4x4 hole, producing a frame.
+        // A's -X face is not touched (b doesn't reach x=0).
+        // A's +Y, -Y, +Z, -Z faces: b penetrates into their planes at various points.
+        // Total tris should be more than the isolated 12.
+        let tris = triangle_count(&mesh_a);
+        assert!(tris > 12, "overlap should produce more tris, got {}", tris);
+    }
+
+    #[test]
+    fn bake_engulfed_room_keeps_all_faces() {
+        // Room B is fully inside Room A -- B's walls should remain
+        let a = Room::new(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0));
+        let b = Room::new(Vec3::new(3.0, 3.0, 3.0), Vec3::new(7.0, 7.0, 7.0));
+
+        let mesh_b = b.bake_faces(&[a.clone()]);
+        assert_eq!(triangle_count(&mesh_b), 12, "engulfed room should keep all 6 faces");
+
+        // A should also be unaffected (B is fully inside, doesn't reach A's faces)
+        let mesh_a = a.bake_faces(&[b.clone()]);
+        assert_eq!(triangle_count(&mesh_a), 12, "engulfing room should keep all 6 faces");
+    }
+
+    #[test]
+    fn bake_non_overlapping_rooms_unchanged() {
+        let a = Room::new(Vec3::ZERO, Vec3::new(5.0, 5.0, 5.0));
+        let b = Room::new(Vec3::new(100.0, 100.0, 100.0), Vec3::new(105.0, 105.0, 105.0));
+
+        let mesh_a = a.bake_faces(&[b.clone()]);
+        let mesh_b = b.bake_faces(&[a.clone()]);
+
+        assert_eq!(triangle_count(&mesh_a), 12);
+        assert_eq!(triangle_count(&mesh_b), 12);
     }
 }

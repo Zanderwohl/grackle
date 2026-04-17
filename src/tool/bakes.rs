@@ -55,8 +55,14 @@ impl BakePlugin {
             ..Default::default()
         });
 
-        for room in &rooms {
-            let mesh = meshes.add(room.mesh());
+        let all_rooms: Vec<Room> = rooms.iter().map(|r| Room::new(r.min, r.max)).collect();
+
+        for (i, room) in all_rooms.iter().enumerate() {
+            let others: Vec<Room> = all_rooms.iter().enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, r)| r.clone())
+                .collect();
+            let mesh = meshes.add(room.bake_faces(&others));
             commands.spawn((
                 BakedRoomGeometry,
                 Mesh3d(mesh),
@@ -64,7 +70,7 @@ impl BakePlugin {
             ));
         }
 
-        info!("Baked geometry for {} room(s)", rooms.iter().count());
+        info!("Baked geometry for {} room(s)", all_rooms.len());
     }
 }
 

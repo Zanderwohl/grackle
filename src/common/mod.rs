@@ -5,6 +5,7 @@ pub(crate) mod painter;
 pub(crate) mod ray;
 pub mod item;
 pub mod cuboid;
+pub mod rect_subtract;
 
 pub enum PointResolutionError {
     NoSuchPoint,
