@@ -1,6 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
-use crate::editor::editable::{EditorActionId, EditorActions, PointRef};
+use crate::editor::editable::{EditEvent, EditorActionId, EditorActions, PointRef};
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::{CameraAxis, Multicam};
@@ -16,12 +16,18 @@ impl Plugin for RoomPlugin {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<RoomTool>()
+            .init_resource::<RoomDragState>()
             .add_systems(Update, (
                 RoomTool::interface,
                 RoomTool::draw_gizmos,
                 RoomTool::draw_room_bounds,
             ).chain().run_if(in_state(Tools::Room)))
             .add_systems(OnExit(Tools::Room), RoomTool::on_exit)
+            .add_systems(Update, (
+                RoomDragState::spawn_handles_system,
+                RoomDragState::handle_dragging,
+                RoomDragState::update_handle_positions,
+            ).chain())
         ;
     }
 }
@@ -333,6 +339,273 @@ impl RoomTool {
         for (_, room) in rooms {
             bounds_gizmo(&mut gizmos, room.min, room.max, color);
         }
+    }
+}
+
+// --- Drag Handles ---
+
+#[derive(Component)]
+pub struct RoomDragHandle {
+    axis: HandleAxis,
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum HandleAxis {
+    MinX, MinY, MinZ,
+    MaxX, MaxY, MaxZ,
+}
+
+impl HandleAxis {
+    fn is_max(&self) -> bool {
+        matches!(self, HandleAxis::MaxX | HandleAxis::MaxY | HandleAxis::MaxZ)
+    }
+
+    fn axis_index(&self) -> u8 {
+        match self {
+            HandleAxis::MinX | HandleAxis::MaxX => 0,
+            HandleAxis::MinY | HandleAxis::MaxY => 1,
+            HandleAxis::MinZ | HandleAxis::MaxZ => 2,
+        }
+    }
+
+    fn face_centers(min: Vec3, max: Vec3) -> [(Vec3, HandleAxis); 6] {
+        let c = (min + max) / 2.0;
+        [
+            (Vec3::new(min.x, c.y, c.z), HandleAxis::MinX),
+            (Vec3::new(max.x, c.y, c.z), HandleAxis::MaxX),
+            (Vec3::new(c.x, min.y, c.z), HandleAxis::MinY),
+            (Vec3::new(c.x, max.y, c.z), HandleAxis::MaxY),
+            (Vec3::new(c.x, c.y, min.z), HandleAxis::MinZ),
+            (Vec3::new(c.x, c.y, max.z), HandleAxis::MaxZ),
+        ]
+    }
+}
+
+#[derive(Resource, Default)]
+struct RoomDragState {
+    handle_mesh: Option<Handle<Mesh>>,
+    idle_material: Option<Handle<StandardMaterial>>,
+    highlight_material: Option<Handle<StandardMaterial>>,
+    tracked_action: Option<EditorActionId>,
+    drag_start: Option<Vec3>,
+    drag_handle_entity: Option<Entity>,
+    drag_handle_start: Option<Vec3>,
+}
+
+impl RoomDragState {
+    fn ensure_assets(
+        &mut self,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+    ) {
+        if self.handle_mesh.is_none() {
+            self.handle_mesh = Some(meshes.add(Cuboid::new(0.3, 0.3, 0.3)));
+            self.idle_material = Some(materials.add(StandardMaterial {
+                base_color: Color::srgb_u8(180, 230, 180),
+                emissive: LinearRgba::rgb(0.2, 0.3, 0.2),
+                ..Default::default()
+            }));
+            self.highlight_material = Some(materials.add(StandardMaterial {
+                base_color: Color::srgb_u8(220, 255, 255),
+                emissive: LinearRgba::rgb(0.3, 0.4, 0.4),
+                ..Default::default()
+            }));
+        }
+    }
+
+    fn spawn_handles_system(
+        mut state: ResMut<Self>,
+        actions: Res<EditorActions>,
+        handles: Query<Entity, With<RoomDragHandle>>,
+        mut commands: Commands,
+        mut meshes: ResMut<Assets<Mesh>>,
+        mut materials: ResMut<Assets<StandardMaterial>>,
+    ) {
+        let current_action = actions.selected_action();
+
+        let bounds = current_action
+            .and_then(|id| actions.get_action(&id))
+            .and_then(|a| a.object().drag_handle_bounds());
+
+        let should_track = current_action.filter(|_| bounds.is_some());
+
+        if state.tracked_action != should_track {
+            for entity in &handles {
+                commands.entity(entity).despawn();
+            }
+            state.tracked_action = should_track;
+            state.drag_start = None;
+            state.drag_handle_entity = None;
+            state.drag_handle_start = None;
+
+            if let (Some(_action_id), Some((min, max))) = (should_track, bounds) {
+                state.ensure_assets(&mut meshes, &mut materials);
+                let mesh = state.handle_mesh.clone().unwrap();
+                let mat = state.idle_material.clone().unwrap();
+
+                for (center, axis) in HandleAxis::face_centers(min, max) {
+                    commands.spawn((
+                        RoomDragHandle { axis },
+                        Mesh3d(mesh.clone()),
+                        MeshMaterial3d(mat.clone()),
+                        Transform::from_translation(center),
+                    ));
+                }
+            }
+        }
+    }
+
+    fn update_handle_positions(
+        actions: Res<EditorActions>,
+        state: Res<RoomDragState>,
+        mut handles: Query<(&RoomDragHandle, &mut Transform)>,
+    ) {
+        let Some(action_id) = state.tracked_action else { return; };
+        let Some(action) = actions.get_action(&action_id) else { return; };
+        let Some((min, max)) = action.object().drag_handle_bounds() else { return; };
+
+        let centers = HandleAxis::face_centers(min, max);
+        for (handle, mut tfm) in &mut handles {
+            for (pos, axis) in &centers {
+                if handle.axis == *axis {
+                    tfm.translation = *pos;
+                    break;
+                }
+            }
+        }
+    }
+
+    fn handle_dragging(
+        mut handles: Query<(Entity, &RoomDragHandle, &mut Transform)>,
+        mut ray_cast: MeshRayCast,
+        mouse_input: Res<CurrentMouseInput>,
+        mut commands: Commands,
+        mut state: ResMut<Self>,
+        mut actions: ResMut<EditorActions>,
+        mut edit_events: MessageWriter<EditEvent>,
+    ) {
+        let Some(action_id) = state.tracked_action else { return; };
+
+        let idle = state.idle_material.clone();
+        let highlight = state.highlight_material.clone();
+        let (Some(idle), Some(highlight)) = (idle, highlight) else { return; };
+
+        let filter = |entity| handles.get(entity).is_ok();
+        let settings = MeshRayCastSettings::default().with_filter(&filter);
+
+        let mut cursor_point = None;
+
+        if let Some(ray) = mouse_input.world_pos {
+            if let Some((hit_entity, hit_data)) = ray_cast
+                .cast_ray(ray, &settings)
+                .first()
+            {
+                if mouse_input.pressed == Some(MouseButton::Left) {
+                    if state.drag_start.is_none() && mouse_input.just_pressed {
+                        state.drag_handle_entity = Some(*hit_entity);
+                        state.drag_start = Some(hit_data.point);
+                        if let Ok((_, _, tfm)) = handles.get(*hit_entity) {
+                            state.drag_handle_start = Some(tfm.translation);
+                        }
+                    }
+                } else {
+                    state.drag_start = None;
+                    state.drag_handle_entity = None;
+                    state.drag_handle_start = None;
+                }
+
+                cursor_point = Some(hit_data.point);
+
+                commands.entity(*hit_entity)
+                    .remove::<MeshMaterial3d<StandardMaterial>>()
+                    .insert(MeshMaterial3d(highlight.clone()));
+                for (entity, _, _) in &handles {
+                    if entity != *hit_entity {
+                        commands.entity(entity)
+                            .remove::<MeshMaterial3d<StandardMaterial>>()
+                            .insert(MeshMaterial3d(idle.clone()));
+                    }
+                }
+            } else {
+                if mouse_input.pressed.is_none() {
+                    state.drag_start = None;
+                    state.drag_handle_entity = None;
+                    state.drag_handle_start = None;
+                }
+                for (entity, _, _) in &handles {
+                    commands.entity(entity)
+                        .remove::<MeshMaterial3d<StandardMaterial>>()
+                        .insert(MeshMaterial3d(idle.clone()));
+                }
+            }
+        } else {
+            state.drag_start = None;
+            state.drag_handle_entity = None;
+            state.drag_handle_start = None;
+            for (entity, _, _) in &handles {
+                commands.entity(entity)
+                    .remove::<MeshMaterial3d<StandardMaterial>>()
+                    .insert(MeshMaterial3d(idle.clone()));
+            }
+        }
+
+        let (Some(drag_start), Some(drag_entity), Some(drag_handle_start)) =
+            (state.drag_start, state.drag_handle_entity, state.drag_handle_start) else { return; };
+
+        let cursor_point = cursor_point.or_else(|| mouse_input.world_pos.map(|r| r.origin));
+        let Some(cursor_point) = cursor_point else { return; };
+
+        let diff = drag_start - cursor_point;
+        let Ok((_, handle, _)) = handles.get(drag_entity) else { return; };
+        let handle_axis = handle.axis;
+
+        let g = DEFAULT_SNAP_GRANULARITY;
+        let raw = drag_handle_start.clone();
+        let other_bound = actions.get_action(&action_id)
+            .and_then(|a| a.object().drag_handle_bounds());
+        let Some((current_min, current_max)) = other_bound else { return; };
+
+        let new_value = match handle_axis {
+            HandleAxis::MinX => f32::min(f32::ceil((raw.x - diff.x) / g) * g, current_max.x - g),
+            HandleAxis::MaxX => f32::max(f32::ceil((raw.x - diff.x) / g) * g, current_min.x + g),
+            HandleAxis::MinY => f32::min(f32::ceil((raw.y - diff.y) / g) * g, current_max.y - g),
+            HandleAxis::MaxY => f32::max(f32::ceil((raw.y - diff.y) / g) * g, current_min.y + g),
+            HandleAxis::MinZ => f32::min(f32::ceil((raw.z - diff.z) / g) * g, current_max.z - g),
+            HandleAxis::MaxZ => f32::max(f32::ceil((raw.z - diff.z) / g) * g, current_min.z + g),
+        };
+
+        if let Some(mut action) = actions.actions_mut().remove(&action_id) {
+            let modified = action.object_mut().drag_handle(
+                handle_axis.is_max(),
+                handle_axis.axis_index(),
+                new_value,
+            );
+            if modified {
+                if let Some(entity) = action.object().entity() {
+                    action.object_mut().apply_to_entity(&mut commands, entity);
+                    edit_events.write(EditEvent {
+                        editor_id: action_id._id(),
+                        action_id,
+                        entity,
+                    });
+                }
+            }
+            actions.actions_mut().insert(action_id, action);
+        }
+    }
+
+    fn despawn_handles(
+        handles: Query<Entity, With<RoomDragHandle>>,
+        mut commands: Commands,
+        mut state: ResMut<Self>,
+    ) {
+        for entity in &handles {
+            commands.entity(entity).despawn();
+        }
+        state.tracked_action = None;
+        state.drag_start = None;
+        state.drag_handle_entity = None;
+        state.drag_handle_start = None;
     }
 }
 

@@ -1,7 +1,6 @@
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
-use bevy_egui::egui::Context;
+use bevy_egui::{egui, EguiContexts};
 use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
 use crate::common::PointResolutionError;
@@ -27,7 +26,6 @@ impl Plugin for EditorStepsPlugin {
                 EditorActions::handle_edits,
                 EditorActions::draw_affected_gizmos,
             ).chain())
-            .add_systems(EguiPrimaryContextPass, EditorActions::floating_ui)
         ;
     }
 }
@@ -41,7 +39,7 @@ pub struct EditorObjectTag {
 pub trait EditorObject: Send + Sync {
     fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError>;
     /// Returns true if the object was modified this frame.
-    fn editor_ui(&mut self, ctx: &mut Context, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool;
+    fn editor_ui(&mut self, ui: &mut egui::Ui, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool;
     fn type_name(&self) -> String;
     fn debug_gizmos(&self, gizmos: &mut Gizmos);
     fn entity(&self) -> Option<Entity>;
@@ -56,6 +54,17 @@ pub trait EditorObject: Send + Sync {
     /// Return reference points relevant to the given ray. Point-like objects
     /// always return their location; volumetric objects test ray-AABB intersection first.
     fn reference_points_for_ray(&self, ray: &Ray3d) -> Vec<(String, Vec3)>;
+
+    /// Adjust a single axis of a bound point (used by drag handles).
+    /// `is_max`: true for the max point, false for the min point.
+    /// `axis`: 0=X, 1=Y, 2=Z.
+    /// `new_world_value`: the desired world-space coordinate for this axis.
+    /// Returns true if the object was modified.
+    fn drag_handle(&mut self, is_max: bool, axis: u8, new_world_value: f32) -> bool { false }
+
+    /// Returns the resolved min and max bounds if this object is a room-like
+    /// object with drag handles. Used to position handles.
+    fn drag_handle_bounds(&self) -> Option<(Vec3, Vec3)> { None }
 }
 
 #[derive(Message)]
@@ -151,8 +160,16 @@ impl EditorActions {
         })
     }
 
+    pub fn selected_action(&self) -> Option<EditorActionId> {
+        self.selected_action
+    }
+
     pub fn actions_map(&self) -> &HashMap<EditorActionId, EditorAction> {
         &self.actions
+    }
+
+    pub fn actions_mut(&mut self) -> &mut HashMap<EditorActionId, EditorAction> {
+        &mut self.actions
     }
 
     pub fn take_action(&mut self, object: Box<dyn EditorObject>) -> EditorActionId {
@@ -212,7 +229,9 @@ impl EditorActions {
     pub fn ui(
         ui: &mut egui::Ui,
         actions: &mut Self,
+        edit_events: &mut Vec<EditEvent>,
     ) {
+        // Section 1: Undo/Redo (compact, top)
         ui.horizontal(|ui| {
             if ui.add_enabled(actions.can_undo(), egui::Button::new("⮪ ".to_owned() + &get!("editor.timeline.undo"))).clicked() {
                 actions.undo();
@@ -224,6 +243,55 @@ impl EditorActions {
 
         ui.separator();
 
+        // Section 3: Editor for selected action (bottom, takes as much as needed)
+        // We render this into a bottom panel so it pins to the bottom,
+        // then the scroll area fills whatever's left.
+        let mut was_edited = false;
+        let mut edited_id = None;
+        let mut entity_for_event: Option<Entity> = None;
+
+        if let Some(selected_id) = actions.selected_action {
+            let selected_idx = actions.action_order.iter()
+                .position(|id| *id == selected_id);
+            let is_active = selected_idx.is_some_and(|idx| (idx as u64) < actions.cursor);
+
+            if is_active {
+                let selected_idx = selected_idx.unwrap();
+                let prior_order: Vec<EditorActionId> = actions.action_order[..selected_idx].to_vec();
+
+                egui::TopBottomPanel::bottom("editor_action_panel")
+                    .resizable(false)
+                    .show_inside(ui, |ui| {
+                        ui.separator();
+                        if let Some(mut action) = actions.actions.remove(&selected_id) {
+                            ui.heading(action.type_name_with_id());
+                            let edited = action.object_mut().editor_ui(ui, &actions.actions, &prior_order);
+                            if edited {
+                                action.parents = action.object().parent_ids().to_vec();
+                                entity_for_event = action.object().entity();
+                                was_edited = true;
+                                edited_id = Some(selected_id);
+                            }
+                            actions.actions.insert(selected_id, action);
+                        }
+                    });
+            }
+        }
+
+        if was_edited {
+            if let Some(id) = edited_id {
+                actions.select(Some(id));
+                if let Some(entity) = entity_for_event {
+                    edit_events.push(EditEvent {
+                        editor_id: id._id(),
+                        action_id: id,
+                        entity,
+                    });
+                }
+            }
+        }
+
+        // Section 2: History list (fills remaining space)
         let mut selection_changed = false;
         let mut next_selected = actions.selected_action;
 
@@ -279,47 +347,6 @@ impl EditorActions {
         }
     }
 
-    fn floating_ui(
-        mut contexts: EguiContexts,
-        mut actions: ResMut<Self>,
-        mut edit_events: MessageWriter<EditEvent>,
-    ) {
-        let ctx = contexts.ctx_mut();
-        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
-        let ctx = ctx.unwrap();
-        
-        if let Some(selected_id) = actions.selected_action {
-            let selected_idx = actions.action_order.iter()
-                .position(|id| *id == selected_id);
-            let is_active = selected_idx.is_some_and(|idx| (idx as u64) < actions.cursor);
-
-            if is_active {
-                let selected_idx = selected_idx.unwrap();
-                let prior_order: Vec<EditorActionId> = actions.action_order[..selected_idx].to_vec();
-
-                let mut action = actions.actions.remove(&selected_id).unwrap();
-                let was_edited = action.object.editor_ui(ctx, &actions.actions, &prior_order);
-
-                if was_edited {
-                    action.parents = action.object.parent_ids();
-                }
-                let entity_for_event = if was_edited { action.object.entity() } else { None };
-
-                actions.actions.insert(selected_id, action);
-
-                if was_edited {
-                    actions.select(Some(selected_id));
-                    if let Some(entity) = entity_for_event {
-                        edit_events.write(EditEvent {
-                            editor_id: selected_id._id(),
-                            action_id: selected_id,
-                            entity,
-                        });
-                    }
-                }
-            }
-        }
-    }
 
     fn sync_entities(mut actions: ResMut<Self>, mut commands: Commands) {
         for entity in actions.pending_despawns.drain(..) {
@@ -422,6 +449,10 @@ impl EditorAction {
         &*self.object
     }
 
+    pub fn object_mut(&mut self) -> &mut dyn EditorObject {
+        &mut *self.object
+    }
+
     pub fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError> {
         self.object.get_point(key)
     }
@@ -480,7 +511,7 @@ pub struct PointRef {
     pub y: AxisRef,
     pub z: AxisRef,
     #[serde(skip)]
-    resolved_reference: Option<Vec3>,
+    pub(crate) resolved_reference: Option<Vec3>,
 }
 
 impl PointRef {

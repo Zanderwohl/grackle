@@ -1,11 +1,10 @@
-use bevy_egui::egui::Context;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_egui::{egui, EguiContext, EguiPrimaryContextPass, EguiContexts};
+use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use bevy_egui::egui::{Ui, WidgetText};
 use egui_dock::{DockArea, DockState, TabViewer};
 use strum_macros::Display;
-use crate::editor::editable::EditorActions;
+use crate::editor::editable::{EditEvent, EditorActions};
 use crate::editor::multicam::MulticamState;
 use crate::tool::Tools;
 use crate::tool::bakes::{BakePlugin, BakeCommands};
@@ -20,12 +19,18 @@ enum TabKinds {
     Timeline,
 }
 
+#[derive(Default)]
+struct PendingEditEvents {
+    events: Vec<EditEvent>,
+}
+
 struct TabViewerAndResources<'a> {
     current_tool: &'a State<Tools>,
     next_tool: &'a mut NextState<Tools>,
     editor_actions: &'a mut EditorActions,
     multicam_state: &'a mut MulticamState,
     bake_commands: &'a mut BakeCommands,
+    pending_edits: &'a mut PendingEditEvents,
     gizmos: Gizmos<'a, 'a>,
 }
 
@@ -57,8 +62,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 ShowPlugin::ui(ui, self.multicam_state);
             }
             TabKinds::Timeline => {
-                ui.label("Timeline.");
-                EditorActions::ui(ui, self.editor_actions)
+                EditorActions::ui(ui, self.editor_actions, &mut self.pending_edits.events)
             }
         }
     }
@@ -139,12 +143,14 @@ impl EditorPanels {
         mut next_tool: ResMut<NextState<Tools>>,
         mut editor_actions: ResMut<EditorActions>,
         mut room_events: MessageWriter<CalculateRoomGeometry>,
+        mut edit_events: MessageWriter<EditEvent>,
     ) -> Result {
         let ctx = contexts.ctx_mut();
         if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return Ok(()); }
         let ctx = ctx.unwrap();
         
         let mut bake_commands = BakeCommands::default();
+        let mut pending_edits = PendingEditEvents::default();
         
         let mut viewer = TabViewerAndResources  {
             current_tool: & *current_tool,
@@ -153,6 +159,7 @@ impl EditorPanels {
             editor_actions: &mut *editor_actions,
             multicam_state: &mut *multicam_state,
             bake_commands: &mut bake_commands,
+            pending_edits: &mut pending_edits,
         };
 
         panels.top_height = egui::TopBottomPanel::top("top_panel")
@@ -219,6 +226,11 @@ impl EditorPanels {
         // Handle bake commands
         if bake_commands.calculate_room_geometry {
             room_events.write(CalculateRoomGeometry);
+        }
+
+        // Flush edit events
+        for event in pending_edits.events.drain(..) {
+            edit_events.write(event);
         }
 
         Self::set_multicam_size(panels, multicam_state, windows)

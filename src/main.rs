@@ -48,6 +48,11 @@ fn main() {
             EguiPlugin::default(),
             Shape2dPlugin::default(),
         ))
+        .insert_resource(AmbientLight {
+            color: Color::WHITE,
+            brightness: 800.0,
+            ..default()
+        })
         .add_plugins((
             EditorInputPlugin,
             MulticamPlugin {

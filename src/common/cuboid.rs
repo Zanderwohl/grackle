@@ -1,7 +1,6 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_egui::egui::Context;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
@@ -167,9 +166,7 @@ impl EditorObject for GrackleCuboid {
         Ok(point.resolve_in_bounds(self.min, self.max))
     }
 
-    fn editor_ui(&mut self, ctx: &mut Context, _actions: &HashMap<EditorActionId, EditorAction>, _prior_action_order: &[EditorActionId]) -> bool {
-        egui::Window::new(self.type_name()).show(ctx, |_ui| {
-        });
+    fn editor_ui(&mut self, _ui: &mut egui::Ui, _actions: &HashMap<EditorActionId, EditorAction>, _prior_action_order: &[EditorActionId]) -> bool {
         false
     }
 

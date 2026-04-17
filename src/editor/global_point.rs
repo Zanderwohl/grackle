@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use bevy::platform::collections::HashMap;
 use bevy_egui::egui;
-use bevy_egui::egui::Context;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
 use crate::editor::editable::{EditorAction, EditorActionId, EditorObject, PointRef};
@@ -22,11 +21,9 @@ impl EditorObject for GlobalPoint {
         Ok(self.resolved_location)
     }
 
-    fn editor_ui(&mut self, ctx: &mut Context, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool {
+    fn editor_ui(&mut self, ui: &mut egui::Ui, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool {
         let mut changed = false;
-        egui::Window::new(self.type_name()).show(ctx, |ui| {
-            changed |= self.location.editor_ui(ui, "Location", actions, prior_action_order);
-        });
+        changed |= self.location.editor_ui(ui, "Location", actions, prior_action_order);
         if changed {
             if let Ok(v) = self.location.resolve(actions) {
                 self.resolved_location = v;

@@ -1,12 +1,11 @@
 use bevy::prelude::*;
 use bevy::platform::collections::HashMap;
 use bevy_egui::egui;
-use bevy_egui::egui::Context;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
 use crate::common::cuboid::CuboidPoint;
 use crate::common::ray::ray_intersects_aabb;
-use crate::editor::editable::{EditorAction, EditorActionId, EditorObject, PointRef};
+use crate::editor::editable::{AxisRef, EditorAction, EditorActionId, EditorObject, PointRef};
 use crate::tool::room::Room;
 use crate::get;
 
@@ -58,16 +57,14 @@ impl EditorObject for EditorRoom {
         }
     }
 
-    fn editor_ui(&mut self, ctx: &mut Context, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool {
+    fn editor_ui(&mut self, ui: &mut egui::Ui, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool {
         let mut changed = false;
-        egui::Window::new(self.type_name()).show(ctx, |ui| {
-            let size = self.resolved_max - self.resolved_min;
-            ui.label(format!("Size: {}", size));
-            ui.separator();
-            changed |= self.min.editor_ui(ui, "Min", actions, prior_action_order);
-            ui.separator();
-            changed |= self.max.editor_ui(ui, "Max", actions, prior_action_order);
-        });
+        let size = self.resolved_max - self.resolved_min;
+        ui.label(format!("Size: {}", size));
+        ui.separator();
+        changed |= self.min.editor_ui(ui, "Min", actions, prior_action_order);
+        ui.separator();
+        changed |= self.max.editor_ui(ui, "Max", actions, prior_action_order);
         if changed {
             if let Ok(v) = self.min.resolve(actions) {
                 self.resolved_min = v;
@@ -175,6 +172,35 @@ impl EditorObject for EditorRoom {
             ("top_left_edge_center".into(), "Top Left Edge".into()),
             ("top_right_edge_center".into(), "Top Right Edge".into()),
         ]
+    }
+
+    fn drag_handle(&mut self, is_max: bool, axis: u8, new_world_value: f32) -> bool {
+        let point_ref = if is_max { &mut self.max } else { &mut self.min };
+        let axis_ref = match axis {
+            0 => &mut point_ref.x,
+            1 => &mut point_ref.y,
+            2 => &mut point_ref.z,
+            _ => return false,
+        };
+        let base = point_ref.resolved_reference.map(|b| match axis {
+            0 => b.x, 1 => b.y, 2 => b.z, _ => 0.0,
+        });
+        match axis_ref {
+            AxisRef::Absolute(v) => *v = new_world_value,
+            AxisRef::Relative(offset) => {
+                *offset = new_world_value - base.unwrap_or(0.0);
+            }
+        }
+        if is_max {
+            match axis { 0 => self.resolved_max.x = new_world_value, 1 => self.resolved_max.y = new_world_value, 2 => self.resolved_max.z = new_world_value, _ => {} }
+        } else {
+            match axis { 0 => self.resolved_min.x = new_world_value, 1 => self.resolved_min.y = new_world_value, 2 => self.resolved_min.z = new_world_value, _ => {} }
+        }
+        true
+    }
+
+    fn drag_handle_bounds(&self) -> Option<(Vec3, Vec3)> {
+        Some((self.resolved_min, self.resolved_max))
     }
 
     fn reference_points_for_ray(&self, ray: &Ray3d) -> Vec<(String, Vec3)> {
