@@ -42,6 +42,7 @@ pub trait EditorObject: Send + Sync {
     /// Returns true if the object was modified this frame.
     fn editor_ui(&mut self, ui: &mut egui::Ui, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool;
     fn type_name(&self) -> String;
+    fn type_key(&self) -> &'static str;
     fn debug_gizmos(&self, gizmos: &mut Gizmos);
     fn entity(&self) -> Option<Entity>;
     fn set_entity(&mut self, entity: Option<Entity>);
@@ -316,6 +317,15 @@ impl EditorActions {
 
                 if ui.add_sized([ui.available_width(), 0.0], label).clicked() && is_active {
                     next_selected = Some(if is_selected { None } else { Some(*id) }).flatten();
+                    selection_changed = true;
+                }
+            }
+
+            let remaining = ui.available_size();
+            if remaining.y > 0.0 {
+                let response = ui.allocate_response(remaining, egui::Sense::click());
+                if response.clicked() {
+                    next_selected = None;
                     selection_changed = true;
                 }
             }

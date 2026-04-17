@@ -49,6 +49,12 @@ title = "Show/Hide"
 cameras = "Cameras"
 ortho_cameras = "Orthographic Cameras"
 perspective_cameras = "Perspective Cameras"
+gizmos = "Gizmos"
+
+[show.gizmos]
+points = "Points"
+rooms = "Rooms"
+point_lights = "Point Lights"
 
 [room.messages]
 ghost = "Room { me } is fully inside { other } and will not appear!"
@@ -88,6 +94,10 @@ title = "Room"
 
 [editor.actions.grackle_point_light]
 title = "Point Light"
+params = "Light Parameters"
+intensity = "Intensity"
+radius = "Radius"
+range = "Range"
 
 [editor.actions.cuboid]
 title = "Cuboid"

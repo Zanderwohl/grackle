@@ -2,7 +2,7 @@ use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use crate::get;
-use crate::tool::room::{CalculateRoomGeometry, Room};
+use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, Room};
 
 pub struct BakePlugin;
 
@@ -10,7 +10,8 @@ impl Plugin for BakePlugin {
     fn build(&self, app: &mut App) {
         app
             .add_message::<CalculateRoomGeometry>()
-            .add_systems(Update, (Self::post_startup, Self::bake_room_geometry))
+            .add_message::<ClearRoomGeometry>()
+            .add_systems(Update, (Self::post_startup, Self::bake_room_geometry, Self::clear_room_geometry))
         ;
     }
 }
@@ -19,9 +20,14 @@ impl BakePlugin {
     pub fn ui(ui: &mut egui::Ui) -> BakeCommands {
         let mut commands = BakeCommands::default();
         ui.vertical(|ui| {
-            if ui.button(get!("bakes.room_geometry")).clicked() {
-                commands.calculate_room_geometry = true;
-            }
+            ui.horizontal(|ui| {
+                if ui.button(get!("bakes.room_geometry")).clicked() {
+                    commands.calculate_room_geometry = true;
+                }
+                if ui.small_button("x").clicked() {
+                    commands.clear_room_geometry = true;
+                }
+            });
         });
         commands
     }
@@ -72,6 +78,23 @@ impl BakePlugin {
 
         info!("Baked geometry for {} room(s)", all_rooms.len());
     }
+
+    fn clear_room_geometry(
+        mut events: MessageReader<ClearRoomGeometry>,
+        existing_bakes: Query<Entity, With<BakedRoomGeometry>>,
+        mut commands: Commands,
+    ) {
+        if events.read().next().is_none() { return; }
+        events.clear();
+
+        let count = existing_bakes.iter().count();
+        for entity in &existing_bakes {
+            commands.entity(entity).despawn();
+        }
+        if count > 0 {
+            info!("Cleared {} baked room mesh(es)", count);
+        }
+    }
 }
 
 #[derive(Component)]
@@ -80,4 +103,5 @@ pub struct BakedRoomGeometry;
 #[derive(Default)]
 pub struct BakeCommands {
     pub calculate_room_geometry: bool,
+    pub clear_room_geometry: bool,
 }

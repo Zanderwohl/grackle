@@ -48,6 +48,12 @@ title = "Ein-/Ausblenden"
 cameras = "Kameras"
 ortho_cameras = "Orthografische Kameras"
 perspective_cameras = "Perspektivkameras"
+gizmos = "Gizmos"
+
+[show.gizmos]
+points = "Punkte"
+rooms = "Räume"
+point_lights = "Punktlichter"
 
 [room.messages]
 ghost = "Raum { me } ist vollständig in { other } enthalten und wird nicht angezeigt!"
@@ -87,6 +93,10 @@ title = "Raum"
 
 [editor.actions.grackle_point_light]
 title = "Punktlicht"
+params = "Lichtparameter"
+intensity = "Intensität"
+radius = "Radius"
+range = "Reichweite"
 
 [editor.actions.cuboid]
 title = "Quader"

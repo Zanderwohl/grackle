@@ -939,6 +939,9 @@ pub enum IntersectionResult {
 #[derive(Message)]
 pub struct CalculateRoomGeometry;
 
+#[derive(Message)]
+pub struct ClearRoomGeometry;
+
 #[cfg(test)]
 mod tests {
     use bevy::ecs::relationship::RelationshipSourceCollection;

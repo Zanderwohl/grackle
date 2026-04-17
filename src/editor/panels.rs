@@ -8,8 +8,8 @@ use crate::editor::editable::{EditEvent, EditorActions};
 use crate::editor::multicam::MulticamState;
 use crate::tool::Tools;
 use crate::tool::bakes::{BakePlugin, BakeCommands};
-use crate::tool::show::ShowPlugin;
-use crate::tool::room::CalculateRoomGeometry;
+use crate::tool::show::{ShowPlugin, GizmoVisibility};
+use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
 
 enum TabKinds {
     Empty(String),
@@ -30,6 +30,7 @@ struct TabViewerAndResources<'a> {
     editor_actions: &'a mut EditorActions,
     multicam_state: &'a mut MulticamState,
     bake_commands: &'a mut BakeCommands,
+    gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
     gizmos: Gizmos<'a, 'a>,
 }
@@ -59,7 +60,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 *self.bake_commands = BakePlugin::ui(ui);
             }
             TabKinds::Show => {
-                ShowPlugin::ui(ui, self.multicam_state);
+                ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
             }
             TabKinds::Timeline => {
                 EditorActions::ui(ui, self.editor_actions, &mut self.pending_edits.events)
@@ -142,7 +143,9 @@ impl EditorPanels {
         mut gizmos: Gizmos,
         mut next_tool: ResMut<NextState<Tools>>,
         mut editor_actions: ResMut<EditorActions>,
+        mut gizmo_visibility: ResMut<GizmoVisibility>,
         mut room_events: MessageWriter<CalculateRoomGeometry>,
+        mut clear_room_events: MessageWriter<ClearRoomGeometry>,
         mut edit_events: MessageWriter<EditEvent>,
     ) -> Result {
         let ctx = contexts.ctx_mut();
@@ -159,6 +162,7 @@ impl EditorPanels {
             editor_actions: &mut *editor_actions,
             multicam_state: &mut *multicam_state,
             bake_commands: &mut bake_commands,
+            gizmo_visibility: &mut *gizmo_visibility,
             pending_edits: &mut pending_edits,
         };
 
@@ -226,6 +230,9 @@ impl EditorPanels {
         // Handle bake commands
         if bake_commands.calculate_room_geometry {
             room_events.write(CalculateRoomGeometry);
+        }
+        if bake_commands.clear_room_geometry {
+            clear_room_events.write(ClearRoomGeometry);
         }
 
         // Flush edit events

@@ -173,7 +173,9 @@ impl EditorObject for GrackleCuboid {
     fn type_name(&self) -> String {
         get!("editor.actions.cuboid.title")
     }
-    
+
+    fn type_key(&self) -> &'static str { "cuboid" }
+
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let min = self.min;
         let max = self.max;

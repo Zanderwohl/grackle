@@ -38,10 +38,10 @@ impl EditorObject for GracklePointLight {
         }
 
         ui.separator();
-        ui.label("Light Parameters");
-        changed |= ui.add(egui::Slider::new(&mut self.intensity, 0.0..=10000.0).text("Intensity")).changed();
-        changed |= ui.add(egui::Slider::new(&mut self.radius, 0.0..=10.0).text("Radius")).changed();
-        changed |= ui.add(egui::Slider::new(&mut self.range, 0.0..=100.0).text("Range")).changed();
+        ui.label(get!("editor.actions.grackle_point_light.params"));
+        changed |= ui.add(egui::Slider::new(&mut self.intensity, 0.0..=10000.0).text(get!("editor.actions.grackle_point_light.intensity"))).changed();
+        changed |= ui.add(egui::Slider::new(&mut self.radius, 0.0..=10.0).text(get!("editor.actions.grackle_point_light.radius"))).changed();
+        changed |= ui.add(egui::Slider::new(&mut self.range, 0.0..=100.0).text(get!("editor.actions.grackle_point_light.range"))).changed();
 
         changed
     }
@@ -49,6 +49,8 @@ impl EditorObject for GracklePointLight {
     fn type_name(&self) -> String {
         get!("editor.actions.grackle_point_light.title")
     }
+
+    fn type_key(&self) -> &'static str { "grackle_point_light" }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         gizmos.sphere(Isometry3d::from_translation(self.resolved_location), 0.2, Color::srgb_u8(255, 200, 50));

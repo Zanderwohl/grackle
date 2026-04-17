@@ -35,6 +35,8 @@ impl EditorObject for GlobalPoint {
     fn type_name(&self) -> String {
         get!("editor.actions.global_point.title")
     }
+
+    fn type_key(&self) -> &'static str { "global_point" }
     
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         gizmos.sphere(Isometry3d::from_translation(self.resolved_location), 0.2, Color::srgb_u8(0, 255, 0));

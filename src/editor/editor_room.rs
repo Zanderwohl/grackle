@@ -80,6 +80,8 @@ impl EditorObject for EditorRoom {
         get!("editor.actions.room.title")
     }
 
+    fn type_key(&self) -> &'static str { "editor_room" }
+
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let min = self.resolved_min;
         let max = self.resolved_max;
