@@ -75,9 +75,14 @@ active = "Snap to grid"
 
 [editor.timeline]
 title = "Timeline"
+undo = "Undo"
+redo = "Redo"
 
 [editor.actions.global_point]
 title = "Global Point"
+
+[editor.actions.room]
+title = "Room"
 
 [editor.actions.cuboid]
 title = "Cuboid"

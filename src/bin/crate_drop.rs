@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .init_resource::<State>()
         .add_systems(EguiPrimaryContextPass, ui)
-        .run();
+        .run()
     ;
     Ok(())
 }

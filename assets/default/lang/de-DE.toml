@@ -74,9 +74,14 @@ active = "Am Raster einrasten"
 
 [editor.timeline]
 title = "Zeitleiste"
+undo = "Rückgängig"
+redo = "Wiederherstellen"
 
 [editor.actions.global_point]
 title = "Globaler Punkt"
+
+[editor.actions.room]
+title = "Raum"
 
 [editor.actions.cuboid]
 title = "Quader"

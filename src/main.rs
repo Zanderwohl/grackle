@@ -51,7 +51,7 @@ fn main() {
         .add_plugins((
             EditorInputPlugin,
             MulticamPlugin {
-                test_scene: true,
+                test_scene: false,
             },
             EditorPanelPlugin,
             EditorStepsPlugin,

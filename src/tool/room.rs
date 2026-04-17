@@ -3,7 +3,9 @@ use bevy::app::App;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
+use crate::common::cuboid::CuboidPoint;
 use crate::get;
+use crate::editor::editable::{EditorActions, EditorObjectTag};
 use crate::editor::input::{CurrentKeyboardInput, CurrentMouseInput};
 use crate::editor::multicam::{CameraAxis, Multicam};
 use crate::tool::Tools;
@@ -78,17 +80,9 @@ impl Default for RoomTool {
 }
 
 impl RoomTool {
-    fn init(
-        mut commands: Commands,
-        mut tool: ResMut<Self>,
-        mut meshes: ResMut<Assets<Mesh>>,
-        mut materials: ResMut<Assets<StandardMaterial>>,
-    ) {
-        let min = Vec3::new(-1.0, 0.0, -1.0);
-        let max = Vec3::new(1.0, 2.0, 1.0);
-        Room::new(min, max).spawn(&mut commands, meshes, materials);
-        tool.last_min = min;
-        tool.last_max = max;
+    fn init(mut tool: ResMut<Self>) {
+        tool.last_min = Vec3::new(-1.0, 0.0, -1.0);
+        tool.last_max = Vec3::new(1.0, 2.0, 1.0);
     }
     
     fn clear(&mut self) {
@@ -111,14 +105,17 @@ impl RoomTool {
         mut commands: Commands,
         keyboard_input: Res<CurrentKeyboardInput>,
         mut create_events: MessageReader<CreateRoom>,
-        meshes: ResMut<Assets<Mesh>>,
-        materials: ResMut<Assets<StandardMaterial>>,
+        mut editor_actions: ResMut<EditorActions>,
     ) {
         if !create_events.is_empty() || keyboard_input.confirm {
             create_events.clear();
             let new_room = tool.create();
             if let Some(new_room) = new_room {
-                new_room.spawn(&mut commands, meshes, materials);
+                let id = editor_actions.next_id();
+                commands.spawn((
+                    new_room,
+                    EditorObjectTag { editor_id: id._id() },
+                ));
             }
         }
     }
@@ -642,22 +639,6 @@ impl Room {
         }
     }
     
-    pub fn spawn(
-        self, commands: &mut Commands,
-        mut meshes: ResMut<Assets<Mesh>>,
-        mut materials: ResMut<Assets<StandardMaterial>>,
-    ) {
-        let mesh = meshes.add(self.mesh());
-        let material = materials.add(StandardMaterial {
-            base_color: Color::srgb_u8(255, 255, 255),
-            ..Default::default()
-        });
-        commands.spawn((
-            self,
-            Mesh3d(mesh),
-            MeshMaterial3d(material),
-            ));
-    }
     
     pub fn mesh(&self) -> Mesh {
         // Create a mesh which is a rectangular prism

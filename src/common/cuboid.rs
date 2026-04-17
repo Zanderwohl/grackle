@@ -1,10 +1,11 @@
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_egui::egui::{Context, Ui};
+use bevy_egui::egui::Context;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
-use crate::editor::editable::EditorObject;
+use crate::editor::editable::{EditorAction, EditorActionId, EditorObject};
 use crate::get;
 
 lazy_static! {
@@ -49,6 +50,43 @@ pub enum CuboidPoint {
     BottomRightEdgeCenter,
     TopLeftEdgeCenter,
     TopRightEdgeCenter,
+}
+
+impl TryFrom<&str> for CuboidPoint {
+    type Error = PointResolutionError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "centroid" => Ok(CuboidPoint::Centroid),
+            "top_plane_center" => Ok(CuboidPoint::TopPlaneCenter),
+            "front_plane_center" => Ok(CuboidPoint::FrontPlaneCenter),
+            "bottom_plane_center" => Ok(CuboidPoint::BottomPlaneCenter),
+            "back_plane_center" => Ok(CuboidPoint::BackPlaneCenter),
+            "left_plane_center" => Ok(CuboidPoint::LeftPlaneCenter),
+            "right_plane_center" => Ok(CuboidPoint::RightPlaneCenter),
+            "front_bottom_left_corner" => Ok(CuboidPoint::FrontBottomLeftCorner),
+            "front_bottom_right_corner" => Ok(CuboidPoint::FrontBottomRightCorner),
+            "front_top_left_corner" => Ok(CuboidPoint::FrontTopLeftCorner),
+            "front_top_right_corner" => Ok(CuboidPoint::FrontTopRightCorner),
+            "back_bottom_left_corner" => Ok(CuboidPoint::BackBottomLeftCorner),
+            "back_bottom_right_corner" => Ok(CuboidPoint::BackBottomRightCorner),
+            "back_top_left_corner" => Ok(CuboidPoint::BackTopLeftCorner),
+            "back_top_right_corner" => Ok(CuboidPoint::BackTopRightCorner),
+            "front_top_edge_center" => Ok(CuboidPoint::FrontTopEdgeCenter),
+            "front_bottom_edge_center" => Ok(CuboidPoint::FrontBottomEdgeCenter),
+            "front_left_edge_center" => Ok(CuboidPoint::FrontLeftEdgeCenter),
+            "front_right_edge_center" => Ok(CuboidPoint::FrontRightEdgeCenter),
+            "back_top_edge_center" => Ok(CuboidPoint::BackTopEdgeCenter),
+            "back_bottom_edge_center" => Ok(CuboidPoint::BackBottomEdgeCenter),
+            "back_left_edge_center" => Ok(CuboidPoint::BackLeftEdgeCenter),
+            "back_right_edge_center" => Ok(CuboidPoint::BackRightEdgeCenter),
+            "bottom_left_edge_center" => Ok(CuboidPoint::BottomLeftEdgeCenter),
+            "bottom_right_edge_center" => Ok(CuboidPoint::BottomRightEdgeCenter),
+            "top_left_edge_center" => Ok(CuboidPoint::TopLeftEdgeCenter),
+            "top_right_edge_center" => Ok(CuboidPoint::TopRightEdgeCenter),
+            _ => Err(PointResolutionError::NoSuchPoint),
+        }
+    }
 }
 
 impl CuboidPoint {
@@ -107,11 +145,13 @@ impl CuboidPoint {
 pub struct GrackleCuboid {
     min: Vec3,
     max: Vec3,
+    #[serde(skip)]
+    entity: Option<Entity>,
 }
 
 impl GrackleCuboid {
     pub fn new(min: Vec3, max: Vec3) -> Self {
-        Self { min, max }
+        Self { min, max, entity: None }
     }
     
     pub fn get_point(&self, point: CuboidPoint) -> Result<Vec3, PointResolutionError> {
@@ -122,14 +162,14 @@ impl GrackleCuboid {
 #[typetag::serde(name = "cuboid")]
 impl EditorObject for GrackleCuboid {
     fn get_point(&self, point: &str) -> Result<Vec3, PointResolutionError> {
-        todo!()
-        //Ok(point.resolve_in_bounds(self.min, self.max))
+        let point = CuboidPoint::try_from(point)?;
+        Ok(point.resolve_in_bounds(self.min, self.max))
     }
 
-    fn editor_ui(&mut self, ctx: &mut Context) {
-        egui::Window::new(self.type_name()).show(ctx, |ui| {
-
+    fn editor_ui(&mut self, ctx: &mut Context) -> bool {
+        egui::Window::new(self.type_name()).show(ctx, |_ui| {
         });
+        false
     }
 
     fn type_name(&self) -> String {
@@ -138,5 +178,25 @@ impl EditorObject for GrackleCuboid {
     
     fn debug_gizmos(&self, _gizmos: &mut Gizmos) {
         todo!()
+    }
+
+    fn entity(&self) -> Option<Entity> {
+        self.entity
+    }
+
+    fn set_entity(&mut self, entity: Option<Entity>) {
+        self.entity = entity;
+    }
+
+    fn apply_to_entity(&self, _commands: &mut Commands, _entity: Entity) {
+        // TODO: apply cuboid geometry to entity
+    }
+
+    fn resolve_references(&mut self, _actions: &HashMap<EditorActionId, EditorAction>) {
+        // TODO: resolve when cuboid uses PointRef
+    }
+
+    fn parent_ids(&self) -> Vec<EditorActionId> {
+        vec![]
     }
 }
