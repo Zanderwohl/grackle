@@ -166,6 +166,7 @@ impl RoomTool {
                             tool.min_resolved = Some(cursor);
                             tool.last_min = cursor;
                             tool.mode = RoomToolMode::PlacingMax(RoomCornerMode::Normal);
+                            tool.hovered_point = None;
                         } else {
                             Self::create_room(&mut tool, &mut actions, pr, cursor);
                         }
@@ -224,7 +225,11 @@ impl RoomTool {
                             tool.min_point = Some(pr);
                             tool.min_resolved = Some(cursor);
                             tool.last_min = cursor;
-                            tool.mode = RoomToolMode::PlacingMax(RoomCornerMode::Normal);
+                            tool.mode = RoomToolMode::PlacingMax(RoomCornerMode::RelativeSelected {
+                                reference_action,
+                                reference_key: reference_key.clone(),
+                                reference_resolved,
+                            });
                         } else {
                             Self::create_room(&mut tool, &mut actions, pr, cursor);
                         }
