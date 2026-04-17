@@ -36,11 +36,9 @@ impl MovementPlugin {
             cursor_options.visible = true;
         }
 
-        // For now, let's make middle click orbit for 3d cams and turn for 2d cam
-        // and shift + middle click as pan
         if let Some(cam_id) = mouse_input.started_in_camera {
             if let Some(button) = mouse_input.pressed {
-                if button == MouseButton::Middle {
+                if button == MouseButton::Right {
                     // grab and hold mouse
                     cursor_options.grab_mode = CursorGrabMode::Locked;
                     cursor_options.visible = false;

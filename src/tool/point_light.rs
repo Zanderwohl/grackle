@@ -78,6 +78,7 @@ impl PointLightTool {
         keys: Res<ButtonInput<KeyCode>>,
         mut actions: ResMut<EditorActions>,
         rooms: Query<&Room>,
+        mut next_tool: ResMut<NextState<Tools>>,
     ) {
         let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let shift_just_pressed = keys.just_pressed(KeyCode::ShiftLeft) || keys.just_pressed(KeyCode::ShiftRight);
@@ -98,6 +99,7 @@ impl PointLightTool {
                         let id = actions.take_action(Box::new(light));
                         actions.select(Some(id));
                         tool.last_position = cursor;
+                        next_tool.set(Tools::Select);
                     }
                 }
             }
@@ -141,6 +143,7 @@ impl PointLightTool {
                             let id = actions.take_action(Box::new(light));
                             actions.select(Some(id));
                             tool.last_position = cursor;
+                            next_tool.set(Tools::Select);
                         }
                     }
                 }

@@ -27,7 +27,8 @@ impl Plugin for RoomPlugin {
                 RoomDragState::spawn_handles_system,
                 RoomDragState::handle_dragging,
                 RoomDragState::update_handle_positions,
-            ).chain())
+            ).chain().run_if(in_state(Tools::Select)))
+            .add_systems(OnExit(Tools::Select), RoomDragState::despawn_handles)
         ;
     }
 }
@@ -100,6 +101,7 @@ impl RoomTool {
         keys: Res<ButtonInput<KeyCode>>,
         mut actions: ResMut<EditorActions>,
         rooms: Query<&Room>,
+        mut next_tool: ResMut<NextState<Tools>>,
     ) {
         let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let shift_just_pressed = keys.just_pressed(KeyCode::ShiftLeft) || keys.just_pressed(KeyCode::ShiftRight);
@@ -151,7 +153,7 @@ impl RoomTool {
                             tool.mode = RoomToolMode::PlacingMax(RoomCornerMode::Normal);
                             tool.hovered_point = None;
                         } else {
-                            Self::create_room(&mut tool, &mut actions, pr, cursor);
+                            Self::create_room(&mut tool, &mut actions, &mut next_tool, pr, cursor);
                         }
                     }
                 }
@@ -199,7 +201,7 @@ impl RoomTool {
                                 reference_resolved,
                             });
                         } else {
-                            Self::create_room(&mut tool, &mut actions, pr, cursor);
+                            Self::create_room(&mut tool, &mut actions, &mut next_tool, pr, cursor);
                         }
                     }
                 }
@@ -210,6 +212,7 @@ impl RoomTool {
     fn create_room(
         tool: &mut ResMut<Self>,
         actions: &mut ResMut<EditorActions>,
+        next_tool: &mut ResMut<NextState<Tools>>,
         max_point: PointRef,
         max_resolved: Vec3,
     ) {
@@ -220,6 +223,7 @@ impl RoomTool {
             tool.last_max = max_resolved;
             tool.min_resolved = None;
             tool.mode = RoomToolMode::PlacingMin(RoomCornerMode::Normal);
+            next_tool.set(Tools::Select);
         }
     }
 

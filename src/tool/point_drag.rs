@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use crate::editor::editable::{EditEvent, EditorActionId, EditorActions};
 use crate::editor::input::CurrentMouseInput;
 use crate::tool::tool_helpers::closest_param_on_axis;
+use crate::tool::Tools;
 
 pub struct PointDragPlugin;
 
@@ -15,7 +16,8 @@ impl Plugin for PointDragPlugin {
                 PointDragState::spawn_arrows_system,
                 PointDragState::update_arrow_positions,
                 PointDragState::handle_arrow_drag,
-            ).chain());
+            ).chain().run_if(in_state(Tools::Select)))
+            .add_systems(OnExit(Tools::Select), PointDragState::despawn_arrows);
     }
 }
 
@@ -315,5 +317,18 @@ impl PointDragState {
                 }
             }
         }
+    }
+
+    fn despawn_arrows(
+        arrows: Query<Entity, With<PointDragArrow>>,
+        mut commands: Commands,
+        mut state: ResMut<Self>,
+    ) {
+        for entity in &arrows {
+            commands.entity(entity).despawn();
+        }
+        state.tracked_action = None;
+        state.grabbed_axis = None;
+        state.grab_offset = None;
     }
 }
