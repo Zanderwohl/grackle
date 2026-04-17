@@ -46,13 +46,15 @@ impl EditorRoom {
 #[typetag::serde(name = "editor_room")]
 impl EditorObject for EditorRoom {
     fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError> {
+        let min = self.resolved_min.min(self.resolved_max);
+        let max = self.resolved_min.max(self.resolved_max);
         match key {
-            "min" => Ok(self.resolved_min),
-            "max" => Ok(self.resolved_max),
-            "" => Ok((self.resolved_min + self.resolved_max) / 2.0),
+            "min" => Ok(min),
+            "max" => Ok(max),
+            "" => Ok((min + max) / 2.0),
             other => {
                 let cp = CuboidPoint::try_from(other)?;
-                Ok(cp.resolve_in_bounds(self.resolved_min, self.resolved_max))
+                Ok(cp.resolve_in_bounds(min, max))
             }
         }
     }
@@ -83,8 +85,8 @@ impl EditorObject for EditorRoom {
     fn type_key(&self) -> &'static str { "editor_room" }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
-        let min = self.resolved_min;
-        let max = self.resolved_max;
+        let min = self.resolved_min.min(self.resolved_max);
+        let max = self.resolved_min.max(self.resolved_max);
         let color = Color::srgb_u8(200, 200, 200);
 
         gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(max.x, min.y, min.z), color);
@@ -115,10 +117,12 @@ impl EditorObject for EditorRoom {
     }
 
     fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
-        let center = (self.resolved_min + self.resolved_max) / 2.0;
+        let min = self.resolved_min.min(self.resolved_max);
+        let max = self.resolved_min.max(self.resolved_max);
+        let center = (min + max) / 2.0;
         commands.entity(entity).insert((
             Transform::from_translation(center),
-            Room::new(self.resolved_min, self.resolved_max),
+            Room::new(min, max),
         ));
     }
 
@@ -202,7 +206,7 @@ impl EditorObject for EditorRoom {
     }
 
     fn drag_handle_bounds(&self) -> Option<(Vec3, Vec3)> {
-        Some((self.resolved_min, self.resolved_max))
+        Some((self.resolved_min.min(self.resolved_max), self.resolved_min.max(self.resolved_max)))
     }
 
     fn reference_points_for_ray(&self, ray: &Ray3d) -> Vec<(String, Vec3)> {

@@ -53,7 +53,7 @@ impl EditorObject for GracklePointLight {
     fn type_key(&self) -> &'static str { "grackle_point_light" }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
-        gizmos.sphere(Isometry3d::from_translation(self.resolved_location), 0.2, Color::srgb_u8(255, 200, 50));
+        gizmos.sphere(Isometry3d::from_translation(self.resolved_location), 0.2, Color::srgb_u8(255, 255, 0));
         self.location.debug_gizmos(self.resolved_location, gizmos);
     }
 

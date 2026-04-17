@@ -192,8 +192,8 @@ impl PointLightTool {
     ) {
         if let Some(cursor) = tool.cursor {
             let color = match tool.mode {
-                PointLightToolMode::RelativeSelected => Color::srgb_u8(0, 220, 220),
-                _ => Color::srgb_u8(255, 200, 50),
+                PointLightToolMode::RelativeSelected => Color::srgb_u8(80, 140, 255),
+                _ => Color::srgb_u8(60, 120, 255),
             };
             gizmos.sphere(Isometry3d::from_translation(cursor), 0.15, color);
 
@@ -222,8 +222,8 @@ impl PointLightTool {
 
         if tool.mode == PointLightToolMode::Picking {
             if let Some(ray) = mouse_input.world_pos {
-                let dim_color = Color::srgba(0.5, 0.5, 0.5, 0.4);
-                let highlight_color = Color::srgb_u8(180, 240, 255);
+                let dim_color = Color::srgb_u8(200, 200, 200);
+                let highlight_color = Color::srgb_u8(0, 230, 0);
 
                 for (action_id, action) in actions.active_actions() {
                     let points = action.object().reference_points_for_ray(&ray);

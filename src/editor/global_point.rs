@@ -39,7 +39,7 @@ impl EditorObject for GlobalPoint {
     fn type_key(&self) -> &'static str { "global_point" }
     
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
-        gizmos.sphere(Isometry3d::from_translation(self.resolved_location), 0.2, Color::srgb_u8(0, 255, 0));
+        gizmos.sphere(Isometry3d::from_translation(self.resolved_location), 0.2, Color::srgb_u8(255, 60, 60));
         self.location.debug_gizmos(self.resolved_location, gizmos);
     }
 
