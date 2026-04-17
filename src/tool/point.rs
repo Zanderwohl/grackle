@@ -6,7 +6,7 @@ use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::{CameraAxis, Multicam};
 use crate::tool::Tools;
 
-const PICK_RADIUS: f32 = 0.5;
+const PICK_RADIUS: f32 = 0.1;
 const DEFAULT_SNAP_GRANULARITY: f32 = 0.1;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -229,20 +229,16 @@ impl PointTool {
         // In Picking mode, draw all reference point candidates
         if tool.mode == PointToolMode::Picking {
             if let Some(ray) = mouse_input.world_pos {
-                let dim_color = Color::srgba(0.7, 0.7, 0.7, 0.5);
-                let highlight_color = Color::srgb_u8(255, 255, 100);
+                let dim_color = Color::srgba(0.5, 0.5, 0.5, 0.4);
+                let highlight_color = Color::srgb_u8(180, 240, 255);
 
                 for (action_id, action) in actions.active_actions() {
                     let points = action.object().reference_points_for_ray(&ray);
                     for (key, pos) in &points {
                         let is_hovered = tool.hovered_point.as_ref()
                             .is_some_and(|(hid, hkey, _)| *hid == action_id && hkey == key);
-                        let (radius, color) = if is_hovered {
-                            (0.2, highlight_color)
-                        } else {
-                            (0.1, dim_color)
-                        };
-                        gizmos.sphere(Isometry3d::from_translation(*pos), radius, color);
+                        let color = if is_hovered { highlight_color } else { dim_color };
+                        gizmos.sphere(Isometry3d::from_translation(*pos), 0.1, color);
                     }
                 }
             }

@@ -236,12 +236,25 @@ impl EditorObject for GrackleCuboid {
             ("back_bottom_right_corner".into(), "Back Bottom Right".into()),
             ("back_top_left_corner".into(), "Back Top Left".into()),
             ("back_top_right_corner".into(), "Back Top Right".into()),
+            ("front_top_edge_center".into(), "Front Top Edge".into()),
+            ("front_bottom_edge_center".into(), "Front Bottom Edge".into()),
+            ("front_left_edge_center".into(), "Front Left Edge".into()),
+            ("front_right_edge_center".into(), "Front Right Edge".into()),
+            ("back_top_edge_center".into(), "Back Top Edge".into()),
+            ("back_bottom_edge_center".into(), "Back Bottom Edge".into()),
+            ("back_left_edge_center".into(), "Back Left Edge".into()),
+            ("back_right_edge_center".into(), "Back Right Edge".into()),
+            ("bottom_left_edge_center".into(), "Bottom Left Edge".into()),
+            ("bottom_right_edge_center".into(), "Bottom Right Edge".into()),
+            ("top_left_edge_center".into(), "Top Left Edge".into()),
+            ("top_right_edge_center".into(), "Top Right Edge".into()),
         ]
     }
 
     fn reference_points_for_ray(&self, ray: &Ray3d) -> Vec<(String, Vec3)> {
-        let min = self.min.min(self.max);
-        let max = self.min.max(self.max);
+        let padding = Vec3::splat(0.25);
+        let min = self.min.min(self.max) - padding;
+        let max = self.min.max(self.max) + padding;
         if !ray_intersects_aabb(ray, min, max) {
             return vec![];
         }

@@ -4,6 +4,7 @@ use bevy_egui::egui;
 use bevy_egui::egui::Context;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
+use crate::common::cuboid::CuboidPoint;
 use crate::common::ray::ray_intersects_aabb;
 use crate::editor::editable::{EditorAction, EditorActionId, EditorObject, PointRef};
 use crate::tool::room::Room;
@@ -39,7 +40,11 @@ impl EditorObject for EditorRoom {
         match key {
             "min" => Ok(self.resolved_min),
             "max" => Ok(self.resolved_max),
-            _ => Ok((self.resolved_min + self.resolved_max) / 2.0),
+            "" => Ok((self.resolved_min + self.resolved_max) / 2.0),
+            other => {
+                let cp = CuboidPoint::try_from(other)?;
+                Ok(cp.resolve_in_bounds(self.resolved_min, self.resolved_max))
+            }
         }
     }
 
@@ -132,19 +137,45 @@ impl EditorObject for EditorRoom {
             ("".into(), "Center".into()),
             ("min".into(), "Min".into()),
             ("max".into(), "Max".into()),
+            ("centroid".into(), "Centroid".into()),
+            ("top_plane_center".into(), "Top".into()),
+            ("bottom_plane_center".into(), "Bottom".into()),
+            ("front_plane_center".into(), "Front".into()),
+            ("back_plane_center".into(), "Back".into()),
+            ("left_plane_center".into(), "Left".into()),
+            ("right_plane_center".into(), "Right".into()),
+            ("front_bottom_left_corner".into(), "Front Bottom Left".into()),
+            ("front_bottom_right_corner".into(), "Front Bottom Right".into()),
+            ("front_top_left_corner".into(), "Front Top Left".into()),
+            ("front_top_right_corner".into(), "Front Top Right".into()),
+            ("back_bottom_left_corner".into(), "Back Bottom Left".into()),
+            ("back_bottom_right_corner".into(), "Back Bottom Right".into()),
+            ("back_top_left_corner".into(), "Back Top Left".into()),
+            ("back_top_right_corner".into(), "Back Top Right".into()),
+            ("front_top_edge_center".into(), "Front Top Edge".into()),
+            ("front_bottom_edge_center".into(), "Front Bottom Edge".into()),
+            ("front_left_edge_center".into(), "Front Left Edge".into()),
+            ("front_right_edge_center".into(), "Front Right Edge".into()),
+            ("back_top_edge_center".into(), "Back Top Edge".into()),
+            ("back_bottom_edge_center".into(), "Back Bottom Edge".into()),
+            ("back_left_edge_center".into(), "Back Left Edge".into()),
+            ("back_right_edge_center".into(), "Back Right Edge".into()),
+            ("bottom_left_edge_center".into(), "Bottom Left Edge".into()),
+            ("bottom_right_edge_center".into(), "Bottom Right Edge".into()),
+            ("top_left_edge_center".into(), "Top Left Edge".into()),
+            ("top_right_edge_center".into(), "Top Right Edge".into()),
         ]
     }
 
     fn reference_points_for_ray(&self, ray: &Ray3d) -> Vec<(String, Vec3)> {
-        let min = self.resolved_min.min(self.resolved_max);
-        let max = self.resolved_min.max(self.resolved_max);
+        let padding = Vec3::splat(0.25);
+        let min = self.resolved_min.min(self.resolved_max) - padding;
+        let max = self.resolved_min.max(self.resolved_max) + padding;
         if !ray_intersects_aabb(ray, min, max) {
             return vec![];
         }
-        vec![
-            ("".into(), (self.resolved_min + self.resolved_max) / 2.0),
-            ("min".into(), self.resolved_min),
-            ("max".into(), self.resolved_max),
-        ]
+        self.available_point_keys().into_iter().filter_map(|(key, _)| {
+            self.get_point(&key).ok().map(|v| (key, v))
+        }).collect()
     }
 }
