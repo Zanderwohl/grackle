@@ -3,7 +3,7 @@ use bevy::platform::collections::HashMap;
 use bevy_egui::egui;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
-use crate::editor::editable::{EditorAction, EditorActionId, EditorObject, PointRef};
+use crate::editor::editable::{AxisRef, EditorAction, EditorActionId, EditorObject, PointRef};
 use crate::get;
 
 const DEFAULT_INTENSITY: f32 = 10_000.0;
@@ -93,6 +93,24 @@ impl EditorObject for GracklePointLight {
 
     fn reference_points_for_ray(&self, _ray: &Ray3d) -> Vec<(String, Vec3)> {
         vec![("".into(), self.resolved_location)]
+    }
+
+    fn drag_handle(&mut self, _is_max: bool, axis: u8, new_world_value: f32) -> bool {
+        let axis_ref = match axis {
+            0 => &mut self.location.x,
+            1 => &mut self.location.y,
+            2 => &mut self.location.z,
+            _ => return false,
+        };
+        let base = self.location.resolved_reference.map(|b| match axis {
+            0 => b.x, 1 => b.y, _ => b.z,
+        });
+        match axis_ref {
+            AxisRef::Absolute(v) => *v = new_world_value,
+            AxisRef::Relative(offset) => *offset = new_world_value - base.unwrap_or(0.0),
+        }
+        match axis { 0 => self.resolved_location.x = new_world_value, 1 => self.resolved_location.y = new_world_value, _ => self.resolved_location.z = new_world_value }
+        true
     }
 }
 
