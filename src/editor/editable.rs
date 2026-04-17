@@ -25,6 +25,7 @@ impl Plugin for EditorStepsPlugin {
                 EditorActions::undo_redo_shortcuts,
                 EditorActions::sync_entities,
                 EditorActions::handle_edits,
+                EditorActions::draw_affected_gizmos,
             ).chain())
             .add_systems(EguiPrimaryContextPass, EditorActions::floating_ui)
         ;
@@ -71,6 +72,9 @@ pub struct EditorActions {
     action_order: Vec<EditorActionId>,
     id_counter: u64,
     selected_action: Option<EditorActionId>,
+    /// Topologically sorted list of the selected action and all its DAG descendants.
+    /// Parents always appear before their dependants.
+    selection_affected: Option<Vec<EditorActionId>>,
     cursor: u64,
     pending_despawns: Vec<Entity>,
 }
@@ -82,6 +86,7 @@ impl Default for EditorActions {
             action_order: vec![],
             id_counter: 0,
             selected_action: None,
+            selection_affected: None,
             cursor: 0,
             pending_despawns: vec![],
         };
@@ -101,6 +106,34 @@ impl EditorActions {
         id
     }
     
+    pub fn select(&mut self, selection: Option<EditorActionId>) {
+        self.selected_action = selection;
+        self.selection_affected = selection.map(|root| {
+            let mut result = vec![root];
+            let mut visited: HashSet<EditorActionId> = HashSet::from([root]);
+            let mut queue = vec![root];
+
+            while !queue.is_empty() {
+                let parent_set: HashSet<EditorActionId> = queue.drain(..).collect();
+
+                let children: Vec<EditorActionId> = self.actions.iter()
+                    .filter(|(_, action)| action.parents.iter().any(|p| parent_set.contains(p)))
+                    .map(|(id, _)| *id)
+                    .filter(|id| visited.insert(*id))
+                    .collect();
+
+                result.extend(&children);
+                queue = children;
+            }
+
+            result
+        });
+    }
+
+    pub fn selection_affected(&self) -> Option<&[EditorActionId]> {
+        self.selection_affected.as_deref()
+    }
+
     pub fn take_action(&mut self, object: Box<dyn EditorObject>) -> EditorActionId {
         let cur = self.cursor as usize;
         if cur < self.action_order.len() {
@@ -144,7 +177,7 @@ impl EditorActions {
         if let Some(selected) = self.selected_action {
             if let Some(idx) = self.action_order.iter().position(|id| *id == selected) {
                 if idx as u64 >= self.cursor {
-                    self.selected_action = None;
+                    self.select(None);
                 }
             }
         }
@@ -195,7 +228,7 @@ impl EditorActions {
         });
 
         if selection_changed {
-            actions.selected_action = next_selected;
+            actions.select(next_selected);
         }
     }
 
@@ -228,7 +261,6 @@ impl EditorActions {
     fn floating_ui(
         mut contexts: EguiContexts,
         mut actions: ResMut<Self>,
-        mut gizmos: Gizmos,
         mut edit_events: MessageWriter<EditEvent>,
     ) {
         let ctx = contexts.ctx_mut();
@@ -243,7 +275,6 @@ impl EditorActions {
             if is_active {
                 let action = actions.actions.get_mut(&selected_id).unwrap();
                 let was_edited = action.object.editor_ui(ctx);
-                action.object.debug_gizmos(&mut gizmos);
 
                 if was_edited {
                     if let Some(entity) = action.object.entity() {
@@ -298,46 +329,31 @@ impl EditorActions {
         mut edit_events: MessageReader<EditEvent>,
         mut commands: Commands,
     ) {
-        let mut queue: Vec<EditorActionId> = edit_events.read()
-            .map(|e| e.action_id)
-            .collect();
+        if edit_events.read().next().is_none() { return; }
+        edit_events.clear();
 
-        if queue.is_empty() { return; }
+        let affected = match &actions.selection_affected {
+            Some(ids) => ids.clone(),
+            None => return,
+        };
 
-        // Resolve + apply the initially edited objects
-        for id in queue.clone() {
-            if let Some(mut action) = actions.actions.remove(&id) {
+        for id in &affected {
+            if let Some(mut action) = actions.actions.remove(id) {
                 action.object.resolve_references(&actions.actions);
                 if let Some(entity) = action.object.entity() {
                     action.object.apply_to_entity(&mut commands, entity);
                 }
-                actions.actions.insert(id, action);
+                actions.actions.insert(*id, action);
             }
         }
+    }
 
-        // BFS: propagate through every downstream child in the DAG
-        let mut visited: HashSet<EditorActionId> = queue.iter().copied().collect();
-
-        while !queue.is_empty() {
-            let parent_set: HashSet<EditorActionId> = queue.drain(..).collect();
-
-            let children: Vec<EditorActionId> = actions.actions.iter()
-                .filter(|(_, action)| action.object.parent_ids().iter().any(|p| parent_set.contains(p)))
-                .map(|(id, _)| *id)
-                .filter(|id| visited.insert(*id))
-                .collect();
-
-            for child_id in &children {
-                if let Some(mut action) = actions.actions.remove(child_id) {
-                    action.object.resolve_references(&actions.actions);
-                    if let Some(entity) = action.object.entity() {
-                        action.object.apply_to_entity(&mut commands, entity);
-                    }
-                    actions.actions.insert(*child_id, action);
-                }
+    fn draw_affected_gizmos(actions: Res<EditorActions>, mut gizmos: Gizmos) {
+        let Some(affected) = &actions.selection_affected else { return; };
+        for id in affected {
+            if let Some(action) = actions.actions.get(id) {
+                action.object.debug_gizmos(&mut gizmos);
             }
-
-            queue = children;
         }
     }
 }

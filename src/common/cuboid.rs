@@ -176,8 +176,26 @@ impl EditorObject for GrackleCuboid {
         get!("editor.actions.cuboid.title")
     }
     
-    fn debug_gizmos(&self, _gizmos: &mut Gizmos) {
-        todo!()
+    fn debug_gizmos(&self, gizmos: &mut Gizmos) {
+        let min = self.min;
+        let max = self.max;
+        let color = Color::srgb_u8(200, 200, 200);
+
+        // Bottom face
+        gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(max.x, min.y, min.z), color);
+        gizmos.line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, min.y, max.z), color);
+        gizmos.line(Vec3::new(max.x, min.y, max.z), Vec3::new(min.x, min.y, max.z), color);
+        gizmos.line(Vec3::new(min.x, min.y, max.z), Vec3::new(min.x, min.y, min.z), color);
+        // Top face
+        gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(max.x, max.y, min.z), color);
+        gizmos.line(Vec3::new(max.x, max.y, min.z), Vec3::new(max.x, max.y, max.z), color);
+        gizmos.line(Vec3::new(max.x, max.y, max.z), Vec3::new(min.x, max.y, max.z), color);
+        gizmos.line(Vec3::new(min.x, max.y, max.z), Vec3::new(min.x, max.y, min.z), color);
+        // Vertical edges
+        gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(min.x, max.y, min.z), color);
+        gizmos.line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, max.y, min.z), color);
+        gizmos.line(Vec3::new(max.x, min.y, max.z), Vec3::new(max.x, max.y, max.z), color);
+        gizmos.line(Vec3::new(min.x, min.y, max.z), Vec3::new(min.x, max.y, max.z), color);
     }
 
     fn entity(&self) -> Option<Entity> {
