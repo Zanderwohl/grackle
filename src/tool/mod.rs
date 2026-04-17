@@ -6,11 +6,13 @@ use strum_macros::{Display, EnumIter};
 use crate::get;
 use crate::tool::bakes::BakePlugin;
 use crate::tool::movement::MovementPlugin;
+use crate::tool::point::PointPlugin;
 use crate::tool::room::RoomPlugin;
 use crate::tool::selection::SelectionPlugin;
 use crate::tool::show::ShowPlugin;
 
 pub mod selection;
+pub mod point;
 pub mod room;
 pub mod movement;
 pub mod bakes;
@@ -27,6 +29,7 @@ impl Plugin for ToolPlugin {
             .add_plugins(BakePlugin)
             .add_plugins(MovementPlugin)
             .add_plugins(SelectionPlugin)
+            .add_plugins(PointPlugin)
             .add_plugins(RoomPlugin)
             // Toolbar moved to panels.rs Tools tab
             // .add_systems(EguiPrimaryContextPass, Self::toolbar)
@@ -50,6 +53,7 @@ impl Default for ToolData {
 pub enum Tools {
     #[default]
     Select,
+    Point,
     Room,
 }
 
@@ -57,6 +61,7 @@ impl Tools {
     pub fn name(&self) -> String {
         match self {
             Self::Select => get!("tools.select"),
+            Self::Point => get!("tools.point"),
             Self::Room => get!("tools.room"),
         }
     }

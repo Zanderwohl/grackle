@@ -53,6 +53,9 @@ pub trait EditorObject: Send + Sync {
     fn parent_ids(&self) -> Vec<EditorActionId>;
     /// Return the named points this object exposes for referencing.
     fn available_point_keys(&self) -> Vec<(String, String)>;
+    /// Return reference points relevant to the given ray. Point-like objects
+    /// always return their location; volumetric objects test ray-AABB intersection first.
+    fn reference_points_for_ray(&self, ray: &Ray3d) -> Vec<(String, Vec3)>;
 }
 
 #[derive(Message)]
@@ -137,6 +140,19 @@ impl EditorActions {
 
     pub fn selection_affected(&self) -> Option<&[EditorActionId]> {
         self.selection_affected.as_deref()
+    }
+
+    /// Returns an iterator of (EditorActionId, &EditorAction) for all active actions
+    /// (those before the undo/redo cursor).
+    pub fn active_actions(&self) -> impl Iterator<Item = (EditorActionId, &EditorAction)> {
+        let cursor = self.cursor as usize;
+        self.action_order[..cursor].iter().filter_map(move |id| {
+            self.actions.get(id).map(|a| (*id, a))
+        })
+    }
+
+    pub fn actions_map(&self) -> &HashMap<EditorActionId, EditorAction> {
+        &self.actions
     }
 
     pub fn take_action(&mut self, object: Box<dyn EditorObject>) -> EditorActionId {
@@ -402,6 +418,10 @@ pub struct EditorAction {
 }
 
 impl EditorAction {
+    pub fn object(&self) -> &dyn EditorObject {
+        &*self.object
+    }
+
     pub fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError> {
         self.object.get_point(key)
     }

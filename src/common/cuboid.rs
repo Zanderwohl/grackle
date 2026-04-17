@@ -5,6 +5,7 @@ use bevy_egui::egui::Context;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
+use crate::common::ray::ray_intersects_aabb;
 use crate::editor::editable::{EditorAction, EditorActionId, EditorObject};
 use crate::get;
 
@@ -236,5 +237,17 @@ impl EditorObject for GrackleCuboid {
             ("back_top_left_corner".into(), "Back Top Left".into()),
             ("back_top_right_corner".into(), "Back Top Right".into()),
         ]
+    }
+
+    fn reference_points_for_ray(&self, ray: &Ray3d) -> Vec<(String, Vec3)> {
+        let min = self.min.min(self.max);
+        let max = self.min.max(self.max);
+        if !ray_intersects_aabb(ray, min, max) {
+            return vec![];
+        }
+        self.available_point_keys().into_iter().filter_map(|(key, _)| {
+            CuboidPoint::try_from(key.as_str()).ok()
+                .map(|cp| (key, cp.resolve_in_bounds(self.min, self.max)))
+        }).collect()
     }
 }

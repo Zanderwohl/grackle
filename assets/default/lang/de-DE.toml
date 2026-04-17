@@ -34,6 +34,7 @@ orthographic.scroll = "Orthografische Kamera-Scroll-Geschwindigkeit"
 [tools]
 title = "Werkzeuge"
 select = "Auswählen"
+point = "Punkt"
 move = "Bewegen"
 room = "Zimmer"
 

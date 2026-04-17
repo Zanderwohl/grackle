@@ -69,6 +69,10 @@ impl EditorObject for GlobalPoint {
     fn available_point_keys(&self) -> Vec<(String, String)> {
         vec![("".into(), "Point".into())]
     }
+
+    fn reference_points_for_ray(&self, _ray: &Ray3d) -> Vec<(String, Vec3)> {
+        vec![("".into(), self.resolved_location)]
+    }
 }
 
 impl GlobalPoint {

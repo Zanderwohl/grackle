@@ -4,6 +4,7 @@ use bevy_egui::egui;
 use bevy_egui::egui::Context;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
+use crate::common::ray::ray_intersects_aabb;
 use crate::editor::editable::{EditorAction, EditorActionId, EditorObject, PointRef};
 use crate::tool::room::Room;
 use crate::get;
@@ -131,6 +132,19 @@ impl EditorObject for EditorRoom {
             ("".into(), "Center".into()),
             ("min".into(), "Min".into()),
             ("max".into(), "Max".into()),
+        ]
+    }
+
+    fn reference_points_for_ray(&self, ray: &Ray3d) -> Vec<(String, Vec3)> {
+        let min = self.resolved_min.min(self.resolved_max);
+        let max = self.resolved_min.max(self.resolved_max);
+        if !ray_intersects_aabb(ray, min, max) {
+            return vec![];
+        }
+        vec![
+            ("".into(), (self.resolved_min + self.resolved_max) / 2.0),
+            ("min".into(), self.resolved_min),
+            ("max".into(), self.resolved_max),
         ]
     }
 }
