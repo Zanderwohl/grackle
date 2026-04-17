@@ -6,6 +6,7 @@ use serde::{Serialize, Deserialize};
 use crate::common::PointResolutionError;
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::global_point::GlobalPoint;
+use crate::editor::grackle_point_light::GracklePointLight;
 use crate::get;
 
 lazy_static! {
@@ -110,8 +111,12 @@ impl Default for EditorActions {
         a.take_action(Box::new(GlobalPoint::from_point_ref(
             PointRef::reference_with_offset(p1, 2.0, 5.0, 1.0),
         )));
-        a.take_action(Box::new(EditorRoom::from_points(p1, p2)));
-        
+        let room = a.take_action(Box::new(EditorRoom::from_points(p1, p2)));
+
+        let mut light_ref = PointRef::reference_with_offset(room, 0.0, 0.8, 0.0);
+        light_ref.point_key = "bottom_plane_center".to_string();
+        a.take_action(Box::new(GracklePointLight::from_point_ref(light_ref)));
+
         a
     }
 }

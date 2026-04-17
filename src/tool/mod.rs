@@ -7,12 +7,14 @@ use crate::get;
 use crate::tool::bakes::BakePlugin;
 use crate::tool::movement::MovementPlugin;
 use crate::tool::point::PointPlugin;
+use crate::tool::point_light::PointLightPlugin;
 use crate::tool::room::RoomPlugin;
 use crate::tool::selection::SelectionPlugin;
 use crate::tool::show::ShowPlugin;
 
 pub mod selection;
 pub mod point;
+pub mod point_light;
 pub mod room;
 pub mod movement;
 pub mod bakes;
@@ -30,6 +32,7 @@ impl Plugin for ToolPlugin {
             .add_plugins(MovementPlugin)
             .add_plugins(SelectionPlugin)
             .add_plugins(PointPlugin)
+            .add_plugins(PointLightPlugin)
             .add_plugins(RoomPlugin)
             // Toolbar moved to panels.rs Tools tab
             // .add_systems(EguiPrimaryContextPass, Self::toolbar)
@@ -54,6 +57,7 @@ pub enum Tools {
     #[default]
     Select,
     Point,
+    PointLight,
     Room,
 }
 
@@ -62,6 +66,7 @@ impl Tools {
         match self {
             Self::Select => get!("tools.select"),
             Self::Point => get!("tools.point"),
+            Self::PointLight => get!("tools.point_light"),
             Self::Room => get!("tools.room"),
         }
     }

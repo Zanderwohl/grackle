@@ -10,7 +10,7 @@ ui = "UI-Kamera"
 
 [debug.viewport]
 title = "Multicam-Ansicht"
-controls = "Steuerung zusammendrücken"
+controls = "Steuerelemente komprimieren"
 start = "Start"
 end = "Ende"
 
@@ -35,37 +35,38 @@ orthographic.scroll = "Orthografische Kamera-Scroll-Geschwindigkeit"
 title = "Werkzeuge"
 select = "Auswählen"
 point = "Punkt"
+point_light = "Punktlicht"
 move = "Bewegen"
-room = "Zimmer"
+room = "Raum"
 
 [bakes]
-title = "Bake-Operationen"
-room_geometry = "Zimmergeometrie"
+title = "Bake-Vorgänge"
+room_geometry = "Raumgeometrie"
 
 [show]
-title = "Anzeigen/Verstecken"
+title = "Ein-/Ausblenden"
 cameras = "Kameras"
 ortho_cameras = "Orthografische Kameras"
 perspective_cameras = "Perspektivkameras"
 
 [room.messages]
-ghost = "Zimmer { me } ist vollständig in { other } enthalten und wird nicht angezeigt!"
+ghost = "Raum { me } ist vollständig in { other } enthalten und wird nicht angezeigt!"
 
 [room.confirm]
-title = "Zimmer-Ersteller"
+title = "Raum-Ersteller"
 confirm = "Bestätigen"
 
 [debug.room]
-title = "Zimmer-Werkzeug Debug"
+title = "Raum-Werkzeug Debug"
 state = "Aktueller Werkzeugzustand"
 last_min = "Letztes Min: { x }"
 last_max = "Letztes Max: { x }"
 active_min = "Aktives Min: { x }"
 active_max = "Aktives Max: { x }"
 show_points = "Punkte anzeigen"
-show_cursor = "Kamera-Weltkoordinaten-Cursor anzeigen"
+show_cursor = "Cursor in Weltkoordinaten anzeigen"
 invalid_cursor = "Cursor befindet sich in einem ungültigen Zustand!"
-missing_material = "Zimmer-Werkzeug geriet in einen ungültigen Zustand mit fehlenden Material-Handles!"
+missing_material = "Raum-Werkzeug ist in einen ungültigen Zustand geraten – Handles fehlen Materialien!"
 gizmos = "Gizmos"
 
 [debug.room.snap]
@@ -83,6 +84,9 @@ title = "Globaler Punkt"
 
 [editor.actions.room]
 title = "Raum"
+
+[editor.actions.grackle_point_light]
+title = "Punktlicht"
 
 [editor.actions.cuboid]
 title = "Quader"

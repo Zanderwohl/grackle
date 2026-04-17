@@ -36,6 +36,7 @@ orthographic.scroll = "Orthographic camera scroll speed"
 title = "Tools"
 select = "Select"
 point = "Point"
+point_light = "Point Light"
 move = "Move"
 room = "Room"
 
@@ -84,6 +85,9 @@ title = "Global Point"
 
 [editor.actions.room]
 title = "Room"
+
+[editor.actions.grackle_point_light]
+title = "Point Light"
 
 [editor.actions.cuboid]
 title = "Cuboid"
