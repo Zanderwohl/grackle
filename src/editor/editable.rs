@@ -1,12 +1,15 @@
+use std::path::PathBuf;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
 use crate::common::PointResolutionError;
+use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::global_point::GlobalPoint;
 use crate::editor::grackle_point_light::GracklePointLight;
+use crate::editor::save;
 use crate::get;
 
 lazy_static! {
@@ -21,6 +24,7 @@ impl Plugin for EditorStepsPlugin {
         app
             .init_resource::<EditorActions>()
             .add_message::<EditEvent>()
+            .add_systems(Startup, EditorActions::load_template)
             .add_systems(Update, (
                 EditorActions::undo_redo_shortcuts,
                 EditorActions::sync_entities,
@@ -128,7 +132,7 @@ pub struct EditorActions {
 
 impl Default for EditorActions {
     fn default() -> Self {
-        let mut a = Self {
+        Self {
             actions: HashMap::new(),
             action_order: vec![],
             id_counter: 0,
@@ -136,20 +140,7 @@ impl Default for EditorActions {
             selection_affected: None,
             cursor: 0,
             pending_despawns: vec![],
-        };
-        
-        let p1 = a.take_action(Box::new(GlobalPoint::new(-3.0, 0.0, -3.0)));
-        let p2 = a.take_action(Box::new(GlobalPoint::new(3.0, 3.0, 3.0)));
-        a.take_action(Box::new(GlobalPoint::from_point_ref(
-            PointRef::reference_with_offset(p1, 2.0, 5.0, 1.0),
-        )));
-        let room = a.take_action(Box::new(EditorRoom::from_points(p1, p2)));
-
-        let mut light_ref = PointRef::reference_with_offset(room, 0.0, 0.8, 0.0);
-        light_ref.point_key = "bottom_plane_center".to_string();
-        a.take_action(Box::new(GracklePointLight::from_point_ref(light_ref)));
-
-        a
+        }
     }
 }
 
@@ -168,6 +159,19 @@ impl EditorActions {
             selection_affected: None,
             cursor,
             pending_despawns: vec![],
+        }
+    }
+
+    fn load_template(mut actions: ResMut<Self>) {
+        let path = PathBuf::from(format!(
+            "assets/default/blueprints/new.{}", MAP_BLUEPRINT_EXTENSION
+        ));
+        match save::load(&path) {
+            Ok(loaded) => {
+                *actions = loaded;
+                info!("Loaded template from {:?}", path);
+            }
+            Err(e) => error!("Failed to load template {:?}: {}", path, e),
         }
     }
 
@@ -236,6 +240,10 @@ impl EditorActions {
 
     pub fn actions_mut(&mut self) -> &mut HashMap<EditorActionId, EditorAction> {
         &mut self.actions
+    }
+
+    pub fn queue_despawn(&mut self, entity: Entity) {
+        self.pending_despawns.push(entity);
     }
 
     pub fn take_action(&mut self, object: Box<dyn EditorObject>) -> EditorActionId {

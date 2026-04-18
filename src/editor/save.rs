@@ -139,7 +139,7 @@ fn load_point_ref(
 }
 
 pub fn save(path: &Path, actions: &EditorActions) -> rusqlite::Result<()> {
-    let backup_path = path.with_extension(format!("{}.{}}", MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION));
+    let backup_path = path.with_extension(format!("{}.{}", MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION));
     let had_existing = path.exists();
 
     if had_existing {

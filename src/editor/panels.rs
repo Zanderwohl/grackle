@@ -1,16 +1,42 @@
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
-use bevy_egui::egui::{Ui, WidgetText};
+use bevy_egui::egui::{Ui, UiKind, WidgetText};
 use egui_dock::{DockArea, DockState, TabViewer};
 use strum_macros::Display;
+use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::editor::editable::{EditEvent, EditorActionId, EditorActions};
 use crate::editor::multicam::MulticamState;
+use crate::editor::save;
 use crate::tool::Tools;
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS};
 use crate::tool::retarget::RetargetState;
 use crate::tool::show::{ShowPlugin, GizmoVisibility};
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
+
+enum DialogResult {
+    SavePath(PathBuf),
+    LoadPath(PathBuf),
+}
+
+#[derive(Resource, Clone)]
+pub struct CurrentFilePath {
+    pub path: Option<PathBuf>,
+    dialog_result: Arc<Mutex<Option<DialogResult>>>,
+    deferred_room_bake: u8,
+}
+
+impl Default for CurrentFilePath {
+    fn default() -> Self {
+        Self {
+            path: None,
+            dialog_result: Arc::new(Mutex::new(None)),
+            deferred_room_bake: 0,
+        }
+    }
+}
 
 enum TabKinds {
     Empty(String),
@@ -76,6 +102,7 @@ impl Plugin for EditorPanelPlugin {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<EditorPanels>()
+            .init_resource::<CurrentFilePath>()
             .add_systems(Startup, EditorPanels::set_multicam_size)
             .add_systems(EguiPrimaryContextPass, EditorPanels::ui)
         ;
@@ -94,6 +121,7 @@ pub enum EditorPanelLocation {
 pub struct EditorPanels {
     top_tabs: DockState<TabKinds>,
     toolbar_height: f32,
+    menu_bar_height: f32,
     top_height: f32,
     bottom_tabs: DockState<TabKinds>,
     bottom_height: f32,
@@ -125,7 +153,8 @@ impl EditorPanels {
         Self {
             top_tabs: DockState::new(default_top_tabs),
             toolbar_height: 20.0,
-            top_height: 40.0,
+            menu_bar_height: 0.0,
+            top_height: 60.0,
             bottom_tabs: DockState::new(default_bottom_tabs),
             bottom_height: 30.0,
             left_tabs: DockState::new(default_left_tabs),
@@ -151,6 +180,7 @@ impl EditorPanels {
         mut log_ecs_events: MessageWriter<LogECS>,
         mut edit_events: MessageWriter<EditEvent>,
         mut retarget_state: ResMut<RetargetState>,
+        mut current_file: ResMut<CurrentFilePath>,
     ) -> Result {
         let ctx = contexts.ctx_mut();
         if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return Ok(()); }
@@ -159,6 +189,10 @@ impl EditorPanels {
         let mut bake_commands = BakeCommands::default();
         let mut pending_edits = PendingEditEvents::default();
         let mut retarget_request: Option<(EditorActionId, String)> = None;
+        let mut loaded_actions: Option<EditorActions> = None;
+
+        enum FileOp { New, Save, SaveAs, Load }
+        let mut pending_file_op: Option<FileOp> = None;
         
         let mut viewer = TabViewerAndResources  {
             current_tool: & *current_tool,
@@ -171,6 +205,38 @@ impl EditorPanels {
             pending_edits: &mut pending_edits,
             retarget_request: &mut retarget_request,
         };
+
+        panels.menu_bar_height = egui::TopBottomPanel::top("menu_bar")
+            .resizable(false)
+            .show(ctx, |ui| {
+                egui::menu::bar(ui, |ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui.button("New").clicked() {
+                            ui.close_kind(UiKind::Menu);
+                            pending_file_op = Some(FileOp::New);
+                        }
+                        if ui.button("Save").clicked() {
+                            ui.close_kind(UiKind::Menu);
+                            pending_file_op = Some(FileOp::Save);
+                        }
+                        if ui.button("Save As").clicked() {
+                            ui.close_kind(UiKind::Menu);
+                            pending_file_op = Some(FileOp::SaveAs);
+                        }
+                        if ui.button("Load").clicked() {
+                            ui.close_kind(UiKind::Menu);
+                            pending_file_op = Some(FileOp::Load);
+                        }
+                        ui.separator();
+                        if ui.button("Quit").clicked() {
+                            ui.close_kind(UiKind::Menu);
+                        }
+                    });
+                });
+            })
+            .response
+            .rect
+            .height();
 
         panels.top_height = egui::TopBottomPanel::top("top_panel")
             .resizable(true)
@@ -233,6 +299,130 @@ impl EditorPanels {
             .rect
             .height();
 
+        drop(viewer);
+
+        // Poll for completed async file dialog results
+        let dialog_result = current_file.dialog_result.lock().unwrap().take();
+        if let Some(result) = dialog_result {
+            match result {
+                DialogResult::SavePath(path) => {
+                    match save::save(&path, &editor_actions) {
+                        Ok(()) => {
+                            info!("Saved to {:?}", path);
+                            current_file.path = Some(path);
+                        }
+                        Err(e) => error!("Save failed: {}", e),
+                    }
+                }
+                DialogResult::LoadPath(path) => {
+                    match save::load(&path) {
+                        Ok(actions) => {
+                            info!("Loaded from {:?}", path);
+                            loaded_actions = Some(actions);
+                            current_file.path = Some(path);
+                        }
+                        Err(e) => error!("Load failed: {}", e),
+                    }
+                }
+            }
+        }
+
+        // Spawn async file dialogs on background thread (non-blocking)
+        if let Some(op) = pending_file_op {
+            match op {
+                FileOp::New => {
+                    let template = PathBuf::from(format!(
+                        "assets/default/blueprints/new.{}", MAP_BLUEPRINT_EXTENSION
+                    ));
+                    match save::load(&template) {
+                        Ok(actions) => {
+                            info!("New from template {:?}", template);
+                            loaded_actions = Some(actions);
+                            current_file.path = None;
+                        }
+                        Err(e) => error!("New failed: {}", e),
+                    }
+                }
+                FileOp::Save => {
+                    if let Some(ref path) = current_file.path {
+                        match save::save(path, &editor_actions) {
+                            Ok(()) => info!("Saved to {:?}", path),
+                            Err(e) => error!("Save failed: {}", e),
+                        }
+                    } else {
+                        let slot = current_file.dialog_result.clone();
+                        std::thread::spawn(move || {
+                            let handle = pollster::block_on(
+                                rfd::AsyncFileDialog::new()
+                                    .set_file_name(format!("Untitled.{}", MAP_BLUEPRINT_EXTENSION))
+                                    .add_filter("Grackle Map Blueprint", &[MAP_BLUEPRINT_EXTENSION])
+                                    .save_file()
+                            );
+                            if let Some(h) = handle {
+                                *slot.lock().unwrap() = Some(DialogResult::SavePath(h.path().to_path_buf()));
+                            }
+                        });
+                    }
+                }
+                FileOp::SaveAs => {
+                    let slot = current_file.dialog_result.clone();
+                    let existing = current_file.path.clone();
+                    std::thread::spawn(move || {
+                        let mut dialog = rfd::AsyncFileDialog::new()
+                            .add_filter("Grackle Map Blueprint", &[MAP_BLUEPRINT_EXTENSION]);
+                        if let Some(ref existing) = existing {
+                            if let Some(dir) = existing.parent() {
+                                dialog = dialog.set_directory(dir);
+                            }
+                            if let Some(name) = existing.file_name() {
+                                dialog = dialog.set_file_name(name.to_string_lossy().to_string());
+                            }
+                        } else {
+                            dialog = dialog.set_file_name(format!("Untitled.{}", MAP_BLUEPRINT_EXTENSION));
+                        }
+                        let handle = pollster::block_on(dialog.save_file());
+                        if let Some(h) = handle {
+                            *slot.lock().unwrap() = Some(DialogResult::SavePath(h.path().to_path_buf()));
+                        }
+                    });
+                }
+                FileOp::Load => {
+                    let slot = current_file.dialog_result.clone();
+                    std::thread::spawn(move || {
+                        let handle = pollster::block_on(
+                            rfd::AsyncFileDialog::new()
+                                .add_filter("Grackle Map Blueprint", &[MAP_BLUEPRINT_EXTENSION])
+                                .pick_file()
+                        );
+                        if let Some(h) = handle {
+                            *slot.lock().unwrap() = Some(DialogResult::LoadPath(h.path().to_path_buf()));
+                        }
+                    });
+                }
+            }
+        }
+
+        // Handle load
+        if let Some(new_actions) = loaded_actions {
+            let old_entities: Vec<Entity> = editor_actions.active_actions()
+                .filter_map(|(_, a)| a.object().entity())
+                .collect();
+            *editor_actions = new_actions;
+            for entity in old_entities {
+                editor_actions.queue_despawn(entity);
+            }
+            editor_actions.select(None);
+            current_file.deferred_room_bake = 2;
+        }
+
+        // Fire deferred room bake after entities have been spawned and flushed
+        if current_file.deferred_room_bake > 0 {
+            current_file.deferred_room_bake -= 1;
+            if current_file.deferred_room_bake == 0 {
+                room_events.write(CalculateRoomGeometry);
+            }
+        }
+
         // Handle bake commands
         if bake_commands.calculate_room_geometry {
             room_events.write(CalculateRoomGeometry);
@@ -270,7 +460,7 @@ impl EditorPanels {
         let left_taken = panels.left_width / window.width();
         let right_taken = panels.right_width / window.width();
         let bottom_taken = panels.bottom_height / window.height();
-        let top_taken = (panels.toolbar_height + panels.top_height) / window.height();
+        let top_taken = (panels.toolbar_height + panels.menu_bar_height + panels.top_height) / window.height();
         // info!("[{} {}] -> [{}, {}]", left_taken, top_taken, 1.0 - right_taken, 1.0 - bottom_taken);
 
         multicam_state.start = Vec2::new(left_taken, top_taken);
