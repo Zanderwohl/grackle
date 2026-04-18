@@ -1,4 +1,5 @@
 mod common;
+mod constants;
 mod startup;
 mod editor;
 mod tool;

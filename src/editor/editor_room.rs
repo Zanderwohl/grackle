@@ -59,14 +59,14 @@ impl EditorObject for EditorRoom {
         }
     }
 
-    fn editor_ui(&mut self, ui: &mut egui::Ui, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool {
+    fn editor_ui(&mut self, ui: &mut egui::Ui, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId], retarget_request: &mut Option<String>) -> bool {
         let mut changed = false;
         let size = self.resolved_max - self.resolved_min;
         ui.label(format!("Size: {}", size));
         ui.separator();
-        changed |= self.min.editor_ui(ui, "Min", actions, prior_action_order);
+        changed |= self.min.editor_ui(ui, "Min", actions, prior_action_order, retarget_request);
         ui.separator();
-        changed |= self.max.editor_ui(ui, "Max", actions, prior_action_order);
+        changed |= self.max.editor_ui(ui, "Max", actions, prior_action_order, retarget_request);
         if changed {
             if let Ok(v) = self.min.resolve(actions) {
                 self.resolved_min = v;
@@ -178,6 +178,24 @@ impl EditorObject for EditorRoom {
             ("top_left_edge_center".into(), "Top Left Edge".into()),
             ("top_right_edge_center".into(), "Top Right Edge".into()),
         ]
+    }
+
+    fn point_ref_slots(&self) -> Vec<&str> { vec!["min", "max"] }
+
+    fn get_point_ref(&self, key: &str) -> Option<&PointRef> {
+        match key {
+            "Min" | "min" => Some(&self.min),
+            "Max" | "max" => Some(&self.max),
+            _ => None,
+        }
+    }
+
+    fn get_point_ref_mut(&mut self, key: &str) -> Option<&mut PointRef> {
+        match key {
+            "Min" | "min" => Some(&mut self.min),
+            "Max" | "max" => Some(&mut self.max),
+            _ => None,
+        }
     }
 
     fn drag_handle(&mut self, is_max: bool, axis: u8, new_world_value: f32) -> bool {

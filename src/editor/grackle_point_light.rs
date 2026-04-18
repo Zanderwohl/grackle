@@ -28,9 +28,9 @@ impl EditorObject for GracklePointLight {
         Ok(self.resolved_location)
     }
 
-    fn editor_ui(&mut self, ui: &mut egui::Ui, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool {
+    fn editor_ui(&mut self, ui: &mut egui::Ui, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId], retarget_request: &mut Option<String>) -> bool {
         let mut changed = false;
-        changed |= self.location.editor_ui(ui, "Location", actions, prior_action_order);
+        changed |= self.location.editor_ui(ui, "Location", actions, prior_action_order, retarget_request);
         if changed {
             if let Ok(v) = self.location.resolve(actions) {
                 self.resolved_location = v;
@@ -93,6 +93,33 @@ impl EditorObject for GracklePointLight {
 
     fn reference_points_for_ray(&self, _ray: &Ray3d) -> Vec<(String, Vec3)> {
         vec![("".into(), self.resolved_location)]
+    }
+
+    fn point_ref_slots(&self) -> Vec<&str> { vec!["location"] }
+
+    fn scalar_fields(&self) -> Vec<(&str, f32)> {
+        vec![
+            ("intensity", self.intensity),
+            ("radius", self.radius),
+            ("range_val", self.range),
+        ]
+    }
+
+    fn set_scalar_field(&mut self, key: &str, value: f32) {
+        match key {
+            "intensity" => self.intensity = value,
+            "radius" => self.radius = value,
+            "range_val" => self.range = value,
+            _ => {}
+        }
+    }
+
+    fn get_point_ref(&self, _key: &str) -> Option<&PointRef> {
+        Some(&self.location)
+    }
+
+    fn get_point_ref_mut(&mut self, _key: &str) -> Option<&mut PointRef> {
+        Some(&mut self.location)
     }
 
     fn drag_handle(&mut self, _is_max: bool, axis: u8, new_world_value: f32) -> bool {

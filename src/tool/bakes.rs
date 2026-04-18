@@ -1,8 +1,12 @@
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
 use bevy_egui::egui;
+use crate::editor::editable::EditorObjectTag;
 use crate::get;
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, Room};
+
+#[derive(Message)]
+pub struct LogECS;
 
 pub struct BakePlugin;
 
@@ -11,7 +15,8 @@ impl Plugin for BakePlugin {
         app
             .add_message::<CalculateRoomGeometry>()
             .add_message::<ClearRoomGeometry>()
-            .add_systems(Update, (Self::post_startup, Self::bake_room_geometry, Self::clear_room_geometry))
+            .add_message::<LogECS>()
+            .add_systems(Update, (Self::post_startup, Self::bake_room_geometry, Self::clear_room_geometry, Self::log_ecs))
         ;
     }
 }
@@ -28,6 +33,9 @@ impl BakePlugin {
                     commands.clear_room_geometry = true;
                 }
             });
+            if ui.button("Log ECS").clicked() {
+                commands.log_ecs = true;
+            }
         });
         commands
     }
@@ -95,6 +103,31 @@ impl BakePlugin {
             info!("Cleared {} baked room mesh(es)", count);
         }
     }
+
+    fn log_ecs(
+        mut events: MessageReader<LogECS>,
+        query: Query<(Entity, &EditorObjectTag, &Transform, Option<&Room>, Option<&PointLight>)>,
+    ) {
+        if events.read().next().is_none() { return; }
+        events.clear();
+
+        info!("=== ECS Entity Dump ===");
+        for (entity, tag, transform, room, point_light) in &query {
+            let room_str = match room {
+                Some(r) => format!("{:?}", r),
+                None => "None".to_string(),
+            };
+            let light_str = match point_light {
+                Some(l) => format!("{:?}", l),
+                None => "None".to_string(),
+            };
+            info!(
+                "{:?} | {:?} | {:?} | Room: {} | PointLight: {}",
+                entity, tag, transform.translation, room_str, light_str,
+            );
+        }
+        info!("=== {} entities total ===", query.iter().count());
+    }
 }
 
 #[derive(Component)]
@@ -104,4 +137,5 @@ pub struct BakedRoomGeometry;
 pub struct BakeCommands {
     pub calculate_room_geometry: bool,
     pub clear_room_geometry: bool,
+    pub log_ecs: bool,
 }

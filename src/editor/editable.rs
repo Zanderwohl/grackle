@@ -31,7 +31,7 @@ impl Plugin for EditorStepsPlugin {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Debug)]
 pub struct EditorObjectTag {
     pub editor_id: u64,
 }
@@ -40,7 +40,7 @@ pub struct EditorObjectTag {
 pub trait EditorObject: Send + Sync {
     fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError>;
     /// Returns true if the object was modified this frame.
-    fn editor_ui(&mut self, ui: &mut egui::Ui, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId]) -> bool;
+    fn editor_ui(&mut self, ui: &mut egui::Ui, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId], retarget_request: &mut Option<String>) -> bool;
     fn type_name(&self) -> String;
     fn type_key(&self) -> &'static str;
     fn debug_gizmos(&self, gizmos: &mut Gizmos);
@@ -67,6 +67,37 @@ pub trait EditorObject: Send + Sync {
     /// Returns the resolved min and max bounds if this object is a room-like
     /// object with drag handles. Used to position handles.
     fn drag_handle_bounds(&self) -> Option<(Vec3, Vec3)> { None }
+
+    /// Return all named PointRef slots on this object (for save/load).
+    fn point_ref_slots(&self) -> Vec<&str> { vec![] }
+
+    /// Return extra scalar fields for save/load (e.g. light intensity).
+    fn scalar_fields(&self) -> Vec<(&str, f32)> { vec![] }
+
+    /// Set a scalar field by name (for loading).
+    fn set_scalar_field(&mut self, _key: &str, _value: f32) {}
+
+    /// Get a reference to a named PointRef on this object.
+    fn get_point_ref(&self, _key: &str) -> Option<&PointRef> { None }
+
+    /// Get a mutable reference to a named PointRef on this object.
+    /// Keys: GlobalPoint/GracklePointLight use "location" (or ""),
+    /// EditorRoom uses "min" / "max".
+    fn get_point_ref_mut(&mut self, _key: &str) -> Option<&mut PointRef> { None }
+}
+
+/// Create a blank EditorObject from a type_key string (for loading from DB).
+/// PointRefs are initialized to absolute zero and must be overwritten after construction.
+pub fn create_object_from_type_key(type_key: &str) -> Option<Box<dyn EditorObject>> {
+    match type_key {
+        "global_point" => Some(Box::new(GlobalPoint::new(0.0, 0.0, 0.0))),
+        "grackle_point_light" => Some(Box::new(GracklePointLight::new(0.0, 0.0, 0.0))),
+        "editor_room" => Some(Box::new(EditorRoom::from_point_refs(
+            PointRef::absolute(0.0, 0.0, 0.0),
+            PointRef::absolute(0.0, 0.0, 0.0),
+        ))),
+        _ => None,
+    }
 }
 
 #[derive(Message)]
@@ -123,6 +154,31 @@ impl Default for EditorActions {
 }
 
 impl EditorActions {
+    pub fn from_parts(
+        actions: HashMap<EditorActionId, EditorAction>,
+        action_order: Vec<EditorActionId>,
+        id_counter: u64,
+        cursor: u64,
+    ) -> Self {
+        Self {
+            actions,
+            action_order,
+            id_counter,
+            selected_action: None,
+            selection_affected: None,
+            cursor,
+            pending_despawns: vec![],
+        }
+    }
+
+    pub fn id_counter(&self) -> u64 {
+        self.id_counter
+    }
+
+    pub fn cursor(&self) -> u64 {
+        self.cursor
+    }
+
     pub fn next_id(&mut self) -> EditorActionId {
         let id = EditorActionId { _id: self.id_counter };
         self.id_counter += 1;
@@ -172,6 +228,10 @@ impl EditorActions {
 
     pub fn actions_map(&self) -> &HashMap<EditorActionId, EditorAction> {
         &self.actions
+    }
+
+    pub fn action_order(&self) -> &[EditorActionId] {
+        &self.action_order
     }
 
     pub fn actions_mut(&mut self) -> &mut HashMap<EditorActionId, EditorAction> {
@@ -236,6 +296,7 @@ impl EditorActions {
         ui: &mut egui::Ui,
         actions: &mut Self,
         edit_events: &mut Vec<EditEvent>,
+        retarget_out: &mut Option<(EditorActionId, String)>,
     ) {
         // Section 1: Undo/Redo (compact, top)
         ui.horizontal(|ui| {
@@ -271,7 +332,11 @@ impl EditorActions {
                         ui.separator();
                         if let Some(mut action) = actions.actions.remove(&selected_id) {
                             ui.heading(action.type_name_with_id());
-                            let edited = action.object_mut().editor_ui(ui, &actions.actions, &prior_order);
+                            let mut retarget_request: Option<String> = None;
+                            let edited = action.object_mut().editor_ui(ui, &actions.actions, &prior_order, &mut retarget_request);
+                            if let Some(label) = retarget_request {
+                                *retarget_out = Some((selected_id, label));
+                            }
                             if edited {
                                 action.parents = action.object().parent_ids().to_vec();
                                 entity_for_event = action.object().entity();
@@ -437,6 +502,10 @@ impl EditorActionId {
         EditorActionId { _id: 0 }
     }
 
+    pub fn from_raw(id: u64) -> Self {
+        EditorActionId { _id: id }
+    }
+
     pub fn _id(&self) -> u64 {
         self._id
     }
@@ -460,6 +529,14 @@ pub struct EditorAction {
 }
 
 impl EditorAction {
+    pub fn new(id: EditorActionId, object: Box<dyn EditorObject>, parents: Vec<EditorActionId>) -> Self {
+        Self { id, object, parents }
+    }
+
+    pub fn id(&self) -> EditorActionId {
+        self.id
+    }
+
     pub fn object(&self) -> &dyn EditorObject {
         &*self.object
     }
@@ -482,6 +559,10 @@ impl EditorAction {
 
     pub fn parents(&self) -> &[EditorActionId] {
         &self.parents
+    }
+
+    pub fn set_parents(&mut self, parents: Vec<EditorActionId>) {
+        self.parents = parents;
     }
 }
 
@@ -579,10 +660,16 @@ impl PointRef {
         label: &str,
         actions: &HashMap<EditorActionId, EditorAction>,
         prior_action_order: &[EditorActionId],
+        retarget_request: &mut Option<String>,
     ) -> bool {
         let mut changed = false;
 
-        ui.label(egui::RichText::new(label).strong());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(label).strong());
+            if ui.small_button("⊕").on_hover_text("Retarget").clicked() {
+                *retarget_request = Some(label.to_string());
+            }
+        });
 
         // Reference action dropdown
         let ref_label = self.reference

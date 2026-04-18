@@ -166,7 +166,7 @@ impl EditorObject for GrackleCuboid {
         Ok(point.resolve_in_bounds(self.min, self.max))
     }
 
-    fn editor_ui(&mut self, _ui: &mut egui::Ui, _actions: &HashMap<EditorActionId, EditorAction>, _prior_action_order: &[EditorActionId]) -> bool {
+    fn editor_ui(&mut self, _ui: &mut egui::Ui, _actions: &HashMap<EditorActionId, EditorAction>, _prior_action_order: &[EditorActionId], _retarget_request: &mut Option<String>) -> bool {
         false
     }
 

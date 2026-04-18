@@ -4,10 +4,11 @@ use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use bevy_egui::egui::{Ui, WidgetText};
 use egui_dock::{DockArea, DockState, TabViewer};
 use strum_macros::Display;
-use crate::editor::editable::{EditEvent, EditorActions};
+use crate::editor::editable::{EditEvent, EditorActionId, EditorActions};
 use crate::editor::multicam::MulticamState;
 use crate::tool::Tools;
-use crate::tool::bakes::{BakePlugin, BakeCommands};
+use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS};
+use crate::tool::retarget::RetargetState;
 use crate::tool::show::{ShowPlugin, GizmoVisibility};
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
 
@@ -32,6 +33,7 @@ struct TabViewerAndResources<'a> {
     bake_commands: &'a mut BakeCommands,
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
+    retarget_request: &'a mut Option<(EditorActionId, String)>,
     gizmos: Gizmos<'a, 'a>,
 }
 
@@ -63,7 +65,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
             }
             TabKinds::Timeline => {
-                EditorActions::ui(ui, self.editor_actions, &mut self.pending_edits.events)
+                EditorActions::ui(ui, self.editor_actions, &mut self.pending_edits.events, self.retarget_request)
             }
         }
     }
@@ -146,7 +148,9 @@ impl EditorPanels {
         mut gizmo_visibility: ResMut<GizmoVisibility>,
         mut room_events: MessageWriter<CalculateRoomGeometry>,
         mut clear_room_events: MessageWriter<ClearRoomGeometry>,
+        mut log_ecs_events: MessageWriter<LogECS>,
         mut edit_events: MessageWriter<EditEvent>,
+        mut retarget_state: ResMut<RetargetState>,
     ) -> Result {
         let ctx = contexts.ctx_mut();
         if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return Ok(()); }
@@ -154,6 +158,7 @@ impl EditorPanels {
         
         let mut bake_commands = BakeCommands::default();
         let mut pending_edits = PendingEditEvents::default();
+        let mut retarget_request: Option<(EditorActionId, String)> = None;
         
         let mut viewer = TabViewerAndResources  {
             current_tool: & *current_tool,
@@ -164,6 +169,7 @@ impl EditorPanels {
             bake_commands: &mut bake_commands,
             gizmo_visibility: &mut *gizmo_visibility,
             pending_edits: &mut pending_edits,
+            retarget_request: &mut retarget_request,
         };
 
         panels.top_height = egui::TopBottomPanel::top("top_panel")
@@ -233,6 +239,17 @@ impl EditorPanels {
         }
         if bake_commands.clear_room_geometry {
             clear_room_events.write(ClearRoomGeometry);
+        }
+        if bake_commands.log_ecs {
+            log_ecs_events.write(LogECS);
+        }
+
+        // Handle retarget request
+        if let Some((action_id, label)) = retarget_request {
+            retarget_state.target_action = Some(action_id);
+            retarget_state.target_point_ref_key = label;
+            retarget_state.hovered_point = None;
+            next_tool.set(Tools::Retarget);
         }
 
         // Flush edit events

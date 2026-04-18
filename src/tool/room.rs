@@ -555,7 +555,7 @@ impl RoomDragState {
     }
 }
 
-#[derive(Component, Clone)]
+#[derive(Component, Clone, Debug)]
 pub struct Room {
     pub min: Vec3,
     pub max: Vec3,

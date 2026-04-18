@@ -189,6 +189,54 @@ pub fn draw_picking_gizmos(
     }
 }
 
+/// Like `find_hovered_point` but only considers actions whose IDs are in `allowed`.
+pub fn find_hovered_point_filtered(
+    ray: &Ray3d,
+    actions: &EditorActions,
+    pick_radius: f32,
+    allowed: &[EditorActionId],
+) -> Option<(EditorActionId, String, Vec3)> {
+    let mut best_dist = pick_radius;
+    let mut best: Option<(EditorActionId, String, Vec3)> = None;
+
+    for (action_id, action) in actions.active_actions() {
+        if !allowed.contains(&action_id) { continue; }
+        let points = action.object().reference_points_for_ray(ray);
+        for (key, pos) in points {
+            let dist = ray_point_distance(ray, pos);
+            if dist < best_dist {
+                best_dist = dist;
+                best = Some((action_id, key, pos));
+            }
+        }
+    }
+
+    best
+}
+
+/// Like `draw_picking_gizmos` but only draws for actions whose IDs are in `allowed`.
+pub fn draw_picking_gizmos_filtered(
+    gizmos: &mut Gizmos,
+    ray: &Ray3d,
+    actions: &EditorActions,
+    hovered: &Option<(EditorActionId, String, Vec3)>,
+    allowed: &[EditorActionId],
+) {
+    let dim_color = Color::srgb_u8(200, 200, 200);
+    let highlight_color = Color::srgb_u8(0, 230, 0);
+
+    for (action_id, action) in actions.active_actions() {
+        if !allowed.contains(&action_id) { continue; }
+        let points = action.object().reference_points_for_ray(ray);
+        for (key, pos) in &points {
+            let is_hovered = hovered.as_ref()
+                .is_some_and(|(hid, hkey, _)| *hid == action_id && hkey == key);
+            let color = if is_hovered { highlight_color } else { dim_color };
+            gizmos.sphere(Isometry3d::from_translation(*pos), 0.1, color);
+        }
+    }
+}
+
 /// Draw a dashed taxicab path (X -> Z -> Y) from `base` to `target`.
 pub fn draw_taxicab_path(gizmos: &mut Gizmos, base: Vec3, target: Vec3) {
     const DASH: f32 = 0.15;
