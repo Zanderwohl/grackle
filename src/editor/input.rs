@@ -159,14 +159,30 @@ impl EditorInputPlugin {
         let ctx = egui_contexts.ctx_mut();
         if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
-        if ctx.is_pointer_over_area() || ctx.wants_pointer_input() {
-            return;
-        }
 
+        // Always mirror Bevy button state so tools (e.g. drag end → history) see releases
+        // even when we skip world picking over egui.
         let (just_pressed, pressed, released) = mouse_precedence(mouse_buttons);
         current_input.just_pressed = just_pressed;
         current_input.pressed = pressed;
         current_input.released = released;
+
+        if ctx.is_pointer_over_area() || ctx.wants_pointer_input() {
+            current_input.in_camera = None;
+            current_input.local_pos = None;
+            current_input.normalized_pos = None;
+            current_input.global_pos = None;
+            current_input.world_pos = None;
+            if pressed.is_none() {
+                current_input.started_in_camera = None;
+            }
+            current_input.delta_pos = Vec2::ZERO;
+            for ev in evr_motion.read() {
+                current_input.delta_pos.x += ev.delta.x;
+                current_input.delta_pos.y += ev.delta.y;
+            }
+            return;
+        }
 
         let mut locations = Vec::new();
         for (_, pointer) in pointers {

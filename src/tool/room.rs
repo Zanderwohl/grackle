@@ -434,6 +434,7 @@ impl RoomDragState {
 
         if mouse_released || ray.is_none() {
             if state.grabbed_handle.is_some() {
+                features.end_edit(feature_id);
                 state.grabbed_handle = None;
                 state.grab_offset = None;
             }
@@ -519,6 +520,7 @@ impl RoomDragState {
                     }
 
                     if mouse_just_pressed {
+                        features.begin_edit(feature_id);
                         state.grabbed_handle = Some(handle.axis);
                         state.grab_offset = None;
                     }
@@ -580,7 +582,7 @@ impl Room {
     /// Bake this room's wall geometry, carving openings where other rooms
     /// overlap or share walls. Returns a single Mesh with inward-facing normals.
     pub fn bake_faces(&self, others: &[Room]) -> Mesh {
-        use crate::common::rect_subtract::{Rect2D, subtract_rects};
+        use crate::common::rect_subtract::subtract_rects;
 
         let mut vertices: Vec<[f32; 3]> = Vec::new();
         let mut normals: Vec<[f32; 3]> = Vec::new();
@@ -853,7 +855,6 @@ pub struct ClearRoomGeometry;
 
 #[cfg(test)]
 mod tests {
-    use bevy::ecs::relationship::RelationshipSourceCollection;
     use bevy::prelude::*;
     use super::*;
     

@@ -62,6 +62,7 @@ impl RetargetPlugin {
             if let Some((ref_feature_id, ref_key, ref_pos)) = state.hovered_point.clone() {
                 let point_ref_key = state.target_point_ref_key.clone();
 
+                features.begin_edit(target_feature_id);
                 if let Some(mut feature) = features.features_mut().remove(&target_feature_id) {
                     if let Some(pr) = feature.object_mut().get_point_ref_mut(&point_ref_key) {
                         let old_base = pr.resolved_reference.unwrap_or(bevy::math::Vec3::ZERO);
@@ -99,6 +100,7 @@ impl RetargetPlugin {
                     }
                 }
 
+                features.end_edit(target_feature_id);
                 features.select(Some(target_feature_id));
                 next_tool.set(Tools::Select);
             }

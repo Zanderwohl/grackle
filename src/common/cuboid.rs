@@ -5,6 +5,7 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
 use crate::common::ray::ray_intersects_aabb;
+use crate::editor::action::FeatureData;
 use crate::editor::editable::{Feature, FeatureId, FeatureTrait};
 use crate::get;
 
@@ -175,6 +176,16 @@ impl FeatureTrait for GrackleCuboid {
     }
 
     fn type_key(&self) -> &'static str { "cuboid" }
+
+    fn snapshot(&self) -> FeatureData {
+        FeatureData::Cuboid { min: self.min, max: self.max }
+    }
+
+    fn apply_snapshot(&mut self, data: &FeatureData) {
+        let FeatureData::Cuboid { min, max } = data else { return; };
+        self.min = *min;
+        self.max = *max;
+    }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let min = self.min;

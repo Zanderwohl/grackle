@@ -3,6 +3,7 @@ use bevy::platform::collections::HashMap;
 use bevy_egui::egui;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
+use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::get;
 
@@ -51,6 +52,23 @@ impl FeatureTrait for GracklePointLight {
     }
 
     fn type_key(&self) -> &'static str { "grackle_point_light" }
+
+    fn snapshot(&self) -> FeatureData {
+        FeatureData::PointLight {
+            location: self.location.clone(),
+            intensity: self.intensity,
+            radius: self.radius,
+            range: self.range,
+        }
+    }
+
+    fn apply_snapshot(&mut self, data: &FeatureData) {
+        let FeatureData::PointLight { location, intensity, radius, range } = data else { return; };
+        self.location = location.clone();
+        self.intensity = *intensity;
+        self.radius = *radius;
+        self.range = *range;
+    }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         gizmos.sphere(Isometry3d::from_translation(self.resolved_location), 0.2, Color::srgb_u8(255, 255, 0));

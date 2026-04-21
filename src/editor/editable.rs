@@ -6,6 +6,8 @@ use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
 use crate::common::PointResolutionError;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
+use crate::editor::action::{Action, FeatureDelta, FeatureSnapshot};
+use crate::editor::action::FeatureData;
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::global_point::GlobalPoint;
 use crate::editor::grackle_point_light::GracklePointLight;
@@ -47,6 +49,8 @@ pub trait FeatureTrait: Send + Sync {
     fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool;
     fn type_name(&self) -> String;
     fn type_key(&self) -> &'static str;
+    fn snapshot(&self) -> FeatureData;
+    fn apply_snapshot(&mut self, data: &FeatureData);
     fn debug_gizmos(&self, gizmos: &mut Gizmos);
     fn entity(&self) -> Option<Entity>;
     fn set_entity(&mut self, entity: Option<Entity>);
@@ -128,6 +132,9 @@ pub struct FeatureTimeline {
     selection_affected: Option<Vec<FeatureId>>,
     rollback_bar: u64,
     pending_despawns: Vec<Entity>,
+    actions: Vec<Action>,
+    action_cursor: usize,
+    pending_snapshot: Option<(FeatureId, FeatureSnapshot)>,
 }
 
 impl Default for FeatureTimeline {
@@ -140,6 +147,9 @@ impl Default for FeatureTimeline {
             selection_affected: None,
             rollback_bar: 0,
             pending_despawns: vec![],
+            actions: vec![],
+            action_cursor: 0,
+            pending_snapshot: None,
         }
     }
 }
@@ -159,6 +169,9 @@ impl FeatureTimeline {
             selection_affected: None,
             rollback_bar,
             pending_despawns: vec![],
+            actions: vec![],
+            action_cursor: 0,
+            pending_snapshot: None,
         }
     }
 
@@ -247,6 +260,7 @@ impl FeatureTimeline {
     }
 
     pub fn apply_feature(&mut self, feature_object: Box<dyn FeatureTrait>) -> FeatureId {
+        let rollback_at_end = self.rollback_bar == self.feature_order.len() as u64;
         let cur = self.rollback_bar as usize;
         if cur < self.feature_order.len() {
             for id in self.feature_order.drain(cur..) {
@@ -259,6 +273,7 @@ impl FeatureTimeline {
         }
 
         let parents = feature_object.parent_ids();
+        let after_data = feature_object.snapshot();
         let new_id = self.next_id();
         let new_feature = Feature {
             id: new_id,
@@ -267,7 +282,25 @@ impl FeatureTimeline {
         };
         self.features.insert(new_feature.id, new_feature);
         self.feature_order.push(new_id);
-        self.rollback_bar = self.feature_order.len() as u64;
+        if rollback_at_end {
+            self.rollback_bar = self.feature_order.len() as u64;
+        } else {
+            self.clamp_rollback_bar();
+        }
+
+        let order_index = self.feature_order.len().saturating_sub(1);
+        self.record_action(Action {
+            deltas: vec![FeatureDelta {
+                feature_id: new_id,
+                before: None,
+                after: Some(FeatureSnapshot {
+                    data: after_data,
+                    parents: self.features.get(&new_id).map(|f| f.parents().to_vec()).unwrap_or_default(),
+                    order_index,
+                }),
+            }],
+        });
+
         new_id
     }
     
@@ -298,6 +331,187 @@ impl FeatureTimeline {
     pub fn redo(&mut self) {
         if !self.can_redo() { return; }
         self.rollback_bar += 1;
+    }
+
+    pub fn can_undo_action(&self) -> bool {
+        self.action_cursor > 0
+    }
+
+    pub fn can_redo_action(&self) -> bool {
+        self.action_cursor < self.actions.len()
+    }
+
+    pub fn record_action(&mut self, action: Action) {
+        // Drop any redo branch: actions past the cursor are destroyed and never reapplied.
+        if self.action_cursor < self.actions.len() {
+            self.actions.drain(self.action_cursor..);
+        }
+        if let Some(last) = self.actions.last_mut() {
+            if last.try_coalesce_incoming(&action) {
+                self.action_cursor = self.actions.len();
+                return;
+            }
+        }
+        self.actions.push(action);
+        self.action_cursor = self.actions.len();
+    }
+
+    pub fn undo_action(&mut self) {
+        if !self.can_undo_action() { return; }
+        let idx = self.action_cursor - 1;
+        let action = self.actions[idx].clone();
+        for delta in action.deltas.iter().rev() {
+            self.apply_delta(delta.feature_id, delta.before.as_ref());
+        }
+        self.action_cursor -= 1;
+        self.clamp_rollback_bar();
+    }
+
+    pub fn redo_action(&mut self) {
+        if !self.can_redo_action() { return; }
+        let was_at_end = self.rollback_bar >= self.feature_order.len() as u64;
+        let idx = self.action_cursor;
+        let action = self.actions[idx].clone();
+        for delta in action.deltas.iter() {
+            self.apply_delta(delta.feature_id, delta.after.as_ref());
+        }
+        self.action_cursor += 1;
+        self.clamp_rollback_bar();
+        if was_at_end {
+            self.rollback_bar = self.feature_order.len() as u64;
+        }
+    }
+
+    /// Keeps the construction rollback bar valid after feature-order changes from actions.
+    /// Action undo/redo does not otherwise move the bar except to stay in `[0, len]`.
+    fn clamp_rollback_bar(&mut self) {
+        let len = self.feature_order.len() as u64;
+        if self.rollback_bar > len {
+            self.rollback_bar = len;
+        }
+        if let Some(selected) = self.selected_feature {
+            if let Some(idx) = self.feature_order.iter().position(|id| *id == selected) {
+                if idx as u64 >= self.rollback_bar {
+                    self.select(None);
+                }
+            }
+        }
+    }
+
+    pub fn begin_edit(&mut self, feature_id: FeatureId) {
+        if self.pending_snapshot.is_some() {
+            return;
+        }
+        let Some(before) = self.snapshot_feature(feature_id) else { return; };
+        self.pending_snapshot = Some((feature_id, before));
+    }
+
+    pub fn end_edit(&mut self, feature_id: FeatureId) {
+        let Some((pending_id, before)) = self.pending_snapshot.take() else { return; };
+        if pending_id != feature_id {
+            return;
+        }
+        let Some(after) = self.snapshot_feature(feature_id) else { return; };
+        if before == after {
+            return;
+        }
+
+        self.record_action(Action {
+            deltas: vec![FeatureDelta {
+                feature_id,
+                before: Some(before),
+                after: Some(after),
+            }],
+        });
+    }
+
+    fn snapshot_feature(&self, feature_id: FeatureId) -> Option<FeatureSnapshot> {
+        let order_index = self.feature_order.iter().position(|id| *id == feature_id)?;
+        let feature = self.features.get(&feature_id)?;
+        Some(FeatureSnapshot::from_feature(feature, order_index))
+    }
+
+    /// Immutable snapshot for history / UI (does not use `pending_snapshot`).
+    pub fn feature_snapshot(&self, feature_id: FeatureId) -> Option<FeatureSnapshot> {
+        self.snapshot_feature(feature_id)
+    }
+
+    fn apply_delta(&mut self, feature_id: FeatureId, target: Option<&FeatureSnapshot>) {
+        match target {
+            None => {
+                self.remove_feature_internal(feature_id);
+            }
+            Some(snapshot) => {
+                if self.features.contains_key(&feature_id) {
+                    if let Some(mut feature) = self.features.remove(&feature_id) {
+                        feature.object_mut().apply_snapshot(&snapshot.data);
+                        feature.parents = snapshot.parents.clone();
+                        self.features.insert(feature_id, feature);
+                    }
+                } else {
+                    let mut object = snapshot.blank_object();
+                    let feature = Feature::new(feature_id, object, snapshot.parents.clone());
+                    let idx = snapshot.order_index.min(self.feature_order.len());
+                    self.feature_order.insert(idx, feature_id);
+                    self.features.insert(feature_id, feature);
+                }
+
+                // Ensure selection propagation recomputes descendants on undo/redo.
+                if self.selected_feature == Some(feature_id) {
+                    self.select(Some(feature_id));
+                } else if self.selected_feature.is_some() {
+                    self.select(self.selected_feature);
+                }
+            }
+        }
+
+        self.queue_refresh_for_feature_and_descendants(feature_id);
+        self.clamp_rollback_bar();
+    }
+
+    fn queue_refresh_for_feature_and_descendants(&mut self, root: FeatureId) {
+        let mut stack = vec![root];
+        let mut visited: HashSet<FeatureId> = HashSet::new();
+
+        while let Some(current) = stack.pop() {
+            if !visited.insert(current) {
+                continue;
+            }
+
+            if let Some(mut feature) = self.features.remove(&current) {
+                if let Some(entity) = feature.object().entity() {
+                    self.pending_despawns.push(entity);
+                    feature.object_mut().set_entity(None);
+                }
+                self.features.insert(current, feature);
+            }
+
+            for (child_id, child) in self.features.iter() {
+                if child.parents().contains(&current) {
+                    stack.push(*child_id);
+                }
+            }
+        }
+    }
+
+    fn remove_feature_internal(&mut self, feature_id: FeatureId) {
+        if let Some(order_index) = self.feature_order.iter().position(|id| *id == feature_id) {
+            self.feature_order.remove(order_index);
+        }
+
+        if let Some(feature) = self.features.remove(&feature_id) {
+            if let Some(entity) = feature.object.entity() {
+                self.pending_despawns.push(entity);
+            }
+        }
+
+        if self.selected_feature == Some(feature_id) {
+            self.select(None);
+        } else if self.selected_feature.is_some() {
+            self.select(self.selected_feature);
+        }
+
+        self.clamp_rollback_bar();
     }
     
     pub fn ui(
@@ -338,6 +552,7 @@ impl FeatureTimeline {
                     .resizable(false)
                     .show_inside(ui, |ui| {
                         ui.separator();
+                        let before_snap = features.feature_snapshot(selected_id);
                         if let Some(mut feature) = features.features.remove(&selected_id) {
                             ui.heading(feature.type_name_with_id());
                             let mut retarget_request: Option<String> = None;
@@ -352,6 +567,21 @@ impl FeatureTimeline {
                                 edited_id = Some(selected_id);
                             }
                             features.features.insert(selected_id, feature);
+                        }
+                        if was_edited {
+                            if let (Some(before), Some(after)) =
+                                (before_snap, features.feature_snapshot(selected_id))
+                            {
+                                if before != after {
+                                    features.record_action(Action {
+                                        deltas: vec![FeatureDelta {
+                                            feature_id: selected_id,
+                                            before: Some(before),
+                                            after: Some(after),
+                                        }],
+                                    });
+                                }
+                            }
                         }
                     });
             }
@@ -370,7 +600,7 @@ impl FeatureTimeline {
             }
         }
 
-        // Section 2: History list (fills remaining space)
+        // Section 2: Feature order (construction timeline; fills remaining space)
         let mut selection_changed = false;
         let mut next_selected = features.selected_feature;
 
@@ -409,6 +639,43 @@ impl FeatureTimeline {
         }
     }
 
+    /// User action timeline (undo/redo of edits). Separate from the construction timeline (`ui`).
+    pub fn history_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui.add_enabled(
+                self.can_undo_action(),
+                egui::Button::new("⮪ ".to_owned() + &get!("editor.history.undo")),
+            ).clicked() {
+                self.undo_action();
+            }
+            if ui.add_enabled(
+                self.can_redo_action(),
+                egui::Button::new(get!("editor.history.redo") + " ⮫"),
+            ).clicked() {
+                self.redo_action();
+            }
+        });
+
+        ui.separator();
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            if self.actions.is_empty() {
+                ui.label(egui::RichText::new(get!("editor.history.empty")).weak());
+                return;
+            }
+            for (i, action) in self.actions.iter().enumerate() {
+                let applied = i < self.action_cursor;
+                let text = action.label();
+                let rich = if applied {
+                    egui::RichText::new(text)
+                } else {
+                    egui::RichText::new(text).strikethrough().weak()
+                };
+                ui.label(rich);
+            }
+        });
+    }
+
     fn undo_redo_shortcuts(
         keys: Res<ButtonInput<KeyCode>>,
         mut features: ResMut<FeatureTimeline>,
@@ -429,9 +696,9 @@ impl FeatureTimeline {
             || (ctrl && keys.just_pressed(KeyCode::KeyY));
 
         if redo {
-            features.redo();
+            features.redo_action();
         } else if undo {
-            features.undo();
+            features.undo_action();
         }
     }
 
@@ -574,7 +841,7 @@ impl Feature {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub enum AxisRef {
     Absolute(f32),
     Relative(f32),
@@ -607,7 +874,7 @@ impl AxisRef {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct PointRef {
     pub reference: Option<FeatureId>,
     pub point_key: String,

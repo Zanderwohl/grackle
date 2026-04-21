@@ -203,6 +203,7 @@ impl PointDragState {
 
         if mouse_released || ray.is_none() {
             if state.grabbed_axis.is_some() {
+                features.end_edit(feature_id);
                 state.grabbed_axis = None;
                 state.grab_offset = None;
                 Self::restore_all_materials(&arrows, &mut commands, &state);
@@ -269,6 +270,7 @@ impl PointDragState {
                     Self::highlight_axis(&arrows, axis, &mut commands, &state);
 
                     if mouse_just_pressed {
+                        features.begin_edit(feature_id);
                         state.grabbed_axis = Some(axis);
                         state.grab_offset = None;
                     }

@@ -83,6 +83,12 @@ title = "Zeitleiste"
 undo = "Rückgängig"
 redo = "Wiederherstellen"
 
+[editor.history]
+title = "Verlauf"
+undo = "Rückgängig"
+redo = "Wiederholen"
+empty = "Noch keine Aktionen."
+
 [editor.features.global_point]
 title = "Globaler Punkt"
 

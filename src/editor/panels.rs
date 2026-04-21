@@ -97,7 +97,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 FeatureTimeline::ui(ui, self.editor_features, &mut self.pending_edits.events, self.retarget_request)
             }
             TabKinds::History => {
-                ui.label(get!("editor.history.title").to_string());
+                self.editor_features.history_ui(ui);
             }
         }
     }

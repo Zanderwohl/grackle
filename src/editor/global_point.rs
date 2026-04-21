@@ -3,6 +3,7 @@ use bevy::platform::collections::HashMap;
 use bevy_egui::egui;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
+use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::get;
 
@@ -37,6 +38,17 @@ impl FeatureTrait for GlobalPoint {
     }
 
     fn type_key(&self) -> &'static str { "global_point" }
+
+    fn snapshot(&self) -> FeatureData {
+        FeatureData::GlobalPoint {
+            location: self.location.clone(),
+        }
+    }
+
+    fn apply_snapshot(&mut self, data: &FeatureData) {
+        let FeatureData::GlobalPoint { location } = data else { return; };
+        self.location = location.clone();
+    }
     
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         gizmos.sphere(Isometry3d::from_translation(self.resolved_location), 0.2, Color::srgb_u8(255, 60, 60));
