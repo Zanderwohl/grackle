@@ -81,8 +81,8 @@ active = "Snap to grid"
 
 [editor.timeline]
 title = "Timeline"
-undo = "Undo"
-redo = "Redo"
+undo = "Backward"
+redo = "Forward"
 
 [editor.actions.global_point]
 title = "Global Point"

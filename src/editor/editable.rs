@@ -126,7 +126,7 @@ pub struct EditorActions {
     /// Topologically sorted list of the selected action and all its DAG descendants.
     /// Parents always appear before their dependants.
     selection_affected: Option<Vec<EditorActionId>>,
-    cursor: u64,
+    rollback_bar: u64,
     pending_despawns: Vec<Entity>,
 }
 
@@ -138,7 +138,7 @@ impl Default for EditorActions {
             id_counter: 0,
             selected_action: None,
             selection_affected: None,
-            cursor: 0,
+            rollback_bar: 0,
             pending_despawns: vec![],
         }
     }
@@ -149,7 +149,7 @@ impl EditorActions {
         actions: HashMap<EditorActionId, EditorAction>,
         action_order: Vec<EditorActionId>,
         id_counter: u64,
-        cursor: u64,
+        rollback_bar: u64,
     ) -> Self {
         Self {
             actions,
@@ -157,7 +157,7 @@ impl EditorActions {
             id_counter,
             selected_action: None,
             selection_affected: None,
-            cursor,
+            rollback_bar,
             pending_despawns: vec![],
         }
     }
@@ -179,8 +179,8 @@ impl EditorActions {
         self.id_counter
     }
 
-    pub fn cursor(&self) -> u64 {
-        self.cursor
+    pub fn rollback_bar(&self) -> u64 {
+        self.rollback_bar
     }
 
     pub fn next_id(&mut self) -> EditorActionId {
@@ -218,10 +218,10 @@ impl EditorActions {
     }
 
     /// Returns an iterator of (EditorActionId, &EditorAction) for all active actions
-    /// (those before the undo/redo cursor).
+    /// (those before the rollback bar).
     pub fn active_actions(&self) -> impl Iterator<Item = (EditorActionId, &EditorAction)> {
-        let cursor = self.cursor as usize;
-        self.action_order[..cursor].iter().filter_map(move |id| {
+        let rollback_bar = self.rollback_bar as usize;
+        self.action_order[..rollback_bar].iter().filter_map(move |id| {
             self.actions.get(id).map(|a| (*id, a))
         })
     }
@@ -247,7 +247,7 @@ impl EditorActions {
     }
 
     pub fn take_action(&mut self, object: Box<dyn EditorObject>) -> EditorActionId {
-        let cur = self.cursor as usize;
+        let cur = self.rollback_bar as usize;
         if cur < self.action_order.len() {
             for id in self.action_order.drain(cur..) {
                 if let Some(action) = self.actions.remove(&id) {
@@ -267,7 +267,7 @@ impl EditorActions {
         };
         self.actions.insert(new_action.id, new_action);
         self.action_order.push(new_id);
-        self.cursor = self.action_order.len() as u64;
+        self.rollback_bar = self.action_order.len() as u64;
         new_id
     }
     
@@ -276,19 +276,19 @@ impl EditorActions {
     }
 
     pub fn can_undo(&self) -> bool {
-        self.cursor > 0
+        self.rollback_bar > 0
     }
 
     pub fn can_redo(&self) -> bool {
-        self.cursor < self.action_order.len() as u64
+        self.rollback_bar < self.action_order.len() as u64
     }
 
     pub fn undo(&mut self) {
         if !self.can_undo() { return; }
-        self.cursor -= 1;
+        self.rollback_bar -= 1;
         if let Some(selected) = self.selected_action {
             if let Some(idx) = self.action_order.iter().position(|id| *id == selected) {
-                if idx as u64 >= self.cursor {
+                if idx as u64 >= self.rollback_bar {
                     self.select(None);
                 }
             }
@@ -297,7 +297,7 @@ impl EditorActions {
 
     pub fn redo(&mut self) {
         if !self.can_redo() { return; }
-        self.cursor += 1;
+        self.rollback_bar += 1;
     }
     
     pub fn ui(
@@ -328,7 +328,7 @@ impl EditorActions {
         if let Some(selected_id) = actions.selected_action {
             let selected_idx = actions.action_order.iter()
                 .position(|id| *id == selected_id);
-            let is_active = selected_idx.is_some_and(|idx| (idx as u64) < actions.cursor);
+            let is_active = selected_idx.is_some_and(|idx| (idx as u64) < actions.rollback_bar);
 
             if is_active {
                 let selected_idx = selected_idx.unwrap();
@@ -378,7 +378,7 @@ impl EditorActions {
             for (i, id) in actions.action_order.iter().enumerate() {
                 let action = actions.get_action(id).unwrap();
                 let is_selected = actions.selected_action == Some(*id);
-                let is_active = (i as u64) < actions.cursor;
+                let is_active = (i as u64) < actions.rollback_bar;
 
                 let label_text = action.type_name_with_id();
                 let label = if is_active {
@@ -441,14 +441,14 @@ impl EditorActions {
             commands.entity(entity).despawn();
         }
 
-        let cursor = actions.cursor;
+        let rollback_bar = actions.rollback_bar;
         let order: Vec<(usize, EditorActionId)> = actions.action_order.iter()
             .enumerate()
             .map(|(i, id)| (i, *id))
             .collect();
 
         for (i, id) in order {
-            let should_exist = (i as u64) < cursor;
+            let should_exist = (i as u64) < rollback_bar;
             let needs_spawn = should_exist
                 && actions.actions.get(&id).is_some_and(|a| a.object.entity().is_none());
 

@@ -53,6 +53,9 @@ fn migrations() -> Vec<(u64, Vec<&'static str>)> {
                 PRIMARY KEY (owner_action_id, field_key)
             );",
         ]),
+        (2, vec![
+            "ALTER TABLE editor_meta RENAME COLUMN cursor TO rollback_bar;",
+        ]),
     ]
 }
 
@@ -180,8 +183,8 @@ fn save_inner(path: &Path, actions: &EditorActions) -> rusqlite::Result<()> {
     )?;
 
     tx.execute(
-        "INSERT INTO editor_meta (id_counter, cursor) VALUES (?1, ?2)",
-        params![actions.id_counter() as i64, actions.cursor() as i64],
+        "INSERT INTO editor_meta (id_counter, rollback_bar) VALUES (?1, ?2)",
+        params![actions.id_counter() as i64, actions.rollback_bar() as i64],
     )?;
 
     for (idx, id) in actions.action_order().iter().enumerate() {
@@ -245,13 +248,13 @@ pub fn load(path: &Path) -> rusqlite::Result<EditorActions> {
         run_migrations(&conn, file_version, true)?;
     }
 
-    let (id_counter, cursor) = conn.query_row(
-        "SELECT id_counter, cursor FROM editor_meta LIMIT 1",
+    let (id_counter, rollback_bar) = conn.query_row(
+        "SELECT id_counter, rollback_bar FROM editor_meta LIMIT 1",
         [],
         |row| {
             let ic: i64 = row.get(0)?;
-            let c: i64 = row.get(1)?;
-            Ok((ic as u64, c as u64))
+            let rb: i64 = row.get(1)?;
+            Ok((ic as u64, rb as u64))
         },
     )?;
 
@@ -328,7 +331,7 @@ pub fn load(path: &Path) -> rusqlite::Result<EditorActions> {
         actions_map.insert(id, action);
     }
 
-    let mut editor_actions = EditorActions::from_parts(actions_map, action_order, id_counter, cursor);
+    let mut editor_actions = EditorActions::from_parts(actions_map, action_order, id_counter, rollback_bar);
 
     for id in editor_actions.action_order().to_vec() {
         if let Some(mut action) = editor_actions.actions_mut().remove(&id) {
