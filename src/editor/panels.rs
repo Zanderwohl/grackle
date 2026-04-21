@@ -10,6 +10,7 @@ use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureHistory};
 use crate::editor::multicam::MulticamState;
 use crate::editor::save;
+use crate::get;
 use crate::tool::Tools;
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS};
 use crate::tool::retarget::RetargetState;
@@ -69,10 +70,10 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText {
         match tab {
             TabKinds::Empty(name) => { name.as_str().into() }
-            TabKinds::Tools => { "Tools".into() }
-            TabKinds::Bakes => { "Bake Operations".into() }
-            TabKinds::Show => { "Show/Hide".into() }
-            TabKinds::Timeline => { "Timeline".into() }
+            TabKinds::Tools => { get!("tools.title").into() }
+            TabKinds::Bakes => { get!("bakes.title").into() }
+            TabKinds::Show => { get!("show.title").into() }
+            TabKinds::Timeline => { get!("editor.timeline.title").into() }
         }
     }
 

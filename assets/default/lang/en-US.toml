@@ -80,7 +80,7 @@ granularity = "Granularity"
 active = "Snap to grid"
 
 [editor.timeline]
-title = "Timeline"
+title = "Features"
 undo = "Backward"
 redo = "Forward"
 
