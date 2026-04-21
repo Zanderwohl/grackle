@@ -45,6 +45,7 @@ enum TabKinds {
     Bakes,
     Show,
     Timeline,
+    History,
 }
 
 #[derive(Default)]
@@ -74,6 +75,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Bakes => { get!("bakes.title").into() }
             TabKinds::Show => { get!("show.title").into() }
             TabKinds::Timeline => { get!("editor.timeline.title").into() }
+            TabKinds::History => { get!("editor.history.title").into() }
         }
     }
 
@@ -93,6 +95,9 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             }
             TabKinds::Timeline => {
                 FeatureHistory::ui(ui, self.editor_features, &mut self.pending_edits.events, self.retarget_request)
+            }
+            TabKinds::History => {
+                ui.label(get!("editor.history.title").to_string());
             }
         }
     }
@@ -148,7 +153,7 @@ impl EditorPanels {
     pub fn new() -> Self {
         let default_top_tabs = vec![TabKinds::Tools,];
         let default_left_tabs = vec![TabKinds::Timeline, TabKinds::Bakes,];
-        let default_right_tabs = vec![TabKinds::Show, TabKinds::Empty("Beta".to_owned()),];
+        let default_right_tabs = vec![TabKinds::Show, TabKinds::History,];
         let default_bottom_tabs = vec![TabKinds::Empty("Delta".to_owned()), TabKinds::Empty("Epsilon".to_owned())];
         
         Self {

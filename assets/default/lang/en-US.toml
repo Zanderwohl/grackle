@@ -84,6 +84,11 @@ title = "Features"
 undo = "Backward"
 redo = "Forward"
 
+[editor.history]
+title = "History"
+undo = "Undo"
+redo = "Redo"
+
 [editor.features.global_point]
 title = "Global Point"
 
