@@ -7,7 +7,7 @@ use bevy_egui::egui::{Ui, UiKind, WidgetText};
 use egui_dock::{DockArea, DockState, TabViewer};
 use strum_macros::Display;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
-use crate::editor::editable::{EditEvent, FeatureId, FeatureHistory};
+use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::multicam::MulticamState;
 use crate::editor::save;
 use crate::get;
@@ -56,7 +56,7 @@ struct PendingEditEvents {
 struct TabViewerAndResources<'a> {
     current_tool: &'a State<Tools>,
     next_tool: &'a mut NextState<Tools>,
-    editor_features: &'a mut FeatureHistory,
+    editor_features: &'a mut FeatureTimeline,
     multicam_state: &'a mut MulticamState,
     bake_commands: &'a mut BakeCommands,
     gizmo_visibility: &'a mut GizmoVisibility,
@@ -94,7 +94,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
             }
             TabKinds::Timeline => {
-                FeatureHistory::ui(ui, self.editor_features, &mut self.pending_edits.events, self.retarget_request)
+                FeatureTimeline::ui(ui, self.editor_features, &mut self.pending_edits.events, self.retarget_request)
             }
             TabKinds::History => {
                 ui.label(get!("editor.history.title").to_string());
@@ -179,7 +179,7 @@ impl EditorPanels {
         current_tool: Res<State<Tools>>,
         mut gizmos: Gizmos,
         mut next_tool: ResMut<NextState<Tools>>,
-        mut editor_features: ResMut<FeatureHistory>,
+        mut editor_features: ResMut<FeatureTimeline>,
         mut gizmo_visibility: ResMut<GizmoVisibility>,
         mut room_events: MessageWriter<CalculateRoomGeometry>,
         mut clear_room_events: MessageWriter<ClearRoomGeometry>,
@@ -195,7 +195,7 @@ impl EditorPanels {
         let mut bake_commands = BakeCommands::default();
         let mut pending_edits = PendingEditEvents::default();
         let mut retarget_request: Option<(FeatureId, String)> = None;
-        let mut loaded_features: Option<FeatureHistory> = None;
+        let mut loaded_features: Option<FeatureTimeline> = None;
 
         enum FileOp { New, Save, SaveAs, Load }
         let mut pending_file_op: Option<FileOp> = None;

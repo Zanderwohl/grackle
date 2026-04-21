@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::editor::editable::{AxisRef, EditEvent, FeatureId, FeatureHistory};
+use crate::editor::editable::{AxisRef, EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
 use crate::tool::tool_helpers::*;
 use crate::tool::Tools;
@@ -26,7 +26,7 @@ pub struct RetargetState {
 }
 
 impl RetargetPlugin {
-    fn prior_features(features: &FeatureHistory, target: FeatureId) -> Vec<FeatureId> {
+    fn prior_features(features: &FeatureTimeline, target: FeatureId) -> Vec<FeatureId> {
         let order = features.feature_order();
         let cursor = features.active_features().count();
         let target_idx = order.iter().position(|id| *id == target).unwrap_or(0);
@@ -38,7 +38,7 @@ impl RetargetPlugin {
         mut state: ResMut<RetargetState>,
         mouse_input: Res<CurrentMouseInput>,
         keys: Res<ButtonInput<KeyCode>>,
-        mut features: ResMut<FeatureHistory>,
+        mut features: ResMut<FeatureTimeline>,
         mut next_tool: ResMut<NextState<Tools>>,
         mut commands: Commands,
         mut edit_events: MessageWriter<EditEvent>,
@@ -107,7 +107,7 @@ impl RetargetPlugin {
 
     fn draw_gizmos(
         state: Res<RetargetState>,
-        features: Res<FeatureHistory>,
+        features: Res<FeatureTimeline>,
         mouse_input: Res<CurrentMouseInput>,
         mut gizmos: Gizmos,
     ) {

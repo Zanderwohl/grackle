@@ -22,14 +22,14 @@ pub struct EditorStepsPlugin;
 impl Plugin for EditorStepsPlugin {
     fn build(&self, app: &mut App) {
         app
-            .init_resource::<FeatureHistory>()
+            .init_resource::<FeatureTimeline>()
             .add_message::<EditEvent>()
-            .add_systems(Startup, FeatureHistory::load_template)
+            .add_systems(Startup, FeatureTimeline::load_template)
             .add_systems(Update, (
-                FeatureHistory::undo_redo_shortcuts,
-                FeatureHistory::sync_entities,
-                FeatureHistory::handle_edits,
-                FeatureHistory::draw_affected_gizmos,
+                FeatureTimeline::undo_redo_shortcuts,
+                FeatureTimeline::sync_entities,
+                FeatureTimeline::handle_edits,
+                FeatureTimeline::draw_affected_gizmos,
             ).chain())
         ;
     }
@@ -118,7 +118,7 @@ pub struct FeatureId {
 }
 
 #[derive(Resource)]
-pub struct FeatureHistory {
+pub struct FeatureTimeline {
     features: HashMap<FeatureId, Feature>,
     feature_order: Vec<FeatureId>,
     id_counter: u64,
@@ -130,7 +130,7 @@ pub struct FeatureHistory {
     pending_despawns: Vec<Entity>,
 }
 
-impl Default for FeatureHistory {
+impl Default for FeatureTimeline {
     fn default() -> Self {
         Self {
             features: HashMap::new(),
@@ -144,7 +144,7 @@ impl Default for FeatureHistory {
     }
 }
 
-impl FeatureHistory {
+impl FeatureTimeline {
     pub fn from_parts(
         features: HashMap<FeatureId, Feature>,
         feature_order: Vec<FeatureId>,
@@ -411,7 +411,7 @@ impl FeatureHistory {
 
     fn undo_redo_shortcuts(
         keys: Res<ButtonInput<KeyCode>>,
-        mut features: ResMut<FeatureHistory>,
+        mut features: ResMut<FeatureTimeline>,
         mut egui_contexts: EguiContexts,
     ) {
         if let Ok(ctx) = egui_contexts.ctx_mut() {
@@ -472,7 +472,7 @@ impl FeatureHistory {
     }
 
     fn handle_edits(
-        mut features: ResMut<FeatureHistory>,
+        mut features: ResMut<FeatureTimeline>,
         mut edit_events: MessageReader<EditEvent>,
         mut commands: Commands,
     ) {
@@ -495,7 +495,7 @@ impl FeatureHistory {
         }
     }
 
-    fn draw_affected_gizmos(features: Res<FeatureHistory>, mut gizmos: Gizmos) {
+    fn draw_affected_gizmos(features: Res<FeatureTimeline>, mut gizmos: Gizmos) {
         let Some(affected) = &features.selection_affected else { return; };
         for id in affected {
             if let Some(feature) = features.features.get(id) {

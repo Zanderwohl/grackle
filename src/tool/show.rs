@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use crate::get;
 use bevy_egui::egui;
-use crate::editor::editable::FeatureHistory;
+use crate::editor::editable::FeatureTimeline;
 use crate::editor::multicam::MulticamState;
 
 #[derive(Resource)]
@@ -51,7 +51,7 @@ impl ShowPlugin {
 
     fn draw_visible_gizmos(
         visibility: Res<GizmoVisibility>,
-        feature: Res<FeatureHistory>,
+        feature: Res<FeatureTimeline>,
         mut gizmos: Gizmos,
     ) {
         if !visibility.points && !visibility.rooms && !visibility.point_lights {

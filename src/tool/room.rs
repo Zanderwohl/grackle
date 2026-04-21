@@ -1,6 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
-use crate::editor::editable::{EditEvent, FeatureId, FeatureHistory, PointRef};
+use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline, PointRef};
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
@@ -99,7 +99,7 @@ impl RoomTool {
         cameras: Query<(Entity, &Multicam)>,
         mouse_input: Res<CurrentMouseInput>,
         keys: Res<ButtonInput<KeyCode>>,
-        mut features: ResMut<FeatureHistory>,
+        mut features: ResMut<FeatureTimeline>,
         rooms: Query<&Room>,
         mut next_tool: ResMut<NextState<Tools>>,
     ) {
@@ -211,7 +211,7 @@ impl RoomTool {
 
     fn create_room(
         tool: &mut ResMut<Self>,
-        features: &mut ResMut<FeatureHistory>,
+        features: &mut ResMut<FeatureTimeline>,
         next_tool: &mut ResMut<NextState<Tools>>,
         max_point: PointRef,
         max_resolved: Vec3,
@@ -229,7 +229,7 @@ impl RoomTool {
 
     fn draw_gizmos(
         tool: Res<RoomTool>,
-        features: Res<FeatureHistory>,
+        features: Res<FeatureTimeline>,
         mouse_input: Res<CurrentMouseInput>,
         mut gizmos: Gizmos,
     ) {
@@ -354,7 +354,7 @@ impl RoomDragState {
 
     fn spawn_handles_system(
         mut state: ResMut<Self>,
-        features: Res<FeatureHistory>,
+        features: Res<FeatureTimeline>,
         handles: Query<Entity, With<RoomDragHandle>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
@@ -394,7 +394,7 @@ impl RoomDragState {
     }
 
     fn update_handle_positions(
-        features: Res<FeatureHistory>,
+        features: Res<FeatureTimeline>,
         state: Res<RoomDragState>,
         mut handles: Query<(&RoomDragHandle, &mut Transform)>,
     ) {
@@ -419,7 +419,7 @@ impl RoomDragState {
         mouse_input: Res<CurrentMouseInput>,
         mut commands: Commands,
         mut state: ResMut<Self>,
-        mut features: ResMut<FeatureHistory>,
+        mut features: ResMut<FeatureTimeline>,
         mut edit_events: MessageWriter<EditEvent>,
     ) {
         let Some(feature_id) = state.tracked_feature else { return; };

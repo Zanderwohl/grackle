@@ -1,7 +1,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use bevy::prelude::*;
-use crate::editor::editable::{EditEvent, FeatureId, FeatureHistory};
+use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
 use crate::tool::tool_helpers::closest_param_on_axis;
 use crate::tool::Tools;
@@ -104,7 +104,7 @@ impl PointDragState {
 
     fn spawn_arrows_system(
         mut state: ResMut<Self>,
-        features: Res<FeatureHistory>,
+        features: Res<FeatureTimeline>,
         arrows: Query<Entity, With<PointDragArrow>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
@@ -162,7 +162,7 @@ impl PointDragState {
     }
 
     fn update_arrow_positions(
-        features: Res<FeatureHistory>,
+        features: Res<FeatureTimeline>,
         state: Res<PointDragState>,
         mut arrows: Query<(&PointDragArrow, &mut Transform)>,
     ) {
@@ -183,7 +183,7 @@ impl PointDragState {
         mouse_input: Res<CurrentMouseInput>,
         mut commands: Commands,
         mut state: ResMut<Self>,
-        mut features: ResMut<FeatureHistory>,
+        mut features: ResMut<FeatureTimeline>,
         mut edit_events: MessageWriter<EditEvent>,
     ) {
         let Some(feature_id) = state.tracked_feature else { return; };

@@ -4,7 +4,7 @@ use bevy::prelude::info;
 use rusqlite::{Connection, Transaction, params};
 use crate::constants::{SCHEMA_VERSION, MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION};
 use crate::editor::editable::{
-    AxisRef, Feature, FeatureId, FeatureHistory, PointRef,
+    AxisRef, Feature, FeatureId, FeatureTimeline, PointRef,
     create_object_from_type_key,
 };
 
@@ -141,7 +141,7 @@ fn load_point_ref(
     )
 }
 
-pub fn save(path: &Path, features: &FeatureHistory) -> rusqlite::Result<()> {
+pub fn save(path: &Path, features: &FeatureTimeline) -> rusqlite::Result<()> {
     let backup_path = path.with_extension(format!("{}.{}", MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION));
     let had_existing = path.exists();
 
@@ -165,7 +165,7 @@ pub fn save(path: &Path, features: &FeatureHistory) -> rusqlite::Result<()> {
     result
 }
 
-fn save_inner(path: &Path, features: &FeatureHistory) -> rusqlite::Result<()> {
+fn save_inner(path: &Path, features: &FeatureTimeline) -> rusqlite::Result<()> {
     let conn = Connection::open(path)?;
     conn.execute_batch("DROP TABLE IF EXISTS scalar_fields;
                         DROP TABLE IF EXISTS point_refs;
@@ -222,7 +222,7 @@ fn save_inner(path: &Path, features: &FeatureHistory) -> rusqlite::Result<()> {
     Ok(())
 }
 
-pub fn load(path: &Path) -> rusqlite::Result<FeatureHistory> {
+pub fn load(path: &Path) -> rusqlite::Result<FeatureTimeline> {
     let conn = Connection::open(path)?;
 
     let file_version: u64 = conn.query_row(
@@ -331,7 +331,7 @@ pub fn load(path: &Path) -> rusqlite::Result<FeatureHistory> {
         features_map.insert(id, feature);
     }
 
-    let mut editor_features = FeatureHistory::from_parts(features_map, feature_order, id_counter, rollback_bar);
+    let mut editor_features = FeatureTimeline::from_parts(features_map, feature_order, id_counter, rollback_bar);
 
     for id in editor_features.feature_order().to_vec() {
         if let Some(mut feature) = editor_features.features_mut().remove(&id) {

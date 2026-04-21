@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::editor::editable::{FeatureId, FeatureHistory};
+use crate::editor::editable::{FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::{CameraAxis, Multicam};
 use crate::tool::room::Room;
@@ -148,7 +148,7 @@ fn cursor_from_room_faces(
 /// Find the closest reference point to the mouse ray within `pick_radius`.
 pub fn find_hovered_point(
     ray: &Ray3d,
-    features: &FeatureHistory,
+    features: &FeatureTimeline,
     pick_radius: f32,
 ) -> Option<(FeatureId, String, Vec3)> {
     let mut best_dist = pick_radius;
@@ -172,7 +172,7 @@ pub fn find_hovered_point(
 pub fn draw_picking_gizmos(
     gizmos: &mut Gizmos,
     ray: &Ray3d,
-    features: &FeatureHistory,
+    features: &FeatureTimeline,
     hovered: &Option<(FeatureId, String, Vec3)>,
 ) {
     let dim_color = Color::srgb_u8(200, 200, 200);
@@ -192,7 +192,7 @@ pub fn draw_picking_gizmos(
 /// Like `find_hovered_point` but only considers features whose IDs are in `allowed`.
 pub fn find_hovered_point_filtered(
     ray: &Ray3d,
-    features: &FeatureHistory,
+    features: &FeatureTimeline,
     pick_radius: f32,
     allowed: &[FeatureId],
 ) -> Option<(FeatureId, String, Vec3)> {
@@ -218,7 +218,7 @@ pub fn find_hovered_point_filtered(
 pub fn draw_picking_gizmos_filtered(
     gizmos: &mut Gizmos,
     ray: &Ray3d,
-    features: &FeatureHistory,
+    features: &FeatureTimeline,
     hovered: &Option<(FeatureId, String, Vec3)>,
     allowed: &[FeatureId],
 ) {
@@ -301,7 +301,7 @@ pub fn bounds_gizmo(gizmos: &mut Gizmos, min: Vec3, max: Vec3, color: Color) {
 /// Returns the feature ID and hit position of the closest hit across all types.
 pub fn find_nearest_feature_hit(
     ray: &Ray3d,
-    features: &FeatureHistory,
+    features: &FeatureTimeline,
     visibility: &GizmoVisibility,
 ) -> Option<(FeatureId, Vec3)> {
     let dir = Vec3::from(ray.direction);

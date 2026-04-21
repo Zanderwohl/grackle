@@ -1,6 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
-use crate::editor::editable::{FeatureId, FeatureHistory};
+use crate::editor::editable::{FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
 use crate::tool::point_drag::PointDragState;
 use crate::tool::room::RoomDragState;
@@ -26,7 +26,7 @@ impl SelectionPlugin {
     fn select(
         mut state: ResMut<SelectionState>,
         mouse_input: Res<CurrentMouseInput>,
-        mut features: ResMut<FeatureHistory>,
+        mut features: ResMut<FeatureTimeline>,
         visibility: Res<GizmoVisibility>,
         point_drag: Res<PointDragState>,
         room_drag: Res<RoomDragState>,
@@ -48,7 +48,7 @@ impl SelectionPlugin {
 
     fn draw_hover(
         state: Res<SelectionState>,
-        features: Res<FeatureHistory>,
+        features: Res<FeatureTimeline>,
         mut gizmos: Gizmos,
     ) {
         let Some((feature_id, hit_pos)) = state.hovered else { return; };

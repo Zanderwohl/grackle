@@ -1,6 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
-use crate::editor::editable::{FeatureId, FeatureHistory, PointRef};
+use crate::editor::editable::{FeatureId, FeatureTimeline, PointRef};
 use crate::editor::grackle_point_light::GracklePointLight;
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
@@ -76,7 +76,7 @@ impl PointLightTool {
         cameras: Query<(Entity, &Multicam)>,
         mouse_input: Res<CurrentMouseInput>,
         keys: Res<ButtonInput<KeyCode>>,
-        mut features: ResMut<FeatureHistory>,
+        mut features: ResMut<FeatureTimeline>,
         rooms: Query<&Room>,
         mut next_tool: ResMut<NextState<Tools>>,
     ) {
@@ -153,7 +153,7 @@ impl PointLightTool {
 
     fn draw_gizmos(
         tool: Res<PointLightTool>,
-        features: Res<FeatureHistory>,
+        features: Res<FeatureTimeline>,
         mouse_input: Res<CurrentMouseInput>,
         mut gizmos: Gizmos,
     ) {
