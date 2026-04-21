@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
 use crate::common::cuboid::CuboidPoint;
 use crate::common::ray::ray_intersects_aabb;
-use crate::editor::editable::{AxisRef, EditorAction, EditorActionId, EditorObject, PointRef};
+use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::tool::room::Room;
 use crate::get;
 
@@ -22,10 +22,10 @@ pub struct EditorRoom {
 }
 
 impl EditorRoom {
-    pub fn from_points(min_action: EditorActionId, max_action: EditorActionId) -> Self {
+    pub fn from_points(min_feature: FeatureId, max_feature: FeatureId) -> Self {
         Self {
-            min: PointRef::reference(min_action),
-            max: PointRef::reference(max_action),
+            min: PointRef::reference(min_feature),
+            max: PointRef::reference(max_feature),
             resolved_min: Vec3::ZERO,
             resolved_max: Vec3::ZERO,
             entity: None,
@@ -44,7 +44,7 @@ impl EditorRoom {
 }
 
 #[typetag::serde(name = "editor_room")]
-impl EditorObject for EditorRoom {
+impl FeatureTrait for EditorRoom {
     fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError> {
         let min = self.resolved_min.min(self.resolved_max);
         let max = self.resolved_min.max(self.resolved_max);
@@ -59,19 +59,19 @@ impl EditorObject for EditorRoom {
         }
     }
 
-    fn editor_ui(&mut self, ui: &mut egui::Ui, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId], retarget_request: &mut Option<String>) -> bool {
+    fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool {
         let mut changed = false;
         let size = self.resolved_max - self.resolved_min;
         ui.label(format!("Size: {}", size));
         ui.separator();
-        changed |= self.min.editor_ui(ui, "Min", actions, prior_action_order, retarget_request);
+        changed |= self.min.editor_ui(ui, "Min", features, prior_feature_order, retarget_request);
         ui.separator();
-        changed |= self.max.editor_ui(ui, "Max", actions, prior_action_order, retarget_request);
+        changed |= self.max.editor_ui(ui, "Max", features, prior_feature_order, retarget_request);
         if changed {
-            if let Ok(v) = self.min.resolve(actions) {
+            if let Ok(v) = self.min.resolve(features) {
                 self.resolved_min = v;
             }
-            if let Ok(v) = self.max.resolve(actions) {
+            if let Ok(v) = self.max.resolve(features) {
                 self.resolved_max = v;
             }
         }
@@ -79,7 +79,7 @@ impl EditorObject for EditorRoom {
     }
 
     fn type_name(&self) -> String {
-        get!("editor.actions.room.title")
+        get!("editor.features.room.title")
     }
 
     fn type_key(&self) -> &'static str { "editor_room" }
@@ -126,18 +126,18 @@ impl EditorObject for EditorRoom {
         ));
     }
 
-    fn resolve_references(&mut self, actions: &HashMap<EditorActionId, EditorAction>) {
-        if let Ok(v) = self.min.resolve(actions) {
+    fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {
+        if let Ok(v) = self.min.resolve(features) {
             self.resolved_min = v;
         }
-        if let Ok(v) = self.max.resolve(actions) {
+        if let Ok(v) = self.max.resolve(features) {
             self.resolved_max = v;
         }
     }
 
-    fn parent_ids(&self) -> Vec<EditorActionId> {
-        let mut ids = self.min.referenced_actions();
-        for id in self.max.referenced_actions() {
+    fn parent_ids(&self) -> Vec<FeatureId> {
+        let mut ids = self.min.referenced_features();
+        for id in self.max.referenced_features() {
             if !ids.contains(&id) {
                 ids.push(id);
             }

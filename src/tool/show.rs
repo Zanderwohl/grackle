@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use crate::get;
 use bevy_egui::egui;
-use crate::editor::editable::EditorActions;
+use crate::editor::editable::FeatureHistory;
 use crate::editor::multicam::MulticamState;
 
 #[derive(Resource)]
@@ -51,15 +51,15 @@ impl ShowPlugin {
 
     fn draw_visible_gizmos(
         visibility: Res<GizmoVisibility>,
-        actions: Res<EditorActions>,
+        feature: Res<FeatureHistory>,
         mut gizmos: Gizmos,
     ) {
         if !visibility.points && !visibility.rooms && !visibility.point_lights {
             return;
         }
 
-        for (_id, action) in actions.active_actions() {
-            let key = action.object().type_key();
+        for (_id, feature) in feature.active_features() {
+            let key = feature.object().type_key();
             let draw = match key {
                 "global_point" => visibility.points,
                 "editor_room" => visibility.rooms,
@@ -67,7 +67,7 @@ impl ShowPlugin {
                 _ => false,
             };
             if draw {
-                action.object().debug_gizmos(&mut gizmos);
+                feature.object().debug_gizmos(&mut gizmos);
             }
         }
     }

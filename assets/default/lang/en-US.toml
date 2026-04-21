@@ -84,20 +84,20 @@ title = "Timeline"
 undo = "Backward"
 redo = "Forward"
 
-[editor.actions.global_point]
+[editor.features.global_point]
 title = "Global Point"
 
-[editor.actions.room]
+[editor.features.room]
 title = "Room"
 
-[editor.actions.grackle_point_light]
+[editor.features.grackle_point_light]
 title = "Point Light"
 params = "Light Parameters"
 intensity = "Intensity"
 radius = "Radius"
 range = "Range"
 
-[editor.actions.cuboid]
+[editor.features.cuboid]
 title = "Cuboid"
 
 [crate_drop]

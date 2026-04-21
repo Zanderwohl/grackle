@@ -1,7 +1,7 @@
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
 use bevy_egui::egui;
-use crate::editor::editable::EditorObjectTag;
+use crate::editor::editable::FeatureTag;
 use crate::get;
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, Room};
 
@@ -106,7 +106,7 @@ impl BakePlugin {
 
     fn log_ecs(
         mut events: MessageReader<LogECS>,
-        query: Query<(Entity, &EditorObjectTag, &Transform, Option<&Room>, Option<&PointLight>)>,
+        query: Query<(Entity, &FeatureTag, &Transform, Option<&Room>, Option<&PointLight>)>,
     ) {
         if events.read().next().is_none() { return; }
         events.clear();

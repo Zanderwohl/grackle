@@ -1,6 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
-use crate::editor::editable::{EditorActionId, EditorActions};
+use crate::editor::editable::{FeatureId, FeatureHistory};
 use crate::editor::input::CurrentMouseInput;
 use crate::tool::point_drag::PointDragState;
 use crate::tool::room::RoomDragState;
@@ -26,7 +26,7 @@ impl SelectionPlugin {
     fn select(
         mut state: ResMut<SelectionState>,
         mouse_input: Res<CurrentMouseInput>,
-        mut actions: ResMut<EditorActions>,
+        mut features: ResMut<FeatureHistory>,
         visibility: Res<GizmoVisibility>,
         point_drag: Res<PointDragState>,
         room_drag: Res<RoomDragState>,
@@ -34,31 +34,31 @@ impl SelectionPlugin {
         state.hovered = None;
 
         if let Some(ray) = mouse_input.world_pos {
-            if let Some((action_id, hit_pos)) = find_nearest_action_hit(&ray, &actions, &visibility) {
-                state.hovered = Some((action_id, hit_pos));
+            if let Some((feature_id, hit_pos)) = find_nearest_feature_hit(&ray, &features, &visibility) {
+                state.hovered = Some((feature_id, hit_pos));
             }
 
             let any_drag = point_drag.is_dragging() || room_drag.is_dragging();
             if mouse_input.released == Some(MouseButton::Left) && !any_drag {
                 let selection = state.hovered.map(|(id, _)| id);
-                actions.select(selection);
+                features.select(selection);
             }
         }
     }
 
     fn draw_hover(
         state: Res<SelectionState>,
-        actions: Res<EditorActions>,
+        features: Res<FeatureHistory>,
         mut gizmos: Gizmos,
     ) {
-        let Some((action_id, hit_pos)) = state.hovered else { return; };
-        let Some(action) = actions.get_action(&action_id) else { return; };
+        let Some((feature_id, hit_pos)) = state.hovered else { return; };
+        let Some(feature) = features.get_feature(&feature_id) else { return; };
 
         let highlight = Color::srgb_u8(0, 230, 0);
 
-        match action.object().type_key() {
+        match feature.object().type_key() {
             "editor_room" => {
-                if let Some((min, max)) = action.object().drag_handle_bounds() {
+                if let Some((min, max)) = feature.object().drag_handle_bounds() {
                     bounds_gizmo(&mut gizmos, min, max, highlight);
                 }
             }
@@ -77,5 +77,5 @@ pub struct EditorSelectable {
 
 #[derive(Resource, Default)]
 pub struct SelectionState {
-    pub hovered: Option<(EditorActionId, Vec3)>,
+    pub hovered: Option<(FeatureId, Vec3)>,
 }

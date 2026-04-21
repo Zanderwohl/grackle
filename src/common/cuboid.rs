@@ -5,7 +5,7 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
 use crate::common::ray::ray_intersects_aabb;
-use crate::editor::editable::{EditorAction, EditorActionId, EditorObject};
+use crate::editor::editable::{Feature, FeatureId, FeatureTrait};
 use crate::get;
 
 lazy_static! {
@@ -160,18 +160,18 @@ impl GrackleCuboid {
 }
 
 #[typetag::serde(name = "cuboid")]
-impl EditorObject for GrackleCuboid {
+impl FeatureTrait for GrackleCuboid {
     fn get_point(&self, point: &str) -> Result<Vec3, PointResolutionError> {
         let point = CuboidPoint::try_from(point)?;
         Ok(point.resolve_in_bounds(self.min, self.max))
     }
 
-    fn editor_ui(&mut self, _ui: &mut egui::Ui, _actions: &HashMap<EditorActionId, EditorAction>, _prior_action_order: &[EditorActionId], _retarget_request: &mut Option<String>) -> bool {
+    fn editor_ui(&mut self, _ui: &mut egui::Ui, _features: &HashMap<FeatureId, Feature>, _prior_feature_order: &[FeatureId], _retarget_request: &mut Option<String>) -> bool {
         false
     }
 
     fn type_name(&self) -> String {
-        get!("editor.actions.cuboid.title")
+        get!("editor.features.cuboid.title")
     }
 
     fn type_key(&self) -> &'static str { "cuboid" }
@@ -210,11 +210,11 @@ impl EditorObject for GrackleCuboid {
         // TODO: apply cuboid geometry to entity
     }
 
-    fn resolve_references(&mut self, _actions: &HashMap<EditorActionId, EditorAction>) {
+    fn resolve_references(&mut self, _features: &HashMap<FeatureId, Feature>) {
         // TODO: resolve when cuboid uses PointRef
     }
 
-    fn parent_ids(&self) -> Vec<EditorActionId> {
+    fn parent_ids(&self) -> Vec<FeatureId> {
         vec![]
     }
 

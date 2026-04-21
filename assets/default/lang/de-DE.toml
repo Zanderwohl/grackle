@@ -83,18 +83,18 @@ title = "Zeitleiste"
 undo = "Rückgängig"
 redo = "Wiederherstellen"
 
-[editor.actions.global_point]
+[editor.features.global_point]
 title = "Globaler Punkt"
 
-[editor.actions.room]
+[editor.features.room]
 title = "Raum"
 
-[editor.actions.grackle_point_light]
+[editor.features.grackle_point_light]
 title = "Punktlicht"
 params = "Lichtparameter"
 intensity = "Intensität"
 radius = "Radius"
 range = "Reichweite"
 
-[editor.actions.cuboid]
+[editor.features.cuboid]
 title = "Quader"

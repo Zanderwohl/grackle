@@ -7,7 +7,7 @@ use bevy_egui::egui::{Ui, UiKind, WidgetText};
 use egui_dock::{DockArea, DockState, TabViewer};
 use strum_macros::Display;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
-use crate::editor::editable::{EditEvent, EditorActionId, EditorActions};
+use crate::editor::editable::{EditEvent, FeatureId, FeatureHistory};
 use crate::editor::multicam::MulticamState;
 use crate::editor::save;
 use crate::tool::Tools;
@@ -54,12 +54,12 @@ struct PendingEditEvents {
 struct TabViewerAndResources<'a> {
     current_tool: &'a State<Tools>,
     next_tool: &'a mut NextState<Tools>,
-    editor_actions: &'a mut EditorActions,
+    editor_features: &'a mut FeatureHistory,
     multicam_state: &'a mut MulticamState,
     bake_commands: &'a mut BakeCommands,
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
-    retarget_request: &'a mut Option<(EditorActionId, String)>,
+    retarget_request: &'a mut Option<(FeatureId, String)>,
     gizmos: Gizmos<'a, 'a>,
 }
 
@@ -91,7 +91,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
             }
             TabKinds::Timeline => {
-                EditorActions::ui(ui, self.editor_actions, &mut self.pending_edits.events, self.retarget_request)
+                FeatureHistory::ui(ui, self.editor_features, &mut self.pending_edits.events, self.retarget_request)
             }
         }
     }
@@ -169,11 +169,11 @@ impl EditorPanels {
         mut contexts: EguiContexts,
         mut multicam_state: ResMut<MulticamState>,
         windows: Query<&Window, With<PrimaryWindow>>,
-        
+
         current_tool: Res<State<Tools>>,
         mut gizmos: Gizmos,
         mut next_tool: ResMut<NextState<Tools>>,
-        mut editor_actions: ResMut<EditorActions>,
+        mut editor_features: ResMut<FeatureHistory>,
         mut gizmo_visibility: ResMut<GizmoVisibility>,
         mut room_events: MessageWriter<CalculateRoomGeometry>,
         mut clear_room_events: MessageWriter<ClearRoomGeometry>,
@@ -188,8 +188,8 @@ impl EditorPanels {
         
         let mut bake_commands = BakeCommands::default();
         let mut pending_edits = PendingEditEvents::default();
-        let mut retarget_request: Option<(EditorActionId, String)> = None;
-        let mut loaded_actions: Option<EditorActions> = None;
+        let mut retarget_request: Option<(FeatureId, String)> = None;
+        let mut loaded_features: Option<FeatureHistory> = None;
 
         enum FileOp { New, Save, SaveAs, Load }
         let mut pending_file_op: Option<FileOp> = None;
@@ -198,7 +198,7 @@ impl EditorPanels {
             current_tool: & *current_tool,
             gizmos,
             next_tool: &mut *next_tool,
-            editor_actions: &mut *editor_actions,
+            editor_features: &mut *editor_features,
             multicam_state: &mut *multicam_state,
             bake_commands: &mut bake_commands,
             gizmo_visibility: &mut *gizmo_visibility,
@@ -306,7 +306,7 @@ impl EditorPanels {
         if let Some(result) = dialog_result {
             match result {
                 DialogResult::SavePath(path) => {
-                    match save::save(&path, &editor_actions) {
+                    match save::save(&path, &editor_features) {
                         Ok(()) => {
                             info!("Saved to {:?}", path);
                             current_file.path = Some(path);
@@ -316,9 +316,9 @@ impl EditorPanels {
                 }
                 DialogResult::LoadPath(path) => {
                     match save::load(&path) {
-                        Ok(actions) => {
+                        Ok(features) => {
                             info!("Loaded from {:?}", path);
-                            loaded_actions = Some(actions);
+                            loaded_features = Some(features);
                             current_file.path = Some(path);
                         }
                         Err(e) => error!("Load failed: {}", e),
@@ -335,9 +335,9 @@ impl EditorPanels {
                         "assets/default/blueprints/new.{}", MAP_BLUEPRINT_EXTENSION
                     ));
                     match save::load(&template) {
-                        Ok(actions) => {
+                        Ok(features) => {
                             info!("New from template {:?}", template);
-                            loaded_actions = Some(actions);
+                            loaded_features = Some(features);
                             current_file.path = None;
                         }
                         Err(e) => error!("New failed: {}", e),
@@ -345,7 +345,7 @@ impl EditorPanels {
                 }
                 FileOp::Save => {
                     if let Some(ref path) = current_file.path {
-                        match save::save(path, &editor_actions) {
+                        match save::save(path, &editor_features) {
                             Ok(()) => info!("Saved to {:?}", path),
                             Err(e) => error!("Save failed: {}", e),
                         }
@@ -403,15 +403,15 @@ impl EditorPanels {
         }
 
         // Handle load
-        if let Some(new_actions) = loaded_actions {
-            let old_entities: Vec<Entity> = editor_actions.active_actions()
+        if let Some(new_features) = loaded_features {
+            let old_entities: Vec<Entity> = editor_features.active_features()
                 .filter_map(|(_, a)| a.object().entity())
                 .collect();
-            *editor_actions = new_actions;
+            *editor_features = new_features;
             for entity in old_entities {
-                editor_actions.queue_despawn(entity);
+                editor_features.queue_despawn(entity);
             }
-            editor_actions.select(None);
+            editor_features.select(None);
             current_file.deferred_room_bake = 2;
         }
 
@@ -435,8 +435,8 @@ impl EditorPanels {
         }
 
         // Handle retarget request
-        if let Some((action_id, label)) = retarget_request {
-            retarget_state.target_action = Some(action_id);
+        if let Some((feature_id, label)) = retarget_request {
+            retarget_state.target_feature = Some(feature_id);
             retarget_state.target_point_ref_key = label;
             retarget_state.hovered_point = None;
             next_tool.set(Tools::Retarget);

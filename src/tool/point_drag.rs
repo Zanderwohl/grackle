@@ -1,7 +1,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use bevy::prelude::*;
-use crate::editor::editable::{EditEvent, EditorActionId, EditorActions};
+use crate::editor::editable::{EditEvent, FeatureId, FeatureHistory};
 use crate::editor::input::CurrentMouseInput;
 use crate::tool::tool_helpers::closest_param_on_axis;
 use crate::tool::Tools;
@@ -28,7 +28,7 @@ struct PointDragArrow {
 
 #[derive(Resource, Default)]
 pub struct PointDragState {
-    tracked_action: Option<EditorActionId>,
+    tracked_feature: Option<FeatureId>,
     shaft_mesh: Option<Handle<Mesh>>,
     head_mesh: Option<Handle<Mesh>>,
     materials: [Option<Handle<StandardMaterial>>; 3],
@@ -104,34 +104,34 @@ impl PointDragState {
 
     fn spawn_arrows_system(
         mut state: ResMut<Self>,
-        actions: Res<EditorActions>,
+        features: Res<FeatureHistory>,
         arrows: Query<Entity, With<PointDragArrow>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
     ) {
-        let current = actions.selected_action();
+        let current = features.selected_feature();
 
         let should_track = current.filter(|id| {
-            actions.get_action(id)
+            features.get_feature(id)
                 .map(|a| is_point_like(a.object().type_key()))
                 .unwrap_or(false)
         });
 
-        if state.tracked_action == should_track {
+        if state.tracked_feature == should_track {
             return;
         }
 
         for entity in &arrows {
             commands.entity(entity).despawn();
         }
-        state.tracked_action = should_track;
+        state.tracked_feature = should_track;
         state.grabbed_axis = None;
         state.grab_offset = None;
 
-        let Some(action_id) = should_track else { return; };
-        let Some(action) = actions.get_action(&action_id) else { return; };
-        let Ok(pos) = action.object().get_point("") else { return; };
+        let Some(feature_id) = should_track else { return; };
+        let Some(feature) = features.get_feature(&feature_id) else { return; };
+        let Ok(pos) = feature.object().get_point("") else { return; };
 
         state.ensure_assets(&mut meshes, &mut materials);
         let shaft = state.shaft_mesh.clone().unwrap();
@@ -162,13 +162,13 @@ impl PointDragState {
     }
 
     fn update_arrow_positions(
-        actions: Res<EditorActions>,
+        features: Res<FeatureHistory>,
         state: Res<PointDragState>,
         mut arrows: Query<(&PointDragArrow, &mut Transform)>,
     ) {
-        let Some(action_id) = state.tracked_action else { return; };
-        let Some(action) = actions.get_action(&action_id) else { return; };
-        let Ok(pos) = action.object().get_point("") else { return; };
+        let Some(feature_id) = state.tracked_feature else { return; };
+        let Some(feature) = features.get_feature(&feature_id) else { return; };
+        let Ok(pos) = feature.object().get_point("") else { return; };
 
         for (arrow, mut tfm) in &mut arrows {
             tfm.translation = pos;
@@ -183,10 +183,10 @@ impl PointDragState {
         mouse_input: Res<CurrentMouseInput>,
         mut commands: Commands,
         mut state: ResMut<Self>,
-        mut actions: ResMut<EditorActions>,
+        mut features: ResMut<FeatureHistory>,
         mut edit_events: MessageWriter<EditEvent>,
     ) {
-        let Some(action_id) = state.tracked_action else { return; };
+        let Some(feature_id) = state.tracked_feature else { return; };
 
         let all_arrow_children: Vec<Entity> = arrows.iter()
             .flat_map(|(_, _, children)| children.iter())
@@ -224,7 +224,7 @@ impl PointDragState {
             let axis = state.grabbed_axis.unwrap();
             let axis_dir = AXIS_DIRS[axis as usize];
 
-            let Ok(current_pos) = actions.get_action(&action_id)
+            let Ok(current_pos) = features.get_feature(&feature_id)
                 .and_then(|a| a.object().get_point("").ok())
                 .ok_or(()) else { return; };
 
@@ -244,19 +244,19 @@ impl PointDragState {
 
             let new_value = projected - offset;
 
-            if let Some(mut action) = actions.actions_mut().remove(&action_id) {
-                let modified = action.object_mut().drag_handle(false, axis, new_value);
+            if let Some(mut feature) = features.features_mut().remove(&feature_id) {
+                let modified = feature.object_mut().drag_handle(false, axis, new_value);
                 if modified {
-                    if let Some(entity) = action.object().entity() {
-                        action.object_mut().apply_to_entity(&mut commands, entity);
+                    if let Some(entity) = feature.object().entity() {
+                        feature.object_mut().apply_to_entity(&mut commands, entity);
                         edit_events.write(EditEvent {
-                            editor_id: action_id._id(),
-                            action_id,
+                            editor_id: feature_id._id(),
+                            feature_id,
                             entity,
                         });
                     }
                 }
-                actions.actions_mut().insert(action_id, action);
+                features.features_mut().insert(feature_id, feature);
             }
         } else {
             let hits = ray_cast.cast_ray(ray, &settings);
@@ -327,7 +327,7 @@ impl PointDragState {
         for entity in &arrows {
             commands.entity(entity).despawn();
         }
-        state.tracked_action = None;
+        state.tracked_feature = None;
         state.grabbed_axis = None;
         state.grab_offset = None;
     }

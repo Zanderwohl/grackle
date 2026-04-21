@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::editor::editable::{EditorActionId, EditorActions};
+use crate::editor::editable::{FeatureId, FeatureHistory};
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::{CameraAxis, Multicam};
 use crate::tool::room::Room;
@@ -148,19 +148,19 @@ fn cursor_from_room_faces(
 /// Find the closest reference point to the mouse ray within `pick_radius`.
 pub fn find_hovered_point(
     ray: &Ray3d,
-    actions: &EditorActions,
+    features: &FeatureHistory,
     pick_radius: f32,
-) -> Option<(EditorActionId, String, Vec3)> {
+) -> Option<(FeatureId, String, Vec3)> {
     let mut best_dist = pick_radius;
-    let mut best: Option<(EditorActionId, String, Vec3)> = None;
+    let mut best: Option<(FeatureId, String, Vec3)> = None;
 
-    for (action_id, action) in actions.active_actions() {
-        let points = action.object().reference_points_for_ray(ray);
+    for (feature_id, feature) in features.active_features() {
+        let points = feature.object().reference_points_for_ray(ray);
         for (key, pos) in points {
             let dist = ray_point_distance(ray, pos);
             if dist < best_dist {
                 best_dist = dist;
-                best = Some((action_id, key, pos));
+                best = Some((feature_id, key, pos));
             }
         }
     }
@@ -172,41 +172,41 @@ pub fn find_hovered_point(
 pub fn draw_picking_gizmos(
     gizmos: &mut Gizmos,
     ray: &Ray3d,
-    actions: &EditorActions,
-    hovered: &Option<(EditorActionId, String, Vec3)>,
+    features: &FeatureHistory,
+    hovered: &Option<(FeatureId, String, Vec3)>,
 ) {
     let dim_color = Color::srgb_u8(200, 200, 200);
     let highlight_color = Color::srgb_u8(0, 230, 0);
 
-    for (action_id, action) in actions.active_actions() {
-        let points = action.object().reference_points_for_ray(ray);
+    for (feature_id, feature) in features.active_features() {
+        let points = feature.object().reference_points_for_ray(ray);
         for (key, pos) in &points {
             let is_hovered = hovered.as_ref()
-                .is_some_and(|(hid, hkey, _)| *hid == action_id && hkey == key);
+                .is_some_and(|(hid, hkey, _)| *hid == feature_id && hkey == key);
             let color = if is_hovered { highlight_color } else { dim_color };
             gizmos.sphere(Isometry3d::from_translation(*pos), 0.1, color);
         }
     }
 }
 
-/// Like `find_hovered_point` but only considers actions whose IDs are in `allowed`.
+/// Like `find_hovered_point` but only considers features whose IDs are in `allowed`.
 pub fn find_hovered_point_filtered(
     ray: &Ray3d,
-    actions: &EditorActions,
+    features: &FeatureHistory,
     pick_radius: f32,
-    allowed: &[EditorActionId],
-) -> Option<(EditorActionId, String, Vec3)> {
+    allowed: &[FeatureId],
+) -> Option<(FeatureId, String, Vec3)> {
     let mut best_dist = pick_radius;
-    let mut best: Option<(EditorActionId, String, Vec3)> = None;
+    let mut best: Option<(FeatureId, String, Vec3)> = None;
 
-    for (action_id, action) in actions.active_actions() {
-        if !allowed.contains(&action_id) { continue; }
-        let points = action.object().reference_points_for_ray(ray);
+    for (feature_id, feature) in features.active_features() {
+        if !allowed.contains(&feature_id) { continue; }
+        let points = feature.object().reference_points_for_ray(ray);
         for (key, pos) in points {
             let dist = ray_point_distance(ray, pos);
             if dist < best_dist {
                 best_dist = dist;
-                best = Some((action_id, key, pos));
+                best = Some((feature_id, key, pos));
             }
         }
     }
@@ -214,23 +214,23 @@ pub fn find_hovered_point_filtered(
     best
 }
 
-/// Like `draw_picking_gizmos` but only draws for actions whose IDs are in `allowed`.
+/// Like `draw_picking_gizmos` but only draws for features whose IDs are in `allowed`.
 pub fn draw_picking_gizmos_filtered(
     gizmos: &mut Gizmos,
     ray: &Ray3d,
-    actions: &EditorActions,
-    hovered: &Option<(EditorActionId, String, Vec3)>,
-    allowed: &[EditorActionId],
+    features: &FeatureHistory,
+    hovered: &Option<(FeatureId, String, Vec3)>,
+    allowed: &[FeatureId],
 ) {
     let dim_color = Color::srgb_u8(200, 200, 200);
     let highlight_color = Color::srgb_u8(0, 230, 0);
 
-    for (action_id, action) in actions.active_actions() {
-        if !allowed.contains(&action_id) { continue; }
-        let points = action.object().reference_points_for_ray(ray);
+    for (feature_id, feature) in features.active_features() {
+        if !allowed.contains(&feature_id) { continue; }
+        let points = feature.object().reference_points_for_ray(ray);
         for (key, pos) in &points {
             let is_hovered = hovered.as_ref()
-                .is_some_and(|(hid, hkey, _)| *hid == action_id && hkey == key);
+                .is_some_and(|(hid, hkey, _)| *hid == feature_id && hkey == key);
             let color = if is_hovered { highlight_color } else { dim_color };
             gizmos.sphere(Isometry3d::from_translation(*pos), 0.1, color);
         }
@@ -295,21 +295,21 @@ pub fn bounds_gizmo(gizmos: &mut Gizmos, min: Vec3, max: Vec3, color: Color) {
     gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, max.y, max.z), color);
 }
 
-/// Find the nearest visible editor action hit by a ray.
+/// Find the nearest visible editor feature hit by a ray.
 /// For rooms, tests against all 6 AABB faces (visible ones only).
 /// For points/lights, tests ray proximity within SELECT_POINT_RADIUS.
-/// Returns the action ID and hit position of the closest hit across all types.
-pub fn find_nearest_action_hit(
+/// Returns the feature ID and hit position of the closest hit across all types.
+pub fn find_nearest_feature_hit(
     ray: &Ray3d,
-    actions: &EditorActions,
+    features: &FeatureHistory,
     visibility: &GizmoVisibility,
-) -> Option<(EditorActionId, Vec3)> {
+) -> Option<(FeatureId, Vec3)> {
     let dir = Vec3::from(ray.direction);
     let mut best_t = f32::MAX;
-    let mut best: Option<(EditorActionId, Vec3)> = None;
+    let mut best: Option<(FeatureId, Vec3)> = None;
 
-    for (action_id, action) in actions.active_actions() {
-        let key = action.object().type_key();
+    for (feature_id, feature) in features.active_features() {
+        let key = feature.object().type_key();
         let visible = match key {
             "global_point" => visibility.points,
             "editor_room" => visibility.rooms,
@@ -320,7 +320,7 @@ pub fn find_nearest_action_hit(
 
         match key {
             "editor_room" => {
-                if let Some((min, max)) = action.object().drag_handle_bounds() {
+                if let Some((min, max)) = feature.object().drag_handle_bounds() {
                     let faces: [(usize, f32, Vec3); 6] = [
                         (0, min.x, Vec3::X),
                         (0, max.x, Vec3::NEG_X),
@@ -349,19 +349,19 @@ pub fn find_nearest_action_hit(
 
                         if in_bounds {
                             best_t = t;
-                            best = Some((action_id, hit));
+                            best = Some((feature_id, hit));
                         }
                     }
                 }
             }
             "global_point" | "grackle_point_light" => {
-                if let Ok(pos) = action.object().get_point("") {
+                if let Ok(pos) = feature.object().get_point("") {
                     let dist = ray_point_distance(ray, pos);
                     if dist < SELECT_POINT_RADIUS {
                         let t = (pos - ray.origin).dot(dir);
                         if t > 0.0 && t < best_t {
                             best_t = t;
-                            best = Some((action_id, pos));
+                            best = Some((feature_id, pos));
                         }
                     }
                 }

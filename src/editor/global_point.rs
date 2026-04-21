@@ -3,7 +3,7 @@ use bevy::platform::collections::HashMap;
 use bevy_egui::egui;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
-use crate::editor::editable::{AxisRef, EditorAction, EditorActionId, EditorObject, PointRef};
+use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::get;
 
 #[derive(Serialize, Deserialize)]
@@ -16,16 +16,16 @@ pub struct GlobalPoint {
 }
 
 #[typetag::serde(name = "global_point")]
-impl EditorObject for GlobalPoint {
+impl FeatureTrait for GlobalPoint {
     fn get_point(&self, _key: &str) -> Result<Vec3, PointResolutionError> {
         Ok(self.resolved_location)
     }
 
-    fn editor_ui(&mut self, ui: &mut egui::Ui, actions: &HashMap<EditorActionId, EditorAction>, prior_action_order: &[EditorActionId], retarget_request: &mut Option<String>) -> bool {
+    fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool {
         let mut changed = false;
-        changed |= self.location.editor_ui(ui, "Location", actions, prior_action_order, retarget_request);
+        changed |= self.location.editor_ui(ui, "Location", features, prior_feature_order, retarget_request);
         if changed {
-            if let Ok(v) = self.location.resolve(actions) {
+            if let Ok(v) = self.location.resolve(features) {
                 self.resolved_location = v;
             }
         }
@@ -33,7 +33,7 @@ impl EditorObject for GlobalPoint {
     }
 
     fn type_name(&self) -> String {
-        get!("editor.actions.global_point.title")
+        get!("editor.features.global_point.title")
     }
 
     fn type_key(&self) -> &'static str { "global_point" }
@@ -55,14 +55,14 @@ impl EditorObject for GlobalPoint {
         commands.entity(entity).insert(Transform::from_translation(self.resolved_location));
     }
 
-    fn resolve_references(&mut self, actions: &HashMap<EditorActionId, EditorAction>) {
-        if let Ok(v) = self.location.resolve(actions) {
+    fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {
+        if let Ok(v) = self.location.resolve(features) {
             self.resolved_location = v;
         }
     }
 
-    fn parent_ids(&self) -> Vec<EditorActionId> {
-        self.location.referenced_actions()
+    fn parent_ids(&self) -> Vec<FeatureId> {
+        self.location.referenced_features()
     }
 
     fn available_point_keys(&self) -> Vec<(String, String)> {

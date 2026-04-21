@@ -1,6 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
-use crate::editor::editable::{EditEvent, EditorActionId, EditorActions, PointRef};
+use crate::editor::editable::{EditEvent, FeatureId, FeatureHistory, PointRef};
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
@@ -38,7 +38,7 @@ enum RoomCornerMode {
     Normal,
     Picking,
     RelativeSelected {
-        reference_action: EditorActionId,
+        reference_feature: FeatureId,
         reference_key: String,
         reference_resolved: Vec3,
     },
@@ -55,7 +55,7 @@ struct RoomTool {
     last_min: Vec3,
     last_max: Vec3,
     cursor: Option<Vec3>,
-    hovered_point: Option<(EditorActionId, String, Vec3)>,
+    hovered_point: Option<(FeatureId, String, Vec3)>,
     min_point: Option<PointRef>,
     min_resolved: Option<Vec3>,
     snap: bool,
@@ -99,7 +99,7 @@ impl RoomTool {
         cameras: Query<(Entity, &Multicam)>,
         mouse_input: Res<CurrentMouseInput>,
         keys: Res<ButtonInput<KeyCode>>,
-        mut actions: ResMut<EditorActions>,
+        mut features: ResMut<FeatureHistory>,
         rooms: Query<&Room>,
         mut next_tool: ResMut<NextState<Tools>>,
     ) {
@@ -153,7 +153,7 @@ impl RoomTool {
                             tool.mode = RoomToolMode::PlacingMax(RoomCornerMode::Normal);
                             tool.hovered_point = None;
                         } else {
-                            Self::create_room(&mut tool, &mut actions, &mut next_tool, pr, cursor);
+                            Self::create_room(&mut tool, &mut features, &mut next_tool, pr, cursor);
                         }
                     }
                 }
@@ -166,19 +166,19 @@ impl RoomTool {
                 }
 
                 tool.hovered_point = mouse_input.world_pos
-                    .and_then(|ray| find_hovered_point(&ray, &actions, PICK_RADIUS));
+                    .and_then(|ray| find_hovered_point(&ray, &features, PICK_RADIUS));
 
                 if mouse_input.released == Some(MouseButton::Left) {
-                    if let Some((action_id, key, resolved)) = tool.hovered_point.take() {
+                    if let Some((feature_id, key, resolved)) = tool.hovered_point.take() {
                         set_mode(&mut tool, is_placing_min, RoomCornerMode::RelativeSelected {
-                            reference_action: action_id,
+                            reference_feature: feature_id,
                             reference_key: key,
                             reference_resolved: resolved,
                         });
                     }
                 }
             }
-            RoomCornerMode::RelativeSelected { reference_action, reference_key, reference_resolved } => {
+            RoomCornerMode::RelativeSelected { reference_feature, reference_key, reference_resolved } => {
                 if shift_just_pressed {
                     set_mode(&mut tool, is_placing_min, RoomCornerMode::Normal);
                     return;
@@ -187,7 +187,7 @@ impl RoomTool {
                 if let Some(cursor) = tool.cursor {
                     if mouse_input.released == Some(MouseButton::Left) {
                         let d = cursor - reference_resolved;
-                        let mut pr = PointRef::reference_with_offset(reference_action, d.x, d.y, d.z);
+                        let mut pr = PointRef::reference_with_offset(reference_feature, d.x, d.y, d.z);
                         if !reference_key.is_empty() {
                             pr.point_key = reference_key.clone();
                         }
@@ -196,12 +196,12 @@ impl RoomTool {
                             tool.min_resolved = Some(cursor);
                             tool.last_min = cursor;
                             tool.mode = RoomToolMode::PlacingMax(RoomCornerMode::RelativeSelected {
-                                reference_action,
+                                reference_feature,
                                 reference_key: reference_key.clone(),
                                 reference_resolved,
                             });
                         } else {
-                            Self::create_room(&mut tool, &mut actions, &mut next_tool, pr, cursor);
+                            Self::create_room(&mut tool, &mut features, &mut next_tool, pr, cursor);
                         }
                     }
                 }
@@ -211,15 +211,15 @@ impl RoomTool {
 
     fn create_room(
         tool: &mut ResMut<Self>,
-        actions: &mut ResMut<EditorActions>,
+        features: &mut ResMut<FeatureHistory>,
         next_tool: &mut ResMut<NextState<Tools>>,
         max_point: PointRef,
         max_resolved: Vec3,
     ) {
         if let Some(min_point) = tool.min_point.take() {
             let room = EditorRoom::from_point_refs(min_point, max_point);
-            let id = actions.take_action(Box::new(room));
-            actions.select(Some(id));
+            let id = features.apply_feature(Box::new(room));
+            features.select(Some(id));
             tool.last_max = max_resolved;
             tool.min_resolved = None;
             tool.mode = RoomToolMode::PlacingMin(RoomCornerMode::Normal);
@@ -229,7 +229,7 @@ impl RoomTool {
 
     fn draw_gizmos(
         tool: Res<RoomTool>,
-        actions: Res<EditorActions>,
+        features: Res<FeatureHistory>,
         mouse_input: Res<CurrentMouseInput>,
         mut gizmos: Gizmos,
     ) {
@@ -262,7 +262,7 @@ impl RoomTool {
 
         if matches!(corner_mode, RoomCornerMode::Picking) {
             if let Some(ray) = mouse_input.world_pos {
-                draw_picking_gizmos(&mut gizmos, &ray, &actions, &tool.hovered_point);
+                draw_picking_gizmos(&mut gizmos, &ray, &features, &tool.hovered_point);
             }
         }
     }
@@ -322,7 +322,7 @@ pub struct RoomDragState {
     handle_mesh: Option<Handle<Mesh>>,
     idle_material: Option<Handle<StandardMaterial>>,
     highlight_material: Option<Handle<StandardMaterial>>,
-    tracked_action: Option<EditorActionId>,
+    tracked_feature: Option<FeatureId>,
     grabbed_handle: Option<HandleAxis>,
     grab_offset: Option<f32>,
 }
@@ -354,29 +354,29 @@ impl RoomDragState {
 
     fn spawn_handles_system(
         mut state: ResMut<Self>,
-        actions: Res<EditorActions>,
+        features: Res<FeatureHistory>,
         handles: Query<Entity, With<RoomDragHandle>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
     ) {
-        let current_action = actions.selected_action();
+        let current_feature = features.selected_feature();
 
-        let bounds = current_action
-            .and_then(|id| actions.get_action(&id))
+        let bounds = current_feature
+            .and_then(|id| features.get_feature(&id))
             .and_then(|a| a.object().drag_handle_bounds());
 
-        let should_track = current_action.filter(|_| bounds.is_some());
+        let should_track = current_feature.filter(|_| bounds.is_some());
 
-        if state.tracked_action != should_track {
+        if state.tracked_feature != should_track {
             for entity in &handles {
                 commands.entity(entity).despawn();
             }
-            state.tracked_action = should_track;
+            state.tracked_feature = should_track;
             state.grabbed_handle = None;
             state.grab_offset = None;
 
-            if let (Some(_action_id), Some((min, max))) = (should_track, bounds) {
+            if let (Some(_feature_id), Some((min, max))) = (should_track, bounds) {
                 state.ensure_assets(&mut meshes, &mut materials);
                 let mesh = state.handle_mesh.clone().unwrap();
                 let mat = state.idle_material.clone().unwrap();
@@ -394,13 +394,13 @@ impl RoomDragState {
     }
 
     fn update_handle_positions(
-        actions: Res<EditorActions>,
+        features: Res<FeatureHistory>,
         state: Res<RoomDragState>,
         mut handles: Query<(&RoomDragHandle, &mut Transform)>,
     ) {
-        let Some(action_id) = state.tracked_action else { return; };
-        let Some(action) = actions.get_action(&action_id) else { return; };
-        let Some((min, max)) = action.object().drag_handle_bounds() else { return; };
+        let Some(feature_id) = state.tracked_feature else { return; };
+        let Some(feature) = features.get_feature(&feature_id) else { return; };
+        let Some((min, max)) = feature.object().drag_handle_bounds() else { return; };
 
         let centers = HandleAxis::face_centers(min, max);
         for (handle, mut tfm) in &mut handles {
@@ -419,10 +419,10 @@ impl RoomDragState {
         mouse_input: Res<CurrentMouseInput>,
         mut commands: Commands,
         mut state: ResMut<Self>,
-        mut actions: ResMut<EditorActions>,
+        mut features: ResMut<FeatureHistory>,
         mut edit_events: MessageWriter<EditEvent>,
     ) {
-        let Some(action_id) = state.tracked_action else { return; };
+        let Some(feature_id) = state.tracked_feature else { return; };
 
         let idle = state.idle_material.clone();
         let highlight = state.highlight_material.clone();
@@ -451,7 +451,7 @@ impl RoomDragState {
                 _ => Vec3::Z,
             };
 
-            let Some((current_min, current_max)) = actions.get_action(&action_id)
+            let Some((current_min, current_max)) = features.get_feature(&feature_id)
                 .and_then(|a| a.object().drag_handle_bounds()) else { return; };
 
             let face_center = HandleAxis::face_centers(current_min, current_max)
@@ -483,23 +483,23 @@ impl RoomDragState {
                     f32::max((raw / g).ceil() * g, match axis_index { 0 => current_min.x, 1 => current_min.y, _ => current_min.z } + g),
             };
 
-            if let Some(mut action) = actions.actions_mut().remove(&action_id) {
-                let modified = action.object_mut().drag_handle(
+            if let Some(mut feature) = features.features_mut().remove(&feature_id) {
+                let modified = feature.object_mut().drag_handle(
                     handle_axis.is_max(),
                     axis_index,
                     new_value,
                 );
                 if modified {
-                    if let Some(entity) = action.object().entity() {
-                        action.object_mut().apply_to_entity(&mut commands, entity);
+                    if let Some(entity) = feature.object().entity() {
+                        feature.object_mut().apply_to_entity(&mut commands, entity);
                         edit_events.write(EditEvent {
-                            editor_id: action_id._id(),
-                            action_id,
+                            editor_id: feature_id._id(),
+                            feature_id,
                             entity,
                         });
                     }
                 }
-                actions.actions_mut().insert(action_id, action);
+                features.features_mut().insert(feature_id, feature);
             }
         } else {
             let filter = |entity: Entity| handles.get(entity).is_ok();
@@ -549,7 +549,7 @@ impl RoomDragState {
         for entity in &handles {
             commands.entity(entity).despawn();
         }
-        state.tracked_action = None;
+        state.tracked_feature = None;
         state.grabbed_handle = None;
         state.grab_offset = None;
     }

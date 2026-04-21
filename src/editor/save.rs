@@ -4,7 +4,7 @@ use bevy::prelude::info;
 use rusqlite::{Connection, Transaction, params};
 use crate::constants::{SCHEMA_VERSION, MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION};
 use crate::editor::editable::{
-    AxisRef, EditorAction, EditorActionId, EditorActions, PointRef,
+    AxisRef, Feature, FeatureId, FeatureHistory, PointRef,
     create_object_from_type_key,
 };
 
@@ -23,21 +23,21 @@ fn migrations() -> Vec<(u64, Vec<&'static str>)> {
                 id_counter INTEGER NOT NULL,
                 cursor     INTEGER NOT NULL
             );",
-            "CREATE TABLE IF NOT EXISTS editor_actions (
+            "CREATE TABLE IF NOT EXISTS features (
                 id          INTEGER PRIMARY KEY,
                 type_key    TEXT    NOT NULL,
                 order_index INTEGER NOT NULL UNIQUE
             );",
-            "CREATE TABLE IF NOT EXISTS action_parents (
-                action_id INTEGER NOT NULL REFERENCES editor_actions(id),
-                parent_id INTEGER NOT NULL REFERENCES editor_actions(id),
-                PRIMARY KEY (action_id, parent_id)
+            "CREATE TABLE IF NOT EXISTS feature_parents (
+                feature_id INTEGER NOT NULL REFERENCES features(id),
+                parent_id INTEGER NOT NULL REFERENCES features(id),
+                PRIMARY KEY (feature_id, parent_id)
             );",
             "CREATE TABLE IF NOT EXISTS point_refs (
                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                owner_action_id     INTEGER NOT NULL REFERENCES editor_actions(id),
+                owner_feature_id     INTEGER NOT NULL REFERENCES features(id),
                 slot                TEXT    NOT NULL,
-                reference_action_id INTEGER REFERENCES editor_actions(id),
+                reference_feature_id INTEGER REFERENCES features(id),
                 point_key           TEXT    NOT NULL DEFAULT '',
                 x_mode              TEXT    NOT NULL,
                 x_value             REAL    NOT NULL,
@@ -47,10 +47,10 @@ fn migrations() -> Vec<(u64, Vec<&'static str>)> {
                 z_value             REAL    NOT NULL
             );",
             "CREATE TABLE IF NOT EXISTS scalar_fields (
-                owner_action_id INTEGER NOT NULL REFERENCES editor_actions(id),
+                owner_feature_id INTEGER NOT NULL REFERENCES features(id),
                 field_key       TEXT    NOT NULL,
                 field_value     REAL    NOT NULL,
-                PRIMARY KEY (owner_action_id, field_key)
+                PRIMARY KEY (owner_feature_id, field_key)
             );",
         ]),
         (2, vec![
@@ -92,7 +92,7 @@ fn axis_from_mode(mode: &str, value: f32) -> AxisRef {
 
 fn save_point_ref(tx: &Transaction, owner_id: u64, slot: &str, pr: &PointRef) -> rusqlite::Result<()> {
     tx.execute(
-        "INSERT INTO point_refs (owner_action_id, slot, reference_action_id, point_key, x_mode, x_value, y_mode, y_value, z_mode, z_value)
+        "INSERT INTO point_refs (owner_feature_id, slot, reference_feature_id, point_key, x_mode, x_value, y_mode, y_value, z_mode, z_value)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             owner_id as i64,
@@ -116,8 +116,8 @@ fn load_point_ref(
     slot: &str,
 ) -> rusqlite::Result<PointRef> {
     conn.query_row(
-        "SELECT reference_action_id, point_key, x_mode, x_value, y_mode, y_value, z_mode, z_value
-         FROM point_refs WHERE owner_action_id = ?1 AND slot = ?2",
+        "SELECT reference_feature_id, point_key, x_mode, x_value, y_mode, y_value, z_mode, z_value
+         FROM point_refs WHERE owner_feature_id = ?1 AND slot = ?2",
         params![owner_id as i64, slot],
         |row| {
             let ref_id: Option<i64> = row.get(0)?;
@@ -130,7 +130,7 @@ fn load_point_ref(
             let z_val: f64 = row.get(7)?;
 
             Ok(PointRef {
-                reference: ref_id.map(|id| EditorActionId::from_raw(id as u64)),
+                reference: ref_id.map(|id| FeatureId::from_raw(id as u64)),
                 point_key,
                 x: axis_from_mode(&x_mode, x_val as f32),
                 y: axis_from_mode(&y_mode, y_val as f32),
@@ -141,7 +141,7 @@ fn load_point_ref(
     )
 }
 
-pub fn save(path: &Path, actions: &EditorActions) -> rusqlite::Result<()> {
+pub fn save(path: &Path, features: &FeatureHistory) -> rusqlite::Result<()> {
     let backup_path = path.with_extension(format!("{}.{}", MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION));
     let had_existing = path.exists();
 
@@ -151,7 +151,7 @@ pub fn save(path: &Path, actions: &EditorActions) -> rusqlite::Result<()> {
         })?;
     }
 
-    let result = save_inner(path, actions);
+    let result = save_inner(path, features);
 
     if result.is_err() && had_existing {
         info!("Save failed, restoring from backup");
@@ -165,12 +165,12 @@ pub fn save(path: &Path, actions: &EditorActions) -> rusqlite::Result<()> {
     result
 }
 
-fn save_inner(path: &Path, actions: &EditorActions) -> rusqlite::Result<()> {
+fn save_inner(path: &Path, features: &FeatureHistory) -> rusqlite::Result<()> {
     let conn = Connection::open(path)?;
     conn.execute_batch("DROP TABLE IF EXISTS scalar_fields;
                         DROP TABLE IF EXISTS point_refs;
-                        DROP TABLE IF EXISTS action_parents;
-                        DROP TABLE IF EXISTS editor_actions;
+                        DROP TABLE IF EXISTS feature_parents;
+                        DROP TABLE IF EXISTS features;
                         DROP TABLE IF EXISTS editor_meta;
                         DROP TABLE IF EXISTS metadata;")?;
     run_migrations(&conn, 0, false)?;
@@ -184,26 +184,26 @@ fn save_inner(path: &Path, actions: &EditorActions) -> rusqlite::Result<()> {
 
     tx.execute(
         "INSERT INTO editor_meta (id_counter, rollback_bar) VALUES (?1, ?2)",
-        params![actions.id_counter() as i64, actions.rollback_bar() as i64],
+        params![features.id_counter() as i64, features.rollback_bar() as i64],
     )?;
 
-    for (idx, id) in actions.action_order().iter().enumerate() {
-        let Some(action) = actions.actions_map().get(id) else { continue };
+    for (idx, id) in features.feature_order().iter().enumerate() {
+        let Some(feature) = features.features_map().get(id) else { continue };
         let raw_id = id._id() as i64;
 
         tx.execute(
-            "INSERT INTO editor_actions (id, type_key, order_index) VALUES (?1, ?2, ?3)",
-            params![raw_id, action.object().type_key(), idx as i64],
+            "INSERT INTO features (id, type_key, order_index) VALUES (?1, ?2, ?3)",
+            params![raw_id, feature.object().type_key(), idx as i64],
         )?;
 
-        for parent_id in action.parents() {
+        for parent_id in feature.parents() {
             tx.execute(
-                "INSERT INTO action_parents (action_id, parent_id) VALUES (?1, ?2)",
+                "INSERT INTO feature_parents (feature_id, parent_id) VALUES (?1, ?2)",
                 params![raw_id, parent_id._id() as i64],
             )?;
         }
 
-        let obj = action.object();
+        let obj = feature.object();
         for slot in obj.point_ref_slots() {
             if let Some(pr) = obj.get_point_ref(slot) {
                 save_point_ref(&tx, id._id(), slot, pr)?;
@@ -212,7 +212,7 @@ fn save_inner(path: &Path, actions: &EditorActions) -> rusqlite::Result<()> {
 
         for (key, value) in obj.scalar_fields() {
             tx.execute(
-                "INSERT INTO scalar_fields (owner_action_id, field_key, field_value) VALUES (?1, ?2, ?3)",
+                "INSERT INTO scalar_fields (owner_feature_id, field_key, field_value) VALUES (?1, ?2, ?3)",
                 params![raw_id, key, value as f64],
             )?;
         }
@@ -222,7 +222,7 @@ fn save_inner(path: &Path, actions: &EditorActions) -> rusqlite::Result<()> {
     Ok(())
 }
 
-pub fn load(path: &Path) -> rusqlite::Result<EditorActions> {
+pub fn load(path: &Path) -> rusqlite::Result<FeatureHistory> {
     let conn = Connection::open(path)?;
 
     let file_version: u64 = conn.query_row(
@@ -258,9 +258,9 @@ pub fn load(path: &Path) -> rusqlite::Result<EditorActions> {
         },
     )?;
 
-    let mut action_rows: Vec<(u64, String, usize)> = Vec::new();
+    let mut feature_rows: Vec<(u64, String, usize)> = Vec::new();
     {
-        let mut stmt = conn.prepare("SELECT id, type_key, order_index FROM editor_actions ORDER BY order_index")?;
+        let mut stmt = conn.prepare("SELECT id, type_key, order_index FROM features ORDER BY order_index")?;
         let rows = stmt.query_map([], |row| {
             let id: i64 = row.get(0)?;
             let type_key: String = row.get(1)?;
@@ -268,27 +268,27 @@ pub fn load(path: &Path) -> rusqlite::Result<EditorActions> {
             Ok((id as u64, type_key, order_index as usize))
         })?;
         for row in rows {
-            action_rows.push(row?);
+            feature_rows.push(row?);
         }
     }
 
-    let mut parent_map: HashMap<u64, Vec<EditorActionId>> = HashMap::new();
+    let mut parent_map: HashMap<u64, Vec<FeatureId>> = HashMap::new();
     {
-        let mut stmt = conn.prepare("SELECT action_id, parent_id FROM action_parents")?;
+        let mut stmt = conn.prepare("SELECT feature_id, parent_id FROM feature_parents")?;
         let rows = stmt.query_map([], |row| {
-            let action_id: i64 = row.get(0)?;
+            let feature_id: i64 = row.get(0)?;
             let parent_id: i64 = row.get(1)?;
-            Ok((action_id as u64, parent_id as u64))
+            Ok((feature_id as u64, parent_id as u64))
         })?;
         for row in rows {
             let (aid, pid) = row?;
-            parent_map.entry(aid).or_default().push(EditorActionId::from_raw(pid));
+            parent_map.entry(aid).or_default().push(FeatureId::from_raw(pid));
         }
     }
 
     let mut scalar_map: HashMap<u64, Vec<(String, f32)>> = HashMap::new();
     {
-        let mut stmt = conn.prepare("SELECT owner_action_id, field_key, field_value FROM scalar_fields")?;
+        let mut stmt = conn.prepare("SELECT owner_feature_id, field_key, field_value FROM scalar_fields")?;
         let rows = stmt.query_map([], |row| {
             let owner: i64 = row.get(0)?;
             let key: String = row.get(1)?;
@@ -301,12 +301,12 @@ pub fn load(path: &Path) -> rusqlite::Result<EditorActions> {
         }
     }
 
-    let mut actions_map: HashMap<EditorActionId, EditorAction> = HashMap::new();
-    let mut action_order: Vec<EditorActionId> = Vec::new();
+    let mut features_map: HashMap<FeatureId, Feature> = HashMap::new();
+    let mut feature_order: Vec<FeatureId> = Vec::new();
 
-    for (raw_id, type_key, _order_index) in &action_rows {
-        let id = EditorActionId::from_raw(*raw_id);
-        action_order.push(id);
+    for (raw_id, type_key, _order_index) in &feature_rows {
+        let id = FeatureId::from_raw(*raw_id);
+        feature_order.push(id);
 
         let Some(mut obj) = create_object_from_type_key(type_key) else {
             continue;
@@ -327,18 +327,18 @@ pub fn load(path: &Path) -> rusqlite::Result<EditorActions> {
         }
 
         let parents = parent_map.remove(raw_id).unwrap_or_default();
-        let action = EditorAction::new(id, obj, parents);
-        actions_map.insert(id, action);
+        let feature = Feature::new(id, obj, parents);
+        features_map.insert(id, feature);
     }
 
-    let mut editor_actions = EditorActions::from_parts(actions_map, action_order, id_counter, rollback_bar);
+    let mut editor_features = FeatureHistory::from_parts(features_map, feature_order, id_counter, rollback_bar);
 
-    for id in editor_actions.action_order().to_vec() {
-        if let Some(mut action) = editor_actions.actions_mut().remove(&id) {
-            action.object_mut().resolve_references(editor_actions.actions_map());
-            editor_actions.actions_mut().insert(id, action);
+    for id in editor_features.feature_order().to_vec() {
+        if let Some(mut feature) = editor_features.features_mut().remove(&id) {
+            feature.object_mut().resolve_references(editor_features.features_map());
+            editor_features.features_mut().insert(id, feature);
         }
     }
 
-    Ok(editor_actions)
+    Ok(editor_features)
 }

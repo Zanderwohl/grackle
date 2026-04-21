@@ -1,6 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
-use crate::editor::editable::{EditorActionId, EditorActions, PointRef};
+use crate::editor::editable::{FeatureId, FeatureHistory, PointRef};
 use crate::editor::grackle_point_light::GracklePointLight;
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
@@ -22,10 +22,10 @@ struct PointLightTool {
     mode: PointLightToolMode,
     last_position: Vec3,
     cursor: Option<Vec3>,
-    reference_action: Option<EditorActionId>,
+    reference_feature: Option<FeatureId>,
     reference_key: String,
     reference_resolved: Option<Vec3>,
-    hovered_point: Option<(EditorActionId, String, Vec3)>,
+    hovered_point: Option<(FeatureId, String, Vec3)>,
     snap: bool,
     snap_granularity: f32,
 }
@@ -36,7 +36,7 @@ impl Default for PointLightTool {
             mode: PointLightToolMode::Normal,
             last_position: Vec3::ZERO,
             cursor: None,
-            reference_action: None,
+            reference_feature: None,
             reference_key: String::new(),
             reference_resolved: None,
             hovered_point: None,
@@ -66,7 +66,7 @@ impl PointLightTool {
         tool.mode = PointLightToolMode::Normal;
         tool.cursor = None;
         tool.hovered_point = None;
-        tool.reference_action = None;
+        tool.reference_feature = None;
         tool.reference_key.clear();
         tool.reference_resolved = None;
     }
@@ -76,7 +76,7 @@ impl PointLightTool {
         cameras: Query<(Entity, &Multicam)>,
         mouse_input: Res<CurrentMouseInput>,
         keys: Res<ButtonInput<KeyCode>>,
-        mut actions: ResMut<EditorActions>,
+        mut features: ResMut<FeatureHistory>,
         rooms: Query<&Room>,
         mut next_tool: ResMut<NextState<Tools>>,
     ) {
@@ -96,8 +96,8 @@ impl PointLightTool {
                 } else if let Some(cursor) = tool.cursor {
                     if mouse_input.released == Some(MouseButton::Left) {
                         let light = GracklePointLight::new(cursor.x, cursor.y, cursor.z);
-                        let id = actions.take_action(Box::new(light));
-                        actions.select(Some(id));
+                        let id = features.apply_feature(Box::new(light));
+                        features.select(Some(id));
                         tool.last_position = cursor;
                         next_tool.set(Tools::Select);
                     }
@@ -111,11 +111,11 @@ impl PointLightTool {
                 }
 
                 tool.hovered_point = mouse_input.world_pos
-                    .and_then(|ray| find_hovered_point(&ray, &actions, PICK_RADIUS));
+                    .and_then(|ray| find_hovered_point(&ray, &features, PICK_RADIUS));
 
                 if mouse_input.released == Some(MouseButton::Left) {
-                    if let Some((action_id, key, resolved)) = tool.hovered_point.take() {
-                        tool.reference_action = Some(action_id);
+                    if let Some((feature_id, key, resolved)) = tool.hovered_point.take() {
+                        tool.reference_feature = Some(feature_id);
                         tool.reference_key = key;
                         tool.reference_resolved = Some(resolved);
                         tool.mode = PointLightToolMode::RelativeSelected;
@@ -125,7 +125,7 @@ impl PointLightTool {
             PointLightToolMode::RelativeSelected => {
                 if shift_just_pressed {
                     tool.mode = PointLightToolMode::Normal;
-                    tool.reference_action = None;
+                    tool.reference_feature = None;
                     tool.reference_key.clear();
                     tool.reference_resolved = None;
                     return;
@@ -133,15 +133,15 @@ impl PointLightTool {
 
                 if let Some(cursor) = tool.cursor {
                     if mouse_input.released == Some(MouseButton::Left) {
-                        if let (Some(ref_action), Some(ref_resolved)) = (tool.reference_action, tool.reference_resolved) {
+                        if let (Some(ref_feature), Some(ref_resolved)) = (tool.reference_feature, tool.reference_resolved) {
                             let d = cursor - ref_resolved;
-                            let mut pr = PointRef::reference_with_offset(ref_action, d.x, d.y, d.z);
+                            let mut pr = PointRef::reference_with_offset(ref_feature, d.x, d.y, d.z);
                             if !tool.reference_key.is_empty() {
                                 pr.point_key = tool.reference_key.clone();
                             }
                             let light = GracklePointLight::from_point_ref(pr);
-                            let id = actions.take_action(Box::new(light));
-                            actions.select(Some(id));
+                            let id = features.apply_feature(Box::new(light));
+                            features.select(Some(id));
                             tool.last_position = cursor;
                             next_tool.set(Tools::Select);
                         }
@@ -153,7 +153,7 @@ impl PointLightTool {
 
     fn draw_gizmos(
         tool: Res<PointLightTool>,
-        actions: Res<EditorActions>,
+        features: Res<FeatureHistory>,
         mouse_input: Res<CurrentMouseInput>,
         mut gizmos: Gizmos,
     ) {
@@ -173,7 +173,7 @@ impl PointLightTool {
 
         if tool.mode == PointLightToolMode::Picking {
             if let Some(ray) = mouse_input.world_pos {
-                draw_picking_gizmos(&mut gizmos, &ray, &actions, &tool.hovered_point);
+                draw_picking_gizmos(&mut gizmos, &ray, &features, &tool.hovered_point);
             }
         }
     }
