@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 use bevy::platform::collections::HashMap;
-use bevy::prelude::info;
+use bevy::prelude::{Vec3, info};
 use rusqlite::{Connection, Transaction, params};
 use crate::constants::{SCHEMA_VERSION, MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION};
+use crate::editor::action::{Action, FeatureData, FeatureDelta, FeatureSnapshot};
 use crate::editor::editable::{
     AxisRef, Feature, FeatureId, FeatureTimeline, PointRef,
     create_object_from_type_key,
@@ -56,6 +57,52 @@ fn migrations() -> Vec<(u64, Vec<&'static str>)> {
         (2, vec![
             "ALTER TABLE editor_meta RENAME COLUMN cursor TO rollback_bar;",
         ]),
+        (3, vec![
+            "CREATE TABLE IF NOT EXISTS feature_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject_feature_id INTEGER NOT NULL REFERENCES features(id),
+                order_index INTEGER NOT NULL,
+                data_kind TEXT NOT NULL
+            );",
+            "CREATE TABLE IF NOT EXISTS snapshot_parents (
+                snapshot_id INTEGER NOT NULL REFERENCES feature_snapshots(id) ON DELETE CASCADE,
+                parent_id INTEGER NOT NULL REFERENCES features(id),
+                PRIMARY KEY (snapshot_id, parent_id)
+            );",
+            "CREATE TABLE IF NOT EXISTS snapshot_point_refs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id INTEGER NOT NULL REFERENCES feature_snapshots(id) ON DELETE CASCADE,
+                slot TEXT NOT NULL,
+                reference_feature_id INTEGER REFERENCES features(id),
+                point_key TEXT NOT NULL DEFAULT '',
+                x_mode TEXT NOT NULL,
+                x_value REAL NOT NULL,
+                y_mode TEXT NOT NULL,
+                y_value REAL NOT NULL,
+                z_mode TEXT NOT NULL,
+                z_value REAL NOT NULL,
+                UNIQUE(snapshot_id, slot)
+            );",
+            "CREATE TABLE IF NOT EXISTS snapshot_scalar_fields (
+                snapshot_id INTEGER NOT NULL REFERENCES feature_snapshots(id) ON DELETE CASCADE,
+                field_key TEXT NOT NULL,
+                field_value REAL NOT NULL,
+                PRIMARY KEY (snapshot_id, field_key)
+            );",
+            "CREATE TABLE IF NOT EXISTS history_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seq INTEGER NOT NULL UNIQUE
+            );",
+            "CREATE TABLE IF NOT EXISTS history_action_deltas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action_id INTEGER NOT NULL REFERENCES history_actions(id) ON DELETE CASCADE,
+                delta_index INTEGER NOT NULL,
+                feature_id INTEGER NOT NULL REFERENCES features(id),
+                before_snapshot_id INTEGER REFERENCES feature_snapshots(id),
+                after_snapshot_id INTEGER REFERENCES feature_snapshots(id),
+                UNIQUE(action_id, delta_index)
+            );",
+        ]),
     ]
 }
 
@@ -88,6 +135,26 @@ fn axis_from_mode(mode: &str, value: f32) -> AxisRef {
         "rel" => AxisRef::Relative(value),
         _ => AxisRef::Absolute(value),
     }
+}
+
+fn save_snapshot_point_ref(tx: &Transaction, snapshot_id: i64, slot: &str, pr: &PointRef) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT INTO snapshot_point_refs (snapshot_id, slot, reference_feature_id, point_key, x_mode, x_value, y_mode, y_value, z_mode, z_value)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            snapshot_id,
+            slot,
+            pr.reference.map(|id| id._id() as i64),
+            pr.point_key,
+            axis_mode(&pr.x),
+            pr.x.value() as f64,
+            axis_mode(&pr.y),
+            pr.y.value() as f64,
+            axis_mode(&pr.z),
+            pr.z.value() as f64,
+        ],
+    )?;
+    Ok(())
 }
 
 fn save_point_ref(tx: &Transaction, owner_id: u64, slot: &str, pr: &PointRef) -> rusqlite::Result<()> {
@@ -141,6 +208,231 @@ fn load_point_ref(
     )
 }
 
+fn load_snapshot_point_ref(
+    conn: &Connection,
+    snapshot_id: i64,
+    slot: &str,
+) -> rusqlite::Result<PointRef> {
+    conn.query_row(
+        "SELECT reference_feature_id, point_key, x_mode, x_value, y_mode, y_value, z_mode, z_value
+         FROM snapshot_point_refs WHERE snapshot_id = ?1 AND slot = ?2",
+        params![snapshot_id, slot],
+        |row| {
+            let ref_id: Option<i64> = row.get(0)?;
+            let point_key: String = row.get(1)?;
+            let x_mode: String = row.get(2)?;
+            let x_val: f64 = row.get(3)?;
+            let y_mode: String = row.get(4)?;
+            let y_val: f64 = row.get(5)?;
+            let z_mode: String = row.get(6)?;
+            let z_val: f64 = row.get(7)?;
+
+            Ok(PointRef {
+                reference: ref_id.map(|id| FeatureId::from_raw(id as u64)),
+                point_key,
+                x: axis_from_mode(&x_mode, x_val as f32),
+                y: axis_from_mode(&y_mode, y_val as f32),
+                z: axis_from_mode(&z_mode, z_val as f32),
+                resolved_reference: None,
+            })
+        },
+    )
+}
+
+fn load_snapshot_parents(conn: &Connection, snapshot_id: i64) -> rusqlite::Result<Vec<FeatureId>> {
+    let mut stmt = conn.prepare("SELECT parent_id FROM snapshot_parents WHERE snapshot_id = ?1")?;
+    let rows = stmt.query_map(params![snapshot_id], |row| {
+        Ok(FeatureId::from_raw(row.get::<_, i64>(0)? as u64))
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+fn snapshot_data_kind(data: &FeatureData) -> &'static str {
+    match data {
+        FeatureData::GlobalPoint { .. } => "global_point",
+        FeatureData::PointLight { .. } => "point_light",
+        FeatureData::Room { .. } => "room",
+        FeatureData::Cuboid { .. } => "cuboid",
+    }
+}
+
+fn save_feature_snapshot(
+    tx: &Transaction,
+    subject: FeatureId,
+    snap: &FeatureSnapshot,
+) -> rusqlite::Result<i64> {
+    let kind = snapshot_data_kind(&snap.data);
+    tx.execute(
+        "INSERT INTO feature_snapshots (subject_feature_id, order_index, data_kind) VALUES (?1, ?2, ?3)",
+        params![subject._id() as i64, snap.order_index as i64, kind],
+    )?;
+    let sid = tx.last_insert_rowid();
+    for p in &snap.parents {
+        tx.execute(
+            "INSERT INTO snapshot_parents (snapshot_id, parent_id) VALUES (?1, ?2)",
+            params![sid, p._id() as i64],
+        )?;
+    }
+    match &snap.data {
+        FeatureData::GlobalPoint { location } => {
+            save_snapshot_point_ref(tx, sid, "location", location)?;
+        }
+        FeatureData::PointLight {
+            location,
+            intensity,
+            radius,
+            range,
+        } => {
+            save_snapshot_point_ref(tx, sid, "location", location)?;
+            for (k, v) in [
+                ("intensity", *intensity),
+                ("radius", *radius),
+                ("range_val", *range),
+            ] {
+                tx.execute(
+                    "INSERT INTO snapshot_scalar_fields (snapshot_id, field_key, field_value) VALUES (?1, ?2, ?3)",
+                    params![sid, k, v as f64],
+                )?;
+            }
+        }
+        FeatureData::Room { min, max } => {
+            save_snapshot_point_ref(tx, sid, "min", min)?;
+            save_snapshot_point_ref(tx, sid, "max", max)?;
+        }
+        FeatureData::Cuboid { min, max } => {
+            let pairs = [
+                ("cuboid_min_x", min.x),
+                ("cuboid_min_y", min.y),
+                ("cuboid_min_z", min.z),
+                ("cuboid_max_x", max.x),
+                ("cuboid_max_y", max.y),
+                ("cuboid_max_z", max.z),
+            ];
+            for (k, v) in pairs {
+                tx.execute(
+                    "INSERT INTO snapshot_scalar_fields (snapshot_id, field_key, field_value) VALUES (?1, ?2, ?3)",
+                    params![sid, k, v as f64],
+                )?;
+            }
+        }
+    }
+    Ok(sid)
+}
+
+fn load_snapshot_scalar(conn: &Connection, snapshot_id: i64, key: &str) -> rusqlite::Result<f32> {
+    let v: f64 = conn.query_row(
+        "SELECT field_value FROM snapshot_scalar_fields WHERE snapshot_id = ?1 AND field_key = ?2",
+        params![snapshot_id, key],
+        |row| row.get(0),
+    )?;
+    Ok(v as f32)
+}
+
+fn load_feature_snapshot(conn: &Connection, snapshot_id: i64) -> rusqlite::Result<FeatureSnapshot> {
+    let (order_index, data_kind): (i64, String) = conn.query_row(
+        "SELECT order_index, data_kind FROM feature_snapshots WHERE id = ?1",
+        params![snapshot_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let parents = load_snapshot_parents(conn, snapshot_id)?;
+    let data = match data_kind.as_str() {
+        "global_point" => {
+            let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
+            FeatureData::GlobalPoint { location }
+        }
+        "point_light" => {
+            let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
+            let intensity = load_snapshot_scalar(conn, snapshot_id, "intensity")?;
+            let radius = load_snapshot_scalar(conn, snapshot_id, "radius")?;
+            let range = load_snapshot_scalar(conn, snapshot_id, "range_val")?;
+            FeatureData::PointLight {
+                location,
+                intensity,
+                radius,
+                range,
+            }
+        }
+        "room" => {
+            let min = load_snapshot_point_ref(conn, snapshot_id, "min")?;
+            let max = load_snapshot_point_ref(conn, snapshot_id, "max")?;
+            FeatureData::Room { min, max }
+        }
+        "cuboid" => {
+            let min = Vec3::new(
+                load_snapshot_scalar(conn, snapshot_id, "cuboid_min_x")?,
+                load_snapshot_scalar(conn, snapshot_id, "cuboid_min_y")?,
+                load_snapshot_scalar(conn, snapshot_id, "cuboid_min_z")?,
+            );
+            let max = Vec3::new(
+                load_snapshot_scalar(conn, snapshot_id, "cuboid_max_x")?,
+                load_snapshot_scalar(conn, snapshot_id, "cuboid_max_y")?,
+                load_snapshot_scalar(conn, snapshot_id, "cuboid_max_z")?,
+            );
+            FeatureData::Cuboid { min, max }
+        }
+        other => {
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "Unknown snapshot data_kind: {}",
+                other
+            )));
+        }
+    };
+    Ok(FeatureSnapshot {
+        data,
+        parents,
+        order_index: order_index as usize,
+    })
+}
+
+fn load_applied_actions(conn: &Connection) -> rusqlite::Result<Vec<Action>> {
+    let mut action_ids: Vec<i64> = Vec::new();
+    {
+        let mut stmt = conn.prepare("SELECT id FROM history_actions ORDER BY seq ASC")?;
+        let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+        for r in rows {
+            action_ids.push(r?);
+        }
+    }
+    let mut actions = Vec::new();
+    for aid in action_ids {
+        let mut stmt = conn.prepare(
+            "SELECT delta_index, feature_id, before_snapshot_id, after_snapshot_id
+             FROM history_action_deltas WHERE action_id = ?1 ORDER BY delta_index ASC",
+        )?;
+        let rows = stmt.query_map(params![aid], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+            ))
+        })?;
+        let mut deltas: Vec<FeatureDelta> = Vec::new();
+        for r in rows {
+            let (_didx, fid, before_id, after_id) = r?;
+            let before = match before_id {
+                Some(id) => Some(load_feature_snapshot(conn, id)?),
+                None => None,
+            };
+            let after = match after_id {
+                Some(id) => Some(load_feature_snapshot(conn, id)?),
+                None => None,
+            };
+            deltas.push(FeatureDelta {
+                feature_id: FeatureId::from_raw(fid as u64),
+                before,
+                after,
+            });
+        }
+        actions.push(Action { deltas });
+    }
+    Ok(actions)
+}
+
 pub fn save(path: &Path, features: &FeatureTimeline) -> rusqlite::Result<()> {
     let backup_path = path.with_extension(format!("{}.{}", MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION));
     let had_existing = path.exists();
@@ -167,7 +459,13 @@ pub fn save(path: &Path, features: &FeatureTimeline) -> rusqlite::Result<()> {
 
 fn save_inner(path: &Path, features: &FeatureTimeline) -> rusqlite::Result<()> {
     let conn = Connection::open(path)?;
-    conn.execute_batch("DROP TABLE IF EXISTS scalar_fields;
+    conn.execute_batch("DROP TABLE IF EXISTS history_action_deltas;
+                        DROP TABLE IF EXISTS history_actions;
+                        DROP TABLE IF EXISTS snapshot_scalar_fields;
+                        DROP TABLE IF EXISTS snapshot_point_refs;
+                        DROP TABLE IF EXISTS snapshot_parents;
+                        DROP TABLE IF EXISTS feature_snapshots;
+                        DROP TABLE IF EXISTS scalar_fields;
                         DROP TABLE IF EXISTS point_refs;
                         DROP TABLE IF EXISTS feature_parents;
                         DROP TABLE IF EXISTS features;
@@ -214,6 +512,35 @@ fn save_inner(path: &Path, features: &FeatureTimeline) -> rusqlite::Result<()> {
             tx.execute(
                 "INSERT INTO scalar_fields (owner_feature_id, field_key, field_value) VALUES (?1, ?2, ?3)",
                 params![raw_id, key, value as f64],
+            )?;
+        }
+    }
+
+    for (seq, action) in features.applied_actions().iter().enumerate() {
+        tx.execute(
+            "INSERT INTO history_actions (seq) VALUES (?1)",
+            params![seq as i64],
+        )?;
+        let action_id = tx.last_insert_rowid();
+        for (di, delta) in action.deltas.iter().enumerate() {
+            let before_id: Option<i64> = match &delta.before {
+                Some(s) => Some(save_feature_snapshot(&tx, delta.feature_id, s)?),
+                None => None,
+            };
+            let after_id: Option<i64> = match &delta.after {
+                Some(s) => Some(save_feature_snapshot(&tx, delta.feature_id, s)?),
+                None => None,
+            };
+            tx.execute(
+                "INSERT INTO history_action_deltas (action_id, delta_index, feature_id, before_snapshot_id, after_snapshot_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    action_id,
+                    di as i64,
+                    delta.feature_id._id() as i64,
+                    before_id,
+                    after_id,
+                ],
             )?;
         }
     }
@@ -331,7 +658,9 @@ pub fn load(path: &Path) -> rusqlite::Result<FeatureTimeline> {
         features_map.insert(id, feature);
     }
 
-    let mut editor_features = FeatureTimeline::from_parts(features_map, feature_order, id_counter, rollback_bar);
+    let actions = load_applied_actions(&conn)?;
+    let mut editor_features =
+        FeatureTimeline::from_parts(features_map, feature_order, id_counter, rollback_bar, actions);
 
     for id in editor_features.feature_order().to_vec() {
         if let Some(mut feature) = editor_features.features_mut().remove(&id) {

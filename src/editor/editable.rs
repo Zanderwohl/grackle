@@ -160,7 +160,9 @@ impl FeatureTimeline {
         feature_order: Vec<FeatureId>,
         id_counter: u64,
         rollback_bar: u64,
+        actions: Vec<Action>,
     ) -> Self {
+        let action_cursor = actions.len();
         Self {
             features,
             feature_order,
@@ -169,10 +171,15 @@ impl FeatureTimeline {
             selection_affected: None,
             rollback_bar,
             pending_despawns: vec![],
-            actions: vec![],
-            action_cursor: 0,
+            actions,
+            action_cursor,
             pending_snapshot: None,
         }
+    }
+
+    /// Applied history entries only (excludes redo branch after undo).
+    pub fn applied_actions(&self) -> &[Action] {
+        &self.actions[..self.action_cursor]
     }
 
     fn load_template(mut features: ResMut<Self>) {
