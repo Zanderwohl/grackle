@@ -28,11 +28,16 @@ pub fn closest_param_on_axis(ray: Ray3d, axis_origin: Vec3, axis_dir: Vec3) -> O
     Some((a * e - b * d) / denom)
 }
 
+/// Snap each axis to the nearest multiple of `granularity` (ties round half away from zero).
 pub fn snap_vec3(v: Vec3, granularity: f32) -> Vec3 {
+    if granularity <= 0.0 {
+        return v;
+    }
+    let inv = 1.0 / granularity;
     Vec3::new(
-        f32::ceil(v.x / granularity) * granularity,
-        f32::ceil(v.y / granularity) * granularity,
-        f32::ceil(v.z / granularity) * granularity,
+        (v.x * inv).round() * granularity,
+        (v.y * inv).round() * granularity,
+        (v.z * inv).round() * granularity,
     )
 }
 

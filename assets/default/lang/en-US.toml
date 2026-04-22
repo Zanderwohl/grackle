@@ -83,6 +83,7 @@ active = "Snap to grid"
 title = "Features"
 undo = "Backward"
 redo = "Forward"
+delete = "Delete"
 
 [editor.history]
 title = "History"

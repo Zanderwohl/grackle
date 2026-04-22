@@ -82,6 +82,7 @@ active = "Am Raster einrasten"
 title = "Zeitleiste"
 undo = "Rückgängig"
 redo = "Wiederherstellen"
+delete = "Löschen"
 
 [editor.history]
 title = "Verlauf"

@@ -166,7 +166,15 @@ impl RoomTool {
                 }
 
                 tool.hovered_point = mouse_input.world_pos
-                    .and_then(|ray| find_hovered_point(&ray, &features, PICK_RADIUS));
+                    .and_then(|ray| find_hovered_point(&ray, &features, PICK_RADIUS))
+                    .map(|(fid, key, pos)| {
+                        let pos = if tool.snap {
+                            snap_vec3(pos, tool.snap_granularity)
+                        } else {
+                            pos
+                        };
+                        (fid, key, pos)
+                    });
 
                 if mouse_input.released == Some(MouseButton::Left) {
                     if let Some((feature_id, key, resolved)) = tool.hovered_point.take() {

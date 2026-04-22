@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
@@ -180,6 +182,21 @@ impl FeatureTimeline {
     /// Applied history entries only (excludes redo branch after undo).
     pub fn applied_actions(&self) -> &[Action] {
         &self.actions[..self.action_cursor]
+    }
+
+    /// Remove a feature and record a delete entry on the action history (undo restores it).
+    pub fn delete_feature_recorded(&mut self, feature_id: FeatureId) {
+        let Some(before) = self.feature_snapshot(feature_id) else {
+            return;
+        };
+        self.record_action(Action {
+            deltas: vec![FeatureDelta {
+                feature_id,
+                before: Some(before),
+                after: None,
+            }],
+        });
+        self.remove_feature_internal(feature_id);
     }
 
     fn load_template(mut features: ResMut<Self>) {
@@ -610,6 +627,7 @@ impl FeatureTimeline {
         // Section 2: Feature order (construction timeline; fills remaining space)
         let mut selection_changed = false;
         let mut next_selected = features.selected_feature;
+        let pending_delete = Rc::new(RefCell::new(None::<FeatureId>));
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (i, id) in features.feature_order.iter().enumerate() {
@@ -625,10 +643,20 @@ impl FeatureTimeline {
                         egui::RichText::new(label_text).strikethrough().weak())
                 };
 
-                if ui.add_sized([ui.available_width(), 0.0], label).clicked() && is_active {
+                let response = ui.add_sized([ui.available_width(), 0.0], label);
+                if response.clicked() && is_active {
                     next_selected = Some(if is_selected { None } else { Some(*id) }).flatten();
                     selection_changed = true;
                 }
+
+                let fid = *id;
+                let pending = pending_delete.clone();
+                response.context_menu(move |menu_ui| {
+                    if menu_ui.button(get!("editor.timeline.delete")).clicked() {
+                        *pending.borrow_mut() = Some(fid);
+                        menu_ui.close();
+                    }
+                });
             }
 
             let remaining = ui.available_size();
@@ -643,6 +671,10 @@ impl FeatureTimeline {
 
         if selection_changed {
             features.select(next_selected);
+        }
+
+        if let Some(id) = pending_delete.borrow_mut().take() {
+            features.delete_feature_recorded(id);
         }
     }
 
