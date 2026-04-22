@@ -90,6 +90,12 @@ undo = "Rückgängig"
 redo = "Wiederholen"
 empty = "Noch keine Aktionen."
 
+[editor.metadata]
+title = "Metadaten"
+schema_version = "Schemaversion"
+game_mode = "Spielmodus"
+authors = "Autoren"
+
 [editor.features.global_point]
 title = "Globaler Punkt"
 

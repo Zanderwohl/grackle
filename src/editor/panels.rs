@@ -5,11 +5,14 @@ use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use bevy_egui::egui::{Ui, UiKind, WidgetText};
 use egui_dock::{DockArea, DockState, TabViewer};
+use strum::IntoEnumIterator;
 use strum_macros::Display;
+use crate::common::mode::GameMode;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
+use crate::editor::map_metadata::MapMetadata;
 use crate::editor::multicam::MulticamState;
-use crate::editor::save;
+use crate::editor::save::{self, LoadedBlueprint};
 use crate::get;
 use crate::tool::Tools;
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS};
@@ -44,6 +47,7 @@ enum TabKinds {
     Tools,
     Bakes,
     Show,
+    Metadata,
     Timeline,
     History,
 }
@@ -57,6 +61,7 @@ struct TabViewerAndResources<'a> {
     current_tool: &'a State<Tools>,
     next_tool: &'a mut NextState<Tools>,
     editor_features: &'a mut FeatureTimeline,
+    map_metadata: &'a mut MapMetadata,
     multicam_state: &'a mut MulticamState,
     bake_commands: &'a mut BakeCommands,
     gizmo_visibility: &'a mut GizmoVisibility,
@@ -74,6 +79,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Tools => { get!("tools.title").into() }
             TabKinds::Bakes => { get!("bakes.title").into() }
             TabKinds::Show => { get!("show.title").into() }
+            TabKinds::Metadata => { get!("editor.metadata.title").into() }
             TabKinds::Timeline => { get!("editor.timeline.title").into() }
             TabKinds::History => { get!("editor.history.title").into() }
         }
@@ -92,6 +98,9 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             }
             TabKinds::Show => {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
+            }
+            TabKinds::Metadata => {
+                map_metadata_panel_ui(ui, self.map_metadata);
             }
             TabKinds::Timeline => {
                 FeatureTimeline::ui(ui, self.editor_features, &mut self.pending_edits.events, self.retarget_request)
@@ -153,7 +162,7 @@ impl EditorPanels {
     pub fn new() -> Self {
         let default_top_tabs = vec![TabKinds::Tools,];
         let default_left_tabs = vec![TabKinds::Timeline, TabKinds::Bakes,];
-        let default_right_tabs = vec![TabKinds::Show, TabKinds::History,];
+        let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata, TabKinds::History,];
         let default_bottom_tabs = vec![TabKinds::Empty("Delta".to_owned()), TabKinds::Empty("Epsilon".to_owned())];
         
         Self {
@@ -187,15 +196,21 @@ impl EditorPanels {
         mut edit_events: MessageWriter<EditEvent>,
         mut retarget_state: ResMut<RetargetState>,
         mut current_file: ResMut<CurrentFilePath>,
-    ) -> Result {
+        mut map_metadata: ResMut<MapMetadata>,
+    ) {
         let ctx = contexts.ctx_mut();
-        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return Ok(()); }
+        if ctx.is_err() {
+            warn!("{}", ctx.unwrap_err());
+            return;
+        }
         let ctx = ctx.unwrap();
+
+        map_metadata.sync_authors_ui_buffer_from_authors();
         
         let mut bake_commands = BakeCommands::default();
         let mut pending_edits = PendingEditEvents::default();
         let mut retarget_request: Option<(FeatureId, String)> = None;
-        let mut loaded_features: Option<FeatureTimeline> = None;
+        let mut loaded_blueprint: Option<LoadedBlueprint> = None;
 
         enum FileOp { New, Save, SaveAs, Load }
         let mut pending_file_op: Option<FileOp> = None;
@@ -205,6 +220,7 @@ impl EditorPanels {
             gizmos,
             next_tool: &mut *next_tool,
             editor_features: &mut *editor_features,
+            map_metadata: &mut *map_metadata,
             multicam_state: &mut *multicam_state,
             bake_commands: &mut bake_commands,
             gizmo_visibility: &mut *gizmo_visibility,
@@ -312,7 +328,7 @@ impl EditorPanels {
         if let Some(result) = dialog_result {
             match result {
                 DialogResult::SavePath(path) => {
-                    match save::save(&path, &editor_features) {
+                    match save::save(&path, &editor_features, &map_metadata) {
                         Ok(()) => {
                             info!("Saved to {:?}", path);
                             current_file.path = Some(path);
@@ -322,9 +338,9 @@ impl EditorPanels {
                 }
                 DialogResult::LoadPath(path) => {
                     match save::load(&path) {
-                        Ok(features) => {
+                        Ok(loaded) => {
                             info!("Loaded from {:?}", path);
-                            loaded_features = Some(features);
+                            loaded_blueprint = Some(loaded);
                             current_file.path = Some(path);
                         }
                         Err(e) => error!("Load failed: {}", e),
@@ -341,9 +357,12 @@ impl EditorPanels {
                         "assets/default/blueprints/new.{}", MAP_BLUEPRINT_EXTENSION
                     ));
                     match save::load(&template) {
-                        Ok(features) => {
+                        Ok(loaded) => {
                             info!("New from template {:?}", template);
-                            loaded_features = Some(features);
+                            loaded_blueprint = Some(LoadedBlueprint {
+                                timeline: loaded.timeline,
+                                metadata: MapMetadata::default(),
+                            });
                             current_file.path = None;
                         }
                         Err(e) => error!("New failed: {}", e),
@@ -351,7 +370,7 @@ impl EditorPanels {
                 }
                 FileOp::Save => {
                     if let Some(ref path) = current_file.path {
-                        match save::save(path, &editor_features) {
+                        match save::save(path, &editor_features, &map_metadata) {
                             Ok(()) => info!("Saved to {:?}", path),
                             Err(e) => error!("Save failed: {}", e),
                         }
@@ -408,12 +427,13 @@ impl EditorPanels {
             }
         }
 
-        // Handle load
-        if let Some(new_features) = loaded_features {
+        // Handle load / new from template
+        if let Some(loaded) = loaded_blueprint {
             let old_entities: Vec<Entity> = editor_features.active_features()
                 .filter_map(|(_, a)| a.object().entity())
                 .collect();
-            *editor_features = new_features;
+            *editor_features = loaded.timeline;
+            *map_metadata = loaded.metadata;
             for entity in old_entities {
                 editor_features.queue_despawn(entity);
             }
@@ -453,15 +473,21 @@ impl EditorPanels {
             edit_events.write(event);
         }
 
-        Self::set_multicam_size(panels, multicam_state, windows)
+        Self::set_multicam_size(panels, multicam_state, windows);
     }
 
     fn ui_for_panel(ui: &mut Ui) {
         ui.label("Panel is empty.");
     }
 
-    fn set_multicam_size(panels: ResMut<Self>, mut multicam_state: ResMut<MulticamState>, windows: Query<&Window, With<PrimaryWindow>>,) -> Result {
-        let window = windows.single()?;
+    fn set_multicam_size(
+        panels: ResMut<Self>,
+        mut multicam_state: ResMut<MulticamState>,
+        windows: Query<&Window, With<PrimaryWindow>>,
+    ) {
+        let Ok(window) = windows.single() else {
+            return;
+        };
 
         let left_taken = panels.left_width / window.width();
         let right_taken = panels.right_width / window.width();
@@ -471,9 +497,53 @@ impl EditorPanels {
 
         multicam_state.start = Vec2::new(left_taken, top_taken);
         multicam_state.end = Vec2::new(1.0 - right_taken, 1.0 - bottom_taken);
-
-        Ok(())
     }
+}
+
+fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata) {
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::Grid::new("editor_map_metadata_grid")
+            .num_columns(2)
+            .spacing([10.0, 6.0])
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label(get!("editor.metadata.schema_version"));
+                ui.add_enabled_ui(false, |ui| {
+                    ui.label(MapMetadata::map_schema_version().to_string());
+                });
+                ui.end_row();
+
+                ui.label(get!("editor.metadata.game_mode"));
+                ui.vertical(|ui| {
+                    egui::ComboBox::from_id_salt("editor_map_game_mode")
+                        .selected_text(format!("{}", meta.game_mode))
+                        .width(ui.available_width())
+                        .show_ui(ui, |ui| {
+                            for mode in GameMode::iter() {
+                                ui.selectable_value(&mut meta.game_mode, mode, format!("{}", mode));
+                            }
+                        });
+                });
+                ui.end_row();
+
+                ui.label(get!("editor.metadata.authors"));
+                ui.vertical(|ui| {
+                    let r = ui.add(
+                        egui::TextEdit::multiline(meta.authors_ui_text_mut())
+                            .desired_width(ui.available_width())
+                            .desired_rows(4)
+                            .hint_text("anonymous"),
+                    );
+                    if r.changed() {
+                        meta.apply_authors_ui_text_edit();
+                    }
+                    if r.lost_focus() {
+                        meta.normalize_authors_ui_text();
+                    }
+                });
+                ui.end_row();
+            });
+    });
 }
 
 

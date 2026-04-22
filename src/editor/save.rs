@@ -8,6 +8,13 @@ use crate::editor::editable::{
     AxisRef, Feature, FeatureId, FeatureTimeline, PointRef,
     create_object_from_type_key,
 };
+use crate::editor::map_metadata::MapMetadata;
+
+/// Result of loading a blueprint file (features + map metadata).
+pub struct LoadedBlueprint {
+    pub timeline: FeatureTimeline,
+    pub metadata: MapMetadata,
+}
 
 pub fn map_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{}.{}", name, MAP_BLUEPRINT_EXTENSION))
@@ -433,7 +440,7 @@ fn load_applied_actions(conn: &Connection) -> rusqlite::Result<Vec<Action>> {
     Ok(actions)
 }
 
-pub fn save(path: &Path, features: &FeatureTimeline) -> rusqlite::Result<()> {
+pub fn save(path: &Path, features: &FeatureTimeline, metadata: &MapMetadata) -> rusqlite::Result<()> {
     let backup_path = path.with_extension(format!("{}.{}", MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION));
     let had_existing = path.exists();
 
@@ -443,7 +450,7 @@ pub fn save(path: &Path, features: &FeatureTimeline) -> rusqlite::Result<()> {
         })?;
     }
 
-    let result = save_inner(path, features);
+    let result = save_inner(path, features, metadata);
 
     if result.is_err() && had_existing {
         info!("Save failed, restoring from backup");
@@ -457,7 +464,7 @@ pub fn save(path: &Path, features: &FeatureTimeline) -> rusqlite::Result<()> {
     result
 }
 
-fn save_inner(path: &Path, features: &FeatureTimeline) -> rusqlite::Result<()> {
+fn save_inner(path: &Path, features: &FeatureTimeline, metadata: &MapMetadata) -> rusqlite::Result<()> {
     let conn = Connection::open(path)?;
     conn.execute_batch("DROP TABLE IF EXISTS history_action_deltas;
                         DROP TABLE IF EXISTS history_actions;
@@ -479,6 +486,8 @@ fn save_inner(path: &Path, features: &FeatureTimeline) -> rusqlite::Result<()> {
         "INSERT INTO metadata (key, value) VALUES ('schema_version', ?1)",
         params![SCHEMA_VERSION.to_string()],
     )?;
+
+    metadata.insert_rows(&tx)?;
 
     tx.execute(
         "INSERT INTO editor_meta (id_counter, rollback_bar) VALUES (?1, ?2)",
@@ -549,7 +558,7 @@ fn save_inner(path: &Path, features: &FeatureTimeline) -> rusqlite::Result<()> {
     Ok(())
 }
 
-pub fn load(path: &Path) -> rusqlite::Result<FeatureTimeline> {
+pub fn load(path: &Path) -> rusqlite::Result<LoadedBlueprint> {
     let conn = Connection::open(path)?;
 
     let file_version: u64 = conn.query_row(
@@ -669,5 +678,10 @@ pub fn load(path: &Path) -> rusqlite::Result<FeatureTimeline> {
         }
     }
 
-    Ok(editor_features)
+    let map_metadata = MapMetadata::load_from_connection(&conn)?;
+
+    Ok(LoadedBlueprint {
+        timeline: editor_features,
+        metadata: map_metadata,
+    })
 }

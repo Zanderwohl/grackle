@@ -13,6 +13,7 @@ use crate::editor::action::FeatureData;
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::global_point::GlobalPoint;
 use crate::editor::grackle_point_light::GracklePointLight;
+use crate::editor::map_metadata::MapMetadata;
 use crate::editor::save;
 use crate::get;
 
@@ -27,8 +28,9 @@ impl Plugin for EditorStepsPlugin {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<FeatureTimeline>()
+            .init_resource::<MapMetadata>()
             .add_message::<EditEvent>()
-            .add_systems(Startup, FeatureTimeline::load_template)
+            .add_systems(Startup, load_startup_blueprint)
             .add_systems(Update, (
                 FeatureTimeline::undo_redo_shortcuts,
                 FeatureTimeline::sync_entities,
@@ -36,6 +38,24 @@ impl Plugin for EditorStepsPlugin {
                 FeatureTimeline::draw_affected_gizmos,
             ).chain())
         ;
+    }
+}
+
+fn load_startup_blueprint(
+    mut features: ResMut<FeatureTimeline>,
+    mut map_metadata: ResMut<MapMetadata>,
+) {
+    let path = PathBuf::from(format!(
+        "assets/default/blueprints/new.{}",
+        MAP_BLUEPRINT_EXTENSION
+    ));
+    match save::load(&path) {
+        Ok(loaded) => {
+            *features = loaded.timeline;
+            *map_metadata = loaded.metadata;
+            info!("Loaded template from {:?}", path);
+        }
+        Err(e) => error!("Failed to load template {:?}: {}", path, e),
     }
 }
 
@@ -197,19 +217,6 @@ impl FeatureTimeline {
             }],
         });
         self.remove_feature_internal(feature_id);
-    }
-
-    fn load_template(mut features: ResMut<Self>) {
-        let path = PathBuf::from(format!(
-            "assets/default/blueprints/new.{}", MAP_BLUEPRINT_EXTENSION
-        ));
-        match save::load(&path) {
-            Ok(loaded) => {
-                *features = loaded;
-                info!("Loaded template from {:?}", path);
-            }
-            Err(e) => error!("Failed to load template {:?}: {}", path, e),
-        }
     }
 
     pub fn id_counter(&self) -> u64 {

@@ -91,6 +91,12 @@ undo = "Undo"
 redo = "Redo"
 empty = "No actions yet."
 
+[editor.metadata]
+title = "Metadata"
+schema_version = "Schema version"
+game_mode = "Game mode"
+authors = "Authors"
+
 [editor.features.global_point]
 title = "Global Point"
 
@@ -157,3 +163,12 @@ assists = "Kill Assists"
 damage = "Damage Dealt"
 points = "Points Scored"
 healing = "Healing"
+
+[mode]
+arena = "Arena"
+ctf = "Capture the Flag"
+pl = "Payload"
+plr = "Payload Race"
+koth = "King of the Hill"
+cp = "Capture Points"
+sd = "Special Delivery"
