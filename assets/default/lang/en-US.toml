@@ -52,6 +52,7 @@ select = "Select"
 point = "Point"
 point_light = "Point Light"
 spawn_point = "Spawn Point"
+prop = "Prop"
 move = "Move"
 room = "Room"
 
@@ -69,6 +70,7 @@ gizmos_points = "Points"
 gizmos_rooms = "Rooms"
 gizmos_point_lights = "Point Lights"
 gizmos_spawn_points = "Spawn Points"
+gizmos_props = "Props"
 
 [room.messages]
 ghost = "Room { me } is fully inside { other } and will not appear!"
@@ -130,7 +132,16 @@ range = "Range"
 title = "Spawn Point"
 feet = "Feet"
 eyes = "Eyes"
+facing = "Facing"
 clearance = "Needs { height } m of clear headroom."
+
+[editor.features.prop]
+title = "Prop"
+centre = "Centre"
+rotation = "Rotation"
+yaw = "Yaw"
+pitch = "Pitch"
+roll = "Roll"
 
 [editor.features.cuboid]
 title = "Cuboid"

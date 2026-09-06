@@ -9,6 +9,8 @@ use crate::tool::movement::MovementPlugin;
 use crate::tool::point::PointPlugin;
 use crate::tool::spawn_point::SpawnPointPlugin;
 use crate::tool::point_drag::PointDragPlugin;
+use crate::tool::prop::PropPlugin;
+use crate::tool::rotate_drag::RotateDragPlugin;
 use crate::tool::point_light::PointLightPlugin;
 use crate::tool::retarget::RetargetPlugin;
 use crate::tool::room::RoomPlugin;
@@ -20,6 +22,8 @@ pub mod point;
 pub mod spawn_point;
 pub mod point_light;
 pub mod point_drag;
+pub mod prop;
+pub mod rotate_drag;
 pub mod retarget;
 pub mod room;
 pub mod movement;
@@ -42,6 +46,8 @@ impl Plugin for ToolPlugin {
             .add_plugins(SpawnPointPlugin)
             .add_plugins(PointLightPlugin)
             .add_plugins(PointDragPlugin)
+            .add_plugins(RotateDragPlugin)
+            .add_plugins(PropPlugin)
             .add_plugins(RetargetPlugin)
             .add_plugins(RoomPlugin)
             // Toolbar moved to panels.rs Tools tab
@@ -69,6 +75,7 @@ pub enum Tools {
     Point,
     PointLight,
     SpawnPoint,
+    Prop,
     Room,
     Retarget,
 }
@@ -80,6 +87,7 @@ impl Tools {
             Self::Point => get!("tools.point"),
             Self::PointLight => get!("tools.point_light"),
             Self::SpawnPoint => get!("tools.spawn_point"),
+            Self::Prop => get!("tools.prop"),
             Self::Room => get!("tools.room"),
             Self::Retarget => "Retarget".into(),
         }

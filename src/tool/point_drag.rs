@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
+use crate::tool::rotate_drag::RotateDragState;
 use crate::tool::tool_helpers::closest_param_on_axis;
 use crate::tool::Tools;
 
@@ -52,6 +53,7 @@ fn is_point_like(type_key: &str) -> bool {
     type_key == "global_point"
         || type_key == "grackle_point_light"
         || type_key == "spawn_point"
+        || type_key == "prop"
 }
 
 impl PointDragState {
@@ -184,12 +186,20 @@ impl PointDragState {
         child_meshes: Query<Entity, With<Mesh3d>>,
         mut ray_cast: MeshRayCast,
         mouse_input: Res<CurrentMouseInput>,
+        rotate_drag: Res<RotateDragState>,
         mut commands: Commands,
         mut state: ResMut<Self>,
         mut features: ResMut<FeatureTimeline>,
         mut edit_events: MessageWriter<EditEvent>,
     ) {
         let Some(feature_id) = state.tracked_feature else { return; };
+
+        // A ring drag in progress owns the mouse: the arrows reach into the
+        // rings, and grabbing one mid-rotation would leave the rotation's
+        // `begin_edit` open with a translation recorded inside it.
+        if rotate_drag.is_dragging() {
+            return;
+        }
 
         let all_arrow_children: Vec<Entity> = arrows.iter()
             .flat_map(|(_, _, children)| children.iter())
