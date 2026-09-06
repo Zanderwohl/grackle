@@ -83,9 +83,10 @@ refusing to start.
 
 The new-map template (`assets/default/blueprints/new.gmb`) ships one, anchored
 to the room's `bottom_plane_center` rather than placed at absolute coordinates,
-so resizing the room takes the spawn with it. The template is a checked-in
-SQLite blob and so invisible in a diff — the tests at the bottom of
-[`save.rs`](src/editor/save.rs) load it and say what it is meant to contain.
+so resizing the room takes the spawn with it. Most of what is in the template
+is taste and will change; what a new map has to *provide* is a room, a light,
+and a spawn point with headroom, which is what the test at the bottom of
+[`save.rs`](src/editor/save.rs) checks. Don't pin its coordinates there.
 
 Choice is uniform random, and facing is the fixed `SPAWN_YAW`. Per-team spawns
 and not dropping people on each other are gamemode questions, deliberately not
