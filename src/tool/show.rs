@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use crate::common::app_mode::AppMode;
 use crate::get;
 use bevy_egui::egui;
 use crate::editor::editable::FeatureTimeline;
@@ -27,7 +28,7 @@ impl Plugin for ShowPlugin {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<GizmoVisibility>()
-            .add_systems(Update, Self::draw_visible_gizmos)
+            .add_systems(Update, Self::draw_visible_gizmos.run_if(in_state(AppMode::Editor)))
         ;
     }
 }

@@ -1,6 +1,7 @@
  use bevy::app::App;
  use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
  use bevy::prelude::*;
+use crate::common::app_mode::AppMode;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use crate::editor::input::{CurrentKeyboardInput, CurrentMouseInput};
@@ -13,11 +14,8 @@ impl Plugin for MovementPlugin {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<MovementSettings>()
-            .add_systems(Update, (
-                Self::handle,
-                )
-            )
-            .add_systems(EguiPrimaryContextPass, Self::debug_window)
+            .add_systems(Update, Self::handle.run_if(in_state(AppMode::Editor)))
+            .add_systems(EguiPrimaryContextPass, Self::debug_window.run_if(in_state(AppMode::Editor)))
         ;
     }
 }

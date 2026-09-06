@@ -6,6 +6,7 @@ use std::panic::Location;
 use bevy::input::mouse::MouseMotion;
 use bevy::picking::pointer::{PointerId, PointerLocation};
 use bevy::tasks::futures_lite::StreamExt;
+use crate::common::app_mode::AppMode;
 use crate::editor::multicam::Multicam;
 
 pub struct EditorInputPlugin;
@@ -15,10 +16,13 @@ impl Plugin for EditorInputPlugin {
         app
             .init_resource::<CurrentMouseInput>()
             .init_resource::<CurrentKeyboardInput>()
+            // Gating here is the belt to the tools' braces: with these
+            // resources frozen, no tool sees a click even if one slipped
+            // through its own run condition.
             .add_systems(PreUpdate, (
                 Self::mouse_input,
                 Self::keyboard_input,
-            ))
+            ).run_if(in_state(AppMode::Editor)))
         ;
     }
 }

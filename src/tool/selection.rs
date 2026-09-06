@@ -1,5 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
+use crate::common::app_mode::AppMode;
 use crate::editor::editable::{FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
 use crate::tool::point_drag::PointDragState;
@@ -17,7 +18,7 @@ impl Plugin for SelectionPlugin {
             .add_systems(Update, (
                 Self::select.run_if(in_state(Tools::Select)),
                 Self::draw_hover,
-            ).chain())
+            ).chain().run_if(in_state(AppMode::Editor)))
         ;
     }
 }

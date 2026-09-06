@@ -1,5 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
+use crate::common::app_mode::AppMode;
 use crate::editor::editable::{FeatureId, FeatureTimeline, PointRef};
 use crate::editor::grackle_point_light::GracklePointLight;
 use crate::editor::input::CurrentMouseInput;
@@ -55,7 +56,7 @@ impl Plugin for PointLightPlugin {
             .add_systems(Update, (
                 PointLightTool::interface,
                 PointLightTool::draw_gizmos,
-            ).chain().run_if(in_state(Tools::PointLight)))
+            ).chain().run_if(in_state(Tools::PointLight)).run_if(in_state(AppMode::Editor)))
             .add_systems(OnExit(Tools::PointLight), PointLightTool::on_exit)
         ;
     }

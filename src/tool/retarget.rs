@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use crate::common::app_mode::AppMode;
 use crate::editor::editable::{AxisRef, EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
 use crate::tool::tool_helpers::*;
@@ -13,7 +14,7 @@ impl Plugin for RetargetPlugin {
             .add_systems(Update, (
                 Self::interface,
                 Self::draw_gizmos,
-            ).chain().run_if(in_state(Tools::Retarget)))
+            ).chain().run_if(in_state(Tools::Retarget)).run_if(in_state(AppMode::Editor)))
             .add_systems(OnExit(Tools::Retarget), Self::on_exit);
     }
 }

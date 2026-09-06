@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use bevy::prelude::*;
+use crate::common::app_mode::AppMode;
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use bevy_egui::egui::{Ui, UiKind, WidgetText};
@@ -119,7 +120,7 @@ impl Plugin for EditorPanelPlugin {
             .init_resource::<EditorPanels>()
             .init_resource::<CurrentFilePath>()
             .add_systems(Startup, EditorPanels::set_multicam_size)
-            .add_systems(EguiPrimaryContextPass, EditorPanels::ui)
+            .add_systems(EguiPrimaryContextPass, EditorPanels::ui.run_if(in_state(AppMode::Editor)))
         ;
     }
 }

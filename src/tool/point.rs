@@ -1,5 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
+use crate::common::app_mode::AppMode;
 use crate::editor::editable::{FeatureId, FeatureTimeline, PointRef};
 use crate::editor::global_point::GlobalPoint;
 use crate::editor::input::CurrentMouseInput;
@@ -55,7 +56,7 @@ impl Plugin for PointPlugin {
             .add_systems(Update, (
                 PointTool::interface,
                 PointTool::draw_gizmos,
-            ).chain().run_if(in_state(Tools::Point)))
+            ).chain().run_if(in_state(Tools::Point)).run_if(in_state(AppMode::Editor)))
             .add_systems(OnExit(Tools::Point), PointTool::on_exit)
         ;
     }

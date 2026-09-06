@@ -1,3 +1,4 @@
+pub mod app_mode;
 pub mod lang;
 pub(crate) mod perf;
 pub(crate) mod systems;

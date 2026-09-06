@@ -1,5 +1,6 @@
 use bevy::app::App;
 use bevy::prelude::*;
+use crate::common::app_mode::AppMode;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline, PointRef};
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::input::CurrentMouseInput;
@@ -21,13 +22,13 @@ impl Plugin for RoomPlugin {
                 RoomTool::interface,
                 RoomTool::draw_gizmos,
                 RoomTool::draw_room_bounds,
-            ).chain().run_if(in_state(Tools::Room)))
+            ).chain().run_if(in_state(Tools::Room)).run_if(in_state(AppMode::Editor)))
             .add_systems(OnExit(Tools::Room), RoomTool::on_exit)
             .add_systems(Update, (
                 RoomDragState::spawn_handles_system,
                 RoomDragState::handle_dragging,
                 RoomDragState::update_handle_positions,
-            ).chain().run_if(in_state(Tools::Select)))
+            ).chain().run_if(in_state(Tools::Select)).run_if(in_state(AppMode::Editor)))
             .add_systems(OnExit(Tools::Select), RoomDragState::despawn_handles)
         ;
     }
@@ -587,15 +588,19 @@ impl Room {
         }
     }
 
-    /// Bake this room's wall geometry, carving openings where other rooms
-    /// overlap or share walls. Returns a single Mesh with inward-facing normals.
-    pub fn bake_faces(&self, others: &[Room]) -> Mesh {
+    /// Walk the solid parts of this room's six faces — the wall that is left
+    /// after every opening another room carves has been subtracted.
+    ///
+    /// Rendering and collision both go through here so they cannot disagree.
+    /// An opening between two overlapping rooms is a hole you can see through
+    /// and a hole you can walk through, and a bug where those two answers
+    /// differ is a miserable one to chase.
+    fn for_each_solid_rect(
+        &self,
+        others: &[Room],
+        mut visit: impl FnMut(&RoomFace, &crate::common::rect_subtract::Rect2D),
+    ) {
         use crate::common::rect_subtract::subtract_rects;
-
-        let mut vertices: Vec<[f32; 3]> = Vec::new();
-        let mut normals: Vec<[f32; 3]> = Vec::new();
-        let mut uvs: Vec<[f32; 2]> = Vec::new();
-        let mut indices: Vec<u32> = Vec::new();
 
         for face in RoomFace::enumerate(self) {
             let mut holes = Vec::new();
@@ -605,9 +610,37 @@ impl Room {
                 }
             }
 
-            let solid_rects = subtract_rects(&face.rect, &holes);
+            for rect in subtract_rects(&face.rect, &holes) {
+                visit(&face, &rect);
+            }
+        }
+    }
 
-            for rect in &solid_rects {
+    /// The same solid wall rectangles [`Room::bake_faces`] renders, as
+    /// world-space boxes a body can be pushed out of.
+    ///
+    /// `thickness` extends each slab *away* from the room's interior, so a
+    /// wall never eats space the player could otherwise stand in. It wants to
+    /// be comfortably larger than one frame of movement: a slab thinner than
+    /// the distance travelled in a tick can be stepped straight through.
+    pub fn collision_slabs(&self, others: &[Room], thickness: f32) -> Vec<WallSlab> {
+        let mut slabs = Vec::new();
+        self.for_each_solid_rect(others, |face, rect| {
+            slabs.push(face.rect_to_slab(rect, thickness));
+        });
+        slabs
+    }
+
+    /// Bake this room's wall geometry, carving openings where other rooms
+    /// overlap or share walls. Returns a single Mesh with inward-facing normals.
+    pub fn bake_faces(&self, others: &[Room]) -> Mesh {
+        let mut vertices: Vec<[f32; 3]> = Vec::new();
+        let mut normals: Vec<[f32; 3]> = Vec::new();
+        let mut uvs: Vec<[f32; 2]> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+
+        self.for_each_solid_rect(others, |face, rect| {
+            {
                 let base = vertices.len() as u32;
                 let (p0, p1, p2, p3) = face.rect_to_3d(rect);
                 vertices.push(p0.into());
@@ -635,7 +668,7 @@ impl Room {
                     indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
                 }
             }
-        }
+        });
 
         let mut mesh = Mesh::new(
             bevy::render::render_resource::PrimitiveTopology::TriangleList,
@@ -699,6 +732,16 @@ impl Room {
         }
         IntersectionResult::Intersection
     }
+}
+
+/// One solid piece of wall, as a world-space axis-aligned box.
+///
+/// Produced by [`Room::collision_slabs`] from the same face subtraction that
+/// produces the rendered mesh.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WallSlab {
+    pub min: Vec3,
+    pub max: Vec3,
 }
 
 /// Represents one face of a room cuboid, projected into a 2D coordinate system.
@@ -821,6 +864,35 @@ impl RoomFace {
         );
 
         self.rect.intersection(&clip)
+    }
+
+    /// Convert a 2D sub-rectangle into a solid box standing behind this face.
+    ///
+    /// The interior lies toward `opposite_value`, so the box is grown from the
+    /// face plane in the other direction and the room keeps all of its usable
+    /// volume. Mirrors [`RoomFace::rect_to_3d`]'s axis mapping — a max face on
+    /// axis 0 has u along z and v along y.
+    fn rect_to_slab(&self, r: &crate::common::rect_subtract::Rect2D, thickness: f32) -> WallSlab {
+        let (near, far) = if self.is_max {
+            (self.fixed_value, self.fixed_value + thickness)
+        } else {
+            (self.fixed_value - thickness, self.fixed_value)
+        };
+        match self.fixed_axis {
+            0 => WallSlab {
+                min: Vec3::new(near, r.min_v, r.min_u),
+                max: Vec3::new(far, r.max_v, r.max_u),
+            },
+            1 => WallSlab {
+                min: Vec3::new(r.min_u, near, r.min_v),
+                max: Vec3::new(r.max_u, far, r.max_v),
+            },
+            2 => WallSlab {
+                min: Vec3::new(r.min_u, r.min_v, near),
+                max: Vec3::new(r.max_u, r.max_v, far),
+            },
+            _ => unreachable!(),
+        }
     }
 
     /// Convert a 2D sub-rectangle back into four 3D vertices on this face's plane.
