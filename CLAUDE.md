@@ -249,16 +249,19 @@ in order of how load-bearing they are:
   format: let the editor stay native for authoring, and give the runtime a
   format it can read in a browser.
 - **`rfd` + `pollster::block_on` inside `std::thread::spawn`**
-  ([`panels.rs:379`](src/editor/panels.rs:379)) — no threads on wasm, and
+  ([`panels.rs:402`](src/editor/panels.rs:402)) — no threads on wasm, and
   blocking the main thread deadlocks.
 - **`lang.rs` reads `assets/` via `std::fs`** at first use, outside Bevy's
   `AssetServer`.
-- **`iyes_perf_ui`** is pinned to a git branch, not a release.
 
-Two are already dealt with: `objc2` is scoped to macOS, and `getrandom` has its
+Three are already dealt with: `objc2` is scoped to macOS, `getrandom` has its
 `wasm_js` feature plus the `getrandom_backend` rustflag in
 [`.cargo/config.toml`](.cargo/config.toml) — both halves are required, the
-feature alone selects nothing.
+feature alone selects nothing — and `iyes_perf_ui`, which was pinned to a git
+branch rather than a release, is gone: the F3 overlay in
+[`src/common/perf.rs`](src/common/perf.rs) is now a plain `bevy_egui` window
+over `FrameTimeDiagnosticsPlugin`, so there is no per-Bevy-release fork to
+chase.
 
 `cargo check --target wasm32-unknown-unknown` is worth running as a probe: it
 now gets all the way to `libsqlite3-sys` trying to compile bundled C, which is

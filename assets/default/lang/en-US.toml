@@ -25,6 +25,17 @@ box = "Viewport Box"
 mouseover = "Mouseover Boxes"
 probe = "Mouse Probe"
 
+[debug.perf]
+title = "Performance"
+fps = "FPS"
+frame_time = "Frame time"
+frame_count = "Frames"
+fixed_rate = "Fixed rate"
+fixed_overstep = "Fixed overstep"
+uptime = "Uptime"
+resolution = "Resolution"
+scale_factor = "Scale factor"
+
 [debug.movement]
 title = "Camera Movement"
 perspective.title = "Perspective Camera Settings"

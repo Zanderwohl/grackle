@@ -1,5 +1,5 @@
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::render::view::Hdr;
+use bevy::camera::Hdr;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::time::Fixed;

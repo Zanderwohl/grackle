@@ -587,7 +587,7 @@ impl FeatureTimeline {
                 let selected_idx = selected_idx.unwrap();
                 let prior_order: Vec<FeatureId> = features.feature_order[..selected_idx].to_vec();
 
-                egui::TopBottomPanel::bottom("editor_feature_panel")
+                egui::Panel::bottom("editor_feature_panel")
                     .resizable(false)
                     .show_inside(ui, |ui| {
                         ui.separator();
@@ -652,9 +652,9 @@ impl FeatureTimeline {
 
                 let label_text = feature.type_name_with_id();
                 let label = if is_active {
-                    egui::SelectableLabel::new(is_selected, label_text)
+                    egui::Button::selectable(is_selected, label_text)
                 } else {
-                    egui::SelectableLabel::new(false,
+                    egui::Button::selectable(false,
                         egui::RichText::new(label_text).strikethrough().weak())
                 };
 
@@ -736,7 +736,7 @@ impl FeatureTimeline {
         mut egui_contexts: EguiContexts,
     ) {
         if let Ok(ctx) = egui_contexts.ctx_mut() {
-            if ctx.wants_keyboard_input() {
+            if ctx.egui_wants_keyboard_input() {
                 return;
             }
         }

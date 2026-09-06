@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
-use bevy_egui::egui::{Ui, UiKind, WidgetText};
+use bevy_egui::egui::{Id, LayerId, Ui, UiBuilder, UiKind, WidgetText};
 use egui_dock::{DockArea, DockState, TabViewer};
 use strum::IntoEnumIterator;
 use strum_macros::Display;
@@ -73,6 +73,18 @@ struct TabViewerAndResources<'a> {
 
 impl<'a> TabViewer for TabViewerAndResources<'a> {
     type Tab = TabKinds;
+
+    fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
+        egui::Id::new(match tab {
+            TabKinds::Empty(name) => format!("empty:{}", name),
+            TabKinds::Tools => "tools".to_owned(),
+            TabKinds::Bakes => "bakes".to_owned(),
+            TabKinds::Show => "show".to_owned(),
+            TabKinds::Metadata => "metadata".to_owned(),
+            TabKinds::Timeline => "timeline".to_owned(),
+            TabKinds::History => "history".to_owned(),
+        })
+    }
 
     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText {
         match tab {
@@ -206,6 +218,16 @@ impl EditorPanels {
         }
         let ctx = ctx.unwrap();
 
+        // egui 0.36 hangs top-level panels off a root `Ui` covering the
+        // viewport instead of off the `Context` directly.
+        let mut viewport_ui = Ui::new(
+            ctx.clone(),
+            Id::new("grackle_editor_viewport"),
+            UiBuilder::new()
+                .layer_id(LayerId::background())
+                .max_rect(ctx.viewport_rect()),
+        );
+
         map_metadata.sync_authors_ui_buffer_from_authors();
         
         let mut bake_commands = BakeCommands::default();
@@ -229,10 +251,10 @@ impl EditorPanels {
             retarget_request: &mut retarget_request,
         };
 
-        panels.menu_bar_height = egui::TopBottomPanel::top("menu_bar")
+        panels.menu_bar_height = egui::Panel::top("menu_bar")
             .resizable(false)
-            .show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
+            .show(&mut viewport_ui, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button("File", |ui| {
                         if ui.button("New").clicked() {
                             ui.close_kind(UiKind::Menu);
@@ -261,9 +283,9 @@ impl EditorPanels {
             .rect
             .height();
 
-        panels.top_height = egui::TopBottomPanel::top("top_panel")
+        panels.top_height = egui::Panel::top("top_panel")
             .resizable(true)
-            .show(ctx, |ui| {
+            .show(&mut viewport_ui, |ui| {
                 DockArea::new(&mut panels.top_tabs)
                     .id(egui::Id::new("egui_dock::DockArea::top"))
                     .show_close_buttons(false)
@@ -276,9 +298,9 @@ impl EditorPanels {
             .response
             .rect
             .height();
-        panels.left_width = egui::SidePanel::left("left_panel")
+        panels.left_width = egui::Panel::left("left_panel")
             .resizable(true)
-            .show(ctx, |ui| {
+            .show(&mut viewport_ui, |ui| {
                 DockArea::new(&mut panels.left_tabs)
                     .id(egui::Id::new("egui_dock::DockArea::left"))
                     .show_close_buttons(false)
@@ -291,9 +313,9 @@ impl EditorPanels {
             .response
             .rect
             .width();
-        panels.right_width = egui::SidePanel::right("right_panel")
+        panels.right_width = egui::Panel::right("right_panel")
             .resizable(true)
-            .show(ctx, |ui| {
+            .show(&mut viewport_ui, |ui| {
                 DockArea::new(&mut panels.right_tabs)
                     .id(egui::Id::new("egui_dock::DockArea::right"))
                     .show_close_buttons(false)
@@ -306,9 +328,9 @@ impl EditorPanels {
             .response
             .rect
             .width();
-        panels.bottom_height = egui::TopBottomPanel::bottom("bottom_panel")
+        panels.bottom_height = egui::Panel::bottom("bottom_panel")
             .resizable(true)
-            .show(ctx, |ui| {
+            .show(&mut viewport_ui, |ui| {
                 DockArea::new(&mut panels.bottom_tabs)
                     .id(egui::Id::new("egui_dock::DockArea::bottom"))
                     .show_close_buttons(false)
@@ -466,7 +488,11 @@ impl EditorPanels {
             retarget_state.target_feature = Some(feature_id);
             retarget_state.target_point_ref_key = label;
             retarget_state.hovered_point = None;
-            next_tool.set(Tools::Retarget);
+            // `set_if_neq`, not `set`: since 0.18 a same-state `set` still runs
+            // the transition, and `OnExit(Tools::Retarget)` clears the
+            // `RetargetState` we just filled in. Starting a second retarget
+            // while the tool is already active would wipe its own request.
+            (&mut *next_tool).set_if_neq(Tools::Retarget);
         }
 
         // Flush edit events

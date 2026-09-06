@@ -4,7 +4,7 @@ use grackle::common;
 use bevy::prelude::*;
 use bevy::window::{ExitCondition, PresentMode};
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts, EguiPlugin};
-use bevy_egui::egui::{Frame, ScrollArea, Sense, UiBuilder};
+use bevy_egui::egui::{Frame, Id, LayerId, ScrollArea, Sense, Ui, UiBuilder};
 use grackle::common::item::item::Item;
 use grackle::unlock::{unlock, UnlockProblem};
 
@@ -66,8 +66,18 @@ fn ui(
     let ctx = contexts.ctx_mut();
     if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
     let ctx = ctx.unwrap();
-    
-    egui::SidePanel::left("left_panel").show(ctx, |ui| {
+
+    // egui 0.36 hangs top-level panels off a root `Ui` covering the viewport
+    // instead of off the `Context` directly.
+    let mut viewport_ui = Ui::new(
+        ctx.clone(),
+        Id::new("crate_drop_viewport"),
+        UiBuilder::new()
+            .layer_id(LayerId::background())
+            .max_rect(ctx.viewport_rect()),
+    );
+
+    egui::Panel::left("left_panel").show(&mut viewport_ui, |ui| {
         ui.set_min_width(200.0);
 
         let half_height = ui.available_height() / 2.0;
@@ -137,7 +147,7 @@ fn ui(
         });
     });
     
-    egui::SidePanel::right("right_panel").show(ctx, |ui| {
+    egui::Panel::right("right_panel").show(&mut viewport_ui, |ui| {
         ui.heading(get!("crate_drop.history.title"));
 
         ScrollArea::vertical().show(ui, |ui| {
