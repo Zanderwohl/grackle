@@ -104,23 +104,35 @@ pub struct PlayerCamera;
 /// the duration anyway.
 const PLAY_CAMERA_ORDER: isize = 100;
 
-/// Which way a body faces when it is put down.
+/// Which way a body faces when there is no spawn point to ask.
 ///
-/// Always the same for now. Spawn points carry no facing yet, and gamemodes
-/// will want per-team directions rather than a per-point one, so guessing
-/// here would be guessing at the wrong layer.
+/// A spawn point carries its own yaw and that is what a body put on one uses.
+/// This is only for [`fallback_spawn`], where there is no mapper intent to
+/// read: facing down -Z from the middle of the largest room is as good a guess
+/// as any other.
 pub const SPAWN_YAW: f32 = 0.0;
+
+/// A place to stand and the way to face doing it, as the map gives it.
+///
+/// The pair travels together from here on: choosing a spawn point and then
+/// looking its facing back up would be two chances to pick different ones.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spawn {
+    /// Where the feet go.
+    pub feet: Vec3,
+    /// Heading in radians about world Y.
+    pub yaw: f32,
+}
 
 /// The spawn points a body actually fits in, feet-first.
 ///
 /// A spawn point under a low ceiling is dropped rather than used and then
-/// resolved by shoving the body somewhere the mapper did not intend. Returns
-/// feet positions, which is what [`spawn_player`] is given.
-pub fn usable_spawns(spawns: &[Vec3], world: &CollisionWorld) -> Vec<Vec3> {
+/// resolved by shoving the body somewhere the mapper did not intend.
+pub fn usable_spawns(spawns: &[Spawn], world: &CollisionWorld) -> Vec<Spawn> {
     spawns
         .iter()
         .copied()
-        .filter(|feet| world.fits(body_centre_from_feet(*feet), PLAYER_HALF))
+        .filter(|spawn| world.fits(body_centre_from_feet(spawn.feet), PLAYER_HALF))
         .collect()
 }
 
@@ -129,7 +141,7 @@ pub fn usable_spawns(spawns: &[Vec3], world: &CollisionWorld) -> Vec<Vec3> {
 /// The fallback for a map with no usable spawn point — an unfinished map, or
 /// one whose spawns are all walled in. Largest by volume is a crude guess at
 /// "the main space", and a crude guess beats refusing to start.
-pub fn fallback_spawn(rooms: &[Room]) -> Vec3 {
+pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
     let largest = rooms.iter().max_by(|a, b| {
         let volume = |r: &Room| {
             let size = (r.max - r.min).abs();
@@ -138,7 +150,7 @@ pub fn fallback_spawn(rooms: &[Room]) -> Vec3 {
         volume(a).total_cmp(&volume(b))
     });
 
-    match largest {
+    let feet = match largest {
         Some(room) => {
             let min = room.min.min(room.max);
             let max = room.min.max(room.max);
@@ -149,17 +161,22 @@ pub fn fallback_spawn(rooms: &[Room]) -> Vec3 {
             warn!("No rooms on the map; spawning at the origin");
             Vec3::ZERO
         }
-    }
+    };
+    Spawn { feet, yaw: SPAWN_YAW }
 }
 
-/// `feet` is a spawn point's own position; the body is centred above it.
-pub fn spawn_player(commands: &mut Commands, feet: Vec3) {
-    let position = body_centre_from_feet(feet);
+/// The spawn's `feet` is its own position; the body is centred above it.
+///
+/// The yaw goes into `Player` as well as `Transform` because `mouse_look` owns
+/// the rotation from the next frame on and reads the body's yaw to do it —
+/// setting only the transform would be undone on the first mouse movement.
+pub fn spawn_player(commands: &mut Commands, spawn: Spawn) {
+    let position = body_centre_from_feet(spawn.feet);
     commands
         .spawn((
-            Player { yaw: SPAWN_YAW, ..default() },
+            Player { yaw: spawn.yaw, ..default() },
             PhysicsBody::at(position),
-            Transform::from_translation(position).with_rotation(Quat::from_rotation_y(SPAWN_YAW)),
+            Transform::from_translation(position).with_rotation(Quat::from_rotation_y(spawn.yaw)),
             Visibility::default(),
             Name::new("Player"),
         ))

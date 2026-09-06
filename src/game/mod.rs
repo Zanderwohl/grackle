@@ -8,7 +8,7 @@ use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{
     fallback_spawn, gather_input, interpolate_bodies, mouse_look, spawn_player, step_player,
-    usable_spawns, Player, PlayerInput,
+    usable_spawns, Player, PlayerInput, Spawn,
 };
 use crate::tool::room::Room;
 
@@ -88,7 +88,15 @@ fn enter_play(
     // about the walls.
     collision.rebuild(&rooms);
 
-    let placed: Vec<Vec3> = spawns.iter().map(|t| t.translation).collect();
+    // The feature writes its facing into the transform's rotation, so the
+    // marked entity carries both halves and neither has to be looked up twice.
+    let placed: Vec<Spawn> = spawns
+        .iter()
+        .map(|t| Spawn {
+            feet: t.translation,
+            yaw: t.rotation.to_euler(EulerRot::YXZ).0,
+        })
+        .collect();
     let usable = usable_spawns(&placed, &collision);
     if usable.len() < placed.len() {
         warn!(
@@ -101,14 +109,14 @@ fn enter_play(
     // Uniformly at random for now. Per-team spawns, and not dropping someone
     // on top of someone else, are gamemode questions this is deliberately not
     // trying to answer yet.
-    let feet = match usable.choose(&mut rand::rng()) {
-        Some(feet) => *feet,
+    let spawn = match usable.choose(&mut rand::rng()) {
+        Some(spawn) => *spawn,
         None => {
             warn!("No usable spawn point on this map; falling back to the largest room");
             fallback_spawn(&rooms)
         }
     };
-    spawn_player(&mut commands, feet);
+    spawn_player(&mut commands, spawn);
 
     for mut camera in &mut editor_cameras {
         camera.is_active = false;
@@ -472,8 +480,39 @@ mod tests {
         assert!(position.y < 7.0, "used the unusable spawn anyway: {position}");
     }
 
-    /// Facing is fixed for now, and the body has to actually be turned that
-    /// way rather than the yaw being written and never applied.
+    /// A spawn point's facing has to survive the whole trip: the feature
+    /// writes it into the marked entity's rotation, `enter_play` reads it back
+    /// out, and the body is turned by it. Anywhere along there it could be
+    /// dropped and every spawn would silently face north again.
+    ///
+    /// `Player::yaw` matters as much as the transform, because `mouse_look`
+    /// owns the rotation from the next frame on and drives it from that field.
+    #[test]
+    fn a_spawn_point_turns_the_body_it_spawns() {
+        let yaw = std::f32::consts::FRAC_PI_2;
+        let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
+        app.world_mut().spawn((
+            Transform::from_translation(Vec3::ZERO).with_rotation(Quat::from_rotation_y(yaw)),
+            SpawnPointMarker,
+        ));
+        enter(&mut app);
+
+        let (player_yaw, rotation) = {
+            let world = app.world_mut();
+            let mut query = world.query::<(&Player, &Transform)>();
+            let (player, transform) = query.single(world).unwrap();
+            (player.yaw, transform.rotation)
+        };
+        assert!((player_yaw - yaw).abs() < 1e-5, "the body's yaw is {player_yaw}, not {yaw}");
+        assert!(
+            rotation.abs_diff_eq(Quat::from_rotation_y(yaw), 1e-5),
+            "the yaw was written but the body was never turned by it"
+        );
+    }
+
+    /// With no spawn point to ask, facing falls back to a fixed direction, and
+    /// the body has to actually be turned that way rather than the yaw being
+    /// written and never applied.
     #[test]
     fn a_spawned_body_faces_the_fixed_direction() {
         let mut app = with_spawns(

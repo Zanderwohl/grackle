@@ -264,6 +264,7 @@ fn snapshot_data_kind(data: &FeatureData) -> &'static str {
         FeatureData::PointLight { .. } => "point_light",
         FeatureData::Room { .. } => "room",
         FeatureData::SpawnPoint { .. } => "spawn_point",
+        FeatureData::Prop { .. } => "prop",
         FeatureData::Cuboid { .. } => "cuboid",
     }
 }
@@ -289,8 +290,25 @@ fn save_feature_snapshot(
         FeatureData::GlobalPoint { location } => {
             save_snapshot_point_ref(tx, sid, "location", location)?;
         }
-        FeatureData::SpawnPoint { location } => {
+        FeatureData::SpawnPoint { location, yaw } => {
             save_snapshot_point_ref(tx, sid, "location", location)?;
+            tx.execute(
+                "INSERT INTO snapshot_scalar_fields (snapshot_id, field_key, field_value) VALUES (?1, ?2, ?3)",
+                params![sid, "yaw", *yaw as f64],
+            )?;
+        }
+        FeatureData::Prop { location, rotation } => {
+            save_snapshot_point_ref(tx, sid, "location", location)?;
+            for (k, v) in [
+                ("pitch", rotation.x),
+                ("yaw", rotation.y),
+                ("roll", rotation.z),
+            ] {
+                tx.execute(
+                    "INSERT INTO snapshot_scalar_fields (snapshot_id, field_key, field_value) VALUES (?1, ?2, ?3)",
+                    params![sid, k, v as f64],
+                )?;
+            }
         }
         FeatureData::PointLight {
             location,
@@ -343,6 +361,20 @@ fn load_snapshot_scalar(conn: &Connection, snapshot_id: i64, key: &str) -> rusql
     Ok(v as f32)
 }
 
+/// A snapshot scalar that may simply not be there.
+///
+/// History is persisted, so a blueprint written before a field existed still
+/// has snapshots without it — every spawn point saved before facing was a
+/// thing. Those rows are not corrupt and refusing to load them would throw
+/// away the file's whole undo stack over a value whose absence means "zero".
+fn load_snapshot_scalar_or(conn: &Connection, snapshot_id: i64, key: &str, default: f32) -> rusqlite::Result<f32> {
+    match load_snapshot_scalar(conn, snapshot_id, key) {
+        Ok(v) => Ok(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(default),
+        Err(e) => Err(e),
+    }
+}
+
 fn load_feature_snapshot(conn: &Connection, snapshot_id: i64) -> rusqlite::Result<FeatureSnapshot> {
     let (order_index, data_kind): (i64, String) = conn.query_row(
         "SELECT order_index, data_kind FROM feature_snapshots WHERE id = ?1",
@@ -357,7 +389,17 @@ fn load_feature_snapshot(conn: &Connection, snapshot_id: i64) -> rusqlite::Resul
         }
         "spawn_point" => {
             let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
-            FeatureData::SpawnPoint { location }
+            let yaw = load_snapshot_scalar_or(conn, snapshot_id, "yaw", 0.0)?;
+            FeatureData::SpawnPoint { location, yaw }
+        }
+        "prop" => {
+            let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
+            let rotation = Vec3::new(
+                load_snapshot_scalar(conn, snapshot_id, "pitch")?,
+                load_snapshot_scalar(conn, snapshot_id, "yaw")?,
+                load_snapshot_scalar(conn, snapshot_id, "roll")?,
+            );
+            FeatureData::Prop { location, rotation }
         }
         "point_light" => {
             let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
@@ -777,6 +819,76 @@ mod tests {
             .map(|(_, f)| f.object().get_point("").unwrap())
             .collect();
         assert_eq!(spawns, vec![Vec3::new(5.0, 1.0, 2.0)]);
+    }
+
+    /// A prop's whole point is that it is turned, so a round trip that only
+    /// carried its position back would look like a pass and lose every
+    /// facing on the map.
+    #[test]
+    fn a_prop_survives_a_save_and_load_with_its_rotation() {
+        use crate::editor::prop::Prop;
+
+        let rotation = Vec3::new(0.25, -1.5, 0.75);
+        let mut timeline = FeatureTimeline::default();
+        timeline.apply_feature(Box::new(
+            Prop::new(2.0, 3.0, -1.0).with_rotation(rotation),
+        ));
+
+        let path = temp_path("prop-round-trip");
+        save(&path, &timeline, &MapMetadata::default()).unwrap();
+        let mut loaded = load(&path).unwrap();
+
+        let read_back = |timeline: &FeatureTimeline| -> Vec<(Vec3, Vec3)> {
+            timeline
+                .active_features()
+                .filter(|(_, f)| f.object().type_key() == "prop")
+                .map(|(_, f)| (f.object().get_point("").unwrap(), f.object().euler_angles()))
+                .collect()
+        };
+
+        assert_eq!(
+            read_back(&loaded.timeline),
+            vec![(Vec3::new(2.0, 3.0, -1.0), rotation)]
+        );
+
+        // And again out of the persisted history, which is registered
+        // separately from the features table and fails separately.
+        loaded.timeline.undo();
+        assert!(read_back(&loaded.timeline).is_empty(), "undo left the prop active");
+        loaded.timeline.redo();
+        assert_eq!(
+            read_back(&loaded.timeline),
+            vec![(Vec3::new(2.0, 3.0, -1.0), rotation)]
+        );
+    }
+
+    /// Facing rides along on the spawn point as a scalar, which is a separate
+    /// registration from the point itself in both the live tables and the
+    /// snapshots. A spawn that comes back pointing at zero is a spawn that
+    /// drops everyone facing a wall.
+    #[test]
+    fn a_spawn_point_keeps_its_facing_across_a_save_and_load() {
+        let yaw = 1.25;
+        let mut timeline = FeatureTimeline::default();
+        timeline.apply_feature(Box::new(SpawnPoint::new(0.0, 0.0, 0.0).with_yaw(yaw)));
+
+        let path = temp_path("spawn-yaw-round-trip");
+        save(&path, &timeline, &MapMetadata::default()).unwrap();
+        let mut loaded = load(&path).unwrap();
+
+        let read_back = |timeline: &FeatureTimeline| -> Vec<f32> {
+            timeline
+                .active_features()
+                .filter(|(_, f)| f.object().type_key() == "spawn_point")
+                .map(|(_, f)| f.object().euler_angles().y)
+                .collect()
+        };
+
+        assert_eq!(read_back(&loaded.timeline), vec![yaw]);
+
+        loaded.timeline.undo();
+        loaded.timeline.redo();
+        assert_eq!(read_back(&loaded.timeline), vec![yaw], "the history lost the facing");
     }
 
     /// What a new map has to give you, and no more than that.

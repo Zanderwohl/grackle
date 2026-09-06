@@ -28,6 +28,20 @@ pub fn closest_param_on_axis(ray: Ray3d, axis_origin: Vec3, axis_dir: Vec3) -> O
     Some((a * e - b * d) / denom)
 }
 
+/// The signed angle of `point` about `center` on the plane spanned by
+/// `cos_dir` and `sin_dir` (unit, mutually perpendicular), right-handed about
+/// the normal those two imply.
+///
+/// This is the whole of how a rotation ring reads the mouse: the cursor is
+/// projected onto the ring's plane and asked what angle it sits at, and a drag
+/// is the difference between that angle now and at the moment of the grab.
+/// Taking the difference is what makes the object turn *with* the cursor
+/// instead of snapping its front to it.
+pub fn angle_on_plane(point: Vec3, center: Vec3, cos_dir: Vec3, sin_dir: Vec3) -> f32 {
+    let v = point - center;
+    v.dot(sin_dir).atan2(v.dot(cos_dir))
+}
+
 /// Snap each axis to the nearest multiple of `granularity` (ties round half away from zero).
 pub fn snap_vec3(v: Vec3, granularity: f32) -> Vec3 {
     if granularity <= 0.0 {
@@ -320,6 +334,7 @@ pub fn find_nearest_feature_hit(
             "editor_room" => visibility.rooms,
             "grackle_point_light" => visibility.point_lights,
             "spawn_point" => visibility.spawn_points,
+            "prop" => visibility.props,
             _ => false,
         };
         if !visible { continue; }
@@ -360,7 +375,7 @@ pub fn find_nearest_feature_hit(
                     }
                 }
             }
-            "global_point" | "grackle_point_light" | "spawn_point" => {
+            "global_point" | "grackle_point_light" | "spawn_point" | "prop" => {
                 if let Ok(pos) = feature.object().get_point("") {
                     let dist = ray_point_distance(ray, pos);
                     if dist < SELECT_POINT_RADIUS {

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::editor::editable::{Feature, FeatureId, FeatureTrait, PointRef};
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::global_point::GlobalPoint;
+use crate::editor::prop::Prop;
 use crate::editor::spawn_point::SpawnPoint;
 use crate::editor::grackle_point_light::GracklePointLight;
 use crate::common::cuboid::GrackleCuboid;
@@ -25,6 +26,11 @@ pub enum FeatureData {
     },
     SpawnPoint {
         location: PointRef,
+        yaw: f32,
+    },
+    Prop {
+        location: PointRef,
+        rotation: Vec3,
     },
     Cuboid {
         min: Vec3,
@@ -57,6 +63,7 @@ impl FeatureSnapshot {
                 PointRef::absolute(0.0, 0.0, 0.0),
             )),
             FeatureData::SpawnPoint { .. } => Box::new(SpawnPoint::from_point_ref(PointRef::absolute(0.0, 0.0, 0.0))),
+            FeatureData::Prop { .. } => Box::new(Prop::from_point_ref(PointRef::absolute(0.0, 0.0, 0.0))),
             FeatureData::Cuboid { .. } => Box::new(GrackleCuboid::new(Vec3::ZERO, Vec3::ZERO)),
         };
 
@@ -83,6 +90,7 @@ fn feature_data_kind(data: &FeatureData) -> &'static str {
         FeatureData::PointLight { .. } => "Point Light",
         FeatureData::Room { .. } => "Room",
         FeatureData::SpawnPoint { .. } => "Spawn Point",
+        FeatureData::Prop { .. } => "Prop",
         FeatureData::Cuboid { .. } => "Cuboid",
     }
 }

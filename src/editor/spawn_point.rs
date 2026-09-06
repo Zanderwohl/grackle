@@ -25,6 +25,11 @@ pub struct SpawnPointMarker;
 #[derive(Serialize, Deserialize)]
 pub struct SpawnPoint {
     location: PointRef,
+    /// Which way the body faces, in radians about world Y.
+    ///
+    /// Only yaw, because a body stands upright: a pitched or rolled spawn
+    /// point could only ever describe a spawn nobody can be put in.
+    yaw: f32,
     #[serde(skip)]
     resolved_location: Vec3,
     #[serde(skip)]
@@ -49,6 +54,23 @@ impl FeatureTrait for SpawnPoint {
             "height",
             format!("{TALLEST_CLASS_HEIGHT:.1}")
         ));
+
+        // Degrees in the box, radians in the field: nobody lines a spawn up
+        // against a wall in radians, and everything downstream is trigonometry.
+        let mut degrees = self.yaw.to_degrees();
+        if ui
+            .add(
+                egui::DragValue::new(&mut degrees)
+                    .speed(1.0)
+                    .prefix(format!("{}: ", get!("editor.features.spawn_point.facing")))
+                    .suffix("\u{b0}"),
+            )
+            .changed()
+        {
+            self.yaw = degrees.to_radians();
+            changed = true;
+        }
+
         if changed {
             if let Ok(v) = self.location.resolve(features) {
                 self.resolved_location = v;
@@ -66,12 +88,14 @@ impl FeatureTrait for SpawnPoint {
     fn snapshot(&self) -> FeatureData {
         FeatureData::SpawnPoint {
             location: self.location.clone(),
+            yaw: self.yaw,
         }
     }
 
     fn apply_snapshot(&mut self, data: &FeatureData) {
-        let FeatureData::SpawnPoint { location } = data else { return; };
+        let FeatureData::SpawnPoint { location, yaw } = data else { return; };
         self.location = location.clone();
+        self.yaw = *yaw;
     }
 
     /// Feet, headroom, eyes.
@@ -90,6 +114,11 @@ impl FeatureTrait for SpawnPoint {
         gizmos.line(feet, head, yellow);
         gizmos.sphere(Isometry3d::from_translation(eyes), 0.12, yellow);
 
+        // Which way the body looks, drawn from the eyes because that is where
+        // the view actually starts.
+        let facing = Quat::from_rotation_y(self.yaw) * Vec3::NEG_Z;
+        gizmos.arrow(eyes, eyes + facing, yellow);
+
         self.location.debug_gizmos(feet, gizmos);
     }
 
@@ -103,7 +132,8 @@ impl FeatureTrait for SpawnPoint {
 
     fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
         commands.entity(entity).insert((
-            Transform::from_translation(self.resolved_location),
+            Transform::from_translation(self.resolved_location)
+                .with_rotation(Quat::from_rotation_y(self.yaw)),
             SpawnPointMarker,
         ));
     }
@@ -133,6 +163,28 @@ impl FeatureTrait for SpawnPoint {
     }
 
     fn point_ref_slots(&self) -> Vec<&str> { vec!["location"] }
+
+    fn scalar_fields(&self) -> Vec<(&str, f32)> {
+        vec![("yaw", self.yaw)]
+    }
+
+    fn set_scalar_field(&mut self, key: &str, value: f32) {
+        if key == "yaw" {
+            self.yaw = value;
+        }
+    }
+
+    fn rotation_axes(&self) -> Vec<u8> { vec![1] }
+
+    fn euler_angles(&self) -> Vec3 { Vec3::new(0.0, self.yaw, 0.0) }
+
+    fn set_euler_angle(&mut self, axis: u8, radians: f32) -> bool {
+        if axis != 1 {
+            return false;
+        }
+        self.yaw = radians;
+        true
+    }
 
     fn get_point_ref(&self, _key: &str) -> Option<&PointRef> {
         Some(&self.location)
@@ -169,6 +221,7 @@ impl SpawnPoint {
     pub fn new(x: f32, y: f32, z: f32) -> Self {
         Self {
             location: PointRef::absolute(x, y, z),
+            yaw: 0.0,
             resolved_location: Vec3::new(x, y, z),
             entity: None,
         }
@@ -177,9 +230,20 @@ impl SpawnPoint {
     pub fn from_point_ref(location: PointRef) -> Self {
         Self {
             location,
+            yaw: 0.0,
             resolved_location: Vec3::ZERO,
             entity: None,
         }
+    }
+
+    /// The heading a body put here faces, in radians about world Y.
+    pub fn yaw(&self) -> f32 {
+        self.yaw
+    }
+
+    pub fn with_yaw(mut self, yaw: f32) -> Self {
+        self.yaw = yaw;
+        self
     }
 }
 

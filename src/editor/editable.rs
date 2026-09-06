@@ -15,6 +15,7 @@ use crate::editor::editor_room::EditorRoom;
 use crate::editor::global_point::GlobalPoint;
 use crate::editor::grackle_point_light::GracklePointLight;
 use crate::editor::map_metadata::MapMetadata;
+use crate::editor::prop::Prop;
 use crate::editor::spawn_point::SpawnPoint;
 use crate::editor::save;
 use crate::get;
@@ -121,6 +122,22 @@ pub trait FeatureTrait: Send + Sync {
     /// Keys: GlobalPoint/GracklePointLight use "location" (or ""),
     /// EditorRoom uses "min" / "max".
     fn get_point_ref_mut(&mut self, _key: &str) -> Option<&mut PointRef> { None }
+
+    /// Which Euler components (0=X pitch, 1=Y yaw, 2=Z roll) this feature lets
+    /// the user turn. Empty — the default — means the feature has no facing,
+    /// and the rotation rings are not drawn for it at all.
+    ///
+    /// A spawn point returns just `1`: a body stands upright, so pitching or
+    /// rolling one would only ever describe a spawn that cannot be used.
+    fn rotation_axes(&self) -> Vec<u8> { vec![] }
+
+    /// The three angles in radians, in axis order — see
+    /// [`crate::common::rotation`] for what they mean together.
+    fn euler_angles(&self) -> Vec3 { Vec3::ZERO }
+
+    /// Set one Euler component, in radians. Returns true if it was modified,
+    /// so a drag on an axis the feature does not expose changes nothing.
+    fn set_euler_angle(&mut self, _axis: u8, _radians: f32) -> bool { false }
 }
 
 /// Create a blank EditorObject from a type_key string (for loading from DB).
@@ -130,6 +147,7 @@ pub fn create_object_from_type_key(type_key: &str) -> Option<Box<dyn FeatureTrai
         "global_point" => Some(Box::new(GlobalPoint::new(0.0, 0.0, 0.0))),
         "grackle_point_light" => Some(Box::new(GracklePointLight::new(0.0, 0.0, 0.0))),
         "spawn_point" => Some(Box::new(SpawnPoint::new(0.0, 0.0, 0.0))),
+        "prop" => Some(Box::new(Prop::new(0.0, 0.0, 0.0))),
         "editor_room" => Some(Box::new(EditorRoom::from_point_refs(
             PointRef::absolute(0.0, 0.0, 0.0),
             PointRef::absolute(0.0, 0.0, 0.0),
@@ -650,12 +668,19 @@ impl FeatureTimeline {
                 let is_selected = features.selected_feature == Some(*id);
                 let is_active = (i as u64) < features.rollback_bar;
 
+                // The trailing `Atom::grow` is what left-justifies the title.
+                // These buttons are stretched to the panel width and egui
+                // centres a button's contents, so without it every title
+                // floats in the middle of the row and the list has no edge to
+                // read down.
                 let label_text = feature.type_name_with_id();
                 let label = if is_active {
-                    egui::Button::selectable(is_selected, label_text)
+                    egui::Button::selectable(is_selected, (label_text, egui::Atom::grow()))
                 } else {
-                    egui::Button::selectable(false,
-                        egui::RichText::new(label_text).strikethrough().weak())
+                    egui::Button::selectable(false, (
+                        egui::RichText::new(label_text).strikethrough().weak(),
+                        egui::Atom::grow(),
+                    ))
                 };
 
                 let response = ui.add_sized([ui.available_width(), 0.0], label);

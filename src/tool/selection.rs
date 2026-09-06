@@ -5,6 +5,7 @@ use crate::editor::editable::{FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
 use crate::tool::point_drag::PointDragState;
 use crate::tool::room::RoomDragState;
+use crate::tool::rotate_drag::RotateDragState;
 use crate::tool::show::GizmoVisibility;
 use crate::tool::tool_helpers::*;
 use crate::tool::Tools;
@@ -31,6 +32,7 @@ impl SelectionPlugin {
         visibility: Res<GizmoVisibility>,
         point_drag: Res<PointDragState>,
         room_drag: Res<RoomDragState>,
+        rotate_drag: Res<RotateDragState>,
     ) {
         state.hovered = None;
 
@@ -39,7 +41,9 @@ impl SelectionPlugin {
                 state.hovered = Some((feature_id, hit_pos));
             }
 
-            let any_drag = point_drag.is_dragging() || room_drag.is_dragging();
+            let any_drag = point_drag.is_dragging()
+                || room_drag.is_dragging()
+                || rotate_drag.is_dragging();
             if mouse_input.released == Some(MouseButton::Left) && !any_drag {
                 let selection = state.hovered.map(|(id, _)| id);
                 features.select(selection);
