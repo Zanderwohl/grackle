@@ -43,9 +43,18 @@ strum = "0.27.1"
 strum_macros = "0.27.2"
 rand = "0.9.2"
 
+# Not used from Rust at all: a direct dependency purely so feature unification
+# turns on `relax-sign-encoding` for the copy winit pulls in, which is what
+# stops the macOS 26 beta from tripping objc2's signature assertions. Scoped to
+# macOS because it is an Apple-only crate — declared unconditionally it broke
+# the build on every other target, wasm included.
+[target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.1", features = ["relax-sign-encoding"] }
 
-# Top-level Cargo.toml
+# Belt to that feature's braces: objc2's own debug assertions are what fire.
+# Left unconditional because a profile entry naming a package outside the
+# graph is simply ignored — checked against a wasm32 build, which resolves and
+# compiles past this without complaint.
 [profile.dev.package.objc2]
 debug-assertions = false
 
