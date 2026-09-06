@@ -5,7 +5,7 @@ use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy::camera::{Viewport};
 use bevy::camera::visibility::RenderLayers;
-use bevy::render::view::Hdr;
+use bevy::camera::Hdr;
 use bevy::window::{PrimaryWindow, WindowResized};
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts, EguiGlobalSettings, PrimaryEguiContext};
 use bevy_vector_shapes::prelude::*;
@@ -223,7 +223,7 @@ impl MulticamPlugin {
         // light
         commands.spawn((
             PointLight {
-                shadows_enabled: true,
+                shadow_maps_enabled: true,
                 ..default()
             },
             Transform::from_xyz(4.0, 8.0, 4.0),
@@ -407,7 +407,7 @@ impl MulticamPlugin {
         if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
         
-        if ctx.is_pointer_over_area() || ctx.wants_pointer_input() {
+        if ctx.is_pointer_over_egui() || ctx.egui_wants_pointer_input() {
             return;
         }
 

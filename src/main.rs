@@ -49,7 +49,7 @@ fn main() {
             EguiPlugin::default(),
             Shape2dPlugin::default(),
         ))
-        .insert_resource(AmbientLight {
+        .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
             brightness: 100.0,
             ..default()

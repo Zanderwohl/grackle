@@ -4,6 +4,7 @@ use bevy_egui::EguiContexts;
 use std::fmt::Display;
 use std::panic::Location;
 use bevy::input::mouse::MouseMotion;
+use bevy::camera::RenderTarget;
 use bevy::picking::pointer::{PointerId, PointerLocation};
 use bevy::tasks::futures_lite::StreamExt;
 use crate::common::app_mode::AppMode;
@@ -155,7 +156,7 @@ impl EditorInputPlugin {
         window: Single<&Window, With<PrimaryWindow>>,
         mouse_buttons: Res<ButtonInput<MouseButton>>,
         mut current_input: ResMut<CurrentMouseInput>,
-        cameras: Query<(Entity, &Camera, &GlobalTransform, &Multicam)>,
+        cameras: Query<(Entity, &Camera, &RenderTarget, &GlobalTransform, &Multicam)>,
         pointers: Query<(&PointerId, &PointerLocation)>,
         mut evr_motion: MessageReader<MouseMotion>,
     ) {
@@ -171,7 +172,7 @@ impl EditorInputPlugin {
         current_input.pressed = pressed;
         current_input.released = released;
 
-        if ctx.is_pointer_over_area() || ctx.wants_pointer_input() {
+        if ctx.is_pointer_over_egui() || ctx.egui_wants_pointer_input() {
             current_input.in_camera = None;
             current_input.local_pos = None;
             current_input.normalized_pos = None;
@@ -190,9 +191,9 @@ impl EditorInputPlugin {
 
         let mut locations = Vec::new();
         for (_, pointer) in pointers {
-            for (camera_entity, camera, camera_transform, cam_multicam) in &cameras {
+            for (camera_entity, camera, render_target, camera_transform, cam_multicam) in &cameras {
                 if let Some(pointer_loc) = pointer.location() {
-                    if pointer_loc.is_in_viewport(camera, &primary_window_entity) {
+                    if pointer_loc.is_in_viewport(camera, render_target, &primary_window_entity) {
                         if pressed.is_some() {
                             if just_pressed {
                                 current_input.started_in_camera = Some(camera_entity);
@@ -204,7 +205,7 @@ impl EditorInputPlugin {
                             Some(viewport) => {
                                 let pos = pointer_loc.position - viewport.physical_position.as_vec2();
                                 let normalized = pos / viewport.physical_size.as_vec2();
-                                let ray = make_ray(&primary_window_entity, camera, camera_transform, &pointer);
+                                let ray = make_ray(&primary_window_entity, camera, render_target, camera_transform, &pointer);
                                 (pos, normalized, Some(ray))
                             },
                             None => {
@@ -252,11 +253,12 @@ impl EditorInputPlugin {
 fn make_ray(
     primary_window_entity: &Query<Entity, With<PrimaryWindow>>,
     camera: &Camera,
+    render_target: &RenderTarget,
     camera_tfm: &GlobalTransform,
     pointer_loc: &PointerLocation,
 ) -> Option<Ray3d> {
     let pointer_loc = pointer_loc.location()?;
-    if !pointer_loc.is_in_viewport(camera, primary_window_entity) {
+    if !pointer_loc.is_in_viewport(camera, render_target, primary_window_entity) {
         return None;
     }
     camera.viewport_to_world(camera_tfm, pointer_loc.position).ok()
