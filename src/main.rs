@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use bevy::window::{ExitCondition, PresentMode};
 use bevy_egui::{EguiPlugin};
 use bevy_vector_shapes::prelude::*;
-use crate::common::lang::change_lang;
+use crate::common::lang::{change_lang_or_fallback, default_packs};
 use crate::common::perf::PerfPlugin;
 use crate::editor::editable::EditorStepsPlugin;
 use crate::editor::input::EditorInputPlugin;
@@ -23,11 +23,9 @@ fn main() {
             eprintln!("Editor Startup Error:\n{}", message);
             std::process::exit(1);
         });
-    change_lang(&editor_params.lang)
-        .unwrap_or_else(|message| {
-            eprintln!("Language map error:\n{}", message);
-            std::process::exit(1);
-        });
+    // Falls back to en-US rather than exiting: a bad `--lang` should not stop
+    // the editor from opening.
+    change_lang_or_fallback(&editor_params.lang, &default_packs());
 
     App::new()
         .add_plugins(DefaultPlugins
