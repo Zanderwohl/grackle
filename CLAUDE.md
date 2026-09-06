@@ -212,12 +212,17 @@ in order of how load-bearing they are:
 - **`rfd` + `pollster::block_on` inside `std::thread::spawn`**
   ([`panels.rs:379`](src/editor/panels.rs:379)) — no threads on wasm, and
   blocking the main thread deadlocks.
-- **`objc2`** is an unconditional dependency in `Cargo.toml` for a macOS 26 beta
-  `debug-assertions` workaround, and is not used anywhere in `src/`. As written
-  it breaks Linux and Windows too. It belongs under
-  `[target.'cfg(target_os = "macos")'.dependencies]`, if it is still needed.
 - **`lang.rs` reads `assets/` via `std::fs`** at first use, outside Bevy's
   `AssetServer`.
 - **`iyes_perf_ui`** is pinned to a git branch, not a release.
+
+Two are already dealt with: `objc2` is scoped to macOS, and `getrandom` has its
+`wasm_js` feature plus the `getrandom_backend` rustflag in
+[`.cargo/config.toml`](.cargo/config.toml) — both halves are required, the
+feature alone selects nothing.
+
+`cargo check --target wasm32-unknown-unknown` is worth running as a probe: it
+now gets all the way to `libsqlite3-sys` trying to compile bundled C, which is
+the real blocker and the reason the compiled map format exists.
 
 When adding runtime code, keep it free of these rather than porting them later.

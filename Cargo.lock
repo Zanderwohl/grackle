@@ -3054,6 +3054,7 @@ dependencies = [
  "bevy_vector_shapes",
  "clap",
  "egui_dock",
+ "getrandom",
  "iyes_perf_ui",
  "lazy_static",
  "objc2 0.6.1",

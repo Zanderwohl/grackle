@@ -1,0 +1,9 @@
+# wasm32 has no entropy source of its own, so getrandom must be pointed at the
+# browser's Crypto API. This is half of what that takes — the other half is the
+# `wasm_js` feature, enabled by the wasm-only getrandom dependency in
+# Cargo.toml. getrandom's docs are explicit that the feature alone does
+# nothing: the backend is chosen by this cfg, not by the feature.
+#
+# Scoped to the wasm target, so native builds never see it.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
