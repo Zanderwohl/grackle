@@ -779,6 +779,77 @@ mod tests {
         assert_eq!(spawns, vec![Vec3::new(5.0, 1.0, 2.0)]);
     }
 
+    /// The template every new map starts from is a checked-in binary, so
+    /// nothing about it is visible in a diff. These load it through the real
+    /// path and say what it is supposed to contain.
+    #[test]
+    fn the_new_map_template_has_a_usable_spawn_point() {
+        use crate::common::class::{body_centre_from_feet, CLASS_HALF_EXTENTS};
+        use crate::game::collision::CollisionWorld;
+
+        let path = PathBuf::from(format!(
+            "assets/default/blueprints/new.{}",
+            MAP_BLUEPRINT_EXTENSION
+        ));
+        let loaded = load(&path).expect("the shipped template must load");
+
+        let spawns: Vec<Vec3> = loaded
+            .timeline
+            .active_features()
+            .filter(|(_, f)| f.object().type_key() == "spawn_point")
+            .map(|(_, f)| f.object().get_point("").unwrap())
+            .collect();
+        assert_eq!(spawns.len(), 1, "template spawn points: {spawns:?}");
+
+        // On the floor of the room the template ships, in the middle of it.
+        let rooms: Vec<Room> = loaded
+            .timeline
+            .active_features()
+            .filter_map(|(_, f)| f.object().drag_handle_bounds())
+            .map(|(min, max)| Room::new(min, max))
+            .collect();
+        assert_eq!(rooms.len(), 1, "template rooms: {rooms:?}");
+        let floor_centre = Vec3::new(
+            (rooms[0].min.x + rooms[0].max.x) / 2.0,
+            rooms[0].min.y,
+            (rooms[0].min.z + rooms[0].max.z) / 2.0,
+        );
+        assert!(
+            spawns[0].distance(floor_centre) < 1e-4,
+            "spawn at {} is not the room's floor centre {}",
+            spawns[0],
+            floor_centre
+        );
+
+        // And there is actually room to stand there.
+        let mut world = CollisionWorld::default();
+        world.rebuild(&rooms);
+        assert!(world.fits(body_centre_from_feet(spawns[0]), CLASS_HALF_EXTENTS));
+    }
+
+    /// The spawn point is anchored to the room rather than placed at absolute
+    /// coordinates, so resizing the room in the editor takes the spawn with
+    /// it. Storing a bare position would silently leave it behind — and
+    /// outside the map, on a room that moved.
+    #[test]
+    fn the_template_spawn_point_follows_its_room() {
+        let path = PathBuf::from(format!(
+            "assets/default/blueprints/new.{}",
+            MAP_BLUEPRINT_EXTENSION
+        ));
+        let loaded = load(&path).expect("the shipped template must load");
+
+        let spawn = loaded
+            .timeline
+            .active_features()
+            .find(|(_, f)| f.object().type_key() == "spawn_point")
+            .expect("no spawn point in the template");
+        assert!(
+            !spawn.1.parents().is_empty(),
+            "the template spawn point is at absolute coordinates, not anchored to the room"
+        );
+    }
+
     /// Rooms are the other thing the game reads, and they go through the same
     /// registration. Cheap to assert while the harness is here.
     #[test]

@@ -81,6 +81,12 @@ ceiling *is* a slab the body overlaps. Unusable spawns are skipped with a
 warning, and a map with none falls back to the largest room rather than
 refusing to start.
 
+The new-map template (`assets/default/blueprints/new.gmb`) ships one, anchored
+to the room's `bottom_plane_center` rather than placed at absolute coordinates,
+so resizing the room takes the spawn with it. The template is a checked-in
+SQLite blob and so invisible in a diff — the tests at the bottom of
+[`save.rs`](src/editor/save.rs) load it and say what it is meant to contain.
+
 Choice is uniform random, and facing is the fixed `SPAWN_YAW`. Per-team spawns
 and not dropping people on each other are gamemode questions, deliberately not
 answered at this layer yet.

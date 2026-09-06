@@ -182,3 +182,48 @@ impl SpawnPoint {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bevy::ecs::system::RunSystemOnce;
+
+    use super::*;
+
+    /// The game finds spawn points by [`SpawnPointMarker`], which only ever
+    /// gets inserted here. Break this link and nothing fails loudly: every map
+    /// simply appears to have no spawn points and quietly uses the fallback.
+    #[test]
+    fn applying_a_spawn_point_marks_its_entity_for_the_game() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+
+        world
+            .run_system_once(move |mut commands: Commands| {
+                SpawnPoint::new(1.0, 2.0, 3.0).apply_to_entity(&mut commands, entity);
+            })
+            .unwrap();
+
+        assert!(
+            world.get::<SpawnPointMarker>(entity).is_some(),
+            "the game would never find this spawn point"
+        );
+        assert_eq!(
+            world.get::<Transform>(entity).unwrap().translation,
+            Vec3::new(1.0, 2.0, 3.0),
+            "the marked entity is not where the spawn point is"
+        );
+    }
+
+    /// The gizmo's upper sphere is the eye height, and `available_point_keys`
+    /// advertises it as a reference — so it has to resolve to that, not to the
+    /// feet it would fall back to.
+    #[test]
+    fn the_eyes_reference_point_is_above_the_feet() {
+        let spawn = SpawnPoint::new(0.0, 4.0, 0.0);
+        assert_eq!(spawn.get_point("").unwrap(), Vec3::new(0.0, 4.0, 0.0));
+        assert_eq!(
+            spawn.get_point("eyes").unwrap(),
+            Vec3::new(0.0, 4.0 + TALLEST_CLASS_EYE_HEIGHT, 0.0)
+        );
+    }
+}
