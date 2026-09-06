@@ -39,6 +39,7 @@ title = "Werkzeuge"
 select = "Auswählen"
 point = "Punkt"
 point_light = "Punktlicht"
+spawn_point = "Spawnpunkt"
 move = "Bewegen"
 room = "Raum"
 
@@ -55,6 +56,7 @@ gizmos_title = "Gizmos"
 gizmos_points = "Punkte"
 gizmos_rooms = "Räume"
 gizmos_point_lights = "Punktlichter"
+gizmos_spawn_points = "Spawnpunkte"
 
 [room.messages]
 ghost = "Raum { me } ist vollständig in { other } enthalten und wird nicht angezeigt!"
@@ -111,6 +113,12 @@ params = "Lichtparameter"
 intensity = "Intensität"
 radius = "Radius"
 range = "Reichweite"
+
+[editor.features.spawn_point]
+title = "Spawnpunkt"
+feet = "Füße"
+eyes = "Augen"
+clearance = "Benötigt { height } m freie Kopfhöhe."
 
 [editor.features.cuboid]
 title = "Quader"

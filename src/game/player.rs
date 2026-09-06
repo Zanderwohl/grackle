@@ -4,13 +4,18 @@ use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::time::Fixed;
 
+use crate::common::class::{
+    body_centre_from_feet, CLASS_HALF_EXTENTS, TALLEST_CLASS_EYE_HEIGHT, TALLEST_CLASS_HEIGHT,
+};
 use crate::game::collision::CollisionWorld;
 use crate::tool::room::Room;
 
-/// Half-extents of the body box: a shade under a metre wide, 1.8m tall.
-pub const PLAYER_HALF: Vec3 = Vec3::new(0.35, 0.9, 0.35);
-/// Where the camera sits relative to the body's centre.
-const EYE_OFFSET: f32 = 0.7;
+/// Half-extents of the body box. The tallest class, since there is only one
+/// body so far and a spawn point is checked against the tallest.
+pub const PLAYER_HALF: Vec3 = CLASS_HALF_EXTENTS;
+/// Where the camera sits relative to the body's *centre* — the class metric is
+/// measured from the feet, so half the height comes back off.
+const EYE_OFFSET: f32 = TALLEST_CLASS_EYE_HEIGHT - TALLEST_CLASS_HEIGHT * 0.5;
 
 const WALK_SPEED: f32 = 7.0;
 const GRAVITY: f32 = -20.0;
@@ -99,13 +104,32 @@ pub struct PlayerCamera;
 /// the duration anyway.
 const PLAY_CAMERA_ORDER: isize = 100;
 
+/// Which way a body faces when it is put down.
+///
+/// Always the same for now. Spawn points carry no facing yet, and gamemodes
+/// will want per-team directions rather than a per-point one, so guessing
+/// here would be guessing at the wrong layer.
+pub const SPAWN_YAW: f32 = 0.0;
+
+/// The spawn points a body actually fits in, feet-first.
+///
+/// A spawn point under a low ceiling is dropped rather than used and then
+/// resolved by shoving the body somewhere the mapper did not intend. Returns
+/// feet positions, which is what [`spawn_player`] is given.
+pub fn usable_spawns(spawns: &[Vec3], world: &CollisionWorld) -> Vec<Vec3> {
+    spawns
+        .iter()
+        .copied()
+        .filter(|feet| world.fits(body_centre_from_feet(*feet), PLAYER_HALF))
+        .collect()
+}
+
 /// Stand the player up in the largest room on the map.
 ///
-/// Largest by volume is a crude guess at "the main space", which is the right
-/// kind of guess until maps carry real spawn points — a `GlobalPoint` with a
-/// spawn role is the obvious way to do that, and gamemodes will need per-team
-/// spawns regardless.
-pub fn spawn_position(rooms: &[Room]) -> Vec3 {
+/// The fallback for a map with no usable spawn point — an unfinished map, or
+/// one whose spawns are all walled in. Largest by volume is a crude guess at
+/// "the main space", and a crude guess beats refusing to start.
+pub fn fallback_spawn(rooms: &[Room]) -> Vec3 {
     let largest = rooms.iter().max_by(|a, b| {
         let volume = |r: &Room| {
             let size = (r.max - r.min).abs();
@@ -119,22 +143,23 @@ pub fn spawn_position(rooms: &[Room]) -> Vec3 {
             let min = room.min.min(room.max);
             let max = room.min.max(room.max);
             let centre = (min + max) / 2.0;
-            // Feet on the floor, not in it.
-            Vec3::new(centre.x, min.y + PLAYER_HALF.y, centre.z)
+            Vec3::new(centre.x, min.y, centre.z)
         }
         None => {
             warn!("No rooms on the map; spawning at the origin");
-            Vec3::new(0.0, PLAYER_HALF.y, 0.0)
+            Vec3::ZERO
         }
     }
 }
 
-pub fn spawn_player(commands: &mut Commands, position: Vec3) {
+/// `feet` is a spawn point's own position; the body is centred above it.
+pub fn spawn_player(commands: &mut Commands, feet: Vec3) {
+    let position = body_centre_from_feet(feet);
     commands
         .spawn((
-            Player::default(),
+            Player { yaw: SPAWN_YAW, ..default() },
             PhysicsBody::at(position),
-            Transform::from_translation(position),
+            Transform::from_translation(position).with_rotation(Quat::from_rotation_y(SPAWN_YAW)),
             Visibility::default(),
             Name::new("Player"),
         ))

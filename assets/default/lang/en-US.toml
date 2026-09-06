@@ -40,6 +40,7 @@ title = "Tools"
 select = "Select"
 point = "Point"
 point_light = "Point Light"
+spawn_point = "Spawn Point"
 move = "Move"
 room = "Room"
 
@@ -56,6 +57,7 @@ gizmos_title = "Gizmos"
 gizmos_points = "Points"
 gizmos_rooms = "Rooms"
 gizmos_point_lights = "Point Lights"
+gizmos_spawn_points = "Spawn Points"
 
 [room.messages]
 ghost = "Room { me } is fully inside { other } and will not appear!"
@@ -112,6 +114,12 @@ params = "Light Parameters"
 intensity = "Intensity"
 radius = "Radius"
 range = "Range"
+
+[editor.features.spawn_point]
+title = "Spawn Point"
+feet = "Feet"
+eyes = "Eyes"
+clearance = "Needs { height } m of clear headroom."
 
 [editor.features.cuboid]
 title = "Cuboid"

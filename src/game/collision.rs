@@ -114,6 +114,17 @@ impl CollisionWorld {
         })
     }
 
+    /// Whether a body of `half` extents centred at `centre` stands clear: in
+    /// the map, and touching no wall.
+    ///
+    /// What decides whether a spawn point is usable. A ceiling two metres
+    /// above the feet leaves the head inside the ceiling slab, and this says
+    /// so — no separate notion of "headroom" is needed, because the geometry
+    /// already knows.
+    pub fn fits(&self, centre: Vec3, half: Vec3) -> bool {
+        self.inside_map(centre) && !self.slabs.iter().any(|slab| overlaps(centre, half, slab))
+    }
+
     /// Shove a body that is *already* inside a wall back out of it.
     ///
     /// [`CollisionWorld::move_and_slide`] answers "may I cross this plane",
@@ -276,6 +287,29 @@ mod tests {
 
         assert!(!blocked.x, "the shared wall was solid");
         assert!((end.x - 2.0).abs() < 0.01, "stopped at {}", end.x);
+    }
+
+    /// A spawn point under a low ceiling has to be rejected rather than used
+    /// and then resolved by shoving the body somewhere unexpected.
+    #[test]
+    fn a_body_does_not_fit_under_a_low_ceiling() {
+        let mut world = CollisionWorld::default();
+        // 1.5m of headroom for a 2m body.
+        world.rebuild(&[Room::new(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 1.5, 5.0))]);
+
+        assert!(!world.fits(Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.35, 1.0, 0.35)));
+    }
+
+    #[test]
+    fn a_body_fits_in_a_room_tall_enough_for_it() {
+        let world = one_room();
+        assert!(world.fits(Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.35, 1.0, 0.35)));
+    }
+
+    #[test]
+    fn a_body_outside_the_map_does_not_fit() {
+        let world = one_room();
+        assert!(!world.fits(Vec3::new(50.0, 1.0, 0.0), Vec3::new(0.35, 1.0, 0.35)));
     }
 
     /// A floor raised onto a standing body must lift it, not drop it through

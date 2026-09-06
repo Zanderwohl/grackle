@@ -1,12 +1,14 @@
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+use rand::seq::IndexedRandom;
 
 use crate::common::app_mode::AppMode;
 use crate::editor::multicam::Multicam;
+use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{
-    gather_input, interpolate_bodies, mouse_look, spawn_player, spawn_position, step_player,
-    Player, PlayerInput,
+    fallback_spawn, gather_input, interpolate_bodies, mouse_look, spawn_player, step_player,
+    usable_spawns, Player, PlayerInput,
 };
 use crate::tool::room::Room;
 
@@ -77,12 +79,36 @@ fn enter_play(
     mut commands: Commands,
     mut collision: ResMut<CollisionWorld>,
     rooms: Query<&Room>,
+    spawns: Query<&Transform, With<SpawnPointMarker>>,
     mut editor_cameras: Query<&mut Camera, With<Multicam>>,
     window: Query<Entity, With<PrimaryWindow>>,
 ) {
     let rooms: Vec<Room> = rooms.iter().cloned().collect();
+    // Before choosing, because whether a spawn point is usable is a question
+    // about the walls.
     collision.rebuild(&rooms);
-    spawn_player(&mut commands, spawn_position(&rooms));
+
+    let placed: Vec<Vec3> = spawns.iter().map(|t| t.translation).collect();
+    let usable = usable_spawns(&placed, &collision);
+    if usable.len() < placed.len() {
+        warn!(
+            "{} of {} spawn point(s) have too little headroom to stand in",
+            placed.len() - usable.len(),
+            placed.len()
+        );
+    }
+
+    // Uniformly at random for now. Per-team spawns, and not dropping someone
+    // on top of someone else, are gamemode questions this is deliberately not
+    // trying to answer yet.
+    let feet = match usable.choose(&mut rand::rng()) {
+        Some(feet) => *feet,
+        None => {
+            warn!("No usable spawn point on this map; falling back to the largest room");
+            fallback_spawn(&rooms)
+        }
+    };
+    spawn_player(&mut commands, feet);
 
     for mut camera in &mut editor_cameras {
         camera.is_active = false;
@@ -155,7 +181,7 @@ mod tests {
     use bevy::time::Virtual;
 
     use super::*;
-    use crate::game::player::{PhysicsBody, PLAYER_HALF};
+    use crate::game::player::{PhysicsBody, PLAYER_HALF, SPAWN_YAW};
 
     /// One fixed step, matching Bevy's 64 Hz default.
     const STEP: Duration = Duration::from_micros(15625);
@@ -385,11 +411,113 @@ mod tests {
         assert!((drawn.y - midpoint.y).abs() < 0.001, "drew {} not {}", drawn.y, midpoint.y);
     }
 
+    /// Spawn the app with some spawn points placed, as the editor's feature
+    /// sync would have left them.
+    fn with_spawns(rooms: &[Room], feet: &[Vec3]) -> App {
+        let mut app = headless(rooms);
+        for position in feet {
+            app.world_mut()
+                .spawn((Transform::from_translation(*position), SpawnPointMarker));
+        }
+        app
+    }
+
+    #[test]
+    fn a_spawn_point_is_used_in_preference_to_the_fallback() {
+        let mut app = with_spawns(
+            &[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))],
+            &[Vec3::new(7.0, 0.0, -3.0)],
+        );
+        enter(&mut app);
+
+        // Feet where the spawn point is; the body stands centred above it.
+        let position = player_position(&mut app);
+        assert!((position.x - 7.0).abs() < 0.01, "spawned at {position}");
+        assert!((position.z + 3.0).abs() < 0.01, "spawned at {position}");
+        assert!((position.y - PLAYER_HALF.y).abs() < 0.01, "feet are not on the point: {position}");
+    }
+
+    /// A spawn point with a ceiling too close over it cannot be stood in, and
+    /// has to be passed over rather than used and then resolved by shoving the
+    /// body somewhere the mapper did not choose.
+    #[test]
+    fn a_spawn_point_without_headroom_is_skipped() {
+        let mut app = with_spawns(
+            &[
+                // A crawlspace, and a hall tall enough to stand in.
+                room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(-10.0, 1.5, -10.0)),
+                room(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 8.0, 20.0)),
+            ],
+            &[Vec3::new(-15.0, 0.0, -15.0), Vec3::new(10.0, 0.0, 10.0)],
+        );
+        enter(&mut app);
+
+        let position = player_position(&mut app);
+        assert!((position.x - 10.0).abs() < 0.01, "spawned in the crawlspace: {position}");
+        assert!((position.z - 10.0).abs() < 0.01, "spawned in the crawlspace: {position}");
+    }
+
+    /// Every spawn point unusable is not a reason to refuse to start.
+    #[test]
+    fn a_map_whose_spawns_are_all_too_tight_still_starts() {
+        let mut app = with_spawns(
+            &[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))],
+            // Head in the ceiling.
+            &[Vec3::new(0.0, 7.5, 0.0)],
+        );
+        enter(&mut app);
+
+        assert_eq!(app.world_mut().query::<&Player>().iter(app.world()).count(), 1);
+        let position = player_position(&mut app);
+        assert!(position.y < 7.0, "used the unusable spawn anyway: {position}");
+    }
+
+    /// Facing is fixed for now, and the body has to actually be turned that
+    /// way rather than the yaw being written and never applied.
+    #[test]
+    fn a_spawned_body_faces_the_fixed_direction() {
+        let mut app = with_spawns(
+            &[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))],
+            &[Vec3::new(0.0, 0.0, 0.0)],
+        );
+        enter(&mut app);
+
+        let (player, transform) = {
+            let world = app.world_mut();
+            let mut query = world.query::<(&Player, &Transform)>();
+            let (player, transform) = query.single(world).unwrap();
+            (player.yaw, transform.rotation)
+        };
+        assert_eq!(player, SPAWN_YAW);
+        assert!(transform.angle_between(Quat::from_rotation_y(SPAWN_YAW)) < 1e-5);
+    }
+
+    /// With several to choose from, it must not always be the same one.
+    #[test]
+    fn the_spawn_point_is_chosen_at_random() {
+        let feet: Vec<Vec3> = (0..8).map(|i| Vec3::new(i as f32 * 2.0, 0.0, 0.0)).collect();
+
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..40 {
+            let mut app = with_spawns(
+                &[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))],
+                &feet,
+            );
+            enter(&mut app);
+            seen.insert(player_position(&mut app).x.round() as i32);
+        }
+
+        assert!(seen.len() > 1, "always picked the same spawn point: {seen:?}");
+    }
+
     /// The between-round feature in miniature: resize the room while the body
     /// is standing in it, and the solid world follows without a reload.
     #[test]
     fn editing_a_room_while_playing_moves_the_ground() {
-        let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 4.0, 5.0))]);
+        // Tall enough that raising the floor still leaves room to stand: a
+        // body in a gap exactly its own height cannot be placed with
+        // clearance either side, which is a different situation entirely.
+        let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 8.0, 5.0))]);
         enter(&mut app);
         tick(&mut app, 60);
         assert!((player_position(&mut app).y - PLAYER_HALF.y).abs() < 0.05);

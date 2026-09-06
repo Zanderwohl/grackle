@@ -1,4 +1,5 @@
 pub mod app_mode;
+pub mod class;
 pub mod lang;
 pub(crate) mod perf;
 pub(crate) mod systems;
@@ -9,6 +10,7 @@ pub mod cuboid;
 pub mod rect_subtract;
 pub mod mode;
 
+#[derive(Debug)]
 pub enum PointResolutionError {
     NoSuchPoint,
     NoSuchReferent,

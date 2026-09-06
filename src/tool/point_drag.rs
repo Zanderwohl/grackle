@@ -49,7 +49,9 @@ fn axis_rotation(axis: u8) -> Quat {
 }
 
 fn is_point_like(type_key: &str) -> bool {
-    type_key == "global_point" || type_key == "grackle_point_light"
+    type_key == "global_point"
+        || type_key == "grackle_point_light"
+        || type_key == "spawn_point"
 }
 
 impl PointDragState {

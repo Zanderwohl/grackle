@@ -64,6 +64,27 @@ both, but that call has not been made.
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`. |
 
+## Spawn points and class metrics
+
+A `SpawnPoint` ([`src/editor/spawn_point.rs`](src/editor/spawn_point.rs)) marks
+where **the feet** go — that is the part a mapper lines up against a floor.
+Everything above it comes from
+[`src/common/class.rs`](src/common/class.rs), which is deliberately the single
+home for body metrics: the body the game moves, the clearance a spawn is
+checked for, and the gizmo the editor draws all read the same constants. Let
+those drift and a spawn point passes in the editor while wedging a head in the
+ceiling at runtime.
+
+Usability is decided by `CollisionWorld::fits` — the body box must be in the
+map and touching no wall. There is no separate notion of "headroom": a low
+ceiling *is* a slab the body overlaps. Unusable spawns are skipped with a
+warning, and a map with none falls back to the largest room rather than
+refusing to start.
+
+Choice is uniform random, and facing is the fixed `SPAWN_YAW`. Per-team spawns
+and not dropping people on each other are gamemode questions, deliberately not
+answered at this layer yet.
+
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor` or
@@ -132,10 +153,21 @@ follows. Consequences to respect when adding a feature type:
   feature under-reports its parents.
 - `available_point_keys()` is what the Retarget tool offers; a point you don't
   publish there cannot be referenced.
-- Register the type in **three** places or load will half-work:
-  `create_object_from_type_key()`, `FeatureData` in
-  [`src/editor/action.rs`](src/editor/action.rs), and
-  `FeatureSnapshot::blank_object()`.
+- Registering a type takes edits in **seven** places that do not reference
+  each other, and missing one makes load half-work — the file saves and the
+  feature is simply absent when it comes back. In
+  [`editable.rs`](src/editor/editable.rs): `create_object_from_type_key`. In
+  [`action.rs`](src/editor/action.rs): the `FeatureData` variant,
+  `FeatureSnapshot::blank_object`, and `feature_data_kind`. In
+  [`save.rs`](src/editor/save.rs): `snapshot_data_kind`, the save arm in
+  `save_feature_snapshot`, and the load arm in `load_feature_snapshot`.
+  Nothing in the type system catches an omission, so add a round-trip test
+  next to the ones at the bottom of `save.rs` — that is what they are for.
+- To make it visible and clickable, also add arms in
+  [`show.rs`](src/tool/show.rs) (`GizmoVisibility` plus both matches),
+  [`tool_helpers.rs`](src/tool/tool_helpers.rs) (`find_nearest_feature_hit`),
+  and [`point_drag.rs`](src/tool/point_drag.rs) (`is_point_like`) if it is
+  point-shaped.
 
 Undo/redo is `FeatureTimeline` plus `Action`/`FeatureDelta`: before/after
 snapshots per feature, with `try_coalesce_incoming` folding a drag into one

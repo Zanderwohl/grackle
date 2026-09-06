@@ -7,6 +7,7 @@ use crate::get;
 use crate::tool::bakes::BakePlugin;
 use crate::tool::movement::MovementPlugin;
 use crate::tool::point::PointPlugin;
+use crate::tool::spawn_point::SpawnPointPlugin;
 use crate::tool::point_drag::PointDragPlugin;
 use crate::tool::point_light::PointLightPlugin;
 use crate::tool::retarget::RetargetPlugin;
@@ -16,6 +17,7 @@ use crate::tool::show::ShowPlugin;
 
 pub mod selection;
 pub mod point;
+pub mod spawn_point;
 pub mod point_light;
 pub mod point_drag;
 pub mod retarget;
@@ -37,6 +39,7 @@ impl Plugin for ToolPlugin {
             .add_plugins(MovementPlugin)
             .add_plugins(SelectionPlugin)
             .add_plugins(PointPlugin)
+            .add_plugins(SpawnPointPlugin)
             .add_plugins(PointLightPlugin)
             .add_plugins(PointDragPlugin)
             .add_plugins(RetargetPlugin)
@@ -65,6 +68,7 @@ pub enum Tools {
     Select,
     Point,
     PointLight,
+    SpawnPoint,
     Room,
     Retarget,
 }
@@ -75,6 +79,7 @@ impl Tools {
             Self::Select => get!("tools.select"),
             Self::Point => get!("tools.point"),
             Self::PointLight => get!("tools.point_light"),
+            Self::SpawnPoint => get!("tools.spawn_point"),
             Self::Room => get!("tools.room"),
             Self::Retarget => "Retarget".into(),
         }
