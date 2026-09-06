@@ -1,6 +1,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use bevy::prelude::*;
+use crate::common::app_mode::AppMode;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
 use crate::tool::tool_helpers::closest_param_on_axis;
@@ -16,7 +17,7 @@ impl Plugin for PointDragPlugin {
                 PointDragState::spawn_arrows_system,
                 PointDragState::update_arrow_positions,
                 PointDragState::handle_arrow_drag,
-            ).chain().run_if(in_state(Tools::Select)))
+            ).chain().run_if(in_state(Tools::Select)).run_if(in_state(AppMode::Editor)))
             .add_systems(OnExit(Tools::Select), PointDragState::despawn_arrows);
     }
 }
@@ -48,7 +49,9 @@ fn axis_rotation(axis: u8) -> Quat {
 }
 
 fn is_point_like(type_key: &str) -> bool {
-    type_key == "global_point" || type_key == "grackle_point_light"
+    type_key == "global_point"
+        || type_key == "grackle_point_light"
+        || type_key == "spawn_point"
 }
 
 impl PointDragState {

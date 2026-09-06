@@ -1,8 +1,9 @@
 use bevy::app::App;
 use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
+use crate::common::class::{TALLEST_CLASS_EYE_HEIGHT, TALLEST_CLASS_HEIGHT};
 use crate::editor::editable::{FeatureId, FeatureTimeline, PointRef};
-use crate::editor::grackle_point_light::GracklePointLight;
+use crate::editor::spawn_point::SpawnPoint;
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
 use crate::tool::room::Room;
@@ -11,16 +12,21 @@ use crate::tool::Tools;
 
 const DEFAULT_SNAP_GRANULARITY: f32 = 0.1;
 
+/// Places [`SpawnPoint`] features.
+///
+/// Deliberately the point tool with a different feature at the end of it:
+/// placing a spawn *is* placing a point, and a mapper who has learnt one has
+/// learnt the other — relative placement and shift-picking included.
 #[derive(PartialEq, Eq, Clone, Copy)]
-enum PointLightToolMode {
+enum SpawnPointToolMode {
     Normal,
     Picking,
     RelativeSelected,
 }
 
 #[derive(Resource)]
-struct PointLightTool {
-    mode: PointLightToolMode,
+struct SpawnPointTool {
+    mode: SpawnPointToolMode,
     last_position: Vec3,
     cursor: Option<Vec3>,
     reference_feature: Option<FeatureId>,
@@ -31,10 +37,10 @@ struct PointLightTool {
     snap_granularity: f32,
 }
 
-impl Default for PointLightTool {
+impl Default for SpawnPointTool {
     fn default() -> Self {
         Self {
-            mode: PointLightToolMode::Normal,
+            mode: SpawnPointToolMode::Normal,
             last_position: Vec3::ZERO,
             cursor: None,
             reference_feature: None,
@@ -47,24 +53,24 @@ impl Default for PointLightTool {
     }
 }
 
-pub struct PointLightPlugin;
+pub struct SpawnPointPlugin;
 
-impl Plugin for PointLightPlugin {
+impl Plugin for SpawnPointPlugin {
     fn build(&self, app: &mut App) {
         app
-            .init_resource::<PointLightTool>()
+            .init_resource::<SpawnPointTool>()
             .add_systems(Update, (
-                PointLightTool::interface,
-                PointLightTool::draw_gizmos,
-            ).chain().run_if(in_state(Tools::PointLight)).run_if(in_state(AppMode::Editor)))
-            .add_systems(OnExit(Tools::PointLight), PointLightTool::on_exit)
+                SpawnPointTool::interface,
+                SpawnPointTool::draw_gizmos,
+            ).chain().run_if(in_state(Tools::SpawnPoint)).run_if(in_state(AppMode::Editor)))
+            .add_systems(OnExit(Tools::SpawnPoint), SpawnPointTool::on_exit)
         ;
     }
 }
 
-impl PointLightTool {
+impl SpawnPointTool {
     fn on_exit(mut tool: ResMut<Self>) {
-        tool.mode = PointLightToolMode::Normal;
+        tool.mode = SpawnPointToolMode::Normal;
         tool.cursor = None;
         tool.hovered_point = None;
         tool.reference_feature = None;
@@ -90,23 +96,23 @@ impl PointLightTool {
         );
 
         match tool.mode {
-            PointLightToolMode::Normal => {
+            SpawnPointToolMode::Normal => {
                 if shift_held {
-                    tool.mode = PointLightToolMode::Picking;
+                    tool.mode = SpawnPointToolMode::Picking;
                     tool.hovered_point = None;
                 } else if let Some(cursor) = tool.cursor {
                     if mouse_input.released == Some(MouseButton::Left) {
-                        let light = GracklePointLight::new(cursor.x, cursor.y, cursor.z);
-                        let id = features.apply_feature(Box::new(light));
+                        let point = SpawnPoint::new(cursor.x, cursor.y, cursor.z);
+                        let id = features.apply_feature(Box::new(point));
                         features.select(Some(id));
                         tool.last_position = cursor;
                         next_tool.set(Tools::Select);
                     }
                 }
             }
-            PointLightToolMode::Picking => {
+            SpawnPointToolMode::Picking => {
                 if !shift_held {
-                    tool.mode = PointLightToolMode::Normal;
+                    tool.mode = SpawnPointToolMode::Normal;
                     tool.hovered_point = None;
                     return;
                 }
@@ -119,13 +125,13 @@ impl PointLightTool {
                         tool.reference_feature = Some(feature_id);
                         tool.reference_key = key;
                         tool.reference_resolved = Some(resolved);
-                        tool.mode = PointLightToolMode::RelativeSelected;
+                        tool.mode = SpawnPointToolMode::RelativeSelected;
                     }
                 }
             }
-            PointLightToolMode::RelativeSelected => {
+            SpawnPointToolMode::RelativeSelected => {
                 if shift_just_pressed {
-                    tool.mode = PointLightToolMode::Normal;
+                    tool.mode = SpawnPointToolMode::Normal;
                     tool.reference_feature = None;
                     tool.reference_key.clear();
                     tool.reference_resolved = None;
@@ -140,8 +146,8 @@ impl PointLightTool {
                             if !tool.reference_key.is_empty() {
                                 pr.point_key = tool.reference_key.clone();
                             }
-                            let light = GracklePointLight::from_point_ref(pr);
-                            let id = features.apply_feature(Box::new(light));
+                            let point = SpawnPoint::from_point_ref(pr);
+                            let id = features.apply_feature(Box::new(point));
                             features.select(Some(id));
                             tool.last_position = cursor;
                             next_tool.set(Tools::Select);
@@ -153,26 +159,34 @@ impl PointLightTool {
     }
 
     fn draw_gizmos(
-        tool: Res<PointLightTool>,
+        tool: Res<SpawnPointTool>,
         features: Res<FeatureTimeline>,
         mouse_input: Res<CurrentMouseInput>,
         mut gizmos: Gizmos,
     ) {
         if let Some(cursor) = tool.cursor {
             let color = match tool.mode {
-                PointLightToolMode::RelativeSelected => Color::srgb_u8(80, 140, 255),
-                _ => Color::srgb_u8(60, 120, 255),
+                SpawnPointToolMode::RelativeSelected => Color::srgb_u8(255, 233, 120),
+                _ => Color::srgb_u8(255, 214, 0),
             };
+            // Preview the body that would stand here, so headroom is visible
+            // before the spawn point is committed rather than after.
             gizmos.sphere(Isometry3d::from_translation(cursor), 0.15, color);
+            gizmos.line(cursor, cursor + Vec3::Y * TALLEST_CLASS_HEIGHT, color);
+            gizmos.sphere(
+                Isometry3d::from_translation(cursor + Vec3::Y * TALLEST_CLASS_EYE_HEIGHT),
+                0.12,
+                color,
+            );
 
-            if tool.mode == PointLightToolMode::RelativeSelected {
+            if tool.mode == SpawnPointToolMode::RelativeSelected {
                 if let Some(base) = tool.reference_resolved {
                     draw_taxicab_path(&mut gizmos, base, cursor);
                 }
             }
         }
 
-        if tool.mode == PointLightToolMode::Picking {
+        if tool.mode == SpawnPointToolMode::Picking {
             if let Some(ray) = mouse_input.world_pos {
                 draw_picking_gizmos(&mut gizmos, &ray, &features, &tool.hovered_point);
             }

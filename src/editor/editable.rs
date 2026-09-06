@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
+use crate::common::app_mode::AppMode;
 use crate::common::PointResolutionError;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::editor::action::{Action, FeatureDelta, FeatureSnapshot};
@@ -14,6 +15,7 @@ use crate::editor::editor_room::EditorRoom;
 use crate::editor::global_point::GlobalPoint;
 use crate::editor::grackle_point_light::GracklePointLight;
 use crate::editor::map_metadata::MapMetadata;
+use crate::editor::spawn_point::SpawnPoint;
 use crate::editor::save;
 use crate::get;
 
@@ -31,11 +33,16 @@ impl Plugin for EditorStepsPlugin {
             .init_resource::<MapMetadata>()
             .add_message::<EditEvent>()
             .add_systems(Startup, load_startup_blueprint)
+            // `sync_entities` and `handle_edits` are deliberately not
+            // gated on `AppMode::Editor`: features have to keep reaching their
+            // entities while playing, which is what lets an edit land
+            // mid-match without a reload. Only the two that read editor input
+            // or draw editor gizmos are switched off.
             .add_systems(Update, (
-                FeatureTimeline::undo_redo_shortcuts,
+                FeatureTimeline::undo_redo_shortcuts.run_if(in_state(AppMode::Editor)),
                 FeatureTimeline::sync_entities,
                 FeatureTimeline::handle_edits,
-                FeatureTimeline::draw_affected_gizmos,
+                FeatureTimeline::draw_affected_gizmos.run_if(in_state(AppMode::Editor)),
             ).chain())
         ;
     }
@@ -122,6 +129,7 @@ pub fn create_object_from_type_key(type_key: &str) -> Option<Box<dyn FeatureTrai
     match type_key {
         "global_point" => Some(Box::new(GlobalPoint::new(0.0, 0.0, 0.0))),
         "grackle_point_light" => Some(Box::new(GracklePointLight::new(0.0, 0.0, 0.0))),
+        "spawn_point" => Some(Box::new(SpawnPoint::new(0.0, 0.0, 0.0))),
         "editor_room" => Some(Box::new(EditorRoom::from_point_refs(
             PointRef::absolute(0.0, 0.0, 0.0),
             PointRef::absolute(0.0, 0.0, 0.0),

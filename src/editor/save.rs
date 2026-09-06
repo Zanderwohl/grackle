@@ -263,6 +263,7 @@ fn snapshot_data_kind(data: &FeatureData) -> &'static str {
         FeatureData::GlobalPoint { .. } => "global_point",
         FeatureData::PointLight { .. } => "point_light",
         FeatureData::Room { .. } => "room",
+        FeatureData::SpawnPoint { .. } => "spawn_point",
         FeatureData::Cuboid { .. } => "cuboid",
     }
 }
@@ -286,6 +287,9 @@ fn save_feature_snapshot(
     }
     match &snap.data {
         FeatureData::GlobalPoint { location } => {
+            save_snapshot_point_ref(tx, sid, "location", location)?;
+        }
+        FeatureData::SpawnPoint { location } => {
             save_snapshot_point_ref(tx, sid, "location", location)?;
         }
         FeatureData::PointLight {
@@ -350,6 +354,10 @@ fn load_feature_snapshot(conn: &Connection, snapshot_id: i64) -> rusqlite::Resul
         "global_point" => {
             let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
             FeatureData::GlobalPoint { location }
+        }
+        "spawn_point" => {
+            let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
+            FeatureData::SpawnPoint { location }
         }
         "point_light" => {
             let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
@@ -684,4 +692,168 @@ pub fn load(path: &Path) -> rusqlite::Result<LoadedBlueprint> {
         timeline: editor_features,
         metadata: map_metadata,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::global_point::GlobalPoint;
+    use crate::editor::spawn_point::SpawnPoint;
+    use crate::tool::room::Room;
+
+    fn count_spawns(timeline: &FeatureTimeline) -> usize {
+        timeline
+            .active_features()
+            .filter(|(_, f)| f.object().type_key() == "spawn_point")
+            .count()
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("grackle-save-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{name}.{MAP_BLUEPRINT_EXTENSION}"));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    /// Registering a feature type takes edits in three places that do not
+    /// reference each other — `create_object_from_type_key`, the `FeatureData`
+    /// variant, and `blank_object` — plus two more here. Miss one and load
+    /// half-works: the file saves, and the feature is simply not there when it
+    /// comes back. Nothing in the type system says otherwise, so a round trip
+    /// has to.
+    #[test]
+    fn a_spawn_point_survives_a_save_and_load() {
+        let mut timeline = FeatureTimeline::default();
+        timeline.apply_feature(Box::new(SpawnPoint::new(3.0, 0.0, -4.0)));
+        timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 2.0, 3.0)));
+
+        let path = temp_path("spawn-round-trip");
+        save(&path, &timeline, &MapMetadata::default()).unwrap();
+        let loaded = load(&path).unwrap();
+
+        let spawns: Vec<Vec3> = loaded
+            .timeline
+            .active_features()
+            .filter(|(_, f)| f.object().type_key() == "spawn_point")
+            .map(|(_, f)| f.object().get_point("").unwrap())
+            .collect();
+
+        assert_eq!(spawns, vec![Vec3::new(3.0, 0.0, -4.0)]);
+
+        // And the feature it was saved alongside is still there, so this is
+        // not passing because everything came back empty.
+        assert_eq!(
+            loaded
+                .timeline
+                .active_features()
+                .filter(|(_, f)| f.object().type_key() == "global_point")
+                .count(),
+            1
+        );
+    }
+
+    /// Undo history is persisted too, and snapshots take their own pair of
+    /// registrations in `snapshot_data_kind` and `load_feature_snapshot`.
+    #[test]
+    fn a_spawn_point_in_the_undo_history_survives_a_save_and_load() {
+        let mut timeline = FeatureTimeline::default();
+        let id = timeline.apply_feature(Box::new(SpawnPoint::new(5.0, 1.0, 2.0)));
+
+        let path = temp_path("spawn-history-round-trip");
+        save(&path, &timeline, &MapMetadata::default()).unwrap();
+        let mut loaded = load(&path).unwrap();
+
+        // Rolling back and forward again reconstructs the feature from its
+        // snapshot rather than from the features table.
+        loaded.timeline.undo();
+        assert_eq!(count_spawns(&loaded.timeline), 0, "undo left the spawn point active");
+
+        loaded.timeline.redo();
+        let spawns: Vec<Vec3> = loaded
+            .timeline
+            .active_features()
+            .filter(|(_, f)| f.object().type_key() == "spawn_point")
+            .map(|(_, f)| f.object().get_point("").unwrap())
+            .collect();
+        assert_eq!(spawns, vec![Vec3::new(5.0, 1.0, 2.0)]);
+    }
+
+    /// What a new map has to give you, and no more than that.
+    ///
+    /// The template is a checked-in binary, so nothing about it shows up in a
+    /// diff — but most of what is in it is taste and will change. Pinning the
+    /// spawn point's coordinates would just be a test that has to be edited
+    /// every time someone moves it. These are the things whose absence would
+    /// actually break something: no room and there is nothing to stand in, no
+    /// light and you cannot see it, no spawn with headroom and pressing F5
+    /// falls back to guessing.
+    #[test]
+    fn a_new_map_can_be_stood_in_lit_and_spawned_into() {
+        use crate::common::class::{body_centre_from_feet, CLASS_HALF_EXTENTS};
+        use crate::game::collision::CollisionWorld;
+
+        let path = PathBuf::from(format!(
+            "assets/default/blueprints/new.{}",
+            MAP_BLUEPRINT_EXTENSION
+        ));
+        let loaded = load(&path).expect("the shipped template must load");
+
+        let rooms: Vec<Room> = loaded
+            .timeline
+            .active_features()
+            .filter_map(|(_, f)| f.object().drag_handle_bounds())
+            .map(|(min, max)| Room::new(min, max))
+            .collect();
+        assert!(!rooms.is_empty(), "the template has no room to stand in");
+
+        let lights = loaded
+            .timeline
+            .active_features()
+            .filter(|(_, f)| f.object().type_key() == "grackle_point_light")
+            .count();
+        assert!(lights > 0, "the template has no light to see by");
+
+        let spawns: Vec<Vec3> = loaded
+            .timeline
+            .active_features()
+            .filter(|(_, f)| f.object().type_key() == "spawn_point")
+            .map(|(_, f)| f.object().get_point("").unwrap())
+            .collect();
+        assert!(!spawns.is_empty(), "the template has no spawn point");
+
+        let mut world = CollisionWorld::default();
+        world.rebuild(&rooms);
+        assert!(
+            spawns
+                .iter()
+                .any(|feet| world.fits(body_centre_from_feet(*feet), CLASS_HALF_EXTENTS)),
+            "no spawn point in the template has room to stand: {spawns:?}"
+        );
+    }
+
+    /// Rooms are the other thing the game reads, and they go through the same
+    /// registration. Cheap to assert while the harness is here.
+    #[test]
+    fn a_room_survives_a_save_and_load() {
+        use crate::editor::editor_room::EditorRoom;
+
+        let mut timeline = FeatureTimeline::default();
+        timeline.apply_feature(Box::new(EditorRoom::from_point_refs(
+            PointRef::absolute(-2.0, 0.0, -2.0),
+            PointRef::absolute(2.0, 3.0, 2.0),
+        )));
+
+        let path = temp_path("room-round-trip");
+        save(&path, &timeline, &MapMetadata::default()).unwrap();
+        let loaded = load(&path).unwrap();
+
+        let bounds: Vec<(Vec3, Vec3)> = loaded
+            .timeline
+            .active_features()
+            .filter_map(|(_, f)| f.object().drag_handle_bounds())
+            .collect();
+        assert_eq!(bounds, vec![(Vec3::new(-2.0, 0.0, -2.0), Vec3::new(2.0, 3.0, 2.0))]);
+        let _ = Room::default();
+    }
 }

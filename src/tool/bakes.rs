@@ -1,5 +1,6 @@
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
+use crate::common::app_mode::AppMode;
 use bevy_egui::egui;
 use crate::editor::editable::FeatureTag;
 use crate::get;
@@ -16,7 +17,7 @@ impl Plugin for BakePlugin {
             .add_message::<CalculateRoomGeometry>()
             .add_message::<ClearRoomGeometry>()
             .add_message::<LogECS>()
-            .add_systems(Update, (Self::post_startup, Self::bake_room_geometry, Self::clear_room_geometry, Self::log_ecs))
+            .add_systems(Update, (Self::post_startup, Self::bake_room_geometry, Self::clear_room_geometry, Self::log_ecs).run_if(in_state(AppMode::Editor)))
         ;
     }
 }

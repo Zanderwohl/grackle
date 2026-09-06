@@ -9,6 +9,7 @@ use bevy::render::view::Hdr;
 use bevy::window::{PrimaryWindow, WindowResized};
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts, EguiGlobalSettings, PrimaryEguiContext};
 use bevy_vector_shapes::prelude::*;
+use crate::common::app_mode::AppMode;
 use crate::common::painter;
 use crate::tool::selection::EditorSelectable;
 use crate::get;
@@ -79,10 +80,10 @@ impl Plugin for MulticamPlugin {
             .add_systems(Update, (
                 Self::set_camera_viewports,
                 Self::debug_boxes,
-            ))
+            ).run_if(in_state(AppMode::Editor)))
             // Global transforms are propagated from transforms during PostUpdate, so we need to draw the camera after that.
-            .add_systems(PostUpdate, Self::draw_camera_gizmos.after(TransformSystems::Propagate))
-            .add_systems(EguiPrimaryContextPass, Self::debug_window)
+            .add_systems(PostUpdate, Self::draw_camera_gizmos.after(TransformSystems::Propagate).run_if(in_state(AppMode::Editor)))
+            .add_systems(EguiPrimaryContextPass, Self::debug_window.run_if(in_state(AppMode::Editor)))
         ;
     }
 }
