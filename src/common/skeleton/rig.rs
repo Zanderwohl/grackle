@@ -253,6 +253,26 @@ impl Skeleton {
     }
 }
 
+/// How high the ankle sits, as a fraction of height.
+///
+/// Not a [`Proportions`] field because it is the same on every build: an ankle
+/// is at the bottom of a leg wherever that leg starts.
+const ANKLE_HEIGHT: f32 = 0.04;
+
+/// How long a leg is, as a fraction of the hip's height off the ground.
+///
+/// The one number an animation needs to know about the rig it is playing on,
+/// and the reason it can be a constant: a leg spans hip to ankle, so its length
+/// is fixed relative to the hip once [`ANKLE_HEIGHT`] is. That is what lets a
+/// pose lower the hips by a third of a leg — planting the feet by bending the
+/// knees exactly enough — without knowing whose legs they are.
+///
+/// Exact for the default build's hip height and within a fraction of a percent
+/// for the others, which is a tenth of a millimetre at the floor. See
+/// `feet_stay_planted_through_the_whole_idle_cycle`.
+pub const LEG_SPAN_PER_HIP_HEIGHT: f32 =
+    1.0 - ANKLE_HEIGHT / Proportions::DEFAULT.hip_height;
+
 /// The one humanoid rig, built once.
 ///
 /// Classes do not exist yet, so every body on the map is the same shape and
@@ -371,7 +391,7 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
     // Legs stand very slightly apart, so the knee has a bend direction that is
     // not exactly degenerate when an IK solver goes looking for one.
     let leg_dir = Vec3::new(0.03, -1.0, 0.0).normalize();
-    let leg = (hip_y - h * 0.04) / -leg_dir.y;
+    let leg = (hip_y - h * ANKLE_HEIGHT) / -leg_dir.y;
     let (thigh, shin) = (leg * 0.5, leg * 0.5);
     let foot_length = h * 0.14;
 

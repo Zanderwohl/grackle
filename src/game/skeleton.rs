@@ -24,11 +24,12 @@ use bevy::transform::TransformSystems;
 use crate::common::app_mode::AppMode;
 use crate::common::class::body_centre_from_feet;
 use crate::common::skeleton::{
-    draw_skeleton, humanoid, BodyRequests, ForcedAnimation, Pose, Proportions, Skeleton,
-    SkeletonAnimator, SkeletonPalette,
+    draw_skeleton, humanoid, AnimationClock, AnimationPhase, BodyRequests, ForcedAnimation, Pose,
+    Proportions, Skeleton, SkeletonAnimator, SkeletonPalette,
 };
+use crate::game::hitbox::HitboxPlugin;
 use crate::game::collision::CollisionWorld;
-use crate::game::player::{Player, PlayerInput, PLAYER_HALF};
+use crate::game::player::{step_player, Player, PlayerInput, PLAYER_HALF};
 
 /// Where a skeleton's feet sit relative to the entity carrying it.
 ///
@@ -56,6 +57,13 @@ pub struct SkeletonPlugin;
 impl Plugin for SkeletonPlugin {
     fn build(&self, app: &mut App) {
         app
+            // The boxes a body can be hit on are part of what a body is, and
+            // they need the same renderer resources this plugin already does.
+            .add_plugins(HitboxPlugin)
+            .init_resource::<AnimationClock>()
+            // Before anything reads it, and on the tick: the clock is the one
+            // quantity every viewer of a body has to agree on.
+            .add_systems(FixedUpdate, advance_animation_clock.before(step_player))
             .add_systems(Update, (
                 describe_player_bodies.run_if(in_state(AppMode::Play)),
                 dress_new_players.run_if(in_state(AppMode::Play)),
@@ -70,6 +78,15 @@ impl Plugin for SkeletonPlugin {
             .add_systems(OnExit(AppMode::Play), despawn_mannequins)
         ;
     }
+}
+
+/// One fixed step of the shared clock.
+///
+/// `Time<Fixed>`'s delta inside `FixedUpdate` is the fixed timestep itself, so
+/// this advances by exactly one tick however the frame rate is behaving —
+/// which is the whole reason the clock is here rather than in `Update`.
+pub fn advance_animation_clock(time: Res<Time<Fixed>>, mut clock: ResMut<AnimationClock>) {
+    clock.advance(time.delta_secs());
 }
 
 /// Describe what the local player's body is doing.
@@ -117,6 +134,11 @@ fn dress_new_players(
             Pose::rest(),
             SkeletonAnimator::default(),
             BodyRequests::default(),
+            // Phase zero until bodies have identities everyone agrees on. A
+            // networked body takes its phase from its network id, which is
+            // what makes two clients put it in the same part of its cycle;
+            // an `Entity`'s index would not, being local to one `World`.
+            AnimationPhase::default(),
             SkeletonRoot(feet_offset),
         ));
 
@@ -129,6 +151,8 @@ fn dress_new_players(
                     humanoid(Proportions::DEFAULT),
                     Pose::rest(),
                     SkeletonAnimator::default(),
+                    // Off the player's phase, so the two are not a mirror.
+                    AnimationPhase::from_id(1),
                     // Turned to face back the way it was placed from, so its
                     // pose is seen from the front.
                     Transform::from_translation(spot)
@@ -167,15 +191,17 @@ fn despawn_mannequins(mut commands: Commands, mannequins: Query<Entity, With<Man
 /// edits the pose it left, rather than competing with it.
 fn advance_animators(
     time: Res<Time>,
+    clock: Res<AnimationClock>,
     mut bodies: Query<(
         &mut SkeletonAnimator,
         &mut Pose,
         Option<&BodyRequests>,
         Option<&ForcedAnimation>,
+        Option<&AnimationPhase>,
     )>,
 ) {
     let dt = time.delta_secs();
-    for (mut animator, mut pose, requests, forced) in &mut bodies {
+    for (mut animator, mut pose, requests, forced, phase) in &mut bodies {
         match forced {
             // Being shown rather than driven: requests, if any, are ignored.
             Some(ForcedAnimation(state)) => animator.force(*state, dt),
@@ -183,7 +209,10 @@ fn advance_animators(
             // which is the right answer for a mannequin.
             None => animator.advance(&requests.copied().unwrap_or_default(), dt),
         }
-        *pose = animator.pose();
+        // Sampled from the shared clock rather than from time-in-state, so
+        // two people watching this body on the same tick see it in the same
+        // part of its cycle whatever either of them was doing a moment ago.
+        *pose = animator.pose_at(clock.seconds() + phase.copied().unwrap_or_default().0);
     }
 }
 
@@ -258,6 +287,7 @@ mod tests {
     fn a_body_animates_from_whatever_wrote_its_requests() {
         let mut app = App::new();
         app.add_plugins(bevy::time::TimePlugin);
+        app.init_resource::<AnimationClock>();
         let body = app
             .world_mut()
             .spawn((
@@ -283,6 +313,7 @@ mod tests {
     fn a_forced_body_ignores_its_requests() {
         let mut app = App::new();
         app.add_plugins(bevy::time::TimePlugin);
+        app.init_resource::<AnimationClock>();
         let body = app
             .world_mut()
             .spawn((

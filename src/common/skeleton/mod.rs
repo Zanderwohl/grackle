@@ -17,4 +17,7 @@ pub mod state;
 
 pub use draw::{draw_skeleton, SkeletonPalette};
 pub use rig::{bone, default_humanoid, humanoid, Bone, Pose, PosedBone, Proportions, Side, Skeleton};
-pub use state::{AnimationState, BodyRequests, ForcedAnimation, SkeletonAnimator};
+pub use state::{
+    AnimationClock, AnimationPhase, AnimationState, BodyRequests, ForcedAnimation,
+    SkeletonAnimator,
+};

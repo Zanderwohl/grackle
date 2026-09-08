@@ -1,0 +1,251 @@
+//! What a body can be hit on, which is not the same thing as what it is drawn
+//! as.
+//!
+//! Three volumes get confused with each other, and keeping them apart is the
+//! whole of this module:
+//!
+//! - **The movement hull** ([`crate::common::class::CLASS_HALF_EXTENTS`]) is
+//!   what stops a body walking through a wall. It is one box, the same for
+//!   every class, and no animation touches it.
+//! - **Hitboxes** are what a shot is tested against. They are related to the
+//!   bones — the head one is attached to the head — but they are not the
+//!   bones: bigger than what they cover, and moving far less.
+//! - **Bones** move as much as the animation says, which is the point of them.
+//!
+//! Two rules follow, and both are about fairness rather than tidiness:
+//!
+//! - **A head hitbox barely moves.** It follows the head through a fraction
+//!   and a hard clamp ([`HEAD_FOLLOW`], [`HEAD_MAX_OFFSET`]), so an animator
+//!   can give a body as much bob as it needs and a shot at where the head
+//!   plainly is still lands. Without the budget, "shouldn't bob much" degrades
+//!   silently the first time somebody adds a big idle.
+//! - **A hitbox never reads the drawn pose.** The pose on screen is written at
+//!   frame rate, and a hit test that read it would resolve differently on two
+//!   machines drawing at different rates. Hitboxes are computed on the tick,
+//!   from a pose sampled at the tick — see [`crate::game::hitbox`].
+//!
+//! There is nothing to shoot yet, so nothing tests against these; they are
+//! drawn as gizmos and no further. Hit *detection* arrives with a weapon.
+
+use bevy::prelude::*;
+
+use crate::common::class::{CLASS_HALF_EXTENTS, TALLEST_CLASS_HEIGHT};
+use crate::common::skeleton::rig::{bone, Pose, Skeleton};
+
+/// How much of the head's movement the head hitbox takes.
+///
+/// A quarter: enough that leaning out of the way is worth something, little
+/// enough that an idle cycle does not move where you have to aim.
+pub const HEAD_FOLLOW: f32 = 0.25;
+
+/// The furthest the head hitbox will go from where it rests, in metres.
+///
+/// The backstop behind [`HEAD_FOLLOW`]: whatever an animation does, a head
+/// hitbox stays within this of the head on a body standing still.
+pub const HEAD_MAX_OFFSET: f32 = 0.05;
+
+/// How much bigger than the head bone the head hitbox is, in metres on each
+/// side.
+///
+/// "A bit bigger than the head" — a shot that clips an ear should count, and
+/// the drawn skull is a rectangle standing in for one.
+pub const HEAD_MARGIN: f32 = 0.03;
+
+/// An axis-aligned box.
+///
+/// Axis-aligned including the head one, which a body's own head is not. That
+/// is a simplification worth naming: it makes the box a little generous when a
+/// head is tilted, and it makes every test against it a comparison rather than
+/// a transform.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Box3 {
+    pub centre: Vec3,
+    pub half_extents: Vec3,
+}
+
+impl Box3 {
+    pub fn min(&self) -> Vec3 {
+        self.centre - self.half_extents
+    }
+
+    pub fn max(&self) -> Vec3 {
+        self.centre + self.half_extents
+    }
+
+    pub fn contains(&self, point: Vec3) -> bool {
+        let d = (point - self.centre).abs();
+        d.x <= self.half_extents.x && d.y <= self.half_extents.y && d.z <= self.half_extents.z
+    }
+}
+
+/// Where a body can be hit, in world space.
+///
+/// Head and body only. Limbs are real in the games this is modelled on, but
+/// they are also the part that has to track the pose closely, and there is
+/// nothing to shoot them with yet.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Hitboxes {
+    /// The bulk of the body: an upright box the size of the movement hull,
+    /// which does not move with the animation at all.
+    pub body: Box3,
+    /// The head: attached to the head bone, bigger than it, and damped.
+    pub head: Box3,
+}
+
+/// The boxes for a body whose feet are at `root`, posed as `pose`.
+///
+/// `root` is the skeleton's own transform — feet on the floor — and the pose
+/// must be one sampled on the tick, not the one being drawn.
+pub fn hitboxes(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Hitboxes {
+    Hitboxes {
+        body: body_box(root),
+        head: head_box(skeleton, pose, root),
+    }
+}
+
+/// The body box: the movement hull, standing on the feet.
+///
+/// Deliberately the same box the body collides with, and deliberately written
+/// as its own function anyway. The two are the same size today and are not the
+/// same idea, so when one of them has to change the other does not follow by
+/// accident.
+fn body_box(root: &Transform) -> Box3 {
+    Box3 {
+        centre: root.translation + Vec3::Y * (TALLEST_CLASS_HEIGHT * 0.5),
+        half_extents: CLASS_HALF_EXTENTS,
+    }
+}
+
+/// The head box: the head bone, inflated, and only fractionally where the
+/// animation put it.
+fn head_box(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Box3 {
+    let head_centre = |pose: &Pose| {
+        skeleton
+            .posed_bones(pose, root)
+            .into_iter()
+            .find(|posed| posed.name == bone::HEAD)
+            .map(|posed| (posed.prism().translation, posed.length, posed.thickness))
+    };
+
+    // Where the head sits on a body standing still. The hitbox is anchored
+    // here and only visits where the animation is.
+    let Some((rest, length, thickness)) = head_centre(&Pose::rest()) else {
+        return Box3::default();
+    };
+    let posed = head_centre(pose).map(|(centre, _, _)| centre).unwrap_or(rest);
+
+    let travel = (posed - rest) * HEAD_FOLLOW;
+    let travel = travel.clamp_length_max(HEAD_MAX_OFFSET);
+
+    Box3 {
+        centre: rest + travel,
+        half_extents: Vec3::new(
+            thickness.x * 0.5 + HEAD_MARGIN,
+            length * 0.5 + HEAD_MARGIN,
+            thickness.y * 0.5 + HEAD_MARGIN,
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::skeleton::state::AnimationState;
+    use crate::common::skeleton::{humanoid, Proportions};
+
+    fn rig() -> Skeleton {
+        humanoid(Proportions::DEFAULT)
+    }
+
+    /// The head hitbox has to cover the head it is drawn around, or a shot
+    /// that plainly hit somebody misses.
+    #[test]
+    fn the_head_box_contains_the_head() {
+        let skeleton = rig();
+        let root = Transform::from_translation(Vec3::new(2.0, 0.0, -1.0));
+        let boxes = hitboxes(&skeleton, &Pose::rest(), &root);
+
+        let head = skeleton
+            .posed_bones(&Pose::rest(), &root)
+            .into_iter()
+            .find(|bone| bone.name == bone::HEAD)
+            .unwrap();
+
+        assert!(boxes.head.contains(head.head), "the base of the skull is outside the box");
+        assert!(boxes.head.contains(head.tail), "the crown is outside the box");
+        // And bigger than it, on every axis.
+        assert!(boxes.head.half_extents.y > head.length * 0.5);
+        assert!(boxes.head.half_extents.x > head.thickness.x * 0.5);
+    }
+
+    /// The whole point of the layer: the head moves through a whole idle
+    /// cycle and the hitbox barely does.
+    #[test]
+    fn an_idle_moves_the_head_far_more_than_its_hitbox() {
+        let skeleton = rig();
+        let root = Transform::IDENTITY;
+
+        let head_of = |pose: &Pose| {
+            skeleton
+                .posed_bones(pose, &root)
+                .into_iter()
+                .find(|bone| bone.name == bone::HEAD)
+                .unwrap()
+                .prism()
+                .translation
+        };
+
+        let rest = hitboxes(&skeleton, &Pose::rest(), &root).head.centre;
+        let mut most_head = 0.0_f32;
+        let mut most_box = 0.0_f32;
+        for step in 0..64 {
+            let pose = AnimationState::Idle.pose(step as f32 * 0.05);
+            most_head = most_head.max((head_of(&pose) - head_of(&Pose::rest())).length());
+            most_box = most_box.max((hitboxes(&skeleton, &pose, &root).head.centre - rest).length());
+        }
+
+        assert!(most_head > 0.015, "the idle barely moves the head at all: {most_head} m");
+        assert!(
+            most_box <= most_head * HEAD_FOLLOW + 1e-4,
+            "the hitbox took {most_box} m of the head's {most_head} m"
+        );
+        assert!(most_box <= HEAD_MAX_OFFSET + 1e-4);
+    }
+
+    /// However wild the animation, the head hitbox stays near where a shooter
+    /// would expect it. A pose no idle would ever produce, on purpose.
+    #[test]
+    fn no_animation_can_move_the_head_hitbox_far() {
+        let skeleton = rig();
+        let root = Transform::IDENTITY;
+        let thrown = Pose::rest()
+            .with(bone::CHEST, Quat::from_rotation_x(-1.4))
+            .with(bone::NECK, Quat::from_rotation_x(-1.0));
+
+        let rest = hitboxes(&skeleton, &Pose::rest(), &root).head.centre;
+        let moved = hitboxes(&skeleton, &thrown, &root).head.centre;
+
+        assert!(
+            (moved - rest).length() <= HEAD_MAX_OFFSET + 1e-5,
+            "a duck moved the head hitbox by {} m",
+            (moved - rest).length()
+        );
+    }
+
+    /// The body box is the movement hull and does not animate. If it ever
+    /// starts following the pose, a body that crouched visually would become
+    /// unhittable where it plainly is.
+    #[test]
+    fn the_body_box_ignores_the_pose_entirely() {
+        let skeleton = rig();
+        let root = Transform::from_translation(Vec3::new(-4.0, 2.0, 0.5));
+
+        let standing = hitboxes(&skeleton, &Pose::rest(), &root).body;
+        let idling = hitboxes(&skeleton, &AnimationState::Idle.pose(1.7), &root).body;
+
+        assert_eq!(standing, idling);
+        assert_eq!(standing.half_extents, CLASS_HALF_EXTENTS);
+        // Standing on its feet, not centred on them.
+        assert!((standing.min().y - root.translation.y).abs() < 1e-5);
+    }
+}

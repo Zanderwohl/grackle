@@ -33,8 +33,83 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
-use crate::common::skeleton::rig::Pose;
+use crate::common::skeleton::rig::{bone, Pose, LEG_SPAN_PER_HIP_HEIGHT};
 use crate::get;
+
+/// The clock every animation is sampled against.
+///
+/// Not each viewer's own elapsed time, and not the animator's time-in-state:
+/// two people watching the same body on the same tick have to see it in the
+/// same part of its cycle, or a spectator and a player disagree about where a
+/// head is. So the clock is a shared quantity — advanced by whole fixed steps,
+/// which is what makes it a number a server can state and a client can be
+/// corrected to.
+///
+/// Sampling on tick boundaries rather than at frame rate is deliberate for the
+/// same reason. An idle cycle is seconds long; 64 Hz is far finer than
+/// anything the eye can catch in one, and it is the rate everything else that
+/// has to agree already runs at.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct AnimationClock {
+    ticks: u64,
+    seconds: f32,
+}
+
+impl AnimationClock {
+    /// Seconds since the clock started.
+    pub fn seconds(&self) -> f32 {
+        self.seconds
+    }
+
+    pub fn ticks(&self) -> u64 {
+        self.ticks
+    }
+
+    /// One fixed step. `dt` is the fixed timestep, so this is exact rather
+    /// than accumulated frame time.
+    pub fn advance(&mut self, dt: f32) {
+        self.ticks += 1;
+        // From the tick count rather than by adding `dt` each time: a float
+        // added sixty-four times a second drifts, and two machines that had
+        // been running for different lengths of time would drift apart.
+        self.seconds = self.ticks as f32 * dt;
+    }
+}
+
+/// Where in its cycle a body is, relative to the shared clock.
+///
+/// Bodies that all bounced on the same frame would read as one machine rather
+/// than ten people, so each is offset. The offset is derived from an
+/// identifier everyone agrees on rather than rolled locally: two viewers of
+/// the same body must land on the same phase, which is exactly what an RNG
+/// would not give them.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct AnimationPhase(pub f32);
+
+impl AnimationPhase {
+    /// A phase from a stable identifier.
+    ///
+    /// The identifier has to be one every machine computes the same way — a
+    /// cell's index in a grid, and a body's network id once there is a
+    /// network. Not an `Entity`, whose index is local to one `World` and would
+    /// put a body in a different part of its cycle on every machine.
+    pub fn from_id(id: u64) -> AnimationPhase {
+        // SplitMix64's finaliser: integer-only, so every machine agrees, and
+        // it scatters consecutive ids rather than leaving neighbours in step.
+        let mut z = id.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        // Into [0, 1) with a division that is exact in binary, then out to a
+        // spread of seconds wider than any cycle.
+        AnimationPhase(((z >> 40) as f32 / (1u32 << 24) as f32) * PHASE_SPREAD)
+    }
+}
+
+/// How far apart in time two bodies can be put.
+///
+/// Longer than the longest cycle, so a phase can land anywhere in one.
+const PHASE_SPREAD: f32 = 10.0;
 
 /// How long a state has to hold before another one can take over.
 ///
@@ -169,13 +244,23 @@ impl AnimationState {
         matches!(self, AnimationState::Airborne)
     }
 
-    /// The pose this state is in, `seconds` into it.
+    /// The pose this state is in at `seconds` on the shared clock.
     ///
-    /// Every state is the A-pose today, because there are no clips. When there
-    /// are, this is where a clip is sampled — and the sample is a [`Pose`], so
-    /// the same clip serves every set of proportions.
-    pub fn pose(&self, _seconds: f32) -> Pose {
-        Pose::rest()
+    /// `seconds` is [`AnimationClock`] plus the body's [`AnimationPhase`], not
+    /// time-in-state: a cycle that restarted on every transition would hitch
+    /// each time a body brushed a wall, and two viewers would only agree if
+    /// they had also agreed on the exact tick the state changed.
+    ///
+    /// Only [`AnimationState::Idle`] has anything yet; the rest still stand in
+    /// the A-pose. Written as a function rather than sampled from keyframes
+    /// because an idle *is* a function — the first state that genuinely needs
+    /// keys is a run cycle, and inventing the format before then would be
+    /// inventing it blind.
+    pub fn pose(&self, seconds: f32) -> Pose {
+        match self {
+            AnimationState::Idle => idle_pose(seconds),
+            _ => Pose::rest(),
+        }
     }
 }
 
@@ -222,8 +307,9 @@ impl SkeletonAnimator {
         }
     }
 
-    pub fn pose(&self) -> Pose {
-        self.state.pose(self.elapsed)
+    /// The pose this body holds at `seconds` on the shared clock.
+    pub fn pose_at(&self, seconds: f32) -> Pose {
+        self.state.pose(seconds)
     }
 }
 
@@ -235,9 +321,186 @@ impl SkeletonAnimator {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ForcedAnimation(pub AnimationState);
 
+/// How long one idle cycle takes, in seconds.
+const IDLE_PERIOD: f32 = 3.4;
+
+/// How far the hips drop at the bottom of the cycle, in hip-heights.
+///
+/// In hip-heights rather than metres so the same idle reads the same on every
+/// build — a two-centimetre drop is a settle on a tall body and a squat on a
+/// short one.
+const IDLE_BOB: f32 = 0.022;
+
+/// How far the chest leans forward at the bottom, in radians.
+const IDLE_LEAN: f32 = 0.045;
+
+/// How far the arms swing, in radians.
+const IDLE_ARM_SWING: f32 = 0.05;
+
+/// Standing still: a slow settle into the knees and back up.
+///
+/// The hips drop and the knees take it, rather than the whole body sinking
+/// through the floor. Legs are a rigid chain from the root, so moving the root
+/// moves the feet with it — the bend below is what puts them back, and it is
+/// exact rather than eyeballed: for a leg of two equal segments, dropping the
+/// hip to a fraction `k` of the leg's length is a thigh turned by
+/// `acos(1 - k)`, a shin turned back by twice that, and an ankle turned by the
+/// same again to keep the sole flat.
+///
+/// That is a two-bone IK solve in its simplest form — one foot, planted, with
+/// the target directly below the hip. The general version is the next thing
+/// this file will want, and it will replace these three lines rather than
+/// sitting beside them.
+fn idle_pose(seconds: f32) -> Pose {
+    // Down from rest and back, never up: rest already has the legs straight,
+    // so there is nowhere above it to go without leaving the floor.
+    let cycle = std::f32::consts::TAU * seconds / IDLE_PERIOD;
+    let settle = (1.0 - cycle.cos()) * 0.5;
+
+    let drop = settle * IDLE_BOB;
+    let mut pose = Pose::rest();
+    pose.root_offset = Vec3::NEG_Y * drop;
+
+    // The knee bend that puts the feet back where they were.
+    let bend = (1.0 - drop / LEG_SPAN_PER_HIP_HEIGHT).clamp(-1.0, 1.0).acos();
+    for (thigh, shin, foot) in [
+        (bone::THIGH_L, bone::SHIN_L, bone::FOOT_L),
+        (bone::THIGH_R, bone::SHIN_R, bone::FOOT_R),
+    ] {
+        pose.set(thigh, Quat::from_rotation_x(bend));
+        pose.set(shin, Quat::from_rotation_x(-2.0 * bend));
+        pose.set(foot, Quat::from_rotation_x(bend));
+    }
+
+    // A settle that only moved vertically would read as an elevator. The chest
+    // leans into it and the arms trail a quarter cycle behind, which is what
+    // makes it look like weight rather than translation.
+    pose.set(bone::CHEST, Quat::from_rotation_x(settle * IDLE_LEAN));
+    pose.set(bone::NECK, Quat::from_rotation_x(-settle * IDLE_LEAN * 0.6));
+
+    let trail = (cycle - std::f32::consts::FRAC_PI_2).sin();
+    pose.set(bone::UPPER_ARM_L, Quat::from_rotation_z(-trail * IDLE_ARM_SWING));
+    pose.set(bone::UPPER_ARM_R, Quat::from_rotation_z(trail * IDLE_ARM_SWING));
+
+    pose
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::skeleton::rig::{humanoid, Proportions};
+
+    /// Where a named bone's head and tail end up, for a body standing at the
+    /// origin.
+    fn bone_at(proportions: Proportions, pose: &Pose, name: &str) -> (Vec3, Vec3) {
+        let skeleton = humanoid(proportions);
+        let posed = skeleton
+            .posed_bones(pose, &Transform::IDENTITY)
+            .into_iter()
+            .find(|bone| bone.name == name)
+            .expect("no such bone");
+        (posed.head, posed.tail)
+    }
+
+    /// The bounce lowers the hips, and the legs are a rigid chain hanging off
+    /// them — so without the knee bend that compensates, the whole idle would
+    /// be a body sinking through the floor. The compensation is arithmetic
+    /// rather than eyeballed, and this is what says so.
+    ///
+    /// Also the first real test of a pose crossing builds: the bend is
+    /// computed from a ratio the rig fixes, so it has to plant the feet of a
+    /// short body and a stocky one just as well.
+    #[test]
+    fn feet_stay_planted_through_the_whole_idle_cycle() {
+        for proportions in [Proportions::DEFAULT, Proportions::STOCKY, Proportions::LANKY] {
+            let (_, resting_toe) = bone_at(proportions, &Pose::rest(), bone::FOOT_L);
+
+            for step in 0..40 {
+                let seconds = step as f32 * IDLE_PERIOD / 40.0;
+                let pose = AnimationState::Idle.pose(seconds);
+                let (ankle, toe) = bone_at(proportions, &pose, bone::FOOT_L);
+
+                assert!(
+                    (toe - resting_toe).length() < 0.002,
+                    "at {seconds:.2}s the foot has moved {:.4} m",
+                    (toe - resting_toe).length()
+                );
+                assert!(ankle.y > 0.0, "the ankle went through the floor at {seconds:.2}s");
+            }
+        }
+    }
+
+    /// And it does actually move — a planted-feet test passes perfectly on an
+    /// animation that does nothing at all.
+    #[test]
+    fn the_idle_settles_and_comes_back_up() {
+        let standing = bone_at(Proportions::DEFAULT, &Pose::rest(), bone::HEAD).1.y;
+        let bottom = bone_at(Proportions::DEFAULT, &AnimationState::Idle.pose(IDLE_PERIOD * 0.5), bone::HEAD).1.y;
+        let back_up = bone_at(Proportions::DEFAULT, &AnimationState::Idle.pose(IDLE_PERIOD), bone::HEAD).1.y;
+
+        assert!(standing - bottom > 0.015, "the head only dropped {} m", standing - bottom);
+        assert!((standing - back_up).abs() < 1e-4, "the cycle does not return to where it started");
+    }
+
+    /// A one-sided idle would be a body leaning slightly for ever, and would
+    /// show up the moment it was played next to nine others.
+    #[test]
+    fn the_idle_is_symmetric() {
+        let pose = AnimationState::Idle.pose(0.9);
+        let (_, left) = bone_at(Proportions::DEFAULT, &pose, bone::HAND_L);
+        let (_, right) = bone_at(Proportions::DEFAULT, &pose, bone::HAND_R);
+
+        assert!(
+            (left - Vec3::new(-right.x, right.y, right.z)).length() < 1e-5,
+            "the hands are at {left} and {right}"
+        );
+    }
+
+    /// The point of a shared clock: the same tick gives the same pose, on any
+    /// machine, whatever either of them was doing beforehand.
+    #[test]
+    fn the_same_moment_gives_the_same_pose() {
+        let one = AnimationState::Idle.pose(12.25);
+        let other = AnimationState::Idle.pose(12.25);
+        assert_eq!(one.root_offset, other.root_offset);
+        assert_eq!(one.joint(bone::THIGH_L), other.joint(bone::THIGH_L));
+    }
+
+    /// The clock counts ticks and derives seconds from the count, so a machine
+    /// that has been running for an hour is at the same time as one that has
+    /// been running for a minute if they are on the same tick.
+    #[test]
+    fn the_clock_advances_by_whole_ticks() {
+        let dt = 1.0 / 64.0;
+        let mut clock = AnimationClock::default();
+        for _ in 0..640 {
+            clock.advance(dt);
+        }
+
+        assert_eq!(clock.ticks(), 640);
+        assert!((clock.seconds() - 10.0).abs() < 1e-4, "ten seconds is {}", clock.seconds());
+    }
+
+    /// A phase has to be a function of the identifier and nothing else — two
+    /// viewers deriving it separately must land on the same number — and
+    /// consecutive ids must not come out next to each other, or a grid bounces
+    /// as a wave.
+    #[test]
+    fn a_phase_is_derived_from_its_id_alone() {
+        assert_eq!(AnimationPhase::from_id(7), AnimationPhase::from_id(7));
+
+        let phases: Vec<f32> = (0..60).map(|id| AnimationPhase::from_id(id).0).collect();
+        assert!(phases.iter().all(|phase| (0.0..PHASE_SPREAD).contains(phase)));
+
+        let mut sorted = phases.clone();
+        sorted.sort_by(f32::total_cmp);
+        sorted.dedup();
+        assert_eq!(sorted.len(), phases.len(), "two bodies were given the same phase");
+
+        // Neighbours land far apart rather than a step apart.
+        let neighbours = phases.windows(2).filter(|pair| (pair[1] - pair[0]).abs() < 0.1).count();
+        assert!(neighbours < 6, "{neighbours} of 59 neighbouring ids are nearly in step");
+    }
 
     /// The example the whole arrangement is for: two independent facts, one
     /// written by input and one by collision, and neither writer knows what

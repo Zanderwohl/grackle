@@ -9,8 +9,8 @@
 use bevy::prelude::*;
 
 use crate::common::skeleton::{
-    default_humanoid, draw_skeleton, humanoid, ForcedAnimation, Pose, SkeletonAnimator,
-    SkeletonPalette,
+    default_humanoid, draw_skeleton, humanoid, AnimationPhase, ForcedAnimation, Pose,
+    SkeletonAnimator, SkeletonPalette,
 };
 use crate::editor::animation_grid::{cells, AnimationGrid, AnimationGridMarker};
 use crate::editor::editable::{FeatureTrait, PointRef};
@@ -50,11 +50,17 @@ pub fn sync_animation_grids(
         }
 
         commands.entity(grid).with_children(|parent| {
-            for cell in cells() {
+            for (index, cell) in cells().into_iter().enumerate() {
                 parent.spawn((
                     humanoid(cell.class.proportions()),
                     Pose::rest(),
                     SkeletonAnimator::default(),
+                    // From the cell's place in the grid, which every machine
+                    // that loads this map computes the same way. Sixty bodies
+                    // bouncing in lockstep would read as one machine, and
+                    // sixty bodies with locally rolled phases would put two
+                    // viewers of the same map out of step with each other.
+                    AnimationPhase::from_id(index as u64),
                     // The one difference from a player: pinned to this cell's
                     // state instead of being told what is happening to it.
                     ForcedAnimation(cell.state),

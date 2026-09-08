@@ -13,6 +13,7 @@ use crate::game::player::{
 use crate::tool::room::Room;
 
 pub mod collision;
+pub mod hitbox;
 pub mod player;
 pub mod skeleton;
 
