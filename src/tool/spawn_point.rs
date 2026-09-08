@@ -1,195 +1,54 @@
+//! Places [`SpawnPoint`] features.
+//!
+//! Deliberately the point tool with a different feature at the end of it:
+//! placing a spawn *is* placing a point, and a mapper who has learnt one has
+//! learnt the other — relative placement and shift-picking included. The
+//! shared half lives in [`crate::tool::point_placement`].
+
 use bevy::app::App;
 use bevy::prelude::*;
-use crate::common::app_mode::AppMode;
 use crate::common::class::{TALLEST_CLASS_EYE_HEIGHT, TALLEST_CLASS_HEIGHT};
-use crate::editor::editable::{FeatureId, FeatureTimeline, PointRef};
+use crate::editor::editable::{FeatureTrait, PointRef};
 use crate::editor::spawn_point::SpawnPoint;
-use crate::editor::input::CurrentMouseInput;
-use crate::editor::multicam::Multicam;
-use crate::tool::room::Room;
-use crate::tool::tool_helpers::*;
+use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
 use crate::tool::Tools;
-
-const DEFAULT_SNAP_GRANULARITY: f32 = 0.1;
-
-/// Places [`SpawnPoint`] features.
-///
-/// Deliberately the point tool with a different feature at the end of it:
-/// placing a spawn *is* placing a point, and a mapper who has learnt one has
-/// learnt the other — relative placement and shift-picking included.
-#[derive(PartialEq, Eq, Clone, Copy)]
-enum SpawnPointToolMode {
-    Normal,
-    Picking,
-    RelativeSelected,
-}
-
-#[derive(Resource)]
-struct SpawnPointTool {
-    mode: SpawnPointToolMode,
-    last_position: Vec3,
-    cursor: Option<Vec3>,
-    reference_feature: Option<FeatureId>,
-    reference_key: String,
-    reference_resolved: Option<Vec3>,
-    hovered_point: Option<(FeatureId, String, Vec3)>,
-    snap: bool,
-    snap_granularity: f32,
-}
-
-impl Default for SpawnPointTool {
-    fn default() -> Self {
-        Self {
-            mode: SpawnPointToolMode::Normal,
-            last_position: Vec3::ZERO,
-            cursor: None,
-            reference_feature: None,
-            reference_key: String::new(),
-            reference_resolved: None,
-            hovered_point: None,
-            snap: true,
-            snap_granularity: DEFAULT_SNAP_GRANULARITY,
-        }
-    }
-}
 
 pub struct SpawnPointPlugin;
 
 impl Plugin for SpawnPointPlugin {
     fn build(&self, app: &mut App) {
-        app
-            .init_resource::<SpawnPointTool>()
-            .add_systems(Update, (
-                SpawnPointTool::interface,
-                SpawnPointTool::draw_gizmos,
-            ).chain().run_if(in_state(Tools::SpawnPoint)).run_if(in_state(AppMode::Editor)))
-            .add_systems(OnExit(Tools::SpawnPoint), SpawnPointTool::on_exit)
-        ;
+        add_point_placement_tool::<SpawnPoint>(app);
     }
 }
 
-impl SpawnPointTool {
-    fn on_exit(mut tool: ResMut<Self>) {
-        tool.mode = SpawnPointToolMode::Normal;
-        tool.cursor = None;
-        tool.hovered_point = None;
-        tool.reference_feature = None;
-        tool.reference_key.clear();
-        tool.reference_resolved = None;
+impl PlaceablePoint for SpawnPoint {
+    const TOOL: Tools = Tools::SpawnPoint;
+
+    fn from_position(position: Vec3) -> Box<dyn FeatureTrait> {
+        Box::new(SpawnPoint::new(position.x, position.y, position.z))
     }
 
-    fn interface(
-        mut tool: ResMut<Self>,
-        cameras: Query<(Entity, &Multicam)>,
-        mouse_input: Res<CurrentMouseInput>,
-        keys: Res<ButtonInput<KeyCode>>,
-        mut features: ResMut<FeatureTimeline>,
-        rooms: Query<&Room>,
-        mut next_tool: ResMut<NextState<Tools>>,
-    ) {
-        let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-        let shift_just_pressed = keys.just_pressed(KeyCode::ShiftLeft) || keys.just_pressed(KeyCode::ShiftRight);
+    fn from_point_ref(point_ref: PointRef) -> Box<dyn FeatureTrait> {
+        Box::new(SpawnPoint::from_point_ref(point_ref))
+    }
 
-        tool.cursor = compute_cursor(
-            &mouse_input, &cameras, tool.last_position,
-            tool.snap, tool.snap_granularity, &rooms,
+    fn normal_color() -> Color {
+        Color::srgb_u8(255, 214, 0)
+    }
+
+    fn relative_color() -> Color {
+        Color::srgb_u8(255, 233, 120)
+    }
+
+    /// Preview the body that would stand here, so headroom is visible before
+    /// the spawn point is committed rather than after.
+    fn draw_preview(gizmos: &mut Gizmos, cursor: Vec3, color: Color) {
+        gizmos.sphere(Isometry3d::from_translation(cursor), 0.15, color);
+        gizmos.line(cursor, cursor + Vec3::Y * TALLEST_CLASS_HEIGHT, color);
+        gizmos.sphere(
+            Isometry3d::from_translation(cursor + Vec3::Y * TALLEST_CLASS_EYE_HEIGHT),
+            0.12,
+            color,
         );
-
-        match tool.mode {
-            SpawnPointToolMode::Normal => {
-                if shift_held {
-                    tool.mode = SpawnPointToolMode::Picking;
-                    tool.hovered_point = None;
-                } else if let Some(cursor) = tool.cursor {
-                    if mouse_input.released == Some(MouseButton::Left) {
-                        let point = SpawnPoint::new(cursor.x, cursor.y, cursor.z);
-                        let id = features.apply_feature(Box::new(point));
-                        features.select(Some(id));
-                        tool.last_position = cursor;
-                        next_tool.set(Tools::Select);
-                    }
-                }
-            }
-            SpawnPointToolMode::Picking => {
-                if !shift_held {
-                    tool.mode = SpawnPointToolMode::Normal;
-                    tool.hovered_point = None;
-                    return;
-                }
-
-                tool.hovered_point = mouse_input.world_pos
-                    .and_then(|ray| find_hovered_point(&ray, &features, PICK_RADIUS));
-
-                if mouse_input.released == Some(MouseButton::Left) {
-                    if let Some((feature_id, key, resolved)) = tool.hovered_point.take() {
-                        tool.reference_feature = Some(feature_id);
-                        tool.reference_key = key;
-                        tool.reference_resolved = Some(resolved);
-                        tool.mode = SpawnPointToolMode::RelativeSelected;
-                    }
-                }
-            }
-            SpawnPointToolMode::RelativeSelected => {
-                if shift_just_pressed {
-                    tool.mode = SpawnPointToolMode::Normal;
-                    tool.reference_feature = None;
-                    tool.reference_key.clear();
-                    tool.reference_resolved = None;
-                    return;
-                }
-
-                if let Some(cursor) = tool.cursor {
-                    if mouse_input.released == Some(MouseButton::Left) {
-                        if let (Some(ref_feature), Some(ref_resolved)) = (tool.reference_feature, tool.reference_resolved) {
-                            let d = cursor - ref_resolved;
-                            let mut pr = PointRef::reference_with_offset(ref_feature, d.x, d.y, d.z);
-                            if !tool.reference_key.is_empty() {
-                                pr.point_key = tool.reference_key.clone();
-                            }
-                            let point = SpawnPoint::from_point_ref(pr);
-                            let id = features.apply_feature(Box::new(point));
-                            features.select(Some(id));
-                            tool.last_position = cursor;
-                            next_tool.set(Tools::Select);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn draw_gizmos(
-        tool: Res<SpawnPointTool>,
-        features: Res<FeatureTimeline>,
-        mouse_input: Res<CurrentMouseInput>,
-        mut gizmos: Gizmos,
-    ) {
-        if let Some(cursor) = tool.cursor {
-            let color = match tool.mode {
-                SpawnPointToolMode::RelativeSelected => Color::srgb_u8(255, 233, 120),
-                _ => Color::srgb_u8(255, 214, 0),
-            };
-            // Preview the body that would stand here, so headroom is visible
-            // before the spawn point is committed rather than after.
-            gizmos.sphere(Isometry3d::from_translation(cursor), 0.15, color);
-            gizmos.line(cursor, cursor + Vec3::Y * TALLEST_CLASS_HEIGHT, color);
-            gizmos.sphere(
-                Isometry3d::from_translation(cursor + Vec3::Y * TALLEST_CLASS_EYE_HEIGHT),
-                0.12,
-                color,
-            );
-
-            if tool.mode == SpawnPointToolMode::RelativeSelected {
-                if let Some(base) = tool.reference_resolved {
-                    draw_taxicab_path(&mut gizmos, base, cursor);
-                }
-            }
-        }
-
-        if tool.mode == SpawnPointToolMode::Picking {
-            if let Some(ray) = mouse_input.world_pos {
-                draw_picking_gizmos(&mut gizmos, &ray, &features, &tool.hovered_point);
-            }
-        }
     }
 }
