@@ -22,6 +22,7 @@ pub mod point;
 pub mod spawn_point;
 pub mod point_light;
 pub mod point_drag;
+pub mod point_placement;
 pub mod prop;
 pub mod rotate_drag;
 pub mod retarget;
