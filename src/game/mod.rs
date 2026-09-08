@@ -14,6 +14,7 @@ use crate::tool::room::Room;
 
 pub mod collision;
 pub mod player;
+pub mod skeleton;
 
 /// Playing the map that is currently open in the editor.
 ///

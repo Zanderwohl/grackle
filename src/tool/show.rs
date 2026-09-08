@@ -12,6 +12,8 @@ pub struct GizmoVisibility {
     pub point_lights: bool,
     pub spawn_points: bool,
     pub props: bool,
+    pub animation_displays: bool,
+    pub animation_grids: bool,
 }
 
 impl Default for GizmoVisibility {
@@ -22,6 +24,8 @@ impl Default for GizmoVisibility {
             point_lights: false,
             spawn_points: false,
             props: false,
+            animation_displays: false,
+            animation_grids: false,
         }
     }
 }
@@ -54,6 +58,8 @@ impl ShowPlugin {
         ui.checkbox(&mut gizmo_visibility.point_lights, get!("show.gizmos_point_lights"));
         ui.checkbox(&mut gizmo_visibility.spawn_points, get!("show.gizmos_spawn_points"));
         ui.checkbox(&mut gizmo_visibility.props, get!("show.gizmos_props"));
+        ui.checkbox(&mut gizmo_visibility.animation_displays, get!("show.gizmos_animation_displays"));
+        ui.checkbox(&mut gizmo_visibility.animation_grids, get!("show.gizmos_animation_grids"));
     }
 
     fn draw_visible_gizmos(
@@ -62,7 +68,8 @@ impl ShowPlugin {
         mut gizmos: Gizmos,
     ) {
         if !visibility.points && !visibility.rooms && !visibility.point_lights
-            && !visibility.spawn_points && !visibility.props
+            && !visibility.spawn_points && !visibility.props && !visibility.animation_displays
+            && !visibility.animation_grids
         {
             return;
         }
@@ -75,6 +82,8 @@ impl ShowPlugin {
                 "grackle_point_light" => visibility.point_lights,
                 "spawn_point" => visibility.spawn_points,
                 "prop" => visibility.props,
+                "animation_display" => visibility.animation_displays,
+                "animation_grid" => visibility.animation_grids,
                 _ => false,
             };
             if draw {

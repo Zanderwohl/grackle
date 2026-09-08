@@ -40,6 +40,13 @@ pub struct Player {
     pub yaw: f32,
     pub pitch: f32,
     pub on_ground: bool,
+    /// Which axes the last step was stopped on.
+    ///
+    /// A fact about the step, kept because nothing else can recover it: the
+    /// body's position after a blocked move looks like a body that simply did
+    /// not go that far. The animation layer reads it to tell running from
+    /// running into a wall — see [`crate::game::skeleton`].
+    pub blocked: BVec3,
 }
 
 impl Default for Player {
@@ -49,6 +56,7 @@ impl Default for Player {
             yaw: 0.0,
             pitch: 0.0,
             on_ground: false,
+            blocked: BVec3::FALSE,
         }
     }
 }
@@ -307,6 +315,7 @@ pub fn step_player(
 
         // Standing on something means the *downward* move was the blocked one;
         // clouting your head on a ceiling also blocks Y and must not count.
+        player.blocked = blocked;
         player.on_ground = blocked.y && delta.y <= 0.0;
         if blocked.y {
             player.velocity.y = 0.0;

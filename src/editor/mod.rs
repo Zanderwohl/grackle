@@ -8,5 +8,7 @@ pub mod grackle_point_light;
 pub mod editor_room;
 pub mod panels;
 pub mod save;
+pub mod animation_display;
+pub mod animation_grid;
 pub mod prop;
 pub mod spawn_point;

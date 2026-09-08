@@ -335,6 +335,8 @@ pub fn find_nearest_feature_hit(
             "grackle_point_light" => visibility.point_lights,
             "spawn_point" => visibility.spawn_points,
             "prop" => visibility.props,
+            "animation_display" => visibility.animation_displays,
+            "animation_grid" => visibility.animation_grids,
             _ => false,
         };
         if !visible { continue; }
@@ -375,7 +377,7 @@ pub fn find_nearest_feature_hit(
                     }
                 }
             }
-            "global_point" | "grackle_point_light" | "spawn_point" | "prop" => {
+            "global_point" | "grackle_point_light" | "spawn_point" | "prop" | "animation_display" | "animation_grid" => {
                 if let Ok(pos) = feature.object().get_point("") {
                     let dist = ray_point_distance(ray, pos);
                     if dist < SELECT_POINT_RADIUS {

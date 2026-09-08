@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use crate::editor::editable::{Feature, FeatureId, FeatureTrait, PointRef};
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::global_point::GlobalPoint;
+use crate::common::skeleton::AnimationState;
+use crate::editor::animation_display::AnimationDisplay;
+use crate::editor::animation_grid::AnimationGrid;
 use crate::editor::prop::Prop;
 use crate::editor::spawn_point::SpawnPoint;
 use crate::editor::grackle_point_light::GracklePointLight;
@@ -31,6 +34,15 @@ pub enum FeatureData {
     Prop {
         location: PointRef,
         rotation: Vec3,
+    },
+    AnimationDisplay {
+        location: PointRef,
+        yaw: f32,
+        state: AnimationState,
+    },
+    AnimationGrid {
+        location: PointRef,
+        yaw: f32,
     },
     Cuboid {
         min: Vec3,
@@ -64,6 +76,8 @@ impl FeatureSnapshot {
             )),
             FeatureData::SpawnPoint { .. } => Box::new(SpawnPoint::from_point_ref(PointRef::absolute(0.0, 0.0, 0.0))),
             FeatureData::Prop { .. } => Box::new(Prop::from_point_ref(PointRef::absolute(0.0, 0.0, 0.0))),
+            FeatureData::AnimationDisplay { .. } => Box::new(AnimationDisplay::from_point_ref(PointRef::absolute(0.0, 0.0, 0.0))),
+            FeatureData::AnimationGrid { .. } => Box::new(AnimationGrid::from_point_ref(PointRef::absolute(0.0, 0.0, 0.0))),
             FeatureData::Cuboid { .. } => Box::new(GrackleCuboid::new(Vec3::ZERO, Vec3::ZERO)),
         };
 
@@ -91,6 +105,8 @@ fn feature_data_kind(data: &FeatureData) -> &'static str {
         FeatureData::Room { .. } => "Room",
         FeatureData::SpawnPoint { .. } => "Spawn Point",
         FeatureData::Prop { .. } => "Prop",
+        FeatureData::AnimationDisplay { .. } => "Animation Display",
+        FeatureData::AnimationGrid { .. } => "Animation Grid",
         FeatureData::Cuboid { .. } => "Cuboid",
     }
 }

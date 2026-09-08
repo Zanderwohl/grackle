@@ -15,6 +15,7 @@ use crate::editor::editable::EditorStepsPlugin;
 use crate::editor::input::EditorInputPlugin;
 use crate::editor::multicam::MulticamPlugin;
 use crate::editor::panels::EditorPanelPlugin;
+use crate::game::skeleton::SkeletonPlugin;
 use crate::game::GamePlugin;
 use crate::tool::ToolPlugin;
 
@@ -63,6 +64,7 @@ fn main() {
             EditorStepsPlugin,
             ToolPlugin,
             GamePlugin,
+            SkeletonPlugin,
             PerfPlugin,
             ))
         .run();
