@@ -19,11 +19,9 @@ pub struct SpawnPointMarker;
 
 /// The green a spawn point's body is painted.
 ///
-/// Bright, and nothing else on the map is: this body is not a player, it is a
-/// drawing of the space one takes up, and it has to be impossible to mistake
-/// for somebody standing there. It is the same green whether the spawn is
-/// selected or not — a preview that changed colour with selection would be one
-/// more thing to read.
+/// Bright, and nothing else on the map is: this is a drawing of the space a
+/// body takes up, and it has to be impossible to mistake for somebody standing
+/// there. The same green whether the spawn is selected or not.
 pub const SPAWN_BODY_COLOUR: Color = Color::srgb(0.13, 0.95, 0.35);
 
 /// Somewhere a player can be put at the start of a round.
@@ -109,15 +107,12 @@ impl FeatureTrait for SpawnPoint {
         self.yaw = *yaw;
     }
 
-    /// Where the body stands, where it looks from, and which way.
-    ///
-    /// The body itself is no longer drawn here: it is a real rig on this
-    /// feature's entity now, in green, and a wireframe inside it would be the
-    /// same shape twice. What is left is what a gizmo is for — the feet, the
-    /// eye and the facing, which are the spawn point rather than the body.
+    /// The feet, the eye and the facing — the spawn point rather than the
+    /// body, which is a rig on this feature's entity and drawn whatever this
+    /// does.
     ///
     /// Drawn while the feature is selected, and whenever spawn-point gizmos
-    /// are switched on. The body is drawn whatever this does.
+    /// are switched on.
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let feet = self.resolved_location;
         let eyes = feet + Vec3::Y * TALLEST_CLASS_EYE_HEIGHT;
@@ -142,18 +137,16 @@ impl FeatureTrait for SpawnPoint {
         self.entity = entity;
     }
 
-    /// The body that will stand here, as a body rather than a drawing of one.
+    /// The body that will stand here.
     ///
     /// The same rig the game puts on what it spawns, in its rest pose, so what
-    /// is standing here is what turns up on F5 — the space a body needs is a
-    /// shape and not a height, and an arm through a doorframe is the sort of
-    /// thing a mapper can only see if it is there.
+    /// stands here is what turns up on F5: the space a body needs is a shape
+    /// rather than a height, and an arm through a doorframe is the sort of
+    /// thing a mapper can only see if it is drawn.
     ///
-    /// No [`SkeletonAnimator`](crate::common::skeleton::SkeletonAnimator) and
-    /// no hitboxes, which is the whole difference between this and the
-    /// animation display: nothing here animates, and nothing here can be shot.
     /// A rig with no animator holds the pose it was given, so this stands
-    /// still without a system to make it.
+    /// still without a system to make it. That and the absent hitboxes are the
+    /// difference between this body and an animation display's.
     fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
         commands
             .entity(entity)
@@ -163,9 +156,8 @@ impl FeatureTrait for SpawnPoint {
                 SpawnPointMarker,
             ))
             // The body once, not once per edit. This runs on every change to
-            // the feature, and a re-inserted rig reads as a changed rig — so
-            // plain `insert` would throw the mesh away and rebuild it on every
-            // frame of a drag.
+            // the feature, and a re-inserted rig reads as a changed rig, so
+            // `insert` would rebuild the mesh on every frame of a drag.
             .insert_if_new((
                 default_humanoid().clone(),
                 Pose::rest(),
@@ -314,9 +306,7 @@ mod tests {
     }
 
     /// The body a mapper lines up against a floor: a real rig, in the green
-    /// that says it is a preview and not somebody standing there, and with no
-    /// hitboxes — it is a drawing of the space a body needs rather than a body
-    /// anyone can shoot.
+    /// that marks it a preview, with no hitboxes.
     #[test]
     fn a_spawn_point_stands_a_green_body_that_cannot_be_shot() {
         use crate::common::hitbox::Hitboxes;
@@ -345,8 +335,7 @@ mod tests {
 
     /// Applying the feature again — which happens on every frame of a drag —
     /// must leave the rig alone. A re-inserted `Skeleton` reads as a changed
-    /// one, and the mesh would be thrown away and rebuilt for every frame the
-    /// point moved.
+    /// one, and the mesh would be rebuilt for every frame the point moved.
     #[test]
     fn dragging_a_spawn_point_does_not_rebuild_its_body() {
         use crate::common::skeleton::Skeleton;

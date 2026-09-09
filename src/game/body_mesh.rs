@@ -1,26 +1,21 @@
 //! Bodies as geometry: one child entity per bone, carrying that bone's mesh.
 //!
-//! What replaces the wireframe prisms. The rig is unchanged and so are the
-//! hitboxes — this is the third thing a body is, after the boxes it can be hit
-//! on and the bones it moves as, and it is the only one that is not
-//! authoritative about anything. Nothing tests against a mesh; if it drifted a
-//! frame behind the simulation it would look wrong and play the same.
+//! The one thing a body is that is authoritative about nothing: hit
+//! registration reads the hitboxes and the simulation reads the bones, so a
+//! mesh a frame behind either would look wrong and play the same.
 //!
-//! **A part is a child of the body, one per bone, placed by that bone.** So
-//! the vertices are rigidly parented — a shoulder does not stretch, and two
-//! parts meeting at a joint interpenetrate rather than deform. That is the
-//! deliberate first cut: it makes the mesh a function of the pose with no
-//! extra state, and it means the geometry is already authored in bone space,
-//! which is the space a skinned version wants it in. Warping vertices across a
-//! joint replaces [`pose_body_meshes`] and leaves
+//! **A part is a child of the body, one per bone, placed by that bone**, so
+//! vertices are rigidly parented: a shoulder does not stretch, and two parts
+//! meeting at a joint interpenetrate. That makes the mesh a function of the
+//! pose with no state of its own, and leaves the geometry authored in bone
+//! space — the space a skinned version wants it in, so warping vertices across
+//! a joint replaces [`pose_body_meshes`] and leaves
 //! [`crate::common::skeleton::mesh`] alone.
 //!
-//! Placing the parts in **body-local space** is what makes this cheap and
-//! correct: [`Skeleton::posed_bones`] is run with the skeleton's own root
-//! offset as its root, so what comes back is already relative to the entity
-//! the parts hang off, and Bevy's transform propagation does the rest. No
-//! inverse transforms, and a body that moves takes its mesh with it even on a
-//! frame this never runs.
+//! Parts are placed in **body-local space**: [`Skeleton::posed_bones`] is run
+//! with the skeleton's root offset as its root, so what comes back is already
+//! relative to the entity the parts hang off and propagation does the rest. A
+//! body that moves takes its mesh with it even on a frame this never runs.
 //!
 //! Meshes are cached per **build** rather than per body: sixty bodies in an
 //! animation grid are ten distinct silhouettes, and a class's mesh depends on
@@ -39,8 +34,8 @@ use crate::game::skeleton::SkeletonRoot;
 /// A body that has had its parts built.
 ///
 /// Holds them so they can be thrown away and rebuilt when the body changes
-/// shape. Walking `Children` would find the camera hanging off a player as
-/// well, and a system that despawned that would be a hard bug to place.
+/// shape. `Children` would not do: a player's camera hangs off it too, and a
+/// system that despawned that would be a hard bug to place.
 #[derive(Component, Debug)]
 pub struct BodyMesh {
     parts: Vec<Entity>,
@@ -56,17 +51,14 @@ pub struct BoneMesh(pub usize);
 
 /// What colour a body is, if it is not the default one.
 ///
-/// A body rather than a bone, because a colour is a statement about *whose*
-/// body this is — an editor preview, and later a team — and not about which
-/// part of it. Per-bone colour is a skin, and a skin is a texture rather than
-/// a component.
+/// A body rather than a bone, because a colour says *whose* body this is — an
+/// editor preview, and later a team. Colour that varies across one body is a
+/// skin, which is a texture.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct BodyTint(pub Color);
 
-/// What a body is drawn in when nothing says otherwise.
-///
-/// Plainly a placeholder: teams, classes and skins all want their own, and
-/// none of them exist.
+/// What a body is drawn in when nothing says otherwise. A placeholder until
+/// teams and skins exist.
 pub const DEFAULT_BODY_COLOUR: Color = Color::srgb(0.62, 0.64, 0.70);
 
 /// One material per colour asked for.
@@ -102,12 +94,9 @@ pub struct BodyMeshCache(HashMap<BuildKey, Vec<Handle<Mesh>>>);
 
 /// A [`Proportions`] as something that can be hashed.
 ///
-/// Bit patterns rather than a rounded key: two builds that differ anywhere
-/// must not share a mesh, and float equality is exactly the question being
-/// asked — these numbers are copied from a table, not computed, so the usual
-/// argument against comparing floats does not apply. A `NaN` in a build would
-/// key to itself here and produce a mesh full of holes, which is a louder
-/// failure than silently reusing somebody else's body.
+/// Bit patterns, because exact equality is the question being asked: these
+/// numbers are copied from a class's table rather than computed, so the usual
+/// argument against comparing floats does not apply.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct BuildKey([u32; 9]);
 
@@ -145,11 +134,8 @@ impl Plugin for BodyMeshPlugin {
 }
 
 /// Give every body a part per bone, and rebuild them if it changes shape or
-/// colour.
-///
-/// Keyed on the components themselves changing, which covers insertion too: a
-/// rig is inserted once on a player and could be swapped when classes become
-/// something a player picks.
+/// colour. Change detection covers insertion, so this is also what dresses a
+/// body in the first place.
 fn build_body_meshes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -192,8 +178,8 @@ fn build_body_meshes(
                         Mesh3d(handle.clone()),
                         MeshMaterial3d(material.clone()),
                         // Overwritten by `pose_body_meshes` before anything is
-                        // drawn. Spawning at the identity would pile every
-                        // part on the body's origin for one frame.
+                        // drawn; the identity would pile every part on the
+                        // body's origin for a frame.
                         Transform::from_translation(
                             skeleton.bones()[index].head,
                         ),
@@ -205,9 +191,8 @@ fn build_body_meshes(
 
         commands
             .entity(body)
-            // A body spawned without one — a grid cell, a spawn point's
-            // preview — is a body whose parts would have nothing to inherit
-            // from.
+            // Grid cells and spawn-point previews are spawned without one,
+            // and their parts would have nothing to inherit from.
             .insert_if_new(Visibility::default())
             .insert(BodyMesh { parts });
     }
@@ -215,17 +200,16 @@ fn build_body_meshes(
 
 /// Put every part where its bone is.
 ///
-/// The one hot loop here: bones per body per frame. Forward kinematics is run
-/// once per body and read out by index, which is why [`BoneMesh`] holds one.
+/// The hot loop: bones per body per frame. Forward kinematics runs once per
+/// body and is read out by index, which is why [`BoneMesh`] holds one.
 fn pose_body_meshes(
     bodies: Query<(&Skeleton, &Pose, Option<&SkeletonRoot>, &BodyMesh)>,
     mut parts: Query<(&BoneMesh, &mut Transform)>,
 ) {
     for (skeleton, pose, offset, mesh) in &bodies {
-        // The skeleton's root in the body's own frame: its feet, which sit
-        // below the middle of a body whose transform is the centre of its
-        // collision box. In local space there is no rotation to undo, so this
-        // is the whole of the conversion.
+        // The skeleton's root in the body's own frame: its feet, below the
+        // middle of a body whose transform is the centre of its collision box.
+        // Local space has no rotation to undo, so this is the whole of it.
         let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
         let posed = skeleton.posed_bones(pose, &root);
 
@@ -234,9 +218,8 @@ fn pose_body_meshes(
                 continue;
             };
             let bone = &posed[*index];
-            // Position and rotation only. The mesh is already the bone's
-            // size — scaling it here would be a second opinion about that, and
-            // a non-uniform one would skew its normals.
+            // The mesh is already the bone's size; a non-uniform scale here
+            // would be a second opinion about that and would skew its normals.
             *transform = Transform {
                 translation: bone.head,
                 rotation: bone.rotation,
@@ -246,11 +229,11 @@ fn pose_body_meshes(
     }
 }
 
-/// Hide the body the camera is inside.
+/// Hide the body the camera is inside: from in your own head your own body is
+/// geometry across the lens.
 ///
-/// The same rule the gizmos followed: from in your own head your own body is
-/// geometry across the lens. Set on the parts rather than on the player,
-/// because the player entity is also what the camera hangs off.
+/// Set on the parts rather than on the player, which is also what the camera
+/// hangs off.
 fn hide_own_body(
     view: Res<ViewMode>,
     players: Query<&BodyMesh, With<Player>>,
@@ -265,8 +248,8 @@ fn hide_own_body(
     for mesh in &players {
         for part in &mesh.parts {
             let Ok(mut visibility) = parts.get_mut(*part) else { continue };
-            // Assigned only on a change, so this does not mark every part of
-            // every player dirty sixty times a second.
+            // Assigned only on a change, so this does not dirty every part of
+            // every player every frame.
             if *visibility != wanted {
                 *visibility = wanted;
             }

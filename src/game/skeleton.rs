@@ -45,12 +45,10 @@ use crate::game::player::{
 #[derive(Component, Clone, Copy, Debug)]
 pub struct SkeletonRoot(pub Vec3);
 
-/// Whether the bones themselves are drawn on top of the mesh. `F6` toggles it.
+/// Whether the bones are drawn on top of the mesh. `F6` toggles it.
 ///
-/// Off by default, which is the change: the wireframe prisms were what a body
-/// looked like, and now they are a debug view of what is inside one. Kept
-/// rather than deleted because a limb that bends the wrong way is a bone
-/// problem, and the mesh hides bones by design.
+/// Off by default: it is a debug view of what is inside a body, and a limb
+/// that bends the wrong way is a bone problem the mesh is built to hide.
 #[derive(Resource, Debug, Default)]
 pub struct ShowBones(pub bool);
 
@@ -62,10 +60,9 @@ impl Plugin for SkeletonPlugin {
             // The boxes a body can be hit on are part of what a body is, and
             // they need the same renderer resources this plugin already does.
             .add_plugins(HitboxPlugin)
-            // The solid a body is drawn as. Beside the hitboxes rather than in
-            // `GamePlugin` for the same reason: the editor shows bodies too,
-            // and one that only had geometry in Play would be a preview of
-            // something else.
+            // Beside the hitboxes rather than in `GamePlugin` for the same
+            // reason: the editor shows bodies too, and one with geometry only
+            // in Play would be a preview of something else.
             .add_plugins(BodyMeshPlugin)
             .init_resource::<AnimationClock>()
             .init_resource::<ShowBones>()
@@ -110,21 +107,15 @@ pub fn advance_animation_clock(time: Res<Time<Fixed>>, mut clock: ResMut<Animati
     clock.advance(time.delta_secs());
 }
 
-/// Anything with a rig gets the parts every body has.
+/// Anything with a rig gets the [`Gait`] every body has, in one place rather
+/// than a line in each of the things that spawn a body: a body whose spawner
+/// forgot it would stand still while running.
 ///
-/// One place rather than a line in each of the things that spawn a body: a
-/// body whose spawner forgot its [`Gait`] would stand still while running.
-///
-/// [`Hitboxes`](crate::common::hitbox::Hitboxes) used to be handed out here
-/// too and deliberately are not any more. Every body has a stride; not every
-/// body is a body somebody can shoot. An editor preview — the rig standing on
-/// a spawn point to show what fits there — is a drawing of a body rather than
-/// one, and boxing it would put hit volumes on a thing that is not in the
-/// game. So hitboxes are asked for, by `#[require(Hitboxes)]` on the markers
-/// that mean "this is a real body": [`Player`], `CarouselBody` and
-/// `AnimationDisplayMarker`. The forgetting that was worth guarding against is
-/// still guarded against — it is just the marker that carries it, so it cannot
-/// be half-applied.
+/// The gait and nothing else. Every body has a stride, but not every body is
+/// one somebody can shoot — a rig standing on a spawn point is a drawing of
+/// what fits there — so [`Hitboxes`](crate::common::hitbox::Hitboxes) come
+/// from `#[require(Hitboxes)]` on the markers that mean a real body:
+/// [`Player`], `CarouselBody`, `AnimationDisplayMarker`.
 fn equip_new_bodies(
     mut commands: Commands,
     bodies: Query<Entity, (With<Skeleton>, Without<Gait>)>,
@@ -315,12 +306,11 @@ fn advance_animators(
     }
 }
 
-/// Every body on the map, in whatever pose it is holding.
+/// Every body on the map, in whatever pose it is holding, once `F6` asks for
+/// them.
 ///
-/// The debug view now that bodies have geometry, so it is off until `F6` says
-/// otherwise. Still skips the one the camera is inside: from in there its own
-/// rig is a set of bones across the lens. `F` swaps to third person and it
-/// appears.
+/// Skips the one the camera is inside: from in there its own rig is a set of
+/// bones across the lens. `F` swaps to third person and it appears.
 pub fn draw_skeletons(
     show: Res<ShowBones>,
     mut gizmos: Gizmos,
@@ -362,10 +352,8 @@ mod tests {
         app.world_mut().run_system_once(advance_animators).unwrap();
     }
 
-    /// Hitboxes are asked for now, not handed out. A real body carries the
-    /// marker that requires them; a spawn point's preview is a drawing of a
-    /// body and carries nothing, so it comes out unboxed even though it has
-    /// the same rig.
+    /// A real body carries a marker that requires hitboxes; a spawn point's
+    /// preview carries none, so it comes out unboxed on the same rig.
     #[test]
     fn only_real_bodies_are_boxed() {
         use crate::editor::animation_display::AnimationDisplayMarker;
@@ -382,8 +370,6 @@ mod tests {
         ];
         let preview = world.spawn((SpawnPointMarker, rig())).id();
 
-        // The system that used to be what gave every rig its boxes. It still
-        // runs, and it still must not be what does this.
         world.run_system_once(equip_new_bodies).unwrap();
 
         for body in real {
@@ -394,8 +380,8 @@ mod tests {
             world.get::<Hitboxes>(preview).is_none(),
             "a spawn point's preview was boxed as though it were in the game",
         );
-        // Still a body in every other respect: it is only the hit volumes it
-        // does without.
+        // A body in every other respect: it is only hit volumes it goes
+        // without.
         assert!(world.get::<Gait>(preview).is_some(), "the preview is not a body at all");
     }
 

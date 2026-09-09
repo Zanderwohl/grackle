@@ -6,12 +6,11 @@
 //! rate from the same shared clock, so reading it here would make where a
 //! player can be hit depend on how fast the machine asking is drawing.
 //!
-//! Boxes go to bodies that ask for them — a player, the sixty bodies in an
-//! animation grid, an animation display — and not to every rig on the map: a
-//! spawn point's preview is a drawing of the space a body needs rather than a
-//! body, so it has none. See `equip_new_bodies` in
-//! [`crate::game::skeleton`]. The grid is the harness: stand in front of it
-//! and watch heads bob inside head boxes that hardly move.
+//! Boxes go to bodies that ask for them — a player, an animation display, the
+//! sixty bodies in an animation grid — rather than to every rig on the map;
+//! see `equip_new_bodies` in [`crate::game::skeleton`]. The grid is the
+//! harness: stand in front of it and watch heads bob inside head boxes that
+//! hardly move.
 
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;

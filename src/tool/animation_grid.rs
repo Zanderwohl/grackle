@@ -44,9 +44,9 @@ impl Plugin for AnimationGridPlugin {
 /// bodies deep in itself within a drag.
 /// One of the bodies a grid stands up, waiting to be told what to do.
 ///
-/// Requires [`Hitboxes`], because the grid is the harness they are checked
-/// against: stand in front of it and watch sixty heads bob inside head boxes
-/// that hardly move.
+/// Requires [`Hitboxes`]: the grid is the harness they are checked against —
+/// stand in front of it and watch sixty heads bob inside head boxes that
+/// hardly move.
 #[derive(Component, Debug)]
 #[require(Hitboxes)]
 pub struct CarouselBody;

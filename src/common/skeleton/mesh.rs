@@ -1,32 +1,23 @@
 //! The shape a body is drawn as: one mesh per bone, built from the same
 //! numbers the bone is.
 //!
-//! A bone already carries a length and a cross-section — that is what the
-//! wireframe prisms were drawn from. This turns each one into a solid, and
-//! adds the only thing a box is missing: a **profile**, a handful of
+//! A bone carries a length and a cross-section. This turns each one into a
+//! solid and adds the one thing a box is missing: a **profile**, a handful of
 //! cross-sections down the bone saying how wide it is where. A thigh is wide
 //! at the hip and narrow at the knee, a skull is chamfered top and bottom, a
-//! foot has a heel behind its own joint. None of that is new information
-//! about the body; it is the same [`Proportions`] read at more than two points
-//! along each bone.
+//! foot has a heel behind its own joint.
 //!
-//! Which is the point of doing it this way rather than importing a model:
-//! `girth` and `belly` already differ per class, the bone thicknesses are
-//! already derived from them, and a profile is a multiplier on top. So the
-//! Heavy comes out heavy and the Sniper lanky for free, and a new class is
-//! nine numbers rather than a mesh somebody has to author.
+//! That is all the same [`Proportions`] read at more than two points along
+//! each bone, which is the argument for building the mesh rather than
+//! importing one: `girth` and `belly` already differ per class and the
+//! thicknesses already derive from them, so the Heavy comes out heavy for
+//! free and a new class is nine numbers rather than a model.
 //!
-//! **Meshes are built in bone space**, with local `+Y` running head to tail
-//! exactly as [`crate::common::skeleton::rig::Bone`] describes. Nothing here
-//! knows where the body is standing: putting a bone's mesh in the world is
-//! setting one transform, which is what
-//! [`crate::game::body_mesh`] does. Later, when vertices are warped across a
-//! joint rather than rigidly following one bone, this stays the authoring
-//! space and the skinning changes; that is why the rings are here and the
-//! transforms are not.
-//!
-//! Pure maths and one `Mesh`. No assets, no file system — wasm-clean, like the
-//! rest of the skeleton.
+//! **Meshes are built in bone space**, with local `+Y` running head to tail as
+//! [`crate::common::skeleton::rig::Bone`] describes, so putting one in the
+//! world is setting a single transform — see [`crate::game::body_mesh`]. When
+//! vertices are warped across a joint rather than following one bone rigidly,
+//! this stays the authoring space and only the skinning changes.
 
 use bevy::prelude::*;
 
@@ -38,17 +29,15 @@ use crate::common::skeleton::rig::{bone, Bone, Skeleton};
 pub struct Ring {
     /// How far along the bone it sits, as a fraction of the bone's length.
     ///
-    /// Not clamped to `0..=1` on purpose: a foot's heel is behind the ankle,
-    /// which is the bone's own head, and saying so is `t: -0.3` rather than a
-    /// second bone nobody animates.
+    /// Unclamped, so that a foot's heel — geometry behind the ankle, which is
+    /// the bone's own head — is `t: -0.3` rather than a bone nobody animates.
     pub t: f32,
     /// Width and depth here, as a fraction of the bone's `thickness`.
     pub scale: Vec2,
     /// Where the section's middle sits, in the same fractions of `thickness`.
     ///
-    /// What keeps a taper from tapering about its own centre line: a foot
-    /// thins towards the toe, and it does that from the top, because the
-    /// bottom of it is the floor.
+    /// Keeps a taper from narrowing about its own centre line: a foot thins
+    /// towards the toe from the top, because its underside is the floor.
     pub offset: Vec2,
 }
 
@@ -60,9 +49,8 @@ impl Ring {
 
     /// A section that keeps its underside where a full-size one would be.
     ///
-    /// The foot's rule, spelled out once: shrinking `z` about the centre lifts
-    /// the sole off the ground, and a body whose toes float is a body that
-    /// reads as hovering.
+    /// The foot's rule: narrowing `z` about the centre lifts the sole, and a
+    /// body whose toes float reads as hovering.
     pub const fn flat_bottomed(t: f32, x: f32, z: f32) -> Ring {
         Ring { t, scale: Vec2::new(x, z), offset: Vec2::new(0.0, -0.5 * (1.0 - z)) }
     }
@@ -73,26 +61,25 @@ impl Ring {
 pub struct Profile {
     /// How much of each corner is cut off, `0` for a square section.
     ///
-    /// Zero is its own case rather than the low end of a range: a chamfer of
-    /// nothing on an eight-point ring is four pairs of coincident vertices and
-    /// four degenerate quads, so a square section is built as a square.
+    /// Zero is its own case rather than the low end of a range: an eight-point
+    /// ring chamfered by nothing is four coincident pairs and four degenerate
+    /// quads, so a square section is built as a square.
     pub chamfer: f32,
     /// Sections from the head end to the tail end, in order. At least two.
     pub rings: &'static [Ring],
 }
 
-/// A plain tapered box, for a bone with nothing said about it.
-///
-/// Reachable only by adding a bone and not adding it to [`profile`], which is
-/// a thing to notice on screen rather than a thing to crash on.
+/// A plain tapered box, for a bone with nothing said about it — a new bone
+/// that nobody gave a shape, which is better noticed on screen than crashed
+/// on.
 const DEFAULT: Profile = Profile {
     chamfer: 0.3,
     rings: &[Ring::at(0.0, 1.0, 1.0), Ring::at(1.0, 0.85, 0.85)],
 };
 
-// The spine flares at the hips and again across the chest, and pinches at the
-// waist between them. Both bones narrow where they meet, so the two solids do
-// not step against each other.
+// The spine flares at the hips and again across the chest, pinching at the
+// waist between them. Both bones narrow where they meet, so the solids do not
+// step against each other.
 const PELVIS: Profile = Profile {
     chamfer: 0.3,
     rings: &[Ring::at(0.0, 0.94, 0.94), Ring::at(0.35, 1.0, 1.0), Ring::at(1.0, 0.86, 0.9)],
@@ -163,10 +150,9 @@ const FOOT: Profile = Profile {
 
 /// The shape of each bone in the humanoid rig.
 ///
-/// Read off a name rather than stored on the [`Bone`], because it is a
-/// statement about how a body is *drawn* and the rig is a statement about how
-/// it moves. A second silhouette — armour, a class that is not a person — is
-/// another table here, not another skeleton.
+/// Read off a name rather than stored on the [`Bone`], because it says how a
+/// body is *drawn* and a rig says how it moves. A second silhouette — armour,
+/// a class that is not a person — is another table here, not another skeleton.
 pub fn profile(name: &str) -> Profile {
     match name {
         bone::PELVIS => PELVIS,
@@ -209,9 +195,9 @@ pub fn bone_mesh(bone: &Bone) -> Mesh {
 
 /// One mesh per bone, in [`Skeleton::bones`] order.
 ///
-/// The order is the contract: it is the order forward kinematics returns bones
-/// in, so a part and the bone that places it are the same index and nothing
-/// has to match names at frame rate.
+/// The order is the contract: forward kinematics returns bones in it too, so a
+/// part and the bone that places it share an index and nothing matches names
+/// at frame rate.
 pub fn body_meshes(skeleton: &Skeleton) -> Vec<Mesh> {
     skeleton.bones().iter().map(bone_mesh).collect()
 }
@@ -245,9 +231,8 @@ mod tests {
         bone_mesh(bone)
     }
 
-    /// Every bone gets geometry, and none of it is empty. A profile with one
-    /// ring, or a bone that slipped through with no length, would be an
-    /// invisible limb rather than a failure.
+    /// Every bone gets geometry, and none of it is empty. A one-ring profile,
+    /// or a bone with no length, is an invisible limb rather than a failure.
     #[test]
     fn every_bone_of_every_class_has_a_solid_mesh() {
         for class in [Class::Scout, Class::Heavy, Class::Civilian, Class::Sniper] {
@@ -271,9 +256,9 @@ mod tests {
         }
     }
 
-    /// A bone's mesh runs the bone's length along local `+Y`, because that is
-    /// what lets the part be placed by the bone's own transform and nothing
-    /// else. The foot is the exception and says so.
+    /// A bone's mesh runs the bone's length along local `+Y`, which is what
+    /// lets a part be placed by the bone's transform and nothing else. The
+    /// foot is the exception, and says so.
     #[test]
     fn a_bones_mesh_spans_its_own_length() {
         let skeleton = humanoid(Proportions::DEFAULT);
@@ -293,9 +278,8 @@ mod tests {
         }
     }
 
-    /// The heel is the reason [`Ring::t`] is not clamped: it is geometry
-    /// behind the ankle, and losing it would make every body look like it was
-    /// standing on the balls of its feet.
+    /// The heel is why [`Ring::t`] is unclamped. Lose it and every body stands
+    /// on the balls of its feet.
     #[test]
     fn a_foot_has_a_heel_behind_its_ankle() {
         let skeleton = humanoid(Proportions::DEFAULT);
@@ -303,9 +287,8 @@ mod tests {
         assert!(min.y < -0.01, "no heel: the foot starts at {}", min.y);
     }
 
-    /// The whole argument for building the mesh rather than importing one: a
-    /// class's numbers reach its silhouette without anybody authoring a second
-    /// model.
+    /// The argument for building the mesh: a class's numbers reach its
+    /// silhouette with nobody authoring a second model.
     #[test]
     fn a_heavier_class_comes_out_heavier() {
         let heavy = humanoid(Class::Heavy.proportions());

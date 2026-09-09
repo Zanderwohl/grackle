@@ -1,34 +1,22 @@
 //! Building meshes out of quads, by hand.
 //!
-//! Bevy's primitives ([`bevy::math::primitives::Cuboid`] and friends) each
-//! bake their own self-contained mesh, and that is exactly what a character
-//! built out of parts cannot use: two boxes meeting at a knee are two closed
-//! surfaces that happen to overlap, and there is no seam to sew because
-//! neither one has an edge the other shares. Rolling our own keeps the
-//! vertices in our hands, so a limb can later hand its end ring to the next
-//! part instead of capping it off.
+//! A `Cuboid` bakes a closed surface of its own, so two of them meeting at a
+//! knee overlap without sharing an edge, and there is no seam to sew. Keeping
+//! the vertices here means a limb can hand its end ring to the next part.
 //!
-//! Two ideas carry the whole module:
+//! Two ideas carry the module:
 //!
-//! - **A ring** is a closed loop of points around a shape — the cross-section
-//!   at some point along it. Every surface here is built by running a tube
-//!   between two rings, so making a shape rounder is giving its rings more
-//!   points, not writing a second shape.
-//! - **Winding is outward-facing everywhere.** A quad is listed
-//!   counter-clockwise seen from outside the solid, which is what wgpu's
-//!   default front face and `StandardMaterial`'s back-face culling agree on.
-//!   Get it backwards and the part is not missing, which would be obvious —
-//!   it is inside out, which is not.
+//! - **A ring** is a closed loop of points across a shape — its cross-section
+//!   somewhere along its length. Every surface is a tube run between two
+//!   rings, so a rounder shape is a longer ring rather than a second shape.
+//! - **Winding is counter-clockwise seen from outside**, which is what wgpu's
+//!   front face and `StandardMaterial`'s back-face culling agree on. Get it
+//!   backwards and the part is not missing, which would be obvious — it is
+//!   inside out, which is not.
 //!
-//! Vertices are **not** shared between faces: each quad carries its own four,
-//! with one flat normal. That is a deliberate first cut — it gives crisp
-//! low-poly facets and it makes every face independent. Welding is the
-//! follow-up, and the ring-shaped API above is what it will be written
-//! against: averaging normals across an edge means finding the two faces that
-//! share a ring, and rings are the thing that survives here.
-//!
-//! Plain maths over `bevy_math` types plus one `Mesh`. No assets, no file
-//! system: it builds for wasm as-is.
+//! Each face carries its own vertices and one flat normal, which is what
+//! welding will change: averaging normals across an edge means finding the two
+//! faces that share a ring, and the rings are what survives here.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -52,21 +40,11 @@ impl MeshBuilder {
         MeshBuilder::default()
     }
 
-    /// How many vertices have been emitted so far.
-    ///
-    /// Only really useful for asserting on a shape's cost in a test, which is
-    /// the one thing about a generated mesh that is easy to get wrong by an
-    /// order of magnitude without noticing.
-    pub fn vertex_count(&self) -> usize {
-        self.positions.len()
-    }
-
     /// One quad, wound counter-clockwise **seen from outside**, with its own
     /// flat normal.
     ///
-    /// UVs are the unit square in the order given, which is a stand-in: the
-    /// bodies are untextured, and a real layout is a job for whatever authors
-    /// skins.
+    /// UVs are the unit square in corner order, which is a stand-in until
+    /// something authors skins.
     pub fn quad(&mut self, corners: [Vec3; 4]) {
         self.quad_uv(corners, [Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y]);
     }
@@ -88,9 +66,8 @@ impl MeshBuilder {
 
     /// A quad with the texture coordinates spelled out.
     pub fn quad_uv(&mut self, corners: [Vec3; 4], uvs: [Vec2; 4]) {
-        // From the first corner, because a quad built from a ring is planar by
-        // construction and a degenerate first triangle would mean a
-        // degenerate quad.
+        // From the first corner: a quad built from a ring is planar by
+        // construction, so one triangle's normal is the quad's.
         let normal = (corners[1] - corners[0])
             .cross(corners[2] - corners[0])
             .normalize_or_zero();
@@ -108,14 +85,12 @@ impl MeshBuilder {
     /// The wall between two rings of the same length.
     ///
     /// `head` and `tail` are the same loop at two places along a shape, listed
-    /// in the same order and going the same way round. Which one is which
-    /// decides which way the wall faces: with the rings wound so that they run
-    /// clockwise seen from `head` looking towards `tail`, the wall faces
-    /// outwards.
+    /// in the same order and going the same way round. Which is which decides
+    /// which way the wall faces: rings wound clockwise seen from `head`
+    /// looking towards `tail` give a wall that faces outwards.
     ///
-    /// Panics on a length mismatch. That is a mistake in a shape's own
-    /// definition — a taper that dropped a corner — and quietly skirting it
-    /// would produce a hole rather than an error.
+    /// Panics on a length mismatch, because the alternative is a shape with a
+    /// hole in it and no error to go with it.
     pub fn tube(&mut self, head: &[Vec3], tail: &[Vec3]) {
         assert_eq!(
             head.len(),
@@ -142,9 +117,9 @@ impl MeshBuilder {
 
     /// Close a ring off with a fan from its centre.
     ///
-    /// `reverse` flips the winding, which is what the two ends of a shape
-    /// need: a ring wound to face outwards as a wall caps correctly at one end
-    /// and inside out at the other.
+    /// `reverse` flips the winding, which the two ends of a shape need in
+    /// opposite senses: one ring order caps correctly at the head and inside
+    /// out at the tail.
     pub fn cap(&mut self, ring: &[Vec3], reverse: bool) {
         if ring.len() < 3 {
             return;
@@ -159,10 +134,8 @@ impl MeshBuilder {
     }
 
     /// A closed solid from a stack of rings: walls between each neighbouring
-    /// pair, and a cap on each end.
-    ///
-    /// The one call most shapes actually want. Rings run from the head end to
-    /// the tail end, all the same length.
+    /// pair, and a cap on each end. Rings run head to tail, all the same
+    /// length.
     pub fn hull(&mut self, rings: &[Vec<Vec3>]) {
         let Some(first) = rings.first() else { return };
         for pair in rings.windows(2) {
@@ -175,9 +148,8 @@ impl MeshBuilder {
     /// Hand the result to Bevy.
     ///
     /// `RenderAssetUsages::default()` keeps the data in main memory as well as
-    /// on the GPU. A body mesh is small and something will want to read it
-    /// back — a decal, a weld pass, an exporter — and rebuilding it to answer
-    /// that would be worse than the handful of kilobytes.
+    /// on the GPU, for the kilobytes it costs: a weld pass, a decal or an
+    /// exporter would otherwise have to rebuild the mesh to read it.
     pub fn build(self) -> Mesh {
         Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
@@ -189,10 +161,9 @@ impl MeshBuilder {
 
 /// A rectangular ring in the plane `y = y`, centred on `offset`.
 ///
-/// Wound so that a stack of these built head-first — smaller `y` first — comes
-/// out facing outwards under [`MeshBuilder::hull`]. That is the convention a
-/// bone uses: local `+Y` runs down the bone, so a ring's `y` is how far along
-/// it sits.
+/// Wound so a stack built smallest-`y`-first faces outwards under
+/// [`MeshBuilder::hull`], which is the convention a bone uses: local `+Y` runs
+/// head to tail, so a ring's `y` is how far along it sits.
 pub fn rect_ring(y: f32, half: Vec2, offset: Vec2) -> Vec<Vec3> {
     [
         Vec2::new(-half.x, -half.y),
@@ -210,14 +181,14 @@ pub fn rect_ring(y: f32, half: Vec2, offset: Vec2) -> Vec<Vec3> {
 
 /// A rectangular ring with its corners cut off, in the plane `y = y`.
 ///
-/// Eight points rather than four, wound the same way [`rect_ring`] is, so the
-/// two are interchangeable within one shape as long as every ring of that
-/// shape agrees. `chamfer` is the fraction of each half-extent the corner
-/// takes: zero is [`rect_ring`] with four coincident pairs — which is why the
-/// caller picks between them rather than passing zero — and one is a diamond.
+/// Eight points rather than four, wound the way [`rect_ring`] is, so the two
+/// are interchangeable within a shape whose every ring agrees. `chamfer` is
+/// the fraction of each half-extent a corner takes: at zero this degenerates
+/// into [`rect_ring`] with four coincident pairs, so callers pick between the
+/// two rather than passing zero; at one it is a diamond.
 ///
-/// This is most of the difference between a limb that reads as a box and one
-/// that reads as an arm, and it costs eight quads instead of four.
+/// Eight quads instead of four, and most of the difference between a limb that
+/// reads as a box and one that reads as an arm.
 pub fn rounded_ring(y: f32, half: Vec2, offset: Vec2, chamfer: f32) -> Vec<Vec3> {
     let cut = half * chamfer.clamp(0.0, 1.0);
     [

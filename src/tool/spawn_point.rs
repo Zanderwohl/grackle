@@ -19,19 +19,16 @@ pub struct SpawnPointPlugin;
 impl Plugin for SpawnPointPlugin {
     fn build(&self, app: &mut App) {
         add_point_placement_tool::<SpawnPoint>(app);
-        // Ungated on purpose: it is the system that has to notice the mode
-        // changed, so gating it on a mode would be the one thing it must not
-        // do.
+        // Ungated: it is the system that has to notice the mode changed.
         app.add_systems(Update, hide_spawn_bodies_while_playing);
     }
 }
 
-/// A spawn point's body is drawn in the editor and not while playing.
+/// A spawn point's body is drawn in the editor and not while playing: the one
+/// place it would certainly be in the way is where a player materialises,
+/// which is inside it.
 ///
-/// It is a drawing of the space a body takes up, not a body — and the one
-/// place it would certainly be in the way is the place a player materialises,
-/// which is inside it. Hidden rather than despawned, because the feature is
-/// still there and F5 back has to bring it straight back.
+/// Hidden rather than despawned, so F5 back brings it straight back.
 fn hide_spawn_bodies_while_playing(
     mode: Res<State<AppMode>>,
     mut bodies: Query<&mut Visibility, With<SpawnPointMarker>>,
@@ -41,8 +38,8 @@ fn hide_spawn_bodies_while_playing(
         AppMode::Play => Visibility::Hidden,
     };
     for mut visibility in &mut bodies {
-        // Assigned only on a change, so this does not mark every spawn point
-        // on the map dirty every frame.
+        // Assigned only on a change, so this does not dirty every spawn point
+        // on the map every frame.
         if *visibility != wanted {
             *visibility = wanted;
         }

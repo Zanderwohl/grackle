@@ -54,9 +54,8 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 /// and not the eye — [`PLAYER_HALF`] is measured from here, and the camera
 /// hangs off it as a child.
 ///
-/// Requires [`Hitboxes`]: a player is the thing hitboxes exist for, and one
-/// spawned without them would be a body that could not be shot rather than a
-/// body that failed to spawn.
+/// Requires [`Hitboxes`]: a player is what hitboxes exist for, and one spawned
+/// without them fails silently as a body nobody can shoot.
 #[derive(Component, Debug)]
 #[require(Hitboxes)]
 pub struct Player {

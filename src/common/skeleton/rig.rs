@@ -423,8 +423,8 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
     // it. The break is low, where a real spine actually bends.
     let spine_mid_y = hip_y + (shoulder_y - hip_y) * 0.45;
 
-    // Cross-sections the shoulder has to be placed against, so the number the
-    // arm clears and the number the chest is drawn at are the same number.
+    // Hoisted so the number the shoulder clears and the number the chest is
+    // drawn at are the same number.
     let chest_thickness = Vec2::new(0.24, 0.15) * chest_belly * h;
 
     // The shoulder joint sits on the side of the ribcage, never inside it.
@@ -638,9 +638,8 @@ mod tests {
 
     /// An arm hangs off the side of a body, not out of the middle of it.
     ///
-    /// The rule that keeps a rotund build's arms from starting inside its own
-    /// ribcage, checked across the roster because it is the wide classes it
-    /// exists for and the slim ones it must not disturb.
+    /// Checked across the roster: it is the wide classes the rule exists for
+    /// and the slim ones it must not disturb.
     #[test]
     fn no_build_starts_its_arms_inside_its_own_chest() {
         use crate::common::class::Class;
@@ -658,8 +657,7 @@ mod tests {
                 "the {:?}'s shoulder is {shoulder:.3} m out and its chest {chest_half:.3} m",
                 class,
             );
-            // A floor, not an override: a build the stated width already
-            // clears its chest keeps the shoulders it was given.
+            // A floor, not an override.
             assert!(
                 shoulder >= proportions.height * proportions.shoulder_half_width - 1e-4,
                 "the {:?}'s shoulders were pulled in",

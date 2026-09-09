@@ -33,9 +33,8 @@ use crate::get;
 /// `SpawnPointMarker`.
 ///
 /// Requires [`Hitboxes`]: a display exists to be looked at closely, and where
-/// a body can be hit while it holds a state is one of the things worth looking
-/// at. This is where it differs from a spawn point's body, which is a drawing
-/// of what fits rather than a body in the game.
+/// a body can be hit while it holds a state is one of the things worth
+/// looking at.
 #[derive(Component, Debug)]
 #[require(Hitboxes)]
 pub struct AnimationDisplayMarker;
@@ -176,7 +175,7 @@ impl FeatureTrait for AnimationDisplay {
             ))
             // The body once, not once per edit: this runs on every change to
             // the feature, a re-inserted rig reads as a changed rig, and the
-            // mesh would be thrown away and rebuilt on every frame of a drag.
+            // mesh would be rebuilt on every frame of a drag.
             .insert_if_new((
                 default_humanoid().clone(),
                 Pose::rest(),
