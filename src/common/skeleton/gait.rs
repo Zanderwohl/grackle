@@ -536,6 +536,22 @@ mod tests {
     const WALKING: f32 = 2.5;
     const RUNNING: f32 = 7.0;
 
+    /// Every shape a body is actually built in, plus the two sample builds
+    /// that exist to be extremes.
+    ///
+    /// The constraints below are the reason the roster's numbers are safe to
+    /// change: a stride that cannot be reached or a crouch that cannot fold
+    /// fails here rather than in the game.
+    fn every_build() -> Vec<Proportions> {
+        use crate::common::class::Class;
+        use strum::IntoEnumIterator;
+
+        Class::iter()
+            .map(|class| class.proportions())
+            .chain([Proportions::STOCKY, Proportions::LANKY])
+            .collect()
+    }
+
     /// The claim the whole design rests on: while a foot is planted, the body
     /// moves and the foot does not.
     ///
@@ -628,7 +644,7 @@ mod tests {
     /// actually get to, on every build.
     #[test]
     fn no_step_is_out_of_reach() {
-        for proportions in [Proportions::DEFAULT, Proportions::STOCKY, Proportions::LANKY] {
+        for proportions in every_build() {
             let skeleton = humanoid(proportions);
             let root = Transform::IDENTITY;
 
@@ -822,7 +838,7 @@ mod tests {
     fn a_crouched_body_fits_under_its_own_ceiling() {
         use crate::common::class::CROUCH_HEIGHT;
 
-        for proportions in [Proportions::DEFAULT, Proportions::STOCKY, Proportions::LANKY] {
+        for proportions in every_build() {
             let skeleton = humanoid(proportions);
             let root = Transform::IDENTITY;
 

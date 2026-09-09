@@ -109,9 +109,17 @@ pub struct Proportions {
     pub shoulder_half_width: f32,
     /// Half the distance between the two hip joints.
     pub hip_half_width: f32,
-    /// Multiplier on every limb and torso cross-section. Girth is the whole
+    /// Multiplier on every limb and torso cross-section. Girth is most of the
     /// difference between two silhouettes that stand the same height.
     pub girth: f32,
+    /// Extra width and depth around the middle, on top of `girth`.
+    ///
+    /// Its own number because girth alone cannot tell fat from burly: scaling
+    /// a body uniformly gives a bigger body, where what makes somebody rotund
+    /// is that the belly is the widest part of them. This applies in full at
+    /// the hips and a quarter at the chest, so the shape tapers upwards
+    /// instead of being a barrel with a head on it.
+    pub belly: f32,
 }
 
 impl Proportions {
@@ -130,6 +138,7 @@ impl Proportions {
         shoulder_half_width: 0.115,
         hip_half_width: 0.055,
         girth: 1.0,
+        belly: 1.0,
     };
 
     /// Short legs, long arms, twice the girth — the silhouette test. Not a
@@ -143,6 +152,7 @@ impl Proportions {
         shoulder_half_width: 0.155,
         hip_half_width: 0.075,
         girth: 1.6,
+        belly: 1.0,
     };
 
     /// The other end of it: small, long-legged, thin.
@@ -155,6 +165,7 @@ impl Proportions {
         shoulder_half_width: 0.10,
         hip_half_width: 0.048,
         girth: 0.75,
+        belly: 1.0,
     };
 
     /// The hip joint's height in metres — the length a pose's root offset is
@@ -392,6 +403,11 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
     let p = proportions;
     let h = p.height;
     let girth = p.girth;
+    // In full at the hips, a quarter of it at the chest: a belly is widest at
+    // the middle and tapers into the ribs, rather than being a straight-sided
+    // barrel.
+    let belly = girth * p.belly;
+    let chest_belly = girth * (1.0 + (p.belly - 1.0) * 0.25);
 
     // Every landmark in rest-space metres, so the layout below reads as a
     // description of a body rather than a chain of offsets.
@@ -421,8 +437,8 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
 
     // Spine, bottom up. The pelvis is the root: it is the bone the whole body
     // hangs off, and the one a root offset moves.
-    builder.bone(bone::PELVIS, None, Vec3::new(0.0, hip_y, 0.0), Vec3::new(0.0, spine_mid_y, 0.0), Vec2::new(0.20, 0.14) * girth * h);
-    builder.bone(bone::CHEST, Some(bone::PELVIS), Vec3::new(0.0, spine_mid_y, 0.0), Vec3::new(0.0, shoulder_y, 0.0), Vec2::new(0.24, 0.15) * girth * h);
+    builder.bone(bone::PELVIS, None, Vec3::new(0.0, hip_y, 0.0), Vec3::new(0.0, spine_mid_y, 0.0), Vec2::new(0.20, 0.14) * belly * h);
+    builder.bone(bone::CHEST, Some(bone::PELVIS), Vec3::new(0.0, spine_mid_y, 0.0), Vec3::new(0.0, shoulder_y, 0.0), Vec2::new(0.24, 0.15) * chest_belly * h);
     builder.bone(bone::NECK, Some(bone::CHEST), Vec3::new(0.0, shoulder_y, 0.0), Vec3::new(0.0, head_base_y, 0.0), Vec2::new(0.07, 0.07) * girth * h);
     // The head keeps its own size: a heavier build is not a bigger skull, and
     // a head that grew with girth would read as a different character rather
