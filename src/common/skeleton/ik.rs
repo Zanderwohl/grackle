@@ -202,8 +202,10 @@ pub fn plant_feet(
     let mut reached = [Reach::Impossible; 2];
     let standing = skeleton.posed_bones(&Pose::rest(), root);
     // Knees bend forwards. The one thing the solver cannot work out for
-    // itself, and the one thing a body is never in two minds about.
+    // itself, and the one thing a body is never in two minds about — a
+    // sidestep still has its knees pointing the way its toes do.
     let forward = root.rotation * Vec3::NEG_Z;
+    let across = root.rotation * Vec3::X;
 
     for (index, (chain, offset)) in [LEFT_LEG, RIGHT_LEG].iter().zip(offsets).enumerate() {
         let Some(resting) = standing
@@ -217,7 +219,8 @@ pub fn plant_feet(
         // In leg-lengths, so a long-legged build takes a longer step in metres
         // and the same step as a fraction of itself.
         let leg = chain_length(skeleton, chain);
-        let target = resting + (forward * offset.ahead + Vec3::Y * offset.lift) * leg;
+        let target = resting
+            + (forward * offset.ahead + across * offset.across + Vec3::Y * offset.lift) * leg;
         reached[index] = solve(skeleton, pose, root, chain, target, forward);
     }
 

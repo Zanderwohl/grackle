@@ -172,8 +172,12 @@ pub struct BodyRequests {
     pub running_forward: bool,
     /// Being asked to move backwards.
     pub running_backward: bool,
-    /// Being asked to move sideways, either way.
-    pub strafing: bool,
+    /// Being asked to step sideways, towards the character's own left or
+    /// right. Two fields rather than one, for the same reason forwards and
+    /// backwards are two: which way the feet travel is not something a pose
+    /// can work out for itself.
+    pub strafing_left: bool,
+    pub strafing_right: bool,
     /// Movement is being stopped by something solid in the direction asked
     /// for. Written by whatever ran the movement, because it is the only thing
     /// that knows.
@@ -189,7 +193,7 @@ pub struct BodyRequests {
 impl BodyRequests {
     /// Being asked to move at all, in any direction.
     pub fn moving(&self) -> bool {
-        self.running_forward || self.running_backward || self.strafing
+        self.running_forward || self.running_backward || self.strafing_left || self.strafing_right
     }
 }
 
@@ -205,7 +209,9 @@ pub enum AnimationState {
     Idle,
     RunForward,
     RunBackward,
-    Strafe,
+    /// Stepping sideways towards the character's own left. Was simply
+    /// `Strafe` before there were sides to it, and keeps that index.
+    StrafeLeft,
     /// Asking to move forwards into something solid. Its own state rather than
     /// a variant of running, because a body whose legs keep cycling against a
     /// wall is the single most obvious animation bug there is.
@@ -220,6 +226,9 @@ pub enum AnimationState {
     /// [`AnimationState::RunBackward`] is: which way the feet travel is not
     /// something a pose can be asked to work out for itself.
     CrouchWalkBackward,
+    StrafeRight,
+    CrouchStrafeLeft,
+    CrouchStrafeRight,
 }
 
 impl AnimationState {
@@ -229,12 +238,15 @@ impl AnimationState {
             AnimationState::Idle => 0,
             AnimationState::RunForward => 1,
             AnimationState::RunBackward => 2,
-            AnimationState::Strafe => 3,
+            AnimationState::StrafeLeft => 3,
             AnimationState::PushingWall => 4,
             AnimationState::Airborne => 5,
             AnimationState::Crouch => 6,
             AnimationState::CrouchWalk => 7,
             AnimationState::CrouchWalkBackward => 8,
+            AnimationState::StrafeRight => 9,
+            AnimationState::CrouchStrafeLeft => 10,
+            AnimationState::CrouchStrafeRight => 11,
         }
     }
 
@@ -247,12 +259,15 @@ impl AnimationState {
         match index {
             1 => AnimationState::RunForward,
             2 => AnimationState::RunBackward,
-            3 => AnimationState::Strafe,
+            3 => AnimationState::StrafeLeft,
             4 => AnimationState::PushingWall,
             5 => AnimationState::Airborne,
             6 => AnimationState::Crouch,
             7 => AnimationState::CrouchWalk,
             8 => AnimationState::CrouchWalkBackward,
+            9 => AnimationState::StrafeRight,
+            10 => AnimationState::CrouchStrafeLeft,
+            11 => AnimationState::CrouchStrafeRight,
             _ => AnimationState::Idle,
         }
     }
@@ -262,7 +277,10 @@ impl AnimationState {
             AnimationState::Idle => get!("animation.states.idle"),
             AnimationState::RunForward => get!("animation.states.run_forward"),
             AnimationState::RunBackward => get!("animation.states.run_backward"),
-            AnimationState::Strafe => get!("animation.states.strafe"),
+            AnimationState::StrafeLeft => get!("animation.states.strafe_left"),
+            AnimationState::StrafeRight => get!("animation.states.strafe_right"),
+            AnimationState::CrouchStrafeLeft => get!("animation.states.crouch_strafe_left"),
+            AnimationState::CrouchStrafeRight => get!("animation.states.crouch_strafe_right"),
             AnimationState::PushingWall => get!("animation.states.pushing_wall"),
             AnimationState::Airborne => get!("animation.states.airborne"),
             AnimationState::Crouch => get!("animation.states.crouch"),
@@ -284,10 +302,14 @@ impl AnimationState {
             // sprint out of a duck.
             if requests.wall_ahead || !requests.moving() {
                 AnimationState::Crouch
+            } else if requests.running_forward {
+                AnimationState::CrouchWalk
             } else if requests.running_backward {
                 AnimationState::CrouchWalkBackward
+            } else if requests.strafing_left {
+                AnimationState::CrouchStrafeLeft
             } else {
-                AnimationState::CrouchWalk
+                AnimationState::CrouchStrafeRight
             }
         } else if requests.running_forward && requests.wall_ahead {
             AnimationState::PushingWall
@@ -295,8 +317,10 @@ impl AnimationState {
             AnimationState::RunForward
         } else if requests.running_backward {
             AnimationState::RunBackward
-        } else if requests.strafing {
-            AnimationState::Strafe
+        } else if requests.strafing_left {
+            AnimationState::StrafeLeft
+        } else if requests.strafing_right {
+            AnimationState::StrafeRight
         } else {
             AnimationState::Idle
         }
@@ -314,6 +338,8 @@ impl AnimationState {
             AnimationState::Crouch
                 | AnimationState::CrouchWalk
                 | AnimationState::CrouchWalkBackward
+                | AnimationState::CrouchStrafeLeft
+                | AnimationState::CrouchStrafeRight
         )
     }
 
@@ -373,7 +399,10 @@ impl AnimationState {
             self,
             AnimationState::RunForward
                 | AnimationState::RunBackward
-                | AnimationState::Strafe
+                | AnimationState::StrafeLeft
+                | AnimationState::StrafeRight
+                | AnimationState::CrouchStrafeLeft
+                | AnimationState::CrouchStrafeRight
                 | AnimationState::PushingWall
                 | AnimationState::CrouchWalk
                 | AnimationState::CrouchWalkBackward
@@ -388,6 +417,10 @@ impl AnimationState {
     fn gait_style(&self, inputs: &PoseInputs) -> GaitStyle {
         match self {
             AnimationState::CrouchWalk | AnimationState::CrouchWalkBackward => GaitStyle::CROUCHED,
+            AnimationState::StrafeLeft | AnimationState::StrafeRight => GaitStyle::SIDESTEP,
+            AnimationState::CrouchStrafeLeft | AnimationState::CrouchStrafeRight => {
+                GaitStyle::CROUCHED_SIDESTEP
+            }
             _ => GaitStyle::upright(inputs.speed),
         }
     }
@@ -853,6 +886,27 @@ mod tests {
             animator.advance(&crouching, 1.0 / 64.0);
         }
         assert_eq!(animator.blend(), 1.0);
+    }
+
+    /// Stepping sideways is four states, not one: two directions, each of
+    /// which can be ducked. A single `Strafe` could only ever step one way.
+    #[test]
+    fn stepping_sideways_has_a_side_and_a_stance() {
+        let left = BodyRequests { strafing_left: true, ..default() };
+        let right = BodyRequests { strafing_right: true, ..default() };
+        assert_eq!(AnimationState::from_requests(&left), AnimationState::StrafeLeft);
+        assert_eq!(AnimationState::from_requests(&right), AnimationState::StrafeRight);
+
+        let ducked = BodyRequests { crouching: true, ..left };
+        assert_eq!(
+            AnimationState::from_requests(&ducked),
+            AnimationState::CrouchStrafeLeft
+        );
+
+        // Going forwards as well as sideways animates as going forwards: a
+        // diagonal is a run with a turn in it, not a shuffle.
+        let diagonal = BodyRequests { running_forward: true, ..right };
+        assert_eq!(AnimationState::from_requests(&diagonal), AnimationState::RunForward);
     }
 
     /// Which way a ducked body is going is a state of its own, the same way it

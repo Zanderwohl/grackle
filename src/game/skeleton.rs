@@ -206,7 +206,8 @@ fn describe_player_bodies(
         // own writer rather than a second reading of this resource.
         requests.running_forward = input.movement.y > 0.5;
         requests.running_backward = input.movement.y < -0.5;
-        requests.strafing = input.movement.x.abs() > 0.5;
+        requests.strafing_left = input.movement.x < -0.5;
+        requests.strafing_right = input.movement.x > 0.5;
         requests.airborne = !player.on_ground;
         // What the body *is*, not what the key says: a body that cannot stand
         // up under a vent is still crouched, and should still look it.
