@@ -34,9 +34,9 @@ in it that constrains code written today: items must record their provenance
 ## State of the repo
 
 The editor is real and works. **The game does not exist yet** — there is no
-player, weapon, projectile, physics, collision response, or networking code in
-`src/`. There is also no wasm build yet. Adding the runtime is the current
-frontier, not a finished thing to extend.
+weapon, projectile, or networking code in `src/`, and no respawn: a body that
+dies leaves a ragdoll and is gone. There is also no wasm build yet. Adding the
+runtime is the current frontier, not a finished thing to extend.
 
 `src/unlock` and the `crate_drop` binary are a self-contained TF2-style
 crate-unboxing prototype. It is orthogonal to both the editor and the game.
@@ -45,11 +45,10 @@ Don't wire new work into it.
 There is a player body that walks, falls and jumps in `src/game/`, but it is a
 prototype for feeling out room sizes — no health, no weapons, no networking.
 
-`cargo check --all-targets` passes. `cargo test` has one known failure:
-`tool::room::tests::test_ghost_message` asserts on a hardcoded `Entity` Display
-string, and Bevy 0.17 changed the entity bit layout. The `Room` type it covers
-is itself dead — superseded by `EditorRoom` — so the fix is probably deleting
-both, but that call has not been made.
+`cargo check --all-targets` and `cargo test` both pass. The `Room` type is
+still dead — superseded by `EditorRoom` for authoring — but it is what
+`CollisionWorld` is rebuilt from, so deleting it is not the small change it
+looks like.
 
 ## Layout
 
@@ -58,7 +57,7 @@ both, but that call has not been made.
 | `src/main.rs` | The `editor` binary — plugin wiring only. |
 | `src/editor/` | The document model: features, timeline, save/load, panels, cameras. |
 | `src/tool/` | One module per editor tool, each its own `Plugin` with its own `Tools` state. |
-| `src/game/` | Playing the open map: `AppMode` swap, player body, collision. |
+| `src/game/` | Playing the open map: `AppMode` swap, player body, collision, damage, ragdolls. |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `crate_drop`. |
@@ -203,6 +202,91 @@ interchangeable:
   onto a standing player encloses it having crossed nothing. It prefers escapes
   that land inside a room over shorter ones that do not, because the short way
   out of a floor is downwards, through the map.
+
+## What a body does once it is dead
+
+A corpse is a **second entity**, not the same one with its animator taken
+away. [`src/game/ragdoll.rs`](src/game/ragdoll.rs) copies the dying body's
+pose out and stands its own entity up in it; `reap_the_dead` then removes the
+original as it always did. Keeping the same entity would mean everything that
+asks the world about players has to ask whether each one is still alive — a
+corpse would still have hitboxes, a `PlayerId`, a camera hanging off it and a
+health pool at zero waiting to be reaped again.
+
+**The rule is a query, not a marker**: a `Skeleton` and a `Damageable` at
+zero. A crate has health and no skeleton, so it vanishes as before; a spawn
+point's preview has a skeleton and no health, so nothing can kill it. The
+corpse carries the *same* `Skeleton`, so `BodyMeshPlugin` dresses it from the
+same cached meshes in the same colour — a class's corpse is its own build,
+with no second asset anywhere. What it must never carry is a
+`SkeletonAnimator`: the solver owns a corpse's `Pose`, and two writers on one
+component is a body that lies there playing its idle.
+
+The ordering spans two plugins and nothing in the type system holds it
+together: `raise_ragdolls` has to run **before** `reap_the_dead`, because by
+the time `Died` is written there is no pose left to copy. Break it and bodies
+quietly stop leaving corpses — there is no error. There is a test at the
+bottom of `ragdoll.rs` that assembles both plugins for exactly this reason.
+
+Simulation is position-based dynamics over **two points per bone**, a head and
+a tail, hand-written for the same reasons the rest of the physics is: no C
+library, so it builds for wasm, and every constraint is something the rig
+already states — a bone's length, a joint's offset from its parent, and the
+limits in [`src/common/skeleton/joints.rs`](src/common/skeleton/joints.rs). A
+new class ragdolls correctly because its bones are already the right length.
+Four things about it are load-bearing and easy to undo by accident:
+
+- **The walls are solved *with* the rig, not before or after.** Rig last and a
+  foot is pushed back through the floor a little further every tick, until the
+  corpse crawls across the room. Walls last and nothing restores a bone's
+  length after the world moved one end of it, so the body stretches.
+- **Velocity is read off where the body ended up**, at the end of the tick,
+  not written during the move. Otherwise a foot lifted out of the floor picks
+  up an upward velocity for having been lifted, hovers, never registers
+  contact, and so never feels friction — and a corpse that lands spinning
+  spins forever.
+- **The root bone has no joint and must not be given one.** A limit needs a
+  parent to be measured against; applied to the pelvis it is measured against
+  the world, which welds the body upright with every other joint straining
+  against it.
+- **Nothing the solver moves may feed back into the root's frame.** Two points
+  cannot express a twist, and the root's twist is the one that matters: it is
+  the frame every limit on the body is ultimately stated against. Reading it
+  off the hips looks obviously right and is a closed loop with gain — the roll
+  sets the legs' limit frames, the limits move the legs, the legs move the
+  hips. Bodies pick up a bias that drag exactly cancels and slide across the
+  room forever. It is seeded from the pose the body died in and only ever
+  swung onto wherever the pelvis now points.
+- **Limits are relaxed towards, not snapped onto.** A hinge removes sideways
+  motion outright, and a hard projection fighting the distance constraints
+  overshoots — an arm flaps at the elbow for as long as you watch it.
+- **Limits are stated in the bone's own rest frame.** That is what lets one
+  table cover both sides of the body: the rig builds mirrored rest rotations,
+  so "an elbow bends forwards" is the same local rotation on both arms.
+
+Force arrives as `RagdollShove` — a **point, a direction and a radius**, not a
+bone. The bones inside the radius are shoved and the joints drag the rest
+along, which is what makes one message serve a bullet (a tight radius, one or
+two bones) and an explosion (a wide one) without either knowing about the
+other. `fire_hitscan` writes one for *every* hit it lands and never asks
+whether anything died; the shot that happens to be fatal lands on a corpse
+raised earlier in the same tick. Its units are honest: `push` is a speed at
+the centre, not momentum to be divided by a mass. Mass is real — a bone's own
+volume — and what it decides is how much of the body a shove drags with it,
+not how fast the bone that was hit leaves, because a rocket that flings a
+scout's hand at two hundred metres per second is a correct simulation and a
+bad game.
+
+None of that announces itself when it breaks — you get a corpse that crawls,
+buzzes, stretches or windmills an arm, and each has a different cause. The
+test that catches them is `every_corpse_settles_however_it_lands`, which drops
+**forty** bodies rather than one, because whether any single body settles turns
+out to depend on exactly how it lands. Run it after touching any constant in
+that file.
+
+Corpses belong to the match: cleared on leaving Play and again in
+`reset_for_play`, and they age on game time, so nothing rots while somebody is
+in the editor. They sleep once settled, and a shove wakes them.
 
 ## The feature model
 

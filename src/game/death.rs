@@ -16,8 +16,17 @@
 //! that comes out says so.
 //!
 //! **What happens after the entity goes is nobody's business here.** No
-//! respawn, no ragdoll, no score. Those are gamemode questions, and answering
-//! any of them at this layer would answer it for every gamemode at once.
+//! respawn, no score. Those are gamemode questions, and answering any of them
+//! at this layer would answer it for every gamemode at once.
+//!
+//! The corpse is the one thing that has to happen *before* the entity goes,
+//! and it still is not this module's business: [`crate::game::ragdoll`] copies
+//! the body's pose out and stands its own entity up, ordered ahead of
+//! `reap_the_dead` from its own plugin. Nothing here knows that, and a
+//! gamemode that wants bodies to vanish switches that plugin off rather than
+//! editing this one — but if you reorder these systems, that is the ordering
+//! you would be breaking, and the symptom is a body that stops leaving a
+//! corpse rather than an error.
 
 use bevy::prelude::*;
 
