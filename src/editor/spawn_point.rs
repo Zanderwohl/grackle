@@ -4,7 +4,8 @@ use bevy_egui::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::common::class::{TALLEST_CLASS_EYE_HEIGHT, TALLEST_CLASS_HEIGHT};
-use crate::common::skeleton::{default_humanoid, draw_skeleton, Pose, SkeletonPalette};
+use crate::common::skeleton::{default_humanoid, Pose};
+use crate::game::body_mesh::BodyTint;
 use crate::common::PointResolutionError;
 use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
@@ -15,6 +16,13 @@ use crate::get;
 /// arrangement `EditorRoom` has with `Room`.
 #[derive(Component, Debug)]
 pub struct SpawnPointMarker;
+
+/// The green a spawn point's body is painted.
+///
+/// Bright, and nothing else on the map is: this is a drawing of the space a
+/// body takes up, and it has to be impossible to mistake for somebody standing
+/// there. The same green whether the spawn is selected or not.
+pub const SPAWN_BODY_COLOUR: Color = Color::srgb(0.13, 0.95, 0.35);
 
 /// Somewhere a player can be put at the start of a round.
 ///
@@ -99,13 +107,9 @@ impl FeatureTrait for SpawnPoint {
         self.yaw = *yaw;
     }
 
-    /// The body that will stand here, where it will look from, and which way.
-    ///
-    /// The rig rather than a line: the space a body needs is a shape, not a
-    /// height, and an arm through a doorframe is the sort of thing a mapper
-    /// can only see if it is drawn. It is the same skeleton the game puts on
-    /// the body it spawns, in its rest pose, so what is drawn here is what
-    /// turns up on F5.
+    /// The feet, the eye and the facing — the spawn point rather than the
+    /// body, which is a rig on this feature's entity and drawn whatever this
+    /// does.
     ///
     /// Drawn while the feature is selected, and whenever spawn-point gizmos
     /// are switched on.
@@ -115,15 +119,6 @@ impl FeatureTrait for SpawnPoint {
 
         let yellow = Color::srgb_u8(255, 214, 0);
         gizmos.sphere(Isometry3d::from_translation(feet), 0.2, yellow);
-        // Flat yellow rather than the game's per-side colours: this is a spawn
-        // point's gizmo and has to keep reading as one.
-        draw_skeleton(
-            gizmos,
-            default_humanoid(),
-            &Pose::rest(),
-            &Transform::from_translation(feet).with_rotation(Quat::from_rotation_y(self.yaw)),
-            &SkeletonPalette::flat(yellow),
-        );
         gizmos.sphere(Isometry3d::from_translation(eyes), 0.12, yellow);
 
         // Which way the body looks, drawn from the eyes because that is where
@@ -142,12 +137,32 @@ impl FeatureTrait for SpawnPoint {
         self.entity = entity;
     }
 
+    /// The body that will stand here.
+    ///
+    /// The same rig the game puts on what it spawns, in its rest pose, so what
+    /// stands here is what turns up on F5: the space a body needs is a shape
+    /// rather than a height, and an arm through a doorframe is the sort of
+    /// thing a mapper can only see if it is drawn.
+    ///
+    /// A rig with no animator holds the pose it was given, so this stands
+    /// still without a system to make it. That and the absent hitboxes are the
+    /// difference between this body and an animation display's.
     fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
-        commands.entity(entity).insert((
-            Transform::from_translation(self.resolved_location)
-                .with_rotation(Quat::from_rotation_y(self.yaw)),
-            SpawnPointMarker,
-        ));
+        commands
+            .entity(entity)
+            .insert((
+                Transform::from_translation(self.resolved_location)
+                    .with_rotation(Quat::from_rotation_y(self.yaw)),
+                SpawnPointMarker,
+            ))
+            // The body once, not once per edit. This runs on every change to
+            // the feature, and a re-inserted rig reads as a changed rig, so
+            // `insert` would rebuild the mesh on every frame of a drag.
+            .insert_if_new((
+                default_humanoid().clone(),
+                Pose::rest(),
+                BodyTint(SPAWN_BODY_COLOUR),
+            ));
     }
 
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {
@@ -288,6 +303,55 @@ mod tests {
             Vec3::new(1.0, 2.0, 3.0),
             "the marked entity is not where the spawn point is"
         );
+    }
+
+    /// The body a mapper lines up against a floor: a real rig, in the green
+    /// that marks it a preview, with no hitboxes.
+    #[test]
+    fn a_spawn_point_stands_a_green_body_that_cannot_be_shot() {
+        use crate::common::hitbox::Hitboxes;
+        use crate::common::skeleton::Skeleton;
+
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+
+        world
+            .run_system_once(move |mut commands: Commands| {
+                SpawnPoint::new(1.0, 2.0, 3.0).apply_to_entity(&mut commands, entity);
+            })
+            .unwrap();
+
+        assert!(world.get::<Skeleton>(entity).is_some(), "nothing is standing there");
+        assert_eq!(
+            world.get::<BodyTint>(entity).map(|tint| tint.0),
+            Some(SPAWN_BODY_COLOUR),
+            "the preview body is not the preview colour",
+        );
+        assert!(
+            world.get::<Hitboxes>(entity).is_none(),
+            "a spawn point's preview is not a thing to shoot at",
+        );
+    }
+
+    /// Applying the feature again — which happens on every frame of a drag —
+    /// must leave the rig alone. A re-inserted `Skeleton` reads as a changed
+    /// one, and the mesh would be rebuilt for every frame the point moved.
+    #[test]
+    fn dragging_a_spawn_point_does_not_rebuild_its_body() {
+        use crate::common::skeleton::Skeleton;
+
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let apply = move |mut commands: Commands| {
+            SpawnPoint::new(1.0, 2.0, 3.0).apply_to_entity(&mut commands, entity);
+        };
+
+        world.run_system_once(apply).unwrap();
+        world.clear_trackers();
+        world.run_system_once(apply).unwrap();
+
+        let rig = world.entity(entity).get_ref::<Skeleton>().expect("a body");
+        assert!(!rig.is_changed(), "the rig was replaced by an edit that did not touch it");
     }
 
     /// The gizmo's upper sphere is the eye height, and `available_point_keys`

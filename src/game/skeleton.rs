@@ -22,16 +22,15 @@ use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
 use crate::common::app_mode::AppMode;
-use crate::common::class::{body_centre_from_feet, Stance};
-use crate::common::hitbox::Hitboxes;
+use crate::common::class::Stance;
 use crate::common::skeleton::{
     draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
     direction_of, DisplaySpeed, ForcedAnimation, Gait, Pose, PoseInputs, Proportions, Skeleton,
     SkeletonAnimator,
     SkeletonPalette,
 };
+use crate::game::body_mesh::BodyMeshPlugin;
 use crate::game::hitbox::HitboxPlugin;
-use crate::game::collision::CollisionWorld;
 use crate::game::player::{
     step_player, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
 };
@@ -46,16 +45,12 @@ use crate::game::player::{
 #[derive(Component, Clone, Copy, Debug)]
 pub struct SkeletonRoot(pub Vec3);
 
-/// A skeleton stood somewhere to be looked at.
+/// Whether the bones are drawn on top of the mesh. `F6` toggles it.
 ///
-/// The player's own body is drawn too, but from inside its head you can only
-/// see your arms and legs. This is the one you can walk around. A debug
-/// harness, not a character: nothing simulates it.
-#[derive(Component, Debug)]
-pub struct Mannequin;
-
-/// How far in front of a spawn the mannequin stands.
-const MANNEQUIN_DISTANCE: f32 = 2.5;
+/// Off by default: it is a debug view of what is inside a body, and a limb
+/// that bends the wrong way is a bone problem the mesh is built to hide.
+#[derive(Resource, Debug, Default)]
+pub struct ShowBones(pub bool);
 
 pub struct SkeletonPlugin;
 
@@ -65,7 +60,12 @@ impl Plugin for SkeletonPlugin {
             // The boxes a body can be hit on are part of what a body is, and
             // they need the same renderer resources this plugin already does.
             .add_plugins(HitboxPlugin)
+            // Beside the hitboxes rather than in `GamePlugin` for the same
+            // reason: the editor shows bodies too, and one with geometry only
+            // in Play would be a preview of something else.
+            .add_plugins(BodyMeshPlugin)
             .init_resource::<AnimationClock>()
+            .init_resource::<ShowBones>()
             // Before anything reads it, and on the tick: the clock is the one
             // quantity every viewer of a body has to agree on.
             .add_systems(FixedUpdate, (
@@ -75,6 +75,7 @@ impl Plugin for SkeletonPlugin {
                 advance_gaits.after(step_player),
                 follow_stance.after(step_player),
             ))
+            .add_systems(Update, toggle_bones)
             .add_systems(Update, (
                 describe_player_bodies.run_if(in_state(AppMode::Play)),
                 dress_new_players.run_if(in_state(AppMode::Play)),
@@ -87,8 +88,13 @@ impl Plugin for SkeletonPlugin {
             // `interpolate_bodies` has already run by here, so a player's
             // skeleton follows the smoothed position, not the 64 Hz one.
             .add_systems(PostUpdate, draw_skeletons.after(TransformSystems::Propagate))
-            .add_systems(OnExit(AppMode::Play), despawn_mannequins)
         ;
+    }
+}
+
+fn toggle_bones(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowBones>) {
+    if keys.just_pressed(KeyCode::F6) {
+        show.0 = !show.0;
     }
 }
 
@@ -101,20 +107,21 @@ pub fn advance_animation_clock(time: Res<Time<Fixed>>, mut clock: ResMut<Animati
     clock.advance(time.delta_secs());
 }
 
-/// Anything with a rig gets the parts every body has.
+/// Anything with a rig gets the [`Gait`] every body has, in one place rather
+/// than a line in each of the things that spawn a body: a body whose spawner
+/// forgot it would stand still while running.
 ///
-/// One place rather than a line in each of the four things that spawn a body:
-/// a body whose spawner forgot its [`Gait`] would stand still while running,
-/// and one that forgot its [`Hitboxes`] could not be hit.
+/// The gait and nothing else. Every body has a stride, but not every body is
+/// one somebody can shoot — a rig standing on a spawn point is a drawing of
+/// what fits there — so [`Hitboxes`](crate::common::hitbox::Hitboxes) come
+/// from `#[require(Hitboxes)]` on the markers that mean a real body:
+/// [`Player`], `CarouselBody`, `AnimationDisplayMarker`.
 fn equip_new_bodies(
     mut commands: Commands,
-    bodies: Query<Entity, (With<Skeleton>, Or<(Without<Hitboxes>, Without<Gait>)>)>,
+    bodies: Query<Entity, (With<Skeleton>, Without<Gait>)>,
 ) {
     for body in &bodies {
-        commands
-            .entity(body)
-            .insert_if_new(Hitboxes::default())
-            .insert_if_new(Gait::default());
+        commands.entity(body).insert_if_new(Gait::default());
     }
 }
 
@@ -226,18 +233,13 @@ fn describe_player_bodies(
     }
 }
 
-/// Give every newly spawned body a skeleton, and stand a mannequin near it.
+/// Give every newly spawned body a skeleton.
 ///
 /// Keyed off `Added<Player>` rather than done in `enter_play`, because the
 /// body is spawned by a command there and does not exist until that schedule's
 /// commands are applied. This also covers any other way a body comes to be.
-fn dress_new_players(
-    mut commands: Commands,
-    world: Res<CollisionWorld>,
-    players: Query<(Entity, &Transform), Added<Player>>,
-) {
-    for (player, transform) in &players {
-        let feet_offset = Vec3::NEG_Y * PLAYER_HALF.y;
+fn dress_new_players(mut commands: Commands, players: Query<Entity, Added<Player>>) {
+    for player in &players {
         commands.entity(player).insert((
             humanoid(Proportions::DEFAULT),
             Pose::rest(),
@@ -249,48 +251,8 @@ fn dress_new_players(
             // what makes two clients put it in the same part of its cycle;
             // an `Entity`'s index would not, being local to one `World`.
             AnimationPhase::default(),
-            SkeletonRoot(feet_offset),
+            SkeletonRoot(Vec3::NEG_Y * PLAYER_HALF.y),
         ));
-
-        let feet = transform.translation + feet_offset;
-        let yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
-        match mannequin_spot(feet, yaw, &world) {
-            Some(spot) => {
-                commands.spawn((
-                    Mannequin,
-                    humanoid(Proportions::DEFAULT),
-                    Pose::rest(),
-                    SkeletonAnimator::default(),
-                    // Off the player's phase, so the two are not a mirror.
-                    AnimationPhase::from_id(1),
-                    // Turned to face back the way it was placed from, so its
-                    // pose is seen from the front.
-                    Transform::from_translation(spot)
-                        .with_rotation(Quat::from_rotation_y(yaw + std::f32::consts::PI)),
-                    Name::new("Mannequin"),
-                ));
-            }
-            None => info!("No room beside the spawn for a mannequin; skipping it"),
-        }
-    }
-}
-
-/// Somewhere near `feet` that a body actually fits, or `None`.
-///
-/// In front first, because that is where you are looking when you spawn, then
-/// around the compass. The same `fits` check a spawn point is filtered by, so
-/// a mannequin never ends up inside a wall or hanging outside the map.
-pub fn mannequin_spot(feet: Vec3, yaw: f32, world: &CollisionWorld) -> Option<Vec3> {
-    let facing = Quat::from_rotation_y(yaw);
-    [Vec3::NEG_Z, Vec3::X, Vec3::NEG_X, Vec3::Z]
-        .into_iter()
-        .map(|direction| feet + facing * direction * MANNEQUIN_DISTANCE)
-        .find(|spot| world.fits(body_centre_from_feet(*spot), PLAYER_HALF))
-}
-
-fn despawn_mannequins(mut commands: Commands, mannequins: Query<Entity, With<Mannequin>>) {
-    for mannequin in &mannequins {
-        commands.entity(mannequin).despawn();
     }
 }
 
@@ -322,7 +284,7 @@ fn advance_animators(
             // Being shown rather than driven: requests, if any, are ignored.
             Some(ForcedAnimation(state)) => animator.force(*state, dt),
             // A body with nothing describing it is a body standing still,
-            // which is the right answer for a mannequin.
+            // which is the right answer for one nothing is driving.
             None => animator.advance(&requests.copied().unwrap_or_default(), dt),
         }
         // Sampled from the shared clock rather than from time-in-state, so
@@ -344,15 +306,21 @@ fn advance_animators(
     }
 }
 
-/// Every body on the map, in whatever pose it is holding.
+/// Every body on the map, in whatever pose it is holding, once `F6` asks for
+/// them.
 ///
-/// Except the one the camera is inside: from in there its own rig is a set of
+/// Skips the one the camera is inside: from in there its own rig is a set of
 /// bones across the lens. `F` swaps to third person and it appears.
 pub fn draw_skeletons(
+    show: Res<ShowBones>,
     mut gizmos: Gizmos,
     view: Res<ViewMode>,
     bodies: Query<(&Skeleton, &Pose, &GlobalTransform, Option<&SkeletonRoot>, Option<&Player>)>,
 ) {
+    if !show.0 {
+        return;
+    }
+
     for (skeleton, pose, global, offset, own_body) in &bodies {
         // `Player` is the body this machine is looking out of. A remote body
         // will not carry it, so this hides one rig rather than everybody's.
@@ -370,8 +338,8 @@ pub fn draw_skeletons(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::hitbox::Hitboxes;
     use crate::common::skeleton::AnimationState;
-    use crate::tool::room::Room;
     use bevy::ecs::system::RunSystemOnce;
 
     /// One frame of animation. `Time` does not advance on its own in a bare
@@ -384,37 +352,37 @@ mod tests {
         app.world_mut().run_system_once(advance_animators).unwrap();
     }
 
-    fn world(rooms: &[Room]) -> CollisionWorld {
-        let mut world = CollisionWorld::default();
-        world.rebuild(rooms);
-        world
-    }
-
-    /// With space all round, the mannequin goes where you are looking.
+    /// A real body carries a marker that requires hitboxes; a spawn point's
+    /// preview carries none, so it comes out unboxed on the same rig.
     #[test]
-    fn the_mannequin_stands_in_front_of_the_spawn() {
-        let world = world(&[Room::new(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 8.0, 10.0))]);
-        let spot = mannequin_spot(Vec3::ZERO, 0.0, &world).expect("a big empty room has room for one");
+    fn only_real_bodies_are_boxed() {
+        use crate::editor::animation_display::AnimationDisplayMarker;
+        use crate::editor::spawn_point::SpawnPointMarker;
+        use crate::tool::animation_grid::CarouselBody;
 
-        // Yaw zero faces -Z, the same direction the player camera looks.
-        assert!((spot - Vec3::new(0.0, 0.0, -MANNEQUIN_DISTANCE)).length() < 1e-4, "stood at {spot}");
-    }
+        let mut world = World::new();
+        let rig = || (humanoid(Proportions::DEFAULT), Pose::rest(), Transform::IDENTITY);
 
-    /// A wall in front is not a reason to put a rig inside it.
-    #[test]
-    fn a_wall_in_front_moves_the_mannequin() {
-        let world = world(&[Room::new(Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 8.0, 10.0))]);
-        let spot = mannequin_spot(Vec3::ZERO, 0.0, &world).expect("there is room behind");
+        let real = [
+            world.spawn((CarouselBody, rig())).id(),
+            world.spawn((AnimationDisplayMarker, rig())).id(),
+            world.spawn((Player::default(), rig())).id(),
+        ];
+        let preview = world.spawn((SpawnPointMarker, rig())).id();
 
-        assert!(spot.z > 0.0, "stood in the wall at {spot}");
-    }
+        world.run_system_once(equip_new_bodies).unwrap();
 
-    /// A space too tight in every direction gets no mannequin rather than one
-    /// embedded in the map.
-    #[test]
-    fn nowhere_to_stand_means_no_mannequin() {
-        let world = world(&[Room::new(Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 8.0, 1.0))]);
-        assert!(mannequin_spot(Vec3::ZERO, 0.0, &world).is_none());
+        for body in real {
+            assert!(world.get::<Hitboxes>(body).is_some(), "a real body cannot be hit");
+            assert!(world.get::<Gait>(body).is_some(), "a body with no stride");
+        }
+        assert!(
+            world.get::<Hitboxes>(preview).is_none(),
+            "a spawn point's preview was boxed as though it were in the game",
+        );
+        // A body in every other respect: it is only hit volumes it goes
+        // without.
+        assert!(world.get::<Gait>(preview).is_some(), "the preview is not a body at all");
     }
 
     /// The seam the whole arrangement rests on: a body's animation follows

@@ -350,11 +350,27 @@ mod tests {
         assert!(civilian.girth < heavy.girth, "the Civilian is built bigger than the Heavy");
 
         // Widest at the belly and narrow at the shoulders, which is the shape.
+        // Measured off the built rig, because on a build this wide
+        // `shoulder_half_width` is only a floor and this has to stay true of
+        // where the joint actually ends up.
         let belly = |p: &Proportions| p.height * p.girth * p.belly * 0.20;
-        let shoulders = |p: &Proportions| p.height * p.shoulder_half_width * 2.0;
+        let shoulders = |p: &Proportions| {
+            let skeleton = crate::common::skeleton::humanoid(*p);
+            let bones = skeleton.posed_bones(
+                &crate::common::skeleton::Pose::rest(),
+                &bevy::prelude::Transform::IDENTITY,
+            );
+            let shoulder = bones
+                .iter()
+                .find(|bone| bone.name == crate::common::skeleton::bone::UPPER_ARM_R)
+                .expect("the rig has an arm");
+            shoulder.head.x * 2.0
+        };
         assert!(
             belly(&civilian) > shoulders(&civilian),
-            "the Civilian's shoulders are wider than his middle"
+            "the Civilian's shoulders are {:.2} m across and his middle {:.2} m",
+            shoulders(&civilian),
+            belly(&civilian),
         );
         // Wider round the middle than the Heavy in plain metres, while being
         // thirty centimetres shorter and built smaller everywhere else. That

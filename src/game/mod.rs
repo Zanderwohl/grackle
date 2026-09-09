@@ -12,6 +12,7 @@ use crate::game::player::{
 };
 use crate::tool::room::Room;
 
+pub mod body_mesh;
 pub mod collision;
 pub mod hitbox;
 pub mod player;
