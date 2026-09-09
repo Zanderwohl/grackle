@@ -15,8 +15,7 @@ use bevy::transform::TransformSystems;
 
 use crate::common::hitbox::{hitboxes, Hitboxes};
 use crate::common::skeleton::{AnimationClock, AnimationPhase, Skeleton, SkeletonAnimator};
-use crate::game::player::PhysicsBody;
-use crate::game::player::step_player;
+use crate::game::player::{step_player, PhysicsBody, Player, ViewMode};
 use crate::game::skeleton::{advance_animation_clock, SkeletonRoot};
 
 /// Whether hitboxes are drawn. `F4` toggles it.
@@ -100,7 +99,12 @@ fn update_hitboxes(
     }
 }
 
-fn draw_hitboxes(show: Res<ShowHitboxes>, mut gizmos: Gizmos, bodies: Query<&Hitboxes>) {
+fn draw_hitboxes(
+    show: Res<ShowHitboxes>,
+    view: Res<ViewMode>,
+    mut gizmos: Gizmos,
+    bodies: Query<(&Hitboxes, Option<&Player>)>,
+) {
     if !show.0 {
         return;
     }
@@ -110,7 +114,13 @@ fn draw_hitboxes(show: Res<ShowHitboxes>, mut gizmos: Gizmos, bodies: Query<&Hit
     let body_colour = Color::srgb(0.55, 0.16, 0.16);
     let head_colour = Color::srgb(1.0, 0.25, 0.25);
 
-    for boxes in &bodies {
+    for (boxes, own_body) in &bodies {
+        // Hidden along with the body it belongs to: in first person the camera
+        // stands in the middle of its own body box, and a wireframe seen from
+        // the inside is just lines across the view.
+        if own_body.is_some() && !view.shows_own_body() {
+            continue;
+        }
         for (hitbox, colour) in [(boxes.body, body_colour), (boxes.head, head_colour)] {
             gizmos.cube(
                 Transform::from_translation(hitbox.centre).with_scale(hitbox.half_extents * 2.0),

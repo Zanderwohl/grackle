@@ -112,6 +112,45 @@ pub struct PlayerCamera;
 /// the duration anyway.
 const PLAY_CAMERA_ORDER: isize = 100;
 
+/// Whether the player is watching from inside their own head or behind it.
+///
+/// A resource rather than a component: it is a property of *this* view, not of
+/// a body. A spectator watching someone else, or a second local view, would
+/// each have their own, which is the same reason it is not on the player.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ViewMode {
+    #[default]
+    FirstPerson,
+    ThirdPerson,
+}
+
+impl ViewMode {
+    /// Whether the player's own body is drawn.
+    ///
+    /// It is not, in first person: from inside its head the body is a set of
+    /// bones across the lens, and its own hitbox is a wireframe box the camera
+    /// is standing in the middle of. Other people's bodies are always drawn —
+    /// this is about the one you are inside.
+    pub fn shows_own_body(&self) -> bool {
+        matches!(self, ViewMode::ThirdPerson)
+    }
+}
+
+/// How far behind the head the third-person camera sits.
+const THIRD_PERSON_DISTANCE: f32 = 3.5;
+
+/// The point the third-person camera orbits, measured from the body's centre.
+///
+/// The head, so that looking up and down swings the camera about roughly where
+/// the eyes are rather than about the navel.
+const THIRD_PERSON_PIVOT: f32 = EYE_OFFSET;
+
+/// The half-extent of the box the camera is swept as when looking for a wall.
+///
+/// Small: it exists so the camera stops in front of a wall rather than inside
+/// it, not so the camera has a body.
+const CAMERA_RADIUS: f32 = 0.15;
+
 /// Which way a body faces when there is no spawn point to ask.
 ///
 /// A spawn point carries its own yaw and that is what a body put on one uses.
@@ -264,6 +303,64 @@ pub fn mouse_look(
     }
 }
 
+/// `F` swaps between looking out of the body and looking at it.
+///
+/// Only while playing: in the editor the cameras belong to the viewports, and
+/// there is no body to be inside.
+pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<ViewMode>) {
+    if !keys.just_pressed(KeyCode::KeyF) {
+        return;
+    }
+    *mode = match *mode {
+        ViewMode::FirstPerson => ViewMode::ThirdPerson,
+        ViewMode::ThirdPerson => ViewMode::FirstPerson,
+    };
+}
+
+/// Put the camera where the current [`ViewMode`] says.
+///
+/// Runs at frame rate beside [`mouse_look`], which owns the camera's rotation;
+/// this owns its position. Splitting them is what lets the third-person camera
+/// swing with the pitch that was just written without either system having to
+/// know when the other ran.
+pub fn place_camera(
+    mode: Res<ViewMode>,
+    world: Res<CollisionWorld>,
+    players: Query<&Transform, (With<Player>, Without<PlayerCamera>)>,
+    mut cameras: Query<&mut Transform, With<PlayerCamera>>,
+) {
+    let Ok(body) = players.single() else { return };
+
+    for mut camera in &mut cameras {
+        camera.translation = match *mode {
+            ViewMode::FirstPerson => Vec3::Y * EYE_OFFSET,
+            ViewMode::ThirdPerson => third_person_camera(body, camera.rotation, &world),
+        };
+    }
+}
+
+/// Where the third-person camera sits, in the body's own frame.
+///
+/// Behind the head along the direction the view is pointing, so pitching up
+/// swings it down and vice versa — and pulled in short of anything solid, so
+/// backing into a wall does not put the camera inside it and show the player
+/// the world from the other side of the map.
+pub fn third_person_camera(body: &Transform, pitch: Quat, world: &CollisionWorld) -> Vec3 {
+    let pivot = Vec3::Y * THIRD_PERSON_PIVOT;
+    let wanted = pivot + pitch * Vec3::Z * THIRD_PERSON_DISTANCE;
+
+    // Swept in world space, because that is where the walls are.
+    let pivot_world = body.transform_point(pivot);
+    let wanted_world = body.transform_point(wanted);
+    let (stopped, _) = world.move_and_slide(
+        pivot_world,
+        Vec3::splat(CAMERA_RADIUS),
+        wanted_world - pivot_world,
+    );
+
+    body.to_matrix().inverse().transform_point3(stopped)
+}
+
 /// Walk, fall, jump, and stop at walls — one fixed step.
 ///
 /// Everything that decides where a body ends up lives here, at a fixed rate,
@@ -336,5 +433,131 @@ pub fn interpolate_bodies(
     let alpha = fixed.overstep_fraction();
     for (body, mut transform) in &mut bodies {
         transform.translation = body.previous.lerp(body.current, alpha);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::ecs::system::RunSystemOnce;
+
+    use super::*;
+    use crate::tool::room::Room;
+
+    fn world(rooms: &[Room]) -> CollisionWorld {
+        let mut world = CollisionWorld::default();
+        world.rebuild(rooms);
+        world
+    }
+
+    fn open_room() -> CollisionWorld {
+        world(&[Room::new(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 6.0, 10.0))])
+    }
+
+    /// Behind the head, at the distance asked for, when there is nothing in
+    /// the way. Local `+Z` is behind a body that faces `-Z`.
+    #[test]
+    fn the_third_person_camera_sits_behind_the_head() {
+        let body = Transform::from_xyz(0.0, 1.0, 0.0);
+        let camera = third_person_camera(&body, Quat::IDENTITY, &open_room());
+
+        assert!((camera.y - THIRD_PERSON_PIVOT).abs() < 1e-3, "at height {}", camera.y);
+        assert!((camera.z - THIRD_PERSON_DISTANCE).abs() < 1e-3, "at {} behind", camera.z);
+        assert!(camera.x.abs() < 1e-3);
+    }
+
+    /// It orbits the head rather than sliding: looking up puts the camera
+    /// lower, and it stays the same distance away.
+    ///
+    /// A gentle pitch, deliberately. Look up far enough and the camera would
+    /// be under the floor, and the sweep pulls it in instead of keeping the
+    /// distance — which is the behaviour the next test is about, not this one.
+    #[test]
+    fn looking_up_swings_the_camera_down() {
+        let body = Transform::from_xyz(0.0, 1.0, 0.0);
+        let world = open_room();
+        let pivot = Vec3::Y * THIRD_PERSON_PIVOT;
+
+        let level = third_person_camera(&body, Quat::IDENTITY, &world);
+        let looking_up = third_person_camera(&body, Quat::from_rotation_x(0.3), &world);
+
+        assert!(looking_up.y < level.y, "the camera did not drop: {} then {}", level.y, looking_up.y);
+        assert!(
+            ((looking_up - pivot).length() - (level - pivot).length()).abs() < 1e-3,
+            "the camera changed distance while pitching"
+        );
+    }
+
+    /// Backing into a wall pulls the camera in rather than putting it inside
+    /// the wall, where it would show the player the far side of the map.
+    #[test]
+    fn a_wall_behind_pulls_the_camera_in() {
+        let world = open_room();
+        // Close enough to the +Z wall that the camera cannot have its distance.
+        let body = Transform::from_xyz(0.0, 1.0, 8.0);
+        let camera = third_person_camera(&body, Quat::IDENTITY, &world);
+
+        assert!(camera.z < THIRD_PERSON_DISTANCE, "the camera kept its distance at {}", camera.z);
+        assert!(camera.z > 0.0, "the camera ended up in front of the body at {}", camera.z);
+        assert!(
+            world.inside_map(body.transform_point(camera)),
+            "the camera ended up outside the map"
+        );
+    }
+
+    /// First person is the eye, and the eye is a class metric rather than a
+    /// number this file made up.
+    #[test]
+    fn first_person_puts_the_camera_at_the_eye() {
+        let mut app = App::new();
+        app.init_resource::<ViewMode>();
+        app.insert_resource(open_room());
+        app.world_mut().spawn((Player::default(), Transform::from_xyz(0.0, 1.0, 0.0)));
+        let camera = app
+            .world_mut()
+            .spawn((PlayerCamera, Transform::default()))
+            .id();
+
+        app.world_mut().run_system_once(place_camera).unwrap();
+
+        let placed = app.world().get::<Transform>(camera).unwrap().translation;
+        assert_eq!(placed, Vec3::Y * EYE_OFFSET);
+        assert!(
+            (placed.y + PLAYER_HALF.y - TALLEST_CLASS_EYE_HEIGHT).abs() < 1e-5,
+            "the eye is not where the class says it is"
+        );
+    }
+
+    /// `F` swaps, and swaps back.
+    #[test]
+    fn f_toggles_the_view() {
+        let mut app = App::new();
+        app.init_resource::<ViewMode>();
+        app.add_plugins(bevy::input::InputPlugin);
+
+        let press = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::KeyF);
+            app.world_mut().run_system_once(toggle_view).unwrap();
+            // Released as well as cleared: a key already held is not pressed
+            // again, so without this the second press never happens.
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::KeyF);
+            keys.clear();
+        };
+
+        assert_eq!(*app.world().resource::<ViewMode>(), ViewMode::FirstPerson);
+        press(&mut app);
+        assert_eq!(*app.world().resource::<ViewMode>(), ViewMode::ThirdPerson);
+        press(&mut app);
+        assert_eq!(*app.world().resource::<ViewMode>(), ViewMode::FirstPerson);
+    }
+
+    /// The rule the drawing systems read: your own body is hidden from inside
+    /// its own head, and only there.
+    #[test]
+    fn only_third_person_shows_your_own_body() {
+        assert!(!ViewMode::FirstPerson.shows_own_body());
+        assert!(ViewMode::ThirdPerson.shows_own_body());
     }
 }

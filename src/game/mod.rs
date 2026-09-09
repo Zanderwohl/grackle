@@ -7,8 +7,8 @@ use crate::editor::multicam::Multicam;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{
-    fallback_spawn, gather_input, interpolate_bodies, mouse_look, spawn_player, step_player,
-    usable_spawns, Player, PlayerInput, Spawn,
+    fallback_spawn, gather_input, interpolate_bodies, mouse_look, place_camera, spawn_player,
+    step_player, toggle_view, usable_spawns, Player, PlayerInput, Spawn, ViewMode,
 };
 use crate::tool::room::Room;
 
@@ -30,7 +30,9 @@ impl Plugin for GamePlugin {
             .init_state::<AppMode>()
             .init_resource::<CollisionWorld>()
             .init_resource::<PlayerInput>()
+            .init_resource::<ViewMode>()
             .add_systems(Update, toggle_mode)
+            .add_systems(Update, toggle_view.run_if(in_state(AppMode::Play)))
             .add_systems(OnEnter(AppMode::Play), enter_play)
             .add_systems(OnExit(AppMode::Play), leave_play)
             // Aim and input sampling stay at frame rate — the first because
@@ -39,7 +41,9 @@ impl Plugin for GamePlugin {
             .add_systems(RunFixedMainLoop, (
                 gather_input,
                 mouse_look,
-            ).in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop)
+                // After `mouse_look`, which owns the rotation this reads.
+                place_camera,
+            ).chain().in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop)
                 .run_if(in_state(AppMode::Play)))
             // Everything that decides where a body ends up runs at a fixed
             // rate, so the same inputs give the same trajectory whatever the

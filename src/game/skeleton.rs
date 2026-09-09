@@ -29,7 +29,7 @@ use crate::common::skeleton::{
 };
 use crate::game::hitbox::HitboxPlugin;
 use crate::game::collision::CollisionWorld;
-use crate::game::player::{step_player, Player, PlayerInput, PLAYER_HALF};
+use crate::game::player::{step_player, Player, PlayerInput, ViewMode, PLAYER_HALF};
 
 /// Where a skeleton's feet sit relative to the entity carrying it.
 ///
@@ -217,11 +217,20 @@ fn advance_animators(
 }
 
 /// Every body on the map, in whatever pose it is holding.
+///
+/// Except the one the camera is inside: from in there its own rig is a set of
+/// bones across the lens. `F` swaps to third person and it appears.
 pub fn draw_skeletons(
     mut gizmos: Gizmos,
-    bodies: Query<(&Skeleton, &Pose, &GlobalTransform, Option<&SkeletonRoot>)>,
+    view: Res<ViewMode>,
+    bodies: Query<(&Skeleton, &Pose, &GlobalTransform, Option<&SkeletonRoot>, Option<&Player>)>,
 ) {
-    for (skeleton, pose, global, offset) in &bodies {
+    for (skeleton, pose, global, offset, own_body) in &bodies {
+        // `Player` is the body this machine is looking out of. A remote body
+        // will not carry it, so this hides one rig rather than everybody's.
+        if own_body.is_some() && !view.shows_own_body() {
+            continue;
+        }
         let mut root = global.compute_transform();
         if let Some(SkeletonRoot(offset)) = offset {
             root.translation += root.rotation * *offset;
