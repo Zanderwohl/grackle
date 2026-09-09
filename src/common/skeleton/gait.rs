@@ -468,7 +468,7 @@ pub fn gait_pose(inputs: &PoseInputs, direction: f32, style: GaitStyle) -> Pose 
         // stride. A crouched sidestep keeps its fold as well.
         pose.set(
             bone::CHEST,
-            Quat::from_rotation_z(-direction * SIDESTEP_LEAN)
+            Quat::from_rotation_z(direction * SIDESTEP_LEAN)
                 * Quat::from_rotation_x(lean.max(0.0)),
         );
         pose.set(bone::NECK, Quat::from_rotation_x(-lean * 0.6));
@@ -499,7 +499,12 @@ pub fn gait_pose(inputs: &PoseInputs, direction: f32, style: GaitStyle) -> Pose 
 /// visibly runs while it slides sideways.
 pub fn direction_of(state: AnimationState) -> f32 {
     match state {
-        AnimationState::RunBackward | AnimationState::CrouchWalkBackward => -1.0,
+        // Backwards, and — for the sideways gaits — towards the character's
+        // own left, since positive is their right.
+        AnimationState::RunBackward
+        | AnimationState::CrouchWalkBackward
+        | AnimationState::StrafeLeft
+        | AnimationState::CrouchStrafeLeft => -1.0,
         _ => 1.0,
     }
 }
@@ -850,42 +855,99 @@ mod tests {
 
     /// A sidestep does not slide either — the same cancellation, along the
     /// axis the body is actually travelling.
+    ///
+    /// Both ways round, because a state that stepped the wrong way would still
+    /// hold its feet perfectly while going the other one. That is exactly what
+    /// a missing arm in [`direction_of`] looks like: the animation is right
+    /// half the time.
     #[test]
     fn a_planted_foot_does_not_slide_sideways() {
-        let skeleton = humanoid(Proportions::DEFAULT);
-        let leg = leg_length(&skeleton);
-        let shape = GaitShape::SIDESTEP;
-        let mut phase = 0.0;
-        let mut travelled = 0.0;
-        let mut was: Option<Vec3> = None;
+        for (state, towards) in [
+            (AnimationState::StrafeRight, 1.0),
+            (AnimationState::StrafeLeft, -1.0),
+            (AnimationState::CrouchStrafeRight, 1.0),
+            (AnimationState::CrouchStrafeLeft, -1.0),
+        ] {
+            let skeleton = humanoid(Proportions::DEFAULT);
+            let leg = leg_length(&skeleton);
+            let shape = if state.ducks() {
+                GaitShape::CROUCHED_SIDESTEP
+            } else {
+                GaitShape::SIDESTEP
+            };
+            let mut phase = 0.0;
+            let mut travelled = 0.0;
+            let mut was: Option<Vec3> = None;
 
-        for _ in 0..24 {
-            let step = shape.stride_per_cycle() * leg / 40.0;
-            travelled += step;
-            phase += step / (shape.stride_per_cycle() * leg);
+            for _ in 0..24 {
+                let step = shape.stride_per_cycle() * leg / 40.0;
+                travelled += step;
+                phase += step / (shape.stride_per_cycle() * leg);
 
-            // Travelling towards the character's own right, which is +X for a
-            // body facing -Z.
-            let root = Transform::from_xyz(travelled, 0.0, 0.0);
-            let inputs = PoseInputs { seconds: 0.0, stride: phase, speed: 2.0 };
-            let pose = finish_pose(&skeleton, AnimationState::StrafeRight, &inputs, &root);
-            let ankle = skeleton
-                .posed_bones(&pose, &root)
-                .into_iter()
-                .find(|posed| posed.name == bone::SHIN_L)
-                .unwrap()
-                .tail;
+                // +X is the character's own right, for a body facing -Z.
+                let root = Transform::from_xyz(towards * travelled, 0.0, 0.0);
+                let inputs = PoseInputs { seconds: 0.0, stride: phase, speed: 2.0 };
+                let pose = finish_pose(&skeleton, state, &inputs, &root);
+                let ankle = skeleton
+                    .posed_bones(&pose, &root)
+                    .into_iter()
+                    .find(|posed| posed.name == bone::SHIN_L)
+                    .unwrap()
+                    .tail;
 
-            let planted = foot_offsets(phase, 1.0, shape)[0].lift == 0.0;
-            if let (true, Some(was)) = (planted, was) {
-                assert!(
-                    (ankle - was).length() < 1e-3,
-                    "the planted foot slid {:.5} m sideways",
-                    (ankle - was).length()
-                );
+                let planted = foot_offsets(phase, towards, shape)[0].lift == 0.0;
+                if let (true, Some(was)) = (planted, was) {
+                    assert!(
+                        (ankle - was).length() < 1e-3,
+                        "in {state:?} the planted foot slid {:.5} m",
+                        (ankle - was).length()
+                    );
+                }
+                was = planted.then_some(ankle);
             }
-            was = planted.then_some(ankle);
         }
+    }
+
+    /// Every state that travels has to say which way, or it animates as
+    /// whichever direction happens to be the default.
+    #[test]
+    fn every_gait_state_knows_which_way_it_is_going() {
+        for (state, direction) in [
+            (AnimationState::RunForward, 1.0),
+            (AnimationState::RunBackward, -1.0),
+            (AnimationState::StrafeLeft, -1.0),
+            (AnimationState::StrafeRight, 1.0),
+            (AnimationState::CrouchWalk, 1.0),
+            (AnimationState::CrouchWalkBackward, -1.0),
+            (AnimationState::CrouchStrafeLeft, -1.0),
+            (AnimationState::CrouchStrafeRight, 1.0),
+        ] {
+            assert_eq!(direction_of(state), direction, "{state:?} goes the wrong way");
+        }
+    }
+
+    /// And the body tips the way it is going, rather than always the same way.
+    #[test]
+    fn a_sidestep_leans_towards_where_it_is_going() {
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let root = Transform::IDENTITY;
+        let inputs = PoseInputs { seconds: 0.0, stride: 0.2, speed: 2.0 };
+
+        let crown = |state: AnimationState| {
+            skeleton
+                .posed_bones(&state.pose(&inputs), &root)
+                .into_iter()
+                .find(|posed| posed.name == bone::HEAD)
+                .unwrap()
+                .tail
+                .x
+        };
+
+        let right = crown(AnimationState::StrafeRight);
+        let left = crown(AnimationState::StrafeLeft);
+        assert!(right > 0.0, "stepping right leans to {right}");
+        assert!(left < 0.0, "stepping left leans to {left}");
+        assert!((right + left).abs() < 1e-5, "the two leans do not mirror");
     }
 
     /// The feet keep to their own sides. A leg that swung across its partner
