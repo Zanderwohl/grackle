@@ -111,13 +111,19 @@ fn update_hitboxes(
             &PoseInputs { seconds: 0.0, stride: 0.0, ..inputs },
             &root,
         );
-        *boxes = hitboxes(
-            skeleton,
-            &pose,
-            &settled,
-            &root,
-            stance.copied().unwrap_or_default(),
-        );
+        // A simulated body's stance is a fact its step owns, and it wins. A
+        // body being shown rather than played has no step and no stance — all
+        // there is to go on is what it is visibly doing, and a full-height box
+        // round a ducked body is a lie about where it can be hit.
+        let stance = stance.copied().unwrap_or_else(|| {
+            if animator.state().ducks() {
+                Stance::Crouched
+            } else {
+                Stance::Standing
+            }
+        });
+
+        *boxes = hitboxes(skeleton, &pose, &settled, &root, stance);
     }
 }
 
@@ -183,6 +189,78 @@ mod tests {
         assert!((boxes.body.min().y - feet.y).abs() < 1e-4, "the body box is not standing on the floor");
         assert!((boxes.body.centre.xz() - feet.xz()).length() < 1e-4);
         assert!(boxes.head.centre.y > boxes.body.centre.y, "the head is not above the middle of the body");
+    }
+
+    /// And a player's own stance still wins over its animation, since that is
+    /// the box it actually collides with.
+    #[test]
+    fn a_simulated_bodys_stance_beats_its_animation() {
+        use crate::common::class::TALLEST_CLASS_HEIGHT;
+        use crate::common::skeleton::{AnimationState, ForcedAnimation};
+
+        let mut world = World::new();
+        world.init_resource::<AnimationClock>();
+        let body = world
+            .spawn((
+                humanoid(Proportions::DEFAULT),
+                Pose::rest(),
+                SkeletonAnimator::default(),
+                // Deliberately at odds: ducking animation, standing stance.
+                ForcedAnimation(AnimationState::Crouch),
+                Stance::Standing,
+                Hitboxes::default(),
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+            ))
+            .id();
+
+        world.run_system_once(update_hitboxes).unwrap();
+
+        let height = world.get::<Hitboxes>(body).unwrap().body.half_extents.y * 2.0;
+        assert!(
+            (height - TALLEST_CLASS_HEIGHT).abs() < 1e-4,
+            "the animation overrode the stance: {height:.2} m"
+        );
+    }
+
+    /// A body being shown rather than simulated has no stance of its own, and
+    /// its box still has to match what it is visibly doing. Every body on an
+    /// animation grid is one of these: it ducks because its animation says so,
+    /// and a full-height box round a ducked body is a lie about where it can
+    /// be hit.
+    #[test]
+    fn a_body_with_no_stance_is_boxed_as_its_animation_stands() {
+        use crate::common::class::CROUCH_HEIGHT;
+        use crate::common::skeleton::{AnimationState, ForcedAnimation};
+
+        let mut world = World::new();
+        world.init_resource::<AnimationClock>();
+        let body = world
+            .spawn((
+                humanoid(Proportions::DEFAULT),
+                Pose::rest(),
+                SkeletonAnimator::default(),
+                ForcedAnimation(AnimationState::Crouch),
+                Hitboxes::default(),
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+            ))
+            .id();
+        // Settle it into the crouch it is being shown in.
+        world.resource_mut::<AnimationClock>().advance(1.0 / 64.0);
+        {
+            let mut animator = world.get_mut::<SkeletonAnimator>(body).unwrap();
+            animator.force(AnimationState::Crouch, 1.0);
+        }
+
+        world.run_system_once(update_hitboxes).unwrap();
+
+        let boxes = world.get::<Hitboxes>(body).unwrap();
+        let height = boxes.body.half_extents.y * 2.0;
+        assert!(
+            (height - CROUCH_HEIGHT).abs() < 1e-4,
+            "a ducked body is boxed {height:.2} m tall"
+        );
     }
 
     /// A body that physics has moved is boxed where the *step* left it, not
