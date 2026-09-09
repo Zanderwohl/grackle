@@ -30,6 +30,7 @@ use crate::common::skeleton::{
     SkeletonAnimator,
     SkeletonPalette,
 };
+use crate::game::body_mesh::BodyMeshPlugin;
 use crate::game::hitbox::HitboxPlugin;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{
@@ -45,6 +46,15 @@ use crate::game::player::{
 /// for everything about a body.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct SkeletonRoot(pub Vec3);
+
+/// Whether the bones themselves are drawn on top of the mesh. `F6` toggles it.
+///
+/// Off by default, which is the change: the wireframe prisms were what a body
+/// looked like, and now they are a debug view of what is inside one. Kept
+/// rather than deleted because a limb that bends the wrong way is a bone
+/// problem, and the mesh hides bones by design.
+#[derive(Resource, Debug, Default)]
+pub struct ShowBones(pub bool);
 
 /// A skeleton stood somewhere to be looked at.
 ///
@@ -65,7 +75,13 @@ impl Plugin for SkeletonPlugin {
             // The boxes a body can be hit on are part of what a body is, and
             // they need the same renderer resources this plugin already does.
             .add_plugins(HitboxPlugin)
+            // The solid a body is drawn as. Beside the hitboxes rather than in
+            // `GamePlugin` for the same reason: the editor shows bodies too,
+            // and one that only had geometry in Play would be a preview of
+            // something else.
+            .add_plugins(BodyMeshPlugin)
             .init_resource::<AnimationClock>()
+            .init_resource::<ShowBones>()
             // Before anything reads it, and on the tick: the clock is the one
             // quantity every viewer of a body has to agree on.
             .add_systems(FixedUpdate, (
@@ -75,6 +91,7 @@ impl Plugin for SkeletonPlugin {
                 advance_gaits.after(step_player),
                 follow_stance.after(step_player),
             ))
+            .add_systems(Update, toggle_bones)
             .add_systems(Update, (
                 describe_player_bodies.run_if(in_state(AppMode::Play)),
                 dress_new_players.run_if(in_state(AppMode::Play)),
@@ -89,6 +106,12 @@ impl Plugin for SkeletonPlugin {
             .add_systems(PostUpdate, draw_skeletons.after(TransformSystems::Propagate))
             .add_systems(OnExit(AppMode::Play), despawn_mannequins)
         ;
+    }
+}
+
+fn toggle_bones(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowBones>) {
+    if keys.just_pressed(KeyCode::F6) {
+        show.0 = !show.0;
     }
 }
 
@@ -346,13 +369,20 @@ fn advance_animators(
 
 /// Every body on the map, in whatever pose it is holding.
 ///
-/// Except the one the camera is inside: from in there its own rig is a set of
-/// bones across the lens. `F` swaps to third person and it appears.
+/// The debug view now that bodies have geometry, so it is off until `F6` says
+/// otherwise. Still skips the one the camera is inside: from in there its own
+/// rig is a set of bones across the lens. `F` swaps to third person and it
+/// appears.
 pub fn draw_skeletons(
+    show: Res<ShowBones>,
     mut gizmos: Gizmos,
     view: Res<ViewMode>,
     bodies: Query<(&Skeleton, &Pose, &GlobalTransform, Option<&SkeletonRoot>, Option<&Player>)>,
 ) {
+    if !show.0 {
+        return;
+    }
+
     for (skeleton, pose, global, offset, own_body) in &bodies {
         // `Player` is the body this machine is looking out of. A remote body
         // will not carry it, so this hides one rig rather than everybody's.

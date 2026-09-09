@@ -105,7 +105,12 @@ pub struct Proportions {
     pub arm_length: f32,
     /// The head bone itself — jaw to crown.
     pub head_length: f32,
-    /// Half the distance between the two shoulder joints.
+    /// Half the distance between the two shoulder joints, on a build narrow
+    /// enough for it.
+    ///
+    /// A floor rather than the last word: a chest widens with `girth` and
+    /// `belly` and this does not, so on a wide build the shoulders are pushed
+    /// out to the side of the ribcage instead. See [`humanoid`].
     pub shoulder_half_width: f32,
     /// Half the distance between the two hip joints.
     pub hip_half_width: f32,
@@ -418,7 +423,25 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
     // it. The break is low, where a real spine actually bends.
     let spine_mid_y = hip_y + (shoulder_y - hip_y) * 0.45;
 
-    let shoulder_x = h * p.shoulder_half_width;
+    // Cross-sections the shoulder has to be placed against, so the number the
+    // arm clears and the number the chest is drawn at are the same number.
+    let chest_thickness = Vec2::new(0.24, 0.15) * chest_belly * h;
+
+    // The shoulder joint sits on the side of the ribcage, never inside it.
+    //
+    // `shoulder_half_width` says where the shoulder goes on a build slim
+    // enough to put it there, and for most of the roster that is what happens.
+    // On a wide one it cannot be the whole answer: a chest is `girth` and
+    // `belly` across while the shoulders are a fraction of height alone, so a
+    // rotund body ends up with its arms hanging out of the middle of its own
+    // torso — which is not an arm clipping into a chest so much as an arm that
+    // starts inside one. Putting the joint on the edge instead lets the arm
+    // straddle it, half in and half out, which is where a shoulder is.
+    //
+    // The clavicle absorbs it: it runs from the base of the neck out to
+    // wherever this lands, which is exactly the bone's job, so nothing
+    // downstream has to know the shoulders moved.
+    let shoulder_x = (h * p.shoulder_half_width).max(chest_thickness.x * 0.5);
     let hip_x = h * p.hip_half_width;
 
     // Down and out at 45°, both arms.
@@ -438,7 +461,7 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
     // Spine, bottom up. The pelvis is the root: it is the bone the whole body
     // hangs off, and the one a root offset moves.
     builder.bone(bone::PELVIS, None, Vec3::new(0.0, hip_y, 0.0), Vec3::new(0.0, spine_mid_y, 0.0), Vec2::new(0.20, 0.14) * belly * h);
-    builder.bone(bone::CHEST, Some(bone::PELVIS), Vec3::new(0.0, spine_mid_y, 0.0), Vec3::new(0.0, shoulder_y, 0.0), Vec2::new(0.24, 0.15) * chest_belly * h);
+    builder.bone(bone::CHEST, Some(bone::PELVIS), Vec3::new(0.0, spine_mid_y, 0.0), Vec3::new(0.0, shoulder_y, 0.0), chest_thickness);
     builder.bone(bone::NECK, Some(bone::CHEST), Vec3::new(0.0, shoulder_y, 0.0), Vec3::new(0.0, head_base_y, 0.0), Vec2::new(0.07, 0.07) * girth * h);
     // The head keeps its own size: a heavier build is not a bigger skull, and
     // a head that grew with girth would read as a different character rather
@@ -610,6 +633,38 @@ mod tests {
             let lowest = bones.values().map(|bone| bone.head.y.min(bone.tail.y)).fold(f32::MAX, f32::min);
             assert!(lowest >= 0.0, "a bone is underground at y = {lowest}");
             assert!(lowest < proportions.height * 0.06, "the body is floating: lowest bone at y = {lowest}");
+        }
+    }
+
+    /// An arm hangs off the side of a body, not out of the middle of it.
+    ///
+    /// The rule that keeps a rotund build's arms from starting inside its own
+    /// ribcage, checked across the roster because it is the wide classes it
+    /// exists for and the slim ones it must not disturb.
+    #[test]
+    fn no_build_starts_its_arms_inside_its_own_chest() {
+        use crate::common::class::Class;
+        use strum::IntoEnumIterator;
+
+        for class in Class::iter() {
+            let proportions = class.proportions();
+            let skeleton = humanoid(proportions);
+            let bones = posed(&skeleton, &Pose::rest());
+            let chest_half = bones[bone::CHEST].thickness.x * 0.5;
+            let shoulder = bones[bone::UPPER_ARM_R].head.x;
+
+            assert!(
+                shoulder >= chest_half - 1e-4,
+                "the {:?}'s shoulder is {shoulder:.3} m out and its chest {chest_half:.3} m",
+                class,
+            );
+            // A floor, not an override: a build the stated width already
+            // clears its chest keeps the shoulders it was given.
+            assert!(
+                shoulder >= proportions.height * proportions.shoulder_half_width - 1e-4,
+                "the {:?}'s shoulders were pulled in",
+                class,
+            );
         }
     }
 

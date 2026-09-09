@@ -107,10 +107,44 @@ answered at this layer yet.
 `Escape` belongs to the pause menu. No reload, no second process — that is the
 between-round editing feature, so keep it that way.
 
-Two more keys while playing: **`F`** swaps between first and third person
+Three more keys while playing: **`F`** swaps between first and third person
 (`ViewMode` in [`src/game/player.rs`](src/game/player.rs) — your own body and
-its hitboxes are hidden from inside your own head, nobody else's are), and
-**`F4`** toggles the hitbox gizmos. `F3` is the perf overlay in both modes.
+its hitboxes are hidden from inside your own head, nobody else's are),
+**`F4`** toggles the hitbox gizmos, and **`F6`** toggles the bone gizmos, which
+are off by default now that bodies have geometry. `F3` is the perf overlay in
+both modes.
+
+## What a body is drawn as
+
+Three volumes, and they are kept apart on purpose — the movement hull, the
+hitboxes and the bones are covered in
+[`src/common/hitbox.rs`](src/common/hitbox.rs). The mesh is a fourth, and it is
+the only one that is authoritative about nothing: it is built from the bones
+and nothing tests against it.
+
+One child entity per bone, carrying that bone's mesh, placed by that bone
+([`src/game/body_mesh.rs`](src/game/body_mesh.rs)). Rigid parenting — a
+shoulder does not stretch, and two parts meeting at a joint interpenetrate.
+That is a first cut, and the shape of it is what a skinned version wants:
+vertices are authored in bone space in
+[`src/common/skeleton/mesh.rs`](src/common/skeleton/mesh.rs), so warping them
+across a joint later replaces the placing system and leaves the geometry alone.
+
+The geometry itself is quads built by hand
+([`src/common/mesh.rs`](src/common/mesh.rs)) rather than Bevy primitives,
+because two `Cuboid`s meeting at a knee are two closed surfaces with no shared
+edge to sew. Everything is built from **rings** — a closed loop of points
+across a shape — so a limb is a stack of cross-sections, and welding two parts
+later means sharing a ring rather than rewriting a shape. Winding is
+counter-clockwise seen from outside, everywhere; get it backwards and a part is
+not missing, it is inside out.
+
+A bone's shape is a `Profile`: a handful of rings down its length, each a
+multiplier on the bone's own thickness. So nothing here is a second opinion
+about how big a body is — `girth` and `belly` already differ per class, and a
+new class is nine numbers rather than a model somebody authored. Meshes are
+cached per build, not per body, which is what makes the sixty-body animation
+grid ten meshes.
 
 Every editor system is gated with `.run_if(in_state(AppMode::Editor))` at its
 `add_systems` call, and `EditorInputPlugin` is gated too so the resources every
