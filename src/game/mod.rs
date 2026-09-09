@@ -3,9 +3,12 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use rand::seq::IndexedRandom;
 
 use crate::common::app_mode::AppMode;
+use crate::common::damage::NextPlayerId;
+use crate::common::skeleton::AnimationClock;
 use crate::editor::multicam::Multicam;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
+use crate::game::reset::reset_for_play;
 use crate::game::player::{
     fallback_spawn, gather_input, interpolate_bodies, mouse_look, place_camera, spawn_player,
     step_player, toggle_view, usable_spawns, Player, PlayerInput, Spawn, ViewMode,
@@ -14,7 +17,10 @@ use crate::tool::room::Room;
 
 pub mod body_mesh;
 pub mod collision;
+pub mod damage;
 pub mod hitbox;
+pub mod hitscan;
+pub mod reset;
 pub mod player;
 pub mod skeleton;
 
@@ -30,11 +36,18 @@ impl Plugin for GamePlugin {
         app
             .init_state::<AppMode>()
             .init_resource::<CollisionWorld>()
+            .init_resource::<NextPlayerId>()
+            // Owned by `SkeletonPlugin`, initialised here as well because the
+            // reset writes it and a game without the skeleton layer would
+            // otherwise fail on the first F5 rather than at startup.
+            .init_resource::<AnimationClock>()
             .init_resource::<PlayerInput>()
             .init_resource::<ViewMode>()
             .add_systems(Update, toggle_mode)
             .add_systems(Update, toggle_view.run_if(in_state(AppMode::Play)))
-            .add_systems(OnEnter(AppMode::Play), enter_play)
+            // Clear the table, then set it: a new match starts from a known
+            // state rather than from whatever the last one left behind.
+            .add_systems(OnEnter(AppMode::Play), (reset_for_play, enter_play).chain())
             .add_systems(OnExit(AppMode::Play), leave_play)
             // Aim and input sampling stay at frame rate — the first because
             // 64 Hz aim is latency you can feel, the second so a press made on
@@ -89,6 +102,7 @@ fn enter_play(
     spawns: Query<&Transform, With<SpawnPointMarker>>,
     mut editor_cameras: Query<&mut Camera, With<Multicam>>,
     window: Query<Entity, With<PrimaryWindow>>,
+    mut ids: ResMut<NextPlayerId>,
 ) {
     let rooms: Vec<Room> = rooms.iter().cloned().collect();
     // Before choosing, because whether a spawn point is usable is a question
@@ -123,7 +137,10 @@ fn enter_play(
             fallback_spawn(&rooms)
         }
     };
-    spawn_player(&mut commands, spawn);
+    // A fresh id each time rather than one kept across F5: the body that
+    // comes back is a new body, and a kill feed that reused the id would
+    // credit its damage to the one before it.
+    spawn_player(&mut commands, spawn, ids.allocate());
 
     for mut camera in &mut editor_cameras {
         camera.is_active = false;

@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::common::ray::ray_aabb_distance;
 use crate::tool::room::{Room, WallSlab};
 
 /// How far each wall slab extends behind its face.
@@ -125,6 +126,22 @@ impl CollisionWorld {
         self.inside_map(centre) && !self.slabs.iter().any(|slab| overlaps(centre, half, slab))
     }
 
+    /// How far along the ray the first wall is, or `None` if nothing solid is
+    /// in the way within `range`.
+    ///
+    /// The unswept counterpart to [`CollisionWorld::move_and_slide`]: a shot
+    /// has no volume, so it needs the plane it crosses and nothing else. What
+    /// it is for is stopping a hitscan at the surface a player can see, so
+    /// that a body behind a wall is behind it for shooting as well as for
+    /// looking.
+    pub fn ray_distance(&self, ray: &Ray3d, range: f32) -> Option<f32> {
+        self.slabs
+            .iter()
+            .filter_map(|slab| ray_aabb_distance(ray, slab.min, slab.max))
+            .filter(|distance| *distance <= range)
+            .min_by(f32::total_cmp)
+    }
+
     /// Shove a body that is *already* inside a wall back out of it.
     ///
     /// [`CollisionWorld::move_and_slide`] answers "may I cross this plane",
@@ -220,6 +237,26 @@ mod tests {
     }
 
     const HALF: Vec3 = Vec3::new(0.35, 0.9, 0.35);
+
+    /// A shot fired across the room stops at the far wall, at the wall.
+    #[test]
+    fn a_ray_stops_at_the_wall_it_crosses() {
+        let world = one_room();
+        let ray = Ray3d::new(Vec3::new(0.0, 1.5, 0.0), Dir3::X);
+
+        let distance = world.ray_distance(&ray, 100.0).expect("the ray left the room unstopped");
+        assert!((distance - 5.0).abs() < 1e-3, "stopped at {distance} m");
+    }
+
+    /// And a range shorter than the room reports nothing, which is what lets
+    /// a weapon's reach be the only thing deciding how far it carries.
+    #[test]
+    fn a_wall_beyond_the_range_is_not_reported() {
+        let world = one_room();
+        let ray = Ray3d::new(Vec3::new(0.0, 1.5, 0.0), Dir3::X);
+        assert_eq!(world.ray_distance(&ray, 2.0), None);
+    }
+
 
     #[test]
     fn a_lone_room_is_walled_on_all_six_sides() {

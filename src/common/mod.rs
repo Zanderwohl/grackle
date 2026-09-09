@@ -1,6 +1,8 @@
 pub mod app_mode;
 pub mod class;
+pub mod damage;
 pub mod hitbox;
+pub mod hitscan;
 pub mod mesh;
 pub mod skeleton;
 pub mod lang;
