@@ -40,6 +40,7 @@ use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamagePlugin;
 use crate::game::hitbox::update_hitboxes;
 use crate::game::player::{step_player, PhysicsBody, Player, PlayerInput};
+use crate::game::ragdoll::RagdollShove;
 
 /// How far the debug laser reaches, in metres.
 ///
@@ -64,6 +65,26 @@ pub const HITSCAN_DAMAGE: u32 = 30;
 /// The reason the zone is carried out of the trace at all: without it the head
 /// box is an elaborate way of computing the same number as the body box.
 pub const HEADSHOT_MULTIPLIER: u32 = 3;
+
+/// How hard a shot shoves a corpse, in metres per second per point of damage.
+///
+/// A placeholder beside [`HITSCAN_DAMAGE`], and it gets deleted with it: a
+/// real weapon states its own knockback, because how far a rocket throws a
+/// body is a weapon's character and not a property of being shot.
+///
+/// Off what the shot was *worth* rather than what it took off, so the round
+/// that kills somebody with twenty health left shoves as hard as the one
+/// before it did. A bullet's momentum is not a question about the target.
+pub const SHOVE_PER_DAMAGE: f32 = 0.15;
+
+/// How far a bullet's shove reaches, in metres.
+///
+/// Tight — about the length of a forearm — so that a shot moves the bone it
+/// hit and the joints drag the rest of the body after it. That is the whole
+/// difference between a body spun by a headshot and a body slid sideways as a
+/// lump. An explosion writes the same message with a radius that covers all of
+/// it; see [`RagdollShove`].
+pub const SHOVE_RADIUS: f32 = 0.4;
 
 pub struct HitscanPlugin;
 
@@ -143,6 +164,7 @@ pub fn fire_hitscan(
     targets: Query<(Entity, &Hitboxes)>,
     mut health: Query<&mut Damageable>,
     mut dealt: MessageWriter<DamageDealt>,
+    mut shoves: MessageWriter<RagdollShove>,
 ) {
     // Taken once, whoever ends up firing: the latch is a record that the
     // trigger was pulled, and leaving it set would fire again next tick.
@@ -167,13 +189,26 @@ pub fn fire_hitscan(
         // somebody has not given HP to. It stopped the shot all the same.
         let Ok(mut target) = health.get_mut(hit.target) else { continue };
 
-        let amount = target.apply(damage_for(hit.zone));
+        let worth = damage_for(hit.zone);
+        let amount = target.apply(worth);
         dealt.write(DamageDealt {
             target: hit.target,
             source: DamageSource::Player(*id),
             amount,
             remaining: target.health(),
             point: hit.point,
+        });
+
+        // Written whether or not that was fatal, and read a moment later by
+        // corpses that may not have existed when this ran. A shot that kills
+        // therefore throws the body it just made, and one that does not is a
+        // shove aimed at a body still standing up, which nothing answers.
+        // Neither case is tested for here, which is the point: this knows it
+        // fired a bullet and nothing else.
+        shoves.write(RagdollShove {
+            at: hit.point,
+            push: *ray.direction * (worth as f32 * SHOVE_PER_DAMAGE),
+            radius: SHOVE_RADIUS,
         });
     }
 }
@@ -239,6 +274,7 @@ mod tests {
         world.init_resource::<PlayerInput>();
         world.init_resource::<CollisionWorld>();
         world.init_resource::<Messages<DamageDealt>>();
+        world.init_resource::<Messages<RagdollShove>>();
 
         let centre = body_centre_from_feet(Vec3::ZERO);
         let shooter = world

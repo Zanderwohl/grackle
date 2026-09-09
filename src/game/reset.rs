@@ -25,6 +25,7 @@ use bevy::prelude::*;
 use crate::common::damage::{DamageLog, Damageable};
 use crate::common::skeleton::{AnimationClock, Gait, SkeletonAnimator};
 use crate::game::damage::DamageNumber;
+use crate::game::ragdoll::Ragdoll;
 use crate::game::player::PlayerInput;
 
 /// Everything a new match starts from scratch.
@@ -40,6 +41,7 @@ pub fn reset_for_play(
     mut bodies: Query<(&mut Gait, &mut SkeletonAnimator)>,
     mut health: Query<(&mut Damageable, &mut DamageLog)>,
     numbers: Query<Entity, With<DamageNumber>>,
+    corpses: Query<Entity, With<Ragdoll>>,
 ) {
     // Back to zero, so two runs of the same map put every body at the same
     // point in its cycle. A match that started at whatever second the editor
@@ -69,6 +71,13 @@ pub fn reset_for_play(
     // now at full health.
     for number in &numbers {
         commands.entity(number).despawn();
+    }
+
+    // And the bodies themselves. Everything that died last match is alive
+    // again by the line above, so a corpse of it would be a second copy of
+    // somebody standing a few feet away.
+    for corpse in &corpses {
+        commands.entity(corpse).despawn();
     }
 }
 

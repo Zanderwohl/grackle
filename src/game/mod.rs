@@ -8,6 +8,7 @@ use crate::common::skeleton::AnimationClock;
 use crate::editor::multicam::Multicam;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
+use crate::game::ragdoll::RagdollPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::player::{
     fallback_spawn, gather_input, interpolate_bodies, mouse_look, place_camera, spawn_player,
@@ -23,6 +24,7 @@ pub mod hitbox;
 pub mod hitscan;
 pub mod reset;
 pub mod player;
+pub mod ragdoll;
 pub mod skeleton;
 
 /// Playing the map that is currently open in the editor.
@@ -35,6 +37,11 @@ pub struct GamePlugin;
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app
+            // What is left of a body once it stops holding itself up. Here
+            // rather than beside the damage layer because it is physics: it
+            // wants the same fixed steps and the same `CollisionWorld` the
+            // player's own step does, and no renderer at all.
+            .add_plugins(RagdollPlugin)
             .init_state::<AppMode>()
             .init_resource::<CollisionWorld>()
             .init_resource::<NextPlayerId>()

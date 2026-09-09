@@ -38,7 +38,7 @@ const SPRINT_SPEED: f32 = 7.0;
 /// Slow enough that ducking is a decision. Sprinting while crouched is not a
 /// thing: the stance wins, which is what makes crouching cost something.
 const CROUCH_SPEED: f32 = 1.2;
-const GRAVITY: f32 = -20.0;
+pub const GRAVITY: f32 = -20.0;
 const JUMP_SPEED: f32 = 7.0;
 const MOUSE_SENSITIVITY: f32 = 0.0022;
 /// Vertical field of view.
