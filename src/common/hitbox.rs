@@ -14,11 +14,14 @@
 //!
 //! Two rules follow, and both are about fairness rather than tidiness:
 //!
-//! - **A head hitbox barely moves.** It follows the head through a fraction
-//!   and a hard clamp ([`HEAD_FOLLOW`], [`HEAD_MAX_OFFSET`]), so an animator
-//!   can give a body as much bob as it needs and a shot at where the head
-//!   plainly is still lands. Without the budget, "shouldn't bob much" degrades
-//!   silently the first time somebody adds a big idle.
+//! - **A head hitbox barely moves — within a pose.** It follows the head
+//!   through a fraction and a hard clamp ([`HEAD_FOLLOW`], [`HEAD_MAX_OFFSET`])
+//!   *of where that body's head settles in what it is currently doing*, so an
+//!   animator can give a body as much bob as it needs and a shot at where the
+//!   head plainly is still lands. What the budget must never damp is the head
+//!   moving because the body did: a ducked body's head is most of a metre
+//!   lower, and a hitbox that stayed up where it used to be would make
+//!   crouching a way of leaving your head behind.
 //! - **A hitbox never reads the drawn pose.** The pose on screen is written at
 //!   frame rate, and a hit test that read it would resolve differently on two
 //!   machines drawing at different rates. Hitboxes are computed on the tick,
@@ -96,15 +99,23 @@ pub struct Hitboxes {
 ///
 /// `root` is the skeleton's own transform — feet on the floor — and the pose
 /// must be one sampled on the tick, not the one being drawn.
+///
+/// `settled` is the same body doing the same thing with the cycle taken out of
+/// it: the pose it would hold standing at that moment. It is what the head
+/// hitbox is anchored to, so that ducking moves the box and a step bob does
+/// not. Passing `pose` itself would make the box track the animation exactly;
+/// passing the rest pose would leave it behind whenever the body changed
+/// shape.
 pub fn hitboxes(
     skeleton: &Skeleton,
     pose: &Pose,
+    settled: &Pose,
     root: &Transform,
     stance: Stance,
 ) -> Hitboxes {
     Hitboxes {
         body: body_box(root, stance),
-        head: head_box(skeleton, pose, root),
+        head: head_box(skeleton, pose, settled, root),
     }
 }
 
@@ -125,9 +136,13 @@ fn body_box(root: &Transform, stance: Stance) -> Box3 {
     }
 }
 
-/// The head box: the head bone, inflated, and only fractionally where the
-/// animation put it.
-fn head_box(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Box3 {
+/// The head box: this body's own head bone, inflated, anchored where that head
+/// settles and only fractionally where the animation has taken it.
+///
+/// Everything about it comes from the rig rather than from a constant, so a
+/// class with a bigger head or a shorter body is boxed around its own head
+/// rather than around the average of everybody's.
+fn head_box(skeleton: &Skeleton, pose: &Pose, settled: &Pose, root: &Transform) -> Box3 {
     let head_centre = |pose: &Pose| {
         skeleton
             .posed_bones(pose, root)
@@ -136,18 +151,16 @@ fn head_box(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Box3 {
             .map(|posed| (posed.prism().translation, posed.length, posed.thickness))
     };
 
-    // Where the head sits on a body standing still. The hitbox is anchored
-    // here and only visits where the animation is.
-    let Some((rest, length, thickness)) = head_centre(&Pose::rest()) else {
+    let Some((anchor, length, thickness)) = head_centre(settled) else {
         return Box3::default();
     };
-    let posed = head_centre(pose).map(|(centre, _, _)| centre).unwrap_or(rest);
+    let posed = head_centre(pose).map(|(centre, _, _)| centre).unwrap_or(anchor);
 
-    let travel = (posed - rest) * HEAD_FOLLOW;
+    let travel = (posed - anchor) * HEAD_FOLLOW;
     let travel = travel.clamp_length_max(HEAD_MAX_OFFSET);
 
     Box3 {
-        centre: rest + travel,
+        centre: anchor + travel,
         half_extents: Vec3::new(
             thickness.x * 0.5 + HEAD_MARGIN,
             length * 0.5 + HEAD_MARGIN,
@@ -173,7 +186,7 @@ mod tests {
     fn the_head_box_contains_the_head() {
         let skeleton = rig();
         let root = Transform::from_translation(Vec3::new(2.0, 0.0, -1.0));
-        let boxes = hitboxes(&skeleton, &Pose::rest(), &root, Stance::Standing);
+        let boxes = hitboxes(&skeleton, &Pose::rest(), &Pose::rest(), &root, Stance::Standing);
 
         let head = skeleton
             .posed_bones(&Pose::rest(), &root)
@@ -205,13 +218,13 @@ mod tests {
                 .translation
         };
 
-        let rest = hitboxes(&skeleton, &Pose::rest(), &root, Stance::Standing).head.centre;
+        let rest = hitboxes(&skeleton, &Pose::rest(), &Pose::rest(), &root, Stance::Standing).head.centre;
         let mut most_head = 0.0_f32;
         let mut most_box = 0.0_f32;
         for step in 0..64 {
             let pose = AnimationState::Idle.pose(&PoseInputs { seconds: step as f32 * 0.05, ..default() });
             most_head = most_head.max((head_of(&pose) - head_of(&Pose::rest())).length());
-            most_box = most_box.max((hitboxes(&skeleton, &pose, &root, Stance::Standing).head.centre - rest).length());
+            most_box = most_box.max((hitboxes(&skeleton, &pose, &Pose::rest(), &root, Stance::Standing).head.centre - rest).length());
         }
 
         assert!(most_head > 0.015, "the idle barely moves the head at all: {most_head} m");
@@ -232,14 +245,81 @@ mod tests {
             .with(bone::CHEST, Quat::from_rotation_x(-1.4))
             .with(bone::NECK, Quat::from_rotation_x(-1.0));
 
-        let rest = hitboxes(&skeleton, &Pose::rest(), &root, Stance::Standing).head.centre;
-        let moved = hitboxes(&skeleton, &thrown, &root, Stance::Standing).head.centre;
+        let rest = hitboxes(&skeleton, &Pose::rest(), &Pose::rest(), &root, Stance::Standing).head.centre;
+        let moved = hitboxes(&skeleton, &thrown, &Pose::rest(), &root, Stance::Standing).head.centre;
 
         assert!(
             (moved - rest).length() <= HEAD_MAX_OFFSET + 1e-5,
             "a duck moved the head hitbox by {} m",
             (moved - rest).length()
         );
+    }
+
+    /// A ducked body's head is most of a metre lower, and the box has to go
+    /// with it. The damping is there to absorb a step bob, not a change of
+    /// stance — anchoring on the standing pose made crouching a way of leaving
+    /// your head behind.
+    #[test]
+    fn the_head_box_follows_a_body_that_ducks() {
+        use crate::common::skeleton::finish_pose;
+
+        let skeleton = rig();
+        let root = Transform::from_xyz(1.0, 0.0, 2.0);
+        let inputs = PoseInputs::default();
+
+        let ducked = finish_pose(&skeleton, AnimationState::Crouch, &inputs, &root);
+        let standing = finish_pose(&skeleton, AnimationState::Idle, &inputs, &root);
+
+        let up = hitboxes(&skeleton, &standing, &standing, &root, Stance::Standing).head;
+        let down = hitboxes(&skeleton, &ducked, &ducked, &root, Stance::Crouched).head;
+
+        assert!(
+            up.centre.y - down.centre.y > 0.5,
+            "ducking moved the head box by {:.2} m",
+            up.centre.y - down.centre.y
+        );
+
+        // And it is around the ducked head, not merely lower than it was.
+        let head = skeleton
+            .posed_bones(&ducked, &root)
+            .into_iter()
+            .find(|posed| posed.name == bone::HEAD)
+            .unwrap();
+        assert!(down.contains(head.head) && down.contains(head.tail), "the ducked head is outside its own box");
+    }
+
+    /// Every class is boxed around its own head. A roster whose heads are at
+    /// ten different heights cannot share one number, and the rig already
+    /// knows where each of them is.
+    #[test]
+    fn every_class_is_boxed_around_its_own_head() {
+        use crate::common::class::Class;
+        use crate::common::skeleton::humanoid;
+        use strum::IntoEnumIterator;
+
+        let mut heights = Vec::new();
+        for class in Class::iter() {
+            let skeleton = humanoid(class.proportions());
+            let root = Transform::IDENTITY;
+            let boxes = hitboxes(&skeleton, &Pose::rest(), &Pose::rest(), &root, Stance::Standing);
+
+            let head = skeleton
+                .posed_bones(&Pose::rest(), &root)
+                .into_iter()
+                .find(|posed| posed.name == bone::HEAD)
+                .unwrap();
+            assert!(
+                boxes.head.contains(head.head) && boxes.head.contains(head.tail),
+                "{class:?} is not boxed around its own head"
+            );
+            heights.push(boxes.head.centre.y);
+        }
+
+        // And those heights genuinely differ, or the check above would pass on
+        // a box that happened to be generous enough for everybody.
+        let low = heights.iter().copied().fold(f32::MAX, f32::min);
+        let high = heights.iter().copied().fold(f32::MIN, f32::max);
+        assert!(high - low > 0.15, "every class's head box is at the same height");
     }
 
     /// The body box is the movement hull and does not animate. If it ever
@@ -250,10 +330,11 @@ mod tests {
         let skeleton = rig();
         let root = Transform::from_translation(Vec3::new(-4.0, 2.0, 0.5));
 
-        let standing = hitboxes(&skeleton, &Pose::rest(), &root, Stance::Standing).body;
+        let standing = hitboxes(&skeleton, &Pose::rest(), &Pose::rest(), &root, Stance::Standing).body;
         let idling = hitboxes(
             &skeleton,
             &AnimationState::Idle.pose(&PoseInputs { seconds: 1.7, ..default() }),
+            &Pose::rest(),
             &root,
             Stance::Standing,
         )

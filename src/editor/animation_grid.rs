@@ -93,6 +93,7 @@ pub fn rows() -> Vec<GridRow> {
         AnimationState::StrafeRight,
         AnimationState::PushingWall,
         AnimationState::Airborne,
+        AnimationState::CrouchAirborne,
         AnimationState::Crouch,
         AnimationState::CrouchWalk,
         AnimationState::CrouchWalkBackward,

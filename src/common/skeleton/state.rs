@@ -229,6 +229,10 @@ pub enum AnimationState {
     StrafeRight,
     CrouchStrafeLeft,
     CrouchStrafeRight,
+    /// In the air and ducked — the crouch-jump. Both halves at once, because
+    /// it is both: the legs are tucked because there is no ground, and the
+    /// body is folded because the hull it is flying through is the short one.
+    CrouchAirborne,
 }
 
 impl AnimationState {
@@ -247,6 +251,7 @@ impl AnimationState {
             AnimationState::StrafeRight => 9,
             AnimationState::CrouchStrafeLeft => 10,
             AnimationState::CrouchStrafeRight => 11,
+            AnimationState::CrouchAirborne => 12,
         }
     }
 
@@ -268,6 +273,7 @@ impl AnimationState {
             9 => AnimationState::StrafeRight,
             10 => AnimationState::CrouchStrafeLeft,
             11 => AnimationState::CrouchStrafeRight,
+            12 => AnimationState::CrouchAirborne,
             _ => AnimationState::Idle,
         }
     }
@@ -281,6 +287,7 @@ impl AnimationState {
             AnimationState::StrafeRight => get!("animation.states.strafe_right"),
             AnimationState::CrouchStrafeLeft => get!("animation.states.crouch_strafe_left"),
             AnimationState::CrouchStrafeRight => get!("animation.states.crouch_strafe_right"),
+            AnimationState::CrouchAirborne => get!("animation.states.crouch_airborne"),
             AnimationState::PushingWall => get!("animation.states.pushing_wall"),
             AnimationState::Airborne => get!("animation.states.airborne"),
             AnimationState::Crouch => get!("animation.states.crouch"),
@@ -295,7 +302,15 @@ impl AnimationState {
     /// the legs were asked to do, and running into a wall beats running.
     pub fn from_requests(requests: &BodyRequests) -> AnimationState {
         if requests.airborne {
-            AnimationState::Airborne
+            // A crouch-jump is not a jump that happens to be ducked: the hull
+            // shrinks, the feet come up, and a body drawn standing upright
+            // through a gap it is only clearing because it ducked would be
+            // showing the player the wrong thing at the moment it matters.
+            if requests.crouching {
+                AnimationState::CrouchAirborne
+            } else {
+                AnimationState::Airborne
+            }
         } else if requests.crouching {
             // Crouching outranks what the legs were asked to do, because it is
             // the thing that decides what they can do at all. A body cannot
@@ -340,6 +355,7 @@ impl AnimationState {
                 | AnimationState::CrouchWalkBackward
                 | AnimationState::CrouchStrafeLeft
                 | AnimationState::CrouchStrafeRight
+                | AnimationState::CrouchAirborne
         )
     }
 
@@ -350,7 +366,10 @@ impl AnimationState {
     /// that makes the distinction real — feet welded to a floor a body has
     /// left would be a body doing the splits on the way up.
     pub fn plants_feet(&self) -> bool {
-        !matches!(self, AnimationState::Airborne)
+        !matches!(
+            self,
+            AnimationState::Airborne | AnimationState::CrouchAirborne
+        )
     }
 
     /// Transitions that must not wait for [`MIN_DWELL`].
@@ -382,6 +401,14 @@ impl AnimationState {
             AnimationState::Idle => idle_pose(inputs.seconds),
             AnimationState::Crouch => crouch_posture(),
             AnimationState::Airborne => airborne_pose(),
+            AnimationState::CrouchAirborne => {
+                // Folded like a crouch, with the legs of a jump. Nothing is
+                // planted, so the tuck stands as written; `duck_under` then
+                // folds the whole thing under the short hull it is flying in.
+                let mut pose = crouch_posture();
+                airborne_legs(&mut pose);
+                pose
+            }
             state if state.uses_gait() => {
                 gait_pose(inputs, direction_of(*state), state.gait_style(inputs))
             }
@@ -552,6 +579,21 @@ const IDLE_ARM_SWING: f32 = 0.05;
 const AIRBORNE_LEADING: (f32, f32) = (0.55, -1.25);
 const AIRBORNE_TRAILING: (f32, f32) = (0.10, -1.05);
 
+/// One leading knee up and one trailing heel tucked, for a body with no ground
+/// under it.
+///
+/// Its own function because a crouch-jump wants these legs on a folded body:
+/// two states, one pair of legs, and no chance of them drifting apart.
+fn airborne_legs(pose: &mut Pose) {
+    for ((thigh, shin), (hip, knee)) in [
+        ((bone::THIGH_L, bone::SHIN_L), AIRBORNE_LEADING),
+        ((bone::THIGH_R, bone::SHIN_R), AIRBORNE_TRAILING),
+    ] {
+        pose.set(thigh, Quat::from_rotation_x(hip));
+        pose.set(shin, Quat::from_rotation_x(knee));
+    }
+}
+
 /// Off the ground.
 ///
 /// Nothing is planted, so this is the one state whose legs are written here
@@ -560,14 +602,7 @@ const AIRBORNE_TRAILING: (f32, f32) = (0.10, -1.05);
 /// splits on the way up.
 fn airborne_pose() -> Pose {
     let mut pose = Pose::rest();
-
-    for ((thigh, shin), (hip, knee)) in [
-        ((bone::THIGH_L, bone::SHIN_L), AIRBORNE_LEADING),
-        ((bone::THIGH_R, bone::SHIN_R), AIRBORNE_TRAILING),
-    ] {
-        pose.set(thigh, Quat::from_rotation_x(hip));
-        pose.set(shin, Quat::from_rotation_x(knee));
-    }
+    airborne_legs(&mut pose);
 
     // Forward and up, the way arms go when the ground stops being there — and
     // at the sides rather than out on the diagonal, like every other posture.
@@ -821,9 +856,19 @@ mod tests {
         let hurrying = BodyRequests { crouching: true, running_forward: true, ..default() };
         assert_ne!(AnimationState::from_requests(&hurrying), AnimationState::RunForward);
 
-        // But a crouch-jump is in the air first and ducked second.
+        // And a crouch-jump is both at once rather than one of the two: the
+        // hull it is flying in is the short one, so the body flying in it is
+        // folded, with the legs of a jump.
         let jumping = BodyRequests { crouching: true, airborne: true, ..default() };
-        assert_eq!(AnimationState::from_requests(&jumping), AnimationState::Airborne);
+        assert_eq!(
+            AnimationState::from_requests(&jumping),
+            AnimationState::CrouchAirborne
+        );
+        assert!(AnimationState::CrouchAirborne.ducks(), "a crouch-jump does not fold");
+        assert!(
+            !AnimationState::CrouchAirborne.plants_feet(),
+            "a crouch-jump has its feet on a floor it has left"
+        );
     }
 
     /// Being in the air beats whatever the legs were asked for.

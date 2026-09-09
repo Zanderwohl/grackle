@@ -101,7 +101,22 @@ fn update_hitboxes(
             speed: gait.speed(),
         };
         let pose = animator_pose(skeleton, animator, &inputs, &root);
-        *boxes = hitboxes(skeleton, &pose, &root, stance.copied().unwrap_or_default());
+        // The same body in the same state with the cycle stood still: where
+        // its head settles, rather than where this instant of a stride has
+        // taken it. Ducking moves this; a step bob does not.
+        let settled = animator_pose(
+            skeleton,
+            animator,
+            &PoseInputs { seconds: 0.0, stride: 0.0, ..inputs },
+            &root,
+        );
+        *boxes = hitboxes(
+            skeleton,
+            &pose,
+            &settled,
+            &root,
+            stance.copied().unwrap_or_default(),
+        );
     }
 }
 
