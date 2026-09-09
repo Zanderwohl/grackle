@@ -20,7 +20,17 @@
 //! and explosions too, and a field only hitscan can fill would be `None` on
 //! most of them.
 
+use std::fmt;
+
 use bevy::prelude::*;
+
+/// How long a hit still counts towards an assist, in seconds of game time.
+///
+/// Long enough that softening somebody up and letting a teammate finish is
+/// credited, short enough that a hit landed at the other end of the round is
+/// not. Eight seconds is a guess in the right order of magnitude and nothing
+/// more; it is a gamemode's number in the end.
+pub const ASSIST_WINDOW: f32 = 8.0;
 
 /// Health a body starts with when nothing says otherwise.
 ///
@@ -43,6 +53,12 @@ pub const DEFAULT_HEALTH: u32 = 100;
 /// is the one thing in a step that cannot be reconciled.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PlayerId(pub u64);
+
+impl fmt::Display for PlayerId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "player {}", self.0)
+    }
+}
 
 /// The counter [`PlayerId`]s come from.
 ///
@@ -71,11 +87,23 @@ pub enum DamageSource {
     World,
 }
 
+impl fmt::Display for DamageSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DamageSource::Player(id) => write!(f, "{id}"),
+            DamageSource::World => write!(f, "the map"),
+        }
+    }
+}
+
 /// Something with health.
 ///
-/// Requires nothing and is required by the markers that mean a real body, so
-/// putting it on a crate is inserting one component.
+/// Required by the markers that mean a real body, so putting it on a crate is
+/// inserting one component. It in turn requires a [`DamageLog`]: anything that
+/// can be killed has to be able to say who did it, and a health pool with no
+/// log would be one that died anonymously.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+#[require(DamageLog)]
 pub struct Damageable {
     health: u32,
     max: u32,
@@ -150,9 +178,153 @@ pub struct DamageDealt {
     pub point: Vec3,
 }
 
+/// Who has hurt this body lately, and when.
+///
+/// One entry per source, oldest first, pruned to [`ASSIST_WINDOW`]. Per source
+/// rather than per hit because what a kill credit asks is "who was involved",
+/// and somebody who landed nine shots is no more involved than somebody who
+/// landed one — they are just the more recent.
+///
+/// A `Vec` and not a fixed pair: two is what a kill feed shows, but the log is
+/// what a scoreboard, a revenge system and an assist rule all read, and
+/// throwing away the third contributor at the point of recording would be
+/// deciding all of those here.
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct DamageLog {
+    contributors: Vec<(DamageSource, f32)>,
+}
+
+impl DamageLog {
+    /// Note that `source` hurt this body at `at` seconds of game time.
+    pub fn record(&mut self, source: DamageSource, at: f32) {
+        // Drop this source's older entry along with anything stale: a
+        // contributor is held at their *latest* hit, so a long fight does not
+        // leave somebody credited for where they came in.
+        self.contributors
+            .retain(|(who, when)| *who != source && at - *when <= ASSIST_WINDOW);
+        self.contributors.push((source, at));
+    }
+
+    /// Who landed the last hit. `None` for a body nothing has touched.
+    pub fn killer(&self) -> Option<DamageSource> {
+        self.contributors.last().map(|(who, _)| *who)
+    }
+
+    /// The most recent *other* contributor, if their hit is still inside the
+    /// window at `now`.
+    ///
+    /// One, deliberately. "A second person also did damage recently" is the
+    /// question a kill feed asks; who else was in the fight is a different one
+    /// and the log still answers it.
+    pub fn assist(&self, now: f32) -> Option<DamageSource> {
+        self.contributors
+            .iter()
+            .rev()
+            .nth(1)
+            .filter(|(_, when)| now - *when <= ASSIST_WINDOW)
+            .map(|(who, _)| *who)
+    }
+
+    pub fn clear(&mut self) {
+        self.contributors.clear();
+    }
+}
+
+/// A body that ran out of health, written as it is removed.
+///
+/// Carries the victim's *name* rather than only its entity, because by the
+/// time anything reads this the entity is gone — a kill feed that looked the
+/// victim up would find nothing to look up.
+#[derive(Message, Clone, Debug, PartialEq)]
+pub struct Died {
+    /// The entity that was despawned. Useful for matching a death to a hit
+    /// already in flight; useless for asking the world anything about it.
+    pub victim: Entity,
+    pub victim_name: Option<String>,
+    /// The victim's match identity, if it had one. A prop does not.
+    pub victim_id: Option<PlayerId>,
+    /// Whoever landed the last hit. [`DamageSource::World`] when there is
+    /// no-one to credit.
+    pub killer: DamageSource,
+    pub assist: Option<DamageSource>,
+    /// Where it died.
+    pub at: Vec3,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const A: DamageSource = DamageSource::Player(PlayerId(1));
+    const B: DamageSource = DamageSource::Player(PlayerId(2));
+    const C: DamageSource = DamageSource::Player(PlayerId(3));
+
+    /// The last hit is the kill and the one before it is the assist.
+    #[test]
+    fn the_last_two_contributors_are_the_kill_and_the_assist() {
+        let mut log = DamageLog::default();
+        log.record(A, 0.0);
+        log.record(B, 1.0);
+
+        assert_eq!(log.killer(), Some(B));
+        assert_eq!(log.assist(1.0), Some(A));
+    }
+
+    /// A hit from long enough ago is not an assist. This is the whole reason
+    /// the log carries times rather than just an order.
+    #[test]
+    fn an_old_hit_does_not_earn_an_assist() {
+        let mut log = DamageLog::default();
+        log.record(A, 0.0);
+        log.record(B, ASSIST_WINDOW + 1.0);
+
+        assert_eq!(log.killer(), Some(B));
+        assert_eq!(log.assist(ASSIST_WINDOW + 1.0), None);
+    }
+
+    /// Shooting somebody twice is not an assist to yourself.
+    #[test]
+    fn one_person_alone_gets_no_assist() {
+        let mut log = DamageLog::default();
+        log.record(A, 0.0);
+        log.record(A, 1.0);
+
+        assert_eq!(log.killer(), Some(A));
+        assert_eq!(log.assist(1.0), None);
+    }
+
+    /// A contributor is held at their latest hit, so coming back into a fight
+    /// moves you up the order rather than leaving you where you came in.
+    #[test]
+    fn hitting_again_moves_a_contributor_to_the_front() {
+        let mut log = DamageLog::default();
+        log.record(A, 0.0);
+        log.record(B, 1.0);
+        log.record(A, 2.0);
+
+        assert_eq!(log.killer(), Some(A));
+        assert_eq!(log.assist(2.0), Some(B));
+    }
+
+    /// Three in a fight: the two most recent are the ones a kill feed shows,
+    /// and the third is still in the log for whatever wants it.
+    #[test]
+    fn a_third_contributor_does_not_displace_the_credit() {
+        let mut log = DamageLog::default();
+        log.record(C, 0.0);
+        log.record(A, 1.0);
+        log.record(B, 2.0);
+
+        assert_eq!(log.killer(), Some(B));
+        assert_eq!(log.assist(2.0), Some(A));
+    }
+
+    /// Nothing has touched it, so there is nobody to credit.
+    #[test]
+    fn an_untouched_body_has_no_killer() {
+        assert_eq!(DamageLog::default().killer(), None);
+        assert_eq!(DamageLog::default().assist(0.0), None);
+    }
 
     #[test]
     fn a_hit_takes_what_it_asks_for() {

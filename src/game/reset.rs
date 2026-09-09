@@ -22,7 +22,7 @@
 
 use bevy::prelude::*;
 
-use crate::common::damage::Damageable;
+use crate::common::damage::{DamageLog, Damageable};
 use crate::common::skeleton::{AnimationClock, Gait, SkeletonAnimator};
 use crate::game::damage::DamageNumber;
 use crate::game::player::PlayerInput;
@@ -38,7 +38,7 @@ pub fn reset_for_play(
     mut clock: ResMut<AnimationClock>,
     mut input: ResMut<PlayerInput>,
     mut bodies: Query<(&mut Gait, &mut SkeletonAnimator)>,
-    mut health: Query<&mut Damageable>,
+    mut health: Query<(&mut Damageable, &mut DamageLog)>,
     numbers: Query<Entity, With<DamageNumber>>,
 ) {
     // Back to zero, so two runs of the same map put every body at the same
@@ -57,8 +57,12 @@ pub fn reset_for_play(
         *animator = SkeletonAnimator::default();
     }
 
-    for mut body in &mut health {
+    for (mut body, mut log) in &mut health {
         body.restore();
+        // Who hurt it last match is not who hurt it this match. A stale log
+        // would credit the first kill of a new round to whoever was shooting
+        // when the last one ended.
+        log.clear();
     }
 
     // Feedback from the last match, hanging in the air over bodies that are
@@ -87,7 +91,11 @@ mod tests {
 
         let mut hurt = Damageable::with_health(100);
         hurt.apply(70);
-        let body = world.spawn((hurt, Gait::default(), SkeletonAnimator::default())).id();
+        let mut log = DamageLog::default();
+        log.record(crate::common::damage::DamageSource::World, 0.0);
+        let body = world
+            .spawn((hurt, log, Gait::default(), SkeletonAnimator::default()))
+            .id();
         world.spawn(DamageNumber { amount: 70, at: Vec3::ZERO, remaining: 1.0 });
 
         world.run_system_once(reset_for_play).unwrap();
@@ -96,6 +104,7 @@ mod tests {
         assert!(!world.resource::<PlayerInput>().attack, "a click made while editing fired on spawn");
         assert!(!world.resource::<PlayerInput>().jump);
         assert_eq!(world.get::<Damageable>(body).unwrap().health(), 100);
+        assert_eq!(world.get::<DamageLog>(body).unwrap().killer(), None, "last match's shooter carried over");
         assert_eq!(world.query::<&DamageNumber>().iter(&world).count(), 0);
     }
 }

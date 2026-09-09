@@ -395,7 +395,7 @@ mod tests {
         let rig = || (humanoid(Proportions::DEFAULT), Pose::rest(), Transform::IDENTITY);
 
         let real = [
-            world.spawn((CarouselBody, rig())).id(),
+            world.spawn((CarouselBody(0), rig())).id(),
             world.spawn((AnimationDisplayMarker, rig())).id(),
             world.spawn((Player::default(), rig())).id(),
         ];

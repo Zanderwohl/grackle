@@ -1,4 +1,7 @@
-//! What a hit looks like: a red number where it landed, fading out.
+//! What a hit leads to: a red number where it landed, and — once there is no
+//! health left — the body going away. The numbers are here; the reaping is in
+//! [`crate::game::death`], wired up from this plugin because this is where
+//! [`DamageDealt`] is registered and where the ordering against it belongs.
 //!
 //! Reads [`DamageDealt`] rather than being called by the thing that shot, so
 //! the day a rocket, a fall or a raised floor deals damage they get numbers
@@ -14,7 +17,9 @@ use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::AppMode;
-use crate::common::damage::DamageDealt;
+use crate::common::damage::{DamageDealt, Died};
+use crate::game::death::{announce_deaths, reap_the_dead, record_damage};
+use crate::game::hitscan::fire_hitscan;
 use crate::game::player::PlayerCamera;
 
 /// How long a damage number lasts, in seconds.
@@ -41,7 +46,18 @@ impl Plugin for DamagePlugin {
             // Registered here, by the reader, because this is the module that
             // outlives any one thing that writes it.
             .add_message::<DamageDealt>()
-            .add_systems(Update, (spawn_damage_numbers, fade_damage_numbers).chain())
+            .add_message::<Died>()
+            // On the tick, in this order, in the same tick as the shot. A
+            // body reaped before its log is written is a kill credited to
+            // nobody — see [`crate::game::death`].
+            .add_systems(
+                FixedUpdate,
+                (record_damage, reap_the_dead)
+                    .chain()
+                    .after(fire_hitscan)
+                    .run_if(in_state(AppMode::Play)),
+            )
+            .add_systems(Update, (spawn_damage_numbers, fade_damage_numbers, announce_deaths).chain())
             .add_systems(
                 EguiPrimaryContextPass,
                 draw_damage_numbers.run_if(in_state(AppMode::Play)),
