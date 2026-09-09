@@ -12,7 +12,8 @@ use crate::common::skeleton::{
     default_humanoid, draw_skeleton, humanoid, AnimationPhase, DisplaySpeed, ForcedAnimation,
     Pose, SkeletonAnimator, SkeletonPalette,
 };
-use crate::editor::animation_grid::{cells, AnimationGrid, AnimationGridMarker};
+use crate::common::skeleton::AnimationClock;
+use crate::editor::animation_grid::{cells, showing, AnimationGrid, AnimationGridMarker};
 use crate::editor::editable::{FeatureTrait, PointRef};
 use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
 use crate::tool::Tools;
@@ -26,7 +27,7 @@ impl Plugin for AnimationGridPlugin {
             // Deliberately not gated on `AppMode::Editor`: the grid is map
             // content, and its whole use is judging an animation at the size
             // and distance a player sees it at, which means seeing it in play.
-            .add_systems(Update, sync_animation_grids)
+            .add_systems(Update, (sync_animation_grids, drive_carousels).chain())
         ;
     }
 }
@@ -40,6 +41,55 @@ impl Plugin for AnimationGridPlugin {
 /// marker is re-inserted whenever the feature is edited, and a grid that
 /// spawned a second roster every time its point was nudged would be sixty
 /// bodies deep in itself within a drag.
+/// One of the bodies a grid stands up, waiting to be told what to do.
+#[derive(Component, Debug)]
+pub struct CarouselBody;
+
+/// Put every carousel body into whatever the shared clock says the roster is
+/// showing.
+///
+/// All of them at once, which is the point: ten builds doing the same thing at
+/// the same moment is the comparison worth having, and it costs ten bodies
+/// rather than one per class per state.
+///
+/// Written as a [`ForcedAnimation`] like any other display, so the change goes
+/// through the state machine and blends rather than cutting.
+pub fn drive_carousels(
+    clock: Res<AnimationClock>,
+    mut bodies: Query<(&mut ForcedAnimation, &mut DisplaySpeed), With<CarouselBody>>,
+    mut announced: Local<Option<u64>>,
+) {
+    if bodies.is_empty() {
+        return;
+    }
+
+    let showing = showing(clock.seconds());
+    for (mut forced, mut speed) in &mut bodies {
+        forced.0 = showing.row.state;
+        speed.0 = showing.row.speed;
+    }
+
+    // Once per shuffle, since the order is the one thing you cannot read off
+    // the bodies themselves.
+    if *announced != Some(showing.cycle) {
+        *announced = Some(showing.cycle);
+        let order: Vec<String> = crate::editor::animation_grid::order(showing.cycle)
+            .iter()
+            .map(|row| {
+                // With the speed, since the same state at three speeds is
+                // three of the entries and they are the ones worth telling
+                // apart.
+                if row.state.uses_gait() {
+                    format!("{} ({:.1})", row.state.name(), row.speed)
+                } else {
+                    row.state.name()
+                }
+            })
+            .collect();
+        info!("Animation carousel: {}", order.join(", "));
+    }
+}
+
 pub fn sync_animation_grids(
     mut commands: Commands,
     grids: Query<(Entity, Option<&Children>), Added<AnimationGridMarker>>,
@@ -63,18 +113,12 @@ pub fn sync_animation_grids(
                     AnimationPhase::from_id(index as u64),
                     // The one difference from a player: pinned to this cell's
                     // state instead of being told what is happening to it.
-                    ForcedAnimation(cell.state),
-                    // The row's own speed: the upright gait changes shape as
-                    // it speeds up, so a walk and a run are two rows of the
-                    // same state rather than one.
-                    DisplaySpeed(cell.speed),
+                    // Told what to do by `drive_carousels`, every frame.
+                    CarouselBody,
+                    ForcedAnimation::default(),
+                    DisplaySpeed::default(),
                     Transform::from_translation(cell.offset),
-                    Name::new(format!(
-                        "{} \u{2014} {} ({:.1})",
-                        cell.class.name(),
-                        cell.state.name(),
-                        cell.speed
-                    )),
+                    Name::new(cell.class.name()),
                 ));
             }
         });
@@ -130,26 +174,56 @@ mod tests {
         world
     }
 
-    /// One body per cell, each a real skeleton pinned to its cell's state.
+    /// One body per cell, each a real skeleton standing where the line puts
+    /// it. What it is doing comes later, from the clock.
     #[test]
     fn a_placed_grid_stands_up_the_whole_roster() {
         let mut world = grid_world();
 
-        let mut query = world.query::<(&Skeleton, &ForcedAnimation, &Transform)>();
-        let bodies: Vec<(AnimationState, Vec3)> = query
+        let mut query = world.query::<(&Skeleton, &CarouselBody, &Transform)>();
+        let bodies: Vec<Vec3> = query
             .iter(&world)
-            .map(|(_, forced, transform)| (forced.0, transform.translation))
+            .map(|(_, _, transform)| transform.translation)
             .collect();
 
         assert_eq!(bodies.len(), cells().len());
         for cell in cells() {
             assert!(
-                bodies.iter().any(|(state, offset)| *state == cell.state && *offset == cell.offset),
-                "no body for {:?} in {:?}",
-                cell.class,
-                cell.state
+                bodies.contains(&cell.offset),
+                "no body standing where {:?} goes",
+                cell.class
             );
         }
+    }
+
+    /// Every body is put into the same animation on the same tick — which is
+    /// the whole reason ten of them are worth more than a hundred and forty.
+    #[test]
+    fn the_whole_line_is_shown_the_same_animation() {
+        use crate::common::skeleton::{AnimationClock, DisplaySpeed};
+
+        let mut world = grid_world();
+        let mut clock = AnimationClock::default();
+        // Far enough in to be part way through a rotation rather than at its
+        // start, and on a whole number of ticks like the real one.
+        for _ in 0..(64 * 9) {
+            clock.advance(1.0 / 64.0);
+        }
+        let expected = showing(clock.seconds()).row;
+        world.insert_resource(clock);
+        world.run_system_once(drive_carousels).unwrap();
+
+        let mut query = world.query::<(&ForcedAnimation, &DisplaySpeed)>();
+        let shown: Vec<(AnimationState, f32)> = query
+            .iter(&world)
+            .map(|(forced, speed)| (forced.0, speed.0))
+            .collect();
+
+        assert_eq!(shown.len(), cells().len());
+        assert!(
+            shown.iter().all(|(state, speed)| *state == expected.state && *speed == expected.speed),
+            "the line is not in step: {shown:?}"
+        );
     }
 
     /// The marker is re-inserted on every edit of the feature, so the system

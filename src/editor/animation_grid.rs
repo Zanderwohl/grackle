@@ -1,14 +1,21 @@
-//! Every class in every animation state, laid out on the floor.
+//! The whole roster, running through every animation together.
 //!
-//! One placed point turns into a body per cell: a column per [`Class`] and a
-//! row per [`AnimationState`]. That is the whole reason it is a grid rather
-//! than ten separate displays — an animation that reads well on one build and
-//! badly on another is only visible with the two side by side, and a state
-//! that was never given a clip is only obvious next to the ones that were.
+//! One placed point turns into one body per [`Class`], standing in a line — and
+//! the second axis of the grid is *time* rather than floor. All ten hold the
+//! same animation at the same moment, for two seconds, and then move on to the
+//! next; when the list runs out it is shuffled and starts again.
 //!
-//! It states no animation of its own: adding a state adds a row to every grid
-//! already placed on every map. A grid that had to be told which states exist
-//! would be a grid that silently stopped covering them.
+//! Laying the same thing out in space instead meant a body per class per state,
+//! which was a hundred and forty of them across a field forty metres deep. Ten
+//! is a line you can stand in front of and read, and a comparison across time
+//! is the one that matters anyway: an animation that reads well on one build
+//! and badly on another shows it in the moment they are both doing it.
+//!
+//! The order is shuffled so that neighbouring states are not always seen next
+//! to each other — but shuffled from the shared clock rather than rolled, so
+//! every viewer of the same map is watching the same animation at the same
+//! moment. It states no animation of its own: adding a state adds it to the
+//! rotation everywhere one of these is already placed.
 //!
 //! The bodies are ordinary skeleton entities, spawned as children by
 //! [`crate::tool::animation_grid`] and animated by the same systems that
@@ -102,13 +109,76 @@ pub fn rows() -> Vec<GridRow> {
     rows
 }
 
-/// One body's place in the grid.
+/// How long each animation is held before the next, in seconds.
+///
+/// Long enough to see a cycle or two of it and to compare it across ten
+/// bodies; short enough that watching the whole rotation is not a chore.
+pub const HOLD: f32 = 2.0;
+
+/// The rotation the bodies are part way through, and which of it they are on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Showing {
+    pub row: GridRow,
+    /// Which shuffle this is. Everything about the order follows from it.
+    pub cycle: u64,
+    /// How far through that shuffle, counting from zero.
+    pub slot: usize,
+}
+
+/// What every body on a carousel is showing at `seconds` on the shared clock.
+///
+/// A function of the clock and nothing else, which is what makes ten bodies on
+/// one map and two people watching them agree without anybody being told.
+pub fn showing(seconds: f32) -> Showing {
+    let rows = rows();
+    let period = rows.len() as f32 * HOLD;
+    let seconds = seconds.max(0.0);
+
+    let cycle = (seconds / period).floor();
+    let slot = (((seconds - cycle * period) / HOLD).floor() as usize).min(rows.len() - 1);
+    let cycle = cycle as u64;
+
+    Showing { row: order(cycle)[slot], cycle, slot }
+}
+
+/// The order the rows are shown in on a given rotation.
+///
+/// A shuffle rather than a roll: the same rotation number gives the same order
+/// on every machine, for the same reason an [`AnimationPhase`] does. Two people
+/// watching one body have to see the same thing, and an order nobody could
+/// reproduce would be the one thing on the map that only made sense from one
+/// seat.
+///
+/// [`AnimationPhase`]: crate::common::skeleton::AnimationPhase
+pub fn order(cycle: u64) -> Vec<GridRow> {
+    let mut rows = rows();
+    let mut seed = cycle;
+
+    // Fisher-Yates, drawing from an integer hash so that every machine draws
+    // the same numbers.
+    for index in (1..rows.len()).rev() {
+        seed = mixed(seed);
+        rows.swap(index, (seed % (index as u64 + 1)) as usize);
+    }
+    rows
+}
+
+/// SplitMix64's finaliser: integer-only, so every machine agrees, and it
+/// scatters consecutive seeds rather than leaving them in step.
+fn mixed(seed: u64) -> u64 {
+    let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// One body's place in the line: which class it is, and where it stands.
+///
+/// What it is *doing* is not here, because it is the same for all of them and
+/// changes every two seconds. See [`showing`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridCell {
     pub class: Class,
-    pub state: AnimationState,
-    /// How fast this body is pretending to move, in leg-lengths per second.
-    pub speed: f32,
     /// Where this body's feet go, relative to the grid's point.
     pub offset: Vec3,
 }
@@ -126,14 +196,12 @@ pub fn column_spacing() -> f32 {
     })
 }
 
-/// How far apart rows stand.
+/// How much floor a body needs front to back.
 ///
-/// Measured off how far a body actually reaches front to back while it is
-/// moving, rather than a number picked to look right at the time: rows are
-/// read from in front, and a body whose stride overlapped the row ahead of it
-/// would be one you could not judge. Sampled across the cycle because the
-/// deepest moment of a stride is not the moment anyone thinks to check.
-pub fn row_spacing() -> f32 {
+/// Measured off how far one actually reaches while it is moving, rather than a
+/// number picked to look right at the time. Sampled across the cycle because
+/// the deepest moment of a stride is not the moment anyone thinks to check.
+pub fn body_depth() -> f32 {
     static SPACING: OnceLock<f32> = OnceLock::new();
     *SPACING.get_or_init(|| {
         let skeleton = default_humanoid();
@@ -182,31 +250,19 @@ fn body_width(class: Class) -> f32 {
 /// per class, columns centred on the grid's own point.
 pub fn cells() -> Vec<GridCell> {
     let classes: Vec<Class> = Class::iter().collect();
-    let rows = rows();
-    let (columns, depth) = (column_spacing(), row_spacing());
-    // Centred, so moving the point moves the middle of the grid rather than
-    // its left edge — a grid placed in a room should be placed in the middle
-    // of it.
+    let columns = column_spacing();
+    // Centred, so moving the point moves the middle of the line rather than
+    // its left edge.
     let centre = (classes.len() as f32 - 1.0) * 0.5;
 
-    let mut cells = Vec::with_capacity(classes.len() * rows.len());
-    for (index, row) in rows.iter().enumerate() {
-        for (column, class) in classes.iter().enumerate() {
-            cells.push(GridCell {
-                class: *class,
-                state: row.state,
-                speed: row.speed,
-                // Rows recede away from the front, which is the side the
-                // bodies face and therefore the side they are read from.
-                offset: Vec3::new(
-                    (column as f32 - centre) * columns,
-                    0.0,
-                    index as f32 * depth,
-                ),
-            });
-        }
-    }
-    cells
+    classes
+        .iter()
+        .enumerate()
+        .map(|(column, class)| GridCell {
+            class: *class,
+            offset: Vec3::new((column as f32 - centre) * columns, 0.0, 0.0),
+        })
+        .collect()
 }
 
 /// The floor the grid covers, relative to its own point.
@@ -219,7 +275,7 @@ pub fn footprint() -> (Vec3, Vec3) {
     let cells = cells();
     let mut min = Vec3::splat(f32::MAX);
     let mut max = Vec3::splat(f32::MIN);
-    let half = Vec3::new(column_spacing(), 0.0, row_spacing()) * 0.5;
+    let half = Vec3::new(column_spacing(), 0.0, body_depth()) * 0.5;
     for cell in &cells {
         min = min.min(cell.offset - half);
         max = max.max(cell.offset + half);
@@ -466,37 +522,34 @@ impl AnimationGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::skeleton::{finish_pose, PoseInputs};
 
-    /// Every class in every row, once each. A grid that quietly dropped a
-    /// combination would be a grid you could not trust to have shown you the
-    /// problem.
+    /// One body per class, standing in a line. What they are doing is a
+    /// question about the clock, not about where they are standing.
     #[test]
-    fn the_grid_covers_every_class_in_every_row() {
+    fn the_line_is_one_body_per_class() {
         let cells = cells();
-        assert_eq!(cells.len(), Class::iter().count() * rows().len());
+        assert_eq!(cells.len(), Class::iter().count());
 
         for class in Class::iter() {
-            for row in rows() {
-                let matches = cells
-                    .iter()
-                    .filter(|cell| {
-                        cell.class == class && cell.state == row.state && cell.speed == row.speed
-                    })
-                    .count();
-                assert_eq!(matches, 1, "{class:?} in {row:?} appears {matches} times");
-            }
+            assert_eq!(
+                cells.iter().filter(|cell| cell.class == class).count(),
+                1,
+                "{class:?} is not on the line exactly once"
+            );
         }
+        assert!(cells.iter().all(|cell| cell.offset.z == 0.0), "the line is not a line");
     }
 
     /// The rows are written out by hand so that related states stand together,
     /// which is exactly the arrangement that lets one be forgotten. Adding a
-    /// state and not showing it is the failure this catches.
+    /// state and never showing it is the failure this catches.
     #[test]
     fn every_state_has_a_row() {
         for state in AnimationState::iter() {
             assert!(
                 rows().iter().any(|row| row.state == state),
-                "{state:?} is not shown anywhere on the grid"
+                "{state:?} is never shown"
             );
         }
     }
@@ -514,21 +567,80 @@ mod tests {
             .collect();
         assert!(speeds.len() > 1, "the run is only shown at one speed");
 
-        // And they are far enough apart to be different gaits, not three rows
-        // of the same one: at least one walks and at least one runs.
+        // Far enough apart to be different gaits rather than three rows of the
+        // same one: at least one walks and at least one runs.
         assert!(speeds.iter().any(|speed| !GaitShape::for_speed(*speed).has_flight()));
         assert!(speeds.iter().any(|speed| GaitShape::for_speed(*speed).has_flight()));
 
         // A body that is not going anywhere is shown standing still, rather
         // than running on the spot.
-        assert!(rows()
-            .iter()
-            .all(|row| row.state.uses_gait() || row.speed == 0.0));
+        assert!(rows().iter().all(|row| row.state.uses_gait() || row.speed == 0.0));
     }
 
-    /// Bodies stand in an A-pose, which is the widest a rest pose gets. If the
-    /// columns are packed tighter than that, the arms overlap and the grid is
-    /// unreadable exactly where it is meant to be useful.
+    /// Every rotation is a permutation: nothing is shown twice and nothing is
+    /// skipped, however the shuffle falls.
+    #[test]
+    fn a_rotation_shows_everything_exactly_once() {
+        for cycle in 0..64 {
+            let order = order(cycle);
+            assert_eq!(order.len(), rows().len());
+
+            for row in rows() {
+                assert_eq!(
+                    order.iter().filter(|shown| **shown == row).count(),
+                    1,
+                    "{row:?} appears the wrong number of times on rotation {cycle}"
+                );
+            }
+        }
+    }
+
+    /// Shuffled from the clock rather than rolled: asking twice gives the same
+    /// answer, which is what lets two people watching the same map watch the
+    /// same thing.
+    #[test]
+    fn the_shuffle_is_the_same_for_everyone() {
+        for cycle in 0..16 {
+            assert_eq!(order(cycle), order(cycle), "the order is not reproducible");
+        }
+
+        // And it is genuinely shuffled: consecutive rotations differ, and over
+        // a few dozen the orders are nearly all distinct.
+        let orders: Vec<Vec<GridRow>> = (0..32).map(order).collect();
+        assert!(orders[0] != orders[1], "two rotations in a row are identical");
+
+        let mut distinct = orders.clone();
+        distinct.dedup();
+        assert!(distinct.len() > 28, "the shuffle repeats itself: {} of 32", distinct.len());
+    }
+
+    /// Two seconds each, in the order the shuffle chose, then round again.
+    #[test]
+    fn each_animation_is_held_for_its_turn() {
+        let rows = rows();
+        let period = rows.len() as f32 * HOLD;
+
+        for slot in 0..rows.len() {
+            let start = slot as f32 * HOLD;
+            let expected = order(0)[slot];
+
+            for moment in [start + 0.01, start + HOLD * 0.5, start + HOLD - 0.01] {
+                let showing = showing(moment);
+                assert_eq!(showing.row, expected, "at {moment:.2}s");
+                assert_eq!(showing.slot, slot);
+                assert_eq!(showing.cycle, 0);
+            }
+        }
+
+        // Round again, on a different shuffle.
+        let next = showing(period + 0.01);
+        assert_eq!(next.cycle, 1);
+        assert_eq!(next.slot, 0);
+        assert_eq!(next.row, order(1)[0]);
+    }
+
+    /// Bodies do not overlap, and the spacing is measured off the widest of
+    /// them rather than guessed.
     #[test]
     fn neighbouring_bodies_do_not_overlap() {
         let widest = Class::iter().map(body_width).fold(0.0_f32, f32::max);
@@ -538,29 +650,16 @@ mod tests {
             column_spacing()
         );
 
-        // And the arithmetic that turns that spacing into positions has to
-        // keep the gap: a centring bug would show up here and nowhere else.
-        let front: Vec<f32> = cells()
-            .iter()
-            .filter(|cell| cell.offset.z == 0.0)
-            .map(|cell| cell.offset.x)
-            .collect();
-        for pair in front.windows(2) {
-            assert!(
-                (pair[1] - pair[0]) >= widest,
-                "two bodies {} apart are {widest} wide",
-                pair[1] - pair[0]
-            );
+        let places: Vec<f32> = cells().iter().map(|cell| cell.offset.x).collect();
+        for pair in places.windows(2) {
+            assert!((pair[1] - pair[0]) >= widest, "two bodies are {} apart", pair[1] - pair[0]);
         }
     }
 
-    /// Rows are far enough apart that a body's stride does not reach into the
-    /// row ahead of it — which is the whole of what makes a grid readable from
-    /// in front.
+    /// The floor a body is given is enough for what it does on it — a stride
+    /// that reached past its own patch would reach into the next one.
     #[test]
-    fn a_stride_does_not_reach_the_row_in_front() {
-        use crate::common::skeleton::{finish_pose, PoseInputs};
-
+    fn a_stride_stays_on_its_own_patch() {
         let skeleton = default_humanoid();
         for row in rows() {
             for step in 0..8 {
@@ -577,33 +676,22 @@ mod tests {
                     .fold(0.0_f32, f32::max);
 
                 assert!(
-                    deepest * 2.0 < row_spacing(),
-                    "{:?} reaches {:.2} m front to back, in rows {:.2} m apart",
+                    deepest * 2.0 <= body_depth(),
+                    "{:?} reaches {:.2} m front to back, on {:.2} m of floor",
                     row.state,
                     deepest * 2.0,
-                    row_spacing()
+                    body_depth()
                 );
             }
         }
     }
 
-    /// The point is the middle of the front row, not a corner: a grid is
-    /// placed by standing where you will look at it from.
+    /// The point is the middle of the line, not one end: a grid is placed by
+    /// standing where you will look at it from.
     #[test]
-    fn the_grid_is_centred_on_its_point() {
-        let front: Vec<Vec3> = cells()
-            .iter()
-            .filter(|cell| cell.offset.z == 0.0)
-            .map(|cell| cell.offset)
-            .collect();
-
-        let mean: f32 = front.iter().map(|offset| offset.x).sum::<f32>() / front.len() as f32;
-        assert!(mean.abs() < 1e-4, "the front row is off-centre by {mean}");
-        assert!(front.iter().all(|offset| offset.z.abs() < 1e-6), "the front row is not at the point");
-        // Rows go away from the viewer, never towards.
-        assert!(cells().iter().all(|cell| cell.offset.z >= 0.0));
+    fn the_line_is_centred_on_its_point() {
+        let places: Vec<f32> = cells().iter().map(|cell| cell.offset.x).collect();
+        let mean: f32 = places.iter().sum::<f32>() / places.len() as f32;
+        assert!(mean.abs() < 1e-4, "the line is off-centre by {mean}");
     }
 }
-
-
-
