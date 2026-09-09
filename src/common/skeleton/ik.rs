@@ -157,8 +157,15 @@ pub fn solve(
         return Reach::Impossible;
     }
 
-    let upper_rotation = aim(upper_direction, pole);
-    let lower_rotation = aim(lower_direction, pole);
+    // Both bones framed about the joint's own hinge rather than about the
+    // pole. The pole says which way the limb bends and is a fine thing to
+    // measure that against, but it is a terrible thing to hang a *roll* on: a
+    // bone that comes near to pointing along it — a shin under a deep crouch —
+    // has no meaningful sideways left, and the frame flips through half a turn
+    // as it crosses. The hinge is square to both bones by construction and
+    // stays that way through the whole cycle.
+    let upper_rotation = aim(upper_direction, axis);
+    let lower_rotation = aim(lower_direction, axis);
 
     // Back from world orientations to what a pose stores: the turn each joint
     // makes away from its rest, in its parent's frame.
@@ -332,26 +339,29 @@ pub fn finish_pose(
     pose
 }
 
-/// The orientation that points a bone's local `+Y` along `along`, with its
-/// local `+Z` as near `reference` as it can be.
+/// The orientation that points a bone's local `+Y` along `along`, turned so
+/// that its local `+X` lies along `hinge`.
 ///
-/// The reference is what fixes the roll. Handing it the pole means a knee and
-/// the foot below it face the same way the limb bends, which is the difference
-/// between a leg and a leg with a twisted shin.
-fn aim(along: Vec3, reference: Vec3) -> Quat {
+/// The hinge is what fixes the roll, and it has to be something square to the
+/// bone. A knee's hinge is: it is the axis the joint bends about, so it stays
+/// perpendicular to both bones however far the limb folds. Anything that can
+/// come near to parallel with the bone — the pole, for one — leaves the frame
+/// undefined at that moment and flipped through half a turn just after it,
+/// which is a leg rolling right over in the middle of a stride.
+fn aim(along: Vec3, hinge: Vec3) -> Quat {
     let y = along.normalize_or_zero();
     if y == Vec3::ZERO {
         return Quat::IDENTITY;
     }
 
-    let flattened = reference - y * reference.dot(y);
-    let z = if flattened.length_squared() < 1e-8 {
+    let flattened = hinge - y * hinge.dot(y);
+    let x = if flattened.length_squared() < 1e-8 {
         y.any_orthonormal_vector()
     } else {
         flattened.normalize()
     };
 
-    Quat::from_mat3(&Mat3::from_cols(y.cross(z), y, z))
+    Quat::from_mat3(&Mat3::from_cols(x, y, x.cross(y)))
 }
 
 #[cfg(test)]
@@ -519,6 +529,65 @@ mod tests {
                         "{name} moved {:.5} m when the hips dropped {drop} on {proportions:?}",
                         (now - *was).length()
                     );
+                }
+            }
+        }
+    }
+
+    /// A solved limb must not lurch between one moment and the next.
+    ///
+    /// It did. The frame each bone was turned in was hung off the pole — the
+    /// direction the limb bends towards — which is fine until a bone comes
+    /// near to pointing along it, at which point there is no sideways left to
+    /// measure and the frame flips through half a turn. A shin under a deep
+    /// crouch does exactly that, so crouching and standing again rolled a
+    /// whole leg over on the way.
+    ///
+    /// Sampled far more finely than anything is drawn, so a flip cannot hide
+    /// between two frames, and across the states and directions that bring a
+    /// limb closest to its own pole.
+    #[test]
+    fn a_solved_limb_never_lurches() {
+        use crate::common::class::Class;
+        use crate::common::skeleton::rig::{humanoid, Proportions};
+
+        let corner = Vec2::new(1.0, 1.0).normalize();
+        for proportions in [Proportions::DEFAULT, Class::Heavy.proportions()] {
+            let skeleton = humanoid(proportions);
+            let root = Transform::IDENTITY;
+
+            for (state, speed, travel) in [
+                (AnimationState::CrouchWalk, 4.5, Vec2::Y),
+                (AnimationState::CrouchWalkBackward, 4.5, Vec2::NEG_Y),
+                (AnimationState::CrouchStrafeLeft, 4.5, Vec2::NEG_X),
+                (AnimationState::RunForward, 2.0, Vec2::Y),
+                (AnimationState::RunForward, 7.5, Vec2::Y),
+                (AnimationState::RunForward, 4.5, corner),
+                (AnimationState::StrafeRight, 4.5, Vec2::X),
+            ] {
+                let mut previous: Option<Pose> = None;
+                for step in 0..400 {
+                    let inputs = PoseInputs {
+                        seconds: 0.0,
+                        stride: step as f32 / 400.0,
+                        speed,
+                        travel,
+                    };
+                    let pose = finish_pose(&skeleton, state, &inputs, &root);
+
+                    if let Some(before) = &previous {
+                        for bone in skeleton.bones() {
+                            let turned =
+                                before.joint(bone.name).angle_between(pose.joint(bone.name));
+                            assert!(
+                                turned < 0.2,
+                                "{} turns {turned:.2} rad in a four-hundredth of a {state:?} \
+                                 cycle on {proportions:?}",
+                                bone.name
+                            );
+                        }
+                    }
+                    previous = Some(pose);
                 }
             }
         }
