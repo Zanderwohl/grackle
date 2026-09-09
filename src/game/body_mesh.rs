@@ -205,8 +205,9 @@ fn build_body_meshes(
 
         commands
             .entity(body)
-            // A body spawned without one — a mannequin, a grid cell — is a
-            // body whose parts would have nothing to inherit from.
+            // A body spawned without one — a grid cell, a spawn point's
+            // preview — is a body whose parts would have nothing to inherit
+            // from.
             .insert_if_new(Visibility::default())
             .insert(BodyMesh { parts });
     }

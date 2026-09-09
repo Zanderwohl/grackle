@@ -149,8 +149,8 @@ default on a body that wants its own.
 
 **Hitboxes are asked for, not handed out.** Every rig gets a `Gait`, because
 every body has a stride, but `Hitboxes` come from `#[require(Hitboxes)]` on the
-markers that mean *this is a real body*: `Player`, `Mannequin`, `CarouselBody`
-and `AnimationDisplayMarker`. A `SpawnPoint` carries none of them — its body is
+markers that mean *this is a real body*: `Player`, `CarouselBody` and
+`AnimationDisplayMarker`. A `SpawnPoint` carries none of them — its body is
 a drawing of the space a body needs, so it is green, has no animator, has no
 hit volumes, and is hidden while playing rather than left for a spawning player
 to materialise inside.
