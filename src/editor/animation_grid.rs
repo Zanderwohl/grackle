@@ -20,8 +20,12 @@ use bevy_egui::egui;
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 
+use std::sync::OnceLock;
+
 use crate::common::class::Class;
-use crate::common::skeleton::{default_humanoid, humanoid, AnimationState, Pose};
+use crate::common::skeleton::{
+    default_humanoid, finish_pose, humanoid, AnimationState, Pose, PoseInputs,
+};
 use crate::common::PointResolutionError;
 use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
@@ -33,21 +37,78 @@ use crate::get;
 #[derive(Component, Debug)]
 pub struct AnimationGridMarker;
 
-/// Clear floor between one row of bodies and the next.
-///
-/// Along the grid's local Z, away from the front. Generous rather than tight:
-/// rows are read from in front, and a row close enough to overlap the one
-/// ahead of it in perspective is a row you cannot judge.
-const ROW_SPACING: f32 = 2.0;
-
 /// Clear floor either side of a body, on top of its own width.
 const COLUMN_MARGIN: f32 = 0.3;
+
+/// Clear floor between one row of bodies and the next, on top of how far they
+/// stride.
+const ROW_MARGIN: f32 = 0.4;
+
+/// Walking, running and sprinting, in leg-lengths per second.
+///
+/// The upright gait changes shape with speed — the stance fraction falls, the
+/// stride grows, and somewhere in between the walk becomes a run — so one row
+/// of it would only ever show one of those. See
+/// [`crate::common::skeleton::GaitShape::for_speed`].
+const DISPLAY_SPEEDS: [f32; 3] = [2.0, 4.5, 7.5];
+
+/// One row of the grid: a state, and the speed to show it at.
+///
+/// A row is not simply a state, because some states look like two different
+/// animations at two different speeds and there is no use in a grid that shows
+/// one of them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridRow {
+    pub state: AnimationState,
+    /// In leg-lengths per second. Zero for the states that do not move.
+    pub speed: f32,
+}
+
+/// Every row, in the order they are read.
+///
+/// Written out rather than taken from [`AnimationState::iter`] so that related
+/// states stand next to each other: the enum's own order is the order states
+/// were added, since its indices are on disk and cannot be shuffled.
+/// `every_state_has_a_row` is what stops a state being added and quietly never
+/// shown.
+pub fn rows() -> Vec<GridRow> {
+    let mut rows = vec![GridRow { state: AnimationState::Idle, speed: 0.0 }];
+
+    // The one state worth seeing three times.
+    rows.extend(DISPLAY_SPEEDS.map(|speed| GridRow {
+        state: AnimationState::RunForward,
+        speed,
+    }));
+
+    for state in [
+        AnimationState::RunBackward,
+        AnimationState::StrafeLeft,
+        AnimationState::StrafeRight,
+        AnimationState::PushingWall,
+        AnimationState::Airborne,
+        AnimationState::Crouch,
+        AnimationState::CrouchWalk,
+        AnimationState::CrouchWalkBackward,
+        AnimationState::CrouchStrafeLeft,
+        AnimationState::CrouchStrafeRight,
+    ] {
+        // A running pace for the ones that move, and nothing for the ones that
+        // do not — a body standing still at speed would be a lie the gait
+        // would then have to animate.
+        let speed = if state.uses_gait() { DISPLAY_SPEEDS[1] } else { 0.0 };
+        rows.push(GridRow { state, speed });
+    }
+
+    rows
+}
 
 /// One body's place in the grid.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridCell {
     pub class: Class,
     pub state: AnimationState,
+    /// How fast this body is pretending to move, in leg-lengths per second.
+    pub speed: f32,
     /// Where this body's feet go, relative to the grid's point.
     pub offset: Vec3,
 }
@@ -59,16 +120,47 @@ pub struct GridCell {
 /// neighbour. An A-pose is the widest a rest pose gets, which is what makes
 /// this measurable at all.
 pub fn column_spacing() -> f32 {
-    let widest = Class::iter()
-        .map(|class| body_width(class))
-        .fold(0.0_f32, f32::max);
-    widest + COLUMN_MARGIN
+    static SPACING: OnceLock<f32> = OnceLock::new();
+    *SPACING.get_or_init(|| {
+        Class::iter().map(body_width).fold(0.0_f32, f32::max) + COLUMN_MARGIN
+    })
+}
+
+/// How far apart rows stand.
+///
+/// Measured off how far a body actually reaches front to back while it is
+/// moving, rather than a number picked to look right at the time: rows are
+/// read from in front, and a body whose stride overlapped the row ahead of it
+/// would be one you could not judge. Sampled across the cycle because the
+/// deepest moment of a stride is not the moment anyone thinks to check.
+pub fn row_spacing() -> f32 {
+    static SPACING: OnceLock<f32> = OnceLock::new();
+    *SPACING.get_or_init(|| {
+        let skeleton = default_humanoid();
+        let deepest = rows()
+            .iter()
+            .flat_map(|row| (0..8).map(move |step| (row, step)))
+            .map(|(row, step)| {
+                let inputs = PoseInputs {
+                    seconds: step as f32 * 0.4,
+                    stride: step as f32 / 8.0,
+                    speed: row.speed,
+                };
+                let pose = finish_pose(skeleton, row.state, &inputs, &Transform::IDENTITY);
+                skeleton
+                    .posed_bones(&pose, &Transform::IDENTITY)
+                    .iter()
+                    .map(|bone| bone.head.z.abs().max(bone.tail.z.abs()))
+                    .fold(0.0_f32, f32::max)
+            })
+            .fold(0.0_f32, f32::max);
+
+        deepest * 2.0 + ROW_MARGIN
+    })
 }
 
 /// How wide a class's body is across, in its rest pose.
 fn body_width(class: Class) -> f32 {
-    // The shared rig for the common case, so the grid is not building ten
-    // identical skeletons every time it is asked how wide one is.
     let proportions = class.proportions();
     let owned;
     let skeleton = if proportions == default_humanoid().proportions() {
@@ -90,24 +182,26 @@ fn body_width(class: Class) -> f32 {
 /// per class, columns centred on the grid's own point.
 pub fn cells() -> Vec<GridCell> {
     let classes: Vec<Class> = Class::iter().collect();
-    let spacing = column_spacing();
+    let rows = rows();
+    let (columns, depth) = (column_spacing(), row_spacing());
     // Centred, so moving the point moves the middle of the grid rather than
     // its left edge — a grid placed in a room should be placed in the middle
     // of it.
     let centre = (classes.len() as f32 - 1.0) * 0.5;
 
-    let mut cells = Vec::with_capacity(classes.len() * AnimationState::iter().count());
-    for (row, state) in AnimationState::iter().enumerate() {
+    let mut cells = Vec::with_capacity(classes.len() * rows.len());
+    for (index, row) in rows.iter().enumerate() {
         for (column, class) in classes.iter().enumerate() {
             cells.push(GridCell {
                 class: *class,
-                state,
+                state: row.state,
+                speed: row.speed,
                 // Rows recede away from the front, which is the side the
                 // bodies face and therefore the side they are read from.
                 offset: Vec3::new(
-                    (column as f32 - centre) * spacing,
+                    (column as f32 - centre) * columns,
                     0.0,
-                    row as f32 * ROW_SPACING,
+                    index as f32 * depth,
                 ),
             });
         }
@@ -115,18 +209,20 @@ pub fn cells() -> Vec<GridCell> {
     cells
 }
 
-/// The footprint the grid needs, as half-extents on the ground.
+/// The floor the grid covers, relative to its own point.
 ///
-/// Only for the gizmo — a grid is eighteen metres across, and a mapper placing
-/// one wants to know that before the bodies appear.
-fn footprint() -> (Vec3, Vec3) {
+/// A grid is tens of metres across, and both a mapper placing one and the
+/// template that ships one want to know that before the bodies appear — the
+/// new-map room is sized from this rather than guessed at, so the room grows
+/// when the roster does.
+pub fn footprint() -> (Vec3, Vec3) {
     let cells = cells();
     let mut min = Vec3::splat(f32::MAX);
     let mut max = Vec3::splat(f32::MIN);
-    let half_width = column_spacing() * 0.5;
+    let half = Vec3::new(column_spacing(), 0.0, row_spacing()) * 0.5;
     for cell in &cells {
-        min = min.min(cell.offset - Vec3::new(half_width, 0.0, ROW_SPACING * 0.5));
-        max = max.max(cell.offset + Vec3::new(half_width, 0.0, ROW_SPACING * 0.5));
+        min = min.min(cell.offset - half);
+        max = max.max(cell.offset + half);
     }
     (min, max)
 }
@@ -371,23 +467,63 @@ impl AnimationGrid {
 mod tests {
     use super::*;
 
-    /// Every class in every state, once each. A grid that quietly dropped a
+    /// Every class in every row, once each. A grid that quietly dropped a
     /// combination would be a grid you could not trust to have shown you the
     /// problem.
     #[test]
-    fn the_grid_covers_every_class_in_every_state() {
+    fn the_grid_covers_every_class_in_every_row() {
         let cells = cells();
-        assert_eq!(cells.len(), Class::iter().count() * AnimationState::iter().count());
+        assert_eq!(cells.len(), Class::iter().count() * rows().len());
 
         for class in Class::iter() {
-            for state in AnimationState::iter() {
+            for row in rows() {
                 let matches = cells
                     .iter()
-                    .filter(|cell| cell.class == class && cell.state == state)
+                    .filter(|cell| {
+                        cell.class == class && cell.state == row.state && cell.speed == row.speed
+                    })
                     .count();
-                assert_eq!(matches, 1, "{class:?} in {state:?} appears {matches} times");
+                assert_eq!(matches, 1, "{class:?} in {row:?} appears {matches} times");
             }
         }
+    }
+
+    /// The rows are written out by hand so that related states stand together,
+    /// which is exactly the arrangement that lets one be forgotten. Adding a
+    /// state and not showing it is the failure this catches.
+    #[test]
+    fn every_state_has_a_row() {
+        for state in AnimationState::iter() {
+            assert!(
+                rows().iter().any(|row| row.state == state),
+                "{state:?} is not shown anywhere on the grid"
+            );
+        }
+    }
+
+    /// The states that look like two animations at two speeds get shown at
+    /// both, which is the whole reason a row is a state *and* a speed.
+    #[test]
+    fn a_gait_that_changes_with_speed_is_shown_at_several() {
+        use crate::common::skeleton::GaitShape;
+
+        let speeds: Vec<f32> = rows()
+            .iter()
+            .filter(|row| row.state == AnimationState::RunForward)
+            .map(|row| row.speed)
+            .collect();
+        assert!(speeds.len() > 1, "the run is only shown at one speed");
+
+        // And they are far enough apart to be different gaits, not three rows
+        // of the same one: at least one walks and at least one runs.
+        assert!(speeds.iter().any(|speed| !GaitShape::for_speed(*speed).has_flight()));
+        assert!(speeds.iter().any(|speed| GaitShape::for_speed(*speed).has_flight()));
+
+        // A body that is not going anywhere is shown standing still, rather
+        // than running on the spot.
+        assert!(rows()
+            .iter()
+            .all(|row| row.state.uses_gait() || row.speed == 0.0));
     }
 
     /// Bodies stand in an A-pose, which is the widest a rest pose gets. If the
@@ -406,7 +542,7 @@ mod tests {
         // keep the gap: a centring bug would show up here and nowhere else.
         let front: Vec<f32> = cells()
             .iter()
-            .filter(|cell| cell.state == AnimationState::default())
+            .filter(|cell| cell.offset.z == 0.0)
             .map(|cell| cell.offset.x)
             .collect();
         for pair in front.windows(2) {
@@ -418,13 +554,46 @@ mod tests {
         }
     }
 
+    /// Rows are far enough apart that a body's stride does not reach into the
+    /// row ahead of it — which is the whole of what makes a grid readable from
+    /// in front.
+    #[test]
+    fn a_stride_does_not_reach_the_row_in_front() {
+        use crate::common::skeleton::{finish_pose, PoseInputs};
+
+        let skeleton = default_humanoid();
+        for row in rows() {
+            for step in 0..8 {
+                let inputs = PoseInputs {
+                    seconds: step as f32 * 0.4,
+                    stride: step as f32 / 8.0,
+                    speed: row.speed,
+                };
+                let pose = finish_pose(skeleton, row.state, &inputs, &Transform::IDENTITY);
+                let deepest = skeleton
+                    .posed_bones(&pose, &Transform::IDENTITY)
+                    .iter()
+                    .map(|bone| bone.head.z.abs().max(bone.tail.z.abs()))
+                    .fold(0.0_f32, f32::max);
+
+                assert!(
+                    deepest * 2.0 < row_spacing(),
+                    "{:?} reaches {:.2} m front to back, in rows {:.2} m apart",
+                    row.state,
+                    deepest * 2.0,
+                    row_spacing()
+                );
+            }
+        }
+    }
+
     /// The point is the middle of the front row, not a corner: a grid is
     /// placed by standing where you will look at it from.
     #[test]
     fn the_grid_is_centred_on_its_point() {
         let front: Vec<Vec3> = cells()
             .iter()
-            .filter(|cell| cell.state == AnimationState::default())
+            .filter(|cell| cell.offset.z == 0.0)
             .map(|cell| cell.offset)
             .collect();
 
@@ -435,4 +604,6 @@ mod tests {
         assert!(cells().iter().all(|cell| cell.offset.z >= 0.0));
     }
 }
+
+
 

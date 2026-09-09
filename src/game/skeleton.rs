@@ -26,7 +26,8 @@ use crate::common::class::{body_centre_from_feet, Stance};
 use crate::common::hitbox::Hitboxes;
 use crate::common::skeleton::{
     draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
-    ForcedAnimation, Gait, Pose, PoseInputs, Proportions, Skeleton, SkeletonAnimator,
+    DisplaySpeed, ForcedAnimation, Gait, Pose, PoseInputs, Proportions, Skeleton,
+    SkeletonAnimator,
     SkeletonPalette,
 };
 use crate::game::hitbox::HitboxPlugin;
@@ -100,19 +101,6 @@ pub fn advance_animation_clock(time: Res<Time<Fixed>>, mut clock: ResMut<Animati
     clock.advance(time.delta_secs());
 }
 
-/// How fast a body with no movement to measure appears to run, in leg-lengths
-/// per second.
-///
-/// For bodies that are being shown rather than played: an animation display
-/// forced into a run covers no ground, and a run cycle driven by ground
-/// covered would stand perfectly still. A nominal speed is the honest
-/// stand-in — it is a preview of what running looks like, not a body running.
-///
-/// Fast enough to be a run rather than a walk, since `RunForward` is the state
-/// being previewed. A display of the walk would need a speed of its own, and a
-/// walk and a run are the same state here.
-const DISPLAY_RUN_SPEED: f32 = 6.0;
-
 /// Anything with a rig gets the parts every body has.
 ///
 /// One place rather than a line in each of the four things that spawn a body:
@@ -151,10 +139,16 @@ pub fn follow_stance(mut bodies: Query<(&Stance, &mut SkeletonRoot), Changed<Sta
 /// replicates it, the way it replicates a position.
 pub fn advance_gaits(
     time: Res<Time<Fixed>>,
-    mut bodies: Query<(&Skeleton, &SkeletonAnimator, Option<&PhysicsBody>, &mut Gait)>,
+    mut bodies: Query<(
+        &Skeleton,
+        &SkeletonAnimator,
+        Option<&PhysicsBody>,
+        Option<&DisplaySpeed>,
+        &mut Gait,
+    )>,
 ) {
     let dt = time.delta_secs();
-    for (skeleton, animator, physics, mut gait) in &mut bodies {
+    for (skeleton, animator, physics, display, mut gait) in &mut bodies {
         // Back to the start when a body stops, so setting off again does not
         // begin mid-swing on a foot that is already in the air.
         if !animator.state().uses_gait() {
@@ -167,7 +161,9 @@ pub fn advance_gaits(
             // Only the ground covered counts. Falling is not walking, and a
             // body shoved sideways by a lift has not taken a step.
             Some(body) => (body.current - body.previous).xz().length(),
-            None => DISPLAY_RUN_SPEED * leg * dt,
+            // Nothing moving to measure: a body being shown rather than
+            // played, covering ground it is not actually covering.
+            None => display.copied().unwrap_or_default().0 * leg * dt,
         };
         gait.advance(distance, leg, dt);
     }

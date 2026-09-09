@@ -287,6 +287,23 @@ impl Gait {
     }
 }
 
+/// How fast a body with no movement to measure should look like it is going,
+/// in leg-lengths per second.
+///
+/// For bodies that are being shown rather than played — an animation display
+/// forced into a run covers no ground, and a cycle driven by ground covered
+/// would stand perfectly still. A component rather than a constant because a
+/// grid shows the same state at several speeds on purpose: the upright gait
+/// changes shape as it speeds up, so a walk and a run are two rows of it.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct DisplaySpeed(pub f32);
+
+impl Default for DisplaySpeed {
+    fn default() -> Self {
+        DisplaySpeed(6.0)
+    }
+}
+
 /// Where one foot is, relative to where it rests, in leg-lengths.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FootOffset {

@@ -9,8 +9,8 @@
 use bevy::prelude::*;
 
 use crate::common::skeleton::{
-    default_humanoid, draw_skeleton, humanoid, AnimationPhase, ForcedAnimation, Pose,
-    SkeletonAnimator, SkeletonPalette,
+    default_humanoid, draw_skeleton, humanoid, AnimationPhase, DisplaySpeed, ForcedAnimation,
+    Pose, SkeletonAnimator, SkeletonPalette,
 };
 use crate::editor::animation_grid::{cells, AnimationGrid, AnimationGridMarker};
 use crate::editor::editable::{FeatureTrait, PointRef};
@@ -64,8 +64,17 @@ pub fn sync_animation_grids(
                     // The one difference from a player: pinned to this cell's
                     // state instead of being told what is happening to it.
                     ForcedAnimation(cell.state),
+                    // The row's own speed: the upright gait changes shape as
+                    // it speeds up, so a walk and a run are two rows of the
+                    // same state rather than one.
+                    DisplaySpeed(cell.speed),
                     Transform::from_translation(cell.offset),
-                    Name::new(format!("{} \u{2014} {}", cell.class.name(), cell.state.name())),
+                    Name::new(format!(
+                        "{} \u{2014} {} ({:.1})",
+                        cell.class.name(),
+                        cell.state.name(),
+                        cell.speed
+                    )),
                 ));
             }
         });
