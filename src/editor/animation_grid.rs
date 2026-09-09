@@ -412,11 +412,22 @@ impl FeatureTrait for AnimationGrid {
     /// this runs each time the feature changes — sixty more bodies for every
     /// nudge of the point.
     fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
-        commands.entity(entity).insert((
-            Transform::from_translation(self.resolved_location)
-                .with_rotation(Quat::from_rotation_y(self.yaw)),
-            AnimationGridMarker,
-        ));
+        commands
+            .entity(entity)
+            .insert((
+                Transform::from_translation(self.resolved_location)
+                    .with_rotation(Quat::from_rotation_y(self.yaw)),
+                AnimationGridMarker,
+            ))
+            // The bodies hang off this entity and each carries a `Visibility`
+            // of its own, which Bevy expects to inherit from a parent that has
+            // one. Without it every body warns (B0004) and the grid cannot be
+            // hidden as a unit.
+            //
+            // `insert_if_new`, like the rig on an animation display: this runs
+            // on every edit, and re-inserting a default would undo anything
+            // that had hidden the grid on the frame the point was nudged.
+            .insert_if_new(Visibility::default());
     }
 
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {
@@ -595,6 +606,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The grid entity carries a `Visibility` so the bodies hung off it have
+    /// one to inherit. Without it Bevy warns once per body per spawn (B0004)
+    /// and there is no way to hide the grid as a unit.
+    #[test]
+    fn a_grid_can_be_a_parent_to_visible_bodies() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let grid = AnimationGrid::new(0.0, 0.0, 0.0);
+        world
+            .run_system_once(move |mut commands: Commands| {
+                grid.apply_to_entity(&mut commands, entity);
+            })
+            .unwrap();
+
+        assert!(world.get::<Visibility>(entity).is_some());
+        assert!(
+            world.get::<InheritedVisibility>(entity).is_some(),
+            "the bodies have nothing to inherit visibility from"
+        );
     }
 
     /// Shuffled from the clock rather than rolled: asking twice gives the same

@@ -25,6 +25,7 @@ use crate::common::skeleton::{
 use crate::common::PointResolutionError;
 use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
+use crate::common::damage::Damageable;
 use crate::common::hitbox::Hitboxes;
 use crate::get;
 
@@ -32,11 +33,12 @@ use crate::get;
 /// without reading the timeline — the same arrangement `SpawnPoint` has with
 /// `SpawnPointMarker`.
 ///
-/// Requires [`Hitboxes`]: a display exists to be looked at closely, and where
-/// a body can be hit while it holds a state is one of the things worth
-/// looking at.
+/// Requires [`Hitboxes`] and [`Damageable`]: a display exists to be looked at
+/// closely, and where a body can be hit while it holds a state is one of the
+/// things worth looking at. Health comes with them because a body you can hit
+/// and cannot hurt is a harness that only tests half the answer.
 #[derive(Component, Debug)]
-#[require(Hitboxes)]
+#[require(Hitboxes, Damageable)]
 pub struct AnimationDisplayMarker;
 
 /// A body on the map, holding one state.

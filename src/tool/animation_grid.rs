@@ -8,13 +8,16 @@
 
 use bevy::prelude::*;
 
+use crate::common::damage::Damageable;
 use crate::common::hitbox::Hitboxes;
 use crate::common::skeleton::{
     default_humanoid, draw_skeleton, humanoid, AnimationPhase, DisplaySpeed, ForcedAnimation,
     Pose, SkeletonAnimator, SkeletonPalette,
 };
 use crate::common::skeleton::AnimationClock;
-use crate::editor::animation_grid::{cells, showing, AnimationGrid, AnimationGridMarker};
+use crate::editor::animation_grid::{
+    cells, showing, AnimationGrid, AnimationGridMarker, GridCell,
+};
 use crate::editor::editable::{FeatureTrait, PointRef};
 use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
 use crate::tool::Tools;
@@ -33,23 +36,20 @@ impl Plugin for AnimationGridPlugin {
     }
 }
 
-/// Stand up the roster under every grid that does not have one yet.
-///
-/// Children, so the whole grid moves and turns with its point for free and is
-/// despawned with it — including on undo, which despawns the entity outright.
-///
-/// Guarded on the grid having no bodies rather than on `Added` alone: the
-/// marker is re-inserted whenever the feature is edited, and a grid that
-/// spawned a second roster every time its point was nudged would be sixty
-/// bodies deep in itself within a drag.
 /// One of the bodies a grid stands up, waiting to be told what to do.
 ///
-/// Requires [`Hitboxes`]: the grid is the harness they are checked against —
-/// stand in front of it and watch sixty heads bob inside head boxes that
-/// hardly move.
+/// Requires [`Hitboxes`] and [`Damageable`]: the grid is the harness they are
+/// checked against — stand in front of it, watch sixty heads bob inside head
+/// boxes that hardly move, and shoot one to see the number that comes off.
+///
+/// Carries which cell of [`cells`] it is, so a grid can tell a body it is
+/// missing from one it still has. Without it, a body shot out of the roster
+/// leaves a hole nothing can name, and refilling one gap means rebuilding the
+/// whole grid — taking the other fifty-nine bodies' phases and blends down
+/// with it.
 #[derive(Component, Debug)]
-#[require(Hitboxes)]
-pub struct CarouselBody;
+#[require(Hitboxes, Damageable)]
+pub struct CarouselBody(pub usize);
 
 /// Put every carousel body into whatever the shared clock says the roster is
 /// showing.
@@ -96,39 +96,92 @@ pub fn drive_carousels(
     }
 }
 
+/// Stand up the roster under every grid that is short of one.
+///
+/// Children, so the whole grid moves and turns with its point for free and is
+/// despawned with it — including on undo, which despawns the entity outright.
+///
+/// Two ways a grid comes to be short, filled at different moments on purpose:
+///
+/// - **Nothing standing at all**: the grid has just been placed, or has just
+///   had its point nudged — the marker is re-inserted on every edit. It gets
+///   its roster now, because a mapper staring at an empty patch of floor
+///   cannot tell a grid that is waiting from a tool that did not work.
+/// - **A gap in it**: a body was shot out of the roster. That is filled at the
+///   next shuffle, when the whole grid changes state anyway. A body appearing
+///   out of nothing mid-pose is a thing you notice; one appearing as
+///   everything else changes is not.
+///
+/// Per cell rather than by rebuilding the roster, so the bodies that survived
+/// keep their phases and their blends. Refilling one gap must not visibly
+/// restart the other fifty-nine.
+///
+/// Checking the cells present rather than `Added` alone is also what stops a
+/// grid stacking rosters: the marker is re-inserted on every edit, and a grid
+/// that spawned a fresh sixty each time its point moved would be sixty bodies
+/// deep in itself within a drag.
 pub fn sync_animation_grids(
     mut commands: Commands,
-    grids: Query<(Entity, Option<&Children>), Added<AnimationGridMarker>>,
+    clock: Res<AnimationClock>,
+    grids: Query<(Entity, Option<&Children>), With<AnimationGridMarker>>,
+    bodies: Query<&CarouselBody>,
+    mut last_cycle: Local<Option<u64>>,
 ) {
+    // The same boundary `drive_carousels` announces on, read from the same
+    // clock rather than counted here: a refill that happened on its own
+    // schedule would arrive in the middle of a pose.
+    let cycle = showing(clock.seconds()).cycle;
+    let shuffled = last_cycle.replace(cycle) != Some(cycle);
+
+    let cells = cells();
     for (grid, children) in &grids {
-        if children.is_some_and(|children| !children.is_empty()) {
+        let mut standing = vec![false; cells.len()];
+        for child in children.into_iter().flat_map(|children| children.iter()) {
+            if let Ok(body) = bodies.get(child) {
+                if let Some(cell) = standing.get_mut(body.0) {
+                    *cell = true;
+                }
+            }
+        }
+
+        let missing: Vec<usize> = (0..cells.len()).filter(|cell| !standing[*cell]).collect();
+        if missing.is_empty() {
+            continue;
+        }
+        // Short but not empty: somebody shot one. It waits for the shuffle.
+        if missing.len() < cells.len() && !shuffled {
             continue;
         }
 
         commands.entity(grid).with_children(|parent| {
-            for (index, cell) in cells().into_iter().enumerate() {
-                parent.spawn((
-                    humanoid(cell.class.proportions()),
-                    Pose::rest(),
-                    SkeletonAnimator::default(),
-                    // From the cell's place in the grid, which every machine
-                    // that loads this map computes the same way. Sixty bodies
-                    // bouncing in lockstep would read as one machine, and
-                    // sixty bodies with locally rolled phases would put two
-                    // viewers of the same map out of step with each other.
-                    AnimationPhase::from_id(index as u64),
-                    // The one difference from a player: pinned to this cell's
-                    // state instead of being told what is happening to it.
-                    // Told what to do by `drive_carousels`, every frame.
-                    CarouselBody,
-                    ForcedAnimation::default(),
-                    DisplaySpeed::default(),
-                    Transform::from_translation(cell.offset),
-                    Name::new(cell.class.name()),
-                ));
+            for cell in missing {
+                parent.spawn(carousel_body(cell, &cells[cell]));
             }
         });
     }
+}
+
+/// One body of the roster, as the grid wants it.
+fn carousel_body(cell: usize, placed: &GridCell) -> impl Bundle {
+    (
+        humanoid(placed.class.proportions()),
+        Pose::rest(),
+        SkeletonAnimator::default(),
+        // From the cell's place in the grid, which every machine that loads
+        // this map computes the same way. Sixty bodies bouncing in lockstep
+        // would read as one machine, and sixty bodies with locally rolled
+        // phases would put two viewers of the same map out of step with each
+        // other.
+        AnimationPhase::from_id(cell as u64),
+        // The one difference from a player: pinned to this cell's state
+        // instead of being told what is happening to it. Told what to do by
+        // `drive_carousels`, every frame.
+        CarouselBody(cell),
+        ForcedAnimation::default(),
+        DisplaySpeed::default(),
+        Transform::from_translation(placed.offset),
+        Name::new(placed.class.name()),
+    )
 }
 
 impl PlaceablePoint for AnimationGrid {
@@ -175,9 +228,69 @@ mod tests {
 
     fn grid_world() -> World {
         let mut world = World::new();
+        world.init_resource::<AnimationClock>();
         world.spawn((AnimationGridMarker, Transform::IDENTITY));
         world.run_system_once(sync_animation_grids).unwrap();
+        world.flush();
         world
+    }
+
+    fn standing(world: &mut World) -> Vec<usize> {
+        let mut cells: Vec<usize> = world
+            .query::<&CarouselBody>()
+            .iter(world)
+            .map(|body| body.0)
+            .collect();
+        cells.sort_unstable();
+        cells
+    }
+
+    /// A body shot out of the grid is not replaced on the spot — that would
+    /// be a body appearing out of nothing while you watched — but it is back
+    /// by the next shuffle.
+    ///
+    /// Registered rather than `run_system_once`d, because the system remembers
+    /// which shuffle it last saw in a `Local` and a fresh system would think
+    /// every call was a new one.
+    #[test]
+    fn a_body_shot_out_of_the_roster_comes_back_at_the_next_shuffle() {
+        let mut world = World::new();
+        world.init_resource::<AnimationClock>();
+        world.spawn((AnimationGridMarker, Transform::IDENTITY));
+        let sync = world.register_system(sync_animation_grids);
+
+        world.run_system(sync).unwrap();
+        world.flush();
+        assert_eq!(standing(&mut world).len(), cells().len());
+
+        // Shoot one out of the middle of the line.
+        let shot = world
+            .query::<(Entity, &CarouselBody)>()
+            .iter(&world)
+            .find(|(_, body)| body.0 == 3)
+            .map(|(entity, _)| entity)
+            .expect("no third cell");
+        world.despawn(shot);
+
+        world.run_system(sync).unwrap();
+        world.flush();
+        assert_eq!(
+            standing(&mut world).len(),
+            cells().len() - 1,
+            "the body came back mid-pose instead of waiting for the shuffle"
+        );
+
+        // Well past a whole rotation of the roster.
+        world.resource_mut::<AnimationClock>().advance(1000.0);
+        world.run_system(sync).unwrap();
+        world.flush();
+
+        let back = standing(&mut world);
+        assert_eq!(back.len(), cells().len(), "the shuffle did not refill the grid");
+        // The same cell, in its own place, rather than a sixtieth body on the
+        // end of the line.
+        assert!(back.contains(&3));
+        assert_eq!(back, (0..cells().len()).collect::<Vec<_>>());
     }
 
     /// One body per cell, each a real skeleton standing where the line puts

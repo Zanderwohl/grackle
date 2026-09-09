@@ -4,6 +4,7 @@ use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::time::Fixed;
 
+use crate::common::damage::{Damageable, PlayerId};
 use crate::common::hitbox::Hitboxes;
 use crate::common::class::{
     body_centre_from_feet, Stance, CLASS_HALF_EXTENTS, TALLEST_CLASS_EYE_HEIGHT,
@@ -54,10 +55,12 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 /// and not the eye — [`PLAYER_HALF`] is measured from here, and the camera
 /// hangs off it as a child.
 ///
-/// Requires [`Hitboxes`]: a player is what hitboxes exist for, and one spawned
-/// without them fails silently as a body nobody can shoot.
+/// Requires [`Hitboxes`] and [`Damageable`]: a player is what hitboxes exist
+/// for, and one spawned without them fails silently as a body nobody can
+/// shoot. Health is the same statement — it is not required by `Damageable`'s
+/// own definition, because a crate has health and is not a player.
 #[derive(Component, Debug)]
-#[require(Hitboxes)]
+#[require(Hitboxes, Damageable)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -115,6 +118,13 @@ pub struct PlayerInput {
     /// which can disagree: a body under a low ceiling cannot stand up when
     /// this goes false.
     pub crouch: bool,
+    /// The trigger was pulled at some point since the last step consumed it.
+    ///
+    /// Latched like jump and unlike sprint, and for a sharper reason: a shot
+    /// is an edge. Reading `just_pressed` from the fixed step would fire twice
+    /// on a slow frame and not at all on a fast one, which is a weapon whose
+    /// rate of fire is the frame rate.
+    pub attack: bool,
 }
 
 /// Where the body is at fixed-step boundaries, so rendering can draw between
@@ -244,11 +254,12 @@ pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
 /// The yaw goes into `Player` as well as `Transform` because `mouse_look` owns
 /// the rotation from the next frame on and reads the body's yaw to do it —
 /// setting only the transform would be undone on the first mouse movement.
-pub fn spawn_player(commands: &mut Commands, spawn: Spawn) {
+pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) {
     let position = body_centre_from_feet(spawn.feet);
     commands
         .spawn((
             Player { yaw: spawn.yaw, ..default() },
+            id,
             Stance::default(),
             PhysicsBody::at(position),
             Transform::from_translation(position).with_rotation(Quat::from_rotation_y(spawn.yaw)),
@@ -278,7 +289,11 @@ pub fn spawn_player(commands: &mut Commands, spawn: Spawn) {
 ///
 /// Runs before the fixed loop so a press is available to the steps taken in
 /// the same frame it happened, rather than a frame late.
-pub fn gather_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInput>) {
+pub fn gather_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    mut input: ResMut<PlayerInput>,
+) {
     let mut movement = Vec2::ZERO;
     if keys.pressed(KeyCode::KeyW) {
         movement.y += 1.0;
@@ -297,6 +312,11 @@ pub fn gather_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInp
     // Accumulated, not assigned: a press between two fixed steps must not be
     // erased by the frames either side of it that saw nothing.
     input.jump |= keys.pressed(KeyCode::Space);
+
+    // The edge, not the state: one press is one shot, however many frames
+    // pass before a fixed step gets round to it. Automatic fire is a weapon
+    // property and will latch a held button instead.
+    input.attack |= buttons.just_pressed(MouseButton::Left);
 
     input.sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     input.crouch = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);

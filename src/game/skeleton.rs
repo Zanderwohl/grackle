@@ -31,6 +31,7 @@ use crate::common::skeleton::{
 };
 use crate::game::body_mesh::BodyMeshPlugin;
 use crate::game::hitbox::HitboxPlugin;
+use crate::game::hitscan::HitscanPlugin;
 use crate::game::player::{
     step_player, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
 };
@@ -59,22 +60,16 @@ impl Plugin for SkeletonPlugin {
         app
             // The boxes a body can be hit on are part of what a body is, and
             // they need the same renderer resources this plugin already does.
-            .add_plugins(HitboxPlugin)
+            // The debug laser next to the boxes it tests against: it has no
+            // meaning without them, and it is how you check they are where
+            // they look like they are.
+            .add_plugins((HitboxPlugin, HitscanPlugin))
             // Beside the hitboxes rather than in `GamePlugin` for the same
             // reason: the editor shows bodies too, and one with geometry only
             // in Play would be a preview of something else.
             .add_plugins(BodyMeshPlugin)
-            .init_resource::<AnimationClock>()
+            .add_plugins(GameTimePlugin)
             .init_resource::<ShowBones>()
-            // Before anything reads it, and on the tick: the clock is the one
-            // quantity every viewer of a body has to agree on.
-            .add_systems(FixedUpdate, (
-                advance_animation_clock,
-                // After the step, because it advances on the ground that step
-                // actually covered.
-                advance_gaits.after(step_player),
-                follow_stance.after(step_player),
-            ))
             .add_systems(Update, toggle_bones)
             .add_systems(Update, (
                 describe_player_bodies.run_if(in_state(AppMode::Play)),
@@ -88,6 +83,42 @@ impl Plugin for SkeletonPlugin {
             // `interpolate_bodies` has already run by here, so a player's
             // skeleton follows the smoothed position, not the 64 Hz one.
             .add_systems(PostUpdate, draw_skeletons.after(TransformSystems::Propagate))
+        ;
+    }
+}
+
+/// Game time: the clocks a match runs on, and the switch that stops them.
+///
+/// **None of it runs in the editor.** Everything here is a cycle — the shared
+/// clock an animation is sampled against, the stride a gait is at, the stance
+/// a step decided — and a room is far easier to line up against a body that is
+/// holding still than one that is breathing.
+///
+/// What this does *not* freeze is `advance_animators`, which still blends a
+/// display into whatever state the panel has just been set to. That is not
+/// game time; that is the editor answering an edit, and a display that stopped
+/// responding to the dropdown above it would be a worse editor rather than a
+/// stiller one. The clock being frozen is what makes the answer a held frame
+/// instead of a cycle.
+///
+/// Its own plugin so that "does game time run right now" is one gate in one
+/// place rather than a `run_if` on each system, and so a test can ask the
+/// question without standing up a renderer.
+pub struct GameTimePlugin;
+
+impl Plugin for GameTimePlugin {
+    fn build(&self, app: &mut App) {
+        app
+            .init_resource::<AnimationClock>()
+            // Before anything reads it, and on the tick: the clock is the one
+            // quantity every viewer of a body has to agree on.
+            .add_systems(FixedUpdate, (
+                advance_animation_clock,
+                // After the step, because it advances on the ground that step
+                // actually covered.
+                advance_gaits.after(step_player),
+                follow_stance.after(step_player),
+            ).run_if(in_state(AppMode::Play)))
         ;
     }
 }
@@ -364,7 +395,7 @@ mod tests {
         let rig = || (humanoid(Proportions::DEFAULT), Pose::rest(), Transform::IDENTITY);
 
         let real = [
-            world.spawn((CarouselBody, rig())).id(),
+            world.spawn((CarouselBody(0), rig())).id(),
             world.spawn((AnimationDisplayMarker, rig())).id(),
             world.spawn((Player::default(), rig())).id(),
         ];
@@ -383,6 +414,33 @@ mod tests {
         // A body in every other respect: it is only hit volumes it goes
         // without.
         assert!(world.get::<Gait>(preview).is_some(), "the preview is not a body at all");
+    }
+
+    /// The thing the whole gate is for: a body in the editor is holding a
+    /// frame, not playing a cycle. Only the clock is checked, because the
+    /// clock is what every animation is sampled against — freeze it and the
+    /// pose is frozen with it.
+    #[test]
+    fn game_time_does_not_run_in_the_editor() {
+        use bevy::state::app::StatesPlugin;
+
+        let mut app = App::new();
+        app.add_plugins((StatesPlugin, bevy::time::TimePlugin));
+        app.init_state::<AppMode>();
+        app.add_plugins(GameTimePlugin);
+        app.update();
+
+        for _ in 0..8 {
+            app.world_mut().run_schedule(FixedUpdate);
+        }
+        assert_eq!(app.world().resource::<AnimationClock>().ticks(), 0, "the editor was animating");
+
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        for _ in 0..8 {
+            app.world_mut().run_schedule(FixedUpdate);
+        }
+        assert_eq!(app.world().resource::<AnimationClock>().ticks(), 8, "playing did not start the clock");
     }
 
     /// The seam the whole arrangement rests on: a body's animation follows

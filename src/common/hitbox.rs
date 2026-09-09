@@ -27,8 +27,9 @@
 //!   machines drawing at different rates. Hitboxes are computed on the tick,
 //!   from a pose sampled at the tick — see [`crate::game::hitbox`].
 //!
-//! There is nothing to shoot yet, so nothing tests against these; they are
-//! drawn as gizmos and no further. Hit *detection* arrives with a weapon.
+//! What tests against them is [`crate::common::hitscan`], and the debug laser
+//! in [`crate::game::hitscan`] is how you look at the answer. There is still no
+//! weapon and no damage — a hit is a coloured ball and no further.
 
 use bevy::prelude::*;
 

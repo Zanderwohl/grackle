@@ -27,8 +27,8 @@ use crate::game::skeleton::{
 
 /// Whether hitboxes are drawn. `F4` toggles it.
 ///
-/// On by default: they exist to be looked at, and nothing tests against them
-/// yet, so a hidden hitbox layer would be a layer nobody ever checked.
+/// On by default: they are the thing the debug laser is aimed at, and a
+/// hidden hitbox layer would be a layer nobody ever checked.
 #[derive(Resource, Debug)]
 pub struct ShowHitboxes(pub bool);
 
@@ -65,7 +65,7 @@ fn toggle_hitboxes(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowHitboxe
 }
 
 /// Recompute every body's boxes from a pose sampled on this tick.
-fn update_hitboxes(
+pub fn update_hitboxes(
     clock: Res<AnimationClock>,
     mut bodies: Query<(
         &Skeleton,
