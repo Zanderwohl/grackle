@@ -538,12 +538,19 @@ const IDLE_LEAN: f32 = 0.045;
 /// How far the arms swing, in radians.
 const IDLE_ARM_SWING: f32 = 0.05;
 
-/// How far the knees come up in the air, in radians.
+/// How the legs are carried in the air, in radians: how far the hip is raised
+/// and how far the knee is bent under it.
 ///
-/// Slight. A body in the air is on its way to a landing, not tucked into a
-/// ball — the legs come up a little and stay a little bent, which is what a
-/// body does when it is about to need them.
-const AIRBORNE_LIFT: f32 = 0.2;
+/// The two legs do not match. A body with its legs together is a body at
+/// attention, which is not what anybody looks like mid-jump — one leads with
+/// the knee up and the other trails with the heel tucked behind. Which one
+/// leads is arbitrary and stays put; mirroring it would need a reason to
+/// mirror it by.
+/// The knee is what raises a foot; the hip mostly swings it forward. So both
+/// legs bend further at the knee than they lift at the hip, which is also what
+/// tucks the heels up rather than leaving the legs dangling.
+const AIRBORNE_LEADING: (f32, f32) = (0.55, -1.25);
+const AIRBORNE_TRAILING: (f32, f32) = (0.10, -1.05);
 
 /// Off the ground.
 ///
@@ -554,18 +561,18 @@ const AIRBORNE_LIFT: f32 = 0.2;
 fn airborne_pose() -> Pose {
     let mut pose = Pose::rest();
 
-    for (thigh, shin) in [
-        (bone::THIGH_L, bone::SHIN_L),
-        (bone::THIGH_R, bone::SHIN_R),
+    for ((thigh, shin), (hip, knee)) in [
+        ((bone::THIGH_L, bone::SHIN_L), AIRBORNE_LEADING),
+        ((bone::THIGH_R, bone::SHIN_R), AIRBORNE_TRAILING),
     ] {
-        pose.set(thigh, Quat::from_rotation_x(AIRBORNE_LIFT));
-        pose.set(shin, Quat::from_rotation_x(-AIRBORNE_LIFT * 1.8));
+        pose.set(thigh, Quat::from_rotation_x(hip));
+        pose.set(shin, Quat::from_rotation_x(knee));
     }
 
-    // Forward and up, the way arms go when the ground stops being there —
-    // and at the sides rather than out on the diagonal, like every other
-    // posture.
-    arms_at_sides(&mut pose, [0.7, 0.7], 1.3);
+    // Forward and up, the way arms go when the ground stops being there — and
+    // at the sides rather than out on the diagonal, like every other posture.
+    // The arm opposite the leading leg carries higher, as it would running.
+    arms_at_sides(&mut pose, [0.5, 0.9], 1.3);
 
     pose
 }
@@ -694,6 +701,32 @@ mod tests {
                 "at {seconds}s the hand is {idling:.2} out, against {resting:.2} at rest"
             );
         }
+    }
+
+    /// Both feet up, and not the same amount: a body in the air with its legs
+    /// together reads as standing to attention while falling.
+    #[test]
+    fn the_airborne_pose_lifts_both_feet_and_splits_them() {
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let root = Transform::IDENTITY;
+        let ankle = |pose: &Pose, name: &str| {
+            skeleton
+                .posed_bones(pose, &root)
+                .into_iter()
+                .find(|posed| posed.name == name)
+                .unwrap()
+                .tail
+        };
+
+        let flying = AnimationState::Airborne.pose(&PoseInputs::default());
+        for name in [bone::SHIN_L, bone::SHIN_R] {
+            let lift = ankle(&flying, name).y - ankle(&Pose::rest(), name).y;
+            assert!(lift > 0.08, "{name} is only {lift:.2} m off where it stands");
+        }
+
+        // One in front of the other, by enough to see.
+        let split = ankle(&flying, bone::SHIN_L).z - ankle(&flying, bone::SHIN_R).z;
+        assert!(split.abs() > 0.1, "the feet are {split:.2} m apart front to back");
     }
 
     /// A one-sided idle would be a body leaning slightly for ever, and would
@@ -947,3 +980,4 @@ mod tests {
         assert_eq!(AnimationState::from_index(9999), AnimationState::Idle);
     }
 }
+
