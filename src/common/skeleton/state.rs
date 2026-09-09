@@ -60,6 +60,12 @@ pub struct PoseInputs {
     /// along by something else animates as moving and a body pushing at a wall
     /// does not. It is what decides whether a gait is a walk or a run.
     pub speed: f32,
+    /// Which way it is going, in its own frame: `x` right, `y` forwards.
+    ///
+    /// The state says what a body is doing in the coarse — running, shuffling,
+    /// ducked — and this says exactly which way, which is the only way a
+    /// diagonal can be one thing rather than a choice between two states.
+    pub travel: Vec2,
 }
 
 /// The clock every animation is sampled against.
@@ -410,7 +416,7 @@ impl AnimationState {
                 pose
             }
             state if state.uses_gait() => {
-                gait_pose(inputs, direction_of(*state), state.gait_style(inputs))
+                gait_pose(inputs, state.travel(inputs), state.gait_style(inputs))
             }
             _ => Pose::rest(),
         }
@@ -436,6 +442,20 @@ impl AnimationState {
         )
     }
 
+    /// Which way this body is travelling, in its own frame.
+    ///
+    /// Measured movement where there is any, and the state's own coarse
+    /// direction where there is not — a display standing on the spot has
+    /// nothing to measure, and a body that has actually gone somewhere knows
+    /// better than its own label does.
+    fn travel(&self, inputs: &PoseInputs) -> Vec2 {
+        if inputs.travel == Vec2::ZERO {
+            direction_of(*self)
+        } else {
+            inputs.travel.normalize_or_zero()
+        }
+    }
+
     /// How a state carries itself while it walks.
     ///
     /// A crouched walk is its own gait rather than the upright one played
@@ -458,11 +478,7 @@ impl AnimationState {
     /// what an idle wants. A clip will answer this from its contact spans.
     pub fn foot_offsets(&self, inputs: &PoseInputs) -> [FootOffset; 2] {
         if self.uses_gait() {
-            gait_foot_offsets(
-                inputs.stride,
-                direction_of(*self),
-                self.gait_style(inputs).shape,
-            )
+            gait_foot_offsets(inputs.stride, self.travel(inputs), self.gait_style(inputs).shape)
         } else {
             [FootOffset::default(); 2]
         }
@@ -998,8 +1014,8 @@ mod tests {
         );
 
         use crate::common::skeleton::gait::direction_of;
-        assert_eq!(direction_of(AnimationState::CrouchWalkBackward), -1.0);
-        assert_eq!(direction_of(AnimationState::CrouchWalk), 1.0);
+        assert_eq!(direction_of(AnimationState::CrouchWalkBackward), Vec2::NEG_Y);
+        assert_eq!(direction_of(AnimationState::CrouchWalk), Vec2::Y);
     }
 
     /// A forced state ignores requests entirely — that is the whole point of

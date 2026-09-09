@@ -134,14 +134,48 @@ const SIDESTEP_LEAN: f32 = 0.12;
 pub struct GaitShape {
     /// How much of the cycle each foot is on the ground.
     pub stance: f32,
-    /// How far a foot swings from under the hip, in leg-lengths.
+    /// How far a foot swings from under the hip going forwards, in
+    /// leg-lengths.
     pub half_stride: f32,
-    /// Whether the feet travel across the body rather than through it.
+    /// And going sideways, which is always less.
     ///
-    /// A sidestep is not the walk turned ninety degrees: the feet keep to
-    /// their own sides of the body and take turns stepping out and closing up,
-    /// because a leg that swung across the other one would walk through it.
-    pub sideways: bool,
+    /// A leg reaching straight out to the side has the same limit as one
+    /// reaching forward, but it starts from a hip only a hand's width off the
+    /// centre line and has to leave room for its partner — so a sideways step
+    /// is a short one whatever the body is doing.
+    pub half_stride_across: f32,
+}
+
+impl GaitShape {
+    /// How far a foot swings when the body is going `travel`, in leg-lengths.
+    ///
+    /// The two limits as the axes of an ellipse, rather than one or the other:
+    /// a diagonal is neither a stride nor a sidestep and taking either number
+    /// whole would make it reach too far one way or not far enough the other.
+    pub fn half_stride_for(&self, travel: Vec2) -> f32 {
+        let travel = travel.normalize_or_zero();
+        if travel == Vec2::ZERO {
+            return self.half_stride;
+        }
+
+        let across = travel.x / self.half_stride_across;
+        let along = travel.y / self.half_stride;
+        1.0 / (across * across + along * along).sqrt()
+    }
+
+    /// How far the body travels in one full cycle of two steps, in
+    /// leg-lengths, going `travel`.
+    ///
+    /// Falls out of the stride and the stance rather than being chosen. A
+    /// planted foot travels `2 × half_stride` backwards through the body while
+    /// it is down, and it can only stand still doing that if the body covers
+    /// exactly as much ground in the same time — which is `stance` of the
+    /// cycle. It is why the stride has to be the one for the direction the
+    /// body is actually going: a step of one length paid for at another is a
+    /// foot that slides.
+    pub fn stride_per_cycle(&self, travel: Vec2) -> f32 {
+        2.0 * self.half_stride_for(travel) / self.stance
+    }
 }
 
 impl GaitShape {
@@ -155,20 +189,8 @@ impl GaitShape {
         GaitShape {
             stance: WALK_STANCE + (RUN_STANCE - WALK_STANCE) * t,
             half_stride: WALK_HALF_STRIDE + (RUN_HALF_STRIDE - WALK_HALF_STRIDE) * t,
-            sideways: false,
+            half_stride_across: SIDESTEP_HALF_STRIDE,
         }
-    }
-
-    /// How far the body travels in one full cycle of two steps, in
-    /// leg-lengths.
-    ///
-    /// Falls out of the stride and the stance rather than being chosen. A
-    /// planted foot travels `2 × half_stride` backwards through the body while
-    /// it is down, and it can only stand still doing that if the body covers
-    /// exactly as much ground in the same time — which is `stance` of the
-    /// cycle.
-    pub fn stride_per_cycle(&self) -> f32 {
-        2.0 * self.half_stride / self.stance
     }
 
     /// A duck-walk: short steps, both feet down most of the time, and no
@@ -176,21 +198,21 @@ impl GaitShape {
     pub const CROUCHED: GaitShape = GaitShape {
         stance: CROUCH_STANCE,
         half_stride: CROUCH_HALF_STRIDE,
-        sideways: false,
+        half_stride_across: SIDESTEP_HALF_STRIDE * 0.9,
     };
 
     /// Stepping sideways: out with the leading foot, closed up with the other.
     pub const SIDESTEP: GaitShape = GaitShape {
         stance: SIDESTEP_STANCE,
         half_stride: SIDESTEP_HALF_STRIDE,
-        sideways: true,
+        half_stride_across: SIDESTEP_HALF_STRIDE,
     };
 
     /// The same, ducked: shorter still, and both feet down more of the time.
     pub const CROUCHED_SIDESTEP: GaitShape = GaitShape {
         stance: CROUCH_STANCE,
         half_stride: SIDESTEP_HALF_STRIDE * 0.8,
-        sideways: true,
+        half_stride_across: SIDESTEP_HALF_STRIDE * 0.8,
     };
 
     /// Whether this gait leaves the ground: a run does, a walk does not.
@@ -235,7 +257,13 @@ pub const CROUCH_LEAN: f32 = 1.02;
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct Gait {
     phase: f32,
-    speed: f32,
+    /// Where the body is going, in its own frame and in leg-lengths per
+    /// second: `x` towards its right, `y` forwards.
+    ///
+    /// A vector rather than a speed, because a body moving diagonally is doing
+    /// both things at once and the feet have to as well. A sign could only
+    /// ever say forwards or sideways.
+    velocity: Vec2,
 }
 
 impl Gait {
@@ -251,30 +279,38 @@ impl Gait {
     /// input because this is where the distance is already known, and two
     /// definitions of how fast a body is going would eventually disagree.
     pub fn speed(&self) -> f32 {
-        self.speed
+        self.velocity.length()
+    }
+
+    /// Which way it is going, in its own frame: `x` right, `y` forwards.
+    ///
+    /// Zero when it is not going anywhere, which the gait reads as feet that
+    /// stay where they rest.
+    pub fn travel(&self) -> Vec2 {
+        self.velocity.normalize_or_zero()
     }
 
     /// The cycle this body's speed puts it in.
     pub fn shape(&self) -> GaitShape {
-        GaitShape::for_speed(self.speed)
+        GaitShape::for_speed(self.speed())
     }
 
-    /// Advance by `distance` metres of ground covered over `dt` seconds, on a
-    /// body whose legs are `leg` metres long.
+    /// Advance by the ground covered this step: `moved` metres in the body's
+    /// own frame, over `dt` seconds, on legs `leg` metres long.
     ///
     /// Distance rather than time, and the body's own leg length rather than a
     /// fixed number of metres, so two builds running side by side stay in step
     /// as a fraction of their own stride.
-    pub fn advance(&mut self, distance: f32, leg: f32, dt: f32) {
+    pub fn advance(&mut self, moved: Vec2, leg: f32, dt: f32) {
         if leg <= 0.0 || dt <= 0.0 {
             return;
         }
 
-        let measured = distance / dt / leg;
-        self.speed += (measured - self.speed) * (dt / SPEED_SMOOTHING).min(1.0);
+        let measured = moved / dt / leg;
+        self.velocity += (measured - self.velocity) * (dt / SPEED_SMOOTHING).min(1.0);
 
-        let stride = self.shape().stride_per_cycle() * leg;
-        self.phase = (self.phase + distance / stride).rem_euclid(1.0);
+        let stride = self.shape().stride_per_cycle(self.travel()) * leg;
+        self.phase = (self.phase + moved.length() / stride).rem_euclid(1.0);
     }
 
     /// Put a body back at the start of its stride, standing still.
@@ -283,7 +319,7 @@ impl Gait {
     /// the walk on a foot that is already in the air.
     pub fn reset(&mut self) {
         self.phase = 0.0;
-        self.speed = 0.0;
+        self.velocity = Vec2::ZERO;
     }
 }
 
@@ -321,23 +357,25 @@ pub struct FootOffset {
 /// walk a walk. `direction` is +1 running forwards and -1 backwards; the cycle
 /// itself runs the same way either way, since it is driven by distance covered
 /// rather than by which way that distance was.
-pub fn foot_offsets(phase: f32, direction: f32, shape: GaitShape) -> [FootOffset; 2] {
+pub fn foot_offsets(phase: f32, travel: Vec2, shape: GaitShape) -> [FootOffset; 2] {
     [
-        foot_offset(phase, direction, shape, -1.0),
-        foot_offset(phase + 0.5, direction, shape, 1.0),
+        foot_offset(phase, travel, shape, -1.0),
+        foot_offset(phase + 0.5, travel, shape, 1.0),
     ]
 }
 
 /// One foot, `side` being which side of the body it is on: -1 left, +1 right.
-fn foot_offset(phase: f32, direction: f32, shape: GaitShape, side: f32) -> FootOffset {
-    let GaitShape { stance, half_stride, sideways } = shape;
+fn foot_offset(phase: f32, travel: Vec2, shape: GaitShape, side: f32) -> FootOffset {
+    let stance = shape.stance;
+    let half_stride = shape.half_stride_for(travel);
+    let travel = travel.normalize_or_zero();
     let phase = phase.rem_euclid(1.0);
 
     // How far this foot is from the middle of its own travel, from in front to
     // behind while it is planted and back round while it is not. The rate on
     // the ground is the whole of the no-slide property, and it does not care
     // which direction the travel is in.
-    let (travel, lift) = if phase < stance {
+    let (sweep, lift) = if phase < stance {
         (1.0 - 2.0 * (phase / stance), 0.0)
     } else {
         let travelled = (phase - stance) / (1.0 - stance);
@@ -347,22 +385,18 @@ fn foot_offset(phase: f32, direction: f32, shape: GaitShape, side: f32) -> FootO
         )
     };
 
-    if sideways {
-        FootOffset {
-            ahead: 0.0,
-            // Each foot keeps to its own side: its travel is offset outwards
-            // by exactly its own reach, so the two never pass each other. A
-            // sidestep is one foot going out and the other closing up, and a
-            // leg swinging across its partner would swing through it.
-            across: side * half_stride + direction * half_stride * travel,
-            lift,
-        }
-    } else {
-        FootOffset {
-            ahead: direction * half_stride * travel,
-            across: 0.0,
-            lift,
-        }
+    // The step goes the way the body is going: a diagonal steps forward and
+    // sideways at once, in the proportions it is actually travelling. Both
+    // components cancel the body's own movement along their own axis while the
+    // foot is down, which is what keeps a diagonal from sliding.
+    FootOffset {
+        ahead: travel.y * half_stride * sweep,
+        // Each foot keeps to its own side, offset outwards by as much of its
+        // reach as the step is sideways: a leg swinging across its partner
+        // would swing through it, and a body running straight has no such
+        // problem to solve.
+        across: travel.x * half_stride * sweep + side * half_stride * travel.x.abs(),
+        lift,
     }
 }
 
@@ -471,7 +505,7 @@ pub fn crouch_posture() -> Pose {
 /// to be, which is [`foot_offsets`] and the solver — a gait that also stated
 /// its own knee angles would be stating the same thing twice, in units that
 /// disagree between builds.
-pub fn gait_pose(inputs: &PoseInputs, direction: f32, style: GaitStyle) -> Pose {
+pub fn gait_pose(inputs: &PoseInputs, travel: Vec2, style: GaitStyle) -> Pose {
     let GaitStyle { shape, sink, lean, swing: arm_swing } = style;
     let phase = inputs.stride.rem_euclid(1.0);
     let cycle = std::f32::consts::TAU * phase;
@@ -480,49 +514,45 @@ pub fn gait_pose(inputs: &PoseInputs, direction: f32, style: GaitStyle) -> Pose 
     // Two dips per cycle, one under each step, on top of the constant sink.
     pose.root_offset = Vec3::NEG_Y * (sink + GAIT_BOB * (1.0 - (2.0 * cycle).cos()) * 0.5);
 
-    if shape.sideways {
-        // Tipped towards where it is going, rather than folded over its own
-        // stride. A crouched sidestep keeps its fold as well.
-        pose.set(
-            bone::CHEST,
-            Quat::from_rotation_z(direction * SIDESTEP_LEAN)
-                * Quat::from_rotation_x(lean.max(0.0)),
-        );
-        pose.set(bone::NECK, Quat::from_rotation_x(-lean * 0.6));
-    } else {
-        // A body walking backwards leans back, not forward — but a crouched
-        // one is folded either way, so only the upright part turns around.
-        let leaning = lean * if lean > RUN_LEAN { 1.0 } else { direction };
-        pose.set(bone::CHEST, Quat::from_rotation_x(leaning));
-        pose.set(bone::NECK, Quat::from_rotation_x(-leaning * 0.7));
-    }
+    // Leaning into it on both axes at once, in the proportions it is
+    // travelling: forwards over its own stride, and tipped towards where it is
+    // stepping sideways. A body walking backwards leans back — but a crouched
+    // one is folded either way, so only the upright part of the lean turns
+    // around with it.
+    let folded = lean > RUN_LEAN;
+    let leaning = lean * if folded { 1.0 } else { travel.y };
+    pose.set(
+        bone::CHEST,
+        Quat::from_rotation_z(travel.x * SIDESTEP_LEAN) * Quat::from_rotation_x(leaning),
+    );
+    pose.set(bone::NECK, Quat::from_rotation_x(-leaning * 0.7));
 
     // Opposite the leg on the same side, which is what stops a run looking
     // like a march.
-    let [left, right] = foot_offsets(phase, direction, shape);
+    let [left, right] = foot_offsets(phase, travel, shape);
     let swing_of = |offset: FootOffset| {
-        let along = if shape.sideways { offset.across } else { offset.ahead };
-        -along / shape.half_stride * arm_swing
+        // Opposite whichever way the leg on that side is travelling, which for
+        // a diagonal is a bit of both.
+        let along = offset.ahead * travel.y.signum() + offset.across * travel.x.signum();
+        -along / shape.half_stride_for(travel) * arm_swing
     };
     arms_at_sides(&mut pose, [swing_of(left), swing_of(right)], ELBOW_BEND);
 
     pose
 }
 
-/// Which way a state's feet travel: forwards, backwards, or not at all.
+/// Which way a state's feet travel, in the body's own frame.
 ///
-/// Strafing runs the forward cycle. Sideways steps are a different gait rather
-/// than this one mirrored, and guessing at one would be worse than a body that
-/// visibly runs while it slides sideways.
-pub fn direction_of(state: AnimationState) -> f32 {
+/// A coarse answer, and only used for bodies with no movement to measure —
+/// a display standing on the spot. A body that is actually going somewhere
+/// takes its direction from where it went, which is the only way a diagonal
+/// can be one: the states are labels, and there is no `RunForwardAndLeft`.
+pub fn direction_of(state: AnimationState) -> Vec2 {
     match state {
-        // Backwards, and — for the sideways gaits — towards the character's
-        // own left, since positive is their right.
-        AnimationState::RunBackward
-        | AnimationState::CrouchWalkBackward
-        | AnimationState::StrafeLeft
-        | AnimationState::CrouchStrafeLeft => -1.0,
-        _ => 1.0,
+        AnimationState::RunBackward | AnimationState::CrouchWalkBackward => Vec2::NEG_Y,
+        AnimationState::StrafeLeft | AnimationState::CrouchStrafeLeft => Vec2::NEG_X,
+        AnimationState::StrafeRight | AnimationState::CrouchStrafeRight => Vec2::X,
+        _ => Vec2::Y,
     }
 }
 
@@ -562,11 +592,12 @@ mod tests {
     fn a_planted_foot_does_not_slide() {
         let leg = 0.98;
         let shape = GaitShape::for_speed(RUNNING);
+        let travel = Vec2::Y;
         let mut phase = 0.0;
         let mut travelled = 0.0;
 
         let world_position = |phase: f32, travelled: f32| {
-            let [left, _] = foot_offsets(phase, 1.0, shape);
+            let [left, _] = foot_offsets(phase, Vec2::Y, shape);
             (travelled + left.ahead * leg, left.lift)
         };
 
@@ -574,7 +605,7 @@ mod tests {
         for _ in 0..40 {
             let step = 0.01;
             travelled += step;
-            phase += step / (shape.stride_per_cycle() * leg);
+            phase += step / (shape.stride_per_cycle(travel) * leg);
 
             let (position, lift) = world_position(phase, travelled);
             if lift > 0.0 {
@@ -603,18 +634,19 @@ mod tests {
                 let skeleton = humanoid(proportions);
                 let leg = leg_length(&skeleton);
                 let shape = GaitShape::for_speed(speed);
+                let travel = Vec2::Y;
                 let mut phase = 0.0;
                 let mut travelled = 0.0;
                 let mut was: Option<Vec3> = None;
 
                 for _ in 0..24 {
                     // A fortieth of the cycle at a time, forwards along -Z.
-                    let step = shape.stride_per_cycle() * leg / 40.0;
+                    let step = shape.stride_per_cycle(travel) * leg / 40.0;
                     travelled += step;
-                    phase += step / (shape.stride_per_cycle() * leg);
+                    phase += step / (shape.stride_per_cycle(travel) * leg);
 
                     let root = Transform::from_xyz(0.0, 0.0, -travelled);
-                    let inputs = PoseInputs { seconds: 0.0, stride: phase, speed };
+                    let inputs = PoseInputs { seconds: 0.0, stride: phase, speed, travel: Vec2::Y };
                     let pose =
                         finish_pose(&skeleton, AnimationState::RunForward, &inputs, &root);
                     let ankle = skeleton
@@ -624,7 +656,7 @@ mod tests {
                         .unwrap()
                         .tail;
 
-                    let planted = foot_offsets(phase, 1.0, shape)[0].lift == 0.0;
+                    let planted = foot_offsets(phase, Vec2::Y, shape)[0].lift == 0.0;
                     if let (true, Some(was)) = (planted, was) {
                         assert!(
                             (ankle - was).length() < 1e-3,
@@ -641,39 +673,61 @@ mod tests {
     /// The stride and the sink into the knees are chosen together: a leg
     /// reaching forward still has to touch the floor, and a straight one
     /// cannot. Every step of every gait has to be somewhere the leg can
-    /// actually get to, on every build.
+    /// actually get to, on every build — and in every direction.
+    ///
+    /// The directions matter as much as the builds. A stride checked only
+    /// along the axes passes happily while a diagonal reaches past what the
+    /// leg can do, and a foot that cannot get to its target lands short and
+    /// slides, which is the one thing the whole arrangement exists to prevent.
     #[test]
     fn no_step_is_out_of_reach() {
+        let corner = Vec2::new(1.0, 1.0).normalize();
+        let directions = [
+            Vec2::Y,
+            Vec2::NEG_Y,
+            Vec2::X,
+            Vec2::NEG_X,
+            corner,
+            Vec2::new(-corner.x, corner.y),
+            Vec2::new(corner.x, -corner.y),
+            Vec2::new(-corner.x, -corner.y),
+        ];
+
         for proportions in every_build() {
             let skeleton = humanoid(proportions);
             let root = Transform::IDENTITY;
 
-            for speed_step in 0..=8 {
-                let speed = speed_step as f32;
-                for step in 0..48 {
-                    let inputs = PoseInputs {
-                        seconds: 0.0,
-                        stride: step as f32 / 48.0,
-                        speed,
-                    };
-                    for state in [
-                        AnimationState::RunForward,
-                        AnimationState::StrafeLeft,
-                        AnimationState::StrafeRight,
-                        AnimationState::CrouchWalk,
-                        AnimationState::CrouchStrafeRight,
-                    ] {
-                    let mut pose = state.pose(&inputs);
-
-                    let reached =
-                        plant_feet(&skeleton, &mut pose, &root, state.foot_offsets(&inputs));
-                    assert_eq!(
-                        reached,
-                        [Reach::Reached; 2],
-                        "in {state:?} at stride {:.2} and speed {speed} on {proportions:?} the \
-                         legs cannot make the step",
-                        inputs.stride
-                    );
+            for speed_step in 0..4 {
+                let speed = speed_step as f32 * 3.0;
+                for step in 0..16 {
+                    for travel in directions {
+                        let inputs = PoseInputs {
+                            seconds: 0.0,
+                            stride: step as f32 / 16.0,
+                            speed,
+                            travel,
+                        };
+                        for state in [
+                            AnimationState::RunForward,
+                            AnimationState::StrafeRight,
+                            AnimationState::CrouchWalk,
+                            AnimationState::CrouchStrafeLeft,
+                        ] {
+                            let mut pose = state.pose(&inputs);
+                            let reached = plant_feet(
+                                &skeleton,
+                                &mut pose,
+                                &root,
+                                state.foot_offsets(&inputs),
+                            );
+                            assert_eq!(
+                                reached,
+                                [Reach::Reached; 2],
+                                "in {state:?} going {travel} at stride {:.2} and speed {speed} \
+                                 on {proportions:?} the legs cannot make the step",
+                                inputs.stride
+                            );
+                        }
                     }
                 }
             }
@@ -690,7 +744,7 @@ mod tests {
 
         let mut both_down = 0;
         for step in 0..128 {
-            let [left, right] = foot_offsets(step as f32 / 128.0, 1.0, shape);
+            let [left, right] = foot_offsets(step as f32 / 128.0, Vec2::Y, shape);
             assert!(
                 left.lift == 0.0 || right.lift == 0.0,
                 "at {:.2} a walking body has both feet in the air",
@@ -712,7 +766,7 @@ mod tests {
 
         let mut airborne = 0;
         for step in 0..128 {
-            let [left, right] = foot_offsets(step as f32 / 128.0, 1.0, shape);
+            let [left, right] = foot_offsets(step as f32 / 128.0, Vec2::Y, shape);
             assert!(
                 left.lift > 0.0 || right.lift > 0.0,
                 "at {:.2} a running body has both feet planted, which is a walk",
@@ -727,7 +781,7 @@ mod tests {
 
         // Each foot is down for its share of the cycle and no more.
         let planted = (0..128)
-            .filter(|step| foot_offsets(*step as f32 / 128.0, 1.0, shape)[0].lift == 0.0)
+            .filter(|step| foot_offsets(*step as f32 / 128.0, Vec2::Y, shape)[0].lift == 0.0)
             .count() as f32
             / 128.0;
         assert!(
@@ -771,7 +825,7 @@ mod tests {
 
         // Settled after a moment of running at a constant rate.
         for _ in 0..64 {
-            gait.advance(RUNNING * leg * dt, leg, dt);
+            gait.advance(Vec2::Y * RUNNING * leg * dt, leg, dt);
         }
         assert!(
             (gait.speed() - RUNNING).abs() < 0.1,
@@ -782,7 +836,7 @@ mod tests {
 
         // And a body that stops covering ground is not running any more.
         for _ in 0..64 {
-            gait.advance(0.0, leg, dt);
+            gait.advance(Vec2::ZERO, leg, dt);
         }
         assert!(gait.speed() < 0.5, "a stopped body is still moving at {}", gait.speed());
         assert!(!gait.shape().has_flight());
@@ -795,11 +849,11 @@ mod tests {
     fn a_body_going_nowhere_does_not_take_steps() {
         let dt = 1.0 / 64.0;
         let mut gait = Gait::default();
-        gait.advance(0.4, 0.98, dt);
+        gait.advance(Vec2::Y * 0.4, 0.98, dt);
         let stopped = gait.phase();
 
         for _ in 0..64 {
-            gait.advance(0.0, 0.98, dt);
+            gait.advance(Vec2::ZERO, 0.98, dt);
         }
 
         assert_eq!(gait.phase(), stopped);
@@ -815,8 +869,8 @@ mod tests {
         let mut big = Gait::default();
 
         for _ in 0..96 {
-            small.advance(RUNNING * short * dt, short, dt);
-            big.advance(RUNNING * tall * dt, tall, dt);
+            small.advance(Vec2::Y * RUNNING * short * dt, short, dt);
+            big.advance(Vec2::Y * RUNNING * tall * dt, tall, dt);
         }
 
         assert!(
@@ -851,6 +905,7 @@ mod tests {
                         seconds: step as f32 * 0.3,
                         stride: step as f32 / strides as f32,
                         speed: 1.0,
+                        ..default()
                     };
                     let pose = finish_pose(&skeleton, state, &inputs, &root);
 
@@ -881,7 +936,7 @@ mod tests {
         assert!(GaitShape::CROUCHED.stance > 0.5);
 
         for step in 0..64 {
-            let [left, right] = foot_offsets(step as f32 / 64.0, 1.0, GaitShape::CROUCHED);
+            let [left, right] = foot_offsets(step as f32 / 64.0, Vec2::Y, GaitShape::CROUCHED);
             assert!(left.lift == 0.0 || right.lift == 0.0);
         }
     }
@@ -908,18 +963,24 @@ mod tests {
             } else {
                 GaitShape::SIDESTEP
             };
+            let travel = Vec2::new(towards, 0.0);
             let mut phase = 0.0;
             let mut travelled = 0.0;
             let mut was: Option<Vec3> = None;
 
             for _ in 0..24 {
-                let step = shape.stride_per_cycle() * leg / 40.0;
+                let step = shape.stride_per_cycle(travel) * leg / 40.0;
                 travelled += step;
-                phase += step / (shape.stride_per_cycle() * leg);
+                phase += step / (shape.stride_per_cycle(travel) * leg);
 
                 // +X is the character's own right, for a body facing -Z.
                 let root = Transform::from_xyz(towards * travelled, 0.0, 0.0);
-                let inputs = PoseInputs { seconds: 0.0, stride: phase, speed: 2.0 };
+                let inputs = PoseInputs {
+                    seconds: 0.0,
+                    stride: phase,
+                    speed: 2.0,
+                    travel: Vec2::new(towards, 0.0),
+                };
                 let pose = finish_pose(&skeleton, state, &inputs, &root);
                 let ankle = skeleton
                     .posed_bones(&pose, &root)
@@ -928,7 +989,7 @@ mod tests {
                     .unwrap()
                     .tail;
 
-                let planted = foot_offsets(phase, towards, shape)[0].lift == 0.0;
+                let planted = foot_offsets(phase, Vec2::new(towards, 0.0), shape)[0].lift == 0.0;
                 if let (true, Some(was)) = (planted, was) {
                     assert!(
                         (ankle - was).length() < 1e-3,
@@ -946,14 +1007,14 @@ mod tests {
     #[test]
     fn every_gait_state_knows_which_way_it_is_going() {
         for (state, direction) in [
-            (AnimationState::RunForward, 1.0),
-            (AnimationState::RunBackward, -1.0),
-            (AnimationState::StrafeLeft, -1.0),
-            (AnimationState::StrafeRight, 1.0),
-            (AnimationState::CrouchWalk, 1.0),
-            (AnimationState::CrouchWalkBackward, -1.0),
-            (AnimationState::CrouchStrafeLeft, -1.0),
-            (AnimationState::CrouchStrafeRight, 1.0),
+            (AnimationState::RunForward, Vec2::Y),
+            (AnimationState::RunBackward, Vec2::NEG_Y),
+            (AnimationState::StrafeLeft, Vec2::NEG_X),
+            (AnimationState::StrafeRight, Vec2::X),
+            (AnimationState::CrouchWalk, Vec2::Y),
+            (AnimationState::CrouchWalkBackward, Vec2::NEG_Y),
+            (AnimationState::CrouchStrafeLeft, Vec2::NEG_X),
+            (AnimationState::CrouchStrafeRight, Vec2::X),
         ] {
             assert_eq!(direction_of(state), direction, "{state:?} goes the wrong way");
         }
@@ -964,7 +1025,7 @@ mod tests {
     fn a_sidestep_leans_towards_where_it_is_going() {
         let skeleton = humanoid(Proportions::DEFAULT);
         let root = Transform::IDENTITY;
-        let inputs = PoseInputs { seconds: 0.0, stride: 0.2, speed: 2.0 };
+        let inputs = PoseInputs { seconds: 0.0, stride: 0.2, speed: 2.0, ..default() };
 
         let crown = |state: AnimationState| {
             skeleton
@@ -983,12 +1044,93 @@ mod tests {
         assert!((right + left).abs() < 1e-5, "the two leans do not mirror");
     }
 
+    /// A diagonal steps diagonally: both feet travel forwards and sideways at
+    /// once, in the proportions the body is actually going, rather than the
+    /// body running straight while it slides across the floor.
+    #[test]
+    fn a_diagonal_steps_both_ways_at_once() {
+        let shape = GaitShape::for_speed(RUNNING);
+        let diagonal = Vec2::new(1.0, 1.0).normalize();
+
+        let mut stepped_ahead = false;
+        let mut stepped_across = false;
+        for step in 0..32 {
+            let [left, _] = foot_offsets(step as f32 / 32.0, diagonal, shape);
+            stepped_ahead |= left.ahead.abs() > 0.05;
+            stepped_across |= left.across.abs() > 0.05;
+
+            // In the proportions it is travelling, not one and then the other.
+            if left.ahead.abs() > 1e-4 {
+                let sideways = (left.across - left.ahead).abs();
+                assert!(sideways < 0.35, "the step is {sideways} out of proportion");
+            }
+        }
+        assert!(stepped_ahead, "a diagonal never steps forwards");
+        assert!(stepped_across, "a diagonal never steps sideways");
+
+        // And running straight is still straight: the sideways offset that
+        // keeps a sidestep's feet apart must not leak into a run.
+        for step in 0..32 {
+            let [left, right] = foot_offsets(step as f32 / 32.0, Vec2::Y, shape);
+            assert_eq!(left.across, 0.0);
+            assert_eq!(right.across, 0.0);
+        }
+    }
+
+    /// And it does not slide while doing it. The cancellation is per axis, so
+    /// a diagonal is the case that catches one axis being handled and the
+    /// other forgotten.
+    #[test]
+    fn a_planted_foot_does_not_slide_on_a_diagonal() {
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let leg = leg_length(&skeleton);
+        let shape = GaitShape::for_speed(RUNNING);
+        let travel = Vec2::new(1.0, 1.0).normalize();
+        // The body faces -Z, so its own forward and right are these in world.
+        let world = Vec3::new(travel.x, 0.0, -travel.y);
+
+        let mut phase = 0.0;
+        let mut travelled = 0.0;
+        let mut was: Option<Vec3> = None;
+
+        for _ in 0..24 {
+            let step = shape.stride_per_cycle(travel) * leg / 40.0;
+            travelled += step;
+            phase += step / (shape.stride_per_cycle(travel) * leg);
+
+            let root = Transform::from_translation(world * travelled);
+            let inputs = PoseInputs {
+                seconds: 0.0,
+                stride: phase,
+                speed: RUNNING,
+                travel,
+            };
+            let pose = finish_pose(&skeleton, AnimationState::RunForward, &inputs, &root);
+            let ankle = skeleton
+                .posed_bones(&pose, &root)
+                .into_iter()
+                .find(|posed| posed.name == bone::SHIN_L)
+                .unwrap()
+                .tail;
+
+            let planted = foot_offsets(phase, travel, shape)[0].lift == 0.0;
+            if let (true, Some(was)) = (planted, was) {
+                assert!(
+                    (ankle - was).length() < 1e-3,
+                    "the planted foot slid {:.5} m on the diagonal",
+                    (ankle - was).length()
+                );
+            }
+            was = planted.then_some(ankle);
+        }
+    }
+
     /// The feet keep to their own sides. A leg that swung across its partner
     /// would swing through it, which is the one thing a sidestep must not do.
     #[test]
     fn the_feet_never_cross_in_a_sidestep() {
         for shape in [GaitShape::SIDESTEP, GaitShape::CROUCHED_SIDESTEP] {
-            for direction in [-1.0, 1.0] {
+            for direction in [Vec2::NEG_X, Vec2::X] {
                 for step in 0..128 {
                     let [left, right] = foot_offsets(step as f32 / 128.0, direction, shape);
                     assert!(
@@ -1015,8 +1157,8 @@ mod tests {
         let shape = GaitShape::SIDESTEP;
         for step in 0..32 {
             let phase = step as f32 / 32.0;
-            let [left, right] = foot_offsets(phase, -1.0, shape);
-            let [mirror_left, mirror_right] = foot_offsets(phase + 0.5, 1.0, shape);
+            let [left, right] = foot_offsets(phase, Vec2::NEG_X, shape);
+            let [mirror_left, mirror_right] = foot_offsets(phase + 0.5, Vec2::X, shape);
 
             assert_eq!(left.ahead, 0.0, "a sidestep is stepping through the body");
             assert!(left.across != 0.0 || right.across != 0.0);
@@ -1037,8 +1179,8 @@ mod tests {
     fn running_backwards_reverses_the_feet_and_not_the_cycle() {
         let shape = GaitShape::for_speed(RUNNING);
         let phase = 0.3;
-        let [forwards, _] = foot_offsets(phase, 1.0, shape);
-        let [backwards, _] = foot_offsets(phase, -1.0, shape);
+        let [forwards, _] = foot_offsets(phase, Vec2::Y, shape);
+        let [backwards, _] = foot_offsets(phase, Vec2::NEG_Y, shape);
 
         assert!((forwards.ahead + backwards.ahead).abs() < 1e-6);
         assert_eq!(forwards.lift, backwards.lift);
@@ -1060,8 +1202,13 @@ mod tests {
         };
 
         let resting = Pose::rest();
-        let inputs = PoseInputs { seconds: 0.0, stride: 0.15, speed: RUNNING };
-        let running = gait_pose(&inputs, 1.0, GaitStyle::upright(RUNNING));
+        let inputs = PoseInputs {
+            seconds: 0.0,
+            stride: 0.15,
+            speed: RUNNING,
+            travel: Vec2::Y,
+        };
+        let running = gait_pose(&inputs, Vec2::Y, GaitStyle::upright(RUNNING));
 
         for name in [bone::HAND_L, bone::HAND_R] {
             assert!(
@@ -1081,8 +1228,9 @@ mod tests {
                         seconds: 0.0,
                         stride: step as f32 / 32.0,
                         speed: RUNNING,
+                        travel: Vec2::Y,
                     };
-                    hand(&gait_pose(&inputs, 1.0, GaitStyle::upright(RUNNING)), name).x
+                    hand(&gait_pose(&inputs, Vec2::Y, GaitStyle::upright(RUNNING)), name).x
                 })
                 .sum()
         };

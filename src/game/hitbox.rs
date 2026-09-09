@@ -99,6 +99,7 @@ fn update_hitboxes(
             seconds: clock.seconds() + phase.copied().unwrap_or_default().0,
             stride: gait.phase(),
             speed: gait.speed(),
+            travel: gait.travel(),
         };
         let pose = animator_pose(skeleton, animator, &inputs, &root);
         // The same body in the same state with the cycle stood still: where

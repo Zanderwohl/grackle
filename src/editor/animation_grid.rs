@@ -214,6 +214,7 @@ pub fn body_depth() -> f32 {
                     seconds: step as f32 * 0.4,
                     stride: step as f32 / 8.0,
                     speed: row.speed,
+                    ..default()
                 };
                 let pose = finish_pose(skeleton, row.state, &inputs, &Transform::IDENTITY);
                 skeleton
@@ -668,6 +669,7 @@ mod tests {
                     seconds: step as f32 * 0.4,
                     stride: step as f32 / 8.0,
                     speed: row.speed,
+                    ..default()
                 };
                 let pose = finish_pose(skeleton, row.state, &inputs, &Transform::IDENTITY);
                 let deepest = skeleton
