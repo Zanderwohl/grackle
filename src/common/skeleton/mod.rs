@@ -22,7 +22,7 @@ pub mod rig;
 pub mod state;
 
 pub use draw::{draw_skeleton, SkeletonPalette};
-pub use gait::{Gait, FootOffset};
+pub use gait::{FootOffset, Gait, GaitShape};
 pub use ik::{finish_pose, leg_length, plant_feet, solve, Chain, Reach};
 pub use rig::{bone, default_humanoid, humanoid, Bone, Pose, PosedBone, Proportions, Side, Skeleton};
 pub use state::{

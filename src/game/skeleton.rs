@@ -106,7 +106,11 @@ pub fn advance_animation_clock(time: Res<Time<Fixed>>, mut clock: ResMut<Animati
 /// forced into a run covers no ground, and a run cycle driven by ground
 /// covered would stand perfectly still. A nominal speed is the honest
 /// stand-in — it is a preview of what running looks like, not a body running.
-const DISPLAY_RUN_SPEED: f32 = 3.0;
+///
+/// Fast enough to be a run rather than a walk, since `RunForward` is the state
+/// being previewed. A display of the walk would need a speed of its own, and a
+/// walk and a run are the same state here.
+const DISPLAY_RUN_SPEED: f32 = 6.0;
 
 /// Anything with a rig gets the parts every body has.
 ///
@@ -151,7 +155,7 @@ pub fn advance_gaits(
             Some(body) => (body.current - body.previous).xz().length(),
             None => DISPLAY_RUN_SPEED * leg * dt,
         };
-        gait.advance(distance, leg);
+        gait.advance(distance, leg, dt);
     }
 }
 
@@ -302,9 +306,11 @@ fn advance_animators(
         // Harmless: the corrections are stated in world space but resolve to
         // joint angles, so only the body's facing matters and not where it is
         // standing.
+        let gait = gait.copied().unwrap_or_default();
         let inputs = PoseInputs {
             seconds: clock.seconds() + phase.copied().unwrap_or_default().0,
-            stride: gait.copied().unwrap_or_default().phase(),
+            stride: gait.phase(),
+            speed: gait.speed(),
         };
         *pose = finish_pose(
             skeleton,
@@ -450,7 +456,10 @@ mod tests {
     #[test]
     fn a_player_pressed_against_a_wall_is_described_as_pushing() {
         let mut app = App::new();
-        app.insert_resource(PlayerInput { movement: Vec2::new(0.0, 1.0), jump: false });
+        app.insert_resource(PlayerInput {
+            movement: Vec2::new(0.0, 1.0),
+            ..default()
+        });
         let player = app
             .world_mut()
             .spawn((

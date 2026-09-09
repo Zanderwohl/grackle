@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
 use crate::common::skeleton::gait::{
-    direction_of, foot_offsets as gait_foot_offsets, gait_pose, FootOffset,
+    direction_of, foot_offsets as gait_foot_offsets, gait_pose, FootOffset, GaitShape,
 };
 use crate::common::skeleton::rig::{bone, Pose};
 use crate::get;
@@ -53,6 +53,12 @@ pub struct PoseInputs {
     pub seconds: f32,
     /// Where in its stride the body is, wrapping at 1.
     pub stride: f32,
+    /// How fast it is going, in leg-lengths per second.
+    ///
+    /// Measured from ground covered rather than asked for, so a body dragged
+    /// along by something else animates as moving and a body pushing at a wall
+    /// does not. It is what decides whether a gait is a walk or a run.
+    pub speed: f32,
 }
 
 /// The clock every animation is sampled against.
@@ -317,7 +323,11 @@ impl AnimationState {
     /// what an idle wants. A clip will answer this from its contact spans.
     pub fn foot_offsets(&self, inputs: &PoseInputs) -> [FootOffset; 2] {
         if self.uses_gait() {
-            gait_foot_offsets(inputs.stride, direction_of(*self))
+            gait_foot_offsets(
+                inputs.stride,
+                direction_of(*self),
+                GaitShape::for_speed(inputs.speed),
+            )
         } else {
             [FootOffset::default(); 2]
         }

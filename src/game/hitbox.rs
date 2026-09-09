@@ -90,9 +90,11 @@ fn update_hitboxes(
         // The same pipeline the drawing goes through, corrections and all: a
         // hitbox worked out from an uncorrected pose would sit where the body
         // visibly is not.
+        let gait = gait.copied().unwrap_or_default();
         let inputs = PoseInputs {
             seconds: clock.seconds() + phase.copied().unwrap_or_default().0,
-            stride: gait.copied().unwrap_or_default().phase(),
+            stride: gait.phase(),
+            speed: gait.speed(),
         };
         let pose = finish_pose(skeleton, animator.state(), &inputs, &root);
         *boxes = hitboxes(skeleton, &pose, &root);

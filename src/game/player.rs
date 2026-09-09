@@ -17,7 +17,18 @@ pub const PLAYER_HALF: Vec3 = CLASS_HALF_EXTENTS;
 /// measured from the feet, so half the height comes back off.
 const EYE_OFFSET: f32 = TALLEST_CLASS_EYE_HEIGHT - TALLEST_CLASS_HEIGHT * 0.5;
 
-const WALK_SPEED: f32 = 7.0;
+/// How fast a body moves without being asked to hurry, in metres per second.
+///
+/// A walking pace, which is what makes the gait a walk: the animation reads
+/// speed off the ground covered, so this number is what decides whether a body
+/// has a foot down at all times. Sprinting is [`SPRINT_SPEED`].
+const WALK_SPEED: f32 = 2.6;
+
+/// How fast a body moves while sprinting.
+///
+/// The speed everything moved at before there was a distinction, so holding
+/// shift is the movement this prototype has always had.
+const SPRINT_SPEED: f32 = 7.0;
 const GRAVITY: f32 = -20.0;
 const JUMP_SPEED: f32 = 7.0;
 const MOUSE_SENSITIVITY: f32 = 0.0022;
@@ -82,6 +93,12 @@ pub struct PlayerInput {
     pub movement: Vec2,
     /// Jump was held or pressed at some point since the last step consumed it.
     pub jump: bool,
+    /// Asking to go faster.
+    ///
+    /// Held rather than latched, like movement and unlike jump: it describes a
+    /// state the body is in for as long as it is asked for, not an edge that
+    /// has to survive to the next step.
+    pub sprint: bool,
 }
 
 /// Where the body is at fixed-step boundaries, so rendering can draw between
@@ -269,6 +286,8 @@ pub fn gather_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInp
     // Accumulated, not assigned: a press between two fixed steps must not be
     // erased by the frames either side of it that saw nothing.
     input.jump |= keys.pressed(KeyCode::Space);
+
+    input.sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
 }
 
 /// Turn mouse movement into yaw on the body and pitch on the camera.
@@ -387,8 +406,11 @@ pub fn step_player(
         let wish = Vec3::new(input.movement.x, 0.0, -input.movement.y).normalize_or_zero();
         let wish = Quat::from_rotation_y(player.yaw) * wish;
 
-        player.velocity.x = wish.x * WALK_SPEED;
-        player.velocity.z = wish.z * WALK_SPEED;
+        // The animation is never told which of these it was: it measures the
+        // ground covered and works out for itself whether that is a walk.
+        let speed = if input.sprint { SPRINT_SPEED } else { WALK_SPEED };
+        player.velocity.x = wish.x * speed;
+        player.velocity.z = wish.z * speed;
 
         // A held jump re-fires the step a landing is detected, rather than
         // eating the input and asking for a fresh press. Chaining jumps is a
