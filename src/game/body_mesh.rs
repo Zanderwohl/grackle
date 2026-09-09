@@ -54,22 +54,45 @@ pub struct BodyMesh {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct BoneMesh(pub usize);
 
-/// The material every body is drawn in.
+/// What colour a body is, if it is not the default one.
 ///
-/// One, for now, and plainly a placeholder: teams, classes and skins all want
-/// their own, and none of them exist. Kept as a resource rather than made per
-/// body so that when they do arrive there is one place that decides.
-#[derive(Resource, Debug)]
-pub struct BodyMaterial(pub Handle<StandardMaterial>);
+/// A body rather than a bone, because a colour is a statement about *whose*
+/// body this is — an editor preview, and later a team — and not about which
+/// part of it. Per-bone colour is a skin, and a skin is a texture rather than
+/// a component.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct BodyTint(pub Color);
 
-impl FromWorld for BodyMaterial {
-    fn from_world(world: &mut World) -> BodyMaterial {
-        let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-        BodyMaterial(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.62, 0.64, 0.70),
-            perceptual_roughness: 0.85,
-            ..default()
-        }))
+/// What a body is drawn in when nothing says otherwise.
+///
+/// Plainly a placeholder: teams, classes and skins all want their own, and
+/// none of them exist.
+pub const DEFAULT_BODY_COLOUR: Color = Color::srgb(0.62, 0.64, 0.70);
+
+/// One material per colour asked for.
+///
+/// Bodies of a colour share a material for the same reason bodies of a build
+/// share their meshes: an animation grid is sixty bodies and a handful of
+/// distinct answers.
+#[derive(Resource, Default)]
+pub struct BodyMaterials(HashMap<[u8; 4], Handle<StandardMaterial>>);
+
+impl BodyMaterials {
+    fn get(
+        &mut self,
+        colour: Color,
+        materials: &mut Assets<StandardMaterial>,
+    ) -> Handle<StandardMaterial> {
+        self.0
+            .entry(colour.to_srgba().to_u8_array())
+            .or_insert_with(|| {
+                materials.add(StandardMaterial {
+                    base_color: colour,
+                    perceptual_roughness: 0.85,
+                    ..default()
+                })
+            })
+            .clone()
     }
 }
 
@@ -110,7 +133,7 @@ impl Plugin for BodyMeshPlugin {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<BodyMeshCache>()
-            .init_resource::<BodyMaterial>()
+            .init_resource::<BodyMaterials>()
             .add_systems(Update, (build_body_meshes, hide_own_body))
             // Before propagation rather than after it, unlike the gizmos: a
             // part is a real entity whose `GlobalTransform` has to be computed
@@ -121,23 +144,34 @@ impl Plugin for BodyMeshPlugin {
     }
 }
 
-/// Give every body a part per bone, and rebuild them if it changes shape.
+/// Give every body a part per bone, and rebuild them if it changes shape or
+/// colour.
 ///
-/// Keyed on `Changed<Skeleton>`, which covers both: a rig is inserted once on
-/// a player and could be swapped when classes become something a player picks.
+/// Keyed on the components themselves changing, which covers insertion too: a
+/// rig is inserted once on a player and could be swapped when classes become
+/// something a player picks.
 fn build_body_meshes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut cache: ResMut<BodyMeshCache>,
-    material: Res<BodyMaterial>,
-    bodies: Query<(Entity, &Skeleton, Option<&BodyMesh>), Changed<Skeleton>>,
+    mut palette: ResMut<BodyMaterials>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    bodies: Query<
+        (Entity, &Skeleton, Option<&BodyTint>, Option<&BodyMesh>),
+        Or<(Changed<Skeleton>, Changed<BodyTint>)>,
+    >,
 ) {
-    for (body, skeleton, existing) in &bodies {
+    for (body, skeleton, tint, existing) in &bodies {
         if let Some(existing) = existing {
             for part in &existing.parts {
                 commands.entity(*part).despawn();
             }
         }
+
+        let material = palette.get(
+            tint.map_or(DEFAULT_BODY_COLOUR, |tint| tint.0),
+            &mut materials,
+        );
 
         let handles = cache
             .0
@@ -156,7 +190,7 @@ fn build_body_meshes(
                     body.spawn((
                         BoneMesh(index),
                         Mesh3d(handle.clone()),
-                        MeshMaterial3d(material.0.clone()),
+                        MeshMaterial3d(material.clone()),
                         // Overwritten by `pose_body_meshes` before anything is
                         // drawn. Spawning at the identity would pile every
                         // part on the body's origin for one frame.
@@ -316,6 +350,36 @@ mod tests {
             (placed - expected).length() < 1e-4,
             "the head part is at {placed}, and the head bone at {expected}",
         );
+    }
+
+    /// A tinted body is painted its own colour, and bodies asking for the same
+    /// colour share one material — the same reasoning as the mesh cache, and
+    /// the thing that keeps a map full of green spawn points to one material.
+    #[test]
+    fn a_tint_paints_a_body_without_multiplying_materials() {
+        let mut app = app();
+        let green = Color::srgb(0.13, 0.95, 0.35);
+        let rig = || (humanoid(Proportions::DEFAULT), Pose::rest(), Transform::IDENTITY);
+
+        let plain = app.world_mut().spawn(rig()).id();
+        let first = app.world_mut().spawn((rig(), BodyTint(green))).id();
+        let second = app.world_mut().spawn((rig(), BodyTint(green))).id();
+
+        app.update();
+
+        let material = |body: Entity| {
+            let part = app.world().get::<BodyMesh>(body).expect("dressed").parts[0];
+            app.world()
+                .get::<MeshMaterial3d<StandardMaterial>>(part)
+                .expect("a part is painted")
+                .0
+                .clone()
+        };
+
+        assert_eq!(material(first), material(second), "two green bodies, two materials");
+        assert_ne!(material(plain), material(first), "the tint was ignored");
+        // The default and the green, and nothing else.
+        assert_eq!(app.world().resource::<BodyMaterials>().0.len(), 2);
     }
 
     /// A rig swapped for another build takes its geometry with it, rather than

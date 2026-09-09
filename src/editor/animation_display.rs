@@ -25,12 +25,19 @@ use crate::common::skeleton::{
 use crate::common::PointResolutionError;
 use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
+use crate::common::hitbox::Hitboxes;
 use crate::get;
 
 /// Marks the entity an [`AnimationDisplay`] drives, so the body can be found
 /// without reading the timeline — the same arrangement `SpawnPoint` has with
 /// `SpawnPointMarker`.
+///
+/// Requires [`Hitboxes`]: a display exists to be looked at closely, and where
+/// a body can be hit while it holds a state is one of the things worth looking
+/// at. This is where it differs from a spawn point's body, which is a drawing
+/// of what fits rather than a body in the game.
 #[derive(Component, Debug)]
+#[require(Hitboxes)]
 pub struct AnimationDisplayMarker;
 
 /// A body on the map, holding one state.
@@ -157,15 +164,24 @@ impl FeatureTrait for AnimationDisplay {
     /// it is pinned to the chosen state instead of being told what is
     /// happening to it.
     fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
-        commands.entity(entity).insert((
-            Transform::from_translation(self.resolved_location)
-                .with_rotation(Quat::from_rotation_y(self.yaw)),
-            AnimationDisplayMarker,
-            default_humanoid().clone(),
-            Pose::rest(),
-            SkeletonAnimator::default(),
-            ForcedAnimation(self.state),
-        ));
+        commands
+            .entity(entity)
+            .insert((
+                Transform::from_translation(self.resolved_location)
+                    .with_rotation(Quat::from_rotation_y(self.yaw)),
+                AnimationDisplayMarker,
+                // The state is the one thing here an edit is allowed to
+                // change, and the reason this runs again at all.
+                ForcedAnimation(self.state),
+            ))
+            // The body once, not once per edit: this runs on every change to
+            // the feature, a re-inserted rig reads as a changed rig, and the
+            // mesh would be thrown away and rebuilt on every frame of a drag.
+            .insert_if_new((
+                default_humanoid().clone(),
+                Pose::rest(),
+                SkeletonAnimator::default(),
+            ));
     }
 
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {

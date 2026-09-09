@@ -7,9 +7,10 @@
 
 use bevy::app::App;
 use bevy::prelude::*;
+use crate::common::app_mode::AppMode;
 use crate::common::class::{TALLEST_CLASS_EYE_HEIGHT, TALLEST_CLASS_HEIGHT};
 use crate::editor::editable::{FeatureTrait, PointRef};
-use crate::editor::spawn_point::SpawnPoint;
+use crate::editor::spawn_point::{SpawnPoint, SpawnPointMarker};
 use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
 use crate::tool::Tools;
 
@@ -18,6 +19,33 @@ pub struct SpawnPointPlugin;
 impl Plugin for SpawnPointPlugin {
     fn build(&self, app: &mut App) {
         add_point_placement_tool::<SpawnPoint>(app);
+        // Ungated on purpose: it is the system that has to notice the mode
+        // changed, so gating it on a mode would be the one thing it must not
+        // do.
+        app.add_systems(Update, hide_spawn_bodies_while_playing);
+    }
+}
+
+/// A spawn point's body is drawn in the editor and not while playing.
+///
+/// It is a drawing of the space a body takes up, not a body — and the one
+/// place it would certainly be in the way is the place a player materialises,
+/// which is inside it. Hidden rather than despawned, because the feature is
+/// still there and F5 back has to bring it straight back.
+fn hide_spawn_bodies_while_playing(
+    mode: Res<State<AppMode>>,
+    mut bodies: Query<&mut Visibility, With<SpawnPointMarker>>,
+) {
+    let wanted = match mode.get() {
+        AppMode::Editor => Visibility::Inherited,
+        AppMode::Play => Visibility::Hidden,
+    };
+    for mut visibility in &mut bodies {
+        // Assigned only on a change, so this does not mark every spawn point
+        // on the map dirty every frame.
+        if *visibility != wanted {
+            *visibility = wanted;
+        }
     }
 }
 

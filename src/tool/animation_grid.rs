@@ -8,6 +8,7 @@
 
 use bevy::prelude::*;
 
+use crate::common::hitbox::Hitboxes;
 use crate::common::skeleton::{
     default_humanoid, draw_skeleton, humanoid, AnimationPhase, DisplaySpeed, ForcedAnimation,
     Pose, SkeletonAnimator, SkeletonPalette,
@@ -42,7 +43,12 @@ impl Plugin for AnimationGridPlugin {
 /// spawned a second roster every time its point was nudged would be sixty
 /// bodies deep in itself within a drag.
 /// One of the bodies a grid stands up, waiting to be told what to do.
+///
+/// Requires [`Hitboxes`], because the grid is the harness they are checked
+/// against: stand in front of it and watch sixty heads bob inside head boxes
+/// that hardly move.
 #[derive(Component, Debug)]
+#[require(Hitboxes)]
 pub struct CarouselBody;
 
 /// Put every carousel body into whatever the shared clock says the roster is

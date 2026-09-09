@@ -4,6 +4,7 @@ use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::time::Fixed;
 
+use crate::common::hitbox::Hitboxes;
 use crate::common::class::{
     body_centre_from_feet, Stance, CLASS_HALF_EXTENTS, TALLEST_CLASS_EYE_HEIGHT,
     TALLEST_CLASS_HEIGHT,
@@ -52,7 +53,12 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 /// The body. Its `Transform` is the centre of the collision box, not the feet
 /// and not the eye — [`PLAYER_HALF`] is measured from here, and the camera
 /// hangs off it as a child.
+///
+/// Requires [`Hitboxes`]: a player is the thing hitboxes exist for, and one
+/// spawned without them would be a body that could not be shot rather than a
+/// body that failed to spawn.
 #[derive(Component, Debug)]
+#[require(Hitboxes)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,

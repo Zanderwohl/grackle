@@ -144,7 +144,21 @@ multiplier on the bone's own thickness. So nothing here is a second opinion
 about how big a body is — `girth` and `belly` already differ per class, and a
 new class is nine numbers rather than a model somebody authored. Meshes are
 cached per build, not per body, which is what makes the sixty-body animation
-grid ten meshes.
+grid ten meshes; materials are cached per colour, `BodyTint` overriding the
+default on a body that wants its own.
+
+**Hitboxes are asked for, not handed out.** Every rig gets a `Gait`, because
+every body has a stride, but `Hitboxes` come from `#[require(Hitboxes)]` on the
+markers that mean *this is a real body*: `Player`, `Mannequin`, `CarouselBody`
+and `AnimationDisplayMarker`. A `SpawnPoint` carries none of them — its body is
+a drawing of the space a body needs, so it is green, has no animator, has no
+hit volumes, and is hidden while playing rather than left for a spawning player
+to materialise inside.
+
+One trap when a feature stands up a body: `apply_to_entity` runs on **every**
+edit, and re-inserting a `Skeleton` reads as a changed one, so a plain `insert`
+throws the mesh away and rebuilds it on every frame of a drag. Insert the rig
+with `insert_if_new` and let the edit change only what it actually changes.
 
 Every editor system is gated with `.run_if(in_state(AppMode::Editor))` at its
 `add_systems` call, and `EditorInputPlugin` is gated too so the resources every

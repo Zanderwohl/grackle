@@ -60,8 +60,10 @@ pub struct ShowBones(pub bool);
 ///
 /// The player's own body is drawn too, but from inside its head you can only
 /// see your arms and legs. This is the one you can walk around. A debug
-/// harness, not a character: nothing simulates it.
+/// harness, not a character: nothing simulates it — but it is a body on the
+/// map, so it is one you can shoot at.
 #[derive(Component, Debug)]
+#[require(Hitboxes)]
 pub struct Mannequin;
 
 /// How far in front of a spawn the mannequin stands.
@@ -126,18 +128,24 @@ pub fn advance_animation_clock(time: Res<Time<Fixed>>, mut clock: ResMut<Animati
 
 /// Anything with a rig gets the parts every body has.
 ///
-/// One place rather than a line in each of the four things that spawn a body:
-/// a body whose spawner forgot its [`Gait`] would stand still while running,
-/// and one that forgot its [`Hitboxes`] could not be hit.
+/// One place rather than a line in each of the things that spawn a body: a
+/// body whose spawner forgot its [`Gait`] would stand still while running.
+///
+/// [`Hitboxes`] used to be handed out here too and deliberately are not any
+/// more. Every body has a stride; not every body is a body somebody can shoot.
+/// An editor preview — the rig standing on a spawn point to show what fits
+/// there — is a drawing of a body rather than one, and boxing it would put
+/// hit volumes on a thing that is not in the game. So hitboxes are asked for,
+/// by `#[require(Hitboxes)]` on the markers that mean "this is a real body":
+/// [`Player`], [`Mannequin`], `CarouselBody` and `AnimationDisplayMarker`. The
+/// forgetting that was worth guarding against is still guarded against — it is
+/// just the marker that carries it, so it cannot be half-applied.
 fn equip_new_bodies(
     mut commands: Commands,
-    bodies: Query<Entity, (With<Skeleton>, Or<(Without<Hitboxes>, Without<Gait>)>)>,
+    bodies: Query<Entity, (With<Skeleton>, Without<Gait>)>,
 ) {
     for body in &bodies {
-        commands
-            .entity(body)
-            .insert_if_new(Hitboxes::default())
-            .insert_if_new(Gait::default());
+        commands.entity(body).insert_if_new(Gait::default());
     }
 }
 
@@ -418,6 +426,44 @@ mod tests {
         let mut world = CollisionWorld::default();
         world.rebuild(rooms);
         world
+    }
+
+    /// Hitboxes are asked for now, not handed out. A real body carries the
+    /// marker that requires them; a spawn point's preview is a drawing of a
+    /// body and carries nothing, so it comes out unboxed even though it has
+    /// the same rig.
+    #[test]
+    fn only_real_bodies_are_boxed() {
+        use crate::editor::animation_display::AnimationDisplayMarker;
+        use crate::editor::spawn_point::SpawnPointMarker;
+        use crate::tool::animation_grid::CarouselBody;
+
+        let mut world = World::new();
+        let rig = || (humanoid(Proportions::DEFAULT), Pose::rest(), Transform::IDENTITY);
+
+        let real = [
+            world.spawn((Mannequin, rig())).id(),
+            world.spawn((CarouselBody, rig())).id(),
+            world.spawn((AnimationDisplayMarker, rig())).id(),
+            world.spawn((Player::default(), rig())).id(),
+        ];
+        let preview = world.spawn((SpawnPointMarker, rig())).id();
+
+        // The system that used to be what gave every rig its boxes. It still
+        // runs, and it still must not be what does this.
+        world.run_system_once(equip_new_bodies).unwrap();
+
+        for body in real {
+            assert!(world.get::<Hitboxes>(body).is_some(), "a real body cannot be hit");
+            assert!(world.get::<Gait>(body).is_some(), "a body with no stride");
+        }
+        assert!(
+            world.get::<Hitboxes>(preview).is_none(),
+            "a spawn point's preview was boxed as though it were in the game",
+        );
+        // Still a body in every other respect: it is only the hit volumes it
+        // does without.
+        assert!(world.get::<Gait>(preview).is_some(), "the preview is not a body at all");
     }
 
     /// With space all round, the mannequin goes where you are looking.
