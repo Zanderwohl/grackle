@@ -1,4 +1,4 @@
-use bevy::prelude::Vec3;
+use bevy::prelude::*;
 use strum_macros::EnumIter;
 
 use crate::common::skeleton::Proportions;
@@ -28,6 +28,66 @@ pub const CLASS_RADIUS: f32 = 0.35;
 /// Half-extents of a body box, for collision.
 pub const CLASS_HALF_EXTENTS: Vec3 =
     Vec3::new(CLASS_RADIUS, TALLEST_CLASS_HEIGHT * 0.5, CLASS_RADIUS);
+
+/// How tall a crouched body is.
+///
+/// A little over half standing, which is about what the games this is modelled
+/// on use. The number matters twice over: it is the gap a body can get through
+/// only by ducking, and it is the height of the box that can be shot at.
+pub const CROUCH_HEIGHT: f32 = 1.1;
+
+/// Where the camera sits on a crouched body, measured from the feet.
+pub const CROUCH_EYE_HEIGHT: f32 = 0.88;
+
+/// How much of a body is standing up.
+///
+/// A component, because it is a fact about a body that several unrelated
+/// things need and none of them owns: the step moves a hull this size, the
+/// camera sits at this eye height, the hitboxes are this tall, and the
+/// animation crouches to match. Kept apart from *asking* to crouch, which is a
+/// [`crate::common::skeleton::BodyRequests`] field — a body under a low
+/// ceiling is crouched whether it still wants to be or not.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Stance {
+    #[default]
+    Standing,
+    Crouched,
+}
+
+impl Stance {
+    pub fn height(&self) -> f32 {
+        match self {
+            Stance::Standing => TALLEST_CLASS_HEIGHT,
+            Stance::Crouched => CROUCH_HEIGHT,
+        }
+    }
+
+    pub fn eye_height(&self) -> f32 {
+        match self {
+            Stance::Standing => TALLEST_CLASS_EYE_HEIGHT,
+            Stance::Crouched => CROUCH_EYE_HEIGHT,
+        }
+    }
+
+    /// Half-extents of this stance's box, for collision and for hitboxes.
+    pub fn half_extents(&self) -> Vec3 {
+        Vec3::new(CLASS_RADIUS, self.height() * 0.5, CLASS_RADIUS)
+    }
+
+    /// Where the camera sits relative to the body's *centre*, since that is
+    /// what the body's transform is and what the box is measured from.
+    pub fn eye_offset(&self) -> f32 {
+        self.eye_height() - self.height() * 0.5
+    }
+
+    /// How far a body's centre moves when it changes stance.
+    ///
+    /// Which way it moves depends on what is being kept still: the feet, for a
+    /// body on the ground, or the head, for one in the air.
+    pub fn centre_shift() -> f32 {
+        (Stance::Standing.height() - Stance::Crouched.height()) * 0.5
+    }
+}
 
 /// The centre of a body standing with its feet at `feet`.
 ///

@@ -5,7 +5,8 @@ use bevy::prelude::*;
 use bevy::time::Fixed;
 
 use crate::common::class::{
-    body_centre_from_feet, CLASS_HALF_EXTENTS, TALLEST_CLASS_EYE_HEIGHT, TALLEST_CLASS_HEIGHT,
+    body_centre_from_feet, Stance, CLASS_HALF_EXTENTS, TALLEST_CLASS_EYE_HEIGHT,
+    TALLEST_CLASS_HEIGHT,
 };
 use crate::game::collision::CollisionWorld;
 use crate::tool::room::Room;
@@ -29,6 +30,12 @@ const WALK_SPEED: f32 = 2.6;
 /// The speed everything moved at before there was a distinction, so holding
 /// shift is the movement this prototype has always had.
 const SPRINT_SPEED: f32 = 7.0;
+
+/// How fast a body moves while crouched.
+///
+/// Slow enough that ducking is a decision. Sprinting while crouched is not a
+/// thing: the stance wins, which is what makes crouching cost something.
+const CROUCH_SPEED: f32 = 1.2;
 const GRAVITY: f32 = -20.0;
 const JUMP_SPEED: f32 = 7.0;
 const MOUSE_SENSITIVITY: f32 = 0.0022;
@@ -99,6 +106,10 @@ pub struct PlayerInput {
     /// state the body is in for as long as it is asked for, not an edge that
     /// has to survive to the next step.
     pub sprint: bool,
+    /// Asking to duck. Whether the body actually is ducked is [`Stance`],
+    /// which can disagree: a body under a low ceiling cannot stand up when
+    /// this goes false.
+    pub crouch: bool,
 }
 
 /// Where the body is at fixed-step boundaries, so rendering can draw between
@@ -155,12 +166,6 @@ impl ViewMode {
 
 /// How far behind the head the third-person camera sits.
 const THIRD_PERSON_DISTANCE: f32 = 3.5;
-
-/// The point the third-person camera orbits, measured from the body's centre.
-///
-/// The head, so that looking up and down swings the camera about roughly where
-/// the eyes are rather than about the navel.
-const THIRD_PERSON_PIVOT: f32 = EYE_OFFSET;
 
 /// The half-extent of the box the camera is swept as when looking for a wall.
 ///
@@ -239,6 +244,7 @@ pub fn spawn_player(commands: &mut Commands, spawn: Spawn) {
     commands
         .spawn((
             Player { yaw: spawn.yaw, ..default() },
+            Stance::default(),
             PhysicsBody::at(position),
             Transform::from_translation(position).with_rotation(Quat::from_rotation_y(spawn.yaw)),
             Visibility::default(),
@@ -288,6 +294,7 @@ pub fn gather_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInp
     input.jump |= keys.pressed(KeyCode::Space);
 
     input.sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    input.crouch = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
 }
 
 /// Turn mouse movement into yaw on the body and pitch on the camera.
@@ -345,15 +352,19 @@ pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<ViewMode>) 
 pub fn place_camera(
     mode: Res<ViewMode>,
     world: Res<CollisionWorld>,
-    players: Query<&Transform, (With<Player>, Without<PlayerCamera>)>,
+    players: Query<(&Transform, &Stance), (With<Player>, Without<PlayerCamera>)>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
-    let Ok(body) = players.single() else { return };
+    let Ok((body, stance)) = players.single() else { return };
+    // Ducking lowers the eye, and it lowers what the third-person camera
+    // orbits with it — otherwise crouching would swing the view around a point
+    // above the body's own head.
+    let eye = stance.eye_offset();
 
     for mut camera in &mut cameras {
         camera.translation = match *mode {
-            ViewMode::FirstPerson => Vec3::Y * EYE_OFFSET,
-            ViewMode::ThirdPerson => third_person_camera(body, camera.rotation, &world),
+            ViewMode::FirstPerson => Vec3::Y * eye,
+            ViewMode::ThirdPerson => third_person_camera(body, camera.rotation, eye, &world),
         };
     }
 }
@@ -364,8 +375,13 @@ pub fn place_camera(
 /// swings it down and vice versa — and pulled in short of anything solid, so
 /// backing into a wall does not put the camera inside it and show the player
 /// the world from the other side of the map.
-pub fn third_person_camera(body: &Transform, pitch: Quat, world: &CollisionWorld) -> Vec3 {
-    let pivot = Vec3::Y * THIRD_PERSON_PIVOT;
+pub fn third_person_camera(
+    body: &Transform,
+    pitch: Quat,
+    eye: f32,
+    world: &CollisionWorld,
+) -> Vec3 {
+    let pivot = Vec3::Y * eye;
     let wanted = pivot + pitch * Vec3::Z * THIRD_PERSON_DISTANCE;
 
     // Swept in world space, because that is where the walls are.
@@ -391,7 +407,7 @@ pub fn step_player(
     time: Res<Time>,
     mut input: ResMut<PlayerInput>,
     world: Res<CollisionWorld>,
-    mut players: Query<(&mut Player, &mut PhysicsBody)>,
+    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance)>,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {
@@ -401,7 +417,9 @@ pub fn step_player(
     // Taken, not read: the latch is per step, so a press cannot fire twice.
     let jump = std::mem::take(&mut input.jump);
 
-    for (mut player, mut body) in &mut players {
+    for (mut player, mut body, mut stance) in &mut players {
+        change_stance(&mut stance, &mut body, player.on_ground, input.crouch, &world);
+        let half = stance.half_extents();
         // Movement is in the body's frame, so turning turns the run direction.
         let wish = Vec3::new(input.movement.x, 0.0, -input.movement.y).normalize_or_zero();
         let wish = Quat::from_rotation_y(player.yaw) * wish;
@@ -409,6 +427,7 @@ pub fn step_player(
         // The animation is never told which of these it was: it measures the
         // ground covered and works out for itself whether that is a walk.
         let speed = if input.sprint { SPRINT_SPEED } else { WALK_SPEED };
+        let speed = if *stance == Stance::Crouched { CROUCH_SPEED } else { speed };
         player.velocity.x = wish.x * speed;
         player.velocity.z = wish.z * speed;
 
@@ -424,10 +443,10 @@ pub fn step_player(
         // Before moving, get out of anything that has been built around us.
         // A room edited mid-match can enclose a body that crossed nothing, and
         // `move_and_slide` only ever answers questions about crossings.
-        let start = world.depenetrate(body.current, PLAYER_HALF);
+        let start = world.depenetrate(body.current, half);
 
         let delta = player.velocity * dt;
-        let (position, blocked) = world.move_and_slide(start, PLAYER_HALF, delta);
+        let (position, blocked) = world.move_and_slide(start, half, delta);
 
         body.previous = body.current;
         body.current = position;
@@ -440,6 +459,49 @@ pub fn step_player(
             player.velocity.y = 0.0;
         }
     }
+}
+
+/// Duck, or stand back up if there is room.
+///
+/// Which end of the body stays put is the whole of the crouch-jump: on the
+/// ground the feet stay and the head drops, and in the air the head stays and
+/// the feet come up, which is what lets a body clear a ledge it could not walk
+/// onto. Both are the same box moving half the difference in height, in
+/// opposite directions.
+///
+/// Standing up is a request rather than a certainty. A body under a vent stays
+/// ducked until it has somewhere to put its head, which is what stops it
+/// standing into the ceiling and being shoved back out by depenetration.
+fn change_stance(
+    stance: &mut Stance,
+    body: &mut PhysicsBody,
+    on_ground: bool,
+    wants_crouch: bool,
+    world: &CollisionWorld,
+) {
+    let shift = Stance::centre_shift();
+    let (wanted, movement) = match (wants_crouch, *stance) {
+        (true, Stance::Standing) => (
+            Stance::Crouched,
+            if on_ground { -shift } else { shift },
+        ),
+        (false, Stance::Crouched) => (
+            Stance::Standing,
+            if on_ground { shift } else { -shift },
+        ),
+        _ => return,
+    };
+
+    let moved = body.current + Vec3::Y * movement;
+    if wanted == Stance::Standing && !world.fits(moved, Stance::Standing.half_extents()) {
+        return;
+    }
+
+    // Both ends of the interpolation, so the change does not draw as the body
+    // sliding through the floor over the next frame.
+    body.current = moved;
+    body.previous += Vec3::Y * movement;
+    *stance = wanted;
 }
 
 /// Draw the body between its last two fixed positions.
@@ -480,9 +542,10 @@ mod tests {
     #[test]
     fn the_third_person_camera_sits_behind_the_head() {
         let body = Transform::from_xyz(0.0, 1.0, 0.0);
-        let camera = third_person_camera(&body, Quat::IDENTITY, &open_room());
+        let eye = Stance::Standing.eye_offset();
+        let camera = third_person_camera(&body, Quat::IDENTITY, eye, &open_room());
 
-        assert!((camera.y - THIRD_PERSON_PIVOT).abs() < 1e-3, "at height {}", camera.y);
+        assert!((camera.y - eye).abs() < 1e-3, "at height {}", camera.y);
         assert!((camera.z - THIRD_PERSON_DISTANCE).abs() < 1e-3, "at {} behind", camera.z);
         assert!(camera.x.abs() < 1e-3);
     }
@@ -497,10 +560,11 @@ mod tests {
     fn looking_up_swings_the_camera_down() {
         let body = Transform::from_xyz(0.0, 1.0, 0.0);
         let world = open_room();
-        let pivot = Vec3::Y * THIRD_PERSON_PIVOT;
+        let eye = Stance::Standing.eye_offset();
+        let pivot = Vec3::Y * eye;
 
-        let level = third_person_camera(&body, Quat::IDENTITY, &world);
-        let looking_up = third_person_camera(&body, Quat::from_rotation_x(0.3), &world);
+        let level = third_person_camera(&body, Quat::IDENTITY, eye, &world);
+        let looking_up = third_person_camera(&body, Quat::from_rotation_x(0.3), eye, &world);
 
         assert!(looking_up.y < level.y, "the camera did not drop: {} then {}", level.y, looking_up.y);
         assert!(
@@ -516,7 +580,7 @@ mod tests {
         let world = open_room();
         // Close enough to the +Z wall that the camera cannot have its distance.
         let body = Transform::from_xyz(0.0, 1.0, 8.0);
-        let camera = third_person_camera(&body, Quat::IDENTITY, &world);
+        let camera = third_person_camera(&body, Quat::IDENTITY, Stance::Standing.eye_offset(), &world);
 
         assert!(camera.z < THIRD_PERSON_DISTANCE, "the camera kept its distance at {}", camera.z);
         assert!(camera.z > 0.0, "the camera ended up in front of the body at {}", camera.z);
@@ -533,7 +597,11 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<ViewMode>();
         app.insert_resource(open_room());
-        app.world_mut().spawn((Player::default(), Transform::from_xyz(0.0, 1.0, 0.0)));
+        app.world_mut().spawn((
+            Player::default(),
+            Stance::Standing,
+            Transform::from_xyz(0.0, 1.0, 0.0),
+        ));
         let camera = app
             .world_mut()
             .spawn((PlayerCamera, Transform::default()))
@@ -542,11 +610,93 @@ mod tests {
         app.world_mut().run_system_once(place_camera).unwrap();
 
         let placed = app.world().get::<Transform>(camera).unwrap().translation;
-        assert_eq!(placed, Vec3::Y * EYE_OFFSET);
+        assert_eq!(placed, Vec3::Y * Stance::Standing.eye_offset());
         assert!(
             (placed.y + PLAYER_HALF.y - TALLEST_CLASS_EYE_HEIGHT).abs() < 1e-5,
             "the eye is not where the class says it is"
         );
+    }
+
+    /// Ducking on the ground leaves the feet where they are and brings the
+    /// head down — which is what makes a crouch a way through a low gap.
+    #[test]
+    fn crouching_on_the_ground_keeps_the_feet_and_drops_the_head() {
+        let world = open_room();
+        let mut stance = Stance::Standing;
+        let mut body = PhysicsBody::at(body_centre_from_feet(Vec3::ZERO));
+
+        let head = body.current.y + Stance::Standing.half_extents().y;
+        change_stance(&mut stance, &mut body, true, true, &world);
+
+        assert_eq!(stance, Stance::Crouched);
+        let feet = body.current.y - Stance::Crouched.half_extents().y;
+        assert!(feet.abs() < 1e-5, "the feet moved to {feet}");
+        assert!(
+            body.current.y + Stance::Crouched.half_extents().y < head - 0.5,
+            "the head barely moved"
+        );
+    }
+
+    /// In the air it is the other way round: the head stays and the feet come
+    /// up. That is the crouch-jump — the body clears a ledge it could not have
+    /// walked onto, by pulling its legs out of the way.
+    #[test]
+    fn crouching_in_the_air_keeps_the_head_and_lifts_the_feet() {
+        let world = open_room();
+        let mut stance = Stance::Standing;
+        let mut body = PhysicsBody::at(Vec3::new(0.0, 3.0, 0.0));
+
+        let head = body.current.y + Stance::Standing.half_extents().y;
+        let feet = body.current.y - Stance::Standing.half_extents().y;
+        change_stance(&mut stance, &mut body, false, true, &world);
+
+        assert_eq!(stance, Stance::Crouched);
+        assert!(
+            (body.current.y + Stance::Crouched.half_extents().y - head).abs() < 1e-5,
+            "the head moved"
+        );
+        let lifted = body.current.y - Stance::Crouched.half_extents().y - feet;
+        assert!(
+            (lifted - 2.0 * Stance::centre_shift()).abs() < 1e-5,
+            "the feet came up by {lifted}"
+        );
+    }
+
+    /// Standing up is a request, not a certainty. Under something low the body
+    /// stays down rather than standing into the ceiling and being shoved out
+    /// of it again.
+    #[test]
+    fn a_body_under_a_low_ceiling_cannot_stand_up() {
+        let world = world(&[Room::new(
+            Vec3::new(-5.0, 0.0, -5.0),
+            Vec3::new(5.0, Stance::Crouched.height() + 0.2, 5.0),
+        )]);
+        let mut stance = Stance::Crouched;
+        let mut body = PhysicsBody::at(Vec3::Y * Stance::Crouched.half_extents().y);
+        let was = body.current;
+
+        change_stance(&mut stance, &mut body, true, false, &world);
+
+        assert_eq!(stance, Stance::Crouched, "stood up into the ceiling");
+        assert_eq!(body.current, was);
+
+        // And in a room it fits in, it stands straight back up.
+        let mut stance = Stance::Crouched;
+        change_stance(&mut stance, &mut body, true, false, &open_room());
+        assert_eq!(stance, Stance::Standing);
+    }
+
+    /// The interpolated position moves with the stance too. Without it, a
+    /// crouch would be drawn as the body sliding into the floor over the
+    /// following frame.
+    #[test]
+    fn a_stance_change_moves_both_ends_of_the_interpolation() {
+        let mut stance = Stance::Standing;
+        let mut body = PhysicsBody::at(body_centre_from_feet(Vec3::ZERO));
+
+        change_stance(&mut stance, &mut body, true, true, &open_room());
+
+        assert_eq!(body.current, body.previous);
     }
 
     /// `F` swaps, and swaps back.

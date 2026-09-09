@@ -34,7 +34,8 @@ use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
 use crate::common::skeleton::gait::{
-    direction_of, foot_offsets as gait_foot_offsets, gait_pose, FootOffset, GaitShape,
+    crouch_posture, direction_of, foot_offsets as gait_foot_offsets, gait_pose, FootOffset,
+    GaitStyle,
 };
 use crate::common::skeleton::rig::{bone, Pose};
 use crate::get;
@@ -171,6 +172,10 @@ pub struct BodyRequests {
     pub wall_ahead: bool,
     /// Not standing on anything.
     pub airborne: bool,
+    /// Ducked. What the body *is*, not what it was asked to be — a body under
+    /// a vent stays crouched after the key comes up, and it should animate
+    /// that way.
+    pub crouching: bool,
 }
 
 impl BodyRequests {
@@ -198,6 +203,11 @@ pub enum AnimationState {
     /// wall is the single most obvious animation bug there is.
     PushingWall,
     Airborne,
+    /// Ducked and still.
+    Crouch,
+    /// Ducked and moving: a short-stepped shuffle that always keeps a foot
+    /// down.
+    CrouchWalk,
 }
 
 impl AnimationState {
@@ -210,6 +220,8 @@ impl AnimationState {
             AnimationState::Strafe => 3,
             AnimationState::PushingWall => 4,
             AnimationState::Airborne => 5,
+            AnimationState::Crouch => 6,
+            AnimationState::CrouchWalk => 7,
         }
     }
 
@@ -225,6 +237,8 @@ impl AnimationState {
             3 => AnimationState::Strafe,
             4 => AnimationState::PushingWall,
             5 => AnimationState::Airborne,
+            6 => AnimationState::Crouch,
+            7 => AnimationState::CrouchWalk,
             _ => AnimationState::Idle,
         }
     }
@@ -237,6 +251,8 @@ impl AnimationState {
             AnimationState::Strafe => get!("animation.states.strafe"),
             AnimationState::PushingWall => get!("animation.states.pushing_wall"),
             AnimationState::Airborne => get!("animation.states.airborne"),
+            AnimationState::Crouch => get!("animation.states.crouch"),
+            AnimationState::CrouchWalk => get!("animation.states.crouch_walk"),
         }
     }
 
@@ -247,6 +263,15 @@ impl AnimationState {
     pub fn from_requests(requests: &BodyRequests) -> AnimationState {
         if requests.airborne {
             AnimationState::Airborne
+        } else if requests.crouching {
+            // Crouching outranks what the legs were asked to do, because it is
+            // the thing that decides what they can do at all. A body cannot
+            // sprint out of a duck.
+            if requests.moving() && !requests.wall_ahead {
+                AnimationState::CrouchWalk
+            } else {
+                AnimationState::Crouch
+            }
         } else if requests.running_forward && requests.wall_ahead {
             AnimationState::PushingWall
         } else if requests.running_forward {
@@ -258,6 +283,16 @@ impl AnimationState {
         } else {
             AnimationState::Idle
         }
+    }
+
+    /// Whether this state has to fit inside a crouched body's box.
+    ///
+    /// Being ducked is measured against a hull that is one size for every
+    /// build, so how far a particular body has to fold to get under it is
+    /// worked out per body rather than written down — see
+    /// [`crate::common::skeleton::ik::duck_under`].
+    pub fn ducks(&self) -> bool {
+        matches!(self, AnimationState::Crouch | AnimationState::CrouchWalk)
     }
 
     /// Whether this state's feet are pinned to the ground it is standing on.
@@ -297,7 +332,11 @@ impl AnimationState {
     pub fn pose(&self, inputs: &PoseInputs) -> Pose {
         match self {
             AnimationState::Idle => idle_pose(inputs.seconds),
-            state if state.uses_gait() => gait_pose(inputs, direction_of(*state)),
+            AnimationState::Crouch => crouch_posture(),
+            AnimationState::Airborne => airborne_pose(),
+            state if state.uses_gait() => {
+                gait_pose(inputs, direction_of(*state), state.gait_style(inputs))
+            }
             _ => Pose::rest(),
         }
     }
@@ -314,7 +353,20 @@ impl AnimationState {
                 | AnimationState::RunBackward
                 | AnimationState::Strafe
                 | AnimationState::PushingWall
+                | AnimationState::CrouchWalk
         )
+    }
+
+    /// How a state carries itself while it walks.
+    ///
+    /// A crouched walk is its own gait rather than the upright one played
+    /// lower: shorter steps, both feet down most of the time, and no speed at
+    /// which it turns into a run.
+    fn gait_style(&self, inputs: &PoseInputs) -> GaitStyle {
+        match self {
+            AnimationState::CrouchWalk => GaitStyle::CROUCHED,
+            _ => GaitStyle::upright(inputs.speed),
+        }
     }
 
     /// Where this state wants the feet, relative to where they rest.
@@ -326,7 +378,7 @@ impl AnimationState {
             gait_foot_offsets(
                 inputs.stride,
                 direction_of(*self),
-                GaitShape::for_speed(inputs.speed),
+                self.gait_style(inputs).shape,
             )
         } else {
             [FootOffset::default(); 2]
@@ -406,6 +458,38 @@ const IDLE_LEAN: f32 = 0.045;
 
 /// How far the arms swing, in radians.
 const IDLE_ARM_SWING: f32 = 0.05;
+
+/// How far the knees come up in the air, in radians.
+const AIRBORNE_TUCK: f32 = 0.65;
+
+/// Off the ground: knees up, arms out.
+///
+/// Nothing is planted, so this is the one state whose legs are written here
+/// rather than solved for — [`AnimationState::plants_feet`] is false, and a
+/// body whose feet were pinned to a floor it has left would be doing the
+/// splits on the way up.
+fn airborne_pose() -> Pose {
+    let mut pose = Pose::rest();
+
+    for (thigh, shin) in [
+        (bone::THIGH_L, bone::SHIN_L),
+        (bone::THIGH_R, bone::SHIN_R),
+    ] {
+        pose.set(thigh, Quat::from_rotation_x(AIRBORNE_TUCK));
+        pose.set(shin, Quat::from_rotation_x(-AIRBORNE_TUCK * 1.6));
+    }
+
+    // Out and up, the way arms go when the ground stops being there.
+    for (arm, forearm, tuck) in [
+        (bone::UPPER_ARM_L, bone::FOREARM_L, -0.25),
+        (bone::UPPER_ARM_R, bone::FOREARM_R, 0.25),
+    ] {
+        pose.set(arm, Quat::from_rotation_z(tuck) * Quat::from_rotation_x(-0.5));
+        pose.set(forearm, Quat::from_rotation_x(0.8));
+    }
+
+    pose
+}
 
 /// Standing still: a slow settle into the knees and back up.
 ///
@@ -581,6 +665,26 @@ mod tests {
         // A wall in front of a body that is not going anywhere is just a wall.
         requests.running_forward = false;
         assert_eq!(AnimationState::from_requests(&requests), AnimationState::Idle);
+    }
+
+    /// Ducking outranks what the legs were asked to do, and moving while
+    /// ducked is its own thing rather than a walk played lower.
+    #[test]
+    fn a_ducked_body_crouches_whether_or_not_it_is_moving() {
+        let still = BodyRequests { crouching: true, ..default() };
+        assert_eq!(AnimationState::from_requests(&still), AnimationState::Crouch);
+
+        let moving = BodyRequests { crouching: true, running_forward: true, ..default() };
+        assert_eq!(AnimationState::from_requests(&moving), AnimationState::CrouchWalk);
+
+        // Even sprinting: a body cannot sprint out of a duck, and the stance
+        // is the thing that decides what the legs can do.
+        let hurrying = BodyRequests { crouching: true, running_forward: true, ..default() };
+        assert_ne!(AnimationState::from_requests(&hurrying), AnimationState::RunForward);
+
+        // But a crouch-jump is in the air first and ducked second.
+        let jumping = BodyRequests { crouching: true, airborne: true, ..default() };
+        assert_eq!(AnimationState::from_requests(&jumping), AnimationState::Airborne);
     }
 
     /// Being in the air beats whatever the legs were asked for.

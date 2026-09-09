@@ -179,6 +179,8 @@ run_backward = "Run Backward"
 strafe = "Strafe"
 pushing_wall = "Pushing Wall"
 airborne = "Airborne"
+crouch = "Crouch"
+crouch_walk = "Crouch Walk"
 
 [editor.features.cuboid]
 title = "Cuboid"

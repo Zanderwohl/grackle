@@ -20,6 +20,7 @@
 
 use bevy::prelude::*;
 
+use crate::common::class::CROUCH_HEIGHT;
 use crate::common::skeleton::gait::FootOffset;
 use crate::common::skeleton::rig::{bone, Pose, Skeleton};
 use crate::common::skeleton::state::{AnimationState, PoseInputs};
@@ -242,6 +243,42 @@ pub fn leg_length(skeleton: &Skeleton) -> f32 {
     chain_length(skeleton, &LEFT_LEG)
 }
 
+/// Sit a body exactly under `ceiling`, measured from its feet: low enough to
+/// fit, and no lower.
+///
+/// A crouched body has to fit inside the box it ducks through gaps with, and
+/// that box is one size for everybody while the bodies are not. A build with a
+/// long back and short legs cannot fold into it as easily as a lanky one, and
+/// a small build would be folding for no reason. So how far to duck is not a
+/// number that can be written down once — it is a constraint, like a planted
+/// foot, and it is solved the same way.
+///
+/// Both directions on purpose. Cancelling the slack is what keeps a crouched
+/// body's head still: a step bob that pushed the crown up would push it into
+/// the vent the body is ducking through, and holding the head level while the
+/// legs do the work is what crouching along a low gap actually looks like.
+///
+/// Exact in one pass, because the root offset translates the whole body
+/// rigidly. The knees are put back underneath afterwards by [`plant_feet`].
+pub fn duck_under(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, ceiling: f32) {
+    let highest = skeleton
+        .posed_bones(pose, root)
+        .iter()
+        .map(|posed| posed.head.y.max(posed.tail.y))
+        .fold(f32::MIN, f32::max);
+
+    let slack = (highest - root.translation.y) - ceiling;
+    if slack.abs() < 1e-5 {
+        return;
+    }
+
+    // In hip-heights, which is what a root offset is measured in. Never above
+    // rest: a body small enough to walk under the gap stands up straight
+    // rather than being stretched to reach the ceiling.
+    let hips = pose.root_offset.y - slack / skeleton.proportions().hip_metres();
+    pose.root_offset.y = hips.min(0.0);
+}
+
 /// The pose a body is actually in: its state's own pose, plus the corrections
 /// that state calls for.
 ///
@@ -256,6 +293,11 @@ pub fn finish_pose(
     root: &Transform,
 ) -> Pose {
     let mut pose = state.pose(inputs);
+    // Ducking first: it lowers the hips, and planting is what puts the knees
+    // back underneath wherever they end up.
+    if state.ducks() {
+        duck_under(skeleton, &mut pose, root, CROUCH_HEIGHT);
+    }
     if state.plants_feet() {
         plant_feet(skeleton, &mut pose, root, state.foot_offsets(inputs));
     }
@@ -465,10 +507,13 @@ mod tests {
         assert!(AnimationState::Idle.plants_feet());
         assert!(!AnimationState::Airborne.plants_feet());
 
-        // And the pipeline honours it: the airborne pose comes out untouched.
+        // And the pipeline honours it: an airborne body's legs come out of the
+        // pipeline exactly as its own pose left them, tuck and all.
         let inputs = PoseInputs { seconds: 1.0, ..default() };
         let finished = finish_pose(&skeleton, AnimationState::Airborne, &inputs, &root);
-        assert_eq!(finished.joint(bone::THIGH_L), Quat::IDENTITY);
+        let untouched = AnimationState::Airborne.pose(&inputs);
+        assert_eq!(finished.joint(bone::THIGH_L), untouched.joint(bone::THIGH_L));
+        assert_eq!(finished.joint(bone::SHIN_L), untouched.joint(bone::SHIN_L));
 
         let idling = finish_pose(&skeleton, AnimationState::Idle, &inputs, &root);
         assert_ne!(idling.joint(bone::THIGH_L), Quat::IDENTITY, "the idle was never corrected");

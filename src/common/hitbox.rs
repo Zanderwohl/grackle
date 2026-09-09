@@ -29,7 +29,7 @@
 
 use bevy::prelude::*;
 
-use crate::common::class::{CLASS_HALF_EXTENTS, TALLEST_CLASS_HEIGHT};
+use crate::common::class::Stance;
 use crate::common::skeleton::rig::{bone, Pose, Skeleton};
 
 /// How much of the head's movement the head hitbox takes.
@@ -96,23 +96,32 @@ pub struct Hitboxes {
 ///
 /// `root` is the skeleton's own transform — feet on the floor — and the pose
 /// must be one sampled on the tick, not the one being drawn.
-pub fn hitboxes(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Hitboxes {
+pub fn hitboxes(
+    skeleton: &Skeleton,
+    pose: &Pose,
+    root: &Transform,
+    stance: Stance,
+) -> Hitboxes {
     Hitboxes {
-        body: body_box(root),
+        body: body_box(root, stance),
         head: head_box(skeleton, pose, root),
     }
 }
 
-/// The body box: the movement hull, standing on the feet.
+/// The body box: the movement hull of whatever stance the body is in,
+/// standing on its feet.
+///
+/// Ducking shrinks it, which is the point of ducking — a crouched body is a
+/// smaller thing to hit as well as a shorter one to see over. It is the only
+/// thing about this box that moves; the animation still does not touch it.
 ///
 /// Deliberately the same box the body collides with, and deliberately written
-/// as its own function anyway. The two are the same size today and are not the
-/// same idea, so when one of them has to change the other does not follow by
-/// accident.
-fn body_box(root: &Transform) -> Box3 {
+/// as its own function anyway: the two are not the same idea, so when one of
+/// them has to change the other does not follow by accident.
+fn body_box(root: &Transform, stance: Stance) -> Box3 {
     Box3 {
-        centre: root.translation + Vec3::Y * (TALLEST_CLASS_HEIGHT * 0.5),
-        half_extents: CLASS_HALF_EXTENTS,
+        centre: root.translation + Vec3::Y * (stance.height() * 0.5),
+        half_extents: stance.half_extents(),
     }
 }
 
@@ -150,6 +159,7 @@ fn head_box(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Box3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::class::CLASS_HALF_EXTENTS;
     use crate::common::skeleton::state::{AnimationState, PoseInputs};
     use crate::common::skeleton::{humanoid, Proportions};
 
@@ -163,7 +173,7 @@ mod tests {
     fn the_head_box_contains_the_head() {
         let skeleton = rig();
         let root = Transform::from_translation(Vec3::new(2.0, 0.0, -1.0));
-        let boxes = hitboxes(&skeleton, &Pose::rest(), &root);
+        let boxes = hitboxes(&skeleton, &Pose::rest(), &root, Stance::Standing);
 
         let head = skeleton
             .posed_bones(&Pose::rest(), &root)
@@ -195,13 +205,13 @@ mod tests {
                 .translation
         };
 
-        let rest = hitboxes(&skeleton, &Pose::rest(), &root).head.centre;
+        let rest = hitboxes(&skeleton, &Pose::rest(), &root, Stance::Standing).head.centre;
         let mut most_head = 0.0_f32;
         let mut most_box = 0.0_f32;
         for step in 0..64 {
             let pose = AnimationState::Idle.pose(&PoseInputs { seconds: step as f32 * 0.05, ..default() });
             most_head = most_head.max((head_of(&pose) - head_of(&Pose::rest())).length());
-            most_box = most_box.max((hitboxes(&skeleton, &pose, &root).head.centre - rest).length());
+            most_box = most_box.max((hitboxes(&skeleton, &pose, &root, Stance::Standing).head.centre - rest).length());
         }
 
         assert!(most_head > 0.015, "the idle barely moves the head at all: {most_head} m");
@@ -222,8 +232,8 @@ mod tests {
             .with(bone::CHEST, Quat::from_rotation_x(-1.4))
             .with(bone::NECK, Quat::from_rotation_x(-1.0));
 
-        let rest = hitboxes(&skeleton, &Pose::rest(), &root).head.centre;
-        let moved = hitboxes(&skeleton, &thrown, &root).head.centre;
+        let rest = hitboxes(&skeleton, &Pose::rest(), &root, Stance::Standing).head.centre;
+        let moved = hitboxes(&skeleton, &thrown, &root, Stance::Standing).head.centre;
 
         assert!(
             (moved - rest).length() <= HEAD_MAX_OFFSET + 1e-5,
@@ -240,8 +250,14 @@ mod tests {
         let skeleton = rig();
         let root = Transform::from_translation(Vec3::new(-4.0, 2.0, 0.5));
 
-        let standing = hitboxes(&skeleton, &Pose::rest(), &root).body;
-        let idling = hitboxes(&skeleton, &AnimationState::Idle.pose(&PoseInputs { seconds: 1.7, ..default() }), &root).body;
+        let standing = hitboxes(&skeleton, &Pose::rest(), &root, Stance::Standing).body;
+        let idling = hitboxes(
+            &skeleton,
+            &AnimationState::Idle.pose(&PoseInputs { seconds: 1.7, ..default() }),
+            &root,
+            Stance::Standing,
+        )
+        .body;
 
         assert_eq!(standing, idling);
         assert_eq!(standing.half_extents, CLASS_HALF_EXTENTS);

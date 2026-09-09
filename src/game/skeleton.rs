@@ -22,7 +22,7 @@ use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
 use crate::common::app_mode::AppMode;
-use crate::common::class::body_centre_from_feet;
+use crate::common::class::{body_centre_from_feet, Stance};
 use crate::common::hitbox::Hitboxes;
 use crate::common::skeleton::{
     draw_skeleton, finish_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
@@ -72,6 +72,7 @@ impl Plugin for SkeletonPlugin {
                 // After the step, because it advances on the ground that step
                 // actually covered.
                 advance_gaits.after(step_player),
+                follow_stance.after(step_player),
             ))
             .add_systems(Update, (
                 describe_player_bodies.run_if(in_state(AppMode::Play)),
@@ -126,6 +127,19 @@ fn equip_new_bodies(
             .entity(body)
             .insert_if_new(Hitboxes::default())
             .insert_if_new(Gait::default());
+    }
+}
+
+/// Keep the rig's feet on the bottom of the hull as the hull changes height.
+///
+/// A body's transform is the centre of its box, and ducking makes that box
+/// half as tall — so the offset from the centre down to the feet is not a
+/// constant. In `FixedUpdate` beside the step that changes the stance, so a
+/// crouch and the body drawn crouching happen on the same tick rather than a
+/// frame apart.
+pub fn follow_stance(mut bodies: Query<(&Stance, &mut SkeletonRoot), Changed<Stance>>) {
+    for (stance, mut root) in &mut bodies {
+        root.0 = Vec3::NEG_Y * stance.half_extents().y;
     }
 }
 
@@ -184,9 +198,9 @@ pub fn skeleton_root(global: &GlobalTransform, offset: Option<&SkeletonRoot>) ->
 /// every frame, so nothing goes stale.
 fn describe_player_bodies(
     input: Res<PlayerInput>,
-    mut players: Query<(&Player, &mut BodyRequests)>,
+    mut players: Query<(&Player, &Stance, &mut BodyRequests)>,
 ) {
-    for (player, mut requests) in &mut players {
+    for (player, stance, mut requests) in &mut players {
         // `PlayerInput` is the local player's, so this is only correct while
         // there is one body. A second local player, or a remote one, gets its
         // own writer rather than a second reading of this resource.
@@ -194,6 +208,9 @@ fn describe_player_bodies(
         requests.running_backward = input.movement.y < -0.5;
         requests.strafing = input.movement.x.abs() > 0.5;
         requests.airborne = !player.on_ground;
+        // What the body *is*, not what the key says: a body that cannot stand
+        // up under a vent is still crouched, and should still look it.
+        requests.crouching = *stance == Stance::Crouched;
         // Asked to move and stopped on a ground axis. The step is the only
         // thing that knows a wall was hit, so it records it and this reads it.
         requests.wall_ahead = requests.moving() && (player.blocked.x || player.blocked.z);
@@ -217,6 +234,7 @@ fn dress_new_players(
             Pose::rest(),
             SkeletonAnimator::default(),
             BodyRequests::default(),
+            Stance::default(),
             // Phase zero until bodies have identities everyone agrees on. A
             // networked body takes its phase from its network id, which is
             // what makes two clients put it in the same part of its cycle;
@@ -464,6 +482,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Player { on_ground: true, blocked: BVec3::new(false, false, true), ..default() },
+                Stance::Standing,
                 BodyRequests::default(),
             ))
             .id();

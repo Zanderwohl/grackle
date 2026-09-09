@@ -150,6 +150,13 @@ impl GaitShape {
         2.0 * self.half_stride / self.stance
     }
 
+    /// A duck-walk: short steps, both feet down most of the time, and no
+    /// speed at which it turns into anything else.
+    pub const CROUCHED: GaitShape = GaitShape {
+        stance: CROUCH_STANCE,
+        half_stride: CROUCH_HALF_STRIDE,
+    };
+
     /// Whether this gait leaves the ground: a run does, a walk does not.
     ///
     /// Two stances half a cycle apart overlap exactly when they take up more
@@ -159,7 +166,31 @@ impl GaitShape {
     }
 }
 
-/// Where in a stride a body is: one full cycle of two steps, wrapping at 1.
+/// How much of the cycle a crouched foot spends down.
+///
+/// Well over half: a duck-walk always has a foot on the floor, and usually
+/// two. Nobody runs while crouched.
+const CROUCH_STANCE: f32 = 0.68;
+
+/// How far a crouched foot swings, in leg-lengths.
+///
+/// Short. The legs are already folded up, and the shuffle is what makes
+/// crouching cost something to move in.
+const CROUCH_HALF_STRIDE: f32 = 0.26;
+
+/// How far the hips drop to crouch, in hip-heights.
+///
+/// Deep enough that the drawn body fits inside the box a crouched body
+/// collides with — `a_crouched_body_fits_under_its_own_ceiling` is what holds
+/// the two together, since a body drawn standing taller than the gap it just
+/// ducked through would be worse than not drawing it at all.
+pub const CROUCH_DEPTH: f32 = 0.70;
+
+/// How far the chest folds forward while crouched, in radians.
+pub const CROUCH_LEAN: f32 = 1.02;
+
+/// The shape of a cycle at one speed: how long a foot is down, and how far it
+/// swings.
 ///
 /// Simulated state rather than something each viewer works out for itself. It
 /// is accumulated from distance actually covered, so a server owns it and
@@ -266,6 +297,69 @@ fn foot_offset(phase: f32, direction: f32, shape: GaitShape) -> FootOffset {
     }
 }
 
+/// A gait's posture: how the body carries itself, as opposed to where its feet
+/// go.
+///
+/// Bundled rather than passed one argument at a time because they go together
+/// — a crouched walk is a deeper sink, a bigger fold forward, a shorter arm
+/// swing and a shorter step, and picking three of the four would just look
+/// wrong.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GaitStyle {
+    pub shape: GaitShape,
+    /// How far the hips sit below where they rest, in hip-heights.
+    pub sink: f32,
+    /// How far the chest leans into it, in radians.
+    pub lean: f32,
+    /// How far the arms swing, in radians.
+    pub swing: f32,
+}
+
+impl GaitStyle {
+    /// Walking or running upright, at whatever speed the body is going.
+    pub fn upright(speed: f32) -> GaitStyle {
+        GaitStyle {
+            shape: GaitShape::for_speed(speed),
+            sink: GAIT_CROUCH,
+            lean: RUN_LEAN,
+            swing: ARM_SWING,
+        }
+    }
+
+    /// Shuffling along ducked.
+    pub const CROUCHED: GaitStyle = GaitStyle {
+        shape: GaitShape::CROUCHED,
+        sink: CROUCH_DEPTH,
+        lean: CROUCH_LEAN,
+        // Small: the arms are in front of a folded body, not swinging past it.
+        swing: 0.2,
+    };
+}
+
+/// Standing still, ducked.
+///
+/// The posture a crouched walk is built on, without the stride — so the two
+/// cannot drift apart, and a body that stops moving while crouched settles
+/// into the same shape it was walking in.
+pub fn crouch_posture() -> Pose {
+    let mut pose = Pose::rest();
+    pose.root_offset = Vec3::NEG_Y * CROUCH_DEPTH;
+    pose.set(bone::CHEST, Quat::from_rotation_x(CROUCH_LEAN));
+    // The head comes back up to look ahead, rather than at the floor the chest
+    // is folded towards.
+    pose.set(bone::NECK, Quat::from_rotation_x(-CROUCH_LEAN * 0.6));
+
+    for (arm, forearm, tuck) in [
+        (bone::UPPER_ARM_L, bone::FOREARM_L, -ARM_TUCK),
+        (bone::UPPER_ARM_R, bone::FOREARM_R, ARM_TUCK),
+    ] {
+        pose.set(arm, Quat::from_rotation_z(tuck) * Quat::from_rotation_x(0.35));
+        pose.set(forearm, Quat::from_rotation_x(ELBOW_BEND));
+    }
+
+    pose
+}
+
 /// Everything above the knees: the sink into the stride, the dip on each step,
 /// the arms.
 ///
@@ -273,17 +367,20 @@ fn foot_offset(phase: f32, direction: f32, shape: GaitShape) -> FootOffset {
 /// to be, which is [`foot_offsets`] and the solver — a gait that also stated
 /// its own knee angles would be stating the same thing twice, in units that
 /// disagree between builds.
-pub fn gait_pose(inputs: &PoseInputs, direction: f32) -> Pose {
-    let shape = GaitShape::for_speed(inputs.speed);
+pub fn gait_pose(inputs: &PoseInputs, direction: f32, style: GaitStyle) -> Pose {
+    let GaitStyle { shape, sink, lean, swing: arm_swing } = style;
     let phase = inputs.stride.rem_euclid(1.0);
     let cycle = std::f32::consts::TAU * phase;
 
     let mut pose = Pose::rest();
     // Two dips per cycle, one under each step, on top of the constant sink.
-    pose.root_offset = Vec3::NEG_Y * (GAIT_CROUCH + GAIT_BOB * (1.0 - (2.0 * cycle).cos()) * 0.5);
+    pose.root_offset = Vec3::NEG_Y * (sink + GAIT_BOB * (1.0 - (2.0 * cycle).cos()) * 0.5);
 
-    pose.set(bone::CHEST, Quat::from_rotation_x(RUN_LEAN * direction));
-    pose.set(bone::NECK, Quat::from_rotation_x(-RUN_LEAN * direction * 0.7));
+    // A body walking backwards leans back, not forward — but a crouched one is
+    // folded either way, so only the upright part of the lean turns around.
+    let leaning = lean * if lean > RUN_LEAN { 1.0 } else { direction };
+    pose.set(bone::CHEST, Quat::from_rotation_x(leaning));
+    pose.set(bone::NECK, Quat::from_rotation_x(-leaning * 0.7));
 
     // In to the sides first, then swinging fore and aft about the shoulder it
     // now hangs from — the order matters, because the axis an arm swings about
@@ -297,7 +394,7 @@ pub fn gait_pose(inputs: &PoseInputs, direction: f32) -> Pose {
         (bone::UPPER_ARM_L, bone::FOREARM_L, -ARM_TUCK, left),
         (bone::UPPER_ARM_R, bone::FOREARM_R, ARM_TUCK, right),
     ] {
-        let swing = -offset.ahead / shape.half_stride * ARM_SWING;
+        let swing = -offset.ahead / shape.half_stride * arm_swing;
         pose.set(
             arm,
             Quat::from_rotation_z(tuck) * Quat::from_rotation_x(swing),
@@ -599,6 +696,64 @@ mod tests {
         assert!(small.phase() > 0.0);
     }
 
+    /// The drawn body has to fit inside the box it ducks through gaps with.
+    ///
+    /// These are two different descriptions of the same crouch — one for
+    /// collision, one for the eye — and nothing in the type system keeps them
+    /// together. A body drawn standing a head taller than the gap it just
+    /// walked through would be worse than not drawing it at all.
+    #[test]
+    fn a_crouched_body_fits_under_its_own_ceiling() {
+        use crate::common::class::CROUCH_HEIGHT;
+
+        for proportions in [Proportions::DEFAULT, Proportions::STOCKY, Proportions::LANKY] {
+            let skeleton = humanoid(proportions);
+            let root = Transform::IDENTITY;
+
+            for (state, strides) in [
+                (AnimationState::Crouch, 1),
+                (AnimationState::CrouchWalk, 16),
+            ] {
+                for step in 0..strides {
+                    let inputs = PoseInputs {
+                        seconds: step as f32 * 0.3,
+                        stride: step as f32 / strides as f32,
+                        speed: 1.0,
+                    };
+                    let pose = finish_pose(&skeleton, state, &inputs, &root);
+
+                    let highest = skeleton
+                        .posed_bones(&pose, &root)
+                        .iter()
+                        .map(|posed| posed.head.y.max(posed.tail.y))
+                        .fold(0.0_f32, f32::max);
+                    // Exactly under it, not merely below it: a body folded to
+                    // the floor would pass a one-sided check and look
+                    // ridiculous doing it, and one folded barely at all would
+                    // clip through the gap it is ducking into.
+                    assert!(
+                        (highest - CROUCH_HEIGHT).abs() < 1e-3,
+                        "{state:?} on {proportions:?} stands {highest:.2} m tall against a \
+                         {CROUCH_HEIGHT} m ceiling"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Nobody runs while crouched: the duck-walk keeps a foot down whatever
+    /// speed the body is somehow going.
+    #[test]
+    fn a_duck_walk_never_leaves_the_ground() {
+        assert!(!GaitShape::CROUCHED.has_flight());
+        assert!(GaitShape::CROUCHED.stance > 0.5);
+
+        for step in 0..64 {
+            let [left, right] = foot_offsets(step as f32 / 64.0, 1.0, GaitShape::CROUCHED);
+            assert!(left.lift == 0.0 || right.lift == 0.0);
+        }
+    }
+
     /// Backwards is the same cycle with the feet travelling the other way —
     /// not the cycle running in reverse, which would be a film played
     /// backwards rather than a body walking backwards.
@@ -630,7 +785,7 @@ mod tests {
 
         let resting = Pose::rest();
         let inputs = PoseInputs { seconds: 0.0, stride: 0.15, speed: RUNNING };
-        let running = gait_pose(&inputs, 1.0);
+        let running = gait_pose(&inputs, 1.0, GaitStyle::upright(RUNNING));
 
         for name in [bone::HAND_L, bone::HAND_R] {
             assert!(
@@ -651,7 +806,7 @@ mod tests {
                         stride: step as f32 / 32.0,
                         speed: RUNNING,
                     };
-                    hand(&gait_pose(&inputs, 1.0), name).x
+                    hand(&gait_pose(&inputs, 1.0, GaitStyle::upright(RUNNING)), name).x
                 })
                 .sum()
         };

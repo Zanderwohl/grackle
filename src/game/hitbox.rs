@@ -13,6 +13,7 @@
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
+use crate::common::class::Stance;
 use crate::common::hitbox::{hitboxes, Hitboxes};
 use crate::common::skeleton::{
     finish_pose, AnimationClock, AnimationPhase, Gait, PoseInputs, Skeleton, SkeletonAnimator,
@@ -69,13 +70,16 @@ fn update_hitboxes(
         &SkeletonAnimator,
         Option<&AnimationPhase>,
         Option<&Gait>,
+        Option<&Stance>,
         &GlobalTransform,
         Option<&SkeletonRoot>,
         Option<&PhysicsBody>,
         &mut Hitboxes,
     )>,
 ) {
-    for (skeleton, animator, phase, gait, global, offset, physics, mut boxes) in &mut bodies {
+    for (skeleton, animator, phase, gait, stance, global, offset, physics, mut boxes) in
+        &mut bodies
+    {
         // A moving body's drawn transform is interpolated between ticks, which
         // is exactly the frame-rate-dependent quantity this must not use. The
         // fixed step's own position is the one two machines can agree on.
@@ -97,7 +101,7 @@ fn update_hitboxes(
             speed: gait.speed(),
         };
         let pose = finish_pose(skeleton, animator.state(), &inputs, &root);
-        *boxes = hitboxes(skeleton, &pose, &root);
+        *boxes = hitboxes(skeleton, &pose, &root, stance.copied().unwrap_or_default());
     }
 }
 
