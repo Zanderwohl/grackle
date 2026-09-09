@@ -1,10 +1,10 @@
 //! Walking and running: where the feet go, and when.
 //!
 //! The cycle is driven by **distance travelled**, not by the clock. That one
-//! decision is what stops feet sliding: during the half of the cycle a foot is
-//! planted, it moves backwards through the body's own frame at exactly the
-//! rate the body moves forwards, so it stands still in the world. Tie the
-//! cycle to time instead and the two rates agree only at one speed.
+//! decision is what stops feet sliding: while a foot is planted it moves
+//! backwards through the body's own frame at exactly the rate the body moves
+//! forwards, so it stands still in the world. Tie the cycle to time instead
+//! and the two rates agree only at one speed.
 //!
 //! It also gives a few things away for free. A body pushing at a wall covers
 //! no distance, so its cycle does not advance and its legs stop moving without
@@ -33,16 +33,26 @@ use crate::common::skeleton::state::{AnimationState, PoseInputs};
 /// Bounded by geometry rather than taste: a leg reaching forward has to still
 /// touch the floor, and the further forward it goes the more the hips have to
 /// drop for it to get there. See [`GAIT_CROUCH`] — the pair are chosen
-/// together, and `no_step_is_out_of_reach` is what says they still fit.
-const HALF_STRIDE: f32 = 0.4;
+/// together, and `no_step_is_out_of_reach` is what says they still fit. This
+/// sits about six per cent inside what the legs can actually do.
+const HALF_STRIDE: f32 = 0.48;
+
+/// How much of the cycle each foot spends on the ground.
+///
+/// Under half, so the two stances do not overlap and there is a moment with
+/// both feet off the floor. That is what makes this a run rather than a walk —
+/// and it is also the cadence control: a shorter stance means a longer stride
+/// for the same step, so the same speed is covered in fewer, longer cycles
+/// instead of a sprint on the spot.
+const STANCE_FRACTION: f32 = 0.32;
 
 /// How far the body travels in one full cycle of two steps, in leg-lengths.
 ///
-/// Falls out of the stride rather than being chosen: a planted foot travels
-/// `2 × HALF_STRIDE` backwards through the body over half a cycle, and it can
-/// only stand still while doing that if the body covers exactly as much
-/// ground.
-pub const STRIDE_PER_CYCLE: f32 = 4.0 * HALF_STRIDE;
+/// Falls out of the stride and the stance rather than being chosen. A planted
+/// foot travels `2 × HALF_STRIDE` backwards through the body while it is down,
+/// and it can only stand still doing that if the body covers exactly as much
+/// ground in the same time — which is `STANCE_FRACTION` of the cycle.
+pub const STRIDE_PER_CYCLE: f32 = 2.0 * HALF_STRIDE / STANCE_FRACTION;
 
 /// How high a foot lifts at the top of its swing, in leg-lengths.
 const FOOT_LIFT: f32 = 0.18;
@@ -53,13 +63,24 @@ const FOOT_LIFT: f32 = 0.18;
 /// anywhere but the spot directly under its hip. So a gait has to sink into
 /// the knees before it can have a stride at all — which is what real ones do,
 /// and why this is a constant of the gait rather than an expressive flourish.
-const GAIT_CROUCH: f32 = 0.115;
+const GAIT_CROUCH: f32 = 0.13;
 
 /// How much further the hips dip at the middle of each step, in hip-heights.
 const GAIT_BOB: f32 = 0.03;
 
-/// How far the arms swing, in radians.
-const ARM_SWING: f32 = 0.55;
+/// How far the arms swing fore and aft, in radians.
+const ARM_SWING: f32 = 0.6;
+
+/// How far the arms come in from the rest pose, in radians.
+///
+/// Rest is an A-pose, which is a shape for building a rig and not a shape
+/// anybody runs in. This brings the arms down to the sides — about a third of
+/// a turn in from where they hang at rest, which leaves them a few degrees off
+/// vertical rather than out on the diagonal.
+const ARM_TUCK: f32 = 0.6;
+
+/// How far the elbows are held bent while running, in radians.
+const ELBOW_BEND: f32 = 1.1;
 
 /// How far the chest leans into the run, in radians.
 const RUN_LEAN: f32 = 0.12;
@@ -127,18 +148,19 @@ pub fn foot_offsets(phase: f32, direction: f32) -> [FootOffset; 2] {
 fn foot_offset(phase: f32, direction: f32) -> FootOffset {
     let phase = phase.rem_euclid(1.0);
 
-    if phase < 0.5 {
+    if phase < STANCE_FRACTION {
         // Planted. Travels from in front of the hip to behind it, at exactly
         // the rate the body travels forwards — so in the world it does not
         // move at all.
-        let travelled = phase / 0.5;
+        let travelled = phase / STANCE_FRACTION;
         FootOffset {
             ahead: direction * HALF_STRIDE * (1.0 - 2.0 * travelled),
             lift: 0.0,
         }
     } else {
-        // Swinging back to the front, over the top.
-        let travelled = (phase - 0.5) / 0.5;
+        // Swinging back to the front, over the top. It has longer to do it in
+        // than it had on the ground, which is what a run looks like.
+        let travelled = (phase - STANCE_FRACTION) / (1.0 - STANCE_FRACTION);
         FootOffset {
             ahead: direction * HALF_STRIDE * (2.0 * travelled - 1.0),
             lift: FOOT_LIFT * (std::f32::consts::PI * travelled).sin(),
@@ -164,17 +186,25 @@ pub fn gait_pose(inputs: &PoseInputs, direction: f32) -> Pose {
     pose.set(bone::CHEST, Quat::from_rotation_x(RUN_LEAN * direction));
     pose.set(bone::NECK, Quat::from_rotation_x(-RUN_LEAN * direction * 0.7));
 
+    // In to the sides first, then swinging fore and aft about the shoulder it
+    // now hangs from — the order matters, because the axis an arm swings about
+    // is not the same one before and after it has come in.
+    //
     // Opposite the leg on the same side, which is what stops a run looking
-    // like a march.
+    // like a march. Mirrored signs: the two shoulders are mirror images, so
+    // the same sign on both would tuck one arm in and throw the other out.
     let [left, right] = foot_offsets(phase, direction);
-    pose.set(
-        bone::UPPER_ARM_L,
-        Quat::from_rotation_x(-left.ahead / HALF_STRIDE * ARM_SWING),
-    );
-    pose.set(
-        bone::UPPER_ARM_R,
-        Quat::from_rotation_x(-right.ahead / HALF_STRIDE * ARM_SWING),
-    );
+    for (arm, forearm, tuck, offset) in [
+        (bone::UPPER_ARM_L, bone::FOREARM_L, -ARM_TUCK, left),
+        (bone::UPPER_ARM_R, bone::FOREARM_R, ARM_TUCK, right),
+    ] {
+        let swing = -offset.ahead / HALF_STRIDE * ARM_SWING;
+        pose.set(
+            arm,
+            Quat::from_rotation_z(tuck) * Quat::from_rotation_x(swing),
+        );
+        pose.set(forearm, Quat::from_rotation_x(ELBOW_BEND));
+    }
 
     pose
 }
@@ -343,36 +373,84 @@ mod tests {
         assert!(big.phase().abs() < 1e-5, "{}", big.phase());
     }
 
-    /// One foot down while the other swings, all the way round. Both feet off
-    /// the floor at once is a jump, and neither ever leaving it is a shuffle.
+    /// One foot at a time on the ground, with a moment where neither is.
     ///
-    /// The claim is about them never being airborne together, not about one
-    /// always being airborne: at the two instants a foot lifts and lands, it
-    /// is at zero height like the other one, and that is a walk changing feet
-    /// rather than a gap in the gait.
+    /// Both planted at once would mean the two stances overlap, which is a
+    /// walk; both airborne is the flight phase that makes this a run. The
+    /// second is asserted as much as the first, because a stance fraction that
+    /// crept back up to a half would quietly turn the run into a march.
     #[test]
-    fn the_feet_take_turns() {
-        for step in 0..64 {
-            let phase = step as f32 / 64.0;
+    fn the_feet_take_turns_with_a_moment_in_the_air() {
+        let mut airborne = 0;
+        for step in 0..128 {
+            let phase = step as f32 / 128.0;
             let [left, right] = foot_offsets(phase, 1.0);
 
             assert!(
-                left.lift == 0.0 || right.lift == 0.0,
-                "at {phase:.2} both feet are off the floor: {} and {}",
-                left.lift,
-                right.lift
+                left.lift > 0.0 || right.lift > 0.0,
+                "at {phase:.2} both feet are planted at once, which is a walk: {} and {}",
+                left.ahead,
+                right.ahead
+            );
+            if left.lift > 0.0 && right.lift > 0.0 {
+                airborne += 1;
+            }
+        }
+
+        assert!(airborne > 0, "the run has no flight phase");
+
+        // Each foot is down for its share of the cycle and no more.
+        let planted = (0..128)
+            .filter(|step| foot_offsets(*step as f32 / 128.0, 1.0)[0].lift == 0.0)
+            .count() as f32
+            / 128.0;
+        assert!(
+            (planted - STANCE_FRACTION).abs() < 0.02,
+            "a foot is down for {planted:.2} of the cycle, not {STANCE_FRACTION}"
+        );
+    }
+
+    /// A rest pose is a shape for building a rig, not one for running in. The
+    /// arms come in to the sides, and stay mirrored doing it.
+    #[test]
+    fn the_arms_come_in_from_the_a_pose() {
+        use crate::common::skeleton::rig::{bone, humanoid, Proportions};
+
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let root = Transform::IDENTITY;
+        let hand = |pose: &Pose, name: &str| {
+            skeleton
+                .posed_bones(pose, &root)
+                .into_iter()
+                .find(|posed| posed.name == name)
+                .unwrap()
+                .tail
+        };
+
+        let resting = Pose::rest();
+        let running = gait_pose(&PoseInputs { seconds: 0.0, stride: 0.15 }, 1.0);
+
+        for name in [bone::HAND_L, bone::HAND_R] {
+            assert!(
+                hand(&running, name).x.abs() < hand(&resting, name).x.abs(),
+                "{name} is no closer to the body than it is at rest"
             );
         }
 
-        // A quarter of the way into each half, the swinging foot is plainly up
-        // and the planted one is plainly down.
-        let [left, right] = foot_offsets(0.25, 1.0);
-        assert_eq!(left.lift, 0.0);
-        assert!(right.lift > 0.0, "the right foot never leaves the floor");
-
-        let [left, right] = foot_offsets(0.75, 1.0);
-        assert!(left.lift > 0.0, "the left foot never leaves the floor");
-        assert_eq!(right.lift, 0.0);
+        // The two arms do the same thing half a cycle apart, so at any one
+        // moment they are not mirror images — one is forward while the other
+        // is back. Over a whole cycle they have to even out, and that is the
+        // symmetry worth asserting.
+        let across_the_cycle = |name: &str| -> f32 {
+            (0..32)
+                .map(|step| {
+                    let inputs = PoseInputs { seconds: 0.0, stride: step as f32 / 32.0 };
+                    hand(&gait_pose(&inputs, 1.0), name).x
+                })
+                .sum()
+        };
+        let lopsided = across_the_cycle(bone::HAND_L) + across_the_cycle(bone::HAND_R);
+        assert!(lopsided.abs() < 1e-4, "the arms are lopsided by {lopsided} over a cycle");
     }
 
     /// Backwards is the same cycle with the feet travelling the other way —
@@ -388,3 +466,4 @@ mod tests {
         assert_eq!(forwards.lift, backwards.lift);
     }
 }
+
