@@ -9,13 +9,17 @@
 //!   machine that turns them into an [`AnimationState`]. A local player, an
 //!   NPC and a body being driven by the network all say *what is happening*
 //!   and none of them chooses an animation.
+//! - [`ik`] — putting the end of a limb where it has to be, and the pipeline
+//!   that applies such corrections to whatever a state produced.
 //! - [`draw`] — one prism per bone, for anything that wants to see a rig.
 
 pub mod draw;
+pub mod ik;
 pub mod rig;
 pub mod state;
 
 pub use draw::{draw_skeleton, SkeletonPalette};
+pub use ik::{finish_pose, plant_feet, solve, Chain, Reach};
 pub use rig::{bone, default_humanoid, humanoid, Bone, Pose, PosedBone, Proportions, Side, Skeleton};
 pub use state::{
     AnimationClock, AnimationPhase, AnimationState, BodyRequests, ForcedAnimation,

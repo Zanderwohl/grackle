@@ -33,7 +33,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
-use crate::common::skeleton::rig::{bone, Pose, LEG_SPAN_PER_HIP_HEIGHT};
+use crate::common::skeleton::rig::{bone, Pose};
 use crate::get;
 
 /// The clock every animation is sampled against.
@@ -235,6 +235,16 @@ impl AnimationState {
         }
     }
 
+    /// Whether this state's feet are pinned to the ground it is standing on.
+    ///
+    /// A correction the state asks for rather than something every body gets:
+    /// see [`crate::common::skeleton::ik::finish_pose`]. Airborne is the case
+    /// that makes the distinction real — feet welded to a floor a body has
+    /// left would be a body doing the splits on the way up.
+    pub fn plants_feet(&self) -> bool {
+        !matches!(self, AnimationState::Airborne)
+    }
+
     /// Transitions that must not wait for [`MIN_DWELL`].
     ///
     /// Leaving the ground and landing are the two the eye catches: a jump that
@@ -339,38 +349,20 @@ const IDLE_ARM_SWING: f32 = 0.05;
 
 /// Standing still: a slow settle into the knees and back up.
 ///
-/// The hips drop and the knees take it, rather than the whole body sinking
-/// through the floor. Legs are a rigid chain from the root, so moving the root
-/// moves the feet with it — the bend below is what puts them back, and it is
-/// exact rather than eyeballed: for a leg of two equal segments, dropping the
-/// hip to a fraction `k` of the leg's length is a thigh turned by
-/// `acos(1 - k)`, a shin turned back by twice that, and an ankle turned by the
-/// same again to keep the sole flat.
-///
-/// That is a two-bone IK solve in its simplest form — one foot, planted, with
-/// the target directly below the hip. The general version is the next thing
-/// this file will want, and it will replace these three lines rather than
-/// sitting beside them.
+/// Only the hips and the spine. The legs are not mentioned at all — the feet
+/// are held by the planting pass in [`crate::common::skeleton::ik`], which is
+/// the same pass a run cycle and a taunt's contact spans will use. This
+/// function used to work the knee angles out itself, exactly and only for the
+/// case of a hip directly above a planted foot; the solver does the general
+/// thing, so the special case is gone.
 fn idle_pose(seconds: f32) -> Pose {
     // Down from rest and back, never up: rest already has the legs straight,
     // so there is nowhere above it to go without leaving the floor.
     let cycle = std::f32::consts::TAU * seconds / IDLE_PERIOD;
     let settle = (1.0 - cycle.cos()) * 0.5;
 
-    let drop = settle * IDLE_BOB;
     let mut pose = Pose::rest();
-    pose.root_offset = Vec3::NEG_Y * drop;
-
-    // The knee bend that puts the feet back where they were.
-    let bend = (1.0 - drop / LEG_SPAN_PER_HIP_HEIGHT).clamp(-1.0, 1.0).acos();
-    for (thigh, shin, foot) in [
-        (bone::THIGH_L, bone::SHIN_L, bone::FOOT_L),
-        (bone::THIGH_R, bone::SHIN_R, bone::FOOT_R),
-    ] {
-        pose.set(thigh, Quat::from_rotation_x(bend));
-        pose.set(shin, Quat::from_rotation_x(-2.0 * bend));
-        pose.set(foot, Quat::from_rotation_x(bend));
-    }
+    pose.root_offset = Vec3::NEG_Y * (settle * IDLE_BOB);
 
     // A settle that only moved vertically would read as an elevator. The chest
     // leans into it and the arms trail a quarter cycle behind, which is what
@@ -402,27 +394,29 @@ mod tests {
         (posed.head, posed.tail)
     }
 
-    /// The bounce lowers the hips, and the legs are a rigid chain hanging off
-    /// them — so without the knee bend that compensates, the whole idle would
-    /// be a body sinking through the floor. The compensation is arithmetic
-    /// rather than eyeballed, and this is what says so.
+    /// The bounce lowers the hips and the legs hang off them, so on its own
+    /// the idle is a body sinking through the floor. What holds the feet is
+    /// the planting pass the state asks for — this is the whole pipeline, and
+    /// the thing a player would actually see.
     ///
-    /// Also the first real test of a pose crossing builds: the bend is
-    /// computed from a ratio the rig fixes, so it has to plant the feet of a
-    /// short body and a stocky one just as well.
+    /// Across all three builds, because a foot that stayed put on one and
+    /// slid on another is exactly what a pose of rotations would do.
     #[test]
     fn feet_stay_planted_through_the_whole_idle_cycle() {
+        use crate::common::skeleton::ik::finish_pose;
+
         for proportions in [Proportions::DEFAULT, Proportions::STOCKY, Proportions::LANKY] {
+            let skeleton = humanoid(proportions);
             let (_, resting_toe) = bone_at(proportions, &Pose::rest(), bone::FOOT_L);
 
             for step in 0..40 {
                 let seconds = step as f32 * IDLE_PERIOD / 40.0;
-                let pose = AnimationState::Idle.pose(seconds);
+                let pose = finish_pose(&skeleton, AnimationState::Idle, seconds, &Transform::IDENTITY);
                 let (ankle, toe) = bone_at(proportions, &pose, bone::FOOT_L);
 
                 assert!(
-                    (toe - resting_toe).length() < 0.002,
-                    "at {seconds:.2}s the foot has moved {:.4} m",
+                    (toe - resting_toe).length() < 1e-4,
+                    "at {seconds:.2}s the foot has moved {:.5} m",
                     (toe - resting_toe).length()
                 );
                 assert!(ankle.y > 0.0, "the ankle went through the floor at {seconds:.2}s");

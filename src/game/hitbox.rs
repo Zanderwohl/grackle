@@ -14,9 +14,11 @@ use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
 use crate::common::hitbox::{hitboxes, Hitboxes};
-use crate::common::skeleton::{AnimationClock, AnimationPhase, Skeleton, SkeletonAnimator};
+use crate::common::skeleton::{
+    finish_pose, AnimationClock, AnimationPhase, Skeleton, SkeletonAnimator,
+};
 use crate::game::player::{step_player, PhysicsBody, Player, ViewMode};
-use crate::game::skeleton::{advance_animation_clock, SkeletonRoot};
+use crate::game::skeleton::{advance_animation_clock, skeleton_root, SkeletonRoot};
 
 /// Whether hitboxes are drawn. `F4` toggles it.
 ///
@@ -83,19 +85,23 @@ fn update_hitboxes(
     )>,
 ) {
     for (skeleton, animator, phase, global, offset, physics, mut boxes) in &mut bodies {
-        let mut root = global.compute_transform();
         // A moving body's drawn transform is interpolated between ticks, which
         // is exactly the frame-rate-dependent quantity this must not use. The
         // fixed step's own position is the one two machines can agree on.
+        let mut placed = *global;
         if let Some(physics) = physics {
-            root.translation = physics.current;
+            placed = GlobalTransform::from(
+                global.compute_transform().with_translation(physics.current),
+            );
         }
-        if let Some(SkeletonRoot(offset)) = offset {
-            root.translation += root.rotation * *offset;
-        }
+        let root = skeleton_root(&placed, offset);
 
+        // The same pipeline the drawing goes through, corrections and all: a
+        // hitbox worked out from an uncorrected pose would sit where the body
+        // visibly is not.
         let seconds = clock.seconds() + phase.copied().unwrap_or_default().0;
-        *boxes = hitboxes(skeleton, &animator.pose_at(seconds), &root);
+        let pose = finish_pose(skeleton, animator.state(), seconds, &root);
+        *boxes = hitboxes(skeleton, &pose, &root);
     }
 }
 

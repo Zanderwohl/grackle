@@ -200,6 +200,17 @@ pub struct Skeleton {
 }
 
 impl Skeleton {
+    /// The bones, parents first.
+    pub fn bones(&self) -> &[Bone] {
+        &self.bones
+    }
+
+    /// Where a named bone sits in [`Skeleton::bones`], and so in the list
+    /// [`Skeleton::posed_bones`] returns.
+    pub fn index_of(&self, name: &str) -> Option<usize> {
+        self.bones.iter().position(|bone| bone.name == name)
+    }
+
     /// The numbers this rig was built from. Anything that needs a body's
     /// height — how tall a display stands, where its head is — asks the rig
     /// rather than reaching for a constant of its own.
@@ -258,20 +269,6 @@ impl Skeleton {
 /// Not a [`Proportions`] field because it is the same on every build: an ankle
 /// is at the bottom of a leg wherever that leg starts.
 const ANKLE_HEIGHT: f32 = 0.04;
-
-/// How long a leg is, as a fraction of the hip's height off the ground.
-///
-/// The one number an animation needs to know about the rig it is playing on,
-/// and the reason it can be a constant: a leg spans hip to ankle, so its length
-/// is fixed relative to the hip once [`ANKLE_HEIGHT`] is. That is what lets a
-/// pose lower the hips by a third of a leg — planting the feet by bending the
-/// knees exactly enough — without knowing whose legs they are.
-///
-/// Exact for the default build's hip height and within a fraction of a percent
-/// for the others, which is a tenth of a millimetre at the floor. See
-/// `feet_stay_planted_through_the_whole_idle_cycle`.
-pub const LEG_SPAN_PER_HIP_HEIGHT: f32 =
-    1.0 - ANKLE_HEIGHT / Proportions::DEFAULT.hip_height;
 
 /// The one humanoid rig, built once.
 ///

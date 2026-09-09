@@ -24,8 +24,8 @@ use bevy::transform::TransformSystems;
 use crate::common::app_mode::AppMode;
 use crate::common::class::body_centre_from_feet;
 use crate::common::skeleton::{
-    draw_skeleton, humanoid, AnimationClock, AnimationPhase, BodyRequests, ForcedAnimation, Pose,
-    Proportions, Skeleton, SkeletonAnimator, SkeletonPalette,
+    draw_skeleton, finish_pose, humanoid, AnimationClock, AnimationPhase, BodyRequests,
+    ForcedAnimation, Pose, Proportions, Skeleton, SkeletonAnimator, SkeletonPalette,
 };
 use crate::game::hitbox::HitboxPlugin;
 use crate::game::collision::CollisionWorld;
@@ -87,6 +87,19 @@ impl Plugin for SkeletonPlugin {
 /// which is the whole reason the clock is here rather than in `Update`.
 pub fn advance_animation_clock(time: Res<Time<Fixed>>, mut clock: ResMut<AnimationClock>) {
     clock.advance(time.delta_secs());
+}
+
+/// Where a body's feet are, from the entity carrying the rig.
+///
+/// Three systems ask — the one that animates, the one that draws and the one
+/// that works out where a body can be hit — and a rig drawn at one place and
+/// boxed at another would be worse than either.
+pub fn skeleton_root(global: &GlobalTransform, offset: Option<&SkeletonRoot>) -> Transform {
+    let mut root = global.compute_transform();
+    if let Some(SkeletonRoot(offset)) = offset {
+        root.translation += root.rotation * *offset;
+    }
+    root
 }
 
 /// Describe what the local player's body is doing.
@@ -193,15 +206,18 @@ fn advance_animators(
     time: Res<Time>,
     clock: Res<AnimationClock>,
     mut bodies: Query<(
+        &Skeleton,
         &mut SkeletonAnimator,
         &mut Pose,
+        &GlobalTransform,
+        Option<&SkeletonRoot>,
         Option<&BodyRequests>,
         Option<&ForcedAnimation>,
         Option<&AnimationPhase>,
     )>,
 ) {
     let dt = time.delta_secs();
-    for (mut animator, mut pose, requests, forced, phase) in &mut bodies {
+    for (skeleton, mut animator, mut pose, global, offset, requests, forced, phase) in &mut bodies {
         match forced {
             // Being shown rather than driven: requests, if any, are ignored.
             Some(ForcedAnimation(state)) => animator.force(*state, dt),
@@ -212,7 +228,18 @@ fn advance_animators(
         // Sampled from the shared clock rather than from time-in-state, so
         // two people watching this body on the same tick see it in the same
         // part of its cycle whatever either of them was doing a moment ago.
-        *pose = animator.pose_at(clock.seconds() + phase.copied().unwrap_or_default().0);
+        //
+        // The root here is last frame's, since propagation has not run yet.
+        // Harmless: the corrections are stated in world space but resolve to
+        // joint angles, so only the body's facing matters and not where it is
+        // standing.
+        let seconds = clock.seconds() + phase.copied().unwrap_or_default().0;
+        *pose = finish_pose(
+            skeleton,
+            animator.state(),
+            seconds,
+            &skeleton_root(global, offset),
+        );
     }
 }
 
@@ -304,6 +331,7 @@ mod tests {
                 Pose::rest(),
                 SkeletonAnimator::default(),
                 BodyRequests { running_forward: true, ..default() },
+                Transform::IDENTITY,
             ))
             .id();
 
@@ -331,6 +359,7 @@ mod tests {
                 SkeletonAnimator::default(),
                 BodyRequests { running_forward: true, ..default() },
                 ForcedAnimation(AnimationState::Airborne),
+                Transform::IDENTITY,
             ))
             .id();
 
