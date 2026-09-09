@@ -15,6 +15,8 @@ use crate::editor::editor_room::EditorRoom;
 use crate::editor::global_point::GlobalPoint;
 use crate::editor::grackle_point_light::GracklePointLight;
 use crate::editor::map_metadata::MapMetadata;
+use crate::editor::animation_display::AnimationDisplay;
+use crate::editor::animation_grid::AnimationGrid;
 use crate::editor::prop::Prop;
 use crate::editor::spawn_point::SpawnPoint;
 use crate::editor::save;
@@ -148,6 +150,8 @@ pub fn create_object_from_type_key(type_key: &str) -> Option<Box<dyn FeatureTrai
         "grackle_point_light" => Some(Box::new(GracklePointLight::new(0.0, 0.0, 0.0))),
         "spawn_point" => Some(Box::new(SpawnPoint::new(0.0, 0.0, 0.0))),
         "prop" => Some(Box::new(Prop::new(0.0, 0.0, 0.0))),
+        "animation_display" => Some(Box::new(AnimationDisplay::new(0.0, 0.0, 0.0))),
+        "animation_grid" => Some(Box::new(AnimationGrid::new(0.0, 0.0, 0.0))),
         "editor_room" => Some(Box::new(EditorRoom::from_point_refs(
             PointRef::absolute(0.0, 0.0, 0.0),
             PointRef::absolute(0.0, 0.0, 0.0),

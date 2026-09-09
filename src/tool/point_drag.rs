@@ -54,6 +54,8 @@ fn is_point_like(type_key: &str) -> bool {
         || type_key == "grackle_point_light"
         || type_key == "spawn_point"
         || type_key == "prop"
+        || type_key == "animation_display"
+        || type_key == "animation_grid"
 }
 
 impl PointDragState {

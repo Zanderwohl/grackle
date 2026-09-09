@@ -4,6 +4,7 @@ use bevy_egui::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::common::class::{TALLEST_CLASS_EYE_HEIGHT, TALLEST_CLASS_HEIGHT};
+use crate::common::skeleton::{default_humanoid, draw_skeleton, Pose, SkeletonPalette};
 use crate::common::PointResolutionError;
 use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
@@ -98,20 +99,31 @@ impl FeatureTrait for SpawnPoint {
         self.yaw = *yaw;
     }
 
-    /// Feet, headroom, eyes.
+    /// The body that will stand here, where it will look from, and which way.
     ///
-    /// The line is the space a body needs and the sphere on it is where that
-    /// body would be looking from, so a mapper can see at a glance both
-    /// whether the spawn fits and what it would open onto. Drawn while the
-    /// feature is selected, and whenever spawn-point gizmos are switched on.
+    /// The rig rather than a line: the space a body needs is a shape, not a
+    /// height, and an arm through a doorframe is the sort of thing a mapper
+    /// can only see if it is drawn. It is the same skeleton the game puts on
+    /// the body it spawns, in its rest pose, so what is drawn here is what
+    /// turns up on F5.
+    ///
+    /// Drawn while the feature is selected, and whenever spawn-point gizmos
+    /// are switched on.
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let feet = self.resolved_location;
-        let head = feet + Vec3::Y * TALLEST_CLASS_HEIGHT;
         let eyes = feet + Vec3::Y * TALLEST_CLASS_EYE_HEIGHT;
 
         let yellow = Color::srgb_u8(255, 214, 0);
         gizmos.sphere(Isometry3d::from_translation(feet), 0.2, yellow);
-        gizmos.line(feet, head, yellow);
+        // Flat yellow rather than the game's per-side colours: this is a spawn
+        // point's gizmo and has to keep reading as one.
+        draw_skeleton(
+            gizmos,
+            default_humanoid(),
+            &Pose::rest(),
+            &Transform::from_translation(feet).with_rotation(Quat::from_rotation_y(self.yaw)),
+            &SkeletonPalette::flat(yellow),
+        );
         gizmos.sphere(Isometry3d::from_translation(eyes), 0.12, yellow);
 
         // Which way the body looks, drawn from the eyes because that is where

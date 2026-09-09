@@ -1,5 +1,7 @@
 pub mod app_mode;
 pub mod class;
+pub mod hitbox;
+pub mod skeleton;
 pub mod lang;
 pub(crate) mod perf;
 pub(crate) mod systems;

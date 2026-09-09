@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::{Vec3, info};
 use rusqlite::{Connection, Transaction, params};
+use crate::common::skeleton::AnimationState;
 use crate::constants::{SCHEMA_VERSION, MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION};
 use crate::editor::action::{Action, FeatureData, FeatureDelta, FeatureSnapshot};
 use crate::editor::editable::{
@@ -265,6 +266,8 @@ fn snapshot_data_kind(data: &FeatureData) -> &'static str {
         FeatureData::Room { .. } => "room",
         FeatureData::SpawnPoint { .. } => "spawn_point",
         FeatureData::Prop { .. } => "prop",
+        FeatureData::AnimationDisplay { .. } => "animation_display",
+        FeatureData::AnimationGrid { .. } => "animation_grid",
         FeatureData::Cuboid { .. } => "cuboid",
     }
 }
@@ -309,6 +312,24 @@ fn save_feature_snapshot(
                     params![sid, k, v as f64],
                 )?;
             }
+        }
+        FeatureData::AnimationDisplay { location, yaw, state } => {
+            save_snapshot_point_ref(tx, sid, "location", location)?;
+            // The state goes out as its index, which is stable across builds
+            // by contract — see `AnimationState`.
+            for (k, v) in [("yaw", *yaw), ("state", state.index() as f32)] {
+                tx.execute(
+                    "INSERT INTO snapshot_scalar_fields (snapshot_id, field_key, field_value) VALUES (?1, ?2, ?3)",
+                    params![sid, k, v as f64],
+                )?;
+            }
+        }
+        FeatureData::AnimationGrid { location, yaw } => {
+            save_snapshot_point_ref(tx, sid, "location", location)?;
+            tx.execute(
+                "INSERT INTO snapshot_scalar_fields (snapshot_id, field_key, field_value) VALUES (?1, ?2, ?3)",
+                params![sid, "yaw", *yaw as f64],
+            )?;
         }
         FeatureData::PointLight {
             location,
@@ -400,6 +421,21 @@ fn load_feature_snapshot(conn: &Connection, snapshot_id: i64) -> rusqlite::Resul
                 load_snapshot_scalar(conn, snapshot_id, "roll")?,
             );
             FeatureData::Prop { location, rotation }
+        }
+        "animation_display" => {
+            let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
+            let yaw = load_snapshot_scalar_or(conn, snapshot_id, "yaw", 0.0)?;
+            // Defaulting rather than failing: a display whose state this build
+            // does not know still stands there, idle.
+            let state = AnimationState::from_index(
+                load_snapshot_scalar_or(conn, snapshot_id, "state", 0.0)?.max(0.0) as u32,
+            );
+            FeatureData::AnimationDisplay { location, yaw, state }
+        }
+        "animation_grid" => {
+            let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
+            let yaw = load_snapshot_scalar_or(conn, snapshot_id, "yaw", 0.0)?;
+            FeatureData::AnimationGrid { location, yaw }
         }
         "point_light" => {
             let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
@@ -860,6 +896,88 @@ mod tests {
             read_back(&loaded.timeline),
             vec![(Vec3::new(2.0, 3.0, -1.0), rotation)]
         );
+    }
+
+    /// Registering a feature type takes edits in seven places that do not
+    /// reference each other, and a missed one loses the feature quietly: the
+    /// file saves, and the display is simply absent when it comes back. The
+    /// chosen state is the part most likely to survive halfway, since it goes
+    /// to disk as a number and a wrong one still loads as a valid state.
+    #[test]
+    fn an_animation_display_survives_a_save_and_load_with_its_state() {
+        use crate::common::skeleton::AnimationState;
+        use crate::editor::animation_display::AnimationDisplay;
+
+        let mut timeline = FeatureTimeline::default();
+        timeline.apply_feature(Box::new(
+            AnimationDisplay::new(4.0, 0.0, -2.0)
+                .with_state(AnimationState::PushingWall)
+                .with_yaw(1.25),
+        ));
+
+        let path = temp_path("animation-display-round-trip");
+        save(&path, &timeline, &MapMetadata::default()).unwrap();
+        let mut loaded = load(&path).unwrap();
+
+        let read_back = |timeline: &FeatureTimeline| -> Vec<(Vec3, f32, f32)> {
+            timeline
+                .active_features()
+                .filter(|(_, f)| f.object().type_key() == "animation_display")
+                .map(|(_, f)| {
+                    let scalars: HashMap<&str, f32> = f.object().scalar_fields().into_iter().collect();
+                    (
+                        f.object().get_point("").unwrap(),
+                        scalars["yaw"],
+                        scalars["state"],
+                    )
+                })
+                .collect()
+        };
+
+        let expected = vec![(
+            Vec3::new(4.0, 0.0, -2.0),
+            1.25,
+            AnimationState::PushingWall.index() as f32,
+        )];
+        assert_eq!(read_back(&loaded.timeline), expected);
+
+        // And again out of the persisted history, which is registered
+        // separately from the features table and fails separately.
+        loaded.timeline.undo();
+        assert!(read_back(&loaded.timeline).is_empty(), "undo left the display active");
+        loaded.timeline.redo();
+        assert_eq!(read_back(&loaded.timeline), expected);
+    }
+
+    /// The grid carries almost nothing of its own — a point and a facing — so
+    /// the thing that breaks is registration rather than data: miss one of the
+    /// seven places and the map saves fine and comes back sixty bodies short.
+    #[test]
+    fn an_animation_grid_survives_a_save_and_load() {
+        use crate::editor::animation_grid::AnimationGrid;
+
+        let mut timeline = FeatureTimeline::default();
+        timeline.apply_feature(Box::new(AnimationGrid::new(-3.0, 0.5, 7.0).with_yaw(-0.75)));
+
+        let path = temp_path("animation-grid-round-trip");
+        save(&path, &timeline, &MapMetadata::default()).unwrap();
+        let mut loaded = load(&path).unwrap();
+
+        let read_back = |timeline: &FeatureTimeline| -> Vec<(Vec3, Vec3)> {
+            timeline
+                .active_features()
+                .filter(|(_, f)| f.object().type_key() == "animation_grid")
+                .map(|(_, f)| (f.object().get_point("").unwrap(), f.object().euler_angles()))
+                .collect()
+        };
+
+        let expected = vec![(Vec3::new(-3.0, 0.5, 7.0), Vec3::new(0.0, -0.75, 0.0))];
+        assert_eq!(read_back(&loaded.timeline), expected);
+
+        loaded.timeline.undo();
+        assert!(read_back(&loaded.timeline).is_empty(), "undo left the grid active");
+        loaded.timeline.redo();
+        assert_eq!(read_back(&loaded.timeline), expected);
     }
 
     /// Facing rides along on the spawn point as a scalar, which is a separate

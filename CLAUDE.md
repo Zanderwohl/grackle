@@ -61,7 +61,7 @@ both, but that call has not been made.
 | `src/game/` | Playing the open map: `AppMode` swap, player body, collision. |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`. |
 
 ## Spawn points and class metrics
@@ -88,6 +88,14 @@ is taste and will change; what a new map has to *provide* is a room, a light,
 and a spawn point with headroom, which is what the test at the bottom of
 [`save.rs`](src/editor/save.rs) checks. Don't pin its coordinates there.
 
+The template is a database, so a diff shows it as "changed" and nothing more.
+Don't edit it by saving over it from the editor — it is written by
+`cargo run --bin new_map_template`
+([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the
+repo root, and that file is where its contents are reviewable. It currently
+also ships an animation grid, which is why the room is 24 m square: the grid is
+a testing convenience rather than something a new map owes you.
+
 Choice is uniform random, and facing is the fixed `SPAWN_YAW`. Per-team spawns
 and not dropping people on each other are gamemode questions, deliberately not
 answered at this layer yet.
@@ -98,6 +106,11 @@ answered at this layer yet.
 `Play`, and **`F5` swaps between them** — the only way back to the editor, as
 `Escape` belongs to the pause menu. No reload, no second process — that is the
 between-round editing feature, so keep it that way.
+
+Two more keys while playing: **`F`** swaps between first and third person
+(`ViewMode` in [`src/game/player.rs`](src/game/player.rs) — your own body and
+its hitboxes are hidden from inside your own head, nobody else's are), and
+**`F4`** toggles the hitbox gizmos. `F3` is the perf overlay in both modes.
 
 Every editor system is gated with `.run_if(in_state(AppMode::Editor))` at its
 `add_systems` call, and `EditorInputPlugin` is gated too so the resources every

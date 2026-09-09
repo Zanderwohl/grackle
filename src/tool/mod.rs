@@ -4,6 +4,8 @@ use bevy_egui::egui;
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter};
 use crate::get;
+use crate::tool::animation_display::AnimationDisplayPlugin;
+use crate::tool::animation_grid::AnimationGridPlugin;
 use crate::tool::bakes::BakePlugin;
 use crate::tool::movement::MovementPlugin;
 use crate::tool::point::PointPlugin;
@@ -22,6 +24,8 @@ pub mod point;
 pub mod spawn_point;
 pub mod point_light;
 pub mod point_drag;
+pub mod animation_display;
+pub mod animation_grid;
 pub mod point_placement;
 pub mod prop;
 pub mod rotate_drag;
@@ -49,6 +53,8 @@ impl Plugin for ToolPlugin {
             .add_plugins(PointDragPlugin)
             .add_plugins(RotateDragPlugin)
             .add_plugins(PropPlugin)
+            .add_plugins(AnimationDisplayPlugin)
+            .add_plugins(AnimationGridPlugin)
             .add_plugins(RetargetPlugin)
             .add_plugins(RoomPlugin)
             // Toolbar moved to panels.rs Tools tab
@@ -77,6 +83,8 @@ pub enum Tools {
     PointLight,
     SpawnPoint,
     Prop,
+    AnimationDisplay,
+    AnimationGrid,
     Room,
     Retarget,
 }
@@ -89,6 +97,8 @@ impl Tools {
             Self::PointLight => get!("tools.point_light"),
             Self::SpawnPoint => get!("tools.spawn_point"),
             Self::Prop => get!("tools.prop"),
+            Self::AnimationDisplay => get!("tools.animation_display"),
+            Self::AnimationGrid => get!("tools.animation_grid"),
             Self::Room => get!("tools.room"),
             Self::Retarget => "Retarget".into(),
         }

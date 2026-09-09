@@ -1,7 +1,7 @@
 pub mod startup;
 pub mod common;
 pub mod constants;
-mod editor;
-mod tool;
+pub mod editor;
+pub mod tool;
 pub mod game;
 pub mod unlock;

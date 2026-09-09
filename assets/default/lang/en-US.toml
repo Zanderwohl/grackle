@@ -53,6 +53,8 @@ point = "Point"
 point_light = "Point Light"
 spawn_point = "Spawn Point"
 prop = "Prop"
+animation_display = "Animation Display"
+animation_grid = "Animation Grid"
 move = "Move"
 room = "Room"
 
@@ -71,6 +73,8 @@ gizmos_rooms = "Rooms"
 gizmos_point_lights = "Point Lights"
 gizmos_spawn_points = "Spawn Points"
 gizmos_props = "Props"
+gizmos_animation_displays = "Animation Displays"
+gizmos_animation_grids = "Animation Grids"
 
 [room.messages]
 ghost = "Room { me } is fully inside { other } and will not appear!"
@@ -142,6 +146,46 @@ rotation = "Rotation"
 yaw = "Yaw"
 pitch = "Pitch"
 roll = "Roll"
+
+[editor.features.animation_display]
+title = "Animation Display"
+feet = "Feet"
+head = "Head"
+facing = "Facing"
+state = "Animation"
+
+[editor.features.animation_grid]
+title = "Animation Grid"
+feet = "Front Centre"
+facing = "Facing"
+summary = "{ bodies } bodies, { width } m by { depth } m."
+
+[class.names]
+scout = "Scout"
+soldier = "Soldier"
+pyro = "Pyro"
+demoman = "Demoman"
+heavy = "Heavy"
+engineer = "Engineer"
+medic = "Medic"
+sniper = "Sniper"
+spy = "Spy"
+civilian = "Civilian"
+
+[animation.states]
+idle = "Idle"
+run_forward = "Run Forward"
+run_backward = "Run Backward"
+strafe_left = "Strafe Left"
+strafe_right = "Strafe Right"
+crouch_strafe_left = "Crouch Strafe Left"
+crouch_strafe_right = "Crouch Strafe Right"
+crouch_airborne = "Crouch Jump"
+pushing_wall = "Pushing Wall"
+airborne = "Airborne"
+crouch = "Crouch"
+crouch_walk = "Crouch Walk"
+crouch_walk_backward = "Crouch Walk Backward"
 
 [editor.features.cuboid]
 title = "Cuboid"
