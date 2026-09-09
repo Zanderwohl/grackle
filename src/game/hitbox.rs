@@ -15,10 +15,12 @@ use bevy::transform::TransformSystems;
 
 use crate::common::hitbox::{hitboxes, Hitboxes};
 use crate::common::skeleton::{
-    finish_pose, AnimationClock, AnimationPhase, Skeleton, SkeletonAnimator,
+    finish_pose, AnimationClock, AnimationPhase, Gait, PoseInputs, Skeleton, SkeletonAnimator,
 };
 use crate::game::player::{step_player, PhysicsBody, Player, ViewMode};
-use crate::game::skeleton::{advance_animation_clock, skeleton_root, SkeletonRoot};
+use crate::game::skeleton::{
+    advance_animation_clock, advance_gaits, skeleton_root, SkeletonRoot,
+};
 
 /// Whether hitboxes are drawn. `F4` toggles it.
 ///
@@ -39,29 +41,17 @@ impl Plugin for HitboxPlugin {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<ShowHitboxes>()
-            .add_systems(Update, (give_bodies_hitboxes, toggle_hitboxes))
+            .add_systems(Update, toggle_hitboxes)
             // On the tick, with the physics that hit registration will one day
             // have to agree with.
             .add_systems(FixedUpdate, update_hitboxes
                 .after(advance_animation_clock)
+                .after(advance_gaits)
                 // After the step, so a body is boxed where this tick left it
                 // rather than where the last one did.
                 .after(step_player))
             .add_systems(PostUpdate, draw_hitboxes.after(TransformSystems::Propagate))
         ;
-    }
-}
-
-/// Anything with a rig can be shot at, so anything with a rig gets boxes.
-///
-/// One place rather than a line in each of the four things that spawn a body —
-/// a body whose creator forgot would be one that silently could not be hit.
-fn give_bodies_hitboxes(
-    mut commands: Commands,
-    bodies: Query<Entity, (With<Skeleton>, Without<Hitboxes>)>,
-) {
-    for body in &bodies {
-        commands.entity(body).insert(Hitboxes::default());
     }
 }
 
@@ -78,13 +68,14 @@ fn update_hitboxes(
         &Skeleton,
         &SkeletonAnimator,
         Option<&AnimationPhase>,
+        Option<&Gait>,
         &GlobalTransform,
         Option<&SkeletonRoot>,
         Option<&PhysicsBody>,
         &mut Hitboxes,
     )>,
 ) {
-    for (skeleton, animator, phase, global, offset, physics, mut boxes) in &mut bodies {
+    for (skeleton, animator, phase, gait, global, offset, physics, mut boxes) in &mut bodies {
         // A moving body's drawn transform is interpolated between ticks, which
         // is exactly the frame-rate-dependent quantity this must not use. The
         // fixed step's own position is the one two machines can agree on.
@@ -99,8 +90,11 @@ fn update_hitboxes(
         // The same pipeline the drawing goes through, corrections and all: a
         // hitbox worked out from an uncorrected pose would sit where the body
         // visibly is not.
-        let seconds = clock.seconds() + phase.copied().unwrap_or_default().0;
-        let pose = finish_pose(skeleton, animator.state(), seconds, &root);
+        let inputs = PoseInputs {
+            seconds: clock.seconds() + phase.copied().unwrap_or_default().0,
+            stride: gait.copied().unwrap_or_default().phase(),
+        };
+        let pose = finish_pose(skeleton, animator.state(), &inputs, &root);
         *boxes = hitboxes(skeleton, &pose, &root);
     }
 }
@@ -142,20 +136,6 @@ mod tests {
 
     use super::*;
     use crate::common::skeleton::{humanoid, Pose, Proportions};
-
-    /// A body spawned by anything at all ends up with boxes, without its
-    /// spawner having to remember.
-    #[test]
-    fn every_rigged_body_is_given_hitboxes() {
-        let mut world = World::new();
-        let body = world
-            .spawn((humanoid(Proportions::DEFAULT), Pose::rest()))
-            .id();
-
-        world.run_system_once(give_bodies_hitboxes).unwrap();
-
-        assert!(world.get::<Hitboxes>(body).is_some());
-    }
 
     /// The boxes follow the body around the map, and the body box stands on
     /// its feet rather than being centred on them.

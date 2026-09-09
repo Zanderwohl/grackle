@@ -150,7 +150,7 @@ fn head_box(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Box3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::skeleton::state::AnimationState;
+    use crate::common::skeleton::state::{AnimationState, PoseInputs};
     use crate::common::skeleton::{humanoid, Proportions};
 
     fn rig() -> Skeleton {
@@ -199,7 +199,7 @@ mod tests {
         let mut most_head = 0.0_f32;
         let mut most_box = 0.0_f32;
         for step in 0..64 {
-            let pose = AnimationState::Idle.pose(step as f32 * 0.05);
+            let pose = AnimationState::Idle.pose(&PoseInputs { seconds: step as f32 * 0.05, ..default() });
             most_head = most_head.max((head_of(&pose) - head_of(&Pose::rest())).length());
             most_box = most_box.max((hitboxes(&skeleton, &pose, &root).head.centre - rest).length());
         }
@@ -241,7 +241,7 @@ mod tests {
         let root = Transform::from_translation(Vec3::new(-4.0, 2.0, 0.5));
 
         let standing = hitboxes(&skeleton, &Pose::rest(), &root).body;
-        let idling = hitboxes(&skeleton, &AnimationState::Idle.pose(1.7), &root).body;
+        let idling = hitboxes(&skeleton, &AnimationState::Idle.pose(&PoseInputs { seconds: 1.7, ..default() }), &root).body;
 
         assert_eq!(standing, idling);
         assert_eq!(standing.half_extents, CLASS_HALF_EXTENTS);

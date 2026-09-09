@@ -20,8 +20,9 @@
 
 use bevy::prelude::*;
 
+use crate::common::skeleton::gait::FootOffset;
 use crate::common::skeleton::rig::{bone, Pose, Skeleton};
-use crate::common::skeleton::state::AnimationState;
+use crate::common::skeleton::state::{AnimationState, PoseInputs};
 
 /// How far from straight, and from folded, a limb is kept.
 ///
@@ -191,22 +192,54 @@ pub fn solve(
 /// supply its own — a foot planted where it was put down, until the stride
 /// lifts it — and a clip's contact spans will supply theirs. Those replace the
 /// targets, not the solve underneath.
-pub fn plant_feet(skeleton: &Skeleton, pose: &mut Pose, root: &Transform) {
+pub fn plant_feet(
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    root: &Transform,
+    offsets: [FootOffset; 2],
+) -> [Reach; 2] {
+    let mut reached = [Reach::Impossible; 2];
     let standing = skeleton.posed_bones(&Pose::rest(), root);
     // Knees bend forwards. The one thing the solver cannot work out for
     // itself, and the one thing a body is never in two minds about.
     let forward = root.rotation * Vec3::NEG_Z;
 
-    for chain in [LEFT_LEG, RIGHT_LEG] {
-        let Some(target) = standing
+    for (index, (chain, offset)) in [LEFT_LEG, RIGHT_LEG].iter().zip(offsets).enumerate() {
+        let Some(resting) = standing
             .iter()
             .find(|posed| posed.name == chain.lower)
             .map(|posed| posed.tail)
         else {
             continue;
         };
-        solve(skeleton, pose, root, &chain, target, forward);
+
+        // In leg-lengths, so a long-legged build takes a longer step in metres
+        // and the same step as a fraction of itself.
+        let leg = chain_length(skeleton, chain);
+        let target = resting + (forward * offset.ahead + Vec3::Y * offset.lift) * leg;
+        reached[index] = solve(skeleton, pose, root, chain, target, forward);
     }
+
+    // Handed back rather than swallowed: a foot that cannot reach where the
+    // gait wants it is a stride the body is not built for, and eventually it
+    // is also how a leg finds out the ground is further away than it is long.
+    reached
+}
+
+/// How long a chain is, end to end, fully extended.
+pub fn chain_length(skeleton: &Skeleton, chain: &Chain) -> f32 {
+    let bones = skeleton.bones();
+    [chain.upper, chain.lower]
+        .iter()
+        .filter_map(|name| skeleton.index_of(name))
+        .map(|index| bones[index].length)
+        .sum()
+}
+
+/// How long this body's legs are, which is the unit a gait's strides are
+/// measured in.
+pub fn leg_length(skeleton: &Skeleton) -> f32 {
+    chain_length(skeleton, &LEFT_LEG)
 }
 
 /// The pose a body is actually in: its state's own pose, plus the corrections
@@ -219,12 +252,12 @@ pub fn plant_feet(skeleton: &Skeleton, pose: &mut Pose, root: &Transform) {
 pub fn finish_pose(
     skeleton: &Skeleton,
     state: AnimationState,
-    seconds: f32,
+    inputs: &PoseInputs,
     root: &Transform,
 ) -> Pose {
-    let mut pose = state.pose(seconds);
+    let mut pose = state.pose(inputs);
     if state.plants_feet() {
-        plant_feet(skeleton, &mut pose, root);
+        plant_feet(skeleton, &mut pose, root, state.foot_offsets(inputs));
     }
     pose
 }
@@ -407,7 +440,7 @@ mod tests {
             for drop in [0.0, 0.01, 0.05, 0.12] {
                 let mut pose = Pose::rest();
                 pose.root_offset = Vec3::NEG_Y * drop;
-                plant_feet(&skeleton, &mut pose, &root);
+                plant_feet(&skeleton, &mut pose, &root, [FootOffset::default(); 2]);
 
                 for (name, was) in [bone::FOOT_L, bone::FOOT_R].iter().zip(&standing) {
                     let now = tip_of(&skeleton, &pose, &root, name);
@@ -433,10 +466,11 @@ mod tests {
         assert!(!AnimationState::Airborne.plants_feet());
 
         // And the pipeline honours it: the airborne pose comes out untouched.
-        let finished = finish_pose(&skeleton, AnimationState::Airborne, 1.0, &root);
+        let inputs = PoseInputs { seconds: 1.0, ..default() };
+        let finished = finish_pose(&skeleton, AnimationState::Airborne, &inputs, &root);
         assert_eq!(finished.joint(bone::THIGH_L), Quat::IDENTITY);
 
-        let idling = finish_pose(&skeleton, AnimationState::Idle, 1.0, &root);
+        let idling = finish_pose(&skeleton, AnimationState::Idle, &inputs, &root);
         assert_ne!(idling.joint(bone::THIGH_L), Quat::IDENTITY, "the idle was never corrected");
     }
 }

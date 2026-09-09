@@ -23,13 +23,17 @@ use bevy::transform::TransformSystems;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::body_centre_from_feet;
+use crate::common::hitbox::Hitboxes;
 use crate::common::skeleton::{
-    draw_skeleton, finish_pose, humanoid, AnimationClock, AnimationPhase, BodyRequests,
-    ForcedAnimation, Pose, Proportions, Skeleton, SkeletonAnimator, SkeletonPalette,
+    draw_skeleton, finish_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
+    ForcedAnimation, Gait, Pose, PoseInputs, Proportions, Skeleton, SkeletonAnimator,
+    SkeletonPalette,
 };
 use crate::game::hitbox::HitboxPlugin;
 use crate::game::collision::CollisionWorld;
-use crate::game::player::{step_player, Player, PlayerInput, ViewMode, PLAYER_HALF};
+use crate::game::player::{
+    step_player, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
+};
 
 /// Where a skeleton's feet sit relative to the entity carrying it.
 ///
@@ -63,10 +67,16 @@ impl Plugin for SkeletonPlugin {
             .init_resource::<AnimationClock>()
             // Before anything reads it, and on the tick: the clock is the one
             // quantity every viewer of a body has to agree on.
-            .add_systems(FixedUpdate, advance_animation_clock.before(step_player))
+            .add_systems(FixedUpdate, (
+                advance_animation_clock,
+                // After the step, because it advances on the ground that step
+                // actually covered.
+                advance_gaits.after(step_player),
+            ))
             .add_systems(Update, (
                 describe_player_bodies.run_if(in_state(AppMode::Play)),
                 dress_new_players.run_if(in_state(AppMode::Play)),
+                equip_new_bodies,
                 // After the writers, so a body animates on the situation it is
                 // in this frame rather than last frame's.
                 advance_animators,
@@ -87,6 +97,62 @@ impl Plugin for SkeletonPlugin {
 /// which is the whole reason the clock is here rather than in `Update`.
 pub fn advance_animation_clock(time: Res<Time<Fixed>>, mut clock: ResMut<AnimationClock>) {
     clock.advance(time.delta_secs());
+}
+
+/// How fast a body with no movement to measure appears to run, in leg-lengths
+/// per second.
+///
+/// For bodies that are being shown rather than played: an animation display
+/// forced into a run covers no ground, and a run cycle driven by ground
+/// covered would stand perfectly still. A nominal speed is the honest
+/// stand-in — it is a preview of what running looks like, not a body running.
+const DISPLAY_RUN_SPEED: f32 = 3.0;
+
+/// Anything with a rig gets the parts every body has.
+///
+/// One place rather than a line in each of the four things that spawn a body:
+/// a body whose spawner forgot its [`Gait`] would stand still while running,
+/// and one that forgot its [`Hitboxes`] could not be hit.
+fn equip_new_bodies(
+    mut commands: Commands,
+    bodies: Query<Entity, (With<Skeleton>, Or<(Without<Hitboxes>, Without<Gait>)>)>,
+) {
+    for body in &bodies {
+        commands
+            .entity(body)
+            .insert_if_new(Hitboxes::default())
+            .insert_if_new(Gait::default());
+    }
+}
+
+/// Advance every body's stride by the ground it covered this tick.
+///
+/// In `FixedUpdate` and off the step's own displacement, so the cycle is a
+/// function of the simulation rather than of how fast anyone is drawing. It is
+/// the same reasoning as the hitboxes: a server owns this number and
+/// replicates it, the way it replicates a position.
+pub fn advance_gaits(
+    time: Res<Time<Fixed>>,
+    mut bodies: Query<(&Skeleton, &SkeletonAnimator, Option<&PhysicsBody>, &mut Gait)>,
+) {
+    let dt = time.delta_secs();
+    for (skeleton, animator, physics, mut gait) in &mut bodies {
+        // Back to the start when a body stops, so setting off again does not
+        // begin mid-swing on a foot that is already in the air.
+        if !animator.state().uses_gait() {
+            gait.reset();
+            continue;
+        }
+
+        let leg = leg_length(skeleton);
+        let distance = match physics {
+            // Only the ground covered counts. Falling is not walking, and a
+            // body shoved sideways by a lift has not taken a step.
+            Some(body) => (body.current - body.previous).xz().length(),
+            None => DISPLAY_RUN_SPEED * leg * dt,
+        };
+        gait.advance(distance, leg);
+    }
 }
 
 /// Where a body's feet are, from the entity carrying the rig.
@@ -214,10 +280,13 @@ fn advance_animators(
         Option<&BodyRequests>,
         Option<&ForcedAnimation>,
         Option<&AnimationPhase>,
+        Option<&Gait>,
     )>,
 ) {
     let dt = time.delta_secs();
-    for (skeleton, mut animator, mut pose, global, offset, requests, forced, phase) in &mut bodies {
+    for (skeleton, mut animator, mut pose, global, offset, requests, forced, phase, gait) in
+        &mut bodies
+    {
         match forced {
             // Being shown rather than driven: requests, if any, are ignored.
             Some(ForcedAnimation(state)) => animator.force(*state, dt),
@@ -233,11 +302,14 @@ fn advance_animators(
         // Harmless: the corrections are stated in world space but resolve to
         // joint angles, so only the body's facing matters and not where it is
         // standing.
-        let seconds = clock.seconds() + phase.copied().unwrap_or_default().0;
+        let inputs = PoseInputs {
+            seconds: clock.seconds() + phase.copied().unwrap_or_default().0,
+            stride: gait.copied().unwrap_or_default().phase(),
+        };
         *pose = finish_pose(
             skeleton,
             animator.state(),
-            seconds,
+            &inputs,
             &skeleton_root(global, offset),
         );
     }

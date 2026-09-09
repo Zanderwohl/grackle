@@ -33,8 +33,27 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
+use crate::common::skeleton::gait::{
+    direction_of, foot_offsets as gait_foot_offsets, gait_pose, FootOffset,
+};
 use crate::common::skeleton::rig::{bone, Pose};
 use crate::get;
+
+/// Everything a state needs to know to pose a body.
+///
+/// Two clocks, deliberately, because animations are not all functions of the
+/// same thing. An idle is a function of time; a run is a function of how far
+/// you have gone, which is what stops its feet sliding when you speed up. Both
+/// are quantities every viewer of a body can agree on — see [`AnimationClock`]
+/// and [`crate::common::skeleton::gait::Gait`] — and a state says which it
+/// uses simply by reading it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PoseInputs {
+    /// The shared clock, plus this body's own [`AnimationPhase`].
+    pub seconds: f32,
+    /// Where in its stride the body is, wrapping at 1.
+    pub stride: f32,
+}
 
 /// The clock every animation is sampled against.
 ///
@@ -261,15 +280,46 @@ impl AnimationState {
     /// each time a body brushed a wall, and two viewers would only agree if
     /// they had also agreed on the exact tick the state changed.
     ///
-    /// Only [`AnimationState::Idle`] has anything yet; the rest still stand in
-    /// the A-pose. Written as a function rather than sampled from keyframes
-    /// because an idle *is* a function — the first state that genuinely needs
-    /// keys is a run cycle, and inventing the format before then would be
-    /// inventing it blind.
-    pub fn pose(&self, seconds: f32) -> Pose {
+    /// The moving states are a gait, the idle is a settle, and being in the
+    /// air is still the A-pose — falling is the next thing worth writing, and
+    /// standing in for it with a guess would be worse than the placeholder
+    /// being obvious.
+    ///
+    /// Both are functions rather than sampled keys, because both genuinely are
+    /// functions. The first state that needs a clip is one nobody can derive:
+    /// a taunt.
+    pub fn pose(&self, inputs: &PoseInputs) -> Pose {
         match self {
-            AnimationState::Idle => idle_pose(seconds),
+            AnimationState::Idle => idle_pose(inputs.seconds),
+            state if state.uses_gait() => gait_pose(inputs, direction_of(*state)),
             _ => Pose::rest(),
+        }
+    }
+
+    /// Whether this state walks, in the sense of taking steps.
+    ///
+    /// `PushingWall` does, which is the interesting one: its cycle is driven
+    /// by ground covered, so a body shoving at a wall holds whatever step it
+    /// stopped on instead of running on the spot.
+    pub fn uses_gait(&self) -> bool {
+        matches!(
+            self,
+            AnimationState::RunForward
+                | AnimationState::RunBackward
+                | AnimationState::Strafe
+                | AnimationState::PushingWall
+        )
+    }
+
+    /// Where this state wants the feet, relative to where they rest.
+    ///
+    /// Empty offsets mean "where a body standing still has them", which is
+    /// what an idle wants. A clip will answer this from its contact spans.
+    pub fn foot_offsets(&self, inputs: &PoseInputs) -> [FootOffset; 2] {
+        if self.uses_gait() {
+            gait_foot_offsets(inputs.stride, direction_of(*self))
+        } else {
+            [FootOffset::default(); 2]
         }
     }
 }
@@ -317,9 +367,9 @@ impl SkeletonAnimator {
         }
     }
 
-    /// The pose this body holds at `seconds` on the shared clock.
-    pub fn pose_at(&self, seconds: f32) -> Pose {
-        self.state.pose(seconds)
+    /// The pose this body holds, before any corrections.
+    pub fn pose_at(&self, inputs: &PoseInputs) -> Pose {
+        self.state.pose(inputs)
     }
 }
 
@@ -382,6 +432,11 @@ mod tests {
     use super::*;
     use crate::common::skeleton::rig::{humanoid, Proportions};
 
+    /// The idle's own pose, before corrections.
+    fn idle_at(seconds: f32) -> Pose {
+        AnimationState::Idle.pose(&PoseInputs { seconds, ..default() })
+    }
+
     /// Where a named bone's head and tail end up, for a body standing at the
     /// origin.
     fn bone_at(proportions: Proportions, pose: &Pose, name: &str) -> (Vec3, Vec3) {
@@ -411,7 +466,12 @@ mod tests {
 
             for step in 0..40 {
                 let seconds = step as f32 * IDLE_PERIOD / 40.0;
-                let pose = finish_pose(&skeleton, AnimationState::Idle, seconds, &Transform::IDENTITY);
+                let pose = finish_pose(
+                    &skeleton,
+                    AnimationState::Idle,
+                    &PoseInputs { seconds, ..default() },
+                    &Transform::IDENTITY,
+                );
                 let (ankle, toe) = bone_at(proportions, &pose, bone::FOOT_L);
 
                 assert!(
@@ -429,8 +489,8 @@ mod tests {
     #[test]
     fn the_idle_settles_and_comes_back_up() {
         let standing = bone_at(Proportions::DEFAULT, &Pose::rest(), bone::HEAD).1.y;
-        let bottom = bone_at(Proportions::DEFAULT, &AnimationState::Idle.pose(IDLE_PERIOD * 0.5), bone::HEAD).1.y;
-        let back_up = bone_at(Proportions::DEFAULT, &AnimationState::Idle.pose(IDLE_PERIOD), bone::HEAD).1.y;
+        let bottom = bone_at(Proportions::DEFAULT, &idle_at(IDLE_PERIOD * 0.5), bone::HEAD).1.y;
+        let back_up = bone_at(Proportions::DEFAULT, &idle_at(IDLE_PERIOD), bone::HEAD).1.y;
 
         assert!(standing - bottom > 0.015, "the head only dropped {} m", standing - bottom);
         assert!((standing - back_up).abs() < 1e-4, "the cycle does not return to where it started");
@@ -440,7 +500,7 @@ mod tests {
     /// show up the moment it was played next to nine others.
     #[test]
     fn the_idle_is_symmetric() {
-        let pose = AnimationState::Idle.pose(0.9);
+        let pose = idle_at(0.9);
         let (_, left) = bone_at(Proportions::DEFAULT, &pose, bone::HAND_L);
         let (_, right) = bone_at(Proportions::DEFAULT, &pose, bone::HAND_R);
 
@@ -454,8 +514,8 @@ mod tests {
     /// machine, whatever either of them was doing beforehand.
     #[test]
     fn the_same_moment_gives_the_same_pose() {
-        let one = AnimationState::Idle.pose(12.25);
-        let other = AnimationState::Idle.pose(12.25);
+        let one = idle_at(12.25);
+        let other = idle_at(12.25);
         assert_eq!(one.root_offset, other.root_offset);
         assert_eq!(one.joint(bone::THIGH_L), other.joint(bone::THIGH_L));
     }
