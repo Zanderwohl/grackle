@@ -23,7 +23,7 @@ pub mod state;
 
 pub use draw::{draw_skeleton, SkeletonPalette};
 pub use gait::{FootOffset, Gait, GaitShape};
-pub use ik::{duck_under, finish_pose, leg_length, plant_feet, solve, Chain, Reach};
+pub use ik::{animator_pose, duck_under, finish_pose, leg_length, plant_feet, solve, Chain, Reach};
 pub use rig::{bone, default_humanoid, humanoid, Bone, Pose, PosedBone, Proportions, Side, Skeleton};
 pub use state::{
     AnimationClock, AnimationPhase, AnimationState, BodyRequests, ForcedAnimation, PoseInputs,

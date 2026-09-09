@@ -25,7 +25,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::class::{body_centre_from_feet, Stance};
 use crate::common::hitbox::Hitboxes;
 use crate::common::skeleton::{
-    draw_skeleton, finish_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
+    draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
     ForcedAnimation, Gait, Pose, PoseInputs, Proportions, Skeleton, SkeletonAnimator,
     SkeletonPalette,
 };
@@ -330,12 +330,7 @@ fn advance_animators(
             stride: gait.phase(),
             speed: gait.speed(),
         };
-        *pose = finish_pose(
-            skeleton,
-            animator.state(),
-            &inputs,
-            &skeleton_root(global, offset),
-        );
+        *pose = animator_pose(skeleton, &animator, &inputs, &skeleton_root(global, offset));
     }
 }
 

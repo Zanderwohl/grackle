@@ -181,6 +181,7 @@ pushing_wall = "Pushing Wall"
 airborne = "Airborne"
 crouch = "Crouch"
 crouch_walk = "Crouch Walk"
+crouch_walk_backward = "Crouch Walk Backward"
 
 [editor.features.cuboid]
 title = "Cuboid"

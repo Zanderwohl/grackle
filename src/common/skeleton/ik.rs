@@ -23,7 +23,7 @@ use bevy::prelude::*;
 use crate::common::class::CROUCH_HEIGHT;
 use crate::common::skeleton::gait::FootOffset;
 use crate::common::skeleton::rig::{bone, Pose, Skeleton};
-use crate::common::skeleton::state::{AnimationState, PoseInputs};
+use crate::common::skeleton::state::{AnimationState, PoseInputs, SkeletonAnimator};
 
 /// How far from straight, and from folded, a limb is kept.
 ///
@@ -277,6 +277,31 @@ pub fn duck_under(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, ceilin
     // rather than being stretched to reach the ceiling.
     let hips = pose.root_offset.y - slack / skeleton.proportions().hip_metres();
     pose.root_offset.y = hips.min(0.0);
+}
+
+/// The pose a body is actually in, part way through changing its mind.
+///
+/// The two states' *finished* poses are blended, not their raw ones. A crouch
+/// is only a crouch after the correction that folds it under the ceiling, so
+/// blending before that would take the body through poses neither state ever
+/// asked for — and half of a duck that has not been ducked is just a body
+/// standing in the floor.
+pub fn animator_pose(
+    skeleton: &Skeleton,
+    animator: &SkeletonAnimator,
+    inputs: &PoseInputs,
+    root: &Transform,
+) -> Pose {
+    let arriving = finish_pose(skeleton, animator.state(), inputs, root);
+    if animator.blend() >= 1.0 || animator.previous() == animator.state() {
+        return arriving;
+    }
+
+    let leaving = finish_pose(skeleton, animator.previous(), inputs, root);
+    // Eased, so the change starts and ends gently rather than setting off at
+    // full speed.
+    let t = animator.blend();
+    Pose::lerp(&leaving, &arriving, t * t * (3.0 - 2.0 * t))
 }
 
 /// The pose a body is actually in: its state's own pose, plus the corrections

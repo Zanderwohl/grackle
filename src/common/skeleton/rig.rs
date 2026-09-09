@@ -342,6 +342,31 @@ impl Pose {
         self.joints.insert(name, rotation);
     }
 
+    /// Part way from one pose to another.
+    ///
+    /// Well defined precisely because a pose is sparse and named: a joint one
+    /// side has an opinion about and the other does not blends towards rest,
+    /// which is the right answer — rest is what that side is saying.
+    ///
+    /// Rotations are taken the short way round. Two poses of the same body are
+    /// never more than a half-turn apart at a joint, and a knee that took the
+    /// long way would bend backwards on the way there.
+    pub fn lerp(from: &Pose, to: &Pose, t: f32) -> Pose {
+        let t = t.clamp(0.0, 1.0);
+        let mut blended = Pose {
+            root_offset: from.root_offset.lerp(to.root_offset, t),
+            joints: HashMap::default(),
+        };
+
+        for name in from.joints.keys().chain(to.joints.keys()) {
+            blended
+                .joints
+                .insert(*name, from.joint(name).slerp(to.joint(name), t));
+        }
+
+        blended
+    }
+
     pub fn with(mut self, name: &'static str, rotation: Quat) -> Pose {
         self.set(name, rotation);
         self

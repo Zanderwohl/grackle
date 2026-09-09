@@ -102,7 +102,7 @@ const ARM_SWING: f32 = 0.6;
 const ARM_TUCK: f32 = 0.6;
 
 /// How far the elbows are held bent while running, in radians.
-const ELBOW_BEND: f32 = 1.1;
+pub const ELBOW_BEND: f32 = 1.1;
 
 /// How far the chest leans into the run, in radians.
 const RUN_LEAN: f32 = 0.12;
@@ -336,6 +336,28 @@ impl GaitStyle {
     };
 }
 
+/// Bring the arms in from the rest pose and hang them at the sides, swinging.
+///
+/// Shared by every posture that is not the rest pose, which is all of them: an
+/// A-pose is a shape for building a rig, and a body that stood in one while
+/// idling and came out of it to run would change shape for no reason anybody
+/// could see. `swing` is the fore-and-aft turn for the left and right arms, in
+/// radians, and `elbow` is how far the elbows are held bent.
+///
+/// Tuck first, then swing: the axis an arm swings about is not the same one
+/// before and after it has come in. The signs are mirrored because the two
+/// shoulders are, so the same sign on both would tuck one arm in and throw the
+/// other out.
+pub fn arms_at_sides(pose: &mut Pose, swing: [f32; 2], elbow: f32) {
+    for (arm, forearm, tuck, swing) in [
+        (bone::UPPER_ARM_L, bone::FOREARM_L, -ARM_TUCK, swing[0]),
+        (bone::UPPER_ARM_R, bone::FOREARM_R, ARM_TUCK, swing[1]),
+    ] {
+        pose.set(arm, Quat::from_rotation_z(tuck) * Quat::from_rotation_x(swing));
+        pose.set(forearm, Quat::from_rotation_x(elbow));
+    }
+}
+
 /// Standing still, ducked.
 ///
 /// The posture a crouched walk is built on, without the stride — so the two
@@ -349,13 +371,8 @@ pub fn crouch_posture() -> Pose {
     // is folded towards.
     pose.set(bone::NECK, Quat::from_rotation_x(-CROUCH_LEAN * 0.6));
 
-    for (arm, forearm, tuck) in [
-        (bone::UPPER_ARM_L, bone::FOREARM_L, -ARM_TUCK),
-        (bone::UPPER_ARM_R, bone::FOREARM_R, ARM_TUCK),
-    ] {
-        pose.set(arm, Quat::from_rotation_z(tuck) * Quat::from_rotation_x(0.35));
-        pose.set(forearm, Quat::from_rotation_x(ELBOW_BEND));
-    }
+    // Held in front of a folded body rather than hanging past it.
+    arms_at_sides(&mut pose, [0.35, 0.35], ELBOW_BEND);
 
     pose
 }
@@ -382,25 +399,11 @@ pub fn gait_pose(inputs: &PoseInputs, direction: f32, style: GaitStyle) -> Pose 
     pose.set(bone::CHEST, Quat::from_rotation_x(leaning));
     pose.set(bone::NECK, Quat::from_rotation_x(-leaning * 0.7));
 
-    // In to the sides first, then swinging fore and aft about the shoulder it
-    // now hangs from — the order matters, because the axis an arm swings about
-    // is not the same one before and after it has come in.
-    //
     // Opposite the leg on the same side, which is what stops a run looking
-    // like a march. Mirrored signs: the two shoulders are mirror images, so
-    // the same sign on both would tuck one arm in and throw the other out.
+    // like a march.
     let [left, right] = foot_offsets(phase, direction, shape);
-    for (arm, forearm, tuck, offset) in [
-        (bone::UPPER_ARM_L, bone::FOREARM_L, -ARM_TUCK, left),
-        (bone::UPPER_ARM_R, bone::FOREARM_R, ARM_TUCK, right),
-    ] {
-        let swing = -offset.ahead / shape.half_stride * arm_swing;
-        pose.set(
-            arm,
-            Quat::from_rotation_z(tuck) * Quat::from_rotation_x(swing),
-        );
-        pose.set(forearm, Quat::from_rotation_x(ELBOW_BEND));
-    }
+    let swing_of = |offset: FootOffset| -offset.ahead / shape.half_stride * arm_swing;
+    arms_at_sides(&mut pose, [swing_of(left), swing_of(right)], ELBOW_BEND);
 
     pose
 }
@@ -412,7 +415,7 @@ pub fn gait_pose(inputs: &PoseInputs, direction: f32, style: GaitStyle) -> Pose 
 /// visibly runs while it slides sideways.
 pub fn direction_of(state: AnimationState) -> f32 {
     match state {
-        AnimationState::RunBackward => -1.0,
+        AnimationState::RunBackward | AnimationState::CrouchWalkBackward => -1.0,
         _ => 1.0,
     }
 }

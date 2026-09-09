@@ -16,7 +16,7 @@ use bevy::transform::TransformSystems;
 use crate::common::class::Stance;
 use crate::common::hitbox::{hitboxes, Hitboxes};
 use crate::common::skeleton::{
-    finish_pose, AnimationClock, AnimationPhase, Gait, PoseInputs, Skeleton, SkeletonAnimator,
+    animator_pose, AnimationClock, AnimationPhase, Gait, PoseInputs, Skeleton, SkeletonAnimator,
 };
 use crate::game::player::{step_player, PhysicsBody, Player, ViewMode};
 use crate::game::skeleton::{
@@ -100,7 +100,7 @@ fn update_hitboxes(
             stride: gait.phase(),
             speed: gait.speed(),
         };
-        let pose = finish_pose(skeleton, animator.state(), &inputs, &root);
+        let pose = animator_pose(skeleton, animator, &inputs, &root);
         *boxes = hitboxes(skeleton, &pose, &root, stance.copied().unwrap_or_default());
     }
 }

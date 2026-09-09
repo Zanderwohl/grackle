@@ -34,8 +34,8 @@ use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
 use crate::common::skeleton::gait::{
-    crouch_posture, direction_of, foot_offsets as gait_foot_offsets, gait_pose, FootOffset,
-    GaitStyle,
+    arms_at_sides, crouch_posture, direction_of, foot_offsets as gait_foot_offsets, gait_pose,
+    FootOffset, GaitStyle,
 };
 use crate::common::skeleton::rig::{bone, Pose};
 use crate::get;
@@ -137,6 +137,14 @@ impl AnimationPhase {
 /// Longer than the longest cycle, so a phase can land anywhere in one.
 const PHASE_SPREAD: f32 = 10.0;
 
+/// How long it takes to change from one state to the next, in seconds.
+///
+/// Without it a body cuts between poses: standing up out of a crouch happens
+/// entirely between two frames, which reads as a jerk rather than as a
+/// movement. Short enough that a state change is still a state change and not
+/// a slow dissolve.
+const BLEND_TIME: f32 = 0.15;
+
 /// How long a state has to hold before another one can take over.
 ///
 /// Without it, a body pressed against a wall alternates between running and
@@ -208,6 +216,10 @@ pub enum AnimationState {
     /// Ducked and moving: a short-stepped shuffle that always keeps a foot
     /// down.
     CrouchWalk,
+    /// The same shuffle, backwards. Its own state for the same reason
+    /// [`AnimationState::RunBackward`] is: which way the feet travel is not
+    /// something a pose can be asked to work out for itself.
+    CrouchWalkBackward,
 }
 
 impl AnimationState {
@@ -222,6 +234,7 @@ impl AnimationState {
             AnimationState::Airborne => 5,
             AnimationState::Crouch => 6,
             AnimationState::CrouchWalk => 7,
+            AnimationState::CrouchWalkBackward => 8,
         }
     }
 
@@ -239,6 +252,7 @@ impl AnimationState {
             5 => AnimationState::Airborne,
             6 => AnimationState::Crouch,
             7 => AnimationState::CrouchWalk,
+            8 => AnimationState::CrouchWalkBackward,
             _ => AnimationState::Idle,
         }
     }
@@ -253,6 +267,7 @@ impl AnimationState {
             AnimationState::Airborne => get!("animation.states.airborne"),
             AnimationState::Crouch => get!("animation.states.crouch"),
             AnimationState::CrouchWalk => get!("animation.states.crouch_walk"),
+            AnimationState::CrouchWalkBackward => get!("animation.states.crouch_walk_backward"),
         }
     }
 
@@ -267,10 +282,12 @@ impl AnimationState {
             // Crouching outranks what the legs were asked to do, because it is
             // the thing that decides what they can do at all. A body cannot
             // sprint out of a duck.
-            if requests.moving() && !requests.wall_ahead {
-                AnimationState::CrouchWalk
-            } else {
+            if requests.wall_ahead || !requests.moving() {
                 AnimationState::Crouch
+            } else if requests.running_backward {
+                AnimationState::CrouchWalkBackward
+            } else {
+                AnimationState::CrouchWalk
             }
         } else if requests.running_forward && requests.wall_ahead {
             AnimationState::PushingWall
@@ -292,7 +309,12 @@ impl AnimationState {
     /// worked out per body rather than written down — see
     /// [`crate::common::skeleton::ik::duck_under`].
     pub fn ducks(&self) -> bool {
-        matches!(self, AnimationState::Crouch | AnimationState::CrouchWalk)
+        matches!(
+            self,
+            AnimationState::Crouch
+                | AnimationState::CrouchWalk
+                | AnimationState::CrouchWalkBackward
+        )
     }
 
     /// Whether this state's feet are pinned to the ground it is standing on.
@@ -354,6 +376,7 @@ impl AnimationState {
                 | AnimationState::Strafe
                 | AnimationState::PushingWall
                 | AnimationState::CrouchWalk
+                | AnimationState::CrouchWalkBackward
         )
     }
 
@@ -364,7 +387,7 @@ impl AnimationState {
     /// which it turns into a run.
     fn gait_style(&self, inputs: &PoseInputs) -> GaitStyle {
         match self {
-            AnimationState::CrouchWalk => GaitStyle::CROUCHED,
+            AnimationState::CrouchWalk | AnimationState::CrouchWalkBackward => GaitStyle::CROUCHED,
             _ => GaitStyle::upright(inputs.speed),
         }
     }
@@ -390,6 +413,10 @@ impl AnimationState {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct SkeletonAnimator {
     state: AnimationState,
+    /// What it was doing before, and how far along the change is. A body is
+    /// somewhere between the two until the blend finishes.
+    previous: AnimationState,
+    blend: f32,
     /// How long the current state has been running, which is what a clip is
     /// sampled at and what [`MIN_DWELL`] is measured against.
     elapsed: f32,
@@ -402,6 +429,18 @@ impl SkeletonAnimator {
 
     pub fn elapsed(&self) -> f32 {
         self.elapsed
+    }
+
+    /// The state being blended out of, and how far the change has got.
+    ///
+    /// One at rest, which is the common case: most of the time a body is
+    /// simply in a state and there is nothing to blend.
+    pub fn previous(&self) -> AnimationState {
+        self.previous
+    }
+
+    pub fn blend(&self) -> f32 {
+        self.blend
     }
 
     /// Advance by `dt`, moving to the state `requests` calls for if this one
@@ -417,6 +456,7 @@ impl SkeletonAnimator {
 
     fn step_towards(&mut self, wanted: AnimationState, dt: f32) {
         self.elapsed += dt;
+        self.blend = (self.blend + dt / BLEND_TIME).min(1.0);
         if wanted == self.state {
             return;
         }
@@ -424,6 +464,12 @@ impl SkeletonAnimator {
         // to wait — leaving the state matters as much as arriving, so a jump
         // out of a hundredth-of-a-second idle still plays.
         if self.elapsed >= MIN_DWELL || wanted.is_urgent() || self.state.is_urgent() {
+            // Blending out of whatever it was, from the start again. A change
+            // that interrupts a change loses the pose it was part way to,
+            // which is a corner worth knowing about but not one the eye
+            // catches at this length.
+            self.previous = self.state;
+            self.blend = 0.0;
             self.state = wanted;
             self.elapsed = 0.0;
         }
@@ -460,9 +506,13 @@ const IDLE_LEAN: f32 = 0.045;
 const IDLE_ARM_SWING: f32 = 0.05;
 
 /// How far the knees come up in the air, in radians.
-const AIRBORNE_TUCK: f32 = 0.65;
+///
+/// Slight. A body in the air is on its way to a landing, not tucked into a
+/// ball — the legs come up a little and stay a little bent, which is what a
+/// body does when it is about to need them.
+const AIRBORNE_LIFT: f32 = 0.2;
 
-/// Off the ground: knees up, arms out.
+/// Off the ground.
 ///
 /// Nothing is planted, so this is the one state whose legs are written here
 /// rather than solved for — [`AnimationState::plants_feet`] is false, and a
@@ -475,18 +525,14 @@ fn airborne_pose() -> Pose {
         (bone::THIGH_L, bone::SHIN_L),
         (bone::THIGH_R, bone::SHIN_R),
     ] {
-        pose.set(thigh, Quat::from_rotation_x(AIRBORNE_TUCK));
-        pose.set(shin, Quat::from_rotation_x(-AIRBORNE_TUCK * 1.6));
+        pose.set(thigh, Quat::from_rotation_x(AIRBORNE_LIFT));
+        pose.set(shin, Quat::from_rotation_x(-AIRBORNE_LIFT * 1.8));
     }
 
-    // Out and up, the way arms go when the ground stops being there.
-    for (arm, forearm, tuck) in [
-        (bone::UPPER_ARM_L, bone::FOREARM_L, -0.25),
-        (bone::UPPER_ARM_R, bone::FOREARM_R, 0.25),
-    ] {
-        pose.set(arm, Quat::from_rotation_z(tuck) * Quat::from_rotation_x(-0.5));
-        pose.set(forearm, Quat::from_rotation_x(0.8));
-    }
+    // Forward and up, the way arms go when the ground stops being there —
+    // and at the sides rather than out on the diagonal, like every other
+    // posture.
+    arms_at_sides(&mut pose, [0.7, 0.7], 1.3);
 
     pose
 }
@@ -514,9 +560,12 @@ fn idle_pose(seconds: f32) -> Pose {
     pose.set(bone::CHEST, Quat::from_rotation_x(settle * IDLE_LEAN));
     pose.set(bone::NECK, Quat::from_rotation_x(-settle * IDLE_LEAN * 0.6));
 
-    let trail = (cycle - std::f32::consts::FRAC_PI_2).sin();
-    pose.set(bone::UPPER_ARM_L, Quat::from_rotation_z(-trail * IDLE_ARM_SWING));
-    pose.set(bone::UPPER_ARM_R, Quat::from_rotation_z(trail * IDLE_ARM_SWING));
+    // At the sides, as in every other posture — an A-pose is for building a
+    // rig, not for standing about in. The sway is a fraction of a walk's, and
+    // both arms do it together: opposed swings are what walking looks like,
+    // and a body standing still is not taking steps.
+    let trail = (cycle - std::f32::consts::FRAC_PI_2).sin() * IDLE_ARM_SWING;
+    arms_at_sides(&mut pose, [trail, trail], 0.3);
 
     pose
 }
@@ -588,6 +637,30 @@ mod tests {
 
         assert!(standing - bottom > 0.015, "the head only dropped {} m", standing - bottom);
         assert!((standing - back_up).abs() < 1e-4, "the cycle does not return to where it started");
+    }
+
+    /// Standing about in an A-pose is a rig, not a person. The idle hangs its
+    /// arms where every other posture does.
+    #[test]
+    fn the_idle_stands_with_its_arms_at_its_sides() {
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let hand = |pose: &Pose| {
+            skeleton
+                .posed_bones(pose, &Transform::IDENTITY)
+                .into_iter()
+                .find(|posed| posed.name == bone::HAND_R)
+                .unwrap()
+                .tail
+        };
+
+        let resting = hand(&Pose::rest()).x;
+        for seconds in [0.0, 0.7, 1.6, 2.9] {
+            let idling = hand(&idle_at(seconds)).x;
+            assert!(
+                idling < resting * 0.6,
+                "at {seconds}s the hand is {idling:.2} out, against {resting:.2} at rest"
+            );
+        }
     }
 
     /// A one-sided idle would be a body leaning slightly for ever, and would
@@ -758,6 +831,43 @@ mod tests {
         animator.advance(&BodyRequests { running_forward: true, ..default() }, 0.25);
         assert_eq!(animator.state(), AnimationState::RunForward);
         assert_eq!(animator.elapsed(), 0.0, "the new state started part-way through");
+    }
+
+    /// A change of state is a movement rather than a cut: for a moment the
+    /// body is part way between the two, and only then is it wholly in the new
+    /// one.
+    #[test]
+    fn a_state_change_blends_rather_than_snapping() {
+        let mut animator = SkeletonAnimator::default();
+        let crouching = BodyRequests { crouching: true, ..default() };
+        animator.advance(&BodyRequests::default(), 0.5);
+        assert_eq!(animator.blend(), 1.0, "a settled body is still blending");
+
+        animator.advance(&crouching, 1.0 / 64.0);
+        assert_eq!(animator.state(), AnimationState::Crouch);
+        assert_eq!(animator.previous(), AnimationState::Idle);
+        assert!(animator.blend() < 0.5, "the change was most of the way done immediately");
+
+        // And it finishes, rather than hanging half way for ever.
+        for _ in 0..16 {
+            animator.advance(&crouching, 1.0 / 64.0);
+        }
+        assert_eq!(animator.blend(), 1.0);
+    }
+
+    /// Which way a ducked body is going is a state of its own, the same way it
+    /// is for running. Otherwise a body shuffling backwards steps forwards.
+    #[test]
+    fn a_ducked_body_walking_backwards_has_its_own_state() {
+        let back = BodyRequests { crouching: true, running_backward: true, ..default() };
+        assert_eq!(
+            AnimationState::from_requests(&back),
+            AnimationState::CrouchWalkBackward
+        );
+
+        use crate::common::skeleton::gait::direction_of;
+        assert_eq!(direction_of(AnimationState::CrouchWalkBackward), -1.0);
+        assert_eq!(direction_of(AnimationState::CrouchWalk), 1.0);
     }
 
     /// A forced state ignores requests entirely — that is the whole point of
