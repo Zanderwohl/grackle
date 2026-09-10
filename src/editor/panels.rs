@@ -478,15 +478,8 @@ impl EditorPanels {
 
         // Handle load / new from template
         if let Some(loaded) = loaded_blueprint {
-            let old_entities: Vec<Entity> = editor_features.active_features()
-                .filter_map(|(_, a)| a.object().entity())
-                .collect();
-            *editor_features = loaded.timeline;
+            editor_features.adopt(loaded.timeline);
             *map_metadata = loaded.metadata;
-            for entity in old_entities {
-                editor_features.queue_despawn(entity);
-            }
-            editor_features.select(None);
             current_file.deferred_room_bake = 2;
         }
 

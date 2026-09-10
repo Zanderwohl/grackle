@@ -92,6 +92,7 @@ impl Plugin for NetTransportPlugin {
             .add_plugins(crate::common::protocol::ProtocolPlugin)
             // After the protocol, since it registers a channel and a message.
             .add_plugins(crate::common::match_state::MatchStatePlugin)
+            .add_plugins(crate::common::map_sync::MapSyncPlugin)
             // Prediction is gated on this resource existing, not on a plugin,
             // so it goes in once and stays: a process that is currently a
             // listen server may be a client after the next menu click.

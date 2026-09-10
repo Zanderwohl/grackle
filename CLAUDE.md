@@ -518,6 +518,45 @@ Two rules, and both are easy to undo:
   role equal to the one already set, because the transport will hang off
   `Changed<NetRole>` and re-picking "Host" must not drop everybody connected.
 
+### The map every client is standing in
+
+A client predicting its own movement steps the same physics against its own
+copy of the walls, so the two copies have to *be* the same walls. When they are
+not, prediction does not fail loudly — the client walks through a doorway the
+server stops it at, is corrected, walks into it again, and rubber-bands there
+for as long as you watch it.
+
+[`src/common/map_sync.rs`](src/common/map_sync.rs) sends the **feature
+timeline**, not the baked geometry: features are what the editor edits, so
+sending them is what will let an edit made between rounds reach everybody. The
+snapshot goes on connect rather than on entering Play, because a client is in
+the editor with everyone else between rounds and an empty editor is not one
+anybody can work in.
+
+- **`FeatureTimeline::adopt` is what replaces a map**, and it queues the old
+  map's despawns rather than doing them, so `sync_entities` performs them
+  alongside the incoming spawns. Skip it and the client stands in two maps at
+  once with a `CollisionWorld` built from both — which looks like a working
+  sync. The file-open path in `panels.rs` goes through the same function.
+- **Re-bake room geometry after adopting.** The features have no entities until
+  `sync_entities` has run, so a bake fired in the same frame bakes nothing;
+  `CalculateRoomGeometry` is written and read a frame later, which is what
+  makes it work.
+- **`entity` is `#[serde(skip)]` on every feature, and has to stay that way.**
+  A decoded feature that arrives believing it already has an entity is skipped
+  by `sync_entities`, so the map is adopted and never appears.
+- Only the client adopts, and the guard is on `NetRole::is_authority()` rather
+  than on holding a receiver — a listen server has one too, and adopting its
+  own map back would despawn the entities it is replicating.
+- No history crosses: undo is a fact about whoever made the edits, and a client
+  that could undo the server's map would be editing a map it does not own.
+
+The wire format is JSON, which is the wrong choice for anything large and is
+knowingly temporary — it is what `typetag` gives for free, and a map is sent
+once per join. **Only the initial snapshot is sent.** Edits made after a client
+joins do not reach it yet; that is the same channel and the next piece of work,
+and it is the half that makes between-round editing real.
+
 ### The transport behind it
 
 [`src/common/net_transport.rs`](src/common/net_transport.rs) is what makes a
