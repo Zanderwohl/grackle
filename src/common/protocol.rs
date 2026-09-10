@@ -71,6 +71,26 @@ impl Plugin for ProtocolPlugin {
         app.component::<crate::common::skeleton::ForcedAnimation>().replicate();
         app.component::<crate::common::skeleton::gait::DisplaySpeed>().replicate();
 
+        // That a body has died. Its one job on the wire is to hide the body
+        // for the tick it outlives itself by — a death is always a despawn,
+        // and without this the body stands upright inside its own corpse until
+        // the despawn arrives.
+        app.component::<crate::game::death::Dying>().replicate_once();
+
+        // A corpse, and only its **seed**. `Ragdoll` carries two points per
+        // bone at the moment of death, and from there every machine runs the
+        // same solver over the same rig: nothing can touch a corpse, nothing
+        // collides with one, and it takes no input, so the simulation is a
+        // function of the seed alone. `replicate_once` is what keeps that
+        // affordable — twenty bones of physics per corpse once, not per tick.
+        //
+        // A corpse is a prop, so it is replicated the way a prop is. The
+        // alternative — every machine raising its own from the replicated fact
+        // that a body's health hit zero — cannot be made to work, because that
+        // fact and the despawn that follows arrive together and the body is
+        // gone by the time anything can copy its pose.
+        app.component::<crate::game::ragdoll::Ragdoll>().replicate_once();
+
         // A projectile in flight, so everybody can see it coming. Replicated
         // rather than re-simulated: see `replicate_projectiles`.
         app.component::<crate::game::projectile::Projectile>().replicate();

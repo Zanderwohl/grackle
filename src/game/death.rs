@@ -29,6 +29,7 @@
 //! corpse rather than an error.
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::common::damage::{DamageDealt, DamageLog, DamageSource, Damageable, Died, PlayerId};
 use crate::common::skeleton::AnimationClock;
@@ -58,18 +59,45 @@ pub fn record_damage(
 /// The whole entity, children included — a player's camera hangs off its body,
 /// which is a thing to know before anything can kill a player. Nothing can
 /// today: you cannot shoot yourself and there is no second shooter.
-pub fn reap_the_dead(
+/// This body has died and is on its way out.
+///
+/// **The death signal, and it is replicated.** A death is always a despawn, so
+/// the two must not be announced separately: `Died` travels on the event
+/// channel and the despawn travels through replication, and nothing orders one
+/// channel against another. Sent both ways, the despawn won — the body was
+/// gone before the message that was supposed to make a corpse of it arrived,
+/// every time.
+///
+/// Riding replication fixes that by construction. This is inserted a tick
+/// before the body is removed, and replication is ordered with itself, so
+/// every machine is told the body died *before* it is told the body is gone.
+/// `Died` remains, but only for what does not care about ordering: the kill
+/// feed.
+///
+/// The tick of grace is what gives this component a turn on the wire. The body
+/// is invisible for it — `raise_ragdolls` hides whatever it made a corpse of.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Reflect, Serialize, Deserialize)]
+pub struct Dying;
+
+/// Say who died, and mark the body for removal.
+///
+/// Split from the removal so that the zero this is reacting to gets a tick on
+/// the wire before the entity goes.
+pub fn announce_the_dead(
     mut commands: Commands,
     clock: Res<AnimationClock>,
     mut died: MessageWriter<Died>,
-    bodies: Query<(
-        Entity,
-        &Damageable,
-        &DamageLog,
-        Option<&Name>,
-        Option<&PlayerId>,
-        Option<&GlobalTransform>,
-    )>,
+    bodies: Query<
+        (
+            Entity,
+            &Damageable,
+            &DamageLog,
+            Option<&Name>,
+            Option<&PlayerId>,
+            Option<&GlobalTransform>,
+        ),
+        Without<Dying>,
+    >,
 ) {
     let now = clock.seconds();
     for (entity, health, log, name, id, placed) in &bodies {
@@ -88,6 +116,15 @@ pub fn reap_the_dead(
             at: placed.map(|placed| placed.translation()).unwrap_or_default(),
         });
 
+        commands.entity(entity).insert(Dying);
+    }
+}
+
+/// Remove what died on an earlier tick.
+///
+/// A tick later than the death, which is the whole point — see [`Dying`].
+pub fn reap_the_dead(mut commands: Commands, dying: Query<Entity, With<Dying>>) {
+    for entity in &dying {
         commands.entity(entity).despawn();
     }
 }
@@ -155,6 +192,19 @@ mod tests {
     }
 
     /// The ordinary case, end to end: two people hurt a body, the second one
+    /// Announcing and removing, in the order the schedule runs them.
+    ///
+    /// Two systems rather than one because a death has to be *visible* for a
+    /// tick before the body goes: health is replicated and a corpse is a local
+    /// reaction to it, and a body killed and removed inside one tick never has
+    /// its zero sent to anybody. One call here does a whole tick's worth.
+    fn resolve(world: &mut World) {
+        world.run_system_once(announce_the_dead).unwrap();
+        world.flush();
+        world.run_system_once(reap_the_dead).unwrap();
+        world.flush();
+    }
+
     /// finishes it, and the record says so.
     #[test]
     fn a_kill_credits_the_last_hit_and_the_one_before_it() {
@@ -168,8 +218,7 @@ mod tests {
         advance(&mut world, 1.0);
         world.get_mut::<Damageable>(victim).unwrap().apply(100);
         land(&mut world, victim, SHOOTER);
-        world.run_system_once(reap_the_dead).unwrap();
-        world.flush();
+        resolve(&mut world);
 
         let record = deaths(&mut world);
         assert_eq!(record.len(), 1);
@@ -192,7 +241,7 @@ mod tests {
         advance(&mut world, ASSIST_WINDOW + 1.0);
         world.get_mut::<Damageable>(victim).unwrap().apply(100);
         land(&mut world, victim, SHOOTER);
-        world.run_system_once(reap_the_dead).unwrap();
+        resolve(&mut world);
 
         let record = deaths(&mut world);
         assert_eq!(record[0].killer, SHOOTER);
@@ -208,8 +257,7 @@ mod tests {
         crate_health.apply(20);
         let crate_entity = world.spawn((crate_health, DamageLog::default(), Name::new("Crate"))).id();
 
-        world.run_system_once(reap_the_dead).unwrap();
-        world.flush();
+        resolve(&mut world);
 
         let record = deaths(&mut world);
         assert_eq!(record[0].victim_name.as_deref(), Some("Crate"));
@@ -226,11 +274,36 @@ mod tests {
         let mut world = a_world();
         let alive = world.spawn((Damageable::with_health(100), DamageLog::default())).id();
 
-        world.run_system_once(reap_the_dead).unwrap();
-        world.flush();
+        resolve(&mut world);
 
         assert!(world.get_entity(alive).is_ok());
         assert!(deaths(&mut world).is_empty());
+    }
+
+    /// A body stays in the world for the tick after it dies.
+    ///
+    /// That gap is the whole reason the pair is two systems. Health is
+    /// replicated and a corpse is a local reaction to it, so a body killed and
+    /// removed inside one tick never has its zero sent anywhere — every
+    /// machine but this one would watch it vanish leaving nothing behind.
+    #[test]
+    fn a_dead_body_survives_the_tick_it_died_on() {
+        let mut world = a_world();
+        let mut health = Damageable::with_health(10);
+        health.apply(10);
+        let body = world.spawn((health, DamageLog::default())).id();
+
+        world.run_system_once(announce_the_dead).unwrap();
+        world.flush();
+        assert!(
+            world.get_entity(body).is_ok(),
+            "the body went in the same tick it died; nobody else will see the zero"
+        );
+        assert_eq!(deaths(&mut world).len(), 1, "the death was not announced");
+
+        world.run_system_once(reap_the_dead).unwrap();
+        world.flush();
+        assert!(world.get_entity(body).is_err(), "the body was never removed");
     }
 
     /// A death is announced once. Reaping is what removes the body, so a
@@ -243,10 +316,8 @@ mod tests {
         health.apply(10);
         world.spawn((health, DamageLog::default()));
 
-        world.run_system_once(reap_the_dead).unwrap();
-        world.flush();
-        world.run_system_once(reap_the_dead).unwrap();
-        world.flush();
+        resolve(&mut world);
+        resolve(&mut world);
 
         assert_eq!(deaths(&mut world).len(), 1);
     }

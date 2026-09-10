@@ -30,7 +30,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::damage::{Damage, DamageDealt, Damageable, Died};
-use crate::game::death::{announce_deaths, reap_the_dead, record_damage};
+use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage};
 use crate::game::player::PlayerCamera;
 
 /// How long a damage number lasts, in seconds.
@@ -112,7 +112,13 @@ impl Plugin for DamagePlugin {
             .add_systems(FixedUpdate, apply_damage.in_set(DamageSystems::Apply))
             .add_systems(
                 FixedUpdate,
-                (record_damage, reap_the_dead).chain().in_set(DamageSystems::Resolve),
+                // `announce_the_dead` marks and says so; `reap_the_dead`
+                // removes what was marked on an *earlier* tick. The gap is
+                // what gives replication a tick to carry the zero health that
+                // every other machine raises its own corpse from.
+                (record_damage, announce_the_dead, reap_the_dead)
+                    .chain()
+                    .in_set(DamageSystems::Resolve),
             )
             .add_systems(Update, (spawn_damage_numbers, fade_damage_numbers, announce_deaths).chain())
             .add_systems(

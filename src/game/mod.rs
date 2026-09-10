@@ -106,8 +106,6 @@ impl Plugin for GamePlugin {
                 // motion made while paused rather than save it up for the
                 // frame the menu closes. It answers the question itself.
                 gather_aim,
-                // After the aim it reads.
-                place_camera,
             ).chain().in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop)
                 .run_if(in_state(AppMode::Play)))
             // Everything that decides where a body ends up runs at a fixed
@@ -139,7 +137,9 @@ impl Plugin for GamePlugin {
                 step_player,
             ).chain().run_if(in_state(AppMode::Play)))
             // Draws the body between fixed steps, so a 64 Hz simulation does
-            // not step visibly on a 144 Hz display.
+            // not step visibly on a 144 Hz display. `place_camera` is ordered
+            // after it — see below — because a view placed at a body has to be
+            // placed after the body is.
             // Not gated on `AppMode::Play`, unlike everything around it:
             // `PhysicsBody` is where a thing *is*, and that is as true of a
             // body standing in an animation grid in the editor as it is of a
@@ -147,7 +147,9 @@ impl Plugin for GamePlugin {
             // origin until somebody starts a round.
             .add_systems(RunFixedMainLoop, interpolate_bodies
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop))
-            .add_systems(RunFixedMainLoop, face_bodies
+            .add_systems(RunFixedMainLoop, (face_bodies, place_camera)
+                .chain()
+                .after(interpolate_bodies)
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
                 .run_if(in_state(AppMode::Play)))
         ;

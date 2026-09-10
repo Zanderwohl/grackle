@@ -107,6 +107,7 @@ impl Plugin for NetTransportPlugin {
                     report_status,
                     crate::common::net_events::replicate_projectiles,
                     crate::common::net_events::replicate_display_bodies,
+                    crate::common::net_events::replicate_corpses,
                 )
                     .chain(),
             );

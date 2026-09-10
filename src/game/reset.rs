@@ -72,7 +72,8 @@ pub fn reset_for_play(
     // that owns it puts it back. A client restoring it locally would show
     // every body at full for the round-trip it takes to be told otherwise —
     // and if the server never says otherwise, would keep showing it.
-    if role.is_none_or(|role| role.is_authority()) {
+    let authority = role.is_none_or(|role| role.is_authority());
+    if authority {
         for (mut body, mut log) in &mut health {
             body.restore();
             // Who hurt it last match is not who hurt it this match. A stale
@@ -91,8 +92,14 @@ pub fn reset_for_play(
     // And the bodies themselves. Everything that died last match is alive
     // again by the line above, so a corpse of it would be a second copy of
     // somebody standing a few feet away.
-    for corpse in &corpses {
-        commands.entity(corpse).despawn();
+    //
+    // The authority only: a corpse is replicated, so a client's copies are not
+    // its to remove — the despawn arrives with everything else the server
+    // takes away.
+    if authority {
+        for corpse in &corpses {
+            commands.entity(corpse).despawn();
+        }
     }
 
     // And anything the last match left in the air, along with the emitters

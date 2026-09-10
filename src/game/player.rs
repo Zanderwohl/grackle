@@ -626,6 +626,12 @@ pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<ViewMode>) 
 /// happens to be — which is the one thing that must never wait for a
 /// round-trip. It is also the whole reason the camera is a separate entity: as
 /// a child it would inherit the body's rotation and the view would lag.
+///
+/// **Runs after `interpolate_bodies`, not before the fixed loop.** It reads
+/// where the body is, so it has to run after the thing that decides where the
+/// body is this frame. Placed earlier it sits a whole frame behind, and
+/// anything drawn from the body's own position — the debug laser, most
+/// visibly — comes out of a point the view is no longer at.
 pub fn place_camera(
     mode: Res<ViewMode>,
     world: Res<CollisionWorld>,

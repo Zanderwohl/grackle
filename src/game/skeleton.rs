@@ -369,7 +369,14 @@ fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
 /// own rig — every one the authority itself stood up — is left alone.
 fn dress_bodies_from_elsewhere(
     mut commands: Commands,
-    bodies: Query<(Entity, &Class), (Added<Class>, Without<Skeleton>)>,
+    bodies: Query<
+        (Entity, &Class),
+        // Not a corpse. One of those carries a `Class` too — it is how a
+        // viewer puts the rig back — and the first thing this hands out is a
+        // `SkeletonAnimator`, which is the one component a corpse must never
+        // have. `dress_corpses_from_elsewhere` does the other half.
+        (Added<Class>, Without<Skeleton>, Without<crate::game::ragdoll::Ragdoll>),
+    >,
 ) {
     for (body, class) in &bodies {
         commands.entity(body).insert_if_new((
@@ -378,6 +385,12 @@ fn dress_bodies_from_elsewhere(
             SkeletonAnimator::default(),
             BodyRequests::default(),
             AnimationPhase::default(),
+            // Hit volumes, because this is a real body and being shootable is
+            // the same property as being catchable in a blast. `CarouselBody`
+            // requires them, but `CarouselBody` is exactly the sort of thing a
+            // viewer is never told about — so on a client nothing asked for
+            // them and the boxes simply were not there.
+            crate::common::hitbox::Hitboxes::default(),
             // A place to be drawn and a say in whether it is. `Player`
             // requires both, so a player's body has them before anything
             // replicates; one that is not a player arrives carrying only the

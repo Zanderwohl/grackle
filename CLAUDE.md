@@ -384,9 +384,20 @@ component is a body that lies there playing its idle.
 
 The ordering spans two plugins and nothing in the type system holds it
 together: `raise_ragdolls` has to run **before** `reap_the_dead`, because by
-the time `Died` is written there is no pose left to copy. Break it and bodies
+the time the body is reaped there is no pose left to copy. Break it and bodies
 quietly stop leaving corpses — there is no error. There is a test at the
 bottom of `ragdoll.rs` that assembles both plugins for exactly this reason.
+
+**A corpse is replicated, not raised locally** — see "Corpses are props" below.
+The authority makes one and everybody else is sent the seed.
+
+**A corpse's clock is its own.** `RAGDOLL_LIFETIME` is ten seconds of game time
+and nothing else ends it: a body and its corpse are not mutually exclusive, and
+since respawning is immediate, clearing a corpse when its owner came back would
+be a corpse nobody ever saw. Standing over your own body is the correct
+picture. Only the round ends one early — `clear_ragdolls` on leaving Play and
+`reset_for_play` on entering it, both on the authority, since a client's copies
+go away with the despawns it is sent.
 
 Simulation is position-based dynamics over **two points per bone**, a head and
 a tail, hand-written for the same reasons the rest of the physics is: no C
@@ -448,8 +459,9 @@ out to depend on exactly how it lands. Run it after touching any constant in
 that file.
 
 Corpses belong to the match: cleared on leaving Play and again in
-`reset_for_play`, and they age on game time, so nothing rots while somebody is
-in the editor. They sleep once settled, and a shove wakes them.
+`reset_for_play` — on the authority, whose despawns carry to everybody else —
+and they age on game time, so nothing rots while somebody is in the editor.
+They sleep once settled, and a shove wakes them.
 
 ## Damage, weapons and projectiles
 
@@ -467,7 +479,7 @@ The order inside a tick is stated as **sets, not as named systems**
 | --- | --- |
 | `Deal` | Everything that writes `Damage`: `fire_hitscan`, `step_projectiles`, `explode`, `fire_flame`, `burn`. |
 | `Apply` | `apply_damage`, and nothing else, ever. |
-| `Resolve` | `record_damage` then `reap_the_dead`. |
+| `Resolve` | `record_damage`, `announce_the_dead`, then `reap_the_dead`. |
 
 A new damage source joins `Deal` and says nothing about what happens after it.
 Before the sets, `DamagePlugin` had to name every weapon so it could order
@@ -612,7 +624,8 @@ every bug in this area has been a component in the wrong layer.
 | **Identity** | `PlayerId` | the server, once | `replicate_once` |
 | **Intent** | `Inputs` (`ActionState<PlayerInput>`) | the owning client | client → server only |
 | **Description** | `BodyRequests` | `describe_player_bodies`, on the authority | replicated |
-| **Presentation** | `Skeleton`, `Pose`, `SkeletonAnimator`, `Gait`, `AnimationPhase`, `SkeletonRoot`, `BodyMesh`, `Hitboxes`, `Ragdoll` | every process, locally | **never** |
+| **Presentation** | `Skeleton`, `Pose`, `SkeletonAnimator`, `Gait`, `AnimationPhase`, `SkeletonRoot`, `BodyMesh`, `Hitboxes` | every process, locally | **never** |
+| **Props** | `Ragdoll` | the authority, once | `replicate_once` |
 
 **Where a body is looking is `Player.yaw`/`Player.pitch`**, and both ride along
 in the replicated `Player`. Applying them is split across two systems, because
@@ -657,10 +670,53 @@ either: it is advanced from ground covered, and the ground covered is
 `phase_bodies_by_id`, so two clients put the same body at the same point in its
 cycle; an `Entity` index or an RNG would give every viewer a different answer.
 
-**Corpses are never transmitted either.** `raise_ragdolls` runs on every
-process, because a corpse is a local reaction to a fact — this body's health
-reached zero — and that fact *is* replicated. What differs between machines is
-which way an arm flopped, and nobody can tell.
+#### Corpses are props, and props are replicated
+
+A corpse is the one piece of presentation that **does** cross the wire, and the
+reason is ordering rather than physics. Every arrangement where a viewer raises
+its own corpse from the fact that a body died is a race against that body's
+despawn: a death is *always* a despawn, the fact and the removal arrive
+together, and by the time anything can copy the pose the entity has been
+recycled. A `Died` message, a `Dying` marker, a tick of grace — each makes the
+window narrower and none removes it, and the symptom is silent. The measured
+gap got down to 1.3 ms and still lost every time.
+
+Making the corpse a replicated entity settles it by construction: the spawn and
+the despawn are on the same channel, and replication is ordered with itself.
+That is also what a corpse *is* — nothing can touch one, nothing collides with
+one (not even another corpse), and it takes no input. It is a prop that used to
+be a person, so it goes on the wire the way a prop does.
+
+What crosses is the **seed**, not the simulation. `Ragdoll` is
+`replicate_once`: two points per bone at the moment of death, sent once and
+never again, and each machine runs the same solver over them from there —
+twenty bones of physics per corpse once, not per tick. A `Skeleton` still never
+crosses; the corpse carries a `Class` like a living body and
+`dress_corpses_from_elsewhere` puts the rig back.
+
+Four things about that are load-bearing:
+
+- **Dressing is keyed on absence, not on `Added<Ragdoll>`.** The seed and the
+  class are two components on one entity, and replication does not promise to
+  deliver them in one packet. Keyed on the seed's arrival, a corpse whose class
+  came a tick later is never dressed at all — three in eight, measured — and an
+  undressed corpse is invisible rather than an error.
+- **A corpse must never be given a `SkeletonAnimator`.** The solver owns its
+  pose. That is why dressing a corpse is its own system rather than
+  `dress_bodies_from_elsewhere`, which hands one out — and why that system
+  carries a `Without<Ragdoll>`.
+- **Only the authority retires one.** `retire_ragdolls` is split out of
+  `step_ragdolls` for exactly that: a client counting down its own lifetime
+  would remove something that is not its to remove, at a slightly different
+  moment, since its copy started ageing when the spawn arrived.
+- **`RagdollShove` is relayed on `EventChannel`**, like `Effect` and for the
+  same reason — it is pure geometry, so no entity mapping. Without it the
+  simulation is identical on every machine except that nobody but the server
+  ever saw the rocket hit the body, and corpses elsewhere would simply crumple.
+
+`Dying` still crosses, and its one remaining job is to hide the body for the
+tick it outlives itself by (`hide_the_dying`, which runs everywhere) — without
+it the body stands upright inside its own corpse until the despawn lands.
 
 ### One rule: the server decides, and a client guesses only its own movement
 
@@ -765,7 +821,7 @@ hits of thirty in one tick and one hit of sixty leave a body at identical
 health, and a client watching only the number would draw one number instead of
 two, in the wrong place, credited to nobody.
 
-So `DamageDealt` and `Died` are relayed as messages by
+So `DamageDealt`, `Died` and `RagdollShove` are relayed as messages by
 [`src/common/net_events.rs`](src/common/net_events.rs): the server reads the
 same local queue the floating numbers read and sends each record on; a client
 writes what arrives into its own local queue. Everything downstream then reads
@@ -873,6 +929,8 @@ origin until somebody starts a round.
 **Known gaps, all of them "not sent yet" rather than "broken":**
 
 - `Loadout` is not replicated, so every remote body holds the default weapons.
+- `BodyTint` is not replicated either, so a corpse elsewhere is drawn in its
+  class's default colour rather than whatever its body was tinted.
 - Aim is part of the predicted `Player`, so turning triggers a rollback per
   tick while you turn. It is correct and cheap — the replay reaches the same
   yaw — but wasteful, since aim is copied from input and can only ever
@@ -981,9 +1039,10 @@ a token for any client id. That is the right trade for a LAN listen server with
 no accounts behind it, and it is exactly what the token backend in
 `documentation/sketch.md` replaces.
 
-Lightyear was chosen partly for its prediction and rollback, and **none of that
-is switched on today** — see "One rule" above for why, and for the order it
-goes back in.
+**Relays are received in `PreUpdate`, after `MessageSystems::Receive`.** Not
+tidiness: `FixedUpdate` runs before `Update`, so a record taken in `Update` is
+not read until the next frame's fixed loop — thirteen milliseconds on this
+machine, and things happen in it.
 
 ## The feature model
 

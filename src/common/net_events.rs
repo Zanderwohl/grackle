@@ -20,6 +20,7 @@ use lightyear::prelude::*;
 use crate::common::damage::{DamageDealt, Died};
 use crate::common::effects::Effect;
 use crate::common::net::{has_authority, is_remote_client, NetRole};
+use crate::game::ragdoll::RagdollShove;
 
 /// What happened, as against what is.
 ///
@@ -52,13 +53,29 @@ impl Plugin for NetEventsPlugin {
         // lets it be drawn even when whatever it happened to has already gone.
         app.register_message::<Effect>()
             .add_direction(NetworkDirection::ServerToClient);
+        // A shove is geometry too — a point, a direction and a radius — and
+        // needs no mapping for the same reason. It is relayed because a
+        // corpse's simulation is otherwise identical on every machine: the
+        // seed crosses, the solver is the same, and the only thing that would
+        // differ is that nobody but the server ever saw the rocket hit it.
+        app.register_message::<RagdollShove>()
+            .add_direction(NetworkDirection::ServerToClient);
 
+        // Sending in `Update`, after the tick that produced the records.
         app.add_systems(
             Update,
-            (
-                (send_hits, send_deaths, send_effects).run_if(has_authority),
-                (receive_hits, receive_deaths, receive_effects).run_if(is_remote_client),
-            ),
+            (send_hits, send_deaths, send_effects, send_shoves).run_if(has_authority),
+        );
+        // **Receiving in `PreUpdate`**, before anything acts on what arrived —
+        // and that is not tidiness. A shove is read from `FixedUpdate`, which
+        // runs before `Update`, so a record taken in `Update` is not read
+        // until the next frame's fixed loop and lands a frame late on a corpse
+        // that has already begun to fall.
+        app.add_systems(
+            PreUpdate,
+            (receive_hits, receive_deaths, receive_effects, receive_shoves)
+                .after(MessageSystems::Receive)
+                .run_if(is_remote_client),
         );
     }
 }
@@ -149,6 +166,51 @@ fn receive_effects(
         for effect in receiver.receive() {
             effects.write(effect);
         }
+    }
+}
+
+/// Pass on every push a corpse was given.
+fn send_shoves(
+    mut shoves: MessageReader<RagdollShove>,
+    server: Option<Single<&Server>>,
+    mut sender: ServerMultiMessageSender,
+) -> Result {
+    let Some(server) = server else { return Ok(()) };
+    for shove in shoves.read() {
+        sender.send::<_, EventChannel>(shove, &server, &NetworkTarget::All)?;
+    }
+    Ok(())
+}
+
+fn receive_shoves(
+    mut receivers: Query<&mut MessageReceiver<RagdollShove>>,
+    mut shoves: MessageWriter<RagdollShove>,
+) {
+    for mut receiver in &mut receivers {
+        for shove in receiver.receive() {
+            shoves.write(shove);
+        }
+    }
+}
+
+/// Show everybody the corpse the authority just made.
+///
+/// A corpse is a prop that used to be a person: nothing can touch one, nothing
+/// collides with one, and it takes no input — so it goes on the wire the way
+/// any other prop in the world does. What crosses is the seed only, and the
+/// solver on each machine takes it from there.
+pub fn replicate_corpses(
+    mut commands: Commands,
+    role: Res<NetRole>,
+    raised: Query<Entity, (Added<crate::game::ragdoll::Ragdoll>, Without<Replicate>)>,
+) {
+    if !matches!(*role, NetRole::Listen { .. }) {
+        return;
+    }
+    for corpse in &raised {
+        commands
+            .entity(corpse)
+            .insert(Replicate::to_clients(NetworkTarget::All));
     }
 }
 
