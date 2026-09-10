@@ -28,7 +28,6 @@ use crate::common::skeleton::{AnimationClock, Gait, SkeletonAnimator};
 use crate::game::damage::DamageNumber;
 use crate::game::projectile::{Projectile, ProjectileEmitter};
 use crate::game::ragdoll::Ragdoll;
-use crate::game::player::PlayerInput;
 
 /// Everything a new match starts from scratch.
 ///
@@ -39,7 +38,6 @@ use crate::game::player::PlayerInput;
 pub fn reset_for_play(
     mut commands: Commands,
     mut clock: ResMut<AnimationClock>,
-    mut input: ResMut<PlayerInput>,
     mut bodies: Query<(&mut Gait, &mut SkeletonAnimator)>,
     mut health: Query<(&mut Damageable, &mut DamageLog)>,
     numbers: Query<Entity, With<DamageNumber>>,
@@ -52,9 +50,10 @@ pub fn reset_for_play(
     // happened to be left at could not be compared with the one before it.
     *clock = AnimationClock::default();
 
-    // A click or a held key made while editing is not an order to shoot on
-    // spawn. The latch especially: it survives frames on purpose.
-    *input = PlayerInput::default();
+    // Nothing to do about a click made while editing: the latch lives on the
+    // body, and leaving Play despawned it. This used to clear a global
+    // `PlayerInput`, which was the only thing that could carry a stale press
+    // across the swap.
 
     for (mut gait, mut animator) in &mut bodies {
         // Standing still at the start of a stride, in a state rather than part
@@ -114,7 +113,6 @@ mod tests {
         let mut clock = AnimationClock::default();
         clock.advance(1.0 / 64.0);
         world.insert_resource(clock);
-        world.insert_resource(PlayerInput { attack: true, jump: true, ..default() });
 
         let mut hurt = Damageable::with_health(100);
         hurt.apply(70);
@@ -128,8 +126,6 @@ mod tests {
         world.run_system_once(reset_for_play).unwrap();
 
         assert_eq!(world.resource::<AnimationClock>().ticks(), 0);
-        assert!(!world.resource::<PlayerInput>().attack, "a click made while editing fired on spawn");
-        assert!(!world.resource::<PlayerInput>().jump);
         assert_eq!(world.get::<Damageable>(body).unwrap().health(), 100);
         assert_eq!(world.get::<DamageLog>(body).unwrap().killer(), None, "last match's shooter carried over");
         assert_eq!(world.query::<&DamageNumber>().iter(&world).count(), 0);

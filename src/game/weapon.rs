@@ -198,17 +198,18 @@ impl Plugin for WeaponPlugin {
 /// disagreeing about whether a press that was also a hold is one shot or two.
 pub fn pull_trigger(
     time: Res<Time<Fixed>>,
-    mut input: ResMut<PlayerInput>,
-    mut shooters: Query<(Entity, &Loadout, &mut Trigger), With<Player>>,
+    mut shooters: Query<(Entity, &Loadout, &mut Trigger, &mut PlayerInput), With<Player>>,
     mut pulled: MessageWriter<TriggerPulled>,
 ) {
-    // Taken, not read: leaving it set would fire again next tick, and taking
-    // it here rather than in a weapon is what stops two weapons racing for it.
-    let pressed = std::mem::take(&mut input.attack);
-    let held = input.attack_held;
     let dt = time.delta_secs();
 
-    for (shooter, loadout, mut trigger) in &mut shooters {
+    for (shooter, loadout, mut trigger, mut input) in &mut shooters {
+        // Taken, not read: leaving it set would fire again next tick, and
+        // taking it here rather than in a weapon is what stops two weapons
+        // racing for it. Per body, because each body has its own trigger.
+        let pressed = std::mem::take(&mut input.attack);
+        let held = input.attack_held;
+
         trigger.ready_in = (trigger.ready_in - dt).max(0.0);
 
         let Some(weapon) = loadout.held() else { continue };
@@ -237,9 +238,9 @@ pub fn pull_trigger(
 }
 
 /// Act on a switch made since the last step.
-pub fn select_weapons(mut input: ResMut<PlayerInput>, mut carriers: Query<&mut Loadout, With<Player>>) {
-    let Some(slot) = std::mem::take(&mut input.select) else { return };
-    for mut loadout in &mut carriers {
+pub fn select_weapons(mut carriers: Query<(&mut Loadout, &mut PlayerInput), With<Player>>) {
+    for (mut loadout, mut input) in &mut carriers {
+        let Some(slot) = std::mem::take(&mut input.select) else { continue };
         loadout.select(slot);
     }
 }
@@ -255,13 +256,17 @@ mod tests {
 
     fn a_world() -> World {
         let mut world = World::new();
-        world.init_resource::<PlayerInput>();
         world.init_resource::<Messages<TriggerPulled>>();
 
         let mut fixed = Time::<Fixed>::default();
         fixed.advance_by(STEP);
         world.insert_resource(fixed);
         world
+    }
+
+    /// The input on one body, to poke at the way `gather_input` would.
+    fn input(world: &mut World, body: Entity) -> Mut<'_, PlayerInput> {
+        world.get_mut::<PlayerInput>(body).expect("body has no input")
     }
 
     fn pulls(world: &mut World) -> Vec<TriggerPulled> {
@@ -276,12 +281,12 @@ mod tests {
     fn a_press_is_announced_once() {
         let mut world = a_world();
         let shooter = world.spawn((Player::default(), Loadout::default(), Trigger::default())).id();
-        world.resource_mut::<PlayerInput>().attack = true;
-        world.resource_mut::<PlayerInput>().attack_held = true;
+        input(&mut world, shooter).attack = true;
+        input(&mut world, shooter).attack_held = true;
 
         world.run_system_once(pull_trigger).unwrap();
         assert_eq!(pulls(&mut world), vec![TriggerPulled { shooter }]);
-        assert!(!world.resource::<PlayerInput>().attack);
+        assert!(!input(&mut world, shooter).attack);
 
         world.resource_mut::<Messages<TriggerPulled>>().clear();
         world.run_system_once(pull_trigger).unwrap();
@@ -294,12 +299,14 @@ mod tests {
     fn an_automatic_weapon_fires_on_its_interval_while_held() {
         let mut world = a_world();
         let flame = FlameSpec { interval: 0.1, ..FlameSpec::FLAMETHROWER };
-        world.spawn((
-            Player::default(),
-            Loadout::new(vec![Weapon::Flame(flame)]),
-            Trigger::default(),
-        ));
-        world.resource_mut::<PlayerInput>().attack_held = true;
+        let shooter = world
+            .spawn((
+                Player::default(),
+                Loadout::new(vec![Weapon::Flame(flame)]),
+                Trigger::default(),
+            ))
+            .id();
+        input(&mut world, shooter).attack_held = true;
 
         // One second of holding it down, in 64 Hz steps.
         let mut shots = 0;
@@ -318,13 +325,15 @@ mod tests {
     #[test]
     fn an_automatic_weapon_stops_when_the_trigger_is_released() {
         let mut world = a_world();
-        world.spawn((
-            Player::default(),
-            Loadout::new(vec![Weapon::Flame(FlameSpec::FLAMETHROWER)]),
-            Trigger::default(),
-        ));
+        let shooter = world
+            .spawn((
+                Player::default(),
+                Loadout::new(vec![Weapon::Flame(FlameSpec::FLAMETHROWER)]),
+                Trigger::default(),
+            ))
+            .id();
 
-        world.resource_mut::<PlayerInput>().attack_held = false;
+        input(&mut world, shooter).attack_held = false;
         for _ in 0..64 {
             world.run_system_once(pull_trigger).unwrap();
         }
@@ -337,12 +346,14 @@ mod tests {
     #[test]
     fn a_tap_too_short_to_be_held_still_fires_an_automatic_weapon() {
         let mut world = a_world();
-        world.spawn((
-            Player::default(),
-            Loadout::new(vec![Weapon::Flame(FlameSpec::FLAMETHROWER)]),
-            Trigger::default(),
-        ));
-        world.resource_mut::<PlayerInput>().attack = true;
+        let shooter = world
+            .spawn((
+                Player::default(),
+                Loadout::new(vec![Weapon::Flame(FlameSpec::FLAMETHROWER)]),
+                Trigger::default(),
+            ))
+            .id();
+        input(&mut world, shooter).attack = true;
 
         world.run_system_once(pull_trigger).unwrap();
         assert_eq!(pulls(&mut world).len(), 1);
@@ -368,7 +379,7 @@ mod tests {
     fn a_switch_is_taken_by_the_step_that_acts_on_it() {
         let mut world = a_world();
         let player = world.spawn((Player::default(), Loadout::default())).id();
-        world.resource_mut::<PlayerInput>().select = Some(2);
+        input(&mut world, player).select = Some(2);
 
         world.run_system_once(select_weapons).unwrap();
 
@@ -376,6 +387,22 @@ mod tests {
             world.get::<Loadout>(player).unwrap().held(),
             Some(Weapon::Projectile(ProjectileSpec::PIPE_BOMB))
         );
-        assert_eq!(world.resource::<PlayerInput>().select, None);
+        assert_eq!(input(&mut world, player).select, None);
+    }
+
+    /// The reason the input moved onto the body: two bodies in one world are
+    /// asked for different things in the same tick. With a single global
+    /// input, whoever wrote it last fired everybody's weapon.
+    #[test]
+    fn one_body_firing_does_not_fire_the_others() {
+        let mut world = a_world();
+        let shooting = world.spawn((Player::default(), Loadout::default(), Trigger::default())).id();
+        let idle = world.spawn((Player::default(), Loadout::default(), Trigger::default())).id();
+        input(&mut world, shooting).attack = true;
+
+        world.run_system_once(pull_trigger).unwrap();
+
+        assert_eq!(pulls(&mut world), vec![TriggerPulled { shooter: shooting }]);
+        assert!(!input(&mut world, idle).attack, "the idle body's latch was taken too");
     }
 }

@@ -243,13 +243,11 @@ pub fn skeleton_root(global: &GlobalTransform, offset: Option<&SkeletonRoot>) ->
 /// Fields are assigned rather than accumulated: this system owns all of them,
 /// every frame, so nothing goes stale.
 fn describe_player_bodies(
-    input: Res<PlayerInput>,
-    mut players: Query<(&Player, &Stance, &mut BodyRequests)>,
+    mut players: Query<(&Player, &Stance, &PlayerInput, &mut BodyRequests)>,
 ) {
-    for (player, stance, mut requests) in &mut players {
-        // `PlayerInput` is the local player's, so this is only correct while
-        // there is one body. A second local player, or a remote one, gets its
-        // own writer rather than a second reading of this resource.
+    for (player, stance, input, mut requests) in &mut players {
+        // Each body's own input, so a second local player or one being driven
+        // from the wire is described from what it was actually asked to do.
         requests.running_forward = input.movement.y > 0.5;
         requests.running_backward = input.movement.y < -0.5;
         requests.strafing_left = input.movement.x < -0.5;
@@ -505,14 +503,11 @@ mod tests {
     #[test]
     fn a_player_pressed_against_a_wall_is_described_as_pushing() {
         let mut app = App::new();
-        app.insert_resource(PlayerInput {
-            movement: Vec2::new(0.0, 1.0),
-            ..default()
-        });
         let player = app
             .world_mut()
             .spawn((
                 Player { on_ground: true, blocked: BVec3::new(false, false, true), ..default() },
+                PlayerInput { movement: Vec2::new(0.0, 1.0), ..default() },
                 Stance::Standing,
                 BodyRequests::default(),
             ))

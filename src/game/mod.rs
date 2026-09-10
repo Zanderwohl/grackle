@@ -12,7 +12,7 @@ use crate::game::ragdoll::RagdollPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::player::{
     fallback_spawn, gather_input, interpolate_bodies, mouse_look, place_camera, spawn_player,
-    step_player, toggle_view, usable_spawns, Player, PlayerInput, Spawn, ViewMode,
+    step_player, toggle_view, usable_spawns, Player, Spawn, ViewMode,
 };
 use crate::tool::room::Room;
 
@@ -53,7 +53,6 @@ impl Plugin for GamePlugin {
             // reset writes it and a game without the skeleton layer would
             // otherwise fail on the first F5 rather than at startup.
             .init_resource::<AnimationClock>()
-            .init_resource::<PlayerInput>()
             .init_resource::<ViewMode>()
             .add_systems(Update, toggle_mode)
             .add_systems(Update, toggle_view.run_if(in_state(AppMode::Play)))
@@ -225,7 +224,8 @@ mod tests {
     use bevy::time::Virtual;
 
     use super::*;
-    use crate::game::player::{PhysicsBody, PLAYER_HALF, SPAWN_YAW};
+    use crate::common::class::Stance;
+    use crate::game::player::{LocalPlayer, PhysicsBody, PlayerInput, PLAYER_HALF, SPAWN_YAW};
 
     /// One fixed step, matching Bevy's 64 Hz default.
     const STEP: Duration = Duration::from_micros(15625);
@@ -267,13 +267,25 @@ mod tests {
         }
     }
 
+    /// The locally driven body's input, to poke at the way `gather_input`
+    /// would. Filtered on `LocalPlayer` rather than `Player`, because a test
+    /// may well have put another body in the world.
+    fn input(app: &mut App) -> Mut<'_, PlayerInput> {
+        let body = app
+            .world_mut()
+            .query_filtered::<Entity, With<LocalPlayer>>()
+            .single(app.world())
+            .expect("no local player");
+        app.world_mut().get_mut::<PlayerInput>(body).expect("body has no input")
+    }
+
     /// The simulated position, which is the one physics writes. `Transform` is
     /// the drawn position and lags it by up to a step.
     fn player_position(app: &mut App) -> Vec3 {
         app.world_mut()
-            .query_filtered::<&PhysicsBody, With<Player>>()
+            .query_filtered::<&PhysicsBody, With<LocalPlayer>>()
             .single(app.world())
-            .expect("no player")
+            .expect("no local player")
             .current
     }
 
@@ -360,7 +372,7 @@ mod tests {
         let mut airborne = false;
         for _ in 0..240 {
             // Held: re-latched every frame, as `gather_input` would.
-            app.world_mut().resource_mut::<PlayerInput>().jump = true;
+            input(&mut app).jump = true;
             tick(&mut app, 1);
             let y = player_position(&mut app).y;
             if y > rest + 0.3 {
@@ -394,7 +406,7 @@ mod tests {
             .release(KeyCode::Space);
         app.world_mut().run_system_once(gather_input).unwrap();
 
-        assert!(app.world().resource::<PlayerInput>().jump, "the press was dropped");
+        assert!(input(&mut app).jump, "the press was dropped");
 
         tick(&mut app, 4);
         assert!(player_position(&mut app).y > rest + 0.05, "the latched press did not jump");
@@ -407,10 +419,10 @@ mod tests {
         enter(&mut app);
         tick(&mut app, 60);
 
-        app.world_mut().resource_mut::<PlayerInput>().jump = true;
+        input(&mut app).jump = true;
         tick(&mut app, 1);
 
-        assert!(!app.world().resource::<PlayerInput>().jump, "the latch survived its step");
+        assert!(!input(&mut app).jump, "the latch survived its step");
     }
 
     /// The body is simulated at 64 Hz but drawn whenever the frame lands, so
@@ -424,7 +436,7 @@ mod tests {
         // Mid-jump, so the two step positions differ. A body at rest on the
         // floor interpolates between two identical points and would pass this
         // however the maths was written.
-        app.world_mut().resource_mut::<PlayerInput>().jump = true;
+        input(&mut app).jump = true;
         tick(&mut app, 3);
 
         // A frame worth one and a half steps: the loop takes one and keeps
@@ -583,6 +595,90 @@ mod tests {
         }
 
         assert!(seen.len() > 1, "always picked the same spawn point: {seen:?}");
+    }
+
+    /// Aim travels as input and the step is what turns the body. `mouse_look`
+    /// points the transform for the sake of the view, but a server replaying
+    /// these inputs has only the yaw in them to go on — so the step has to be
+    /// the thing that applies it.
+    #[test]
+    fn the_step_turns_the_body_to_the_aim_it_was_given() {
+        let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 8.0, 5.0))]);
+        enter(&mut app);
+
+        let yaw = std::f32::consts::FRAC_PI_2;
+        input(&mut app).yaw = yaw;
+        tick(&mut app, 1);
+
+        let player = app
+            .world_mut()
+            .query::<&Player>()
+            .single(app.world())
+            .unwrap();
+        assert!((player.yaw - yaw).abs() < 1e-5, "the body was not turned by its input");
+    }
+
+    /// And turning changes which way forward is, since movement is in the
+    /// body's own frame. This is the half a server cannot guess: fed the
+    /// movement without the aim it would walk the body the wrong way.
+    #[test]
+    fn aim_decides_which_way_forward_is() {
+        let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
+        enter(&mut app);
+        tick(&mut app, 60);
+        let start = player_position(&mut app);
+
+        // Facing a quarter turn to the left, walking forward.
+        {
+            let mut input = input(&mut app);
+            input.yaw = std::f32::consts::FRAC_PI_2;
+            input.movement = Vec2::new(0.0, 1.0);
+        }
+        tick(&mut app, 30);
+
+        let moved = player_position(&mut app) - start;
+        assert!(
+            moved.x < -0.3 && moved.z.abs() < 0.1,
+            "walked {moved} — forward did not follow the aim"
+        );
+    }
+
+    /// The reason the input moved onto the body at all: two bodies stepping in
+    /// the same tick from different inputs. A single global input would walk
+    /// both of them wherever the last writer said.
+    #[test]
+    fn two_bodies_step_from_their_own_inputs() {
+        let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
+        enter(&mut app);
+
+        // A second body beside the one the spawn made, as a server holding
+        // somebody else's player would have.
+        let other = app
+            .world_mut()
+            .spawn((
+                Player::default(),
+                Stance::default(),
+                PhysicsBody::at(Vec3::new(5.0, PLAYER_HALF.y, 0.0)),
+                Transform::from_xyz(5.0, PLAYER_HALF.y, 0.0),
+            ))
+            .id();
+        tick(&mut app, 30);
+        let other_start = app.world().get::<PhysicsBody>(other).unwrap().current;
+        let own_start = player_position(&mut app);
+
+        // Only the local body is asked to walk.
+        input(&mut app).movement = Vec2::new(0.0, 1.0);
+        tick(&mut app, 30);
+
+        let other_end = app.world().get::<PhysicsBody>(other).unwrap().current;
+        assert!(
+            (player_position(&mut app) - own_start).length() > 0.3,
+            "the body that was asked to move did not"
+        );
+        assert!(
+            (other_end - other_start).length() < 0.01,
+            "the other body moved on somebody else's input"
+        );
     }
 
     /// The between-round feature in miniature: resize the room while the body

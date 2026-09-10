@@ -193,10 +193,38 @@ Two rules that follow, and both are easy to break by accident:
   owns `Transform.translation`; writing it from a step would be overwritten and
   would skip interpolation. `mouse_look` owns `Transform.rotation`.
 
-`PlayerInput` is also the seam prediction will need: the step is a function of
+`PlayerInput` is also the seam prediction needs: the step is a function of
 `(state, input, fixed dt)`, so a client and a server fed the same values reach
 the same position. Keep it that way — a step that reads the keyboard, the wall
 clock, or an RNG directly cannot be reconciled.
+
+**`PlayerInput` is a component on the body, not a resource**, and that is what
+makes the step a function of one body's inputs rather than of whatever the
+last writer said. A server steps every player in the same tick from a
+different set of inputs; a global input would walk them all the same way.
+`Player` requires it, so no body can exist without one.
+
+Two consequences worth knowing:
+
+- **Aim travels in the input.** `mouse_look` accumulates `yaw`/`pitch` onto
+  `PlayerInput` and the step copies them onto the body, rather than writing
+  the body directly. Facing decides which way "forward" is, so a server
+  handed movement without aim walks the body the wrong way. `mouse_look` does
+  still write `Transform.rotation` itself — waiting for the next fixed step to
+  see the view move is 15 ms of lag on the one thing that has to feel
+  immediate — but that write is for the view, and the step is what turns the
+  body.
+- **`LocalPlayer` marks the one body this machine drives.** Everything that
+  reads a keyboard or a mouse looks for it and nothing else; a system querying
+  `With<Player>` would steer every body in the world at once. It is also why
+  `reset_for_play` no longer clears a stale press: the latch lives on the body
+  and leaving Play despawned it.
+
+One trap when adding a system that wants the local body's `Transform`
+alongside the camera's: put `With<Player>` in the filter next to
+`With<LocalPlayer>`, redundant as it looks. It is what proves the query
+disjoint from the camera's `Without<Player>` one, and without it Bevy refuses
+the system at runtime rather than at compile time.
 
 Collision comes from the rooms, not from the baked meshes
 ([`src/game/collision.rs`](src/game/collision.rs)) — but from the *same* face

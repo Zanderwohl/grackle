@@ -65,7 +65,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 /// trigger does nothing for — silently, since a missing component simply drops
 /// it out of every weapon's query.
 #[derive(Component, Debug)]
-#[require(Hitboxes, Damageable, Loadout, Trigger)]
+#[require(Hitboxes, Damageable, Loadout, Trigger, PlayerInput)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -92,7 +92,13 @@ impl Default for Player {
     }
 }
 
-/// What the body is being asked to do this step.
+/// What one body is being asked to do this step.
+///
+/// **A component on the body, not a resource.** It was a resource while there
+/// was only ever one body being driven, and that is exactly the assumption a
+/// server breaks: a server steps every player from a different set of inputs
+/// in the same tick, so the inputs have to hang off the bodies they belong to.
+/// A global one would step every body from whoever's packet arrived last.
 ///
 /// Gathered once per frame and consumed by the fixed step, rather than each
 /// system reading the keyboard for itself. Two reasons, and the second is the
@@ -103,11 +109,15 @@ impl Default for Player {
 ///   `just_pressed` from inside the fixed step double-counts a press on a slow
 ///   frame and drops it entirely on a fast one. Latching here is what makes a
 ///   tap survive to the next step.
-/// - It is the seam prediction will need. Once there is a server, this struct
-///   is what travels: the same `(state, input, fixed dt)` fed to the same
-///   stepping function has to produce the same position on both ends, and that
-///   is only true if the input is a value rather than a keyboard read.
-#[derive(Resource, Default, Debug, Clone, Copy)]
+/// - It is the seam prediction needs. This struct is what travels: the same
+///   `(state, input, fixed dt)` fed to the same stepping function has to
+///   produce the same position on both ends, and that is only true if the
+///   input is a value rather than a keyboard read.
+///
+/// Because it lives on the body, leaving Play takes it with the body. A click
+/// made while editing cannot fire on the next spawn, because the thing that
+/// would have remembered it no longer exists.
+#[derive(Component, Default, Debug, Clone, Copy, PartialEq)]
 pub struct PlayerInput {
     /// Movement in the body's own frame: `x` right, `y` forward.
     pub movement: Vec2,
@@ -145,7 +155,28 @@ pub struct PlayerInput {
     /// click made and released between two fixed steps was never held on any
     /// step that ran.
     pub attack_held: bool,
+    /// Where the body is being asked to look, about world Y.
+    ///
+    /// Aim is an input rather than something `mouse_look` writes straight onto
+    /// the body, because the step reads it: which way you are facing decides
+    /// which way "forward" is, and a server that had to guess a client's
+    /// facing could not reproduce its movement. `mouse_look` accumulates here
+    /// at frame rate and the step copies it onto the body.
+    pub yaw: f32,
+    /// Where the body is being asked to look, up and down. Tilts the head
+    /// only — the run direction stays level — and is carried for the same
+    /// reason as `yaw`: a shot goes where the pitch says.
+    pub pitch: f32,
 }
+
+/// The one body this machine is driving.
+///
+/// Everything that reads a keyboard or a mouse is looking for this, and
+/// nothing else. In a closed game it is the only body there is; with a server
+/// there are others in the world that must not be steered from local input,
+/// and a system that queried `With<Player>` would drive all of them at once.
+#[derive(Component, Default, Debug)]
+pub struct LocalPlayer;
 
 /// Where the body is at fixed-step boundaries, so rendering can draw between
 /// them.
@@ -279,6 +310,11 @@ pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) {
     commands
         .spawn((
             Player { yaw: spawn.yaw, ..default() },
+            // Seeded rather than left at zero: the step copies aim off the
+            // input, so a body spawned facing east would snap north on its
+            // first step if the input still said zero.
+            PlayerInput { yaw: spawn.yaw, ..default() },
+            LocalPlayer,
             id,
             Stance::default(),
             PhysicsBody::at(position),
@@ -312,8 +348,10 @@ pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) {
 pub fn gather_input(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
-    mut input: ResMut<PlayerInput>,
+    input: Single<&mut PlayerInput, With<LocalPlayer>>,
 ) {
+    let mut input = input.into_inner();
+    let input = &mut *input;
     let mut movement = Vec2::ZERO;
     if keys.pressed(KeyCode::KeyW) {
         movement.y += 1.0;
@@ -364,28 +402,33 @@ pub fn gather_input(
 /// physics has to agree with a server about.
 pub fn mouse_look(
     mut motion: MessageReader<MouseMotion>,
-    mut players: Query<(&mut Player, &mut Transform)>,
+    // `With<Player>` as well as `With<LocalPlayer>`, redundant as it looks:
+    // it is what proves this query disjoint from the camera's `Without<Player>`
+    // one, and without it both want `&mut Transform` and Bevy refuses the
+    // system at runtime rather than at compile time.
+    player: Option<Single<(&mut PlayerInput, &mut Transform), (With<LocalPlayer>, With<Player>)>>,
     mut cameras: Query<&mut Transform, (With<PlayerCamera>, Without<Player>)>,
 ) {
     let delta: Vec2 = motion.read().map(|event| event.delta).sum();
     if delta == Vec2::ZERO {
         return;
     }
+    let Some(player) = player else { return };
+    let (mut input, mut transform) = player.into_inner();
 
-    let mut pitch = None;
-    for (mut player, mut transform) in &mut players {
-        player.yaw -= delta.x * MOUSE_SENSITIVITY;
-        player.pitch = (player.pitch - delta.y * MOUSE_SENSITIVITY).clamp(-PITCH_LIMIT, PITCH_LIMIT);
-        transform.rotation = Quat::from_rotation_y(player.yaw);
-        pitch = Some(player.pitch);
-    }
+    // Accumulated onto the input rather than onto the body: the step is what
+    // turns the body, so that a server replaying these inputs turns it the
+    // same way. The transform is written here anyway, because waiting for the
+    // next fixed step to see the view move is 15 ms of lag on the one thing
+    // that has to feel immediate.
+    input.yaw -= delta.x * MOUSE_SENSITIVITY;
+    input.pitch = (input.pitch - delta.y * MOUSE_SENSITIVITY).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+    transform.rotation = Quat::from_rotation_y(input.yaw);
 
     // Yaw turns the body, pitch tilts only the head — so the run direction
     // stays level however far up or down you are looking.
-    if let Some(pitch) = pitch {
-        for mut camera in &mut cameras {
-            camera.rotation = Quat::from_rotation_x(pitch);
-        }
+    for mut camera in &mut cameras {
+        camera.rotation = Quat::from_rotation_x(input.pitch);
     }
 }
 
@@ -465,19 +508,25 @@ pub fn third_person_camera(
 /// same `dt` give the same answer on both.
 pub fn step_player(
     time: Res<Time>,
-    mut input: ResMut<PlayerInput>,
     world: Res<CollisionWorld>,
-    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance)>,
+    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance, &mut PlayerInput)>,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {
         return;
     }
 
-    // Taken, not read: the latch is per step, so a press cannot fire twice.
-    let jump = std::mem::take(&mut input.jump);
+    for (mut player, mut body, mut stance, mut input) in &mut players {
+        // Taken, not read: the latch is per step, so a press cannot fire
+        // twice. Per body, because each body has its own latch to take.
+        let jump = std::mem::take(&mut input.jump);
 
-    for (mut player, mut body, mut stance) in &mut players {
+        // Aim arrives as input and is copied onto the body here, so the step
+        // is the only thing that turns it. `mouse_look` has already pointed
+        // the local body's transform this way for the sake of the view; a
+        // remote body is turned by this and nothing else.
+        player.yaw = input.yaw;
+        player.pitch = input.pitch;
         change_stance(&mut stance, &mut body, player.on_ground, input.crouch, &world);
         let half = stance.half_extents();
         // Movement is in the body's frame, so turning turns the run direction.
