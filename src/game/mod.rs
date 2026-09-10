@@ -13,10 +13,9 @@ use crate::game::ragdoll::RagdollPlugin;
 use crate::game::pause_menu::PauseMenuPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::player::{
-    fallback_spawn, gather_input, interpolate_bodies, mouse_look, place_camera, spawn_player,
-    face_bodies, give_the_local_body_a_camera, step_player, toggle_view, usable_spawns,
-    write_client_inputs,
-    InputLatch, LocalPlayer, Player, Spawn, ViewMode,
+    despawn_the_view, face_bodies, fallback_spawn, gather_aim, gather_input, interpolate_bodies,
+    place_camera, spawn_player, spawn_the_view, step_player, toggle_view, usable_spawns,
+    write_client_inputs, InputLatch, LocalPlayer, Player, Spawn, ViewMode,
 };
 use crate::tool::bakes::BakeSystems;
 use crate::tool::room::Room;
@@ -72,8 +71,8 @@ impl Plugin for GamePlugin {
                 toggle_view,
                 // Not gated on being the one who spawned it: on a client the
                 // body turns up from the server some time after the round
-                // starts, and the camera has to follow it whenever it does.
-                give_the_local_body_a_camera,
+                // starts, and the view has to appear whenever it does.
+                spawn_the_view,
             ).run_if(in_state(AppMode::Play)))
             // Clear the table, then set it: a new match starts from a known
             // state rather than from whatever the last one left behind.
@@ -86,19 +85,22 @@ impl Plugin for GamePlugin {
                 OnEnter(AppMode::Play),
                 (reset_for_play, enter_play).chain().after(BakeSystems::All),
             )
-            .add_systems(OnExit(AppMode::Play), leave_play)
+            .add_systems(OnExit(AppMode::Play), (leave_play, despawn_the_view))
             // Aim and input sampling stay at frame rate — the first because
             // 64 Hz aim is latency you can feel, the second so a press made on
             // this frame reaches the steps taken on this frame.
+            // Reading the peripherals into the latch, and pointing the view.
+            // Nothing here touches a body: aim is an input, and where a body
+            // ends up facing is the step's answer alone.
             .add_systems(RunFixedMainLoop, (
                 // Not while the menu is up: a released cursor that still
                 // walked the body would be worse than a captured one.
                 gather_input.run_if(pause_menu::not_paused),
-                // `mouse_look` is *not* gated — it has to drain the mouse
+                // `gather_aim` is *not* gated — it has to drain the mouse
                 // motion made while paused rather than save it up for the
                 // frame the menu closes. It answers the question itself.
-                mouse_look,
-                // After `mouse_look`, which owns the rotation this reads.
+                gather_aim,
+                // After the aim it reads.
                 place_camera,
             ).chain().in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop)
                 .run_if(in_state(AppMode::Play)))
@@ -112,10 +114,15 @@ impl Plugin for GamePlugin {
             .add_systems(FixedPreUpdate, write_client_inputs
                 .in_set(lightyear::prelude::client::input::InputSystems::WriteClientInputs)
                 .run_if(in_state(AppMode::Play)))
+            // The simulation, and only where this process is believed. A
+            // client runs none of it: it sends inputs and draws what it is
+            // told, which is what leaves every value with one writer.
             .add_systems(FixedUpdate, (
                 rebuild_collision_when_rooms_change,
                 step_player,
-            ).chain().run_if(in_state(AppMode::Play)))
+            ).chain()
+                .run_if(in_state(AppMode::Play))
+                .run_if(crate::common::net::has_authority))
             // Draws the body between fixed steps, so a 64 Hz simulation does
             // not step visibly on a 144 Hz display.
             .add_systems(RunFixedMainLoop, (
@@ -806,12 +813,15 @@ mod tests {
         );
     }
 
-    /// And the body we *are* aiming for is left to `mouse_look`, which has
-    /// already pointed it this frame — turning it again from the stepped yaw
-    /// would throw away the sub-tick aim that makes looking around feel
-    /// immediate.
+    /// And our own body is turned by the same system, from the same value.
+    ///
+    /// It used to be excluded, because the mouse turned it directly for the
+    /// sake of an instant view. Two writers for one rotation is how the two
+    /// ends came to disagree about which way somebody was looking; the view
+    /// is a separate entity now and takes its aim from the latch, so the body
+    /// has exactly one writer like every other.
     #[test]
-    fn the_local_body_is_left_to_the_mouse() {
+    fn our_own_body_is_turned_by_its_yaw_like_any_other() {
         let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
         enter(&mut app);
 
@@ -820,16 +830,17 @@ mod tests {
             let mut query = world.query_filtered::<Entity, With<LocalPlayer>>();
             query.single(world).expect("no local body")
         };
-        // A rotation only the mouse could have written: the body's own yaw
-        // still says something else.
-        let aimed = Quat::from_rotation_y(1.2);
-        app.world_mut().get_mut::<Transform>(mine).unwrap().rotation = aimed;
-        app.world_mut().get_mut::<Player>(mine).unwrap().yaw = 0.0;
+        let yaw = 1.2;
+        app.world_mut().get_mut::<Player>(mine).unwrap().yaw = yaw;
         app.world_mut().run_system_once(face_bodies).unwrap();
 
         assert!(
-            app.world().get::<Transform>(mine).unwrap().rotation.abs_diff_eq(aimed, 1e-5),
-            "the mouse's aim was overwritten by the stepped yaw"
+            app.world()
+                .get::<Transform>(mine)
+                .unwrap()
+                .rotation
+                .abs_diff_eq(Quat::from_rotation_y(yaw), 1e-5),
+            "our own body was left facing somewhere else"
         );
     }
 

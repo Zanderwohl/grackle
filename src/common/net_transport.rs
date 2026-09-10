@@ -15,7 +15,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use bevy::prelude::*;
 use lightyear::prelude::client::{Client, NetcodeClient, NetcodeConfig as ClientNetcodeConfig};
 use lightyear::prelude::server::{NetcodeConfig as ServerNetcodeConfig, NetcodeServer, ServerUdpIo, Start, Started};
-use lightyear::prediction::prelude::PredictionManager;
 use lightyear::prelude::*;
 
 use crate::common::net::NetRole;
@@ -94,10 +93,6 @@ impl Plugin for NetTransportPlugin {
             .add_plugins(crate::common::match_state::MatchStatePlugin)
             .add_plugins(crate::common::map_sync::MapSyncPlugin)
             .add_plugins(crate::common::net_events::NetEventsPlugin)
-            // Prediction is gated on this resource existing, not on a plugin,
-            // so it goes in once and stays: a process that is currently a
-            // listen server may be a client after the next menu click.
-            .insert_resource(PredictionManager::default())
             .init_resource::<NetStatus>()
             .add_observer(dress_new_client)
             .add_systems(

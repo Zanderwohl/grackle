@@ -644,47 +644,50 @@ process, because a corpse is a local reaction to a fact — this body's health
 reached zero — and that fact *is* replicated. What differs between machines is
 which way an arm flopped, and nobody can tell.
 
-### Three markers, and none of them is a synonym
+### One rule: the client owns its view and its input, and nothing else
 
-This is the distinction the whole layer rests on. Getting it wrong does not
-error.
+**The server simulates. Every other machine draws what it is told.** That is
+the whole authority model, and it replaces a set of per-system decisions that
+were wrong four times in a row. A client runs no step, fires no weapon, resolves
+no damage and describes no animation; it reads its peripherals into a latch,
+sends them, and draws the world that comes back.
+
+What that buys is **one writer per value**. Almost every bug in this area was
+two writers for one thing — a body turned by the mouse locally and by its yaw
+remotely, a body spawned by the map on one end and by replication on the other
+— and each one showed up as something that looked unrelated to its cause.
+
+There is no `Simulated` marker any more, and there is no client-side
+prediction. Both are coming back, but prediction belongs **on top** of a system
+where every value already has one writer, added once as its own layer — not
+smeared through movement, input, damage and drawing, which is where it was and
+what made the two ends disagree.
+
+Two markers remain and they are not synonyms:
 
 | Marker | Means | Who has it |
 | --- | --- | --- |
 | `Player` | this is a person's body | every body, everywhere |
-| `Simulated` | **this process steps it** | all bodies on a server; only the predicted one on a client |
-| `LocalPlayer` | **this machine's keyboard drives it** | exactly one body, or none |
+| `LocalPlayer` | **this machine's view follows it** | exactly one body, or none |
 
-`spawn_player` adds `Simulated` — whoever spawns a body steps it — and
-deliberately **does not** add `LocalPlayer`. It used to, and that single line
-produced a crop of symptoms that looked unrelated to each other and to their
-cause: on a host, the second player to join made `gather_input` (a `Single`)
-match two entities and silently stop running, so the host could not move;
-`hide_own_body` hid every body in the match; and every body was given its own
-camera and its own `IsDefaultUiCamera`. Whose body it is is answered by whoever
-knows — `enter_play` for a solo game or a host, `claim_our_own_body` on a
-client.
+`LocalPlayer` gates `gather_input`, `write_client_inputs`, `place_camera` and
+`spawn_the_view`, and answers "is this mine" in `hide_own_body`,
+`draw_hitboxes` and `draw_skeletons`. `has_authority` — which answers `true`
+with no network layer at all, so a solo game is unchanged — gates `step_player`,
+the weapon systems, `describe_player_bodies`, all of `DamageSystems`, and the
+health restore in `reset_for_play`.
 
-What each marker gates:
+### The view is not the body
 
-- `Simulated`: `step_player`, `pull_trigger`, `select_weapons`,
-  `describe_player_bodies`. A body driven from the wire carries a `Loadout` and
-  a `Trigger` like any other and an `Inputs` nobody ever fills, so an ungated
-  system either fires somebody else's gun locally or flattens the server's
-  description to "standing still" one frame after it arrives.
-- `LocalPlayer`: `gather_input`, `mouse_look`, `place_camera`,
-  `give_the_local_body_a_camera`, `hide_own_body`, and the "is this mine" test
-  in `draw_hitboxes` and `draw_skeletons`.
-- Authority (`has_authority`, which answers `true` with no network layer at
-  all): all of `DamageSystems`, and the health restore in `reset_for_play`.
-  Nothing about damage is predicted — guessing a kill and being wrong is a body
-  that falls over and stands back up, which is worse to watch than a kill that
-  arrives a round-trip late.
+`place_camera` puts the camera at the local body's position and aims it
+**straight from this machine's latch**. The camera is its own entity, not a
+child of the body, and that is load-bearing: as a child it would inherit the
+body's rotation, and the body's rotation is a round-trip behind. Looking around
+has to be instant even when moving is not.
 
-`reap_the_dead` therefore does not run on a client: the entity belongs to the
-server, which despawns it and replicates that. `raise_ragdolls` hides the body
-it made a corpse of, because on a client the despawn is a round-trip away and
-the body would otherwise stand upright inside its own corpse.
+So aim goes to exactly one place — the latch — and comes back as `Player.yaw`
+for the body. `face_bodies` turns **every** body from that one value, our own
+included. Nothing writes a body's rotation from the mouse.
 
 ### Who gets a body, and when it goes away
 
@@ -694,20 +697,14 @@ The server spawns every body, its own included. A client never spawns one.
 | --- | --- |
 | Client connects mid-round | `give_arriving_clients_a_body` |
 | Round starts with clients already connected | `give_waiting_clients_a_body`, on `OnEnter(Play)` |
-| Client's body reaches it | `claim_our_own_body` marks it `LocalPlayer` + `Simulated` + `InputMarker` |
+| Client's body reaches it | `claim_our_own_body` marks it `LocalPlayer` + `InputMarker` |
 | Client disconnects | `ControlledBy { lifetime: SessionBased }` despawns it on the server; the despawn replicates |
 | Round ends | the server's `leave_play` despawns every body; a client's despawns none, because they are not its to despawn |
 
-Prediction is **in place**: `PredictionTarget` is a replication target for the
-`Predicted` marker, so a client gets one entity per body with `Predicted` on
-its own — not a predicted copy beside a confirmed one. There is no ghost of
-yourself to hide.
-
-There is deliberately **no `InterpolationTarget`**. An interpolated body is a
-second entity written by interpolation functions, and none are registered — so
-targeting it produces a body nothing ever writes to, which is a player you
-cannot see. Everybody else's body is the plain replicated entity, smoothed by
-`interpolate_bodies` between the last two positions the server sent.
+**One entity per body, everywhere.** `Controlled` — the receiver-side half of
+the server's `ControlledBy` — is how a client knows which body is its own. No
+`PredictionTarget` and no `InterpolationTarget`: both make a *second* copy of a
+body on the receiving end, and a second copy is a second writer.
 
 ### State is replicated; events are relayed
 

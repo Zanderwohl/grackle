@@ -36,8 +36,7 @@ use crate::game::body_mesh::BodyMeshPlugin;
 use crate::game::hitbox::HitboxPlugin;
 use crate::game::weapon::WeaponPlugin;
 use crate::game::player::{
-    step_player, Inputs, LocalPlayer, PhysicsBody, Player, PlayerInput, Simulated, ViewMode,
-    PLAYER_HALF,
+    step_player, Inputs, LocalPlayer, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
 };
 
 /// Where a skeleton's feet sit relative to the entity carrying it.
@@ -76,7 +75,9 @@ impl Plugin for SkeletonPlugin {
             .init_resource::<ShowBones>()
             .add_systems(Update, toggle_bones)
             .add_systems(Update, (
-                describe_player_bodies.run_if(in_state(AppMode::Play)),
+                describe_player_bodies
+                    .run_if(in_state(AppMode::Play))
+                    .run_if(crate::common::net::has_authority),
                 // Not gated on `AppMode::Play`: a body replicated from the
                 // server can arrive on a frame when this process has not
                 // finished entering the round, and `Added` is true for one
@@ -250,22 +251,20 @@ pub fn skeleton_root(global: &GlobalTransform, offset: Option<&SkeletonRoot>) ->
 
 /// Describe what a body we are simulating is doing.
 ///
-/// One of two writers of [`BodyRequests`]; the other is replication. This one
-/// covers the bodies this process steps — every body on a server, and its own
-/// predicted body on a client — and the wire covers the rest. Both write the
-/// same component, and neither names an animation: the state machine is
-/// written once, in [`crate::common::skeleton::state`], and every process runs
-/// it over whatever description it has.
+/// Runs only where this process is believed. A client is *told* what every
+/// body is doing — `BodyRequests` is replicated — and describes none of them
+/// for itself. Run here as well and it would describe a body from an `Inputs`
+/// nobody ever fills, flattening a sprinting player to standing still one
+/// frame after the server said otherwise, every frame.
 ///
-/// **`With<Simulated>` is what makes that split work.** Run on a body driven
-/// from the wire and this would describe it from an `Inputs` nobody ever fills
-/// — a sprinting player would be described as standing still, one frame after
-/// the server said otherwise, every frame.
+/// It does not name an animation: the state machine is written once, in
+/// [`crate::common::skeleton::state`], and every process runs it over whatever
+/// description it has.
 ///
 /// Fields are assigned rather than accumulated: this system owns all of them,
 /// every frame, so nothing goes stale.
 fn describe_player_bodies(
-    mut players: Query<(&Player, &Stance, &Inputs, &mut BodyRequests), With<Simulated>>,
+    mut players: Query<(&Player, &Stance, &Inputs, &mut BodyRequests)>,
 ) {
     for (player, stance, input, mut requests) in &mut players {
         // Each body's own input, so a second local player or one being driven
@@ -677,37 +676,6 @@ mod tests {
         );
     }
 
-    /// A body driven from the wire is described by replication, not from an
-    /// input nobody fills.
-    ///
-    /// `Inputs` travels one way only — client to server — so a body somebody
-    /// else is driving has a default `Inputs` on this machine forever.
-    /// Described from that, a sprinting player would be flattened to standing
-    /// still one frame after the server said otherwise, every frame, and the
-    /// replicated `BodyRequests` would never survive long enough to animate
-    /// anything.
-    #[test]
-    fn a_body_we_do_not_simulate_is_not_described_from_its_empty_input() {
-        let mut app = App::new();
-        let theirs = app
-            .world_mut()
-            .spawn((
-                Player { on_ground: true, ..default() },
-                ActionState(PlayerInput::default()),
-                Stance::Standing,
-                // As replication delivered it: sprinting forwards.
-                BodyRequests { running_forward: true, ..default() },
-            ))
-            .id();
-
-        app.world_mut().run_system_once(describe_player_bodies).unwrap();
-
-        assert!(
-            app.world().get::<BodyRequests>(theirs).unwrap().running_forward,
-            "the server's description was overwritten with an empty local one"
-        );
-    }
-
     /// Walking into a wall is the two-writer case: input says forward, the
     /// step says blocked, and only the state machine puts them together.
     #[test]
@@ -717,10 +685,6 @@ mod tests {
             .world_mut()
             .spawn((
                 Player { on_ground: true, blocked: BVec3::new(false, false, true), ..default() },
-                // `Simulated`, because this describes bodies this process
-                // steps. One driven from the wire is described by replication
-                // instead.
-                Simulated,
                 ActionState(PlayerInput { movement: Vec2::new(0.0, 1.0), ..default() }),
                 Stance::Standing,
                 BodyRequests::default(),

@@ -29,9 +29,7 @@ use crate::common::damage::NextPlayerId;
 use crate::common::net::NetRole;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
-use crate::game::player::{
-    fallback_spawn, spawn_player, usable_spawns, LocalPlayer, Player, Simulated, Spawn,
-};
+use crate::game::player::{fallback_spawn, spawn_player, usable_spawns, LocalPlayer, Player, Spawn};
 use crate::tool::room::Room;
 
 /// Spawns bodies for connected clients and marks our own when it arrives.
@@ -59,28 +57,22 @@ impl Plugin for NetBodiesPlugin {
 
 /// Stand a body up for one client and start replicating it.
 ///
-/// The targets are the whole of the arrangement. `Replicate` to everybody, so
-/// every client can see it. `PredictionTarget` to its owner alone, because
-/// only the person holding the controls has inputs to run ahead with.
+/// One entity, replicated to everybody, and `ControlledBy` says whose it is.
 ///
-/// **No `InterpolationTarget` yet.** An interpolated body is a second entity
-/// whose components are written by interpolation functions, and none are
-/// registered — so targeting it produces a body nothing ever writes to, which
-/// is a player you cannot see. Everybody else's body is the plain replicated
-/// entity for now, smoothed by `interpolate_bodies` between the last two
-/// positions the server sent. That is coarser than real interpolation and is
-/// the thing to fix once there is somebody to look at it with.
+/// No prediction and no interpolation target. Both make a *second* copy of a
+/// body on the receiving end, and a second copy is a second writer — which is
+/// the whole class of bug this arrangement exists to make impossible. The
+/// server steps the body, everybody is told where it ended up, and
+/// `interpolate_bodies` smooths between the last two positions it was told.
 fn spawn_body_for(
     commands: &mut Commands,
     spawn: Spawn,
     ids: &mut NextPlayerId,
     link: Entity,
-    peer: PeerId,
 ) {
     let body = spawn_player(commands, spawn, ids.allocate());
     commands.entity(body).insert((
         Replicate::to_clients(NetworkTarget::All),
-        PredictionTarget::to_clients(NetworkTarget::Single(peer)),
         // Ties the body's life to the connection's: somebody who disconnects
         // does not leave a body standing in the map for the rest of the round.
         ControlledBy { owner: link, lifetime: Lifetime::default() },
@@ -119,7 +111,7 @@ fn choose_spawn(
 fn give_arriving_clients_a_body(
     mut commands: Commands,
     role: Res<NetRole>,
-    joined: Query<(Entity, &RemoteId), (With<ClientOf>, Added<Connected>)>,
+    joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
     collision: Res<CollisionWorld>,
     spawns: Query<&Transform, With<SpawnPointMarker>>,
     rooms: Query<&Room>,
@@ -128,10 +120,10 @@ fn give_arriving_clients_a_body(
     if !role.is_authority() {
         return;
     }
-    for (link, peer) in &joined {
+    for link in &joined {
         let spawn = choose_spawn(&collision, &spawns, &rooms);
-        info!("Giving {:?} a body", peer.0);
-        spawn_body_for(&mut commands, spawn, &mut ids, link, peer.0);
+        info!("Giving a new client a body");
+        spawn_body_for(&mut commands, spawn, &mut ids, link);
     }
 }
 
@@ -139,7 +131,7 @@ fn give_arriving_clients_a_body(
 fn give_waiting_clients_a_body(
     mut commands: Commands,
     role: Res<NetRole>,
-    waiting: Query<(Entity, &RemoteId), (With<ClientOf>, With<Connected>)>,
+    waiting: Query<Entity, (With<ClientOf>, With<Connected>)>,
     collision: Res<CollisionWorld>,
     spawns: Query<&Transform, With<SpawnPointMarker>>,
     rooms: Query<&Room>,
@@ -148,10 +140,10 @@ fn give_waiting_clients_a_body(
     if !role.is_authority() {
         return;
     }
-    for (link, peer) in &waiting {
+    for link in &waiting {
         let spawn = choose_spawn(&collision, &spawns, &rooms);
-        info!("Giving {:?} a body for the new round", peer.0);
-        spawn_body_for(&mut commands, spawn, &mut ids, link, peer.0);
+        info!("Giving a waiting client a body for the new round");
+        spawn_body_for(&mut commands, spawn, &mut ids, link);
     }
 }
 
@@ -175,28 +167,25 @@ fn replicate_the_hosts_body(
     }
 }
 
-/// Take ownership of the predicted body the server made for us.
+/// Recognise the body the server says is ours.
 ///
-/// `Predicted` alone is the right test on a conventional client, because the
-/// server only predicts a body to the client that controls it — the others
-/// arrive interpolated. Marking it `LocalPlayer` is what points the camera at
-/// it and starts feeding it this machine's inputs; `InputMarker` is what makes
-/// Lightyear send those inputs to the server.
+/// `Controlled` is the receiver-side half of the `ControlledBy` the server put
+/// on it, so it arrives on exactly one body and only on the machine that
+/// drives it. That makes it the natural answer to "which of these is mine",
+/// and it does not require a second copy of the body to exist the way asking
+/// `Predicted` did.
+///
+/// Marking it `LocalPlayer` is what aims the view at it; `InputMarker` is what
+/// makes Lightyear send this machine's inputs for it. It is **not** marked as
+/// something we simulate, because we simulate nothing.
 fn claim_our_own_body(
     mut commands: Commands,
-    role: Res<NetRole>,
-    ours: Query<Entity, (Added<Predicted>, With<Player>, Without<LocalPlayer>)>,
+    ours: Query<Entity, (Added<Controlled>, With<Player>, Without<LocalPlayer>)>,
 ) {
-    if role.is_authority() {
-        return;
-    }
     for body in &ours {
         info!("The server has given us a body");
         commands.entity(body).insert((
             LocalPlayer,
-            // The one body a client steps: the others arrive interpolated and
-            // are Lightyear's to move.
-            Simulated,
             InputMarker::<crate::game::player::PlayerInput>::default(),
         ));
     }
