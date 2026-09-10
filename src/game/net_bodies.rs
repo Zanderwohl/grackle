@@ -40,17 +40,9 @@ impl Plugin for NetBodiesPlugin {
         app.add_systems(
             Update,
             (
-                give_arriving_clients_a_body.run_if(in_state(AppMode::Play)),
-                replicate_the_hosts_body.run_if(in_state(AppMode::Play)),
+                give_bodies_to_whoever_needs_one.run_if(in_state(AppMode::Play)),
                 claim_our_own_body,
             ),
-        )
-        // Everybody already connected when the round starts needs one too:
-        // joining before the round and joining during it must both work, and
-        // only one of them goes through the arrival path.
-        .add_systems(
-            OnEnter(AppMode::Play),
-            give_waiting_clients_a_body.after(crate::game::reset::reset_for_play),
         );
     }
 }
@@ -107,63 +99,62 @@ fn choose_spawn(
     }
 }
 
-/// A client turned up mid-round: give it a body now.
-fn give_arriving_clients_a_body(
-    mut commands: Commands,
-    role: Res<NetRole>,
-    joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
-    collision: Res<CollisionWorld>,
-    spawns: Query<&Transform, With<SpawnPointMarker>>,
-    rooms: Query<&Room>,
-    mut ids: ResMut<NextPlayerId>,
-) {
-    if !role.is_authority() {
-        return;
-    }
-    for link in &joined {
-        let spawn = choose_spawn(&collision, &spawns, &rooms);
-        info!("Giving a new client a body");
-        spawn_body_for(&mut commands, spawn, &mut ids, link);
-    }
-}
-
-/// The round has just started: give everyone already here a body.
-fn give_waiting_clients_a_body(
-    mut commands: Commands,
-    role: Res<NetRole>,
-    waiting: Query<Entity, (With<ClientOf>, With<Connected>)>,
-    collision: Res<CollisionWorld>,
-    spawns: Query<&Transform, With<SpawnPointMarker>>,
-    rooms: Query<&Room>,
-    mut ids: ResMut<NextPlayerId>,
-) {
-    if !role.is_authority() {
-        return;
-    }
-    for link in &waiting {
-        let spawn = choose_spawn(&collision, &spawns, &rooms);
-        info!("Giving a waiting client a body for the new round");
-        spawn_body_for(&mut commands, spawn, &mut ids, link);
-    }
-}
-
-/// Let clients see the host's own body.
+/// Give a body to everybody who should have one and does not.
 ///
-/// The host's body is spawned by `enter_play` like a solo game's, because a
-/// listen server is a solo game that also has company — so the replication has
-/// to be added afterwards rather than at the spawn, which knows nothing about
-/// the network. Interpolated to everybody: nobody else is driving it, so
-/// nobody else should be predicting it.
-fn replicate_the_hosts_body(
+/// **One rule instead of four.** This used to be a system for a client
+/// arriving mid-round, another for clients already connected when the round
+/// started, a third to start replicating the host's body, and a spawn inside
+/// `enter_play` for the host itself. Each one answered "when does somebody get
+/// a body" for its own case, and respawning would have been a fifth.
+///
+/// Asking about *absence* answers all of them at once. A player with no body
+/// gets one, whether they never had one, joined a minute ago, or died two
+/// seconds ago. There is no queue to keep, no timer keyed to an entity that
+/// has already been despawned, and nothing to get wrong when a case nobody
+/// thought of turns up.
+///
+/// **Respawning is immediate**, which is a placeholder and not a decision.
+/// When a body comes back — on a wave, after a delay, at your team's end of
+/// the map — is a gamemode question, and this layer deliberately answers none
+/// of those. What it guarantees is only that being alive is the resting state.
+fn give_bodies_to_whoever_needs_one(
     mut commands: Commands,
     role: Res<NetRole>,
-    ours: Query<Entity, (Added<LocalPlayer>, With<Player>, Without<Replicate>)>,
+    links: Query<Entity, (With<ClientOf>, With<Connected>)>,
+    owners: Query<&ControlledBy, With<Player>>,
+    ours: Query<(), (With<Player>, With<LocalPlayer>)>,
+    collision: Res<CollisionWorld>,
+    spawns: Query<&Transform, With<SpawnPointMarker>>,
+    rooms: Query<&Room>,
+    mut ids: ResMut<NextPlayerId>,
 ) {
-    if !matches!(*role, NetRole::Listen { .. }) {
+    if !role.is_authority() {
         return;
     }
-    for body in &ours {
-        commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
+    let hosting = matches!(*role, NetRole::Listen { .. });
+
+    // Whoever is sitting at this machine, if anybody is. A dedicated server
+    // would have nobody here and the loop below would be the whole of it.
+    if ours.is_empty() {
+        let spawn = choose_spawn(&collision, &spawns, &rooms);
+        info!("Standing our own body up");
+        // A fresh id each time rather than one kept across a death: the body
+        // that comes back is a new body, and a kill feed that reused the id
+        // would credit its damage to the one before it.
+        let body = spawn_player(&mut commands, spawn, ids.allocate());
+        commands.entity(body).insert(LocalPlayer);
+        if hosting {
+            commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
+        }
+    }
+
+    for link in &links {
+        if owners.iter().any(|owned| owned.owner == link) {
+            continue;
+        }
+        let spawn = choose_spawn(&collision, &spawns, &rooms);
+        info!("Standing a client's body up");
+        spawn_body_for(&mut commands, spawn, &mut ids, link);
     }
 }
 

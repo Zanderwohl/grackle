@@ -1,21 +1,18 @@
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
-use rand::seq::IndexedRandom;
 
 use crate::common::app_mode::{start_in_play, AppMode, StartInPlay};
 use crate::common::damage::NextPlayerId;
 use crate::common::net::NetRole;
 use crate::common::skeleton::AnimationClock;
 use crate::editor::multicam::Multicam;
-use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::ragdoll::RagdollPlugin;
 use crate::game::pause_menu::PauseMenuPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::player::{
-    despawn_the_view, face_bodies, fallback_spawn, gather_aim, gather_input, interpolate_bodies,
-    place_camera, spawn_player, spawn_the_view, step_player, toggle_view, usable_spawns,
-    write_client_inputs, InputLatch, LocalPlayer, Player, Spawn, ViewMode,
+    despawn_the_view, face_bodies, gather_aim, gather_input, interpolate_bodies, place_camera,
+    spawn_the_view, step_player, toggle_view, write_client_inputs, InputLatch, Player, ViewMode,
 };
 use crate::tool::bakes::BakeSystems;
 use crate::tool::room::Room;
@@ -177,56 +174,14 @@ fn enter_play(
     mut commands: Commands,
     mut collision: ResMut<CollisionWorld>,
     rooms: Query<&Room>,
-    spawns: Query<&Transform, With<SpawnPointMarker>>,
     mut editor_cameras: Query<&mut Camera, With<Multicam>>,
     window: Query<Entity, With<PrimaryWindow>>,
-    mut ids: ResMut<NextPlayerId>,
-    role: Option<Res<NetRole>>,
 ) {
     let rooms: Vec<Room> = rooms.iter().cloned().collect();
-    // Before choosing, because whether a spawn point is usable is a question
-    // about the walls.
+    // The walls first, because everything that follows asks questions about
+    // them — including where a body can stand, which
+    // `give_bodies_to_whoever_needs_one` decides on the next Update.
     collision.rebuild(&rooms);
-
-    // The feature writes its facing into the transform's rotation, so the
-    // marked entity carries both halves and neither has to be looked up twice.
-    let placed: Vec<Spawn> = spawns
-        .iter()
-        .map(|t| Spawn {
-            feet: t.translation,
-            yaw: t.rotation.to_euler(EulerRot::YXZ).0,
-        })
-        .collect();
-    let usable = usable_spawns(&placed, &collision);
-    if usable.len() < placed.len() {
-        warn!(
-            "{} of {} spawn point(s) have too little headroom to stand in",
-            placed.len() - usable.len(),
-            placed.len()
-        );
-    }
-
-    // Uniformly at random for now. Per-team spawns, and not dropping someone
-    // on top of someone else, are gamemode questions this is deliberately not
-    // trying to answer yet.
-    let spawn = match usable.choose(&mut rand::rng()) {
-        Some(spawn) => *spawn,
-        None => {
-            warn!("No usable spawn point on this map; falling back to the largest room");
-            fallback_spawn(&rooms)
-        }
-    };
-    // Only where this process simulates. On a client the body is the
-    // server's: it arrives replicated, and spawning one here would put a
-    // second body in the world that nobody else can see and that the server
-    // will never correct.
-    if role.is_none_or(|role| role.is_authority()) {
-        // A fresh id each time rather than one kept across F5: the body that
-        // comes back is a new body, and a kill feed that reused the id would
-        // credit its damage to the one before it.
-        let body = spawn_player(&mut commands, spawn, ids.allocate());
-        commands.entity(body).insert(LocalPlayer);
-    }
 
     for mut camera in &mut editor_cameras {
         camera.is_active = false;
@@ -302,6 +257,9 @@ fn rebuild_collision_when_rooms_change(
 mod tests {
     use std::time::Duration;
 
+    use crate::editor::spawn_point::SpawnPointMarker;
+    use crate::game::player::{spawn_player, Spawn};
+
     use bevy::ecs::system::RunSystemOnce;
     use bevy::time::Virtual;
 
@@ -325,6 +283,10 @@ mod tests {
         app.add_plugins(bevy::input::InputPlugin);
         app.add_plugins(bevy::time::TimePlugin);
         app.add_plugins(GamePlugin);
+        // Where bodies come from now: one absence-driven rule, rather than a
+        // spawn buried in `enter_play`. A closed game is its own authority.
+        app.insert_resource(crate::common::net::NetRole::Solo);
+        app.add_plugins(crate::game::net_bodies::NetBodiesPlugin);
         app.world_mut().resource_mut::<Time<Virtual>>().pause();
 
         for room in rooms {
@@ -842,6 +804,63 @@ mod tests {
                 .abs_diff_eq(Quat::from_rotation_y(yaw), 1e-5),
             "our own body was left facing somewhere else"
         );
+    }
+
+    /// Being alive is the resting state: a body that goes away comes back.
+    ///
+    /// Respawn is not a system of its own and deliberately never was. Bodies
+    /// are handed out by asking who has not got one, so dying is just another
+    /// way to be somebody without a body — the same answer that covers joining
+    /// mid-round, being connected when the round starts, and starting a solo
+    /// game.
+    #[test]
+    fn a_player_whose_body_is_gone_gets_another_one() {
+        let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
+        enter(&mut app);
+
+        let first = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<LocalPlayer>>();
+            query.single(world).expect("no body to begin with")
+        };
+
+        // However it went — reaped, disconnected, despawned by a gamemode.
+        app.world_mut().entity_mut(first).despawn();
+        app.update();
+
+        let second = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<LocalPlayer>>();
+            query.single(world).expect("the player was left with no body")
+        };
+        assert_ne!(second, first, "the old body came back rather than a new one");
+    }
+
+    /// And the body that comes back is a *new* body.
+    ///
+    /// A reused id would credit the last body's damage to this one, which is a
+    /// kill feed naming somebody who was not involved.
+    #[test]
+    fn the_body_that_comes_back_has_an_identity_of_its_own() {
+        let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
+        enter(&mut app);
+
+        let id_of = |app: &mut App| {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<&crate::common::damage::PlayerId, With<LocalPlayer>>();
+            *query.single(world).expect("no body")
+        };
+        let before = id_of(&mut app);
+
+        let body = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<LocalPlayer>>();
+            query.single(world).unwrap()
+        };
+        app.world_mut().entity_mut(body).despawn();
+        app.update();
+
+        assert_ne!(id_of(&mut app), before, "the new body reused the dead one's identity");
     }
 
     /// A server spawns a body for everybody and drives none of them.

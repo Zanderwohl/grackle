@@ -36,9 +36,9 @@ in it that constrains code written today: items must record their provenance
 The editor is real and works. **The game barely exists.** There is a damage
 layer and three kinds of weapon — hitscan, projectile, flame — and a
 server-authoritative network layer that carries the map, the bodies, damage and
-deaths. There is no ammo, no reload, no teams, no respawn and no client-side
-prediction: a body that dies leaves a ragdoll and is gone, and a client's
-movement is a round-trip behind. There is also no wasm build yet. Adding the
+deaths. There is no ammo, no reload, no teams and no client-side prediction: a body
+that dies leaves a ragdoll and comes straight back, and a client's movement is
+a round-trip behind. There is also no wasm build yet. Adding the
 runtime is the current frontier, not a finished thing to extend.
 
 `src/unlock` and the `crate_drop` binary are a self-contained TF2-style
@@ -692,13 +692,31 @@ included. Nothing writes a body's rotation from the mouse.
 
 The server spawns every body, its own included. A client never spawns one.
 
+**There is one rule and it is about absence:**
+`give_bodies_to_whoever_needs_one` hands a body to every player who should
+have one and does not. That single question covers starting a solo game,
+joining mid-round, being connected when the round starts, and dying — all of
+which used to be a system each, with respawn lined up to be a fifth.
+
+Asking about absence rather than about events is what makes it hold: there is
+no queue to keep, no timer keyed to an entity that has already been despawned,
+and nothing to get wrong when a case nobody thought of turns up.
+
+**Respawning is immediate, and that is a placeholder rather than a decision.**
+When a body comes back — on a wave, after a delay, at your team's end of the
+map — is a gamemode question, and this layer answers none of those. What it
+guarantees is only that being alive is the resting state.
+
 | Moment | What happens |
 | --- | --- |
-| Client connects mid-round | `give_arriving_clients_a_body` |
-| Round starts with clients already connected | `give_waiting_clients_a_body`, on `OnEnter(Play)` |
+| Anybody has no body | `give_bodies_to_whoever_needs_one`, next `Update` |
 | Client's body reaches it | `claim_our_own_body` marks it `LocalPlayer` + `InputMarker` |
 | Client disconnects | `ControlledBy { lifetime: SessionBased }` despawns it on the server; the despawn replicates |
 | Round ends | the server's `leave_play` despawns every body; a client's despawns none, because they are not its to despawn |
+
+`enter_play` no longer spawns anything: it rebuilds `CollisionWorld` and hands
+the cursor over, and the body follows on the next `Update` because by then
+somebody is a player with no body.
 
 **One entity per body, everywhere.** `Controlled` — the receiver-side half of
 the server's `ControlledBy` — is how a client knows which body is its own. No
@@ -790,7 +808,6 @@ transforms first. Empty and consistent beats populated and disagreeing.
   alongside `DamageDealt`.
 - Explosions replicate their consequences — health, corpses, damage numbers —
   but not the blast itself, so there is no visual where one went off.
-- No respawn. A body that dies is gone for the round.
 - No client-side prediction, so movement is a round-trip behind on a client.
   Looking around is not — the view is a separate entity aimed from the local
   latch. Prediction goes back on top of this, as one layer, not through it.
