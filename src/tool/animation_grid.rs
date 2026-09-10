@@ -31,7 +31,20 @@ impl Plugin for AnimationGridPlugin {
             // Deliberately not gated on `AppMode::Editor`: the grid is map
             // content, and its whole use is judging an animation at the size
             // and distance a player sees it at, which means seeing it in play.
-            .add_systems(Update, (sync_animation_grids, drive_carousels).chain())
+            //
+            // Gated on authority, though, and that is not about editing. The
+            // bodies a grid stands up have health and hitboxes, so something
+            // has to be believed about whether each one is alive. Built on
+            // every machine from the same feature they would be *different
+            // entities with the same shape*: shoot one on the server and the
+            // client's copy — which nobody told anything — goes on standing
+            // there. Bodies come from the authority, like every other body.
+            .add_systems(
+                Update,
+                (sync_animation_grids, drive_carousels)
+                    .chain()
+                    .run_if(crate::common::net::has_authority),
+            )
         ;
     }
 }
@@ -360,6 +373,37 @@ mod tests {
     /// The bodies are children, so the grid moves, turns and is deleted as one
     /// thing — undo despawns the feature's entity and the roster has to go
     /// with it.
+    /// A client builds none of the grid's bodies.
+    ///
+    /// They have health and hitboxes, so something has to be believed about
+    /// whether each one is alive. Built on both ends from the same feature
+    /// they are *different entities with the same shape*: shoot one on the
+    /// server and the client's copy, which nobody told anything, goes on
+    /// standing there. That was the symptom; two authorities over one object
+    /// was the cause.
+    #[test]
+    fn a_client_stands_up_none_of_the_grids_bodies() {
+        use crate::common::net::NetRole;
+
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.init_state::<crate::common::app_mode::AppMode>();
+        app.add_plugins(AnimationGridPlugin);
+        app.insert_resource(NetRole::Client { host: "elsewhere".into(), port: 27100 });
+        app.world_mut().spawn((
+            AnimationGridMarker,
+            Transform::default(),
+            Visibility::default(),
+        ));
+        app.update();
+
+        assert_eq!(
+            app.world_mut().query::<&CarouselBody>().iter(app.world()).count(),
+            0,
+            "the client built its own set of bodies"
+        );
+    }
+
     #[test]
     fn the_bodies_belong_to_the_grid() {
         let mut world = grid_world();

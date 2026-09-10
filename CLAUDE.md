@@ -764,6 +764,25 @@ fly:
 resolving the hit, which is always the authority, and skipping it keeps the
 component off the list of things needing entity mapping.
 
+### Features describe the map; the authority builds the bodies
+
+A room is map content: every machine builds its own from the same features and
+they agree because the features do. **A body is not.** It has health and
+hitboxes, so something has to be believed about whether it is alive — and built
+on every machine from the same feature, the copies are *different entities with
+the same shape*. Shoot one on the server and the client's copy, which nobody
+told anything, goes on standing there.
+
+So `sync_animation_grids` and `drive_carousels` are gated on `has_authority`.
+The grid *feature* still exists everywhere — it is map content, it draws its
+gizmos, a mapper can still move it — but the bodies it stands up come from the
+authority like every other body.
+
+A client currently sees an empty grid rather than the server's bodies: they are
+spawned as children of the grid entity with transforms local to it, so
+replicating them would need them to become root entities carrying world
+transforms first. Empty and consistent beats populated and disagreeing.
+
 **Known gaps, all of them "not sent yet" rather than "broken":**
 
 - `Loadout` is not replicated, so every remote body holds the default weapons.
@@ -773,6 +792,10 @@ component off the list of things needing entity mapping.
 - Explosions replicate their consequences — health, corpses, damage numbers —
   but not the blast itself, so there is no visual where one went off.
 - No respawn. A body that dies is gone for the round.
+- No client-side prediction, so movement is a round-trip behind on a client.
+  Looking around is not — the view is a separate entity aimed from the local
+  latch. Prediction goes back on top of this, as one layer, not through it.
+- A client sees no animation-grid bodies (above).
 
 ### The map every client is standing in
 
