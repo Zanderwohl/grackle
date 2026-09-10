@@ -7,10 +7,15 @@
 //! rubber-bands there forever.
 //!
 //! What travels is the **feature timeline**, not the baked geometry: features
-//! are what the editor edits, and sending them is what will let an edit made
-//! between rounds reach everybody. Today only the initial snapshot is sent, on
-//! connect. Streaming the edits after it is the same channel and the next
-//! piece of work — see the note at the bottom of this file.
+//! are what the editor edits, so sending them is what makes an edit reach
+//! everybody.
+//!
+//! **The whole map is sent every time, and there are no deltas.** A delta
+//! protocol is a second way of describing a map, and two descriptions of one
+//! thing is the shape every bug in this layer has had. What keeps the cost
+//! down instead is asking whether the map actually changed — by comparing the
+//! bytes we are about to send with the bytes we sent last — and a floor on how
+//! often we are willing to send at all.
 
 use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
@@ -27,6 +32,16 @@ use crate::tool::room::CalculateRoomGeometry;
 /// against the state the last one left behind, so one arriving late or not at
 /// all leaves a client's map permanently different from the server's.
 pub struct MapChannel;
+
+/// How often the server is willing to re-send the map, at most.
+///
+/// Dragging a room edits the timeline every frame, and a client adopting a map
+/// rebuilds every feature entity and re-bakes the geometry, so sending at
+/// frame rate would spend a client's whole frame budget watching somebody
+/// resize a wall. A quarter of a second makes an edit land visibly late and
+/// costs four rebuilds a second at worst, which is the right way round: this
+/// is somebody editing between rounds, not aiming.
+const RESEND_INTERVAL: f32 = 0.25;
 
 /// The whole map, as the server currently has it.
 ///
@@ -82,8 +97,90 @@ impl Plugin for MapSyncPlugin {
         app.register_message::<MapSnapshot>()
             .add_direction(NetworkDirection::ServerToClient);
 
-        app.add_systems(Update, (send_map_to_new_clients, adopt_the_servers_map));
+        app.init_resource::<LastMapSent>()
+            .add_systems(
+                Update,
+                (send_map_to_new_clients, broadcast_map_changes, adopt_the_servers_map),
+            );
     }
+}
+
+/// The bytes the server last put on the wire, and when.
+///
+/// The bytes rather than a version number or a dirty flag, because
+/// `FeatureTimeline` is marked changed by things that are not the map —
+/// selecting a feature, for one — and a flag would broadcast the whole map
+/// because somebody clicked on a wall. Comparing what we would send with what
+/// we sent answers the only question that matters.
+#[derive(Resource, Default)]
+struct LastMapSent {
+    blueprint: Vec<u8>,
+    since: f32,
+}
+
+/// Serialise the map as it stands, or say why not.
+///
+/// One encoder for both paths — the snapshot a joiner gets and the one an edit
+/// broadcasts — so the two can never describe the same map differently.
+fn encode(timeline: &FeatureTimeline) -> Option<Vec<u8>> {
+    let snapshot = Outgoing {
+        features: timeline
+            .feature_order()
+            .iter()
+            .filter_map(|id| timeline.get_feature(id))
+            .collect(),
+        order: timeline.feature_order(),
+        id_counter: timeline.id_counter(),
+        rollback_bar: timeline.rollback_bar(),
+    };
+    match serde_json::to_vec(&snapshot) {
+        Ok(bytes) => Some(bytes),
+        Err(error) => {
+            // Not fatal to the server: the client simply has no map, which is
+            // better than dropping everybody because one feature would not
+            // encode.
+            error!("Could not encode the map to send: {error}");
+            None
+        }
+    }
+}
+
+/// Send the map again when it has actually changed.
+///
+/// This is the half that makes between-round editing real: a client that
+/// joined an hour ago sees the wall somebody just moved. It sends the whole
+/// map rather than the edit, which is coarse and is the point — there is one
+/// description of a map, one encoder, and one thing for a client to do with
+/// what arrives.
+fn broadcast_map_changes(
+    time: Res<Time>,
+    timeline: Res<FeatureTimeline>,
+    server: Option<Single<&Server>>,
+    mut last: ResMut<LastMapSent>,
+    mut sender: ServerMultiMessageSender,
+) -> Result {
+    let Some(server) = server else { return Ok(()) };
+
+    last.since += time.delta_secs();
+    if last.since < RESEND_INTERVAL {
+        return Ok(());
+    }
+    // Cheap pre-filter only. The answer that decides anything is the byte
+    // comparison below, since a timeline is marked changed by more than edits.
+    if !timeline.is_changed() {
+        return Ok(());
+    }
+
+    let Some(blueprint) = encode(&timeline) else { return Ok(()) };
+    if blueprint == last.blueprint {
+        return Ok(());
+    }
+
+    last.since = 0.0;
+    last.blueprint = blueprint.clone();
+    info!("Map changed; sending {} bytes to everyone", blueprint.len());
+    sender.send::<_, MapChannel>(&MapSnapshot { blueprint }, &server, &NetworkTarget::All)?;
+    Ok(())
 }
 
 /// Hand the map over the moment somebody connects.
@@ -100,26 +197,7 @@ fn send_map_to_new_clients(
         return Ok(());
     }
 
-    let snapshot = Outgoing {
-        features: timeline
-            .feature_order()
-            .iter()
-            .filter_map(|id| timeline.get_feature(id))
-            .collect(),
-        order: timeline.feature_order(),
-        id_counter: timeline.id_counter(),
-        rollback_bar: timeline.rollback_bar(),
-    };
-    let blueprint = match serde_json::to_vec(&snapshot) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            // Not fatal to the server: the client simply has no map, which is
-            // better than dropping everybody because one feature would not
-            // encode.
-            error!("Could not encode the map to send: {error}");
-            return Ok(());
-        }
-    };
+    let Some(blueprint) = encode(&timeline) else { return Ok(()) };
     let message = MapSnapshot { blueprint };
 
     for client in &joined {
@@ -139,6 +217,10 @@ fn adopt_the_servers_map(
     mut receivers: Query<&mut MessageReceiver<MapSnapshot>>,
     mut timeline: ResMut<FeatureTimeline>,
     mut bake: MessageWriter<CalculateRoomGeometry>,
+    // The last map we took. Adopting rebuilds every feature entity and
+    // re-bakes the geometry, so taking a map we already have is a visible
+    // hitch in exchange for nothing.
+    mut last: Local<Vec<u8>>,
 ) {
     if role.is_authority() {
         return;
@@ -146,6 +228,10 @@ fn adopt_the_servers_map(
 
     for mut receiver in &mut receivers {
         for message in receiver.receive() {
+            if message.blueprint == *last {
+                continue;
+            }
+            *last = message.blueprint.clone();
             let incoming: Incoming = match serde_json::from_slice(&message.blueprint) {
                 Ok(incoming) => incoming,
                 Err(error) => {
@@ -191,6 +277,42 @@ mod tests {
     use super::*;
     use crate::editor::editable::PointRef;
     use crate::editor::editor_room::EditorRoom;
+
+    /// The rule the broadcast rests on: the bytes change when the *map*
+    /// changes, and not when something merely about looking at it does.
+    ///
+    /// `FeatureTimeline` is marked changed by selecting a feature, so a dirty
+    /// flag would put the whole map on the wire because somebody clicked a
+    /// wall. Comparing what we would send against what we sent is what makes
+    /// that impossible rather than unlikely.
+    #[test]
+    fn only_an_edit_changes_the_bytes() {
+        let mut timeline = FeatureTimeline::default();
+        let id = timeline.apply_feature(Box::new(EditorRoom::from_point_refs(
+            PointRef::absolute(0.0, 0.0, 0.0),
+            PointRef::absolute(4.0, 3.0, 4.0),
+        )));
+        let before = encode(&timeline).expect("the map would not encode");
+
+        // Looking at it is not editing it.
+        timeline.select(Some(id));
+        assert_eq!(
+            encode(&timeline).as_deref(),
+            Some(before.as_slice()),
+            "selecting a feature would have re-sent the whole map"
+        );
+
+        // Adding a room is.
+        timeline.apply_feature(Box::new(EditorRoom::from_point_refs(
+            PointRef::absolute(10.0, 0.0, 10.0),
+            PointRef::absolute(14.0, 3.0, 14.0),
+        )));
+        assert_ne!(
+            encode(&timeline).as_deref(),
+            Some(before.as_slice()),
+            "an edit did not change what would be sent"
+        );
+    }
 
     /// The round trip the wire actually does: encode a server's features,
     /// decode them into a client's timeline, and get the same map back.

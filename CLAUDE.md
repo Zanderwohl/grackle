@@ -829,11 +829,30 @@ anybody can work in.
 - No history crosses: undo is a fact about whoever made the edits, and a client
   that could undo the server's map would be editing a map it does not own.
 
+**Edits reach clients by sending the whole map again**, not by sending the
+edit. `broadcast_map_changes` re-encodes the timeline, compares it with the
+bytes it last sent, and puts it on the wire if they differ. A delta protocol
+would be a *second* description of a map, and two descriptions of one thing is
+the shape every bug in this layer has had.
+
+Two things keep the cost of that honest:
+
+- **The comparison is on the bytes, not on a dirty flag.** `FeatureTimeline` is
+  marked changed by selecting a feature, so a flag would broadcast the whole
+  map because somebody clicked a wall. `only_an_edit_changes_the_bytes` pins
+  it.
+- **`RESEND_INTERVAL` is a floor of a quarter-second.** Dragging a room edits
+  the timeline every frame and adopting rebuilds every feature entity and
+  re-bakes, so sending at frame rate would spend a client's frame budget
+  watching somebody resize a wall. An edit lands visibly late, which is the
+  right way round: this is editing between rounds, not aiming.
+
+A client also declines to adopt a map identical to the one it already has,
+since adopting is a visible rebuild in exchange for nothing.
+
 The wire format is JSON, which is the wrong choice for anything large and is
-knowingly temporary — it is what `typetag` gives for free, and a map is sent
-once per join. **Only the initial snapshot is sent.** Edits made after a client
-joins do not reach it yet; that is the same channel and the next piece of work,
-and it is the half that makes between-round editing real.
+knowingly temporary — it is what `typetag` gives for free. The compiled map
+format is where this stops being acceptable.
 
 ### The transport behind it
 
