@@ -14,7 +14,8 @@ use crate::game::pause_menu::PauseMenuPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::player::{
     fallback_spawn, gather_input, interpolate_bodies, mouse_look, place_camera, spawn_player,
-    give_the_local_body_a_camera, step_player, toggle_view, usable_spawns, write_client_inputs,
+    face_bodies, give_the_local_body_a_camera, step_player, toggle_view, usable_spawns,
+    write_client_inputs,
     InputLatch, LocalPlayer, Player, Spawn, ViewMode,
 };
 use crate::tool::bakes::BakeSystems;
@@ -117,8 +118,15 @@ impl Plugin for GamePlugin {
             ).chain().run_if(in_state(AppMode::Play)))
             // Draws the body between fixed steps, so a 64 Hz simulation does
             // not step visibly on a 144 Hz display.
-            .add_systems(RunFixedMainLoop, interpolate_bodies
-                .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
+            .add_systems(RunFixedMainLoop, (
+                interpolate_bodies,
+                // Beside the interpolation and for the same reason: both are
+                // "put the body where it is drawn this frame", one for
+                // position and one for facing. Every frame rather than every
+                // tick, so a body turning is drawn turning smoothly even
+                // though the yaw behind it only changes at 64 Hz.
+                face_bodies,
+            ).in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
                 .run_if(in_state(AppMode::Play)))
         ;
     }
@@ -760,6 +768,68 @@ mod tests {
         assert!(
             moved.x < -0.3 && moved.z.abs() < 0.1,
             "walked {moved} — forward did not follow the aim"
+        );
+    }
+
+    /// A body we are not aiming for is turned to the yaw it reports.
+    ///
+    /// Nothing used to turn one: `mouse_look` writes the rotation of the body
+    /// `LocalPlayer` marks and stops there, so every other body — a remote
+    /// player on a client, and every client's body on a server — faced
+    /// wherever it spawned however hard its owner was turning. Hitboxes are
+    /// built from the body's transform, so it is not only a drawing problem: a
+    /// shot that visibly lands on a head does not register on one that is
+    /// boxed facing the other way.
+    #[test]
+    fn a_body_we_do_not_aim_for_is_turned_to_where_it_is_looking() {
+        let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
+        enter(&mut app);
+        spawn_a_second_body(&mut app);
+
+        let yaw = std::f32::consts::FRAC_PI_2;
+        let theirs = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, (With<Player>, Without<LocalPlayer>)>();
+            query.single(world).expect("no second body")
+        };
+        // As replication would have delivered it.
+        app.world_mut().get_mut::<Player>(theirs).unwrap().yaw = yaw;
+        app.update();
+
+        assert!(
+            app.world()
+                .get::<Transform>(theirs)
+                .unwrap()
+                .rotation
+                .abs_diff_eq(Quat::from_rotation_y(yaw), 1e-5),
+            "the body was not turned to the yaw it reported"
+        );
+    }
+
+    /// And the body we *are* aiming for is left to `mouse_look`, which has
+    /// already pointed it this frame — turning it again from the stepped yaw
+    /// would throw away the sub-tick aim that makes looking around feel
+    /// immediate.
+    #[test]
+    fn the_local_body_is_left_to_the_mouse() {
+        let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
+        enter(&mut app);
+
+        let mine = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<LocalPlayer>>();
+            query.single(world).expect("no local body")
+        };
+        // A rotation only the mouse could have written: the body's own yaw
+        // still says something else.
+        let aimed = Quat::from_rotation_y(1.2);
+        app.world_mut().get_mut::<Transform>(mine).unwrap().rotation = aimed;
+        app.world_mut().get_mut::<Player>(mine).unwrap().yaw = 0.0;
+        app.world_mut().run_system_once(face_bodies).unwrap();
+
+        assert!(
+            app.world().get::<Transform>(mine).unwrap().rotation.abs_diff_eq(aimed, 1e-5),
+            "the mouse's aim was overwritten by the stepped yaw"
         );
     }
 

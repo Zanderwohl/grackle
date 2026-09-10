@@ -25,6 +25,7 @@ use bevy::transform::TransformSystems;
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::damage::PlayerId;
+use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{
     draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
     direction_of, DisplaySpeed, ForcedAnimation, Gait, Pose, PoseInputs, Proportions, Skeleton,
@@ -90,6 +91,9 @@ impl Plugin for SkeletonPlugin {
                 // After the writers, so a body animates on the situation it is
                 // in this frame rather than last frame's.
                 advance_animators,
+                // And after the animator, editing the pose it left. Ordered by
+                // the `.chain()` below rather than by name.
+                look_with_the_head,
             ).chain())
             // After propagation, so a rig is drawn where its body is now.
             // `interpolate_bodies` has already run by here, so a player's
@@ -305,6 +309,44 @@ fn dress_new_players(mut commands: Commands, players: Query<Entity, Added<Player
     }
 }
 
+/// How much of a body's pitch each joint takes.
+///
+/// Split rather than all on the head, because a head alone at eighty degrees
+/// reads as a broken neck. The neck takes the smaller share and the head the
+/// rest; the sum is one, so a body looking straight up is looking straight up.
+const NECK_SHARE: f32 = 0.4;
+const HEAD_SHARE: f32 = 1.0 - NECK_SHARE;
+
+/// Tilt the head and neck to where the body is looking.
+///
+/// After `advance_animators` and on top of the pose it left, which is the
+/// arrangement `advance_animators` documents for exactly this: the state
+/// machine says what the body is *doing* and this bends two joints on top of
+/// it, so a head-turn does not have to be authored into every animation.
+///
+/// Every body with a `Player`, not only the ones we simulate — `Player.pitch`
+/// is replicated, so this is what makes a remote player visibly look up and
+/// down. Yaw is not here: yaw turns the whole body, which is
+/// [`face_bodies`](crate::game::player::face_bodies)'s job, and a body that
+/// turned its head instead would strafe sideways while facing forwards.
+fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
+    for (player, mut pose) in &mut bodies {
+        if player.pitch == 0.0 && pose.joint(bone::NECK) == Quat::IDENTITY {
+            // Nothing to add and nothing left over from last frame. Skipping
+            // keeps a still body from dirtying its pose every frame.
+            continue;
+        }
+        for (joint, share) in [(bone::NECK, NECK_SHARE), (bone::HEAD, HEAD_SHARE)] {
+            // Composed onto whatever the animation said rather than replacing
+            // it, and in the joint's own frame — a bone's `+Y` runs down its
+            // length, so a rotation about local `X` pitches the face the same
+            // way the camera pitches.
+            let animated = pose.joint(joint);
+            pose.set(joint, animated * Quat::from_rotation_x(player.pitch * share));
+        }
+    }
+}
+
 /// Put each body at its own point in the animation cycle, from its network id.
 ///
 /// Bodies that all bounced on the same frame read as one machine rather than
@@ -407,6 +449,7 @@ pub fn draw_skeletons(
 mod tests {
     use super::*;
     use crate::common::hitbox::Hitboxes;
+    use crate::common::skeleton::rig::{humanoid, Proportions};
     use crate::common::skeleton::AnimationState;
     use bevy::ecs::system::RunSystemOnce;
 
@@ -534,6 +577,67 @@ mod tests {
         assert_eq!(
             app.world().get::<SkeletonAnimator>(body).unwrap().state(),
             AnimationState::Airborne
+        );
+    }
+
+    /// Looking up points the head up.
+    ///
+    /// Asserted on the posed rig rather than on the quaternion, because the
+    /// sign of a rotation about a bone's local axis is exactly the thing that
+    /// is easy to get backwards and impossible to read back from the maths.
+    #[test]
+    fn pitching_up_points_the_face_up() {
+        let skeleton = humanoid(Proportions::DEFAULT);
+
+        let face_at = |pitch: f32| {
+            let mut app = App::new();
+            let body = app
+                .world_mut()
+                .spawn((Player { pitch, ..default() }, Pose::rest()))
+                .id();
+            app.world_mut().run_system_once(look_with_the_head).unwrap();
+            let pose = app.world().get::<Pose>(body).unwrap().clone();
+            let bones = skeleton.posed_bones(&pose, &Transform::IDENTITY);
+            let head = bones
+                .iter()
+                .find(|bone| bone.name == bone::HEAD)
+                .expect("no head on the rig");
+            // A bone's own `-Z` is the way its face points, as the camera's is.
+            head.rotation * Vec3::NEG_Z
+        };
+
+        let level = face_at(0.0);
+        let up = face_at(0.8);
+        let down = face_at(-0.8);
+
+        assert!(level.y.abs() < 1e-3, "a level body is not looking level: {level}");
+        assert!(up.y > 0.5, "looking up did not point the face up: {up}");
+        assert!(down.y < -0.5, "looking down did not point the face down: {down}");
+    }
+
+    /// The head takes the larger share and the neck the rest, and together
+    /// they add up to the whole pitch — a body looking straight up is looking
+    /// straight up, not four fifths of the way there.
+    #[test]
+    fn the_neck_and_the_head_share_the_whole_pitch() {
+        let mut app = App::new();
+        let pitch = 0.9;
+        let body = app
+            .world_mut()
+            .spawn((Player { pitch, ..default() }, Pose::rest()))
+            .id();
+        app.world_mut().run_system_once(look_with_the_head).unwrap();
+
+        let pose = app.world().get::<Pose>(body).unwrap();
+        let angle_of = |joint: &str| pose.joint(joint).to_euler(EulerRot::XYZ).0;
+        let neck = angle_of(bone::NECK);
+        let head = angle_of(bone::HEAD);
+
+        assert!(head > neck, "the neck bent further than the head");
+        assert!(
+            (neck + head - pitch).abs() < 1e-4,
+            "the shares came to {} rather than {pitch}",
+            neck + head
         );
     }
 

@@ -594,6 +594,28 @@ every bug in this area has been a component in the wrong layer.
 | **Description** | `BodyRequests` | `describe_player_bodies` on simulated bodies | replicated |
 | **Presentation** | `Skeleton`, `Pose`, `SkeletonAnimator`, `Gait`, `AnimationPhase`, `SkeletonRoot`, `BodyMesh`, `Hitboxes`, `Ragdoll` | every process, locally | **never** |
 
+**Where a body is looking is `Player.yaw`/`Player.pitch`**, and both ride along
+in the replicated `Player`. Applying them is split across two systems, because
+they do different things to a body:
+
+- `face_bodies` turns the whole body to `yaw`, for every body *except* the one
+  `LocalPlayer` marks — `mouse_look` owns that one and has already pointed it
+  this frame from sub-tick mouse motion. Nothing used to turn the others at
+  all, so a remote player, and every client's body on a server, faced whichever
+  way it spawned for the whole round. That is not only a drawing bug: hitboxes
+  are built from the body's `GlobalTransform`, so a shot that visibly lands on
+  a head does not register on a head boxed facing the other way.
+- `look_with_the_head` bends the neck and head to `pitch`, running after
+  `advance_animators` and composing onto the pose it left — which is the
+  arrangement that system's own docs describe for a look-at. The pitch is split
+  0.4/0.6 between neck and head, because a head alone at eighty degrees reads
+  as a broken neck, and the shares sum to one so straight up is straight up.
+
+`face_bodies` writes the rotation exactly rather than smoothing it. `yaw`
+arrives at the tick rate, the same rate `PhysicsBody` does, so a filter would
+buy slightly less stepping in exchange for hitboxes that lag where the body is
+aiming — and aim is the one thing that must not lag.
+
 **Poses are never transmitted.** A pose is twenty-odd quaternions per body per
 tick and it is the *output* of a state machine that is deterministic and
 present on every machine. What crosses is the machine's input — `BodyRequests`,

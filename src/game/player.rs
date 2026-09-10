@@ -558,6 +558,33 @@ pub fn write_client_inputs(
     latch.0.select = None;
 }
 
+/// Turn every body this machine is not aiming for itself.
+///
+/// `mouse_look` writes the rotation of the one body `LocalPlayer` marks, and
+/// nothing wrote anybody else's — so a body driven from the wire, or another
+/// player's body held by a server, faced whichever way it spawned for the rest
+/// of the round however hard its owner was turning.
+///
+/// It is not only a drawing problem. Hitboxes are built from the body's
+/// `GlobalTransform`, so an unturned body is one whose head is boxed where its
+/// head is not, and a shot that visibly lands does not register.
+///
+/// Written exactly rather than smoothed. `Player.yaw` arrives at the tick rate
+/// — the same rate `PhysicsBody` does — so smoothing it would buy a little
+/// less stepping in exchange for hitboxes that lag where the body is aiming,
+/// and aim is the one thing that must not lag. Real interpolation of a remote
+/// body is the same missing piece for facing as it is for position.
+pub fn face_bodies(mut bodies: Query<(&Player, &mut Transform), Without<LocalPlayer>>) {
+    for (player, mut transform) in &mut bodies {
+        let facing = Quat::from_rotation_y(player.yaw);
+        // Assigned only when it differs, so a body standing still does not
+        // dirty its transform — and everything hanging off it — every frame.
+        if transform.rotation != facing {
+            transform.rotation = facing;
+        }
+    }
+}
+
 /// `F` swaps between looking out of the body and looking at it.
 ///
 /// Only while playing: in the editor the cameras belong to the viewports, and
