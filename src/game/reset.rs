@@ -26,9 +26,9 @@ use crate::common::damage::{DamageLog, Damageable};
 use crate::common::flame::Burning;
 use crate::common::skeleton::{AnimationClock, Gait, SkeletonAnimator};
 use crate::game::damage::DamageNumber;
+use crate::game::player::InputLatch;
 use crate::game::projectile::{Projectile, ProjectileEmitter};
 use crate::game::ragdoll::Ragdoll;
-use crate::game::player::PlayerInput;
 
 /// Everything a new match starts from scratch.
 ///
@@ -39,7 +39,8 @@ use crate::game::player::PlayerInput;
 pub fn reset_for_play(
     mut commands: Commands,
     mut clock: ResMut<AnimationClock>,
-    mut input: ResMut<PlayerInput>,
+    mut latch: ResMut<InputLatch>,
+    role: Option<Res<crate::common::net::NetRole>>,
     mut bodies: Query<(&mut Gait, &mut SkeletonAnimator)>,
     mut health: Query<(&mut Damageable, &mut DamageLog)>,
     numbers: Query<Entity, With<DamageNumber>>,
@@ -53,8 +54,12 @@ pub fn reset_for_play(
     *clock = AnimationClock::default();
 
     // A click or a held key made while editing is not an order to shoot on
-    // spawn. The latch especially: it survives frames on purpose.
-    *input = PlayerInput::default();
+    // spawn. The bodies are new and carry nothing, but the latch is a fact
+    // about the keyboard rather than about a body, so it outlives them both.
+    // Aim is not released with them: `aim_the_view_at_our_body` sets it from
+    // whatever body this round gives us, and zeroing it here would be a spawn
+    // point's facing thrown away a frame before it was read.
+    latch.0.release_controls();
 
     for (mut gait, mut animator) in &mut bodies {
         // Standing still at the start of a stride, in a state rather than part
@@ -63,12 +68,19 @@ pub fn reset_for_play(
         *animator = SkeletonAnimator::default();
     }
 
-    for (mut body, mut log) in &mut health {
-        body.restore();
-        // Who hurt it last match is not who hurt it this match. A stale log
-        // would credit the first kill of a new round to whoever was shooting
-        // when the last one ended.
-        log.clear();
+    // Health is authoritative state and is replicated, so only the process
+    // that owns it puts it back. A client restoring it locally would show
+    // every body at full for the round-trip it takes to be told otherwise —
+    // and if the server never says otherwise, would keep showing it.
+    let authority = role.is_none_or(|role| role.is_authority());
+    if authority {
+        for (mut body, mut log) in &mut health {
+            body.restore();
+            // Who hurt it last match is not who hurt it this match. A stale
+            // log would credit the first kill of a new round to whoever was
+            // shooting when the last one ended.
+            log.clear();
+        }
     }
 
     // Feedback from the last match, hanging in the air over bodies that are
@@ -80,8 +92,14 @@ pub fn reset_for_play(
     // And the bodies themselves. Everything that died last match is alive
     // again by the line above, so a corpse of it would be a second copy of
     // somebody standing a few feet away.
-    for corpse in &corpses {
-        commands.entity(corpse).despawn();
+    //
+    // The authority only: a corpse is replicated, so a client's copies are not
+    // its to remove — the despawn arrives with everything else the server
+    // takes away.
+    if authority {
+        for corpse in &corpses {
+            commands.entity(corpse).despawn();
+        }
     }
 
     // And anything the last match left in the air, along with the emitters
@@ -114,7 +132,11 @@ mod tests {
         let mut clock = AnimationClock::default();
         clock.advance(1.0 / 64.0);
         world.insert_resource(clock);
-        world.insert_resource(PlayerInput { attack: true, jump: true, ..default() });
+        world.insert_resource(InputLatch(crate::game::player::PlayerInput {
+            attack: true,
+            jump: true,
+            ..default()
+        }));
 
         let mut hurt = Damageable::with_health(100);
         hurt.apply(70);
@@ -128,8 +150,9 @@ mod tests {
         world.run_system_once(reset_for_play).unwrap();
 
         assert_eq!(world.resource::<AnimationClock>().ticks(), 0);
-        assert!(!world.resource::<PlayerInput>().attack, "a click made while editing fired on spawn");
-        assert!(!world.resource::<PlayerInput>().jump);
+        let latch = world.resource::<InputLatch>().0;
+        assert!(!latch.attack, "a click made while editing fired on spawn");
+        assert!(!latch.jump);
         assert_eq!(world.get::<Damageable>(body).unwrap().health(), 100);
         assert_eq!(world.get::<DamageLog>(body).unwrap().killer(), None, "last match's shooter carried over");
         assert_eq!(world.query::<&DamageNumber>().iter(&world).count(), 0);

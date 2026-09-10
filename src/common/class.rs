@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
 use crate::common::skeleton::Proportions;
@@ -47,7 +48,7 @@ pub const CROUCH_EYE_HEIGHT: f32 = 0.88;
 /// animation crouches to match. Kept apart from *asking* to crouch, which is a
 /// [`crate::common::skeleton::BodyRequests`] field — a body under a low
 /// ceiling is crouched whether it still wants to be or not.
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, Serialize, Deserialize)]
 pub enum Stance {
     #[default]
     Standing,
@@ -109,8 +110,15 @@ pub fn body_centre_from_feet(feet: Vec3) -> Vec3 {
 ///
 /// The order is the order they are displayed in and nothing more; nothing
 /// persists a class by index.
-#[derive(EnumIter, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// A `Component` as well as an enum, because it is also the answer to "what
+/// shape is this body" — the one thing a viewer needs in order to build a rig
+/// for a body somebody else is driving.
+#[derive(
+    Component, EnumIter, Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Reflect,
+    Serialize, Deserialize,
+)]
 pub enum Class {
+    #[default]
     Scout,
     Soldier,
     Pyro,

@@ -1,23 +1,30 @@
-mod common;
-mod constants;
-mod game;
-mod startup;
-mod editor;
-mod tool;
+//! The `editor` binary: plugin wiring only.
+//!
+//! Everything it wires up comes from the `grackle` library rather than from a
+//! second `mod` tree of its own. That is load-bearing rather than tidiness: a
+//! client and a server that must reach the same position from the same inputs
+//! cannot be two compiled copies of the simulation, each with its own `LANG`
+//! table and its own caches.
 
 use bevy::prelude::*;
 use bevy::window::{ExitCondition, PresentMode};
 use bevy_egui::{EguiPlugin};
 use bevy_vector_shapes::prelude::*;
-use crate::common::lang::{change_lang_or_fallback, default_packs};
-use crate::common::perf::PerfPlugin;
-use crate::editor::editable::EditorStepsPlugin;
-use crate::editor::input::EditorInputPlugin;
-use crate::editor::multicam::MulticamPlugin;
-use crate::editor::panels::EditorPanelPlugin;
-use crate::game::skeleton::SkeletonPlugin;
-use crate::game::GamePlugin;
-use crate::tool::ToolPlugin;
+use grackle::{get, startup};
+use grackle::common::app_mode::StartInPlay;
+use grackle::common::lang::{change_lang_or_fallback, default_packs};
+use grackle::common::net::NetPlugin;
+use grackle::common::net_transport::NetTransportPlugin;
+use grackle::common::perf::PerfPlugin;
+use grackle::editor::editable::EditorStepsPlugin;
+use grackle::editor::input::EditorInputPlugin;
+use grackle::editor::multicam::MulticamPlugin;
+use grackle::editor::net_menu::NetMenuPlugin;
+use grackle::editor::panels::EditorPanelPlugin;
+use grackle::game::net_bodies::NetBodiesPlugin;
+use grackle::game::skeleton::SkeletonPlugin;
+use grackle::game::GamePlugin;
+use grackle::tool::ToolPlugin;
 
 
 fn main() {
@@ -46,6 +53,8 @@ fn main() {
                 close_when_requested: true,
             }),
         )
+        .insert_resource(editor_params.net.clone())
+        .insert_resource(StartInPlay(editor_params.start_playing))
         .add_plugins((
             EguiPlugin::default(),
             Shape2dPlugin::default(),
@@ -57,6 +66,10 @@ fn main() {
         })
         .add_plugins((
             EditorInputPlugin,
+            NetPlugin,
+            NetTransportPlugin,
+            NetBodiesPlugin,
+            NetMenuPlugin,
             MulticamPlugin {
                 test_scene: false,
             },

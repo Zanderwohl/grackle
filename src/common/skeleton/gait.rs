@@ -31,6 +31,7 @@
 //! motion that should not be authored by hand.
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::common::skeleton::rig::{bone, Pose};
 use crate::common::skeleton::state::{AnimationState, PoseInputs};
@@ -331,7 +332,7 @@ impl Gait {
 /// would stand perfectly still. A component rather than a constant because a
 /// grid shows the same state at several speeds on purpose: the upright gait
 /// changes shape as it speeds up, so a walk and a run are two rows of it.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct DisplaySpeed(pub f32);
 
 impl Default for DisplaySpeed {

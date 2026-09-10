@@ -6,6 +6,7 @@ pub mod action;
 pub mod global_point;
 pub mod grackle_point_light;
 pub mod editor_room;
+pub mod net_menu;
 pub mod panels;
 pub mod save;
 pub mod animation_display;

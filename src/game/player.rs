@@ -2,7 +2,9 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::camera::Hdr;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
+use lightyear::prelude::input::native::ActionState;
 
 use crate::common::damage::{Damageable, PlayerId};
 use crate::common::hitbox::Hitboxes;
@@ -65,8 +67,13 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 /// And a [`Loadout`], because a body with nothing to shoot with is a body the
 /// trigger does nothing for — silently, since a missing component simply drops
 /// it out of every weapon's query.
-#[derive(Component, Debug)]
-#[require(Hitboxes, Damageable, Loadout, Trigger)]
+#[derive(Component, Debug, Clone, PartialEq, Reflect, Serialize, Deserialize)]
+// `Transform` and `Visibility` as well, because a body does not always come
+// into being through `spawn_player`: one arriving from the server is built by
+// inserting the replicated components, and a body with children but no
+// transform is a Bevy hierarchy warning per child per frame and a mesh drawn
+// at the origin.
+#[require(Hitboxes, Damageable, Loadout, Trigger, Inputs, Transform, Visibility)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -93,7 +100,13 @@ impl Default for Player {
     }
 }
 
-/// What the body is being asked to do this step.
+/// What one body is being asked to do this step.
+///
+/// **A component on the body, not a resource.** It was a resource while there
+/// was only ever one body being driven, and that is exactly the assumption a
+/// server breaks: a server steps every player from a different set of inputs
+/// in the same tick, so the inputs have to hang off the bodies they belong to.
+/// A global one would step every body from whoever's packet arrived last.
 ///
 /// Gathered once per frame and consumed by the fixed step, rather than each
 /// system reading the keyboard for itself. Two reasons, and the second is the
@@ -104,11 +117,15 @@ impl Default for Player {
 ///   `just_pressed` from inside the fixed step double-counts a press on a slow
 ///   frame and drops it entirely on a fast one. Latching here is what makes a
 ///   tap survive to the next step.
-/// - It is the seam prediction will need. Once there is a server, this struct
-///   is what travels: the same `(state, input, fixed dt)` fed to the same
-///   stepping function has to produce the same position on both ends, and that
-///   is only true if the input is a value rather than a keyboard read.
-#[derive(Resource, Default, Debug, Clone, Copy)]
+/// - It is the seam prediction needs. This struct is what travels: the same
+///   `(state, input, fixed dt)` fed to the same stepping function has to
+///   produce the same position on both ends, and that is only true if the
+///   input is a value rather than a keyboard read.
+///
+/// Because it lives on the body, leaving Play takes it with the body. A click
+/// made while editing cannot fire on the next spawn, because the thing that
+/// would have remembered it no longer exists.
+#[derive(Component, Default, Debug, Clone, Copy, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct PlayerInput {
     /// Movement in the body's own frame: `x` right, `y` forward.
     pub movement: Vec2,
@@ -146,7 +163,98 @@ pub struct PlayerInput {
     /// click made and released between two fixed steps was never held on any
     /// step that ran.
     pub attack_held: bool,
+    /// Where the body is being asked to look, about world Y.
+    ///
+    /// Aim is an input rather than something `mouse_look` writes straight onto
+    /// the body, because the step reads it: which way you are facing decides
+    /// which way "forward" is, and a server that had to guess a client's
+    /// facing could not reproduce its movement. `mouse_look` accumulates here
+    /// at frame rate and the step copies it onto the body.
+    pub yaw: f32,
+    /// Where the body is being asked to look, up and down. Tilts the head
+    /// only — the run direction stays level — and is carried for the same
+    /// reason as `yaw`: a shot goes where the pitch says.
+    pub pitch: f32,
 }
+
+/// What this machine's keyboard and mouse have said since the last tick.
+///
+/// A resource, and correctly so: it is a fact about the peripherals attached
+/// to *this* process, not about any body. It exists because the two clocks
+/// disagree — `ButtonInput` is cleared once per frame while `FixedUpdate` runs
+/// zero, one or several times — so a press has to be accumulated somewhere
+/// that survives frames and is emptied once per tick.
+///
+/// [`gather_input`] fills it at frame rate; [`write_client_inputs`] empties it
+/// into the body's [`Inputs`] once per tick, and that drain is the only place
+/// an edge is consumed. **The step must not consume it**: a predicted tick is
+/// replayed from the same buffered input during rollback, and a step that took
+impl PlayerInput {
+    /// Let go of every control without forgetting where you were looking.
+    ///
+    /// This struct holds two kinds of field and they behave differently when
+    /// nobody is at the keyboard. Movement, sprint, crouch, jump, attack and a
+    /// weapon switch are all things a key is *doing* — held or just pressed —
+    /// and a key held as the pause menu goes up would stay held with nothing
+    /// running to correct it, walking the body into a wall until the menu
+    /// closes.
+    ///
+    /// **Aim is not one of those.** `yaw` and `pitch` are where the player has
+    /// *put* the view, the way a mouse pointer has a position: nothing is
+    /// holding them, and zeroing them on a pause spins you round to face north
+    /// the moment you open the menu.
+    ///
+    /// A new field wants classifying deliberately, which is why this is a
+    /// method that lists them rather than a `..default()` at each call site.
+    pub fn release_controls(&mut self) {
+        *self = PlayerInput {
+            yaw: self.yaw,
+            pitch: self.pitch,
+            ..PlayerInput::default()
+        };
+    }
+}
+
+/// the jump out of it would replay as a step that never jumped.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct InputLatch(pub PlayerInput);
+
+/// The input component a body actually carries.
+///
+/// `ActionState` is Lightyear's wrapper, and using it as the storage rather
+/// than keeping a `PlayerInput` beside it is deliberate. The alternative — our
+/// own component, copied to and from the networked one each tick — is a bridge
+/// that has to be exactly right about *when* it copies, and rollback replays
+/// ticks out of order. One value, written and read in place, has no such
+/// window to get wrong.
+///
+/// It derefs to [`PlayerInput`], so everything downstream reads and writes the
+/// fields as before.
+pub type Inputs = ActionState<PlayerInput>;
+
+/// A body this process steps forward itself.
+///
+/// **Read by exactly one system, `step_player`, and that is the point.** It
+/// was once a marker five systems consulted, which made it a decision each of
+/// them had to make correctly and none of them errored on. Everything else —
+/// weapons, damage, descriptions — is authority-only and asks
+/// `has_authority`, because none of it is predicted: guessing a kill and being
+/// wrong is a body that falls over and stands back up.
+///
+/// A server steps every body, so `spawn_player` adds it. A client steps only
+/// the one it predicts, which is by construction the one it controls, so
+/// `claim_our_own_body` adds it there.
+#[derive(Component, Default, Debug)]
+pub struct Simulated;
+
+/// The one body this machine is driving.
+///
+/// Everything that reads a keyboard or a mouse is looking for this, and
+/// nothing else. In a closed game it is the only body there is; with a server
+/// there are others in the world that must not be steered from local input,
+/// and a system that queried `With<Player>` would drive all of them at once.
+#[derive(Component, Default, Debug)]
+pub struct LocalPlayer;
 
 /// Where the body is at fixed-step boundaries, so rendering can draw between
 /// them.
@@ -155,7 +263,7 @@ pub struct PlayerInput {
 /// `Transform` and never to here. Without that split, a 64 Hz body drawn at
 /// 144 Hz visibly steps — and keeping the previous position around is also
 /// what reconciliation will want when it has to rewind.
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct PhysicsBody {
     pub previous: Vec3,
     pub current: Vec3,
@@ -275,11 +383,36 @@ pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
 /// The yaw goes into `Player` as well as `Transform` because `mouse_look` owns
 /// the rotation from the next frame on and reads the body's yaw to do it —
 /// setting only the transform would be undone on the first mouse movement.
-pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId, team: Team) {
+///
+/// **Does not mark the body as [`LocalPlayer`].** A server spawns a body for
+/// every player in the match and drives none of them; whose body it is, is a
+/// separate question answered by whoever knows — `enter_play` for a solo game
+/// or a host, `claim_our_own_body` for a client. Marking it here made every
+/// body on a server the local one, which reads as a pile of unrelated
+/// symptoms: `gather_input` is a `Single`, so the host stopped being able to
+/// move the moment somebody joined; `hide_own_body` hid every body in the
+/// match; and every body was given its own camera.
+///
+/// It *does* mark the body [`Simulated`], because whoever spawns a body steps
+/// it.
+pub fn spawn_player(
+    commands: &mut Commands,
+    spawn: Spawn,
+    id: PlayerId,
+    team: Team,
+) -> Entity {
     let position = body_centre_from_feet(spawn.feet);
     commands
         .spawn((
             Player { yaw: spawn.yaw, ..default() },
+            // Whoever stands a body up steps it. On a client that is nothing:
+            // its own body is marked where it is claimed, and the rest belong
+            // to the server.
+            Simulated,
+            // Seeded rather than left at zero: the step copies aim off the
+            // input, so a body spawned facing east would snap north on its
+            // first step if the input still said zero.
+            ActionState(PlayerInput { yaw: spawn.yaw, ..default() }),
             id,
             team,
             Stance::default(),
@@ -288,34 +421,80 @@ pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId, team: T
             Visibility::default(),
             Name::new("Player"),
         ))
-        .with_children(|body| {
-            body.spawn((
-                PlayerCamera,
-                Camera3d::default(),
-                Camera {
-                    order: PLAY_CAMERA_ORDER,
-                    ..default()
-                },
-                Hdr,
-                Tonemapping::TonyMcMapface,
-                Projection::Perspective(PerspectiveProjection {
-                    fov: FIELD_OF_VIEW,
-                    ..default()
-                }),
-                Transform::from_xyz(0.0, EYE_OFFSET, 0.0),
-            ));
-        });
+        .id()
 }
 
-/// Read the keyboard into [`PlayerInput`], once per frame.
+/// Hang a camera off whichever body this machine is looking out of.
+///
+/// Keyed on `LocalPlayer` rather than done in [`spawn_player`], because on a
+/// client the body is not spawned here at all: it arrives from the server and
+/// is marked local when it turns out to be ours. A camera is a fact about who
+/// is watching, so it belongs with the mark and not with the body.
+pub fn spawn_the_view(
+    mut commands: Commands,
+    bodies: Query<Entity, Added<LocalPlayer>>,
+    existing: Query<(), With<PlayerCamera>>,
+) {
+    if bodies.is_empty() || !existing.is_empty() {
+        return;
+    }
+    commands.spawn((
+        PlayerCamera,
+        // The window has five cameras in it — four editor viewports and this —
+        // and Bevy UI picks one by ambiguity rules rather than by asking.
+        bevy::ui::IsDefaultUiCamera,
+        Camera3d::default(),
+        Camera { order: PLAY_CAMERA_ORDER, ..default() },
+        Hdr,
+        Tonemapping::TonyMcMapface,
+        Projection::Perspective(PerspectiveProjection {
+            fov: FIELD_OF_VIEW,
+            ..default()
+        }),
+        Transform::default(),
+        Name::new("View"),
+    ));
+}
+
+/// Point the view where our new body is already looking.
+///
+/// A body knows its facing before this machine does: on a host it comes from
+/// the spawn point, and on a client it arrives from the server. The latch is
+/// what the view is aimed from and what the next tick sends, so a latch left
+/// at zero snaps the body round to face north on the first input it sends —
+/// which is a spawn point's facing being quietly ignored.
+///
+/// On `Added<LocalPlayer>`, so one rule covers a fresh round, a respawn, and a
+/// client being handed a body, without any of them knowing about the others.
+pub fn aim_the_view_at_our_body(
+    mut latch: ResMut<InputLatch>,
+    ours: Query<&Player, Added<LocalPlayer>>,
+) {
+    for body in &ours {
+        latch.0.yaw = body.yaw;
+        latch.0.pitch = body.pitch;
+    }
+}
+
+/// Take the view away with the round.
+pub fn despawn_the_view(mut commands: Commands, cameras: Query<Entity, With<PlayerCamera>>) {
+    for camera in &cameras {
+        commands.entity(camera).despawn();
+    }
+}
+
+/// Read the keyboard into [`InputLatch`], once per frame.
 ///
 /// Runs before the fixed loop so a press is available to the steps taken in
-/// the same frame it happened, rather than a frame late.
+/// the same frame it happened, rather than a frame late. Writes the latch
+/// rather than the body, because the body's input belongs to a tick and this
+/// runs on frames.
 pub fn gather_input(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
-    mut input: ResMut<PlayerInput>,
+    mut latch: ResMut<InputLatch>,
 ) {
+    let input = &mut latch.0;
     let mut movement = Vec2::ZERO;
     if keys.pressed(KeyCode::KeyW) {
         movement.y += 1.0;
@@ -359,34 +538,75 @@ pub fn gather_input(
     input.crouch = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
 }
 
-/// Turn mouse movement into yaw on the body and pitch on the camera.
+/// Read the mouse into the latch, once per frame.
 ///
-/// Stays at frame rate rather than moving into the fixed step: sampling aim at
-/// 64 Hz is latency you can feel, and looking around changes nothing the
-/// physics has to agree with a server about.
-pub fn mouse_look(
+/// Aim is an input like any other and goes to exactly one place — nothing here
+/// touches a body or a camera. What that buys is that a body's facing has one
+/// writer anywhere in the system: the step, on the machine that owns it. There
+/// is no version of "the view already turned but the body has not" to get
+/// wrong.
+///
+/// Not gated on the pause menu, but it checks: a `MessageReader` has its own
+/// cursor, so a frame this does not run is a frame of mouse motion still
+/// waiting. Gated, closing the menu would apply every scrap of motion made
+/// while it was up in one frame and spin the view.
+pub fn gather_aim(
     mut motion: MessageReader<MouseMotion>,
-    mut players: Query<(&mut Player, &mut Transform)>,
-    mut cameras: Query<&mut Transform, (With<PlayerCamera>, Without<Player>)>,
+    paused: Option<Res<crate::game::pause_menu::PauseMenu>>,
+    mut latch: ResMut<InputLatch>,
 ) {
+    // Drained first, whatever happens next: what is not read now is read
+    // later, and later is the wrong frame.
     let delta: Vec2 = motion.read().map(|event| event.delta).sum();
-    if delta == Vec2::ZERO {
+    if paused.is_some_and(|menu| menu.open) || delta == Vec2::ZERO {
         return;
     }
+    let input = &mut latch.0;
+    input.yaw -= delta.x * MOUSE_SENSITIVITY;
+    input.pitch = (input.pitch - delta.y * MOUSE_SENSITIVITY).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+}
 
-    let mut pitch = None;
-    for (mut player, mut transform) in &mut players {
-        player.yaw -= delta.x * MOUSE_SENSITIVITY;
-        player.pitch = (player.pitch - delta.y * MOUSE_SENSITIVITY).clamp(-PITCH_LIMIT, PITCH_LIMIT);
-        transform.rotation = Quat::from_rotation_y(player.yaw);
-        pitch = Some(player.pitch);
-    }
+/// Empty the frame-rate latch into the local body's input for this tick.
+///
+/// The one place an edge is consumed. Level fields — movement, sprint, aim —
+/// are carried across, since the peripherals are re-read every frame and the
+/// latest reading is the right one. Edges are taken, so that one press is one
+/// tick's worth of press however many frames it spanned.
+///
+/// Runs in `FixedPreUpdate`, in Lightyear's `WriteClientInputs` set, because
+/// what is written here is what gets buffered and sent to the server.
+pub fn write_client_inputs(
+    mut latch: ResMut<InputLatch>,
+    input: Option<Single<&mut Inputs, With<LocalPlayer>>>,
+) {
+    let Some(input) = input else { return };
+    let mut input = input.into_inner();
+    input.0 = latch.0;
 
-    // Yaw turns the body, pitch tilts only the head — so the run direction
-    // stays level however far up or down you are looking.
-    if let Some(pitch) = pitch {
-        for mut camera in &mut cameras {
-            camera.rotation = Quat::from_rotation_x(pitch);
+    latch.0.jump = false;
+    latch.0.attack = false;
+    latch.0.select = None;
+}
+
+/// Turn every body to the yaw it is carrying.
+///
+/// **Every** body, our own included. `Player.yaw` is written by the step on
+/// the machine that owns it and by replication everywhere else, so there is
+/// one value and this is the one place it reaches a transform. The alternative
+/// — the local body turned by the mouse and everybody else's by their yaw —
+/// is two writers for one thing, and two writers is how the two ends came to
+/// disagree about which way somebody was looking.
+///
+/// It is not only a drawing question. Hitboxes are built from the body's
+/// `GlobalTransform`, so an unturned body has its head boxed where its head is
+/// not, and a shot that visibly lands does not register.
+pub fn face_bodies(mut bodies: Query<(&Player, &mut Transform)>) {
+    for (player, mut transform) in &mut bodies {
+        let facing = Quat::from_rotation_y(player.yaw);
+        // Assigned only when it differs, so a body standing still does not
+        // dirty its transform — and everything hanging off it — every frame.
+        if transform.rotation != facing {
+            transform.rotation = facing;
         }
     }
 }
@@ -405,57 +625,59 @@ pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<ViewMode>) 
     };
 }
 
-/// Put the camera where the current [`ViewMode`] says.
+/// Put the view where the local body is, looking where the latch says.
 ///
-/// Runs at frame rate beside [`mouse_look`], which owns the camera's rotation;
-/// this owns its position. Splitting them is what lets the third-person camera
-/// swing with the pitch that was just written without either system having to
-/// know when the other ran.
+/// The camera is **not a child of the body** and takes nothing from it but a
+/// position. Its rotation comes straight from this machine's own aim, so
+/// looking around is instant however far behind the server the body's facing
+/// happens to be — which is the one thing that must never wait for a
+/// round-trip. It is also the whole reason the camera is a separate entity: as
+/// a child it would inherit the body's rotation and the view would lag.
+///
+/// **Runs after `interpolate_bodies`, not before the fixed loop.** It reads
+/// where the body is, so it has to run after the thing that decides where the
+/// body is this frame. Placed earlier it sits a whole frame behind, and
+/// anything drawn from the body's own position — the debug laser, most
+/// visibly — comes out of a point the view is no longer at.
 pub fn place_camera(
     mode: Res<ViewMode>,
     world: Res<CollisionWorld>,
-    players: Query<(&Transform, &Stance), (With<Player>, Without<PlayerCamera>)>,
+    latch: Res<InputLatch>,
+    body: Option<Single<(&Transform, &Stance), (With<LocalPlayer>, Without<PlayerCamera>)>>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
-    let Ok((body, stance)) = players.single() else { return };
+    let Some(body) = body else { return };
+    let (body, stance) = body.into_inner();
     // Ducking lowers the eye, and it lowers what the third-person camera
     // orbits with it — otherwise crouching would swing the view around a point
     // above the body's own head.
     let eye = stance.eye_offset();
+    let aim = Quat::from_rotation_y(latch.0.yaw) * Quat::from_rotation_x(latch.0.pitch);
+    let pivot = body.translation + Vec3::Y * eye;
 
     for mut camera in &mut cameras {
+        camera.rotation = aim;
         camera.translation = match *mode {
-            ViewMode::FirstPerson => Vec3::Y * eye,
-            ViewMode::ThirdPerson => third_person_camera(body, camera.rotation, eye, &world),
+            ViewMode::FirstPerson => pivot,
+            ViewMode::ThirdPerson => third_person_camera(pivot, aim, &world),
         };
     }
 }
 
-/// Where the third-person camera sits, in the body's own frame.
+/// Where the third-person camera sits, in world space.
 ///
 /// Behind the head along the direction the view is pointing, so pitching up
 /// swings it down and vice versa — and pulled in short of anything solid, so
 /// backing into a wall does not put the camera inside it and show the player
 /// the world from the other side of the map.
-pub fn third_person_camera(
-    body: &Transform,
-    pitch: Quat,
-    eye: f32,
-    world: &CollisionWorld,
-) -> Vec3 {
-    let pivot = Vec3::Y * eye;
-    let wanted = pivot + pitch * Vec3::Z * THIRD_PERSON_DISTANCE;
-
-    // Swept in world space, because that is where the walls are.
-    let pivot_world = body.transform_point(pivot);
-    let wanted_world = body.transform_point(wanted);
-    let (stopped, _) = world.move_and_slide(
-        pivot_world,
-        Vec3::splat(CAMERA_RADIUS),
-        wanted_world - pivot_world,
-    );
-
-    body.to_matrix().inverse().transform_point3(stopped)
+///
+/// World space throughout, now that the camera is its own entity: it used to
+/// answer in the body's frame and be converted back, which was a conversion
+/// that existed only because of the parenting.
+pub fn third_person_camera(pivot: Vec3, aim: Quat, world: &CollisionWorld) -> Vec3 {
+    let wanted = pivot + aim * Vec3::Z * THIRD_PERSON_DISTANCE;
+    let (stopped, _) = world.move_and_slide(pivot, Vec3::splat(CAMERA_RADIUS), wanted - pivot);
+    stopped
 }
 
 /// Walk, fall, jump, and stop at walls — one fixed step.
@@ -467,19 +689,25 @@ pub fn third_person_camera(
 /// same `dt` give the same answer on both.
 pub fn step_player(
     time: Res<Time>,
-    mut input: ResMut<PlayerInput>,
     world: Res<CollisionWorld>,
-    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance)>,
+    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance, &Inputs), With<Simulated>>,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {
         return;
     }
 
-    // Taken, not read: the latch is per step, so a press cannot fire twice.
-    let jump = std::mem::take(&mut input.jump);
+    for (mut player, mut body, mut stance, input) in &mut players {
+        // Read, never taken. The edge was already consumed by
+        // `write_client_inputs` when it filled this tick's input; a step that
+        // took it would empty the buffer the input layer sends from.
+        let jump = input.jump;
 
-    for (mut player, mut body, mut stance) in &mut players {
+        // Aim arrives as input and is written onto the body here. This is the
+        // only place a body's facing is decided, on the only machine that
+        // decides anything, and `face_bodies` draws every body from it.
+        player.yaw = input.yaw;
+        player.pitch = input.pitch;
         change_stance(&mut stance, &mut body, player.on_ground, input.crouch, &world);
         let half = stance.half_extents();
         // Movement is in the body's frame, so turning turns the run direction.
@@ -600,12 +828,12 @@ mod tests {
     }
 
     /// Behind the head, at the distance asked for, when there is nothing in
-    /// the way. Local `+Z` is behind a body that faces `-Z`.
+    /// the way. `+Z` is behind a view that faces `-Z`.
     #[test]
     fn the_third_person_camera_sits_behind_the_head() {
-        let body = Transform::from_xyz(0.0, 1.0, 0.0);
         let eye = Stance::Standing.eye_offset();
-        let camera = third_person_camera(&body, Quat::IDENTITY, eye, &open_room());
+        let pivot = Vec3::Y * eye;
+        let camera = third_person_camera(pivot, Quat::IDENTITY, &open_room());
 
         assert!((camera.y - eye).abs() < 1e-3, "at height {}", camera.y);
         assert!((camera.z - THIRD_PERSON_DISTANCE).abs() < 1e-3, "at {} behind", camera.z);
@@ -620,13 +848,14 @@ mod tests {
     /// distance — which is the behaviour the next test is about, not this one.
     #[test]
     fn looking_up_swings_the_camera_down() {
-        let body = Transform::from_xyz(0.0, 1.0, 0.0);
         let world = open_room();
-        let eye = Stance::Standing.eye_offset();
-        let pivot = Vec3::Y * eye;
+        // Well clear of the floor: pitched up, the camera swings down, and one
+        // that reached the floor would be pulled in by the sweep instead of
+        // keeping its distance — which is the *next* test's business.
+        let pivot = Vec3::new(0.0, 3.0, 0.0);
 
-        let level = third_person_camera(&body, Quat::IDENTITY, eye, &world);
-        let looking_up = third_person_camera(&body, Quat::from_rotation_x(0.3), eye, &world);
+        let level = third_person_camera(pivot, Quat::IDENTITY, &world);
+        let looking_up = third_person_camera(pivot, Quat::from_rotation_x(0.3), &world);
 
         assert!(looking_up.y < level.y, "the camera did not drop: {} then {}", level.y, looking_up.y);
         assert!(
@@ -641,13 +870,14 @@ mod tests {
     fn a_wall_behind_pulls_the_camera_in() {
         let world = open_room();
         // Close enough to the +Z wall that the camera cannot have its distance.
-        let body = Transform::from_xyz(0.0, 1.0, 8.0);
-        let camera = third_person_camera(&body, Quat::IDENTITY, Stance::Standing.eye_offset(), &world);
+        let pivot = Vec3::new(0.0, Stance::Standing.eye_offset(), 8.0);
+        let camera = third_person_camera(pivot, Quat::IDENTITY, &world);
+        let behind = camera.z - pivot.z;
 
-        assert!(camera.z < THIRD_PERSON_DISTANCE, "the camera kept its distance at {}", camera.z);
-        assert!(camera.z > 0.0, "the camera ended up in front of the body at {}", camera.z);
+        assert!(behind < THIRD_PERSON_DISTANCE, "the camera kept its distance at {behind}");
+        assert!(behind > 0.0, "the camera ended up in front of the body at {behind}");
         assert!(
-            world.inside_map(body.transform_point(camera)),
+            world.inside_map(camera),
             "the camera ended up outside the map"
         );
     }
@@ -658,11 +888,14 @@ mod tests {
     fn first_person_puts_the_camera_at_the_eye() {
         let mut app = App::new();
         app.init_resource::<ViewMode>();
+        app.init_resource::<InputLatch>();
         app.insert_resource(open_room());
+        let body = Vec3::new(0.0, 1.0, 0.0);
         app.world_mut().spawn((
             Player::default(),
+            LocalPlayer,
             Stance::Standing,
-            Transform::from_xyz(0.0, 1.0, 0.0),
+            Transform::from_translation(body),
         ));
         let camera = app
             .world_mut()
@@ -671,11 +904,43 @@ mod tests {
 
         app.world_mut().run_system_once(place_camera).unwrap();
 
+        // World space, not the body's frame: the camera is its own entity and
+        // inherits nothing.
         let placed = app.world().get::<Transform>(camera).unwrap().translation;
-        assert_eq!(placed, Vec3::Y * Stance::Standing.eye_offset());
+        let eye = Stance::Standing.eye_offset();
+        assert_eq!(placed, body + Vec3::Y * eye);
         assert!(
-            (placed.y + PLAYER_HALF.y - TALLEST_CLASS_EYE_HEIGHT).abs() < 1e-5,
+            (eye + PLAYER_HALF.y - TALLEST_CLASS_EYE_HEIGHT).abs() < 1e-5,
             "the eye is not where the class says it is"
+        );
+    }
+
+    /// The view is aimed from this machine's own latch and from nothing else.
+    ///
+    /// That is what lets looking around stay instant while the body it is
+    /// standing in is a round-trip behind: the two are simply not connected.
+    #[test]
+    fn the_view_is_aimed_by_the_latch_not_by_the_body() {
+        let mut app = App::new();
+        app.init_resource::<ViewMode>();
+        app.insert_resource(open_room());
+        let yaw = 1.1;
+        app.insert_resource(InputLatch(PlayerInput { yaw, ..default() }));
+        app.world_mut().spawn((
+            // The body says it is facing somewhere else entirely.
+            Player { yaw: -2.0, ..default() },
+            LocalPlayer,
+            Stance::Standing,
+            Transform::from_rotation(Quat::from_rotation_y(-2.0)),
+        ));
+        let camera = app.world_mut().spawn((PlayerCamera, Transform::default())).id();
+
+        app.world_mut().run_system_once(place_camera).unwrap();
+
+        let aimed = app.world().get::<Transform>(camera).unwrap().rotation;
+        assert!(
+            aimed.abs_diff_eq(Quat::from_rotation_y(yaw), 1e-5),
+            "the view took its aim from the body rather than from the latch"
         );
     }
 

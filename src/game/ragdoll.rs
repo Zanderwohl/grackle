@@ -74,8 +74,11 @@
 //! on a corpse that this module raised a moment earlier in the same tick.
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
+use crate::common::net::has_authority;
+use crate::common::skeleton::rig::{humanoid, Proportions};
 use crate::common::damage::{falloff, Damageable};
 use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
@@ -83,7 +86,7 @@ use crate::common::team::Team;
 use crate::game::body_mesh::BodyTint;
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
-use crate::game::death::{reap_the_dead, record_damage};
+use crate::game::death::{announce_the_dead, reap_the_dead, Dying};
 use crate::game::player::{PhysicsBody, GRAVITY};
 use crate::game::skeleton::{skeleton_root, SkeletonRoot};
 
@@ -93,7 +96,13 @@ use crate::game::skeleton::{skeleton_root, SkeletonRoot};
 /// Game time rather than wall time, so corpses do not quietly rot while
 /// somebody is in the editor between rounds. A gamemode's number in the end,
 /// like every other duration in the damage layer.
-pub const RAGDOLL_LIFETIME: f32 = 20.0;
+///
+/// **A corpse's clock is its own, and nothing else stops it.** In particular
+/// it is not tied to the body that left it: respawning is immediate, so a
+/// corpse cleared when its owner came back would be a corpse nobody ever saw.
+/// A player standing over their own body is the correct picture, and the only
+/// thing that ends it early is the round itself.
+pub const RAGDOLL_LIFETIME: f32 = 10.0;
 
 /// How many times the constraints are solved per tick.
 ///
@@ -183,7 +192,7 @@ const POINT_RADIUS: (f32, f32) = (0.04, 0.14);
 /// bone away from it. Written as a directed shove with a wide radius, an
 /// explosion under a corpse's feet slides it sideways rather than throwing it
 /// up, which is the whole of what a rocket looks like.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Push {
     /// A fixed direction, at this speed — a bullet, a punch, a moving floor.
     /// The vector's length is the speed at the centre.
@@ -201,7 +210,7 @@ pub enum Push {
 /// knocked to, in metres per second, and not an impulse to be divided by a
 /// mass. See the module docs for why a corpse is deliberately not a momentum
 /// simulation.
-#[derive(Message, Clone, Copy, Debug, PartialEq)]
+#[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RagdollShove {
     /// Where the push came from, in world space.
     pub at: Vec3,
@@ -213,8 +222,20 @@ pub struct RagdollShove {
     pub radius: f32,
 }
 
+/// What a corpse was built from.
+///
+/// The nine numbers a rig is derived from, taken off the dying body's own
+/// [`Skeleton`] and sent with the seed. A `Skeleton` is presentation and never
+/// crosses the wire; this is the description it is rebuilt from, and taking it
+/// from the rig rather than from a class is what makes it work for every body
+/// there is. A player's body has no [`Class`](crate::common::class::Class) at
+/// all — it is rigged from `Proportions::DEFAULT` — so a corpse that asked for
+/// one was a corpse nobody but the authority could ever draw.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CorpseBuild(pub Proportions);
+
 /// A corpse.
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct Ragdoll {
     /// Two per bone, in [`Skeleton::bones`] order: `2i` is bone `i`'s head and
     /// `2i + 1` its tail. An index rather than a name because this is walked
@@ -274,7 +295,7 @@ pub struct Ragdolled;
 /// is what makes a constraint that moves a point *be* a change in its velocity
 /// — a leg straightened by its own length constraint pushes off the floor,
 /// with nothing written to make it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct Point {
     at: Vec3,
     previous: Vec3,
@@ -696,21 +717,59 @@ impl Plugin for RagdollPlugin {
             //    `DamageSystems::Deal` rather than against one weapon.
             // 3. `step_ragdolls` last, so a shove is taken on the tick it
             //    arrived rather than the one after.
+            // The queue this reads. `DamagePlugin` registers it too and
+            // `add_message` is idempotent; stating it here as well is what
+            // lets the corpses be assembled without the damage layer, which
+            // several tests do.
             .add_systems(FixedUpdate, (
-                raise_ragdolls.after(record_damage).before(reap_the_dead),
+                // The authority makes the corpse; everybody else is sent one.
+                raise_ragdolls
+                    .after(announce_the_dead)
+                    .before(reap_the_dead)
+                    .run_if(has_authority),
                 shove_ragdolls.after(DamageSystems::Deal),
                 step_ragdolls,
+                // Only the authority takes one away, for the same reason.
+                retire_ragdolls.run_if(has_authority),
             ).chain().run_if(in_state(AppMode::Play)))
+            // Not on the tick and not gated on the mode: a corpse arrives from
+            // the wire whenever the wire delivers it, and it has no rig until
+            // this has run.
+            .add_systems(Update, dress_corpses_from_elsewhere)
+            .add_systems(Update, hide_the_dying)
             // Corpses belong to the match. F5 back to the editor and a body
             // lying across the room you are trying to resize is in the way of
             // the thing you went there to do.
-            .add_systems(OnExit(AppMode::Play), clear_ragdolls)
+            .add_systems(OnExit(AppMode::Play), clear_ragdolls.run_if(has_authority))
         ;
     }
 }
 
 /// Make a corpse of anything that has run out of health and had a body to
 /// lose.
+///
+/// **The authority raises it and everybody else is sent it.** A corpse is a
+/// prop that used to be a person, and that is the whole argument: nothing can
+/// touch one, nothing collides with one — not even another corpse — and it
+/// takes no input. So it is replicated the way any other prop in the world
+/// would be, which costs one spawn and settles the question that four other
+/// arrangements could not.
+///
+/// The one that this replaces is worth writing down, because it looks right.
+/// A corpse *could* be a local reaction to a replicated fact — this body's
+/// health reached zero — with every machine raising its own. That fails on
+/// ordering rather than on physics: the fact and the despawn that follows it
+/// travel together, and a viewer only ever learns of the death from the body
+/// itself, which is by then a body that has gone. Every attempt to widen that
+/// window — a `Died` message, a marker component, a tick of grace — is a race
+/// being made narrower rather than a race being removed.
+///
+/// What crosses is the **seed**, not the simulation: [`Ragdoll`] is
+/// `replicate_once`, so the points are sent at the moment of death and never
+/// again, and each machine runs the same solver over them from there. That is
+/// what makes this affordable — twenty bones of physics per corpse once, not
+/// per tick. Where the two ends drift apart is which way an arm flopped, and
+/// nobody can tell.
 ///
 /// The query is the whole of the rule the user of this module cares about: a
 /// [`Skeleton`] and a [`Damageable`] at zero. A crate has health and no
@@ -723,7 +782,6 @@ pub fn raise_ragdolls(
     bodies: Query<
         (
             Entity,
-            &Damageable,
             &Skeleton,
             &Pose,
             &GlobalTransform,
@@ -733,14 +791,10 @@ pub fn raise_ragdolls(
             Option<&PhysicsBody>,
             Option<&Name>,
         ),
-        Without<Ragdolled>,
+        (Added<Dying>, Without<Ragdolled>),
     >,
 ) {
-    for (entity, health, skeleton, pose, global, offset, tint, team, physics, name) in &bodies {
-        if health.is_alive() {
-            continue;
-        }
-
+    for (entity, skeleton, pose, global, offset, tint, team, physics, name) in &bodies {
         // The step's own displacement rather than a velocity in metres per
         // second, because that is the unit the solver keeps: how far a point
         // moved on the last tick.
@@ -771,11 +825,62 @@ pub fn raise_ragdolls(
             // floor: a pile of corpses is how you read which way a fight went,
             // and a corpse that reverted to the default grey would erase that.
             // Not a live body — nothing asks a corpse's team a question, and
-            // it has no `Damageable` to be spared by one.
+            // it has no `Damageable` to be spared by one. Replicated, so it
+            // reads the same colour on every machine.
             corpse.insert(*team);
         }
 
+        // The build, so a viewer can put the rig back. Read off the rig the
+        // body actually had, which is the only description that cannot
+        // disagree with it.
+        corpse.insert(CorpseBuild(skeleton.proportions()));
+
         commands.entity(entity).insert(Ragdolled);
+    }
+}
+
+/// Build the rig for a corpse that arrived from somewhere else.
+///
+/// The mirror of [`dress_bodies_from_elsewhere`](crate::game::skeleton) and
+/// deliberately not the same system: what a corpse must never be given is a
+/// `SkeletonAnimator`, and that is the first thing dressing a living body
+/// hands out. The solver owns a corpse's pose.
+///
+/// Posed here rather than left to the first solve, for the same reason the
+/// authority poses it at the moment of death: a corpse drawn for one frame
+/// standing at the origin in its rest pose is a body that appears to die
+/// twice.
+///
+/// **Asked as an absence, not as an arrival.** The obvious filter is
+/// `Added<Ragdoll>`, and it is wrong: the seed and the build are two
+/// components on one entity and replication does not promise to deliver them
+/// in the same packet. Keyed on the arrival of the seed, a corpse whose build
+/// came a tick later is never dressed at all — three in eight, measured — and
+/// the symptom is an invisible corpse rather than an error. A corpse with no
+/// rig is the thing to react to, however it came to be one.
+pub fn dress_corpses_from_elsewhere(
+    mut commands: Commands,
+    corpses: Query<(Entity, &Ragdoll, &CorpseBuild), Without<Skeleton>>,
+) {
+    for (entity, ragdoll, build) in &corpses {
+        let skeleton = humanoid(build.0);
+        let (transform, pose) = ragdoll.pose(&skeleton);
+        commands
+            .entity(entity)
+            .insert((skeleton, pose, transform, Visibility::default()));
+    }
+}
+
+/// Hide a body that has died, on every machine alike.
+///
+/// A body outlives its own death by a tick — that gap is what gives the
+/// corpse's spawn a turn on the wire ahead of the body's despawn — and
+/// without this it stands upright inside its own corpse for as long as that
+/// takes. Keyed on [`Dying`] rather than done by `raise_ragdolls`, because
+/// that runs on the authority only and this is true everywhere.
+pub fn hide_the_dying(mut commands: Commands, dying: Query<Entity, Added<Dying>>) {
+    for body in &dying {
+        commands.entity(body).insert(Visibility::Hidden);
     }
 }
 
@@ -810,15 +915,13 @@ pub fn shove_ragdolls(
 /// steps everything else that decides where a body ends up is, and so it does
 /// not age while the game is paused in the editor.
 pub fn step_ragdolls(
-    mut commands: Commands,
     time: Res<Time<Fixed>>,
     world: Res<CollisionWorld>,
-    mut corpses: Query<(Entity, &mut Ragdoll, &Skeleton, &mut Transform, &mut Pose)>,
+    mut corpses: Query<(&mut Ragdoll, &Skeleton, &mut Transform, &mut Pose)>,
 ) {
     let dt = time.delta_secs();
-    for (entity, mut corpse, skeleton, mut transform, mut pose) in &mut corpses {
+    for (mut corpse, skeleton, mut transform, mut pose) in &mut corpses {
         if corpse.age() >= RAGDOLL_LIFETIME {
-            commands.entity(entity).despawn();
             continue;
         }
 
@@ -833,6 +936,21 @@ pub fn step_ragdolls(
         let (placed, shape) = corpse.pose(skeleton);
         *transform = placed;
         *pose = shape;
+    }
+}
+
+/// Take away every corpse that has lain there long enough.
+///
+/// Split out of the step so it can be the authority's alone. A corpse is a
+/// replicated entity, so a client counting down its own lifetime would be
+/// removing something that is not its to remove — and would do it at a
+/// slightly different moment, since its copy started ageing when the spawn
+/// arrived rather than when the body died.
+pub fn retire_ragdolls(mut commands: Commands, corpses: Query<(Entity, &Ragdoll)>) {
+    for (entity, corpse) in &corpses {
+        if corpse.age() >= RAGDOLL_LIFETIME {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -1278,12 +1396,13 @@ mod tests {
         );
     }
 
-    /// The rule the rest of the game sees: a skeleton plus health at zero.
-    /// Everything below is that sentence taken apart.
+    /// The rule the rest of the game sees: a death was announced, and the
+    /// thing it names has a skeleton to copy. Everything below is that
+    /// sentence taken apart.
     fn a_dead_body(world: &mut World, extras: impl Bundle) -> Entity {
         let mut health = Damageable::with_health(100);
         health.apply(100);
-        world
+        let body = world
             .spawn((
                 health,
                 DamageLog::default(),
@@ -1293,7 +1412,16 @@ mod tests {
                 GlobalTransform::default(),
                 extras,
             ))
-            .id()
+            .id();
+        announce(world, body);
+        body
+    }
+
+    /// Say it died, the way `announce_the_dead` would — or the way
+    /// replication would, on a machine that did not decide it. The same
+    /// component either way, which is the point of putting it on the wire.
+    fn announce(world: &mut World, victim: Entity) {
+        world.entity_mut(victim).insert(Dying);
     }
 
     fn corpses(world: &mut World) -> usize {
@@ -1318,16 +1446,20 @@ mod tests {
         let mut world = World::new();
         let mut health = Damageable::with_health(20);
         health.apply(20);
-        world.spawn((health, DamageLog::default(), Transform::IDENTITY, GlobalTransform::default()));
+        let crate_entity = world
+            .spawn((health, DamageLog::default(), Transform::IDENTITY, GlobalTransform::default()))
+            .id();
+        announce(&mut world, crate_entity);
         world.run_system_once(raise_ragdolls).unwrap();
 
         assert_eq!(corpses(&mut world), 0);
     }
 
-    /// And a body is not enough either: a spawn point's preview is a rig with
-    /// no health, and there is nothing that could kill it.
+    /// And a body nobody announced is left standing. A spawn point's preview
+    /// is a rig that nothing can kill, and an unannounced body is one nothing
+    /// has killed *yet* — neither should be lying on the floor.
     #[test]
-    fn a_living_body_is_left_standing() {
+    fn a_body_nobody_announced_is_left_standing() {
         let mut world = World::new();
         world.spawn((
             Damageable::with_health(100),
@@ -1435,6 +1567,172 @@ mod tests {
             corpses.single(&world).unwrap().bone_points(0).0
         };
         assert!(moved.x > raised.x + 0.001, "the shot did not move the corpse: {raised} -> {moved}");
+    }
+
+    /// A client makes no corpse of its own, and hides the body it is told
+    /// died.
+    ///
+    /// **A death is always a despawn**, and every arrangement where a viewer
+    /// raises its own corpse from the fact that a body died is a race against
+    /// that despawn: the fact and the removal arrive together, and the pose
+    /// there was to copy has gone. So the corpse is a prop and it is sent —
+    /// nothing can touch one, nothing collides with one, and it takes no
+    /// input, so what a viewer needs is the seed and its own solver.
+    ///
+    /// What is still local is hiding the body for the tick it outlives itself
+    /// by, which is a fact about a body rather than about a corpse.
+    #[test]
+    fn a_client_makes_no_corpse_and_hides_the_body_it_is_told_died() {
+        use crate::common::net::NetRole;
+        use crate::game::damage::DamagePlugin;
+        use crate::game::GamePlugin;
+
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.add_plugins(bevy::input::InputPlugin);
+        app.add_plugins(bevy::time::TimePlugin);
+        app.add_plugins(GamePlugin);
+        app.add_plugins(DamagePlugin);
+        // Somebody else is deciding what happens.
+        app.insert_resource(NetRole::Client { host: "elsewhere".into(), port: 27100 });
+        app.world_mut()
+            .resource_mut::<NextState<AppMode>>()
+            .set(AppMode::Play);
+        app.update();
+
+        let placed = Transform::from_translation(Vec3::new(4.0, 0.0, 1.0));
+        let body = app
+            .world_mut()
+            .spawn((
+                rig(),
+                Pose::rest(),
+                placed,
+                GlobalTransform::from(placed),
+                Damageable::with_health(100),
+                DamageLog::default(),
+                PlayerId(11),
+            ))
+            .id();
+        app.update();
+
+        // As replication delivers it: somebody else decided this body died.
+        app.world_mut().get_mut::<Damageable>(body).unwrap().apply(100);
+        app.world_mut().entity_mut(body).insert(Dying);
+        app.world_mut().run_schedule(FixedUpdate);
+        app.update();
+
+        let mut corpses = app.world_mut().query::<&Ragdoll>();
+        assert_eq!(
+            corpses.iter(app.world()).count(),
+            0,
+            "the client raised a corpse of its own; it is sent one"
+        );
+        assert!(
+            app.world().get_entity(body).is_ok(),
+            "the client removed a body that is the server's to remove"
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(body),
+            Some(&Visibility::Hidden),
+            "the body was left standing where its corpse is about to arrive"
+        );
+    }
+
+    /// A corpse that arrives from the wire is dressed and posed, and never
+    /// given an animator.
+    ///
+    /// Only a seed crosses — the points at the moment of death and the build
+    /// the body was rigged from — so a viewer has to put the rig back before
+    /// anything can draw it. What it must not put back is a
+    /// `SkeletonAnimator`: the solver owns a corpse's pose, and a corpse with
+    /// both lies there playing its idle.
+    #[test]
+    fn a_corpse_from_the_wire_is_dressed_by_its_build() {
+        use crate::common::skeleton::SkeletonAnimator;
+
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let placed = Transform::from_translation(Vec3::new(2.0, 1.0, -3.0));
+        let seed = Ragdoll::from_body(&skeleton, &Pose::rest(), &placed, Vec3::ZERO);
+
+        let mut app = App::new();
+        app.add_systems(Update, dress_corpses_from_elsewhere);
+        // Exactly what replication puts there, and nothing else.
+        let corpse = app
+            .world_mut()
+            .spawn((seed, CorpseBuild(Proportions::DEFAULT)))
+            .id();
+        app.update();
+
+        assert!(app.world().get::<Skeleton>(corpse).is_some(), "the corpse was never dressed");
+        assert!(app.world().get::<Pose>(corpse).is_some(), "the corpse has no pose to draw");
+        assert!(
+            app.world().get::<SkeletonAnimator>(corpse).is_none(),
+            "a corpse was given an animator to argue with the solver"
+        );
+        let at = app.world().get::<Transform>(corpse).unwrap().translation;
+        assert!(
+            at.distance(placed.translation) < 1.0,
+            "the corpse was not posed where it died: {at} against {}",
+            placed.translation
+        );
+    }
+
+    /// A player's corpse carries the build it was rigged from.
+    ///
+    /// The gap this pins: a player's body has **no `Class`** — it is rigged
+    /// from `Proportions::DEFAULT` — so a corpse whose build was taken from a
+    /// class was a corpse no client could ever dress, and the one kind of
+    /// death anybody actually watches left nothing behind on the other
+    /// machine. The build is read off the rig instead, which every body has by
+    /// definition.
+    #[test]
+    fn a_players_corpse_carries_the_build_it_was_rigged_from() {
+        use crate::common::class::Class;
+        use crate::game::damage::DamagePlugin;
+        use crate::game::GamePlugin;
+
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.add_plugins(bevy::input::InputPlugin);
+        app.add_plugins(bevy::time::TimePlugin);
+        app.add_plugins(GamePlugin);
+        app.add_plugins(DamagePlugin);
+        app.world_mut()
+            .resource_mut::<NextState<AppMode>>()
+            .set(AppMode::Play);
+        app.update();
+
+        let placed = Transform::from_translation(Vec3::new(1.0, 0.0, 2.0));
+        let body = app
+            .world_mut()
+            .spawn((
+                rig(),
+                Pose::rest(),
+                placed,
+                GlobalTransform::from(placed),
+                Damageable::with_health(100),
+                DamageLog::default(),
+                PlayerId(4),
+            ))
+            .id();
+        app.update();
+        assert!(
+            app.world().get::<Class>(body).is_none(),
+            "this test is worthless if a body has a class to fall back on"
+        );
+
+        app.world_mut().get_mut::<Damageable>(body).unwrap().apply(100);
+        app.world_mut().run_schedule(FixedUpdate);
+
+        let mut corpses = app.world_mut().query::<&CorpseBuild>();
+        let build = corpses
+            .single(app.world())
+            .expect("no corpse, or a corpse nobody else could draw");
+        assert_eq!(
+            build.0,
+            rig().proportions(),
+            "the corpse was built from something other than the rig it came from"
+        );
     }
 
     /// The ordering, assembled.

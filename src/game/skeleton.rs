@@ -19,10 +19,14 @@
 //! resources the game's headless tests do not have.
 
 use bevy::prelude::*;
+use lightyear::prelude::input::native::ActionState;
 use bevy::transform::TransformSystems;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
+use crate::common::damage::PlayerId;
+use crate::common::class::Class;
+use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{
     draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
     direction_of, DisplaySpeed, ForcedAnimation, Gait, Pose, PoseInputs, Proportions, Skeleton,
@@ -33,7 +37,7 @@ use crate::game::body_mesh::BodyMeshPlugin;
 use crate::game::hitbox::HitboxPlugin;
 use crate::game::weapon::WeaponPlugin;
 use crate::game::player::{
-    step_player, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
+    step_player, Inputs, LocalPlayer, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
 };
 
 /// Where a skeleton's feet sit relative to the entity carrying it.
@@ -72,12 +76,27 @@ impl Plugin for SkeletonPlugin {
             .init_resource::<ShowBones>()
             .add_systems(Update, toggle_bones)
             .add_systems(Update, (
-                describe_player_bodies.run_if(in_state(AppMode::Play)),
-                dress_new_players.run_if(in_state(AppMode::Play)),
+                describe_player_bodies
+                    .run_if(in_state(AppMode::Play))
+                    .run_if(crate::common::net::has_authority),
+                // Not gated on `AppMode::Play`: a body replicated from the
+                // server can arrive on a frame when this process has not
+                // finished entering the round, and `Added` is true for one
+                // frame whether or not a gated-off system was there to see it.
+                // A body that misses its rig never gets another chance and is
+                // simply invisible for the rest of the match.
+                dress_new_players,
+                dress_bodies_from_elsewhere,
                 equip_new_bodies,
+                // After the rig exists, so the phase lands on a body that has
+                // something to animate.
+                phase_bodies_by_id,
                 // After the writers, so a body animates on the situation it is
                 // in this frame rather than last frame's.
                 advance_animators,
+                // And after the animator, editing the pose it left. Ordered by
+                // the `.chain()` below rather than by name.
+                look_with_the_head,
             ).chain())
             // After propagation, so a rig is drawn where its body is now.
             // `interpolate_bodies` has already run by here, so a player's
@@ -232,24 +251,26 @@ pub fn skeleton_root(global: &GlobalTransform, offset: Option<&SkeletonRoot>) ->
     root
 }
 
-/// Describe what the local player's body is doing.
+/// Describe what a body we are simulating is doing.
 ///
-/// The one writer of [`BodyRequests`] that exists today. A remote player's
-/// requests will come off the wire and an NPC's from its planner; all three
-/// write the same component and none of them names an animation, which is the
-/// entire point — the state machine is written once, in
-/// [`crate::common::skeleton::state`].
+/// Runs only where this process is believed. A client is *told* what every
+/// body is doing — `BodyRequests` is replicated — and describes none of them
+/// for itself. Run here as well and it would describe a body from an `Inputs`
+/// nobody ever fills, flattening a sprinting player to standing still one
+/// frame after the server said otherwise, every frame.
+///
+/// It does not name an animation: the state machine is written once, in
+/// [`crate::common::skeleton::state`], and every process runs it over whatever
+/// description it has.
 ///
 /// Fields are assigned rather than accumulated: this system owns all of them,
 /// every frame, so nothing goes stale.
 fn describe_player_bodies(
-    input: Res<PlayerInput>,
-    mut players: Query<(&Player, &Stance, &mut BodyRequests)>,
+    mut players: Query<(&Player, &Stance, &Inputs, &mut BodyRequests)>,
 ) {
-    for (player, stance, mut requests) in &mut players {
-        // `PlayerInput` is the local player's, so this is only correct while
-        // there is one body. A second local player, or a remote one, gets its
-        // own writer rather than a second reading of this resource.
+    for (player, stance, input, mut requests) in &mut players {
+        // Each body's own input, so a second local player or one being driven
+        // from the wire is described from what it was actually asked to do.
         requests.running_forward = input.movement.y > 0.5;
         requests.running_backward = input.movement.y < -0.5;
         requests.strafing_left = input.movement.x < -0.5;
@@ -271,19 +292,123 @@ fn describe_player_bodies(
 /// commands are applied. This also covers any other way a body comes to be.
 fn dress_new_players(mut commands: Commands, players: Query<Entity, Added<Player>>) {
     for player in &players {
-        commands.entity(player).insert((
+        // `insert_if_new`, not `insert`: a replicated body may already carry
+        // a `Stance` the server sent, and overwriting it with a default here
+        // would stand a crouching body up for a frame.
+        commands.entity(player).insert_if_new((
             humanoid(Proportions::DEFAULT),
             Pose::rest(),
             SkeletonAnimator::default(),
             BodyRequests::default(),
             Stance::default(),
-            // Phase zero until bodies have identities everyone agrees on. A
-            // networked body takes its phase from its network id, which is
-            // what makes two clients put it in the same part of its cycle;
-            // an `Entity`'s index would not, being local to one `World`.
+            // Zero here and replaced by `phase_bodies_by_id` as soon as the
+            // body has a `PlayerId`. It is not always here yet: a replicated
+            // body's id arrives in its own message.
             AnimationPhase::default(),
             SkeletonRoot(Vec3::NEG_Y * PLAYER_HALF.y),
         ));
+    }
+}
+
+/// How much of a body's pitch each joint takes.
+///
+/// Split rather than all on the head, because a head alone at eighty degrees
+/// reads as a broken neck. The neck takes the smaller share and the head the
+/// rest; the sum is one, so a body looking straight up is looking straight up.
+const NECK_SHARE: f32 = 0.4;
+const HEAD_SHARE: f32 = 1.0 - NECK_SHARE;
+
+/// Tilt the head and neck to where the body is looking.
+///
+/// **Positive is down.** A spine bone's `+Y` runs up its length and the rig
+/// faces `-Z`, so a positive rotation about its local `X` folds it forwards
+/// and down — which is why `CROUCH_LEAN` is positive on the chest and negative
+/// on the neck, where it lifts the head back up. Pitch runs the other way:
+/// positive means looking up, as the camera does. Hence the negation, and it
+/// is the whole of what `pitching_up_points_the_face_up` is guarding.
+///
+/// After `advance_animators` and on top of the pose it left, which is the
+/// arrangement `advance_animators` documents for exactly this: the state
+/// machine says what the body is *doing* and this bends two joints on top of
+/// it, so a head-turn does not have to be authored into every animation.
+///
+/// Every body with a `Player`, not only the ones we simulate — `Player.pitch`
+/// is replicated, so this is what makes a remote player visibly look up and
+/// down. Yaw is not here: yaw turns the whole body, which is
+/// [`face_bodies`](crate::game::player::face_bodies)'s job, and a body that
+/// turned its head instead would strafe sideways while facing forwards.
+fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
+    for (player, mut pose) in &mut bodies {
+        if player.pitch == 0.0 && pose.joint(bone::NECK) == Quat::IDENTITY {
+            // Nothing to add and nothing left over from last frame. Skipping
+            // keeps a still body from dirtying its pose every frame.
+            continue;
+        }
+        for (joint, share) in [(bone::NECK, NECK_SHARE), (bone::HEAD, HEAD_SHARE)] {
+            // Composed onto whatever the animation said rather than replacing
+            // it, and in the joint's own frame — a bone's `+Y` runs down its
+            // length, so a rotation about local `X` pitches the face the same
+            // way the camera pitches.
+            let animated = pose.joint(joint);
+            pose.set(joint, animated * Quat::from_rotation_x(-player.pitch * share));
+        }
+    }
+}
+
+/// Dress a body that arrived from somewhere else.
+///
+/// A player's body is dressed off `Added<Player>`. A body that is not a player
+/// — one standing in an animation grid, say — arrives carrying a `Class`, a
+/// `ForcedAnimation` and a position, and nothing else. That is deliberately
+/// all a viewer is told: it is a body, of this build, doing this, here. What a
+/// grid is, which cell it stands in, and what the roster is showing are the
+/// authority's business and stay there.
+///
+/// Keyed on `Class` because that is the component which says "a body, built
+/// like this". `insert_if_new` throughout, so a body that already brought its
+/// own rig — every one the authority itself stood up — is left alone.
+fn dress_bodies_from_elsewhere(
+    mut commands: Commands,
+    bodies: Query<(Entity, &Class), (Added<Class>, Without<Skeleton>)>,
+) {
+    for (body, class) in &bodies {
+        commands.entity(body).insert_if_new((
+            humanoid(class.proportions()),
+            Pose::rest(),
+            SkeletonAnimator::default(),
+            BodyRequests::default(),
+            AnimationPhase::default(),
+            // Hit volumes, because this is a real body and being shootable is
+            // the same property as being catchable in a blast. `CarouselBody`
+            // requires them, but `CarouselBody` is exactly the sort of thing a
+            // viewer is never told about — so on a client nothing asked for
+            // them and the boxes simply were not there.
+            crate::common::hitbox::Hitboxes::default(),
+            // A place to be drawn and a say in whether it is. `Player`
+            // requires both, so a player's body has them before anything
+            // replicates; one that is not a player arrives carrying only the
+            // facts about itself, and its parts would hang off an entity with
+            // no `GlobalTransform` to inherit.
+            Transform::default(),
+            Visibility::default(),
+        ));
+    }
+}
+
+/// Put each body at its own point in the animation cycle, from its network id.
+///
+/// Bodies that all bounced on the same frame read as one machine rather than
+/// several people. The offset has to come from an identifier every machine
+/// agrees on — `PlayerId`, which is replicated — because two clients looking
+/// at the same body have to put it at the same point. An `Entity`'s index is
+/// local to one `World` and an RNG is local to one process; either would give
+/// every viewer a different answer.
+fn phase_bodies_by_id(
+    mut commands: Commands,
+    bodies: Query<(Entity, &PlayerId), (Added<PlayerId>, With<Skeleton>)>,
+) {
+    for (body, id) in &bodies {
+        commands.entity(body).insert(AnimationPhase::from_id(id.0));
     }
 }
 
@@ -346,15 +471,17 @@ pub fn draw_skeletons(
     show: Res<ShowBones>,
     mut gizmos: Gizmos,
     view: Res<ViewMode>,
-    bodies: Query<(&Skeleton, &Pose, &GlobalTransform, Option<&SkeletonRoot>, Option<&Player>)>,
+    bodies: Query<(&Skeleton, &Pose, &GlobalTransform, Option<&SkeletonRoot>, Option<&LocalPlayer>)>,
 ) {
     if !show.0 {
         return;
     }
 
     for (skeleton, pose, global, offset, own_body) in &bodies {
-        // `Player` is the body this machine is looking out of. A remote body
-        // will not carry it, so this hides one rig rather than everybody's.
+        // `LocalPlayer` is the body this machine is looking out of. `Player`
+        // used to serve here and stopped being right the moment bodies could
+        // be replicated: a remote body carries `Player` too, so asking that
+        // question hid every rig in the match.
         if own_body.is_some() && !view.shows_own_body() {
             continue;
         }
@@ -370,6 +497,7 @@ pub fn draw_skeletons(
 mod tests {
     use super::*;
     use crate::common::hitbox::Hitboxes;
+    use crate::common::skeleton::rig::{humanoid, Proportions};
     use crate::common::skeleton::AnimationState;
     use bevy::ecs::system::RunSystemOnce;
 
@@ -500,19 +628,106 @@ mod tests {
         );
     }
 
+    /// Which way the head's face points, in world space.
+    ///
+    /// Derived from the rig rather than assumed. The head bone's rest
+    /// rotation is *not* identity — its local `-Z` points at world `+Z`, which
+    /// is behind the body — so a test that measured `rotation * NEG_Z` would
+    /// be watching the back of the head and would call looking down looking
+    /// up. That is exactly the mistake this pair of tests exists to catch, and
+    /// the first thing they assert is the convention itself.
+    fn face_of(pose: &Pose) -> Vec3 {
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let bones = skeleton.posed_bones(pose, &Transform::IDENTITY);
+        let head = bones
+            .iter()
+            .find(|bone| bone.name == bone::HEAD)
+            .expect("no head on the rig");
+        head.rotation * Vec3::Z
+    }
+
+    fn face_at(pitch: f32) -> Vec3 {
+        let mut app = App::new();
+        let body = app
+            .world_mut()
+            .spawn((Player { pitch, ..default() }, Pose::rest()))
+            .id();
+        app.world_mut().run_system_once(look_with_the_head).unwrap();
+        face_of(app.world().get::<Pose>(body).unwrap())
+    }
+
+    /// The convention every other assertion here rests on: a body at rest
+    /// faces the way it walks, which is `-Z`.
+    ///
+    /// Pinned separately because it is a fact about the rig, not about the
+    /// look pass. If somebody re-authors the head's rest rotation, this fails
+    /// with a clear reason instead of quietly inverting everybody's aim.
+    #[test]
+    fn a_body_at_rest_faces_the_way_it_walks() {
+        let face = face_of(&Pose::rest());
+        assert!(
+            face.abs_diff_eq(Vec3::NEG_Z, 1e-4),
+            "the rig no longer faces -Z at rest; it faces {face}"
+        );
+    }
+
+    /// Looking up points the face up, and looking down points it down.
+    ///
+    /// The sign of a rotation about a bone's local axis is the one thing here
+    /// that cannot be read back from the maths, and getting it backwards is
+    /// not subtle to a player: heads tilt away from wherever their owner is
+    /// looking.
+    #[test]
+    fn pitching_up_points_the_face_up() {
+        let level = face_at(0.0);
+        let up = face_at(0.8);
+        let down = face_at(-0.8);
+
+        assert!(level.y.abs() < 1e-3, "a level body is not looking level: {level}");
+        assert!(up.y > 0.5, "looking up did not point the face up: {up}");
+        assert!(down.y < -0.5, "looking down did not point the face down: {down}");
+        // And it is still facing forwards while it does it, rather than having
+        // turned around on the way.
+        assert!(up.z < 0.0 && down.z < 0.0, "the head turned to face backwards");
+    }
+
+    /// The head takes the larger share and the neck the rest, and together
+    /// they add up to the whole pitch — a body looking straight up is looking
+    /// straight up, not four fifths of the way there.
+    #[test]
+    fn the_neck_and_the_head_share_the_whole_pitch() {
+        let mut app = App::new();
+        let pitch = 0.9;
+        let body = app
+            .world_mut()
+            .spawn((Player { pitch, ..default() }, Pose::rest()))
+            .id();
+        app.world_mut().run_system_once(look_with_the_head).unwrap();
+
+        let pose = app.world().get::<Pose>(body).unwrap();
+        // Negated on the way in, so read back negated.
+        let angle_of = |joint: &str| -pose.joint(joint).to_euler(EulerRot::XYZ).0;
+        let neck = angle_of(bone::NECK);
+        let head = angle_of(bone::HEAD);
+
+        assert!(head > neck, "the neck bent further than the head");
+        assert!(
+            (neck + head - pitch).abs() < 1e-4,
+            "the shares came to {} rather than {pitch}",
+            neck + head
+        );
+    }
+
     /// Walking into a wall is the two-writer case: input says forward, the
     /// step says blocked, and only the state machine puts them together.
     #[test]
     fn a_player_pressed_against_a_wall_is_described_as_pushing() {
         let mut app = App::new();
-        app.insert_resource(PlayerInput {
-            movement: Vec2::new(0.0, 1.0),
-            ..default()
-        });
         let player = app
             .world_mut()
             .spawn((
                 Player { on_ground: true, blocked: BVec3::new(false, false, true), ..default() },
+                ActionState(PlayerInput { movement: Vec2::new(0.0, 1.0), ..default() }),
                 Stance::Standing,
                 BodyRequests::default(),
             ))

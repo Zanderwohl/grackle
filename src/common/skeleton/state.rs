@@ -170,7 +170,7 @@ const MIN_DWELL: f32 = 0.1;
 /// having an opinion clears its own field. That is why there is no reset
 /// system: a stale `wall_ahead` that nothing ever cleared would be a body
 /// pushing at thin air forever.
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct BodyRequests {
     /// Being asked to move forwards — a held W, an NPC's path, a replayed
     /// input. Asked for, not achieved: a body walking into a wall is still
@@ -209,7 +209,7 @@ impl BodyRequests {
 /// stores the state as [`AnimationState::index`] — so **add new states at the
 /// end** and do not reorder. A shuffled list would silently repoint every
 /// saved display at a different animation.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, EnumIter)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, EnumIter, Reflect)]
 pub enum AnimationState {
     #[default]
     Idle,
@@ -562,7 +562,9 @@ impl SkeletonAnimator {
 /// For showing an animation rather than driving a character: the editor's
 /// Animation Display feature, and anything else that wants a body to stand
 /// there doing one named thing.
-#[derive(Component, Clone, Copy, Debug, Default)]
+#[derive(
+    Component, Clone, Copy, Debug, Default, PartialEq, Reflect, Serialize, Deserialize,
+)]
 pub struct ForcedAnimation(pub AnimationState);
 
 /// How long one idle cycle takes, in seconds.

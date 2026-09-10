@@ -33,6 +33,7 @@ use bevy::transform::TransformSystems;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
+use crate::common::effects::Effect;
 use crate::common::damage::{Damage, DamageSource, PlayerId};
 use crate::common::hitbox::Hitboxes;
 use crate::common::hitscan::{trace, HitZone};
@@ -49,6 +50,10 @@ use crate::game::weapon::{Loadout, TriggerPulled, Weapon};
 /// enough that it is a line and not a claim about a weapon's range. A real
 /// weapon brings its own.
 pub const LASER_RANGE: f32 = 200.0;
+
+/// How long a tracer is drawn for, in seconds. Long enough to see, short
+/// enough that a stream of them does not read as one continuous beam.
+const TRACER_LIFETIME: f32 = 0.12;
 
 /// Radius of the ball drawn at a hit, in metres. Twenty centimetres across.
 pub const HIT_BALL_RADIUS: f32 = 0.1;
@@ -104,12 +109,16 @@ impl Plugin for HitscanPlugin {
                     .after(step_player)
                     .in_set(DamageSystems::Deal),
             )
+            // Drawing, so everywhere: a client fires nothing and has to show
+            // every shot anybody took.
+            .add_systems(Update, (mark_tracers, fade_tracers))
             .add_systems(
                 PostUpdate,
-                draw_debug_laser
+                (draw_debug_laser, draw_tracers)
                     .after(TransformSystems::Propagate)
                     .run_if(in_state(AppMode::Play)),
             )
+            .add_systems(OnExit(AppMode::Play), clear_tracers)
         ;
     }
 }
@@ -162,6 +171,7 @@ pub fn fire_hitscan(
     targets: Query<(Entity, &Hitboxes)>,
     mut damage: MessageWriter<Damage>,
     mut shoves: MessageWriter<RagdollShove>,
+    mut effects: MessageWriter<Effect>,
 ) {
     for shot in pulled.read() {
         let Ok((body, player, stance, id, loadout)) = shooters.get(shot.shooter) else { continue };
@@ -183,7 +193,19 @@ pub fn fire_hitscan(
             .filter(|(entity, _)| *entity != shot.shooter)
             .map(|(entity, boxes)| (entity, *boxes));
 
-        let Some(hit) = trace(&ray, range, others) else { continue };
+        let hit = trace(&ray, range, others);
+
+        // Written before the `continue` below, because a shot that hit nothing
+        // is still a shot somebody saw. The tracer is where the bullet went,
+        // which is a fact about the world and not about whether it found
+        // anybody.
+        effects.write(Effect::Tracer {
+            from: ray.origin,
+            to: hit.map_or(ray.origin + *ray.direction * range, |hit| hit.point),
+            hit: hit.is_some(),
+        });
+
+        let Some(hit) = hit else { continue };
 
         // Asked for, not applied: what a shot is worth is this module's
         // business and what it does to a health pool is the damage layer's.
@@ -208,6 +230,66 @@ pub fn fire_hitscan(
             push: Push::Along(*ray.direction * (worth as f32 * SHOVE_PER_DAMAGE)),
             radius: SHOVE_RADIUS,
         });
+    }
+}
+
+/// A tracer, for the fraction of a second it is worth seeing.
+///
+/// An entity rather than a gizmo call at the moment of firing, because firing
+/// happens on the tick and drawing happens at frame rate — a gizmo written
+/// inside `fire_hitscan` would be drawn for one frame if the frame rate
+/// happened to line up, and not at all if it did not.
+#[derive(Component)]
+pub struct Tracer {
+    from: Vec3,
+    to: Vec3,
+    hit: bool,
+    remaining: f32,
+}
+
+fn mark_tracers(mut commands: Commands, mut effects: MessageReader<Effect>) {
+    for effect in effects.read() {
+        let Effect::Tracer { from, to, hit } = *effect else { continue };
+        commands.spawn((
+            Tracer { from, to, hit, remaining: TRACER_LIFETIME },
+            Name::new("Tracer"),
+        ));
+    }
+}
+
+fn fade_tracers(mut commands: Commands, time: Res<Time>, mut tracers: Query<(Entity, &mut Tracer)>) {
+    for (entity, mut tracer) in &mut tracers {
+        tracer.remaining -= time.delta_secs();
+        if tracer.remaining <= 0.0 {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn draw_tracers(mut gizmos: Gizmos, tracers: Query<&Tracer>) {
+    for tracer in &tracers {
+        // Fading out rather than vanishing, so a burst reads as several shots
+        // rather than as one line that flickers.
+        let fade = (tracer.remaining / TRACER_LIFETIME).clamp(0.0, 1.0);
+        gizmos.line(
+            tracer.from,
+            tracer.to,
+            Color::srgba(1.0, 0.85, 0.4, fade),
+        );
+        if tracer.hit {
+            gizmos.sphere(
+                Isometry3d::from_translation(tracer.to),
+                HIT_BALL_RADIUS,
+                Color::srgba(1.0, 0.4, 0.2, fade),
+            );
+        }
+    }
+}
+
+/// Tracers belong to the match, like the corpses and the blast marks.
+fn clear_tracers(mut commands: Commands, tracers: Query<Entity, With<Tracer>>) {
+    for tracer in &tracers {
+        commands.entity(tracer).despawn();
     }
 }
 
@@ -274,6 +356,7 @@ mod tests {
         world.init_resource::<Messages<TriggerPulled>>();
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<RagdollShove>>();
+        world.init_resource::<Messages<Effect>>();
 
         let centre = body_centre_from_feet(Vec3::ZERO);
         let shooter = world
@@ -316,6 +399,48 @@ mod tests {
         let messages = world.resource::<Messages<Damage>>();
         let mut cursor = messages.get_cursor();
         cursor.read(messages).copied().collect()
+    }
+
+    fn effects_of(world: &mut World) -> Vec<Effect> {
+        let messages = world.resource::<Messages<Effect>>();
+        let mut cursor = messages.get_cursor();
+        cursor.read(messages).copied().collect()
+    }
+
+    /// Every shot leaves a tracer, including one that hit nobody.
+    ///
+    /// A tracer is where the bullet went, which is a fact about the world and
+    /// not about whether it found anybody — written before the early return
+    /// that skips the damage. Miss that and a player firing into open space
+    /// sees no feedback at all and reads the weapon as jammed.
+    #[test]
+    fn a_shot_that_hits_nothing_still_leaves_a_tracer() {
+        let (mut world, shooter, target) = a_shooter_and_a_target(target_boxes(5.0));
+        // Nothing in front of the muzzle at all.
+        world.entity_mut(target).despawn();
+        fire(&mut world, shooter);
+
+        assert!(asked_for(&mut world).is_empty(), "it hit something after all");
+
+        let effects = effects_of(&mut world);
+        assert_eq!(effects.len(), 1, "{effects:?}");
+        assert!(matches!(effects[0], Effect::Tracer { .. }));
+    }
+
+    /// And a shot that lands says where it landed, so the mark is drawn on the
+    /// body rather than at the end of the weapon's reach.
+    #[test]
+    fn a_tracer_stops_where_the_shot_did() {
+        let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(5.0));
+        fire(&mut world, shooter);
+
+        let effects = effects_of(&mut world);
+        let Some(Effect::Tracer { from, to, hit }) = effects.first().copied() else {
+            panic!("no tracer: {effects:?}");
+        };
+        assert!(hit, "the shot landed but the tracer says it did not");
+        assert!((to - from).length() < LASER_RANGE, "the tracer ran to full range");
+        assert!((to.z - from.z).abs() > 1.0, "the tracer went nowhere");
     }
 
     /// The whole path: a click asks for damage on the thing in front of you

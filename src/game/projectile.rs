@@ -39,6 +39,7 @@
 //! nothing else writes a projectile's.
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
@@ -80,13 +81,20 @@ const MUZZLE_OFFSET: f32 = 0.5;
 /// up from the weapon, because a rocket that is already in the air was fired
 /// by the launcher as it was then: switching weapons, or an item that changes
 /// a number, must not reach back and change a shot that has left.
-#[derive(Component, Clone, Debug)]
+#[derive(Component, Clone, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct Projectile {
     pub spec: ProjectileSpec,
     /// Who gets the kill. `None` for anything the map threw — see
     /// [`DamageSource::World`].
     pub owner: Option<PlayerId>,
     /// The body it came out of, which its own direct hits ignore.
+    ///
+    /// Not sent. It is only ever asked by the process resolving the hit, and
+    /// that is always the authority — a client draws the rocket and decides
+    /// nothing about it. Skipping it also keeps this component off the list of
+    /// things that need entity mapping to cross a wire.
+    #[serde(skip)]
+    #[reflect(ignore)]
     pub shooter: Option<Entity>,
     pub velocity: Vec3,
     /// How far it has tumbled, in radians. Cosmetic.
@@ -144,7 +152,9 @@ impl Plugin for ProjectilePlugin {
                     .in_set(DamageSystems::Deal),
             )
             .add_systems(Update, plant_emitters.run_if(in_state(AppMode::Play)))
-            .add_systems(Update, dress_projectiles)
+            // Drawing, so everywhere: a client flies none of these and has to
+            // draw all of them.
+            .add_systems(Update, (dress_projectiles, spin_projectiles))
             .init_resource::<ProjectileAssets>()
             // Everything in flight belongs to the match, like the corpses and
             // the damage numbers. A rocket left hanging in the editor would be
@@ -331,10 +341,6 @@ pub fn step_projectiles(
 
         body.previous = body.current;
         body.current = position;
-        // Not the translation: `interpolate_bodies` owns that, and writing it
-        // here would be overwritten and would skip the interpolation.
-        transform.rotation = Quat::from_rotation_x(projectile.spin)
-            * Quat::from_rotation_y(projectile.spin * 0.5);
 
         let Some((ending, direct)) = ending else { continue };
 
@@ -371,12 +377,28 @@ struct ProjectileAssets {
 ///
 /// A sphere, and unashamedly a placeholder: a projectile's *shape* is art, and
 /// what this layer owes is a thing you can see coming.
+/// Turn every projectile to the spin it is carrying.
+///
+/// Split out of the step, which only runs where the projectile is simulated. A
+/// replicated rocket is flown by the server and drawn here, and one that never
+/// turned would be a tumbling pipe bomb that does not tumble. `spin` rides
+/// along in the replicated `Projectile`, so both ends read the same number.
+///
+/// Rotation only — `interpolate_bodies` owns the translation, and writing it
+/// here would be overwritten and would skip the interpolation.
+fn spin_projectiles(mut projectiles: Query<(&Projectile, &mut Transform)>) {
+    for (projectile, mut transform) in &mut projectiles {
+        transform.rotation = Quat::from_rotation_x(projectile.spin)
+            * Quat::from_rotation_y(projectile.spin * 0.5);
+    }
+}
+
 fn dress_projectiles(
     mut commands: Commands,
     mut assets: ResMut<ProjectileAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    undressed: Query<Entity, (With<Projectile>, Without<Mesh3d>)>,
+    undressed: Query<(Entity, &Projectile), Without<Mesh3d>>,
 ) {
     if undressed.is_empty() {
         return;
@@ -398,8 +420,16 @@ fn dress_projectiles(
         })
         .clone();
 
-    for entity in &undressed {
-        commands.entity(entity).insert((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone())));
+    for (entity, projectile) in &undressed {
+        // The scale comes from the spec rather than from whatever the spawn
+        // put in the transform: a replicated projectile is built by inserting
+        // components and never went through `launch`, so its transform starts
+        // at unit scale and a rocket would be drawn a metre wide.
+        commands.entity(entity).insert((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_scale(Vec3::splat(projectile.spec.radius)),
+        ));
     }
 }
 
@@ -455,9 +485,17 @@ fn plant_emitters(
 /// braces the corpses and the damage numbers get.
 pub fn clear_projectiles(
     mut commands: Commands,
+    role: Option<Res<crate::common::net::NetRole>>,
     projectiles: Query<Entity, With<Projectile>>,
     emitters: Query<Entity, With<ProjectileEmitter>>,
 ) {
+    // A client's projectiles are the server's, which despawns them when the
+    // round ends and replicates that. Despawning them here as well deletes
+    // entities the receiver still has a record of — the same rule that keeps a
+    // client from reaping a body.
+    if !role.is_none_or(|role| role.is_authority()) {
+        return;
+    }
     for entity in projectiles.iter().chain(&emitters) {
         commands.entity(entity).despawn();
     }
@@ -467,6 +505,99 @@ pub fn clear_projectiles(
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use std::time::Duration;
+
+    use crate::common::net::NetRole;
+
+    /// A projectile the server flew and replicated never went through
+    /// `launch`, so its transform arrives at unit scale. The size has to come
+    /// from the spec at dressing time, or a rocket is drawn a metre wide.
+    #[test]
+    fn a_projectile_is_sized_from_its_spec_rather_than_its_spawn() {
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Mesh>();
+        app.init_asset::<StandardMaterial>();
+        app.init_resource::<ProjectileAssets>();
+
+        // As replication delivers one: the component, and nothing else.
+        let spec = ProjectileSpec::ROCKET;
+        let rocket = app
+            .world_mut()
+            .spawn(Projectile {
+                spec,
+                owner: None,
+                shooter: None,
+                velocity: Vec3::ZERO,
+                spin: 0.0,
+                age: 0.0,
+                bounces: 0,
+            })
+            .id();
+
+        app.world_mut().run_system_once(dress_projectiles).unwrap();
+
+        let scale = app.world().get::<Transform>(rocket).unwrap().scale;
+        assert!(
+            scale.abs_diff_eq(Vec3::splat(spec.radius), 1e-6),
+            "drawn at {scale} rather than its own radius"
+        );
+        assert!(app.world().get::<Mesh3d>(rocket).is_some(), "it was never dressed");
+    }
+
+    /// Spin is drawn, not stepped, so it happens on a machine that flies
+    /// nothing. A replicated pipe bomb that never turned would be a tumbling
+    /// projectile that does not tumble.
+    #[test]
+    fn a_projectile_turns_to_the_spin_it_carries() {
+        let mut world = World::new();
+        let pipe = world
+            .spawn((
+                Projectile {
+                    spec: ProjectileSpec::PIPE_BOMB,
+                    owner: None,
+                    shooter: None,
+                    velocity: Vec3::ZERO,
+                    spin: 1.1,
+                    age: 0.0,
+                    bounces: 0,
+                },
+                Transform::default(),
+            ))
+            .id();
+
+        world.run_system_once(spin_projectiles).unwrap();
+
+        assert!(
+            world.get::<Transform>(pipe).unwrap().rotation.angle_between(Quat::IDENTITY) > 0.1,
+            "it did not turn"
+        );
+    }
+
+    /// A client's projectiles belong to the server, which despawns them when
+    /// the round ends and replicates that. Despawning them locally as well
+    /// deletes entities the receiver still expects to keep updating — the same
+    /// rule that keeps a client from reaping a body.
+    #[test]
+    fn a_client_does_not_clear_the_servers_projectiles() {
+        let mut world = World::new();
+        world.insert_resource(NetRole::Client { host: "elsewhere".into(), port: 27100 });
+        let rocket = world.spawn(Projectile {
+            spec: ProjectileSpec::ROCKET,
+            owner: None,
+            shooter: None,
+            velocity: Vec3::ZERO,
+            spin: 0.0,
+            age: 0.0,
+            bounces: 0,
+        }).id();
+
+        world.run_system_once(clear_projectiles).unwrap();
+        assert!(world.get_entity(rocket).is_ok(), "the client despawned the server's rocket");
+
+        world.insert_resource(NetRole::Listen { port: 27100 });
+        world.run_system_once(clear_projectiles).unwrap();
+        assert!(world.get_entity(rocket).is_err(), "the server left its own rocket in the air");
+    }
 
     use super::*;
     use crate::common::hitbox::Box3;

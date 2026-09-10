@@ -33,7 +33,8 @@ use crate::game::damage::{DamagePlugin, DamageSystems};
 use crate::game::explosion::ExplosionPlugin;
 use crate::game::flame::FlamePlugin;
 use crate::game::hitscan::HitscanPlugin;
-use crate::game::player::{Player, PlayerInput};
+use crate::common::net::has_authority;
+use crate::game::player::{Inputs, Player};
 use crate::game::projectile::ProjectilePlugin;
 
 /// One thing you can shoot with.
@@ -183,7 +184,8 @@ impl Plugin for WeaponPlugin {
                 (select_weapons, pull_trigger)
                     .chain()
                     .before(DamageSystems::Deal)
-                    .run_if(in_state(AppMode::Play)),
+                    .run_if(in_state(AppMode::Play))
+                    .run_if(has_authority),
             )
         ;
     }
@@ -192,23 +194,29 @@ impl Plugin for WeaponPlugin {
 /// Put a shot in front of every weapon, when the weapon in hand says there is
 /// one.
 ///
+/// Runs only where this process is believed — the whole set is gated on
+/// authority in `WeaponPlugin`. A client fires nothing locally; what its
+/// trigger does is travel as an input and come back as a consequence.
+///
 /// Both halves of the trigger are read here: the latched *press*, which a
 /// semi-automatic weapon answers, and the *held* state, which an automatic one
 /// does on its own interval. Doing it in one place is what stops the two
 /// disagreeing about whether a press that was also a hold is one shot or two.
 pub fn pull_trigger(
     time: Res<Time<Fixed>>,
-    mut input: ResMut<PlayerInput>,
-    mut shooters: Query<(Entity, &Loadout, &mut Trigger), With<Player>>,
+    mut shooters: Query<(Entity, &Loadout, &mut Trigger, &Inputs), With<Player>>,
     mut pulled: MessageWriter<TriggerPulled>,
 ) {
-    // Taken, not read: leaving it set would fire again next tick, and taking
-    // it here rather than in a weapon is what stops two weapons racing for it.
-    let pressed = std::mem::take(&mut input.attack);
-    let held = input.attack_held;
     let dt = time.delta_secs();
 
-    for (shooter, loadout, mut trigger) in &mut shooters {
+    for (shooter, loadout, mut trigger, input) in &mut shooters {
+        // Read, never taken: this tick's input has to survive being read, so
+        // that a rollback replaying the tick fires the same shot. The edge was
+        // already consumed when the tick's input was written — see
+        // `write_client_inputs`.
+        let pressed = input.attack;
+        let held = input.attack_held;
+
         trigger.ready_in = (trigger.ready_in - dt).max(0.0);
 
         let Some(weapon) = loadout.held() else { continue };
@@ -237,9 +245,12 @@ pub fn pull_trigger(
 }
 
 /// Act on a switch made since the last step.
-pub fn select_weapons(mut input: ResMut<PlayerInput>, mut carriers: Query<&mut Loadout, With<Player>>) {
-    let Some(slot) = std::mem::take(&mut input.select) else { return };
-    for mut loadout in &mut carriers {
+pub fn select_weapons(mut carriers: Query<(&mut Loadout, &Inputs), With<Player>>) {
+    for (mut loadout, input) in &mut carriers {
+        let Some(slot) = input.select else { continue };
+        // Idempotent, which is what lets it be read rather than taken:
+        // selecting the slot already held is not a second switch, so a
+        // replayed tick asking for it again changes nothing.
         loadout.select(slot);
     }
 }
@@ -255,13 +266,17 @@ mod tests {
 
     fn a_world() -> World {
         let mut world = World::new();
-        world.init_resource::<PlayerInput>();
         world.init_resource::<Messages<TriggerPulled>>();
 
         let mut fixed = Time::<Fixed>::default();
         fixed.advance_by(STEP);
         world.insert_resource(fixed);
         world
+    }
+
+    /// The input on one body, to poke at the way `gather_input` would.
+    fn input(world: &mut World, body: Entity) -> Mut<'_, Inputs> {
+        world.get_mut::<Inputs>(body).expect("body has no input")
     }
 
     fn pulls(world: &mut World) -> Vec<TriggerPulled> {
@@ -276,13 +291,16 @@ mod tests {
     fn a_press_is_announced_once() {
         let mut world = a_world();
         let shooter = world.spawn((Player::default(), Loadout::default(), Trigger::default())).id();
-        world.resource_mut::<PlayerInput>().attack = true;
-        world.resource_mut::<PlayerInput>().attack_held = true;
+        input(&mut world, shooter).attack = true;
+        input(&mut world, shooter).attack_held = true;
 
         world.run_system_once(pull_trigger).unwrap();
         assert_eq!(pulls(&mut world), vec![TriggerPulled { shooter }]);
-        assert!(!world.resource::<PlayerInput>().attack);
 
+        // The next tick's input: still held, no longer a fresh press, because
+        // the edge was consumed when that tick's input was written. Reading it
+        // here would fire again, which is the bug this pins.
+        input(&mut world, shooter).attack = false;
         world.resource_mut::<Messages<TriggerPulled>>().clear();
         world.run_system_once(pull_trigger).unwrap();
         assert!(pulls(&mut world).is_empty(), "holding the button fired a second time");
@@ -294,12 +312,14 @@ mod tests {
     fn an_automatic_weapon_fires_on_its_interval_while_held() {
         let mut world = a_world();
         let flame = FlameSpec { interval: 0.1, ..FlameSpec::FLAMETHROWER };
-        world.spawn((
-            Player::default(),
-            Loadout::new(vec![Weapon::Flame(flame)]),
-            Trigger::default(),
-        ));
-        world.resource_mut::<PlayerInput>().attack_held = true;
+        let shooter = world
+            .spawn((
+                Player::default(),
+                Loadout::new(vec![Weapon::Flame(flame)]),
+                Trigger::default(),
+            ))
+            .id();
+        input(&mut world, shooter).attack_held = true;
 
         // One second of holding it down, in 64 Hz steps.
         let mut shots = 0;
@@ -318,13 +338,15 @@ mod tests {
     #[test]
     fn an_automatic_weapon_stops_when_the_trigger_is_released() {
         let mut world = a_world();
-        world.spawn((
-            Player::default(),
-            Loadout::new(vec![Weapon::Flame(FlameSpec::FLAMETHROWER)]),
-            Trigger::default(),
-        ));
+        let shooter = world
+            .spawn((
+                Player::default(),
+                Loadout::new(vec![Weapon::Flame(FlameSpec::FLAMETHROWER)]),
+                Trigger::default(),
+            ))
+            .id();
 
-        world.resource_mut::<PlayerInput>().attack_held = false;
+        input(&mut world, shooter).attack_held = false;
         for _ in 0..64 {
             world.run_system_once(pull_trigger).unwrap();
         }
@@ -337,12 +359,14 @@ mod tests {
     #[test]
     fn a_tap_too_short_to_be_held_still_fires_an_automatic_weapon() {
         let mut world = a_world();
-        world.spawn((
-            Player::default(),
-            Loadout::new(vec![Weapon::Flame(FlameSpec::FLAMETHROWER)]),
-            Trigger::default(),
-        ));
-        world.resource_mut::<PlayerInput>().attack = true;
+        let shooter = world
+            .spawn((
+                Player::default(),
+                Loadout::new(vec![Weapon::Flame(FlameSpec::FLAMETHROWER)]),
+                Trigger::default(),
+            ))
+            .id();
+        input(&mut world, shooter).attack = true;
 
         world.run_system_once(pull_trigger).unwrap();
         assert_eq!(pulls(&mut world).len(), 1);
@@ -362,20 +386,42 @@ mod tests {
         assert_eq!(Loadout::new(vec![]).held(), None);
     }
 
-    /// A switch travels through the input like everything else, and is
-    /// consumed by the step that acted on it.
+    /// A switch travels through the input like everything else, and acting on
+    /// it twice is the same as acting on it once — which is what lets it be
+    /// read rather than taken, so a replayed tick reaches the same loadout.
     #[test]
-    fn a_switch_is_taken_by_the_step_that_acts_on_it() {
+    fn acting_on_a_switch_twice_is_the_same_as_once() {
         let mut world = a_world();
         let player = world.spawn((Player::default(), Loadout::default())).id();
-        world.resource_mut::<PlayerInput>().select = Some(2);
+        input(&mut world, player).select = Some(2);
 
+        world.run_system_once(select_weapons).unwrap();
         world.run_system_once(select_weapons).unwrap();
 
         assert_eq!(
             world.get::<Loadout>(player).unwrap().held(),
             Some(Weapon::Projectile(ProjectileSpec::PIPE_BOMB))
         );
-        assert_eq!(world.resource::<PlayerInput>().select, None);
+        assert_eq!(
+            input(&mut world, player).select,
+            Some(2),
+            "the tick's input was emptied by the system that read it"
+        );
+    }
+
+    /// The reason the input moved onto the body: two bodies in one world are
+    /// asked for different things in the same tick. With a single global
+    /// input, whoever wrote it last fired everybody's weapon.
+    #[test]
+    fn one_body_firing_does_not_fire_the_others() {
+        let mut world = a_world();
+        let shooting = world.spawn((Player::default(), Loadout::default(), Trigger::default())).id();
+        let idle = world.spawn((Player::default(), Loadout::default(), Trigger::default())).id();
+        input(&mut world, shooting).attack = true;
+
+        world.run_system_once(pull_trigger).unwrap();
+
+        assert_eq!(pulls(&mut world), vec![TriggerPulled { shooter: shooting }]);
+        assert!(!input(&mut world, idle).attack, "the idle body's latch was taken too");
     }
 }

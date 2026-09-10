@@ -28,9 +28,10 @@ use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::AppMode;
+use crate::common::net::has_authority;
 use crate::common::damage::{Damage, DamageDealt, Damageable, Died};
 use crate::common::team::Allegiances;
-use crate::game::death::{announce_deaths, reap_the_dead, record_damage};
+use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage};
 use crate::game::player::PlayerCamera;
 
 /// How long a damage number lasts, in seconds.
@@ -83,21 +84,42 @@ impl Plugin for DamagePlugin {
             // Registered here, by the reader, because this is the module that
             // outlives any one thing that writes it.
             .add_message::<Damage>()
+            // Beside the damage records and for the same reason: the queue
+            // belongs to the module that outlives the things writing into it.
+            // Every visual reads this one, filled locally or off the wire.
+            .add_message::<crate::common::effects::Effect>()
             .add_message::<DamageDealt>()
             .add_message::<Died>()
             // On the tick, in this order, in the same tick as the shot. A
             // body reaped before its log is written is a kill credited to
             // nobody — see [`crate::game::death`].
+            // **Only where this process is believed.** Damage is decided
+            // once, by the server, and every client is told the result:
+            // `Damageable` is replicated. A client that resolved damage for
+            // itself would take a body to zero on a shot the server never
+            // agreed landed, drop a corpse, and then be told the body is
+            // alive — and the two answers would differ on every client.
+            //
+            // Nothing here is predicted, deliberately. Guessing a kill and
+            // being wrong is a body that falls over and stands back up, which
+            // is worse to watch than a kill that arrives a round-trip late.
             .configure_sets(
                 FixedUpdate,
                 (DamageSystems::Deal, DamageSystems::Apply, DamageSystems::Resolve)
                     .chain()
-                    .run_if(in_state(AppMode::Play)),
+                    .run_if(in_state(AppMode::Play))
+                    .run_if(has_authority),
             )
             .add_systems(FixedUpdate, apply_damage.in_set(DamageSystems::Apply))
             .add_systems(
                 FixedUpdate,
-                (record_damage, reap_the_dead).chain().in_set(DamageSystems::Resolve),
+                // `announce_the_dead` marks and says so; `reap_the_dead`
+                // removes what was marked on an *earlier* tick. The gap is
+                // what gives replication a tick to carry the zero health that
+                // every other machine raises its own corpse from.
+                (record_damage, announce_the_dead, reap_the_dead)
+                    .chain()
+                    .in_set(DamageSystems::Resolve),
             )
             .add_systems(Update, (spawn_damage_numbers, fade_damage_numbers, announce_deaths).chain())
             .add_systems(

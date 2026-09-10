@@ -22,7 +22,9 @@
 
 use std::fmt;
 
+use bevy::ecs::entity::{EntityMapper, MapEntities};
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// How long a hit still counts towards an assist, in seconds of game time.
 ///
@@ -51,7 +53,7 @@ pub const DEFAULT_HEALTH: u32 = 100;
 /// Allocated by [`NextPlayerId`] rather than randomly: two clients replaying
 /// the same match have to agree on who did what, and an id drawn from an RNG
 /// is the one thing in a step that cannot be reconciled.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Reflect, Serialize, Deserialize)]
 pub struct PlayerId(pub u64);
 
 impl fmt::Display for PlayerId {
@@ -80,7 +82,7 @@ impl NextPlayerId {
 /// An enum rather than a bare [`PlayerId`] because the map is going to be one
 /// of the answers: this is a game about editing the level mid-match, and being
 /// crushed by a floor somebody raised has no player behind it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect, Serialize, Deserialize)]
 pub enum DamageSource {
     Player(PlayerId),
     /// The map, gravity, or anything else with no-one to credit.
@@ -102,7 +104,7 @@ impl fmt::Display for DamageSource {
 /// inserting one component. It in turn requires a [`DamageLog`]: anything that
 /// can be killed has to be able to say who did it, and a health pool with no
 /// log would be one that died anonymously.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Reflect, Serialize, Deserialize)]
 #[require(DamageLog)]
 pub struct Damageable {
     health: u32,
@@ -235,7 +237,7 @@ pub struct Explosion {
 /// floating numbers today, a kill feed and a scoreboard later. A message
 /// rather than a method call so that the list of things watching can grow
 /// without the thing shooting knowing about any of them.
-#[derive(Message, Clone, Copy, Debug, PartialEq)]
+#[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DamageDealt {
     /// The body that took it.
     pub target: Entity,
@@ -247,6 +249,22 @@ pub struct DamageDealt {
     pub remaining: u32,
     /// Where in the world it landed, so feedback can be drawn there.
     pub point: Vec3,
+}
+
+/// The entity in a record is the sender's, so it has to be translated on the
+/// way in. Without this a damage number would be anchored to whatever entity
+/// happened to share that index locally — and a kill feed would name the wrong
+/// victim on the one path that falls back to the entity.
+impl MapEntities for DamageDealt {
+    fn map_entities<M: EntityMapper>(&mut self, mapper: &mut M) {
+        self.target = mapper.get_mapped(self.target);
+    }
+}
+
+impl MapEntities for Died {
+    fn map_entities<M: EntityMapper>(&mut self, mapper: &mut M) {
+        self.victim = mapper.get_mapped(self.victim);
+    }
 }
 
 /// Who has hurt this body lately, and when.
@@ -306,7 +324,7 @@ impl DamageLog {
 /// Carries the victim's *name* rather than only its entity, because by the
 /// time anything reads this the entity is gone — a kill feed that looked the
 /// victim up would find nothing to look up.
-#[derive(Message, Clone, Debug, PartialEq)]
+#[derive(Message, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Died {
     /// The entity that was despawned. Useful for matching a death to a hit
     /// already in flight; useless for asking the world anything about it.
@@ -325,6 +343,51 @@ pub struct Died {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mapper that stands in for the one replication uses: it turns the
+    /// sender's ids into the receiver's.
+    struct Shift;
+    impl EntityMapper for Shift {
+        fn get_mapped(&mut self, entity: Entity) -> Entity {
+            Entity::from_raw_u32(entity.index().index() + 100).unwrap()
+        }
+        fn set_mapped(&mut self, _from: Entity, _to: Entity) {}
+    }
+
+    /// The entity in a record is the sender's and has to be translated.
+    ///
+    /// Untranslated, a damage number would be anchored to whatever entity
+    /// happened to share that index on the receiving machine, and the one path
+    /// in the kill feed that falls back to the entity would name a stranger.
+    #[test]
+    fn a_record_that_crosses_a_wire_has_its_entity_translated() {
+        let target = Entity::from_raw_u32(7).unwrap();
+        let mut hit = DamageDealt {
+            target,
+            source: A,
+            amount: 30,
+            remaining: 70,
+            point: Vec3::new(1.0, 2.0, 3.0),
+        };
+        hit.map_entities(&mut Shift);
+        assert_eq!(hit.target, Entity::from_raw_u32(107).unwrap());
+        // And nothing else moved: the numbers and the place are facts about
+        // the world, not references into it.
+        assert_eq!(hit.amount, 30);
+        assert_eq!(hit.point, Vec3::new(1.0, 2.0, 3.0));
+
+        let mut death = Died {
+            victim: target,
+            victim_name: Some("somebody".into()),
+            victim_id: Some(PlayerId(4)),
+            killer: A,
+            assist: None,
+            at: Vec3::ZERO,
+        };
+        death.map_entities(&mut Shift);
+        assert_eq!(death.victim, Entity::from_raw_u32(107).unwrap());
+        assert_eq!(death.victim_id, Some(PlayerId(4)), "the match identity is not an entity");
+    }
 
     const A: DamageSource = DamageSource::Player(PlayerId(1));
     const B: DamageSource = DamageSource::Player(PlayerId(2));

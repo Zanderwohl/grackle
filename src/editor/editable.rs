@@ -229,6 +229,31 @@ impl FeatureTimeline {
         }
     }
 
+    /// Replace the open map with another one, taking the old map's entities
+    /// down with it.
+    ///
+    /// The despawns are *queued* rather than done here, so they run in
+    /// `sync_entities` alongside the spawns of the incoming features — one
+    /// place that owns the world's shape, rather than two that have to agree
+    /// about which frame they run on. Leaving them out is what would strand
+    /// the old map's rooms in the world with nothing left pointing at them.
+    ///
+    /// The caller is responsible for re-baking room geometry afterwards: the
+    /// entities do not exist until `sync_entities` has run, so a bake fired in
+    /// the same frame would bake nothing.
+    pub fn adopt(&mut self, incoming: FeatureTimeline) {
+        let old: Vec<Entity> = self
+            .active_features()
+            .filter_map(|(_, feature)| feature.object().entity())
+            .collect();
+        *self = incoming;
+        for entity in old {
+            self.queue_despawn(entity);
+        }
+        // A selection is an index into the map that just went away.
+        self.select(None);
+    }
+
     /// Applied history entries only (excludes redo branch after undo).
     pub fn applied_actions(&self) -> &[Action] {
         &self.actions[..self.action_cursor]
@@ -786,7 +811,9 @@ impl FeatureTimeline {
     }
 
 
-    fn sync_entities(mut features: ResMut<Self>, mut commands: Commands) {
+    // `pub(crate)` so a test elsewhere in the crate can drive it directly:
+    // what a map adoption does to the world only shows up once this has run.
+    pub(crate) fn sync_entities(mut features: ResMut<Self>, mut commands: Commands) {
         for entity in features.pending_despawns.drain(..) {
             commands.entity(entity).despawn();
         }

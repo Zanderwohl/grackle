@@ -34,11 +34,13 @@ in it that constrains code written today: items must record their provenance
 ## State of the repo
 
 The editor is real and works. **The game barely exists.** There is a damage
-layer, three kinds of weapon — hitscan, projectile, flame — and teams, but no
-networking, no ammo,
-no reload and no round structure: a body that dies leaves a ragdoll, and you
-are back on your feet instantly. There is also no wasm build yet. Adding the runtime is the current
-frontier, not a finished thing to extend.
+layer, three kinds of weapon — hitscan, projectile, flame — teams, and a
+server-authoritative network layer that carries the map, the bodies, damage,
+deaths and corpses. There is no ammo, no reload and no round structure: a body
+that dies leaves a ragdoll and comes straight back, on the same side, as the
+same player. A client predicts its own movement and is rolled back when the
+server disagrees. There is also no wasm build yet. Adding the runtime is the
+current frontier, not a finished thing to extend.
 
 `src/unlock` and the `crate_drop` binary are a self-contained TF2-style
 crate-unboxing prototype. It is orthogonal to both the editor and the game.
@@ -109,6 +111,52 @@ answered at this layer yet.
 `Escape` belongs to the pause menu. No reload, no second process — that is the
 between-round editing feature, so keep it that way.
 
+**On a client the server owns the mode**, and F5 does nothing.
+[`src/common/match_state.rs`](src/common/match_state.rs) sends a `MatchMode`
+whenever the server's `AppMode` changes and again to each client as it
+connects, and the client follows. Everyone drops into the editor between rounds
+together and drops back into the round together, which only works if one
+process owns the transition. Two details there are load-bearing: the message
+states what the mode *is* rather than that it changed, so a client joining
+mid-round is told where things stand and a dropped message is corrected by the
+next one instead of leaving somebody inverted; and a restatement of the mode
+already in force is ignored, because `NextState::set` runs the transition even
+for the same state and `OnEnter(Play)` tears the match down and rebuilds it.
+`toggle_mode` answers a client's F5 with a line in the log rather than
+swallowing it — a key that silently does nothing reads as a bug.
+
+**`Escape` opens the pause menu**
+([`src/game/pause_menu.rs`](src/game/pause_menu.rs)), and releasing the mouse
+is the point of it — a grabbed cursor is not something a player can get out of
+by clicking elsewhere, so a window with no way to hand the pointer back is a
+window you have to kill the process to leave. Plain Bevy UI, not `egui`: the
+panels are egui because they are editor tools, and this is part of the game, so
+it has to exist in a build with no editor and on a browser tab where the egui
+layer is one more thing to have gone wrong.
+
+Three things there are easy to get wrong and none of them errors:
+
+- **`gather_input` is gated on `not_paused`, but `gather_aim` is not.** A
+  `MessageReader` has its own cursor, so a frame the system does not run is a
+  frame of mouse motion still waiting to be read — gate it and closing the menu
+  applies every scrap of motion made while it was up, in one frame. It drains
+  first and answers the pause question itself.
+- **Opening the menu calls `release_controls`, not `InputLatch::default`.** A
+  key held as the menu goes up would stay held with `gather_input` not running
+  to correct it, so the body walks into a wall for as long as the menu is open.
+  But `yaw` and `pitch` are not keys being held — they are where the player
+  *put* the view — and clearing them too spins you round to face north the
+  moment you open the menu. `PlayerInput::release_controls` is the one place
+  that distinction is written down, deliberately listing the fields rather than
+  spreading `..default()` around, so a new field gets classified on purpose.
+- **The cursor is only touched while in Play.** Change detection counts a
+  resource's insertion as a change, so a `resource_changed` system that sets
+  the cursor unconditionally grabs it inside the editor on the first frame of
+  the process.
+
+The play camera carries `IsDefaultUiCamera`: the window has five cameras in it
+and Bevy UI otherwise picks one by ambiguity rules rather than by being told.
+
 Three more keys while playing: **`F`** swaps between first and third person
 (`ViewMode` in [`src/game/player.rs`](src/game/player.rs) — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
@@ -120,6 +168,40 @@ Weapons are on **`1`–`5`** (hitscan, rocket, pipe bomb, RPG, flamethrower),
 the left mouse button fires — held, for the flamethrower — and **`G`** plants
 an emitter firing whatever projectile you are holding every two seconds with
 **`B`** to clear them. See "Damage, weapons and projectiles" below.
+
+## Baking before a round
+
+**Entering Play bakes the map first.** `BakeSystems::All`
+([`src/tool/bakes.rs`](src/tool/bakes.rs)) runs on `OnEnter(AppMode::Play)`
+and `reset_for_play`/`enter_play` are ordered `.after` it, so a round is set up
+against a world that has been rebuilt rather than one that is about to be.
+
+It is a **set, not a list of named systems**, for the same reason
+`DamageSystems` is one: rooms are the only thing baked today, and a second kind
+— navmesh, lightmap, whatever the compiled map format wants — joins by naming
+the set. Name the systems instead and the ordering lives somewhere that does
+not know about them, and forgetting one produces no error, just a round that
+starts before its world is finished.
+
+The bake is unconditional rather than message-driven, because the case it
+exists for is a client: it is handed the server's map and enters Play in the
+same breath, and the `CalculateRoomGeometry` that adoption writes is read a
+frame later than the round starts. What a missed bake costs is *not* a body
+falling through the world — collision is built from the `Room` components, so
+the walls are all still there — it is a round played in a map nobody can see.
+That is why it is easy to miss.
+
+`bake_room_geometry` is also **no longer gated on `AppMode::Editor`**, unlike
+the rest of `BakePlugin`. A map can change while a round is being played; that
+is the whole between-round editing feature, and geometry that stopped being
+rebuilt the moment somebody pressed F5 would leave the match looking at the map
+as it was before the edit. Joining a round therefore bakes twice — once on
+adoption, once entering Play — which is the right trade: the message covers a
+map arriving mid-round, the set covers one arriving as the round starts.
+
+The actual work is the free function `bake_rooms`, called by both paths, so
+that "somebody pressed the button" and "a round is starting" cannot bake
+slightly differently.
 
 ## What a body is drawn as
 
@@ -179,7 +261,7 @@ schedules is deliberate:
 
 | Schedule | What runs there | Why |
 | --- | --- | --- |
-| `BeforeFixedMainLoop` | `gather_input`, `mouse_look` | Aim at 64 Hz is latency you can feel; input gathered here reaches the same frame's steps. |
+| `BeforeFixedMainLoop` | `gather_input`, `gather_aim`, `place_camera` | Aim at 64 Hz is latency you can feel; input gathered here reaches the same frame's steps. |
 | `FixedUpdate` | `step_player`, collision rebuild | Everything deciding where a body ends up, so the same inputs give the same trajectory at any frame rate. |
 | `AfterFixedMainLoop` | `interpolate_bodies` | Draws between steps, so 64 Hz does not visibly step on a 144 Hz display. |
 
@@ -188,15 +270,86 @@ Two rules that follow, and both are easy to break by accident:
 - **Never read `ButtonInput` from `FixedUpdate`.** It is cleared once per
   frame while `FixedUpdate` runs zero, one or several times, so edges get
   double-counted on a slow frame and dropped on a fast one. Latch into
-  `PlayerInput` in `gather_input` and consume it in the step.
+  `InputLatch` in `gather_input` and let the tick take it.
 - **Physics writes `PhysicsBody`, never `Transform`.** `interpolate_bodies`
   owns `Transform.translation`; writing it from a step would be overwritten and
-  would skip interpolation. `mouse_look` owns `Transform.rotation`.
+  would skip interpolation. `face_bodies` owns `Transform.rotation`, for every
+  body, from `Player.yaw`.
 
-`PlayerInput` is also the seam prediction will need: the step is a function of
-`(state, input, fixed dt)`, so a client and a server fed the same values reach
-the same position. Keep it that way — a step that reads the keyboard, the wall
-clock, or an RNG directly cannot be reconciled.
+`PlayerInput` is the seam prediction will need when it comes back: the step is
+a function of `(state, input, fixed dt)`, so a client and a server fed the same
+values reach the same position. Keep it that way — a step that reads the
+keyboard, the wall clock, or an RNG directly cannot be reconciled. Nothing
+predicts today; see "One rule" below.
+
+**`PlayerInput` is a component on the body, not a resource**, and that is what
+makes the step a function of one body's inputs rather than of whatever the
+last writer said. A server steps every player in the same tick from a
+different set of inputs; a global input would walk them all the same way.
+`Player` requires it, so no body can exist without one.
+
+Two consequences worth knowing:
+
+- **Aim travels in the input, and nowhere else.** `gather_aim` accumulates
+  `yaw`/`pitch` onto the latch and the step copies them onto the body. Facing
+  decides which way "forward" is, so a server handed movement without aim walks
+  the body the wrong way. Nothing writes a body's rotation from the mouse — the
+  view is a separate entity aimed straight from the latch, which is what keeps
+  looking around instant without giving a body's rotation two writers.
+- **`LocalPlayer` marks the one body this machine's view follows.** Everything
+  that reads a keyboard or a mouse looks for it and nothing else; a system
+  querying `With<Player>` would steer every body in the world at once.
+
+### Three clocks, and what consumes an edge
+
+Input crosses two clock boundaries and each has its own home:
+
+| Where | What lives there |
+| --- | --- |
+| `InputLatch` (resource) | What this machine's keyboard has said since the last tick. A fact about the peripherals, not about a body, so it outlives every body — which is why `reset_for_play` clears it. |
+| `Inputs` = `ActionState<PlayerInput>` (component) | What *this tick* asked one body to do. Written by `write_client_inputs`, buffered and sent by Lightyear, replayed by rollback. |
+| `Player`, `PhysicsBody`, `Stance` | What the step made of it. |
+
+**The latch is seeded from the body, not left at zero.** A body knows its
+facing before this machine does — from a spawn point on a host, from the server
+on a client — and the latch is both what the view is aimed from and what the
+next tick sends. `aim_the_view_at_our_body` copies `Player.yaw`/`pitch` across
+on `Added<LocalPlayer>`, which covers a fresh round, a respawn and a client
+being handed a body without any of them knowing about the others.
+
+It runs in **`PreUpdate`**, and that is the only place early enough. The body
+is created by a command in `Update`, so the mark lands at the end of that
+frame; `write_client_inputs` runs in the fixed loop of the *next* frame, before
+`Update` gets another turn. Seed any later and the latch's zero is copied onto
+the body first — a spawn point's facing thrown away by the very input meant to
+carry it.
+
+**`write_client_inputs` is the only place an edge is consumed.** It runs in
+`FixedPreUpdate` inside Lightyear's `WriteClientInputs` set, copies the latch
+onto the local body's `Inputs`, and clears `jump`, `attack` and `select` from
+the latch. Level fields — movement, sprint, aim — are carried across, since
+`gather_input` reassigns them every frame and the latest reading is the right
+one.
+
+**Nothing downstream may consume what it reads.** `step_player`, `pull_trigger`
+and `select_weapons` take `&Inputs`, never `&mut`. Rollback replays a tick from
+its buffered input, so a step that took the jump out of it would replay as a
+step that never jumped — and the symptom is not an error, it is a body that
+lands somewhere slightly different every time the connection hiccups. That is
+also why `select_weapons` selects rather than takes: selecting the slot already
+held is not a second switch, so replaying it changes nothing.
+`replaying_a_tick_reads_the_same_input_again` is the test that pins it.
+
+`Inputs` is Lightyear's `ActionState` used directly as the storage rather than
+a `PlayerInput` of our own kept beside it. The alternative is a bridge that has
+to be exactly right about *when* it copies, and rollback replays ticks out of
+order; one value written and read in place has no such window to get wrong.
+
+One trap when adding a system that wants the local body's `Transform`
+alongside the camera's: put `With<Player>` in the filter next to
+`With<LocalPlayer>`, redundant as it looks. It is what proves the query
+disjoint from the camera's `Without<Player>` one, and without it Bevy refuses
+the system at runtime rather than at compile time.
 
 Collision comes from the rooms, not from the baked meshes
 ([`src/game/collision.rs`](src/game/collision.rs)) — but from the *same* face
@@ -232,9 +385,20 @@ component is a body that lies there playing its idle.
 
 The ordering spans two plugins and nothing in the type system holds it
 together: `raise_ragdolls` has to run **before** `reap_the_dead`, because by
-the time `Died` is written there is no pose left to copy. Break it and bodies
+the time the body is reaped there is no pose left to copy. Break it and bodies
 quietly stop leaving corpses — there is no error. There is a test at the
 bottom of `ragdoll.rs` that assembles both plugins for exactly this reason.
+
+**A corpse is replicated, not raised locally** — see "Corpses are props" below.
+The authority makes one and everybody else is sent the seed.
+
+**A corpse's clock is its own.** `RAGDOLL_LIFETIME` is ten seconds of game time
+and nothing else ends it: a body and its corpse are not mutually exclusive, and
+since respawning is immediate, clearing a corpse when its owner came back would
+be a corpse nobody ever saw. Standing over your own body is the correct
+picture. Only the round ends one early — `clear_ragdolls` on leaving Play and
+`reset_for_play` on entering it, both on the authority, since a client's copies
+go away with the despawns it is sent.
 
 Simulation is position-based dynamics over **two points per bone**, a head and
 a tail, hand-written for the same reasons the rest of the physics is: no C
@@ -296,8 +460,9 @@ out to depend on exactly how it lands. Run it after touching any constant in
 that file.
 
 Corpses belong to the match: cleared on leaving Play and again in
-`reset_for_play`, and they age on game time, so nothing rots while somebody is
-in the editor. They sleep once settled, and a shove wakes them.
+`reset_for_play` — on the authority, whose despawns carry to everybody else —
+and they age on game time, so nothing rots while somebody is in the editor.
+They sleep once settled, and a shove wakes them.
 
 ## Teams
 
@@ -335,10 +500,14 @@ what you read across a room in a fight. A spawn point's preview is still green
 because nothing on it has a side. Corpses keep their team, so a pile of them
 still says which way a fight went.
 
-The player does not choose: it is `PLAYER_TEAM` in
-[`src/game/mod.rs`](src/game/mod.rs), a constant, because there is no lobby and
-no second player to be balanced against. Per-team spawns are still a gamemode
-question, deliberately unanswered.
+The player does not choose: `next_team` in
+[`src/game/respawn.rs`](src/game/respawn.rs) alternates Red and Blue as people
+turn up, because there is no lobby and nothing that could balance. Alternating
+rather than a constant so that **two people on one map are on different
+sides** — with everybody on one team the rule above is unreachable outside the
+animation grid, and a rule you cannot walk up to and check is a rule that
+quietly stops being true. Per-team spawns are still a gamemode question,
+deliberately unanswered.
 
 **The animation grid does choose.** `RosterTeam` on the feature is a panel
 combo — *Striped*, or one of the four — and striped deals them round the roster
@@ -353,8 +522,10 @@ It rides in the generic `scalar_fields` table and loads through
 saved before the field existed comes back striped. That is the pattern for any
 new scalar on an existing feature; a migration is only for a table shape.
 
-`team_carousels` keeps standing bodies in step with the choice, and it
-**compares before it writes**. `apply_to_entity` runs on every edit, so the
+`team_carousels` keeps standing bodies in step with the choice. It walks the
+bodies and asks each which grid it is on rather than walking a grid's children,
+because these bodies stand in the world so they can be replicated — `OfGrid` is
+what replaced the parenting. And it **compares before it writes**. `apply_to_entity` runs on every edit, so the
 grid's `RosterTeam` reads as changed on every frame of a drag — and a written
 `Team` is a changed one, which is `build_body_meshes` throwing sixty bodies
 away and rebuilding them for as long as the point is moving. Same trap as
@@ -363,30 +534,40 @@ re-inserting a `Skeleton`, one component along.
 ## Coming back
 
 Death used to be the end of the session: the body was despawned, the camera
-went with it as a child, and what was left was a map with nobody in it. Now
-[`src/game/respawn.rs`](src/game/respawn.rs) stands another one up, **instantly
-and in the same fixed step** — `respawn_players` sits in `DamageSystems::Resolve`
-after `reap_the_dead`, because a frame with no player is a frame with no camera.
+went with it as a child, and what was left was a map with nobody in it. Now you
+come straight back, and the rule that puts you there is the same one that hands
+a body to somebody joining mid-round — see "Who gets a body, and when it goes
+away" below. There is no respawn system: `give_bodies_to_whoever_needs_one`
+asks who should have a body and does not, and dying is one of the ways to be in
+that state.
 
 Instant is a placeholder and is meant to look like one; a respawn timer, wave
 respawns and spawn protection are a gamemode's numbers. Two parts of the shape
-are not placeholders:
+are not placeholders, and both live in
+[`src/game/respawn.rs`](src/game/respawn.rs):
 
-- **Your identity outlives your body.** `LocalPlayer` is a *resource* holding
-  the `PlayerId` and the team for the length of a match, and a new body gets
-  the *same* id. This is the opposite of what `F5` does, deliberately: a new
-  match is a new player, a new life is not, and a fresh id per death would show
-  a scoreboard one player per life. Set by `enter_play`, removed by
-  `leave_play` — that removal is what stops the editor being handed a body.
+- **Your identity outlives your body.** `Identity` is a `PlayerId` and a
+  `Team`, and every body somebody is given carries the *same* one. This is the
+  opposite of what `F5` does, deliberately: a new match is a new player, a new
+  life is not. A fresh id per death shows a scoreboard one player per life, and
+  a fresh team is being put on the other side for dying.
+
+  It is never stored on a body, since a body is the thing that keeps being
+  destroyed. It lives where the *player* lives, and there are two of those:
+  `OurIdentity` — a resource — for the person at this machine, dropped by
+  `enter_play` so the next match is a new player; and a component on the
+  **link entity** for each connected client, which appears with the connection
+  and goes with it. Two homes rather than one because those are two genuinely
+  different lifetimes, and each is already exactly right — nothing has to keep
+  a roster in step with who is actually here.
+
+  A client holds no identity of its own. It is *told* who it is by the body the
+  server hands it, and a second opinion held locally is the two-writers mistake
+  most of this section is about.
 - **The choice of where is shared with the first spawn**, in `choose_spawn`.
   Two copies of "pick a usable spawn point, fall back to the largest room" is
   one copy that quietly stops matching the other, and the failure is a body
   that respawns inside a wall on maps the first spawn handles fine.
-
-The trigger is the invariant *while you are playing, there is a body*, not a
-`Died` message — right whatever removed the body, including a way of dying
-nobody has written yet. With several players it becomes "a player with no
-body", which is the same rule with a roster behind it.
 
 ## Damage, weapons and projectiles
 
@@ -404,7 +585,7 @@ The order inside a tick is stated as **sets, not as named systems**
 | --- | --- |
 | `Deal` | Everything that writes `Damage`: `fire_hitscan`, `step_projectiles`, `explode`, `fire_flame`, `burn`. |
 | `Apply` | `apply_damage`, and nothing else, ever. |
-| `Resolve` | `record_damage`, then `reap_the_dead`, then `respawn_players`. |
+| `Resolve` | `record_damage`, `announce_the_dead`, then `reap_the_dead`. |
 
 A new damage source joins `Deal` and says nothing about what happens after it.
 Before the sets, `DamagePlugin` had to name every weapon so it could order
@@ -507,6 +688,483 @@ in front of the animation grid and the sixty standing bodies become a firing
 range. It reads the keyboard directly rather than going through `PlayerInput`,
 which is fine precisely because planting a prop is not part of the simulation.
 
+## Which end of the wire this is
+
+`NetRole` ([`src/common/net.rs`](src/common/net.rs)) is `Solo`, `Listen { port }`
+or `Client { host, port }`, and **the default is `Solo` — a closed game with no
+socket at all**. Opening the editor to lay out a room must not involve the
+network, so a solo game is a real role rather than a server nobody connected
+to; making it a degenerate listen server would put a loopback connection in the
+way of the one thing this editor exists to make fast.
+
+`--serve [PORT]` is a **listen server, not a dedicated one**: the window still
+opens, the editor is still there, and the host is a player. That is what makes
+between-round editing testable with somebody else standing in the map.
+`--connect HOST[:PORT]` joins one. The two conflict at the clap level. Bare
+`--serve` takes `DEFAULT_PORT`. The same two choices are in the `Multiplayer`
+menu, which opens the connect dialog in
+[`src/editor/net_menu.rs`](src/editor/net_menu.rs) — a floating
+`egui::Window` rather than an `egui_dock` tab on purpose: the panels rule is
+about surfaces you work in, and this is a modal question with an answer.
+
+Two rules, and both are easy to undo:
+
+- **Ask `NetRole::is_authority()`, not which variant it is.** Solo and Listen
+  both simulate and are believed; a client is told and draws. Almost
+  nothing cares about the difference between playing alone and hosting, and a
+  system that matches on the variant has to be found again the first time a
+  fourth role appears. `has_authority` and `is_remote_client` are run
+  conditions over the same question.
+- **`NetRole` is written in exactly one place**, `apply_net_requests`, which
+  reads `NetRequest`. Everything else — the CLI, the menu, the dialog — asks.
+  There is nothing to tear down today; the moment there is, every caller
+  already routes through the place that will do it. It also declines to write a
+  role equal to the one already set, because the transport will hang off
+  `Changed<NetRole>` and re-picking "Host" must not drop everybody connected.
+
+### What a networked body is
+
+A body is one entity on every machine, in four layers. Which layer a component
+belongs to decides who writes it and whether it crosses the wire, and almost
+every bug in this area has been a component in the wrong layer.
+
+| Layer | Components | Written by | On the wire |
+| --- | --- | --- | --- |
+| **State** | `PhysicsBody`, `Player`, `Stance` | the step, on the authority | replicated |
+| **Consequence** | `Damageable` (+`DamageLog`) | the damage layer, on the authority only | replicated |
+| **Identity** | `PlayerId`, `Team` | the server, once | `replicate_once` |
+| **Intent** | `Inputs` (`ActionState<PlayerInput>`) | the owning client | client → server only |
+| **Description** | `BodyRequests` | `describe_player_bodies`, on the authority | replicated |
+| **Presentation** | `Skeleton`, `Pose`, `SkeletonAnimator`, `Gait`, `AnimationPhase`, `SkeletonRoot`, `BodyMesh`, `Hitboxes` | every process, locally | **never** |
+| **Props** | `Ragdoll` | the authority, once | `replicate_once` |
+
+**Where a body is looking is `Player.yaw`/`Player.pitch`**, and both ride along
+in the replicated `Player`. Applying them is split across two systems, because
+they do different things to a body:
+
+- `face_bodies` turns the whole body to `yaw`, for **every** body including our
+  own. It is the only writer of a body's rotation anywhere. That is not only a
+  drawing question: hitboxes are built from the body's `GlobalTransform`, so a
+  body left unturned has its head boxed where its head is not, and a shot that
+  visibly lands does not register.
+- `look_with_the_head` bends the neck and head to `pitch`, running after
+  `advance_animators` and composing onto the pose it left — which is the
+  arrangement that system's own docs describe for a look-at. The pitch is split
+  0.4/0.6 between neck and head, because a head alone at eighty degrees reads
+  as a broken neck, and the shares sum to one so straight up is straight up.
+
+**A spine bone's positive `X` rotation is *down*, and pitch is positive *up*,**
+so the look pass negates. A bone's `+Y` runs up its length and the rig faces
+`-Z`, so folding forward is positive — which is why `CROUCH_LEAN` is positive
+on the chest and negative on the neck, where it lifts the head back up.
+
+The trap underneath that is worth stating on its own, because it cost a round
+trip: **the head bone's rest rotation is not identity.** Its local `-Z` points
+at world `+Z`, which is *behind* the body, so a test that measures
+`rotation * NEG_Z` is watching the back of the head and will happily confirm
+that looking down is looking up. Measure `rotation * Z`, and assert the
+convention itself first — `a_body_at_rest_faces_the_way_it_walks` exists so
+that re-authoring a rest rotation fails loudly instead of quietly inverting
+everybody's aim.
+
+`face_bodies` writes the rotation exactly rather than smoothing it. `yaw`
+arrives at the tick rate, the same rate `PhysicsBody` does, so a filter would
+buy slightly less stepping in exchange for hitboxes that lag where the body is
+aiming — and aim is the one thing that must not lag.
+
+**Poses are never transmitted.** A pose is twenty-odd quaternions per body per
+tick and it is the *output* of a state machine that is deterministic and
+present on every machine. What crosses is the machine's input — `BodyRequests`,
+nine bools — and each process runs `AnimationState` over it. `Gait` is not sent
+either: it is advanced from ground covered, and the ground covered is
+`PhysicsBody`, which is. `AnimationPhase` is derived from `PlayerId` by
+`phase_bodies_by_id`, so two clients put the same body at the same point in its
+cycle; an `Entity` index or an RNG would give every viewer a different answer.
+
+#### Corpses are props, and props are replicated
+
+A corpse is the one piece of presentation that **does** cross the wire, and the
+reason is ordering rather than physics. Every arrangement where a viewer raises
+its own corpse from the fact that a body died is a race against that body's
+despawn: a death is *always* a despawn, the fact and the removal arrive
+together, and by the time anything can copy the pose the entity has been
+recycled. A `Died` message, a `Dying` marker, a tick of grace — each makes the
+window narrower and none removes it, and the symptom is silent. The measured
+gap got down to 1.3 ms and still lost every time.
+
+Making the corpse a replicated entity settles it by construction: the spawn and
+the despawn are on the same channel, and replication is ordered with itself.
+That is also what a corpse *is* — nothing can touch one, nothing collides with
+one (not even another corpse), and it takes no input. It is a prop that used to
+be a person, so it goes on the wire the way a prop does.
+
+What crosses is the **seed**, not the simulation. `Ragdoll` is
+`replicate_once`: two points per bone at the moment of death, sent once and
+never again, and each machine runs the same solver over them from there —
+twenty bones of physics per corpse once, not per tick. A `Skeleton` still never
+crosses; the corpse carries a `CorpseBuild` — the `Proportions` read straight
+off the rig the body had — and `dress_corpses_from_elsewhere` puts the rig
+back from it.
+
+**The build comes off the rig, not off a `Class`.** A player's body has no
+`Class` at all: it is rigged from `Proportions::DEFAULT` by `dress_new_players`,
+and only the animation grid's bodies carry one. Keyed on a class, every corpse
+in the game replicated correctly *except* a player's — the one death anybody
+actually watches — and it failed as an invisible corpse rather than as an
+error. Every body has a rig by definition, and a rig knows what it was built
+from.
+
+Four things about that are load-bearing:
+
+- **Dressing is keyed on absence, not on `Added<Ragdoll>`.** The seed and the
+  build are two components on one entity, and replication does not promise to
+  deliver them in one packet. Keyed on the seed's arrival, a corpse whose build
+  came a tick later is never dressed at all — three in eight, measured — and an
+  undressed corpse is invisible rather than an error.
+- **A corpse must never be given a `SkeletonAnimator`.** The solver owns its
+  pose. That is why dressing a corpse is its own system rather than
+  `dress_bodies_from_elsewhere`, which hands one out — and why that system
+  carries a `Without<Ragdoll>`.
+- **Only the authority retires one.** `retire_ragdolls` is split out of
+  `step_ragdolls` for exactly that: a client counting down its own lifetime
+  would remove something that is not its to remove, at a slightly different
+  moment, since its copy started ageing when the spawn arrived.
+- **`RagdollShove` is relayed on `EventChannel`**, like `Effect` and for the
+  same reason — it is pure geometry, so no entity mapping. Without it the
+  simulation is identical on every machine except that nobody but the server
+  ever saw the rocket hit the body, and corpses elsewhere would simply crumple.
+
+`Dying` still crosses, and its one remaining job is to hide the body for the
+tick it outlives itself by (`hide_the_dying`, which runs everywhere) — without
+it the body stands upright inside its own corpse until the despawn lands.
+
+### One rule: the server decides, and a client guesses only its own movement
+
+**The server simulates. Every other machine draws what it is told** — with one
+exception, and it is deliberately only one. A client runs `step_player` on the
+body it controls, so moving feels immediate, and Lightyear rewinds and replays
+when the server disagrees. It fires no weapon, resolves no damage and describes
+no animation; those are not predicted, because guessing a kill and being wrong
+is a body that falls over and stands back up.
+
+What holds it together is **one writer per value**. Almost every bug in this
+area was two writers for one thing — a body turned by the mouse locally and by
+its yaw remotely, a body spawned by the map on one end and by replication on
+the other — and each showed up as something that looked unrelated to its cause.
+Prediction was smeared through movement, input, damage and drawing before, and
+that is what made the two ends disagree; it went back on afterwards, as one
+layer, changing the behaviour of exactly one system.
+
+Three markers, and they are not synonyms:
+
+| Marker | Means | Who has it |
+| --- | --- | --- |
+| `Player` | this is a person's body | every body, everywhere |
+| `LocalPlayer` | **this machine's view follows it** | exactly one body, or none |
+| `Simulated` | **this process steps it** | every body on a server; the predicted one on a client |
+
+`Simulated` is read by **`step_player` and nothing else**, which is the whole
+difference between it and the version that got deleted: it was once a decision
+five systems each had to make correctly, none of which errored on getting it
+wrong. `spawn_player` adds it, because whoever stands a body up steps it, and
+`claim_our_own_body` adds it to the body a client is handed. Those coincide by
+construction — the server predicts a body only to the client that controls it —
+so "ours", "what we drive" and "what we predict" cannot come apart.
+
+`LocalPlayer` gates `gather_input`, `write_client_inputs`, `place_camera`,
+`spawn_the_view` and `aim_the_view_at_our_body`, and answers "is this mine" in
+`hide_own_body`, `draw_hitboxes` and `draw_skeletons`. `has_authority` — which
+answers `true` with no network layer at all, so a solo game is unchanged —
+gates the weapon systems, `describe_player_bodies`, all of `DamageSystems`, the
+health restore in `reset_for_play`, and every system that hands out a body.
+
+**Lightyear replays a rollback by re-running `FixedUpdate`**, so everything in
+it runs several times on a frame where the server disagreed. That is exactly
+why nothing downstream may consume what it reads — see "Three clocks" above.
+The collision rebuild is in there too and is no longer authority-gated: a
+client predicting movement walks into its own copy of the walls, so that copy
+has to be current.
+
+### The view is not the body
+
+`place_camera` puts the camera at the local body's position and aims it
+**straight from this machine's latch**. The camera is its own entity, not a
+child of the body, and that is load-bearing: as a child it would inherit the
+body's rotation, and the body's rotation is a round-trip behind. Looking around
+has to be instant even when moving is not.
+
+So aim goes to exactly one place — the latch — and comes back as `Player.yaw`
+for the body. `face_bodies` turns **every** body from that one value, our own
+included. Nothing writes a body's rotation from the mouse.
+
+### Who gets a body, and when it goes away
+
+The server spawns every body, its own included. A client never spawns one.
+
+**There is one rule and it is about absence:**
+`give_bodies_to_whoever_needs_one` hands a body to every player who should
+have one and does not. That single question covers starting a solo game,
+joining mid-round, being connected when the round starts, and dying — all of
+which used to be a system each, with respawn lined up to be a fifth.
+
+Asking about absence rather than about events is what makes it hold: there is
+no queue to keep, no timer keyed to an entity that has already been despawned,
+and nothing to get wrong when a case nobody thought of turns up.
+
+**Respawning is immediate, and that is a placeholder rather than a decision.**
+When a body comes back — on a wave, after a delay, at your team's end of the
+map — is a gamemode question, and this layer answers none of those. What it
+guarantees is only that being alive is the resting state.
+
+| Moment | What happens |
+| --- | --- |
+| Anybody has no body | `give_bodies_to_whoever_needs_one`, next `Update`, wearing the `Identity` they already had |
+| Client's body reaches it | `claim_our_own_body` marks it `LocalPlayer` + `InputMarker` |
+| Client disconnects | `ControlledBy { lifetime: SessionBased }` despawns it on the server; the despawn replicates |
+| Round ends | the server's `leave_play` despawns every body; a client's despawns none, because they are not its to despawn |
+
+`enter_play` no longer spawns anything: it rebuilds `CollisionWorld`, drops
+`OurIdentity` so the new match is a new player, and hands the cursor over. The
+body follows on the next `Update`, because by then somebody is a player with no
+body.
+
+**One entity per body, everywhere.** `Controlled` — the receiver-side half of
+the server's `ControlledBy` — is how a client knows which body is its own. No
+`PredictionTarget` and no `InterpolationTarget`: both make a *second* copy of a
+body on the receiving end, and a second copy is a second writer.
+
+### State is replicated; events are relayed
+
+Replication carries **state**: health is a component, so a client is told the
+number. It cannot carry **events** — a hit landed *here*, for *this much*, by
+*this person* — because an event is not a value anything holds afterwards. Two
+hits of thirty in one tick and one hit of sixty leave a body at identical
+health, and a client watching only the number would draw one number instead of
+two, in the wrong place, credited to nobody.
+
+So `DamageDealt`, `Died` and `RagdollShove` are relayed as messages by
+[`src/common/net_events.rs`](src/common/net_events.rs): the server reads the
+same local queue the floating numbers read and sends each record on; a client
+writes what arrives into its own local queue. Everything downstream then reads
+one queue and never asks where a record came from — and the damage layer stays
+unaware there is a network, so a new source joining `DamageSystems::Deal` is
+relayed without naming itself anywhere.
+
+They are **feedback only** on the receiving end. Nothing a client does with a
+`DamageDealt` touches a health pool, because `DamageSystems` does not run
+there. A record arriving late, out of order, or not at all costs a floating
+number, never a disagreement about who is alive — which is why the channel is
+unordered.
+
+**Records carry entities, and an entity is the sender's.** Both implement
+`MapEntities` and are registered with `.add_map_entities()`. Without it a
+damage number would be anchored to whatever entity happened to share that index
+locally.
+
+**`Effect` travels the same way, and is the only thing the visuals read.**
+[`src/common/effects.rs`](src/common/effects.rs) is a tracer or a blast — pure
+geometry, no entities, so nothing about it needs mapping and one whose target
+has already been despawned is still perfectly drawable. `mark_blasts` used to
+read `Explosion` directly, which worked exactly as long as the only machine
+that mattered was the one deciding the damage: `explode` is in
+`DamageSystems::Deal`, so a client watching it would see nothing go off, ever.
+Reading a queue filled either locally or off the wire is what lets the drawing
+not know which it was.
+
+Two things about tracers specifically:
+
+- **A shot that hits nothing still writes one.** It is written before the early
+  return that skips the damage, because a tracer is where the bullet went — a
+  fact about the world, not about whether it found anybody. Fire into open
+  space with no tracer and the weapon reads as jammed.
+- **A tracer is an entity with a lifetime, not a gizmo call at the moment of
+  firing.** Firing happens on the tick and drawing at frame rate, so a gizmo
+  written inside `fire_hitscan` is drawn for one frame if the rates happen to
+  line up and not at all if they do not.
+
+### Projectiles are replicated, not re-simulated
+
+Every client could step the same spec from the same origin and get the same
+arc — the map is identical and the maths is deterministic — right up until it
+meets a body, and a client's copy of a remote body is always a little behind
+the server's. A locally simulated rocket would detonate against a player who,
+on the server, was never there: a puff of smoke and no damage, which reads as
+the game losing a hit that plainly landed.
+
+So the server flies it and everybody watches. `PhysicsBody` carries the
+position and `interpolate_bodies` smooths it, exactly as for a body. The
+stepping needs no gate of its own: `fire_projectiles`, `run_emitters` and
+`step_projectiles` are all in `DamageSystems::Deal`, which is already
+authority-only.
+
+Two things had to move out of the step, because a client draws what it does not
+fly:
+
+- **Spin.** `spin_projectiles` turns the transform from the replicated
+  `Projectile.spin`. Left in the step, a replicated pipe bomb would be a
+  tumbling projectile that does not tumble.
+- **Scale.** `dress_projectiles` sizes the transform from `spec.radius`. A
+  replicated projectile is built by inserting components and never went through
+  `launch`, so its transform starts at unit scale and a rocket is drawn a metre
+  wide.
+
+`Projectile.shooter` is `#[serde(skip)]`: it is only ever asked by the process
+resolving the hit, which is always the authority, and skipping it keeps the
+component off the list of things needing entity mapping.
+
+### Features describe the map; the authority builds the bodies
+
+A room is map content: every machine builds its own from the same features and
+they agree because the features do. **A body is not.** It has health and
+hitboxes, so something has to be believed about whether it is alive — and built
+on every machine from the same feature, the copies are *different entities with
+the same shape*. Shoot one on the server and the client's copy, which nobody
+told anything, goes on standing there.
+
+So `sync_animation_grids`, `follow_moved_grids` and `drive_carousels` are gated
+on `has_authority`. The grid *feature* still exists everywhere — it is map
+content, it draws its gizmos, a mapper can still move it — but the bodies it
+stands up come from the authority like every other body, and reach everybody
+else by replication.
+
+**A viewer is never told what a carousel body is.** `CarouselBody` and `OfGrid`
+do not cross the wire; what does is a `PhysicsBody`, a `Class` and a
+`ForcedAnimation`/`DisplaySpeed` — a body somewhere, of some build, doing
+something. That is the same set of facts a player's body is drawn from, so
+`dress_bodies_from_elsewhere` gives it a rig and the ordinary drawing does the
+rest. Grids, cells and rosters stay on the authority, which is the only place
+they mean anything.
+
+That is why the bodies **stand in the world rather than inside the grid**. They
+were children, which made moving and despawning free but made a body's
+transform relative to a parent a viewer has never heard of. `OfGrid` replaces
+`ChildOf`, and `follow_moved_grids` and `clear_orphaned_carousels` are the
+bookkeeping that buys — the second of which is *not* authority-gated, since a
+client holds these bodies and has to drop them when the grid goes.
+
+`interpolate_bodies` is also no longer gated on `AppMode::Play`: `PhysicsBody`
+is where a thing *is*, and that is as true of a body standing in a grid in the
+editor as of a player mid-round. Gated, a replicated display body sits at the
+origin until somebody starts a round.
+
+**Known gaps, all of them "not sent yet" rather than "broken":**
+
+- `Loadout` is not replicated, so every remote body holds the default weapons.
+- `BodyTint` is not replicated either, so a corpse elsewhere is drawn in its
+  class's default colour rather than whatever its body was tinted.
+- Aim is part of the predicted `Player`, so turning triggers a rollback per
+  tick while you turn. It is correct and cheap — the replay reaches the same
+  yaw — but wasteful, since aim is copied from input and can only ever
+  disagree by lag. A `with_rollback_condition` on `Player` that ignored
+  `yaw`/`pitch` would remove it. Idle rollbacks are already zero, so this is
+  not urgent.
+
+### The map every client is standing in
+
+A client predicting its own movement steps the same physics against its own
+copy of the walls, so the two copies have to *be* the same walls. When they are
+not, prediction does not fail loudly — the client walks through a doorway the
+server stops it at, is corrected, walks into it again, and rubber-bands there
+for as long as you watch it.
+
+[`src/common/map_sync.rs`](src/common/map_sync.rs) sends the **feature
+timeline**, not the baked geometry: features are what the editor edits, so
+sending them is what will let an edit made between rounds reach everybody. The
+snapshot goes on connect rather than on entering Play, because a client is in
+the editor with everyone else between rounds and an empty editor is not one
+anybody can work in.
+
+- **`FeatureTimeline::adopt` is what replaces a map**, and it queues the old
+  map's despawns rather than doing them, so `sync_entities` performs them
+  alongside the incoming spawns. Skip it and the client stands in two maps at
+  once with a `CollisionWorld` built from both — which looks like a working
+  sync. The file-open path in `panels.rs` goes through the same function.
+- **Re-bake room geometry after adopting.** The features have no entities until
+  `sync_entities` has run, so a bake fired in the same frame bakes nothing;
+  `CalculateRoomGeometry` is written and read a frame later, which is what
+  makes it work.
+- **`entity` is `#[serde(skip)]` on every feature, and has to stay that way.**
+  A decoded feature that arrives believing it already has an entity is skipped
+  by `sync_entities`, so the map is adopted and never appears.
+- Only the client adopts, and the guard is on `NetRole::is_authority()` rather
+  than on holding a receiver — a listen server has one too, and adopting its
+  own map back would despawn the entities it is replicating.
+- No history crosses: undo is a fact about whoever made the edits, and a client
+  that could undo the server's map would be editing a map it does not own.
+
+**Edits reach clients by sending the whole map again**, not by sending the
+edit. `broadcast_map_changes` re-encodes the timeline, compares it with the
+bytes it last sent, and puts it on the wire if they differ. A delta protocol
+would be a *second* description of a map, and two descriptions of one thing is
+the shape every bug in this layer has had.
+
+Two things keep the cost of that honest:
+
+- **The comparison is on the bytes, not on a dirty flag.** `FeatureTimeline` is
+  marked changed by selecting a feature, so a flag would broadcast the whole
+  map because somebody clicked a wall. `only_an_edit_changes_the_bytes` pins
+  it.
+- **`RESEND_INTERVAL` is a floor of a quarter-second.** Dragging a room edits
+  the timeline every frame and adopting rebuilds every feature entity and
+  re-bakes, so sending at frame rate would spend a client's frame budget
+  watching somebody resize a wall. An edit lands visibly late, which is the
+  right way round: this is editing between rounds, not aiming.
+
+A client also declines to adopt a map identical to the one it already has,
+since adopting is a visible rebuild in exchange for nothing.
+
+The wire format is JSON, which is the wrong choice for anything large and is
+knowingly temporary — it is what `typetag` gives for free. The compiled map
+format is where this stops being acceptable.
+
+### The transport behind it
+
+[`src/common/net_transport.rs`](src/common/net_transport.rs) is what makes a
+role true, using **Lightyear** — chosen because WebTransport reaches a browser
+(`renet` upstream has no transport that does) and because it ships prediction
+and rollback rather than leaving them to us.
+
+**Both `ClientPlugins` and `ServerPlugins` are always added, in every process,
+including a closed solo one.** Bevy cannot add a plugin after `run()`, so
+"start hosting" can never mean "add the server plugins now". What comes and
+goes is a single entity, marked `NetLink`, and `Solo` holds none: nothing bound,
+nothing polled, no loopback between two halves of one process. A role change
+always despawns before it spawns, even from one `Listen` port to another —
+rebinding in place is a half-applied state that only surfaces later.
+
+Two things about assembling that entity are not optional and fail silently:
+
+- **Every arriving connection needs a `ReplicationSender` on its `LinkOf`
+  child**, which `dress_new_client` does. The server endpoint is one socket;
+  the child entity per client is what replication is addressed through, and
+  nothing inserts this for you. Without it the netcode handshake completes,
+  nothing flows, and the client is dropped on the server's three-second
+  timeout — after which the client panics deep inside
+  `lightyear_interpolation` on a negative tick delta. It reads as a Lightyear
+  bug and is a missing component.
+- **The client needs `ReplicationReceiver`**, or replication metadata arrives
+  with nothing willing to interpret it.
+
+`TICK_HZ` in `constants.rs` sets both `Time<Fixed>` and Lightyear's
+`tick_duration`. They are the same number from one place on purpose — a tick is
+the unit prediction reconciles in, and two clocks that agree by coincidence
+will stop agreeing.
+
+`NetStatus` is what the link is *doing*, as against what `NetRole` asked for.
+Keep them apart: a role changes the instant a menu item is picked, whereas a
+connection is attempted, takes time, and may fail. A UI reading the role would
+cheerfully say "Connected" about a host that never answered.
+
+`DEV_PRIVATE_KEY` is compiled into the binary, so anyone with the game can mint
+a token for any client id. That is the right trade for a LAN listen server with
+no accounts behind it, and it is exactly what the token backend in
+`documentation/sketch.md` replaces.
+
+**Relays are received in `PreUpdate`, after `MessageSystems::Receive`.** Not
+tidiness: `FixedUpdate` runs before `Update`, so a record taken in `Update` is
+not read until the next frame's fixed loop — thirteen milliseconds on this
+machine, and things happen in it.
+
 ## The feature model
 
 The core abstraction is `FeatureTrait` in
@@ -594,14 +1252,15 @@ key that has slots — fill those in by hand.
   don't revive it.
 - Asset paths are relative to the working directory (`assets/default/...`), so
   binaries must run from the repo root.
-- `src/main.rs` re-declares `mod common; mod editor; mod tool;` instead of using
-  the `grackle` library, so the `editor` binary compiles a second copy of the
-  whole tree rather than linking `lib.rs`. Each copy gets its own `LANG` table
-  and cache. Self-consistent today, but it doubles build time and means a
-  process cannot share state between the two. Worth collapsing before the game
-  runtime lands and there are more binaries. It is also why the bin targets emit
-  dead-code warnings (`remerge`, `get_maybe`, `TEMPLATE_REGEX`) that
-  `cargo check --lib` does not.
+- **Every binary links `lib.rs`; none re-declares the module tree.** `main.rs`
+  is `use grackle::...` and plugin wiring, nothing else. This used to be
+  `mod common; mod editor; mod tool;`, which compiled a second copy of the
+  whole tree with its own `LANG` table and its own caches. That is not a build
+  time problem to get round to — a client and a server that must reach the same
+  position from the same inputs cannot be two copies of the simulation, and the
+  moment a second copy exists there is no way to tell which one a bug is in.
+  A new binary goes in `src/bin/` and imports; if something it needs is
+  `pub(crate)`, widen it rather than reaching around it.
 
 ## Targeting wasm
 

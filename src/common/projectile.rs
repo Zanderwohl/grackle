@@ -20,13 +20,14 @@
 //! arcing differently from the man who fired it.
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Everything that distinguishes one thrown weapon from another.
 ///
 /// A `const` per weapon rather than a trait per weapon: adding the flare gun
 /// should be adding thirteen numbers, not a type with thirteen methods that
 /// return them.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct ProjectileSpec {
     /// How fast it leaves the muzzle, in metres per second.
     pub initial_speed: f32,
