@@ -11,7 +11,8 @@ use crate::game::ragdoll::RagdollPlugin;
 use crate::game::pause_menu::PauseMenuPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::player::{
-    despawn_the_view, face_bodies, gather_aim, gather_input, interpolate_bodies, place_camera,
+    aim_the_view_at_our_body, despawn_the_view, face_bodies, gather_aim, gather_input,
+    interpolate_bodies, place_camera,
     spawn_the_view, step_player, toggle_view, write_client_inputs, InputLatch, Player, ViewMode,
 };
 use crate::tool::bakes::BakeSystems;
@@ -86,6 +87,14 @@ impl Plugin for GamePlugin {
             // Aim and input sampling stay at frame rate — the first because
             // 64 Hz aim is latency you can feel, the second so a press made on
             // this frame reaches the steps taken on this frame.
+            // In `PreUpdate`, which is the only place early enough. The body
+            // is created by a command in `Update`, so the mark lands at the
+            // end of that frame; `write_client_inputs` runs in the fixed loop
+            // of the *next* frame, before `Update` gets another turn. Seeded
+            // any later and the latch's zero is copied onto the body first,
+            // and a spawn point's facing is thrown away by the input that was
+            // supposed to preserve it.
+            .add_systems(PreUpdate, aim_the_view_at_our_body.run_if(in_state(AppMode::Play)))
             // Reading the peripherals into the latch, and pointing the view.
             // Nothing here touches a body: aim is an input, and where a body
             // ends up facing is the step's answer alone.
@@ -803,6 +812,32 @@ mod tests {
                 .rotation
                 .abs_diff_eq(Quat::from_rotation_y(yaw), 1e-5),
             "our own body was left facing somewhere else"
+        );
+    }
+
+    /// A spawn point's facing reaches the view, not just the body.
+    ///
+    /// The body is turned by `Player.yaw`, but the *view* is aimed from the
+    /// latch and the latch is what the next tick sends — so a latch left at
+    /// zero snapped the body back round on the first input after spawning,
+    /// which is a spawn point's facing quietly ignored.
+    #[test]
+    fn a_spawn_points_facing_is_what_we_start_looking_along() {
+        let yaw = std::f32::consts::FRAC_PI_2;
+        let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
+        app.world_mut().spawn((
+            Transform::from_translation(Vec3::ZERO).with_rotation(Quat::from_rotation_y(yaw)),
+            SpawnPointMarker,
+        ));
+        enter(&mut app);
+        // The body is created by a command in `Update`, so the mark it is
+        // recognised by lands at the end of that frame.
+        app.update();
+
+        assert!(
+            (app.world().resource::<InputLatch>().0.yaw - yaw).abs() < 1e-5,
+            "the view is looking along {} rather than {yaw}",
+            app.world().resource::<InputLatch>().0.yaw
         );
     }
 

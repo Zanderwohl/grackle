@@ -188,6 +188,32 @@ pub struct PlayerInput {
 /// into the body's [`Inputs`] once per tick, and that drain is the only place
 /// an edge is consumed. **The step must not consume it**: a predicted tick is
 /// replayed from the same buffered input during rollback, and a step that took
+impl PlayerInput {
+    /// Let go of every control without forgetting where you were looking.
+    ///
+    /// This struct holds two kinds of field and they behave differently when
+    /// nobody is at the keyboard. Movement, sprint, crouch, jump, attack and a
+    /// weapon switch are all things a key is *doing* — held or just pressed —
+    /// and a key held as the pause menu goes up would stay held with nothing
+    /// running to correct it, walking the body into a wall until the menu
+    /// closes.
+    ///
+    /// **Aim is not one of those.** `yaw` and `pitch` are where the player has
+    /// *put* the view, the way a mouse pointer has a position: nothing is
+    /// holding them, and zeroing them on a pause spins you round to face north
+    /// the moment you open the menu.
+    ///
+    /// A new field wants classifying deliberately, which is why this is a
+    /// method that lists them rather than a `..default()` at each call site.
+    pub fn release_controls(&mut self) {
+        *self = PlayerInput {
+            yaw: self.yaw,
+            pitch: self.pitch,
+            ..PlayerInput::default()
+        };
+    }
+}
+
 /// the jump out of it would replay as a step that never jumped.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct InputLatch(pub PlayerInput);
@@ -402,6 +428,26 @@ pub fn spawn_the_view(
         Transform::default(),
         Name::new("View"),
     ));
+}
+
+/// Point the view where our new body is already looking.
+///
+/// A body knows its facing before this machine does: on a host it comes from
+/// the spawn point, and on a client it arrives from the server. The latch is
+/// what the view is aimed from and what the next tick sends, so a latch left
+/// at zero snaps the body round to face north on the first input it sends —
+/// which is a spawn point's facing being quietly ignored.
+///
+/// On `Added<LocalPlayer>`, so one rule covers a fresh round, a respawn, and a
+/// client being handed a body, without any of them knowing about the others.
+pub fn aim_the_view_at_our_body(
+    mut latch: ResMut<InputLatch>,
+    ours: Query<&Player, Added<LocalPlayer>>,
+) {
+    for body in &ours {
+        latch.0.yaw = body.yaw;
+        latch.0.pitch = body.pitch;
+    }
 }
 
 /// Take the view away with the round.

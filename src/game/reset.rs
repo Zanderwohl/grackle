@@ -56,7 +56,10 @@ pub fn reset_for_play(
     // A click or a held key made while editing is not an order to shoot on
     // spawn. The bodies are new and carry nothing, but the latch is a fact
     // about the keyboard rather than about a body, so it outlives them both.
-    *latch = InputLatch::default();
+    // Aim is not released with them: `aim_the_view_at_our_body` sets it from
+    // whatever body this round gives us, and zeroing it here would be a spawn
+    // point's facing thrown away a frame before it was read.
+    latch.0.release_controls();
 
     for (mut gait, mut animator) in &mut bodies {
         // Standing still at the start of a stride, in a state rather than part

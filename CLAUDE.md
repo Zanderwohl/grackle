@@ -140,9 +140,14 @@ Three things there are easy to get wrong and none of them errors:
   frame of mouse motion still waiting to be read — gate it and closing the menu
   applies every scrap of motion made while it was up, in one frame. It drains
   first and answers the pause question itself.
-- **Opening the menu clears `InputLatch`.** A key held as it goes up would stay
-  held, and `gather_input` is not running to correct it, so the body walks into
-  a wall for as long as the menu is open.
+- **Opening the menu calls `release_controls`, not `InputLatch::default`.** A
+  key held as the menu goes up would stay held with `gather_input` not running
+  to correct it, so the body walks into a wall for as long as the menu is open.
+  But `yaw` and `pitch` are not keys being held — they are where the player
+  *put* the view — and clearing them too spins you round to face north the
+  moment you open the menu. `PlayerInput::release_controls` is the one place
+  that distinction is written down, deliberately listing the fields rather than
+  spreading `..default()` around, so a new field gets classified on purpose.
 - **The cursor is only touched while in Play.** Change detection counts a
   resource's insertion as a change, so a `resource_changed` system that sets
   the cursor unconditionally grabs it inside the editor on the first frame of
@@ -303,6 +308,20 @@ Input crosses two clock boundaries and each has its own home:
 | `InputLatch` (resource) | What this machine's keyboard has said since the last tick. A fact about the peripherals, not about a body, so it outlives every body — which is why `reset_for_play` clears it. |
 | `Inputs` = `ActionState<PlayerInput>` (component) | What *this tick* asked one body to do. Written by `write_client_inputs`, buffered and sent by Lightyear, replayed by rollback. |
 | `Player`, `PhysicsBody`, `Stance` | What the step made of it. |
+
+**The latch is seeded from the body, not left at zero.** A body knows its
+facing before this machine does — from a spawn point on a host, from the server
+on a client — and the latch is both what the view is aimed from and what the
+next tick sends. `aim_the_view_at_our_body` copies `Player.yaw`/`pitch` across
+on `Added<LocalPlayer>`, which covers a fresh round, a respawn and a client
+being handed a body without any of them knowing about the others.
+
+It runs in **`PreUpdate`**, and that is the only place early enough. The body
+is created by a command in `Update`, so the mark lands at the end of that
+frame; `write_client_inputs` runs in the fixed loop of the *next* frame, before
+`Update` gets another turn. Seed any later and the latch's zero is copied onto
+the body first — a spawn point's facing thrown away by the very input meant to
+carry it.
 
 **`write_client_inputs` is the only place an edge is consumed.** It runs in
 `FixedPreUpdate` inside Lightyear's `WriteClientInputs` set, copies the latch

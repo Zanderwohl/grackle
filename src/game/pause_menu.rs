@@ -93,9 +93,11 @@ fn show_or_hide(
     if menu.open {
         // A key held as the menu goes up would otherwise stay held in the
         // latch, and the body would walk into a wall for as long as the menu
-        // was open. `gather_input` is not running to correct it.
+        // was open — `gather_input` is not running to correct it. Aim is
+        // deliberately kept: it is where the player put the view, not
+        // something a key is holding down.
         if let Some(mut latch) = latch {
-            *latch = crate::game::player::InputLatch::default();
+            latch.0.release_controls();
         }
 
         commands.spawn((
@@ -191,6 +193,34 @@ mod tests {
 
         press_escape(&mut app);
         assert!(!showing(&mut app), "escape did not close the menu again");
+    }
+
+    /// Opening the menu lets go of the controls and keeps the view.
+    ///
+    /// The bug this pins was reported as "I press escape and lose my
+    /// orientation": clearing the whole latch took `yaw` and `pitch` with the
+    /// held keys, and the body snapped round to face north.
+    #[test]
+    fn pausing_releases_the_controls_but_not_the_view() {
+        use crate::game::player::{InputLatch, PlayerInput};
+
+        let mut app = app();
+        app.insert_resource(InputLatch(PlayerInput {
+            yaw: 1.3,
+            pitch: -0.4,
+            movement: Vec2::new(0.0, 1.0),
+            jump: true,
+            sprint: true,
+            ..default()
+        }));
+
+        press_escape(&mut app);
+
+        let latch = app.world().resource::<InputLatch>().0;
+        assert_eq!(latch.yaw, 1.3, "the pause menu turned the player round");
+        assert_eq!(latch.pitch, -0.4, "the pause menu changed where they were looking");
+        assert_eq!(latch.movement, Vec2::ZERO, "a held key survived the pause");
+        assert!(!latch.jump && !latch.sprint, "a held key survived the pause");
     }
 
     /// The menu belongs to a match. Left up it would be a black overlay across
