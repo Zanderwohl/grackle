@@ -79,6 +79,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::damage::{falloff, Damageable};
 use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
+use crate::common::team::Team;
 use crate::game::body_mesh::BodyTint;
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
@@ -728,13 +729,14 @@ pub fn raise_ragdolls(
             &GlobalTransform,
             Option<&SkeletonRoot>,
             Option<&BodyTint>,
+            Option<&Team>,
             Option<&PhysicsBody>,
             Option<&Name>,
         ),
         Without<Ragdolled>,
     >,
 ) {
-    for (entity, health, skeleton, pose, global, offset, tint, physics, name) in &bodies {
+    for (entity, health, skeleton, pose, global, offset, tint, team, physics, name) in &bodies {
         if health.is_alive() {
             continue;
         }
@@ -762,9 +764,15 @@ pub fn raise_ragdolls(
             }),
         ));
         if let Some(tint) = tint {
-            // Whose body it was is still worth knowing once it is on the
-            // floor — more so, if teams are ever a thing you check by looking.
             corpse.insert(*tint);
+        }
+        if let Some(team) = team {
+            // Whose body it was is still worth knowing once it is on the
+            // floor: a pile of corpses is how you read which way a fight went,
+            // and a corpse that reverted to the default grey would erase that.
+            // Not a live body — nothing asks a corpse's team a question, and
+            // it has no `Damageable` to be spared by one.
+            corpse.insert(*team);
         }
 
         commands.entity(entity).insert(Ragdolled);

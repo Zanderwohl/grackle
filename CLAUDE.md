@@ -34,10 +34,10 @@ in it that constrains code written today: items must record their provenance
 ## State of the repo
 
 The editor is real and works. **The game barely exists.** There is a damage
-layer and three kinds of weapon — hitscan, projectile, flame — but no
+layer, three kinds of weapon — hitscan, projectile, flame — and teams, but no
 networking, no ammo,
-no reload, no teams and no respawn: a body that dies leaves a ragdoll and is
-gone. There is also no wasm build yet. Adding the runtime is the current
+no reload and no round structure: a body that dies leaves a ragdoll, and you
+are back on your feet instantly. There is also no wasm build yet. Adding the runtime is the current
 frontier, not a finished thing to extend.
 
 `src/unlock` and the `crate_drop` binary are a self-contained TF2-style
@@ -299,6 +299,95 @@ Corpses belong to the match: cleared on leaving Play and again in
 `reset_for_play`, and they age on game time, so nothing rots while somebody is
 in the editor. They sleep once settled, and a shove wakes them.
 
+## Teams
+
+Four — Red, Blue, Yellow, Green — as `Team` in
+[`src/common/team.rs`](src/common/team.rs), a component on a body and nothing
+else. The whole rule is three cases:
+
+- Two teams that differ hurt each other.
+- **No team is hostile to everybody.** A crate, a training dummy and the map
+  have no side, and that is deliberate rather than a gap to be closed — making
+  them pick one means deciding which team a door is on.
+- **You always hurt yourself.** Stated as a *self* exception on the
+  `PlayerId`, not as "splash ignores teams", so a rocket at your feet costs you
+  and costs the teammate beside you nothing. This is what rocket jumping will
+  need; take it out and self-damage goes with it.
+
+**The gate is `apply_damage` and nowhere else.** A weapon writes its `Damage`
+without asking whose side anything is on, and a request at a teammate is
+dropped there — dropped entirely, so no health comes off and no `DamageDealt`
+is written and there is no number over a friend's head reading zero. The
+lookup is `Allegiances`, a `SystemParam`, because a team is matched on the
+`PlayerId` a `DamageSource` carries rather than on an entity: the shooter may
+be a corpse by the time an afterburn tick lands.
+
+**One weapon has to ask for itself, and only one.** `fire_flame` *lights*
+bodies, which is a second effect that never passes through `apply_damage`; a
+teammate walking away on fire from a flame that did them no damage would be
+the rule with a hole through it. Anything else with an effect that is not a
+`Damage` message has the same problem — ask `Allegiances::may_hurt`, do not
+re-derive the rule.
+
+A body's colour is its team (`body_look`), outranking `BodyTint` — a tint says
+"draw this specially", a team says which side you are on, and the second is
+what you read across a room in a fight. A spawn point's preview is still green
+because nothing on it has a side. Corpses keep their team, so a pile of them
+still says which way a fight went.
+
+The player does not choose: it is `PLAYER_TEAM` in
+[`src/game/mod.rs`](src/game/mod.rs), a constant, because there is no lobby and
+no second player to be balanced against. Per-team spawns are still a gamemode
+question, deliberately unanswered.
+
+**The animation grid does choose.** `RosterTeam` on the feature is a panel
+combo — *Striped*, or one of the four — and striped deals them round the roster
+in cell order, which turns the grid into a friendly-fire range as well as an
+animation one: shoot along a row and every fourth body refuses the hit. Pick a
+single team and it is a plain firing range again. `One(Team)` rather than four
+more variants, so a fifth team is one more entry and nothing else; the numbers
+in `RosterTeam::index` are on disk and must not be renumbered.
+
+It rides in the generic `scalar_fields` table and loads through
+`load_snapshot_scalar_or`, so **no migration and no schema bump** — a grid
+saved before the field existed comes back striped. That is the pattern for any
+new scalar on an existing feature; a migration is only for a table shape.
+
+`team_carousels` keeps standing bodies in step with the choice, and it
+**compares before it writes**. `apply_to_entity` runs on every edit, so the
+grid's `RosterTeam` reads as changed on every frame of a drag — and a written
+`Team` is a changed one, which is `build_body_meshes` throwing sixty bodies
+away and rebuilding them for as long as the point is moving. Same trap as
+re-inserting a `Skeleton`, one component along.
+
+## Coming back
+
+Death used to be the end of the session: the body was despawned, the camera
+went with it as a child, and what was left was a map with nobody in it. Now
+[`src/game/respawn.rs`](src/game/respawn.rs) stands another one up, **instantly
+and in the same fixed step** — `respawn_players` sits in `DamageSystems::Resolve`
+after `reap_the_dead`, because a frame with no player is a frame with no camera.
+
+Instant is a placeholder and is meant to look like one; a respawn timer, wave
+respawns and spawn protection are a gamemode's numbers. Two parts of the shape
+are not placeholders:
+
+- **Your identity outlives your body.** `LocalPlayer` is a *resource* holding
+  the `PlayerId` and the team for the length of a match, and a new body gets
+  the *same* id. This is the opposite of what `F5` does, deliberately: a new
+  match is a new player, a new life is not, and a fresh id per death would show
+  a scoreboard one player per life. Set by `enter_play`, removed by
+  `leave_play` — that removal is what stops the editor being handed a body.
+- **The choice of where is shared with the first spawn**, in `choose_spawn`.
+  Two copies of "pick a usable spawn point, fall back to the largest room" is
+  one copy that quietly stops matching the other, and the failure is a body
+  that respawns inside a wall on maps the first spawn handles fine.
+
+The trigger is the invariant *while you are playing, there is a body*, not a
+`Died` message — right whatever removed the body, including a way of dying
+nobody has written yet. With several players it becomes "a player with no
+body", which is the same rule with a roster behind it.
+
 ## Damage, weapons and projectiles
 
 **Nothing applies damage to a health pool except one system.** A weapon writes
@@ -315,7 +404,7 @@ The order inside a tick is stated as **sets, not as named systems**
 | --- | --- |
 | `Deal` | Everything that writes `Damage`: `fire_hitscan`, `step_projectiles`, `explode`, `fire_flame`, `burn`. |
 | `Apply` | `apply_damage`, and nothing else, ever. |
-| `Resolve` | `record_damage` then `reap_the_dead`. |
+| `Resolve` | `record_damage`, then `reap_the_dead`, then `respawn_players`. |
 
 A new damage source joins `Deal` and says nothing about what happens after it.
 Before the sets, `DamagePlugin` had to name every weapon so it could order
@@ -400,12 +489,17 @@ it needed no new machinery for that: `burn` sits in `Deal` and writes a
   weapon that hurt more because it was traced more finely would be a weapon
   whose damage is a fidelity setting. There is no RNG in the spread — a fixed
   pattern is what a server can re-run and what a player can learn to aim.
-- **Burning is an input to a body's colour, not a `BodyTint` written onto it.**
-  Overwriting the tint means remembering what was underneath and putting it
-  back, and forgetting leaves a body scorched for the rest of the match.
-  `body_colour` in [`body_mesh.rs`](src/game/body_mesh.rs) is the one place
-  that decides, and `recolour_bodies` swaps materials on the existing parts
-  rather than rebuilding a body because somebody set it on fire.
+- **Burning is an input to how a body is drawn, not a `BodyTint` written onto
+  it.** Overwriting the tint means remembering what was underneath and putting
+  it back, and forgetting leaves a body scorched for the rest of the match.
+  `body_look` in [`body_mesh.rs`](src/game/body_mesh.rs) is the one place that
+  decides, and `recolour_bodies` swaps materials on the existing parts rather
+  than rebuilding a body because somebody set it on fire.
+- **Fire is a glow, not a hue.** It used to lerp the base colour towards
+  orange, which worked while every body was the same grey; now that a body's
+  colour is its team, an emissive term (`BURNING_GLOW`) is the one signal that
+  reads the same on all four of them. A burning red pulling further towards
+  red is a burning body you cannot see.
 
 Testing all of this by hand is what `ProjectileEmitter` is for: `G` plants one
 firing whatever you are holding every two seconds, `B` clears them. Plant one

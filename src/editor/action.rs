@@ -6,7 +6,7 @@ use crate::editor::editor_room::EditorRoom;
 use crate::editor::global_point::GlobalPoint;
 use crate::common::skeleton::AnimationState;
 use crate::editor::animation_display::AnimationDisplay;
-use crate::editor::animation_grid::AnimationGrid;
+use crate::editor::animation_grid::{AnimationGrid, RosterTeam};
 use crate::editor::prop::Prop;
 use crate::editor::spawn_point::SpawnPoint;
 use crate::editor::grackle_point_light::GracklePointLight;
@@ -43,6 +43,7 @@ pub enum FeatureData {
     AnimationGrid {
         location: PointRef,
         yaw: f32,
+        teams: RosterTeam,
     },
     Cuboid {
         min: Vec3,

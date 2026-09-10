@@ -1,6 +1,7 @@
 pub mod app_mode;
 pub mod class;
 pub mod damage;
+pub mod team;
 pub mod hitbox;
 pub mod flame;
 pub mod hitscan;
