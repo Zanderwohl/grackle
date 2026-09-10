@@ -1,0 +1,147 @@
+//! Telling clients what happened, as against what is.
+//!
+//! Replication carries **state**: a body's health is a component, so a client
+//! is told the number and can draw a health bar from it. It cannot carry
+//! **events** — a hit landed here, for this much, by this person — because an
+//! event is not a value anything holds afterwards. Two hits of thirty in one
+//! tick and one hit of sixty leave a body at exactly the same health, and a
+//! client watching only the number would draw one number instead of two, in
+//! the wrong place, credited to nobody.
+//!
+//! So the records travel as messages. They are **feedback only** on the
+//! receiving end: nothing a client does with a `DamageDealt` changes a health
+//! pool, because `DamageSystems` does not run there. Arriving late, arriving
+//! out of order, or not arriving at all costs a floating number, never a
+//! disagreement about who is alive.
+
+use bevy::prelude::*;
+use lightyear::prelude::*;
+
+use crate::common::damage::{DamageDealt, Died};
+use crate::common::net::{has_authority, is_remote_client, NetRole};
+
+/// What happened, as against what is.
+///
+/// Unordered: each record stands alone, and two hits landing in the wrong
+/// order draw two numbers in the wrong order, which nobody can perceive.
+/// Reliable, because a dropped kill is a kill feed that never mentions it.
+pub struct EventChannel;
+
+/// Relays the damage layer's records to clients.
+pub struct NetEventsPlugin;
+
+impl Plugin for NetEventsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_channel::<EventChannel>(ChannelSettings {
+            mode: ChannelMode::UnorderedReliable(ReliableSettings::default()),
+            ..default()
+        })
+        .add_direction(NetworkDirection::ServerToClient);
+
+        // `add_map_entities`, because the entity in a record is the sender's.
+        // Without it a damage number would be anchored to whatever entity
+        // happened to share that index on the receiving machine.
+        app.register_message::<DamageDealt>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<Died>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ServerToClient);
+
+        app.add_systems(
+            Update,
+            (
+                (send_hits, send_deaths).run_if(has_authority),
+                (receive_hits, receive_deaths).run_if(is_remote_client),
+            ),
+        );
+    }
+}
+
+/// Pass on every hit the damage layer resolved this frame.
+///
+/// Reads the same local message the floating numbers read, rather than being
+/// written by `apply_damage` itself. That keeps the damage layer unaware there
+/// is a network at all: a new source of damage joins `DamageSystems::Deal` and
+/// is relayed without naming itself here, which is the same reason the sets
+/// exist in the first place.
+fn send_hits(
+    mut hits: MessageReader<DamageDealt>,
+    server: Option<Single<&Server>>,
+    mut sender: ServerMultiMessageSender,
+) -> Result {
+    let Some(server) = server else {
+        // A closed game. Draining is not needed — the local readers have their
+        // own cursors — so there is simply nothing to do.
+        return Ok(());
+    };
+    for hit in hits.read() {
+        sender.send::<_, EventChannel>(hit, &server, &NetworkTarget::All)?;
+    }
+    Ok(())
+}
+
+fn send_deaths(
+    mut deaths: MessageReader<Died>,
+    server: Option<Single<&Server>>,
+    mut sender: ServerMultiMessageSender,
+) -> Result {
+    let Some(server) = server else { return Ok(()) };
+    for death in deaths.read() {
+        sender.send::<_, EventChannel>(death, &server, &NetworkTarget::All)?;
+    }
+    Ok(())
+}
+
+/// Put arriving hits into the same local queue a server's own would be in.
+///
+/// Everything downstream — the floating numbers, and a scoreboard when there
+/// is one — then reads one queue and never asks where a record came from.
+fn receive_hits(
+    mut receivers: Query<&mut MessageReceiver<DamageDealt>>,
+    mut hits: MessageWriter<DamageDealt>,
+) {
+    for mut receiver in &mut receivers {
+        for hit in receiver.receive() {
+            hits.write(hit);
+        }
+    }
+}
+
+fn receive_deaths(
+    mut receivers: Query<&mut MessageReceiver<Died>>,
+    mut deaths: MessageWriter<Died>,
+) {
+    for mut receiver in &mut receivers {
+        for death in receiver.receive() {
+            deaths.write(death);
+        }
+    }
+}
+
+/// Start replicating anything that goes bang, so everyone can see it coming.
+///
+/// A projectile is **replicated, not re-simulated**. Each client could step
+/// the same spec from the same origin and get the same arc — the map is the
+/// same and the maths is deterministic — right up until it meets a body, and
+/// a client's copy of a remote body is always a little behind the server's. A
+/// locally simulated rocket would detonate against a player who, on the
+/// server, was never there: a puff of smoke and no damage, which reads as the
+/// game losing a hit that plainly landed.
+///
+/// So the server flies it and everybody watches. `PhysicsBody` carries the
+/// position and `interpolate_bodies` smooths it, exactly as for a body.
+pub fn replicate_projectiles(
+    mut commands: Commands,
+    role: Res<NetRole>,
+    launched: Query<Entity, (Added<crate::game::projectile::Projectile>, Without<Replicate>)>,
+) {
+    if !matches!(*role, NetRole::Listen { .. }) {
+        return;
+    }
+    for projectile in &launched {
+        commands
+            .entity(projectile)
+            .insert(Replicate::to_clients(NetworkTarget::All));
+    }
+}

@@ -93,6 +93,7 @@ impl Plugin for NetTransportPlugin {
             // After the protocol, since it registers a channel and a message.
             .add_plugins(crate::common::match_state::MatchStatePlugin)
             .add_plugins(crate::common::map_sync::MapSyncPlugin)
+            .add_plugins(crate::common::net_events::NetEventsPlugin)
             // Prediction is gated on this resource existing, not on a plugin,
             // so it goes in once and stays: a process that is currently a
             // listen server may be a client after the next menu click.
@@ -104,6 +105,7 @@ impl Plugin for NetTransportPlugin {
                 (
                     open_link_for_role.run_if(resource_changed::<NetRole>),
                     report_status,
+                    crate::common::net_events::replicate_projectiles,
                 )
                     .chain(),
             );

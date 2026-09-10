@@ -61,6 +61,10 @@ impl Plugin for ProtocolPlugin {
         // the server's to decide and this is the client being told.
         app.component::<Damageable>().replicate();
 
+        // A projectile in flight, so everybody can see it coming. Replicated
+        // rather than re-simulated: see `replicate_projectiles`.
+        app.component::<crate::game::projectile::Projectile>().replicate();
+
         // Sent once, on the insert that first carries it. An id is a fact
         // about who a body belongs to, not a value that changes per tick, and
         // re-sending it every update would be bandwidth spent restating it.

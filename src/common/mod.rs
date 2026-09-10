@@ -11,6 +11,7 @@ pub mod lang;
 pub mod map_sync;
 pub mod match_state;
 pub mod net;
+pub mod net_events;
 pub mod net_transport;
 pub mod protocol;
 // `pub` rather than `pub(crate)`: the `editor` binary wires `PerfPlugin` up

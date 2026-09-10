@@ -709,13 +709,72 @@ targeting it produces a body nothing ever writes to, which is a player you
 cannot see. Everybody else's body is the plain replicated entity, smoothed by
 `interpolate_bodies` between the last two positions the server sent.
 
+### State is replicated; events are relayed
+
+Replication carries **state**: health is a component, so a client is told the
+number. It cannot carry **events** — a hit landed *here*, for *this much*, by
+*this person* — because an event is not a value anything holds afterwards. Two
+hits of thirty in one tick and one hit of sixty leave a body at identical
+health, and a client watching only the number would draw one number instead of
+two, in the wrong place, credited to nobody.
+
+So `DamageDealt` and `Died` are relayed as messages by
+[`src/common/net_events.rs`](src/common/net_events.rs): the server reads the
+same local queue the floating numbers read and sends each record on; a client
+writes what arrives into its own local queue. Everything downstream then reads
+one queue and never asks where a record came from — and the damage layer stays
+unaware there is a network, so a new source joining `DamageSystems::Deal` is
+relayed without naming itself anywhere.
+
+They are **feedback only** on the receiving end. Nothing a client does with a
+`DamageDealt` touches a health pool, because `DamageSystems` does not run
+there. A record arriving late, out of order, or not at all costs a floating
+number, never a disagreement about who is alive — which is why the channel is
+unordered.
+
+**Records carry entities, and an entity is the sender's.** Both implement
+`MapEntities` and are registered with `.add_map_entities()`. Without it a
+damage number would be anchored to whatever entity happened to share that index
+locally.
+
+### Projectiles are replicated, not re-simulated
+
+Every client could step the same spec from the same origin and get the same
+arc — the map is identical and the maths is deterministic — right up until it
+meets a body, and a client's copy of a remote body is always a little behind
+the server's. A locally simulated rocket would detonate against a player who,
+on the server, was never there: a puff of smoke and no damage, which reads as
+the game losing a hit that plainly landed.
+
+So the server flies it and everybody watches. `PhysicsBody` carries the
+position and `interpolate_bodies` smooths it, exactly as for a body. The
+stepping needs no gate of its own: `fire_projectiles`, `run_emitters` and
+`step_projectiles` are all in `DamageSystems::Deal`, which is already
+authority-only.
+
+Two things had to move out of the step, because a client draws what it does not
+fly:
+
+- **Spin.** `spin_projectiles` turns the transform from the replicated
+  `Projectile.spin`. Left in the step, a replicated pipe bomb would be a
+  tumbling projectile that does not tumble.
+- **Scale.** `dress_projectiles` sizes the transform from `spec.radius`. A
+  replicated projectile is built by inserting components and never went through
+  `launch`, so its transform starts at unit scale and a rocket is drawn a metre
+  wide.
+
+`Projectile.shooter` is `#[serde(skip)]`: it is only ever asked by the process
+resolving the hit, which is always the authority, and skipping it keeps the
+component off the list of things needing entity mapping.
+
 **Known gaps, all of them "not sent yet" rather than "broken":**
 
 - `Loadout` is not replicated, so every remote body holds the default weapons.
-- `DamageDealt` and `Died` are messages, not replicated, so a client sees no
-  damage numbers and no kill feed — including for its own shots.
-- Another player's shot has no visual on your machine at all: the server
-  decides it and nothing carries the effect.
+- A hitscan shot has no tracer on anybody else's machine. Unlike a projectile
+  there is no entity to replicate, so it wants an effect record of its own
+  alongside `DamageDealt`.
+- Explosions replicate their consequences — health, corpses, damage numbers —
+  but not the blast itself, so there is no visual where one went off.
 - No respawn. A body that dies is gone for the round.
 
 ### The map every client is standing in
