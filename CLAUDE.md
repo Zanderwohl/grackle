@@ -33,17 +33,20 @@ in it that constrains code written today: items must record their provenance
 
 ## State of the repo
 
-The editor is real and works. **The game does not exist yet** — there is no
-weapon, projectile, or networking code in `src/`, and no respawn: a body that
-dies leaves a ragdoll and is gone. There is also no wasm build yet. Adding the
-runtime is the current frontier, not a finished thing to extend.
+The editor is real and works. **The game barely exists.** There is a damage
+layer and three kinds of weapon — hitscan, projectile, flame — but no
+networking, no ammo,
+no reload, no teams and no respawn: a body that dies leaves a ragdoll and is
+gone. There is also no wasm build yet. Adding the runtime is the current
+frontier, not a finished thing to extend.
 
 `src/unlock` and the `crate_drop` binary are a self-contained TF2-style
 crate-unboxing prototype. It is orthogonal to both the editor and the game.
 Don't wire new work into it.
 
-There is a player body that walks, falls and jumps in `src/game/`, but it is a
-prototype for feeling out room sizes — no health, no weapons, no networking.
+There is a player body that walks, falls and jumps in `src/game/`, but it is
+still a prototype for feeling out room sizes: it has health and can shoot, and
+that is the whole of it.
 
 `cargo check --all-targets` and `cargo test` both pass. The `Room` type is
 still dead — superseded by `EditorRoom` for authoring — but it is what
@@ -57,7 +60,7 @@ looks like.
 | `src/main.rs` | The `editor` binary — plugin wiring only. |
 | `src/editor/` | The document model: features, timeline, save/load, panels, cameras. |
 | `src/tool/` | One module per editor tool, each its own `Plugin` with its own `Tools` state. |
-| `src/game/` | Playing the open map: `AppMode` swap, player body, collision, damage, ragdolls. |
+| `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls. |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `crate_drop`. |
@@ -112,6 +115,11 @@ its hitboxes are hidden from inside your own head, nobody else's are),
 **`F4`** toggles the hitbox gizmos, and **`F6`** toggles the bone gizmos, which
 are off by default now that bodies have geometry. `F3` is the perf overlay in
 both modes.
+
+Weapons are on **`1`–`5`** (hitscan, rocket, pipe bomb, RPG, flamethrower),
+the left mouse button fires — held, for the flamethrower — and **`G`** plants
+an emitter firing whatever projectile you are holding every two seconds with
+**`B`** to clear them. See "Damage, weapons and projectiles" below.
 
 ## What a body is drawn as
 
@@ -264,12 +272,15 @@ Four things about it are load-bearing and easy to undo by accident:
   table cover both sides of the body: the rig builds mirrored rest rotations,
   so "an elbow bends forwards" is the same local rotation on both arms.
 
-Force arrives as `RagdollShove` — a **point, a direction and a radius**, not a
+Force arrives as `RagdollShove` — a **point, a `Push` and a radius**, not a
 bone. The bones inside the radius are shoved and the joints drag the rest
 along, which is what makes one message serve a bullet (a tight radius, one or
 two bones) and an explosion (a wide one) without either knowing about the
-other. `fire_hitscan` writes one for *every* hit it lands and never asks
-whether anything died; the shot that happens to be fatal lands on a corpse
+other. The `Push` is the one thing they cannot share: a bullet is
+`Push::Along` a fixed direction, an explosion is `Push::Outward` from its own
+point. Write a blast as a directed shove and it slides every corpse in the
+room the same way instead of throwing them off it. A weapon writes a shove for
+*every* hit it lands and never asks whether anything died; the shot that happens to be fatal lands on a corpse
 raised earlier in the same tick. Its units are honest: `push` is a speed at
 the centre, not momentum to be divided by a mass. Mass is real — a bone's own
 volume — and what it decides is how much of the body a shove drags with it,
@@ -287,6 +298,120 @@ that file.
 Corpses belong to the match: cleared on leaving Play and again in
 `reset_for_play`, and they age on game time, so nothing rots while somebody is
 in the editor. They sleep once settled, and a shove wakes them.
+
+## Damage, weapons and projectiles
+
+**Nothing applies damage to a health pool except one system.** A weapon writes
+a `Damage` message — target, source, amount, where — and is finished;
+`apply_damage` ([`src/game/damage.rs`](src/game/damage.rs)) is the only thing
+that touches a `Damageable`, clamps the overkill and writes the `DamageDealt`
+record everything downstream reads. Two weapons each doing that for themselves
+is how a scoreboard ends up adding to more health than the map contains.
+
+The order inside a tick is stated as **sets, not as named systems**
+(`DamageSystems`):
+
+| Set | What is in it |
+| --- | --- |
+| `Deal` | Everything that writes `Damage`: `fire_hitscan`, `step_projectiles`, `explode`, `fire_flame`, `burn`. |
+| `Apply` | `apply_damage`, and nothing else, ever. |
+| `Resolve` | `record_damage` then `reap_the_dead`. |
+
+A new damage source joins `Deal` and says nothing about what happens after it.
+Before the sets, `DamagePlugin` had to name every weapon so it could order
+itself after them, and forgetting one produced no error — just the occasional
+kill credited to nobody.
+
+**An explosion is a message too.** `Explosion` (a point, a radius, splash
+damage, knockback, a source, and an optional direct hit) is written by anything
+that goes off, and `src/game/explosion.rs` is the only thing that knows what
+splash means. Three rules live there and a player notices immediately if any is
+wrong: a wall stops a blast (the same `ray_distance` that shortens a bullet), a
+direct hit takes the direct number *instead of* splash rather than on top of
+it, corpses are thrown `Push::Outward` rather than along, and each damage
+number is anchored **over the body it hurt** rather than over the blast —
+every victim of one rocket shares the blast's centre exactly, so numbers put
+there are superimposed rather than merely close and six hits read as one.
+Anything that hurts several bodies at once from a single origin wants that
+last one. Splash reaches anything with `Hitboxes` — being shootable and being
+catchable in a blast are deliberately the same property.
+
+**Knockback on a body that is still alive is missing on purpose.** `step_player`
+writes horizontal velocity outright from the movement input every step, so an
+impulse given to a standing player is gone by the next tick. Rocket jumping
+needs a movement model with momentum; the explosion already carries the number
+it would want.
+
+### One projectile type, several weapons
+
+`ProjectileSpec` ([`src/common/projectile.rs`](src/common/projectile.rs)) is
+thirteen numbers, and the rocket launcher, the pipe bomb launcher and the
+TF2C-style RPG are three `const`s of it. A grenade is a rocket that falls,
+spins, bounces and goes off on a timer. Adding a fourth weapon is adding a
+constant, not a type — and `Weapon` in [`src/game/weapon.rs`](src/game/weapon.rs)
+is `Hitscan` or `Projectile(spec)`, which is the whole taxonomy.
+
+Things worth knowing before touching `src/game/projectile.rs`:
+
+- **The move is swept**, against the walls and the hitboxes at once, using the
+  same two functions hit registration uses (`trace`, `CollisionWorld::ray_hit`).
+  A rocket covers half a metre a tick and a wall slab is half a metre thick, so
+  a teleport-then-overlap test waves it straight through.
+- **Bounces are resolved inside the step**, bounded at four contacts. A pipe
+  thrown into a corner meets two walls in the same 15 ms.
+- **A projectile never direct-hits the body that fired it** — the muzzle is
+  inside your own hitbox. That is not a friendly-fire rule: your own splash
+  hurts you like anyone else's, because there are no teams.
+- **The spec is copied onto the projectile**, so switching weapons cannot reach
+  back and change a shot that has already left.
+- Position goes through `PhysicsBody`, which buys interpolation for free —
+  drawn at the tick, a 30 m/s rocket visibly stutters.
+
+Every firing system reads `TriggerPulled`, which `pull_trigger` writes after
+taking the `PlayerInput::attack` latch **once**. Several firing systems each
+taking the latch for themselves is a race where whichever ran first ate the
+press.
+
+Whether holding the button keeps firing is `Weapon::cadence()` — `Semi` for
+everything you click, `Automatic { interval }` for the flamethrower — and the
+cooldown lives in a `Trigger` on the body. It counts *down*, so the default of
+zero is a body that may fire immediately; counting up would make a freshly
+spawned player wait out an interval before their first shot and read as a
+misfire. The rate is quantised to whole ticks, deliberately: carrying the
+remainder would let a weapon that had been idle empty several shots on
+consecutive ticks.
+
+### Fire
+
+Fire is the first source whose interesting half happens *after* the hit, and
+it needed no new machinery for that: `burn` sits in `Deal` and writes a
+`Damage` every half second like anything else would.
+
+- **`Burning` is the state and the tag.** It carries who lit it last, which is
+  who afterburn is credited to — the shooter may be dead or gone by the time
+  the last tick lands.
+- **Re-lighting resets the timer, never extends or maxes it.** A short burn on
+  top of a long one is a short burn. But re-lighting deliberately does *not*
+  touch `until_next`: a flamethrower re-lights ten times a second, and pushing
+  the next tick out each time is a burn that never ticks while somebody keeps
+  burning you. That one is easy to "fix" into a bug and has a test.
+- **The cone is sampled, and the sampling is worth nothing.** A puff is
+  `FlameSpec::rays` traces and a body caught by four of them takes one puff. A
+  weapon that hurt more because it was traced more finely would be a weapon
+  whose damage is a fidelity setting. There is no RNG in the spread — a fixed
+  pattern is what a server can re-run and what a player can learn to aim.
+- **Burning is an input to a body's colour, not a `BodyTint` written onto it.**
+  Overwriting the tint means remembering what was underneath and putting it
+  back, and forgetting leaves a body scorched for the rest of the match.
+  `body_colour` in [`body_mesh.rs`](src/game/body_mesh.rs) is the one place
+  that decides, and `recolour_bodies` swaps materials on the existing parts
+  rather than rebuilding a body because somebody set it on fire.
+
+Testing all of this by hand is what `ProjectileEmitter` is for: `G` plants one
+firing whatever you are holding every two seconds, `B` clears them. Plant one
+in front of the animation grid and the sixty standing bodies become a firing
+range. It reads the keyboard directly rather than going through `PlayerInput`,
+which is fine precisely because planting a prop is not part of the simulation.
 
 ## The feature model
 

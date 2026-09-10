@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::common::ray::ray_aabb_distance;
+use crate::common::ray::{ray_aabb_distance, ray_aabb_entry};
 use crate::tool::room::{Room, WallSlab};
 
 /// How far each wall slab extends behind its face.
@@ -140,6 +140,20 @@ impl CollisionWorld {
             .filter_map(|slab| ray_aabb_distance(ray, slab.min, slab.max))
             .filter(|distance| *distance <= range)
             .min_by(f32::total_cmp)
+    }
+
+    /// The first wall along the ray, as a distance and the face it presents.
+    ///
+    /// [`CollisionWorld::ray_distance`] with the half a *bounce* needs. A
+    /// hitscan shot stops at a wall and never asks which way it was facing; a
+    /// pipe bomb has to be mirrored about it, and a normal taken off the
+    /// nearest face rather than the crossed one sends it through the floor.
+    pub fn ray_hit(&self, ray: &Ray3d, range: f32) -> Option<(f32, Vec3)> {
+        self.slabs
+            .iter()
+            .filter_map(|slab| ray_aabb_entry(ray, slab.min, slab.max))
+            .filter(|(distance, _)| *distance <= range)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
     }
 
     /// Shove a body that is *already* inside a wall back out of it.
