@@ -23,6 +23,7 @@
 use std::fmt;
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// How long a hit still counts towards an assist, in seconds of game time.
 ///
@@ -51,7 +52,7 @@ pub const DEFAULT_HEALTH: u32 = 100;
 /// Allocated by [`NextPlayerId`] rather than randomly: two clients replaying
 /// the same match have to agree on who did what, and an id drawn from an RNG
 /// is the one thing in a step that cannot be reconciled.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Reflect, Serialize, Deserialize)]
 pub struct PlayerId(pub u64);
 
 impl fmt::Display for PlayerId {

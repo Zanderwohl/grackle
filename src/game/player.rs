@@ -2,6 +2,7 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::camera::Hdr;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
 
 use crate::common::damage::{Damageable, PlayerId};
@@ -64,7 +65,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 /// And a [`Loadout`], because a body with nothing to shoot with is a body the
 /// trigger does nothing for — silently, since a missing component simply drops
 /// it out of every weapon's query.
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Clone, PartialEq, Reflect, Serialize, Deserialize)]
 #[require(Hitboxes, Damageable, Loadout, Trigger, PlayerInput)]
 pub struct Player {
     pub velocity: Vec3,
@@ -117,7 +118,7 @@ impl Default for Player {
 /// Because it lives on the body, leaving Play takes it with the body. A click
 /// made while editing cannot fire on the next spawn, because the thing that
 /// would have remembered it no longer exists.
-#[derive(Component, Default, Debug, Clone, Copy, PartialEq)]
+#[derive(Component, Default, Debug, Clone, Copy, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct PlayerInput {
     /// Movement in the body's own frame: `x` right, `y` forward.
     pub movement: Vec2,
@@ -185,7 +186,7 @@ pub struct LocalPlayer;
 /// `Transform` and never to here. Without that split, a 64 Hz body drawn at
 /// 144 Hz visibly steps — and keeping the previous position around is also
 /// what reconciliation will want when it has to rewind.
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct PhysicsBody {
     pub previous: Vec3,
     pub current: Vec3,

@@ -85,6 +85,11 @@ impl Plugin for NetTransportPlugin {
             .insert_resource(Time::<Fixed>::from_hz(TICK_HZ))
             .add_plugins(client::ClientPlugins { tick_duration })
             .add_plugins(server::ServerPlugins { tick_duration })
+            // After both plugin groups and before any link entity exists,
+            // which is the order Lightyear requires: the registries are
+            // hashed into the handshake, so they have to be complete before
+            // anything can connect.
+            .add_plugins(crate::common::protocol::ProtocolPlugin)
             // Prediction is gated on this resource existing, not on a plugin,
             // so it goes in once and stays: a process that is currently a
             // listen server may be a client after the next menu click.
