@@ -29,6 +29,7 @@ use crate::common::flame::Burning;
 use crate::common::skeleton::mesh::body_meshes;
 use crate::common::skeleton::rig::Proportions;
 use crate::common::skeleton::{Pose, Skeleton};
+use crate::common::team::Team;
 use crate::game::player::{Player, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
 
@@ -50,72 +51,100 @@ pub struct BodyMesh {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct BoneMesh(pub usize);
 
-/// What colour a body is, if it is not the default one.
+/// What colour a body is, if it is not the default one and has no team.
 ///
 /// A body rather than a bone, because a colour says *whose* body this is — an
-/// editor preview, and later a team. Colour that varies across one body is a
+/// editor preview, and now a team. Colour that varies across one body is a
 /// skin, which is a texture.
+///
+/// [`Team`] outranks it. The two are not really the same statement: a tint is
+/// "draw this body specially" and a team is "this body is on that side", and
+/// whose side you are on is the thing you have to be able to read across a
+/// room in a fight. A spawn point's preview is green because nothing on it has
+/// a side.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct BodyTint(pub Color);
 
-/// What a body is drawn in when nothing says otherwise. A placeholder until
-/// teams and skins exist.
+/// What a body is drawn in when it has neither a team nor a tint.
 pub const DEFAULT_BODY_COLOUR: Color = Color::srgb(0.62, 0.64, 0.70);
 
-/// What a body on fire is pulled towards.
-pub const BURNING_COLOUR: Color = Color::srgb(1.0, 0.30, 0.10);
-
-/// How far towards [`BURNING_COLOUR`] a burning body is pulled.
+/// How a body on fire is lit from inside, in linear light.
 ///
-/// Slight on purpose: it has to read as *that scout, on fire* rather than as a
-/// differently coloured scout, because whose body it is will one day be what
-/// the colour means. Enough that you can pick a burning body out of a crowd at
-/// a glance, and not enough to hide a team.
-const BURNING_TINT_STRENGTH: f32 = 0.45;
+/// **Fire is a glow, not a hue.** It used to pull a body's base colour towards
+/// orange, which worked when every body was the same grey and stops working
+/// the moment bodies are coloured: a burning red is a red, and a burning
+/// yellow was already most of the way there. An emissive term is the one
+/// signal that reads identically on all four teams, because it adds light
+/// rather than replacing colour — and it does not have to be remembered and
+/// undone, because it is not written onto the body at all.
+///
+/// Over 1.0 on purpose: the play camera is HDR and tone-mapped, so this is a
+/// body that is *brighter than white* in the red channel rather than one
+/// painted a lighter orange.
+pub const BURNING_GLOW: LinearRgba = LinearRgba::rgb(2.4, 0.55, 0.06);
 
-/// What colour a body is drawn in, in one place.
+/// How a body is drawn: what colour it is, and whether it is alight.
+///
+/// One value rather than two arguments threaded around, because it is also the
+/// material cache's key — two bodies that look the same share a material, and
+/// what "the same" means is exactly this.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BodyLook {
+    pub colour: Color,
+    pub burning: bool,
+}
+
+impl BodyLook {
+    /// The cache key: the colour to eight bits a channel, plus the fire.
+    fn key(self) -> ([u8; 4], bool) {
+        (self.colour.to_srgba().to_u8_array(), self.burning)
+    }
+}
+
+/// What a body looks like, in one place.
 ///
 /// Burning is an *input* to this rather than something written onto the body
 /// as a [`BodyTint`]. Overwriting the tint would mean remembering what was
 /// underneath it and putting it back when the fire went out, and the failure
 /// mode of forgetting is a body that stays scorched for the rest of the match.
-/// A body's colour is a function of what the body is, and being on fire is
-/// part of what it is.
-pub fn body_colour(tint: Option<&BodyTint>, burning: Option<&Burning>) -> Color {
-    let base = tint.map_or(DEFAULT_BODY_COLOUR, |tint| tint.0);
-    if burning.is_none() {
-        return base;
+/// A body's appearance is a function of what the body is, and being on fire is
+/// part of what it is — as is whose side it is on.
+pub fn body_look(
+    team: Option<&Team>,
+    tint: Option<&BodyTint>,
+    burning: Option<&Burning>,
+) -> BodyLook {
+    BodyLook {
+        colour: team
+            .map(|team| team.colour())
+            .or_else(|| tint.map(|tint| tint.0))
+            .unwrap_or(DEFAULT_BODY_COLOUR),
+        burning: burning.is_some(),
     }
-
-    let base = base.to_linear();
-    let fire = BURNING_COLOUR.to_linear();
-    Color::LinearRgba(LinearRgba {
-        red: base.red.lerp(fire.red, BURNING_TINT_STRENGTH),
-        green: base.green.lerp(fire.green, BURNING_TINT_STRENGTH),
-        blue: base.blue.lerp(fire.blue, BURNING_TINT_STRENGTH),
-        alpha: base.alpha,
-    })
 }
 
-/// One material per colour asked for.
+/// One material per look asked for.
 ///
-/// Bodies of a colour share a material for the same reason bodies of a build
-/// share their meshes: an animation grid is sixty bodies and a handful of
-/// distinct answers.
+/// Bodies that look the same share a material for the same reason bodies of a
+/// build share their meshes: an animation grid is sixty bodies and a handful
+/// of distinct answers. Four teams alight or not is eight, not sixty.
 #[derive(Resource, Default)]
-pub struct BodyMaterials(HashMap<[u8; 4], Handle<StandardMaterial>>);
+pub struct BodyMaterials(HashMap<([u8; 4], bool), Handle<StandardMaterial>>);
 
 impl BodyMaterials {
     fn get(
         &mut self,
-        colour: Color,
+        look: BodyLook,
         materials: &mut Assets<StandardMaterial>,
     ) -> Handle<StandardMaterial> {
         self.0
-            .entry(colour.to_srgba().to_u8_array())
+            .entry(look.key())
             .or_insert_with(|| {
                 materials.add(StandardMaterial {
-                    base_color: colour,
+                    base_color: look.colour,
+                    // The whole of what fire does to a body: it keeps its own
+                    // colour and is lit from inside.
+                    emissive: if look.burning { BURNING_GLOW } else { LinearRgba::BLACK },
                     perceptual_roughness: 0.85,
                     ..default()
                 })
@@ -183,18 +212,25 @@ fn build_body_meshes(
     mut palette: ResMut<BodyMaterials>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     bodies: Query<
-        (Entity, &Skeleton, Option<&BodyTint>, Option<&Burning>, Option<&BodyMesh>),
-        Or<(Changed<Skeleton>, Changed<BodyTint>)>,
+        (
+            Entity,
+            &Skeleton,
+            Option<&Team>,
+            Option<&BodyTint>,
+            Option<&Burning>,
+            Option<&BodyMesh>,
+        ),
+        Or<(Changed<Skeleton>, Changed<Team>, Changed<BodyTint>)>,
     >,
 ) {
-    for (body, skeleton, tint, burning, existing) in &bodies {
+    for (body, skeleton, team, tint, burning, existing) in &bodies {
         if let Some(existing) = existing {
             for part in &existing.parts {
                 commands.entity(*part).despawn();
             }
         }
 
-        let material = palette.get(body_colour(tint, burning), &mut materials);
+        let material = palette.get(body_look(team, tint, burning), &mut materials);
 
         let handles = cache
             .0
@@ -248,7 +284,7 @@ fn recolour_bodies(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut extinguished: RemovedComponents<Burning>,
     lit: Query<Entity, Added<Burning>>,
-    bodies: Query<(&BodyMesh, Option<&BodyTint>, Option<&Burning>)>,
+    bodies: Query<(&BodyMesh, Option<&Team>, Option<&BodyTint>, Option<&Burning>)>,
     mut parts: Query<&mut MeshMaterial3d<StandardMaterial>>,
 ) {
     // Both edges. Only having the first is a body that stays scorched after
@@ -256,9 +292,9 @@ fn recolour_bodies(
     for body in lit.iter().chain(extinguished.read()) {
         // Undressed, or despawned between catching fire and this running —
         // a body killed by the burn that lit it.
-        let Ok((mesh, tint, burning)) = bodies.get(body) else { continue };
+        let Ok((mesh, team, tint, burning)) = bodies.get(body) else { continue };
 
-        let material = palette.get(body_colour(tint, burning), &mut materials);
+        let material = palette.get(body_look(team, tint, burning), &mut materials);
         for part in &mesh.parts {
             let Ok(mut slot) = parts.get_mut(*part) else { continue };
             slot.0 = material.clone();
@@ -330,43 +366,45 @@ fn hide_own_body(
 mod tests {
     use super::*;
     use crate::common::class::Class;
+    use crate::common::team::Team;
     use crate::common::skeleton::rig::{bone, humanoid};
 
-    /// A body on fire is pulled towards the fire colour but not replaced by
-    /// it: whose body it is has to survive being alight, because one day the
-    /// colour is which team you are on.
+    /// Fire is a glow, not a repaint: a burning body keeps the colour that
+    /// says whose it is and is lit from inside instead. That is the property
+    /// that makes it work on all four teams, red included.
     #[test]
-    fn burning_tints_a_body_towards_fire_without_hiding_whose_it_is() {
+    fn burning_lights_a_body_up_without_changing_whose_it_is() {
         use crate::common::damage::DamageSource;
         use crate::common::flame::{Burning, FlameSpec};
 
-        let team = BodyTint(Color::srgb(0.2, 0.4, 0.9));
         let burning = Burning::lit(&FlameSpec::FLAMETHROWER, DamageSource::World);
 
-        let plain = body_colour(Some(&team), None).to_linear();
-        let alight = body_colour(Some(&team), Some(&burning)).to_linear();
+        for team in Team::ALL {
+            let plain = body_look(Some(&team), None, None);
+            let alight = body_look(Some(&team), None, Some(&burning));
 
-        assert_eq!(plain, team.0.to_linear(), "a body not on fire is its own colour");
-        assert!(alight.red > plain.red, "it did not warm up: {alight:?}");
-        assert!(alight.blue < plain.blue, "it did not shift off blue: {alight:?}");
-        assert!(
-            alight.blue > BURNING_COLOUR.to_linear().blue,
-            "the fire colour replaced the body's own rather than tinting it"
-        );
+            assert_eq!(plain.colour, team.colour());
+            assert_eq!(alight.colour, team.colour(), "the fire repainted a {team:?}");
+            assert!(!plain.burning);
+            assert!(alight.burning);
+            assert_ne!(plain.key(), alight.key(), "the two share a material");
+        }
     }
 
-    /// And a body with no tint of its own still shows the fire.
+    /// The order of precedence, all three at once: a team wins over a tint,
+    /// a tint wins over the default, and being alight is orthogonal to all of
+    /// it.
     #[test]
-    fn an_untinted_body_still_burns_visibly() {
-        use crate::common::damage::DamageSource;
-        use crate::common::flame::{Burning, FlameSpec};
+    fn a_team_outranks_a_tint_which_outranks_the_default() {
+        let tint = BodyTint(Color::srgb(0.2, 0.9, 0.3));
 
-        let burning = Burning::lit(&FlameSpec::FLAMETHROWER, DamageSource::World);
-        let plain = body_colour(None, None).to_linear();
-        let alight = body_colour(None, Some(&burning)).to_linear();
-
-        assert_eq!(plain, DEFAULT_BODY_COLOUR.to_linear());
-        assert!(alight.red > plain.red && alight.blue < plain.blue, "{alight:?}");
+        assert_eq!(body_look(None, None, None).colour, DEFAULT_BODY_COLOUR);
+        assert_eq!(body_look(None, Some(&tint), None).colour, tint.0);
+        assert_eq!(
+            body_look(Some(&Team::Blue), Some(&tint), None).colour,
+            Team::Blue.colour(),
+            "a spawn point's green hid a team"
+        );
     }
 
     fn app() -> App {

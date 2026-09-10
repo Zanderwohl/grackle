@@ -36,6 +36,7 @@ use crate::common::damage::{Damage, DamageSource, PlayerId};
 use crate::common::flame::{cone_directions, Burning, FlameSpec};
 use crate::common::hitbox::Hitboxes;
 use crate::common::hitscan::trace;
+use crate::common::team::Allegiances;
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::hitscan::{aim, eye};
@@ -69,6 +70,7 @@ pub fn fire_flame(
     shooters: Query<(&PhysicsBody, &Player, &Stance, Option<&PlayerId>, &Loadout)>,
     targets: Query<(Entity, &Hitboxes)>,
     mut alight: Query<&mut Burning>,
+    allegiances: Allegiances,
     mut damage: MessageWriter<Damage>,
 ) {
     for shot in pulled.read() {
@@ -101,6 +103,16 @@ pub fn fire_flame(
                 continue;
             }
             caught.push(hit.target);
+
+            // The one place a weapon has to ask about teams for itself.
+            // Everything a flame *damages* is dropped by `apply_damage` like
+            // any other request, but setting somebody alight is a second
+            // effect that never goes through it — and a teammate walking away
+            // on fire from a flame that did them no damage would be the
+            // friendly fire rule with a hole straight through it.
+            if !allegiances.may_hurt(source, hit.target) {
+                continue;
+            }
 
             // A head is not worth more to fire. The zone is where the flame
             // touched, not what it touched — and a flamethrower that rewarded
@@ -282,6 +294,44 @@ mod tests {
         let messages = world.resource::<Messages<Damage>>();
         let mut cursor = messages.get_cursor();
         cursor.read(messages).copied().collect()
+    }
+
+    /// A teammate caught in the cone is neither hurt nor lit. The damage half
+    /// would be dropped by `apply_damage` anyway; the *lighting* is the half
+    /// that never passes through it, and a teammate walking away on fire from
+    /// a flame that did them no damage would be the rule with a hole in it.
+    #[test]
+    fn a_teammate_in_the_cone_does_not_catch_fire() {
+        use crate::common::team::Team;
+
+        let mut world = a_world();
+        let shooter = a_shooter(&mut world);
+        world.entity_mut(shooter).insert(Team::Green);
+        let ally = a_body(&mut world, 2.0, 0.0);
+        world.entity_mut(ally).insert((PlayerId(2), Team::Green));
+
+        puff(&mut world, shooter);
+
+        assert!(asked_for(&mut world).is_empty(), "asked to hurt a teammate");
+        assert!(world.get::<Burning>(ally).is_none(), "set a teammate alight");
+    }
+
+    /// The other side of it, through the same harness: an enemy in the same
+    /// place takes the puff and burns.
+    #[test]
+    fn an_enemy_in_the_cone_burns() {
+        use crate::common::team::Team;
+
+        let mut world = a_world();
+        let shooter = a_shooter(&mut world);
+        world.entity_mut(shooter).insert(Team::Green);
+        let enemy = a_body(&mut world, 2.0, 0.0);
+        world.entity_mut(enemy).insert((PlayerId(2), Team::Yellow));
+
+        puff(&mut world, shooter);
+
+        assert_eq!(asked_for(&mut world).len(), 1);
+        assert!(world.get::<Burning>(enemy).is_some());
     }
 
     /// The drawn cone has to describe the shot: apex on the eye, base at the

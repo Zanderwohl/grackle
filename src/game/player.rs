@@ -6,6 +6,7 @@ use bevy::time::Fixed;
 
 use crate::common::damage::{Damageable, PlayerId};
 use crate::common::hitbox::Hitboxes;
+use crate::common::team::Team;
 use crate::common::class::{
     body_centre_from_feet, Stance, CLASS_HALF_EXTENTS, TALLEST_CLASS_EYE_HEIGHT,
     TALLEST_CLASS_HEIGHT,
@@ -274,12 +275,13 @@ pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
 /// The yaw goes into `Player` as well as `Transform` because `mouse_look` owns
 /// the rotation from the next frame on and reads the body's yaw to do it —
 /// setting only the transform would be undone on the first mouse movement.
-pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) {
+pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId, team: Team) {
     let position = body_centre_from_feet(spawn.feet);
     commands
         .spawn((
             Player { yaw: spawn.yaw, ..default() },
             id,
+            team,
             Stance::default(),
             PhysicsBody::at(position),
             Transform::from_translation(position).with_rotation(Quat::from_rotation_y(spawn.yaw)),

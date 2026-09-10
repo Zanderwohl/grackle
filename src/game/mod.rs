@@ -5,6 +5,7 @@ use rand::seq::IndexedRandom;
 use crate::common::app_mode::AppMode;
 use crate::common::damage::NextPlayerId;
 use crate::common::skeleton::AnimationClock;
+use crate::common::team::Team;
 use crate::editor::multicam::Multicam;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
@@ -107,6 +108,16 @@ fn toggle_mode(
     });
 }
 
+/// The side the one body on the map is on.
+///
+/// A constant because there is nothing yet that could choose: no lobby, no
+/// team select, no second player to be balanced against. What it *is* for is
+/// making the rule in [`crate::common::team`] something you can walk up to and
+/// check — with an animation grid on the map, three quarters of the roster
+/// shoot back and the red quarter does not. A gamemode picks this the day
+/// there is one.
+const PLAYER_TEAM: Team = Team::Red;
+
 fn enter_play(
     mut commands: Commands,
     mut collision: ResMut<CollisionWorld>,
@@ -152,14 +163,18 @@ fn enter_play(
     // A fresh id each time rather than one kept across F5: the body that
     // comes back is a new body, and a kill feed that reused the id would
     // credit its damage to the one before it.
-    spawn_player(&mut commands, spawn, ids.allocate());
+    spawn_player(&mut commands, spawn, ids.allocate(), PLAYER_TEAM);
 
     for mut camera in &mut editor_cameras {
         camera.is_active = false;
     }
 
     set_cursor_captured(&mut commands, &window, true);
-    info!("Playing {} room(s); F5 to go back to editing", rooms.len());
+    info!(
+        "Playing {} room(s) on {}; F5 to go back to editing",
+        rooms.len(),
+        PLAYER_TEAM.name()
+    );
 }
 
 fn leave_play(

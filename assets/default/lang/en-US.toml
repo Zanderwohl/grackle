@@ -158,6 +158,8 @@ state = "Animation"
 title = "Animation Grid"
 feet = "Front Centre"
 facing = "Facing"
+teams = "Teams"
+striped = "Striped"
 summary = "{ bodies } bodies, { width } m by { depth } m."
 
 [class.names]
@@ -171,6 +173,12 @@ medic = "Medic"
 sniper = "Sniper"
 spy = "Spy"
 civilian = "Civilian"
+
+[team.names]
+red = "Red"
+blue = "Blue"
+yellow = "Yellow"
+green = "Green"
 
 [animation.states]
 idle = "Idle"
