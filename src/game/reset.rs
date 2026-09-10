@@ -23,6 +23,7 @@
 use bevy::prelude::*;
 
 use crate::common::damage::{DamageLog, Damageable};
+use crate::common::flame::Burning;
 use crate::common::skeleton::{AnimationClock, Gait, SkeletonAnimator};
 use crate::game::damage::DamageNumber;
 use crate::game::projectile::{Projectile, ProjectileEmitter};
@@ -44,6 +45,7 @@ pub fn reset_for_play(
     numbers: Query<Entity, With<DamageNumber>>,
     corpses: Query<Entity, With<Ragdoll>>,
     in_flight: Query<Entity, Or<(With<Projectile>, With<ProjectileEmitter>)>>,
+    alight: Query<Entity, With<Burning>>,
 ) {
     // Back to zero, so two runs of the same map put every body at the same
     // point in its cycle. A match that started at whatever second the editor
@@ -87,6 +89,13 @@ pub fn reset_for_play(
     // otherwise arrive in the new match, from a shooter that no longer exists.
     for entity in &in_flight {
         commands.entity(entity).despawn();
+    }
+
+    // And put out anything still burning. The health is back by the loop
+    // above, so a fire carried over would be a body at full health taking
+    // damage for something that happened last match.
+    for body in &alight {
+        commands.entity(body).remove::<Burning>();
     }
 }
 

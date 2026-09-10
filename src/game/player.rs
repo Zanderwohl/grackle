@@ -11,7 +11,7 @@ use crate::common::class::{
     TALLEST_CLASS_HEIGHT,
 };
 use crate::game::collision::CollisionWorld;
-use crate::game::weapon::Loadout;
+use crate::game::weapon::{Loadout, Trigger};
 use crate::tool::room::Room;
 
 /// Half-extents of the body box. The tallest class, since there is only one
@@ -65,7 +65,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 /// trigger does nothing for — silently, since a missing component simply drops
 /// it out of every weapon's query.
 #[derive(Component, Debug)]
-#[require(Hitboxes, Damageable, Loadout)]
+#[require(Hitboxes, Damageable, Loadout, Trigger)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -137,6 +137,14 @@ pub struct PlayerInput {
     /// on a slow frame and not at all on a fast one, which is a weapon whose
     /// rate of fire is the frame rate.
     pub attack: bool,
+    /// The trigger is being held *now*.
+    ///
+    /// Held rather than latched, like sprint: an automatic weapon asks whether
+    /// the button is down, not whether it went down. Both halves are needed —
+    /// see [`pull_trigger`](crate::game::weapon::pull_trigger) — because a
+    /// click made and released between two fixed steps was never held on any
+    /// step that ran.
+    pub attack_held: bool,
 }
 
 /// Where the body is at fixed-step boundaries, so rendering can draw between
@@ -329,6 +337,7 @@ pub fn gather_input(
     // pass before a fixed step gets round to it. Automatic fire is a weapon
     // property and will latch a held button instead.
     input.attack |= buttons.just_pressed(MouseButton::Left);
+    input.attack_held = buttons.pressed(MouseButton::Left);
 
     // Latched like the trigger and for the same reason: a switch is an edge,
     // and a fixed step that ran twice this frame must not see it twice.
@@ -337,6 +346,7 @@ pub fn gather_input(
         (KeyCode::Digit2, 1),
         (KeyCode::Digit3, 2),
         (KeyCode::Digit4, 3),
+        (KeyCode::Digit5, 4),
     ] {
         if keys.just_pressed(key) {
             input.select = Some(slot);

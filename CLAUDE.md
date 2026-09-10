@@ -34,7 +34,8 @@ in it that constrains code written today: items must record their provenance
 ## State of the repo
 
 The editor is real and works. **The game barely exists.** There is a damage
-layer, a hitscan weapon and a projectile weapon, but no networking, no ammo,
+layer and three kinds of weapon — hitscan, projectile, flame — but no
+networking, no ammo,
 no reload, no teams and no respawn: a body that dies leaves a ragdoll and is
 gone. There is also no wasm build yet. Adding the runtime is the current
 frontier, not a finished thing to extend.
@@ -115,10 +116,10 @@ its hitboxes are hidden from inside your own head, nobody else's are),
 are off by default now that bodies have geometry. `F3` is the perf overlay in
 both modes.
 
-Weapons are on **`1`–`4`** (hitscan, rocket, pipe bomb, RPG), the left mouse
-button fires, and **`G`** plants an emitter firing whatever you are holding
-every two seconds with **`B`** to clear them — see "Damage, weapons and
-projectiles" below.
+Weapons are on **`1`–`5`** (hitscan, rocket, pipe bomb, RPG, flamethrower),
+the left mouse button fires — held, for the flamethrower — and **`G`** plants
+an emitter firing whatever projectile you are holding every two seconds with
+**`B`** to clear them. See "Damage, weapons and projectiles" below.
 
 ## What a body is drawn as
 
@@ -312,7 +313,7 @@ The order inside a tick is stated as **sets, not as named systems**
 
 | Set | What is in it |
 | --- | --- |
-| `Deal` | Everything that writes `Damage`: `fire_hitscan`, `step_projectiles`, `explode`. |
+| `Deal` | Everything that writes `Damage`: `fire_hitscan`, `step_projectiles`, `explode`, `fire_flame`, `burn`. |
 | `Apply` | `apply_damage`, and nothing else, ever. |
 | `Resolve` | `record_damage` then `reap_the_dead`. |
 
@@ -366,10 +367,45 @@ Things worth knowing before touching `src/game/projectile.rs`:
 - Position goes through `PhysicsBody`, which buys interpolation for free —
   drawn at the tick, a 30 m/s rocket visibly stutters.
 
-`fire_hitscan` and `fire_projectiles` both read `TriggerPulled`, which
-`pull_trigger` writes after taking the `PlayerInput::attack` latch **once**.
-Two firing systems each taking the latch for themselves is a race where
-whichever ran first ate the press.
+Every firing system reads `TriggerPulled`, which `pull_trigger` writes after
+taking the `PlayerInput::attack` latch **once**. Several firing systems each
+taking the latch for themselves is a race where whichever ran first ate the
+press.
+
+Whether holding the button keeps firing is `Weapon::cadence()` — `Semi` for
+everything you click, `Automatic { interval }` for the flamethrower — and the
+cooldown lives in a `Trigger` on the body. It counts *down*, so the default of
+zero is a body that may fire immediately; counting up would make a freshly
+spawned player wait out an interval before their first shot and read as a
+misfire. The rate is quantised to whole ticks, deliberately: carrying the
+remainder would let a weapon that had been idle empty several shots on
+consecutive ticks.
+
+### Fire
+
+Fire is the first source whose interesting half happens *after* the hit, and
+it needed no new machinery for that: `burn` sits in `Deal` and writes a
+`Damage` every half second like anything else would.
+
+- **`Burning` is the state and the tag.** It carries who lit it last, which is
+  who afterburn is credited to — the shooter may be dead or gone by the time
+  the last tick lands.
+- **Re-lighting resets the timer, never extends or maxes it.** A short burn on
+  top of a long one is a short burn. But re-lighting deliberately does *not*
+  touch `until_next`: a flamethrower re-lights ten times a second, and pushing
+  the next tick out each time is a burn that never ticks while somebody keeps
+  burning you. That one is easy to "fix" into a bug and has a test.
+- **The cone is sampled, and the sampling is worth nothing.** A puff is
+  `FlameSpec::rays` traces and a body caught by four of them takes one puff. A
+  weapon that hurt more because it was traced more finely would be a weapon
+  whose damage is a fidelity setting. There is no RNG in the spread — a fixed
+  pattern is what a server can re-run and what a player can learn to aim.
+- **Burning is an input to a body's colour, not a `BodyTint` written onto it.**
+  Overwriting the tint means remembering what was underneath and putting it
+  back, and forgetting leaves a body scorched for the rest of the match.
+  `body_colour` in [`body_mesh.rs`](src/game/body_mesh.rs) is the one place
+  that decides, and `recolour_bodies` swaps materials on the existing parts
+  rather than rebuilding a body because somebody set it on fire.
 
 Testing all of this by hand is what `ProjectileEmitter` is for: `G` plants one
 firing whatever you are holding every two seconds, `B` clears them. Plant one

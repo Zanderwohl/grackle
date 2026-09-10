@@ -25,6 +25,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
+use crate::common::flame::Burning;
 use crate::common::skeleton::mesh::body_meshes;
 use crate::common::skeleton::rig::Proportions;
 use crate::common::skeleton::{Pose, Skeleton};
@@ -60,6 +61,41 @@ pub struct BodyTint(pub Color);
 /// What a body is drawn in when nothing says otherwise. A placeholder until
 /// teams and skins exist.
 pub const DEFAULT_BODY_COLOUR: Color = Color::srgb(0.62, 0.64, 0.70);
+
+/// What a body on fire is pulled towards.
+pub const BURNING_COLOUR: Color = Color::srgb(1.0, 0.30, 0.10);
+
+/// How far towards [`BURNING_COLOUR`] a burning body is pulled.
+///
+/// Slight on purpose: it has to read as *that scout, on fire* rather than as a
+/// differently coloured scout, because whose body it is will one day be what
+/// the colour means. Enough that you can pick a burning body out of a crowd at
+/// a glance, and not enough to hide a team.
+const BURNING_TINT_STRENGTH: f32 = 0.45;
+
+/// What colour a body is drawn in, in one place.
+///
+/// Burning is an *input* to this rather than something written onto the body
+/// as a [`BodyTint`]. Overwriting the tint would mean remembering what was
+/// underneath it and putting it back when the fire went out, and the failure
+/// mode of forgetting is a body that stays scorched for the rest of the match.
+/// A body's colour is a function of what the body is, and being on fire is
+/// part of what it is.
+pub fn body_colour(tint: Option<&BodyTint>, burning: Option<&Burning>) -> Color {
+    let base = tint.map_or(DEFAULT_BODY_COLOUR, |tint| tint.0);
+    if burning.is_none() {
+        return base;
+    }
+
+    let base = base.to_linear();
+    let fire = BURNING_COLOUR.to_linear();
+    Color::LinearRgba(LinearRgba {
+        red: base.red.lerp(fire.red, BURNING_TINT_STRENGTH),
+        green: base.green.lerp(fire.green, BURNING_TINT_STRENGTH),
+        blue: base.blue.lerp(fire.blue, BURNING_TINT_STRENGTH),
+        alpha: base.alpha,
+    })
+}
 
 /// One material per colour asked for.
 ///
@@ -123,7 +159,11 @@ impl Plugin for BodyMeshPlugin {
         app
             .init_resource::<BodyMeshCache>()
             .init_resource::<BodyMaterials>()
-            .add_systems(Update, (build_body_meshes, hide_own_body))
+            // `recolour_bodies` after the build, so a body that catches fire
+            // on the same frame it is dressed is dressed and then scorched
+            // rather than scorched and then dressed plain.
+            .add_systems(Update, (build_body_meshes, recolour_bodies).chain())
+            .add_systems(Update, hide_own_body)
             // Before propagation rather than after it, unlike the gizmos: a
             // part is a real entity whose `GlobalTransform` has to be computed
             // from what this writes, and writing it afterwards would draw
@@ -143,21 +183,18 @@ fn build_body_meshes(
     mut palette: ResMut<BodyMaterials>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     bodies: Query<
-        (Entity, &Skeleton, Option<&BodyTint>, Option<&BodyMesh>),
+        (Entity, &Skeleton, Option<&BodyTint>, Option<&Burning>, Option<&BodyMesh>),
         Or<(Changed<Skeleton>, Changed<BodyTint>)>,
     >,
 ) {
-    for (body, skeleton, tint, existing) in &bodies {
+    for (body, skeleton, tint, burning, existing) in &bodies {
         if let Some(existing) = existing {
             for part in &existing.parts {
                 commands.entity(*part).despawn();
             }
         }
 
-        let material = palette.get(
-            tint.map_or(DEFAULT_BODY_COLOUR, |tint| tint.0),
-            &mut materials,
-        );
+        let material = palette.get(body_colour(tint, burning), &mut materials);
 
         let handles = cache
             .0
@@ -197,6 +234,38 @@ fn build_body_meshes(
             .insert(BodyMesh { parts });
     }
 }
+
+/// Swap the material on a body whose colour has changed but whose *shape* has
+/// not.
+///
+/// Catching fire must not rebuild a body. `build_body_meshes` throws every
+/// part away and respawns it, which is the right thing when the skeleton
+/// changes and absurd when somebody is set alight ten times a second — and
+/// twice per burn is still ten entities of churn for a colour. Shape and
+/// colour are two different questions and this is the second one.
+fn recolour_bodies(
+    mut palette: ResMut<BodyMaterials>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut extinguished: RemovedComponents<Burning>,
+    lit: Query<Entity, Added<Burning>>,
+    bodies: Query<(&BodyMesh, Option<&BodyTint>, Option<&Burning>)>,
+    mut parts: Query<&mut MeshMaterial3d<StandardMaterial>>,
+) {
+    // Both edges. Only having the first is a body that stays scorched after
+    // the fire is out, which looks like the fire never went out.
+    for body in lit.iter().chain(extinguished.read()) {
+        // Undressed, or despawned between catching fire and this running —
+        // a body killed by the burn that lit it.
+        let Ok((mesh, tint, burning)) = bodies.get(body) else { continue };
+
+        let material = palette.get(body_colour(tint, burning), &mut materials);
+        for part in &mesh.parts {
+            let Ok(mut slot) = parts.get_mut(*part) else { continue };
+            slot.0 = material.clone();
+        }
+    }
+}
+
 
 /// Put every part where its bone is.
 ///
@@ -262,6 +331,43 @@ mod tests {
     use super::*;
     use crate::common::class::Class;
     use crate::common::skeleton::rig::{bone, humanoid};
+
+    /// A body on fire is pulled towards the fire colour but not replaced by
+    /// it: whose body it is has to survive being alight, because one day the
+    /// colour is which team you are on.
+    #[test]
+    fn burning_tints_a_body_towards_fire_without_hiding_whose_it_is() {
+        use crate::common::damage::DamageSource;
+        use crate::common::flame::{Burning, FlameSpec};
+
+        let team = BodyTint(Color::srgb(0.2, 0.4, 0.9));
+        let burning = Burning::lit(&FlameSpec::FLAMETHROWER, DamageSource::World);
+
+        let plain = body_colour(Some(&team), None).to_linear();
+        let alight = body_colour(Some(&team), Some(&burning)).to_linear();
+
+        assert_eq!(plain, team.0.to_linear(), "a body not on fire is its own colour");
+        assert!(alight.red > plain.red, "it did not warm up: {alight:?}");
+        assert!(alight.blue < plain.blue, "it did not shift off blue: {alight:?}");
+        assert!(
+            alight.blue > BURNING_COLOUR.to_linear().blue,
+            "the fire colour replaced the body's own rather than tinting it"
+        );
+    }
+
+    /// And a body with no tint of its own still shows the fire.
+    #[test]
+    fn an_untinted_body_still_burns_visibly() {
+        use crate::common::damage::DamageSource;
+        use crate::common::flame::{Burning, FlameSpec};
+
+        let burning = Burning::lit(&FlameSpec::FLAMETHROWER, DamageSource::World);
+        let plain = body_colour(None, None).to_linear();
+        let alight = body_colour(None, Some(&burning)).to_linear();
+
+        assert_eq!(plain, DEFAULT_BODY_COLOUR.to_linear());
+        assert!(alight.red > plain.red && alight.blue < plain.blue, "{alight:?}");
+    }
 
     fn app() -> App {
         let mut app = App::new();

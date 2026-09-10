@@ -22,6 +22,7 @@ pub mod damage;
 pub mod death;
 pub mod hitbox;
 pub mod explosion;
+pub mod flame;
 pub mod hitscan;
 pub mod projectile;
 pub mod reset;

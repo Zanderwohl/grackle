@@ -2,6 +2,7 @@ pub mod app_mode;
 pub mod class;
 pub mod damage;
 pub mod hitbox;
+pub mod flame;
 pub mod hitscan;
 pub mod projectile;
 pub mod mesh;
