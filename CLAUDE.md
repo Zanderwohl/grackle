@@ -109,6 +109,20 @@ answered at this layer yet.
 `Escape` belongs to the pause menu. No reload, no second process — that is the
 between-round editing feature, so keep it that way.
 
+**On a client the server owns the mode**, and F5 does nothing.
+[`src/common/match_state.rs`](src/common/match_state.rs) sends a `MatchMode`
+whenever the server's `AppMode` changes and again to each client as it
+connects, and the client follows. Everyone drops into the editor between rounds
+together and drops back into the round together, which only works if one
+process owns the transition. Two details there are load-bearing: the message
+states what the mode *is* rather than that it changed, so a client joining
+mid-round is told where things stand and a dropped message is corrected by the
+next one instead of leaving somebody inverted; and a restatement of the mode
+already in force is ignored, because `NextState::set` runs the transition even
+for the same state and `OnEnter(Play)` tears the match down and rebuilds it.
+`toggle_mode` answers a client's F5 with a line in the log rather than
+swallowing it — a key that silently does nothing reads as a bug.
+
 Three more keys while playing: **`F`** swaps between first and third person
 (`ViewMode` in [`src/game/player.rs`](src/game/player.rs) — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),

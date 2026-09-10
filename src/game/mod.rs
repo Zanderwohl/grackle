@@ -4,6 +4,7 @@ use rand::seq::IndexedRandom;
 
 use crate::common::app_mode::AppMode;
 use crate::common::damage::NextPlayerId;
+use crate::common::net::NetRole;
 use crate::common::skeleton::AnimationClock;
 use crate::editor::multicam::Multicam;
 use crate::editor::spawn_point::SpawnPointMarker;
@@ -100,12 +101,27 @@ impl Plugin for GamePlugin {
 /// Deliberately the only way back to the editor: `Escape` is spoken for by the
 /// pause menu, and a key that sometimes pauses and sometimes throws you into
 /// the editor would be worse than either.
+///
+/// **Only where this process holds authority.** A client is shown the match
+/// the server is running: everyone drops into the editor between rounds
+/// together and drops back into the round together, which only works if one
+/// process owns the transition. The press is answered with a line in the log
+/// rather than swallowed, because a key that silently does nothing reads as a
+/// bug.
 fn toggle_mode(
     keys: Res<ButtonInput<KeyCode>>,
+    // Optional so that the game layer does not require the network layer: a
+    // build or a test with no `NetPlugin` in it is a closed game, and a closed
+    // game is its own authority.
+    role: Option<Res<NetRole>>,
     mode: Res<State<AppMode>>,
     mut next: ResMut<NextState<AppMode>>,
 ) {
     if !keys.just_pressed(KeyCode::F5) {
+        return;
+    }
+    if !role.is_none_or(|role| role.is_authority()) {
+        info!("The server decides when the match is played; F5 does nothing here.");
         return;
     }
     next.set(match mode.get() {
