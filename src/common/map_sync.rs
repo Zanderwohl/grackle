@@ -174,6 +174,13 @@ fn adopt_the_servers_map(
             // `sync_entities` has run, and a bake this frame would bake an
             // empty world. `CalculateRoomGeometry` is read on a later frame,
             // which is what makes this work.
+            //
+            // Joining a round bakes twice over — once here and once in
+            // `BakeSystems::All` as Play is entered — and that is the right
+            // trade. This message is what covers a map arriving while a round
+            // is already under way, which is where between-round editing is
+            // going; the other covers a map that arrives in the same breath as
+            // the round starts, which this message is one frame too late for.
             bake.write(CalculateRoomGeometry);
         }
     }

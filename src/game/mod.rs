@@ -17,6 +17,7 @@ use crate::game::player::{
     give_the_local_body_a_camera, step_player, toggle_view, usable_spawns, write_client_inputs,
     InputLatch, LocalPlayer, Player, Spawn, ViewMode,
 };
+use crate::tool::bakes::BakeSystems;
 use crate::tool::room::Room;
 
 pub mod body_mesh;
@@ -75,7 +76,15 @@ impl Plugin for GamePlugin {
             ).run_if(in_state(AppMode::Play)))
             // Clear the table, then set it: a new match starts from a known
             // state rather than from whatever the last one left behind.
-            .add_systems(OnEnter(AppMode::Play), (reset_for_play, enter_play).chain())
+            // After `BakeSystems::All`, so the round is set up against a map
+            // that has been rebuilt. The bake is what makes the map visible;
+            // entering before it means a round played in a world you cannot
+            // see, which is exactly what a client that has just been handed
+            // the server's map would get.
+            .add_systems(
+                OnEnter(AppMode::Play),
+                (reset_for_play, enter_play).chain().after(BakeSystems::All),
+            )
             .add_systems(OnExit(AppMode::Play), leave_play)
             // Aim and input sampling stay at frame rate — the first because
             // 64 Hz aim is latency you can feel, the second so a press made on

@@ -162,6 +162,40 @@ the left mouse button fires — held, for the flamethrower — and **`G`** plant
 an emitter firing whatever projectile you are holding every two seconds with
 **`B`** to clear them. See "Damage, weapons and projectiles" below.
 
+## Baking before a round
+
+**Entering Play bakes the map first.** `BakeSystems::All`
+([`src/tool/bakes.rs`](src/tool/bakes.rs)) runs on `OnEnter(AppMode::Play)`
+and `reset_for_play`/`enter_play` are ordered `.after` it, so a round is set up
+against a world that has been rebuilt rather than one that is about to be.
+
+It is a **set, not a list of named systems**, for the same reason
+`DamageSystems` is one: rooms are the only thing baked today, and a second kind
+— navmesh, lightmap, whatever the compiled map format wants — joins by naming
+the set. Name the systems instead and the ordering lives somewhere that does
+not know about them, and forgetting one produces no error, just a round that
+starts before its world is finished.
+
+The bake is unconditional rather than message-driven, because the case it
+exists for is a client: it is handed the server's map and enters Play in the
+same breath, and the `CalculateRoomGeometry` that adoption writes is read a
+frame later than the round starts. What a missed bake costs is *not* a body
+falling through the world — collision is built from the `Room` components, so
+the walls are all still there — it is a round played in a map nobody can see.
+That is why it is easy to miss.
+
+`bake_room_geometry` is also **no longer gated on `AppMode::Editor`**, unlike
+the rest of `BakePlugin`. A map can change while a round is being played; that
+is the whole between-round editing feature, and geometry that stopped being
+rebuilt the moment somebody pressed F5 would leave the match looking at the map
+as it was before the edit. Joining a round therefore bakes twice — once on
+adoption, once entering Play — which is the right trade: the message covers a
+map arriving mid-round, the set covers one arriving as the round starts.
+
+The actual work is the free function `bake_rooms`, called by both paths, so
+that "somebody pressed the button" and "a round is starting" cannot bake
+slightly differently.
+
 ## What a body is drawn as
 
 Three volumes, and they are kept apart on purpose — the movement hull, the
