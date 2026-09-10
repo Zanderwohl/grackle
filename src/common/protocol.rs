@@ -90,6 +90,11 @@ impl Plugin for ProtocolPlugin {
         // fact and the despawn that follows arrive together and the body is
         // gone by the time anything can copy its pose.
         app.component::<crate::game::ragdoll::Ragdoll>().replicate_once();
+        // And what it was built from, read off the rig the body actually had.
+        // Not its `Class`: a player's body has none — it is rigged from
+        // `Proportions::DEFAULT` — so a corpse keyed on one is a corpse only
+        // the authority can draw, which is exactly how this was first wrong.
+        app.component::<crate::game::ragdoll::CorpseBuild>().replicate_once();
 
         // A projectile in flight, so everybody can see it coming. Replicated
         // rather than re-simulated: see `replicate_projectiles`.

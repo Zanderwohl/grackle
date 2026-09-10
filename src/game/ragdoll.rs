@@ -77,9 +77,8 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
-use crate::common::class::Class;
 use crate::common::net::has_authority;
-use crate::common::skeleton::rig::humanoid;
+use crate::common::skeleton::rig::{humanoid, Proportions};
 use crate::common::damage::{falloff, Damageable};
 use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
@@ -221,6 +220,18 @@ pub struct RagdollShove {
     /// rest, and an explosion's wide one moves the whole body at once.
     pub radius: f32,
 }
+
+/// What a corpse was built from.
+///
+/// The nine numbers a rig is derived from, taken off the dying body's own
+/// [`Skeleton`] and sent with the seed. A `Skeleton` is presentation and never
+/// crosses the wire; this is the description it is rebuilt from, and taking it
+/// from the rig rather than from a class is what makes it work for every body
+/// there is. A player's body has no [`Class`](crate::common::class::Class) at
+/// all — it is rigged from `Proportions::DEFAULT` — so a corpse that asked for
+/// one was a corpse nobody but the authority could ever draw.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CorpseBuild(pub Proportions);
 
 /// A corpse.
 #[derive(Component, Debug, Clone, Serialize, Deserialize)]
@@ -777,12 +788,11 @@ pub fn raise_ragdolls(
             Option<&BodyTint>,
             Option<&PhysicsBody>,
             Option<&Name>,
-            Option<&Class>,
         ),
         (Added<Dying>, Without<Ragdolled>),
     >,
 ) {
-    for (entity, skeleton, pose, global, offset, tint, physics, name, class) in &bodies {
+    for (entity, skeleton, pose, global, offset, tint, physics, name) in &bodies {
         // The step's own displacement rather than a velocity in metres per
         // second, because that is the unit the solver keeps: how far a point
         // moved on the last tick.
@@ -810,12 +820,10 @@ pub fn raise_ragdolls(
             // floor — more so, if teams are ever a thing you check by looking.
             corpse.insert(*tint);
         }
-        if let Some(class) = class {
-            // The build, so a viewer can put the rig back. A `Skeleton` is
-            // presentation and never crosses the wire — the class it was made
-            // from does, exactly as it does for a living body.
-            corpse.insert(*class);
-        }
+        // The build, so a viewer can put the rig back. Read off the rig the
+        // body actually had, which is the only description that cannot
+        // disagree with it.
+        corpse.insert(CorpseBuild(skeleton.proportions()));
 
         commands.entity(entity).insert(Ragdolled);
     }
@@ -834,18 +842,18 @@ pub fn raise_ragdolls(
 /// twice.
 ///
 /// **Asked as an absence, not as an arrival.** The obvious filter is
-/// `Added<Ragdoll>`, and it is wrong: the seed and the class are two
+/// `Added<Ragdoll>`, and it is wrong: the seed and the build are two
 /// components on one entity and replication does not promise to deliver them
-/// in the same packet. Keyed on the arrival of the seed, a corpse whose class
+/// in the same packet. Keyed on the arrival of the seed, a corpse whose build
 /// came a tick later is never dressed at all — three in eight, measured — and
 /// the symptom is an invisible corpse rather than an error. A corpse with no
 /// rig is the thing to react to, however it came to be one.
 pub fn dress_corpses_from_elsewhere(
     mut commands: Commands,
-    corpses: Query<(Entity, &Ragdoll, &Class), Without<Skeleton>>,
+    corpses: Query<(Entity, &Ragdoll, &CorpseBuild), Without<Skeleton>>,
 ) {
-    for (entity, ragdoll, class) in &corpses {
-        let skeleton = humanoid(class.proportions());
+    for (entity, ragdoll, build) in &corpses {
+        let skeleton = humanoid(build.0);
         let (transform, pose) = ragdoll.pose(&skeleton);
         commands
             .entity(entity)
@@ -1623,24 +1631,26 @@ mod tests {
     /// A corpse that arrives from the wire is dressed and posed, and never
     /// given an animator.
     ///
-    /// Only a seed crosses — the points at the moment of death and the class
-    /// the body was built from — so a viewer has to put the rig back before
+    /// Only a seed crosses — the points at the moment of death and the build
+    /// the body was rigged from — so a viewer has to put the rig back before
     /// anything can draw it. What it must not put back is a
     /// `SkeletonAnimator`: the solver owns a corpse's pose, and a corpse with
     /// both lies there playing its idle.
     #[test]
-    fn a_corpse_from_the_wire_is_dressed_by_its_class() {
-        use crate::common::class::Class;
+    fn a_corpse_from_the_wire_is_dressed_by_its_build() {
         use crate::common::skeleton::SkeletonAnimator;
 
-        let skeleton = humanoid(Class::default().proportions());
+        let skeleton = humanoid(Proportions::DEFAULT);
         let placed = Transform::from_translation(Vec3::new(2.0, 1.0, -3.0));
         let seed = Ragdoll::from_body(&skeleton, &Pose::rest(), &placed, Vec3::ZERO);
 
         let mut app = App::new();
         app.add_systems(Update, dress_corpses_from_elsewhere);
         // Exactly what replication puts there, and nothing else.
-        let corpse = app.world_mut().spawn((seed, Class::default())).id();
+        let corpse = app
+            .world_mut()
+            .spawn((seed, CorpseBuild(Proportions::DEFAULT)))
+            .id();
         app.update();
 
         assert!(app.world().get::<Skeleton>(corpse).is_some(), "the corpse was never dressed");
@@ -1654,6 +1664,64 @@ mod tests {
             at.distance(placed.translation) < 1.0,
             "the corpse was not posed where it died: {at} against {}",
             placed.translation
+        );
+    }
+
+    /// A player's corpse carries the build it was rigged from.
+    ///
+    /// The gap this pins: a player's body has **no `Class`** — it is rigged
+    /// from `Proportions::DEFAULT` — so a corpse whose build was taken from a
+    /// class was a corpse no client could ever dress, and the one kind of
+    /// death anybody actually watches left nothing behind on the other
+    /// machine. The build is read off the rig instead, which every body has by
+    /// definition.
+    #[test]
+    fn a_players_corpse_carries_the_build_it_was_rigged_from() {
+        use crate::common::class::Class;
+        use crate::game::damage::DamagePlugin;
+        use crate::game::GamePlugin;
+
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.add_plugins(bevy::input::InputPlugin);
+        app.add_plugins(bevy::time::TimePlugin);
+        app.add_plugins(GamePlugin);
+        app.add_plugins(DamagePlugin);
+        app.world_mut()
+            .resource_mut::<NextState<AppMode>>()
+            .set(AppMode::Play);
+        app.update();
+
+        let placed = Transform::from_translation(Vec3::new(1.0, 0.0, 2.0));
+        let body = app
+            .world_mut()
+            .spawn((
+                rig(),
+                Pose::rest(),
+                placed,
+                GlobalTransform::from(placed),
+                Damageable::with_health(100),
+                DamageLog::default(),
+                PlayerId(4),
+            ))
+            .id();
+        app.update();
+        assert!(
+            app.world().get::<Class>(body).is_none(),
+            "this test is worthless if a body has a class to fall back on"
+        );
+
+        app.world_mut().get_mut::<Damageable>(body).unwrap().apply(100);
+        app.world_mut().run_schedule(FixedUpdate);
+
+        let mut corpses = app.world_mut().query::<&CorpseBuild>();
+        let build = corpses
+            .single(app.world())
+            .expect("no corpse, or a corpse nobody else could draw");
+        assert_eq!(
+            build.0,
+            rig().proportions(),
+            "the corpse was built from something other than the rig it came from"
         );
     }
 

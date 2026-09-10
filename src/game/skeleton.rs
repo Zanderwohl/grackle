@@ -369,14 +369,7 @@ fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
 /// own rig — every one the authority itself stood up — is left alone.
 fn dress_bodies_from_elsewhere(
     mut commands: Commands,
-    bodies: Query<
-        (Entity, &Class),
-        // Not a corpse. One of those carries a `Class` too — it is how a
-        // viewer puts the rig back — and the first thing this hands out is a
-        // `SkeletonAnimator`, which is the one component a corpse must never
-        // have. `dress_corpses_from_elsewhere` does the other half.
-        (Added<Class>, Without<Skeleton>, Without<crate::game::ragdoll::Ragdoll>),
-    >,
+    bodies: Query<(Entity, &Class), (Added<Class>, Without<Skeleton>)>,
 ) {
     for (body, class) in &bodies {
         commands.entity(body).insert_if_new((

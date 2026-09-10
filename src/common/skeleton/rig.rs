@@ -28,6 +28,7 @@ use std::sync::OnceLock;
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::common::class::TALLEST_CLASS_HEIGHT;
 
@@ -92,7 +93,7 @@ impl Side {
 /// The rig is derived from these, so anything not listed — where the knee
 /// sits, how long the neck is — is computed rather than stored, and cannot
 /// contradict them.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Proportions {
     /// Ground to the crown of the head, in metres. Everything else is a
     /// fraction of this.

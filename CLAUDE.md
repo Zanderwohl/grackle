@@ -691,14 +691,23 @@ What crosses is the **seed**, not the simulation. `Ragdoll` is
 `replicate_once`: two points per bone at the moment of death, sent once and
 never again, and each machine runs the same solver over them from there —
 twenty bones of physics per corpse once, not per tick. A `Skeleton` still never
-crosses; the corpse carries a `Class` like a living body and
-`dress_corpses_from_elsewhere` puts the rig back.
+crosses; the corpse carries a `CorpseBuild` — the `Proportions` read straight
+off the rig the body had — and `dress_corpses_from_elsewhere` puts the rig
+back from it.
+
+**The build comes off the rig, not off a `Class`.** A player's body has no
+`Class` at all: it is rigged from `Proportions::DEFAULT` by `dress_new_players`,
+and only the animation grid's bodies carry one. Keyed on a class, every corpse
+in the game replicated correctly *except* a player's — the one death anybody
+actually watches — and it failed as an invisible corpse rather than as an
+error. Every body has a rig by definition, and a rig knows what it was built
+from.
 
 Four things about that are load-bearing:
 
 - **Dressing is keyed on absence, not on `Added<Ragdoll>`.** The seed and the
-  class are two components on one entity, and replication does not promise to
-  deliver them in one packet. Keyed on the seed's arrival, a corpse whose class
+  build are two components on one entity, and replication does not promise to
+  deliver them in one packet. Keyed on the seed's arrival, a corpse whose build
   came a tick later is never dressed at all — three in eight, measured — and an
   undressed corpse is invisible rather than an error.
 - **A corpse must never be given a `SkeletonAnimator`.** The solver owns its
