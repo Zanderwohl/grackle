@@ -34,11 +34,12 @@ in it that constrains code written today: items must record their provenance
 ## State of the repo
 
 The editor is real and works. **The game barely exists.** There is a damage
-layer and three kinds of weapon — hitscan, projectile, flame — but no
-networking, no ammo,
-no reload, no teams and no respawn: a body that dies leaves a ragdoll and is
-gone. There is also no wasm build yet. Adding the runtime is the current
-frontier, not a finished thing to extend.
+layer and three kinds of weapon — hitscan, projectile, flame — and a
+server-authoritative network layer that carries the map, the bodies, damage and
+deaths. There is no ammo, no reload, no teams, no respawn and no client-side
+prediction: a body that dies leaves a ragdoll and is gone, and a client's
+movement is a round-trip behind. There is also no wasm build yet. Adding the
+runtime is the current frontier, not a finished thing to extend.
 
 `src/unlock` and the `crate_drop` binary are a self-contained TF2-style
 crate-unboxing prototype. It is orthogonal to both the editor and the game.
@@ -134,7 +135,7 @@ layer is one more thing to have gone wrong.
 
 Three things there are easy to get wrong and none of them errors:
 
-- **`gather_input` is gated on `not_paused`, but `mouse_look` is not.** A
+- **`gather_input` is gated on `not_paused`, but `gather_aim` is not.** A
   `MessageReader` has its own cursor, so a frame the system does not run is a
   frame of mouse motion still waiting to be read — gate it and closing the menu
   applies every scrap of motion made while it was up, in one frame. It drains
@@ -254,7 +255,7 @@ schedules is deliberate:
 
 | Schedule | What runs there | Why |
 | --- | --- | --- |
-| `BeforeFixedMainLoop` | `gather_input`, `mouse_look` | Aim at 64 Hz is latency you can feel; input gathered here reaches the same frame's steps. |
+| `BeforeFixedMainLoop` | `gather_input`, `gather_aim`, `place_camera` | Aim at 64 Hz is latency you can feel; input gathered here reaches the same frame's steps. |
 | `FixedUpdate` | `step_player`, collision rebuild | Everything deciding where a body ends up, so the same inputs give the same trajectory at any frame rate. |
 | `AfterFixedMainLoop` | `interpolate_bodies` | Draws between steps, so 64 Hz does not visibly step on a 144 Hz display. |
 
@@ -266,12 +267,14 @@ Two rules that follow, and both are easy to break by accident:
   `InputLatch` in `gather_input` and let the tick take it.
 - **Physics writes `PhysicsBody`, never `Transform`.** `interpolate_bodies`
   owns `Transform.translation`; writing it from a step would be overwritten and
-  would skip interpolation. `mouse_look` owns `Transform.rotation`.
+  would skip interpolation. `face_bodies` owns `Transform.rotation`, for every
+  body, from `Player.yaw`.
 
-`PlayerInput` is also the seam prediction needs: the step is a function of
-`(state, input, fixed dt)`, so a client and a server fed the same values reach
-the same position. Keep it that way — a step that reads the keyboard, the wall
-clock, or an RNG directly cannot be reconciled.
+`PlayerInput` is the seam prediction will need when it comes back: the step is
+a function of `(state, input, fixed dt)`, so a client and a server fed the same
+values reach the same position. Keep it that way — a step that reads the
+keyboard, the wall clock, or an RNG directly cannot be reconciled. Nothing
+predicts today; see "One rule" below.
 
 **`PlayerInput` is a component on the body, not a resource**, and that is what
 makes the step a function of one body's inputs rather than of whatever the
@@ -281,17 +284,15 @@ different set of inputs; a global input would walk them all the same way.
 
 Two consequences worth knowing:
 
-- **Aim travels in the input.** `mouse_look` accumulates `yaw`/`pitch` onto
-  `PlayerInput` and the step copies them onto the body, rather than writing
-  the body directly. Facing decides which way "forward" is, so a server
-  handed movement without aim walks the body the wrong way. `mouse_look` does
-  still write `Transform.rotation` itself — waiting for the next fixed step to
-  see the view move is 15 ms of lag on the one thing that has to feel
-  immediate — but that write is for the view, and the step is what turns the
-  body.
-- **`LocalPlayer` marks the one body this machine drives.** Everything that
-  reads a keyboard or a mouse looks for it and nothing else; a system querying
-  `With<Player>` would steer every body in the world at once.
+- **Aim travels in the input, and nowhere else.** `gather_aim` accumulates
+  `yaw`/`pitch` onto the latch and the step copies them onto the body. Facing
+  decides which way "forward" is, so a server handed movement without aim walks
+  the body the wrong way. Nothing writes a body's rotation from the mouse — the
+  view is a separate entity aimed straight from the latch, which is what keeps
+  looking around instant without giving a body's rotation two writers.
+- **`LocalPlayer` marks the one body this machine's view follows.** Everything
+  that reads a keyboard or a mouse looks for it and nothing else; a system
+  querying `With<Player>` would steer every body in the world at once.
 
 ### Three clocks, and what consumes an edge
 
@@ -567,7 +568,7 @@ about surfaces you work in, and this is a modal question with an answer.
 Two rules, and both are easy to undo:
 
 - **Ask `NetRole::is_authority()`, not which variant it is.** Solo and Listen
-  both simulate and are believed; a client predicts and is corrected. Almost
+  both simulate and are believed; a client is told and draws. Almost
   nothing cares about the difference between playing alone and hosting, and a
   system that matches on the variant has to be found again the first time a
   fourth role appears. `has_authority` and `is_remote_client` are run
@@ -587,24 +588,22 @@ every bug in this area has been a component in the wrong layer.
 
 | Layer | Components | Written by | On the wire |
 | --- | --- | --- | --- |
-| **State** | `PhysicsBody`, `Player`, `Stance` | the step, on whoever simulates | replicated, predicted |
-| **Consequence** | `Damageable` (+`DamageLog`) | the damage layer, on the authority only | replicated, *not* predicted |
+| **State** | `PhysicsBody`, `Player`, `Stance` | the step, on the authority | replicated |
+| **Consequence** | `Damageable` (+`DamageLog`) | the damage layer, on the authority only | replicated |
 | **Identity** | `PlayerId` | the server, once | `replicate_once` |
 | **Intent** | `Inputs` (`ActionState<PlayerInput>`) | the owning client | client → server only |
-| **Description** | `BodyRequests` | `describe_player_bodies` on simulated bodies | replicated |
+| **Description** | `BodyRequests` | `describe_player_bodies`, on the authority | replicated |
 | **Presentation** | `Skeleton`, `Pose`, `SkeletonAnimator`, `Gait`, `AnimationPhase`, `SkeletonRoot`, `BodyMesh`, `Hitboxes`, `Ragdoll` | every process, locally | **never** |
 
 **Where a body is looking is `Player.yaw`/`Player.pitch`**, and both ride along
 in the replicated `Player`. Applying them is split across two systems, because
 they do different things to a body:
 
-- `face_bodies` turns the whole body to `yaw`, for every body *except* the one
-  `LocalPlayer` marks — `mouse_look` owns that one and has already pointed it
-  this frame from sub-tick mouse motion. Nothing used to turn the others at
-  all, so a remote player, and every client's body on a server, faced whichever
-  way it spawned for the whole round. That is not only a drawing bug: hitboxes
-  are built from the body's `GlobalTransform`, so a shot that visibly lands on
-  a head does not register on a head boxed facing the other way.
+- `face_bodies` turns the whole body to `yaw`, for **every** body including our
+  own. It is the only writer of a body's rotation anywhere. That is not only a
+  drawing question: hitboxes are built from the body's `GlobalTransform`, so a
+  body left unturned has its head boxed where its head is not, and a shot that
+  visibly lands does not register.
 - `look_with_the_head` bends the neck and head to `pitch`, running after
   `advance_animators` and composing onto the pose it left — which is the
   arrangement that system's own docs describe for a look-at. The pitch is split
@@ -861,10 +860,8 @@ Two things about assembling that entity are not optional and fail silently:
   timeout — after which the client panics deep inside
   `lightyear_interpolation` on a negative tick delta. It reads as a Lightyear
   bug and is a missing component.
-- **The client needs `ReplicationReceiver`**, and `PredictionManager` has to
-  exist as a resource. Prediction is gated on that resource, not on a plugin,
-  so it is inserted once and left: a process hosting now may be a client after
-  the next menu click.
+- **The client needs `ReplicationReceiver`**, or replication metadata arrives
+  with nothing willing to interpret it.
 
 `TICK_HZ` in `constants.rs` sets both `Time<Fixed>` and Lightyear's
 `tick_duration`. They are the same number from one place on purpose — a tick is
@@ -881,10 +878,9 @@ a token for any client id. That is the right trade for a LAN listen server with
 no accounts behind it, and it is exactly what the token backend in
 `documentation/sketch.md` replaces.
 
-**Nothing is replicated yet.** The link is real and stable; no game state
-crosses it. `PhysicsBody`, the player body and `PlayerInput` are the next
-things to go over, and what they plug into is the input latch in
-`gather_input` and the 64 Hz `FixedUpdate` step.
+Lightyear was chosen partly for its prediction and rollback, and **none of that
+is switched on today** — see "One rule" above for why, and for the order it
+goes back in.
 
 ## The feature model
 
