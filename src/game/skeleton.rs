@@ -319,6 +319,13 @@ const HEAD_SHARE: f32 = 1.0 - NECK_SHARE;
 
 /// Tilt the head and neck to where the body is looking.
 ///
+/// **Positive is down.** A spine bone's `+Y` runs up its length and the rig
+/// faces `-Z`, so a positive rotation about its local `X` folds it forwards
+/// and down — which is why `CROUCH_LEAN` is positive on the chest and negative
+/// on the neck, where it lifts the head back up. Pitch runs the other way:
+/// positive means looking up, as the camera does. Hence the negation, and it
+/// is the whole of what `pitching_up_points_the_face_up` is guarding.
+///
 /// After `advance_animators` and on top of the pose it left, which is the
 /// arrangement `advance_animators` documents for exactly this: the state
 /// machine says what the body is *doing* and this bends two joints on top of
@@ -342,7 +349,7 @@ fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
             // length, so a rotation about local `X` pitches the face the same
             // way the camera pitches.
             let animated = pose.joint(joint);
-            pose.set(joint, animated * Quat::from_rotation_x(player.pitch * share));
+            pose.set(joint, animated * Quat::from_rotation_x(-player.pitch * share));
         }
     }
 }
@@ -580,32 +587,57 @@ mod tests {
         );
     }
 
-    /// Looking up points the head up.
+    /// Which way the head's face points, in world space.
     ///
-    /// Asserted on the posed rig rather than on the quaternion, because the
-    /// sign of a rotation about a bone's local axis is exactly the thing that
-    /// is easy to get backwards and impossible to read back from the maths.
+    /// Derived from the rig rather than assumed. The head bone's rest
+    /// rotation is *not* identity — its local `-Z` points at world `+Z`, which
+    /// is behind the body — so a test that measured `rotation * NEG_Z` would
+    /// be watching the back of the head and would call looking down looking
+    /// up. That is exactly the mistake this pair of tests exists to catch, and
+    /// the first thing they assert is the convention itself.
+    fn face_of(pose: &Pose) -> Vec3 {
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let bones = skeleton.posed_bones(pose, &Transform::IDENTITY);
+        let head = bones
+            .iter()
+            .find(|bone| bone.name == bone::HEAD)
+            .expect("no head on the rig");
+        head.rotation * Vec3::Z
+    }
+
+    fn face_at(pitch: f32) -> Vec3 {
+        let mut app = App::new();
+        let body = app
+            .world_mut()
+            .spawn((Player { pitch, ..default() }, Pose::rest()))
+            .id();
+        app.world_mut().run_system_once(look_with_the_head).unwrap();
+        face_of(app.world().get::<Pose>(body).unwrap())
+    }
+
+    /// The convention every other assertion here rests on: a body at rest
+    /// faces the way it walks, which is `-Z`.
+    ///
+    /// Pinned separately because it is a fact about the rig, not about the
+    /// look pass. If somebody re-authors the head's rest rotation, this fails
+    /// with a clear reason instead of quietly inverting everybody's aim.
+    #[test]
+    fn a_body_at_rest_faces_the_way_it_walks() {
+        let face = face_of(&Pose::rest());
+        assert!(
+            face.abs_diff_eq(Vec3::NEG_Z, 1e-4),
+            "the rig no longer faces -Z at rest; it faces {face}"
+        );
+    }
+
+    /// Looking up points the face up, and looking down points it down.
+    ///
+    /// The sign of a rotation about a bone's local axis is the one thing here
+    /// that cannot be read back from the maths, and getting it backwards is
+    /// not subtle to a player: heads tilt away from wherever their owner is
+    /// looking.
     #[test]
     fn pitching_up_points_the_face_up() {
-        let skeleton = humanoid(Proportions::DEFAULT);
-
-        let face_at = |pitch: f32| {
-            let mut app = App::new();
-            let body = app
-                .world_mut()
-                .spawn((Player { pitch, ..default() }, Pose::rest()))
-                .id();
-            app.world_mut().run_system_once(look_with_the_head).unwrap();
-            let pose = app.world().get::<Pose>(body).unwrap().clone();
-            let bones = skeleton.posed_bones(&pose, &Transform::IDENTITY);
-            let head = bones
-                .iter()
-                .find(|bone| bone.name == bone::HEAD)
-                .expect("no head on the rig");
-            // A bone's own `-Z` is the way its face points, as the camera's is.
-            head.rotation * Vec3::NEG_Z
-        };
-
         let level = face_at(0.0);
         let up = face_at(0.8);
         let down = face_at(-0.8);
@@ -613,6 +645,9 @@ mod tests {
         assert!(level.y.abs() < 1e-3, "a level body is not looking level: {level}");
         assert!(up.y > 0.5, "looking up did not point the face up: {up}");
         assert!(down.y < -0.5, "looking down did not point the face down: {down}");
+        // And it is still facing forwards while it does it, rather than having
+        // turned around on the way.
+        assert!(up.z < 0.0 && down.z < 0.0, "the head turned to face backwards");
     }
 
     /// The head takes the larger share and the neck the rest, and together
@@ -629,7 +664,8 @@ mod tests {
         app.world_mut().run_system_once(look_with_the_head).unwrap();
 
         let pose = app.world().get::<Pose>(body).unwrap();
-        let angle_of = |joint: &str| pose.joint(joint).to_euler(EulerRot::XYZ).0;
+        // Negated on the way in, so read back negated.
+        let angle_of = |joint: &str| -pose.joint(joint).to_euler(EulerRot::XYZ).0;
         let neck = angle_of(bone::NECK);
         let head = angle_of(bone::HEAD);
 

@@ -611,6 +611,20 @@ they do different things to a body:
   0.4/0.6 between neck and head, because a head alone at eighty degrees reads
   as a broken neck, and the shares sum to one so straight up is straight up.
 
+**A spine bone's positive `X` rotation is *down*, and pitch is positive *up*,**
+so the look pass negates. A bone's `+Y` runs up its length and the rig faces
+`-Z`, so folding forward is positive — which is why `CROUCH_LEAN` is positive
+on the chest and negative on the neck, where it lifts the head back up.
+
+The trap underneath that is worth stating on its own, because it cost a round
+trip: **the head bone's rest rotation is not identity.** Its local `-Z` points
+at world `+Z`, which is *behind* the body, so a test that measures
+`rotation * NEG_Z` is watching the back of the head and will happily confirm
+that looking down is looking up. Measure `rotation * Z`, and assert the
+convention itself first — `a_body_at_rest_faces_the_way_it_walks` exists so
+that re-authoring a rest rotation fails loudly instead of quietly inverting
+everybody's aim.
+
 `face_bodies` writes the rotation exactly rather than smoothing it. `yaw`
 arrives at the tick rate, the same rate `PhysicsBody` does, so a filter would
 buy slightly less stepping in exchange for hitboxes that lag where the body is
