@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
-use rand::seq::IndexedRandom;
 
 use crate::common::app_mode::AppMode;
 use crate::common::damage::NextPlayerId;
@@ -11,9 +10,10 @@ use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::ragdoll::RagdollPlugin;
 use crate::game::reset::reset_for_play;
+use crate::game::respawn::{choose_spawn, placed_spawns, respawn_players, LocalPlayer};
 use crate::game::player::{
-    fallback_spawn, gather_input, interpolate_bodies, mouse_look, place_camera, spawn_player,
-    step_player, toggle_view, usable_spawns, Player, PlayerInput, Spawn, ViewMode,
+    gather_input, interpolate_bodies, mouse_look, place_camera, spawn_player, step_player,
+    toggle_view, Player, PlayerInput, ViewMode,
 };
 use crate::tool::room::Room;
 
@@ -27,6 +27,7 @@ pub mod flame;
 pub mod hitscan;
 pub mod projectile;
 pub mod reset;
+pub mod respawn;
 pub mod weapon;
 pub mod player;
 pub mod ragdoll;
@@ -80,6 +81,15 @@ impl Plugin for GamePlugin {
                 rebuild_collision_when_rooms_change,
                 step_player,
             ).chain().run_if(in_state(AppMode::Play)))
+            // On the tick and immediately after the reaping, rather than in
+            // `Update`: a frame with no player is a frame with no camera, and
+            // landing in the same fixed step means the world is never empty.
+            .add_systems(
+                FixedUpdate,
+                respawn_players
+                    .after(crate::game::death::reap_the_dead)
+                    .in_set(crate::game::damage::DamageSystems::Resolve),
+            )
             // Draws the body between fixed steps, so a 64 Hz simulation does
             // not step visibly on a 144 Hz display.
             .add_systems(RunFixedMainLoop, interpolate_bodies
@@ -132,38 +142,18 @@ fn enter_play(
     // about the walls.
     collision.rebuild(&rooms);
 
-    // The feature writes its facing into the transform's rotation, so the
-    // marked entity carries both halves and neither has to be looked up twice.
-    let placed: Vec<Spawn> = spawns
-        .iter()
-        .map(|t| Spawn {
-            feet: t.translation,
-            yaw: t.rotation.to_euler(EulerRot::YXZ).0,
-        })
-        .collect();
-    let usable = usable_spawns(&placed, &collision);
-    if usable.len() < placed.len() {
-        warn!(
-            "{} of {} spawn point(s) have too little headroom to stand in",
-            placed.len() - usable.len(),
-            placed.len()
-        );
-    }
-
-    // Uniformly at random for now. Per-team spawns, and not dropping someone
-    // on top of someone else, are gamemode questions this is deliberately not
-    // trying to answer yet.
-    let spawn = match usable.choose(&mut rand::rng()) {
-        Some(spawn) => *spawn,
-        None => {
-            warn!("No usable spawn point on this map; falling back to the largest room");
-            fallback_spawn(&rooms)
-        }
-    };
     // A fresh id each time rather than one kept across F5: the body that
     // comes back is a new body, and a kill feed that reused the id would
-    // credit its damage to the one before it.
-    spawn_player(&mut commands, spawn, ids.allocate(), PLAYER_TEAM);
+    // credit its damage to the one before it. Dying inside a match is the
+    // other case and keeps the id — see [`crate::game::respawn`].
+    let local = LocalPlayer { id: ids.allocate(), team: PLAYER_TEAM };
+    commands.insert_resource(local);
+
+    // Here rather than left to `respawn_players`, which would only get to it
+    // on the first fixed step: a frame with no player is a frame with no
+    // camera.
+    let spawn = choose_spawn(&placed_spawns(&spawns), &collision, &rooms);
+    spawn_player(&mut commands, spawn, local.id, local.team);
 
     for mut camera in &mut editor_cameras {
         camera.is_active = false;
@@ -187,6 +177,10 @@ fn leave_play(
         // Despawns the camera with it: it is a child of the body.
         commands.entity(player).despawn();
     }
+    // And with the body gone, nobody to put back. Without this,
+    // `respawn_players` has a match to stand a body up for the next time one
+    // is missing — which is every frame of the editor.
+    commands.remove_resource::<LocalPlayer>();
 
     for mut camera in &mut editor_cameras {
         camera.is_active = true;

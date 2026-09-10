@@ -36,8 +36,8 @@ in it that constrains code written today: items must record their provenance
 The editor is real and works. **The game barely exists.** There is a damage
 layer, three kinds of weapon — hitscan, projectile, flame — and teams, but no
 networking, no ammo,
-no reload and no respawn: a body that dies leaves a ragdoll and is
-gone. There is also no wasm build yet. Adding the runtime is the current
+no reload and no round structure: a body that dies leaves a ragdoll, and you
+are back on your feet instantly. There is also no wasm build yet. Adding the runtime is the current
 frontier, not a finished thing to extend.
 
 `src/unlock` and the `crate_drop` binary are a self-contained TF2-style
@@ -360,6 +360,34 @@ grid's `RosterTeam` reads as changed on every frame of a drag — and a written
 away and rebuilding them for as long as the point is moving. Same trap as
 re-inserting a `Skeleton`, one component along.
 
+## Coming back
+
+Death used to be the end of the session: the body was despawned, the camera
+went with it as a child, and what was left was a map with nobody in it. Now
+[`src/game/respawn.rs`](src/game/respawn.rs) stands another one up, **instantly
+and in the same fixed step** — `respawn_players` sits in `DamageSystems::Resolve`
+after `reap_the_dead`, because a frame with no player is a frame with no camera.
+
+Instant is a placeholder and is meant to look like one; a respawn timer, wave
+respawns and spawn protection are a gamemode's numbers. Two parts of the shape
+are not placeholders:
+
+- **Your identity outlives your body.** `LocalPlayer` is a *resource* holding
+  the `PlayerId` and the team for the length of a match, and a new body gets
+  the *same* id. This is the opposite of what `F5` does, deliberately: a new
+  match is a new player, a new life is not, and a fresh id per death would show
+  a scoreboard one player per life. Set by `enter_play`, removed by
+  `leave_play` — that removal is what stops the editor being handed a body.
+- **The choice of where is shared with the first spawn**, in `choose_spawn`.
+  Two copies of "pick a usable spawn point, fall back to the largest room" is
+  one copy that quietly stops matching the other, and the failure is a body
+  that respawns inside a wall on maps the first spawn handles fine.
+
+The trigger is the invariant *while you are playing, there is a body*, not a
+`Died` message — right whatever removed the body, including a way of dying
+nobody has written yet. With several players it becomes "a player with no
+body", which is the same rule with a roster behind it.
+
 ## Damage, weapons and projectiles
 
 **Nothing applies damage to a health pool except one system.** A weapon writes
@@ -376,7 +404,7 @@ The order inside a tick is stated as **sets, not as named systems**
 | --- | --- |
 | `Deal` | Everything that writes `Damage`: `fire_hitscan`, `step_projectiles`, `explode`, `fire_flame`, `burn`. |
 | `Apply` | `apply_damage`, and nothing else, ever. |
-| `Resolve` | `record_damage` then `reap_the_dead`. |
+| `Resolve` | `record_damage`, then `reap_the_dead`, then `respawn_players`. |
 
 A new damage source joins `Deal` and says nothing about what happens after it.
 Before the sets, `DamagePlugin` had to name every weapon so it could order
