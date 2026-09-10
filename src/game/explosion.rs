@@ -4,11 +4,11 @@
 //! rocket, a pipe bomb, a barrel and whatever a mapper eventually plants
 //! between rounds all write the same message and none of them contains a copy
 //! of this loop — which matters less because the loop is hard than because
-//! there are four decisions in it (what counts as a body, what a wall does,
-//! whether a direct hit also takes splash, what gets thrown) and four copies
-//! would answer them four ways.
+//! there are five decisions in it (what counts as a body, what a wall does,
+//! whether a direct hit also takes splash, what gets thrown, where the number
+//! goes) and five copies would answer them five ways.
 //!
-//! Three rules, and each is a thing a player will notice immediately if it is
+//! Four rules, and each is a thing a player will notice immediately if it is
 //! wrong:
 //!
 //! - **A wall stops it.** A rocket on the other side of the floor you are
@@ -20,6 +20,11 @@
 //! - **The corpses are thrown outwards, not along.** [`Push::Outward`] exists
 //!   for this: an explosion at a body's feet has to lift it, and a directed
 //!   shove with a wide radius slides the whole room the same way instead.
+//! - **Each number is anchored over the body it hurt**, not over the blast.
+//!   Every victim of one rocket shares its centre *exactly*, so numbers
+//!   written there are superimposed rather than merely close, and six hits
+//!   read as one. Anything that hurts several bodies at once from a single
+//!   origin has this problem — afterburn next.
 //!
 //! What is deliberately missing is knockback on a body that is still alive —
 //! rocket jumping. Not an oversight: [`step_player`](crate::game::player::step_player)
@@ -130,10 +135,14 @@ pub fn explode(
                 target: entity,
                 source: blast.source,
                 amount,
-                // Where the blast was, not where the body is: the number
-                // belongs to the explosion, and half a dozen of them stacked
-                // on one point is what an explosion looks like.
-                point: blast.at,
+                // Over the body, not over the blast. Every victim of one
+                // rocket shares a blast point exactly, and the numbers drawn
+                // there are superimposed rather than merely close — six hits
+                // read as one. A number belongs to the body that took it,
+                // which is the same rule that keeps it anchored in the world
+                // instead of on the screen. Anything that hurts several
+                // bodies at once from one origin wants this — afterburn next.
+                point: centre,
             });
         }
 
@@ -264,9 +273,44 @@ mod tests {
 
         let hits = damage_written(&mut world);
         assert_eq!(hits.len(), 2, "the body outside the radius was caught: {hits:?}");
-        let worth = |target| hits.iter().find(|h| h.target == target).unwrap().amount;
-        assert_eq!(worth(near), 45, "60 at three quarters reach");
-        assert_eq!(worth(far), 15, "60 at a quarter reach");
+        let hit_on = |target| *hits.iter().find(|h| h.target == target).unwrap();
+        assert_eq!(hit_on(near).amount, 45, "60 at three quarters reach");
+        assert_eq!(hit_on(far).amount, 15, "60 at a quarter reach");
+    }
+
+    /// Each splash number is anchored over the body that took it, not over the
+    /// blast. Every victim of one rocket shares its centre exactly, so numbers
+    /// drawn there would be superimposed and read as a single hit.
+    #[test]
+    fn a_splash_number_is_anchored_over_the_body_it_hurt() {
+        let mut world = a_world();
+        let left = body(&mut world, Vec3::new(-1.0, 0.0, 0.0));
+        let right = body(&mut world, Vec3::new(1.0, 0.0, 0.0));
+        world.write_message(blast(Vec3::ZERO, None));
+
+        world.run_system_once(explode).unwrap();
+
+        let hits = damage_written(&mut world);
+        let point_on = |target| hits.iter().find(|h| h.target == target).unwrap().point;
+        assert_eq!(point_on(left), Vec3::new(-1.0, 0.0, 0.0));
+        assert_eq!(point_on(right), Vec3::new(1.0, 0.0, 0.0));
+        assert_ne!(point_on(left), point_on(right), "two hits landed on one point");
+    }
+
+    /// A direct hit keeps the blast's own point, which for a direct hit is
+    /// where the projectile actually struck the body — more specific than the
+    /// chest, not less.
+    #[test]
+    fn a_direct_hit_is_anchored_where_it_struck() {
+        let mut world = a_world();
+        let target = body(&mut world, Vec3::new(0.0, 1.0, 0.0));
+        let struck = Vec3::new(0.1, 1.6, 0.3);
+        world.write_message(blast(struck, Some((target, 90))));
+
+        world.run_system_once(explode).unwrap();
+
+        let hits = damage_written(&mut world);
+        assert_eq!(hits.iter().find(|h| h.target == target).unwrap().point, struck);
     }
 
     /// A direct hit takes the direct number and no splash on top of it — one

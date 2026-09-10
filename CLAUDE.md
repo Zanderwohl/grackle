@@ -327,9 +327,13 @@ that goes off, and `src/game/explosion.rs` is the only thing that knows what
 splash means. Three rules live there and a player notices immediately if any is
 wrong: a wall stops a blast (the same `ray_distance` that shortens a bullet), a
 direct hit takes the direct number *instead of* splash rather than on top of
-it, and corpses are thrown `Push::Outward` rather than along. Splash reaches
-anything with `Hitboxes` — being shootable and being catchable in a blast are
-deliberately the same property.
+it, corpses are thrown `Push::Outward` rather than along, and each damage
+number is anchored **over the body it hurt** rather than over the blast —
+every victim of one rocket shares the blast's centre exactly, so numbers put
+there are superimposed rather than merely close and six hits read as one.
+Anything that hurts several bodies at once from a single origin wants that
+last one. Splash reaches anything with `Hitboxes` — being shootable and being
+catchable in a blast are deliberately the same property.
 
 **Knockback on a body that is still alive is missing on purpose.** `step_player`
 writes horizontal velocity outright from the movement input every step, so an
