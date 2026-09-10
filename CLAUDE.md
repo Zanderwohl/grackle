@@ -541,14 +541,15 @@ key that has slots — fill those in by hand.
   don't revive it.
 - Asset paths are relative to the working directory (`assets/default/...`), so
   binaries must run from the repo root.
-- `src/main.rs` re-declares `mod common; mod editor; mod tool;` instead of using
-  the `grackle` library, so the `editor` binary compiles a second copy of the
-  whole tree rather than linking `lib.rs`. Each copy gets its own `LANG` table
-  and cache. Self-consistent today, but it doubles build time and means a
-  process cannot share state between the two. Worth collapsing before the game
-  runtime lands and there are more binaries. It is also why the bin targets emit
-  dead-code warnings (`remerge`, `get_maybe`, `TEMPLATE_REGEX`) that
-  `cargo check --lib` does not.
+- **Every binary links `lib.rs`; none re-declares the module tree.** `main.rs`
+  is `use grackle::...` and plugin wiring, nothing else. This used to be
+  `mod common; mod editor; mod tool;`, which compiled a second copy of the
+  whole tree with its own `LANG` table and its own caches. That is not a build
+  time problem to get round to — a client and a server that must reach the same
+  position from the same inputs cannot be two copies of the simulation, and the
+  moment a second copy exists there is no way to tell which one a bug is in.
+  A new binary goes in `src/bin/` and imports; if something it needs is
+  `pub(crate)`, widen it rather than reaching around it.
 
 ## Targeting wasm
 
