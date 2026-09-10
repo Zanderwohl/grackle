@@ -158,6 +158,77 @@ impl Damageable {
     }
 }
 
+/// How much of a radial effect reaches something `distance` away.
+///
+/// Linear to nothing at `radius`, and shared on purpose: an explosion's splash
+/// damage and the shove it delivers are the same falling-off thing, and two
+/// curves would mean a body thrown further than it was hurt at exactly one
+/// distance and nobody able to say which was right.
+///
+/// A zero or negative radius reaches nothing rather than everything, which is
+/// what a weapon with no explosion should do.
+pub fn falloff(distance: f32, radius: f32) -> f32 {
+    if radius <= 0.0 {
+        return 0.0;
+    }
+    (1.0 - distance / radius).clamp(0.0, 1.0)
+}
+
+/// **Hurt this.** A request, not a record.
+///
+/// The seam that makes damage sources extensible: whatever did the damage
+/// writes one of these and is finished. Applying it to the health pool,
+/// clamping the overkill and writing the [`DamageDealt`] record that everything
+/// downstream reads is one system, in one place — see
+/// [`crate::game::damage::apply_damage`].
+///
+/// Before this, every weapon carried its own copy of "look the target up, take
+/// health off, write a record", and the second one to be written was the one
+/// that got the clamp subtly wrong. A rocket, a fall, a raised floor and a
+/// melee swing now all say the same thing and differ only in what they aimed
+/// at and how much.
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct Damage {
+    /// What to hurt. A target with no [`Damageable`] is skipped, not an
+    /// error: a shot that stopped on a wall dressing still stopped.
+    pub target: Entity,
+    pub source: DamageSource,
+    /// What to try to take off, before the clamp.
+    pub amount: u32,
+    /// Where it landed, so the record can say where to draw the number.
+    pub point: Vec3,
+}
+
+/// **Something went off here.**
+///
+/// The other half of the generic damage layer, and the reason it is a message
+/// rather than a loop inside the rocket: a rocket, a pipe bomb, an exploding
+/// barrel, a demolition charge somebody built into the map and — one day — a
+/// player who dies badly all do exactly the same thing to the world, and only
+/// one of them should have to know how splash works. See
+/// [`crate::game::explosion`] for what reads it.
+///
+/// Everything here is stated in the units the falloff wants: [`falloff`] is
+/// applied to `damage` and to `knockback` alike, so a body thrown half as far
+/// was hurt half as much and nothing has to be kept in step by hand.
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct Explosion {
+    pub at: Vec3,
+    /// How far it reaches. Damage and knockback both fall to nothing here.
+    pub radius: f32,
+    /// What standing at the centre is worth.
+    pub damage: u32,
+    /// How hard it throws a corpse at the centre, in metres per second.
+    pub knockback: f32,
+    pub source: DamageSource,
+    /// The body it landed on squarely, and what that is worth.
+    ///
+    /// Takes this *instead* of a share of the splash, which is how a direct
+    /// hit reads to a player: one number, the big one. `None` for anything
+    /// that went off against a wall, a floor or the air.
+    pub direct: Option<(Entity, u32)>,
+}
+
 /// A hit that landed, after the fact.
 ///
 /// Written by whatever did the damage and read by anything that cares — the
@@ -324,6 +395,17 @@ mod tests {
     fn an_untouched_body_has_no_killer() {
         assert_eq!(DamageLog::default().killer(), None);
         assert_eq!(DamageLog::default().assist(0.0), None);
+    }
+
+    /// Full at the centre, nothing at the edge, nothing past it — and a
+    /// weapon with no explosion reaches nobody rather than everybody.
+    #[test]
+    fn a_radial_effect_falls_off_to_nothing_at_its_edge() {
+        assert_eq!(falloff(0.0, 4.0), 1.0);
+        assert_eq!(falloff(2.0, 4.0), 0.5);
+        assert_eq!(falloff(4.0, 4.0), 0.0);
+        assert_eq!(falloff(9.0, 4.0), 0.0);
+        assert_eq!(falloff(0.0, 0.0), 0.0);
     }
 
     #[test]

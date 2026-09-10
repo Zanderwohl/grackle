@@ -76,13 +76,13 @@
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::damage::Damageable;
+use crate::common::damage::{falloff, Damageable};
 use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
 use crate::game::body_mesh::BodyTint;
 use crate::game::collision::CollisionWorld;
+use crate::game::damage::DamageSystems;
 use crate::game::death::{reap_the_dead, record_damage};
-use crate::game::hitscan::fire_hitscan;
 use crate::game::player::{PhysicsBody, GRAVITY};
 use crate::game::skeleton::{skeleton_root, SkeletonRoot};
 
@@ -174,6 +174,26 @@ const SLEEP_AFTER: f32 = 0.5;
 /// in every doorway it is dropped near.
 const POINT_RADIUS: (f32, f32) = (0.04, 0.14);
 
+/// Which way a shove pushes what it reaches.
+///
+/// Two, because there are two shapes of force in the game and they differ in
+/// exactly this. A bullet arrives along a line and pushes everything it
+/// touches the same way; an explosion arrives from a point and pushes each
+/// bone away from it. Written as a directed shove with a wide radius, an
+/// explosion under a corpse's feet slides it sideways rather than throwing it
+/// up, which is the whole of what a rocket looks like.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Push {
+    /// A fixed direction, at this speed — a bullet, a punch, a moving floor.
+    /// The vector's length is the speed at the centre.
+    Along(Vec3),
+    /// Outwards from the shove's own point, at this speed at the centre — an
+    /// explosion. A bone exactly at the centre is pushed nowhere in
+    /// particular, and is left alone rather than shoved in an arbitrary
+    /// direction.
+    Outward(f32),
+}
+
 /// A body being pushed about, at a point.
 ///
 /// The units are the honest ones: `push` is the speed the bone at `at` is
@@ -185,7 +205,7 @@ pub struct RagdollShove {
     /// Where the push came from, in world space.
     pub at: Vec3,
     /// Which way, and how hard, at the centre.
-    pub push: Vec3,
+    pub push: Push,
     /// How far the push reaches. Falls off linearly to nothing at the edge, so
     /// a bullet's tight radius moves one bone and lets the joints carry the
     /// rest, and an explosion's wide one moves the whole body at once.
@@ -402,19 +422,26 @@ impl Ragdoll {
     ///
     /// `dt` because velocity here is the gap between two positions, so a speed
     /// only means anything against the length of a tick.
-    pub fn shove(&mut self, at: Vec3, push: Vec3, radius: f32, dt: f32) {
+    pub fn shove(&mut self, at: Vec3, push: Push, radius: f32, dt: f32) {
         if radius <= 0.0 {
             return;
         }
 
         let mut touched = false;
         for point in &mut self.points {
-            let reach = (1.0 - point.at.distance(at) / radius).clamp(0.0, 1.0);
+            let reach = falloff(point.at.distance(at), radius);
             if reach <= 0.0 {
                 continue;
             }
+            let along = match push {
+                Push::Along(direction) => direction,
+                // A bone standing exactly where the rocket went off has no
+                // "away" to be thrown along. `normalize_or_zero` leaves it,
+                // and its neighbours drag it out.
+                Push::Outward(speed) => (point.at - at).normalize_or_zero() * speed,
+            };
             // Backwards, because that is what a velocity is here.
-            point.previous -= push * reach * dt;
+            point.previous -= along * reach * dt;
             touched = true;
         }
 
@@ -662,13 +689,15 @@ impl Plugin for RagdollPlugin {
             //    takes it away — a corpse is a copy of a pose, and by the time
             //    `Died` is written there is no pose left to copy.
             // 2. `shove_ragdolls` has to run after that, so the shot that did
-            //    the killing lands on the corpse it just made. `fire_hitscan`
-            //    writes the shove without knowing whether anything died.
+            //    the killing lands on the corpse it just made. A weapon
+            //    writes its shove without knowing whether anything died,
+            //    which is why the ordering is stated against the whole of
+            //    `DamageSystems::Deal` rather than against one weapon.
             // 3. `step_ragdolls` last, so a shove is taken on the tick it
             //    arrived rather than the one after.
             .add_systems(FixedUpdate, (
                 raise_ragdolls.after(record_damage).before(reap_the_dead),
-                shove_ragdolls.after(fire_hitscan),
+                shove_ragdolls.after(DamageSystems::Deal),
                 step_ragdolls,
             ).chain().run_if(in_state(AppMode::Play)))
             // Corpses belong to the match. F5 back to the editor and a body
@@ -986,7 +1015,7 @@ mod tests {
         // body, as far from the pelvis as anything gets. Hard, but within
         // reach — a headshot writes about 13 m/s, so this is a rocket.
         let (wrist, _) = corpse.bone_points(skeleton.index_of(bone::HAND_R).unwrap());
-        corpse.shove(wrist, Vec3::new(18.0, 11.0, 0.0), 0.3, DT);
+        corpse.shove(wrist, Push::Along(Vec3::new(18.0, 11.0, 0.0)), 0.3, DT);
         run(&mut corpse, &skeleton, &world, 64 * 4);
 
         for (index, bone) in skeleton.bones().iter().enumerate() {
@@ -1010,7 +1039,7 @@ mod tests {
         let mut corpse = stood_up(&skeleton, &Pose::rest());
 
         let (ankle, _) = corpse.bone_points(skeleton.index_of(bone::FOOT_L).unwrap());
-        corpse.shove(ankle, Vec3::new(-14.0, 14.0, 9.0), 0.3, DT);
+        corpse.shove(ankle, Push::Along(Vec3::new(-14.0, 14.0, 9.0)), 0.3, DT);
         run(&mut corpse, &skeleton, &world, 64 * 4);
 
         for (index, bone) in skeleton.bones().iter().enumerate() {
@@ -1040,7 +1069,7 @@ mod tests {
         // Straight up the front of the shin, which is exactly the direction
         // that would hyperextend the joint.
         let (knee, _) = corpse.bone_points(skeleton.index_of(bone::SHIN_L).unwrap());
-        corpse.shove(knee, Vec3::new(0.0, 4.0, -35.0), 0.35, DT);
+        corpse.shove(knee, Push::Along(Vec3::new(0.0, 4.0, -35.0)), 0.35, DT);
 
         for _ in 0..64 * 4 {
             corpse.step(&skeleton, &world, DT);
@@ -1053,6 +1082,24 @@ mod tests {
             assert!(tail.z <= 0.1, "the knee bent forwards: {tail}");
             let _ = root;
         }
+    }
+
+/// An explosion under a corpse lifts it; the same force written as a
+    /// directed shove would slide it sideways instead. That is the whole
+    /// reason [`Push`] has two variants.
+    #[test]
+    fn a_blast_underneath_throws_a_corpse_upwards() {
+        let skeleton = rig();
+        let world = CollisionWorld::default();
+        let mut corpse = stood_up(&skeleton, &Pose::rest());
+
+        let (pelvis, _) = corpse.bone_points(0);
+        let under = pelvis - Vec3::Y * 0.5;
+        corpse.shove(under, Push::Outward(14.0), 2.0, DT);
+        run(&mut corpse, &skeleton, &world, 2);
+
+        let (after, _) = corpse.bone_points(0);
+        assert!(after.y > pelvis.y + 0.005, "the blast did not lift it: {pelvis} -> {after}");
     }
 
     /// The shove is a point and a radius, and the point is the whole design:
@@ -1068,7 +1115,7 @@ mod tests {
         let (before_head, _) = corpse.bone_points(head_index);
         let (before_foot, _) = corpse.bone_points(skeleton.index_of(bone::FOOT_L).unwrap());
 
-        corpse.shove(before_head, Vec3::new(0.0, 0.0, -12.0), 0.4, DT);
+        corpse.shove(before_head, Push::Along(Vec3::new(0.0, 0.0, -12.0)), 0.4, DT);
         // Two steps: enough for the shove to be taken and not enough for the
         // rest of the body to have caught up.
         run(&mut corpse, &skeleton, &CollisionWorld::default(), 2);
@@ -1097,7 +1144,7 @@ mod tests {
         let (at, _) = corpse.bone_points(head_index);
         let (before_chest, _) = corpse.bone_points(chest_index);
 
-        corpse.shove(at, Vec3::new(0.0, 0.0, -12.0), 0.4, DT);
+        corpse.shove(at, Push::Along(Vec3::new(0.0, 0.0, -12.0)), 0.4, DT);
         run(&mut corpse, &skeleton, &CollisionWorld::default(), 30);
 
         let (after_chest, _) = corpse.bone_points(chest_index);
@@ -1137,7 +1184,7 @@ mod tests {
             let mut corpse =
                 Ragdoll::from_body(&skeleton, &pose, &root, Vec3::new(a.sin(), 0.0, a.cos()) * 0.1);
             let (head, _) = corpse.bone_points(skeleton.index_of(bone::HEAD).unwrap());
-            corpse.shove(head, Vec3::new(a.cos() * 9.0, 2.0, a.sin() * 9.0), 0.4, DT);
+            corpse.shove(head, Push::Along(Vec3::new(a.cos() * 9.0, 2.0, a.sin() * 9.0)), 0.4, DT);
 
             run(&mut corpse, &skeleton, &world, 64 * 12);
             if !corpse.is_asleep() {
@@ -1158,7 +1205,7 @@ mod tests {
         assert!(corpse.is_asleep());
 
         let (pelvis, _) = corpse.bone_points(0);
-        corpse.shove(pelvis, Vec3::new(6.0, 3.0, 0.0), 1.0, DT);
+        corpse.shove(pelvis, Push::Along(Vec3::new(6.0, 3.0, 0.0)), 1.0, DT);
         assert!(!corpse.is_asleep(), "slept through being shot");
 
         let before = corpse.bone_points(0).0;
@@ -1176,7 +1223,7 @@ mod tests {
         let mut corpse = stood_up(&skeleton, &Pose::rest());
         run(&mut corpse, &skeleton, &world, 64 * 15);
 
-        corpse.shove(Vec3::new(50.0, 0.0, 0.0), Vec3::X * 100.0, 0.4, DT);
+        corpse.shove(Vec3::new(50.0, 0.0, 0.0), Push::Along(Vec3::X * 100.0), 0.4, DT);
         assert!(corpse.is_asleep(), "woken by a shot on the other side of the map");
     }
 
@@ -1201,7 +1248,7 @@ mod tests {
             let mut corpse = stood_up(&skeleton, &Pose::rest());
             if let Some(pushed) = pushed {
                 let (at, _) = corpse.bone_points(skeleton.index_of(pushed).unwrap());
-                corpse.shove(at, Vec3::X * 10.0, 0.25, DT);
+                corpse.shove(at, Push::Along(Vec3::X * 10.0), 0.25, DT);
             }
             run(&mut corpse, &skeleton, &world, 30);
             corpse.bone_points(watched).0
@@ -1369,7 +1416,7 @@ mod tests {
         // without knowing whether anything died.
         world.write_message(RagdollShove {
             at: raised,
-            push: Vec3::X * 20.0,
+            push: Push::Along(Vec3::X * 20.0),
             radius: 1.0,
         });
         world.run_system_once(shove_ragdolls).unwrap();
@@ -1462,7 +1509,7 @@ mod tests {
         let mut corpse = stood_up(&skeleton, &Pose::rest());
         let before = corpse.bone_points(0).0;
 
-        corpse.shove(before, Vec3::X * 100.0, 0.0, DT);
+        corpse.shove(before, Push::Along(Vec3::X * 100.0), 0.0, DT);
         run(&mut corpse, &skeleton, &CollisionWorld::default(), 1);
 
         // Gravity, and nothing sideways.

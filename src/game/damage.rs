@@ -28,9 +28,8 @@ use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::AppMode;
-use crate::common::damage::{DamageDealt, Died};
+use crate::common::damage::{Damage, DamageDealt, Damageable, Died};
 use crate::game::death::{announce_deaths, reap_the_dead, record_damage};
-use crate::game::hitscan::fire_hitscan;
 use crate::game::player::PlayerCamera;
 
 /// How long a damage number lasts, in seconds.
@@ -54,6 +53,27 @@ pub struct DamageNumber {
     pub remaining: f32,
 }
 
+/// The order a tick's damage goes through, as sets rather than as named
+/// systems.
+///
+/// This is what makes damage sources extensible. Before it, everything that
+/// could hurt something had to be named by `DamagePlugin` so the resolution
+/// could be ordered after it, which meant adding a weapon meant editing this
+/// module — and forgetting to produced no error, just a kill credited to
+/// nobody every so often. A new source now joins [`DamageSystems::Deal`] and
+/// says nothing about what happens next.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DamageSystems {
+    /// Everything that writes [`Damage`]: a shot fired, an explosion, a fall,
+    /// a floor raised onto somebody.
+    Deal,
+    /// [`apply_damage`] — requests become health taken off and records
+    /// written.
+    Apply,
+    /// What the records lead to: the log, and then the reaping.
+    Resolve,
+}
+
 pub struct DamagePlugin;
 
 impl Plugin for DamagePlugin {
@@ -61,17 +81,22 @@ impl Plugin for DamagePlugin {
         app
             // Registered here, by the reader, because this is the module that
             // outlives any one thing that writes it.
+            .add_message::<Damage>()
             .add_message::<DamageDealt>()
             .add_message::<Died>()
             // On the tick, in this order, in the same tick as the shot. A
             // body reaped before its log is written is a kill credited to
             // nobody — see [`crate::game::death`].
+            .configure_sets(
+                FixedUpdate,
+                (DamageSystems::Deal, DamageSystems::Apply, DamageSystems::Resolve)
+                    .chain()
+                    .run_if(in_state(AppMode::Play)),
+            )
+            .add_systems(FixedUpdate, apply_damage.in_set(DamageSystems::Apply))
             .add_systems(
                 FixedUpdate,
-                (record_damage, reap_the_dead)
-                    .chain()
-                    .after(fire_hitscan)
-                    .run_if(in_state(AppMode::Play)),
+                (record_damage, reap_the_dead).chain().in_set(DamageSystems::Resolve),
             )
             .add_systems(Update, (spawn_damage_numbers, fade_damage_numbers, announce_deaths).chain())
             .add_systems(
@@ -82,6 +107,40 @@ impl Plugin for DamagePlugin {
             // last shot's feedback should not still be hanging in a viewport.
             .add_systems(OnExit(AppMode::Play), clear_damage_numbers)
         ;
+    }
+}
+
+/// Turn every request to hurt something into health taken off and a record of
+/// it.
+///
+/// The one place that touches a health pool. Every weapon used to do this for
+/// itself — look the target up, apply, remember to report the *clamped* number
+/// rather than the one it swung — and the interesting failure was never a
+/// crash: it was the second weapon reporting overkill as damage dealt, and a
+/// scoreboard adding up to more health than the map contains.
+///
+/// A target with no [`Damageable`] is skipped rather than an error. A shot
+/// that stopped on a wall dressing still stopped, and an explosion sweeps up
+/// whatever is nearby without asking first whether it bleeds.
+pub fn apply_damage(
+    mut requests: MessageReader<Damage>,
+    mut health: Query<&mut Damageable>,
+    mut dealt: MessageWriter<DamageDealt>,
+) {
+    for request in requests.read() {
+        let Ok(mut target) = health.get_mut(request.target) else { continue };
+
+        // Nothing happens at zero — see `Damageable::apply`. The record is
+        // still written, worth nothing, which is what lets a debug harness
+        // keep shooting a body it has already emptied.
+        let amount = target.apply(request.amount);
+        dealt.write(DamageDealt {
+            target: request.target,
+            source: request.source,
+            amount,
+            remaining: target.health(),
+            point: request.point,
+        });
     }
 }
 
@@ -189,6 +248,120 @@ mod tests {
             remaining: 70,
             point,
         }
+    }
+
+    /// The clamp lives in `Damageable`; this is the check that one place
+    /// applies it and reports the number that actually came off rather than
+    /// the one that was swung.
+    #[test]
+    fn a_request_takes_health_off_and_records_what_it_took() {
+        let mut world = World::new();
+        world.init_resource::<Messages<Damage>>();
+        world.init_resource::<Messages<DamageDealt>>();
+        let target = world.spawn(Damageable::with_health(12)).id();
+        world.write_message(Damage {
+            target,
+            source: DamageSource::Player(PlayerId(1)),
+            amount: 90,
+            point: Vec3::Y,
+        });
+
+        world.run_system_once(apply_damage).unwrap();
+
+        assert_eq!(world.get::<Damageable>(target).unwrap().health(), 0);
+        let messages = world.resource::<Messages<DamageDealt>>();
+        let mut cursor = messages.get_cursor();
+        let dealt: Vec<DamageDealt> = cursor.read(messages).copied().collect();
+        assert_eq!(dealt.len(), 1);
+        assert_eq!(dealt[0].amount, 12, "overkill was recorded as what was swung");
+        assert_eq!(dealt[0].remaining, 0);
+        assert_eq!(dealt[0].point, Vec3::Y);
+    }
+
+    /// A target with no health is skipped rather than an error: an explosion
+    /// sweeps up whatever is nearby without asking first whether it bleeds.
+    #[test]
+    fn a_target_with_no_health_is_left_alone() {
+        let mut world = World::new();
+        world.init_resource::<Messages<Damage>>();
+        world.init_resource::<Messages<DamageDealt>>();
+        let dressing = world.spawn(Name::new("Scenery")).id();
+        world.write_message(Damage {
+            target: dressing,
+            source: DamageSource::World,
+            amount: 40,
+            point: Vec3::ZERO,
+        });
+
+        world.run_system_once(apply_damage).unwrap();
+
+        let messages = world.resource::<Messages<DamageDealt>>();
+        let mut cursor = messages.get_cursor();
+        assert_eq!(cursor.read(messages).count(), 0);
+    }
+
+    /// The set ordering, end to end and in one tick: an explosion is dealt,
+    /// applied, logged and reaped, and the kill is credited to whoever set it
+    /// off. Nothing in the type system holds that order together — see
+    /// [`DamageSystems`] — so it is worth a test that assembles the plugins
+    /// and takes a step.
+    #[test]
+    fn one_tick_carries_a_blast_all_the_way_to_a_credited_kill() {
+        use crate::common::damage::{DamageLog, Explosion};
+        use crate::common::hitbox::{Box3, Hitboxes};
+        use crate::common::skeleton::AnimationClock;
+        use crate::game::collision::CollisionWorld;
+        use crate::game::explosion::explode;
+
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.add_plugins(bevy::time::TimePlugin);
+        app.init_state::<AppMode>();
+        app.init_resource::<CollisionWorld>();
+        app.init_resource::<AnimationClock>();
+        app.add_plugins(DamagePlugin);
+        // The system rather than `ExplosionPlugin`, which also draws — and
+        // drawing wants a renderer this headless app has not got. What is
+        // under test is the order, and `explode` is the part that is in it.
+        app.add_message::<Explosion>();
+        // Written by `explode` and read by `RagdollPlugin`, which is not here.
+        app.add_message::<crate::game::ragdoll::RagdollShove>();
+        app.add_systems(FixedUpdate, explode.in_set(DamageSystems::Deal));
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+
+        let centre = Vec3::new(0.0, 1.0, 0.0);
+        let victim = app
+            .world_mut()
+            .spawn((
+                Damageable::with_health(20),
+                DamageLog::default(),
+                Hitboxes {
+                    body: Box3 { centre, half_extents: Vec3::splat(0.5) },
+                    head: Box3 { centre, half_extents: Vec3::splat(0.15) },
+                },
+                Name::new("Bystander"),
+            ))
+            .id();
+        app.world_mut().write_message(Explosion {
+            at: centre,
+            radius: 4.0,
+            damage: 60,
+            knockback: 10.0,
+            source: DamageSource::Player(PlayerId(2)),
+            direct: None,
+        });
+
+        // One whole fixed step, driven by hand: what is under test is the
+        // order inside the tick, not how the fixed loop decides to take one.
+        app.world_mut().run_schedule(FixedUpdate);
+
+        assert!(app.world().get_entity(victim).is_err(), "the blast never reaped it");
+        let messages = app.world().resource::<Messages<Died>>();
+        let mut cursor = messages.get_cursor();
+        let deaths: Vec<Died> = cursor.read(messages).cloned().collect();
+        assert_eq!(deaths.len(), 1, "{deaths:?}");
+        assert_eq!(deaths[0].killer, DamageSource::Player(PlayerId(2)));
     }
 
     /// A hit puts a number where it landed, in the world rather than on the

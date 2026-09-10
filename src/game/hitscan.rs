@@ -33,14 +33,15 @@ use bevy::transform::TransformSystems;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
-use crate::common::damage::{Damageable, DamageDealt, DamageSource, PlayerId};
+use crate::common::damage::{Damage, DamageSource, PlayerId};
 use crate::common::hitbox::Hitboxes;
 use crate::common::hitscan::{trace, HitZone};
 use crate::game::collision::CollisionWorld;
-use crate::game::damage::DamagePlugin;
+use crate::game::damage::DamageSystems;
 use crate::game::hitbox::update_hitboxes;
-use crate::game::player::{step_player, PhysicsBody, Player, PlayerInput};
-use crate::game::ragdoll::RagdollShove;
+use crate::game::player::{step_player, PhysicsBody, Player};
+use crate::game::ragdoll::{Push, RagdollShove};
+use crate::game::weapon::{Loadout, TriggerPulled, Weapon};
 
 /// How far the debug laser reaches, in metres.
 ///
@@ -93,18 +94,15 @@ impl Plugin for HitscanPlugin {
         // With the other gizmos, after the transforms they are placed from
         // have been propagated.
         app
-            // The feedback the shot produces. Brought in here because a shot
-            // that dealt damage nobody could see would be a debug tool with
-            // its output switched off.
-            .add_plugins(DamagePlugin)
             // On the tick, after the boxes it tests against have been moved
-            // to where this step left them.
+            // to where this step left them, and in the set every damage
+            // source shares — see [`DamageSystems`].
             .add_systems(
                 FixedUpdate,
                 fire_hitscan
                     .after(update_hitboxes)
                     .after(step_player)
-                    .run_if(in_state(AppMode::Play)),
+                    .in_set(DamageSystems::Deal),
             )
             .add_systems(
                 PostUpdate,
@@ -121,7 +119,7 @@ impl Plugin for HitscanPlugin {
 /// Yaw and pitch rather than the camera's transform: in third person the
 /// camera has swung behind the body and is no longer standing where the eye
 /// is, and the eye is what a shot comes out of in both views.
-fn aim(player: &Player) -> Dir3 {
+pub(crate) fn aim(player: &Player) -> Dir3 {
     let looking = Quat::from_rotation_y(player.yaw) * Quat::from_rotation_x(player.pitch);
     // A rotation of a unit vector is a unit vector; the fallback is unreachable
     // arithmetic rather than a case worth handling.
@@ -139,7 +137,7 @@ fn aim(player: &Player) -> Dir3 {
 /// The same offset the first-person camera is placed at, from the same class
 /// metric, so the beam comes out of the lens rather than out of somewhere near
 /// it.
-fn eye(centre: Vec3, stance: Stance) -> Vec3 {
+pub(crate) fn eye(centre: Vec3, stance: Stance) -> Vec3 {
     centre + Vec3::Y * stance.eye_offset()
 }
 
@@ -158,21 +156,22 @@ fn damage_for(zone: HitZone) -> u32 {
 /// exactly what a debug harness should do until a gamemode has an opinion
 /// about death.
 pub fn fire_hitscan(
-    mut input: ResMut<PlayerInput>,
+    mut pulled: MessageReader<TriggerPulled>,
     world: Res<CollisionWorld>,
-    shooters: Query<(Entity, &PhysicsBody, &Player, &Stance, &PlayerId)>,
+    shooters: Query<(&PhysicsBody, &Player, &Stance, &PlayerId, &Loadout)>,
     targets: Query<(Entity, &Hitboxes)>,
-    mut health: Query<&mut Damageable>,
-    mut dealt: MessageWriter<DamageDealt>,
+    mut damage: MessageWriter<Damage>,
     mut shoves: MessageWriter<RagdollShove>,
 ) {
-    // Taken once, whoever ends up firing: the latch is a record that the
-    // trigger was pulled, and leaving it set would fire again next tick.
-    if !std::mem::take(&mut input.attack) {
-        return;
-    }
+    for shot in pulled.read() {
+        let Ok((body, player, stance, id, loadout)) = shooters.get(shot.shooter) else { continue };
+        // Somebody else's weapon. Each weapon answers for the shooters holding
+        // it and ignores the rest, which is what lets a new one be added
+        // without this system being touched.
+        if loadout.held() != Some(Weapon::Hitscan) {
+            continue;
+        }
 
-    for (shooter, body, player, stance, id) in &shooters {
         // The step's own position, not the drawn one. `Transform` is written
         // by `interpolate_bodies` at frame rate, and a shot fired from it
         // would come from a slightly different place on every machine.
@@ -181,21 +180,20 @@ pub fn fire_hitscan(
 
         let others = targets
             .iter()
-            .filter(|(entity, _)| *entity != shooter)
+            .filter(|(entity, _)| *entity != shot.shooter)
             .map(|(entity, boxes)| (entity, *boxes));
 
         let Some(hit) = trace(&ray, range, others) else { continue };
-        // Hit something with no health — a wall dressing, a display body
-        // somebody has not given HP to. It stopped the shot all the same.
-        let Ok(mut target) = health.get_mut(hit.target) else { continue };
 
+        // Asked for, not applied: what a shot is worth is this module's
+        // business and what it does to a health pool is the damage layer's.
+        // A target with no health is skipped there — a wall dressing stopped
+        // the shot all the same.
         let worth = damage_for(hit.zone);
-        let amount = target.apply(worth);
-        dealt.write(DamageDealt {
+        damage.write(Damage {
             target: hit.target,
             source: DamageSource::Player(*id),
-            amount,
-            remaining: target.health(),
+            amount: worth,
             point: hit.point,
         });
 
@@ -207,7 +205,7 @@ pub fn fire_hitscan(
         // fired a bullet and nothing else.
         shoves.write(RagdollShove {
             at: hit.point,
-            push: *ray.direction * (worth as f32 * SHOVE_PER_DAMAGE),
+            push: Push::Along(*ray.direction * (worth as f32 * SHOVE_PER_DAMAGE)),
             radius: SHOVE_RADIUS,
         });
     }
@@ -262,6 +260,7 @@ mod tests {
     use super::*;
     use crate::common::class::{body_centre_from_feet, TALLEST_CLASS_EYE_HEIGHT};
     use crate::common::hitbox::Box3;
+    use crate::common::projectile::ProjectileSpec;
 
     /// A shooter standing at the origin looking down -Z, and a target box
     /// hanging in front of it.
@@ -269,11 +268,11 @@ mod tests {
     /// The boxes are placed by hand rather than posed off a rig: what is under
     /// test is the trigger, and a rig would make the test fail when a head
     /// moved rather than when the firing did.
-    fn a_shooter_and_a_target(boxes: Hitboxes, health: u32) -> (World, Entity, Entity) {
+    fn a_shooter_and_a_target(boxes: Hitboxes) -> (World, Entity, Entity) {
         let mut world = World::new();
-        world.init_resource::<PlayerInput>();
         world.init_resource::<CollisionWorld>();
-        world.init_resource::<Messages<DamageDealt>>();
+        world.init_resource::<Messages<TriggerPulled>>();
+        world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<RagdollShove>>();
 
         let centre = body_centre_from_feet(Vec3::ZERO);
@@ -284,10 +283,10 @@ mod tests {
                 Stance::Standing,
                 PhysicsBody { previous: centre, current: centre },
                 Hitboxes::default(),
-                Damageable::default(),
+                Loadout::default(),
             ))
             .id();
-        let target = world.spawn((boxes, Damageable::with_health(health))).id();
+        let target = world.spawn(boxes).id();
 
         (world, shooter, target)
     }
@@ -308,32 +307,30 @@ mod tests {
         }
     }
 
-    fn fire(world: &mut World) {
-        world.resource_mut::<PlayerInput>().attack = true;
+    fn fire(world: &mut World, shooter: Entity) {
+        world.write_message(TriggerPulled { shooter });
         world.run_system_once(fire_hitscan).unwrap();
     }
 
-    fn records(world: &mut World) -> Vec<DamageDealt> {
-        let messages = world.resource::<Messages<DamageDealt>>();
+    fn asked_for(world: &mut World) -> Vec<Damage> {
+        let messages = world.resource::<Messages<Damage>>();
         let mut cursor = messages.get_cursor();
         cursor.read(messages).copied().collect()
     }
 
-    /// The whole path: a click takes health off the thing in front of you and
-    /// leaves a record of who did it.
+    /// The whole path: a click asks for damage on the thing in front of you
+    /// and says who is asking. What that does to a health pool is the damage
+    /// layer's business — see [`crate::game::damage::apply_damage`].
     #[test]
-    fn a_shot_takes_health_off_and_says_who_took_it() {
-        let (mut world, _, target) = a_shooter_and_a_target(target_boxes(5.0), 100);
-        fire(&mut world);
+    fn a_shot_asks_for_damage_on_what_it_hit_and_says_who_fired() {
+        let (mut world, shooter, target) = a_shooter_and_a_target(target_boxes(5.0));
+        fire(&mut world, shooter);
 
-        assert_eq!(world.get::<Damageable>(target).unwrap().health(), 100 - HITSCAN_DAMAGE);
-
-        let record = records(&mut world);
-        assert_eq!(record.len(), 1);
-        assert_eq!(record[0].target, target);
-        assert_eq!(record[0].source, DamageSource::Player(PlayerId(7)));
-        assert_eq!(record[0].amount, HITSCAN_DAMAGE);
-        assert_eq!(record[0].remaining, 100 - HITSCAN_DAMAGE);
+        let asked = asked_for(&mut world);
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert_eq!(asked[0].target, target);
+        assert_eq!(asked[0].source, DamageSource::Player(PlayerId(7)));
+        assert_eq!(asked[0].amount, HITSCAN_DAMAGE);
     }
 
     /// A head is worth more, which is the only reason the trace distinguishes
@@ -343,50 +340,30 @@ mod tests {
         let mut boxes = target_boxes(5.0);
         // Aimed level, so only a head box at eye height is in the way.
         boxes.head.centre.y = TALLEST_CLASS_EYE_HEIGHT;
-        let (mut world, _, target) = a_shooter_and_a_target(boxes, 500);
+        let (mut world, shooter, _) = a_shooter_and_a_target(boxes);
 
-        fire(&mut world);
-        assert_eq!(
-            world.get::<Damageable>(target).unwrap().health(),
-            500 - HITSCAN_DAMAGE * HEADSHOT_MULTIPLIER
-        );
+        fire(&mut world, shooter);
+        assert_eq!(asked_for(&mut world)[0].amount, HITSCAN_DAMAGE * HEADSHOT_MULTIPLIER);
     }
 
-    /// Overkill is recorded as what was there. The clamp lives in
-    /// `Damageable`; this is the check that the shot reports the clamped
-    /// number rather than the one it swung.
+    /// A body holding something else does not fire a bullet, which is the
+    /// whole of how two weapons share one trigger.
     #[test]
-    fn a_shot_into_a_body_with_less_left_records_what_it_took() {
-        let (mut world, _, _) = a_shooter_and_a_target(target_boxes(5.0), 12);
-        fire(&mut world);
+    fn a_shooter_holding_a_rocket_launcher_fires_no_bullet() {
+        let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(5.0));
+        world
+            .entity_mut(shooter)
+            .insert(Loadout::new(vec![Weapon::Projectile(ProjectileSpec::ROCKET)]));
 
-        let record = records(&mut world);
-        assert_eq!(record[0].amount, 12);
-        assert_eq!(record[0].remaining, 0);
-    }
-
-    /// One press is one shot. The latch is consumed by the step that used it,
-    /// or a click held across two ticks would fire twice.
-    #[test]
-    fn the_trigger_is_consumed_by_the_shot_it_fires() {
-        let (mut world, _, target) = a_shooter_and_a_target(target_boxes(5.0), 500);
-
-        fire(&mut world);
-        assert!(!world.resource::<PlayerInput>().attack);
-
-        world.run_system_once(fire_hitscan).unwrap();
-        assert_eq!(
-            world.get::<Damageable>(target).unwrap().health(),
-            500 - HITSCAN_DAMAGE,
-            "the second tick fired again on the same press"
-        );
+        fire(&mut world, shooter);
+        assert!(asked_for(&mut world).is_empty(), "the launcher fired a bullet");
     }
 
     /// A wall in the way stops the shot, so the body behind it is safe from a
     /// weapon that only tests bodies.
     #[test]
     fn a_wall_between_you_and_a_body_stops_the_shot() {
-        let (mut world, _, target) = a_shooter_and_a_target(target_boxes(20.0), 100);
+        let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(20.0));
         // A room ending well short of the target: its far wall is between the
         // two.
         world.resource_mut::<CollisionWorld>().rebuild(&[crate::tool::room::Room::new(
@@ -394,15 +371,15 @@ mod tests {
             Vec3::new(5.0, 4.0, 5.0),
         )]);
 
-        fire(&mut world);
-        assert_eq!(world.get::<Damageable>(target).unwrap().health(), 100);
+        fire(&mut world, shooter);
+        assert!(asked_for(&mut world).is_empty());
     }
 
     /// And you cannot shoot yourself, which you would do at zero metres every
     /// time otherwise.
     #[test]
     fn a_shot_never_lands_on_the_body_that_fired_it() {
-        let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(5.0), 100);
+        let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(5.0));
         // The shooter's own boxes, around its own eye.
         let centre = body_centre_from_feet(Vec3::ZERO);
         world.entity_mut(shooter).insert(Hitboxes {
@@ -410,8 +387,9 @@ mod tests {
             head: Box3 { centre: centre + Vec3::Y * 0.7, half_extents: Vec3::splat(0.15) },
         });
 
-        fire(&mut world);
-        assert_eq!(world.get::<Damageable>(shooter).unwrap().health(), 100);
+        fire(&mut world, shooter);
+        let asked = asked_for(&mut world);
+        assert!(asked.iter().all(|hit| hit.target != shooter), "{asked:?}");
     }
 
     /// Looking up sends the beam up. The sign of the pitch is the one thing

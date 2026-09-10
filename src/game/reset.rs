@@ -25,6 +25,7 @@ use bevy::prelude::*;
 use crate::common::damage::{DamageLog, Damageable};
 use crate::common::skeleton::{AnimationClock, Gait, SkeletonAnimator};
 use crate::game::damage::DamageNumber;
+use crate::game::projectile::{Projectile, ProjectileEmitter};
 use crate::game::ragdoll::Ragdoll;
 use crate::game::player::PlayerInput;
 
@@ -42,6 +43,7 @@ pub fn reset_for_play(
     mut health: Query<(&mut Damageable, &mut DamageLog)>,
     numbers: Query<Entity, With<DamageNumber>>,
     corpses: Query<Entity, With<Ragdoll>>,
+    in_flight: Query<Entity, Or<(With<Projectile>, With<ProjectileEmitter>)>>,
 ) {
     // Back to zero, so two runs of the same map put every body at the same
     // point in its cycle. A match that started at whatever second the editor
@@ -78,6 +80,13 @@ pub fn reset_for_play(
     // somebody standing a few feet away.
     for corpse in &corpses {
         commands.entity(corpse).despawn();
+    }
+
+    // And anything the last match left in the air, along with the emitters
+    // that were putting it there. A rocket fired a moment before F5 would
+    // otherwise arrive in the new match, from a shooter that no longer exists.
+    for entity in &in_flight {
+        commands.entity(entity).despawn();
     }
 }
 

@@ -11,6 +11,7 @@ use crate::common::class::{
     TALLEST_CLASS_HEIGHT,
 };
 use crate::game::collision::CollisionWorld;
+use crate::game::weapon::Loadout;
 use crate::tool::room::Room;
 
 /// Half-extents of the body box. The tallest class, since there is only one
@@ -59,8 +60,12 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 /// for, and one spawned without them fails silently as a body nobody can
 /// shoot. Health is the same statement — it is not required by `Damageable`'s
 /// own definition, because a crate has health and is not a player.
+///
+/// And a [`Loadout`], because a body with nothing to shoot with is a body the
+/// trigger does nothing for — silently, since a missing component simply drops
+/// it out of every weapon's query.
 #[derive(Component, Debug)]
-#[require(Hitboxes, Damageable)]
+#[require(Hitboxes, Damageable, Loadout)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -118,6 +123,13 @@ pub struct PlayerInput {
     /// which can disagree: a body under a low ceiling cannot stand up when
     /// this goes false.
     pub crouch: bool,
+    /// A weapon slot asked for since the last step acted on it, if any.
+    ///
+    /// A slot number rather than a [`Weapon`](crate::game::weapon::Weapon):
+    /// this struct is what will travel to a server, and what a slot holds is a
+    /// property of the body at the other end rather than something the client
+    /// gets to assert.
+    pub select: Option<usize>,
     /// The trigger was pulled at some point since the last step consumed it.
     ///
     /// Latched like jump and unlike sprint, and for a sharper reason: a shot
@@ -141,7 +153,7 @@ pub struct PhysicsBody {
 }
 
 impl PhysicsBody {
-    fn at(position: Vec3) -> Self {
+    pub fn at(position: Vec3) -> Self {
         Self { previous: position, current: position }
     }
 }
@@ -317,6 +329,19 @@ pub fn gather_input(
     // pass before a fixed step gets round to it. Automatic fire is a weapon
     // property and will latch a held button instead.
     input.attack |= buttons.just_pressed(MouseButton::Left);
+
+    // Latched like the trigger and for the same reason: a switch is an edge,
+    // and a fixed step that ran twice this frame must not see it twice.
+    for (key, slot) in [
+        (KeyCode::Digit1, 0),
+        (KeyCode::Digit2, 1),
+        (KeyCode::Digit3, 2),
+        (KeyCode::Digit4, 3),
+    ] {
+        if keys.just_pressed(key) {
+            input.select = Some(slot);
+        }
+    }
 
     input.sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     input.crouch = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);

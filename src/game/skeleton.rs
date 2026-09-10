@@ -31,7 +31,7 @@ use crate::common::skeleton::{
 };
 use crate::game::body_mesh::BodyMeshPlugin;
 use crate::game::hitbox::HitboxPlugin;
-use crate::game::hitscan::HitscanPlugin;
+use crate::game::weapon::WeaponPlugin;
 use crate::game::player::{
     step_player, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
 };
@@ -60,10 +60,10 @@ impl Plugin for SkeletonPlugin {
         app
             // The boxes a body can be hit on are part of what a body is, and
             // they need the same renderer resources this plugin already does.
-            // The debug laser next to the boxes it tests against: it has no
-            // meaning without them, and it is how you check they are where
-            // they look like they are.
-            .add_plugins((HitboxPlugin, HitscanPlugin))
+            // The weapons next to the boxes they test against: they have no
+            // meaning without them, and the debug laser is how you check the
+            // boxes are where they look like they are.
+            .add_plugins((HitboxPlugin, WeaponPlugin))
             // Beside the hitboxes rather than in `GamePlugin` for the same
             // reason: the editor shows bodies too, and one with geometry only
             // in Play would be a preview of something else.
