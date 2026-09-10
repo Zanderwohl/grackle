@@ -231,6 +231,21 @@ pub struct InputLatch(pub PlayerInput);
 /// fields as before.
 pub type Inputs = ActionState<PlayerInput>;
 
+/// A body this process steps forward itself.
+///
+/// **Read by exactly one system, `step_player`, and that is the point.** It
+/// was once a marker five systems consulted, which made it a decision each of
+/// them had to make correctly and none of them errored on. Everything else —
+/// weapons, damage, descriptions — is authority-only and asks
+/// `has_authority`, because none of it is predicted: guessing a kill and being
+/// wrong is a body that falls over and stands back up.
+///
+/// A server steps every body, so `spawn_player` adds it. A client steps only
+/// the one it predicts, which is by construction the one it controls, so
+/// `claim_our_own_body` adds it there.
+#[derive(Component, Default, Debug)]
+pub struct Simulated;
+
 /// The one body this machine is driving.
 ///
 /// Everything that reads a keyboard or a mouse is looking for this, and
@@ -384,6 +399,10 @@ pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) -> Enti
     commands
         .spawn((
             Player { yaw: spawn.yaw, ..default() },
+            // Whoever stands a body up steps it. On a client that is nothing:
+            // its own body is marked where it is claimed, and the rest belong
+            // to the server.
+            Simulated,
             // Seeded rather than left at zero: the step copies aim off the
             // input, so a body spawned facing east would snap north on its
             // first step if the input still said zero.
@@ -658,7 +677,7 @@ pub fn third_person_camera(pivot: Vec3, aim: Quat, world: &CollisionWorld) -> Ve
 pub fn step_player(
     time: Res<Time>,
     world: Res<CollisionWorld>,
-    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance, &Inputs)>,
+    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance, &Inputs), With<Simulated>>,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {

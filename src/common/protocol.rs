@@ -32,14 +32,17 @@ impl Plugin for ProtocolPlugin {
         // last several ticks so that one lost packet is not one lost step.
         app.add_plugins(InputPlugin::<PlayerInput>::default());
 
-        // What the step writes, and therefore what a client is told. Not
-        // predicted: the server simulates and the client draws, so there is
-        // exactly one writer for each of these anywhere in the system.
-        // Prediction belongs on top of that, added once, not spread through
-        // every system that touches a body.
-        app.component::<PhysicsBody>().replicate();
-        app.component::<Player>().replicate();
-        app.component::<Stance>().replicate();
+        // What the step writes, and therefore both what a client is told and
+        // what has to be rewound and replayed when the server disagrees.
+        //
+        // All three, because a rollback replays the step and a step that
+        // started from the wrong state diverges again immediately:
+        // `PhysicsBody` is the position, `Player` carries the velocity and the
+        // on-ground flag, and `Stance` decides how tall the hull being swept
+        // is.
+        app.component::<PhysicsBody>().replicate().predict();
+        app.component::<Player>().replicate().predict();
+        app.component::<Stance>().replicate().predict();
 
         // How a body is animated, in nine bools.
         //

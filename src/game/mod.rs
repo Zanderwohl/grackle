@@ -123,12 +123,21 @@ impl Plugin for GamePlugin {
             // The simulation, and only where this process is believed. A
             // client runs none of it: it sends inputs and draws what it is
             // told, which is what leaves every value with one writer.
+            // Not gated on authority any more: a client steps its own body
+            // ahead of the server and is corrected when the two disagree, and
+            // `step_player` picks its bodies with `Simulated` rather than the
+            // whole system being switched off. The collision rebuild comes
+            // with it — a client predicting movement is walking into its own
+            // copy of the walls, so that copy has to be current.
+            //
+            // Lightyear re-runs `FixedUpdate` to replay a rollback, so
+            // everything here is run several times on a frame where the server
+            // disagreed. That is exactly why nothing in it may consume what it
+            // reads.
             .add_systems(FixedUpdate, (
                 rebuild_collision_when_rooms_change,
                 step_player,
-            ).chain()
-                .run_if(in_state(AppMode::Play))
-                .run_if(crate::common::net::has_authority))
+            ).chain().run_if(in_state(AppMode::Play)))
             // Draws the body between fixed steps, so a 64 Hz simulation does
             // not step visibly on a 144 Hz display.
             // Not gated on `AppMode::Play`, unlike everything around it:
@@ -812,6 +821,34 @@ mod tests {
                 .rotation
                 .abs_diff_eq(Quat::from_rotation_y(yaw), 1e-5),
             "our own body was left facing somewhere else"
+        );
+    }
+
+    /// A body we do not step is not stepped.
+    ///
+    /// The one thing that would quietly undo prediction: `step_player` picks
+    /// its bodies by `Simulated`, and a client marks only the body it
+    /// predicts. Step everybody and a client runs the whole match from inputs
+    /// it does not have, disagrees with the server about every body at once,
+    /// and rolls back for ever.
+    #[test]
+    fn a_body_we_do_not_simulate_is_left_where_the_server_put_it() {
+        let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
+        enter(&mut app);
+
+        // As one replicated from the server arrives: a body, and no mark
+        // saying we are the ones running it.
+        let placed = Vec3::new(5.0, 4.0, 0.0);
+        let theirs = app
+            .world_mut()
+            .spawn((Player::default(), PhysicsBody::at(placed)))
+            .id();
+        tick(&mut app, 60);
+
+        assert_eq!(
+            app.world().get::<PhysicsBody>(theirs).unwrap().current,
+            placed,
+            "we stepped somebody else's body, and gravity took it"
         );
     }
 

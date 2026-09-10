@@ -29,7 +29,9 @@ use crate::common::damage::NextPlayerId;
 use crate::common::net::NetRole;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
-use crate::game::player::{fallback_spawn, spawn_player, usable_spawns, LocalPlayer, Player, Spawn};
+use crate::game::player::{
+    fallback_spawn, spawn_player, usable_spawns, LocalPlayer, Player, Simulated, Spawn,
+};
 use crate::tool::room::Room;
 
 /// Spawns bodies for connected clients and marks our own when it arrives.
@@ -51,20 +53,27 @@ impl Plugin for NetBodiesPlugin {
 ///
 /// One entity, replicated to everybody, and `ControlledBy` says whose it is.
 ///
-/// No prediction and no interpolation target. Both make a *second* copy of a
-/// body on the receiving end, and a second copy is a second writer — which is
-/// the whole class of bug this arrangement exists to make impossible. The
-/// server steps the body, everybody is told where it ended up, and
-/// `interpolate_bodies` smooths between the last two positions it was told.
+/// `PredictionTarget` goes to its owner alone, because only the person holding
+/// the controls has inputs to run ahead with. It is a replication target for
+/// the `Predicted` *marker*, so the owner ends up with one entity carrying it
+/// rather than a predicted copy beside a confirmed one — there is no ghost of
+/// yourself to hide.
+///
+/// Still no `InterpolationTarget`: that one really would make a second entity,
+/// written by interpolation functions none of which are registered.
+/// `interpolate_bodies` smooths everybody else between the last two positions
+/// the server sent.
 fn spawn_body_for(
     commands: &mut Commands,
     spawn: Spawn,
     ids: &mut NextPlayerId,
     link: Entity,
+    peer: PeerId,
 ) {
     let body = spawn_player(commands, spawn, ids.allocate());
     commands.entity(body).insert((
         Replicate::to_clients(NetworkTarget::All),
+        PredictionTarget::to_clients(NetworkTarget::Single(peer)),
         // Ties the body's life to the connection's: somebody who disconnects
         // does not leave a body standing in the map for the rest of the round.
         ControlledBy { owner: link, lifetime: Lifetime::default() },
@@ -120,7 +129,7 @@ fn choose_spawn(
 fn give_bodies_to_whoever_needs_one(
     mut commands: Commands,
     role: Res<NetRole>,
-    links: Query<Entity, (With<ClientOf>, With<Connected>)>,
+    links: Query<(Entity, &RemoteId), (With<ClientOf>, With<Connected>)>,
     owners: Query<&ControlledBy, With<Player>>,
     ours: Query<(), (With<Player>, With<LocalPlayer>)>,
     collision: Res<CollisionWorld>,
@@ -148,13 +157,13 @@ fn give_bodies_to_whoever_needs_one(
         }
     }
 
-    for link in &links {
+    for (link, peer) in &links {
         if owners.iter().any(|owned| owned.owner == link) {
             continue;
         }
         let spawn = choose_spawn(&collision, &spawns, &rooms);
         info!("Standing a client's body up");
-        spawn_body_for(&mut commands, spawn, &mut ids, link);
+        spawn_body_for(&mut commands, spawn, &mut ids, link, peer.0);
     }
 }
 
@@ -167,8 +176,12 @@ fn give_bodies_to_whoever_needs_one(
 /// `Predicted` did.
 ///
 /// Marking it `LocalPlayer` is what aims the view at it; `InputMarker` is what
-/// makes Lightyear send this machine's inputs for it. It is **not** marked as
-/// something we simulate, because we simulate nothing.
+/// makes Lightyear send this machine's inputs for it; `Simulated` is what makes
+/// `step_player` run it ahead of the server.
+///
+/// All three land together because they are the same body by construction: the
+/// server predicts a body only to the client that controls it, so "ours",
+/// "what we drive" and "what we predict" cannot come apart.
 fn claim_our_own_body(
     mut commands: Commands,
     ours: Query<Entity, (Added<Controlled>, With<Player>, Without<LocalPlayer>)>,
@@ -177,6 +190,7 @@ fn claim_our_own_body(
         info!("The server has given us a body");
         commands.entity(body).insert((
             LocalPlayer,
+            Simulated,
             InputMarker::<crate::game::player::PlayerInput>::default(),
         ));
     }

@@ -36,9 +36,9 @@ in it that constrains code written today: items must record their provenance
 The editor is real and works. **The game barely exists.** There is a damage
 layer and three kinds of weapon — hitscan, projectile, flame — and a
 server-authoritative network layer that carries the map, the bodies, damage and
-deaths. There is no ammo, no reload, no teams and no client-side prediction: a body
-that dies leaves a ragdoll and comes straight back, and a client's movement is
-a round-trip behind. There is also no wasm build yet. Adding the
+deaths. There is no ammo, no reload and no teams: a body that dies leaves a ragdoll and
+comes straight back. A client predicts its own movement and is rolled back when
+the server disagrees. There is also no wasm build yet. Adding the
 runtime is the current frontier, not a finished thing to extend.
 
 `src/unlock` and the `crate_drop` binary are a self-contained TF2-style
@@ -662,38 +662,52 @@ process, because a corpse is a local reaction to a fact — this body's health
 reached zero — and that fact *is* replicated. What differs between machines is
 which way an arm flopped, and nobody can tell.
 
-### One rule: the client owns its view and its input, and nothing else
+### One rule: the server decides, and a client guesses only its own movement
 
-**The server simulates. Every other machine draws what it is told.** That is
-the whole authority model, and it replaces a set of per-system decisions that
-were wrong four times in a row. A client runs no step, fires no weapon, resolves
-no damage and describes no animation; it reads its peripherals into a latch,
-sends them, and draws the world that comes back.
+**The server simulates. Every other machine draws what it is told** — with one
+exception, and it is deliberately only one. A client runs `step_player` on the
+body it controls, so moving feels immediate, and Lightyear rewinds and replays
+when the server disagrees. It fires no weapon, resolves no damage and describes
+no animation; those are not predicted, because guessing a kill and being wrong
+is a body that falls over and stands back up.
 
-What that buys is **one writer per value**. Almost every bug in this area was
-two writers for one thing — a body turned by the mouse locally and by its yaw
-remotely, a body spawned by the map on one end and by replication on the other
-— and each one showed up as something that looked unrelated to its cause.
+What holds it together is **one writer per value**. Almost every bug in this
+area was two writers for one thing — a body turned by the mouse locally and by
+its yaw remotely, a body spawned by the map on one end and by replication on
+the other — and each showed up as something that looked unrelated to its cause.
+Prediction was smeared through movement, input, damage and drawing before, and
+that is what made the two ends disagree; it went back on afterwards, as one
+layer, changing the behaviour of exactly one system.
 
-There is no `Simulated` marker any more, and there is no client-side
-prediction. Both are coming back, but prediction belongs **on top** of a system
-where every value already has one writer, added once as its own layer — not
-smeared through movement, input, damage and drawing, which is where it was and
-what made the two ends disagree.
-
-Two markers remain and they are not synonyms:
+Three markers, and they are not synonyms:
 
 | Marker | Means | Who has it |
 | --- | --- | --- |
 | `Player` | this is a person's body | every body, everywhere |
 | `LocalPlayer` | **this machine's view follows it** | exactly one body, or none |
+| `Simulated` | **this process steps it** | every body on a server; the predicted one on a client |
 
-`LocalPlayer` gates `gather_input`, `write_client_inputs`, `place_camera` and
-`spawn_the_view`, and answers "is this mine" in `hide_own_body`,
-`draw_hitboxes` and `draw_skeletons`. `has_authority` — which answers `true`
-with no network layer at all, so a solo game is unchanged — gates `step_player`,
-the weapon systems, `describe_player_bodies`, all of `DamageSystems`, and the
-health restore in `reset_for_play`.
+`Simulated` is read by **`step_player` and nothing else**, which is the whole
+difference between it and the version that got deleted: it was once a decision
+five systems each had to make correctly, none of which errored on getting it
+wrong. `spawn_player` adds it, because whoever stands a body up steps it, and
+`claim_our_own_body` adds it to the body a client is handed. Those coincide by
+construction — the server predicts a body only to the client that controls it —
+so "ours", "what we drive" and "what we predict" cannot come apart.
+
+`LocalPlayer` gates `gather_input`, `write_client_inputs`, `place_camera`,
+`spawn_the_view` and `aim_the_view_at_our_body`, and answers "is this mine" in
+`hide_own_body`, `draw_hitboxes` and `draw_skeletons`. `has_authority` — which
+answers `true` with no network layer at all, so a solo game is unchanged —
+gates the weapon systems, `describe_player_bodies`, all of `DamageSystems`, the
+health restore in `reset_for_play`, and every system that hands out a body.
+
+**Lightyear replays a rollback by re-running `FixedUpdate`**, so everything in
+it runs several times on a frame where the server disagreed. That is exactly
+why nothing downstream may consume what it reads — see "Three clocks" above.
+The collision rebuild is in there too and is no longer authority-gated: a
+client predicting movement walks into its own copy of the walls, so that copy
+has to be current.
 
 ### The view is not the body
 
@@ -859,9 +873,12 @@ origin until somebody starts a round.
 **Known gaps, all of them "not sent yet" rather than "broken":**
 
 - `Loadout` is not replicated, so every remote body holds the default weapons.
-- No client-side prediction, so movement is a round-trip behind on a client.
-  Looking around is not — the view is a separate entity aimed from the local
-  latch. Prediction goes back on top of this, as one layer, not through it.
+- Aim is part of the predicted `Player`, so turning triggers a rollback per
+  tick while you turn. It is correct and cheap — the replay reaches the same
+  yaw — but wasteful, since aim is copied from input and can only ever
+  disagree by lag. A `with_rollback_condition` on `Player` that ignored
+  `yaw`/`pitch` would remove it. Idle rollbacks are already zero, so this is
+  not urgent.
 
 ### The map every client is standing in
 
