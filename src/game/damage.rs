@@ -30,6 +30,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::damage::{Damage, DamageDealt, Damageable, Died};
+use crate::common::team::Allegiances;
 use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage};
 use crate::game::player::PlayerCamera;
 
@@ -144,12 +145,24 @@ impl Plugin for DamagePlugin {
 /// A target with no [`Damageable`] is skipped rather than an error. A shot
 /// that stopped on a wall dressing still stopped, and an explosion sweeps up
 /// whatever is nearby without asking first whether it bleeds.
+///
+/// **This is also where teams are enforced**, for the same reason: a request
+/// to hurt a teammate is dropped here rather than never written, so a weapon
+/// does not have to know whose side anything is on and cannot get it wrong on
+/// its own. Dropped means dropped entirely — no health comes off and no
+/// [`DamageDealt`] is written, so there is no number over a teammate's head
+/// reading zero. See [`crate::common::team`] for the rule, self-damage
+/// included.
 pub fn apply_damage(
     mut requests: MessageReader<Damage>,
     mut health: Query<&mut Damageable>,
+    allegiances: Allegiances,
     mut dealt: MessageWriter<DamageDealt>,
 ) {
     for request in requests.read() {
+        if !allegiances.may_hurt(request.source, request.target) {
+            continue;
+        }
         let Ok(mut target) = health.get_mut(request.target) else { continue };
 
         // Nothing happens at zero — see `Damageable::apply`. The record is
@@ -298,6 +311,61 @@ mod tests {
         assert_eq!(dealt[0].amount, 12, "overkill was recorded as what was swung");
         assert_eq!(dealt[0].remaining, 0);
         assert_eq!(dealt[0].point, Vec3::Y);
+    }
+
+    /// The team gate, through the system that owns it. A teammate is skipped
+    /// **entirely** — no health off and no record — because a `DamageDealt` of
+    /// zero would put a number reading nothing over a friend's head every time
+    /// you clipped them.
+    #[test]
+    fn a_teammate_takes_nothing_and_is_not_even_recorded() {
+        use crate::common::team::Team;
+
+        let mut world = World::new();
+        world.init_resource::<Messages<Damage>>();
+        world.init_resource::<Messages<DamageDealt>>();
+        let shooter = PlayerId(1);
+        world.spawn((shooter, Team::Blue));
+        let ally = world
+            .spawn((Damageable::with_health(100), PlayerId(2), Team::Blue))
+            .id();
+        world.write_message(Damage {
+            target: ally,
+            source: DamageSource::Player(shooter),
+            amount: 40,
+            point: Vec3::ZERO,
+        });
+
+        world.run_system_once(apply_damage).unwrap();
+
+        assert_eq!(world.get::<Damageable>(ally).unwrap().health(), 100);
+        let messages = world.resource::<Messages<DamageDealt>>();
+        let mut cursor = messages.get_cursor();
+        assert_eq!(cursor.read(messages).count(), 0, "a number over a teammate");
+    }
+
+    /// And the exception the rule exists alongside: your own blast is yours,
+    /// even though you are trivially on your own team. Without this there is
+    /// no rocket jumping.
+    #[test]
+    fn your_own_splash_still_hurts_you() {
+        use crate::common::team::Team;
+
+        let mut world = World::new();
+        world.init_resource::<Messages<Damage>>();
+        world.init_resource::<Messages<DamageDealt>>();
+        let id = PlayerId(1);
+        let me = world.spawn((Damageable::with_health(100), id, Team::Blue)).id();
+        world.write_message(Damage {
+            target: me,
+            source: DamageSource::Player(id),
+            amount: 40,
+            point: Vec3::ZERO,
+        });
+
+        world.run_system_once(apply_damage).unwrap();
+
+        assert_eq!(world.get::<Damageable>(me).unwrap().health(), 60);
     }
 
     /// A target with no health is skipped rather than an error: an explosion

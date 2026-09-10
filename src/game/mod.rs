@@ -5,11 +5,13 @@ use crate::common::app_mode::{start_in_play, AppMode, StartInPlay};
 use crate::common::damage::NextPlayerId;
 use crate::common::net::NetRole;
 use crate::common::skeleton::AnimationClock;
+use crate::common::team::Team;
 use crate::editor::multicam::Multicam;
 use crate::game::collision::CollisionWorld;
 use crate::game::ragdoll::RagdollPlugin;
 use crate::game::pause_menu::PauseMenuPlugin;
 use crate::game::reset::reset_for_play;
+use crate::game::respawn::OurIdentity;
 use crate::game::player::{
     aim_the_view_at_our_body, despawn_the_view, face_bodies, gather_aim, gather_input,
     interpolate_bodies, place_camera,
@@ -28,6 +30,7 @@ pub mod flame;
 pub mod hitscan;
 pub mod projectile;
 pub mod reset;
+pub mod respawn;
 pub mod weapon;
 pub mod player;
 pub mod net_bodies;
@@ -203,6 +206,17 @@ fn enter_play(
     // `give_bodies_to_whoever_needs_one` decides on the next Update.
     collision.rebuild(&rooms);
 
+    // Whoever was here last match is not who is here this one: a new match is
+    // a new player, and dropping the identity is what makes the next body
+    // stood up allocate a fresh id. Dying *inside* a match is the other case
+    // and keeps it — see [`crate::game::respawn::Identity`].
+    //
+    // Nothing is spawned here. A player with no body gets one from
+    // `give_bodies_to_whoever_needs_one` on the next `Update`, which is the
+    // same rule that covers joining, respawning and starting a round.
+    commands.remove_resource::<OurIdentity>();
+
+
     for mut camera in &mut editor_cameras {
         camera.is_active = false;
     }
@@ -228,6 +242,10 @@ fn leave_play(
             commands.entity(player).despawn();
         }
     }
+    // And with the body gone, nobody left to be. Kept, this would be the
+    // identity a body stood up in the *next* match inherited, which is the
+    // opposite of what F5 means: a new match is a new player.
+    commands.remove_resource::<OurIdentity>();
 
     for mut camera in &mut editor_cameras {
         camera.is_active = true;
@@ -910,21 +928,28 @@ mod tests {
         assert_ne!(second, first, "the old body came back rather than a new one");
     }
 
-    /// And the body that comes back is a *new* body.
+    /// And the person inside it is the *same* person.
     ///
-    /// A reused id would credit the last body's damage to this one, which is a
-    /// kill feed naming somebody who was not involved.
+    /// A new body, a new entity, a new health pool — but the same
+    /// [`PlayerId`](crate::common::damage::PlayerId) and the same side, because
+    /// an identity outlives the body wearing it. A fresh id per life is a
+    /// scoreboard showing one player per death, and a fresh team is being put
+    /// on the other side for dying. `F5` is the case that *does* reallocate:
+    /// a new match is a new player, and `enter_play` drops the resource to say
+    /// so.
     #[test]
-    fn the_body_that_comes_back_has_an_identity_of_its_own() {
+    fn the_person_who_comes_back_is_the_same_person() {
         let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
         enter(&mut app);
 
-        let id_of = |app: &mut App| {
+        let who = |app: &mut App| {
             let world = app.world_mut();
-            let mut query = world.query_filtered::<&crate::common::damage::PlayerId, With<LocalPlayer>>();
-            *query.single(world).expect("no body")
+            let mut query = world
+                .query_filtered::<(&crate::common::damage::PlayerId, &Team), With<LocalPlayer>>();
+            let (id, team) = query.single(world).expect("no body");
+            (*id, *team)
         };
-        let before = id_of(&mut app);
+        let before = who(&mut app);
 
         let body = {
             let world = app.world_mut();
@@ -934,7 +959,7 @@ mod tests {
         app.world_mut().entity_mut(body).despawn();
         app.update();
 
-        assert_ne!(id_of(&mut app), before, "the new body reused the dead one's identity");
+        assert_eq!(who(&mut app), before, "a life cost the player their identity");
     }
 
     /// A server spawns a body for everybody and drives none of them.
@@ -989,7 +1014,7 @@ mod tests {
         let mut queue = bevy::ecs::world::CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, app.world());
-            spawn_player(&mut commands, spawn, crate::common::damage::PlayerId(99));
+            spawn_player(&mut commands, spawn, crate::common::damage::PlayerId(99), Team::Red);
         }
         queue.apply(app.world_mut());
         app.update();

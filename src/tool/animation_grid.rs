@@ -10,6 +10,7 @@ use bevy::prelude::*;
 
 use crate::common::damage::Damageable;
 use crate::common::hitbox::Hitboxes;
+use crate::common::team::Team;
 use crate::game::player::PhysicsBody;
 use crate::common::skeleton::{
     default_humanoid, draw_skeleton, humanoid, AnimationPhase, DisplaySpeed, ForcedAnimation,
@@ -17,7 +18,7 @@ use crate::common::skeleton::{
 };
 use crate::common::skeleton::AnimationClock;
 use crate::editor::animation_grid::{
-    cells, showing, AnimationGrid, AnimationGridMarker, GridCell,
+    cells, showing, AnimationGrid, AnimationGridMarker, GridCell, RosterTeam,
 };
 use crate::editor::editable::{FeatureTrait, PointRef};
 use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
@@ -40,12 +41,16 @@ impl Plugin for AnimationGridPlugin {
             // entities with the same shape*: shoot one on the server and the
             // client's copy — which nobody told anything — goes on standing
             // there. Bodies come from the authority, like every other body.
+            //
+            // `team_carousels` after the sync, so a body stood up this frame
+            // is teamed this frame rather than spending one drawn in the
+            // colour of whichever side it was last on.
             // Not gated on authority: a client receives these bodies, so it has
             // to clean them up when the grid they belong to goes away.
             .add_systems(Update, clear_orphaned_carousels)
             .add_systems(
                 Update,
-                (sync_animation_grids, follow_moved_grids, drive_carousels)
+                (sync_animation_grids, team_carousels, follow_moved_grids, drive_carousels)
                     .chain()
                     .run_if(crate::common::net::has_authority),
             )
@@ -153,7 +158,7 @@ pub fn drive_carousels(
 pub fn sync_animation_grids(
     mut commands: Commands,
     clock: Res<AnimationClock>,
-    grids: Query<(Entity, &Transform), With<AnimationGridMarker>>,
+    grids: Query<(Entity, &Transform, Option<&RosterTeam>), With<AnimationGridMarker>>,
     bodies: Query<&OfGrid>,
     mut last_cycle: Local<Option<u64>>,
 ) {
@@ -164,7 +169,7 @@ pub fn sync_animation_grids(
     let shuffled = last_cycle.replace(cycle) != Some(cycle);
 
     let cells = cells();
-    for (grid, placed_at) in &grids {
+    for (grid, placed_at, teams) in &grids {
         let mut standing = vec![false; cells.len()];
         for body in &bodies {
             if body.grid != grid {
@@ -184,8 +189,38 @@ pub fn sync_animation_grids(
             continue;
         }
 
+        let teams = teams.copied().unwrap_or_default();
         for cell in missing {
-            commands.spawn(carousel_body(grid, cell, &cells[cell], placed_at));
+            commands.spawn(carousel_body(grid, cell, &cells[cell], placed_at, teams));
+        }
+    }
+}
+
+/// Keep every standing body on the side its grid says it is on.
+///
+/// Separate from the spawn because the choice can change under bodies that are
+/// already up, and rebuilding the roster to recolour it would take all sixty
+/// phases and blends down with it.
+///
+/// **It compares before it writes**, which is the load-bearing part. The
+/// feature's `apply_to_entity` runs on every edit, so the grid's `RosterTeam`
+/// reads as changed on every frame of a drag; a system that trusted change
+/// detection would write sixty `Team`s a frame, and a written `Team` is a
+/// changed one, which is `build_body_meshes` throwing sixty bodies away and
+/// rebuilding them for as long as the point is moving.
+///
+/// Walks the bodies and asks each which grid it is on, rather than walking a
+/// grid's children: these bodies stand in the world so that they can be
+/// replicated on their own terms, and `OfGrid` is what replaced the parenting.
+pub fn team_carousels(
+    grids: Query<&RosterTeam, With<AnimationGridMarker>>,
+    mut bodies: Query<(&OfGrid, &mut Team), With<CarouselBody>>,
+) {
+    for (body, mut team) in &mut bodies {
+        let Ok(teams) = grids.get(body.grid) else { continue };
+        let wanted = teams.team_for(body.cell);
+        if *team != wanted {
+            *team = wanted;
         }
     }
 }
@@ -195,9 +230,15 @@ pub fn sync_animation_grids(
 /// Placed in the world rather than inside the grid, and its position carried
 /// by `PhysicsBody` like every other body's. That is the whole of what makes
 /// it replicable: what a viewer receives is a body somewhere, of some build,
-/// doing something — the same three facts a player's body is drawn from, and
-/// not one word about carousels.
-fn carousel_body(grid: Entity, cell: usize, placed: &GridCell, at: &Transform) -> impl Bundle {
+/// on some side, doing something — the same facts a player's body is drawn
+/// from, and not one word about carousels.
+fn carousel_body(
+    grid: Entity,
+    cell: usize,
+    placed: &GridCell,
+    at: &Transform,
+    teams: RosterTeam,
+) -> impl Bundle {
     let world = at.transform_point(placed.offset);
     (
         humanoid(placed.class.proportions()),
@@ -217,6 +258,12 @@ fn carousel_body(grid: Entity, cell: usize, placed: &GridCell, at: &Transform) -
         // What it is built like, and what it is doing. The two things a viewer
         // needs beyond a position, and both of them travel.
         placed.class,
+        // Whatever the grid was told to be, which for a striped one is a
+        // different side per cell — see `RosterTeam`. Deterministic like the
+        // phase above and for the same reason: teams rolled locally would put
+        // two viewers of one map out of step about who may shoot whom. It
+        // travels too, so a viewer draws the side rather than guessing it.
+        teams.team_for(cell),
         ForcedAnimation::default(),
         DisplaySpeed::default(),
         PhysicsBody::at(world),
@@ -309,6 +356,7 @@ impl PlaceablePoint for AnimationGrid {
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::change_detection::Tick;
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
@@ -331,6 +379,78 @@ mod tests {
             .collect();
         cells.sort_unstable();
         cells
+    }
+
+    /// A grid stands its roster up on the side it was told to, and a striped
+    /// one deals the four round in cell order.
+    #[test]
+    fn a_roster_stands_up_on_the_side_it_was_told_to() {
+        for choice in RosterTeam::choices() {
+            let mut world = World::new();
+            world.init_resource::<AnimationClock>();
+            world.spawn((AnimationGridMarker, Transform::IDENTITY, choice));
+            world.run_system_once(sync_animation_grids).unwrap();
+            world.flush();
+
+            let mut wrong: Vec<usize> = world
+                .query::<(&CarouselBody, &Team)>()
+                .iter(&world)
+                .filter(|(body, team)| **team != choice.team_for(body.0))
+                .map(|(body, _)| body.0)
+                .collect();
+            wrong.sort_unstable();
+            assert!(wrong.is_empty(), "{choice:?} put cells {wrong:?} on the wrong side");
+        }
+    }
+
+    /// Changing the choice re-teams the bodies that are already standing,
+    /// rather than waiting for them to be shot and replaced.
+    #[test]
+    fn changing_the_choice_re_teams_the_bodies_already_standing() {
+        let mut world = World::new();
+        world.init_resource::<AnimationClock>();
+        let grid = world.spawn((AnimationGridMarker, Transform::IDENTITY, RosterTeam::Striped)).id();
+        world.run_system_once(sync_animation_grids).unwrap();
+        world.flush();
+
+        world.entity_mut(grid).insert(RosterTeam::One(Team::Yellow));
+        world.run_system_once(team_carousels).unwrap();
+
+        assert!(
+            world.query::<(&CarouselBody, &Team)>().iter(&world).all(|(_, team)| *team == Team::Yellow),
+            "a body kept the side it was standing on"
+        );
+    }
+
+    /// And a re-run that changes nothing writes nothing. The feature
+    /// re-inserts its `RosterTeam` on every edit, so a system that wrote
+    /// unconditionally would mark sixty `Team`s changed on every frame of a
+    /// drag — and a changed `Team` is `build_body_meshes` throwing sixty
+    /// bodies away and rebuilding them.
+    #[test]
+    fn re_teaming_an_unchanged_roster_touches_nothing() {
+        let mut world = World::new();
+        world.init_resource::<AnimationClock>();
+        world.spawn((AnimationGridMarker, Transform::IDENTITY, RosterTeam::Striped));
+        world.run_system_once(sync_animation_grids).unwrap();
+        world.flush();
+
+        // Read off the components themselves rather than through a `Changed`
+        // filter: a freshly registered system has never run, so every filter
+        // in it matches everything and would pass this whatever happened.
+        let ticks = |world: &mut World| -> Vec<Tick> {
+            world
+                .query::<(&CarouselBody, Ref<Team>)>()
+                .iter(world)
+                .map(|(_, team)| team.last_changed())
+                .collect()
+        };
+
+        let before = ticks(&mut world);
+        world.increment_change_tick();
+        world.run_system_once(team_carousels).unwrap();
+
+        assert_eq!(before, ticks(&mut world), "bodies were rewritten for no reason");
     }
 
     /// A body shot out of the grid is not replaced on the spot — that would

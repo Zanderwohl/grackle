@@ -34,12 +34,13 @@ in it that constrains code written today: items must record their provenance
 ## State of the repo
 
 The editor is real and works. **The game barely exists.** There is a damage
-layer and three kinds of weapon — hitscan, projectile, flame — and a
-server-authoritative network layer that carries the map, the bodies, damage and
-deaths. There is no ammo, no reload and no teams: a body that dies leaves a ragdoll and
-comes straight back. A client predicts its own movement and is rolled back when
-the server disagrees. There is also no wasm build yet. Adding the
-runtime is the current frontier, not a finished thing to extend.
+layer, three kinds of weapon — hitscan, projectile, flame — teams, and a
+server-authoritative network layer that carries the map, the bodies, damage,
+deaths and corpses. There is no ammo, no reload and no round structure: a body
+that dies leaves a ragdoll and comes straight back, on the same side, as the
+same player. A client predicts its own movement and is rolled back when the
+server disagrees. There is also no wasm build yet. Adding the runtime is the
+current frontier, not a finished thing to extend.
 
 `src/unlock` and the `crate_drop` binary are a self-contained TF2-style
 crate-unboxing prototype. It is orthogonal to both the editor and the game.
@@ -463,6 +464,111 @@ Corpses belong to the match: cleared on leaving Play and again in
 and they age on game time, so nothing rots while somebody is in the editor.
 They sleep once settled, and a shove wakes them.
 
+## Teams
+
+Four — Red, Blue, Yellow, Green — as `Team` in
+[`src/common/team.rs`](src/common/team.rs), a component on a body and nothing
+else. The whole rule is three cases:
+
+- Two teams that differ hurt each other.
+- **No team is hostile to everybody.** A crate, a training dummy and the map
+  have no side, and that is deliberate rather than a gap to be closed — making
+  them pick one means deciding which team a door is on.
+- **You always hurt yourself.** Stated as a *self* exception on the
+  `PlayerId`, not as "splash ignores teams", so a rocket at your feet costs you
+  and costs the teammate beside you nothing. This is what rocket jumping will
+  need; take it out and self-damage goes with it.
+
+**The gate is `apply_damage` and nowhere else.** A weapon writes its `Damage`
+without asking whose side anything is on, and a request at a teammate is
+dropped there — dropped entirely, so no health comes off and no `DamageDealt`
+is written and there is no number over a friend's head reading zero. The
+lookup is `Allegiances`, a `SystemParam`, because a team is matched on the
+`PlayerId` a `DamageSource` carries rather than on an entity: the shooter may
+be a corpse by the time an afterburn tick lands.
+
+**One weapon has to ask for itself, and only one.** `fire_flame` *lights*
+bodies, which is a second effect that never passes through `apply_damage`; a
+teammate walking away on fire from a flame that did them no damage would be
+the rule with a hole through it. Anything else with an effect that is not a
+`Damage` message has the same problem — ask `Allegiances::may_hurt`, do not
+re-derive the rule.
+
+A body's colour is its team (`body_look`), outranking `BodyTint` — a tint says
+"draw this specially", a team says which side you are on, and the second is
+what you read across a room in a fight. A spawn point's preview is still green
+because nothing on it has a side. Corpses keep their team, so a pile of them
+still says which way a fight went.
+
+The player does not choose: `next_team` in
+[`src/game/respawn.rs`](src/game/respawn.rs) alternates Red and Blue as people
+turn up, because there is no lobby and nothing that could balance. Alternating
+rather than a constant so that **two people on one map are on different
+sides** — with everybody on one team the rule above is unreachable outside the
+animation grid, and a rule you cannot walk up to and check is a rule that
+quietly stops being true. Per-team spawns are still a gamemode question,
+deliberately unanswered.
+
+**The animation grid does choose.** `RosterTeam` on the feature is a panel
+combo — *Striped*, or one of the four — and striped deals them round the roster
+in cell order, which turns the grid into a friendly-fire range as well as an
+animation one: shoot along a row and every fourth body refuses the hit. Pick a
+single team and it is a plain firing range again. `One(Team)` rather than four
+more variants, so a fifth team is one more entry and nothing else; the numbers
+in `RosterTeam::index` are on disk and must not be renumbered.
+
+It rides in the generic `scalar_fields` table and loads through
+`load_snapshot_scalar_or`, so **no migration and no schema bump** — a grid
+saved before the field existed comes back striped. That is the pattern for any
+new scalar on an existing feature; a migration is only for a table shape.
+
+`team_carousels` keeps standing bodies in step with the choice. It walks the
+bodies and asks each which grid it is on rather than walking a grid's children,
+because these bodies stand in the world so they can be replicated — `OfGrid` is
+what replaced the parenting. And it **compares before it writes**. `apply_to_entity` runs on every edit, so the
+grid's `RosterTeam` reads as changed on every frame of a drag — and a written
+`Team` is a changed one, which is `build_body_meshes` throwing sixty bodies
+away and rebuilding them for as long as the point is moving. Same trap as
+re-inserting a `Skeleton`, one component along.
+
+## Coming back
+
+Death used to be the end of the session: the body was despawned, the camera
+went with it as a child, and what was left was a map with nobody in it. Now you
+come straight back, and the rule that puts you there is the same one that hands
+a body to somebody joining mid-round — see "Who gets a body, and when it goes
+away" below. There is no respawn system: `give_bodies_to_whoever_needs_one`
+asks who should have a body and does not, and dying is one of the ways to be in
+that state.
+
+Instant is a placeholder and is meant to look like one; a respawn timer, wave
+respawns and spawn protection are a gamemode's numbers. Two parts of the shape
+are not placeholders, and both live in
+[`src/game/respawn.rs`](src/game/respawn.rs):
+
+- **Your identity outlives your body.** `Identity` is a `PlayerId` and a
+  `Team`, and every body somebody is given carries the *same* one. This is the
+  opposite of what `F5` does, deliberately: a new match is a new player, a new
+  life is not. A fresh id per death shows a scoreboard one player per life, and
+  a fresh team is being put on the other side for dying.
+
+  It is never stored on a body, since a body is the thing that keeps being
+  destroyed. It lives where the *player* lives, and there are two of those:
+  `OurIdentity` — a resource — for the person at this machine, dropped by
+  `enter_play` so the next match is a new player; and a component on the
+  **link entity** for each connected client, which appears with the connection
+  and goes with it. Two homes rather than one because those are two genuinely
+  different lifetimes, and each is already exactly right — nothing has to keep
+  a roster in step with who is actually here.
+
+  A client holds no identity of its own. It is *told* who it is by the body the
+  server hands it, and a second opinion held locally is the two-writers mistake
+  most of this section is about.
+- **The choice of where is shared with the first spawn**, in `choose_spawn`.
+  Two copies of "pick a usable spawn point, fall back to the largest room" is
+  one copy that quietly stops matching the other, and the failure is a body
+  that respawns inside a wall on maps the first spawn handles fine.
+
 ## Damage, weapons and projectiles
 
 **Nothing applies damage to a health pool except one system.** A weapon writes
@@ -564,12 +670,17 @@ it needed no new machinery for that: `burn` sits in `Deal` and writes a
   weapon that hurt more because it was traced more finely would be a weapon
   whose damage is a fidelity setting. There is no RNG in the spread — a fixed
   pattern is what a server can re-run and what a player can learn to aim.
-- **Burning is an input to a body's colour, not a `BodyTint` written onto it.**
-  Overwriting the tint means remembering what was underneath and putting it
-  back, and forgetting leaves a body scorched for the rest of the match.
-  `body_colour` in [`body_mesh.rs`](src/game/body_mesh.rs) is the one place
-  that decides, and `recolour_bodies` swaps materials on the existing parts
-  rather than rebuilding a body because somebody set it on fire.
+- **Burning is an input to how a body is drawn, not a `BodyTint` written onto
+  it.** Overwriting the tint means remembering what was underneath and putting
+  it back, and forgetting leaves a body scorched for the rest of the match.
+  `body_look` in [`body_mesh.rs`](src/game/body_mesh.rs) is the one place that
+  decides, and `recolour_bodies` swaps materials on the existing parts rather
+  than rebuilding a body because somebody set it on fire.
+- **Fire is a glow, not a hue.** It used to lerp the base colour towards
+  orange, which worked while every body was the same grey; now that a body's
+  colour is its team, an emissive term (`BURNING_GLOW`) is the one signal that
+  reads the same on all four of them. A burning red pulling further towards
+  red is a burning body you cannot see.
 
 Testing all of this by hand is what `ProjectileEmitter` is for: `G` plants one
 firing whatever you are holding every two seconds, `B` clears them. Plant one
@@ -621,7 +732,7 @@ every bug in this area has been a component in the wrong layer.
 | --- | --- | --- | --- |
 | **State** | `PhysicsBody`, `Player`, `Stance` | the step, on the authority | replicated |
 | **Consequence** | `Damageable` (+`DamageLog`) | the damage layer, on the authority only | replicated |
-| **Identity** | `PlayerId` | the server, once | `replicate_once` |
+| **Identity** | `PlayerId`, `Team` | the server, once | `replicate_once` |
 | **Intent** | `Inputs` (`ActionState<PlayerInput>`) | the owning client | client → server only |
 | **Description** | `BodyRequests` | `describe_player_bodies`, on the authority | replicated |
 | **Presentation** | `Skeleton`, `Pose`, `SkeletonAnimator`, `Gait`, `AnimationPhase`, `SkeletonRoot`, `BodyMesh`, `Hitboxes` | every process, locally | **never** |
@@ -807,14 +918,15 @@ guarantees is only that being alive is the resting state.
 
 | Moment | What happens |
 | --- | --- |
-| Anybody has no body | `give_bodies_to_whoever_needs_one`, next `Update` |
+| Anybody has no body | `give_bodies_to_whoever_needs_one`, next `Update`, wearing the `Identity` they already had |
 | Client's body reaches it | `claim_our_own_body` marks it `LocalPlayer` + `InputMarker` |
 | Client disconnects | `ControlledBy { lifetime: SessionBased }` despawns it on the server; the despawn replicates |
 | Round ends | the server's `leave_play` despawns every body; a client's despawns none, because they are not its to despawn |
 
-`enter_play` no longer spawns anything: it rebuilds `CollisionWorld` and hands
-the cursor over, and the body follows on the next `Update` because by then
-somebody is a player with no body.
+`enter_play` no longer spawns anything: it rebuilds `CollisionWorld`, drops
+`OurIdentity` so the new match is a new player, and hands the cursor over. The
+body follows on the next `Update`, because by then somebody is a player with no
+body.
 
 **One entity per body, everywhere.** `Controlled` — the receiver-side half of
 the server's `ControlledBy` — is how a client knows which body is its own. No

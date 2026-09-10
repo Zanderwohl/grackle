@@ -5,6 +5,7 @@ use rusqlite::{Connection, Transaction, params};
 use crate::common::skeleton::AnimationState;
 use crate::constants::{SCHEMA_VERSION, MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION};
 use crate::editor::action::{Action, FeatureData, FeatureDelta, FeatureSnapshot};
+use crate::editor::animation_grid::RosterTeam;
 use crate::editor::editable::{
     AxisRef, Feature, FeatureId, FeatureTimeline, PointRef,
     create_object_from_type_key,
@@ -324,12 +325,16 @@ fn save_feature_snapshot(
                 )?;
             }
         }
-        FeatureData::AnimationGrid { location, yaw } => {
+        FeatureData::AnimationGrid { location, yaw, teams } => {
             save_snapshot_point_ref(tx, sid, "location", location)?;
-            tx.execute(
-                "INSERT INTO snapshot_scalar_fields (snapshot_id, field_key, field_value) VALUES (?1, ?2, ?3)",
-                params![sid, "yaw", *yaw as f64],
-            )?;
+            // The teams go out as their index, stable across builds by
+            // contract — see `RosterTeam`.
+            for (k, v) in [("yaw", *yaw), ("teams", teams.index() as f32)] {
+                tx.execute(
+                    "INSERT INTO snapshot_scalar_fields (snapshot_id, field_key, field_value) VALUES (?1, ?2, ?3)",
+                    params![sid, k, v as f64],
+                )?;
+            }
         }
         FeatureData::PointLight {
             location,
@@ -435,7 +440,12 @@ fn load_feature_snapshot(conn: &Connection, snapshot_id: i64) -> rusqlite::Resul
         "animation_grid" => {
             let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
             let yaw = load_snapshot_scalar_or(conn, snapshot_id, "yaw", 0.0)?;
-            FeatureData::AnimationGrid { location, yaw }
+            // Defaulted rather than required: a snapshot written before this
+            // field existed is a striped grid, not a file that fails to open.
+            let teams = RosterTeam::from_index(
+                load_snapshot_scalar_or(conn, snapshot_id, "teams", 0.0)?.max(0.0) as u32,
+            );
+            FeatureData::AnimationGrid { location, yaw, teams }
         }
         "point_light" => {
             let location = load_snapshot_point_ref(conn, snapshot_id, "location")?;
@@ -949,9 +959,10 @@ mod tests {
         assert_eq!(read_back(&loaded.timeline), expected);
     }
 
-    /// The grid carries almost nothing of its own — a point and a facing — so
-    /// the thing that breaks is registration rather than data: miss one of the
-    /// seven places and the map saves fine and comes back sixty bodies short.
+    /// The grid carries almost nothing of its own — a point, a facing and its
+    /// teams — so the thing that breaks is registration rather than data: miss
+    /// one of the seven places and the map saves fine and comes back sixty
+    /// bodies short.
     #[test]
     fn an_animation_grid_survives_a_save_and_load() {
         use crate::editor::animation_grid::AnimationGrid;
@@ -978,6 +989,52 @@ mod tests {
         assert!(read_back(&loaded.timeline).is_empty(), "undo left the grid active");
         loaded.timeline.redo();
         assert_eq!(read_back(&loaded.timeline), expected);
+    }
+
+    /// The teams ride along as a scalar, which is a separate registration from
+    /// the point in both the live tables and the snapshots — and it goes to
+    /// disk as an index, so this is also what catches an index that stopped
+    /// meaning what it meant. Through undo and redo, because the snapshot path
+    /// is the half that is easy to leave writing a default.
+    #[test]
+    fn an_animation_grid_keeps_its_teams_across_a_save_and_load() {
+        use crate::common::team::Team;
+        use crate::editor::animation_grid::{AnimationGrid, RosterTeam};
+
+        for teams in RosterTeam::choices() {
+            let mut timeline = FeatureTimeline::default();
+            timeline.apply_feature(Box::new(
+                AnimationGrid::new(0.0, 0.0, 0.0).with_teams(teams),
+            ));
+
+            let path = temp_path(&format!("animation-grid-teams-{}", teams.index()));
+            save(&path, &timeline, &MapMetadata::default()).unwrap();
+            let mut loaded = load(&path).unwrap();
+
+            let read_back = |timeline: &FeatureTimeline| -> Vec<RosterTeam> {
+                timeline
+                    .active_features()
+                    .filter_map(|(_, f)| {
+                        f.object()
+                            .scalar_fields()
+                            .into_iter()
+                            .find(|(key, _)| *key == "teams")
+                            .map(|(_, value)| RosterTeam::from_index(value as u32))
+                    })
+                    .collect()
+            };
+
+            assert_eq!(read_back(&loaded.timeline), vec![teams], "{teams:?}");
+
+            loaded.timeline.undo();
+            loaded.timeline.redo();
+            assert_eq!(read_back(&loaded.timeline), vec![teams], "{teams:?} after redo");
+        }
+
+        // And the index is the contract the two paths share: a file written
+        // with a green grid has to still be green, not merely still be *a*
+        // grid.
+        assert_eq!(RosterTeam::from_index(RosterTeam::One(Team::Green).index()), RosterTeam::One(Team::Green));
     }
 
     /// Facing rides along on the spawn point as a scalar, which is a separate

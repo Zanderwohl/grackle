@@ -30,6 +30,7 @@ use strum::IntoEnumIterator;
 use std::sync::OnceLock;
 
 use crate::common::class::Class;
+use crate::common::team::Team;
 use crate::common::skeleton::{
     default_humanoid, finish_pose, humanoid, AnimationState, Pose, PoseInputs,
 };
@@ -43,6 +44,79 @@ use crate::get;
 /// `Prop` has with `PropMarker`.
 #[derive(Component, Debug)]
 pub struct AnimationGridMarker;
+
+/// What side the roster is on.
+///
+/// A grid is a harness, and which harness you want depends on what you are
+/// looking at. **Striped** deals the four teams round the roster in cell
+/// order, which makes the grid a friendly-fire range: shoot along a row and
+/// every fourth body refuses the hit. **One team** makes it a plain firing
+/// range again — all of them shoot back, or none of them do, depending on
+/// whether you picked your own.
+///
+/// `One(Team)` rather than four more variants, so a fifth team is a fifth
+/// entry in the combo box and nothing else. The one thing that is written out
+/// by hand is [`RosterTeam::index`], because those numbers are on disk.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RosterTeam {
+    /// One of each, round the roster in cell order.
+    #[default]
+    Striped,
+    /// All of them on the one side.
+    One(Team),
+}
+
+impl RosterTeam {
+    /// Every choice, in the order the panel lists them.
+    pub fn choices() -> Vec<RosterTeam> {
+        std::iter::once(RosterTeam::Striped)
+            .chain(Team::ALL.map(RosterTeam::One))
+            .collect()
+    }
+
+    pub fn name(self) -> String {
+        match self {
+            RosterTeam::Striped => get!("editor.features.animation_grid.striped"),
+            RosterTeam::One(team) => team.name(),
+        }
+    }
+
+    /// What side the body in `cell` is on.
+    ///
+    /// The stripe is by cell rather than rolled, like the animation phase
+    /// beside it: teams drawn locally would put two viewers of one map out of
+    /// step with each other about who is allowed to shoot whom.
+    pub fn team_for(self, cell: usize) -> Team {
+        match self {
+            RosterTeam::Striped => Team::ALL[cell % Team::ALL.len()],
+            RosterTeam::One(team) => team,
+        }
+    }
+
+    /// Stable index for the save format, as [`AnimationState::index`] is.
+    /// Zero is the default, so a file that predates this field loads striped.
+    pub fn index(self) -> u32 {
+        match self {
+            RosterTeam::Striped => 0,
+            RosterTeam::One(Team::Red) => 1,
+            RosterTeam::One(Team::Blue) => 2,
+            RosterTeam::One(Team::Yellow) => 3,
+            RosterTeam::One(Team::Green) => 4,
+        }
+    }
+
+    /// The choice an index names, or striped for one this build does not know
+    /// — a grid saved by a later build still stands up a roster.
+    pub fn from_index(index: u32) -> RosterTeam {
+        match index {
+            1 => RosterTeam::One(Team::Red),
+            2 => RosterTeam::One(Team::Blue),
+            3 => RosterTeam::One(Team::Yellow),
+            4 => RosterTeam::One(Team::Green),
+            _ => RosterTeam::Striped,
+        }
+    }
+}
 
 /// Clear floor either side of a body, on top of its own width.
 const COLUMN_MARGIN: f32 = 0.3;
@@ -294,6 +368,10 @@ pub struct AnimationGrid {
     /// Which way the bodies face, in radians about world Y. The grid turns
     /// with them.
     yaw: f32,
+    /// What side the roster is on. Defaulted rather than required, so a grid
+    /// saved before this existed loads striped instead of failing to load.
+    #[serde(default)]
+    teams: RosterTeam,
     #[serde(skip)]
     resolved_location: Vec3,
     #[serde(skip)]
@@ -324,6 +402,23 @@ impl FeatureTrait for AnimationGrid {
             self.yaw = degrees.to_radians();
             changed = true;
         }
+
+        // Every choice from the type rather than written out here, for the
+        // same reason the display lists its states from the state machine: a
+        // team that existed and could not be picked would be one nobody could
+        // put on the floor.
+        egui::ComboBox::from_label(get!("editor.features.animation_grid.teams"))
+            .selected_text(self.teams.name())
+            .show_ui(ui, |ui| {
+                for choice in RosterTeam::choices() {
+                    if ui.selectable_label(self.teams == choice, choice.name()).clicked()
+                        && self.teams != choice
+                    {
+                        self.teams = choice;
+                        changed = true;
+                    }
+                }
+            });
 
         // What it is about to put on the floor, in numbers: the answer is
         // sixty bodies over eighteen metres by twelve, which is bigger than
@@ -358,13 +453,15 @@ impl FeatureTrait for AnimationGrid {
         FeatureData::AnimationGrid {
             location: self.location.clone(),
             yaw: self.yaw,
+            teams: self.teams,
         }
     }
 
     fn apply_snapshot(&mut self, data: &FeatureData) {
-        let FeatureData::AnimationGrid { location, yaw } = data else { return; };
+        let FeatureData::AnimationGrid { location, yaw, teams } = data else { return; };
         self.location = location.clone();
         self.yaw = *yaw;
+        self.teams = *teams;
     }
 
     /// The point, the facing, and the floor it will cover.
@@ -418,6 +515,12 @@ impl FeatureTrait for AnimationGrid {
                 Transform::from_translation(self.resolved_location)
                     .with_rotation(Quat::from_rotation_y(self.yaw)),
                 AnimationGridMarker,
+                // Plain `insert`, unlike the `Visibility` below: this is the
+                // authored value and re-asserting it on every edit is correct.
+                // It is re-inserted on every edit and so reads as changed on
+                // every frame of a drag, which is why `team_carousels`
+                // compares before it writes rather than trusting that.
+                self.teams,
             ))
             // The bodies hang off this entity and each carries a `Visibility`
             // of its own, which Bevy expects to inherit from a parent that has
@@ -451,12 +554,16 @@ impl FeatureTrait for AnimationGrid {
     fn point_ref_slots(&self) -> Vec<&str> { vec!["location"] }
 
     fn scalar_fields(&self) -> Vec<(&str, f32)> {
-        vec![("yaw", self.yaw)]
+        // The teams go out as an index, which is stable across builds by
+        // contract — see [`RosterTeam::index`].
+        vec![("yaw", self.yaw), ("teams", self.teams.index() as f32)]
     }
 
     fn set_scalar_field(&mut self, key: &str, value: f32) {
-        if key == "yaw" {
-            self.yaw = value;
+        match key {
+            "yaw" => self.yaw = value,
+            "teams" => self.teams = RosterTeam::from_index(value.max(0.0) as u32),
+            _ => {}
         }
     }
 
@@ -508,6 +615,7 @@ impl AnimationGrid {
         Self {
             location: PointRef::absolute(x, y, z),
             yaw: 0.0,
+            teams: RosterTeam::default(),
             resolved_location: Vec3::new(x, y, z),
             entity: None,
         }
@@ -517,6 +625,7 @@ impl AnimationGrid {
         Self {
             location,
             yaw: 0.0,
+            teams: RosterTeam::default(),
             resolved_location: Vec3::ZERO,
             entity: None,
         }
@@ -529,6 +638,15 @@ impl AnimationGrid {
 
     pub fn yaw(&self) -> f32 {
         self.yaw
+    }
+
+    pub fn with_teams(mut self, teams: RosterTeam) -> Self {
+        self.teams = teams;
+        self
+    }
+
+    pub fn teams(&self) -> RosterTeam {
+        self.teams
     }
 }
 

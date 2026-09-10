@@ -68,6 +68,12 @@ impl Plugin for ProtocolPlugin {
         // a body somebody else is driving — including one standing in an
         // animation grid, which is why none of them mentions grids.
         app.component::<crate::common::class::Class>().replicate_once();
+        // Whose side a body is on. It decides what a body is *drawn* in, so a
+        // viewer that was not told would paint every remote body and every
+        // corpse the default grey and there would be no reading a fight by
+        // looking at it. Sent once: a body does not change sides while wearing
+        // it — a new side is a new life, and that is a new body.
+        app.component::<crate::common::team::Team>().replicate_once();
         app.component::<crate::common::skeleton::ForcedAnimation>().replicate();
         app.component::<crate::common::skeleton::gait::DisplaySpeed>().replicate();
 

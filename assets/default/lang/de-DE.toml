@@ -122,3 +122,10 @@ clearance = "Benötigt { height } m freie Kopfhöhe."
 
 [editor.features.cuboid]
 title = "Quader"
+
+[team.names]
+red = "Rot"
+blue = "Blau"
+yellow = "Gelb"
+green = "Grün"
+

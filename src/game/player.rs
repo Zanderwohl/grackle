@@ -8,6 +8,7 @@ use lightyear::prelude::input::native::ActionState;
 
 use crate::common::damage::{Damageable, PlayerId};
 use crate::common::hitbox::Hitboxes;
+use crate::common::team::Team;
 use crate::common::class::{
     body_centre_from_feet, Stance, CLASS_HALF_EXTENTS, TALLEST_CLASS_EYE_HEIGHT,
     TALLEST_CLASS_HEIGHT,
@@ -394,7 +395,12 @@ pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
 ///
 /// It *does* mark the body [`Simulated`], because whoever spawns a body steps
 /// it.
-pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) -> Entity {
+pub fn spawn_player(
+    commands: &mut Commands,
+    spawn: Spawn,
+    id: PlayerId,
+    team: Team,
+) -> Entity {
     let position = body_centre_from_feet(spawn.feet);
     commands
         .spawn((
@@ -408,6 +414,7 @@ pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) -> Enti
             // first step if the input still said zero.
             ActionState(PlayerInput { yaw: spawn.yaw, ..default() }),
             id,
+            team,
             Stance::default(),
             PhysicsBody::at(position),
             Transform::from_translation(position).with_rotation(Quat::from_rotation_y(spawn.yaw)),

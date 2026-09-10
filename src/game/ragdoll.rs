@@ -82,6 +82,7 @@ use crate::common::skeleton::rig::{humanoid, Proportions};
 use crate::common::damage::{falloff, Damageable};
 use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
+use crate::common::team::Team;
 use crate::game::body_mesh::BodyTint;
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
@@ -786,13 +787,14 @@ pub fn raise_ragdolls(
             &GlobalTransform,
             Option<&SkeletonRoot>,
             Option<&BodyTint>,
+            Option<&Team>,
             Option<&PhysicsBody>,
             Option<&Name>,
         ),
         (Added<Dying>, Without<Ragdolled>),
     >,
 ) {
-    for (entity, skeleton, pose, global, offset, tint, physics, name) in &bodies {
+    for (entity, skeleton, pose, global, offset, tint, team, physics, name) in &bodies {
         // The step's own displacement rather than a velocity in metres per
         // second, because that is the unit the solver keeps: how far a point
         // moved on the last tick.
@@ -816,10 +818,18 @@ pub fn raise_ragdolls(
             }),
         ));
         if let Some(tint) = tint {
-            // Whose body it was is still worth knowing once it is on the
-            // floor — more so, if teams are ever a thing you check by looking.
             corpse.insert(*tint);
         }
+        if let Some(team) = team {
+            // Whose body it was is still worth knowing once it is on the
+            // floor: a pile of corpses is how you read which way a fight went,
+            // and a corpse that reverted to the default grey would erase that.
+            // Not a live body — nothing asks a corpse's team a question, and
+            // it has no `Damageable` to be spared by one. Replicated, so it
+            // reads the same colour on every machine.
+            corpse.insert(*team);
+        }
+
         // The build, so a viewer can put the rig back. Read off the rig the
         // body actually had, which is the only description that cannot
         // disagree with it.
