@@ -579,97 +579,108 @@ Two rules, and both are easy to undo:
   role equal to the one already set, because the transport will hang off
   `Changed<NetRole>` and re-picking "Host" must not drop everybody connected.
 
-### Who gets a body, and who steps it
+### What a networked body is
 
-The server spawns every body, its own included. A client never spawns one:
-its body arrives replicated and marked `Predicted`, and the client steps its
-own copy forward from its own inputs so that moving feels immediate.
-[`src/game/net_bodies.rs`](src/game/net_bodies.rs) holds both halves.
+A body is one entity on every machine, in four layers. Which layer a component
+belongs to decides who writes it and whether it crosses the wire, and almost
+every bug in this area has been a component in the wrong layer.
 
-Three kinds of body end up in a client's world, and they are not
-interchangeable:
+| Layer | Components | Written by | On the wire |
+| --- | --- | --- | --- |
+| **State** | `PhysicsBody`, `Player`, `Stance` | the step, on whoever simulates | replicated, predicted |
+| **Consequence** | `Damageable` (+`DamageLog`) | the damage layer, on the authority only | replicated, *not* predicted |
+| **Identity** | `PlayerId` | the server, once | `replicate_once` |
+| **Intent** | `Inputs` (`ActionState<PlayerInput>`) | the owning client | client → server only |
+| **Description** | `BodyRequests` | `describe_player_bodies` on simulated bodies | replicated |
+| **Presentation** | `Skeleton`, `Pose`, `SkeletonAnimator`, `Gait`, `AnimationPhase`, `SkeletonRoot`, `BodyMesh`, `Hitboxes`, `Ragdoll` | every process, locally | **never** |
 
-| Body | What it is | Who steps it |
+**Poses are never transmitted.** A pose is twenty-odd quaternions per body per
+tick and it is the *output* of a state machine that is deterministic and
+present on every machine. What crosses is the machine's input — `BodyRequests`,
+nine bools — and each process runs `AnimationState` over it. `Gait` is not sent
+either: it is advanced from ground covered, and the ground covered is
+`PhysicsBody`, which is. `AnimationPhase` is derived from `PlayerId` by
+`phase_bodies_by_id`, so two clients put the same body at the same point in its
+cycle; an `Entity` index or an RNG would give every viewer a different answer.
+
+**Corpses are never transmitted either.** `raise_ragdolls` runs on every
+process, because a corpse is a local reaction to a fact — this body's health
+reached zero — and that fact *is* replicated. What differs between machines is
+which way an arm flopped, and nobody can tell.
+
+### Three markers, and none of them is a synonym
+
+This is the distinction the whole layer rests on. Getting it wrong does not
+error.
+
+| Marker | Means | Who has it |
 | --- | --- | --- |
-| Predicted | our own, run ahead of the server | us, and replayed on rollback |
-| Replicated | somebody else's, drawn where the server last said | nobody |
+| `Player` | this is a person's body | every body, everywhere |
+| `Simulated` | **this process steps it** | all bodies on a server; only the predicted one on a client |
+| `LocalPlayer` | **this machine's keyboard drives it** | exactly one body, or none |
+
+`spawn_player` adds `Simulated` — whoever spawns a body steps it — and
+deliberately **does not** add `LocalPlayer`. It used to, and that single line
+produced a crop of symptoms that looked unrelated to each other and to their
+cause: on a host, the second player to join made `gather_input` (a `Single`)
+match two entities and silently stop running, so the host could not move;
+`hide_own_body` hid every body in the match; and every body was given its own
+camera and its own `IsDefaultUiCamera`. Whose body it is is answered by whoever
+knows — `enter_play` for a solo game or a host, `claim_our_own_body` on a
+client.
+
+What each marker gates:
+
+- `Simulated`: `step_player`, `pull_trigger`, `select_weapons`,
+  `describe_player_bodies`. A body driven from the wire carries a `Loadout` and
+  a `Trigger` like any other and an `Inputs` nobody ever fills, so an ungated
+  system either fires somebody else's gun locally or flattens the server's
+  description to "standing still" one frame after it arrives.
+- `LocalPlayer`: `gather_input`, `mouse_look`, `place_camera`,
+  `give_the_local_body_a_camera`, `hide_own_body`, and the "is this mine" test
+  in `draw_hitboxes` and `draw_skeletons`.
+- Authority (`has_authority`, which answers `true` with no network layer at
+  all): all of `DamageSystems`, and the health restore in `reset_for_play`.
+  Nothing about damage is predicted — guessing a kill and being wrong is a body
+  that falls over and stands back up, which is worse to watch than a kill that
+  arrives a round-trip late.
+
+`reap_the_dead` therefore does not run on a client: the entity belongs to the
+server, which despawns it and replicates that. `raise_ragdolls` hides the body
+it made a corpse of, because on a client the despawn is a round-trip away and
+the body would otherwise stand upright inside its own corpse.
+
+### Who gets a body, and when it goes away
+
+The server spawns every body, its own included. A client never spawns one.
+
+| Moment | What happens |
+| --- | --- |
+| Client connects mid-round | `give_arriving_clients_a_body` |
+| Round starts with clients already connected | `give_waiting_clients_a_body`, on `OnEnter(Play)` |
+| Client's body reaches it | `claim_our_own_body` marks it `LocalPlayer` + `Simulated` + `InputMarker` |
+| Client disconnects | `ControlledBy { lifetime: SessionBased }` despawns it on the server; the despawn replicates |
+| Round ends | the server's `leave_play` despawns every body; a client's despawns none, because they are not its to despawn |
 
 Prediction is **in place**: `PredictionTarget` is a replication target for the
-`Predicted` marker, so the client gets one entity per body with `Predicted` on
-its own, not a predicted copy beside a confirmed one. There is no ghost of
+`Predicted` marker, so a client gets one entity per body with `Predicted` on
+its own — not a predicted copy beside a confirmed one. There is no ghost of
 yourself to hide.
 
-There is deliberately **no `InterpolationTarget`** yet. An interpolated body is
-a second entity written by interpolation functions, and none are registered —
-so targeting it produces a body nothing ever writes to, which is a player you
+There is deliberately **no `InterpolationTarget`**. An interpolated body is a
+second entity written by interpolation functions, and none are registered — so
+targeting it produces a body nothing ever writes to, which is a player you
 cannot see. Everybody else's body is the plain replicated entity, smoothed by
-`interpolate_bodies` between the last two positions the server sent. Coarser
-than real interpolation, and the thing to fix once there is somebody to look at
-it with.
+`interpolate_bodies` between the last two positions the server sent.
 
-**`Simulated` is the marker that decides**, and it is deliberately not in the
-protocol, so it never crosses the wire. `spawn_player` adds it — whoever
-spawns a body steps it — and `claim_our_own_body` adds it to the predicted
-copy on a client. A body arriving from the server does not carry it, which is
-what stops a client stepping somebody else's body from inputs it does not
-have. That failure is quiet: the body twitches between where the step put it
-and where the server said it was.
+**Known gaps, all of them "not sent yet" rather than "broken":**
 
-**Weapons are gated on it too**, not only movement. A replicated body carries a
-`Loadout` and a `Trigger` like any other and the input layer hands it the
-inputs its real owner is pressing, so an ungated `pull_trigger` fires somebody
-else's gun locally and every client draws its own tracer for a shot nobody
-asked it to.
-
-**`Player` is not "the body I am looking out of".** It used to be, because
-there was only ever one, and three systems asked it that question:
-`hide_own_body`, `draw_hitboxes` and `draw_skeletons`. A replicated body
-carries `Player`, so all three hid *every* body in the match the moment a
-second player existed — which reads as the other players never having arrived,
-since their tracers and their damage still turn up. They ask `LocalPlayer` now.
-Any new system that means "mine" wants `LocalPlayer`; any that means "a player"
-wants `Player`; any that means "one I step" wants `Simulated`.
-
-**`dress_new_players` is not gated on `AppMode::Play`.** A replicated body can
-arrive on a frame when this process has not finished entering the round, and
-`Added` is true for one frame whether or not a gated-off system was there to
-see it. A body that misses its rig never gets another chance and is invisible
-for the rest of the match. It also inserts with `insert_if_new`, so a `Stance`
-the server sent is not overwritten with a default.
-
-`LocalPlayer` is a different question and means "the body this machine drives".
-A server steps every body and drives none; a client steps one and drives the
-same one. Keep them apart.
-
-Some other things that fail silently here:
-
-- **`Player` requires `Transform` and `Visibility`.** A body from the server is
-  built by inserting replicated components, not by `spawn_player`, and a body
-  with children but no transform is a Bevy hierarchy warning per child per
-  frame and a mesh drawn at the origin.
-- **The camera hangs off `Added<LocalPlayer>`, not off the spawn.** On a client
-  the body turns up some time after the round starts, so a camera attached at
-  spawn time would be attached to a body that does not exist yet.
-- **`leave_play` only despawns bodies this process owns.** A client's bodies
-  belong to the server, which despawns them and replicates that; despawning
-  them locally as well deletes entities the receiver still expects to update.
-- **Both link entities need a `PingManager`.** Round-trip time is what the
-  timelines synchronise against and prediction is only as good as that
-  estimate; without one the pings arrive and are dropped with a warning.
-
-`--play` starts in a round rather than in the editor. It waits for the map to
-have reached the world first: the blueprint loads in `Startup` but its features
-do not become entities until `sync_entities` has run and the rooms are not
-baked until a frame later, so a transition made at startup enters a round whose
-collision world is empty and drops the body through a floor that is about to
-appear.
-
-**What is not verified yet:** nobody has driven a body over a real connection.
-The plumbing is confirmed end to end — mode, map, body, ownership, no warnings
-— but how prediction *feels*, and whether remote bodies move smoothly, needs a
-person at each end. `PhysicsBody` has no interpolation function registered, so
-an interpolated body currently gets whatever `interpolate_bodies` makes of the
-last two replicated values rather than a proper blend between server states.
+- `Loadout` is not replicated, so every remote body holds the default weapons.
+- `DamageDealt` and `Died` are messages, not replicated, so a client sees no
+  damage numbers and no kill feed — including for its own shots.
+- Another player's shot has no visual on your machine at all: the server
+  decides it and nothing carries the effect.
+- No respawn. A body that dies is gone for the round.
 
 ### The map every client is standing in
 

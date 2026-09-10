@@ -40,6 +40,7 @@ pub fn reset_for_play(
     mut commands: Commands,
     mut clock: ResMut<AnimationClock>,
     mut latch: ResMut<InputLatch>,
+    role: Option<Res<crate::common::net::NetRole>>,
     mut bodies: Query<(&mut Gait, &mut SkeletonAnimator)>,
     mut health: Query<(&mut Damageable, &mut DamageLog)>,
     numbers: Query<Entity, With<DamageNumber>>,
@@ -64,12 +65,18 @@ pub fn reset_for_play(
         *animator = SkeletonAnimator::default();
     }
 
-    for (mut body, mut log) in &mut health {
-        body.restore();
-        // Who hurt it last match is not who hurt it this match. A stale log
-        // would credit the first kill of a new round to whoever was shooting
-        // when the last one ended.
-        log.clear();
+    // Health is authoritative state and is replicated, so only the process
+    // that owns it puts it back. A client restoring it locally would show
+    // every body at full for the round-trip it takes to be told otherwise —
+    // and if the server never says otherwise, would keep showing it.
+    if role.is_none_or(|role| role.is_authority()) {
+        for (mut body, mut log) in &mut health {
+            body.restore();
+            // Who hurt it last match is not who hurt it this match. A stale
+            // log would credit the first kill of a new round to whoever was
+            // shooting when the last one ended.
+            log.clear();
+        }
     }
 
     // Feedback from the last match, hanging in the air over bodies that are

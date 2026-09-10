@@ -18,7 +18,8 @@ use lightyear::prelude::input::native::InputPlugin;
 use lightyear::prelude::*;
 
 use crate::common::class::Stance;
-use crate::common::damage::PlayerId;
+use crate::common::damage::{Damageable, PlayerId};
+use crate::common::skeleton::BodyRequests;
 use crate::game::player::{PhysicsBody, Player, PlayerInput};
 
 /// Registers everything the two ends have to agree about.
@@ -41,9 +42,30 @@ impl Plugin for ProtocolPlugin {
         app.component::<Player>().replicate().predict();
         app.component::<Stance>().replicate().predict();
 
+        // How a body is animated, in nine bools.
+        //
+        // **Poses are never sent.** A pose is twenty-odd quaternions per body
+        // per tick, and it is the output of a state machine that is
+        // deterministic and already present on every machine. What crosses is
+        // the input to that machine — what the body is being asked to do and
+        // what the world is doing to it — and each process runs the same
+        // `AnimationState` over it. `Gait` is not sent either: it is advanced
+        // from ground covered, and the ground covered is `PhysicsBody`, which
+        // is.
+        app.component::<BodyRequests>().replicate();
+
+        // Health, because a corpse is something every client has to see.
+        //
+        // Not predicted: a client guessing that its shot killed somebody and
+        // being wrong is a body that falls over and stands back up. Damage is
+        // the server's to decide and this is the client being told.
+        app.component::<Damageable>().replicate();
+
         // Sent once, on the insert that first carries it. An id is a fact
         // about who a body belongs to, not a value that changes per tick, and
         // re-sending it every update would be bandwidth spent restating it.
+        // It is also what an animation phase is derived from, so that two
+        // clients put the same body at the same point in its cycle.
         app.component::<PlayerId>().replicate_once();
     }
 }

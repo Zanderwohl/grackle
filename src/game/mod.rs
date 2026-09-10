@@ -763,6 +763,64 @@ mod tests {
         );
     }
 
+    /// A server spawns a body for everybody and drives none of them.
+    ///
+    /// This is the bug that produced a whole crop of unrelated-looking
+    /// symptoms: `spawn_player` marked every body `LocalPlayer`, so on a host
+    /// the second player to join made `gather_input` — a `Single` — match two
+    /// entities and quietly stop running, froze the host in place, hid every
+    /// body in the match, and gave each body its own camera. None of it
+    /// errored.
+    #[test]
+    fn only_one_body_is_ever_the_local_one() {
+        let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
+        enter(&mut app);
+        spawn_a_second_body(&mut app);
+
+        assert_eq!(
+            app.world_mut().query::<&Player>().iter(app.world()).count(),
+            2,
+            "the second body was never spawned"
+        );
+        assert_eq!(
+            app.world_mut().query::<&LocalPlayer>().iter(app.world()).count(),
+            1,
+            "more than one body is the local one; input silently stops working"
+        );
+    }
+
+    /// And the one that is local is still driven. A `Single` that matches
+    /// twice does not error, it skips — so this is the half that would go
+    /// unnoticed.
+    #[test]
+    fn a_second_body_does_not_stop_the_first_being_driven() {
+        let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
+        enter(&mut app);
+        tick(&mut app, 60);
+        spawn_a_second_body(&mut app);
+
+        let start = player_position(&mut app);
+        latch(&mut app).0.movement = Vec2::new(0.0, 1.0);
+        tick(&mut app, 30);
+
+        assert!(
+            (player_position(&mut app) - start).length() > 0.3,
+            "the local body stopped moving once a second body existed"
+        );
+    }
+
+    /// Another player's body, as a server holding one would have it.
+    fn spawn_a_second_body(app: &mut App) {
+        let spawn = Spawn { feet: Vec3::new(5.0, 0.0, 0.0), yaw: 0.0 };
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, app.world());
+            spawn_player(&mut commands, spawn, crate::common::damage::PlayerId(99));
+        }
+        queue.apply(app.world_mut());
+        app.update();
+    }
+
     /// The reason the input moved onto the body at all: two bodies stepping in
     /// the same tick from different inputs. A single global input would walk
     /// both of them wherever the last writer said.

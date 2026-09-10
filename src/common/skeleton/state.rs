@@ -170,7 +170,7 @@ const MIN_DWELL: f32 = 0.1;
 /// having an opinion clears its own field. That is why there is no reset
 /// system: a stale `wall_ahead` that nothing ever cleared would be a body
 /// pushing at thin air forever.
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct BodyRequests {
     /// Being asked to move forwards — a held W, an NPC's path, a replayed
     /// input. Asked for, not achieved: a body walking into a wall is still

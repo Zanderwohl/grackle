@@ -24,6 +24,7 @@ use bevy::transform::TransformSystems;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
+use crate::common::damage::PlayerId;
 use crate::common::skeleton::{
     draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
     direction_of, DisplaySpeed, ForcedAnimation, Gait, Pose, PoseInputs, Proportions, Skeleton,
@@ -34,7 +35,8 @@ use crate::game::body_mesh::BodyMeshPlugin;
 use crate::game::hitbox::HitboxPlugin;
 use crate::game::weapon::WeaponPlugin;
 use crate::game::player::{
-    step_player, Inputs, LocalPlayer, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
+    step_player, Inputs, LocalPlayer, PhysicsBody, Player, PlayerInput, Simulated, ViewMode,
+    PLAYER_HALF,
 };
 
 /// Where a skeleton's feet sit relative to the entity carrying it.
@@ -82,6 +84,9 @@ impl Plugin for SkeletonPlugin {
                 // simply invisible for the rest of the match.
                 dress_new_players,
                 equip_new_bodies,
+                // After the rig exists, so the phase lands on a body that has
+                // something to animate.
+                phase_bodies_by_id,
                 // After the writers, so a body animates on the situation it is
                 // in this frame rather than last frame's.
                 advance_animators,
@@ -239,18 +244,24 @@ pub fn skeleton_root(global: &GlobalTransform, offset: Option<&SkeletonRoot>) ->
     root
 }
 
-/// Describe what the local player's body is doing.
+/// Describe what a body we are simulating is doing.
 ///
-/// The one writer of [`BodyRequests`] that exists today. A remote player's
-/// requests will come off the wire and an NPC's from its planner; all three
-/// write the same component and none of them names an animation, which is the
-/// entire point — the state machine is written once, in
-/// [`crate::common::skeleton::state`].
+/// One of two writers of [`BodyRequests`]; the other is replication. This one
+/// covers the bodies this process steps — every body on a server, and its own
+/// predicted body on a client — and the wire covers the rest. Both write the
+/// same component, and neither names an animation: the state machine is
+/// written once, in [`crate::common::skeleton::state`], and every process runs
+/// it over whatever description it has.
+///
+/// **`With<Simulated>` is what makes that split work.** Run on a body driven
+/// from the wire and this would describe it from an `Inputs` nobody ever fills
+/// — a sprinting player would be described as standing still, one frame after
+/// the server said otherwise, every frame.
 ///
 /// Fields are assigned rather than accumulated: this system owns all of them,
 /// every frame, so nothing goes stale.
 fn describe_player_bodies(
-    mut players: Query<(&Player, &Stance, &Inputs, &mut BodyRequests)>,
+    mut players: Query<(&Player, &Stance, &Inputs, &mut BodyRequests), With<Simulated>>,
 ) {
     for (player, stance, input, mut requests) in &mut players {
         // Each body's own input, so a second local player or one being driven
@@ -285,13 +296,29 @@ fn dress_new_players(mut commands: Commands, players: Query<Entity, Added<Player
             SkeletonAnimator::default(),
             BodyRequests::default(),
             Stance::default(),
-            // Phase zero until bodies have identities everyone agrees on. A
-            // networked body takes its phase from its network id, which is
-            // what makes two clients put it in the same part of its cycle;
-            // an `Entity`'s index would not, being local to one `World`.
+            // Zero here and replaced by `phase_bodies_by_id` as soon as the
+            // body has a `PlayerId`. It is not always here yet: a replicated
+            // body's id arrives in its own message.
             AnimationPhase::default(),
             SkeletonRoot(Vec3::NEG_Y * PLAYER_HALF.y),
         ));
+    }
+}
+
+/// Put each body at its own point in the animation cycle, from its network id.
+///
+/// Bodies that all bounced on the same frame read as one machine rather than
+/// several people. The offset has to come from an identifier every machine
+/// agrees on — `PlayerId`, which is replicated — because two clients looking
+/// at the same body have to put it at the same point. An `Entity`'s index is
+/// local to one `World` and an RNG is local to one process; either would give
+/// every viewer a different answer.
+fn phase_bodies_by_id(
+    mut commands: Commands,
+    bodies: Query<(Entity, &PlayerId), (Added<PlayerId>, With<Skeleton>)>,
+) {
+    for (body, id) in &bodies {
+        commands.entity(body).insert(AnimationPhase::from_id(id.0));
     }
 }
 
@@ -510,6 +537,37 @@ mod tests {
         );
     }
 
+    /// A body driven from the wire is described by replication, not from an
+    /// input nobody fills.
+    ///
+    /// `Inputs` travels one way only — client to server — so a body somebody
+    /// else is driving has a default `Inputs` on this machine forever.
+    /// Described from that, a sprinting player would be flattened to standing
+    /// still one frame after the server said otherwise, every frame, and the
+    /// replicated `BodyRequests` would never survive long enough to animate
+    /// anything.
+    #[test]
+    fn a_body_we_do_not_simulate_is_not_described_from_its_empty_input() {
+        let mut app = App::new();
+        let theirs = app
+            .world_mut()
+            .spawn((
+                Player { on_ground: true, ..default() },
+                ActionState(PlayerInput::default()),
+                Stance::Standing,
+                // As replication delivered it: sprinting forwards.
+                BodyRequests { running_forward: true, ..default() },
+            ))
+            .id();
+
+        app.world_mut().run_system_once(describe_player_bodies).unwrap();
+
+        assert!(
+            app.world().get::<BodyRequests>(theirs).unwrap().running_forward,
+            "the server's description was overwritten with an empty local one"
+        );
+    }
+
     /// Walking into a wall is the two-writer case: input says forward, the
     /// step says blocked, and only the state machine puts them together.
     #[test]
@@ -519,6 +577,10 @@ mod tests {
             .world_mut()
             .spawn((
                 Player { on_ground: true, blocked: BVec3::new(false, false, true), ..default() },
+                // `Simulated`, because this describes bodies this process
+                // steps. One driven from the wire is described by replication
+                // instead.
+                Simulated,
                 ActionState(PlayerInput { movement: Vec2::new(0.0, 1.0), ..default() }),
                 Stance::Standing,
                 BodyRequests::default(),

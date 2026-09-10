@@ -356,6 +356,18 @@ pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
 /// The yaw goes into `Player` as well as `Transform` because `mouse_look` owns
 /// the rotation from the next frame on and reads the body's yaw to do it —
 /// setting only the transform would be undone on the first mouse movement.
+///
+/// **Does not mark the body as [`LocalPlayer`].** A server spawns a body for
+/// every player in the match and drives none of them; whose body it is, is a
+/// separate question answered by whoever knows — `enter_play` for a solo game
+/// or a host, `claim_our_own_body` for a client. Marking it here made every
+/// body on a server the local one, which reads as a pile of unrelated
+/// symptoms: `gather_input` is a `Single`, so the host stopped being able to
+/// move the moment somebody joined; `hide_own_body` hid every body in the
+/// match; and every body was given its own camera.
+///
+/// It *does* mark the body [`Simulated`], because whoever spawns a body steps
+/// it.
 pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) -> Entity {
     let position = body_centre_from_feet(spawn.feet);
     commands
@@ -368,7 +380,6 @@ pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) -> Enti
             // input, so a body spawned facing east would snap north on its
             // first step if the input still said zero.
             ActionState(PlayerInput { yaw: spawn.yaw, ..default() }),
-            LocalPlayer,
             id,
             Stance::default(),
             PhysicsBody::at(position),

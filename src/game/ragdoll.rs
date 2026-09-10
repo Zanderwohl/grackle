@@ -711,6 +711,14 @@ impl Plugin for RagdollPlugin {
 /// Make a corpse of anything that has run out of health and had a body to
 /// lose.
 ///
+/// **Runs on every process, not just the authority.** A corpse is a local
+/// reaction to a fact — this body's health reached zero — and that fact is
+/// replicated, so every client raises its own and simulates it with the same
+/// solver over the same rig. Sending the corpse instead would be sending
+/// twenty bones of physics per body per tick to say something each end can
+/// work out for itself. What differs between machines is only which way an arm
+/// happened to flop, and nobody can tell.
+///
 /// The query is the whole of the rule the user of this module cares about: a
 /// [`Skeleton`] and a [`Damageable`] at zero. A crate has health and no
 /// skeleton, so it simply vanishes as it always did; a spawn point's preview
@@ -767,7 +775,12 @@ pub fn raise_ragdolls(
             corpse.insert(*tint);
         }
 
-        commands.entity(entity).insert(Ragdolled);
+        // Hidden as well as marked. On a server the body is despawned by
+        // `reap_the_dead` on this same tick and this changes nothing; on a
+        // client `reap_the_dead` does not run at all — the despawn arrives
+        // from the server — so without this the body stands upright inside its
+        // own corpse for as long as the trip takes.
+        commands.entity(entity).insert((Ragdolled, Visibility::Hidden));
     }
 }
 
@@ -1427,6 +1440,68 @@ mod tests {
             corpses.single(&world).unwrap().bone_points(0).0
         };
         assert!(moved.x > raised.x + 0.001, "the shot did not move the corpse: {raised} -> {moved}");
+    }
+
+    /// A client raises its own corpse and does not reap the body.
+    ///
+    /// The division this pins: **health is replicated, corpses are not.** A
+    /// corpse is a local reaction to a fact every process has been told, and
+    /// simulating it locally costs nothing over the wire — what differs
+    /// between machines is which way an arm flopped, and nobody can tell. What
+    /// a client must *not* do is reap: the entity belongs to the server, which
+    /// despawns it and replicates that.
+    ///
+    /// Without the body being hidden it would stand upright inside its own
+    /// corpse for the round-trip that despawn takes.
+    #[test]
+    fn a_client_makes_the_corpse_but_leaves_the_reaping_to_the_server() {
+        use crate::common::net::NetRole;
+        use crate::game::damage::DamagePlugin;
+        use crate::game::GamePlugin;
+
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.add_plugins(bevy::input::InputPlugin);
+        app.add_plugins(bevy::time::TimePlugin);
+        app.add_plugins(GamePlugin);
+        app.add_plugins(DamagePlugin);
+        // Somebody else is deciding what happens.
+        app.insert_resource(NetRole::Client { host: "elsewhere".into(), port: 27100 });
+        app.world_mut()
+            .resource_mut::<NextState<AppMode>>()
+            .set(AppMode::Play);
+        app.update();
+
+        let placed = Transform::from_translation(Vec3::new(4.0, 0.0, 1.0));
+        let body = app
+            .world_mut()
+            .spawn((
+                rig(),
+                Pose::rest(),
+                placed,
+                GlobalTransform::from(placed),
+                Damageable::with_health(100),
+                DamageLog::default(),
+                PlayerId(11),
+            ))
+            .id();
+        app.update();
+
+        // As replication would deliver it: health at zero, arriving as a fact.
+        app.world_mut().get_mut::<Damageable>(body).unwrap().apply(100);
+        app.world_mut().run_schedule(FixedUpdate);
+
+        assert!(
+            app.world().get_entity(body).is_ok(),
+            "the client reaped a body it does not own"
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(body),
+            Some(&Visibility::Hidden),
+            "the body was left standing inside its own corpse"
+        );
+        let mut corpses = app.world_mut().query::<&Ragdoll>();
+        assert!(corpses.single(app.world()).is_ok(), "the client made no corpse");
     }
 
     /// The ordering, assembled.

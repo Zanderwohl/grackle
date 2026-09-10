@@ -136,13 +136,17 @@ fn apply_net_requests(mut requests: MessageReader<NetRequest>, mut role: ResMut<
 }
 
 /// Run condition: this process decides what actually happened.
-pub fn has_authority(role: Res<NetRole>) -> bool {
-    role.is_authority()
+///
+/// `Option`, so the game layer does not require the network layer: a build or
+/// a test with no `NetPlugin` in it is a closed game, and a closed game is its
+/// own authority.
+pub fn has_authority(role: Option<Res<NetRole>>) -> bool {
+    role.is_none_or(|role| role.is_authority())
 }
 
-/// Run condition: somebody else does, and we are predicting.
-pub fn is_remote_client(role: Res<NetRole>) -> bool {
-    !role.is_authority()
+/// Run condition: somebody else does, and we are being told.
+pub fn is_remote_client(role: Option<Res<NetRole>>) -> bool {
+    !has_authority(role)
 }
 
 /// Split `host`, `host:port` or `[::1]:port` into its two halves.

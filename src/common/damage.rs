@@ -103,7 +103,7 @@ impl fmt::Display for DamageSource {
 /// inserting one component. It in turn requires a [`DamageLog`]: anything that
 /// can be killed has to be able to say who did it, and a health pool with no
 /// log would be one that died anonymously.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Reflect, Serialize, Deserialize)]
 #[require(DamageLog)]
 pub struct Damageable {
     health: u32,

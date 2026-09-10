@@ -28,6 +28,7 @@ use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::AppMode;
+use crate::common::net::has_authority;
 use crate::common::damage::{Damage, DamageDealt, Damageable, Died};
 use crate::game::death::{announce_deaths, reap_the_dead, record_damage};
 use crate::game::player::PlayerCamera;
@@ -87,11 +88,22 @@ impl Plugin for DamagePlugin {
             // On the tick, in this order, in the same tick as the shot. A
             // body reaped before its log is written is a kill credited to
             // nobody — see [`crate::game::death`].
+            // **Only where this process is believed.** Damage is decided
+            // once, by the server, and every client is told the result:
+            // `Damageable` is replicated. A client that resolved damage for
+            // itself would take a body to zero on a shot the server never
+            // agreed landed, drop a corpse, and then be told the body is
+            // alive — and the two answers would differ on every client.
+            //
+            // Nothing here is predicted, deliberately. Guessing a kill and
+            // being wrong is a body that falls over and stands back up, which
+            // is worse to watch than a kill that arrives a round-trip late.
             .configure_sets(
                 FixedUpdate,
                 (DamageSystems::Deal, DamageSystems::Apply, DamageSystems::Resolve)
                     .chain()
-                    .run_if(in_state(AppMode::Play)),
+                    .run_if(in_state(AppMode::Play))
+                    .run_if(has_authority),
             )
             .add_systems(FixedUpdate, apply_damage.in_set(DamageSystems::Apply))
             .add_systems(
