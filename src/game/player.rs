@@ -393,6 +393,11 @@ pub fn give_the_local_body_a_camera(
         commands.entity(body).with_children(|body| {
             body.spawn((
                 PlayerCamera,
+                // The window has five cameras in it — four editor viewports
+                // and this — and Bevy UI picks one by ambiguity rules rather
+                // than by asking. Saying which outright is what stops the
+                // pause menu drawing into a deactivated viewport camera.
+                bevy::ui::IsDefaultUiCamera,
                 Camera3d::default(),
                 Camera {
                     order: PLAY_CAMERA_ORDER,
@@ -472,15 +477,25 @@ pub fn gather_input(
 /// physics has to agree with a server about.
 pub fn mouse_look(
     mut motion: MessageReader<MouseMotion>,
+    // Read rather than gated on, because this system's `MessageReader` has its
+    // own cursor: a frame it does not run is a frame of mouse motion still
+    // waiting to be read. Gated, an unpause would apply every scrap of motion
+    // made while the menu was up in one frame and spin the view.
+    paused: Option<Res<crate::game::pause_menu::PauseMenu>>,
+    mut latch: ResMut<InputLatch>,
     // `With<Player>` as well as `With<LocalPlayer>`, redundant as it looks:
     // it is what proves this query disjoint from the camera's `Without<Player>`
     // one, and without it both want `&mut Transform` and Bevy refuses the
     // system at runtime rather than at compile time.
-    mut latch: ResMut<InputLatch>,
     player: Option<Single<&mut Transform, (With<LocalPlayer>, With<Player>)>>,
     mut cameras: Query<&mut Transform, (With<PlayerCamera>, Without<Player>)>,
 ) {
+    // Drained first, whatever happens next: what is not read now is read
+    // later, and later is the wrong frame.
     let delta: Vec2 = motion.read().map(|event| event.delta).sum();
+    if paused.is_some_and(|menu| menu.open) {
+        return;
+    }
     if delta == Vec2::ZERO {
         return;
     }

@@ -10,6 +10,7 @@ use crate::editor::multicam::Multicam;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::ragdoll::RagdollPlugin;
+use crate::game::pause_menu::PauseMenuPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::player::{
     fallback_spawn, gather_input, interpolate_bodies, mouse_look, place_camera, spawn_player,
@@ -31,6 +32,7 @@ pub mod reset;
 pub mod weapon;
 pub mod player;
 pub mod net_bodies;
+pub mod pause_menu;
 pub mod ragdoll;
 pub mod skeleton;
 
@@ -49,6 +51,9 @@ impl Plugin for GamePlugin {
             // wants the same fixed steps and the same `CollisionWorld` the
             // player's own step does, and no renderer at all.
             .add_plugins(RagdollPlugin)
+            // Escape, and the mouse comes back. Part of the game rather than
+            // of the editor, so plain Bevy UI and no egui.
+            .add_plugins(PauseMenuPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
 
@@ -76,7 +81,12 @@ impl Plugin for GamePlugin {
             // 64 Hz aim is latency you can feel, the second so a press made on
             // this frame reaches the steps taken on this frame.
             .add_systems(RunFixedMainLoop, (
-                gather_input,
+                // Not while the menu is up: a released cursor that still
+                // walked the body would be worse than a captured one.
+                gather_input.run_if(pause_menu::not_paused),
+                // `mouse_look` is *not* gated — it has to drain the mouse
+                // motion made while paused rather than save it up for the
+                // frame the menu closes. It answers the question itself.
                 mouse_look,
                 // After `mouse_look`, which owns the rotation this reads.
                 place_camera,
@@ -230,7 +240,7 @@ fn leave_play(
 /// The window is created with `primary_cursor_options: None`, so it has no
 /// `CursorOptions` component to reach for — insert one rather than expecting
 /// to find it.
-fn set_cursor_captured(
+pub(crate) fn set_cursor_captured(
     commands: &mut Commands,
     window: &Query<Entity, With<PrimaryWindow>>,
     captured: bool,

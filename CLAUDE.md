@@ -123,6 +123,33 @@ for the same state and `OnEnter(Play)` tears the match down and rebuilds it.
 `toggle_mode` answers a client's F5 with a line in the log rather than
 swallowing it — a key that silently does nothing reads as a bug.
 
+**`Escape` opens the pause menu**
+([`src/game/pause_menu.rs`](src/game/pause_menu.rs)), and releasing the mouse
+is the point of it — a grabbed cursor is not something a player can get out of
+by clicking elsewhere, so a window with no way to hand the pointer back is a
+window you have to kill the process to leave. Plain Bevy UI, not `egui`: the
+panels are egui because they are editor tools, and this is part of the game, so
+it has to exist in a build with no editor and on a browser tab where the egui
+layer is one more thing to have gone wrong.
+
+Three things there are easy to get wrong and none of them errors:
+
+- **`gather_input` is gated on `not_paused`, but `mouse_look` is not.** A
+  `MessageReader` has its own cursor, so a frame the system does not run is a
+  frame of mouse motion still waiting to be read — gate it and closing the menu
+  applies every scrap of motion made while it was up, in one frame. It drains
+  first and answers the pause question itself.
+- **Opening the menu clears `InputLatch`.** A key held as it goes up would stay
+  held, and `gather_input` is not running to correct it, so the body walks into
+  a wall for as long as the menu is open.
+- **The cursor is only touched while in Play.** Change detection counts a
+  resource's insertion as a change, so a `resource_changed` system that sets
+  the cursor unconditionally grabs it inside the editor on the first frame of
+  the process.
+
+The play camera carries `IsDefaultUiCamera`: the window has five cameras in it
+and Bevy UI otherwise picks one by ambiguity rules rather than by being told.
+
 Three more keys while playing: **`F`** swaps between first and third person
 (`ViewMode` in [`src/game/player.rs`](src/game/player.rs) — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),

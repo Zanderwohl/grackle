@@ -284,3 +284,6 @@ hosting = "Listening, { clients } client(s)"
 connecting = "Connecting..."
 connected = "Connected"
 failed = "Failed: { reason }"
+
+[pause]
+title = "Esc Menu"
