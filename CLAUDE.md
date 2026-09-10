@@ -447,12 +447,55 @@ Two rules, and both are easy to undo:
   role equal to the one already set, because the transport will hang off
   `Changed<NetRole>` and re-picking "Host" must not drop everybody connected.
 
-**There is no transport.** Nothing is bound, nothing is dialled, and the dialog
-says so. This is the seam, settled early and on purpose: Lightyear is the
-intended library (WebTransport reaches a browser, which `renet` upstream does
-not, and it ships prediction and rollback rather than leaving them to us), and
-what it plugs into is `PlayerInput` latched in `gather_input`, the 64 Hz
-`FixedUpdate` step, and this role.
+### The transport behind it
+
+[`src/common/net_transport.rs`](src/common/net_transport.rs) is what makes a
+role true, using **Lightyear** — chosen because WebTransport reaches a browser
+(`renet` upstream has no transport that does) and because it ships prediction
+and rollback rather than leaving them to us.
+
+**Both `ClientPlugins` and `ServerPlugins` are always added, in every process,
+including a closed solo one.** Bevy cannot add a plugin after `run()`, so
+"start hosting" can never mean "add the server plugins now". What comes and
+goes is a single entity, marked `NetLink`, and `Solo` holds none: nothing bound,
+nothing polled, no loopback between two halves of one process. A role change
+always despawns before it spawns, even from one `Listen` port to another —
+rebinding in place is a half-applied state that only surfaces later.
+
+Two things about assembling that entity are not optional and fail silently:
+
+- **Every arriving connection needs a `ReplicationSender` on its `LinkOf`
+  child**, which `dress_new_client` does. The server endpoint is one socket;
+  the child entity per client is what replication is addressed through, and
+  nothing inserts this for you. Without it the netcode handshake completes,
+  nothing flows, and the client is dropped on the server's three-second
+  timeout — after which the client panics deep inside
+  `lightyear_interpolation` on a negative tick delta. It reads as a Lightyear
+  bug and is a missing component.
+- **The client needs `ReplicationReceiver`**, and `PredictionManager` has to
+  exist as a resource. Prediction is gated on that resource, not on a plugin,
+  so it is inserted once and left: a process hosting now may be a client after
+  the next menu click.
+
+`TICK_HZ` in `constants.rs` sets both `Time<Fixed>` and Lightyear's
+`tick_duration`. They are the same number from one place on purpose — a tick is
+the unit prediction reconciles in, and two clocks that agree by coincidence
+will stop agreeing.
+
+`NetStatus` is what the link is *doing*, as against what `NetRole` asked for.
+Keep them apart: a role changes the instant a menu item is picked, whereas a
+connection is attempted, takes time, and may fail. A UI reading the role would
+cheerfully say "Connected" about a host that never answered.
+
+`DEV_PRIVATE_KEY` is compiled into the binary, so anyone with the game can mint
+a token for any client id. That is the right trade for a LAN listen server with
+no accounts behind it, and it is exactly what the token backend in
+`documentation/sketch.md` replaces.
+
+**Nothing is replicated yet.** The link is real and stable; no game state
+crosses it. `PhysicsBody`, the player body and `PlayerInput` are the next
+things to go over, and what they plug into is the input latch in
+`gather_input` and the 64 Hz `FixedUpdate` step.
 
 ## The feature model
 

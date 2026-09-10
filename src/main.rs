@@ -13,6 +13,7 @@ use bevy_vector_shapes::prelude::*;
 use grackle::{get, startup};
 use grackle::common::lang::{change_lang_or_fallback, default_packs};
 use grackle::common::net::NetPlugin;
+use grackle::common::net_transport::NetTransportPlugin;
 use grackle::common::perf::PerfPlugin;
 use grackle::editor::editable::EditorStepsPlugin;
 use grackle::editor::input::EditorInputPlugin;
@@ -63,6 +64,7 @@ fn main() {
         .add_plugins((
             EditorInputPlugin,
             NetPlugin,
+            NetTransportPlugin,
             NetMenuPlugin,
             MulticamPlugin {
                 test_scene: false,

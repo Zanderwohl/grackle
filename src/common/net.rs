@@ -104,18 +104,14 @@ impl Plugin for NetPlugin {
 /// mistyped `--serve` would start a listen server that says nothing at all.
 fn announce_role(role: Res<NetRole>) {
     info!("{}", role.describe());
-    if role.is_online() {
-        warn!("No transport yet: the role is recorded but no socket is opened.");
-    }
 }
 
 /// The only writer of [`NetRole`].
 ///
-/// There is no transport behind this yet, so hosting and joining currently
-/// amount to recording the intent and saying so. That is on purpose: the role
-/// is the seam, and having it settled — with the CLI and the UI both already
-/// speaking through it — is what lets the transport be added without moving
-/// anything else. `Changed<NetRole>` is where that plugin will hang.
+/// Deliberately knows nothing about sockets: `NetTransportPlugin` watches
+/// `Changed<NetRole>` and is the thing that binds, dials and tears down. That
+/// split is what lets the role be decided by a menu click, a command-line flag
+/// or a test without any of them having to know what a link entity is.
 fn apply_net_requests(mut requests: MessageReader<NetRequest>, mut role: ResMut<NetRole>) {
     for request in requests.read() {
         let wanted = match request {
@@ -135,9 +131,6 @@ fn apply_net_requests(mut requests: MessageReader<NetRequest>, mut role: ResMut<
         }
 
         info!("Network role: {:?} -> {:?}", *role, wanted);
-        if wanted.is_online() {
-            warn!("No transport yet: the role is recorded but no socket is opened.");
-        }
         *role = wanted;
     }
 }

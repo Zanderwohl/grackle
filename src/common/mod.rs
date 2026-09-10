@@ -9,6 +9,7 @@ pub mod mesh;
 pub mod skeleton;
 pub mod lang;
 pub mod net;
+pub mod net_transport;
 // `pub` rather than `pub(crate)`: the `editor` binary wires `PerfPlugin` up
 // from outside the library now that it no longer compiles its own copy of the
 // tree.

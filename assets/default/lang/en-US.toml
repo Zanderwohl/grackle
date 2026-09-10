@@ -269,7 +269,7 @@ endpoint_label = "Address (host or host:port)"
 host_confirm = "Host"
 join_confirm = "Connect"
 cancel = "Cancel"
-unimplemented = "No transport yet: this records the role only."
+no_replication = "Connects, but no game state is shared across it yet."
 
 [net.error]
 empty = "Enter a host to connect to."
@@ -277,3 +277,10 @@ no_host = "That is a port with no host in front of it."
 malformed = "That address is not host:port."
 unclosed_bracket = "An IPv6 address in brackets needs a closing bracket."
 port = "{ port } is not a port number."
+
+[net.status]
+offline = "Not connected"
+hosting = "Listening, { clients } client(s)"
+connecting = "Connecting..."
+connected = "Connected"
+failed = "Failed: { reason }"

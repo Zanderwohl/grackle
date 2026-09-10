@@ -4,6 +4,7 @@ use bevy_egui::egui::UiKind;
 
 use crate::common::app_mode::AppMode;
 use crate::common::net::{parse_endpoint, NetRequest, NetRole};
+use crate::common::net_transport::NetStatus;
 use crate::constants::DEFAULT_PORT;
 use crate::get;
 
@@ -108,13 +109,20 @@ impl Plugin for NetMenuPlugin {
 pub fn network_menu(
     ui: &mut egui::Ui,
     role: &NetRole,
+    status: &NetStatus,
     dialog: &mut ConnectDialog,
     requests: &mut MessageWriter<NetRequest>,
 ) {
     ui.menu_button(get!("net.menu.title"), |ui| {
         // What we currently are, before what we could become: the answer to
         // "am I hosting?" should not require opening a dialog to find out.
+        //
+        // Both lines, because they answer different questions. The role is
+        // what was asked for and is true the instant it is picked; the status
+        // is what the socket is actually doing, and a host that never answered
+        // shows as a role of `Client` and a status of `Connecting`.
         ui.label(role.describe());
+        ui.label(status.describe());
         ui.separator();
 
         if ui.button(get!("net.menu.host")).clicked() {
@@ -208,11 +216,11 @@ fn connect_dialog(
                 }
             });
 
-            // No transport behind any of this yet, and the box should say so
-            // rather than leaving somebody watching for a connection that was
-            // never going to be attempted.
+            // The link is real, but nothing is replicated across it yet, and
+            // the box should say so rather than leaving somebody wondering why
+            // a connected server has no other players in it.
             ui.separator();
-            ui.label(get!("net.dialog.unimplemented"));
+            ui.label(get!("net.dialog.no_replication"));
         });
 
     if cancelled || !open {

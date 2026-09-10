@@ -11,6 +11,7 @@ use strum::IntoEnumIterator;
 use strum_macros::Display;
 use crate::common::mode::GameMode;
 use crate::common::net::{NetRequest, NetRole};
+use crate::common::net_transport::NetStatus;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::map_metadata::MapMetadata;
@@ -226,6 +227,7 @@ impl EditorPanels {
         mut current_file: ResMut<CurrentFilePath>,
         mut map_metadata: ResMut<MapMetadata>,
         net_role: Res<NetRole>,
+        net_status: Res<NetStatus>,
         mut connect_dialog: ResMut<ConnectDialog>,
     ) {
         let ctx = contexts.ctx_mut();
@@ -297,6 +299,7 @@ impl EditorPanels {
                     network_menu(
                         ui,
                         &net_role,
+                        &net_status,
                         &mut connect_dialog,
                         &mut messages.net,
                     );
