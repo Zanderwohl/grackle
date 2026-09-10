@@ -29,7 +29,7 @@ use crate::common::flame::Burning;
 use crate::common::skeleton::mesh::body_meshes;
 use crate::common::skeleton::rig::Proportions;
 use crate::common::skeleton::{Pose, Skeleton};
-use crate::game::player::{Player, ViewMode};
+use crate::game::player::{LocalPlayer, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
 
 /// A body that has had its parts built.
@@ -303,9 +303,16 @@ fn pose_body_meshes(
 ///
 /// Set on the parts rather than on the player, which is also what the camera
 /// hangs off.
+/// Hide the body the camera is inside, and nobody else's.
+///
+/// `LocalPlayer`, not `Player`: a body replicated from the server carries
+/// `Player` like any other, so asking that question hides every player in the
+/// match the moment there is more than one. That reads as the other players
+/// not having arrived at all — their tracers and their damage still turn up,
+/// which is what makes it confusing rather than obviously broken.
 fn hide_own_body(
     view: Res<ViewMode>,
-    players: Query<&BodyMesh, With<Player>>,
+    players: Query<&BodyMesh, With<LocalPlayer>>,
     mut parts: Query<&mut Visibility, With<BoneMesh>>,
 ) {
     let wanted = if view.shows_own_body() {
@@ -331,6 +338,54 @@ mod tests {
     use super::*;
     use crate::common::class::Class;
     use crate::common::skeleton::rig::{bone, humanoid};
+
+    use bevy::ecs::system::RunSystemOnce;
+
+    use crate::game::player::Player;
+
+    /// In first person the camera is inside its own body, and that body alone
+    /// is hidden.
+    ///
+    /// The bug this pins is the one a second player exposes: asking
+    /// `With<Player>` hid every body in the match, because a replicated body
+    /// carries `Player` like any other. It reads as the other players never
+    /// having arrived, since their tracers and their damage still turn up.
+    #[test]
+    fn first_person_hides_only_the_body_the_camera_is_in() {
+        let mut world = World::new();
+        world.insert_resource(ViewMode::FirstPerson);
+
+        let mut body_with_parts = |world: &mut World, local: bool| {
+            let parts: Vec<Entity> = (0..3)
+                .map(|index| world.spawn((BoneMesh(index), Visibility::Inherited)).id())
+                .collect();
+            let mut body = world.spawn((Player::default(), BodyMesh { parts: parts.clone() }));
+            if local {
+                body.insert(LocalPlayer);
+            }
+            parts
+        };
+
+        let mine = body_with_parts(&mut world, true);
+        let theirs = body_with_parts(&mut world, false);
+
+        world.run_system_once(hide_own_body).unwrap();
+
+        for part in &mine {
+            assert_eq!(
+                *world.get::<Visibility>(*part).unwrap(),
+                Visibility::Hidden,
+                "our own body was left across the lens"
+            );
+        }
+        for part in &theirs {
+            assert_eq!(
+                *world.get::<Visibility>(*part).unwrap(),
+                Visibility::Inherited,
+                "somebody else's body was hidden with ours"
+            );
+        }
+    }
 
     /// A body on fire is pulled towards the fire colour but not replaced by
     /// it: whose body it is has to survive being alight, because one day the

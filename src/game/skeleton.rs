@@ -34,7 +34,7 @@ use crate::game::body_mesh::BodyMeshPlugin;
 use crate::game::hitbox::HitboxPlugin;
 use crate::game::weapon::WeaponPlugin;
 use crate::game::player::{
-    step_player, Inputs, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
+    step_player, Inputs, LocalPlayer, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
 };
 
 /// Where a skeleton's feet sit relative to the entity carrying it.
@@ -74,7 +74,13 @@ impl Plugin for SkeletonPlugin {
             .add_systems(Update, toggle_bones)
             .add_systems(Update, (
                 describe_player_bodies.run_if(in_state(AppMode::Play)),
-                dress_new_players.run_if(in_state(AppMode::Play)),
+                // Not gated on `AppMode::Play`: a body replicated from the
+                // server can arrive on a frame when this process has not
+                // finished entering the round, and `Added` is true for one
+                // frame whether or not a gated-off system was there to see it.
+                // A body that misses its rig never gets another chance and is
+                // simply invisible for the rest of the match.
+                dress_new_players,
                 equip_new_bodies,
                 // After the writers, so a body animates on the situation it is
                 // in this frame rather than last frame's.
@@ -270,7 +276,10 @@ fn describe_player_bodies(
 /// commands are applied. This also covers any other way a body comes to be.
 fn dress_new_players(mut commands: Commands, players: Query<Entity, Added<Player>>) {
     for player in &players {
-        commands.entity(player).insert((
+        // `insert_if_new`, not `insert`: a replicated body may already carry
+        // a `Stance` the server sent, and overwriting it with a default here
+        // would stand a crouching body up for a frame.
+        commands.entity(player).insert_if_new((
             humanoid(Proportions::DEFAULT),
             Pose::rest(),
             SkeletonAnimator::default(),
@@ -345,15 +354,17 @@ pub fn draw_skeletons(
     show: Res<ShowBones>,
     mut gizmos: Gizmos,
     view: Res<ViewMode>,
-    bodies: Query<(&Skeleton, &Pose, &GlobalTransform, Option<&SkeletonRoot>, Option<&Player>)>,
+    bodies: Query<(&Skeleton, &Pose, &GlobalTransform, Option<&SkeletonRoot>, Option<&LocalPlayer>)>,
 ) {
     if !show.0 {
         return;
     }
 
     for (skeleton, pose, global, offset, own_body) in &bodies {
-        // `Player` is the body this machine is looking out of. A remote body
-        // will not carry it, so this hides one rig rather than everybody's.
+        // `LocalPlayer` is the body this machine is looking out of. `Player`
+        // used to serve here and stopped being right the moment bodies could
+        // be replicated: a remote body carries `Player` too, so asking that
+        // question hid every rig in the match.
         if own_body.is_some() && !view.shows_own_body() {
             continue;
         }

@@ -20,7 +20,7 @@ use crate::common::hitbox::{hitboxes, Hitboxes};
 use crate::common::skeleton::{
     animator_pose, AnimationClock, AnimationPhase, Gait, PoseInputs, Skeleton, SkeletonAnimator,
 };
-use crate::game::player::{step_player, PhysicsBody, Player, ViewMode};
+use crate::game::player::{step_player, LocalPlayer, PhysicsBody, ViewMode};
 use crate::game::skeleton::{
     advance_animation_clock, advance_gaits, skeleton_root, SkeletonRoot,
 };
@@ -133,7 +133,7 @@ fn draw_hitboxes(
     show: Res<ShowHitboxes>,
     view: Res<ViewMode>,
     mut gizmos: Gizmos,
-    bodies: Query<(&Hitboxes, Option<&Player>)>,
+    bodies: Query<(&Hitboxes, Option<&LocalPlayer>)>,
 ) {
     if !show.0 {
         return;
@@ -147,7 +147,9 @@ fn draw_hitboxes(
     for (boxes, own_body) in &bodies {
         // Hidden along with the body it belongs to: in first person the camera
         // stands in the middle of its own body box, and a wireframe seen from
-        // the inside is just lines across the view.
+        // the inside is just lines across the view. `LocalPlayer` rather than
+        // `Player`, because a replicated body carries `Player` too and asking
+        // that question hides everybody's boxes at once.
         if own_body.is_some() && !view.shows_own_body() {
             continue;
         }

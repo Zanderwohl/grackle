@@ -33,8 +33,7 @@ use crate::game::damage::{DamagePlugin, DamageSystems};
 use crate::game::explosion::ExplosionPlugin;
 use crate::game::flame::FlamePlugin;
 use crate::game::hitscan::HitscanPlugin;
-use crate::game::player::Player;
-use crate::game::player::Inputs;
+use crate::game::player::{Inputs, Player, Simulated};
 use crate::game::projectile::ProjectilePlugin;
 
 /// One thing you can shoot with.
@@ -193,13 +192,20 @@ impl Plugin for WeaponPlugin {
 /// Put a shot in front of every weapon, when the weapon in hand says there is
 /// one.
 ///
+/// **Only bodies this process simulates.** A body replicated from the server
+/// carries a `Loadout` and a `Trigger` like any other, and the input layer
+/// hands it the inputs its real owner is pressing — so an ungated trigger
+/// fires somebody else's gun locally, and every client draws its own copy of a
+/// tracer nobody asked it to. What another player's shot did is the server's
+/// answer to give.
+///
 /// Both halves of the trigger are read here: the latched *press*, which a
 /// semi-automatic weapon answers, and the *held* state, which an automatic one
 /// does on its own interval. Doing it in one place is what stops the two
 /// disagreeing about whether a press that was also a hold is one shot or two.
 pub fn pull_trigger(
     time: Res<Time<Fixed>>,
-    mut shooters: Query<(Entity, &Loadout, &mut Trigger, &Inputs), With<Player>>,
+    mut shooters: Query<(Entity, &Loadout, &mut Trigger, &Inputs), (With<Player>, With<Simulated>)>,
     mut pulled: MessageWriter<TriggerPulled>,
 ) {
     let dt = time.delta_secs();
@@ -240,7 +246,7 @@ pub fn pull_trigger(
 }
 
 /// Act on a switch made since the last step.
-pub fn select_weapons(mut carriers: Query<(&mut Loadout, &Inputs), With<Player>>) {
+pub fn select_weapons(mut carriers: Query<(&mut Loadout, &Inputs), (With<Player>, With<Simulated>)>) {
     for (mut loadout, input) in &mut carriers {
         let Some(slot) = input.select else { continue };
         // Idempotent, which is what lets it be read rather than taken:
@@ -285,7 +291,7 @@ mod tests {
     #[test]
     fn a_press_is_announced_once() {
         let mut world = a_world();
-        let shooter = world.spawn((Player::default(), Loadout::default(), Trigger::default())).id();
+        let shooter = world.spawn((Player::default(), Simulated, Loadout::default(), Trigger::default())).id();
         input(&mut world, shooter).attack = true;
         input(&mut world, shooter).attack_held = true;
 
@@ -310,6 +316,7 @@ mod tests {
         let shooter = world
             .spawn((
                 Player::default(),
+                Simulated,
                 Loadout::new(vec![Weapon::Flame(flame)]),
                 Trigger::default(),
             ))
@@ -336,6 +343,7 @@ mod tests {
         let shooter = world
             .spawn((
                 Player::default(),
+                Simulated,
                 Loadout::new(vec![Weapon::Flame(FlameSpec::FLAMETHROWER)]),
                 Trigger::default(),
             ))
@@ -357,6 +365,7 @@ mod tests {
         let shooter = world
             .spawn((
                 Player::default(),
+                Simulated,
                 Loadout::new(vec![Weapon::Flame(FlameSpec::FLAMETHROWER)]),
                 Trigger::default(),
             ))
@@ -387,7 +396,7 @@ mod tests {
     #[test]
     fn acting_on_a_switch_twice_is_the_same_as_once() {
         let mut world = a_world();
-        let player = world.spawn((Player::default(), Loadout::default())).id();
+        let player = world.spawn((Player::default(), Simulated, Loadout::default())).id();
         input(&mut world, player).select = Some(2);
 
         world.run_system_once(select_weapons).unwrap();
@@ -404,14 +413,35 @@ mod tests {
         );
     }
 
+    /// A body this process does not simulate must not fire, however loudly
+    /// its input says so.
+    ///
+    /// This is the shape of a real bug: a body replicated from the server
+    /// carries a `Loadout` and a `Trigger` like any other, and the input layer
+    /// hands it the inputs its owner is pressing. Ungated, every client draws
+    /// its own tracer for everybody else's shots.
+    #[test]
+    fn a_body_we_do_not_simulate_does_not_fire() {
+        let mut world = a_world();
+        let theirs = world
+            .spawn((Player::default(), Loadout::default(), Trigger::default()))
+            .id();
+        input(&mut world, theirs).attack = true;
+        input(&mut world, theirs).attack_held = true;
+
+        world.run_system_once(pull_trigger).unwrap();
+
+        assert!(pulls(&mut world).is_empty(), "somebody else's gun went off here");
+    }
+
     /// The reason the input moved onto the body: two bodies in one world are
     /// asked for different things in the same tick. With a single global
     /// input, whoever wrote it last fired everybody's weapon.
     #[test]
     fn one_body_firing_does_not_fire_the_others() {
         let mut world = a_world();
-        let shooting = world.spawn((Player::default(), Loadout::default(), Trigger::default())).id();
-        let idle = world.spawn((Player::default(), Loadout::default(), Trigger::default())).id();
+        let shooting = world.spawn((Player::default(), Simulated, Loadout::default(), Trigger::default())).id();
+        let idle = world.spawn((Player::default(), Simulated, Loadout::default(), Trigger::default())).id();
         input(&mut world, shooting).attack = true;
 
         world.run_system_once(pull_trigger).unwrap();

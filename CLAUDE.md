@@ -592,8 +592,20 @@ interchangeable:
 | Body | What it is | Who steps it |
 | --- | --- | --- |
 | Predicted | our own, run ahead of the server | us, and replayed on rollback |
-| Interpolated | somebody else's, drawn slightly in the past | nobody — Lightyear moves it |
-| Confirmed | the server's last word, kept for comparison | nobody |
+| Replicated | somebody else's, drawn where the server last said | nobody |
+
+Prediction is **in place**: `PredictionTarget` is a replication target for the
+`Predicted` marker, so the client gets one entity per body with `Predicted` on
+its own, not a predicted copy beside a confirmed one. There is no ghost of
+yourself to hide.
+
+There is deliberately **no `InterpolationTarget`** yet. An interpolated body is
+a second entity written by interpolation functions, and none are registered —
+so targeting it produces a body nothing ever writes to, which is a player you
+cannot see. Everybody else's body is the plain replicated entity, smoothed by
+`interpolate_bodies` between the last two positions the server sent. Coarser
+than real interpolation, and the thing to fix once there is somebody to look at
+it with.
 
 **`Simulated` is the marker that decides**, and it is deliberately not in the
 protocol, so it never crosses the wire. `spawn_player` adds it — whoever
@@ -602,6 +614,28 @@ copy on a client. A body arriving from the server does not carry it, which is
 what stops a client stepping somebody else's body from inputs it does not
 have. That failure is quiet: the body twitches between where the step put it
 and where the server said it was.
+
+**Weapons are gated on it too**, not only movement. A replicated body carries a
+`Loadout` and a `Trigger` like any other and the input layer hands it the
+inputs its real owner is pressing, so an ungated `pull_trigger` fires somebody
+else's gun locally and every client draws its own tracer for a shot nobody
+asked it to.
+
+**`Player` is not "the body I am looking out of".** It used to be, because
+there was only ever one, and three systems asked it that question:
+`hide_own_body`, `draw_hitboxes` and `draw_skeletons`. A replicated body
+carries `Player`, so all three hid *every* body in the match the moment a
+second player existed — which reads as the other players never having arrived,
+since their tracers and their damage still turn up. They ask `LocalPlayer` now.
+Any new system that means "mine" wants `LocalPlayer`; any that means "a player"
+wants `Player`; any that means "one I step" wants `Simulated`.
+
+**`dress_new_players` is not gated on `AppMode::Play`.** A replicated body can
+arrive on a frame when this process has not finished entering the round, and
+`Added` is true for one frame whether or not a gated-off system was there to
+see it. A body that misses its rig never gets another chance and is invisible
+for the rest of the match. It also inserts with `insert_if_new`, so a `Stance`
+the server sent is not overwritten with a default.
 
 `LocalPlayer` is a different question and means "the body this machine drives".
 A server steps every body and drives none; a client steps one and drives the

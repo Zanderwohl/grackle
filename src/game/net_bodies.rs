@@ -62,9 +62,14 @@ impl Plugin for NetBodiesPlugin {
 /// The targets are the whole of the arrangement. `Replicate` to everybody, so
 /// every client can see it. `PredictionTarget` to its owner alone, because
 /// only the person holding the controls has inputs to run ahead with.
-/// `InterpolationTarget` to everybody else, because a body you are not driving
-/// is better drawn a little in the past and smooth than in the present and
-/// jittering.
+///
+/// **No `InterpolationTarget` yet.** An interpolated body is a second entity
+/// whose components are written by interpolation functions, and none are
+/// registered — so targeting it produces a body nothing ever writes to, which
+/// is a player you cannot see. Everybody else's body is the plain replicated
+/// entity for now, smoothed by `interpolate_bodies` between the last two
+/// positions the server sent. That is coarser than real interpolation and is
+/// the thing to fix once there is somebody to look at it with.
 fn spawn_body_for(
     commands: &mut Commands,
     spawn: Spawn,
@@ -76,7 +81,6 @@ fn spawn_body_for(
     commands.entity(body).insert((
         Replicate::to_clients(NetworkTarget::All),
         PredictionTarget::to_clients(NetworkTarget::Single(peer)),
-        InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(peer)),
         // Ties the body's life to the connection's: somebody who disconnects
         // does not leave a body standing in the map for the rest of the round.
         ControlledBy { owner: link, lifetime: Lifetime::default() },
@@ -167,10 +171,7 @@ fn replicate_the_hosts_body(
         return;
     }
     for body in &ours {
-        commands.entity(body).insert((
-            Replicate::to_clients(NetworkTarget::All),
-            InterpolationTarget::to_clients(NetworkTarget::All),
-        ));
+        commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
     }
 }
 
