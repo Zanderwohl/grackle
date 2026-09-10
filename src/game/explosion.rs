@@ -40,6 +40,7 @@
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
+use crate::common::effects::Effect;
 use crate::common::damage::{falloff, Damage, Explosion};
 use crate::common::hitbox::Hitboxes;
 use crate::game::collision::CollisionWorld;
@@ -95,8 +96,13 @@ pub fn explode(
     bodies: Query<(Entity, &Hitboxes)>,
     mut damage: MessageWriter<Damage>,
     mut shoves: MessageWriter<RagdollShove>,
+    mut effects: MessageWriter<Effect>,
 ) {
     for blast in blasts.read() {
+        // Said once, here, by the one thing that resolves a blast. Everybody
+        // else — including every client — is told about it.
+        effects.write(Effect::Blast { at: blast.at, radius: blast.radius });
+
         if let Some((target, worth)) = blast.direct {
             damage.write(Damage {
                 target,
@@ -174,14 +180,19 @@ fn in_sight(world: &CollisionWorld, from: Vec3, to: Vec3, distance: f32) -> bool
     world.ray_distance(&Ray3d::new(from, direction), reach).is_none()
 }
 
-fn mark_blasts(mut commands: Commands, mut blasts: MessageReader<Explosion>) {
-    for blast in blasts.read() {
+/// Draw a mark wherever an effect says something went off.
+///
+/// Reads [`Effect`] rather than `Explosion`, which is the difference between a
+/// visual and a decision. `Explosion` is resolved by the authority alone —
+/// `explode` is in `DamageSystems::Deal` — so a client that watched it would
+/// see nothing go off anywhere, ever. `Effect` is relayed, so this system
+/// fills the same queue from a local blast or from the wire and cannot tell
+/// which it was.
+fn mark_blasts(mut commands: Commands, mut effects: MessageReader<Effect>) {
+    for effect in effects.read() {
+        let Effect::Blast { at, radius } = *effect else { continue };
         commands.spawn((
-            BlastMark {
-                at: blast.at,
-                radius: blast.radius,
-                remaining: BLAST_MARK_LIFETIME,
-            },
+            BlastMark { at, radius, remaining: BLAST_MARK_LIFETIME },
             Name::new("Blast mark"),
         ));
     }
@@ -237,6 +248,7 @@ mod tests {
         world.init_resource::<Messages<Explosion>>();
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<RagdollShove>>();
+        world.init_resource::<Messages<Effect>>();
         world
     }
 

@@ -751,6 +751,27 @@ unordered.
 damage number would be anchored to whatever entity happened to share that index
 locally.
 
+**`Effect` travels the same way, and is the only thing the visuals read.**
+[`src/common/effects.rs`](src/common/effects.rs) is a tracer or a blast — pure
+geometry, no entities, so nothing about it needs mapping and one whose target
+has already been despawned is still perfectly drawable. `mark_blasts` used to
+read `Explosion` directly, which worked exactly as long as the only machine
+that mattered was the one deciding the damage: `explode` is in
+`DamageSystems::Deal`, so a client watching it would see nothing go off, ever.
+Reading a queue filled either locally or off the wire is what lets the drawing
+not know which it was.
+
+Two things about tracers specifically:
+
+- **A shot that hits nothing still writes one.** It is written before the early
+  return that skips the damage, because a tracer is where the bullet went — a
+  fact about the world, not about whether it found anybody. Fire into open
+  space with no tracer and the weapon reads as jammed.
+- **A tracer is an entity with a lifetime, not a gizmo call at the moment of
+  firing.** Firing happens on the tick and drawing at frame rate, so a gizmo
+  written inside `fire_hitscan` is drawn for one frame if the rates happen to
+  line up and not at all if they do not.
+
 ### Projectiles are replicated, not re-simulated
 
 Every client could step the same spec from the same origin and get the same
@@ -803,11 +824,6 @@ transforms first. Empty and consistent beats populated and disagreeing.
 **Known gaps, all of them "not sent yet" rather than "broken":**
 
 - `Loadout` is not replicated, so every remote body holds the default weapons.
-- A hitscan shot has no tracer on anybody else's machine. Unlike a projectile
-  there is no entity to replicate, so it wants an effect record of its own
-  alongside `DamageDealt`.
-- Explosions replicate their consequences — health, corpses, damage numbers —
-  but not the blast itself, so there is no visual where one went off.
 - No client-side prediction, so movement is a round-trip behind on a client.
   Looking around is not — the view is a separate entity aimed from the local
   latch. Prediction goes back on top of this, as one layer, not through it.

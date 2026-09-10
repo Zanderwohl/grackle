@@ -83,6 +83,10 @@ impl Plugin for DamagePlugin {
             // Registered here, by the reader, because this is the module that
             // outlives any one thing that writes it.
             .add_message::<Damage>()
+            // Beside the damage records and for the same reason: the queue
+            // belongs to the module that outlives the things writing into it.
+            // Every visual reads this one, filled locally or off the wire.
+            .add_message::<crate::common::effects::Effect>()
             .add_message::<DamageDealt>()
             .add_message::<Died>()
             // On the tick, in this order, in the same tick as the shot. A

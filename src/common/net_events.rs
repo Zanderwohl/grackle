@@ -18,6 +18,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::common::damage::{DamageDealt, Died};
+use crate::common::effects::Effect;
 use crate::common::net::{has_authority, is_remote_client, NetRole};
 
 /// What happened, as against what is.
@@ -47,12 +48,16 @@ impl Plugin for NetEventsPlugin {
         app.register_message::<Died>()
             .add_map_entities()
             .add_direction(NetworkDirection::ServerToClient);
+        // No `add_map_entities`: an effect is pure geometry, which is what
+        // lets it be drawn even when whatever it happened to has already gone.
+        app.register_message::<Effect>()
+            .add_direction(NetworkDirection::ServerToClient);
 
         app.add_systems(
             Update,
             (
-                (send_hits, send_deaths).run_if(has_authority),
-                (receive_hits, receive_deaths).run_if(is_remote_client),
+                (send_hits, send_deaths, send_effects).run_if(has_authority),
+                (receive_hits, receive_deaths, receive_effects).run_if(is_remote_client),
             ),
         );
     }
@@ -115,6 +120,34 @@ fn receive_deaths(
     for mut receiver in &mut receivers {
         for death in receiver.receive() {
             deaths.write(death);
+        }
+    }
+}
+
+/// Pass on every effect the authority produced this frame.
+///
+/// The same shape as the damage records and for the same reason: what happened
+/// is not a value anything holds afterwards. A blast is over by the time the
+/// health it took is replicated, and a tracer never was a value at all.
+fn send_effects(
+    mut effects: MessageReader<Effect>,
+    server: Option<Single<&Server>>,
+    mut sender: ServerMultiMessageSender,
+) -> Result {
+    let Some(server) = server else { return Ok(()) };
+    for effect in effects.read() {
+        sender.send::<_, EventChannel>(effect, &server, &NetworkTarget::All)?;
+    }
+    Ok(())
+}
+
+fn receive_effects(
+    mut receivers: Query<&mut MessageReceiver<Effect>>,
+    mut effects: MessageWriter<Effect>,
+) {
+    for mut receiver in &mut receivers {
+        for effect in receiver.receive() {
+            effects.write(effect);
         }
     }
 }
