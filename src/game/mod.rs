@@ -12,7 +12,8 @@ use crate::game::ragdoll::RagdollPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::player::{
     fallback_spawn, gather_input, interpolate_bodies, mouse_look, place_camera, spawn_player,
-    step_player, toggle_view, usable_spawns, Player, Spawn, ViewMode,
+    step_player, toggle_view, usable_spawns, write_client_inputs, InputLatch, Player, Spawn,
+    ViewMode,
 };
 use crate::tool::room::Room;
 
@@ -53,6 +54,7 @@ impl Plugin for GamePlugin {
             // reset writes it and a game without the skeleton layer would
             // otherwise fail on the first F5 rather than at startup.
             .init_resource::<AnimationClock>()
+            .init_resource::<InputLatch>()
             .init_resource::<ViewMode>()
             .add_systems(Update, toggle_mode)
             .add_systems(Update, toggle_view.run_if(in_state(AppMode::Play)))
@@ -74,6 +76,12 @@ impl Plugin for GamePlugin {
             // rate, so the same inputs give the same trajectory whatever the
             // frame rate is doing. Prediction against a server needs that;
             // so does a browser tab whose refresh rate is anyone's guess.
+            // The frame-rate latch becomes this tick's input here, in the set
+            // Lightyear buffers and sends from. Everything downstream reads
+            // that value and never consumes it, because rollback replays it.
+            .add_systems(FixedPreUpdate, write_client_inputs
+                .in_set(lightyear::prelude::client::input::InputSystems::WriteClientInputs)
+                .run_if(in_state(AppMode::Play)))
             .add_systems(FixedUpdate, (
                 rebuild_collision_when_rooms_change,
                 step_player,
@@ -225,7 +233,7 @@ mod tests {
 
     use super::*;
     use crate::common::class::Stance;
-    use crate::game::player::{LocalPlayer, PhysicsBody, PlayerInput, PLAYER_HALF, SPAWN_YAW};
+    use crate::game::player::{Inputs, LocalPlayer, PhysicsBody, PLAYER_HALF, SPAWN_YAW};
 
     /// One fixed step, matching Bevy's 64 Hz default.
     const STEP: Duration = Duration::from_micros(15625);
@@ -263,6 +271,9 @@ mod tests {
     fn tick(app: &mut App, steps: usize) {
         for _ in 0..steps {
             app.world_mut().resource_mut::<Time>().advance_by(STEP);
+            // The drain first, as the real schedule has it: the latch becomes
+            // this tick's input and only then is the step taken.
+            app.world_mut().run_schedule(FixedPreUpdate);
             app.world_mut().run_schedule(FixedUpdate);
         }
     }
@@ -270,13 +281,13 @@ mod tests {
     /// The locally driven body's input, to poke at the way `gather_input`
     /// would. Filtered on `LocalPlayer` rather than `Player`, because a test
     /// may well have put another body in the world.
-    fn input(app: &mut App) -> Mut<'_, PlayerInput> {
+    fn input(app: &mut App) -> Mut<'_, Inputs> {
         let body = app
             .world_mut()
             .query_filtered::<Entity, With<LocalPlayer>>()
             .single(app.world())
             .expect("no local player");
-        app.world_mut().get_mut::<PlayerInput>(body).expect("body has no input")
+        app.world_mut().get_mut::<Inputs>(body).expect("body has no input")
     }
 
     /// The simulated position, which is the one physics writes. `Transform` is
@@ -372,7 +383,7 @@ mod tests {
         let mut airborne = false;
         for _ in 0..240 {
             // Held: re-latched every frame, as `gather_input` would.
-            input(&mut app).jump = true;
+            latch(&mut app).0.jump = true;
             tick(&mut app, 1);
             let y = player_position(&mut app).y;
             if y > rest + 0.3 {
@@ -384,6 +395,11 @@ mod tests {
         }
 
         assert!(landings >= 2, "bounced {landings} time(s) while jump was held");
+    }
+
+    /// The frame-rate latch, to poke the way `gather_input` would.
+    fn latch(app: &mut App) -> Mut<'_, InputLatch> {
+        app.world_mut().resource_mut::<InputLatch>()
     }
 
     /// A tap has to survive to the next fixed step. `FixedUpdate` runs zero
@@ -406,23 +422,68 @@ mod tests {
             .release(KeyCode::Space);
         app.world_mut().run_system_once(gather_input).unwrap();
 
-        assert!(input(&mut app).jump, "the press was dropped");
+        assert!(latch(&mut app).0.jump, "the press was dropped");
 
         tick(&mut app, 4);
         assert!(player_position(&mut app).y > rest + 0.05, "the latched press did not jump");
     }
 
-    /// And it fires once, not once per step it survives into.
+    /// And it fires once, not once per step it survives into. The tick that
+    /// takes the latch is what consumes it — not the step, which must be able
+    /// to read the same input again when rollback replays it.
     #[test]
-    fn a_latched_press_is_consumed_by_the_step_that_uses_it() {
+    fn the_tick_that_takes_the_latch_is_what_empties_it() {
         let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 8.0, 5.0))]);
         enter(&mut app);
         tick(&mut app, 60);
 
-        input(&mut app).jump = true;
+        latch(&mut app).0.jump = true;
         tick(&mut app, 1);
 
-        assert!(!input(&mut app).jump, "the latch survived its step");
+        assert!(!latch(&mut app).0.jump, "the latch survived the tick that took it");
+        assert!(
+            input(&mut app).jump,
+            "the tick's own input was emptied; a rollback would replay a jump that never happened"
+        );
+    }
+
+    /// The invariant the whole arrangement exists for: a tick's input can be
+    /// read as many times as rollback needs to replay it, and says the same
+    /// thing every time. A step that consumed what it read would replay as a
+    /// step that was never asked to jump.
+    #[test]
+    fn replaying_a_tick_reads_the_same_input_again() {
+        let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 20.0, 5.0))]);
+        enter(&mut app);
+        tick(&mut app, 60);
+        let rest = player_position(&mut app).y;
+
+        latch(&mut app).0.jump = true;
+        tick(&mut app, 1);
+        let once = player_position(&mut app).y;
+        assert!(once > rest, "the jump did not happen the first time");
+
+        // Replay the same tick from the same state, as a rollback would:
+        // rewind the body and step again without touching the input.
+        {
+            let body = app
+                .world_mut()
+                .query_filtered::<Entity, With<LocalPlayer>>()
+                .single(app.world())
+                .unwrap();
+            let mut physics = app.world_mut().get_mut::<PhysicsBody>(body).unwrap();
+            *physics = PhysicsBody::at(Vec3::new(0.0, rest, 0.0));
+            let mut player = app.world_mut().get_mut::<Player>(body).unwrap();
+            player.velocity = Vec3::ZERO;
+            player.on_ground = true;
+        }
+        app.world_mut().resource_mut::<Time>().advance_by(STEP);
+        app.world_mut().run_schedule(FixedUpdate);
+
+        assert!(
+            (player_position(&mut app).y - once).abs() < 1e-5,
+            "the replayed tick did not reach the same place"
+        );
     }
 
     /// The body is simulated at 64 Hz but drawn whenever the frame lands, so
@@ -436,7 +497,7 @@ mod tests {
         // Mid-jump, so the two step positions differ. A body at rest on the
         // floor interpolates between two identical points and would pass this
         // however the maths was written.
-        input(&mut app).jump = true;
+        latch(&mut app).0.jump = true;
         tick(&mut app, 3);
 
         // A frame worth one and a half steps: the loop takes one and keeps
@@ -607,7 +668,7 @@ mod tests {
         enter(&mut app);
 
         let yaw = std::f32::consts::FRAC_PI_2;
-        input(&mut app).yaw = yaw;
+        latch(&mut app).0.yaw = yaw;
         tick(&mut app, 1);
 
         let player = app
@@ -630,9 +691,9 @@ mod tests {
 
         // Facing a quarter turn to the left, walking forward.
         {
-            let mut input = input(&mut app);
-            input.yaw = std::f32::consts::FRAC_PI_2;
-            input.movement = Vec2::new(0.0, 1.0);
+            let mut latch = latch(&mut app);
+            latch.0.yaw = std::f32::consts::FRAC_PI_2;
+            latch.0.movement = Vec2::new(0.0, 1.0);
         }
         tick(&mut app, 30);
 
@@ -667,7 +728,7 @@ mod tests {
         let own_start = player_position(&mut app);
 
         // Only the local body is asked to walk.
-        input(&mut app).movement = Vec2::new(0.0, 1.0);
+        latch(&mut app).0.movement = Vec2::new(0.0, 1.0);
         tick(&mut app, 30);
 
         let other_end = app.world().get::<PhysicsBody>(other).unwrap().current;

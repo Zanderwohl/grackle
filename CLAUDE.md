@@ -188,7 +188,7 @@ Two rules that follow, and both are easy to break by accident:
 - **Never read `ButtonInput` from `FixedUpdate`.** It is cleared once per
   frame while `FixedUpdate` runs zero, one or several times, so edges get
   double-counted on a slow frame and dropped on a fast one. Latch into
-  `PlayerInput` in `gather_input` and consume it in the step.
+  `InputLatch` in `gather_input` and let the tick take it.
 - **Physics writes `PhysicsBody`, never `Transform`.** `interpolate_bodies`
   owns `Transform.translation`; writing it from a step would be overwritten and
   would skip interpolation. `mouse_look` owns `Transform.rotation`.
@@ -216,9 +216,38 @@ Two consequences worth knowing:
   body.
 - **`LocalPlayer` marks the one body this machine drives.** Everything that
   reads a keyboard or a mouse looks for it and nothing else; a system querying
-  `With<Player>` would steer every body in the world at once. It is also why
-  `reset_for_play` no longer clears a stale press: the latch lives on the body
-  and leaving Play despawned it.
+  `With<Player>` would steer every body in the world at once.
+
+### Three clocks, and what consumes an edge
+
+Input crosses two clock boundaries and each has its own home:
+
+| Where | What lives there |
+| --- | --- |
+| `InputLatch` (resource) | What this machine's keyboard has said since the last tick. A fact about the peripherals, not about a body, so it outlives every body — which is why `reset_for_play` clears it. |
+| `Inputs` = `ActionState<PlayerInput>` (component) | What *this tick* asked one body to do. Written by `write_client_inputs`, buffered and sent by Lightyear, replayed by rollback. |
+| `Player`, `PhysicsBody`, `Stance` | What the step made of it. |
+
+**`write_client_inputs` is the only place an edge is consumed.** It runs in
+`FixedPreUpdate` inside Lightyear's `WriteClientInputs` set, copies the latch
+onto the local body's `Inputs`, and clears `jump`, `attack` and `select` from
+the latch. Level fields — movement, sprint, aim — are carried across, since
+`gather_input` reassigns them every frame and the latest reading is the right
+one.
+
+**Nothing downstream may consume what it reads.** `step_player`, `pull_trigger`
+and `select_weapons` take `&Inputs`, never `&mut`. Rollback replays a tick from
+its buffered input, so a step that took the jump out of it would replay as a
+step that never jumped — and the symptom is not an error, it is a body that
+lands somewhere slightly different every time the connection hiccups. That is
+also why `select_weapons` selects rather than takes: selecting the slot already
+held is not a second switch, so replaying it changes nothing.
+`replaying_a_tick_reads_the_same_input_again` is the test that pins it.
+
+`Inputs` is Lightyear's `ActionState` used directly as the storage rather than
+a `PlayerInput` of our own kept beside it. The alternative is a bridge that has
+to be exactly right about *when* it copies, and rollback replays ticks out of
+order; one value written and read in place has no such window to get wrong.
 
 One trap when adding a system that wants the local body's `Transform`
 alongside the camera's: put `With<Player>` in the filter next to

@@ -19,6 +19,7 @@
 //! resources the game's headless tests do not have.
 
 use bevy::prelude::*;
+use lightyear::prelude::input::native::ActionState;
 use bevy::transform::TransformSystems;
 
 use crate::common::app_mode::AppMode;
@@ -33,7 +34,7 @@ use crate::game::body_mesh::BodyMeshPlugin;
 use crate::game::hitbox::HitboxPlugin;
 use crate::game::weapon::WeaponPlugin;
 use crate::game::player::{
-    step_player, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
+    step_player, Inputs, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
 };
 
 /// Where a skeleton's feet sit relative to the entity carrying it.
@@ -243,7 +244,7 @@ pub fn skeleton_root(global: &GlobalTransform, offset: Option<&SkeletonRoot>) ->
 /// Fields are assigned rather than accumulated: this system owns all of them,
 /// every frame, so nothing goes stale.
 fn describe_player_bodies(
-    mut players: Query<(&Player, &Stance, &PlayerInput, &mut BodyRequests)>,
+    mut players: Query<(&Player, &Stance, &Inputs, &mut BodyRequests)>,
 ) {
     for (player, stance, input, mut requests) in &mut players {
         // Each body's own input, so a second local player or one being driven
@@ -507,7 +508,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Player { on_ground: true, blocked: BVec3::new(false, false, true), ..default() },
-                PlayerInput { movement: Vec2::new(0.0, 1.0), ..default() },
+                ActionState(PlayerInput { movement: Vec2::new(0.0, 1.0), ..default() }),
                 Stance::Standing,
                 BodyRequests::default(),
             ))

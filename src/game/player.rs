@@ -4,6 +4,7 @@ use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
+use lightyear::prelude::input::native::ActionState;
 
 use crate::common::damage::{Damageable, PlayerId};
 use crate::common::hitbox::Hitboxes;
@@ -66,7 +67,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 /// trigger does nothing for — silently, since a missing component simply drops
 /// it out of every weapon's query.
 #[derive(Component, Debug, Clone, PartialEq, Reflect, Serialize, Deserialize)]
-#[require(Hitboxes, Damageable, Loadout, Trigger, PlayerInput)]
+#[require(Hitboxes, Damageable, Loadout, Trigger, Inputs)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -169,6 +170,35 @@ pub struct PlayerInput {
     /// reason as `yaw`: a shot goes where the pitch says.
     pub pitch: f32,
 }
+
+/// What this machine's keyboard and mouse have said since the last tick.
+///
+/// A resource, and correctly so: it is a fact about the peripherals attached
+/// to *this* process, not about any body. It exists because the two clocks
+/// disagree — `ButtonInput` is cleared once per frame while `FixedUpdate` runs
+/// zero, one or several times — so a press has to be accumulated somewhere
+/// that survives frames and is emptied once per tick.
+///
+/// [`gather_input`] fills it at frame rate; [`write_client_inputs`] empties it
+/// into the body's [`Inputs`] once per tick, and that drain is the only place
+/// an edge is consumed. **The step must not consume it**: a predicted tick is
+/// replayed from the same buffered input during rollback, and a step that took
+/// the jump out of it would replay as a step that never jumped.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct InputLatch(pub PlayerInput);
+
+/// The input component a body actually carries.
+///
+/// `ActionState` is Lightyear's wrapper, and using it as the storage rather
+/// than keeping a `PlayerInput` beside it is deliberate. The alternative — our
+/// own component, copied to and from the networked one each tick — is a bridge
+/// that has to be exactly right about *when* it copies, and rollback replays
+/// ticks out of order. One value, written and read in place, has no such
+/// window to get wrong.
+///
+/// It derefs to [`PlayerInput`], so everything downstream reads and writes the
+/// fields as before.
+pub type Inputs = ActionState<PlayerInput>;
 
 /// The one body this machine is driving.
 ///
@@ -314,7 +344,7 @@ pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) {
             // Seeded rather than left at zero: the step copies aim off the
             // input, so a body spawned facing east would snap north on its
             // first step if the input still said zero.
-            PlayerInput { yaw: spawn.yaw, ..default() },
+            ActionState(PlayerInput { yaw: spawn.yaw, ..default() }),
             LocalPlayer,
             id,
             Stance::default(),
@@ -342,17 +372,18 @@ pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) {
         });
 }
 
-/// Read the keyboard into [`PlayerInput`], once per frame.
+/// Read the keyboard into [`InputLatch`], once per frame.
 ///
 /// Runs before the fixed loop so a press is available to the steps taken in
-/// the same frame it happened, rather than a frame late.
+/// the same frame it happened, rather than a frame late. Writes the latch
+/// rather than the body, because the body's input belongs to a tick and this
+/// runs on frames.
 pub fn gather_input(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
-    input: Single<&mut PlayerInput, With<LocalPlayer>>,
+    mut latch: ResMut<InputLatch>,
 ) {
-    let mut input = input.into_inner();
-    let input = &mut *input;
+    let input = &mut latch.0;
     let mut movement = Vec2::ZERO;
     if keys.pressed(KeyCode::KeyW) {
         movement.y += 1.0;
@@ -407,30 +438,60 @@ pub fn mouse_look(
     // it is what proves this query disjoint from the camera's `Without<Player>`
     // one, and without it both want `&mut Transform` and Bevy refuses the
     // system at runtime rather than at compile time.
-    player: Option<Single<(&mut PlayerInput, &mut Transform), (With<LocalPlayer>, With<Player>)>>,
+    mut latch: ResMut<InputLatch>,
+    player: Option<Single<&mut Transform, (With<LocalPlayer>, With<Player>)>>,
     mut cameras: Query<&mut Transform, (With<PlayerCamera>, Without<Player>)>,
 ) {
     let delta: Vec2 = motion.read().map(|event| event.delta).sum();
     if delta == Vec2::ZERO {
         return;
     }
-    let Some(player) = player else { return };
-    let (mut input, mut transform) = player.into_inner();
-
-    // Accumulated onto the input rather than onto the body: the step is what
+    // Accumulated onto the latch rather than onto the body: the step is what
     // turns the body, so that a server replaying these inputs turns it the
-    // same way. The transform is written here anyway, because waiting for the
-    // next fixed step to see the view move is 15 ms of lag on the one thing
-    // that has to feel immediate.
+    // same way.
+    let input = &mut latch.0;
     input.yaw -= delta.x * MOUSE_SENSITIVITY;
     input.pitch = (input.pitch - delta.y * MOUSE_SENSITIVITY).clamp(-PITCH_LIMIT, PITCH_LIMIT);
-    transform.rotation = Quat::from_rotation_y(input.yaw);
+    let (yaw, pitch) = (input.yaw, input.pitch);
+
+    // The body is pointed here as well, because waiting for the next fixed
+    // step to see the view move is 15 ms of lag on the one thing that has to
+    // feel immediate. This is for the view; the step is still what decides
+    // which way the body is actually facing.
+    if let Some(mut transform) = player {
+        transform.rotation = Quat::from_rotation_y(yaw);
+    }
 
     // Yaw turns the body, pitch tilts only the head — so the run direction
     // stays level however far up or down you are looking.
     for mut camera in &mut cameras {
-        camera.rotation = Quat::from_rotation_x(input.pitch);
+        camera.rotation = Quat::from_rotation_x(pitch);
     }
+}
+
+/// Empty the frame-rate latch into the body's input for this tick.
+///
+/// The one place an edge is consumed. Level fields — movement, sprint, aim —
+/// are simply carried across, since `gather_input` reassigns them every frame
+/// and the latest reading is the right one. Edges are taken, so that one press
+/// is one tick's worth of press however many frames it spanned.
+///
+/// Runs in `FixedPreUpdate`, in Lightyear's `WriteClientInputs` set, because
+/// what is written here is what gets buffered, sent to the server, and
+/// replayed during rollback.
+pub fn write_client_inputs(
+    mut latch: ResMut<InputLatch>,
+    input: Option<Single<&mut Inputs, With<LocalPlayer>>>,
+) {
+    let Some(input) = input else { return };
+    let mut input = input.into_inner();
+    input.0 = latch.0;
+
+    // Taken here and nowhere else: a tick's input has to survive being read,
+    // because rollback replays it.
+    latch.0.jump = false;
+    latch.0.attack = false;
+    latch.0.select = None;
 }
 
 /// `F` swaps between looking out of the body and looking at it.
@@ -510,17 +571,19 @@ pub fn third_person_camera(
 pub fn step_player(
     time: Res<Time>,
     world: Res<CollisionWorld>,
-    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance, &mut PlayerInput)>,
+    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance, &Inputs)>,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {
         return;
     }
 
-    for (mut player, mut body, mut stance, mut input) in &mut players {
-        // Taken, not read: the latch is per step, so a press cannot fire
-        // twice. Per body, because each body has its own latch to take.
-        let jump = std::mem::take(&mut input.jump);
+    for (mut player, mut body, mut stance, input) in &mut players {
+        // Read, never taken. The edge was already consumed by
+        // `write_client_inputs` when it filled this tick's input; taking it
+        // here would empty the buffer that rollback replays from, and a
+        // replayed jump would come out as a step that never jumped.
+        let jump = input.jump;
 
         // Aim arrives as input and is copied onto the body here, so the step
         // is the only thing that turns it. `mouse_look` has already pointed

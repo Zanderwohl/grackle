@@ -33,7 +33,8 @@ use crate::game::damage::{DamagePlugin, DamageSystems};
 use crate::game::explosion::ExplosionPlugin;
 use crate::game::flame::FlamePlugin;
 use crate::game::hitscan::HitscanPlugin;
-use crate::game::player::{Player, PlayerInput};
+use crate::game::player::Player;
+use crate::game::player::Inputs;
 use crate::game::projectile::ProjectilePlugin;
 
 /// One thing you can shoot with.
@@ -198,16 +199,17 @@ impl Plugin for WeaponPlugin {
 /// disagreeing about whether a press that was also a hold is one shot or two.
 pub fn pull_trigger(
     time: Res<Time<Fixed>>,
-    mut shooters: Query<(Entity, &Loadout, &mut Trigger, &mut PlayerInput), With<Player>>,
+    mut shooters: Query<(Entity, &Loadout, &mut Trigger, &Inputs), With<Player>>,
     mut pulled: MessageWriter<TriggerPulled>,
 ) {
     let dt = time.delta_secs();
 
-    for (shooter, loadout, mut trigger, mut input) in &mut shooters {
-        // Taken, not read: leaving it set would fire again next tick, and
-        // taking it here rather than in a weapon is what stops two weapons
-        // racing for it. Per body, because each body has its own trigger.
-        let pressed = std::mem::take(&mut input.attack);
+    for (shooter, loadout, mut trigger, input) in &mut shooters {
+        // Read, never taken: this tick's input has to survive being read, so
+        // that a rollback replaying the tick fires the same shot. The edge was
+        // already consumed when the tick's input was written — see
+        // `write_client_inputs`.
+        let pressed = input.attack;
         let held = input.attack_held;
 
         trigger.ready_in = (trigger.ready_in - dt).max(0.0);
@@ -238,9 +240,12 @@ pub fn pull_trigger(
 }
 
 /// Act on a switch made since the last step.
-pub fn select_weapons(mut carriers: Query<(&mut Loadout, &mut PlayerInput), With<Player>>) {
-    for (mut loadout, mut input) in &mut carriers {
-        let Some(slot) = std::mem::take(&mut input.select) else { continue };
+pub fn select_weapons(mut carriers: Query<(&mut Loadout, &Inputs), With<Player>>) {
+    for (mut loadout, input) in &mut carriers {
+        let Some(slot) = input.select else { continue };
+        // Idempotent, which is what lets it be read rather than taken:
+        // selecting the slot already held is not a second switch, so a
+        // replayed tick asking for it again changes nothing.
         loadout.select(slot);
     }
 }
@@ -265,8 +270,8 @@ mod tests {
     }
 
     /// The input on one body, to poke at the way `gather_input` would.
-    fn input(world: &mut World, body: Entity) -> Mut<'_, PlayerInput> {
-        world.get_mut::<PlayerInput>(body).expect("body has no input")
+    fn input(world: &mut World, body: Entity) -> Mut<'_, Inputs> {
+        world.get_mut::<Inputs>(body).expect("body has no input")
     }
 
     fn pulls(world: &mut World) -> Vec<TriggerPulled> {
@@ -286,8 +291,11 @@ mod tests {
 
         world.run_system_once(pull_trigger).unwrap();
         assert_eq!(pulls(&mut world), vec![TriggerPulled { shooter }]);
-        assert!(!input(&mut world, shooter).attack);
 
+        // The next tick's input: still held, no longer a fresh press, because
+        // the edge was consumed when that tick's input was written. Reading it
+        // here would fire again, which is the bug this pins.
+        input(&mut world, shooter).attack = false;
         world.resource_mut::<Messages<TriggerPulled>>().clear();
         world.run_system_once(pull_trigger).unwrap();
         assert!(pulls(&mut world).is_empty(), "holding the button fired a second time");
@@ -373,21 +381,27 @@ mod tests {
         assert_eq!(Loadout::new(vec![]).held(), None);
     }
 
-    /// A switch travels through the input like everything else, and is
-    /// consumed by the step that acted on it.
+    /// A switch travels through the input like everything else, and acting on
+    /// it twice is the same as acting on it once — which is what lets it be
+    /// read rather than taken, so a replayed tick reaches the same loadout.
     #[test]
-    fn a_switch_is_taken_by_the_step_that_acts_on_it() {
+    fn acting_on_a_switch_twice_is_the_same_as_once() {
         let mut world = a_world();
         let player = world.spawn((Player::default(), Loadout::default())).id();
         input(&mut world, player).select = Some(2);
 
+        world.run_system_once(select_weapons).unwrap();
         world.run_system_once(select_weapons).unwrap();
 
         assert_eq!(
             world.get::<Loadout>(player).unwrap().held(),
             Some(Weapon::Projectile(ProjectileSpec::PIPE_BOMB))
         );
-        assert_eq!(input(&mut world, player).select, None);
+        assert_eq!(
+            input(&mut world, player).select,
+            Some(2),
+            "the tick's input was emptied by the system that read it"
+        );
     }
 
     /// The reason the input moved onto the body: two bodies in one world are

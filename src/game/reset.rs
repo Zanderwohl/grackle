@@ -26,6 +26,7 @@ use crate::common::damage::{DamageLog, Damageable};
 use crate::common::flame::Burning;
 use crate::common::skeleton::{AnimationClock, Gait, SkeletonAnimator};
 use crate::game::damage::DamageNumber;
+use crate::game::player::InputLatch;
 use crate::game::projectile::{Projectile, ProjectileEmitter};
 use crate::game::ragdoll::Ragdoll;
 
@@ -38,6 +39,7 @@ use crate::game::ragdoll::Ragdoll;
 pub fn reset_for_play(
     mut commands: Commands,
     mut clock: ResMut<AnimationClock>,
+    mut latch: ResMut<InputLatch>,
     mut bodies: Query<(&mut Gait, &mut SkeletonAnimator)>,
     mut health: Query<(&mut Damageable, &mut DamageLog)>,
     numbers: Query<Entity, With<DamageNumber>>,
@@ -50,10 +52,10 @@ pub fn reset_for_play(
     // happened to be left at could not be compared with the one before it.
     *clock = AnimationClock::default();
 
-    // Nothing to do about a click made while editing: the latch lives on the
-    // body, and leaving Play despawned it. This used to clear a global
-    // `PlayerInput`, which was the only thing that could carry a stale press
-    // across the swap.
+    // A click or a held key made while editing is not an order to shoot on
+    // spawn. The bodies are new and carry nothing, but the latch is a fact
+    // about the keyboard rather than about a body, so it outlives them both.
+    *latch = InputLatch::default();
 
     for (mut gait, mut animator) in &mut bodies {
         // Standing still at the start of a stride, in a state rather than part
@@ -113,6 +115,11 @@ mod tests {
         let mut clock = AnimationClock::default();
         clock.advance(1.0 / 64.0);
         world.insert_resource(clock);
+        world.insert_resource(InputLatch(crate::game::player::PlayerInput {
+            attack: true,
+            jump: true,
+            ..default()
+        }));
 
         let mut hurt = Damageable::with_health(100);
         hurt.apply(70);
@@ -126,6 +133,9 @@ mod tests {
         world.run_system_once(reset_for_play).unwrap();
 
         assert_eq!(world.resource::<AnimationClock>().ticks(), 0);
+        let latch = world.resource::<InputLatch>().0;
+        assert!(!latch.attack, "a click made while editing fired on spawn");
+        assert!(!latch.jump);
         assert_eq!(world.get::<Damageable>(body).unwrap().health(), 100);
         assert_eq!(world.get::<DamageLog>(body).unwrap().killer(), None, "last match's shooter carried over");
         assert_eq!(world.query::<&DamageNumber>().iter(&world).count(), 0);
