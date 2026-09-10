@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use bevy::window::PrimaryWindow;
@@ -9,10 +10,12 @@ use egui_dock::{DockArea, DockState, TabViewer};
 use strum::IntoEnumIterator;
 use strum_macros::Display;
 use crate::common::mode::GameMode;
+use crate::common::net::{NetRequest, NetRole};
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::map_metadata::MapMetadata;
 use crate::editor::multicam::MulticamState;
+use crate::editor::net_menu::{network_menu, ConnectDialog};
 use crate::editor::save::{self, LoadedBlueprint};
 use crate::get;
 use crate::tool::Tools;
@@ -51,6 +54,21 @@ enum TabKinds {
     Metadata,
     Timeline,
     History,
+}
+
+/// Everything the panels write out, in one system parameter.
+///
+/// Bundled because a Bevy system takes at most sixteen parameters and `ui` was
+/// at exactly sixteen: the network menu needed a slot. Grouping the writers is
+/// cheaper than splitting the menu bar across two systems, which would then
+/// both want to own its measured height.
+#[derive(SystemParam)]
+struct PanelMessages<'w> {
+    room: MessageWriter<'w, CalculateRoomGeometry>,
+    clear_room: MessageWriter<'w, ClearRoomGeometry>,
+    log_ecs: MessageWriter<'w, LogECS>,
+    edits: MessageWriter<'w, EditEvent>,
+    net: MessageWriter<'w, NetRequest>,
 }
 
 #[derive(Default)]
@@ -203,13 +221,12 @@ impl EditorPanels {
         mut next_tool: ResMut<NextState<Tools>>,
         mut editor_features: ResMut<FeatureTimeline>,
         mut gizmo_visibility: ResMut<GizmoVisibility>,
-        mut room_events: MessageWriter<CalculateRoomGeometry>,
-        mut clear_room_events: MessageWriter<ClearRoomGeometry>,
-        mut log_ecs_events: MessageWriter<LogECS>,
-        mut edit_events: MessageWriter<EditEvent>,
+        mut messages: PanelMessages,
         mut retarget_state: ResMut<RetargetState>,
         mut current_file: ResMut<CurrentFilePath>,
         mut map_metadata: ResMut<MapMetadata>,
+        net_role: Res<NetRole>,
+        mut connect_dialog: ResMut<ConnectDialog>,
     ) {
         let ctx = contexts.ctx_mut();
         if ctx.is_err() {
@@ -277,6 +294,12 @@ impl EditorPanels {
                             ui.close_kind(UiKind::Menu);
                         }
                     });
+                    network_menu(
+                        ui,
+                        &net_role,
+                        &mut connect_dialog,
+                        &mut messages.net,
+                    );
                 });
             })
             .response
@@ -468,19 +491,19 @@ impl EditorPanels {
         if current_file.deferred_room_bake > 0 {
             current_file.deferred_room_bake -= 1;
             if current_file.deferred_room_bake == 0 {
-                room_events.write(CalculateRoomGeometry);
+                messages.room.write(CalculateRoomGeometry);
             }
         }
 
         // Handle bake commands
         if bake_commands.calculate_room_geometry {
-            room_events.write(CalculateRoomGeometry);
+            messages.room.write(CalculateRoomGeometry);
         }
         if bake_commands.clear_room_geometry {
-            clear_room_events.write(ClearRoomGeometry);
+            messages.clear_room.write(ClearRoomGeometry);
         }
         if bake_commands.log_ecs {
-            log_ecs_events.write(LogECS);
+            messages.log_ecs.write(LogECS);
         }
 
         // Handle retarget request
@@ -497,7 +520,7 @@ impl EditorPanels {
 
         // Flush edit events
         for event in pending_edits.events.drain(..) {
-            edit_events.write(event);
+            messages.edits.write(event);
         }
 
         Self::set_multicam_size(panels, multicam_state, windows);

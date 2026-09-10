@@ -249,3 +249,31 @@ plr = "Payload Race"
 koth = "King of the Hill"
 cp = "Capture Points"
 sd = "Special Delivery"
+
+[net.menu]
+title = "Multiplayer"
+host = "Host Game..."
+join = "Connect to..."
+solo = "Leave Game"
+
+[net.role]
+solo = "Playing alone"
+listen = "Hosting on port { port }"
+client = "Connected to { host }:{ port }"
+
+[net.dialog]
+host_title = "Host a Game"
+join_title = "Connect to a Game"
+port_label = "Port to listen on"
+endpoint_label = "Address (host or host:port)"
+host_confirm = "Host"
+join_confirm = "Connect"
+cancel = "Cancel"
+unimplemented = "No transport yet: this records the role only."
+
+[net.error]
+empty = "Enter a host to connect to."
+no_host = "That is a port with no host in front of it."
+malformed = "That address is not host:port."
+unclosed_bracket = "An IPv6 address in brackets needs a closing bracket."
+port = "{ port } is not a port number."

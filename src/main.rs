@@ -10,10 +10,12 @@ use bevy::window::{ExitCondition, PresentMode};
 use bevy_egui::{EguiPlugin};
 use bevy_vector_shapes::prelude::*;
 use crate::common::lang::{change_lang_or_fallback, default_packs};
+use crate::common::net::NetPlugin;
 use crate::common::perf::PerfPlugin;
 use crate::editor::editable::EditorStepsPlugin;
 use crate::editor::input::EditorInputPlugin;
 use crate::editor::multicam::MulticamPlugin;
+use crate::editor::net_menu::NetMenuPlugin;
 use crate::editor::panels::EditorPanelPlugin;
 use crate::game::skeleton::SkeletonPlugin;
 use crate::game::GamePlugin;
@@ -46,6 +48,7 @@ fn main() {
                 close_when_requested: true,
             }),
         )
+        .insert_resource(editor_params.net.clone())
         .add_plugins((
             EguiPlugin::default(),
             Shape2dPlugin::default(),
@@ -57,6 +60,8 @@ fn main() {
         })
         .add_plugins((
             EditorInputPlugin,
+            NetPlugin,
+            NetMenuPlugin,
             MulticamPlugin {
                 test_scene: false,
             },

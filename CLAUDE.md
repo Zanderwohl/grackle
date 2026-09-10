@@ -413,6 +413,47 @@ in front of the animation grid and the sixty standing bodies become a firing
 range. It reads the keyboard directly rather than going through `PlayerInput`,
 which is fine precisely because planting a prop is not part of the simulation.
 
+## Which end of the wire this is
+
+`NetRole` ([`src/common/net.rs`](src/common/net.rs)) is `Solo`, `Listen { port }`
+or `Client { host, port }`, and **the default is `Solo` — a closed game with no
+socket at all**. Opening the editor to lay out a room must not involve the
+network, so a solo game is a real role rather than a server nobody connected
+to; making it a degenerate listen server would put a loopback connection in the
+way of the one thing this editor exists to make fast.
+
+`--serve [PORT]` is a **listen server, not a dedicated one**: the window still
+opens, the editor is still there, and the host is a player. That is what makes
+between-round editing testable with somebody else standing in the map.
+`--connect HOST[:PORT]` joins one. The two conflict at the clap level. Bare
+`--serve` takes `DEFAULT_PORT`. The same two choices are in the `Multiplayer`
+menu, which opens the connect dialog in
+[`src/editor/net_menu.rs`](src/editor/net_menu.rs) — a floating
+`egui::Window` rather than an `egui_dock` tab on purpose: the panels rule is
+about surfaces you work in, and this is a modal question with an answer.
+
+Two rules, and both are easy to undo:
+
+- **Ask `NetRole::is_authority()`, not which variant it is.** Solo and Listen
+  both simulate and are believed; a client predicts and is corrected. Almost
+  nothing cares about the difference between playing alone and hosting, and a
+  system that matches on the variant has to be found again the first time a
+  fourth role appears. `has_authority` and `is_remote_client` are run
+  conditions over the same question.
+- **`NetRole` is written in exactly one place**, `apply_net_requests`, which
+  reads `NetRequest`. Everything else — the CLI, the menu, the dialog — asks.
+  There is nothing to tear down today; the moment there is, every caller
+  already routes through the place that will do it. It also declines to write a
+  role equal to the one already set, because the transport will hang off
+  `Changed<NetRole>` and re-picking "Host" must not drop everybody connected.
+
+**There is no transport.** Nothing is bound, nothing is dialled, and the dialog
+says so. This is the seam, settled early and on purpose: Lightyear is the
+intended library (WebTransport reaches a browser, which `renet` upstream does
+not, and it ships prediction and rollback rather than leaving them to us), and
+what it plugs into is `PlayerInput` latched in `gather_input`, the 64 Hz
+`FixedUpdate` step, and this role.
+
 ## The feature model
 
 The core abstraction is `FeatureTrait` in

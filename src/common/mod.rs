@@ -8,6 +8,7 @@ pub mod projectile;
 pub mod mesh;
 pub mod skeleton;
 pub mod lang;
+pub mod net;
 pub(crate) mod perf;
 pub(crate) mod systems;
 pub(crate) mod painter;
