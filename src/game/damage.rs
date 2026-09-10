@@ -11,6 +11,17 @@
 //! pinned to a screen position when it was born. A number frozen in screen
 //! space slides off the body that took the hit the moment the camera moves,
 //! which is exactly when you are looking at it.
+//!
+//! Everything here works in **logical points**: that is what egui lays out in,
+//! and it is also what `world_to_viewport` gives back, since it maps onto the
+//! camera's logical viewport rect. There is no scale factor to apply, and
+//! applying one anyway is invisible until somebody runs it on a retina display.
+//!
+//! It is drawn at a fixed size in logical points, so a hit reads the same
+//! whether it landed on a body across the room or one in your face — distance
+//! is what the body behind it is for. The drift upwards is screen-space for
+//! the same reason: a fifth of the screen is a fifth of the screen at any
+//! range, where a metre of world rise would be invisible at fifty of them.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -26,7 +37,12 @@ use crate::game::player::PlayerCamera;
 pub const DAMAGE_NUMBER_LIFETIME: f32 = 2.0;
 
 /// How big the number is drawn, in logical points.
-const DAMAGE_NUMBER_SIZE: f32 = 24.0;
+const DAMAGE_NUMBER_SIZE: f32 = 48.0;
+
+/// How far a number climbs over its whole life, as a fraction of the window
+/// height. It travels at a constant speed and expires at the top of that
+/// climb, so lifetime and this together are the velocity.
+const DAMAGE_NUMBER_RISE: f32 = 0.2;
 
 /// A number floating at the place a hit landed.
 #[derive(Component, Debug)]
@@ -110,6 +126,15 @@ fn opacity(remaining: f32) -> f32 {
     (remaining / DAMAGE_NUMBER_LIFETIME).clamp(0.0, 1.0)
 }
 
+/// How far above its hit point a number has climbed, in logical points, given
+/// how much of its life is left and how tall the window is.
+///
+/// Linear in age: zero the frame it appears, the full rise the frame it goes.
+fn rise(remaining: f32, window_height: f32) -> f32 {
+    let age = (1.0 - remaining / DAMAGE_NUMBER_LIFETIME).clamp(0.0, 1.0);
+    age * DAMAGE_NUMBER_RISE * window_height
+}
+
 fn draw_damage_numbers(
     mut contexts: EguiContexts,
     numbers: Query<&DamageNumber>,
@@ -123,8 +148,11 @@ fn draw_damage_numbers(
     let Ok(window) = window.single() else { return };
     let Ok(ctx) = contexts.ctx_mut() else { return };
 
-    // Bevy projects into physical pixels; egui lays out in logical points.
-    let scale = window.scale_factor();
+    // `world_to_viewport` maps onto the camera's *logical* viewport rect, which
+    // is the same space egui lays out in — so the projection is already in
+    // points and must not be divided by the scale factor again. Doing that put
+    // every number in the top-left quadrant of a retina display.
+    let height = window.height();
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("damage_numbers"),
@@ -137,7 +165,7 @@ fn draw_damage_numbers(
 
         let alpha = (opacity(number.remaining) * 255.0) as u8;
         painter.text(
-            egui::pos2(screen.x / scale, screen.y / scale),
+            egui::pos2(screen.x, screen.y - rise(number.remaining, height)),
             egui::Align2::CENTER_CENTER,
             number.amount.to_string(),
             egui::FontId::proportional(DAMAGE_NUMBER_SIZE),
@@ -203,5 +231,20 @@ mod tests {
         assert_eq!(opacity(DAMAGE_NUMBER_LIFETIME), 1.0);
         assert_eq!(opacity(0.0), 0.0);
         assert!(opacity(DAMAGE_NUMBER_LIFETIME * 0.5) < opacity(DAMAGE_NUMBER_LIFETIME));
+    }
+
+    /// It starts at the hit point and ends a fifth of the screen above it,
+    /// having covered the ground at a constant speed rather than easing.
+    #[test]
+    fn a_number_climbs_a_fifth_of_the_screen_at_a_constant_speed() {
+        let height = 1000.0;
+        assert_eq!(rise(DAMAGE_NUMBER_LIFETIME, height), 0.0);
+        assert!((rise(0.0, height) - 200.0).abs() < 1e-3);
+
+        // Constant speed: equal slices of life are equal distances.
+        let quarter = DAMAGE_NUMBER_LIFETIME * 0.25;
+        let first = rise(DAMAGE_NUMBER_LIFETIME - quarter, height) - rise(DAMAGE_NUMBER_LIFETIME, height);
+        let last = rise(0.0, height) - rise(quarter, height);
+        assert!((first - last).abs() < 1e-3, "{first} != {last}");
     }
 }
