@@ -192,6 +192,7 @@ fn open_link_for_role(
                     // metadata arrives with nothing to interpret it.
                     Client,
                     ReplicationReceiver,
+                    PingManager::default(),
                     UdpIo::default(),
                     // Port 0: any free local port. Only the server's address
                     // has to be a number somebody chose.
@@ -216,7 +217,14 @@ fn open_link_for_role(
 fn dress_new_client(add: On<Add, LinkOf>, mut commands: Commands) {
     commands
         .entity(add.entity)
-        .insert((ReplicationSender, Name::from("Client of")));
+        .insert((
+            ReplicationSender,
+            // Round-trip time is what the timelines are synchronised against,
+            // and prediction is only as good as that estimate. Without it the
+            // pings arrive and are dropped with a warning.
+            PingManager::default(),
+            Name::from("Client of"),
+        ));
 }
 
 /// Read what the link is doing back into [`NetStatus`] for the UI.

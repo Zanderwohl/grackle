@@ -518,6 +518,64 @@ Two rules, and both are easy to undo:
   role equal to the one already set, because the transport will hang off
   `Changed<NetRole>` and re-picking "Host" must not drop everybody connected.
 
+### Who gets a body, and who steps it
+
+The server spawns every body, its own included. A client never spawns one:
+its body arrives replicated and marked `Predicted`, and the client steps its
+own copy forward from its own inputs so that moving feels immediate.
+[`src/game/net_bodies.rs`](src/game/net_bodies.rs) holds both halves.
+
+Three kinds of body end up in a client's world, and they are not
+interchangeable:
+
+| Body | What it is | Who steps it |
+| --- | --- | --- |
+| Predicted | our own, run ahead of the server | us, and replayed on rollback |
+| Interpolated | somebody else's, drawn slightly in the past | nobody — Lightyear moves it |
+| Confirmed | the server's last word, kept for comparison | nobody |
+
+**`Simulated` is the marker that decides**, and it is deliberately not in the
+protocol, so it never crosses the wire. `spawn_player` adds it — whoever
+spawns a body steps it — and `claim_our_own_body` adds it to the predicted
+copy on a client. A body arriving from the server does not carry it, which is
+what stops a client stepping somebody else's body from inputs it does not
+have. That failure is quiet: the body twitches between where the step put it
+and where the server said it was.
+
+`LocalPlayer` is a different question and means "the body this machine drives".
+A server steps every body and drives none; a client steps one and drives the
+same one. Keep them apart.
+
+Some other things that fail silently here:
+
+- **`Player` requires `Transform` and `Visibility`.** A body from the server is
+  built by inserting replicated components, not by `spawn_player`, and a body
+  with children but no transform is a Bevy hierarchy warning per child per
+  frame and a mesh drawn at the origin.
+- **The camera hangs off `Added<LocalPlayer>`, not off the spawn.** On a client
+  the body turns up some time after the round starts, so a camera attached at
+  spawn time would be attached to a body that does not exist yet.
+- **`leave_play` only despawns bodies this process owns.** A client's bodies
+  belong to the server, which despawns them and replicates that; despawning
+  them locally as well deletes entities the receiver still expects to update.
+- **Both link entities need a `PingManager`.** Round-trip time is what the
+  timelines synchronise against and prediction is only as good as that
+  estimate; without one the pings arrive and are dropped with a warning.
+
+`--play` starts in a round rather than in the editor. It waits for the map to
+have reached the world first: the blueprint loads in `Startup` but its features
+do not become entities until `sync_entities` has run and the rooms are not
+baked until a frame later, so a transition made at startup enters a round whose
+collision world is empty and drops the body through a floor that is about to
+appear.
+
+**What is not verified yet:** nobody has driven a body over a real connection.
+The plumbing is confirmed end to end — mode, map, body, ownership, no warnings
+— but how prediction *feels*, and whether remote bodies move smoothly, needs a
+person at each end. `PhysicsBody` has no interpolation function registered, so
+an interpolated body currently gets whatever `interpolate_bodies` makes of the
+last two replicated values rather than a proper blend between server states.
+
 ### The map every client is standing in
 
 A client predicting its own movement steps the same physics against its own

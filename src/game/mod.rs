@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use rand::seq::IndexedRandom;
 
-use crate::common::app_mode::AppMode;
+use crate::common::app_mode::{start_in_play, AppMode, StartInPlay};
 use crate::common::damage::NextPlayerId;
 use crate::common::net::NetRole;
 use crate::common::skeleton::AnimationClock;
@@ -13,8 +13,8 @@ use crate::game::ragdoll::RagdollPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::player::{
     fallback_spawn, gather_input, interpolate_bodies, mouse_look, place_camera, spawn_player,
-    step_player, toggle_view, usable_spawns, write_client_inputs, InputLatch, Player, Spawn,
-    ViewMode,
+    give_the_local_body_a_camera, step_player, toggle_view, usable_spawns, write_client_inputs,
+    InputLatch, LocalPlayer, Player, Spawn, ViewMode,
 };
 use crate::tool::room::Room;
 
@@ -30,6 +30,7 @@ pub mod projectile;
 pub mod reset;
 pub mod weapon;
 pub mod player;
+pub mod net_bodies;
 pub mod ragdoll;
 pub mod skeleton;
 
@@ -49,6 +50,8 @@ impl Plugin for GamePlugin {
             // player's own step does, and no renderer at all.
             .add_plugins(RagdollPlugin)
             .init_state::<AppMode>()
+            .init_resource::<StartInPlay>()
+
             .init_resource::<CollisionWorld>()
             .init_resource::<NextPlayerId>()
             // Owned by `SkeletonPlugin`, initialised here as well because the
@@ -57,8 +60,14 @@ impl Plugin for GamePlugin {
             .init_resource::<AnimationClock>()
             .init_resource::<InputLatch>()
             .init_resource::<ViewMode>()
-            .add_systems(Update, toggle_mode)
-            .add_systems(Update, toggle_view.run_if(in_state(AppMode::Play)))
+            .add_systems(Update, (toggle_mode, start_in_play))
+            .add_systems(Update, (
+                toggle_view,
+                // Not gated on being the one who spawned it: on a client the
+                // body turns up from the server some time after the round
+                // starts, and the camera has to follow it whenever it does.
+                give_the_local_body_a_camera,
+            ).run_if(in_state(AppMode::Play)))
             // Clear the table, then set it: a new match starts from a known
             // state rather than from whatever the last one left behind.
             .add_systems(OnEnter(AppMode::Play), (reset_for_play, enter_play).chain())
@@ -138,6 +147,7 @@ fn enter_play(
     mut editor_cameras: Query<&mut Camera, With<Multicam>>,
     window: Query<Entity, With<PrimaryWindow>>,
     mut ids: ResMut<NextPlayerId>,
+    role: Option<Res<NetRole>>,
 ) {
     let rooms: Vec<Room> = rooms.iter().cloned().collect();
     // Before choosing, because whether a spawn point is usable is a question
@@ -172,10 +182,17 @@ fn enter_play(
             fallback_spawn(&rooms)
         }
     };
-    // A fresh id each time rather than one kept across F5: the body that
-    // comes back is a new body, and a kill feed that reused the id would
-    // credit its damage to the one before it.
-    spawn_player(&mut commands, spawn, ids.allocate());
+    // Only where this process simulates. On a client the body is the
+    // server's: it arrives replicated, and spawning one here would put a
+    // second body in the world that nobody else can see and that the server
+    // will never correct.
+    if role.is_none_or(|role| role.is_authority()) {
+        // A fresh id each time rather than one kept across F5: the body that
+        // comes back is a new body, and a kill feed that reused the id would
+        // credit its damage to the one before it.
+        let body = spawn_player(&mut commands, spawn, ids.allocate());
+        commands.entity(body).insert(LocalPlayer);
+    }
 
     for mut camera in &mut editor_cameras {
         camera.is_active = false;
@@ -187,13 +204,20 @@ fn enter_play(
 
 fn leave_play(
     mut commands: Commands,
+    role: Option<Res<NetRole>>,
     players: Query<Entity, With<Player>>,
     mut editor_cameras: Query<&mut Camera, With<Multicam>>,
     window: Query<Entity, With<PrimaryWindow>>,
 ) {
-    for player in &players {
-        // Despawns the camera with it: it is a child of the body.
-        commands.entity(player).despawn();
+    // Only bodies this process owns. A client's bodies belong to the server,
+    // which despawns them when the round ends and replicates that; despawning
+    // them here as well would delete entities the receiver still has a record
+    // of and expects to keep updating.
+    if role.is_none_or(|role| role.is_authority()) {
+        for player in &players {
+            // Despawns the camera with it: it is a child of the body.
+            commands.entity(player).despawn();
+        }
     }
 
     for mut camera in &mut editor_cameras {

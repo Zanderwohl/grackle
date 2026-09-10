@@ -67,7 +67,12 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 /// trigger does nothing for — silently, since a missing component simply drops
 /// it out of every weapon's query.
 #[derive(Component, Debug, Clone, PartialEq, Reflect, Serialize, Deserialize)]
-#[require(Hitboxes, Damageable, Loadout, Trigger, Inputs)]
+// `Transform` and `Visibility` as well, because a body does not always come
+// into being through `spawn_player`: one arriving from the server is built by
+// inserting the replicated components, and a body with children but no
+// transform is a Bevy hierarchy warning per child per frame and a mesh drawn
+// at the origin.
+#[require(Hitboxes, Damageable, Loadout, Trigger, Inputs, Transform, Visibility)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -199,6 +204,21 @@ pub struct InputLatch(pub PlayerInput);
 /// It derefs to [`PlayerInput`], so everything downstream reads and writes the
 /// fields as before.
 pub type Inputs = ActionState<PlayerInput>;
+
+/// This process steps this body forward.
+///
+/// Not the same as [`LocalPlayer`], and the difference is the whole of who
+/// simulates what: a server steps every body in the match and drives none of
+/// them, while a client steps exactly one — the predicted copy of its own —
+/// and is shown everybody else's interpolated from what the server said.
+///
+/// Deliberately **not** in the protocol, so it never crosses the wire. A body
+/// arriving from the server does not carry it, which is what stops a client
+/// stepping somebody else's body forward from inputs it does not have. That
+/// failure is quiet: the body twitches between where the step put it and where
+/// the server said it was.
+#[derive(Component, Default, Debug)]
+pub struct Simulated;
 
 /// The one body this machine is driving.
 ///
@@ -336,11 +356,14 @@ pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
 /// The yaw goes into `Player` as well as `Transform` because `mouse_look` owns
 /// the rotation from the next frame on and reads the body's yaw to do it —
 /// setting only the transform would be undone on the first mouse movement.
-pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) {
+pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) -> Entity {
     let position = body_centre_from_feet(spawn.feet);
     commands
         .spawn((
             Player { yaw: spawn.yaw, ..default() },
+            // Whoever spawns a body steps it. On a client that is only ever
+            // the predicted copy, which is marked where it is claimed.
+            Simulated,
             // Seeded rather than left at zero: the step copies aim off the
             // input, so a body spawned facing east would snap north on its
             // first step if the input still said zero.
@@ -353,7 +376,21 @@ pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) {
             Visibility::default(),
             Name::new("Player"),
         ))
-        .with_children(|body| {
+        .id()
+}
+
+/// Hang a camera off whichever body this machine is looking out of.
+///
+/// Keyed on `LocalPlayer` rather than done in [`spawn_player`], because on a
+/// client the body is not spawned here at all: it arrives from the server and
+/// is marked local when it turns out to be ours. A camera is a fact about who
+/// is watching, so it belongs with the mark and not with the body.
+pub fn give_the_local_body_a_camera(
+    mut commands: Commands,
+    bodies: Query<Entity, Added<LocalPlayer>>,
+) {
+    for body in &bodies {
+        commands.entity(body).with_children(|body| {
             body.spawn((
                 PlayerCamera,
                 Camera3d::default(),
@@ -370,6 +407,7 @@ pub fn spawn_player(commands: &mut Commands, spawn: Spawn, id: PlayerId) {
                 Transform::from_xyz(0.0, EYE_OFFSET, 0.0),
             ));
         });
+    }
 }
 
 /// Read the keyboard into [`InputLatch`], once per frame.
@@ -571,7 +609,7 @@ pub fn third_person_camera(
 pub fn step_player(
     time: Res<Time>,
     world: Res<CollisionWorld>,
-    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance, &Inputs)>,
+    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance, &Inputs), With<Simulated>>,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {

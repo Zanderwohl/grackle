@@ -9,6 +9,8 @@ pub struct EditorParams {
     /// Which end of the wire to start as. Defaults to a closed game: opening
     /// the editor to lay out a room must not involve a socket.
     pub net: NetRole,
+    /// Whether to drop straight into a round instead of opening the editor.
+    pub start_playing: bool,
 }
 
 impl EditorParams {
@@ -50,6 +52,16 @@ impl EditorParams {
                     .value_name("PORT")
                     .conflicts_with("connect")
                     .help("Host a game on PORT while playing locally.")
+            )
+            // Mostly for a server: a host that is meant to be running a round
+            // should not need somebody to walk over and press F5. Also the
+            // only way to drive the mode from a script, which is what makes
+            // the networked spawn path testable at all.
+            .arg(
+                Arg::new("play")
+                    .long("play")
+                    .action(ArgAction::SetTrue)
+                    .help("Start in Play rather than in the editor.")
             )
             .arg(
                 Arg::new("connect")
@@ -94,6 +106,7 @@ impl EditorParams {
             lang: lang.to_owned(),
             game_id: game_id.to_owned(),
             net,
+            start_playing: matches.get_flag("play"),
         })
     }
 }
@@ -150,6 +163,12 @@ mod tests {
         assert!(parse(&["--serve", "0"]).is_err());
         assert!(parse(&["--serve", "http"]).is_err());
         assert!(parse(&["--connect", "example.net:0"]).is_err());
+    }
+
+    #[test]
+    fn play_is_off_unless_asked_for() {
+        assert!(!parse(&[]).unwrap().start_playing);
+        assert!(parse(&["--play"]).unwrap().start_playing);
     }
 
     /// The flags that were there before still are.
