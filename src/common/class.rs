@@ -110,8 +110,15 @@ pub fn body_centre_from_feet(feet: Vec3) -> Vec3 {
 ///
 /// The order is the order they are displayed in and nothing more; nothing
 /// persists a class by index.
-#[derive(EnumIter, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// A `Component` as well as an enum, because it is also the answer to "what
+/// shape is this body" — the one thing a viewer needs in order to build a rig
+/// for a body somebody else is driving.
+#[derive(
+    Component, EnumIter, Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Reflect,
+    Serialize, Deserialize,
+)]
 pub enum Class {
+    #[default]
     Scout,
     Soldier,
     Pyro,

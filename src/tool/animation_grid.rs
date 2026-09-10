@@ -10,6 +10,7 @@ use bevy::prelude::*;
 
 use crate::common::damage::Damageable;
 use crate::common::hitbox::Hitboxes;
+use crate::game::player::PhysicsBody;
 use crate::common::skeleton::{
     default_humanoid, draw_skeleton, humanoid, AnimationPhase, DisplaySpeed, ForcedAnimation,
     Pose, SkeletonAnimator, SkeletonPalette,
@@ -39,9 +40,12 @@ impl Plugin for AnimationGridPlugin {
             // entities with the same shape*: shoot one on the server and the
             // client's copy — which nobody told anything — goes on standing
             // there. Bodies come from the authority, like every other body.
+            // Not gated on authority: a client receives these bodies, so it has
+            // to clean them up when the grid they belong to goes away.
+            .add_systems(Update, clear_orphaned_carousels)
             .add_systems(
                 Update,
-                (sync_animation_grids, drive_carousels)
+                (sync_animation_grids, follow_moved_grids, drive_carousels)
                     .chain()
                     .run_if(crate::common::net::has_authority),
             )
@@ -63,6 +67,19 @@ impl Plugin for AnimationGridPlugin {
 #[derive(Component, Debug)]
 #[require(Hitboxes, Damageable)]
 pub struct CarouselBody(pub usize);
+
+/// Which grid a body belongs to, and where in it.
+///
+/// A component rather than `ChildOf`, because these bodies stand in the world
+/// rather than inside the grid entity. That is what lets one be replicated on
+/// its own terms: a viewer is handed a body at a place doing an animation, and
+/// needs to know nothing about grids, cells or rosters to draw it. As a child
+/// its transform would be relative to a parent the viewer does not have.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct OfGrid {
+    pub grid: Entity,
+    pub cell: usize,
+}
 
 /// Put every carousel body into whatever the shared clock says the roster is
 /// showing.
@@ -136,8 +153,8 @@ pub fn drive_carousels(
 pub fn sync_animation_grids(
     mut commands: Commands,
     clock: Res<AnimationClock>,
-    grids: Query<(Entity, Option<&Children>), With<AnimationGridMarker>>,
-    bodies: Query<&CarouselBody>,
+    grids: Query<(Entity, &Transform), With<AnimationGridMarker>>,
+    bodies: Query<&OfGrid>,
     mut last_cycle: Local<Option<u64>>,
 ) {
     // The same boundary `drive_carousels` announces on, read from the same
@@ -147,13 +164,14 @@ pub fn sync_animation_grids(
     let shuffled = last_cycle.replace(cycle) != Some(cycle);
 
     let cells = cells();
-    for (grid, children) in &grids {
+    for (grid, placed_at) in &grids {
         let mut standing = vec![false; cells.len()];
-        for child in children.into_iter().flat_map(|children| children.iter()) {
-            if let Ok(body) = bodies.get(child) {
-                if let Some(cell) = standing.get_mut(body.0) {
-                    *cell = true;
-                }
+        for body in &bodies {
+            if body.grid != grid {
+                continue;
+            }
+            if let Some(cell) = standing.get_mut(body.cell) {
+                *cell = true;
             }
         }
 
@@ -166,16 +184,21 @@ pub fn sync_animation_grids(
             continue;
         }
 
-        commands.entity(grid).with_children(|parent| {
-            for cell in missing {
-                parent.spawn(carousel_body(cell, &cells[cell]));
-            }
-        });
+        for cell in missing {
+            commands.spawn(carousel_body(grid, cell, &cells[cell], placed_at));
+        }
     }
 }
 
 /// One body of the roster, as the grid wants it.
-fn carousel_body(cell: usize, placed: &GridCell) -> impl Bundle {
+///
+/// Placed in the world rather than inside the grid, and its position carried
+/// by `PhysicsBody` like every other body's. That is the whole of what makes
+/// it replicable: what a viewer receives is a body somewhere, of some build,
+/// doing something — the same three facts a player's body is drawn from, and
+/// not one word about carousels.
+fn carousel_body(grid: Entity, cell: usize, placed: &GridCell, at: &Transform) -> impl Bundle {
+    let world = at.transform_point(placed.offset);
     (
         humanoid(placed.class.proportions()),
         Pose::rest(),
@@ -190,11 +213,63 @@ fn carousel_body(cell: usize, placed: &GridCell) -> impl Bundle {
         // instead of being told what is happening to it. Told what to do by
         // `drive_carousels`, every frame.
         CarouselBody(cell),
+        OfGrid { grid, cell },
+        // What it is built like, and what it is doing. The two things a viewer
+        // needs beyond a position, and both of them travel.
+        placed.class,
         ForcedAnimation::default(),
         DisplaySpeed::default(),
-        Transform::from_translation(placed.offset),
+        PhysicsBody::at(world),
+        Transform::from_translation(world),
         Name::new(placed.class.name()),
     )
+}
+
+/// Keep a grid's bodies with it when it is moved.
+///
+/// The price of standing them in the world instead of inside the grid: a child
+/// followed its parent for free. Cheap to pay, and only on the frame a mapper
+/// actually drags the thing.
+pub fn follow_moved_grids(
+    grids: Query<(Entity, &Transform), (With<AnimationGridMarker>, Changed<Transform>)>,
+    mut bodies: Query<(&OfGrid, &mut PhysicsBody, &mut Transform), Without<AnimationGridMarker>>,
+) {
+    if grids.is_empty() {
+        return;
+    }
+    let cells = cells();
+    for (grid, placed_at) in &grids {
+        for (body, mut physics, mut transform) in &mut bodies {
+            if body.grid != grid {
+                continue;
+            }
+            let Some(cell) = cells.get(body.cell) else { continue };
+            let world = placed_at.transform_point(cell.offset);
+            *physics = PhysicsBody::at(world);
+            transform.translation = world;
+        }
+    }
+}
+
+/// Take a grid's bodies with it when the grid goes.
+///
+/// `ChildOf` did this for free too. `RemovedComponents` rather than watching
+/// the timeline, so it covers a grid deleted, a map replaced, and a round
+/// ending alike.
+pub fn clear_orphaned_carousels(
+    mut commands: Commands,
+    mut gone: RemovedComponents<AnimationGridMarker>,
+    bodies: Query<(Entity, &OfGrid)>,
+) {
+    let gone: Vec<Entity> = gone.read().collect();
+    if gone.is_empty() {
+        return;
+    }
+    for (entity, body) in &bodies {
+        if gone.contains(&body.grid) {
+            commands.entity(entity).despawn();
+        }
+    }
 }
 
 impl PlaceablePoint for AnimationGrid {
@@ -404,6 +479,14 @@ mod tests {
         );
     }
 
+    /// The bodies stand in the world, not inside the grid, and still go when
+    /// it does.
+    ///
+    /// They were children, which took care of both for free. Standing them in
+    /// the world is what lets one be replicated on its own terms — a viewer is
+    /// handed a body at a place, and a child's transform is relative to a
+    /// parent the viewer has never heard of — and this is the bookkeeping that
+    /// buys.
     #[test]
     fn the_bodies_belong_to_the_grid() {
         let mut world = grid_world();
@@ -412,10 +495,48 @@ mod tests {
             let mut query = world.query_filtered::<Entity, With<AnimationGridMarker>>();
             query.single(&world).unwrap()
         };
-        assert_eq!(world.get::<Children>(grid).map(|c| c.len()), Some(cells().len()));
+        assert_eq!(
+            world.query::<&OfGrid>().iter(&world).filter(|b| b.grid == grid).count(),
+            cells().len(),
+            "the roster is not the grid's"
+        );
+        assert!(
+            world.get::<Children>(grid).is_none(),
+            "the bodies are still inside the grid, where a viewer cannot place them"
+        );
 
         world.entity_mut(grid).despawn();
+        world.run_system_once(clear_orphaned_carousels).unwrap();
+        world.flush();
         let mut query = world.query::<&ForcedAnimation>();
         assert_eq!(query.iter(&world).count(), 0, "the roster outlived its grid");
+    }
+
+    /// Moving the grid takes its bodies with it. A child did this for free.
+    #[test]
+    fn a_moved_grid_takes_its_bodies_with_it() {
+        let mut world = grid_world();
+        let before = {
+            let mut query = world.query_filtered::<&Transform, With<CarouselBody>>();
+            query.iter(&world).next().unwrap().translation
+        };
+
+        {
+            let grid = {
+                let mut query = world.query_filtered::<Entity, With<AnimationGridMarker>>();
+                query.single(&world).unwrap()
+            };
+            world.get_mut::<Transform>(grid).unwrap().translation = Vec3::new(30.0, 0.0, -12.0);
+        }
+        world.run_system_once(follow_moved_grids).unwrap();
+
+        let after = {
+            let mut query = world.query_filtered::<&Transform, With<CarouselBody>>();
+            query.iter(&world).next().unwrap().translation
+        };
+        assert!(
+            (after - before - Vec3::new(30.0, 0.0, -12.0)).length() < 1e-4,
+            "the body did not move with its grid: {before} then {after}"
+        );
     }
 }

@@ -25,6 +25,7 @@ use bevy::transform::TransformSystems;
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::damage::PlayerId;
+use crate::common::class::Class;
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{
     draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
@@ -85,6 +86,7 @@ impl Plugin for SkeletonPlugin {
                 // A body that misses its rig never gets another chance and is
                 // simply invisible for the rest of the match.
                 dress_new_players,
+                dress_bodies_from_elsewhere,
                 equip_new_bodies,
                 // After the rig exists, so the phase lands on a body that has
                 // something to animate.
@@ -350,6 +352,40 @@ fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
             let animated = pose.joint(joint);
             pose.set(joint, animated * Quat::from_rotation_x(-player.pitch * share));
         }
+    }
+}
+
+/// Dress a body that arrived from somewhere else.
+///
+/// A player's body is dressed off `Added<Player>`. A body that is not a player
+/// — one standing in an animation grid, say — arrives carrying a `Class`, a
+/// `ForcedAnimation` and a position, and nothing else. That is deliberately
+/// all a viewer is told: it is a body, of this build, doing this, here. What a
+/// grid is, which cell it stands in, and what the roster is showing are the
+/// authority's business and stay there.
+///
+/// Keyed on `Class` because that is the component which says "a body, built
+/// like this". `insert_if_new` throughout, so a body that already brought its
+/// own rig — every one the authority itself stood up — is left alone.
+fn dress_bodies_from_elsewhere(
+    mut commands: Commands,
+    bodies: Query<(Entity, &Class), (Added<Class>, Without<Skeleton>)>,
+) {
+    for (body, class) in &bodies {
+        commands.entity(body).insert_if_new((
+            humanoid(class.proportions()),
+            Pose::rest(),
+            SkeletonAnimator::default(),
+            BodyRequests::default(),
+            AnimationPhase::default(),
+            // A place to be drawn and a say in whether it is. `Player`
+            // requires both, so a player's body has them before anything
+            // replicates; one that is not a player arrives carrying only the
+            // facts about itself, and its parts would hang off an entity with
+            // no `GlobalTransform` to inherit.
+            Transform::default(),
+            Visibility::default(),
+        ));
     }
 }
 

@@ -178,3 +178,25 @@ pub fn replicate_projectiles(
             .insert(Replicate::to_clients(NetworkTarget::All));
     }
 }
+
+/// Show everybody the bodies standing in an animation grid.
+///
+/// The authority stands them up — they have health and hitboxes, so somebody
+/// has to be believed about whether each is alive — and everybody else is
+/// handed the result. What crosses is a position, a build and an animation;
+/// `CarouselBody` and `OfGrid` stay here, because a viewer drawing a body does
+/// not need to know it is part of a roster.
+pub fn replicate_display_bodies(
+    mut commands: Commands,
+    role: Res<NetRole>,
+    standing: Query<Entity, (Added<crate::tool::animation_grid::CarouselBody>, Without<Replicate>)>,
+) {
+    if !matches!(*role, NetRole::Listen { .. }) {
+        return;
+    }
+    for body in &standing {
+        commands
+            .entity(body)
+            .insert(Replicate::to_clients(NetworkTarget::All));
+    }
+}

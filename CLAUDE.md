@@ -811,15 +811,31 @@ on every machine from the same feature, the copies are *different entities with
 the same shape*. Shoot one on the server and the client's copy, which nobody
 told anything, goes on standing there.
 
-So `sync_animation_grids` and `drive_carousels` are gated on `has_authority`.
-The grid *feature* still exists everywhere — it is map content, it draws its
-gizmos, a mapper can still move it — but the bodies it stands up come from the
-authority like every other body.
+So `sync_animation_grids`, `follow_moved_grids` and `drive_carousels` are gated
+on `has_authority`. The grid *feature* still exists everywhere — it is map
+content, it draws its gizmos, a mapper can still move it — but the bodies it
+stands up come from the authority like every other body, and reach everybody
+else by replication.
 
-A client currently sees an empty grid rather than the server's bodies: they are
-spawned as children of the grid entity with transforms local to it, so
-replicating them would need them to become root entities carrying world
-transforms first. Empty and consistent beats populated and disagreeing.
+**A viewer is never told what a carousel body is.** `CarouselBody` and `OfGrid`
+do not cross the wire; what does is a `PhysicsBody`, a `Class` and a
+`ForcedAnimation`/`DisplaySpeed` — a body somewhere, of some build, doing
+something. That is the same set of facts a player's body is drawn from, so
+`dress_bodies_from_elsewhere` gives it a rig and the ordinary drawing does the
+rest. Grids, cells and rosters stay on the authority, which is the only place
+they mean anything.
+
+That is why the bodies **stand in the world rather than inside the grid**. They
+were children, which made moving and despawning free but made a body's
+transform relative to a parent a viewer has never heard of. `OfGrid` replaces
+`ChildOf`, and `follow_moved_grids` and `clear_orphaned_carousels` are the
+bookkeeping that buys — the second of which is *not* authority-gated, since a
+client holds these bodies and has to drop them when the grid goes.
+
+`interpolate_bodies` is also no longer gated on `AppMode::Play`: `PhysicsBody`
+is where a thing *is*, and that is as true of a body standing in a grid in the
+editor as of a player mid-round. Gated, a replicated display body sits at the
+origin until somebody starts a round.
 
 **Known gaps, all of them "not sent yet" rather than "broken":**
 
@@ -827,7 +843,6 @@ transforms first. Empty and consistent beats populated and disagreeing.
 - No client-side prediction, so movement is a round-trip behind on a client.
   Looking around is not — the view is a separate entity aimed from the local
   latch. Prediction goes back on top of this, as one layer, not through it.
-- A client sees no animation-grid bodies (above).
 
 ### The map every client is standing in
 

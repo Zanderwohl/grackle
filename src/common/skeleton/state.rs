@@ -209,7 +209,7 @@ impl BodyRequests {
 /// stores the state as [`AnimationState::index`] — so **add new states at the
 /// end** and do not reorder. A shuffled list would silently repoint every
 /// saved display at a different animation.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, EnumIter)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, EnumIter, Reflect)]
 pub enum AnimationState {
     #[default]
     Idle,
@@ -562,7 +562,9 @@ impl SkeletonAnimator {
 /// For showing an animation rather than driving a character: the editor's
 /// Animation Display feature, and anything else that wants a body to stand
 /// there doing one named thing.
-#[derive(Component, Clone, Copy, Debug, Default)]
+#[derive(
+    Component, Clone, Copy, Debug, Default, PartialEq, Reflect, Serialize, Deserialize,
+)]
 pub struct ForcedAnimation(pub AnimationState);
 
 /// How long one idle cycle takes, in seconds.

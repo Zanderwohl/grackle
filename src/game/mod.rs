@@ -122,15 +122,15 @@ impl Plugin for GamePlugin {
                 .run_if(crate::common::net::has_authority))
             // Draws the body between fixed steps, so a 64 Hz simulation does
             // not step visibly on a 144 Hz display.
-            .add_systems(RunFixedMainLoop, (
-                interpolate_bodies,
-                // Beside the interpolation and for the same reason: both are
-                // "put the body where it is drawn this frame", one for
-                // position and one for facing. Every frame rather than every
-                // tick, so a body turning is drawn turning smoothly even
-                // though the yaw behind it only changes at 64 Hz.
-                face_bodies,
-            ).in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
+            // Not gated on `AppMode::Play`, unlike everything around it:
+            // `PhysicsBody` is where a thing *is*, and that is as true of a
+            // body standing in an animation grid in the editor as it is of a
+            // player mid-round. Gated, a replicated display body sits at the
+            // origin until somebody starts a round.
+            .add_systems(RunFixedMainLoop, interpolate_bodies
+                .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop))
+            .add_systems(RunFixedMainLoop, face_bodies
+                .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
                 .run_if(in_state(AppMode::Play)))
         ;
     }

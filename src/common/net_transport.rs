@@ -101,6 +101,7 @@ impl Plugin for NetTransportPlugin {
                     open_link_for_role.run_if(resource_changed::<NetRole>),
                     report_status,
                     crate::common::net_events::replicate_projectiles,
+                    crate::common::net_events::replicate_display_bodies,
                 )
                     .chain(),
             );
