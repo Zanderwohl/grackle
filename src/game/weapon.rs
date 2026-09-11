@@ -36,7 +36,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::weapon::{
-    Ammo, Cadence, Cost, Equipped, Magazine, Mounted, Slot, WeaponAction, WeaponCatalogue,
+    Ammo, Cadence, Cost, Equipped, Magazine, Mounted, WeaponAction, WeaponCatalogue,
 };
 use crate::game::damage::{DamagePlugin, DamageSystems};
 use crate::game::explosion::ExplosionPlugin;
@@ -396,7 +396,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
-    use crate::common::weapon::{HitscanSpec, Magazine, Weapon, WeaponId, SLOTS};
+    use crate::common::weapon::{HitscanSpec, Magazine, Slot, Weapon, WeaponId, SLOTS};
     use crate::common::weapon_file::default_catalogue;
 
     /// One fixed step at Bevy's 64 Hz default.

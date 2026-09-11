@@ -29,7 +29,7 @@ use crate::common::class::Class;
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{
     draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
-    direction_of, DisplaySpeed, ForcedAnimation, Gait, Pose, PoseInputs, Proportions, Skeleton,
+    direction_of, DisplaySpeed, ForcedAnimation, Gait, Pose, PoseInputs, Skeleton,
     SkeletonAnimator,
     SkeletonPalette,
 };
@@ -285,18 +285,39 @@ fn describe_player_bodies(
     }
 }
 
-/// Give every newly spawned body a skeleton.
+/// Give every body a skeleton built from its class.
 ///
-/// Keyed off `Added<Player>` rather than done in `enter_play`, because the
-/// body is spawned by a command there and does not exist until that schedule's
-/// commands are applied. This also covers any other way a body comes to be.
-fn dress_new_players(mut commands: Commands, players: Query<Entity, Added<Player>>) {
-    for player in &players {
+/// A system rather than something `enter_play` does, because the body is
+/// spawned by a command there and does not exist until that schedule's
+/// commands are applied. This also covers every other way a body comes to be.
+///
+/// **Keyed on absence, not on `Added`.** A body's `Class` is `replicate_once`
+/// and arrives in its own message, so a replicated body really can exist for a
+/// frame or two without one — the same window `dress_corpses_from_elsewhere`
+/// was written for, where three arrivals in eight were measured late. Keyed on
+/// the class *arriving*, a body whose class came a frame after it did would
+/// never be dressed at all, and an undressed body is invisible rather than an
+/// error. Asking whether it has a rig yet has no such window.
+///
+/// The build comes from the body's own `Class` rather than from
+/// `Proportions::DEFAULT`. Those agree today, since every player is a
+/// `Mercenary` and a Mercenary is the default build — but they agreed by
+/// coincidence, so giving a class its own silhouette would have moved the
+/// gizmo in the editor and left the body the game actually moves unchanged.
+///
+/// What this must *not* start doing is deciding a corpse's build from a class.
+/// `CorpseBuild` is read off the rig a body had, and that is what makes it
+/// right for a body however it came to be rigged.
+fn dress_new_players(
+    mut commands: Commands,
+    players: Query<(Entity, &Class), (With<Player>, Without<Skeleton>)>,
+) {
+    for (player, class) in &players {
         // `insert_if_new`, not `insert`: a replicated body may already carry
         // a `Stance` the server sent, and overwriting it with a default here
         // would stand a crouching body up for a frame.
         commands.entity(player).insert_if_new((
-            humanoid(Proportions::DEFAULT),
+            humanoid(class.proportions()),
             Pose::rest(),
             SkeletonAnimator::default(),
             BodyRequests::default(),
@@ -367,9 +388,16 @@ fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
 /// Keyed on `Class` because that is the component which says "a body, built
 /// like this". `insert_if_new` throughout, so a body that already brought its
 /// own rig — every one the authority itself stood up — is left alone.
+///
+/// **`Without<Player>` is not decoration.** A player's body carries a `Class`
+/// too now, so without it both dressing systems match the same body in the
+/// same frame and whichever's commands applied first decided the rig — and
+/// this one does not insert a `SkeletonRoot`, so the loser is a body drawn
+/// half a metre off the ground. The two are disjoint by what they are for:
+/// [`dress_new_players`] dresses people, this dresses everything else.
 fn dress_bodies_from_elsewhere(
     mut commands: Commands,
-    bodies: Query<(Entity, &Class), (Added<Class>, Without<Skeleton>)>,
+    bodies: Query<(Entity, &Class), (Added<Class>, Without<Skeleton>, Without<Player>)>,
 ) {
     for (body, class) in &bodies {
         commands.entity(body).insert_if_new((
@@ -509,6 +537,90 @@ mod tests {
             .resource_mut::<Time>()
             .advance_by(std::time::Duration::from_millis(16));
         app.world_mut().run_system_once(advance_animators).unwrap();
+    }
+
+    /// One pass of both dressing systems, commands applied.
+    fn dress(world: &mut World) {
+        world.run_system_once(dress_new_players).unwrap();
+        world.run_system_once(dress_bodies_from_elsewhere).unwrap();
+        world.flush();
+    }
+
+    /// A body is built from its own class, not from a constant that happens to
+    /// match it.
+    ///
+    /// Every player is a `Mercenary` today and a Mercenary *is*
+    /// `Proportions::DEFAULT`, so this passes either way right now — which is
+    /// exactly why it is written down. Give a class its own silhouette and a
+    /// rig hardcoded to the default would move the gizmo in the editor and
+    /// leave the body the game actually moves unchanged.
+    #[test]
+    fn a_body_is_built_from_its_class() {
+        let mut world = World::new();
+        // A class that is nothing like the default, so the assertion has
+        // something to catch.
+        let body = world.spawn((Player::default(), Class::Heavy)).id();
+
+        dress(&mut world);
+
+        let rig = world.get::<Skeleton>(body).expect("a body with a class went undressed");
+        assert_eq!(
+            rig.proportions(), Class::Heavy.proportions(),
+            "the body was built from something other than its class"
+        );
+    }
+
+    /// A `Class` is `replicate_once` and arrives in its own message, so a
+    /// replicated body really can exist for a frame or two without one. It is
+    /// dressed when the class turns up, not never.
+    ///
+    /// Keyed on the class *arriving* rather than on the rig's absence, this is
+    /// a body that is invisible for the rest of the match — and invisible, not
+    /// an error.
+    #[test]
+    fn a_body_whose_class_is_late_is_dressed_when_it_arrives() {
+        let mut world = World::new();
+        let body = world.spawn(Player::default()).id();
+
+        dress(&mut world);
+        assert!(
+            world.get::<Skeleton>(body).is_none(),
+            "a body with no class was dressed as something"
+        );
+
+        world.entity_mut(body).insert(Class::Sniper);
+        dress(&mut world);
+
+        let rig = world.get::<Skeleton>(body).expect("the class arrived and nothing dressed it");
+        assert_eq!(rig.proportions(), Class::Sniper.proportions());
+    }
+
+    /// The two dressing systems are disjoint, and a player's is the one that
+    /// wins.
+    ///
+    /// A player's body carries a `Class` now, so both would match it — and
+    /// `dress_bodies_from_elsewhere` inserts no `SkeletonRoot`, so a player
+    /// dressed by the wrong one is drawn half a metre off the ground.
+    #[test]
+    fn a_players_body_is_dressed_as_a_player() {
+        let mut world = World::new();
+        let player = world.spawn((Player::default(), Class::Mercenary)).id();
+        let display = world.spawn(Class::Mercenary).id();
+
+        dress(&mut world);
+
+        assert!(
+            world.get::<SkeletonRoot>(player).is_some(),
+            "a player's rig has no root, so it is drawn at the wrong height"
+        );
+        assert!(
+            world.get::<Skeleton>(display).is_some(),
+            "a body that is not a player went undressed"
+        );
+        assert!(
+            world.get::<SkeletonRoot>(display).is_none(),
+            "a display body was given a player's root offset"
+        );
     }
 
     /// A real body carries a marker that requires hitboxes; a spawn point's

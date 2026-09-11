@@ -653,8 +653,20 @@ every kind of action, so the whole table is reachable by walking up to it and
 clicking. `the_placeholder_class_carries_one_of_everything` is what fails when
 a new variant is wired to nothing. It decides what a body *carries* and nothing
 else: the rig is still built from `Proportions::DEFAULT` and a corpse's build
-is still read off the rig, because keying either on a class is the bug that
-replicated every corpse in the game correctly except a player's.
+is still read off the rig, because keying a *corpse* on a class is the bug
+that replicated every corpse in the game correctly except a player's.
+
+`dress_new_players` does build a body's rig from its `Class` now, which is a
+different thing: a rig is built once, from a component the body has, and a
+corpse still reads its build off whatever rig it ended up with. Two details
+there are load-bearing. It is **keyed on the absence of a rig, not on
+`Added<Class>`** — a `Class` is `replicate_once` and arrives in its own
+message, so a body keyed on the class arriving would go undressed for the rest
+of the match if it turned up a frame late, and undressed is invisible rather
+than an error. And `dress_bodies_from_elsewhere` carries a `Without<Player>`,
+because a player's body has a `Class` too now and that system inserts no
+`SkeletonRoot` — a player dressed by the wrong one is drawn half a metre off
+the ground.
 
 **The catalogue is one description, held by the authority.**
 [`src/common/weapon_sync.rs`](src/common/weapon_sync.rs) sends it to each
