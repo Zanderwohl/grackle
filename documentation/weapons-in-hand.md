@@ -92,6 +92,29 @@ already uses and the reason it runs after `advance_animators`.
 That is what lets a reload play over a sprint without either knowing about the
 other.
 
+### Animations live with the weapon, and go last in the file
+
+A hold is geometry and lives on the prop; **an animation is behaviour and lives
+on the weapon**, in `weapons.toml`, where a weapon's timing already is —
+`Magazine.reload` is there now. An animation is expressed as a deviation from
+the hold, so the two stay in their own layers.
+
+**Below the fields somebody edits by hand, and that is a correctness rule
+rather than a courtesy.** An array-of-tables header in TOML captures every key
+written after it, so a `[[weapons.rocket_launcher.animations]]` followed by
+`name_key` would silently make that a property of the animation. Anything
+frequently hand-edited has to come first, and the animations go at the bottom.
+
+Nothing enforces it. `weapons.toml` is read by code and never written by it
+(the only things this repo serialises are props and lang files), so the order
+is a convention a person keeps — which is exactly why it is written down here
+and in the file's own header.
+
+The escape hatch, if animations grow past a few lines each and start crowding
+out the numbers people actually tune: a sibling file keyed by weapon id.
+Nothing in the design prevents it, and it is a move worth making late rather
+than early.
+
 ### Models cross the wire as documents, not as meshes
 
 After the catalogue, on connect, the way `weapon_sync` sends the catalogue and
@@ -112,6 +135,40 @@ Not an error and not a placeholder model. The hand aims as though it held
 something, and nothing is drawn. Most weapons will be in this state for a
 while, and the failure mode of the alternative — a stand-in cube in everybody's
 hands — is worse than empty hands.
+
+### First person performs; third person indicates
+
+**They are separate animation sets, and sometimes unrelated.** A shared base
+with a viewmodel offset on top was the tidier-sounding option and it is the
+wrong one: a viewmodel is a performance staged for one viewer, and a
+third-person body is read across a room in a fight.
+
+What follows from that is a real saving. Nobody needs to read another player's
+reload *faithfully* — this is not a game where counting somebody's rounds is
+the play — so third person needs a **small generic set** of arm states, shared
+by every weapon: holding, firing, reloading. Enough to say "that one is busy"
+at a glance. Per-weapon authoring is then a first-person job only, which is
+where it is actually worth the effort, and it is roughly half the work the
+symmetrical version would have been.
+
+### Nothing special while sprinting
+
+The lower body has a sprint state; the arms do not get one. This is closer to
+TF2 than to Counter-Strike, and a weapon that lowers itself when you run is a
+decision about how the game plays rather than about how it looks. It may come
+later; it is not part of this.
+
+### The shot comes from the eye; only the flash moves
+
+The muzzle flash is drawn at the weapon's muzzle and the shot still originates
+at [`hitscan::eye`](../src/game/hitscan.rs) along `Player.pitch`.
+
+**The tradeoff is accepted, not overlooked**: crouched behind something with
+only your eyes over it, you can shoot through the thing your weapon is buried
+in. Plenty of games take that trade, and the alternative — firing from the
+muzzle — changes hit registration and what a corner peek is worth, which is a
+gameplay change wearing a visual fix's clothes. Written down here so that
+nobody later "fixes" it.
 
 ### The viewmodel is two arms, not a floating weapon
 
@@ -151,29 +208,16 @@ this codebase keeps naming.
 
 ## Open questions
 
-**Do the first-person arms share the third-person pose?** Sharing is the
-obvious pick — the same arm bones, the same `HoldSpec`, so a reload is authored
-once — and it is what the "one description" rule would say. But viewmodels are
-conventionally exaggerated: bigger, closer, with motion a third-person arm
-would never make. If that turns out to be wanted, the shared pose becomes a
-base with a viewmodel-specific offset on top, which is a different design than
-starting from one.
-
-**Where does a shot come from once the weapon is visible?** From the eye today,
-which nobody can see. A muzzle flash at the eye would be obviously wrong, and
-moving the *origin* to the muzzle changes hit registration and what a corner
-peek can do. The likely answer is that the shot keeps coming from the eye and
-only the flash moves, but that is a decision and not an oversight.
-
-**What happens to the hold during a crouch, a sprint or a jump?** The lower
-body has states for all three and the arms currently have none. A sprint that
-lowers the weapon is a real design choice with real gameplay weight, and it is
-the first thing that will want an arm state that is not "holding".
-
-**Do weapon animations live in the prop file?** The hold does, by the decision
-above. A reload is a sequence rather than a pose, and the prop format has no
-notion of time in it. That may argue for a sibling file, or for the prop format
-growing one.
-
 **Is a hold mirrored for a left-handed body?** Nothing is left-handed today and
 nothing asks to be.
+
+**What shape is an animation?** The hold is two points, and a pose deviating
+from it is presumably a few more. A reload is a *sequence*, though, and neither
+the prop format nor `weapons.toml` has any notion of time in it — so whatever
+this turns out to be is the first thing in the project to need keyframes. It is
+the reason stage 6 is last.
+
+**Does the third-person generic set need a weapon at all?** If a reload is
+three arm states shared by every weapon, it may not need to know what is being
+reloaded — in which case it is an `AnimationState` variant and not part of this
+document. Worth checking before building it as something bigger.

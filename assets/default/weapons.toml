@@ -18,6 +18,13 @@
 # its own pack. Omitted means nobody has modelled this weapon yet, which is
 # every weapon so far.
 #
+# **Animations, when they exist, go at the bottom of an entry.** Not tidiness:
+# a TOML array-of-tables header captures every key written after it, so an
+# `[[weapons.x.animations]]` followed by `name_key` would quietly make that a
+# property of the animation. The fields above are the ones people tune, so they
+# come first. Nothing enforces this — weapons.toml is read by code and never
+# written by it.
+#
 # `magazine.clip` omitted means the weapon has no clip at all: its whole supply
 # is loaded, each shot comes straight out of the reserve, and it never reloads.
 # That is the minigun, and it is an absent clip rather than a clip the size of
