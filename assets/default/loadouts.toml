@@ -15,12 +15,16 @@
 # The placeholder everybody actually plays as, and deliberately a sampler:
 # between its six mounted buttons it reaches every kind of action there is, so
 # the whole table can be checked by walking up to it and clicking.
+# One weapon per slot, so every one of them is reachable by a digit. Nothing
+# switches *within* a slot yet — `permitted` is for the loadout screen that
+# does not exist — so two weapons sharing a slot would mean one you cannot get
+# at.
 [loadouts.mercenary.primary]
-permitted = ["laser_rifle", "flamethrower"]
+permitted = ["laser_rifle"]
 default = "laser_rifle"
 
 [loadouts.mercenary.secondary]
-permitted = ["rocket_launcher", "pipe_launcher"]
+permitted = ["rocket_launcher"]
 default = "rocket_launcher"
 
 [loadouts.mercenary.melee]
@@ -30,3 +34,11 @@ default = "medi_wrench"
 [loadouts.mercenary.utility]
 permitted = ["flamethrower"]
 default = "flamethrower"
+
+[loadouts.mercenary.gadget]
+permitted = ["pill_launcher"]
+default = "pill_launcher"
+
+[loadouts.mercenary.special]
+permitted = ["rpg"]
+default = "rpg"

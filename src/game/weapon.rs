@@ -608,13 +608,22 @@ mod tests {
         );
     }
 
-    /// A slot the class does not carry is not a slot: pressing `5` on a body
-    /// with four weapons leaves you holding what you had.
+    /// A slot the class does not carry is not a slot: pressing `6` on a class
+    /// with one weapon leaves you holding what you had.
+    ///
+    /// Against a class that really does leave slots empty, rather than against
+    /// the placeholder — which fills all six, so it cannot say anything about
+    /// this and would pass by accident if the guard were removed.
     #[test]
     fn selecting_an_empty_slot_changes_nothing() {
-        let mut world = a_world(default_catalogue());
+        let mut world = a_world(one_weapon(weapon(
+            semi(WeaponAction::Hitscan(LASER), 1),
+            Mounted::EMPTY,
+            Magazine::BOTTOMLESS,
+        )));
         let body = a_shooter(&mut world);
         let held = world.get::<Equipped>(body).unwrap().held;
+        assert_eq!(held, Slot::Primary, "the fixture stopped leaving slots empty");
 
         input(&mut world, body).select = Some(Slot::Special);
         world.run_system_once(select_weapons).unwrap();

@@ -28,14 +28,34 @@ secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { 
 name_key = "weapon.names.rocket_launcher"
 magazine = { clip = 4, reserve = 20, reload = 0.8, reload_one_at_a_time = true }
 primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 30.0, gravity_factor = 0.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.0, damage_direct_hit = 90, damage_splash = 60, knockback = 9.0, radius = 0.12 } }
-# The TF2C-style RPG: the same rocket, but it falls. One number apart, which is
-# the point of the spec being numbers.
-secondary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 34.0, gravity_factor = 1.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.0, damage_direct_hit = 90, damage_splash = 60, knockback = 9.0, radius = 0.12 } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
-[weapons.pipe_launcher]
-name_key = "weapon.names.pipe_launcher"
-magazine = { clip = 6, reserve = 24, reload = 1.2 }
-primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 24.0, gravity_factor = 1.0, air_resistance = 0.1, spin_rate = 12.0, max_bounces = 4, restitution = 0.45, max_lifetime = 2.3, explodes_at_last_bounce = true, explodes_at_lifetime_end = true, explosion_radius = 3.4, damage_direct_hit = 100, damage_splash = 60, knockback = 10.0, radius = 0.14 } }
+# The TF2C-style RPG: the same rocket as above, but it falls — one number
+# apart, which is the point of the spec being numbers rather than a type.
+#
+# One in the clip, so the arc is a shot you commit to rather than one of four.
+# The reload is the weapon: everything about it is arranged so that a miss
+# costs you a second and a half.
+[weapons.rpg]
+name_key = "weapon.names.rpg"
+magazine = { clip = 1, reserve = 8, reload = 1.5 }
+primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 34.0, gravity_factor = 1.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.2, damage_direct_hit = 110, damage_splash = 70, knockback = 11.0, radius = 0.14 } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
+
+# The demoman's: pills that arc, tumble, bounce off a wall and go off on their
+# fuse — or the instant they land on somebody, since a direct hit detonates
+# whatever the spec says.
+#
+# Two bounces rather than four, because a pill's fuse is meant to be the thing
+# that ends it and a pill still rattling round a corner after four walls is a
+# sticky. A real stickybomb launcher wants an action nothing has yet: one that
+# sets bombs down and detonates them when told, rather than on a timer.
+#
+# Reloaded one round at a time, so firing out of a half-full clip is a choice.
+[weapons.pill_launcher]
+name_key = "weapon.names.pill_launcher"
+magazine = { clip = 4, reserve = 16, reload = 0.6, reload_one_at_a_time = true }
+primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 23.0, gravity_factor = 1.0, air_resistance = 0.1, spin_rate = 12.0, max_bounces = 2, restitution = 0.45, max_lifetime = 2.3, explodes_at_last_bounce = true, explodes_at_lifetime_end = true, explosion_radius = 3.4, damage_direct_hit = 100, damage_splash = 60, knockback = 10.0, radius = 0.14 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
 # No clip: the whole supply is loaded, and it never reloads.

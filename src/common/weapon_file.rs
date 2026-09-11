@@ -379,6 +379,28 @@ mod tests {
         assert!(equipped.held().is_some(), "it spawned holding nothing while carrying something");
     }
 
+    /// Every weapon the default pack defines is reachable by pressing a
+    /// digit.
+    ///
+    /// Nothing switches *within* a slot yet — `permitted` is for a loadout
+    /// screen that does not exist — so a weapon sharing a slot with another is
+    /// a weapon nobody can get at, and a weapon nobody can get at is a weapon
+    /// nobody will notice is broken. Delete this test when there is a way to
+    /// choose between a slot's permitted weapons, not before.
+    #[test]
+    fn every_shipped_weapon_is_on_a_digit() {
+        let catalogue = the_default_pack();
+        let loadout = catalogue.loadout(Class::Mercenary).expect("no placeholder loadout");
+
+        for weapon in &catalogue.weapons {
+            assert!(
+                loadout.slots.iter().any(|(_, choices)| choices.default == weapon.id),
+                "{} is defined but no slot starts with it, so nobody can hold it",
+                weapon.name_key
+            );
+        }
+    }
+
     /// A class is written in a file the way its variant is, derived from the
     /// variant rather than listed beside it.
     #[test]

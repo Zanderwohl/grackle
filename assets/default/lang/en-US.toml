@@ -165,7 +165,8 @@ summary = "{ bodies } bodies, { width } m by { depth } m."
 [weapon.names]
 laser_rifle = "Laser Rifle"
 rocket_launcher = "Rocket Launcher"
-pipe_launcher = "Pipe Bomb Launcher"
+pill_launcher = "Pill Launcher"
+rpg = "RPG"
 flamethrower = "Flamethrower"
 medi_wrench = "Medi-Wrench"
 
