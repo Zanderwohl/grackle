@@ -431,9 +431,11 @@ bodies = "{ count } bodies"
 triangles = "{ count } triangles"
 
 [prop.problems]
-# Plain ASCII on purpose: this one has to render in any font, because the case
-# it marks is the case where something is already wrong.
-marker = "(!)"
+# Checked on screen rather than assumed. egui's fonts cover Miscellaneous
+# Symbols — `⚠` renders — but not Geometric Shapes, which is what made `▲` and
+# `▼` hollow boxes a commit ago. Worth knowing before reaching for another
+# glyph: the block it is in decides, not whether it looks like an icon.
+marker = "⚠"
 none = "No problems."
 missing_body = "points at a body that is not there"
 self_boolean = "points at itself"
