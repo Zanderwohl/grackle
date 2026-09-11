@@ -69,6 +69,24 @@ pub struct HeldModel {
     hold: HoldSpec,
 }
 
+impl HeldModel {
+    /// The weapon the parts were built for, and which version of the cache
+    /// they came from — the two questions anything mirroring this has to ask
+    /// as well.
+    pub fn showing(&self) -> (Option<WeaponId>, u64) {
+        (self.weapon, self.cached_at)
+    }
+
+    /// The drawn parts, for anything that wants to copy them.
+    pub fn parts(&self) -> &[Entity] {
+        &self.parts
+    }
+
+    pub fn hold(&self) -> &HoldSpec {
+        &self.hold
+    }
+}
+
 pub struct HeldWeaponPlugin;
 
 impl Plugin for HeldWeaponPlugin {

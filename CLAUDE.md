@@ -216,8 +216,17 @@ Three things there are easy to get wrong and none of them errors:
   the cursor unconditionally grabs it inside the editor on the first frame of
   the process.
 
-The play camera carries `IsDefaultUiCamera`: the window has five cameras in it
+The play camera carries `IsDefaultUiCamera`: the window has six cameras in it
 and Bevy UI otherwise picks one by ambiguity rules rather than by being told.
+
+**Every camera carries a zero-sized marker and every query filters on one** —
+`Multicam` for the four editor viewports, `PlayerCamera` for the view,
+`ViewmodelCamera` for the one drawn over it. A query that asks for `&Camera`
+alone gets whichever ones happen to match, and the failure is not a compile
+error: it is `place_camera` moving two cameras, or damage numbers projected
+through the wrong one. The viewmodel camera is a **child** of the play camera,
+so the two can never disagree about where you are looking and
+`despawn_the_view` takes it down without knowing it exists.
 
 Three more keys while playing: **`F`** swaps between first and third person
 (`ViewMode` in [`src/game/player.rs`](src/game/player.rs) — your own body and

@@ -38,6 +38,7 @@ pub mod pause_menu;
 pub mod hud;
 pub mod ragdoll;
 pub mod skeleton;
+pub mod viewmodel;
 
 /// Playing the map that is currently open in the editor.
 ///

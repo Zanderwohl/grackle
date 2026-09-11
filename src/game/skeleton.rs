@@ -34,6 +34,7 @@ use crate::common::skeleton::{
 };
 use crate::game::body_mesh::BodyMeshPlugin;
 use crate::game::held::HeldWeaponPlugin;
+use crate::game::viewmodel::ViewmodelPlugin;
 use crate::game::hitbox::HitboxPlugin;
 use crate::game::weapon::WeaponPlugin;
 use crate::game::player::{
@@ -74,7 +75,7 @@ impl Plugin for SkeletonPlugin {
             // Beside the body meshes, and ungated for the same reason: a
             // held weapon is presentation, and a body standing in an
             // animation grid in the editor holds one too.
-            .add_plugins((BodyMeshPlugin, HeldWeaponPlugin))
+            .add_plugins((BodyMeshPlugin, HeldWeaponPlugin, ViewmodelPlugin))
             .add_plugins(GameTimePlugin)
             .init_resource::<ShowBones>()
             .add_systems(Update, toggle_bones)
