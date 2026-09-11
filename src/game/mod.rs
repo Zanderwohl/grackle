@@ -35,6 +35,7 @@ pub mod weapon;
 pub mod player;
 pub mod net_bodies;
 pub mod pause_menu;
+pub mod hud;
 pub mod ragdoll;
 pub mod skeleton;
 
@@ -56,6 +57,10 @@ impl Plugin for GamePlugin {
             // Escape, and the mouse comes back. Part of the game rather than
             // of the editor, so plain Bevy UI and no egui.
             .add_plugins(PauseMenuPlugin)
+            // The crosshair and what you are holding. Beside the pause menu
+            // and for the same reason: plain Bevy UI, because this is the game
+            // rather than the editor.
+            .add_plugins(crate::game::hud::HudPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
 
