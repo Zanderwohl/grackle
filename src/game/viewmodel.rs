@@ -39,6 +39,7 @@
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::camera::Hdr;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
@@ -109,6 +110,11 @@ fn give_the_view_its_own_camera(
                     clear_color: ClearColorConfig::None,
                     ..default()
                 },
+                // **Matched to the play camera's, not chosen.** Two cameras
+                // stacked on one window target with different HDR settings
+                // render to different textures, and the one on top composites
+                // as nothing — no error, no warning, an empty overlay.
+                Hdr,
                 Tonemapping::TonyMcMapface,
                 Projection::Perspective(PerspectiveProjection {
                     fov: VIEWMODEL_FOV,
@@ -274,4 +280,3 @@ mod tests {
         );
     }
 }
-
