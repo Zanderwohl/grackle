@@ -93,6 +93,10 @@ impl Plugin for NetTransportPlugin {
             // After the protocol, since it registers a channel and a message.
             .add_plugins(crate::common::match_state::MatchStatePlugin)
             .add_plugins(crate::common::map_sync::MapSyncPlugin)
+            // The weapons a server plays with, handed to everybody who
+            // connects. Beside the map, because it is the same problem: one
+            // description of one thing, held by the authority.
+            .add_plugins(crate::common::weapon_sync::WeaponSyncPlugin)
             .add_plugins(crate::common::net_events::NetEventsPlugin)
             // Prediction is gated on this resource existing rather than on a
             // plugin, so it goes in once and stays: a process hosting now may

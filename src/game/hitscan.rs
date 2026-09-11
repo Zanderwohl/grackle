@@ -42,7 +42,8 @@ use crate::game::damage::DamageSystems;
 use crate::game::hitbox::update_hitboxes;
 use crate::game::player::{step_player, PhysicsBody, Player};
 use crate::game::ragdoll::{Push, RagdollShove};
-use crate::game::weapon::{Loadout, TriggerPulled, Weapon};
+use crate::common::weapon::{HitscanSpec, WeaponAction};
+use crate::game::weapon::WeaponActionFired;
 
 /// How far the debug laser reaches, in metres.
 ///
@@ -58,39 +59,21 @@ const TRACER_LIFETIME: f32 = 0.12;
 /// Radius of the ball drawn at a hit, in metres. Twenty centimetres across.
 pub const HIT_BALL_RADIUS: f32 = 0.1;
 
-/// What one shot takes off a body.
-///
-/// A single number for a weapon that does not exist: there is no falloff, no
-/// spread and no reload, so this is the whole of the damage model. A real
-/// weapon brings its own, and this constant is what gets deleted rather than
-/// generalised.
-pub const HITSCAN_DAMAGE: u32 = 30;
-
-/// What a head is worth, as a multiple of [`HITSCAN_DAMAGE`].
-///
-/// The reason the zone is carried out of the trace at all: without it the head
-/// box is an elaborate way of computing the same number as the body box.
-pub const HEADSHOT_MULTIPLIER: u32 = 3;
-
-/// How hard a shot shoves a corpse, in metres per second per point of damage.
-///
-/// A placeholder beside [`HITSCAN_DAMAGE`], and it gets deleted with it: a
-/// real weapon states its own knockback, because how far a rocket throws a
-/// body is a weapon's character and not a property of being shot.
-///
-/// Off what the shot was *worth* rather than what it took off, so the round
-/// that kills somebody with twenty health left shoves as hard as the one
-/// before it did. A bullet's momentum is not a question about the target.
-pub const SHOVE_PER_DAMAGE: f32 = 0.15;
-
-/// How far a bullet's shove reaches, in metres.
-///
-/// Tight — about the length of a forearm — so that a shot moves the bone it
-/// hit and the joints drag the rest of the body after it. That is the whole
-/// difference between a body spun by a headshot and a body slid sideways as a
-/// lump. An explosion writes the same message with a radius that covers all of
-/// it; see [`RagdollShove`].
-pub const SHOVE_RADIUS: f32 = 0.4;
+// The numbers a shot is worth used to be four constants here, marked as
+// placeholders to be deleted rather than generalised once a real weapon stated
+// its own. That is [`HitscanSpec`]: range, damage, headshot multiplier, and
+// how hard the shot shoves a corpse. Two things about the last pair are worth
+// keeping said now that they live in a data file.
+//
+// The shove is off what the shot was *worth* rather than what it took off, so
+// the round that kills somebody with twenty health left shoves as hard as the
+// one before it did — a bullet's momentum is not a question about the target.
+//
+// And its radius is tight, about the length of a forearm, so that a shot moves
+// the bone it hit and the joints drag the rest of the body after it. That is
+// the whole difference between a body spun by a headshot and a body slid
+// sideways as a lump. An explosion writes the same message with a radius that
+// covers all of it; see [`RagdollShove`].
 
 pub struct HitscanPlugin;
 
@@ -150,11 +133,15 @@ pub(crate) fn eye(centre: Vec3, stance: Stance) -> Vec3 {
     centre + Vec3::Y * stance.eye_offset()
 }
 
-/// What a hit on `zone` is worth.
-fn damage_for(zone: HitZone) -> u32 {
+/// What a hit on `zone` is worth, to this weapon.
+///
+/// The reason the zone is carried out of the trace at all: without a
+/// multiplier the head box is an elaborate way of computing the same number as
+/// the body box.
+fn damage_for(zone: HitZone, spec: &HitscanSpec) -> u32 {
     match zone {
-        HitZone::Body => HITSCAN_DAMAGE,
-        HitZone::Head => HITSCAN_DAMAGE * HEADSHOT_MULTIPLIER,
+        HitZone::Body => spec.damage,
+        HitZone::Head => spec.damage * spec.headshot_multiplier,
     }
 }
 
@@ -165,28 +152,30 @@ fn damage_for(zone: HitZone) -> u32 {
 /// exactly what a debug harness should do until a gamemode has an opinion
 /// about death.
 pub fn fire_hitscan(
-    mut pulled: MessageReader<TriggerPulled>,
+    mut fired: MessageReader<WeaponActionFired>,
     world: Res<CollisionWorld>,
-    shooters: Query<(&PhysicsBody, &Player, &Stance, &PlayerId, &Loadout)>,
+    shooters: Query<(&PhysicsBody, &Player, &Stance, Option<&PlayerId>)>,
     targets: Query<(Entity, &Hitboxes)>,
     mut damage: MessageWriter<Damage>,
     mut shoves: MessageWriter<RagdollShove>,
     mut effects: MessageWriter<Effect>,
 ) {
-    for shot in pulled.read() {
-        let Ok((body, player, stance, id, loadout)) = shooters.get(shot.shooter) else { continue };
-        // Somebody else's weapon. Each weapon answers for the shooters holding
-        // it and ignores the rest, which is what lets a new one be added
-        // without this system being touched.
-        if loadout.held() != Some(Weapon::Hitscan) {
-            continue;
-        }
+    for shot in fired.read() {
+        // Somebody else's action. Each weapon system answers for the actions
+        // it knows and ignores the rest, which is what lets a new kind be
+        // added without this system being touched.
+        //
+        // Read out of the message rather than looked up on the shooter: what
+        // `pull_trigger` found is what this answers for, so a weapon switched
+        // in the same tick cannot reach back and change the shot.
+        let WeaponAction::Hitscan(spec) = shot.action else { continue };
+        let Ok((body, player, stance, id)) = shooters.get(shot.shooter) else { continue };
 
         // The step's own position, not the drawn one. `Transform` is written
         // by `interpolate_bodies` at frame rate, and a shot fired from it
         // would come from a slightly different place on every machine.
         let ray = Ray3d::new(eye(body.current, *stance), aim(player));
-        let range = world.ray_distance(&ray, LASER_RANGE).unwrap_or(LASER_RANGE);
+        let range = world.ray_distance(&ray, spec.range).unwrap_or(spec.range);
 
         let others = targets
             .iter()
@@ -211,10 +200,10 @@ pub fn fire_hitscan(
         // business and what it does to a health pool is the damage layer's.
         // A target with no health is skipped there — a wall dressing stopped
         // the shot all the same.
-        let worth = damage_for(hit.zone);
+        let worth = damage_for(hit.zone, &spec);
         damage.write(Damage {
             target: hit.target,
-            source: DamageSource::Player(*id),
+            source: id.map_or(DamageSource::World, |id| DamageSource::Player(*id)),
             amount: worth,
             point: hit.point,
         });
@@ -227,8 +216,8 @@ pub fn fire_hitscan(
         // fired a bullet and nothing else.
         shoves.write(RagdollShove {
             at: hit.point,
-            push: Push::Along(*ray.direction * (worth as f32 * SHOVE_PER_DAMAGE)),
-            radius: SHOVE_RADIUS,
+            push: Push::Along(*ray.direction * (worth as f32 * spec.shove_per_damage)),
+            radius: spec.shove_radius,
         });
     }
 }
@@ -353,7 +342,7 @@ mod tests {
     fn a_shooter_and_a_target(boxes: Hitboxes) -> (World, Entity, Entity) {
         let mut world = World::new();
         world.init_resource::<CollisionWorld>();
-        world.init_resource::<Messages<TriggerPulled>>();
+        world.init_resource::<Messages<WeaponActionFired>>();
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<RagdollShove>>();
         world.init_resource::<Messages<Effect>>();
@@ -366,7 +355,6 @@ mod tests {
                 Stance::Standing,
                 PhysicsBody { previous: centre, current: centre },
                 Hitboxes::default(),
-                Loadout::default(),
             ))
             .id();
         let target = world.spawn(boxes).id();
@@ -390,8 +378,27 @@ mod tests {
         }
     }
 
+    /// The weapon under test. Its numbers are the ones this module used to
+    /// keep as constants, so the assertions below still read as the same
+    /// facts about the same shot.
+    const LASER: HitscanSpec = HitscanSpec {
+        range: LASER_RANGE,
+        damage: 30,
+        headshot_multiplier: 3,
+        shove_per_damage: 0.15,
+        shove_radius: 0.4,
+    };
+
     fn fire(world: &mut World, shooter: Entity) {
-        world.write_message(TriggerPulled { shooter });
+        fire_action(world, shooter, WeaponAction::Hitscan(LASER));
+    }
+
+    fn fire_action(world: &mut World, shooter: Entity, action: WeaponAction) {
+        world.write_message(WeaponActionFired {
+            shooter,
+            button: crate::game::weapon::Button::Primary,
+            action,
+        });
         world.run_system_once(fire_hitscan).unwrap();
     }
 
@@ -439,7 +446,7 @@ mod tests {
             panic!("no tracer: {effects:?}");
         };
         assert!(hit, "the shot landed but the tracer says it did not");
-        assert!((to - from).length() < LASER_RANGE, "the tracer ran to full range");
+        assert!((to - from).length() < LASER.range, "the tracer ran to full range");
         assert!((to.z - from.z).abs() > 1.0, "the tracer went nowhere");
     }
 
@@ -455,7 +462,7 @@ mod tests {
         assert_eq!(asked.len(), 1, "{asked:?}");
         assert_eq!(asked[0].target, target);
         assert_eq!(asked[0].source, DamageSource::Player(PlayerId(7)));
-        assert_eq!(asked[0].amount, HITSCAN_DAMAGE);
+        assert_eq!(asked[0].amount, LASER.damage);
     }
 
     /// A head is worth more, which is the only reason the trace distinguishes
@@ -468,20 +475,45 @@ mod tests {
         let (mut world, shooter, _) = a_shooter_and_a_target(boxes);
 
         fire(&mut world, shooter);
-        assert_eq!(asked_for(&mut world)[0].amount, HITSCAN_DAMAGE * HEADSHOT_MULTIPLIER);
+        assert_eq!(asked_for(&mut world)[0].amount, LASER.damage * LASER.headshot_multiplier);
     }
 
-    /// A body holding something else does not fire a bullet, which is the
-    /// whole of how two weapons share one trigger.
+    /// A shot fired with somebody else's action does nothing here, which is
+    /// the whole of how several weapons share one message.
+    ///
+    /// Stated against the *action* rather than against what the shooter is
+    /// holding, because that is what this system now reads — and it is what
+    /// stops a weapon switched in the same tick changing a shot already
+    /// decided on.
     #[test]
-    fn a_shooter_holding_a_rocket_launcher_fires_no_bullet() {
+    fn a_bullet_is_only_fired_for_a_hitscan_action() {
         let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(5.0));
-        world
-            .entity_mut(shooter)
-            .insert(Loadout::new(vec![Weapon::Projectile(ProjectileSpec::ROCKET)]));
+
+        fire_action(
+            &mut world,
+            shooter,
+            WeaponAction::Projectile(ProjectileSpec::ROCKET),
+        );
+        assert!(asked_for(&mut world).is_empty(), "the launcher fired a bullet");
+    }
+
+    /// A shot fired by something that is not a player still fires, credited to
+    /// the world.
+    ///
+    /// `fire_hitscan` used to require a `PlayerId` outright, unlike the other
+    /// two firing systems, so a turret's shot would have vanished with no
+    /// error at all.
+    #[test]
+    fn a_shot_fired_by_nobody_is_the_worlds() {
+        let (mut world, shooter, target) = a_shooter_and_a_target(target_boxes(5.0));
+        world.entity_mut(shooter).remove::<PlayerId>();
 
         fire(&mut world, shooter);
-        assert!(asked_for(&mut world).is_empty(), "the launcher fired a bullet");
+
+        let asked = asked_for(&mut world);
+        assert_eq!(asked.len(), 1, "a shot with no shooter id vanished");
+        assert_eq!(asked[0].target, target);
+        assert_eq!(asked[0].source, DamageSource::World);
     }
 
     /// A wall in the way stops the shot, so the body behind it is safe from a

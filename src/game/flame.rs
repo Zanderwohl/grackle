@@ -41,7 +41,8 @@ use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::hitscan::{aim, eye};
 use crate::game::player::{Player, PhysicsBody};
-use crate::game::weapon::{Loadout, TriggerPulled, Weapon};
+use crate::common::weapon::{Equipped, WeaponAction, WeaponCatalogue};
+use crate::game::weapon::WeaponActionFired;
 
 pub struct FlamePlugin;
 
@@ -60,22 +61,22 @@ impl Plugin for FlamePlugin {
 /// One puff of flame, for every shooter whose trigger came up holding one.
 ///
 /// Cadence is not this system's business — a flamethrower gets a
-/// [`TriggerPulled`] ten times a second because
-/// [`Weapon::cadence`](crate::game::weapon::Weapon::cadence) says so, and this
-/// simply answers each one.
+/// [`WeaponActionFired`] ten times a second because the
+/// [`Cadence`](crate::common::weapon::Cadence) on that button says so, and
+/// this simply answers each one.
 pub fn fire_flame(
     mut commands: Commands,
     world: Res<CollisionWorld>,
-    mut pulled: MessageReader<TriggerPulled>,
-    shooters: Query<(&PhysicsBody, &Player, &Stance, Option<&PlayerId>, &Loadout)>,
+    mut fired: MessageReader<WeaponActionFired>,
+    shooters: Query<(&PhysicsBody, &Player, &Stance, Option<&PlayerId>)>,
     targets: Query<(Entity, &Hitboxes)>,
     mut alight: Query<&mut Burning>,
     allegiances: Allegiances,
     mut damage: MessageWriter<Damage>,
 ) {
-    for shot in pulled.read() {
-        let Ok((body, player, stance, id, loadout)) = shooters.get(shot.shooter) else { continue };
-        let Some(Weapon::Flame(spec)) = loadout.held() else { continue };
+    for shot in fired.read() {
+        let WeaponAction::Flame(spec) = shot.action else { continue };
+        let Ok((body, player, stance, id)) = shooters.get(shot.shooter) else { continue };
 
         let source = match id {
             Some(id) => DamageSource::Player(*id),
@@ -205,12 +206,19 @@ fn flame_cone(origin: Vec3, direction: Dir3, spec: &FlameSpec) -> (Cone, Isometr
 /// this is a picture, and a picture may be smooth. The shot it describes comes
 /// from the fixed step's own position, so the two are a fraction apart, which
 /// is the right way round.
+/// Unlike the firing systems this reads what a body is *holding* rather than
+/// what it fired, because it draws between shots. That is a read a client may
+/// make: it decides what is on the screen, never what happened. Reading a
+/// `Loadout` here was what made the cone invisible on every machine but the
+/// server's, since only the authority ever had one.
 fn draw_flame_cone(
     mut gizmos: Gizmos,
-    shooters: Query<(&Transform, &Player, &Stance, &Loadout)>,
+    catalogue: Res<WeaponCatalogue>,
+    shooters: Query<(&Transform, &Player, &Stance, &Equipped)>,
 ) {
-    for (transform, player, stance, loadout) in &shooters {
-        let Some(Weapon::Flame(spec)) = loadout.held() else { continue };
+    for (transform, player, stance, equipped) in &shooters {
+        let held = catalogue.held_by(equipped).map(|weapon| weapon.primary.action);
+        let Some(WeaponAction::Flame(spec)) = held else { continue };
 
         let (cone, isometry) = flame_cone(eye(transform.translation, *stance), aim(player), &spec);
         gizmos.primitive_3d(&cone, isometry, Color::srgba(1.0, 0.6, 0.1, 0.5));
@@ -245,7 +253,7 @@ mod tests {
     fn a_world() -> World {
         let mut world = World::new();
         world.init_resource::<CollisionWorld>();
-        world.init_resource::<Messages<TriggerPulled>>();
+        world.init_resource::<Messages<WeaponActionFired>>();
         world.init_resource::<Messages<Damage>>();
 
         let mut fixed = Time::<Fixed>::default();
@@ -263,7 +271,6 @@ mod tests {
                 PlayerId(1),
                 Stance::Standing,
                 PhysicsBody { previous: centre, current: centre },
-                Loadout::new(vec![Weapon::Flame(SPEC)]),
             ))
             .id()
     }
@@ -285,7 +292,11 @@ mod tests {
     }
 
     fn puff(world: &mut World, shooter: Entity) {
-        world.write_message(TriggerPulled { shooter });
+        world.write_message(WeaponActionFired {
+            shooter,
+            button: crate::game::weapon::Button::Primary,
+            action: WeaponAction::Flame(SPEC),
+        });
         world.run_system_once(fire_flame).unwrap();
         world.flush();
     }

@@ -35,6 +35,7 @@ pub mod weapon;
 pub mod player;
 pub mod net_bodies;
 pub mod pause_menu;
+pub mod hud;
 pub mod ragdoll;
 pub mod skeleton;
 
@@ -56,8 +57,28 @@ impl Plugin for GamePlugin {
             // Escape, and the mouse comes back. Part of the game rather than
             // of the editor, so plain Bevy UI and no egui.
             .add_plugins(PauseMenuPlugin)
+            // The crosshair and what you are holding. Beside the pause menu
+            // and for the same reason: plain Bevy UI, because this is the game
+            // rather than the editor.
+            .add_plugins(crate::game::hud::HudPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
+
+            // Where a pack's bytes come from. One trait, chosen once, so that
+            // a browser build replaces this line and nothing else.
+            .init_resource::<crate::common::assets::Assets>()
+            // The catalogue lives here rather than in `WeaponPlugin` because
+            // it is a fact about the match and not about the firing systems:
+            // what a body is handed at spawn is read by `spawn_player`, which
+            // is this layer's. On a client it is replaced wholesale by the
+            // server's on connect — the same arrangement the map has, and for
+            // the same reason: two descriptions of one thing is where the bugs
+            // live.
+            .init_resource::<crate::common::weapon::WeaponCatalogue>()
+            .add_systems(
+                Startup,
+                crate::common::weapon_file::load_catalogue_at_startup,
+            )
 
             .init_resource::<CollisionWorld>()
             .init_resource::<NextPlayerId>()
@@ -1014,7 +1035,13 @@ mod tests {
         let mut queue = bevy::ecs::world::CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, app.world());
-            spawn_player(&mut commands, spawn, crate::common::damage::PlayerId(99), Team::Red);
+            spawn_player(
+                &mut commands,
+                spawn,
+                crate::common::damage::PlayerId(99),
+                Team::Red,
+                &crate::common::weapon::WeaponCatalogue::default(),
+            );
         }
         queue.apply(app.world_mut());
         app.update();

@@ -50,7 +50,8 @@ use crate::common::projectile::{bounce, fly, Ending, ProjectileSpec};
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::player::{PhysicsBody, Player, GRAVITY};
-use crate::game::weapon::{Loadout, TriggerPulled, Weapon};
+use crate::common::weapon::{Equipped, WeaponAction, WeaponCatalogue};
+use crate::game::weapon::WeaponActionFired;
 
 /// How many walls one projectile may meet in a single tick.
 ///
@@ -205,12 +206,15 @@ pub fn launch(
 /// machine.
 pub fn fire_projectiles(
     mut commands: Commands,
-    mut pulled: MessageReader<TriggerPulled>,
-    shooters: Query<(&PhysicsBody, &Player, &Stance, Option<&PlayerId>, &Loadout)>,
+    mut fired: MessageReader<WeaponActionFired>,
+    shooters: Query<(&PhysicsBody, &Player, &Stance, Option<&PlayerId>)>,
 ) {
-    for shot in pulled.read() {
-        let Ok((body, player, stance, id, loadout)) = shooters.get(shot.shooter) else { continue };
-        let Some(Weapon::Projectile(spec)) = loadout.held() else { continue };
+    for shot in fired.read() {
+        // The spec comes out of the message, so a weapon switched in the same
+        // tick cannot change a shot already decided on — the same rule
+        // `launch` follows when it copies the spec onto the projectile.
+        let WeaponAction::Projectile(spec) = shot.action else { continue };
+        let Ok((body, player, stance, id)) = shooters.get(shot.shooter) else { continue };
 
         let direction = crate::game::hitscan::aim(player);
         let muzzle = crate::game::hitscan::eye(body.current, *stance) + *direction * MUZZLE_OFFSET;
@@ -443,7 +447,8 @@ fn dress_projectiles(
 fn plant_emitters(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
-    players: Query<(&Transform, &Player, &Loadout)>,
+    catalogue: Res<WeaponCatalogue>,
+    players: Query<(&Transform, &Player, &Equipped)>,
     emitters: Query<Entity, With<ProjectileEmitter>>,
 ) {
     /// Seconds between an emitter's shots. Long enough to watch one flight
@@ -460,11 +465,13 @@ fn plant_emitters(
         return;
     }
 
-    for (transform, player, loadout) in &players {
+    for (transform, player, equipped) in &players {
         // Whatever you are holding, so choosing what an emitter fires is
-        // choosing a weapon and pressing G.
-        let Some(Weapon::Projectile(spec)) = loadout.held() else {
-            info!("Hold a projectile weapon (2, 3 or 4) to plant an emitter");
+        // choosing a weapon and pressing G. The left-click half of it: an
+        // emitter is a prop with no right hand.
+        let held = catalogue.held_by(equipped).map(|weapon| weapon.primary.action);
+        let Some(WeaponAction::Projectile(spec)) = held else {
+            info!("Hold a projectile weapon to plant an emitter");
             continue;
         };
         let facing = Quat::from_rotation_y(player.yaw) * Quat::from_rotation_x(player.pitch);
