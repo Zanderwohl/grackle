@@ -373,7 +373,8 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 // boolean at; one that has been eaten is history. Saying so in
                 // the list is what stops the target dropdowns looking arbitrary.
                 let label = if broken.contains(&id) {
-                    egui::RichText::new(format!("{name}  ⚠")).color(egui::Color32::from_rgb(230, 130, 80))
+                    egui::RichText::new(format!("{name}  {}", get!("prop.problems.marker")))
+                        .color(egui::Color32::from_rgb(230, 130, 80))
                 } else if live.contains(&id) {
                     egui::RichText::new(name)
                 } else {
@@ -383,8 +384,19 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     editor.selected = Some(id);
                 }
 
+                // Icons through the lang layer like any other display text,
+                // and for a reason this panel has already been bitten by: egui
+                // ships one font set, a glyph outside it renders as a hollow
+                // box, and a pack whose language needs a different mark has
+                // nowhere else to say so. The hover text is not decoration
+                // either — an icon button with no name is a button you have to
+                // press to find out about.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("🗑").clicked() {
+                    if ui
+                        .small_button(get!("prop.tree.delete"))
+                        .on_hover_text(get!("prop.tree.delete_hint"))
+                        .clicked()
+                    {
                         pending = Some(Box::new(move |editor: &mut PropEditor| {
                             editor.edit(|doc| doc.remove(id));
                             if editor.selected == Some(id) {
@@ -392,12 +404,20 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                             }
                         }));
                     }
-                    if ui.small_button("▼").clicked() {
+                    if ui
+                        .small_button(get!("prop.tree.move_down"))
+                        .on_hover_text(get!("prop.tree.move_down_hint"))
+                        .clicked()
+                    {
                         pending = Some(Box::new(move |editor: &mut PropEditor| {
                             editor.edit(|doc| doc.shift(id, true));
                         }));
                     }
-                    if ui.small_button("▲").clicked() {
+                    if ui
+                        .small_button(get!("prop.tree.move_up"))
+                        .on_hover_text(get!("prop.tree.move_up_hint"))
+                        .clicked()
+                    {
                         pending = Some(Box::new(move |editor: &mut PropEditor| {
                             editor.edit(|doc| doc.shift(id, false));
                         }));
@@ -665,7 +685,11 @@ fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             if ui
                 .selectable_label(
                     editor.selected == Some(problem.feature),
-                    egui::RichText::new(format!("⚠ {name}: {}", problem.message))
+                    egui::RichText::new(format!(
+                        "{} {name}: {}",
+                        get!("prop.problems.marker"),
+                        problem.message,
+                    ))
                         .color(egui::Color32::from_rgb(230, 130, 80)),
                 )
                 .clicked()
@@ -817,7 +841,11 @@ fn profile_ui(ui: &mut Ui, profile: &mut Profile) -> bool {
                     for component in point.iter_mut() {
                         changed |= ui.add(egui::DragValue::new(component).speed(0.001)).changed();
                     }
-                    if ui.small_button("🗑").clicked() {
+                    if ui
+                        .small_button(get!("prop.tree.delete"))
+                        .on_hover_text(get!("prop.inspector.remove_point"))
+                        .clicked()
+                    {
                         remove = Some(at);
                     }
                 });

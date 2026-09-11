@@ -352,6 +352,16 @@ no_figure = "None"
 [prop.tree]
 undo = "Undo"
 redo = "Redo"
+# Icons, not prose — but still here rather than in the source, because egui
+# ships one font set and a glyph outside it renders as a hollow box. These are
+# emoji rather than the Geometric Shapes triangles they replaced, which is what
+# that failure looked like: NotoEmoji is the font egui actually has.
+move_up = "🔼"
+move_up_hint = "Move earlier"
+move_down = "🔽"
+move_down_hint = "Move later"
+delete = "🗑"
+delete_hint = "Delete"
 
 [prop.add]
 solid = "Solid"
@@ -413,6 +423,7 @@ plane = "Plane"
 offset = "Offset"
 keep_original = "Keep the original"
 add_point = "Add point"
+remove_point = "Remove point"
 missing = "missing { id }"
 
 [prop.stats]
@@ -420,6 +431,9 @@ bodies = "{ count } bodies"
 triangles = "{ count } triangles"
 
 [prop.problems]
+# Plain ASCII on purpose: this one has to render in any font, because the case
+# it marks is the case where something is already wrong.
+marker = "(!)"
 none = "No problems."
 missing_body = "points at a body that is not there"
 self_boolean = "points at itself"
