@@ -25,6 +25,7 @@ use crate::common::class::Class;
 use crate::common::skeleton::ik::Reach;
 use crate::common::skeleton::{humanoid, Pose, Skeleton};
 use crate::game::body_mesh::BodyTint;
+use crate::prop::camera::ViewmodelPreview;
 use crate::prop::document::PropEditor;
 use crate::prop::hold::{grip_with, weapon_transform};
 
@@ -106,15 +107,26 @@ pub fn refresh_the_figure(
 pub fn pose_the_figure(
     editor: Res<PropEditor>,
     choice: Res<ScaleFigure>,
+    preview: Res<ViewmodelPreview>,
     mut figures: Query<
-        (&Skeleton, &mut Pose, &mut Transform, &mut FigureReach),
+        (&Skeleton, &mut Pose, &mut Transform, &mut FigureReach, &mut Visibility),
         With<ScaleFigureMarker>,
     >,
 ) {
     // As the class on show performs it, so an override is authored against the
     // body that will actually hold the thing.
     let hold = editor.doc().hold.for_class(choice.0);
-    for (skeleton, mut pose, mut transform, mut reach) in &mut figures {
+    for (skeleton, mut pose, mut transform, mut reach, mut visibility) in &mut figures {
+        // Out of the way while the perspective view is standing in for an eye,
+        // because that eye is inside this body's head.
+        let wanted = match preview.0 {
+            true => Visibility::Hidden,
+            false => Visibility::Inherited,
+        };
+        if *visibility != wanted {
+            *visibility = wanted;
+        }
+
         let mut standing = Pose::rest();
 
         // Where the weapon would be if the body stood at the origin; the

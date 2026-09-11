@@ -57,11 +57,15 @@ pub const VIEWMODEL_LAYER: usize = 1;
 const VIEWMODEL_CAMERA_ORDER: isize = 101;
 
 /// Close enough that a weapon held at arm's length never crosses it.
-const VIEWMODEL_NEAR: f32 = 0.005;
+///
+/// `pub` because the prop editor borrows it to preview a viewmodel: a preview
+/// at the editor's own near plane and field of view would be showing the right
+/// place at the wrong size.
+pub const VIEWMODEL_NEAR: f32 = 0.005;
 
 /// Narrower than the play camera's, which is deliberately wide. A weapon drawn
 /// at 90° across the eye is a weapon bent round the edges of the screen.
-const VIEWMODEL_FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
+pub const VIEWMODEL_FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
 
 /// The second camera, and the reason a query for `&Camera` is never enough.
 #[derive(Component)]

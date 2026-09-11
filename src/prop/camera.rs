@@ -23,6 +23,8 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use crate::common::app_mode::AppMode;
 use crate::editor::input::{CurrentKeyboardInput, CurrentMouseInput};
 use crate::editor::multicam::{CameraAxis, Multicam};
+use crate::game::viewmodel::{VIEWMODEL_FOV, VIEWMODEL_NEAR};
+use crate::prop::document::PropEditor;
 use crate::prop::view::{PropBuild, PropSceneSystems};
 
 /// How much room to leave around a framed prop.
@@ -59,6 +61,24 @@ const ORTHO_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.000_02..=0.05;
 /// nothing to keep the horizon level with.
 const MAX_ORBIT_PITCH: f32 = 1.54;
 
+/// Whether the perspective view is standing in for the player's eye.
+///
+/// Set by the Hold panel while a viewmodel field is being dragged, and cleared
+/// the moment it is let go — the whole point being that you see what the
+/// number does while you are changing it, not after saving and starting a
+/// round.
+#[derive(Resource, Default)]
+pub struct ViewmodelPreview(pub bool);
+
+/// Where the perspective camera was before it stood in for an eye.
+///
+/// Its own resource rather than [`MapViewpoints`], which holds where the *map*
+/// editor's cameras were: they are two different borrowings of the same camera
+/// and a preview taken during a prop session must not be mistaken for the way
+/// back to the map.
+#[derive(Resource, Default)]
+struct PreviewViewpoint(Option<(Entity, Transform, Projection)>);
+
 /// Where the editor's cameras were before the prop editor moved them. One
 /// resource rather than a component each: "has this been saved yet" is one
 /// question, and a per-camera answer could come back half yes.
@@ -87,6 +107,8 @@ impl Plugin for PropCameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MapViewpoints>()
             .init_resource::<OrbitPivot>()
+            .init_resource::<ViewmodelPreview>()
+            .init_resource::<PreviewViewpoint>()
             .add_message::<FrameTheProp>()
             // After the scene is built, because framing reads the prop's
             // bounds — stale ones put the cameras somewhere plausible and wrong.
@@ -94,10 +116,24 @@ impl Plugin for PropCameraPlugin {
                 OnEnter(AppMode::Prop),
                 frame_on_entering.after(PropSceneSystems::Build),
             )
-            .add_systems(OnExit(AppMode::Prop), (restore_viewpoints, let_go_of_the_cursor))
+            // Forgetting the preview before restoring: leaving the mode
+            // mid-drag would otherwise leave a stale viewpoint to be pasted
+            // over the framing on the way back in.
+            .add_systems(
+                OnExit(AppMode::Prop),
+                (forget_the_preview, restore_viewpoints, let_go_of_the_cursor).chain(),
+            )
             .add_systems(
                 Update,
-                (frame_on_request, navigate, reset_the_hovered_view)
+                (
+                    preview_the_viewmodel,
+                    frame_on_request,
+                    // After the preview, and skipped while it is up: the
+                    // camera is standing somewhere it was put rather than
+                    // somewhere it was flown to.
+                    navigate.run_if(|preview: Res<ViewmodelPreview>| !preview.0),
+                    reset_the_hovered_view,
+                )
                     .after(PropSceneSystems::Build)
                     .run_if(in_state(AppMode::Prop)),
             );
@@ -352,6 +388,65 @@ fn dolly(transform: &mut Transform, pivot: Vec3, notches: f32) {
     let wanted = (distance * ratio(notches))
         .clamp(*DISTANCE_RANGE.start(), *DISTANCE_RANGE.end());
     transform.translation = pivot + offset / distance * wanted;
+}
+
+/// Stand the perspective view where the player's eye would be.
+///
+/// **The prop does not move; the viewer does** — the same inversion that
+/// places the reference figure, for the same reason. The viewmodel says where
+/// the weapon sits in front of an eye, so the eye is the inverse of that, and
+/// the weapon stays exactly where its geometry is authored.
+///
+/// It borrows the camera's field of view and near plane as well, since a
+/// preview at the editor's own field of view would be showing the right place
+/// at the wrong size.
+fn preview_the_viewmodel(
+    preview: Res<ViewmodelPreview>,
+    editor: Res<PropEditor>,
+    mut saved: ResMut<PreviewViewpoint>,
+    mut cameras: Query<(Entity, &mut Transform, &mut Projection, &Camera, &Multicam)>,
+) {
+    if !preview.0 {
+        // Put it back exactly, and only once.
+        if let Some((entity, transform, projection)) = saved.0.take()
+            && let Ok((_, mut current, mut current_projection, _, _)) = cameras.get_mut(entity)
+        {
+            *current = transform;
+            *current_projection = projection;
+        }
+        return;
+    }
+
+    let spec = editor.doc().viewmodel;
+    for (entity, mut transform, mut projection, camera, multicam) in &mut cameras {
+        // The perspective view only. The three orthographic ones are how you
+        // keep your bearings while the fourth is pretending to be an eye.
+        if multicam.axis != CameraAxis::None {
+            continue;
+        }
+        let Some(size) = camera.logical_viewport_size().filter(|size| size.y > 0.0) else {
+            continue;
+        };
+        if saved.0.is_none() {
+            saved.0 = Some((entity, *transform, projection.clone()));
+        }
+
+        *projection = Projection::Perspective(PerspectiveProjection {
+            fov: VIEWMODEL_FOV,
+            near: VIEWMODEL_NEAR,
+            ..default()
+        });
+        // Every frame, so dragging a number moves the view under you.
+        let weapon = spec.transform(VIEWMODEL_FOV, size.x / size.y);
+        let rotation = weapon.rotation.inverse();
+        *transform = Transform::from_translation(rotation * -weapon.translation)
+            .with_rotation(rotation);
+    }
+}
+
+fn forget_the_preview(mut preview: ResMut<ViewmodelPreview>, mut saved: ResMut<PreviewViewpoint>) {
+    preview.0 = false;
+    saved.0 = None;
 }
 
 /// Put the cameras back exactly where the map editor left them.

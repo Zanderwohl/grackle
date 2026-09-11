@@ -33,6 +33,7 @@ use crate::common::class::Class;
 use crate::common::shortcuts::chords;
 use crate::prop::feature::{Axis, BooleanOp, FeatureOp, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
+use crate::prop::camera::ViewmodelPreview;
 use crate::prop::gizmo::HoldHandles;
 use crate::prop::hold::HoldOverride;
 use crate::prop::profile::{Placement, Profile, MIN_SIDES};
@@ -112,6 +113,7 @@ struct PropTabs<'a> {
     build: &'a PropBuild,
     figure: &'a mut ScaleFigure,
     handles: &'a mut HoldHandles,
+    preview: &'a mut ViewmodelPreview,
     requests: &'a mut PropRequests,
 }
 
@@ -143,7 +145,7 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Features => feature_tree(ui, self.editor, self.build),
             PropTab::Inspector => inspector(ui, self.editor, self.build),
             PropTab::Scene => scene(ui, self.figure),
-            PropTab::Hold => hold(ui, self.editor, *self.figure, self.handles),
+            PropTab::Hold => hold(ui, self.editor, *self.figure, self.handles, self.preview),
             PropTab::Problems => problems(ui, self.editor, self.build),
         }
     }
@@ -171,6 +173,7 @@ fn panels(
     build: Res<PropBuild>,
     mut figure: ResMut<ScaleFigure>,
     mut handles: ResMut<HoldHandles>,
+    mut preview: ResMut<ViewmodelPreview>,
     mut multicam: ResMut<MulticamState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     dialog: Res<PropFileDialog>,
@@ -190,6 +193,12 @@ fn panels(
         UiBuilder::new().layer_id(LayerId::background()).max_rect(ctx.viewport_rect()),
     );
 
+    // Off unless this frame's Hold tab turns it back on — a tab closed
+    // mid-drag would otherwise leave the view standing at the muzzle forever.
+    if preview.0 {
+        preview.0 = false;
+    }
+
     let mut requests = PropRequests::default();
     let mut tabs = PropTabs {
         editor: &mut editor,
@@ -200,6 +209,7 @@ fn panels(
         // frame.
         figure: &mut figure,
         handles: &mut handles,
+        preview: &mut preview,
         requests: &mut requests,
     };
 
@@ -855,7 +865,14 @@ fn scene(ui: &mut Ui, figure: &mut ScaleFigure) {
 /// **The class on show is the class being edited.** One question, asked once:
 /// ticking the override edits the entry for whoever is standing there, which
 /// is also the body you are judging it against.
-fn hold(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure, handles: &mut HoldHandles) {
+#[allow(clippy::too_many_arguments)]
+fn hold(
+    ui: &mut Ui,
+    editor: &mut PropEditor,
+    figure: ScaleFigure,
+    handles: &mut HoldHandles,
+    preview: &mut ViewmodelPreview,
+) {
     let base = editor.doc().hold.clone();
     let key = figure.0.map(Class::key);
     let overriding = key.as_ref().is_some_and(|key| base.per_class.contains_key(key));
@@ -921,25 +938,44 @@ fn hold(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure, handles: &mut
 
         ui.separator();
         ui.label(get!("prop.hold.viewmodel"));
-        ui.label(egui::RichText::new(get!("prop.hold.viewmodel_note")).weak().small());
         // Fractions of the frustum, so the same numbers mean the same place on
         // screen at any field of view and any window — which is what stops a
         // weapon drifting in from the edge it is meant to hang off.
+        // **The preview is on while a viewmodel number is being held.** Which
+        // is the only moment it is worth having: you are looking for where the
+        // weapon lands, and the answer is on screen while your hand is still
+        // on the number rather than after a save and a round.
+        let mut holding = false;
         ui.horizontal(|ui| {
             ui.label(get!("prop.hold.across"));
             for (component, axis) in viewmodel.across.iter_mut().zip(["x", "y"]) {
-                view_changed |= ui
-                    .add(
-                        egui::DragValue::new(component)
-                            .speed(0.01)
-                            .range(-2.0..=2.0)
-                            .prefix(format!("{axis} ")),
-                    )
-                    .changed();
+                let response = ui.add(
+                    egui::DragValue::new(component)
+                        .speed(0.01)
+                        .range(-2.0..=2.0)
+                        .prefix(format!("{axis} ")),
+                );
+                view_changed |= response.changed();
+                holding |= response.dragged() || response.has_focus();
             }
         });
-        view_changed |= drag(ui, get!("prop.hold.depth"), &mut viewmodel.depth, 0.005, "m");
-        view_changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut viewmodel.rotation);
+        let (depth_changed, depth_held) =
+            held_drag(ui, get!("prop.hold.depth"), &mut viewmodel.depth, 0.005, "m");
+        view_changed |= depth_changed;
+        holding |= depth_held;
+
+        let mut degrees = viewmodel.rotation.map(f32::to_degrees);
+        let (turned, turn_held) =
+            held_vec3(ui, get!("prop.inspector.rotation"), &mut degrees, 1.0, "°");
+        if turned {
+            viewmodel.rotation = degrees.map(f32::to_radians);
+            view_changed = true;
+        }
+        holding |= turn_held;
+
+        if preview.0 != holding {
+            preview.0 = holding;
+        }
     });
 
     if view_changed {
@@ -1011,6 +1047,49 @@ fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             }
         }
     });
+}
+
+/// As [`drag`], but says whether the box is being held as well as whether it
+/// changed — which is what the viewmodel preview is on for.
+fn held_drag(
+    ui: &mut Ui,
+    label: String,
+    value: &mut f32,
+    speed: f64,
+    suffix: &str,
+) -> (bool, bool) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let response = ui.add(egui::DragValue::new(value).speed(speed).suffix(suffix));
+        (response.changed(), response.dragged() || response.has_focus())
+    })
+    .inner
+}
+
+/// Three of them.
+fn held_vec3(
+    ui: &mut Ui,
+    label: String,
+    value: &mut [f32; 3],
+    speed: f64,
+    suffix: &str,
+) -> (bool, bool) {
+    let mut changed = false;
+    let mut holding = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        for (component, axis) in value.iter_mut().zip(["x", "y", "z"]) {
+            let response = ui.add(
+                egui::DragValue::new(component)
+                    .speed(speed)
+                    .prefix(format!("{axis} "))
+                    .suffix(suffix),
+            );
+            changed |= response.changed();
+            holding |= response.dragged() || response.has_focus();
+        }
+    });
+    (changed, holding)
 }
 
 fn drag(ui: &mut Ui, label: String, value: &mut f32, speed: f64, suffix: &str) -> bool {
