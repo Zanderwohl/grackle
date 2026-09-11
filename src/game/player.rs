@@ -14,7 +14,9 @@ use crate::common::class::{
     TALLEST_CLASS_HEIGHT,
 };
 use crate::game::collision::CollisionWorld;
-use crate::game::weapon::{Loadout, Trigger};
+use crate::common::class::Class;
+use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalogue};
+use crate::game::weapon::Trigger;
 use crate::tool::room::Room;
 
 /// Half-extents of the body box. The tallest class, since there is only one
@@ -73,7 +75,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 // inserting the replicated components, and a body with children but no
 // transform is a Bevy hierarchy warning per child per frame and a mesh drawn
 // at the origin.
-#[require(Hitboxes, Damageable, Loadout, Trigger, Inputs, Transform, Visibility)]
+#[require(Hitboxes, Damageable, Equipped, Ammo, Trigger, Inputs, Transform, Visibility)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -143,11 +145,12 @@ pub struct PlayerInput {
     pub crouch: bool,
     /// A weapon slot asked for since the last step acted on it, if any.
     ///
-    /// A slot number rather than a [`Weapon`](crate::game::weapon::Weapon):
-    /// this struct is what will travel to a server, and what a slot holds is a
-    /// property of the body at the other end rather than something the client
-    /// gets to assert.
-    pub select: Option<usize>,
+    /// A [`Slot`] rather than a weapon: this struct travels to a server, and
+    /// what a slot holds is a property of the body at the other end rather
+    /// than something a client gets to assert. Named rather than numbered,
+    /// because "slot 2" is a fact about a keyboard and this has to mean the
+    /// same thing on both ends.
+    pub select: Option<Slot>,
     /// The trigger was pulled at some point since the last step consumed it.
     ///
     /// Latched like jump and unlike sprint, and for a sharper reason: a shot
@@ -163,6 +166,18 @@ pub struct PlayerInput {
     /// click made and released between two fixed steps was never held on any
     /// step that ran.
     pub attack_held: bool,
+    /// The other trigger was pulled since the last step consumed it.
+    ///
+    /// Latched, for exactly the reason `attack` is: what a right click does is
+    /// a weapon's business, but *that* it was clicked is an edge.
+    pub alt_attack: bool,
+    /// The other trigger is being held *now*. Level, like `attack_held`.
+    pub alt_attack_held: bool,
+    /// A reload was asked for since the last step acted on it.
+    ///
+    /// Latched: one press is one reload, and a reload that started twice is a
+    /// reload that starts over half-way through itself.
+    pub reload: bool,
     /// Where the body is being asked to look, about world Y.
     ///
     /// Aim is an input rather than something `mouse_look` writes straight onto
@@ -193,8 +208,9 @@ impl PlayerInput {
     /// Let go of every control without forgetting where you were looking.
     ///
     /// This struct holds two kinds of field and they behave differently when
-    /// nobody is at the keyboard. Movement, sprint, crouch, jump, attack and a
-    /// weapon switch are all things a key is *doing* — held or just pressed —
+    /// nobody is at the keyboard. Movement, sprint, crouch, jump, both
+    /// triggers, a reload and a weapon switch are all things a key is *doing*
+    /// — held or just pressed —
     /// and a key held as the pause menu goes up would stay held with nothing
     /// running to correct it, walking the body into a wall until the menu
     /// closes.
@@ -400,11 +416,28 @@ pub fn spawn_player(
     spawn: Spawn,
     id: PlayerId,
     team: Team,
+    catalogue: &WeaponCatalogue,
 ) -> Entity {
     let position = body_centre_from_feet(spawn.feet);
+
+    // **Everybody is a Mercenary.** A loadout is stated per class, so a body
+    // needs one; nobody picks a class, so this is the placeholder that gap
+    // wears instead of hiding in a `Default`. Chosen here rather than passed
+    // in by three call sites that would each have to keep saying it.
+    //
+    // It decides what the body *carries* and nothing else. The rig is still
+    // built from `Proportions::DEFAULT` and a corpse's build is still read off
+    // the rig — keying either on a class is the bug that replicated every
+    // corpse in the game correctly except a player's.
+    let class = Class::Mercenary;
+    let (equipped, ammo) = catalogue.starting_equipment(class);
+
     commands
         .spawn((
             Player { yaw: spawn.yaw, ..default() },
+            class,
+            equipped,
+            ammo,
             // Whoever stands a body up steps it. On a client that is nothing:
             // its own body is marked where it is claimed, and the rest belong
             // to the server.
@@ -519,15 +552,25 @@ pub fn gather_input(
     // property and will latch a held button instead.
     input.attack |= buttons.just_pressed(MouseButton::Left);
     input.attack_held = buttons.pressed(MouseButton::Left);
+    input.alt_attack |= buttons.just_pressed(MouseButton::Right);
+    input.alt_attack_held = buttons.pressed(MouseButton::Right);
+
+    input.reload |= keys.just_pressed(KeyCode::KeyR);
 
     // Latched like the trigger and for the same reason: a switch is an edge,
     // and a fixed step that ran twice this frame must not see it twice.
+    //
+    // One digit per slot, all six, whether or not the class being played
+    // carries anything there — a key that is bound to nothing and a key that
+    // is bound to an empty slot are the same thing to a player, and the second
+    // does not need a table kept in step with a loadout.
     for (key, slot) in [
-        (KeyCode::Digit1, 0),
-        (KeyCode::Digit2, 1),
-        (KeyCode::Digit3, 2),
-        (KeyCode::Digit4, 3),
-        (KeyCode::Digit5, 4),
+        (KeyCode::Digit1, Slot::Primary),
+        (KeyCode::Digit2, Slot::Secondary),
+        (KeyCode::Digit3, Slot::Melee),
+        (KeyCode::Digit4, Slot::Utility),
+        (KeyCode::Digit5, Slot::Gadget),
+        (KeyCode::Digit6, Slot::Special),
     ] {
         if keys.just_pressed(key) {
             input.select = Some(slot);
@@ -585,6 +628,8 @@ pub fn write_client_inputs(
 
     latch.0.jump = false;
     latch.0.attack = false;
+    latch.0.alt_attack = false;
+    latch.0.reload = false;
     latch.0.select = None;
 }
 

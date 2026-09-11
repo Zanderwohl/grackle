@@ -59,6 +59,15 @@ impl Plugin for GamePlugin {
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
 
+            // The catalogue lives here rather than in `WeaponPlugin` because
+            // it is a fact about the match and not about the firing systems:
+            // what a body is handed at spawn is read by `spawn_player`, which
+            // is this layer's. On a client it is replaced wholesale by the
+            // server's on connect — the same arrangement the map has, and for
+            // the same reason: two descriptions of one thing is where the bugs
+            // live.
+            .insert_resource(crate::common::weapon::debug_catalogue())
+
             .init_resource::<CollisionWorld>()
             .init_resource::<NextPlayerId>()
             // Owned by `SkeletonPlugin`, initialised here as well because the
@@ -1014,7 +1023,13 @@ mod tests {
         let mut queue = bevy::ecs::world::CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, app.world());
-            spawn_player(&mut commands, spawn, crate::common::damage::PlayerId(99), Team::Red);
+            spawn_player(
+                &mut commands,
+                spawn,
+                crate::common::damage::PlayerId(99),
+                Team::Red,
+                &crate::common::weapon::WeaponCatalogue::default(),
+            );
         }
         queue.apply(app.world_mut());
         app.update();

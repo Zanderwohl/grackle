@@ -130,6 +130,19 @@ pub enum Class {
     Spy,
     /// The tenth body: the one being escorted rather than doing the escorting.
     Civilian,
+    /// The placeholder everybody actually plays as.
+    ///
+    /// A body needs a class because a loadout is stated per class, and nobody
+    /// picks one yet — there is no lobby and no class menu, exactly as there
+    /// is no respawn timer. This is that gap wearing a name instead of hiding
+    /// in a `Default`. Its loadout carries one of every kind of weapon, which
+    /// is what makes the whole action table reachable by walking up to it.
+    ///
+    /// **It is not what a body is drawn from.** Player bodies are rigged from
+    /// `Proportions::DEFAULT` and a corpse's build is read off the rig it had;
+    /// keying either on a class is the bug that replicated every corpse in the
+    /// game correctly except a player's.
+    Mercenary,
 }
 
 impl Class {
@@ -272,6 +285,9 @@ impl Class {
                 girth: 1.40,
                 belly: 1.60,
             },
+            // The ordinary build, deliberately: a placeholder class that
+            // looked distinctive would be a design decision made by accident.
+            Class::Mercenary => Proportions::DEFAULT,
         }
     }
 
@@ -286,6 +302,7 @@ impl Class {
             Class::Medic => get!("class.names.medic"),
             Class::Sniper => get!("class.names.sniper"),
             Class::Spy => get!("class.names.spy"),
+            Class::Mercenary => get!("class.names.mercenary"),
             Class::Civilian => get!("class.names.civilian"),
         }
     }
@@ -314,10 +331,15 @@ mod tests {
         }
     }
 
-    /// The roster is ten, and the display grid is laid out on that count.
+    /// The roster, and the display grid laid out on that count.
+    ///
+    /// Ten of them are the roster proper; the eleventh is the `Mercenary`
+    /// placeholder everybody actually plays as, which is in the iterator
+    /// deliberately — it is a class, so the grid shows it and a mapper can put
+    /// it on a roster like any other.
     #[test]
-    fn there_are_ten_classes() {
-        assert_eq!(Class::iter().count(), 10);
+    fn there_are_ten_classes_and_the_placeholder() {
+        assert_eq!(Class::iter().count(), 11);
     }
 
     /// Ten classes that looked the same would be one class listed ten times.

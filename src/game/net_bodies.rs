@@ -26,6 +26,7 @@ use lightyear::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::damage::NextPlayerId;
 use crate::common::net::NetRole;
+use crate::common::weapon::WeaponCatalogue;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{spawn_player, LocalPlayer, Player, Simulated, Spawn};
@@ -67,8 +68,9 @@ fn spawn_body_for(
     who: Identity,
     link: Entity,
     peer: PeerId,
+    catalogue: &WeaponCatalogue,
 ) {
-    let body = spawn_player(commands, spawn, who.id, who.team);
+    let body = spawn_player(commands, spawn, who.id, who.team, catalogue);
     commands.entity(body).insert((
         Replicate::to_clients(NetworkTarget::All),
         PredictionTarget::to_clients(NetworkTarget::Single(peer)),
@@ -108,6 +110,7 @@ fn give_bodies_to_whoever_needs_one(
     spawns: Query<&Transform, With<SpawnPointMarker>>,
     rooms: Query<&Room>,
     mut ids: ResMut<NextPlayerId>,
+    catalogue: Res<WeaponCatalogue>,
 ) {
     if !role.as_deref().is_none_or(NetRole::is_authority) {
         return;
@@ -141,7 +144,7 @@ fn give_bodies_to_whoever_needs_one(
         };
         let spawn = choose_spawn(&placed, &collision, &rooms);
         info!("Standing our own body up as {} on {}", who.id, who.team.name());
-        let body = spawn_player(&mut commands, spawn, who.id, who.team);
+        let body = spawn_player(&mut commands, spawn, who.id, who.team, &catalogue);
         commands.entity(body).insert(LocalPlayer);
         if hosting {
             commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
@@ -167,7 +170,7 @@ fn give_bodies_to_whoever_needs_one(
         };
         let spawn = choose_spawn(&placed, &collision, &rooms);
         info!("Standing a client's body up as {} on {}", who.id, who.team.name());
-        spawn_body_for(&mut commands, spawn, who, link, peer.0);
+        spawn_body_for(&mut commands, spawn, who, link, peer.0, &catalogue);
     }
 }
 
@@ -215,6 +218,10 @@ mod tests {
         collision.rebuild(std::slice::from_ref(&room));
         world.insert_resource(collision);
         world.init_resource::<NextPlayerId>();
+        // A body is handed its weapons at spawn, so the rule needs a
+        // catalogue to hand them out of. The real one, so that a body stood up
+        // in a test is armed the way a body stood up in a round is.
+        world.insert_resource(crate::common::weapon::debug_catalogue());
         world.spawn(room);
         world.spawn((Transform::from_xyz(2.0, 0.0, -3.0), SpawnPointMarker));
     }

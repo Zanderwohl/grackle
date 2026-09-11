@@ -15,6 +15,7 @@
 //! reconciled, and a fixed pattern is also the one you can learn to aim.
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::common::damage::DamageSource;
 
@@ -22,12 +23,14 @@ use crate::common::damage::DamageSource;
 ///
 /// Split the way the fire is: the first four numbers are the puff, the last
 /// three are what it leaves behind.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// **How often it puffs is not here.** That was `interval`, and it was a
+/// cadence wearing a flame spec's coat — it now lives on
+/// [`crate::common::weapon::Mounted`] beside every other button's rate of
+/// fire. Leaving both would have been two writers for one number, and the
+/// symptom is a data file that is quietly ignored.
+#[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct FlameSpec {
-    /// Seconds between puffs while the trigger is held. A fraction of a
-    /// second — fire is a stream, and a weapon you have to click is a weapon
-    /// that stutters.
-    pub interval: f32,
     /// How far it reaches, in metres. Short, and deliberately the thing that
     /// makes a flamethrower a flamethrower.
     pub range: f32,
@@ -57,7 +60,6 @@ impl FlameSpec {
     /// is worth more than standing in the fire was. That is the character of
     /// the thing — it punishes leaving as much as staying.
     pub const FLAMETHROWER: Self = Self {
-        interval: 0.1,
         range: 6.0,
         spread: 0.28,
         rays: 5,
