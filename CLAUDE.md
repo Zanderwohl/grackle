@@ -474,10 +474,26 @@ which is the trade for being text somebody can read, so the guard is replaying
 each file and insisting it comes out as geometry with nothing to complain
 about.
 
-**A weapon names its model and nothing reads that name yet.** The plan for
-holding one — the grip convention, the aim split, the upper-body layer, sending
-models on connect, and the viewmodel pipeline — is written down in
-[documentation/weapons-in-hand.md](documentation/weapons-in-hand.md). `Weapon.model`
+**A weapon's model reaches the hand, and nothing else about it is built yet.**
+`Weapon.model` names a prop; [`prop::baked`](src/prop/baked.rs) bakes it once
+by name and [`game::held`](src/game/held.rs) hangs it off `hand.r`. It looks
+wrong while walking, on purpose: the body still animates as it always did, and
+the upper-body layer that fixes it is stage 3 of
+[documentation/weapons-in-hand.md](documentation/weapons-in-hand.md), which is
+where the grip convention, the aim split, sending models on connect and the
+viewmodel pipeline are all written down.
+
+**The grip convention is stated once**, in
+[`figure::grip_in_hand_space`](src/prop/figure.rs), and *derived* from the
+reference figure rather than written beside it: the figure is stood so a prop's
+origin is at its right hand, so a weapon in the hand is the inverse of that.
+Two constants here would be a weapon that looks right in the prop editor and
+sits wrong in the hand, with no way to tell which number was wrong.
+
+**`prop::baked` is the only thing that bakes a prop.** The prop editor's
+viewport and a weapon in somebody's hand go through it alike; two bakers for
+one format would show up as a weapon that looks one way in the editor it was
+modelled in and another in a match. `Weapon.model`
 is an `Option<String>` naming a prop under a pack's `props/`; it crosses the
 wire with the rest of the catalogue, so each machine builds the model from its
 own pack — the same arrangement `Equipped` already has, one level down.

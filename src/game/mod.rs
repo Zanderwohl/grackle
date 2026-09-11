@@ -23,6 +23,7 @@ pub mod body_mesh;
 pub mod collision;
 pub mod damage;
 pub mod death;
+pub mod held;
 pub mod hitbox;
 pub mod explosion;
 pub mod flame;

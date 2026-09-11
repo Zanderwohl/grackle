@@ -133,6 +133,30 @@ pub fn place(skeleton: &Skeleton, pose: &Pose) -> Transform {
     Transform::from_translation(-(rotation * grip)).with_rotation(rotation)
 }
 
+/// Where a held weapon sits in the right hand's own frame.
+///
+/// **Derived from [`place`] rather than written down beside it.** The
+/// reference figure is stood so the prop's origin is at its right hand and the
+/// prop's axis runs down `-Z`; a weapon in the hand is that same relationship
+/// read backwards, so this is the inverse of the hand's transform in the
+/// placed figure. A second constant here would be a weapon that looks right in
+/// the prop editor and sits wrong in somebody's hand, with two numbers to tune
+/// against each other and no way to tell which was wrong.
+///
+/// Per-skeleton, because a hand's length is a class's business: the answer is
+/// the hand's own mid-point, and a Heavy's hand is not a Scout's.
+pub fn grip_in_hand_space(skeleton: &Skeleton) -> Transform {
+    let Some(index) = skeleton.index_of(bone::HAND_R) else {
+        return Transform::IDENTITY;
+    };
+    let pose = holding_a_weapon(skeleton);
+    let placement = place(skeleton, &pose);
+    let hand = &skeleton.posed_bones(&pose, &placement)[index];
+
+    let inverse = hand.rotation.inverse();
+    Transform::from_translation(inverse * -hand.head).with_rotation(inverse)
+}
+
 /// Put the chosen figure up and take the old one down.
 ///
 /// Keyed on the choice having changed: re-inserting a `Skeleton` reads as a
@@ -308,6 +332,56 @@ mod tests {
                 "{class:?} holds its weapon at {centre} rather than at the origin",
             );
         }
+    }
+
+    /// The grip is the hand's own mid-point, on every build — which is the
+    /// two halves of the rule agreeing. `place` puts the prop at the hand's
+    /// centre, and a bone's `+Y` runs along its length, so the weapon has to
+    /// come out half a hand up the hand.
+    #[test]
+    fn the_grip_sits_at_the_middle_of_the_hand() {
+        for class in [Class::Scout, Class::Heavy, Class::Sniper, Class::Civilian] {
+            let skeleton = humanoid(class.proportions());
+            let index = skeleton.index_of(bone::HAND_R).expect("bone is in the rig");
+            let length = skeleton.bones()[index].length;
+
+            let grip = grip_in_hand_space(&skeleton);
+            assert!(
+                (grip.translation - Vec3::Y * length / 2.0).length() < 1e-4,
+                "{class:?} grips at {} rather than {} up its own hand",
+                grip.translation,
+                length / 2.0,
+            );
+        }
+    }
+
+    /// The property the game relies on: compose the grip with wherever the
+    /// hand has ended up and the weapon's origin is in the hand — whatever the
+    /// body is doing and wherever it is standing.
+    #[test]
+    fn a_weapon_lands_in_the_hand_from_any_pose() {
+        let skeleton = rig();
+        let grip = grip_in_hand_space(&skeleton);
+        let index = skeleton.index_of(bone::HAND_R).expect("bone is in the rig");
+
+        // Deliberately not the holding pose, and deliberately not at the
+        // origin: the rule must not quietly depend on either.
+        let mut pose = Pose::rest();
+        aim(&skeleton, &mut pose, bone::UPPER_ARM_R, Vec3::new(0.4, -0.3, -0.9));
+        aim(&skeleton, &mut pose, bone::FOREARM_R, Vec3::new(-0.2, 0.8, -0.5));
+        let root = Transform::from_xyz(3.0, -1.0, 2.0)
+            .with_rotation(Quat::from_rotation_y(1.1));
+
+        let hand = &skeleton.posed_bones(&pose, &root)[index];
+        let bone = Transform::from_translation(hand.head).with_rotation(hand.rotation);
+        let weapon = bone.mul_transform(grip);
+
+        let centre = (hand.head + hand.tail) / 2.0;
+        assert!(
+            (weapon.translation - centre).length() < 1e-4,
+            "the weapon landed at {} rather than at the hand's {centre}",
+            weapon.translation,
+        );
     }
 
     /// A figure standing at the origin would have its feet where the prop is.

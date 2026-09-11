@@ -144,12 +144,14 @@ wrong one: a viewmodel is a performance staged for one viewer, and a
 third-person body is read across a room in a fight.
 
 What follows from that is a real saving. Nobody needs to read another player's
-reload *faithfully* — this is not a game where counting somebody's rounds is
-the play — so third person needs a **small generic set** of arm states, shared
-by every weapon: holding, firing, reloading. Enough to say "that one is busy"
-at a glance. Per-weapon authoring is then a first-person job only, which is
-where it is actually worth the effort, and it is roughly half the work the
-symmetrical version would have been.
+reload — this is not a game where counting somebody's rounds is the play — so
+**third person gets a hold and nothing else for now**. No reload indication, no
+per-weapon arm authoring. Per-weapon animation is a first-person job only,
+which is where it is worth the effort, and it is rather less than half the work
+the symmetrical version would have been.
+
+If a third-person indicator is ever wanted it is a small generic set — busy,
+not busy — shared by every weapon rather than authored per weapon.
 
 ### Nothing special while sprinting
 
@@ -191,7 +193,7 @@ Each stands alone and each is worth having on its own.
 
 | # | Stage | Proves |
 | --- | --- | --- |
-| 1 | **Hold the thing.** Extract the prop cache out of the prop editor; write the grip transform down once; attach the held model to `hand.r`. | `Weapon.model` end to end. Will look wrong while walking — no upper-body layer yet, and that is expected. |
+| 1 | ~~**Hold the thing.**~~ **Done.** The prop cache is `prop::baked`, the grip transform is `figure::grip_in_hand_space`, and `game::held` hangs the model off `hand.r`. | `Weapon.model` end to end. Looks wrong while walking — no upper-body layer yet, which is expected. |
 | 2 | **Split the aim.** Clamp the head, leave `Player.pitch` alone. | Independent of the rest; visible immediately. |
 | 3 | **The upper-body layer.** `HoldSpec` on the prop; aim the weapon from the chest; solve both arms to its grip points. | The idea at the top of this document. This is where it starts looking right. |
 | 4 | **Prop sync.** Documents on connect, after the catalogue. | A server can ship a weapon nobody else has. |
@@ -208,16 +210,12 @@ this codebase keeps naming.
 
 ## Open questions
 
-**Is a hold mirrored for a left-handed body?** Nothing is left-handed today and
-nothing asks to be.
-
 **What shape is an animation?** The hold is two points, and a pose deviating
 from it is presumably a few more. A reload is a *sequence*, though, and neither
 the prop format nor `weapons.toml` has any notion of time in it — so whatever
-this turns out to be is the first thing in the project to need keyframes. It is
-the reason stage 6 is last.
+this turns out to be is the first thing in the project to need keyframes.
+Deliberately deferred until stage 6 is actually in front of us.
 
-**Does the third-person generic set need a weapon at all?** If a reload is
-three arm states shared by every weapon, it may not need to know what is being
-reloaded — in which case it is an `AnimationState` variant and not part of this
-document. Worth checking before building it as something bigger.
+**Left-handed bodies** are out of scope. Nothing is left-handed and nothing
+asks to be; a mirrored hold would be the two grip points reflected, and that is
+a problem for whoever wants it.

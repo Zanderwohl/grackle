@@ -51,6 +51,13 @@ pub struct BodyMesh {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct BoneMesh(pub usize);
 
+/// Drawn *as* part of this body, and so hidden from inside its own head.
+///
+/// On bone meshes and on a held weapon's parts. `ViewMode::shows_own_body` is
+/// what decides; this is what it is allowed to decide about.
+#[derive(Component)]
+pub struct FirstPersonHidden;
+
 /// What colour a body is, if it is not the default one and has no team.
 ///
 /// A body rather than a bone, because a colour says *whose* body this is — an
@@ -248,6 +255,7 @@ fn build_body_meshes(
                 parts.push(
                     body.spawn((
                         BoneMesh(index),
+                        FirstPersonHidden,
                         Mesh3d(handle.clone()),
                         MeshMaterial3d(material.clone()),
                         // Overwritten by `pose_body_meshes` before anything is
@@ -348,8 +356,8 @@ fn pose_body_meshes(
 /// which is what makes it confusing rather than obviously broken.
 fn hide_own_body(
     view: Res<ViewMode>,
-    players: Query<&BodyMesh, With<LocalPlayer>>,
-    mut parts: Query<&mut Visibility, With<BoneMesh>>,
+    players: Query<&Children, With<LocalPlayer>>,
+    mut parts: Query<&mut Visibility, With<FirstPersonHidden>>,
 ) {
     let wanted = if view.shows_own_body() {
         Visibility::Inherited
@@ -357,9 +365,13 @@ fn hide_own_body(
         Visibility::Hidden
     };
 
-    for mesh in &players {
-        for part in &mesh.parts {
-            let Ok(mut visibility) = parts.get_mut(*part) else { continue };
+    // Walks the body's children rather than `BodyMesh.parts`, because a bone
+    // is no longer the only thing hung off a body that has no business being
+    // inside your own head: a held weapon is another, and anything later that
+    // carries the marker is covered the day it is written.
+    for children in &players {
+        for child in children.iter() {
+            let Ok(mut visibility) = parts.get_mut(child) else { continue };
             // Assigned only on a change, so this does not dirty every part of
             // every player every frame.
             if *visibility != wanted {
@@ -391,14 +403,30 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(ViewMode::FirstPerson);
 
+        // Children of the body, which is what `build_body_meshes` actually
+        // makes them — the fixture used to spawn them loose, and the system
+        // only noticed once it started walking the hierarchy.
         let body_with_parts = |world: &mut World, local: bool| {
-            let parts: Vec<Entity> = (0..3)
-                .map(|index| world.spawn((BoneMesh(index), Visibility::Inherited)).id())
-                .collect();
-            let mut body = world.spawn((Player::default(), BodyMesh { parts: parts.clone() }));
+            let mut body = world.spawn(Player::default());
             if local {
                 body.insert(LocalPlayer);
             }
+            let body = body.id();
+
+            let mut parts: Vec<Entity> = (0..3)
+                .map(|index| {
+                    world
+                        .spawn((BoneMesh(index), FirstPersonHidden, Visibility::Inherited, ChildOf(body)))
+                        .id()
+                })
+                .collect();
+            // A held weapon: hung off the body, marked the same way, and not a
+            // bone. Hiding only bones leaves a launcher across the lens.
+            parts.push(
+                world
+                    .spawn((FirstPersonHidden, Visibility::Inherited, ChildOf(body)))
+                    .id(),
+            );
             parts
         };
 

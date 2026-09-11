@@ -31,10 +31,10 @@ use bevy::platform::time::Instant;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
+use crate::prop::baked::{parts, SurfaceMaterials};
 use crate::prop::figure::{clear_the_figure, refresh_the_figure, ScaleFigure};
 use crate::prop::document::PropEditor;
 use crate::prop::feature::Evaluated;
-use crate::prop::surface::Surface;
 
 /// Standing the prop up. A set rather than named systems, for the reason
 /// `BakeSystems` is one: the camera frames itself on the prop's bounds from
@@ -98,13 +98,6 @@ const REBUILD_BUDGET: Duration = Duration::from_millis(8);
 /// long enough that a drag does not sneak a rebuild in between two frames of
 /// mouse movement.
 const REBUILD_DEBOUNCE: Duration = Duration::from_millis(120);
-
-/// Materials cached per surface for the life of the process: a drag rebuilds
-/// the prop every frame, and minting one per rebuild would fill
-/// `Assets<StandardMaterial>` with identical greys. Meshes need no cache —
-/// they hang off the entities, so despawning drops the last handle with them.
-#[derive(Resource, Default)]
-struct SurfaceMaterials(Vec<(Surface, Handle<StandardMaterial>)>);
 
 pub struct PropViewPlugin;
 
@@ -225,8 +218,8 @@ fn rebuild_the_prop(
     editor: Res<PropEditor>,
     time: Res<Time>,
     mut build: ResMut<PropBuild>,
-    mut materials: ResMut<SurfaceMaterials>,
-    mut material_assets: ResMut<Assets<StandardMaterial>>,
+    mut surfaces: ResMut<SurfaceMaterials>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     stage: Query<Entity, With<PropStage>>,
 ) {
@@ -279,18 +272,9 @@ fn rebuild_the_prop(
         Name::new("Prop"),
     ));
     root.with_children(|parent| {
-        for (_, solid) in &build.evaluated.bodies {
-            for (surface, mesh) in solid.meshes() {
-                let material = match materials.0.iter().find(|(known, _)| *known == surface) {
-                    Some((_, handle)) => handle.clone(),
-                    None => {
-                        let handle = material_assets.add(surface.material());
-                        materials.0.push((surface, handle.clone()));
-                        handle
-                    }
-                };
-                parent.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material)));
-            }
+        for (surface, mesh) in parts(&build.evaluated) {
+            let material = surfaces.get(surface, &mut materials);
+            parent.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material)));
         }
     });
 }

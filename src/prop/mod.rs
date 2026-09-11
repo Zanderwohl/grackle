@@ -7,6 +7,7 @@
 //!
 //! | Module | What is in it |
 //! | --- | --- |
+//! | [`baked`] | Props baked into mesh handles, by name, for anything that draws one. |
 //! | [`csg`] | The kernel: a BSP tree and three booleans over convex polygon soup. |
 //! | [`profile`] | 2D loops, the planes they are drawn on, and ear clipping. |
 //! | [`solid`] | Sweeps, primitives, transforms, and the bake to a `Mesh`. |
@@ -37,6 +38,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::assets::{default_packs, Assets};
 use crate::prop::document::{prop_path, PropDoc, PropEditor};
 
+pub mod baked;
 pub mod camera;
 pub mod csg;
 pub mod document;
@@ -58,6 +60,10 @@ impl Plugin for PropEditorPlugin {
         // Also initialised by `GamePlugin`; done again here so reading pack
         // files does not depend on the game layer being wired up first.
         app.init_resource::<Assets>()
+            // Shared with the game, which bakes the same props to put them in
+            // somebody's hands — see `prop::baked`.
+            .init_resource::<baked::PropCache>()
+            .init_resource::<baked::SurfaceMaterials>()
             .init_resource::<document::PropEditor>()
             .init_resource::<StartInPropEditor>()
             .add_plugins((
