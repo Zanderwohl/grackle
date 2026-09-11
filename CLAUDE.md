@@ -18,6 +18,9 @@ not a convenience. Design accordingly:
 - Two map formats are intended, and the split is deliberate:
   - **Blueprint (`.gmb`)** — the authoring format, a SQLite database. Holds the
     full feature timeline with undo history. This is what the editor saves.
+  - **Prop (`.gpp`)** — a *thing*, not a place: a weapon, a crate, a control
+    point. Flat text, not SQLite, because the game reads one — see "Modelling
+    a prop" below.
   - **Compiled map** — not written yet. A simpler, flatter runtime format that a
     more traditional art-filled map can be baked into and shipped. The game
     loads this; it does not load blueprints in the general case.
@@ -50,6 +53,11 @@ There is a player body that walks, falls and jumps in `src/game/`, but it is
 still a prototype for feeling out room sizes: it has health and can shoot, and
 that is the whole of it.
 
+There is a prop editor, which models the things a map and a class refer to.
+It is a third `AppMode` and the frontier next to it: the geometry it builds is
+correct and nothing yet *holds* one — a weapon names its model and no system
+reads that name.
+
 `cargo check --all-targets` and `cargo test` both pass. The `Room` type is
 still dead — superseded by `EditorRoom` for authoring — but it is what
 `CollisionWorld` is rebuilt from, so deleting it is not the small change it
@@ -63,6 +71,7 @@ looks like.
 | `src/editor/` | The document model: features, timeline, save/load, panels, cameras. |
 | `src/tool/` | One module per editor tool, each its own `Plugin` with its own `Tools` state. |
 | `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls. |
+| `src/prop/` | The prop editor: a CSG kernel, the modelling feature list, and the mode around it. |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `crate_drop`. |
@@ -106,10 +115,41 @@ answered at this layer yet.
 
 ## Editor and game in one process
 
-`AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor` or
-`Play`, and **`F5` swaps between them** — the only way back to the editor, as
-`Escape` belongs to the pause menu. No reload, no second process — that is the
-between-round editing feature, so keep it that way.
+`AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
+`Prop` or `Play`. **`F5` swaps between the map editor and Play, and nothing
+else** — the only way back to the editor, as `Escape` belongs to the pause
+menu. From the prop editor it is answered with a line in the log rather than
+starting a round: the key's whole meaning is that it toggles between *two*
+modes, and one that went one way from a third would have no way back to where
+it came from. No reload, no second process — that is the between-round editing
+feature, so keep it that way.
+
+**The prop editor has no shortcut, deliberately.** Every mode is reachable
+from the menu bar's **Mode** pulldown, which both authoring modes show and
+neither owns — `mode_menu` lives beside the enum, because what the variants
+are called and which can be reached from where is one thing, and splitting it
+is how a fourth mode ends up offered from one menu bar and not the other. A
+third mode key would be something to remember in exchange for saving a click
+on something nobody does mid-fight. `--prop` opens it at startup, which is the
+only way to reach it from a script.
+
+`AppMode::selectable_from` is the whole rule, out of the egui closure so it can
+be tested: you are never offered the mode you are in — `NextState::set` runs
+the transition even for the same state, and `OnEnter(Play)` tears the match
+down — and **starting *or* ending a round needs authority**, which is why the
+clause names `Play` on either side rather than asking whether it is a change.
+Swapping between the two authoring modes is local and needs nothing.
+
+Ask **`AppMode::is_authoring()`** rather than matching `Editor` wherever the
+question is really "is the match running" — same rule as `NetRole::is_authority`.
+A fourth authoring mode then joins by answering `true` rather than by being
+found again in every match that forgot about it.
+
+Across the wire `Prop` does not exist: `MatchMode` states whether the match is
+*being played*, and modelling is one of the ways of not playing. That is lossy
+on purpose — a client modelling a weapon is put back in the map editor with
+everybody else when the server ends the round, which is the same authority
+rule rather than an exception to it.
 
 **On a client the server owns the mode**, and F5 does nothing.
 [`src/common/match_state.rs`](src/common/match_state.rs) sends a `MatchMode`
@@ -169,6 +209,244 @@ primary and the right its secondary — held, for anything automatic — **`R`**
 reloads, and **`G`** plants an emitter firing whatever projectile you are
 holding every two seconds with **`B`** to clear them. What each slot holds is a
 property of the class, which is read off disk; see "What a weapon is" below.
+
+## Modelling a prop
+
+A **prop** is geometry with a life of its own — a weapon first of all — and it
+is deliberately *not* map content: it lives in a pack beside `weapons.toml`,
+is named rather than embedded, and one model serves a weapon a class carries,
+a prop a mapper places, and whatever comes next. `src/prop/` is the editor for
+one, from the menu bar's **Mode** pulldown or `--prop`.
+
+It is a feature list for the same reason the map is: an edit halfway down is
+felt by everything after it, so a barrel drilled through stays drilled through
+when the barrel gets longer. Four things about it differ from the map's model,
+and each is a decision rather than a shortcut:
+
+- **A modelling feature is an `enum`, not a `typetag` trait object.** The
+  map's features are a trait because a map is open-ended. A boolean has to
+  *know what it is subtracting*, so there is no writing "cut B out of A"
+  against a trait object without the kernel answering for every shape anyway —
+  the openness would be a costume. Closing the set buys exhaustive matching,
+  plain serde, and an evaluator that cannot be handed something it has never
+  heard of. Adding a feature is a variant and an arm in `evaluate`, not seven
+  edits in files that do not reference each other.
+- **Undo is whole-document snapshots**, not before-and-after deltas. A prop is
+  a couple of kilobytes, so cloning per edit is free and correct by
+  construction: no pair to get the wrong way round, no operation that can
+  forget to record itself. The price — history does not survive closing the
+  file — is one the map deliberately pays and this deliberately does not.
+- **The file is flat text.** A blueprint is SQLite because only the editor
+  reads one; a prop is read by the *game*, so it has to reach a browser tab,
+  where bundled C does not go. It goes through `AssetSource` like
+  `weapons.toml`, the kernel is hand-written, and the only `std::fs` is on the
+  saving side.
+- **Numbers are written the way they were typed.** `src/prop/nice_f32.rs`
+  widens an `f32` through its own shortest decimal, so a file says `0.05`
+  rather than `0.05000000074505806`. Lossless by construction — the round trip
+  is pinned by a test — and the whole reason a text format was worth having.
+
+**One rule runs the evaluator: a feature that consumes bodies produces one,
+under its own id.** A boolean eats two and leaves one; a mirror eats one and
+leaves one; a primitive eats none. What is left standing is what gets drawn.
+Without the consuming half, subtracting a bore from a barrel would draw the
+barrel, the bore *and* the result, visible only where they disagree. Two
+consequences:
+
+- **Nothing refuses.** A feature naming a body that was deleted, disabled, or
+  already eaten is skipped with a note that reaches the Problems panel. A tool
+  that stopped at the first dangling reference would blank the viewport every
+  time somebody deleted a feature.
+- **A feature that fails puts back whatever it took.** Finding an operand and
+  taking it are two steps for exactly this reason: a boolean that took its
+  first operand and then failed to find its second would delete a body it
+  never used, and the half that vanishes is not the feature that looks wrong.
+
+The kernel ([`src/prop/csg.rs`](src/prop/csg.rs)) is the `csg.js` BSP
+algorithm written out, and **a solid is a bag of convex polygons that happens
+to be closed**. Nothing checks either property and both matter: a plane cuts a
+convex polygon into exactly two pieces, which is the assumption the splitter
+is written on, and "inside" only means anything for a surface with no gaps.
+That is why every sweep in [`solid.rs`](src/prop/solid.rs) emits triangles or
+planar convex faces, why a revolve's side faces are triangles (a quad between
+two steps is only planar in special cases), and why a cap is **ear-clipped
+rather than fanned** — a fan is right for a rectangle and silently wrong for
+anything with a notch in it.
+
+**A solid's faces point outwards, and that is measured rather than derived.**
+`Solid::oriented_outward` computes the enclosed volume and flips the whole
+thing if it came out negative, so no sweep has to get its winding right by
+reasoning and no mirror has to remember that a negative scale inverts a
+surface. Inside-out is the failure that does not announce itself: it renders
+as a hole from one side and correctly from the other, and a boolean against it
+keeps exactly the wrong half. The tests measure volume for the same reason —
+"does this look right" is not a question a test can ask, and the volume of a
+box with a hole in it is arithmetic.
+
+**Materials are the layer above the kernel's.** The kernel keeps a face's own
+surface through a cut, which is arithmetically honest and the wrong answer for
+a modelling tool: drilling a bore through a steel barrel should leave steel
+inside the bore, not whatever colour the drill was, and nobody sets a drill's
+colour because a drill is not part of the finished prop. So `Solid::subtract`
+and `intersect` repaint the tool with the target's dominant surface — by
+**area**, since a barrel is mostly its long sides — and `union` deliberately
+does not, because joining a wooden stock to a steel receiver is two materials
+meeting.
+
+A **style** (metal, plastic, wood) is how light comes off a surface and a
+**tint** is what colour it was painted; they are kept apart so a red plastic
+grip and a red painted barrel are obviously different objects. A style is four
+numbers on a `StandardMaterial`, not a texture — the right fidelity for
+flat-shaded polygons and the only one that costs a browser nothing.
+
+The mode itself ([`view.rs`](src/prop/view.rs)) does three reversible things
+on the way in: the world is **hidden rather than unloaded** (a prop is
+centimetres across and a map is tens of metres, so leaving it in puts the prop
+inside a wall), the four editor cameras are **framed on the prop and saved**
+so they go back where they were, and the prop gets **its own lights**, since
+the map's lights are feature entities and went out with everything else. The
+prop is rebuilt on `PropEditor::generation` rather than on anything being
+`Changed`: evaluating is a boolean kernel doing real work, and doing it again
+because egui reported a hover would be felt.
+
+**The hiding rule asks what is *not* the prop scene**, rather than naming the
+kinds of thing that might be in the way. Naming them was the first attempt and
+it was wrong within one map: the animation grid's bodies stand in the world
+rather than inside the grid feature — `OfGrid` replaced `ChildOf` so they could
+be replicated — so a rule that hid feature entities left sixty people standing
+around the weapon. Corpses, projectiles, tracers and emitters are loose in the
+same way. `PropScene` marks every root the mode owns and everything else gets
+a `Visibility::Hidden`; a new kind of loose entity is hidden the day it is
+written. Three details carry it:
+
+- **Roots only** (`Without<ChildOf>`), because `Visibility` inherits: hiding a
+  body hides its bone meshes. Walking children too would fight the systems
+  that legitimately hide one part of a visible thing.
+- **`Without<Node>`**, because Bevy UI carries `Visibility` and the viewport
+  labels are UI. They are chrome rather than scene.
+- **What was hidden is put back, not blanket-set to visible.** Plenty of things
+  are hidden on purpose — a spawn point's preview during a round, the body you
+  are looking out of — so the previous value is recorded, and something
+  *already* hidden when the mode opened is never recorded and so stays hidden.
+
+It runs every frame rather than only on the way in, because a map edit can land
+mid-session (`sync_entities` is deliberately ungated) and a server can be
+replicating a round the whole time.
+
+**A gizmo is not an entity, so none of that reaches one.** A debug overlay is a
+system drawing lines every frame, which no amount of hiding touches —
+`draw_hitboxes` and `draw_skeletons` were drawing the animation grid's sixty
+bodies around a weapon. They ask **`AppMode::shows_the_world`** instead, which
+is true in the map editor and in Play and false in the prop editor. A question
+rather than two named variants at each call site, for the same reason
+`is_authoring` is one: an overlay written later answers it once rather than
+being the next thing to leak. `update_hitboxes` deliberately keeps running —
+the boxes are a fact about a body, and not computing them would leave stale
+ones the moment anybody left the mode.
+
+**Getting around** ([`camera.rs`](src/prop/camera.rs)) reuses the four
+viewports and deliberately *not* the map editor's movement. The gesture is the
+same — **right button drags, the modifier key turns a rotate into a pan** — so
+a mapper who has learnt one has learnt the other, but three things differ
+because a prop is not a map:
+
+- **The perspective view orbits a pivot** rather than turning in place. There
+  is no centre to a map, so free-look is the only thing flying one could mean;
+  a prop *is* a centre, and seeing the other side of it is what you want a
+  hundred times an hour. The orbit works in spherical coordinates about the
+  pivot rather than by composing rotations, because composing them drifts —
+  and a horizon a degree off after ten minutes is worse than one obviously
+  wrong.
+- **Zoom is multiplicative**, a constant ratio per notch. A map's step is
+  metres and a prop's is millimetres; an additive step tuned for one is either
+  imperceptible or catastrophic in the other. It is also clamped short of the
+  pivot, because zoom that could reach zero is zoom you cannot come back out
+  of.
+- **The wheel needs no button held**, acting on whatever the pointer is over.
+  In the map editor the same wheel drives other things; here it cannot mean
+  anything else. It is read **once per frame and applied to one camera** — a
+  `MessageReader` has its own cursor, so reading it inside the camera loop
+  would give the first camera every notch and the rest none.
+
+**Panning carries the pivot with it.** Leave it behind and the next orbit
+swings around a point that is no longer anywhere near what is on screen.
+
+`Numpad0` puts the view **under the cursor** back where framing would put it —
+one view, because the reason to reach for it is that one view has been dragged
+somewhere useless, and resetting the other three as collateral would cost more
+than it saved. Over no viewport it does nothing, which is the honest answer to
+"reset which one?". Framing one camera and framing all four are the same
+function (`frame_one`), so two views cannot disagree about what framed means.
+
+`EditorInputPlugin` therefore runs in **both authoring modes** rather than only
+in the map editor — the prop editor needs the same two questions answered,
+which viewport the pointer is over and how far it has moved, and `in_camera` is
+exactly what tells `Numpad0` which view to reset. It stays off in Play, which
+is the gating that matters. Safe because every *tool* carries
+`in_state(AppMode::Editor)` of its own, so waking the resources does not wake a
+tool. `AppMode::authoring` is the run condition, the counterpart to
+`has_authority`: `in_state` can only name a variant, and a system wanted in two
+modes would otherwise name both and have to be found again when a third
+appears.
+
+**The reference figure** ([`figure.rs`](src/prop/figure.rs)) is a body standing
+holding the prop, off by default — a `ScaleFigure` resource of `Option<Class>`,
+picked in the **Scene** tab. A weapon is modelled in metres and nothing in an
+empty viewport says how big a metre is; the question being asked is never "how
+long is this" but "does this look right in somebody's hands". It is a rig with
+a `Pose` and deliberately **no `SkeletonAnimator`** — the pose is set once and
+nothing else may write it, the rule a corpse already follows — so the ungated
+`BodyMeshPlugin` dresses it from the same cached meshes as every other body of
+that build. A reference figure is not a second kind of body.
+
+Three things about it are worth knowing before retuning the pose:
+
+- **Bones are aimed, not given quaternions.** `aim` poses everything decided so
+  far, reads where a bone currently points, and writes the rotation that closes
+  the gap — so the pose reads as "the forearm points forward" rather than as a
+  quaternion that is wrong by a mirror on one side of the body. **Parents
+  before children**: a bone's frame is its parent's.
+- **The torso twist is load-bearing, not decoration.** This rig's arms are
+  short — about 0.55 m shoulder to fingertip on a 1.85 m body — and with the
+  chest square on, the support hand simply cannot reach a weapon held anywhere
+  near the other hand. Turning the left shoulder forward is what a person
+  actually does and it buys the reach back.
+- **The figure is placed twice over**: its right hand goes to the origin, and
+  it is *turned* so the line between its hands runs down the prop's axis. A
+  figure facing a fixed direction would put the support hand out beside the
+  weapon rather than on it. The angle is taken from the pose rather than
+  written down, so retuning the pose cannot silently stop the hands lining up.
+
+The panels ([`ui.rs`](src/prop/ui.rs)) are their own `DockState` rather than
+tabs on `EditorPanels` — that system is already at Bevy's parameter limit, and
+the two surfaces are modes and never up at once. Every write goes through
+`begin_gesture`/`end_gesture` rather than `edit`, because egui reports a drag
+as a change per frame and per-change undo steps would turn one pull on a
+radius into forty presses of Ctrl+Z. The gesture closes when the pointer *and*
+the keyboard are idle, which is what makes typing a name one step rather than
+one per letter.
+
+**What a boolean may point at is what was live when it ran**, not what is live
+now — and the evaluator records that (`Evaluated::live_before`) rather than the
+panel working it out. Two implementations of the consuming rule is two that
+drift, and the symptom would be a dropdown offering bodies that have already
+been eaten.
+
+`assets/default/props/rocket_launcher.gpp` is the example, and the prop editor
+opens onto it: an empty modelling tool is a blank screen with no sense of
+scale, and loading it every time the editor starts means the path the *game*
+will read a model by is exercised constantly rather than first run in anger a
+month later. `every_prop_the_default_pack_ships_loads_and_builds` is what keeps
+the shipped files honest — there is no schema version and no migration chain,
+which is the trade for being text somebody can read, so the guard is replaying
+each file and insisting it comes out as geometry with nothing to complain
+about.
+
+**A weapon names its model and nothing reads that name yet.** `Weapon.model`
+is an `Option<String>` naming a prop under a pack's `props/`; it crosses the
+wire with the rest of the catalogue, so each machine builds the model from its
+own pack — the same arrangement `Equipped` already has, one level down.
+Nothing draws it. That is the next piece, not a gap in this one.
 
 ## Baking before a round
 
@@ -1389,8 +1667,11 @@ in order of how load-bearing they are:
   format: let the editor stay native for authoring, and give the runtime a
   format it can read in a browser.
 - **`rfd` + `pollster::block_on` inside `std::thread::spawn`**
-  ([`panels.rs:402`](src/editor/panels.rs:402)) — no threads on wasm, and
-  blocking the main thread deadlocks.
+  ([`panels.rs:402`](src/editor/panels.rs:402), and the same pattern in
+  [`src/prop/ui.rs`](src/prop/ui.rs)) — no threads on wasm, and blocking the
+  main thread deadlocks. Both are on the *authoring* side; `src/prop/`'s
+  reading path deliberately is not, which is the whole reason the prop format
+  is flat text.
 - **`lang.rs` reads `assets/` via `std::fs`** at first use, outside Bevy's
   `AssetServer`.
 

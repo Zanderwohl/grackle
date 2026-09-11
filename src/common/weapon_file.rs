@@ -61,6 +61,16 @@ struct WeaponFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WeaponEntry {
     name_key: String,
+    /// The prop under `props/` this weapon is drawn as. Absent for a weapon
+    /// nobody has modelled yet.
+    ///
+    /// **Not checked here.** Weapons load at `Startup` and a prop is read when
+    /// something needs to draw one, so verifying the name would mean reading
+    /// every model in the pack to load the catalogue. A name that goes
+    /// nowhere therefore reads as a weapon that draws nothing, which is what a
+    /// weapon with no model does anyway.
+    #[serde(default)]
+    model: Option<String>,
     primary: Mounted,
     secondary: Mounted,
     magazine: Magazine,
@@ -174,6 +184,7 @@ fn load_weapons(assets: &Assets, pack: &Path, catalogue: &mut WeaponCatalogue) {
         catalogue.insert(Weapon {
             id,
             name_key: entry.name_key,
+            model: entry.model,
             primary: entry.primary,
             secondary: entry.secondary,
             magazine: entry.magazine,

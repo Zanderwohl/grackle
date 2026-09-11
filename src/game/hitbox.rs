@@ -13,6 +13,8 @@
 //! hardly move.
 
 use bevy::prelude::*;
+
+use crate::common::app_mode::showing_the_world;
 use bevy::transform::TransformSystems;
 
 use crate::common::class::Stance;
@@ -53,7 +55,18 @@ impl Plugin for HitboxPlugin {
                 // After the step, so a body is boxed where this tick left it
                 // rather than where the last one did.
                 .after(step_player))
-            .add_systems(PostUpdate, draw_hitboxes.after(TransformSystems::Propagate))
+            // Gated on being a view of the map: a gizmo is not an entity, so
+            // the prop editor's hiding cannot reach it, and the animation
+            // grid's bodies are still standing there — their boxes were being
+            // drawn around somebody's weapon. `update_hitboxes` deliberately
+            // keeps running: the boxes are a fact about a body, and stopping
+            // computing them would leave stale ones the moment anybody left.
+            .add_systems(
+                PostUpdate,
+                draw_hitboxes
+                    .after(TransformSystems::Propagate)
+                    .run_if(showing_the_world),
+            )
         ;
     }
 }

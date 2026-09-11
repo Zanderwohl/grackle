@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use crate::common::app_mode::AppMode;
+use crate::common::app_mode::{mode_menu, AppMode};
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use bevy_egui::egui::{Id, LayerId, Ui, UiBuilder, UiKind, WidgetText};
@@ -62,7 +62,10 @@ enum TabKinds {
 /// Bundled because a Bevy system takes at most sixteen parameters and `ui` was
 /// at exactly sixteen: the network menu needed a slot. Grouping the writers is
 /// cheaper than splitting the menu bar across two systems, which would then
-/// both want to own its measured height.
+/// both want to own its measured height. The mode menu needed one next, which
+/// is why `mode` is here despite not being a message — what these have in
+/// common is that they are the panels' *writes*, and the alternative was
+/// evicting something to make room.
 #[derive(SystemParam)]
 struct PanelMessages<'w> {
     room: MessageWriter<'w, CalculateRoomGeometry>,
@@ -70,6 +73,7 @@ struct PanelMessages<'w> {
     log_ecs: MessageWriter<'w, LogECS>,
     edits: MessageWriter<'w, EditEvent>,
     net: MessageWriter<'w, NetRequest>,
+    mode: ResMut<'w, NextState<AppMode>>,
 }
 
 #[derive(Default)]
@@ -256,6 +260,7 @@ impl EditorPanels {
 
         enum FileOp { New, Save, SaveAs, Load }
         let mut pending_file_op: Option<FileOp> = None;
+        let mut wanted_mode: Option<AppMode> = None;
         
         let mut viewer = TabViewerAndResources  {
             current_tool: & *current_tool,
@@ -296,6 +301,10 @@ impl EditorPanels {
                             ui.close_kind(UiKind::Menu);
                         }
                     });
+                    // `Editor` spelled out rather than read from the state:
+                    // this whole system is gated on it, so the mode it is
+                    // drawing for is not in question.
+                    mode_menu(ui, AppMode::Editor, Some(&net_role), &mut wanted_mode);
                     network_menu(
                         ui,
                         &net_role,
@@ -371,6 +380,12 @@ impl EditorPanels {
             .height();
 
         drop(viewer);
+
+        // `set`, not `set_if_neq`: `mode_menu` never offers the mode already
+        // in force, so anything arriving here is a real change.
+        if let Some(mode) = wanted_mode {
+            messages.mode.set(mode);
+        }
 
         // Poll for completed async file dialog results
         let dialog_result = current_file.dialog_result.lock().unwrap().take();

@@ -22,7 +22,7 @@ use bevy::prelude::*;
 use lightyear::prelude::input::native::ActionState;
 use bevy::transform::TransformSystems;
 
-use crate::common::app_mode::AppMode;
+use crate::common::app_mode::{showing_the_world, AppMode};
 use crate::common::class::Stance;
 use crate::common::damage::PlayerId;
 use crate::common::class::Class;
@@ -101,7 +101,16 @@ impl Plugin for SkeletonPlugin {
             // After propagation, so a rig is drawn where its body is now.
             // `interpolate_bodies` has already run by here, so a player's
             // skeleton follows the smoothed position, not the 64 Hz one.
-            .add_systems(PostUpdate, draw_skeletons.after(TransformSystems::Propagate))
+            // Gated for the same reason `draw_hitboxes` is, and it is the same
+            // bug one component along: `F6` is off by default, so the rigs of
+            // the animation grid's sixty bodies were waiting in the prop
+            // editor rather than already showing.
+            .add_systems(
+                PostUpdate,
+                draw_skeletons
+                    .after(TransformSystems::Propagate)
+                    .run_if(showing_the_world),
+            )
         ;
     }
 }

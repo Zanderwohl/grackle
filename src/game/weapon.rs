@@ -440,6 +440,7 @@ mod tests {
         Weapon {
             id: WeaponId::of("test"),
             name_key: "weapon.names.test".into(),
+            model: None,
             primary,
             secondary,
             magazine,

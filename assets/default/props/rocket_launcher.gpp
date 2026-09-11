@@ -1,0 +1,221 @@
+name_key = "weapon.names.rocket_launcher"
+next_id = 9
+
+[[features]]
+id = 0
+name = "Tube"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 12
+radius = 0.05
+height = 0.9
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.0,
+    0.0,
+]
+rotation = [
+    -1.5707964,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.3,
+    0.32,
+    0.34,
+]
+
+[[features]]
+id = 1
+name = "Bore"
+enabled = true
+
+[features.op]
+feature = "extrude"
+depth = 1.0
+midplane = false
+
+[features.op.profile]
+shape = "ngon"
+sides = 12
+radius = 0.038
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.0,
+    -0.5,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.3,
+    0.32,
+    0.34,
+]
+
+[[features]]
+id = 2
+name = "Drilled"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "subtract"
+target = 0
+tool = 1
+
+[[features]]
+id = 3
+name = "Grip"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.05,
+    0.15,
+    0.07,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    -0.11,
+    0.06,
+]
+rotation = [
+    0.21,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.13,
+    0.13,
+    0.15,
+]
+
+[[features]]
+id = 4
+name = "Tube and grip"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "union"
+target = 2
+tool = 3
+
+[[features]]
+id = 5
+name = "Sight"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.012,
+    0.05,
+    0.012,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.062,
+    -0.15,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.3,
+    0.32,
+    0.34,
+]
+
+[[features]]
+id = 6
+name = "Sight fitted"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "union"
+target = 4
+tool = 5
+
+[[features]]
+id = 7
+name = "Rear flare"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "cone"
+sides = 12
+radius = 0.075
+height = 0.12
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.0,
+    0.45,
+]
+rotation = [
+    -1.5707964,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.3,
+    0.32,
+    0.34,
+]
+
+[[features]]
+id = 8
+name = "Rocket launcher"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "union"
+target = 6
+tool = 7

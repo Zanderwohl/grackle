@@ -11,6 +11,8 @@ pub struct EditorParams {
     pub net: NetRole,
     /// Whether to drop straight into a round instead of opening the editor.
     pub start_playing: bool,
+    /// Whether to open the prop editor instead of the map editor.
+    pub start_modelling: bool,
 }
 
 impl EditorParams {
@@ -63,6 +65,17 @@ impl EditorParams {
                     .action(ArgAction::SetTrue)
                     .help("Start in Play rather than in the editor.")
             )
+            // The prop editor's equivalent of `--play`, and for the same
+            // reason: it is the only way to reach the mode from a script, and
+            // somebody who spends an afternoon modelling should not have to
+            // walk in through a map they are not editing.
+            .arg(
+                Arg::new("prop")
+                    .long("prop")
+                    .action(ArgAction::SetTrue)
+                    .conflicts_with("play")
+                    .help("Open the prop editor rather than the map editor.")
+            )
             .arg(
                 Arg::new("connect")
                     .long("connect")
@@ -107,6 +120,7 @@ impl EditorParams {
             game_id: game_id.to_owned(),
             net,
             start_playing: matches.get_flag("play"),
+            start_modelling: matches.get_flag("prop"),
         })
     }
 }
@@ -169,6 +183,20 @@ mod tests {
     fn play_is_off_unless_asked_for() {
         assert!(!parse(&[]).unwrap().start_playing);
         assert!(parse(&["--play"]).unwrap().start_playing);
+    }
+
+    #[test]
+    fn the_prop_editor_is_off_unless_asked_for() {
+        assert!(!parse(&[]).unwrap().start_modelling);
+        assert!(parse(&["--prop"]).unwrap().start_modelling);
+    }
+
+    /// Starting in a round and starting in the prop editor are two different
+    /// modes, and silently preferring one would leave somebody wondering why
+    /// their flag did nothing.
+    #[test]
+    fn playing_and_modelling_at_once_is_refused() {
+        assert!(parse(&["--play", "--prop"]).is_err());
     }
 
     /// The flags that were there before still are.

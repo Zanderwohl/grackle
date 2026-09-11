@@ -33,9 +33,9 @@ fn hide_spawn_bodies_while_playing(
     mode: Res<State<AppMode>>,
     mut bodies: Query<&mut Visibility, With<SpawnPointMarker>>,
 ) {
-    let wanted = match mode.get() {
-        AppMode::Editor => Visibility::Inherited,
-        AppMode::Play => Visibility::Hidden,
+    let wanted = match mode.get().is_authoring() {
+        true => Visibility::Inherited,
+        false => Visibility::Hidden,
     };
     for mut visibility in &mut bodies {
         // Assigned only on a change, so this does not dirty every spawn point
