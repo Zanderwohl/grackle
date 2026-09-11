@@ -59,6 +59,9 @@ impl Plugin for GamePlugin {
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
 
+            // Where a pack's bytes come from. One trait, chosen once, so that
+            // a browser build replaces this line and nothing else.
+            .init_resource::<crate::common::assets::Assets>()
             // The catalogue lives here rather than in `WeaponPlugin` because
             // it is a fact about the match and not about the firing systems:
             // what a body is handed at spawn is read by `spawn_player`, which
@@ -66,7 +69,11 @@ impl Plugin for GamePlugin {
             // server's on connect — the same arrangement the map has, and for
             // the same reason: two descriptions of one thing is where the bugs
             // live.
-            .insert_resource(crate::common::weapon::debug_catalogue())
+            .init_resource::<crate::common::weapon::WeaponCatalogue>()
+            .add_systems(
+                Startup,
+                crate::common::weapon_file::load_catalogue_at_startup,
+            )
 
             .init_resource::<CollisionWorld>()
             .init_resource::<NextPlayerId>()

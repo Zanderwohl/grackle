@@ -221,7 +221,7 @@ mod tests {
         // A body is handed its weapons at spawn, so the rule needs a
         // catalogue to hand them out of. The real one, so that a body stood up
         // in a test is armed the way a body stood up in a round is.
-        world.insert_resource(crate::common::weapon::debug_catalogue());
+        world.insert_resource(crate::common::weapon_file::default_catalogue());
         world.spawn(room);
         world.spawn((Transform::from_xyz(2.0, 0.0, -3.0), SpawnPointMarker));
     }

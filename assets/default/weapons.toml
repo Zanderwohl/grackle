@@ -1,0 +1,52 @@
+# Every weapon in the default pack.
+#
+# The table key is the weapon's id. It is hashed into a `WeaponId` at load and
+# that number is what travels — so renaming a weapon here renames it
+# everywhere, and two weapons that hash alike are caught at load rather than in
+# a fight.
+#
+# `name_key` is a lang key and not a name. Display text lives in
+# `lang/<code>.toml` like every other string in the game.
+#
+# Each of `primary` and `secondary` is one mouse button: what it does, how fast
+# it answers being held, and what it costs. A button that does nothing says so
+# with `kind = "none"` rather than being left out.
+#
+# `magazine.clip` omitted means the weapon has no clip at all: its whole supply
+# is loaded, each shot comes straight out of the reserve, and it never reloads.
+# That is the minigun, and it is an absent clip rather than a clip the size of
+# the reserve, which would be a lie the reload system then has to keep
+# believing.
+
+[weapons.laser_rifle]
+name_key = "weapon.names.laser_rifle"
+magazine = { clip = 12, reserve = 60, reload = 1.0 }
+primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 200.0, damage = 30, headshot_multiplier = 3, shove_per_damage = 0.15, shove_radius = 0.4 } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "scope", zoom = 2.5 } }
+
+[weapons.rocket_launcher]
+name_key = "weapon.names.rocket_launcher"
+magazine = { clip = 4, reserve = 20, reload = 0.8, reload_one_at_a_time = true }
+primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 30.0, gravity_factor = 0.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.0, damage_direct_hit = 90, damage_splash = 60, knockback = 9.0, radius = 0.12 } }
+# The TF2C-style RPG: the same rocket, but it falls. One number apart, which is
+# the point of the spec being numbers.
+secondary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 34.0, gravity_factor = 1.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.0, damage_direct_hit = 90, damage_splash = 60, knockback = 9.0, radius = 0.12 } }
+
+[weapons.pipe_launcher]
+name_key = "weapon.names.pipe_launcher"
+magazine = { clip = 6, reserve = 24, reload = 1.2 }
+primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 24.0, gravity_factor = 1.0, air_resistance = 0.1, spin_rate = 12.0, max_bounces = 4, restitution = 0.45, max_lifetime = 2.3, explodes_at_last_bounce = true, explodes_at_lifetime_end = true, explosion_radius = 3.4, damage_direct_hit = 100, damage_splash = 60, knockback = 10.0, radius = 0.14 } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
+
+# No clip: the whole supply is loaded, and it never reloads.
+[weapons.flamethrower]
+name_key = "weapon.names.flamethrower"
+magazine = { reserve = 200, reload = 0.0 }
+primary = { cadence = { kind = "automatic", interval = 0.1 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "flame", range = 6.0, spread = 0.28, rays = 5, damage = 7, afterburn_duration = 6.0, afterburn_damage = 4, afterburn_interval = 0.5 } }
+secondary = { cadence = { kind = "automatic", interval = 0.75 }, cost = { kind = "ammo", rounds = 20 }, action = { kind = "extinguish", range = 6.0, spread = 0.28 } }
+
+[weapons.medi_wrench]
+name_key = "weapon.names.medi_wrench"
+magazine = { reserve = 0, reload = 0.0 }
+primary = { cadence = { kind = "automatic", interval = 0.1 }, cost = { kind = "free" }, action = { kind = "heal_beam", range = 8.0, heal_per_second = 24 } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "charge", fraction = 1.0 }, action = { kind = "invulnerable", duration = 8.0, cooldown = 0.0 } }

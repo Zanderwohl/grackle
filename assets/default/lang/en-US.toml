@@ -162,6 +162,26 @@ teams = "Teams"
 striped = "Striped"
 summary = "{ bodies } bodies, { width } m by { depth } m."
 
+[weapon.names]
+laser_rifle = "Laser Rifle"
+rocket_launcher = "Rocket Launcher"
+pipe_launcher = "Pipe Bomb Launcher"
+flamethrower = "Flamethrower"
+medi_wrench = "Medi-Wrench"
+
+[weapon.slots]
+primary = "Primary"
+secondary = "Secondary"
+melee = "Melee"
+utility = "Utility"
+gadget = "Gadget"
+special = "Special"
+
+[hud]
+ammo = "{ clip } / { reserve }"
+ammo_no_clip = "{ reserve }"
+reloading = "Reloading"
+
 [class.names]
 scout = "Scout"
 soldier = "Soldier"
@@ -173,6 +193,7 @@ medic = "Medic"
 sniper = "Sniper"
 spy = "Spy"
 civilian = "Civilian"
+mercenary = "Mercenary"
 
 [team.names]
 red = "Red"

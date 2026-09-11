@@ -396,9 +396,8 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
-    use crate::common::weapon::{
-        debug_catalogue, HitscanSpec, Magazine, Weapon, WeaponId, SLOTS,
-    };
+    use crate::common::weapon::{HitscanSpec, Magazine, Weapon, WeaponId, SLOTS};
+    use crate::common::weapon_file::default_catalogue;
 
     /// One fixed step at Bevy's 64 Hz default.
     const STEP: std::time::Duration = std::time::Duration::from_micros(15625);
@@ -576,7 +575,7 @@ mod tests {
     /// input, whoever wrote it last fired everybody's weapon.
     #[test]
     fn one_body_firing_does_not_fire_the_others() {
-        let mut world = a_world(debug_catalogue());
+        let mut world = a_world(default_catalogue());
         let shooting = a_shooter(&mut world);
         let idle = a_shooter(&mut world);
         input(&mut world, shooting).attack = true;
@@ -594,7 +593,7 @@ mod tests {
     /// read rather than taken, so a replayed tick reaches the same loadout.
     #[test]
     fn acting_on_a_switch_twice_is_the_same_as_once() {
-        let mut world = a_world(debug_catalogue());
+        let mut world = a_world(default_catalogue());
         let body = a_shooter(&mut world);
         input(&mut world, body).select = Some(Slot::Secondary);
 
@@ -613,7 +612,7 @@ mod tests {
     /// with four weapons leaves you holding what you had.
     #[test]
     fn selecting_an_empty_slot_changes_nothing() {
-        let mut world = a_world(debug_catalogue());
+        let mut world = a_world(default_catalogue());
         let body = a_shooter(&mut world);
         let held = world.get::<Equipped>(body).unwrap().held;
 
@@ -657,7 +656,7 @@ mod tests {
     /// follows when it copies a spec onto a projectile.
     #[test]
     fn the_action_that_was_fired_is_the_one_the_message_carries() {
-        let mut world = a_world(debug_catalogue());
+        let mut world = a_world(default_catalogue());
         let shooter = a_shooter(&mut world);
         input(&mut world, shooter).attack = true;
 
@@ -869,7 +868,7 @@ mod tests {
     /// while nobody was holding the weapon would be a reload with no reloader.
     #[test]
     fn switching_weapons_cancels_a_reload() {
-        let mut world = a_world(debug_catalogue());
+        let mut world = a_world(default_catalogue());
         let shooter = a_shooter(&mut world);
         let held = world.get::<Equipped>(shooter).unwrap().held;
 

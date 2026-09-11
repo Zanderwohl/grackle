@@ -4,6 +4,7 @@ pub mod class;
 pub mod damage;
 pub mod team;
 pub mod weapon;
+pub mod weapon_file;
 pub mod hitbox;
 pub mod flame;
 pub mod hitscan;

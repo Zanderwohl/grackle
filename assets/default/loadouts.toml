@@ -1,0 +1,32 @@
+# What each class may carry, slot by slot.
+#
+# The table key is a class, written the way the `Class` variant is but in
+# snake_case — derived from the enum at load rather than kept as a second list
+# here, so a class cannot exist in one place and not the other. A class with no
+# entry carries nothing, which is a body that cannot shoot rather than an error.
+#
+# The slots are `primary`, `secondary`, `melee`, `utility`, `gadget` and
+# `special`. A class that uses fewer leaves the rest out.
+#
+# `default` has to be one of `permitted`; a default outside the list is a
+# permitted list that means nothing, and is dropped at load with a line in the
+# log saying so.
+
+# The placeholder everybody actually plays as, and deliberately a sampler:
+# between its six mounted buttons it reaches every kind of action there is, so
+# the whole table can be checked by walking up to it and clicking.
+[loadouts.mercenary.primary]
+permitted = ["laser_rifle", "flamethrower"]
+default = "laser_rifle"
+
+[loadouts.mercenary.secondary]
+permitted = ["rocket_launcher", "pipe_launcher"]
+default = "rocket_launcher"
+
+[loadouts.mercenary.melee]
+permitted = ["medi_wrench"]
+default = "medi_wrench"
+
+[loadouts.mercenary.utility]
+permitted = ["flamethrower"]
+default = "flamethrower"
