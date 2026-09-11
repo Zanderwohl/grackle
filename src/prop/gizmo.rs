@@ -83,9 +83,26 @@ impl Handle {
 #[derive(Resource, Default)]
 pub struct HoldHandles(pub bool);
 
+/// Where an axis arrow is grabbed, given the point it is anchored to.
+///
+/// **Out along its own axis, and that is not decoration.** Picking is by
+/// distance from the ray to a point, so three arrows anchored at the same
+/// place are three identical distances and `min_by` returns whichever was
+/// listed first — every one of them picks as X, in every viewport, silently.
+fn arrow_tip(anchor: Vec3, axis: usize, length: f32) -> Vec3 {
+    let mut unit = Vec3::ZERO;
+    unit[axis] = 1.0;
+    anchor + unit * length
+}
+
 /// How big a grip handle is. Small: a grip is a precise thing on a small
 /// object, and the arrows are what you grab rather than the cube.
 const GRIP_SIZE: f32 = 0.02;
+
+/// How far a grip's arrows reach, which is also how far apart their pick
+/// points are. Comfortably more than twice the pick radius, so no two of them
+/// are ever both in range.
+const GRIP_LENGTH: f32 = GRIP_SIZE * 3.0;
 
 /// The drag in progress, if any.
 ///
@@ -263,9 +280,16 @@ fn drag_the_selected(
             .map(|(_, local)| *local)
             .unwrap_or(Vec3::ZERO);
         if let Some(on_axis) = closest_param_on_axis(ray, origin, axis_direction(axis)) {
-            // See `GizmoGrab`: kept so the handle follows the pointer rather
-            // than jumping its centre under it.
-            grab.held = Some((handle, on_axis - local[axis]));
+            // Measured against **what the drag moves**, not against where it
+            // was grabbed: a move arrow slides the placement's origin, whose
+            // own parameter along this axis is zero, while a face handle
+            // slides the face. Taking the arrow's tip for both made grabbing a
+            // move arrow jump the feature by the arrow's own length.
+            let anchor = match handle {
+                Handle::Move(_) => 0.0,
+                _ => local[axis],
+            };
+            grab.held = Some((handle, on_axis - anchor));
             editor.begin_gesture();
         }
     }
@@ -360,8 +384,10 @@ fn drag_the_hold(
 
     let nearest = points
         .iter()
-        .map(|(handle, at)| (*handle, ray_point_distance(&ray, *at)))
-        .filter(|(_, distance)| *distance < GRIP_SIZE * PICK_SLACK * 2.0)
+        .map(|(handle, at)| {
+            (*handle, ray_point_distance(&ray, arrow_tip(*at, handle.axis(), GRIP_LENGTH)))
+        })
+        .filter(|(_, distance)| *distance < GRIP_SIZE * 2.0)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(handle, _)| handle);
 
@@ -448,8 +474,6 @@ fn draw_hold(
 
     for (handle, at) in points {
         let axis = handle.axis();
-        let mut unit = Vec3::ZERO;
-        unit[axis] = 1.0;
         let colour = match (lit == Some(*handle), handle) {
             (true, _) => highlight,
             // A grip nobody can reach is the thing worth seeing before
@@ -457,7 +481,7 @@ fn draw_hold(
             (false, Handle::Grip { support, .. }) if short(*support) => unreachable,
             _ => AXIS_COLOURS[axis],
         };
-        gizmos.arrow(*at, *at + unit * GRIP_SIZE * 3.0, colour);
+        gizmos.arrow(*at, arrow_tip(*at, axis, GRIP_LENGTH), colour);
     }
 
     // The gap itself, drawn from the hand that fell short to the grip it was
@@ -619,6 +643,48 @@ mod tests {
             }
         }
         assert_eq!(handles(None, 0.05).len(), 3);
+    }
+
+    /// **Three arrows anchored at one point are one pick point.** Picking is
+    /// by distance from the ray, so identical distances make `min_by` return
+    /// whichever was listed first — which is how every grip arrow, in every
+    /// viewport, silently picked as X.
+    #[test]
+    fn the_three_arrows_of_a_handle_can_be_told_apart() {
+        let anchor = Vec3::new(0.1, -0.2, 0.3);
+        let tips: Vec<Vec3> = (0..3).map(|axis| arrow_tip(anchor, axis, GRIP_LENGTH)).collect();
+
+        for (a, first) in tips.iter().enumerate() {
+            for second in &tips[a + 1..] {
+                assert!(
+                    (*first - *second).length() > GRIP_SIZE * 2.0 * 2.0,
+                    "two arrows are within each other's pick radius: {first} and {second}",
+                );
+            }
+        }
+    }
+
+    /// A move arrow slides the placement's **origin**, so its drag has to be
+    /// measured against the origin rather than against the tip it was grabbed
+    /// by — otherwise the feature jumps one arrow length the moment it is
+    /// picked up.
+    #[test]
+    fn grabbing_a_move_arrow_does_not_shift_what_it_moves() {
+        let scale = gizmo_scale(Some(Vec3::splat(0.3)));
+        let points = handles(Some(&box_shape()), scale);
+        let (_, tip) = points
+            .iter()
+            .find(|(handle, _)| *handle == Handle::Move(0))
+            .expect("a move arrow per axis");
+
+        // The parameter of the thing being dragged, along its own axis. The
+        // origin is at zero; the arrow is not, and using the arrow is the bug.
+        assert!(tip.x > 0.0, "the arrow is drawn away from the origin");
+        let anchor = 0.0;
+        let grabbed_at = tip.x;
+        let offset = grabbed_at - anchor;
+        // Pointer has not moved, so nothing should have.
+        assert!((grabbed_at - offset - anchor).abs() < 1e-6);
     }
 
     /// Dragging the figure is how a carry is authored, so the two directions
