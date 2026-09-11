@@ -86,7 +86,12 @@ impl Plugin for ViewmodelPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (give_the_view_its_own_camera, dress_the_viewmodel, show_it_only_in_first_person)
+            (
+                give_the_view_its_own_camera,
+                dress_the_viewmodel,
+                place_the_viewmodel,
+                show_it_only_in_first_person,
+            )
                 .chain()
                 .run_if(in_state(AppMode::Play)),
         );
@@ -161,8 +166,6 @@ fn dress_the_viewmodel(
             commands.entity(part).despawn();
         }
 
-        let placed = held.viewmodel().transform();
-
         let mut parts = Vec::new();
         commands.entity(camera).with_children(|camera| {
             for part in held.parts() {
@@ -174,13 +177,44 @@ fn dress_the_viewmodel(
                             mesh.clone(),
                             material.clone(),
                             RenderLayers::layer(VIEWMODEL_LAYER),
-                            placed,
+                            // Written by `place_the_viewmodel` before anything
+                            // is drawn: where it goes depends on the shape of
+                            // the camera, which this does not have.
+                            Transform::IDENTITY,
                         ))
                         .id(),
                 );
             }
         });
         viewmodel.parts = parts;
+    }
+}
+
+/// Put the weapon where the viewmodel says, for the camera it is drawn by.
+///
+/// **Every frame, not once when it is dressed.** The placement is a fraction
+/// of the frustum, so it depends on the camera's aspect — and a window the
+/// player drags wider would otherwise leave the weapon where the old shape put
+/// it, drifting in from the edge it was meant to hang off.
+fn place_the_viewmodel(
+    held: Query<&HeldModel, With<LocalPlayer>>,
+    cameras: Query<(&Camera, &Projection, &Children), With<ViewmodelCamera>>,
+    mut parts: Query<&mut Transform, With<ViewmodelPart>>,
+) {
+    let Ok(held) = held.single() else { return };
+    let spec = held.viewmodel();
+
+    for (camera, projection, children) in &cameras {
+        let Projection::Perspective(perspective) = projection else { continue };
+        let Some(size) = camera.logical_viewport_size().filter(|size| size.y > 0.0) else {
+            continue;
+        };
+
+        let placed = spec.transform(perspective.fov, size.x / size.y);
+        for child in children.iter() {
+            let Ok(mut transform) = parts.get_mut(child) else { continue };
+            *transform = placed;
+        }
     }
 }
 
@@ -264,11 +298,10 @@ mod tests {
     /// **A viewmodel has to be inside the frustum it is drawn by**, which the
     /// body's carry is not: it is anatomical, and puts the grip well below the
     /// eye. Reusing it rendered the weapon perfectly, off the bottom of the
-    /// screen — visible in the ECS, `ViewVisibility` true, and nowhere on
-    /// screen.
+    /// screen — visible in the ECS, `ViewVisibility` true, and nowhere on it.
     #[test]
     fn the_default_viewmodel_is_somewhere_the_camera_can_see() {
-        let placed = ViewmodelSpec::default().transform();
+        let placed = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
         let depth = -placed.translation.z;
         assert!(depth > VIEWMODEL_NEAR, "the weapon is behind the near plane");
 
@@ -278,5 +311,40 @@ mod tests {
             "the grip sits {:.3} m off the view axis where the frustum is {half_height:.3} m tall",
             placed.translation.y,
         );
+    }
+
+    /// **The same numbers mean the same place on screen at any field of view
+    /// and any window shape.** A weapon pinned at a fixed offset in view space
+    /// drifts towards the middle as the view widens, and a weapon that drifts
+    /// inwards shows the cut end it is meant to be hanging off the edge of.
+    #[test]
+    fn a_viewmodel_stays_where_it_was_put_however_the_view_changes() {
+        let spec = ViewmodelSpec::default();
+
+        let screen_place = |fov: f32, aspect: f32| {
+            let placed = spec.transform(fov, aspect);
+            let half_height = spec.depth * (fov / 2.0).tan();
+            // Where it lands as a fraction of the screen, which is what a
+            // player actually sees.
+            Vec2::new(
+                placed.translation.x / (half_height * aspect),
+                placed.translation.y / half_height,
+            )
+        };
+
+        let reference = screen_place(VIEWMODEL_FOV, 16.0 / 9.0);
+        for (fov, aspect) in [
+            (VIEWMODEL_FOV, 4.0 / 3.0),
+            (VIEWMODEL_FOV, 21.0 / 9.0),
+            (110.0_f32.to_radians(), 16.0 / 9.0),
+            (60.0_f32.to_radians(), 1.0),
+        ] {
+            let at = screen_place(fov, aspect);
+            assert!(
+                at.abs_diff_eq(reference, 1e-5),
+                "at {:.0}° and {aspect:.2}:1 the weapon sits at {at} rather than {reference}",
+                fov.to_degrees(),
+            );
+        }
     }
 }

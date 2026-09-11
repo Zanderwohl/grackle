@@ -241,10 +241,16 @@ well below the eye. A viewmodel is a **composition on a screen**: it should not
 shrink because a shorter class is holding it, and it sits far closer to the
 view axis than any real hold does.
 
-So a prop carries a `ViewmodelSpec` of its own, in metres. Reusing the carry
-put the grip 0.39 m under an eye whose frustum is 0.16 m tall at that distance
-— the weapon rendered perfectly, with `ViewVisibility` true, off the bottom of
-the screen.
+So a prop carries a `ViewmodelSpec` of its own. Reusing the carry put the grip
+0.39 m under an eye whose frustum is 0.16 m tall at that distance — the weapon
+rendered perfectly, with `ViewVisibility` true, off the bottom of the screen.
+
+It is stated **across the frustum**, as a fraction of the half-extent at its own
+depth, rather than in metres sideways. A fixed view-space offset drifts towards
+the middle of the screen as the field of view widens or the window gets wider,
+and a weapon that drifts inwards shows the cut end it is meant to be hanging off
+the edge of. Depth stays in metres: it is the one part of the framing that is
+about size.
 
 ### The viewmodel is two arms, not a floating weapon
 

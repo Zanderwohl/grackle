@@ -862,6 +862,10 @@ fn hold(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure, handles: &mut
 
     let mut changed = false;
     let mut edited = base.for_class(figure.0);
+    // Not per class: a viewmodel is a framing on a screen, not a fact about
+    // whoever is holding the thing.
+    let mut viewmodel = editor.doc().viewmodel;
+    let mut view_changed = false;
 
     // Off by default and exclusive with the feature handles: a grip sits at
     // the prop's origin by convention, which is exactly where a feature's move
@@ -914,7 +918,34 @@ fn hold(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure, handles: &mut
         // is under one arm.
         changed |= vec3_ui(ui, get!("prop.hold.offset"), &mut edited.carry, 0.005, "");
         changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.carry_rotation);
+
+        ui.separator();
+        ui.label(get!("prop.hold.viewmodel"));
+        ui.label(egui::RichText::new(get!("prop.hold.viewmodel_note")).weak().small());
+        // Fractions of the frustum, so the same numbers mean the same place on
+        // screen at any field of view and any window — which is what stops a
+        // weapon drifting in from the edge it is meant to hang off.
+        ui.horizontal(|ui| {
+            ui.label(get!("prop.hold.across"));
+            for (component, axis) in viewmodel.across.iter_mut().zip(["x", "y"]) {
+                view_changed |= ui
+                    .add(
+                        egui::DragValue::new(component)
+                            .speed(0.01)
+                            .range(-2.0..=2.0)
+                            .prefix(format!("{axis} ")),
+                    )
+                    .changed();
+            }
+        });
+        view_changed |= drag(ui, get!("prop.hold.depth"), &mut viewmodel.depth, 0.005, "m");
+        view_changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut viewmodel.rotation);
     });
+
+    if view_changed {
+        editor.begin_gesture();
+        editor.doc_mut().viewmodel = viewmodel;
+    }
 
     if !changed {
         return;

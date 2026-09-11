@@ -83,21 +83,33 @@ pub struct HoldSpec {
 
 /// Where the weapon hangs in first person.
 ///
-/// **Its own placement, in metres, and not the carry.** A carry is anatomical
-/// — it is stated in arm lengths because a Heavy's reach is not a Scout's, and
-/// it puts the weapon where a body would actually hold it, which is well below
-/// the eye. A viewmodel is a *framing* decision: a composition on a screen that
-/// should not shrink because a shorter class is holding it, and which sits far
-/// closer to the view axis than any real hold does.
+/// **Its own placement, and not the carry.** A carry is anatomical — stated in
+/// arm lengths because a Heavy's reach is not a Scout's, and putting the weapon
+/// where a body would really hold it, which is well below the eye. A viewmodel
+/// is a *framing* decision: a composition on a screen that should not shrink
+/// because a shorter class is holding it, and which sits far closer to the view
+/// axis than any real hold does.
 ///
-/// Reusing the carry put the grip 0.39 m below an eye whose frustum is 0.16 m
-/// tall at that distance — the weapon was rendering perfectly, off the bottom
-/// of the screen.
+/// **Across the frustum rather than in metres sideways.** A weapon pinned at a
+/// fixed offset in view space drifts towards the middle of the screen as the
+/// field of view widens or the window gets wider — and a weapon that drifts
+/// inwards eventually shows the cut end it is supposed to be hanging off the
+/// edge of. Stated as a fraction of the frustum at its own depth, it stays
+/// where it was put whatever shape the window is.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ViewmodelSpec {
-    /// Where the grip sits relative to the eye, in metres.
-    #[serde(default = "default_viewmodel_at", with = "crate::prop::nice_f32::array")]
-    pub at: [f32; 3],
+    /// Where the grip sits across the view, as a fraction of the frustum's
+    /// half-extent at [`depth`](Self::depth). `[1.0, -1.0]` is exactly the
+    /// bottom-right corner; past one is off screen, which is where the far end
+    /// of a long weapon belongs.
+    #[serde(default = "default_across", with = "crate::prop::nice_f32::array")]
+    pub across: [f32; 2],
+    /// How far in front of the eye, in metres.
+    ///
+    /// Metres because this is the one part of the framing that is about size:
+    /// it decides how big the weapon looks, and a big weapon should look big.
+    #[serde(default = "default_depth", with = "crate::prop::nice_f32::scalar")]
+    pub depth: f32,
     /// How the weapon is turned there, in axis order.
     #[serde(default, with = "crate::prop::nice_f32::array")]
     pub rotation: [f32; 3],
@@ -105,20 +117,32 @@ pub struct ViewmodelSpec {
 
 impl Default for ViewmodelSpec {
     fn default() -> Self {
-        // Down and to the right of the view axis, and far enough forward to be
-        // in front of the near plane — the usual place a shooter puts one.
-        Self { at: [0.13, -0.15, -0.30], rotation: [0.0; 3] }
+        // Down and to the right, well inside the frustum's corner.
+        Self { across: [0.35, -0.71], depth: 0.30, rotation: [0.0; 3] }
     }
 }
 
-fn default_viewmodel_at() -> [f32; 3] {
-    ViewmodelSpec::default().at
+fn default_across() -> [f32; 2] {
+    ViewmodelSpec::default().across
+}
+
+fn default_depth() -> f32 {
+    ViewmodelSpec::default().depth
 }
 
 impl ViewmodelSpec {
-    pub fn transform(&self) -> Transform {
-        Transform::from_translation(Vec3::from_array(self.at))
-            .with_rotation(quat_from_euler(Vec3::from_array(self.rotation)))
+    /// Where the weapon sits in the camera's own frame.
+    ///
+    /// Needs the camera's shape, which is the whole point: the same numbers
+    /// mean the same place on screen at any field of view and any window.
+    pub fn transform(&self, vertical_fov: f32, aspect: f32) -> Transform {
+        let half_height = self.depth * (vertical_fov / 2.0).tan();
+        Transform::from_translation(Vec3::new(
+            self.across[0] * half_height * aspect,
+            self.across[1] * half_height,
+            -self.depth,
+        ))
+        .with_rotation(quat_from_euler(Vec3::from_array(self.rotation)))
     }
 }
 

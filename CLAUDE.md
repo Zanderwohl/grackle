@@ -221,8 +221,17 @@ and Bevy UI otherwise picks one by ambiguity rules rather than by being told.
 
 A prop's `ViewmodelSpec` is **not** its carry: a carry is anatomical, in arm
 lengths, putting the weapon where a body really holds it — well below the eye —
-while a viewmodel is a framing decision in metres. Reusing the carry drew the
-weapon perfectly, off the bottom of the screen.
+while a viewmodel is a framing decision. Reusing the carry drew the weapon
+perfectly, off the bottom of the screen.
+
+It is stated **across the frustum rather than in metres sideways**: a weapon
+pinned at a fixed offset in view space drifts towards the middle of the screen
+as the field of view widens or the window gets wider, and a weapon that drifts
+inwards eventually shows the cut end it is meant to be hanging off the edge of.
+As a fraction of the frustum at its own depth it stays where it was put
+whatever shape the window is, which is why `place_the_viewmodel` runs every
+frame and reads the camera's aspect rather than placing it once. Depth stays in
+metres, because that is the one part of the framing that is about size.
 
 **Every camera carries a zero-sized marker and every query filters on one** —
 `Multicam` for the four editor viewports, `PlayerCamera` for the view,

@@ -354,6 +354,10 @@ at = "At"
 carry = "Carry"
 offset = "Offset (arm lengths)"
 override_for = "Override for the { class }"
+viewmodel = "Viewmodel"
+viewmodel_note = "Where it hangs in first person. Across is a fraction of the view, so it stays put at any field of view."
+across = "Across"
+depth = "Depth"
 no_figure = "Pick a reference figure to author a per-class hold."
 
 [prop.scene]
