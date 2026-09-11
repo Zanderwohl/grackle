@@ -14,7 +14,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::common::assets::{default_packs, Assets as PackAssets};
-use crate::prop::document;
+use crate::prop::document::{self, PropDoc};
 use crate::prop::feature::Evaluated;
 use crate::prop::hold::HoldSpec;
 use crate::prop::surface::Surface;
@@ -68,6 +68,13 @@ pub struct PropCache {
     /// `None` means "looked for it and it is not there", which is an answer
     /// worth keeping.
     baked: HashMap<String, Option<BakedProp>>,
+    /// Bumped whenever an entry is replaced, so anything drawn from this
+    /// knows to look again.
+    ///
+    /// Needed because a *failure* is cached: a client that asked for a model
+    /// before the server sent it recorded "there is no such prop", and would
+    /// otherwise keep that answer for the rest of the match.
+    generation: u64,
 }
 
 impl PropCache {
@@ -92,6 +99,30 @@ impl PropCache {
     pub fn knows(&self, name: &str) -> bool {
         self.baked.contains_key(name)
     }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Take a prop somebody handed us, over whatever we had.
+    ///
+    /// **The document, not the meshes** — a prop is parametric and the client
+    /// has the whole kernel, so what crosses the wire is what the editor
+    /// saved. Replacing rather than filling a gap, because the entry being
+    /// replaced is often a cached *failure*: a client that went looking for
+    /// this model in its own pack before the server's arrived.
+    pub fn adopt(
+        &mut self,
+        name: &str,
+        doc: &PropDoc,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        surfaces: &mut SurfaceMaterials,
+    ) {
+        let baked = bake_doc(name, doc, meshes, materials, surfaces);
+        self.baked.insert(name.to_owned(), Some(baked));
+        self.generation += 1;
+    }
 }
 
 fn bake(
@@ -113,6 +144,16 @@ fn bake(
     }
 
     let doc = found?;
+    Some(bake_doc(name, &doc, meshes, materials, surfaces))
+}
+
+fn bake_doc(
+    name: &str,
+    doc: &PropDoc,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    surfaces: &mut SurfaceMaterials,
+) -> BakedProp {
     let built = doc.evaluate();
     for problem in &built.problems {
         warn!("prop {name}: {}", problem.message);
@@ -123,5 +164,5 @@ fn bake(
         .map(|(surface, mesh)| (meshes.add(mesh), surfaces.get(surface, materials)))
         .collect();
     info!("Baked prop {name}");
-    Some(BakedProp { parts, hold: doc.hold })
+    BakedProp { parts, hold: doc.hold.clone() }
 }

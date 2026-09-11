@@ -474,6 +474,19 @@ which is the trade for being text somebody can read, so the guard is replaying
 each file and insisting it comes out as geometry with nothing to complain
 about.
 
+**A message carrying an internally tagged enum cannot cross the wire.**
+Lightyear encodes with postcard, which refuses `deserialize_any` — what
+`#[serde(tag = "kind")]` needs to read itself back — and that tagging is
+exactly what makes `weapons.toml` and a `.gpp` readable. So
+[`weapon_sync`](src/common/weapon_sync.rs) sends the catalogue as JSON bytes
+and [`prop::sync`](src/prop/sync.rs) sends a model as the text its file holds,
+the way [`map_sync`](src/common/map_sync.rs) already sent bytes for its own
+reason. **It failed in the way nobody notices**: the send reports success, the
+receive errors inside Lightyear, and both machines already had the same files —
+so the catalogue sync was a no-op in the only arrangement anybody ran. Two
+tests encode the way the wire does and assert the typed value still would not,
+so putting it back fails there rather than on somebody's server.
+
 **A weapon's model reaches the hand, and nothing else about it is built yet.**
 `Weapon.model` names a prop; [`prop::baked`](src/prop/baked.rs) bakes it once
 by name and [`game::held`](src/game/held.rs) hangs it off `hand.r`. It looks

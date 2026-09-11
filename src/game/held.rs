@@ -57,6 +57,12 @@ pub struct HeldModel {
     /// which they may have done by answering "there is no model", and that is
     /// an answer worth keeping.
     resolved: bool,
+    /// Which version of the cache that answer came from.
+    ///
+    /// A model sent by a server arrives after a client may already have gone
+    /// looking in its own packs and cached the miss. Without this, "there is
+    /// no such prop" would be the answer for the rest of the match.
+    cached_at: u64,
     parts: Vec<Entity>,
     /// Taken off the model when there is one, so the pose layer never has to
     /// reach for the prop cache.
@@ -128,6 +134,7 @@ fn dress_held_weapons(
         if let Some(drawn) = drawn
             && drawn.weapon == held
             && drawn.resolved
+            && drawn.cached_at == cache.generation()
         {
             continue;
         }
@@ -137,11 +144,14 @@ fn dress_held_weapons(
             // catalogue does not re-insert the component every frame.
             Wanted::Unknown => {
                 if drawn.is_none_or(|drawn| drawn.weapon != held) {
-                    replace_parts(&mut commands, body, drawn, vec![], held, false, HoldSpec::default());
+                    replace_parts(&mut commands, body, drawn, vec![], held, false, HoldSpec::default(), cache.generation());
                 }
             }
             Wanted::Nothing => {
-                replace_parts(&mut commands, body, drawn, vec![], held, true, HoldSpec::default())
+                replace_parts(
+                    &mut commands, body, drawn, vec![], held, true, HoldSpec::default(),
+                    cache.generation(),
+                )
             }
             Wanted::Model(model) => {
                 let mut spawned = Vec::new();
@@ -171,7 +181,8 @@ fn dress_held_weapons(
                         }
                     });
                 }
-                replace_parts(&mut commands, body, drawn, spawned, held, true, hold);
+                let cached_at = cache.generation();
+                replace_parts(&mut commands, body, drawn, spawned, held, true, hold, cached_at);
             }
         }
     }
@@ -186,6 +197,7 @@ fn replace_parts(
     weapon: Option<WeaponId>,
     resolved: bool,
     hold: HoldSpec,
+    cached_at: u64,
 ) {
     if let Some(drawn) = drawn {
         for part in &drawn.parts {
@@ -194,7 +206,7 @@ fn replace_parts(
     }
     commands
         .entity(body)
-        .insert((HeldModel { weapon, resolved, parts, hold }, WeaponInHand::default()));
+        .insert((HeldModel { weapon, resolved, parts, hold, cached_at }, WeaponInHand::default()));
 }
 
 /// Put the weapon where the body is aiming, and the hands on the weapon.
@@ -369,6 +381,7 @@ mod tests {
                     resolved: true,
                     parts: vec![],
                     hold: HoldSpec::default(),
+                    cached_at: 0,
                 },
                 WeaponInHand::default(),
             ))
@@ -442,7 +455,7 @@ mod tests {
         let mut world = World::new();
         let part = world.spawn((HeldPart, Transform::IDENTITY)).id();
         world.spawn((
-            HeldModel { weapon: None, resolved: true, parts: vec![part], hold: HoldSpec::default() },
+            HeldModel { weapon: None, resolved: true, parts: vec![part], hold: HoldSpec::default(), cached_at: 0 },
             WeaponInHand(decided),
         ));
 

@@ -165,6 +165,7 @@ mod tests {
         // The catalogue's channel and message too, so a registration that will
         // not build fails here rather than at the first connection.
         app.add_plugins(crate::common::weapon_sync::WeaponSyncPlugin);
+        app.add_plugins(crate::prop::sync::PropSyncPlugin);
         app.finish();
     }
 }

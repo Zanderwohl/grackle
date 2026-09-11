@@ -34,8 +34,22 @@ use crate::common::weapon::WeaponCatalogue;
 /// sent is the one that is true.
 pub struct WeaponChannel;
 
+/// The catalogue as JSON bytes.
+///
+/// **Bytes, not the typed value, and that is not a preference.** Lightyear
+/// puts a message on the wire with postcard, and postcard refuses
+/// `deserialize_any` — which is exactly what an internally tagged enum needs.
+/// `WeaponAction`, `Cadence` and `Cost` are all `#[serde(tag = "kind")]`,
+/// because that is what makes `weapons.toml` readable, so the whole catalogue
+/// is undecodable at the far end.
+///
+/// It failed *silently*: the send succeeded, the receive errored inside
+/// Lightyear, and every machine already had the same catalogue from its own
+/// files — so the sync was a no-op in the only arrangement anybody ran. The
+/// same reasoning is why [`crate::common::map_sync`] carries bytes, for a
+/// different reason (a `typetag` trait object).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct CatalogueSnapshot(pub WeaponCatalogue);
+pub struct CatalogueSnapshot(pub Vec<u8>);
 
 /// What was last put on the wire.
 ///
@@ -85,7 +99,7 @@ fn send_catalogue_to_new_clients(
         return Ok(());
     }
 
-    let message = CatalogueSnapshot(catalogue.clone());
+    let Some(message) = encode(&catalogue) else { return Ok(()) };
     for client in &joined {
         info!("Sending {} weapons to a new client", catalogue.weapons.len());
         sender.send_to_entities::<_, WeaponChannel>(&message, core::iter::once(client))?;
@@ -110,13 +124,20 @@ fn broadcast_catalogue_changes(
     }
 
     last.0 = catalogue.clone();
+    let Some(message) = encode(&catalogue) else { return Ok(()) };
     info!("Weapons changed; sending {} of them to everyone", catalogue.weapons.len());
-    sender.send::<_, WeaponChannel>(
-        &CatalogueSnapshot(catalogue.clone()),
-        &server,
-        &NetworkTarget::All,
-    )?;
+    sender.send::<_, WeaponChannel>(&message, &server, &NetworkTarget::All)?;
     Ok(())
+}
+
+fn encode(catalogue: &WeaponCatalogue) -> Option<CatalogueSnapshot> {
+    match serde_json::to_vec(catalogue) {
+        Ok(bytes) => Some(CatalogueSnapshot(bytes)),
+        Err(e) => {
+            error!("The weapon catalogue will not encode: {e}");
+            None
+        }
+    }
 }
 
 /// Replace our catalogue with the server's.
@@ -135,14 +156,24 @@ fn adopt_the_servers_catalogue(
 
     for mut receiver in &mut receivers {
         for message in receiver.receive() {
+            let sent: WeaponCatalogue = match serde_json::from_slice(&message.0) {
+                Ok(sent) => sent,
+                // Logged rather than fatal: a catalogue that will not decode
+                // leaves us with our own, which is a game that plays slightly
+                // wrong rather than a client that falls over.
+                Err(e) => {
+                    error!("The server's weapon catalogue will not decode: {e}");
+                    continue;
+                }
+            };
             // Declined rather than taken, because writing the resource marks
             // it changed and everything watching would react to a catalogue
             // that is the one it already had.
-            if message.0 == *catalogue {
+            if sent == *catalogue {
                 continue;
             }
-            info!("Adopting the server's weapons: {} of them", message.0.weapons.len());
-            *catalogue = message.0;
+            info!("Adopting the server's weapons: {} of them", sent.weapons.len());
+            *catalogue = sent;
         }
     }
 }
@@ -164,12 +195,46 @@ mod tests {
     #[test]
     fn a_catalogue_survives_the_round_trip() {
         let catalogue = default_catalogue();
-        let text = serde_json::to_string(&CatalogueSnapshot(catalogue.clone()))
-            .expect("a catalogue would not encode");
-        let there_and_back: CatalogueSnapshot =
-            serde_json::from_str(&text).expect("a catalogue would not decode");
+        let sent = encode(&catalogue).expect("a catalogue would not encode");
+        let there_and_back: WeaponCatalogue =
+            serde_json::from_slice(&sent.0).expect("a catalogue would not decode");
 
-        assert_eq!(there_and_back.0, catalogue);
+        assert_eq!(there_and_back, catalogue);
+    }
+
+    /// **The wire cannot carry an internally tagged enum**, which is why the
+    /// payload is bytes.
+    ///
+    /// Lightyear encodes a message with postcard, and postcard refuses
+    /// `deserialize_any` — what `#[serde(tag = "kind")]` needs to read itself
+    /// back. `WeaponAction` is tagged that way because it is what makes
+    /// `weapons.toml` readable, so the catalogue could never decode at the far
+    /// end.
+    ///
+    /// It failed in the one way nobody notices: the send succeeded, the
+    /// receive errored inside Lightyear, and both machines already had the
+    /// same catalogue from their own files. This asserts the failure directly
+    /// so that putting the typed value back on the wire fails here instead of
+    /// on somebody's server.
+    #[test]
+    fn the_wire_cannot_carry_an_internally_tagged_enum() {
+        let catalogue = default_catalogue();
+
+        // What is actually sent: bytes, which postcard is perfectly happy with.
+        let sent = encode(&catalogue).expect("a catalogue would not encode");
+        let wire = postcard::to_allocvec(&sent).expect("bytes go on the wire");
+        let back: CatalogueSnapshot =
+            postcard::from_bytes(&wire).expect("and come back off it");
+        assert_eq!(back, sent);
+
+        // And what must not be: the typed value, which encodes and then cannot
+        // be read.
+        let naive = postcard::to_allocvec(&catalogue).expect("postcard will encode it");
+        assert!(
+            postcard::from_bytes::<WeaponCatalogue>(&naive).is_err(),
+            "postcard decoded an internally tagged enum; the payload could be the typed \
+             value again, and this test has stopped earning its place",
+        );
     }
 
     /// The sibling of `only_an_edit_changes_the_bytes`: what decides whether
@@ -199,7 +264,9 @@ mod tests {
     #[test]
     fn a_client_declines_a_catalogue_it_already_has() {
         let held = default_catalogue();
-        let arriving = CatalogueSnapshot(default_catalogue());
-        assert!(arriving.0 == held, "an identical catalogue would have been adopted again");
+        let arriving = encode(&default_catalogue()).expect("a catalogue would not encode");
+        let decoded: WeaponCatalogue =
+            serde_json::from_slice(&arriving.0).expect("a catalogue would not decode");
+        assert!(decoded == held, "an identical catalogue would have been adopted again");
     }
 }

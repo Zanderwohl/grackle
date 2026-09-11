@@ -170,11 +170,22 @@ than early.
 After the catalogue, on connect, the way `weapon_sync` sends the catalogue and
 `map_sync` sends the feature timeline.
 
-- **The `PropDoc`, not the baked geometry.** A prop is parametric and small,
+- **The document, not the baked geometry.** A prop is parametric and small,
   the client already has the whole kernel, and sending features rather than
   triangles is the same choice the map layer made for the same reason.
-- **After the catalogue**, because a model is named by a weapon: a client handed
-  a model for a weapon it has not heard of has nothing to attach it to.
+
+  It goes as the **text the file holds**, and that is forced rather than
+  chosen: Lightyear encodes with postcard, which refuses `deserialize_any` —
+  exactly what an internally tagged enum needs to read itself back, and
+  `FeatureOp`, `Shape` and `Profile` are all tagged that way because it is what
+  makes a `.gpp` readable. It is the better payload anyway: what crosses is
+  what the editor saved, parsed at the far end by the same `document::parse`
+  that reads it off disk.
+- **Order does not matter**, which is better than depending on it. A model
+  arriving before its weapon waits under its own name. A model arriving *after*
+  a client went looking in its own pack replaces the miss that search cached,
+  and bodies redress because `PropCache::generation` moved — without which
+  "there is no such prop" would be the answer for the rest of the match.
 - **Only the props the catalogue names**, which is enumerable from the
   catalogue — so this needs no directory listing, and the rule in
   [`assets.rs`](../src/common/assets.rs) survives.
@@ -247,7 +258,7 @@ Each stands alone and each is worth having on its own.
 | 2 | ~~**Split the aim.**~~ **Done.** `head_pitch` narrows `Player.pitch` to 45° up and 70° down at the one place that bends the neck. | The head stops; the aim does not. Nothing takes up the remainder until stage 3 — the arms are not aimed by pitch at all yet. |
 | 3 | ~~**The upper-body layer.**~~ **Done, bar authoring.** `HoldSpec` is on the prop, `hold_the_weapon` places the weapon from the aim and solves both arms to it. What is missing is a way to *author* a hold — every prop uses its file's values and nothing in the editor writes them. | The idea at the top of this document. |
 | 3b | ~~**Authoring a hold.**~~ **Done.** The two grips and the figure are draggable, the Hold panel carries every number, per-class overrides work, and an arm that cannot reach says so. Rotations are typed rather than dragged. | A weapon shaped unlike a rifle. |
-| 4 | **Prop sync.** Documents on connect, after the catalogue. | A server can ship a weapon nobody else has. |
+| 4 | ~~**Prop sync.**~~ **Done.** `prop::sync` sends every model the catalogue names, as the text its file holds. | A server can ship a weapon nobody else has. |
 | 5 | **The viewmodel pipeline.** Second camera, layer, near plane. | First person. Needs 3: the arms have to be posed before they are worth drawing close up. |
 | 6 | **Weapon animations.** Fire, reload, deploy, as parametric poses over the hold. An editor for them, someday. | |
 
