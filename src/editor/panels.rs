@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use crate::common::app_mode::AppMode;
+use crate::common::app_mode::{mode_menu, AppMode};
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use bevy_egui::egui::{Id, LayerId, Ui, UiBuilder, UiKind, WidgetText};
@@ -10,6 +10,7 @@ use egui_dock::{DockArea, DockState, TabViewer};
 use strum::IntoEnumIterator;
 use strum_macros::Display;
 use crate::common::mode::GameMode;
+use crate::common::shortcuts::chords;
 use crate::common::net::{NetRequest, NetRole};
 use crate::common::net_transport::NetStatus;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
@@ -30,11 +31,73 @@ enum DialogResult {
     LoadPath(PathBuf),
 }
 
+/// What the File menu — or `Ctrl+S` — asked for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FileOp {
+    New,
+    Save,
+    SaveAs,
+    Load,
+}
+
+/// Ask where to put the blueprint, on a background thread.
+///
+/// Shared by *Save As* and by a *Save* with nowhere to save to, which is the
+/// same question either way. The thread and `pollster` are the wasm problem
+/// `CLAUDE.md` lists; this is the authoring side, where it is survivable.
+fn ask_where_to_save(current_file: &CurrentFilePath) {
+    let slot = current_file.dialog_result.clone();
+    let existing = current_file.path.clone();
+    std::thread::spawn(move || {
+        let mut dialog = rfd::AsyncFileDialog::new()
+            .add_filter("Grackle Map Blueprint", &[MAP_BLUEPRINT_EXTENSION]);
+        match existing.as_ref() {
+            Some(existing) => {
+                if let Some(directory) = existing.parent() {
+                    dialog = dialog.set_directory(directory);
+                }
+                if let Some(name) = existing.file_name() {
+                    dialog = dialog.set_file_name(name.to_string_lossy().to_string());
+                }
+            }
+            None => {
+                dialog = dialog.set_file_name(format!("Untitled.{MAP_BLUEPRINT_EXTENSION}"));
+            }
+        }
+        if let Some(handle) = pollster::block_on(dialog.save_file()) {
+            *slot.lock().unwrap() = Some(DialogResult::SavePath(handle.path().to_path_buf()));
+        }
+    });
+}
+
+/// `Ctrl+S`, `Ctrl+Shift+S`, and the undo pair, for the map editor.
+///
+/// Its own system rather than more parameters on [`EditorPanels::ui`], which is
+/// at Bevy's limit already. It hands the request over in `CurrentFilePath` so
+/// that a keyboard save and a menu save are answered by the same code — the
+/// whole point being that `Ctrl+S` on a map that has never been saved has to
+/// open the same dialog the menu would.
+fn file_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    egui: Res<bevy_egui::input::EguiWantsInput>,
+    mut current_file: ResMut<CurrentFilePath>,
+) {
+    let chords = chords(&keys, egui.wants_keyboard_input());
+    if chords.save {
+        current_file.requested_op = Some(FileOp::Save);
+    } else if chords.save_as {
+        current_file.requested_op = Some(FileOp::SaveAs);
+    }
+}
+
 #[derive(Resource, Clone)]
 pub struct CurrentFilePath {
     pub path: Option<PathBuf>,
     dialog_result: Arc<Mutex<Option<DialogResult>>>,
     deferred_room_bake: u8,
+    /// Set by the keyboard, taken by the panel. The two cannot be one system:
+    /// `EditorPanels::ui` is at Bevy's parameter limit.
+    requested_op: Option<FileOp>,
 }
 
 impl Default for CurrentFilePath {
@@ -43,6 +106,7 @@ impl Default for CurrentFilePath {
             path: None,
             dialog_result: Arc::new(Mutex::new(None)),
             deferred_room_bake: 0,
+            requested_op: None,
         }
     }
 }
@@ -74,7 +138,10 @@ enum TabKinds {
 /// Bundled because a Bevy system takes at most sixteen parameters and `ui` was
 /// at exactly sixteen: the network menu needed a slot. Grouping the writers is
 /// cheaper than splitting the menu bar across two systems, which would then
-/// both want to own its measured height.
+/// both want to own its measured height. The mode menu needed one next, which
+/// is why `mode` is here despite not being a message — what these have in
+/// common is that they are the panels' *writes*, and the alternative was
+/// evicting something to make room.
 #[derive(SystemParam)]
 struct PanelMessages<'w> {
     room: MessageWriter<'w, CalculateRoomGeometry>,
@@ -82,6 +149,7 @@ struct PanelMessages<'w> {
     log_ecs: MessageWriter<'w, LogECS>,
     edits: MessageWriter<'w, EditEvent>,
     net: MessageWriter<'w, NetRequest>,
+    mode: ResMut<'w, NextState<AppMode>>,
 }
 
 #[derive(Default)]
@@ -99,7 +167,6 @@ struct TabViewerAndResources<'a> {
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
     retarget_request: &'a mut Option<(FeatureId, String)>,
-    gizmos: Gizmos<'a, 'a>,
 }
 
 impl<'a> TabViewer for TabViewerAndResources<'a> {
@@ -164,6 +231,9 @@ impl Plugin for EditorPanelPlugin {
             .init_resource::<CurrentFilePath>()
             .add_systems(Startup, EditorPanels::set_multicam_size)
             .add_systems(EguiPrimaryContextPass, EditorPanels::ui.run_if(in_state(AppMode::Editor)))
+            // Before the panel, so a chord pressed this frame is answered this
+            // frame rather than on the next one.
+            .add_systems(Update, file_shortcuts.run_if(in_state(AppMode::Editor)))
         ;
     }
 }
@@ -230,7 +300,6 @@ impl EditorPanels {
         windows: Query<&Window, With<PrimaryWindow>>,
 
         current_tool: Res<State<Tools>>,
-        mut gizmos: Gizmos,
         mut next_tool: ResMut<NextState<Tools>>,
         mut editor_features: ResMut<FeatureTimeline>,
         mut gizmo_visibility: ResMut<GizmoVisibility>,
@@ -266,12 +335,13 @@ impl EditorPanels {
         let mut retarget_request: Option<(FeatureId, String)> = None;
         let mut loaded_blueprint: Option<LoadedBlueprint> = None;
 
-        enum FileOp { New, Save, SaveAs, Load }
-        let mut pending_file_op: Option<FileOp> = None;
+        // The menu and the keyboard both ask for these, so the request is a
+        // value either can produce and one place answers.
+        let mut pending_file_op: Option<FileOp> = current_file.requested_op.take();
+        let mut wanted_mode: Option<AppMode> = None;
         
         let mut viewer = TabViewerAndResources  {
             current_tool: & *current_tool,
-            gizmos,
             next_tool: &mut *next_tool,
             editor_features: &mut *editor_features,
             map_metadata: &mut *map_metadata,
@@ -308,6 +378,10 @@ impl EditorPanels {
                             ui.close_kind(UiKind::Menu);
                         }
                     });
+                    // `Editor` spelled out rather than read from the state:
+                    // this whole system is gated on it, so the mode it is
+                    // drawing for is not in question.
+                    mode_menu(ui, AppMode::Editor, Some(&net_role), &mut wanted_mode);
                     network_menu(
                         ui,
                         &net_role,
@@ -386,6 +460,12 @@ impl EditorPanels {
 
         drop(viewer);
 
+        // `set`, not `set_if_neq`: `mode_menu` never offers the mode already
+        // in force, so anything arriving here is a real change.
+        if let Some(mode) = wanted_mode {
+            messages.mode.set(mode);
+        }
+
         // Poll for completed async file dialog results
         let dialog_result = current_file.dialog_result.lock().unwrap().take();
         if let Some(result) = dialog_result {
@@ -431,49 +511,16 @@ impl EditorPanels {
                         Err(e) => error!("New failed: {}", e),
                     }
                 }
-                FileOp::Save => {
-                    if let Some(ref path) = current_file.path {
-                        match save::save(path, &editor_features, &map_metadata) {
-                            Ok(()) => info!("Saved to {:?}", path),
-                            Err(e) => error!("Save failed: {}", e),
-                        }
-                    } else {
-                        let slot = current_file.dialog_result.clone();
-                        std::thread::spawn(move || {
-                            let handle = pollster::block_on(
-                                rfd::AsyncFileDialog::new()
-                                    .set_file_name(format!("Untitled.{}", MAP_BLUEPRINT_EXTENSION))
-                                    .add_filter("Grackle Map Blueprint", &[MAP_BLUEPRINT_EXTENSION])
-                                    .save_file()
-                            );
-                            if let Some(h) = handle {
-                                *slot.lock().unwrap() = Some(DialogResult::SavePath(h.path().to_path_buf()));
-                            }
-                        });
-                    }
-                }
-                FileOp::SaveAs => {
-                    let slot = current_file.dialog_result.clone();
-                    let existing = current_file.path.clone();
-                    std::thread::spawn(move || {
-                        let mut dialog = rfd::AsyncFileDialog::new()
-                            .add_filter("Grackle Map Blueprint", &[MAP_BLUEPRINT_EXTENSION]);
-                        if let Some(ref existing) = existing {
-                            if let Some(dir) = existing.parent() {
-                                dialog = dialog.set_directory(dir);
-                            }
-                            if let Some(name) = existing.file_name() {
-                                dialog = dialog.set_file_name(name.to_string_lossy().to_string());
-                            }
-                        } else {
-                            dialog = dialog.set_file_name(format!("Untitled.{}", MAP_BLUEPRINT_EXTENSION));
-                        }
-                        let handle = pollster::block_on(dialog.save_file());
-                        if let Some(h) = handle {
-                            *slot.lock().unwrap() = Some(DialogResult::SavePath(h.path().to_path_buf()));
-                        }
-                    });
-                }
+                // A save with nowhere to save to is a save-as. Stated here so
+                // it holds for the menu item and the chord alike.
+                FileOp::Save => match current_file.path.clone() {
+                    Some(path) => match save::save(&path, &editor_features, &map_metadata) {
+                        Ok(()) => info!("Saved to {:?}", path),
+                        Err(e) => error!("Save failed: {}", e),
+                    },
+                    None => ask_where_to_save(&current_file),
+                },
+                FileOp::SaveAs => ask_where_to_save(&current_file),
                 FileOp::Load => {
                     let slot = current_file.dialog_result.clone();
                     std::thread::spawn(move || {
@@ -534,10 +581,6 @@ impl EditorPanels {
         }
 
         Self::set_multicam_size(panels, multicam_state, windows);
-    }
-
-    fn ui_for_panel(ui: &mut Ui) {
-        ui.label("Panel is empty.");
     }
 
     fn set_multicam_size(

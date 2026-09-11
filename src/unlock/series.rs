@@ -23,7 +23,7 @@ impl CrateSeries {
     
     pub fn unbox_one(&self) -> Result<item::Item, UnlockProblem> {
         // Choose a random number between 0 and the total odds.
-        let random_number = rand::thread_rng().gen_range(0..self.total_odds);
+        let random_number = rand::rng().random_range(0..self.total_odds);
 
         // Iterate through the entries, subtracting the odds from the random number until we find the entry that contains the random number.
         let mut current_odds = 0;

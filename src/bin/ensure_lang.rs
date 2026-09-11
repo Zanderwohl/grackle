@@ -1,14 +1,6 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 use toml::Value;
-
-#[derive(Debug, Deserialize, Serialize)]
-struct LangFile {
-    #[serde(flatten)]
-    content: HashMap<String, Value>,
-}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lang_dir = Path::new("assets/default/lang");

@@ -5,7 +5,6 @@ use crate::common::app_mode::{start_in_play, AppMode, StartInPlay};
 use crate::common::damage::NextPlayerId;
 use crate::common::net::NetRole;
 use crate::common::skeleton::AnimationClock;
-use crate::common::team::Team;
 use crate::editor::multicam::Multicam;
 use crate::game::collision::CollisionWorld;
 use crate::game::ragdoll::RagdollPlugin;
@@ -24,6 +23,7 @@ pub mod body_mesh;
 pub mod collision;
 pub mod damage;
 pub mod death;
+pub mod held;
 pub mod hitbox;
 pub mod explosion;
 pub mod flame;
@@ -38,6 +38,7 @@ pub mod pause_menu;
 pub mod hud;
 pub mod ragdoll;
 pub mod skeleton;
+pub mod viewmodel;
 
 /// Playing the map that is currently open in the editor.
 ///
@@ -208,9 +209,19 @@ fn toggle_mode(
         info!("The server decides when the match is played; F5 does nothing here.");
         return;
     }
+    // **`F5` is the map editor and Play, and nothing else.** From the prop
+    // editor it is answered with a line rather than starting a round: the
+    // key's whole meaning is that it toggles between two modes, and one that
+    // went one way from a third would have no way back to where it came from.
+    // The Mode menu is how the prop editor is left, and it has an entry for
+    // Play like everything else.
     next.set(match mode.get() {
         AppMode::Editor => AppMode::Play,
         AppMode::Play => AppMode::Editor,
+        AppMode::Prop => {
+            info!("F5 swaps the map editor and Play; use the Mode menu to leave the prop editor.");
+            return;
+        }
     });
 }
 
@@ -316,6 +327,8 @@ fn rebuild_collision_when_rooms_change(
 mod tests {
     use std::time::Duration;
 
+    use crate::common::team::Team;
+
     use crate::editor::spawn_point::SpawnPointMarker;
     use crate::game::player::{spawn_player, Spawn};
 
@@ -399,9 +412,49 @@ mod tests {
         Room::new(min, max)
     }
 
+    /// `F5` means one thing: the map editor and Play, swapping either way.
+    ///
+    /// From the prop editor it deliberately does nothing — the key's whole
+    /// meaning is that it toggles between two modes, and one that went one way
+    /// from a third would have no way back to where it came from. The Mode
+    /// menu is how that mode is left, and it offers Play like everything else.
+    #[test]
+    fn f5_toggles_the_map_editor_and_play_and_nothing_else() {
+        fn press(app: &mut App) {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::F5);
+            app.update();
+            // Released rather than only cleared: `clear` drops the just-pressed
+            // edge but leaves the key held, and a held key produces no second
+            // edge.
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::F5);
+            keys.clear();
+            app.update();
+        }
+        fn mode(app: &App) -> AppMode {
+            *app.world().resource::<State<AppMode>>().get()
+        }
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .init_state::<AppMode>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, toggle_mode);
+
+        press(&mut app);
+        assert_eq!(mode(&app), AppMode::Play, "F5 did not start a round");
+        press(&mut app);
+        assert_eq!(mode(&app), AppMode::Editor, "F5 did not end the round");
+
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Prop);
+        app.update();
+        press(&mut app);
+        assert_eq!(mode(&app), AppMode::Prop, "F5 started a round from the prop editor");
+    }
+
     #[test]
     fn the_editor_is_what_starts() {
-        let mut app = headless(&[]);
+        let app = headless(&[]);
         assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Editor);
     }
 

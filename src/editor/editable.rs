@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::egui;
 use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
 use crate::common::app_mode::AppMode;
+use crate::common::shortcuts::chords;
 use crate::common::PointResolutionError;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::editor::action::{Action, FeatureDelta, FeatureSnapshot};
@@ -102,7 +103,7 @@ pub trait FeatureTrait: Send + Sync {
     /// `axis`: 0=X, 1=Y, 2=Z.
     /// `new_world_value`: the desired world-space coordinate for this axis.
     /// Returns true if the object was modified.
-    fn drag_handle(&mut self, is_max: bool, axis: u8, new_world_value: f32) -> bool { false }
+    fn drag_handle(&mut self, _is_max: bool, _axis: u8, _new_world_value: f32) -> bool { false }
 
     /// Returns the resolved min and max bounds if this object is a room-like
     /// object with drag handles. Used to position handles.
@@ -535,7 +536,7 @@ impl FeatureTimeline {
                         self.features.insert(feature_id, feature);
                     }
                 } else {
-                    let mut object = snapshot.blank_object();
+                    let object = snapshot.blank_object();
                     let feature = Feature::new(feature_id, object, snapshot.parents.clone());
                     let idx = snapshot.order_index.min(self.feature_order.len());
                     self.feature_order.insert(idx, feature_id);
@@ -808,26 +809,13 @@ impl FeatureTimeline {
 
     fn undo_redo_shortcuts(
         keys: Res<ButtonInput<KeyCode>>,
+        egui: Res<bevy_egui::input::EguiWantsInput>,
         mut features: ResMut<FeatureTimeline>,
-        mut egui_contexts: EguiContexts,
     ) {
-        if let Ok(ctx) = egui_contexts.ctx_mut() {
-            if ctx.egui_wants_keyboard_input() {
-                return;
-            }
-        }
-
-        let cmd = keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight);
-        let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-
-        let undo = (cmd || ctrl) && !shift && keys.just_pressed(KeyCode::KeyZ);
-        let redo = ((cmd || ctrl) && shift && keys.just_pressed(KeyCode::KeyZ))
-            || (ctrl && keys.just_pressed(KeyCode::KeyY));
-
-        if redo {
+        let chords = chords(&keys, egui.wants_keyboard_input());
+        if chords.redo {
             features.redo_action();
-        } else if undo {
+        } else if chords.undo {
             features.undo_action();
         }
     }
@@ -1185,7 +1173,7 @@ impl PointRef {
 
     /// Draw a taxicab path from the reference point to the resolved point,
     /// stepping along X then Z then Y, with per-axis colored dashed lines.
-    pub fn debug_gizmos(&self, resolved: Vec3, gizmos: &mut Gizmos) {
+    pub fn debug_gizmos(&self, _resolved: Vec3, gizmos: &mut Gizmos) {
         let Some(base) = self.resolved_reference else { return; };
         const DASH: f32 = 0.15;
         const GAP: f32 = 0.1;

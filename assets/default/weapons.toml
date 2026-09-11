@@ -12,6 +12,19 @@
 # it answers being held, and what it costs. A button that does nothing says so
 # with `kind = "none"` rather than being left out.
 #
+# `model` names a prop under `props/`, without its extension — the geometry the
+# weapon is drawn as, modelled in the prop editor. It is a name rather
+# than a path because a client is told which prop to build and builds it from
+# its own pack. Omitted means nobody has modelled this weapon yet, which is
+# every weapon so far.
+#
+# **Animations, when they exist, go at the bottom of an entry.** Not tidiness:
+# a TOML array-of-tables header captures every key written after it, so an
+# `[[weapons.x.animations]]` followed by `name_key` would quietly make that a
+# property of the animation. The fields above are the ones people tune, so they
+# come first. Nothing enforces this — weapons.toml is read by code and never
+# written by it.
+#
 # `magazine.clip` omitted means the weapon has no clip at all: its whole supply
 # is loaded, each shot comes straight out of the reserve, and it never reloads.
 # That is the minigun, and it is an absent clip rather than a clip the size of
@@ -26,6 +39,7 @@ secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { 
 
 [weapons.rocket_launcher]
 name_key = "weapon.names.rocket_launcher"
+model = "rocket_launcher"
 magazine = { clip = 4, reserve = 20, reload = 0.8, reload_one_at_a_time = true }
 primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 30.0, gravity_factor = 0.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.0, damage_direct_hit = 90, damage_splash = 60, knockback = 9.0, radius = 0.12 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }

@@ -269,7 +269,7 @@ pub fn step_projectiles(
         return;
     }
 
-    for (entity, mut projectile, mut body, mut transform) in &mut projectiles {
+    for (entity, mut projectile, mut body, _transform) in &mut projectiles {
         projectile.age += dt;
         projectile.spin += projectile.spec.spin_rate * dt;
 

@@ -317,3 +317,143 @@ failed = "Failed: { reason }"
 
 [pause]
 title = "Esc Menu"
+
+[app_mode]
+editor = "Map Editor"
+prop = "Prop Editor"
+play = "Play"
+
+[app_mode.menu]
+title = "Mode"
+current = "In: { mode }"
+server_decides = "The server decides when the match is played."
+
+[prop]
+untitled = "Untitled prop"
+
+[prop.menu]
+file = "File"
+new = "New"
+open = "Open"
+save = "Save"
+save_as = "Save As"
+frame = "Frame"
+
+[prop.panels]
+features = "Features"
+inspector = "Inspector"
+scene = "Scene"
+hold = "Hold"
+problems = "Problems"
+
+[prop.hold]
+handles = "Handles in the viewport"
+trigger_hand = "Trigger hand"
+two_handed = "Support hand"
+at = "At"
+carry = "Carry"
+offset = "Offset (arm lengths)"
+override_for = "Override for the { class }"
+viewmodel = "Viewmodel"
+across = "Across"
+depth = "Depth"
+no_figure = "Pick a reference figure to author a per-class hold."
+
+[prop.scene]
+figure = "Reference figure"
+no_figure = "None"
+
+[prop.tree]
+undo = "Undo"
+redo = "Redo"
+# Icons, not prose — but still here rather than in the source, because egui
+# ships one font set and a glyph outside it renders as a hollow box. These are
+# emoji rather than the Geometric Shapes triangles they replaced, which is what
+# that failure looked like: NotoEmoji is the font egui actually has.
+# Right-click menu. "Suppress" and "Unsuppress" name the *action*, not the
+# state: whichever is showing is what clicking will do.
+suppress = "Suppress"
+unsuppress = "Unsuppress"
+delete = "🗑 Delete"
+delete_breaks = "{ count } other features build on this one"
+
+[prop.add]
+solid = "Solid"
+sweep = "Sweep"
+boolean = "Boolean"
+
+[prop.shapes]
+box = "Box"
+prism = "Prism"
+cone = "Cone"
+sphere = "Sphere"
+wedge = "Wedge"
+
+[prop.profiles]
+rect = "Rectangle"
+ngon = "N-gon"
+points = "Points"
+
+[prop.styles]
+metal = "Metal"
+plastic = "Plastic"
+wood = "Wood"
+
+[prop.boolean]
+union = "Union"
+subtract = "Subtract"
+intersect = "Intersect"
+
+[prop.features]
+extrude = "Extrude"
+revolve = "Revolve"
+mirror = "Mirror"
+paint = "Paint"
+
+[prop.inspector]
+nothing = "Select a feature."
+name = "Name"
+active = "Active"
+shape = "Shape"
+profile = "Profile"
+size = "Size"
+half = "Half extents"
+sides = "Sides"
+rings = "Rings"
+radius = "Radius"
+height = "Height"
+depth = "Depth"
+midplane = "Both ways from the plane"
+degrees = "Sweep"
+segments = "Segments"
+origin = "Origin"
+rotation = "Rotation"
+style = "Style"
+tint = "Tint"
+operation = "Operation"
+target = "Target"
+tool = "Tool"
+plane = "Plane"
+offset = "Offset"
+keep_original = "Keep the original"
+add_point = "Add point"
+remove_point = "🗑"
+remove_point_hint = "Remove point"
+missing = "missing { id }"
+
+[prop.stats]
+bodies = "{ count } bodies"
+triangles = "{ count } triangles"
+settling = "settling…"
+
+[prop.problems]
+# Checked on screen rather than assumed. egui's fonts cover Miscellaneous
+# Symbols — `⚠` renders — but not Geometric Shapes, which is what made `▲` and
+# `▼` hollow boxes a commit ago. Worth knowing before reaching for another
+# glyph: the block it is in decides, not whether it looks like an icon.
+marker = "⚠"
+none = "No problems."
+missing_body = "points at a body that is not there"
+self_boolean = "points at itself"
+empty_sweep = "sweeps out nothing"
+nothing_left = "leaves nothing behind"

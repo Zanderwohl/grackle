@@ -41,12 +41,12 @@ impl MovementPlugin {
                     cursor_options.grab_mode = CursorGrabMode::Locked;
                     cursor_options.visible = false;
 
-                    for (entity, mut transform, global_transform, multicam, mut projection, camera) in &mut cameras {
+                    for (entity, mut transform, global_transform, _multicam, projection, _camera) in &mut cameras {
                         if cam_id == entity {
                             let delta = mouse_input.delta_pos;
                             let forward = transform.forward();
                             match projection.into_inner() {
-                                Projection::Perspective(projection) => {
+                                Projection::Perspective(_projection) => {
                                     Self::perspective_move(&mut transform, global_transform, delta, &settings, &keyboard_input);
 
                                     for ev in evr_scroll.read() {
@@ -89,7 +89,7 @@ impl MovementPlugin {
         }
     }
 
-    fn perspective_move(transform: &mut Mut<Transform>, global_transform: &GlobalTransform, delta: Vec2, movement_settings: &Res<MovementSettings>, keyboard_input: &Res<CurrentKeyboardInput>) {
+    fn perspective_move(transform: &mut Mut<Transform>, _global_transform: &GlobalTransform, delta: Vec2, movement_settings: &Res<MovementSettings>, keyboard_input: &Res<CurrentKeyboardInput>) {
         if keyboard_input.modify {
             let pan_scaled_x = delta.x * movement_settings.perspective_pan;
             let pan_scaled_y = delta.y * movement_settings.perspective_pan;
@@ -100,10 +100,7 @@ impl MovementPlugin {
             transform.translation += local_y * pan_scaled_y;
         } else {
             let pi_halves = std::f32::consts::FRAC_PI_2;
-            let pi_fourths = std::f32::consts::PI / 2.0;
-            let max = pi_fourths * 0.95;
-            let min = -pi_fourths * 0.95;
-            
+
             transform.rotate_y(-delta.x * movement_settings.perspective_rotate);
             transform.rotate_local_x(-delta.y * movement_settings.perspective_rotate);
 

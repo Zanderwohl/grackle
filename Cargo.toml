@@ -43,6 +43,13 @@ strum_macros = "0.27.2"
 rand = "0.9.2"
 lightyear = { version = "0.29", features = ["netcode", "udp", "input_native"] }
 
+# Only used from tests: the encoding Lightyear puts messages on the wire in. A
+# message carrying an internally tagged enum fails to *decode* at the far end
+# and nowhere else, which is a silent bug on a live connection — so the tests
+# encode the way the wire does rather than the way JSON does.
+[dev-dependencies]
+postcard = { version = "1.1.3", features = ["use-std"] }
+
 # Not used from Rust: a direct dependency only so feature unification turns on
 # `wasm_js` for the copies bevy_egui, bevy_platform and rand_core pull in.
 # Paired with the `getrandom_backend` rustflag in `.cargo/config.toml`, which

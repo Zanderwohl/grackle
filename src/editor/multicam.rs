@@ -89,15 +89,15 @@ impl Plugin for MulticamPlugin {
 }
 
 impl MulticamPlugin {
-    fn setup_first_camera(mut commands: Commands) {
+    fn setup_first_camera(_commands: Commands) {
 
     }
 
     fn setup(
         mut commands: Commands,
         state: Res<MulticamState>,
-        mut meshes: ResMut<Assets<Mesh>>,
-        mut materials: ResMut<Assets<StandardMaterial>>,
+        meshes: ResMut<Assets<Mesh>>,
+        materials: ResMut<Assets<StandardMaterial>>,
         mut egui_global_settings: ResMut<EguiGlobalSettings>,
     ) {
         egui_global_settings.auto_create_primary_context = false;
@@ -430,7 +430,7 @@ impl MulticamPlugin {
         Self::debug_ui_boxes(&state, &mut painter, window, &ui_cam);
 
         if let Some(cursor_pos_window) = window.cursor_position() {
-            for (camera_entity, camera, camera_tfm, camera_multicam) in &cameras_q {
+            for (_camera_entity, camera, _camera_tfm, _camera_multicam) in &cameras_q {
                 if let Ok((ui_cam, _)) = ui_cam {
                     if let Some(viewport) = &camera.viewport {
                         let vp_min = viewport.physical_position.as_vec2();

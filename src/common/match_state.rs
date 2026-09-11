@@ -38,10 +38,17 @@ pub struct MatchMode {
 
 impl From<AppMode> for MatchMode {
     fn from(mode: AppMode) -> Self {
-        Self { playing: matches!(mode, AppMode::Play) }
+        Self { playing: !mode.is_authoring() }
     }
 }
 
+/// Not playing means the map editor, and **that is lossy on purpose.**
+/// `AppMode::Prop` is a local authoring surface; the server has no opinion
+/// about whether somebody is modelling a weapon, and giving it one would mean
+/// the whole server following one person into a prop file. So a client
+/// modelling a prop when the round ends is put back in the map editor with
+/// everybody else, which is the same rule — the server owns the transition —
+/// rather than an exception to it.
 impl From<MatchMode> for AppMode {
     fn from(mode: MatchMode) -> Self {
         match mode.playing {

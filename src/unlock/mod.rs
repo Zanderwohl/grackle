@@ -1,6 +1,5 @@
 use std::fmt::Display;
 use lazy_static::lazy_static;
-use rand::Rng;
 use particle_effecta::ParticleEffectEntry;
 use series::CrateSeries;
 use series_entry::CrateSeriesEntry;

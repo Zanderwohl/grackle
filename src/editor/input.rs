@@ -2,12 +2,10 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_egui::EguiContexts;
 use std::fmt::Display;
-use std::panic::Location;
 use bevy::input::mouse::MouseMotion;
 use bevy::camera::RenderTarget;
 use bevy::picking::pointer::{PointerId, PointerLocation};
-use bevy::tasks::futures_lite::StreamExt;
-use crate::common::app_mode::AppMode;
+use crate::common::app_mode::authoring;
 use crate::editor::multicam::Multicam;
 
 pub struct EditorInputPlugin;
@@ -20,10 +18,20 @@ impl Plugin for EditorInputPlugin {
             // Gating here is the belt to the tools' braces: with these
             // resources frozen, no tool sees a click even if one slipped
             // through its own run condition.
+            //
+            // **Both authoring modes**, not just the map editor. The prop
+            // editor drives the same four viewports and needs the same two
+            // questions answered — which viewport is the pointer over, and how
+            // far has it moved — and `in_camera` is exactly what tells
+            // `Numpad0` which view to reset. It stays off in Play, which is the
+            // gating that matters: that is where a stray click costs something.
+            //
+            // Safe because every tool carries `in_state(AppMode::Editor)` of
+            // its own, so waking the resources here does not wake a tool.
             .add_systems(PreUpdate, (
                 Self::mouse_input,
                 Self::keyboard_input,
-            ).run_if(in_state(AppMode::Editor)))
+            ).run_if(authoring))
         ;
     }
 }
@@ -191,7 +199,7 @@ impl EditorInputPlugin {
 
         let mut locations = Vec::new();
         for (_, pointer) in pointers {
-            for (camera_entity, camera, render_target, camera_transform, cam_multicam) in &cameras {
+            for (camera_entity, camera, render_target, camera_transform, _cam_multicam) in &cameras {
                 if let Some(pointer_loc) = pointer.location() {
                     if pointer_loc.is_in_viewport(camera, render_target, &primary_window_entity) {
                         if pressed.is_some() {

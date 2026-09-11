@@ -6,7 +6,7 @@ use bevy::window::{ExitCondition, PresentMode};
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts, EguiPlugin};
 use bevy_egui::egui::{Frame, Id, LayerId, ScrollArea, Sense, Ui, UiBuilder};
 use grackle::common::item::item::Item;
-use grackle::unlock::{unlock, UnlockProblem};
+use grackle::unlock::unlock;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let editor_params = startup::EditorParams::new()

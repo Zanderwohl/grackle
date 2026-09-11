@@ -79,7 +79,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::skeleton::rig::{humanoid, Proportions};
-use crate::common::damage::{falloff, Damageable};
+use crate::common::damage::falloff;
 use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
 use crate::common::team::Team;
@@ -969,6 +969,8 @@ pub fn clear_ragdolls(mut commands: Commands, corpses: Query<Entity, With<Ragdol
 #[cfg(test)]
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
+
+    use crate::common::damage::Damageable;
 
     use super::*;
     use crate::common::damage::{DamageLog, PlayerId};

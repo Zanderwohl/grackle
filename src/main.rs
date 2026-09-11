@@ -24,6 +24,7 @@ use grackle::editor::panels::EditorPanelPlugin;
 use grackle::game::net_bodies::NetBodiesPlugin;
 use grackle::game::skeleton::SkeletonPlugin;
 use grackle::game::GamePlugin;
+use grackle::prop::{PropEditorPlugin, StartInPropEditor};
 use grackle::tool::ToolPlugin;
 
 
@@ -55,6 +56,7 @@ fn main() {
         )
         .insert_resource(editor_params.net.clone())
         .insert_resource(StartInPlay(editor_params.start_playing))
+        .insert_resource(StartInPropEditor(editor_params.start_modelling))
         .add_plugins((
             EguiPlugin::default(),
             Shape2dPlugin::default(),
@@ -76,6 +78,7 @@ fn main() {
             EditorPanelPlugin,
             EditorStepsPlugin,
             ToolPlugin,
+            PropEditorPlugin,
             GamePlugin,
             SkeletonPlugin,
             PerfPlugin,

@@ -97,6 +97,10 @@ impl Plugin for NetTransportPlugin {
             // connects. Beside the map, because it is the same problem: one
             // description of one thing, held by the authority.
             .add_plugins(crate::common::weapon_sync::WeaponSyncPlugin)
+            // And the models those weapons name, on the heels of the
+            // catalogue: a client told about a weapon and not its model draws
+            // empty hands.
+            .add_plugins(crate::prop::sync::PropSyncPlugin)
             .add_plugins(crate::common::net_events::NetEventsPlugin)
             // Prediction is gated on this resource existing rather than on a
             // plugin, so it goes in once and stays: a process hosting now may

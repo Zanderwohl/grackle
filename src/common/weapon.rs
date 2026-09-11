@@ -248,6 +248,22 @@ pub struct Weapon {
     /// text outside the lang layer, which is the one thing `CLAUDE.md` says
     /// never to do.
     pub name_key: String,
+    /// The prop this weapon is drawn as: a name under a pack's `props/`
+    /// directory, without the extension.
+    ///
+    /// A **name, not a path and not geometry**. A weapon crosses the wire and
+    /// a prop can be kilobytes of feature list, so what a client is told is
+    /// which prop to build, the same way a body is told which weapon it holds
+    /// rather than what that weapon does. Each machine builds the model from
+    /// its own pack — which is also what will let a server ship a prop
+    /// alongside its weapons without either knowing about the other.
+    ///
+    /// `None` is a weapon nobody has modelled yet, which is every weapon
+    /// today. Stated as an absent model rather than as a name pointing at a
+    /// placeholder file, so "this has no model" and "this has a model that
+    /// would not load" stay different problems.
+    #[serde(default)]
+    pub model: Option<String>,
     pub primary: Mounted,
     pub secondary: Mounted,
     pub magazine: Magazine,

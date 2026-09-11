@@ -24,7 +24,6 @@ pub mod protocol;
 // from outside the library now that it no longer compiles its own copy of the
 // tree.
 pub mod perf;
-pub(crate) mod systems;
 pub(crate) mod painter;
 pub(crate) mod ray;
 pub mod item;
@@ -32,6 +31,7 @@ pub mod cuboid;
 pub mod rect_subtract;
 pub mod rotation;
 pub mod mode;
+pub mod shortcuts;
 
 #[derive(Debug)]
 pub enum PointResolutionError {
