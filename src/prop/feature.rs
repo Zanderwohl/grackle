@@ -1,30 +1,21 @@
 //! The feature list a prop is, and what evaluating one means.
 //!
-//! This is the same idea as the map's [`FeatureTimeline`] — an ordered list of
-//! operations, replayed from the top, so an edit halfway down is felt by
-//! everything after it — with one deliberate difference: **a modelling feature
-//! is an enum, not a `typetag` trait object.**
+//! The same idea as the map's [`FeatureTimeline`] — an ordered list replayed
+//! from the top — with one deliberate difference: **a modelling feature is an
+//! enum, not a `typetag` trait object.** A boolean has to know what it is
+//! subtracting, so there is no writing "cut B out of A" against a trait object
+//! without the kernel answering for every shape anyway; the openness would be a
+//! costume. Closing the set buys exhaustive matching and plain serde.
 //!
-//! The map's features are a trait because a map is open-ended: a new kind of
-//! thing to place is a new implementor and nothing else needs to know. A
-//! boolean, though, has to *know what it is subtracting*. There is no way to
-//! write "cut B out of A" against a trait object without the kernel answering
-//! for every shape anyway, so the openness would be a costume. Closing the set
-//! buys exhaustive matching, plain serde, and an evaluator that cannot be
-//! handed something it has never heard of.
+//! **One rule runs the evaluator**: a feature that consumes bodies produces one
+//! under its own id. What is left at the end is what gets drawn. Without the
+//! consuming half, subtracting a bore from a barrel would draw the barrel, the
+//! bore *and* the result.
 //!
-//! **One rule runs the whole evaluator**: a feature that consumes bodies
-//! produces one body, under its own id. A boolean consumes two and leaves one;
-//! a mirror consumes one and leaves one; a primitive consumes none and leaves
-//! one. What is left at the end is what gets drawn. Without the consuming
-//! half, subtracting a bore from a barrel would draw the barrel, the bore and
-//! the result all at once.
-//!
-//! Nothing here panics or refuses. A feature referring to a body that is not
-//! there — because it was deleted, disabled, or already eaten by an earlier
-//! boolean — is **skipped with a note**, and the note reaches the panel. A
-//! modelling tool that stopped evaluating at the first dangling reference
-//! would be a tool where deleting a feature blanks the viewport.
+//! Nothing panics or refuses. A feature naming a body that is not there —
+//! deleted, disabled, or already eaten — is **skipped with a note** that
+//! reaches the panel; stopping at the first dangling reference would blank the
+//! viewport every time somebody deleted a feature.
 //!
 //! [`FeatureTimeline`]: crate::editor::editable::FeatureTimeline
 
@@ -38,9 +29,9 @@ use crate::prop::surface::Surface;
 
 /// What a feature is called on disk and by the features that refer to it.
 ///
-/// A number handed out by the document and never reused, rather than a
-/// position in the list: features get reordered and deleted, and a reference
-/// that meant "the third one" would silently come to mean something else.
+/// Handed out by the document and never reused: features get reordered and
+/// deleted, and a reference meaning "the third one" would come to mean
+/// something else.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
@@ -132,25 +123,21 @@ pub enum FeatureOp {
     },
     /// Two bodies in, one out.
     Boolean { op: BooleanOp, target: PropFeatureId, tool: PropFeatureId },
-    /// A body reflected in an axis-aligned plane.
-    ///
-    /// The plane is an axis and an offset rather than a full [`Placement`],
-    /// because every mirror anybody has ever wanted on a weapon is across the
-    /// centreline, and a dropdown and a number is a thing you can get right
-    /// without thinking about Euler order.
+    /// A body reflected in an axis-aligned plane. An axis and an offset rather
+    /// than a full [`Placement`]: every mirror on a weapon is across the
+    /// centreline, and a dropdown is a thing you get right without thinking
+    /// about Euler order.
     Mirror {
         target: PropFeatureId,
         axis: Axis,
         #[serde(default, with = "crate::prop::nice_f32::scalar")]
         offset: f32,
-        /// Keep what was there as well as the reflection — the usual case, and
-        /// what makes this a symmetry feature rather than a flip.
+        /// Keep the original too, which makes this symmetry rather than a flip.
         #[serde(default)]
         keep_original: bool,
     },
-    /// Repaint a body. Its own feature rather than a field on every other one
-    /// because the thing being repainted is usually the *result* of a boolean,
-    /// which no earlier feature had a name for.
+    /// Repaint a body. Its own feature because what gets repainted is usually
+    /// the *result* of a boolean, which no earlier feature named.
     Paint { target: PropFeatureId, surface: Surface },
 }
 
@@ -177,11 +164,8 @@ impl FeatureOp {
         }
     }
 
-    /// The bodies this feature eats, in the order it names them.
-    ///
-    /// One place that answers the question, so the evaluator, the delete
-    /// check and the panel's dropdowns cannot disagree about what depends on
-    /// what.
+    /// The bodies this feature eats. One place answers it, so the evaluator,
+    /// the delete check and the panel's dropdowns cannot disagree.
     pub fn consumes(&self) -> Vec<PropFeatureId> {
         match self {
             FeatureOp::Primitive { .. }
@@ -189,18 +173,6 @@ impl FeatureOp {
             | FeatureOp::Revolve { .. } => vec![],
             FeatureOp::Boolean { target, tool, .. } => vec![*target, *tool],
             FeatureOp::Mirror { target, .. } | FeatureOp::Paint { target, .. } => vec![*target],
-        }
-    }
-
-    /// The surface this feature paints with, if it paints at all — so the
-    /// panel can offer a style and tint without matching on the variant.
-    pub fn surface_mut(&mut self) -> Option<&mut Surface> {
-        match self {
-            FeatureOp::Primitive { surface, .. }
-            | FeatureOp::Extrude { surface, .. }
-            | FeatureOp::Revolve { surface, .. }
-            | FeatureOp::Paint { surface, .. } => Some(surface),
-            FeatureOp::Boolean { .. } | FeatureOp::Mirror { .. } => None,
         }
     }
 
@@ -219,8 +191,8 @@ impl FeatureOp {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PropFeature {
     pub id: PropFeatureId,
-    /// What the mapper called it. Free text and **not** a lang key: this is
-    /// content somebody typed, like a map's name, rather than interface text.
+    /// Free text and **not** a lang key: content somebody typed, like a map's
+    /// name, rather than interface text.
     pub name: String,
     #[serde(default = "enabled_by_default")]
     pub enabled: bool,
@@ -255,12 +227,11 @@ pub struct Evaluated {
     /// The bodies left standing, in the order they were made.
     pub bodies: Vec<(PropFeatureId, Solid)>,
     pub problems: Vec<Problem>,
-    /// Which bodies were live just before each feature ran, indexed the same
-    /// way the feature list is.
+    /// Which bodies were live just before each feature ran.
     ///
-    /// Recorded by the evaluator rather than worked out again by the panel:
-    /// "what can this boolean point at" is the consuming rule read backwards,
-    /// and two copies of that rule is two copies that drift.
+    /// Recorded here rather than worked out again by the panel: "what can this
+    /// boolean point at" is the consuming rule read backwards, and two copies
+    /// of it drift.
     pub live_before: Vec<Vec<PropFeatureId>>,
 }
 
@@ -277,11 +248,9 @@ impl Evaluated {
     }
 }
 
-/// Replay a feature list into the bodies it describes.
-///
-/// Deterministic and free of the `World`: this is a pure function of the list,
-/// which is what lets it be tested without a `World` and, later, run on a
-/// client that was handed a prop rather than shown one.
+/// Replay a feature list into the bodies it describes. A pure function of the
+/// list, so it can be tested without a `World` and later run on a client that
+/// was handed a prop rather than shown one.
 pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     let mut live: Vec<(PropFeatureId, Solid)> = Vec::new();
     let mut problems = Vec::new();
@@ -294,11 +263,9 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
             continue;
         }
 
-        // Finding an operand and taking it are deliberately two steps. A
-        // feature that takes its first operand and then fails to find its
-        // second has *deleted a body it did not use*, which reads as the
-        // surviving half of a broken boolean vanishing from the viewport —
-        // and the feature that broke is not the one that looks wrong.
+        // Finding an operand and taking it are two steps on purpose: one that
+        // took its first and then failed to find its second would delete a body
+        // it never used, and the half that vanishes is not the broken feature.
         let find = |id: PropFeatureId, live: &[(PropFeatureId, Solid)]| {
             live.iter().position(|(candidate, _)| *candidate == id)
         };
@@ -333,10 +300,8 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 live.push((feature.id, solid));
             }
             FeatureOp::Boolean { op, target, tool } => {
-                // Refusing the self-reference explicitly: taking the same body
-                // twice would give the second `take` nothing and read as a
-                // missing body, which is a confusing way to say "you pointed
-                // this at itself".
+                // Refused explicitly: taking the same body twice would read as
+                // a missing one, which is a confusing way to say this.
                 if target == tool {
                     problems.push(Problem {
                         feature: feature.id,
@@ -352,8 +317,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     });
                     continue;
                 };
-                // Higher index first: removing the earlier one would shift the
-                // later one out from under its own index.
+                // Higher index first, or removing one shifts the other.
                 let (first, second) = (at_target.max(at_tool), at_target.min(at_tool));
                 let (a, b) = if at_target < at_tool {
                     let b = live.remove(first).1;
@@ -426,10 +390,9 @@ mod tests {
         primitive(id, Shape::Box { size: [1.0, 1.0, 1.0] }, at)
     }
 
-    /// The rule the evaluator is built on. A boolean eats both its operands,
-    /// so what is left to draw is the result and not the ingredients — the
-    /// failure being a barrel with its own bore drawn inside it, visible only
-    /// where the two disagree.
+    /// The rule the evaluator is built on: what is left to draw is the result,
+    /// not the ingredients. The failure is a barrel with its own bore drawn
+    /// inside it, visible only where the two disagree.
     #[test]
     fn a_boolean_consumes_both_of_its_operands() {
         let features = vec![
@@ -451,9 +414,8 @@ mod tests {
         assert!((result.bodies[0].1.volume() - 0.5).abs() < 1e-3);
     }
 
-    /// Deleting a feature something else pointed at must not blank the
-    /// viewport. Everything that still makes sense is still built, and the one
-    /// broken feature says so.
+    /// Deleting something another feature pointed at must not blank the
+    /// viewport: everything that still makes sense is still built.
     #[test]
     fn a_dangling_reference_is_a_note_rather_than_a_blank_prop() {
         let features = vec![
@@ -475,9 +437,7 @@ mod tests {
         assert_eq!(result.bodies[0].0, PropFeatureId(0), "the target was eaten by a failed boolean");
     }
 
-    /// A feature that fails must put back whatever it took. Left out, a
-    /// self-referencing boolean would delete the body it named as well as
-    /// doing nothing.
+    /// A feature that fails must put back whatever it took.
     #[test]
     fn a_boolean_pointed_at_itself_leaves_the_body_alone() {
         let features = vec![
@@ -497,10 +457,8 @@ mod tests {
         assert_eq!(result.bodies[0].0, PropFeatureId(0));
     }
 
-    /// Turning a feature off has to take its dependants with it rather than
-    /// leaving them building against a body that is not there. It reads as a
-    /// problem, which is the honest answer: they are broken *because* of the
-    /// toggle, and turning it back on fixes them.
+    /// Turning a feature off takes its body with it; dependants then read as
+    /// problems, which is honest — turning it back on fixes them.
     #[test]
     fn disabling_a_feature_removes_its_body() {
         let mut features = vec![unit_box(0, Vec3::ZERO), unit_box(1, Vec3::new(3.0, 0.0, 0.0))];
@@ -510,8 +468,7 @@ mod tests {
         assert_eq!(result.bodies[0].0, PropFeatureId(1));
     }
 
-    /// Mirroring with the original kept is the symmetry feature: one body out,
-    /// twice the volume, and no seam down the middle to draw.
+    /// One body out, twice the volume, and no seam down the middle.
     #[test]
     fn a_kept_mirror_doubles_the_body() {
         let features = vec![
@@ -532,10 +489,9 @@ mod tests {
         assert!((result.bodies[0].1.volume() - 2.0).abs() < 1e-3);
     }
 
-    /// What the panel offers a boolean has to be exactly what the evaluator
-    /// will find. Recorded by the evaluator itself for that reason — a second
-    /// implementation of the consuming rule would offer bodies that are
-    /// already eaten.
+    /// What the panel offers has to be what the evaluator will find, which is
+    /// why the evaluator records it: a second implementation of the consuming
+    /// rule would offer bodies that are already eaten.
     #[test]
     fn the_live_set_is_recorded_as_each_feature_sees_it() {
         let features = vec![

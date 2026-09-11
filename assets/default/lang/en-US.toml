@@ -430,6 +430,7 @@ missing = "missing { id }"
 [prop.stats]
 bodies = "{ count } bodies"
 triangles = "{ count } triangles"
+settling = "settling…"
 
 [prop.problems]
 # Checked on screen rather than assumed. egui's fonts cover Miscellaneous

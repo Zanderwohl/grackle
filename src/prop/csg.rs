@@ -1,41 +1,31 @@
 //! Cutting solids out of one another, with a BSP tree.
 //!
-//! This is the whole modelling kernel. It is the classic `csg.js` algorithm
-//! written out in Rust, and it is here rather than pulled from a crate for the
-//! same reason the ragdoll solver is hand-written: a C library does not
-//! compile to wasm, and a weapon has to be drawable in a browser tab. It is
-//! also a couple of hundred lines, which is less than the argument for taking
-//! a dependency would be.
+//! The whole modelling kernel: the `csg.js` algorithm written out, hand-written
+//! for the reason the ragdoll solver is — a C library does not compile to wasm,
+//! and a weapon has to be drawable in a browser tab.
 //!
 //! **A solid is a bag of convex polygons that happens to be closed.** Nothing
-//! here checks either property, and both matter:
+//! checks either property and both matter:
 //!
 //! - **Convex.** A plane cuts a convex polygon into exactly two pieces, which
-//!   is the assumption [`Plane::split_polygon`] is written on. Hand it a
-//!   concave polygon that a plane enters and leaves twice and you get two
-//!   pieces where there should be three, so the solid quietly grows a hole.
-//!   Everything in [`super::solid`] emits triangles or planar convex faces for
-//!   exactly this reason.
-//! - **Closed.** A boolean decides what to keep by asking which side of a
-//!   plane a polygon is on, and "inside" only means anything for a surface
-//!   with no gaps in it. Subtracting from an open shell gives a result that
-//!   looks right from one angle and is inside out from another.
+//!   is what [`Plane::split_polygon`] is written on. A concave one a plane
+//!   enters and leaves twice gives two pieces where there should be three, and
+//!   the solid quietly grows a hole. Everything in [`super::solid`] emits
+//!   triangles or planar convex faces for this reason.
+//! - **Closed.** "Inside" only means anything for a surface with no gaps.
+//!   Subtracting from an open shell looks right from one angle and is inside
+//!   out from another.
 //!
-//! Normals are **per face, not per vertex**. A flat-shaded polygon is the look
-//! this game is after, and it also sidesteps the one genuinely awkward part of
-//! a CSG port: a vertex created by a split has no natural normal, and
-//! interpolating one across a cut edge is what makes a boolean seam visible.
+//! Normals are **per face**. Flat shading is the look, and it sidesteps the
+//! awkward part of a CSG port: a vertex created by a split has no natural
+//! normal, and interpolating one is what makes a boolean seam visible.
 
 use bevy::prelude::*;
 
 use crate::prop::surface::Surface;
 
-/// How close to a plane counts as *on* it.
-///
-/// Generous by the standards of a modelling kernel, because the numbers here
-/// are metres and a weapon is under one of them: a tolerance tight enough for
-/// a millimetre leaves slivers of polygon at every cut, and a sliver is a
-/// z-fighting artefact rather than an error.
+/// How close to a plane counts as *on* it. Generous, because a tolerance tight
+/// enough for a millimetre leaves a sliver of polygon at every cut.
 const EPSILON: f32 = 1e-5;
 
 /// An oriented plane, as a normal and a distance along it from the origin.
@@ -45,9 +35,8 @@ pub struct Plane {
     pub w: f32,
 }
 
-/// Which side of a plane something is on. The values are bits, so the union of
-/// a polygon's vertices' classifications is the polygon's own — that is what
-/// makes `FRONT | BACK == SPANNING` work out.
+/// Which side of a plane something is on. Bits, so the union of a polygon's
+/// vertices is the polygon's own classification: `FRONT | BACK == SPANNING`.
 const COPLANAR: u8 = 0;
 const FRONT: u8 = 1;
 const BACK: u8 = 2;
@@ -55,11 +44,9 @@ const SPANNING: u8 = 3;
 
 /// The four buckets one plane sorts a polygon into.
 ///
-/// A struct rather than four `&mut Vec` arguments because two of the callers
-/// want the same vector in two of the buckets — a clip sends coplanar faces to
-/// whichever side they face, and a build keeps both in the node — and Rust
-/// will not lend one vector out twice. Merging afterwards states which bucket
-/// went where, which is the part worth reading anyway.
+/// A struct rather than four `&mut Vec` arguments, because two callers want the
+/// same vector in two buckets and Rust will not lend one out twice. Merging
+/// afterwards states which bucket went where, which is the part worth reading.
 #[derive(Default)]
 struct Split {
     coplanar_front: Vec<Polygon>,
@@ -69,11 +56,9 @@ struct Split {
 }
 
 impl Plane {
-    /// The plane through three points, or `None` if they are in a line.
-    ///
-    /// Degenerate triangles are dropped rather than tolerated: a plane built
-    /// from a zero normal classifies every point as coplanar, which makes the
-    /// BSP tree silently stop dividing space.
+    /// The plane through three points, or `None` if they are in a line. A
+    /// plane with a zero normal classifies everything as coplanar, which makes
+    /// the tree silently stop dividing space.
     pub fn from_points(a: Vec3, b: Vec3, c: Vec3) -> Option<Plane> {
         let normal = (b - a).cross(c - a);
         if normal.length_squared() < EPSILON * EPSILON {
@@ -101,10 +86,9 @@ impl Plane {
 
     /// Sort one polygon into the four buckets, splitting it if it straddles.
     ///
-    /// The coplanar buckets are kept apart from the other two because a
-    /// polygon lying *in* the dividing plane belongs to whichever side it
-    /// faces, and that is a question about its normal rather than about its
-    /// position.
+    /// Coplanar is kept apart from front and back because a polygon lying *in*
+    /// the plane belongs to whichever side it faces — a question about its
+    /// normal, not its position.
     fn split_polygon(&self, polygon: &Polygon, into: &mut Split) {
         let mut polygon_type = COPLANAR;
         let types: Vec<u8> = polygon
@@ -150,9 +134,8 @@ impl Plane {
                     }
                 }
 
-                // Three vertices is the least a polygon can be; a split that
-                // shaved a corner off exactly on the plane can leave two, and
-                // a two-vertex polygon has no plane to rebuild itself from.
+                // A split that shaved a corner off exactly on the plane can
+                // leave two vertices, which is not a polygon.
                 if front_vertices.len() >= 3 {
                     into.front.push(polygon.with_vertices(front_vertices));
                 }
@@ -164,11 +147,9 @@ impl Plane {
     }
 }
 
-/// One convex face, wound counter-clockwise seen from outside.
-///
-/// The winding convention is [`crate::common::mesh`]'s, and it has to be: the
-/// two modules build the same kind of surface and a prop drawn by one and a
-/// body drawn by the other would otherwise disagree about which way is out.
+/// One convex face, wound counter-clockwise seen from outside — the same
+/// convention [`crate::common::mesh`] uses, so a prop and a body agree about
+/// which way is out.
 #[derive(Clone, Debug)]
 pub struct Polygon {
     pub vertices: Vec<Vec3>,
@@ -186,10 +167,8 @@ impl Polygon {
         Some(Polygon { vertices, plane, surface })
     }
 
-    /// The same face with different corners — used by a split, where the
-    /// plane is known to be unchanged and recomputing it from the new corners
-    /// would be both wasted work and a chance to flip a nearly-degenerate
-    /// sliver the wrong way round.
+    /// The same face with different corners. The plane is known unchanged, and
+    /// recomputing it could flip a nearly-degenerate sliver the wrong way.
     fn with_vertices(&self, vertices: Vec<Vec3>) -> Polygon {
         Polygon { vertices, plane: self.plane, surface: self.surface }
     }
@@ -217,9 +196,8 @@ impl Node {
         node
     }
 
-    /// Turn the solid inside out: every face flipped, and front and back
-    /// swapped everywhere. This is how `subtract` and `intersect` are written
-    /// in terms of `union` rather than as three separate algorithms.
+    /// Turn the solid inside out. This is how `subtract` and `intersect` are
+    /// written in terms of `union` rather than as three algorithms.
     fn invert(&mut self) {
         for polygon in &mut self.polygons {
             polygon.flip();
@@ -255,8 +233,8 @@ impl Node {
             Some(node) => node.clip_polygons(split.front),
             None => split.front,
         };
-        // No back child means the space behind this plane is solid, so
-        // everything that landed there is inside and goes away.
+        // No back child means the space behind is solid, so what landed there
+        // is inside and goes away.
         if let Some(node) = &self.back {
             kept.extend(node.clip_polygons(split.back));
         }
@@ -286,10 +264,6 @@ impl Node {
     }
 
     /// Add polygons to the tree, dividing space by the first one's plane.
-    ///
-    /// Iterative down the back edge rather than recursive on both: a stack of
-    /// boxes stacked along one axis degenerates into a list, and a list deep
-    /// enough overflows the stack on a shape nobody would call complicated.
     fn build(&mut self, polygons: Vec<Polygon>) {
         if polygons.is_empty() {
             return;
@@ -303,8 +277,8 @@ impl Node {
         for polygon in &polygons {
             plane.split_polygon(polygon, &mut split);
         }
-        // Both coplanar buckets lie *in* this node's plane, so they are this
-        // node's own polygons whichever way they face.
+        // Both coplanar buckets lie in this node's plane whichever way they
+        // face, so they are this node's own polygons.
         self.polygons.extend(split.coplanar_front);
         self.polygons.extend(split.coplanar_back);
 
@@ -324,9 +298,8 @@ pub fn union(a: &[Polygon], b: &[Polygon]) -> Vec<Polygon> {
     a.clip_to(&b);
     b.clip_to(&a);
     // `b`'s remaining faces include the inside walls of the shared region,
-    // facing the wrong way. Flipping, clipping and flipping back is what
-    // removes them, and leaving it out is what puts a wall through the middle
-    // of two boxes that overlap.
+    // facing the wrong way. Without this there is a wall through the middle of
+    // two boxes that overlap.
     b.invert();
     b.clip_to(&a);
     b.invert();
@@ -363,12 +336,11 @@ pub fn intersect(a: &[Polygon], b: &[Polygon]) -> Vec<Polygon> {
     a.all_polygons()
 }
 
-/// Six times the signed volume the polygons enclose.
+/// Six times the signed volume the polygons enclose, by the divergence theorem.
 ///
-/// The divergence theorem over a triangle fan per face. Only meaningful for a
-/// closed surface, which is the point: it is what the tests measure a boolean
-/// by, because "does this look right" is not something a test can ask and the
-/// volume of a box with a hole in it is arithmetic.
+/// Only meaningful for a closed surface, which is the point: it is what the
+/// tests measure a boolean by, because "does this look right" is not a question
+/// a test can ask and the volume of a box with a hole in it is arithmetic.
 pub fn signed_volume_x6(polygons: &[Polygon]) -> f32 {
     let mut total = 0.0;
     for polygon in polygons {
@@ -389,10 +361,9 @@ mod tests {
         signed_volume_x6(polygons) / 6.0
     }
 
-    /// The measurement everything else in this file is checked with, checked
-    /// first: a unit box encloses one cubic metre. If this is wrong — most
-    /// likely because the winding convention got inverted somewhere — every
-    /// other assertion here is measuring the wrong thing and passing anyway.
+    /// The measurement everything else here is checked with, checked first. If
+    /// the winding convention is inverted, every other assertion in this file
+    /// is measuring the wrong thing and passing anyway.
     #[test]
     fn a_box_encloses_its_own_volume() {
         let solid = Solid::cuboid(Vec3::ONE, Surface::default());
@@ -403,9 +374,9 @@ mod tests {
         );
     }
 
-    /// Two boxes sharing exactly half their volume. Union has to notice the
-    /// overlap rather than adding the two up, and the wall down the middle has
-    /// to go: a union that kept it would measure correctly and draw a seam.
+    /// Union has to notice the overlap rather than adding the two up, and the
+    /// wall down the middle has to go — one kept would measure correctly and
+    /// draw a seam.
     #[test]
     fn a_union_counts_the_overlap_once() {
         let a = Solid::cuboid(Vec3::ONE, Surface::default());
@@ -419,10 +390,9 @@ mod tests {
         );
     }
 
-    /// A hole all the way through, which is the operation a weapon is mostly
-    /// made of. The tool is longer than the box on purpose: a subtraction
-    /// whose tool ends exactly flush with a face is the one case where the
-    /// tolerance decides the answer, and that is not what this is testing.
+    /// A hole all the way through — the operation a weapon is mostly made of.
+    /// The tool is longer than the box because a tool ending flush with a face
+    /// is the one case where the tolerance decides the answer.
     #[test]
     fn subtracting_a_bore_takes_its_volume_away() {
         let block = Solid::cuboid(Vec3::ONE, Surface::default());
@@ -435,13 +405,10 @@ mod tests {
         );
     }
 
-    /// The kernel itself has **no opinion about materials**: a face it keeps
-    /// from the tool keeps the tool's surface. That is the arithmetically
-    /// honest answer and deliberately not the modelling one — see
-    /// [`Solid::subtract`](crate::prop::solid::Solid::subtract), which
-    /// repaints the tool first so the walls of a bore come out made of
-    /// barrel. Pinned here so that rule stays in one layer rather than being
-    /// half-implemented in both.
+    /// The kernel has **no opinion about materials**: a face it keeps from the
+    /// tool keeps the tool's surface. The modelling rule lives one layer up in
+    /// [`Solid::subtract`](crate::prop::solid::Solid::subtract), and this pins
+    /// it there rather than half-implemented in both.
     #[test]
     fn the_kernel_carries_each_faces_own_surface_through_a_cut() {
         use crate::prop::surface::{Style, Tint};
@@ -461,9 +428,7 @@ mod tests {
         );
     }
 
-    /// Subtracting something that misses entirely must not perturb the solid.
-    /// A kernel that rebuilt the shape anyway would pass a volume check and
-    /// still have quietly retriangulated every face.
+    /// Subtracting something that misses must not perturb the solid.
     #[test]
     fn subtracting_something_disjoint_changes_nothing() {
         let block = Solid::cuboid(Vec3::ONE, Surface::default());
@@ -473,8 +438,7 @@ mod tests {
         assert!((volume(&result) - 1.0).abs() < 1e-4);
     }
 
-    /// Only the overlap survives an intersection — the operation that trims a
-    /// barrel to a silhouette.
+    /// Only the overlap survives an intersection.
     #[test]
     fn an_intersection_keeps_only_the_overlap() {
         let a = Solid::cuboid(Vec3::ONE, Surface::default());

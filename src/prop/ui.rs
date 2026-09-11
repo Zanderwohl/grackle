@@ -1,21 +1,17 @@
 //! The prop editor's panels.
 //!
-//! Its own `DockState` rather than tabs added to
-//! [`EditorPanels`](crate::editor::panels::EditorPanels), for two reasons. The
-//! map editor's panel system already carries most of the editor's resources
-//! and is at Bevy's parameter limit, so a prop tab would have to arrive by
-//! pushing something else out. And the two surfaces are never up at once —
-//! they are modes — so sharing a dock would mean a tab set that has to be
-//! swapped anyway. What is shared is the *shape*: the same egui panels around
-//! the same four viewports, sized the same way, so the window does not
-//! rearrange itself under somebody swapping modes.
+//! Its own `DockState` rather than tabs on
+//! [`EditorPanels`](crate::editor::panels::EditorPanels), which is already at
+//! Bevy's parameter limit — and the two surfaces are modes, never up at once,
+//! so a shared dock would need its tab set swapped anyway. What *is* shared is
+//! the shape: the same panels around the same four viewports, sized the same
+//! way, so the window does not rearrange itself under somebody swapping modes.
 //!
-//! Everything that writes to the document goes through
-//! [`PropEditor::begin_gesture`] and [`PropEditor::end_gesture`] rather than
-//! through `edit`. egui reports a drag as a change every frame it moves, so
-//! per-change undo steps would turn one pull on a radius into forty presses of
-//! Ctrl+Z. The gesture closes when the pointer *and* the keyboard are both
-//! idle, which is what makes typing a name one step rather than one per
+//! Writes go through [`PropEditor::begin_gesture`] and
+//! [`PropEditor::end_gesture`] rather than `edit`: egui reports a drag as a
+//! change every frame, so per-change undo steps would turn one pull on a radius
+//! into forty presses of Ctrl+Z. The gesture closes when the pointer *and* the
+//! keyboard are idle, which makes typing a name one step rather than one per
 //! letter.
 
 use std::path::PathBuf;
@@ -43,9 +39,8 @@ use crate::prop::camera::FrameTheProp;
 use crate::prop::view::PropBuild;
 
 /// What a file dialog came back with. Mirrors the map editor's arrangement,
-/// including the background thread, and inherits its wasm problem — see
-/// "Targeting wasm" in `CLAUDE.md`. The *reading* half of the prop format
-/// deliberately does not go through here.
+/// including the background thread and its wasm problem. The *reading* half of
+/// the prop format deliberately does not come through here.
 enum DialogResult {
     Save(PathBuf),
     Open(PathBuf),
@@ -69,7 +64,7 @@ enum PropTab {
     Problems,
 }
 
-/// The panel layout, kept beside the map editor's own rather than in it.
+/// The panel layout.
 #[derive(Resource)]
 pub struct PropPanels {
     left: DockState<PropTab>,
@@ -95,8 +90,8 @@ impl Default for PropPanels {
     }
 }
 
-/// What the panels asked for this frame, collected so the systems that answer
-/// do not have to be reachable from inside an egui closure.
+/// What the panels asked for this frame, so the systems that answer need not be
+/// reachable from inside an egui closure.
 #[derive(Default)]
 struct PropRequests {
     new: bool,
@@ -297,10 +292,8 @@ fn panels(
 
     drop(tabs);
 
-    // One undo step per gesture. The keyboard half of the test is what makes
-    // typing a feature's name a single step: the pointer is idle the whole
-    // time somebody is typing, so pointer alone would record a step per
-    // keystroke.
+    // One undo step per gesture. The keyboard half is what makes typing a name
+    // a single step — the pointer is idle the whole time somebody types.
     if !ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input() {
         editor.end_gesture();
     }
@@ -325,12 +318,9 @@ fn panels(
     }
 }
 
-/// One line of the feature list, read out of the document before any of it is
-/// drawn.
-///
-/// Collected up front because the rows write back — a selection, an action —
-/// and holding a borrow on the editor across the closures that draw them would
-/// leave the context menu with nothing it could change.
+/// One line of the feature list, read out before any of it is drawn: the rows
+/// write back, and holding a borrow on the editor across the closures that draw
+/// them would leave the context menu with nothing it could change.
 struct Row {
     id: PropFeatureId,
     name: String,
@@ -338,10 +328,8 @@ struct Row {
     /// How many features name this one as an operand, so deleting it can say
     /// what that costs.
     dependants: usize,
-    /// The features this one may not be dragged past, in either direction —
-    /// its operands and its dependants together. Marked while it is being
-    /// dragged, so the reason the insertion line stops is on screen rather
-    /// than only in the behaviour.
+    /// Operands and dependants together — what this may not be dragged past.
+    /// Marked during a drag, so the reason the line stops is on screen.
     pins: Vec<PropFeatureId>,
     /// Where this feature may end up, as indices in the finished list.
     legal: std::ops::RangeInclusive<usize>,
@@ -396,11 +384,9 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let mut select: Option<PropFeatureId> = None;
     let mut pending: Option<Box<dyn FnOnce(&mut PropEditor)>> = None;
 
-    // Collected as the rows are drawn, and used once they all have been: where
-    // an insertion line goes is a question about the whole list, and the
-    // dragged row is not known until the row that reports it has been drawn.
-    // Discovering it this way rather than remembering it between frames means
-    // there is no drag state to get out of step with the document.
+    // Used once every row has been drawn: where an insertion line goes is a
+    // question about the whole list. Discovered this way rather than remembered
+    // between frames, so there is no drag state to get out of step.
     let mut rects: Vec<(PropFeatureId, egui::Rect)> = Vec::new();
     let mut dragging: Option<usize> = None;
     let mut dropped = false;
@@ -410,26 +396,21 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             let Row { id, enabled, dependants, .. } = *row;
             let name = &row.name;
 
-            // Reserved before the row is drawn and filled in after, because
-            // whether to paint it depends on a hover the row has not reported
-            // yet. Painting afterwards without reserving would put the
-            // highlight *over* the name.
+            // Reserved before the row and filled in after: the fill depends on
+            // a hover the row has not reported yet, and painting afterwards
+            // without reserving would put the highlight over the name.
             let background = ui.painter().add(egui::Shape::Noop);
 
-            // **The row is the widget; the name is just text.** A
-            // `SelectableLabel` senses clicks, so it swallowed the secondary
-            // click over the one part of the row anybody aims at, and the menu
-            // appeared everywhere except on the name. A plain `Label` senses
-            // only hover, and egui's click hit-testing filters to widgets that
-            // sense clicks — so the click falls through to the row.
+            // **The row is the widget; the name is just text.** egui's click
+            // hit-testing filters to widgets that sense clicks, so a plain
+            // hover-only `Label` lets both clicks fall through to the row — a
+            // `SelectableLabel` swallowed the secondary click over the one part
+            // of the row anybody aims at.
             //
-            // `.interact(Sense::click())` is then what makes the row a widget
-            // at all: a `Ui`'s own response is allocated with `Sense::hover()`,
-            // and `Popup::context_menu` opens on `secondary_clicked()`, which a
-            // hover-only response can never report. It updates the row in
-            // place rather than moving it to the top of the order, so the
-            // reorder buttons — registered after it — still win their own
-            // clicks.
+            // `.interact(Sense::click())` is what makes the row a widget at
+            // all: a `Ui`'s own response is `Sense::hover()`, and
+            // `Popup::context_menu` opens on `secondary_clicked()`, which such
+            // a response can never report.
             let response = ui
                 .horizontal(|ui| {
                     // Three states, and they are not the same thing, so they
@@ -453,19 +434,13 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                         text = text.weak();
                     }
 
-                    // `.selectable(false)` is the other half of making the row
-                    // the widget, and it is not about the caret. A label that
-                    // can have its text selected picks up
-                    // `Sense::click_and_drag()` for that, which puts it back in
-                    // the click hit-test and wins over the row — so both the
-                    // select and the context menu stop working over the name,
-                    // exactly as they did when it was a `SelectableLabel`.
-                    // The I-beam cursor is the visible half of the same thing.
+                    // `.selectable(false)` is the other half, and not about the
+                    // caret: a selectable label picks up
+                    // `Sense::click_and_drag()` to support that, which puts it
+                    // back in the hit-test and wins over the row.
                     ui.add(egui::Label::new(text).selectable(false));
-                    // Claims the rest of the line so the row is a full-width
-                    // target. Without it `horizontal` shrinks to the text, and
-                    // both the highlight and the place you can grab would be
-                    // as wide as a feature happened to be named.
+                    // Claims the rest of the line, or `horizontal` shrinks to
+                    // the text and so does the grabbable area.
                     ui.allocate_space(egui::vec2(ui.available_width(), 0.0));
 
                 })
@@ -474,7 +449,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
 
             rects.push((id, response.rect));
             // `dragged` stays true for the row the drag began on even once the
-            // pointer has left it, which is exactly what a reorder needs.
+            // pointer has left it.
             if response.dragged() {
                 dragging = Some(at);
             }
@@ -486,8 +461,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 select = Some(id);
             }
 
-            // Selection outranks hover: a row you are pointing at that is
-            // already chosen should not dim to say so.
+            // Selection outranks hover, or a chosen row dims when pointed at.
             let fill = if response.dragged() {
                 Some(ui.visuals().widgets.active.weak_bg_fill)
             } else if selected == Some(id) {
@@ -509,16 +483,12 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             }
 
             response.context_menu(|ui| {
-                // Right-clicking a thing is a way of pointing at it, so it
-                // selects as well as opening the menu — otherwise the inspector
-                // goes on showing whatever was selected before, beside a menu
-                // acting on something else.
+                // Right-clicking is a way of pointing at a thing, so it selects
+                // too — otherwise the inspector shows something else.
                 select = Some(id);
 
-                // The item names the **action**, not the state: "Suppress" on
-                // something that is on. A label that named the state would read
-                // as a checkbox with no box, and you would have to guess
-                // whether clicking it agreed or disagreed with what it said.
+                // Names the **action**, not the state: a label naming the state
+                // reads as a checkbox with no box.
                 let action = match enabled {
                     true => get!("prop.tree.suppress"),
                     false => get!("prop.tree.unsuppress"),
@@ -537,11 +507,9 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 ui.separator();
 
                 let delete = ui.button(get!("prop.tree.delete"));
-                // Said before rather than after: everything that names this
-                // feature as an operand breaks the moment it goes, and the
-                // evaluator will report each of them as a problem. Undo is
-                // there, but knowing beforehand is cheaper than reading four
-                // warnings and working out what they have in common.
+                // Beforehand rather than after: everything naming this feature
+                // breaks the moment it goes, and reading that here is cheaper
+                // than four warnings you have to find the common cause of.
                 let delete = match dependants {
                     0 => delete,
                     count => delete.on_hover_text(get!(
@@ -562,9 +530,8 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             });
         }
 
-        // Everything about the drag is decided here, after every row has
-        // reported its rect: what the insertion line means is a fact about the
-        // list rather than about any one row.
+        // After every row has reported its rect: where the line goes is a fact
+        // about the list, not about any one row.
         if let Some(at) = dragging {
             let row = &entries[at];
             let target = show_the_drop(ui, &rects, row);
@@ -587,16 +554,13 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
 
 /// Draw where a dragged feature would land, and say where it may land.
 ///
-/// Returns the index it would drop at — **clamped into the legal range**,
-/// which is what makes an illegal order unreachable rather than merely
-/// discouraged. Because the legal positions are one contiguous span (see
-/// `PropDoc::legal_range`), clamping is all it takes: the line follows the
-/// pointer and then stops dead against the feature that is pinning it, which
-/// is a thing you can feel rather than a rule you have to have read.
+/// Returns the index it would drop at, **clamped into the legal range**. The
+/// legal positions are one contiguous span (see `PropDoc::legal_range`), so
+/// clamping is all it takes: the line follows the pointer and stops dead
+/// against whatever is pinning it, which you feel rather than have to read.
 ///
-/// The features doing the pinning — this one's operands and dependants — are
-/// marked at the same time, because "it stopped" and "it stopped *there*" are
-/// different amounts of help.
+/// The pinning features are marked at the same time, because "it stopped" and
+/// "it stopped *there*" are different amounts of help.
 fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row) -> usize {
     let others: Vec<egui::Rect> = rects
         .iter()
@@ -612,18 +576,16 @@ fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row
         .pointer_interact_pos()
         .map(|pointer| pointer.y)
         .unwrap_or(f32::NEG_INFINITY);
-    // How many rows the pointer has passed the middle of. Midpoints rather
-    // than edges, so the line flips over to the next gap when the pointer is
-    // more than half way into a row — which is where you would expect it to.
+    // Midpoints rather than edges, so the line flips to the next gap when the
+    // pointer is more than half way into a row.
     let wanted = others.iter().take_while(|rect| rect.center().y < pointer).count();
     let target = wanted.clamp(*row.legal.start(), *row.legal.end());
 
     let painter = ui.painter();
     for (id, rect) in rects {
         if row.pins.contains(id) {
-            // A bar down the leading edge rather than an outline: it reads as
-            // "this is holding you" without competing with the selection
-            // highlight the row may already be wearing.
+            // A bar rather than an outline, so it does not compete with the
+            // selection highlight the row may already be wearing.
             painter.rect_filled(
                 egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
                 0.0,
@@ -634,8 +596,7 @@ fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row
 
     let line = match others.get(target) {
         Some(rect) => rect.top(),
-        // Past the last row, which is where a feature with nothing depending
-        // on it is allowed to go.
+        // Past the last row, where a feature with no dependants may go.
         None => others.last().expect("checked non-empty above").bottom(),
     };
     painter.hline(
@@ -649,11 +610,9 @@ fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row
 
 /// Adding a feature.
 ///
-/// The booleans are only offered when there is something to point them at,
-/// and they arrive **already pointed at the last two bodies** rather than at
-/// nothing. A boolean that lands broken and has to be wired up in the
-/// inspector is two steps where the intent was one, and the intent is nearly
-/// always "cut this out of that".
+/// Booleans arrive **already pointed at the last two bodies**: one that landed
+/// broken and had to be wired up in the inspector would be two steps where the
+/// intent — nearly always "cut this out of that" — was one.
 fn add_menu(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let live: Vec<PropFeatureId> = build.evaluated.bodies.iter().map(|(id, _)| *id).collect();
     let mut added: Option<FeatureOp> = None;
@@ -856,16 +815,12 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     }
 }
 
-/// What is in the viewport besides the prop.
-///
-/// Its own tab rather than a corner of the inspector: the inspector is about
-/// the selected feature and this is about how you are looking at the whole
-/// thing, which is the same distinction the map editor's **Show** tab makes.
+/// What is in the viewport besides the prop. Its own tab because the inspector
+/// is about the selected feature and this is about the whole view — the
+/// distinction the map editor's **Show** tab makes.
 fn scene(ui: &mut Ui, figure: &mut ScaleFigure) {
     ui.label(get!("prop.scene.figure"));
-    // `None` first and default, because the figure is a ruler rather than part
-    // of the prop: a modeller who wants the silhouette on its own should get
-    // the silhouette on its own.
+    // `None` first and default: the figure is a ruler, not part of the prop.
     egui::ComboBox::from_id_salt("prop_scale_figure")
         .selected_text(match figure.0 {
             Some(class) => class.name(),
@@ -889,6 +844,12 @@ fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             ui.separator();
             let size = max - min;
             ui.label(format!("{:.3} × {:.3} × {:.3} m", size.x, size.y, size.z));
+        }
+        // A viewport that stopped following a drag looks like one that stopped
+        // working.
+        if build.settling() {
+            ui.separator();
+            ui.label(egui::RichText::new(get!("prop.stats.settling")).weak());
         }
     });
     ui.separator();
@@ -933,9 +894,7 @@ fn drag(ui: &mut Ui, label: String, value: &mut f32, speed: f64, suffix: &str) -
 fn count(ui: &mut Ui, label: String, value: &mut u32) -> bool {
     ui.horizontal(|ui| {
         ui.label(label);
-        // Clamped at the low end because fewer than three sides is not a
-        // shape, and a box you cannot drag down through 2 on the way to 3 is a
-        // box that fights you.
+        // Clamped low: fewer than three sides is not a shape.
         ui.add(egui::DragValue::new(value).speed(0.2).range(MIN_SIDES..=128)).changed()
     })
     .inner
@@ -956,9 +915,8 @@ fn vec3_ui(ui: &mut Ui, label: String, value: &mut [f32; 3], speed: f64, suffix:
 
 fn placement_ui(ui: &mut Ui, placement: &mut Placement) -> bool {
     let mut changed = vec3_ui(ui, get!("prop.inspector.origin"), &mut placement.origin, 0.001, "");
-    // Degrees in the boxes and radians in the field, the same way a map
-    // feature's rotation is: a part is lined up in degrees and everything
-    // downstream is trigonometry.
+    // Degrees in the boxes and radians in the field, as a map feature's
+    // rotation is: parts are lined up in degrees, maths is done in radians.
     let mut degrees = placement.rotation.map(f32::to_degrees);
     if vec3_ui(ui, get!("prop.inspector.rotation"), &mut degrees, 1.0, "°") {
         placement.rotation = degrees.map(f32::to_radians);
@@ -1015,10 +973,8 @@ fn profile_ui(ui: &mut Ui, profile: &mut Profile) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.label(get!("prop.inspector.profile"));
-        // Switching kind replaces the profile rather than converting it. A
-        // rectangle has no side count to carry into an n-gon and an n-gon has
-        // no corner list to carry into a polyline, so anything else would be
-        // inventing numbers.
+        // Switching kind replaces rather than converts: a rectangle has no side
+        // count to carry into an n-gon, so anything else invents numbers.
         if ui.selectable_label(matches!(profile, Profile::Rect { .. }), Profile::Rect { half: [0.0; 2] }.name()).clicked()
             && !matches!(profile, Profile::Rect { .. })
         {
@@ -1098,9 +1054,8 @@ fn body_picker(
             .iter()
             .find(|(id, _)| id == value)
             .map(|(_, name)| name.clone())
-            // A reference to something that is no longer a body still has to
-            // be shown as what it is, rather than falling back to the first
-            // thing in the list — which would silently repoint the feature.
+            // Falling back to the first thing in the list would silently
+            // repoint the feature.
             .unwrap_or_else(|| get!("prop.inspector.missing", "id", *value));
         egui::ComboBox::from_id_salt(format!("prop_body_{label}"))
             .selected_text(selected)
@@ -1113,8 +1068,7 @@ fn body_picker(
     changed
 }
 
-/// New, open, save — including the file dialog, which runs on its own thread
-/// exactly the way the map editor's does.
+/// New, open, save, including the file dialog on its own thread.
 fn handle_files(requests: &PropRequests, editor: &mut PropEditor, dialog: &PropFileDialog) {
     if requests.new {
         editor.open(PropDoc::new("prop.untitled"), None);
@@ -1154,8 +1108,7 @@ fn handle_files(requests: &PropRequests, editor: &mut PropEditor, dialog: &PropF
         return;
     }
 
-    // A save with nowhere to save to is a save-as, rather than an error or a
-    // silent nothing.
+    // A save with nowhere to save to is a save-as.
     if requests.save_as || requests.save {
         let slot = dialog.result.clone();
         let existing = editor.path.clone();

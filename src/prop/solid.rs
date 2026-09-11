@@ -1,23 +1,16 @@
 //! A closed surface, how to sweep one out of a profile, and how to hand it to
 //! Bevy.
 //!
-//! This sits between [`super::profile`] (2D shapes) and [`super::csg`] (which
-//! cuts closed surfaces out of one another) and owns the one rule both of them
-//! depend on: **a solid's faces point outwards**.
+//! Owns the rule [`super::profile`] and [`super::csg`] both depend on: **a
+//! solid's faces point outwards**. Rather than deriving the winding of every
+//! sweep by hand and getting one backwards, a solid is built however is
+//! convenient and then *measured* — [`Solid::oriented_outward`] flips it if the
+//! enclosed volume came out negative. Inside-out is the failure that does not
+//! announce itself: it renders as a hole from one side and correctly from the
+//! other, and a boolean against it keeps exactly the wrong half.
 //!
-//! Rather than deriving the winding of every sweep by hand and getting one of
-//! them backwards, a solid is built however is convenient and then *measured*:
-//! [`Solid::oriented_outward`] computes the enclosed volume and flips the
-//! whole thing if it came out negative. An inside-out solid is the failure
-//! that does not announce itself — it renders as a hole in the world from one
-//! side and correctly from the other, and a boolean against it keeps exactly
-//! the wrong half — so it is worth a dot product per face to make it
-//! unrepresentable.
-//!
-//! Meshes come out **flat shaded and grouped by surface**. One `Mesh3d` takes
-//! one material, so a prop with a wooden stock and a steel barrel is two
-//! entities; grouping here rather than at draw time means a solid that is all
-//! one material is one entity, which is the common case.
+//! Meshes come out **flat shaded and grouped by surface**, since one `Mesh3d`
+//! takes one material — so a prop that is all one material is one entity.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -28,8 +21,8 @@ use crate::prop::csg::{self, Polygon};
 use crate::prop::profile::{triangulate, Profile, MIN_SIDES};
 use crate::prop::surface::Surface;
 
-/// A bag of convex polygons that is meant to be closed. See [`super::csg`] for
-/// why both of those words matter.
+/// A bag of convex polygons meant to be closed — see [`super::csg`] for why
+/// both words matter.
 #[derive(Clone, Debug, Default)]
 pub struct Solid {
     polygons: Vec<Polygon>,
@@ -48,8 +41,7 @@ impl Solid {
         self.polygons.is_empty()
     }
 
-    /// How many triangles this would draw as — the number a mapper is actually
-    /// spending when they turn a cylinder's side count up.
+    /// What a mapper is spending when they turn a cylinder's side count up.
     pub fn triangle_count(&self) -> usize {
         self.polygons
             .iter()
@@ -57,12 +49,9 @@ impl Solid {
             .sum()
     }
 
-    /// Flip the whole solid if it turned out to be enclosing negative volume.
-    ///
-    /// Cheaper than reasoning about the winding of every sweep, and unlike
-    /// reasoning it cannot be subtly wrong for one case out of five. A solid
-    /// measuring zero is left alone: it is either empty or not closed, and
-    /// flipping it would be guessing.
+    /// Flip the solid if it encloses negative volume. Cheaper than reasoning
+    /// about every sweep's winding, and it cannot be wrong for one case in
+    /// five. Zero is left alone: empty or not closed, and flipping is guessing.
     pub fn oriented_outward(mut self) -> Solid {
         if csg::signed_volume_x6(&self.polygons) < 0.0 {
             for polygon in &mut self.polygons {
@@ -84,9 +73,8 @@ impl Solid {
             }
         }
         self.rebuild_planes();
-        // A negative scale turns a solid inside out, and a mirror is exactly
-        // that. Measuring afterwards means neither the caller nor this
-        // function has to remember which transforms do it.
+        // A mirror is a negative scale, which inverts the surface. Measuring
+        // afterwards means nobody has to remember which transforms do that.
         self.oriented_outward()
     }
 
@@ -119,10 +107,9 @@ impl Solid {
         self
     }
 
-    /// Recompute each face's plane from its (moved) corners.
+    /// Recompute each face's plane from its moved corners.
     ///
-    /// A face whose corners have become collinear is dropped rather than kept
-    /// with a stale plane: the kernel classifies points against planes, and a
+    /// A face gone collinear is dropped rather than kept with a stale plane: a
     /// plane that no longer describes its own polygon is how a boolean starts
     /// keeping the wrong side.
     fn rebuild_planes(&mut self) {
@@ -144,17 +131,11 @@ impl Solid {
     /// Cut `other` out, leaving the walls of the hole made of whatever this
     /// solid is mostly made of.
     ///
-    /// The kernel has no opinion about materials: a face it keeps from the
-    /// tool keeps the tool's surface, which is the arithmetically honest
-    /// answer and the wrong one for a modelling tool. Drilling a bore through
-    /// a steel barrel should leave steel inside the bore, not whatever colour
-    /// the drill happened to be — and nobody sets a drill's material, because
-    /// a drill is not part of the finished prop.
-    ///
-    /// So the rule lives here rather than in [`super::csg`]: repaint the tool
-    /// before cutting with it, and every face the cut produces comes out
-    /// right. The same applies to an intersection, whose new faces are also
-    /// the tool's.
+    /// The kernel keeps a tool's faces wearing the tool's surface, which is
+    /// arithmetically honest and wrong for a modelling tool: a bore through a
+    /// steel barrel should leave steel inside it, not whatever colour the drill
+    /// was. So the tool is repainted before cutting. Same for an intersection,
+    /// whose new faces are also the tool's.
     pub fn subtract(&self, other: &Solid) -> Solid {
         let tool = other.clone().painted(self.dominant_surface());
         Solid { polygons: csg::subtract(&self.polygons, &tool.polygons) }
@@ -165,11 +146,8 @@ impl Solid {
         Solid { polygons: csg::intersect(&self.polygons, &tool.polygons) }
     }
 
-    /// The surface covering the most of this solid.
-    ///
-    /// By **area**, not by face count: a barrel is mostly its long sides and a
-    /// handful of little end facets, and counting faces would let the ends
-    /// decide what the barrel is made of.
+    /// The surface covering the most of this solid, by **area** — counting
+    /// faces would let a barrel's end facets decide what it is made of.
     pub fn dominant_surface(&self) -> Surface {
         let mut totals: Vec<(Surface, f32)> = Vec::new();
         for polygon in &self.polygons {
@@ -203,16 +181,13 @@ impl Solid {
         (min.x <= max.x).then_some((min, max))
     }
 
-    /// Push a profile along its sketch's normal.
+    /// Push a profile along its sketch's local `+Z`.
     ///
-    /// `depth` runs along the sketch's local `+Z`. `midplane` is CAD's
-    /// symmetric extrude — half each way instead of all of it forwards — which
-    /// is what almost every part of a weapon wants, because a barrel is
-    /// centred on its axis rather than starting at it.
+    /// `midplane` is CAD's symmetric extrude — half each way — which is what
+    /// most of a weapon wants, a barrel being centred on its axis.
     ///
     /// Caps are **triangulated, not fanned**: the kernel takes convex polygons
-    /// only, and a profile with a notch in it is exactly the case a fan gets
-    /// wrong without saying so.
+    /// only, and a fan gets a notched profile wrong without saying so.
     pub fn extrude(
         profile: &Profile,
         depth: f32,
@@ -244,8 +219,7 @@ impl Solid {
         }
         for i in 0..points.len() {
             let j = (i + 1) % points.len();
-            // Planar by construction: both edges run along the same extrusion
-            // direction, so this stays one quad rather than two triangles.
+            // Planar by construction, so one quad rather than two triangles.
             polygons.extend(Polygon::new(
                 vec![
                     at(points[i], near),
@@ -262,15 +236,12 @@ impl Solid {
 
     /// Spin a profile about the sketch's local `+Y`.
     ///
-    /// `segments` is the facet count, and it is the whole of what makes this a
-    /// Quake-era shape rather than a smooth one. A full turn wraps and needs
-    /// no caps; anything less is capped with the profile at each end, so a
-    /// half-revolve is a solid half rather than an open shell.
+    /// A full turn wraps and needs no caps; anything less is capped at each
+    /// end, so a half-revolve is a solid half rather than an open shell.
     ///
-    /// Side faces are **triangles**. A quad between two steps of a revolve is
-    /// only planar when the profile edge it came from is parallel to the axis
-    /// or square to it, and a nearly-planar quad handed to the kernel is a
-    /// polygon whose own corners are on both sides of its plane.
+    /// Side faces are **triangles**: a quad between two steps is only planar
+    /// when the profile edge is parallel or square to the axis, and a
+    /// nearly-planar quad is a polygon with corners on both sides of its plane.
     pub fn revolve(
         profile: &Profile,
         degrees: f32,
@@ -299,9 +270,8 @@ impl Solid {
         let rings: Vec<Vec<Vec3>> = (0..=steps).map(ring).collect();
         let mut polygons = Vec::new();
         for k in 0..steps {
-            // The last ring of a full turn is the first ring again, to within
-            // rounding; using index 0 rather than the computed one is what
-            // keeps the seam welded instead of leaving a hairline gap.
+            // The last ring of a full turn is the first again to within
+            // rounding, so index 0 welds the seam rather than leaving a gap.
             let (head, tail) = if full && k + 1 == steps {
                 (&rings[k], &rings[0])
             } else {
@@ -338,10 +308,9 @@ impl Solid {
 
     /// The meshes this solid draws as, one per distinct surface.
     ///
-    /// Flat shaded: each face's own plane normal on each of its vertices,
-    /// which is both the look and the only honest answer after a boolean has
-    /// cut a face in half. UVs are a planar projection in metres, so nothing
-    /// has to author them and a future texture has something to sit on.
+    /// Flat shaded, which is both the look and the only honest answer after a
+    /// boolean has cut a face in half. UVs are a planar projection in metres,
+    /// so nothing has to author them and a future texture has somewhere to sit.
     pub fn meshes(&self) -> Vec<(Surface, Mesh)> {
         let mut groups: Vec<(Surface, MeshParts)> = Vec::new();
         for polygon in &self.polygons {
@@ -358,8 +327,7 @@ impl Solid {
     }
 }
 
-/// One mesh under construction: a fan per polygon, with the polygon's own
-/// normal on every vertex.
+/// One mesh under construction: a fan per polygon.
 #[derive(Default)]
 struct MeshParts {
     positions: Vec<[f32; 3]>,
@@ -371,9 +339,8 @@ struct MeshParts {
 impl MeshParts {
     fn push(&mut self, polygon: &Polygon) {
         let normal = polygon.plane.normal;
-        // Project onto whichever pair of world axes the face is most square
-        // to. Picking the dominant axis rather than a fixed one is what stops
-        // a wall's texture from being smeared into a stripe.
+        // Whichever pair of world axes the face is most square to; a fixed
+        // pair smears a wall's texture into a stripe.
         let (u_axis, v_axis) = {
             let a = normal.abs();
             if a.x >= a.y && a.x >= a.z {
@@ -391,8 +358,7 @@ impl MeshParts {
             self.normals.push(normal.to_array());
             self.uvs.push([vertex.dot(u_axis), vertex.dot(v_axis)]);
         }
-        // A fan is correct here and only here: the kernel's polygons are
-        // convex, which is the invariant the whole module is built on.
+        // A fan is correct because the kernel's polygons are convex.
         for i in 1..polygon.vertices.len() as u32 - 1 {
             self.indices.extend_from_slice(&[base, base + i, base + i + 1]);
         }
@@ -407,13 +373,15 @@ impl MeshParts {
     }
 }
 
+/// The smallest a shape may be dragged to: far enough from zero that it cannot
+/// be collapsed into something with no faces left to grab.
+pub const MIN_EXTENT: f32 = 0.001;
+
 /// A 3D primitive, as a handful of numbers.
 ///
-/// Every one of these is a [`Profile`] swept, and they are named variants
-/// rather than left as "draw a profile and extrude it" because a mapper
-/// reaching for a cylinder should get a cylinder. What they are *not* is a
-/// second geometry path: [`Shape::solid`] goes through the same two sweeps
-/// everything else does, so a bug in a cap is one bug rather than six.
+/// Named variants because a mapper reaching for a cylinder should get one, but
+/// **not a second geometry path**: [`Shape::solid`] goes through the same two
+/// sweeps everything else does, so a bug in a cap is one bug rather than six.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Shape {
@@ -438,8 +406,7 @@ pub enum Shape {
         #[serde(with = "crate::prop::nice_f32::scalar")]
         height: f32,
     },
-    /// A ball of `sides` around and `rings` over the top. Coarse on purpose —
-    /// the default is what a rivet wants, not what a planet does.
+    /// A ball of `sides` around and `rings` over the top.
     Sphere {
         sides: u32,
         rings: u32,
@@ -470,13 +437,60 @@ impl Shape {
         }
     }
 
+    /// The half-extents of the box this shape sits in, in its own space.
+    ///
+    /// What the size handles are placed by. An n-gon's is its **circumradius**
+    /// — the number a mapper typed — rather than the distance to its flats.
+    pub fn half_extents(&self) -> Vec3 {
+        match *self {
+            Shape::Box { size } | Shape::Wedge { size } => Vec3::from_array(size) / 2.0,
+            Shape::Prism { radius, height, .. } | Shape::Cone { radius, height, .. } => {
+                Vec3::new(radius, height / 2.0, radius)
+            }
+            Shape::Sphere { radius, .. } => Vec3::splat(radius),
+        }
+    }
+
+    /// Whether an axis is a **radius** rather than a free extent.
+    ///
+    /// A box's faces move independently, so pulling one leaves the other put. A
+    /// radius has no opposite face — widening a cylinder widens it both ways —
+    /// so a handle sets the radius and the axis stays still. Getting this wrong
+    /// does not error; it slides a cylinder sideways on every resize.
+    pub fn axis_is_radial(&self, axis: usize) -> bool {
+        match self {
+            Shape::Box { .. } | Shape::Wedge { .. } => false,
+            // Height is a free extent; the two radial axes are one number.
+            Shape::Prism { .. } | Shape::Cone { .. } => axis != 1,
+            Shape::Sphere { .. } => true,
+        }
+    }
+
+    /// Resize one axis, clamped at [`MIN_EXTENT`].
+    pub fn set_half_extent(&mut self, axis: usize, half: f32) {
+        let half = half.max(MIN_EXTENT);
+        match self {
+            Shape::Box { size } | Shape::Wedge { size } => {
+                if let Some(component) = size.get_mut(axis) {
+                    *component = half * 2.0;
+                }
+            }
+            Shape::Prism { radius, height, .. } | Shape::Cone { radius, height, .. } => {
+                match axis {
+                    1 => *height = half * 2.0,
+                    _ => *radius = half,
+                }
+            }
+            Shape::Sphere { radius, .. } => *radius = half,
+        }
+    }
+
     /// The solid, in its own space, centred on the origin.
     pub fn solid(&self, surface: Surface) -> Solid {
         match *self {
             Shape::Box { size } => Solid::cuboid(Vec3::from_array(size), surface),
-            // Extruded along the sketch normal and then stood up, rather than
-            // sketched in the ground plane: one sweep, turned, instead of a
-            // second way of writing the same one.
+            // Extruded and then stood up, rather than a second way of writing
+            // the same sweep.
             Shape::Prism { sides, radius, height } => {
                 Solid::extrude(&Profile::Ngon { sides, radius }, height, true, surface)
                     .transformed(Transform::from_rotation(Quat::from_rotation_x(
@@ -496,9 +510,7 @@ impl Shape {
                 surface,
             ),
             Shape::Sphere { sides, rings, radius } => {
-                // Half a disc, spun. The rings are the profile's own point
-                // count, so a sphere's two resolutions are the two numbers
-                // that actually cost triangles.
+                // Half a disc, spun. Rings are the profile's own point count.
                 let rings = rings.max(2);
                 let points: Vec<[f32; 2]> = (0..=rings)
                     .map(|i| {
@@ -529,9 +541,8 @@ impl Shape {
 mod tests {
     use super::*;
 
-    /// The invariant the kernel rests on, asserted about the thing that
-    /// produces the kernel's input. A sweep wound the wrong way measures
-    /// negative, and the orientation pass is what is being checked here.
+    /// The invariant the kernel rests on, asserted about what feeds it: a
+    /// sweep wound the wrong way measures negative.
     #[test]
     fn every_primitive_encloses_positive_volume() {
         let shapes = [
@@ -551,8 +562,8 @@ mod tests {
         }
     }
 
-    /// A prism's volume is arithmetic, so the sweep can be checked rather than
-    /// eyeballed: a regular n-gon of corner radius r has area n·r²·sin(2π/n)/2.
+    /// A regular n-gon of corner radius r has area n·r²·sin(2π/n)/2, so the
+    /// sweep can be checked rather than eyeballed.
     #[test]
     fn a_prism_holds_what_its_cross_section_says_it_should() {
         let (sides, radius, height) = (12u32, 0.2f32, 0.6f32);
@@ -568,9 +579,8 @@ mod tests {
         );
     }
 
-    /// A sphere is a revolve with caps that must *not* appear, and a seam that
-    /// must close. Both failures leave the surface open, and an open surface
-    /// measures the wrong volume rather than erroring.
+    /// A sphere is a revolve whose caps must *not* appear and whose seam must
+    /// close. Both failures leave the surface open rather than erroring.
     #[test]
     fn a_fine_sphere_approaches_the_real_thing() {
         let solid = Shape::Sphere { sides: 48, rings: 24, radius: 1.0 }.solid(Surface::default());
@@ -584,8 +594,7 @@ mod tests {
         );
     }
 
-    /// A mirror is a negative scale, which turns a surface inside out. Solids
-    /// measure themselves afterwards, so the caller never has to know that.
+    /// A mirror is a negative scale; solids measure themselves afterwards.
     #[test]
     fn mirroring_does_not_turn_a_solid_inside_out() {
         let solid = Shape::Wedge { size: [0.3, 0.3, 0.2] }.solid(Surface::default());
@@ -594,11 +603,9 @@ mod tests {
         assert!(mirrored.volume() > 0.0, "the mirrored copy is inside out");
     }
 
-    /// Drilling a bore through a steel barrel leaves steel inside the bore.
-    /// The kernel does not do this on its own — it keeps the tool's faces
-    /// wearing the tool's surface — so this is the test for the repaint in
-    /// [`Solid::subtract`], and the failure is a prop with bright default
-    /// grey down every hole in it.
+    /// The kernel keeps the tool's faces wearing the tool's surface, so this
+    /// is the test for the repaint in [`Solid::subtract`]. The failure is
+    /// bright default grey down every hole in a prop.
     #[test]
     fn the_walls_of_a_cut_are_made_of_what_was_cut() {
         use crate::prop::surface::{Style, Tint};
@@ -615,9 +622,8 @@ mod tests {
         assert_eq!(drilled.meshes().len(), 1, "the drill left a second material behind");
     }
 
-    /// A union is the other way round, and deliberately so: joining a wooden
-    /// stock to a steel receiver is two materials meeting, not one material
-    /// swallowing the other.
+    /// A union is the other way round: joining a wooden stock to a steel
+    /// receiver is two materials meeting, not one swallowing the other.
     #[test]
     fn a_union_keeps_both_materials() {
         use crate::prop::surface::{Style, Tint};
@@ -629,9 +635,74 @@ mod tests {
         assert_eq!(joined.meshes().len(), 2);
     }
 
-    /// Two materials means two meshes, and one material means one. Getting
-    /// this wrong costs an entity per face rather than producing anything
-    /// visibly broken.
+    /// If `half_extents` and `solid` disagree, a handle sits somewhere the
+    /// shape is not.
+    #[test]
+    fn a_shapes_half_extents_are_where_its_geometry_actually_is() {
+        let shapes = [
+            Shape::Box { size: [0.3, 0.4, 0.5] },
+            Shape::Cone { sides: 64, radius: 0.2, height: 0.5 },
+            Shape::Sphere { sides: 64, rings: 32, radius: 0.25 },
+            Shape::Wedge { size: [0.3, 0.3, 0.2] },
+        ];
+        for shape in shapes {
+            let claimed = shape.half_extents();
+            let (min, max) = shape.solid(Surface::default()).bounds().expect("a solid");
+            let measured = (max - min) / 2.0;
+            assert!(
+                (measured - claimed).abs().max_element() < 1e-3,
+                "{shape:?} claims half-extents of {claimed} and measures {measured}",
+            );
+            assert!(
+                ((min + max) / 2.0).abs().max_element() < 1e-4,
+                "{shape:?} is not centred on its own origin",
+            );
+        }
+
+        // A prism is the exception, and deliberately: its radius is to the
+        // corners, so the flats come in short of it. The handle belongs on the
+        // number somebody typed.
+        let prism = Shape::Prism { sides: 6, radius: 0.2, height: 0.6 };
+        let (min, max) = prism.solid(Surface::default()).bounds().expect("a solid");
+        assert!((prism.half_extents().y - (max.y - min.y) / 2.0).abs() < 1e-4);
+        assert!(prism.half_extents().x >= (max.x - min.x) / 2.0 - 1e-4);
+    }
+
+    /// An axis that did not read back would move the moment it was picked up.
+    #[test]
+    fn setting_a_half_extent_reads_back_as_itself() {
+        let shapes = [
+            Shape::Box { size: [0.3, 0.4, 0.5] },
+            Shape::Prism { sides: 8, radius: 0.2, height: 0.6 },
+            Shape::Cone { sides: 8, radius: 0.2, height: 0.5 },
+            Shape::Sphere { sides: 8, rings: 5, radius: 0.25 },
+            Shape::Wedge { size: [0.3, 0.3, 0.2] },
+        ];
+        for shape in shapes {
+            for axis in 0..3 {
+                let mut resized = shape.clone();
+                resized.set_half_extent(axis, 0.42);
+                assert!(
+                    (resized.half_extents()[axis] - 0.42).abs() < 1e-6,
+                    "{shape:?} lost axis {axis}: {:?}",
+                    resized.half_extents(),
+                );
+            }
+        }
+    }
+
+    /// A shape dragged through zero would turn inside out.
+    #[test]
+    fn a_shape_cannot_be_collapsed_to_nothing() {
+        for axis in 0..3 {
+            let mut shape = Shape::Box { size: [0.3, 0.3, 0.3] };
+            shape.set_half_extent(axis, -5.0);
+            assert!(shape.half_extents()[axis] >= MIN_EXTENT);
+            assert!(shape.solid(Surface::default()).volume() > 0.0);
+        }
+    }
+
+    /// Getting this wrong costs an entity per face and looks fine.
     #[test]
     fn meshes_are_grouped_by_surface() {
         use crate::prop::surface::{Style, Tint};

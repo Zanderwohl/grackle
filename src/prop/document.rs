@@ -2,24 +2,17 @@
 //! back to what it looked like a moment ago.
 //!
 //! **Undo is whole-document snapshots**, not per-feature deltas like the map's
-//! [`Action`](crate::editor::action::Action). That is a considered difference
-//! rather than a corner cut. A map is thousands of features and a blueprint
-//! somebody has kept for months, so its history is worth storing carefully and
-//! worth persisting. A prop is a few dozen features and a couple of kilobytes:
-//! cloning the whole thing per edit is free at that size, and it is correct by
-//! construction — there is no before-and-after pair to get the wrong way
-//! round, and no operation that can forget to record itself.
+//! [`Action`](crate::editor::action::Action). A prop is a few dozen features
+//! and a couple of kilobytes, so cloning per edit is free and correct by
+//! construction: no before-and-after pair to get the wrong way round, and no
+//! operation that can forget to record itself. The price is that history does
+//! not survive closing the file, which the map pays for and this does not.
 //!
-//! The price is that history does not survive closing the file, which the map
-//! deliberately pays for and this deliberately does not.
-//!
-//! **The file is flat text, not SQLite.** A map blueprint is an authoring
-//! format the runtime never reads, so `rusqlite` costs it nothing. A prop is
-//! read by the *game* — it is what a weapon is drawn as — and has to reach a
-//! browser tab, where a bundled C library does not go. So a prop is read
-//! through [`AssetSource`](crate::common::assets::AssetSource) like
-//! `weapons.toml` is, and nothing in this module reaches for a filesystem on
-//! the reading side.
+//! **The file is flat text, not SQLite.** A blueprint is an authoring format
+//! the runtime never reads; a prop is read by the *game* and has to reach a
+//! browser tab, where bundled C does not go. So it comes through
+//! [`AssetSource`](crate::common::assets::AssetSource) like `weapons.toml`,
+//! and nothing here reaches for a filesystem on the reading side.
 
 use std::path::{Path, PathBuf};
 
@@ -32,32 +25,25 @@ use crate::prop::feature::{evaluate, Evaluated, FeatureOp, PropFeature, PropFeat
 /// Grackle Prop. Flat text, one prop per file.
 pub const PROP_EXTENSION: &str = "gpp";
 
-/// Where props live inside a pack. Named here so the weapon loader and the
-/// prop editor cannot disagree about it.
+/// Where props live inside a pack, so the weapon loader and the prop editor
+/// cannot disagree about it.
 pub const PROPS_DIR: &str = "props";
 
-/// How many edits back you can go.
-///
-/// Bounded because the stack is whole documents and an editor left open all
-/// afternoon should not grow without limit; deep enough that nobody reaches
-/// the end of it in practice.
+/// How many edits back you can go. Bounded because the stack is whole
+/// documents; deep enough that nobody reaches the end in practice.
 const UNDO_DEPTH: usize = 256;
 
 /// One prop: an ordered list of modelling features and a name.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PropDoc {
-    /// A lang key for what this prop is called, the way a weapon's is. Free
-    /// text would be display text outside the lang layer.
+    /// A lang key, the way a weapon's is — free text would be display text
+    /// outside the lang layer.
     #[serde(default)]
     pub name_key: String,
     #[serde(default)]
     pub features: Vec<PropFeature>,
-    /// The next id to hand out.
-    ///
-    /// Stored rather than derived from the highest id in use, so that deleting
-    /// the last feature cannot make the next one reuse its number — and a
-    /// reference held by something outside this file would then quietly point
-    /// at a different shape.
+    /// The next id to hand out. Stored rather than derived from the highest in
+    /// use, so deleting the last feature cannot make the next reuse its number.
     #[serde(default)]
     next_id: u32,
 }
@@ -96,8 +82,8 @@ impl PropDoc {
         self.features.retain(|feature| feature.id != id);
     }
 
-    /// Everything that names `id` as an operand — what deleting it would
-    /// break, so the panel can say so before rather than after.
+    /// Everything that names `id` as an operand — what deleting it breaks, so
+    /// the panel can say so beforehand.
     pub fn dependants(&self, id: PropFeatureId) -> Vec<PropFeatureId> {
         self.features
             .iter()
@@ -108,21 +94,15 @@ impl PropDoc {
 
     /// Where a feature may be moved to, as indices in the finished list.
     ///
-    /// **Always a contiguous interval**, and that is what makes dragging one
-    /// around tractable. The evaluator replays top to bottom, so a feature has
-    /// to sit after everything it consumes and before everything that consumes
-    /// it — and since moving *one* item leaves every other item's relative
-    /// order alone, those two conditions are a single window: after the last
-    /// operand, before the first dependant. There is no scattered set of legal
-    /// slots to describe, so the panel can clamp a drag into the range rather
-    /// than needing a way to refuse a drop.
+    /// **Always a contiguous interval**, which is what makes dragging tractable.
+    /// Moving *one* item leaves every other item's relative order alone, so
+    /// "after everything I consume" and "before everything that consumes me"
+    /// collapse into one window — no scattered set of slots to describe, so the
+    /// panel clamps into the range rather than needing to refuse a drop.
     ///
-    /// **Direct relations are enough.** An indirect operand is already above a
-    /// direct one, so keeping clear of the direct ones keeps clear of all of
-    /// them.
-    ///
-    /// Indices are counted in the list **with this feature taken out**, which
-    /// is the same thing as the index it will end up at.
+    /// **Direct relations are enough**: an indirect operand is already above a
+    /// direct one. Indices count the list **with this feature taken out**,
+    /// which is the index it will end up at.
     pub fn legal_range(&self, id: PropFeatureId) -> Option<std::ops::RangeInclusive<usize>> {
         let at = self.index_of(id)?;
         let feature = self.feature(id)?;
@@ -144,21 +124,16 @@ impl PropDoc {
             }
         }
 
-        // A document whose features are already out of order would give an
-        // inverted range, and an inverted range is a panic waiting in whatever
-        // clamps with it. The lower bound wins: staying put is always legal.
+        // An already-out-of-order document would give an inverted range, which
+        // is a panic waiting in whatever clamps with it.
         Some(low..=high.max(low))
     }
 
-    /// Move a feature to `target`, or as close to it as the dependencies allow.
+    /// Move a feature to `target`, or as close as the dependencies allow.
     ///
-    /// **Clamped rather than refused.** A drag that would carry a boolean
-    /// above its own operands stops at the last legal place instead of
-    /// snapping back or landing somewhere broken — which is the whole of how
-    /// the panel prevents an illegal order, and why it needs no way to mark a
-    /// drop target as forbidden.
-    ///
-    /// Returns whether anything moved.
+    /// **Clamped rather than refused**, so a drag stops at the last legal place
+    /// instead of snapping back or landing somewhere broken. That is the whole
+    /// of how an illegal order is prevented.
     pub fn move_to(&mut self, id: PropFeatureId, target: usize) -> bool {
         let Some(at) = self.index_of(id) else { return false };
         let Some(legal) = self.legal_range(id) else { return false };
@@ -178,26 +153,22 @@ impl PropDoc {
     }
 }
 
-/// The prop editor's whole state: the document, the undo stacks, and what file
-/// it came from.
+/// The document, the undo stacks, and what file it came from.
 #[derive(Resource, Debug)]
 pub struct PropEditor {
     doc: PropDoc,
     undo: Vec<PropDoc>,
     redo: Vec<PropDoc>,
-    /// What the document looked like when an edit began, waiting to be pushed
-    /// onto the undo stack if and only if the edit changed anything.
-    ///
-    /// Deferred rather than pushed eagerly because an egui panel reports a
-    /// drag as an edit per frame; without this, one drag of a slider would be
-    /// forty undo steps.
+    /// What the document looked like when a gesture began, pushed onto the
+    /// undo stack only if it changed anything. egui reports a drag as an edit
+    /// per frame, so without this one drag would be forty undo steps.
     pending: Option<PropDoc>,
     pub selected: Option<PropFeatureId>,
     pub path: Option<PathBuf>,
     /// Whether the document differs from what is on disk.
     pub dirty: bool,
-    /// Bumped whenever the document changes, so the viewport knows to rebuild
-    /// without comparing two feature lists.
+    /// Bumped on every change, so the viewport can tell without comparing two
+    /// feature lists.
     generation: u64,
 }
 
@@ -225,12 +196,11 @@ impl PropEditor {
         self.generation
     }
 
-    /// Edit the document, recording an undo step if anything actually changed.
+    /// Edit the document, recording an undo step if anything changed.
     ///
-    /// Everything that writes to the document goes through here. That is what
-    /// makes "can this be undone" a property of the type rather than of
-    /// whether each call site remembered — the same reason `NetRole` has
-    /// exactly one writer.
+    /// Everything that writes goes through here, which makes "can this be
+    /// undone" a property of the type rather than of what each call site
+    /// remembered.
     pub fn edit<T>(&mut self, change: impl FnOnce(&mut PropDoc) -> T) -> T {
         let before = self.doc.clone();
         let result = change(&mut self.doc);
@@ -240,10 +210,9 @@ impl PropEditor {
         result
     }
 
-    /// Begin an edit that may span several frames, such as a drag.
-    ///
-    /// Paired with [`PropEditor::end_gesture`]. Between the two, the document
-    /// may be written to freely and only one undo step comes of it.
+    /// Begin an edit spanning several frames, such as a drag. Between this and
+    /// [`PropEditor::end_gesture`] the document may be written to freely and
+    /// only one undo step comes of it.
     pub fn begin_gesture(&mut self) {
         if self.pending.is_none() {
             self.pending = Some(self.doc.clone());
@@ -269,8 +238,7 @@ impl PropEditor {
         if self.undo.len() > UNDO_DEPTH {
             self.undo.remove(0);
         }
-        // A fresh edit ends the redo branch, the same way the map's timeline
-        // drops everything past the rollback bar.
+        // A fresh edit ends the redo branch.
         self.redo.clear();
         self.doc_changed();
     }
@@ -301,18 +269,15 @@ impl PropEditor {
     }
 
     fn after_history_move(&mut self) {
-        // A selection is an id, and undo can take the feature it names away.
+        // Undo can take the feature the selection names away.
         if self.selected.is_some_and(|id| self.doc.feature(id).is_none()) {
             self.selected = None;
         }
         self.doc_changed();
     }
 
-    /// Replace the document wholesale — opening a file, or starting a new one.
-    ///
-    /// Clears the history rather than making the swap undoable: undoing back
-    /// *through* a file open into a document you had closed is not something
-    /// anybody means by Ctrl+Z.
+    /// Replace the document wholesale, clearing the history: undoing back
+    /// *through* a file open is not what anybody means by Ctrl+Z.
     pub fn open(&mut self, doc: PropDoc, path: Option<PathBuf>) {
         self.doc = doc;
         self.undo.clear();
@@ -353,12 +318,8 @@ pub fn prop_path(pack: &Path, name: &str) -> PathBuf {
     pack.join(PROPS_DIR).join(format!("{name}.{PROP_EXTENSION}"))
 }
 
-/// Read a prop out of a pack.
-///
-/// Through [`Assets`] rather than `std::fs`, because the *game* does this: a
-/// weapon's model is pack content that a browser build has to be able to
-/// fetch. The editor's own file dialog goes through [`parse`] instead, since
-/// it opens files from anywhere.
+/// Read a prop out of a pack, through [`Assets`] rather than `std::fs` because
+/// the *game* does this. The editor's file dialog goes through [`parse`].
 pub fn load(assets: &Assets, pack: &Path, name: &str) -> Result<PropDoc, PropFileError> {
     let relative = format!("{PROPS_DIR}/{name}.{PROP_EXTENSION}");
     let bytes = assets.0.read(pack, &relative).map_err(PropFileError::Asset)?;
@@ -375,11 +336,8 @@ pub fn to_text(doc: &PropDoc) -> Result<String, toml::ser::Error> {
     toml::to_string_pretty(doc)
 }
 
-/// Write a prop to disk.
-///
-/// The one `std::fs` in this module, and it is on the *authoring* side: saving
-/// is something the native editor does, the way a blueprint is. Nothing the
-/// game does at runtime comes through here.
+/// Write a prop to disk — the one `std::fs` here, and on the *authoring* side.
+/// Nothing the game does at runtime comes through it.
 pub fn save(path: &Path, doc: &PropDoc) -> Result<(), PropFileError> {
     let text = to_text(doc).map_err(|e| PropFileError::Unwritable(e.to_string()))?;
     if let Some(parent) = path.parent() {
@@ -426,10 +384,8 @@ mod tests {
         doc
     }
 
-    /// The format is the whole storage layer, so this is the test that decides
-    /// whether a prop survives being closed. Every variant that has ever been
-    /// written has to come back as itself; a field that silently defaults is a
-    /// prop that changes shape on load.
+    /// Whether a prop survives being closed. A field that silently defaults is
+    /// a prop that changes shape on load.
     #[test]
     fn a_document_round_trips_through_its_file_format() {
         let doc = sample();
@@ -438,9 +394,8 @@ mod tests {
         assert_eq!(doc, back);
     }
 
-    /// The numbers a solid is built from are the numbers in the file. A format
-    /// that rounded them would move a bore off-centre by an amount too small
-    /// to see and large enough to leave a sliver of metal inside the barrel.
+    /// A format that rounded would move a bore off-centre by too little to see
+    /// and enough to leave a sliver of metal inside the barrel.
     #[test]
     fn the_geometry_survives_the_round_trip() {
         let doc = sample();
@@ -453,8 +408,7 @@ mod tests {
         }
     }
 
-    /// Ids are never reused, so a reference cannot come to mean a different
-    /// shape than it did when it was written.
+    /// A reused id would make a reference mean a different shape.
     #[test]
     fn deleting_the_last_feature_does_not_free_its_id() {
         let mut doc = PropDoc::new("x");
@@ -464,12 +418,7 @@ mod tests {
         assert_ne!(first, second);
     }
 
-    /// What deleting a feature would break, which the tree's context menu
-    /// warns about before the fact rather than leaving the evaluator to report
-    /// four separate problems afterwards.
-    ///
-    /// Counted by **who names it**, not by who comes after it: two features
-    /// can sit either side of a third without either caring about it.
+    /// Counted by **who names it**, not by who comes after it.
     #[test]
     fn a_feature_knows_what_is_built_on_it() {
         let mut doc = PropDoc::new("x");
@@ -494,9 +443,7 @@ mod tests {
         );
     }
 
-    /// The claim the whole drag interaction rests on: what a feature may do is
-    /// one unbroken span, so a drag can be clamped into it rather than needing
-    /// a way to refuse a drop.
+    /// The claim the drag interaction rests on: one unbroken span.
     #[test]
     fn what_a_feature_may_be_moved_to_is_one_unbroken_range() {
         let mut doc = PropDoc::new("x");
@@ -516,9 +463,8 @@ mod tests {
         assert_eq!(doc.legal_range(spare), Some(0..=3));
     }
 
-    /// The evaluator replays top to bottom, so a boolean above its operands can
-    /// never find them. A drag that would do it stops at the last legal place
-    /// rather than snapping back — you get the nearest thing you asked for.
+    /// A drag past a dependency stops at the last legal place rather than
+    /// snapping back — you get the nearest thing you asked for.
     #[test]
     fn a_drag_past_a_dependency_stops_against_it() {
         let mut doc = PropDoc::new("x");
@@ -539,8 +485,7 @@ mod tests {
         assert_eq!(doc.index_of(cut), Some(2));
     }
 
-    /// A move that *is* legal has to actually happen, or the clamp is just a
-    /// way of never moving anything.
+    /// A legal move has to happen, or the clamp never moves anything.
     #[test]
     fn an_unconstrained_feature_goes_where_it_is_put() {
         let mut doc = PropDoc::new("x");
@@ -555,10 +500,8 @@ mod tests {
         assert!(!doc.move_to(first, 2), "moving to where it already is counted as a move");
     }
 
-    /// Every feature in a document stays somewhere it is allowed to be, however
-    /// it is dragged about — including the one being dragged. Checked by
-    /// re-evaluating, because "legal" means exactly "the evaluator finds
-    /// everything it needs".
+    /// Checked by re-evaluating, because "legal" means exactly "the evaluator
+    /// finds everything it needs".
     #[test]
     fn no_sequence_of_drags_can_break_a_prop() {
         // Offset from each other on purpose: `FeatureOp::default()` is the
@@ -585,8 +528,7 @@ mod tests {
         });
 
         let ids: Vec<PropFeatureId> = doc.features.iter().map(|feature| feature.id).collect();
-        // Every feature dragged to every slot, in both directions, including
-        // the ones a careful user would never try.
+        // Every feature to every slot, including the ones nobody would try.
         for _ in 0..3 {
             for id in &ids {
                 for target in 0..ids.len() {
@@ -601,8 +543,8 @@ mod tests {
         }
     }
 
-    /// A drag reports an edit every frame. One gesture is one undo step, or
-    /// Ctrl+Z becomes a way to watch a slider move backwards.
+    /// One gesture is one undo step, or Ctrl+Z becomes a way to watch a slider
+    /// move backwards.
     #[test]
     fn a_gesture_is_one_undo_step_however_many_frames_it_took() {
         let mut editor = PropEditor::default();
@@ -621,8 +563,7 @@ mod tests {
         assert_eq!(*editor.doc(), after_push, "one drag took more than one undo");
     }
 
-    /// An edit that changed nothing must not push a step, or clicking about in
-    /// the panel fills the history with nothing.
+    /// An edit that changed nothing must not push a step.
     #[test]
     fn an_edit_that_changes_nothing_records_nothing() {
         let mut editor = PropEditor::default();
@@ -638,25 +579,21 @@ mod tests {
 
     /// Every prop the default pack ships has to load and build cleanly.
     ///
-    /// The file format has no schema version and no migration chain — that is
-    /// the trade for being flat text a mapper can read — so the thing that
-    /// keeps a shipped prop honest is this: open it, replay it, and insist it
-    /// comes out as geometry with nothing to complain about. A field renamed
-    /// in Rust without the files being brought along fails here rather than as
-    /// a weapon that is invisible in somebody's hands.
+    /// The format has no schema version and no migration chain — the trade for
+    /// being text a mapper can read — so this is what keeps a shipped prop
+    /// honest: open it, replay it, insist it comes out as geometry. A field
+    /// renamed without the files brought along fails here rather than as a
+    /// weapon invisible in somebody's hands.
     ///
-    /// `read_dir` rather than a list of names, deliberately: a list is a
-    /// second description of the directory, and the one that would be
-    /// forgotten. The rule against enumerating a directory is about the
-    /// *runtime*, which has to work behind a `fetch`; a test runs on a machine
-    /// with the repo on it.
+    /// `read_dir` rather than a list of names, which would be a second
+    /// description of the directory. The no-enumeration rule is about the
+    /// *runtime*, which has to work behind a `fetch`.
     #[test]
     fn every_prop_the_default_pack_ships_loads_and_builds() {
         let directory = std::path::Path::new("assets/default").join(PROPS_DIR);
         let Ok(entries) = std::fs::read_dir(&directory) else {
-            // A pack with no props is an ordinary pack, and this test running
-            // from somewhere other than the repo root is not a prop being
-            // broken.
+            // Running from somewhere other than the repo root is not a prop
+            // being broken.
             return;
         };
 
@@ -695,19 +632,15 @@ mod tests {
         assert!(checked > 0, "{} has no props in it", directory.display());
     }
 
-    /// Reading the document must not make the viewport think it has moved on.
-    ///
-    /// The generation is what the rebuild is keyed on, so a reader that
-    /// bumped it would re-run the boolean kernel every frame — which is
-    /// exactly what an inspector drawn against `doc_mut` did, and it showed up
-    /// as the unsaved-work marker appearing from merely selecting something
-    /// rather than as anything obviously wrong.
+    /// The generation is what the rebuild is keyed on, so a reader that bumped
+    /// it would re-run the kernel every frame. An inspector drawn against
+    /// `doc_mut` did exactly that, and it showed as the unsaved-work marker
+    /// appearing from merely selecting something.
     #[test]
     fn looking_at_the_document_does_not_change_it() {
         let mut editor = PropEditor::default();
         editor.edit(|doc| doc.push(FeatureOp::default()));
-        // Saved first, so "dirty" below means *reading* made it dirty rather
-        // than the push that set the scene up.
+        // Saved first, so "dirty" below means reading made it so.
         editor.mark_saved(PathBuf::from("somewhere.gpp"));
         let generation = editor.generation();
 

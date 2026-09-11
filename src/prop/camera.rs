@@ -1,32 +1,20 @@
 //! Getting around a prop in the editor's four viewports.
 //!
-//! The viewports themselves are the map editor's — reusing them is the whole
-//! reason the prop editor can be a mode rather than a second program — but
-//! **how you move in them is not the same job**, and pretending otherwise is
-//! what this module exists to avoid:
+//! The gesture is the map editor's — **right button drags, the modifier key
+//! turns a rotate into a pan** — but three things differ, because a prop is
+//! not a map:
 //!
-//! - A map editor's perspective view is a **free-look camera you fly**: there
-//!   is no centre to a map, so turning in place and walking is the only thing
-//!   that could be meant. A prop *is* a centre, and the thing you want a
-//!   hundred times an hour is to see the other side of it. So the perspective
-//!   view **orbits a pivot** rather than turning in place.
-//! - Zooming is **multiplicative**, not a fixed step. A map's step is metres
-//!   and a prop's is millimetres, and an additive step tuned for one is either
-//!   imperceptible or catastrophic in the other. A constant ratio per notch
-//!   feels the same at any magnitude, which is the only thing that can be true
-//!   of both a receiver and a whole weapon.
-//! - **The scroll wheel needs no button held.** In the map editor it is read
-//!   only while the right button is down, because the same wheel drives other
-//!   things. Here it is the only thing a wheel could mean.
+//! - **The perspective view orbits a pivot** rather than turning in place.
+//!   There is no centre to a map, so free-look is the only thing flying one
+//!   could mean; a prop *is* a centre.
+//! - **Zoom is multiplicative.** A map's step is metres and a prop's is
+//!   millimetres; an additive step tuned for one is imperceptible or
+//!   catastrophic in the other.
+//! - **The wheel needs no button held.** In the map editor the same wheel
+//!   drives other things; here it cannot mean anything else.
 //!
-//! What *is* the same is the gesture: **right button drags**, and the modifier
-//! key turns a rotate into a pan. A mapper who has learnt one view has learnt
-//! the other, which matters more than any of the above.
-//!
-//! `Numpad0` puts the view under the cursor back where framing would have put
-//! it. Under the cursor rather than all four, because the reason to reach for
-//! it is that *one* view has been dragged somewhere useless — resetting the
-//! other three as collateral would cost more than it saved.
+//! `Numpad0` resets the view **under the cursor** — the reason to reach for it
+//! is that one view has been dragged somewhere useless.
 
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
@@ -47,60 +35,49 @@ const EMPTY_RADIUS: f32 = 0.25;
 /// Radians of orbit per pixel dragged.
 const ORBIT_RATE: f32 = 0.006;
 
-/// Metres panned per pixel, **per metre of distance to the pivot**. Scaled by
-/// distance so a drag moves the prop the same distance across the screen
-/// whether you are looking at the whole weapon or at one screw.
+/// Metres panned per pixel, per metre of distance to the pivot — so a drag
+/// moves the prop the same distance across the screen at any zoom.
 const PAN_RATE: f32 = 0.0016;
 
-/// How far one notch of the wheel zooms, as a ratio. A fifteenth is about
-/// seven percent a notch: fine enough to creep up on a fit, coarse enough that
-/// half a turn of the wheel crosses the whole range.
+/// How far one notch zooms, as a ratio: about seven percent, fine enough to
+/// creep up on a fit and coarse enough to cross the range in half a turn.
 const ZOOM_PER_NOTCH: f32 = 1.0 / 15.0;
 
-/// A trackpad reports in pixels and a wheel in lines, and a pixel is worth a
-/// great deal less than a line. Without this a trackpad flick would cross the
-/// entire zoom range in one gesture.
+/// A trackpad reports pixels and a wheel lines. Without this a trackpad flick
+/// crosses the whole zoom range in one gesture.
 const PIXELS_PER_NOTCH: f32 = 40.0;
 
-/// How close and how far the perspective camera may get to its pivot.
-///
-/// The near end is inside a rifle's receiver, which is as close as anybody
-/// needs; the far end is the width of a room, which is as far as a prop is
-/// ever worth looking at from.
+/// How close and how far the perspective camera may get to its pivot: inside a
+/// receiver at one end, across a room at the other.
 const DISTANCE_RANGE: std::ops::RangeInclusive<f32> = 0.02..=40.0;
 
-/// World units per pixel in the orthographic views. The low end is a tenth of
-/// a millimetre across a viewport, which is finer than anything anybody will
-/// model; the high end is a few metres.
+/// World units per pixel in the orthographic views: a tenth of a millimetre
+/// across a viewport at one end, a few metres at the other.
 const ORTHO_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.000_02..=0.05;
 
-/// Stops the view flipping over at the poles, where "up" stops being a
-/// direction and `look_at` has nothing to keep the horizon level with.
+/// Short of the poles, where "up" stops being a direction and `look_at` has
+/// nothing to keep the horizon level with.
 const MAX_ORBIT_PITCH: f32 = 1.54;
 
-/// Where the editor's cameras were before the prop editor moved them.
-///
-/// A resource rather than a component on each camera, because it is *one*
-/// question — "has this been saved yet" — and a per-camera answer could come
-/// back half yes.
+/// Where the editor's cameras were before the prop editor moved them. One
+/// resource rather than a component each: "has this been saved yet" is one
+/// question, and a per-camera answer could come back half yes.
 #[derive(Resource, Default)]
 pub struct MapViewpoints(Vec<(Entity, Transform, Projection)>);
 
 /// What the perspective view turns around.
 ///
-/// Held rather than derived from the prop's bounds each frame, because panning
-/// moves it: a pivot recomputed from the geometry would snap the view back to
-/// the middle of the prop the instant you tried to look at a corner of it.
+/// Held rather than recomputed from the bounds each frame, because panning
+/// moves it — otherwise the view snaps back to the middle of the prop the
+/// instant you try to look at a corner.
 #[derive(Resource, Default)]
 pub struct OrbitPivot(pub Vec3);
 
-/// Asked for by the panel's *Frame* button, and by anything else that wants
-/// the prop centred again.
+/// Asked for by the panel's *Frame* button.
 ///
-/// A message rather than a function the panel calls, because framing needs
-/// every camera's `Transform`, `Projection` and viewport, and the panel system
-/// is already carrying most of the editor's resources. This keeps the camera
-/// work in the module that owns the cameras.
+/// A message rather than a function the panel calls: framing needs every
+/// camera's `Transform`, `Projection` and viewport, and the panel system is
+/// already carrying most of the editor's resources.
 #[derive(Message, Default)]
 pub struct FrameTheProp;
 
@@ -112,9 +89,7 @@ impl Plugin for PropCameraPlugin {
             .init_resource::<OrbitPivot>()
             .add_message::<FrameTheProp>()
             // After the scene is built, because framing reads the prop's
-            // bounds: on the way in the last build belongs to a previous visit
-            // or to no visit at all, and framing on stale bounds puts the
-            // cameras somewhere plausible and wrong.
+            // bounds — stale ones put the cameras somewhere plausible and wrong.
             .add_systems(
                 OnEnter(AppMode::Prop),
                 frame_on_entering.after(PropSceneSystems::Build),
@@ -137,11 +112,8 @@ fn subject(bounds: Option<(Vec3, Vec3)>) -> (Vec3, f32) {
     }
 }
 
-/// Put one camera where framing says it belongs.
-///
-/// One camera rather than four, so that `Numpad0` on a single view and framing
-/// all of them are the same code. Two views that disagreed about what "framed"
-/// means would be two views you could not compare.
+/// Put one camera where framing says it belongs — one camera, so `Numpad0` and
+/// framing all four are the same code and cannot disagree about what it means.
 fn frame_one(
     transform: &mut Transform,
     projection: &mut Projection,
@@ -153,8 +125,7 @@ fn frame_one(
     let distance = (radius * FRAMING_MARGIN * 2.0).max(*DISTANCE_RANGE.start());
 
     let (offset, up) = match multicam.axis {
-        // The free camera comes in over the shoulder rather than square on, so
-        // a box reads as a box in the one view that could show it as a square.
+        // Over the shoulder rather than square on, so a box reads as a box.
         CameraAxis::None => (Vec3::new(-0.6, 0.5, 1.0).normalize(), Vec3::Y),
         CameraAxis::X => (Vec3::X, Vec3::Y),
         CameraAxis::Y => (Vec3::Y, Vec3::NEG_Z),
@@ -162,10 +133,8 @@ fn frame_one(
     };
     *transform = Transform::from_translation(centre + offset * distance).looking_at(centre, up);
 
-    // An orthographic scale is world units per pixel, so how much of the prop
-    // fits depends on how many pixels the viewport got. Reading it off the
-    // camera is what makes framing mean the same thing in a maximised window
-    // and in a narrow one.
+    // Orthographic scale is world units per pixel, so how much fits depends on
+    // the viewport's width — read off the camera rather than assumed.
     if let Projection::Orthographic(ortho) = projection {
         let across = camera
             .viewport
@@ -176,9 +145,8 @@ fn frame_one(
             *ORTHO_SCALE_RANGE.start(),
             *ORTHO_SCALE_RANGE.end(),
         );
-        // Behind the camera as well as in front: an orthographic view placed a
-        // short distance from a prop would otherwise clip the near half of it
-        // away, and the whole point of the side views is to see the silhouette.
+        // Behind the camera as well as in front, or a side view clips away the
+        // near half of the silhouette it exists to show.
         ortho.near = -1000.0;
     }
 }
@@ -198,11 +166,8 @@ fn frame_all(
     }
 }
 
-/// Save a camera's viewpoint the first time the prop editor touches it.
-///
-/// Only the first time: a second save would record where *we* put it, and
-/// leaving the mode would then put the map editor's camera back to where the
-/// prop editor had it.
+/// Save a camera's viewpoint the first time the prop editor touches it — a
+/// second save would record where *we* put it.
 fn remember(saved: &mut MapViewpoints, entity: Entity, transform: &Transform, projection: &Projection) {
     if !saved.0.iter().any(|(known, _, _)| *known == entity) {
         saved.0.push((entity, *transform, projection.clone()));
@@ -231,13 +196,8 @@ fn frame_on_request(
     frame_all(&mut cameras, &mut saved, &mut pivot, build.evaluated.bounds());
 }
 
-/// `Numpad0` puts the view under the cursor back to its default.
-///
-/// **Under the cursor, and nowhere else.** The reason to reach for this is
-/// that one view has been dragged somewhere useless; resetting the other three
-/// as collateral would cost more than it saved. With the cursor over no
-/// viewport at all it does nothing, which is the honest answer to "reset
-/// which one?".
+/// `Numpad0` resets the view under the cursor, and nowhere else. Over no
+/// viewport it does nothing, which is the honest answer to "reset which one?".
 fn reset_the_hovered_view(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<CurrentMouseInput>,
@@ -260,8 +220,8 @@ fn reset_the_hovered_view(
     let (centre, radius) = subject(build.evaluated.bounds());
     remember(&mut saved, entity, &transform, &projection);
     frame_one(&mut transform, &mut projection, camera, multicam, centre, radius);
-    // The pivot is shared, and a reset is the clearest statement anybody makes
-    // about what they are looking at.
+    // A reset is the clearest statement anybody makes about what they are
+    // looking at.
     pivot.0 = centre;
 }
 
@@ -277,10 +237,9 @@ fn navigate(
 ) {
     let dragging = mouse.started_in_camera.filter(|_| mouse.pressed == Some(MouseButton::Right));
 
-    // Held still and hidden for the length of a drag, so a long orbit does not
-    // run the pointer off the edge of the screen and stop. Released the moment
-    // the button is, rather than on some later event, because a cursor nobody
-    // can see is the one failure a user cannot work around.
+    // Held still for the length of a drag, so a long orbit does not run the
+    // pointer off the screen. Released the moment the button is: a cursor
+    // nobody can see is the one failure a user cannot work around.
     let (grab, visible) = match dragging {
         Some(_) => (CursorGrabMode::Locked, false),
         None => (CursorGrabMode::None, true),
@@ -290,11 +249,9 @@ fn navigate(
         cursor.visible = visible;
     }
 
-    // The wheel acts on whatever the pointer is over, with no button held: in
-    // the map editor the same wheel drives other things, and here it cannot
-    // mean anything else. Read once and applied to one camera, because a
-    // `MessageReader` has its own cursor and reading it per camera would give
-    // the first camera every notch and the rest none.
+    // Read once and applied to one camera: a `MessageReader` has its own
+    // cursor, so reading it per camera would give the first every notch and the
+    // rest none.
     let notches: f32 = scrolls
         .read()
         .map(|scroll| match scroll.unit {
@@ -336,20 +293,15 @@ fn navigate(
 }
 
 /// How much a number of notches multiplies a distance or a scale by.
-///
-/// Multiplicative rather than a fixed step: a constant ratio per notch feels
-/// the same whether you are looking at a whole weapon or at one screw, and an
-/// additive step cannot be true of both.
 fn ratio(notches: f32) -> f32 {
     (1.0 + ZOOM_PER_NOTCH).powf(-notches)
 }
 
 /// Swing the camera around the pivot, keeping its distance.
 ///
-/// Spherical coordinates rather than composed rotations, because the thing
-/// that must not happen is drift: a camera turned by accumulating quaternions
-/// slowly picks up roll, and a horizon that is a degree off after ten minutes
-/// of looking at a model is worse than one that is obviously wrong.
+/// Spherical coordinates rather than composed rotations: accumulating
+/// quaternions picks up roll, and a horizon a degree off after ten minutes is
+/// worse than one obviously wrong.
 fn orbit(transform: &mut Transform, pivot: Vec3, drag: Vec2) {
     let offset = transform.translation - pivot;
     let radius = offset.length();
@@ -357,10 +309,9 @@ fn orbit(transform: &mut Transform, pivot: Vec3, drag: Vec2) {
         return;
     }
 
-    // Dragging right swings the camera left, so the prop turns the way the
-    // hand does — and dragging down lifts the camera, so you end up looking
-    // further *down* on it, which is the direction the map editor's free-look
-    // moves the view for the same drag.
+    // Dragging right swings the camera left, so the prop turns the way the hand
+    // does; dragging down lifts it, which is where the map editor's free-look
+    // sends the view for the same drag.
     let yaw = offset.x.atan2(offset.z) - drag.x * ORBIT_RATE;
     let pitch = ((offset.y / radius).clamp(-1.0, 1.0).asin() + drag.y * ORBIT_RATE)
         .clamp(-MAX_ORBIT_PITCH, MAX_ORBIT_PITCH);
@@ -374,11 +325,8 @@ fn orbit(transform: &mut Transform, pivot: Vec3, drag: Vec2) {
     transform.look_at(pivot, Vec3::Y);
 }
 
-/// Slide the camera sideways, taking the pivot with it.
-///
-/// **With it**, which is the whole of what makes panning useful: leave the
-/// pivot behind and the next orbit swings around a point that is no longer
-/// anywhere near what you are looking at.
+/// Slide the camera sideways, **taking the pivot with it** — left behind, the
+/// next orbit swings around a point no longer anywhere near what is on screen.
 fn pan_perspective(transform: &mut Transform, pivot: &mut OrbitPivot, drag: Vec2) {
     let distance = (transform.translation - pivot.0).length().max(0.01);
     let local_x = transform.local_x();
@@ -389,11 +337,9 @@ fn pan_perspective(transform: &mut Transform, pivot: &mut OrbitPivot, drag: Vec2
     pivot.0 += movement;
 }
 
-/// Move the camera along the line to the pivot.
-///
-/// Dolly rather than a field-of-view change, and clamped short of the pivot:
-/// zoom that could reach zero is zoom you cannot come back out of, because
-/// every further notch multiplies nothing by something.
+/// Move the camera along the line to the pivot. Clamped short of it: zoom that
+/// could reach zero cannot be come back out of, since every further notch
+/// multiplies nothing by something.
 fn dolly(transform: &mut Transform, pivot: Vec3, notches: f32) {
     if notches == 0.0 {
         return;
@@ -422,12 +368,9 @@ fn restore_viewpoints(
     }
 }
 
-/// Hand the pointer back on the way out, in case the mode was left mid-drag.
-///
-/// A grabbed cursor is not something a user can get out of by clicking
-/// elsewhere — the same reason the pause menu exists — so releasing it is not
-/// tidiness, it is the difference between leaving the mode and killing the
-/// process.
+/// Hand the pointer back in case the mode was left mid-drag. A grabbed cursor
+/// cannot be escaped by clicking elsewhere, which is the difference between
+/// leaving the mode and killing the process.
 fn let_go_of_the_cursor(mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>) {
     cursor.grab_mode = CursorGrabMode::None;
     cursor.visible = true;
@@ -437,10 +380,8 @@ fn let_go_of_the_cursor(mut cursor: Single<&mut CursorOptions, With<PrimaryWindo
 mod tests {
     use super::*;
 
-    /// The two properties an orbit must have, and the two that are easy to
-    /// lose: the camera stays the same distance away, and it keeps looking at
-    /// what it is turning around. A composed-rotation implementation drifts on
-    /// both.
+    /// The two an orbit is easy to lose: it stays the same distance away, and
+    /// keeps looking at what it turns around.
     #[test]
     fn orbiting_keeps_its_distance_and_its_aim() {
         let pivot = Vec3::new(0.2, -0.1, 0.4);
@@ -464,9 +405,7 @@ mod tests {
         );
     }
 
-    /// At the poles "up" is not a direction and `look_at` has nothing to keep
-    /// the horizon level with, so the view rolls over. Dragging past the top
-    /// has to stop rather than flip.
+    /// At the poles the view rolls over, so dragging past the top has to stop.
     #[test]
     fn orbiting_cannot_be_dragged_over_the_top() {
         let pivot = Vec3::ZERO;
@@ -482,10 +421,8 @@ mod tests {
         assert!(transform.up().y > 0.0, "the view rolled over");
     }
 
-    /// Zoom is a ratio, so two notches one way and two back is where you
-    /// started — at any magnitude. An additive step passes this and still
-    /// feels wrong at one end of the range, which is why the ratio is the
-    /// thing being asserted.
+    /// Zoom is a ratio, so out and back returns to the same place at any
+    /// magnitude.
     #[test]
     fn zooming_in_and_back_out_returns_to_the_same_distance() {
         for distance in [0.05_f32, 0.5, 5.0] {
@@ -506,8 +443,7 @@ mod tests {
         }
     }
 
-    /// Zoom that could reach the pivot is zoom you cannot come back out of:
-    /// every further notch multiplies nothing by something.
+    /// Reaching the pivot would be a zoom you cannot come back out of.
     #[test]
     fn zooming_all_the_way_in_still_leaves_somewhere_to_zoom_out_from() {
         let pivot = Vec3::ZERO;
@@ -524,8 +460,7 @@ mod tests {
         );
     }
 
-    /// Panning has to carry the pivot, or the next orbit swings around a point
-    /// that is no longer anywhere near what is on screen.
+    /// Panning has to carry the pivot with it.
     #[test]
     fn panning_takes_the_pivot_with_it() {
         let mut pivot = OrbitPivot(Vec3::ZERO);

@@ -1,42 +1,33 @@
 //! Showing a prop in the same viewports the map is edited in.
 //!
-//! The prop editor reuses the editor's four cameras rather than standing up
-//! its own, which is the whole reason it can exist as a mode rather than as a
-//! second program: a mapper already knows how to fly the freecam and read the
-//! three orthographic views, and a modelling tool that made them relearn it
-//! would be a modelling tool nobody opens.
-//!
-//! Three things have to happen at the boundary, and all three are reversible:
+//! Reusing the editor's four cameras is the whole reason this can be a mode
+//! rather than a second program. Three things happen at the boundary, all
+//! reversible:
 //!
 //! - **Everything that is not the prop is hidden, not unloaded.** A prop is
-//!   centimetres across and a map is tens of metres; leaving the map in would
-//!   put the prop inside a wall. Hiding is a `Visibility`, so coming back is
-//!   instant and nothing about the open blueprint is touched — which matters,
-//!   because opening the prop editor mid-map must not cost the map.
+//!   centimetres across and a map is tens of metres, so leaving the map in
+//!   puts the prop inside a wall. Hiding is a `Visibility`, so the open
+//!   blueprint is untouched.
 //!
-//!   **The rule asks what is *not* the prop scene**, rather than naming the
+//!   **The rule asks what is *not* the prop scene** rather than naming the
 //!   kinds of thing that might be in the way. Naming them was the first
-//!   attempt and it was wrong within one map: the animation grid's bodies
-//!   stand in the world rather than inside the grid feature — `OfGrid`
-//!   replaced `ChildOf` so they could be replicated — so a rule that hid
-//!   feature entities left sixty people standing around the weapon. Corpses,
-//!   projectiles, tracers and emitters are all loose in the same way, and each
-//!   would have had to be remembered. Asking about absence has no such list to
-//!   forget, and a new kind of loose entity is hidden the day it is written.
-//! - **The cameras are framed on the prop and put back afterwards.** Their
-//!   transforms and projections are saved on the way in. Framing without
-//!   saving would leave somebody's carefully placed viewpoint pointing at a
-//!   room's corner after a detour into a weapon file.
-//! - **The prop gets its own light.** The map's lights are feature entities,
-//!   so they went out with everything else, and a metal surface with nothing
-//!   to reflect is a black shape.
+//!   attempt and was wrong within one map: the animation grid's bodies stand
+//!   loose in the world (`OfGrid` replaced `ChildOf` so they could be
+//!   replicated), so hiding feature entities left sixty people standing around
+//!   the weapon. Corpses, projectiles and tracers are loose the same way.
+//! - **The cameras are framed on the prop and put back afterwards** — see
+//!   [`super::camera`].
+//! - **The prop gets its own light.** The map's lights are feature entities
+//!   and went out with everything else.
 //!
-//! The prop itself is rebuilt from the document whenever it changes, keyed on
-//! [`PropEditor::generation`] rather than on any component being `Changed`:
-//! evaluating a feature list is a boolean kernel doing real work, and doing it
-//! again because egui reported a hover would be felt.
+//! The prop is rebuilt on [`PropEditor::generation`] rather than on anything
+//! being `Changed`: evaluating is a boolean kernel doing real work, and doing
+//! it again because egui reported a hover would be felt.
+
+use core::time::Duration;
 
 use bevy::platform::collections::HashMap;
+use bevy::platform::time::Instant;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
@@ -45,13 +36,9 @@ use crate::prop::document::PropEditor;
 use crate::prop::feature::Evaluated;
 use crate::prop::surface::Surface;
 
-/// Standing the prop up, so anything that needs to read the built prop can be
-/// ordered after it.
-///
-/// A set rather than a list of names, for the reason `BakeSystems` is one: the
-/// camera lives in its own module and frames itself on the prop's bounds, so
-/// it needs the prop built first and must not have to name the systems that
-/// build it.
+/// Standing the prop up. A set rather than named systems, for the reason
+/// `BakeSystems` is one: the camera frames itself on the prop's bounds from
+/// another module, and must not have to name what builds them.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PropSceneSystems {
     Build,
@@ -61,12 +48,8 @@ pub enum PropSceneSystems {
 #[derive(Component)]
 pub struct PropStage;
 
-/// **On every root entity that belongs to the prop editor**, and the whole of
-/// what keeps it visible: the stage, the lights, the scale figure.
-///
-/// Anything spawned into this mode that a modeller is meant to see needs one,
-/// and the failure of forgetting is the obvious one — it is invisible
-/// immediately, rather than a map entity that is quietly still there.
+/// On every root entity the prop editor owns, and the whole of what keeps it
+/// visible. Forgetting one is obvious: it is invisible immediately.
 #[derive(Component)]
 pub struct PropScene;
 
@@ -76,11 +59,9 @@ struct PropStageLight;
 
 /// What was hidden on the way in, and what it was before.
 ///
-/// Put back rather than blanket-set to `Inherited` on the way out: plenty of
-/// things in this world are hidden on purpose — a spawn point's preview during
-/// a round, a body you are looking out of — and an exit that made everything
-/// visible would be an exit that broke them. Something already hidden when the
-/// mode opened is never recorded, so it is still hidden afterwards.
+/// Put back rather than blanket-set to `Inherited`: plenty here is hidden on
+/// purpose — a spawn point's preview during a round, the body you are looking
+/// out of — and an exit that made everything visible would break them.
 #[derive(Resource, Default)]
 struct HiddenForModelling(HashMap<Entity, Visibility>);
 
@@ -91,15 +72,37 @@ pub struct PropBuild {
     pub evaluated: Evaluated,
     /// The generation this was built from, so the rebuild knows it is stale.
     built: Option<u64>,
+    /// How long the last evaluation took, which is what decides whether the
+    /// next one waits.
+    cost: Duration,
+    /// The generation a deferred rebuild is waiting on, and since when.
+    waiting: Option<(u64, Duration)>,
 }
 
-/// Materials are cached per surface for the life of the process.
+impl PropBuild {
+    /// Whether the geometry on screen is behind the document. The panel says
+    /// so: a viewport that has stopped following a drag looks exactly like one
+    /// that has stopped working.
+    pub fn settling(&self) -> bool {
+        self.waiting.is_some()
+    }
+}
+
+/// How long an evaluation may take before the next one is made to wait. Half a
+/// frame at 60 Hz; under it, rebuilding per frame costs nothing anybody sees.
+const REBUILD_BUDGET: Duration = Duration::from_millis(8);
+
+/// How quiet the document has to go before an expensive prop is rebuilt.
 ///
-/// A drag on a radius rebuilds the prop every frame; minting a material per
-/// rebuild would fill `Assets<StandardMaterial>` with a few thousand
-/// identical greys over an afternoon. Meshes are *not* cached, and do not need
-/// to be: they hang off the entities, so despawning the stage's children drops
-/// the last handle and the asset with it.
+/// Short enough to feel like a pause at the end of a drag rather than a delay,
+/// long enough that a drag does not sneak a rebuild in between two frames of
+/// mouse movement.
+const REBUILD_DEBOUNCE: Duration = Duration::from_millis(120);
+
+/// Materials cached per surface for the life of the process: a drag rebuilds
+/// the prop every frame, and minting one per rebuild would fill
+/// `Assets<StandardMaterial>` with identical greys. Meshes need no cache —
+/// they hang off the entities, so despawning drops the last handle with them.
 #[derive(Resource, Default)]
 struct SurfaceMaterials(Vec<(Surface, Handle<StandardMaterial>)>);
 
@@ -148,15 +151,12 @@ impl Plugin for PropViewPlugin {
 
 /// Hide every root entity that is not part of the prop scene.
 ///
-/// **Roots only**, because `Visibility` inherits: hiding a body hides its
-/// bone meshes, and hiding a room hides its baked geometry. Walking children
-/// as well would be the same work several times over and would fight the
-/// systems that legitimately hide one part of a visible thing.
+/// **Roots only**, because `Visibility` inherits: hiding a body hides its bone
+/// meshes. Walking children too would fight the systems that legitimately hide
+/// one part of a visible thing.
 ///
 /// **`Without<Node>`**, because Bevy UI carries `Visibility` too and the
-/// viewport labels the four cameras are named by are UI. They are chrome
-/// rather than scene, and a modelling mode with unlabelled viewports is worse
-/// than one with them.
+/// viewport labels are UI — chrome rather than scene.
 fn set_the_world_aside(
     mut hidden: ResMut<HiddenForModelling>,
     mut entities: Query<
@@ -165,9 +165,9 @@ fn set_the_world_aside(
     >,
 ) {
     for (entity, mut visibility) in &mut entities {
+        // Already invisible, and not by us: leave it, and do not record it, so
+        // the way out does not turn it on.
         if *visibility == Visibility::Hidden {
-            // Already invisible, and not by us: leave it alone and — crucially
-            // — do not record it, so the way out does not turn it on.
             continue;
         }
         hidden.0.entry(entity).or_insert(*visibility);
@@ -181,9 +181,8 @@ fn put_the_world_back(
     mut entities: Query<&mut Visibility>,
 ) {
     for (entity, was) in hidden.0.drain() {
-        // A despawn while somebody was modelling is ordinary — a round can be
-        // running on a server the whole time — so a missing entity is not a
-        // problem, it is one fewer thing to restore.
+        // A despawn while somebody was modelling is ordinary: a round can be
+        // running on a server the whole time.
         if let Ok(mut visibility) = entities.get_mut(entity) {
             *visibility = was;
         }
@@ -191,10 +190,8 @@ fn put_the_world_back(
 }
 
 fn light_the_stage(mut commands: Commands) {
-    // Two lights and no shadows. A key light alone leaves the underside of a
-    // receiver as a silhouette, which is exactly the part somebody modelling
-    // it is trying to look at; shadows would be the map's problem rather than
-    // the prop's.
+    // Two, because a key light alone leaves the underside of a receiver as a
+    // silhouette — exactly the part somebody is trying to look at.
     commands.spawn((
         PropStageLight,
         PropScene,
@@ -218,8 +215,7 @@ fn clear_the_stage(
     for entity in stage.iter().chain(lights.iter()) {
         commands.entity(entity).despawn();
     }
-    // The next entry has to rebuild: the stage it would otherwise consider
-    // current has just been despawned.
+    // The stage it would otherwise consider current has just been despawned.
     build.built = None;
 }
 
@@ -227,17 +223,49 @@ fn clear_the_stage(
 fn rebuild_the_prop(
     mut commands: Commands,
     editor: Res<PropEditor>,
+    time: Res<Time>,
     mut build: ResMut<PropBuild>,
     mut materials: ResMut<SurfaceMaterials>,
     mut material_assets: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     stage: Query<Entity, With<PropStage>>,
 ) {
-    if build.built == Some(editor.generation()) && !stage.is_empty() {
+    let generation = editor.generation();
+    if build.built == Some(generation) && !stage.is_empty() {
+        build.waiting = None;
         return;
     }
-    build.built = Some(editor.generation());
+
+    // **An expensive prop settles; a cheap one keeps up**, decided by the last
+    // evaluation's own cost so there is nothing to tune per prop. Waiting
+    // unconditionally would make a three-box prop feel sticky for no reason.
+    //
+    // The gizmos draw from the *document*, not from this, so a handle keeps
+    // following the pointer while the geometry catches up — which is what
+    // makes the wait read as settling rather than as lag.
+    if build.cost > REBUILD_BUDGET && !stage.is_empty() {
+        let now = time.elapsed();
+        match build.waiting {
+            // Still moving: start the clock again from this change.
+            Some((waiting_for, _)) if waiting_for != generation => {
+                build.waiting = Some((generation, now));
+                return;
+            }
+            Some((_, since)) if now.saturating_sub(since) < REBUILD_DEBOUNCE => return,
+            None => {
+                build.waiting = Some((generation, now));
+                return;
+            }
+            _ => {}
+        }
+    }
+    build.waiting = None;
+
+    build.built = Some(generation);
+    // Bevy's `Instant`, not the standard library's, which panics on wasm.
+    let started = Instant::now();
     build.evaluated = editor.doc().evaluate();
+    build.cost = started.elapsed();
 
     for entity in &stage {
         commands.entity(entity).despawn();
@@ -267,11 +295,9 @@ fn rebuild_the_prop(
     });
 }
 
-/// The origin, the axes and a ruled floor.
-///
-/// A prop has no room around it to judge size against, so the grid *is* the
-/// ruler: ten-centimetre cells over a metre, which is the range everything a
-/// player holds lives in.
+/// The origin, the axes and a ruled floor. Ten-centimetre cells over a metre:
+/// a prop has no room around it to judge size against, so the grid is the
+/// ruler.
 fn draw_the_bench(mut gizmos: Gizmos, editor: Res<PropEditor>, build: Res<PropBuild>) {
     gizmos.grid(
         Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
@@ -283,9 +309,8 @@ fn draw_the_bench(mut gizmos: Gizmos, editor: Res<PropEditor>, build: Res<PropBu
     gizmos.line(Vec3::ZERO, Vec3::Y * 0.25, Color::srgb(0.3, 0.9, 0.3));
     gizmos.line(Vec3::ZERO, Vec3::Z * 0.25, Color::srgb(0.3, 0.5, 0.9));
 
-    // The selected feature's *body*, if it still has one. A feature that has
-    // been eaten by a later boolean has no body to outline, and drawing its
-    // ingredients would be showing geometry that is not in the prop.
+    // A feature eaten by a later boolean has no body to outline, and drawing
+    // its ingredients would show geometry that is not in the prop.
     let Some(selected) = editor.selected else { return };
     let Some((_, solid)) = build.evaluated.bodies.iter().find(|(id, _)| *id == selected) else {
         return;

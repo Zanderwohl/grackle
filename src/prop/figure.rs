@@ -1,28 +1,20 @@
 //! The body standing behind the prop, for scale.
 //!
-//! A weapon is modelled in metres and nothing in an empty viewport says how
-//! big a metre is. The grid helps; a person helps more, because the question
-//! being asked is never "how long is this" but "does this look right in
+//! Off by default: it is a ruler, not part of the prop. The question a
+//! modeller is asking is never "how long is this" but "does this look right in
 //! somebody's hands".
 //!
-//! **Off by default.** It is a ruler, not part of the prop, and a modeller who
-//! wants the silhouette on its own should get the silhouette on its own.
+//! **The figure holds the prop, rather than the prop sitting wherever a hand
+//! happens to be.** It is placed twice over — its right hand at the origin,
+//! and the whole body *turned* so the line between its hands runs down the
+//! prop's axis. Facing a fixed direction instead leaves the support hand out
+//! beside the weapon rather than on it. Its feet end up well below the grid,
+//! which is correct: the grid is a ruler around the prop, not a floor.
 //!
-//! **The figure holds the prop, rather than the prop being wherever a hand
-//! happens to be.** A prop is authored around its own origin, running along
-//! the axis it is drawn on — so the figure is placed twice over: its right
-//! hand is put at the origin, and it is *turned* so the line between its two
-//! hands runs down the prop's axis. Facing a fixed direction instead would
-//! leave the support hand out beside a weapon rather than on it, which is
-//! wrong in exactly the way that makes a reference figure useless. The body
-//! ends up with its feet well below the grid, which is correct: the grid is a
-//! ruler around the prop, not a floor the figure stands on.
-//!
-//! It is a rig with a [`Pose`] and deliberately **no `SkeletonAnimator`**: the
-//! pose is set once and nothing else may write it, the same rule a corpse
-//! follows. `BodyMeshPlugin` is ungated, so the ordinary drawing dresses it
-//! from the same cached meshes every other body of that build uses — a
-//! reference figure is not a second kind of body.
+//! A rig with a [`Pose`] and deliberately **no `SkeletonAnimator`** — the pose
+//! is set once and nothing else may write it, the rule a corpse follows. The
+//! ungated `BodyMeshPlugin` then dresses it from the same cached meshes as
+//! every other body of that build.
 
 use bevy::prelude::*;
 
@@ -33,50 +25,38 @@ use crate::game::body_mesh::BodyTint;
 
 /// Which class is standing there, if any.
 ///
-/// A resource rather than a field on the document: the figure is a fact about
-/// how somebody is *looking* at a prop, like which camera they are in, and
-/// writing it into the file would make a reviewer's diff show that somebody
-/// turned a ruler on.
+/// A resource rather than a field on the document: it is a fact about how
+/// somebody is *looking* at a prop, not about the prop.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ScaleFigure(pub Option<Class>);
 
-/// Marks the figure, so the one that is up can be found and replaced.
 #[derive(Component)]
 pub struct ScaleFigureMarker;
 
-/// Grey-green and unmistakably not the prop.
-///
-/// A team colour would be a lie — the figure has no side — and the default
-/// body colour would make it read as a body in a match rather than as a
-/// measuring stick.
+/// Grey-green and unmistakably not the prop. A team colour would be a lie —
+/// the figure has no side.
 const FIGURE_TINT: Color = Color::srgb(0.34, 0.40, 0.36);
 
-/// The axis a prop is modelled along, and so the direction the figure's grip
-/// is turned to lie down. The same `-Z` every rig in the game faces, which is
-/// what makes a weapon lined up against these hands lined up the way it will
-/// be held.
+/// The axis a prop is modelled along, and the direction the grip is turned to
+/// lie down. The same `-Z` every rig in the game faces.
 const FORWARD: Vec3 = Vec3::NEG_Z;
 
-/// Point a bone along a world direction, by writing the joint rotation that
-/// gets it there.
+/// Point a bone along a world direction.
 ///
-/// The alternative is working out each joint's local frame by hand and
-/// writing down a quaternion, which is both unreadable and the kind of thing
-/// that is wrong by a mirror on one side of the body. This asks the rig
-/// instead: pose everything decided so far, read where the bone currently
-/// points, and write the rotation that closes the gap.
+/// Asks the rig rather than working out each joint's local frame by hand: pose
+/// what is decided so far, read where the bone points, write the rotation that
+/// closes the gap. A hand-written quaternion is unreadable and tends to be
+/// wrong by a mirror on one side of the body.
 ///
 /// **Parents before children.** A bone's frame is its parent's, so aiming an
-/// upper arm after its forearm would swing the forearm along with it and
-/// leave it pointing somewhere nobody asked for.
+/// upper arm after its forearm swings the forearm along with it.
 fn aim(skeleton: &Skeleton, pose: &mut Pose, name: &'static str, direction: Vec3) {
     let Some(index) = skeleton.index_of(name) else {
         warn!("no bone called {name} to aim");
         return;
     };
-    // Cleared first so what is read back is the bone's *rest* orientation in
-    // the frame its parents have put it in, rather than wherever a previous
-    // call to this function left it.
+    // Cleared first, so what is read back is the bone's rest orientation in
+    // its parents' frame rather than wherever a previous call left it.
     pose.set(name, Quat::IDENTITY);
     let current = skeleton.posed_bones(pose, &Transform::IDENTITY)[index].rotation;
     let wanted = (current.inverse() * direction.normalize_or_zero()).normalize_or_zero();
@@ -86,36 +66,27 @@ fn aim(skeleton: &Skeleton, pose: &mut Pose, name: &'static str, direction: Vec3
     pose.set(name, Quat::from_rotation_arc(Vec3::Y, wanted));
 }
 
-/// Both hands on a weapon held out in front.
-///
-/// The right arm is the one that matters: the upper arm hangs down and the
-/// forearm points forward, which is the right angle at the elbow the pose is
-/// named for. The left arm reaches across to where the right hand is, so the
-/// figure reads as *holding* something rather than pointing at it — which is
-/// the only reason to have a figure at all.
+/// Both hands on a weapon held out in front: the right upper arm hangs down
+/// and its forearm points forward, and the left arm reaches across so the
+/// figure reads as *holding* something rather than pointing at it.
 pub fn holding_a_weapon(skeleton: &Skeleton) -> Pose {
     let mut pose = Pose::rest();
 
-    // The torso turns before either arm moves, and it is what makes the pose
-    // possible rather than only what makes it look right. This rig's arms are
-    // short — about 0.55 m from shoulder to fingertip on a 1.85 m body — so
-    // with the chest square on, the support hand cannot reach a weapon held
-    // anywhere near the other hand. Turning the left shoulder forward is what
-    // a person actually does with a two-handed weapon, and it buys most of the
-    // reach back. About local `+Y`, which runs up the bone, so this is a twist
-    // rather than a lean; negative brings the left shoulder round to the front.
+    // The torso turns first, and it is what makes the pose *possible* rather
+    // than only what makes it look right: this rig's arms are short (about
+    // 0.55 m shoulder to fingertip on a 1.85 m body), so with the chest square
+    // on the support hand cannot reach. About local `+Y`, which runs up the
+    // bone, so this is a twist; negative brings the left shoulder forward.
     pose.set(bone::CHEST, Quat::from_rotation_y(-0.40));
 
-    // Down, and a little forward — an upper arm hanging dead straight reads as
-    // a body standing to attention with a rifle taped to its wrist.
+    // Down and a little forward: hanging dead straight reads as a body
+    // standing to attention with a rifle taped to its wrist.
     aim(skeleton, &mut pose, bone::UPPER_ARM_R, Vec3::new(-0.30, -0.91, -0.28));
-    // Forward, and very slightly inward: a weapon is held on the centreline,
-    // not out at shoulder width.
+    // Forward and slightly inward: a weapon is held on the centreline.
     aim(skeleton, &mut pose, bone::FOREARM_R, Vec3::new(-0.10, 0.26, -0.96));
     aim(skeleton, &mut pose, bone::HAND_R, Vec3::new(-0.08, 0.20, -0.98));
 
-    // The support hand comes further across, because it is reaching past the
-    // centreline to a foregrip rather than meeting in the middle.
+    // Further across: reaching past the centreline to a foregrip.
     aim(skeleton, &mut pose, bone::UPPER_ARM_L, Vec3::new(0.42, -0.66, -0.62));
     aim(skeleton, &mut pose, bone::FOREARM_L, Vec3::new(0.52, 0.10, -0.85));
     aim(skeleton, &mut pose, bone::HAND_L, Vec3::new(0.42, 0.06, -0.90));
@@ -123,19 +94,14 @@ pub fn holding_a_weapon(skeleton: &Skeleton) -> Pose {
     pose
 }
 
-/// Where to stand the figure, and which way to turn it.
+/// Where to stand the figure, and which way to turn it — one decision, so one
+/// function:
 ///
-/// Two things at once, because they are one decision:
-///
-/// - **The right hand goes to the origin.** Its *centre* rather than the
-///   wrist: a grip is held in the middle of a palm, so measuring from the
-///   wrist would leave every weapon sitting an inch too far forward in the
-///   hand.
-/// - **The body turns so the hands lie along the prop's axis.** A person
-///   holding a two-handed weapon stands at an angle to it; a figure facing a
-///   fixed direction would put the support hand out beside the weapon instead
-///   of on it. Taking the angle from the pose rather than writing one down
-///   means retuning the pose cannot silently stop the hands lining up.
+/// - **The right hand goes to the origin**, its *centre* rather than the
+///   wrist, since a grip is held in the middle of a palm.
+/// - **The body turns so the hands lie along the prop's axis.** Taken from the
+///   pose rather than written down, so retuning the pose cannot silently stop
+///   the hands lining up.
 pub fn place(skeleton: &Skeleton, pose: &Pose) -> Transform {
     let bones = skeleton.posed_bones(pose, &Transform::IDENTITY);
     let centre = |name: &str| {
@@ -150,17 +116,16 @@ pub fn place(skeleton: &Skeleton, pose: &Pose) -> Transform {
     };
 
     // Flattened onto the ground plane: the hands are at slightly different
-    // heights and tipping the whole body to make up the difference would put
-    // its feet in the air.
+    // heights, and tipping the body to match would put its feet in the air.
     let along = centre(bone::HAND_L)
         .map(|support| (support - grip) * Vec3::new(1.0, 0.0, 1.0))
         .filter(|along| along.length_squared() > 1e-6)
         .map(Vec3::normalize);
 
     let rotation = match along {
-        // Both vectors lie in the ground plane, so the arc between them is a
-        // turn about `Y` — a heading, which is the only part of a body's
-        // orientation that is anybody's to choose.
+        // Both lie in the ground plane, so the arc between them is a turn about
+        // `Y` — a heading, which is the only part of a body's orientation
+        // anybody chooses.
         Some(along) => Quat::from_rotation_arc(along, FORWARD),
         None => Quat::IDENTITY,
     };
@@ -168,13 +133,11 @@ pub fn place(skeleton: &Skeleton, pose: &Pose) -> Transform {
     Transform::from_translation(-(rotation * grip)).with_rotation(rotation)
 }
 
-/// Put the chosen figure up, take the old one down, and do nothing at all when
-/// the choice has not moved.
+/// Put the chosen figure up and take the old one down.
 ///
-/// Keyed on the resource having changed rather than on comparing the figure in
-/// the world with the one asked for: rebuilding a rig re-inserts a `Skeleton`,
-/// which reads as a changed one and throws the body's meshes away — the same
-/// trap a feature standing up a body falls into.
+/// Keyed on the choice having changed: re-inserting a `Skeleton` reads as a
+/// changed one and throws the body's meshes away — the same trap a feature
+/// standing up a body falls into.
 pub fn refresh_the_figure(
     mut commands: Commands,
     choice: Res<ScaleFigure>,
@@ -208,8 +171,7 @@ pub fn refresh_the_figure(
     ));
 }
 
-/// Take the figure down on the way out of the mode, so it cannot be left
-/// standing in the middle of somebody's map.
+/// Take the figure down on the way out, so it is not left standing in a map.
 pub fn clear_the_figure(
     mut commands: Commands,
     existing: Query<Entity, With<ScaleFigureMarker>>,
@@ -218,8 +180,7 @@ pub fn clear_the_figure(
     for entity in &existing {
         commands.entity(entity).despawn();
     }
-    // Forgotten rather than remembered, so re-entering the mode builds it
-    // again instead of deciding nothing has changed.
+    // Forgotten, so re-entering rebuilds rather than deciding nothing changed.
     *last = None;
 }
 
@@ -237,9 +198,8 @@ mod tests {
         (bone.tail - bone.head).normalize()
     }
 
-    /// `aim` is the whole reason the pose is readable, so it is worth pinning
-    /// on its own: a bone asked to point somewhere points there, on either
-    /// side of a body whose rest rotations are mirrored.
+    /// A bone asked to point somewhere points there, on either side of a body
+    /// whose rest rotations are mirrored.
     #[test]
     fn aiming_a_bone_points_it_where_it_was_asked_to() {
         let skeleton = rig();
@@ -256,8 +216,8 @@ mod tests {
         }
     }
 
-    /// The pose the user asked for, measured rather than eyeballed: the elbow
-    /// is a right angle and the forearm points the way the body faces.
+    /// Measured rather than eyeballed: the elbow is a right angle and the
+    /// forearm points the way the body faces.
     #[test]
     fn the_right_elbow_is_bent_a_right_angle_forwards() {
         let skeleton = rig();
@@ -275,11 +235,9 @@ mod tests {
         assert!(upper.y < -0.8, "the right upper arm is not hanging down: {upper}");
     }
 
-    /// The support hand has to be **forward** of the trigger hand, not merely
-    /// somewhere else: hands side by side read as praying, and hands a
-    /// shoulder-width apart across the body read as carrying a tray. The
-    /// torso twist is what buys the reach, so this is also what fails if
-    /// somebody takes it out for looking unnecessary.
+    /// The support hand has to be **forward** of the trigger hand: side by
+    /// side reads as praying, shoulder-width apart as carrying a tray. The
+    /// torso twist buys that reach, so this is what fails if it is removed.
     #[test]
     fn the_support_hand_reaches_forward_along_the_weapon() {
         let skeleton = rig();
@@ -305,10 +263,8 @@ mod tests {
         assert!(left.z < -0.1 && right.z < -0.1, "the hands are not out in front");
     }
 
-    /// Both halves of the placement, which is the contract a modeller relies
-    /// on: the prop is gripped at the origin and lies along the axis it was
-    /// drawn on. A figure turned to face a fixed direction instead would put
-    /// the support hand out beside the weapon rather than on it.
+    /// The contract a modeller relies on: the prop is gripped at the origin
+    /// and lies along the axis it was drawn on.
     #[test]
     fn the_figure_grips_the_origin_and_lines_up_with_the_prop() {
         let skeleton = rig();
@@ -330,10 +286,8 @@ mod tests {
         );
     }
 
-    /// On **every** class, because a build is nine numbers and the pose is
-    /// angles: a Heavy's arms are not a Scout's, and a placement worked out
-    /// for one that quietly missed on another would be a prop that sits in the
-    /// air for half the roster.
+    /// On **every** class: a build is nine numbers and the pose is angles, so
+    /// a placement tuned on one could quietly miss on another.
     #[test]
     fn every_class_grips_the_origin() {
         for class in [
@@ -357,8 +311,6 @@ mod tests {
     }
 
     /// A figure standing at the origin would have its feet where the prop is.
-    /// The offset is what puts the body below its own hand, and it is a real
-    /// distance rather than a rounding error.
     #[test]
     fn the_figure_stands_below_its_own_hand() {
         let skeleton = rig();

@@ -1,33 +1,24 @@
 //! Writing an `f32` to a file the way somebody typed it.
 //!
-//! A prop file is text on purpose — reviewable in a diff, editable by hand —
-//! and that only pays off if the numbers in it are the numbers a mapper
-//! entered. Serde widens an `f32` to the `f64` TOML stores, and the widening
-//! is exact rather than helpful: `0.05f32` goes in and
-//! `0.05000000074505806` comes out. A file full of those is technically
-//! diffable and practically not.
+//! Serde widens an `f32` to the `f64` TOML stores, and the widening is exact
+//! rather than helpful: `0.05f32` comes out as `0.05000000074505806`. A file
+//! full of those is technically diffable and practically not.
 //!
-//! So a value is widened through its own shortest decimal form instead.
-//! `format!("{}", 0.05f32)` is `"0.05"` because Rust prints the shortest
-//! decimal that reads back as the same `f32`; parsing that as an `f64` and
-//! storing it means the file says `0.05`, and reading it back and narrowing
-//! gives exactly the bits that were written. Nothing is rounded away — the
-//! round trip is lossless by construction, which is what
-//! `every_f32_survives_being_written_nicely` pins.
+//! So a value is widened through its own shortest decimal instead. Rust prints
+//! the shortest decimal that reads back as the same `f32`, so parsing that as
+//! an `f64` is lossless by construction —
+//! `every_f32_survives_being_written_nicely` pins it.
 //!
-//! Used through `#[serde(with = ...)]` on the fields a mapper actually types,
-//! which is all of them in [`super::profile`], [`super::solid`] and
-//! [`super::surface`]. Applying it by hand rather than to every float in the
-//! crate keeps it where the argument for it holds: a file somebody reads.
+//! Applied by hand through `#[serde(with = ...)]` rather than to every float
+//! in the crate, which keeps it where the argument holds: a file somebody
+//! reads.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The shortest decimal that reads back as this exact `f32`.
 fn widen(value: f32) -> f64 {
-    // Infinities and NaN have no decimal form to shorten; they cannot be
-    // written to TOML either, so the plain widening is as good an answer as
-    // there is and the failure stays serde's rather than becoming a panic
-    // here.
+    // Infinities and NaN have no decimal form to shorten, and cannot be written
+    // to TOML either — so the failure stays serde's rather than a panic here.
     format!("{value}").parse().unwrap_or(value as f64)
 }
 
@@ -55,11 +46,9 @@ pub mod array {
         value.map(widen).serialize(serializer)
     }
 
-    /// Through a `Vec`, because serde writes its array impls out one length
-    /// at a time rather than over a const generic, so `[f64; N]` for a generic
-    /// `N` is not a thing that deserialises. The length check is what an array
-    /// impl would have done anyway, and it is the error a hand-edited file
-    /// with two numbers where three belong deserves.
+    /// Through a `Vec`, because serde writes its array impls out one length at
+    /// a time rather than over a const generic. The length check is what an
+    /// array impl would have done, and what a hand-edited file deserves.
     pub fn deserialize<'de, D: Deserializer<'de>, const N: usize>(
         deserializer: D,
     ) -> Result<[f32; N], D::Error> {
@@ -94,10 +83,9 @@ pub mod pairs {
 mod tests {
     use super::*;
 
-    /// The claim the whole module rests on: shortening is a *presentation*
-    /// change and never a numeric one. If this ever fails, a prop reopens
-    /// very slightly the wrong shape, which is the kind of drift nobody
-    /// notices until two parts stop meeting.
+    /// Shortening is a *presentation* change and never a numeric one. If this
+    /// fails, a prop reopens very slightly the wrong shape — the kind of drift
+    /// nobody notices until two parts stop meeting.
     #[test]
     fn every_f32_survives_being_written_nicely() {
         let awkward = [
@@ -113,7 +101,7 @@ mod tests {
         }
     }
 
-    /// The point of it, stated as the thing a reviewer would see.
+    /// What a reviewer actually sees.
     #[test]
     fn a_typed_number_is_written_as_it_was_typed() {
         assert_eq!(widen(0.05), 0.05f64);
