@@ -399,7 +399,7 @@ paint = "Paint"
 [prop.inspector]
 nothing = "Select a feature."
 name = "Name"
-suppressed = "Suppressed"
+active = "Active"
 shape = "Shape"
 profile = "Profile"
 size = "Size"

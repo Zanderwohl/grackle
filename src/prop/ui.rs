@@ -775,15 +775,14 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             ui.label(get!("prop.inspector.name"));
             changed |= ui.text_edit_singleline(&mut feature.name).changed();
         });
-        // Phrased as *suppressed* rather than *enabled*, so the inspector and
-        // the tree's context menu are one word for one concept. The stored
-        // field stays `enabled` — it is on disk, and the format has no
-        // migration chain to rename it through.
-        let mut suppressed = !feature.enabled;
-        if ui.checkbox(&mut suppressed, get!("prop.inspector.suppressed")).changed() {
-            feature.enabled = !suppressed;
-            changed = true;
-        }
+        // **Positive, unlike the tree's menu, and that is not an
+        // inconsistency.** A menu item names an *action*, and the useful thing
+        // to say there is what clicking will do — "Suppress". A checkbox names
+        // a *state*, and a ticked box meaning "off" is the kind of thing you
+        // have to read twice. So the two differ because they are different
+        // questions, and the box is bound straight to the stored field with
+        // nothing to invert.
+        changed |= ui.checkbox(&mut feature.enabled, get!("prop.inspector.active")).changed();
         ui.separator();
 
         match &mut feature.op {
