@@ -34,9 +34,9 @@ in it that constrains code written today: items must record their provenance
 ## State of the repo
 
 The editor is real and works. **The game barely exists.** There is a damage
-layer, three kinds of weapon — hitscan, projectile, flame — teams, and a
-server-authoritative network layer that carries the map, the bodies, damage,
-deaths and corpses. There is no ammo, no reload and no round structure: a body
+layer, weapons read off disk, teams, and a server-authoritative network layer
+that carries the map, the weapons, the bodies, damage, deaths and corpses.
+Weapons have clips, reserves and reloads. There is no round structure: a body
 that dies leaves a ragdoll and comes straight back, on the same side, as the
 same player. A client predicts its own movement and is rolled back when the
 server disagrees. There is also no wasm build yet. Adding the runtime is the
@@ -164,10 +164,11 @@ its hitboxes are hidden from inside your own head, nobody else's are),
 are off by default now that bodies have geometry. `F3` is the perf overlay in
 both modes.
 
-Weapons are on **`1`–`5`** (hitscan, rocket, pipe bomb, RPG, flamethrower),
-the left mouse button fires — held, for the flamethrower — and **`G`** plants
-an emitter firing whatever projectile you are holding every two seconds with
-**`B`** to clear them. See "Damage, weapons and projectiles" below.
+Weapon slots are on **`1`–`6`**, the left mouse button fires the weapon's
+primary and the right its secondary — held, for anything automatic — **`R`**
+reloads, and **`G`** plants an emitter firing whatever projectile you are
+holding every two seconds with **`B`** to clear them. What each slot holds is a
+property of the class, which is read off disk; see "What a weapon is" below.
 
 ## Baking before a round
 
@@ -612,14 +613,79 @@ impulse given to a standing player is gone by the next tick. Rocket jumping
 needs a movement model with momentum; the explosion already carries the number
 it would want.
 
-### One projectile type, several weapons
+### What a weapon is
+
+**An action is what one mouse button does; a weapon is a pair of them.**
+`WeaponAction` ([`src/common/weapon.rs`](src/common/weapon.rs)) is a hitscan, a
+projectile, a cone of flame, `None`, or one of four stubs — extinguish, heal
+beam, invuln, scope — that have their real specs and no behaviour yet. A
+`Weapon` mounts one on each button, with a `Cadence` and a `Cost` per button
+and a `Magazine` for the whole thing. Adding a *weapon* is a row in a file;
+adding a *kind* of weapon is a variant and a system that answers for it.
 
 `ProjectileSpec` ([`src/common/projectile.rs`](src/common/projectile.rs)) is
-thirteen numbers, and the rocket launcher, the pipe bomb launcher and the
-TF2C-style RPG are three `const`s of it. A grenade is a rocket that falls,
-spins, bounces and goes off on a timer. Adding a fourth weapon is adding a
-constant, not a type — and `Weapon` in [`src/game/weapon.rs`](src/game/weapon.rs)
-is `Hitscan` or `Projectile(spec)`, which is the whole taxonomy.
+fourteen numbers, and the rocket launcher's two barrels, the pipe bomb and the
+TF2C-style RPG are all values of it. A grenade is a rocket that falls, spins,
+bounces and goes off on a timer.
+
+**Weapons are pack content, not map content.** `assets/default/weapons.toml`
+and `loadouts.toml`, read at `Startup` through
+[`src/common/assets.rs`](src/common/assets.rs) — one trait with one method, and
+that method is deliberately not `list`, because nothing behind a `fetch` can
+enumerate a directory and a manifest saying what one holds is a second
+description of the pack. The browser build replaces `NativeFiles` and one line
+in `GamePlugin`. There is **no second catalogue written in Rust**: one that
+drifted from the files would be a game that plays differently under test than
+it does in front of you.
+
+A bad file is not fatal. A file that will not parse leaves the catalogue as it
+was; a bad entry — a colliding id, a default outside its own permitted list, a
+loadout naming a weapon nobody defines — is dropped with a line saying which
+file and why. The failure then reads as "the Mercenary has no rocket launcher",
+which you can see, rather than as a panic on a listen server with people
+connected.
+
+**A class states what it may carry, per slot**, and there are six named slots
+(`Primary`, `Secondary`, `Melee`, `Utility`, `Gadget`, `Special`). A class that
+uses three leaves three empty. Nobody picks a class yet, so `Class::Mercenary`
+is the placeholder everybody plays as — deliberately a sampler, carrying one of
+every kind of action, so the whole table is reachable by walking up to it and
+clicking. `the_placeholder_class_carries_one_of_everything` is what fails when
+a new variant is wired to nothing. It decides what a body *carries* and nothing
+else: the rig is still built from `Proportions::DEFAULT` and a corpse's build
+is still read off the rig, because keying either on a class is the bug that
+replicated every corpse in the game correctly except a player's.
+
+**The catalogue is one description, held by the authority.**
+[`src/common/weapon_sync.rs`](src/common/weapon_sync.rs) sends it to each
+client on connect, `map_sync` style — so a server can ship its own weapons and
+nobody else needs the files. Two differences from the map: the payload is the
+typed value rather than a bag of bytes, since nothing here is a `typetag`
+trait object, and there is no resend interval, because nothing edits a weapon
+at frame rate.
+
+Its collections are **lists and not maps**, and the on-disk types are
+`BTreeMap`s, because the catalogue is compared for equality to decide whether
+to send it and a `HashMap` walks in an order nobody chose. Filled in hash
+order, two reads of the same file compared unequal — often enough to broadcast
+the whole catalogue at frame rate, rarely enough to ship.
+`only_a_change_puts_the_catalogue_on_the_wire` caught it the day it was
+written.
+
+**A body carries ids, never numbers.** `Equipped` — six `Option<WeaponId>` and
+a held slot — and `Ammo` are replicated and neither is predicted; a client
+guessing its switch landed is the same mistake as guessing a kill, and the
+price is a HUD naming a new weapon a round trip late. `Equipped` is one
+component rather than two for the reason the corpse layer already paid for:
+replication does not promise to deliver two components in one packet, and half
+an answer is a body nothing can describe. A `WeaponId` is a hash of its name
+rather than an index, because an index is a fact about the order a catalogue
+loaded in.
+
+An id and the catalogue that describes it arrive on different channels, so a
+body really can be holding a weapon nobody can name yet. **Nothing caches a
+resolution**: an id is looked up every time it is drawn, and one that resolves
+to nothing draws blank. Key on absence, not on arrival.
 
 Things worth knowing before touching `src/game/projectile.rs`:
 
@@ -637,19 +703,55 @@ Things worth knowing before touching `src/game/projectile.rs`:
 - Position goes through `PhysicsBody`, which buys interpolation for free —
   drawn at the tick, a 30 m/s rocket visibly stutters.
 
-Every firing system reads `TriggerPulled`, which `pull_trigger` writes after
-taking the `PlayerInput::attack` latch **once**. Several firing systems each
-taking the latch for themselves is a race where whichever ran first ate the
-press.
+### Pulling a trigger, and paying for it
 
-Whether holding the button keeps firing is `Weapon::cadence()` — `Semi` for
-everything you click, `Automatic { interval }` for the flamethrower — and the
-cooldown lives in a `Trigger` on the body. It counts *down*, so the default of
-zero is a body that may fire immediately; counting up would make a freshly
-spawned player wait out an interval before their first shot and read as a
-misfire. The rate is quantised to whole ticks, deliberately: carrying the
+Every firing system reads `WeaponActionFired`, which `pull_trigger` writes
+after taking the `PlayerInput::attack` latch **once**. Several firing systems
+each taking the latch for themselves is a race where whichever ran first ate
+the press.
+
+**The action travels by value.** `pull_trigger` is the only thing that asks
+what a body is holding, and what it found is what everything downstream answers
+for — the same rule `launch` follows when it copies a spec onto a projectile,
+so a weapon switched in the same tick cannot change a shot already decided on.
+It also means a firing system needs no access to a loadout at all, which is
+what took `fire_hitscan` off a component only the authority has ever had.
+`the_action_that_was_fired_is_the_one_the_message_carries` pins it.
+
+Whether holding a button keeps firing is the `Cadence` mounted on it, and the
+cooldown lives in a `Trigger` on the body — **one clock per button**, because
+one would let an alt-fire's cooldown eat the stream the primary is meant to be
+putting out, which reads as lag rather than as a bug. It counts *down*, so the
+default of zero is a body that may fire immediately; counting up would make a
+freshly spawned player wait out an interval before their first shot and read as
+a misfire. The rate is quantised to whole ticks, deliberately: carrying the
 remainder would let a weapon that had been idle empty several shots on
 consecutive ticks.
+
+**Ammo is spent in `pull_trigger` and nowhere else**, because that is already
+the one place that decides a shot happens, so it is the one place that can
+decline for want of a round. A firing system debiting its own pool would be
+several writers on one number. A shot that cannot be paid for writes no message
+*and* arms no cooldown, so an empty weapon is silent and instantly ready rather
+than dry-firing on a timer.
+
+`reload_weapons` is the only thing that *starts* a reload — asked for with `R`,
+or automatically once the clip is empty, because a weapon that needed a
+keypress to become useful again reads as broken before it reads as empty. A
+clip that is merely short does not top up, or the magazine size would mean
+nothing. Switching weapons cancels a reload rather than remembering it: a clip
+that filled in a holster is a weapon reloading with nobody holding it.
+
+**`Magazine.clip: None` is the minigun**: no magazine, each shot straight out
+of the reserve, never reloads. Stated as an absent clip rather than as a clip
+the size of the reserve, because the second is a lie the reload system then has
+to keep believing.
+
+Everything in `WeaponPlugin` consumes mutable state inside `FixedUpdate`, which
+the rest of the fixed loop is forbidden from doing. It is correct there because
+the whole plugin is `run_if(has_authority)` and a rollback replays only a
+client's own movement. Anything that stops being authority-only stops being
+allowed to spend.
 
 ### Fire
 
@@ -1049,7 +1151,10 @@ origin until somebody starts a round.
 
 **Known gaps, all of them "not sent yet" rather than "broken":**
 
-- `Loadout` is not replicated, so every remote body holds the default weapons.
+- A remote body's flame cone is drawn from what it is *holding* rather than
+  from an `Effect`, so it appears on every machine now that `Equipped` is
+  replicated — but a puff fired by somebody whose weapon you cannot resolve yet
+  draws nothing. Fire has no `Effect` variant of its own.
 - `BodyTint` is not replicated either, so a corpse elsewhere is drawn in its
   class's default colour rather than whatever its body was tinted.
 - Aim is part of the predicted `Player`, so turning triggers a rollback per
