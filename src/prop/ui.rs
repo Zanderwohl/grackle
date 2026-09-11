@@ -33,6 +33,7 @@ use crate::common::class::Class;
 use crate::common::shortcuts::chords;
 use crate::prop::feature::{Axis, BooleanOp, FeatureOp, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
+use crate::prop::gizmo::HoldHandles;
 use crate::prop::hold::HoldOverride;
 use crate::prop::profile::{Placement, Profile, MIN_SIDES};
 use crate::prop::solid::Shape;
@@ -110,6 +111,7 @@ struct PropTabs<'a> {
     editor: &'a mut PropEditor,
     build: &'a PropBuild,
     figure: &'a mut ScaleFigure,
+    handles: &'a mut HoldHandles,
     requests: &'a mut PropRequests,
 }
 
@@ -141,7 +143,7 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Features => feature_tree(ui, self.editor, self.build),
             PropTab::Inspector => inspector(ui, self.editor, self.build),
             PropTab::Scene => scene(ui, self.figure),
-            PropTab::Hold => hold(ui, self.editor, *self.figure),
+            PropTab::Hold => hold(ui, self.editor, *self.figure, self.handles),
             PropTab::Problems => problems(ui, self.editor, self.build),
         }
     }
@@ -168,6 +170,7 @@ fn panels(
     mut editor: ResMut<PropEditor>,
     build: Res<PropBuild>,
     mut figure: ResMut<ScaleFigure>,
+    mut handles: ResMut<HoldHandles>,
     mut multicam: ResMut<MulticamState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     dialog: Res<PropFileDialog>,
@@ -196,6 +199,7 @@ fn panels(
         // and a write every frame would throw the figure's meshes away every
         // frame.
         figure: &mut figure,
+        handles: &mut handles,
         requests: &mut requests,
     };
 
@@ -851,13 +855,19 @@ fn scene(ui: &mut Ui, figure: &mut ScaleFigure) {
 /// **The class on show is the class being edited.** One question, asked once:
 /// ticking the override edits the entry for whoever is standing there, which
 /// is also the body you are judging it against.
-fn hold(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure) {
+fn hold(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure, handles: &mut HoldHandles) {
     let base = editor.doc().hold.clone();
     let key = figure.0.map(Class::key);
     let overriding = key.as_ref().is_some_and(|key| base.per_class.contains_key(key));
 
     let mut changed = false;
     let mut edited = base.for_class(figure.0);
+
+    // Off by default and exclusive with the feature handles: a grip sits at
+    // the prop's origin by convention, which is exactly where a feature's move
+    // arrows are.
+    ui.checkbox(&mut handles.0, get!("prop.hold.handles"));
+    ui.separator();
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         match (&key, figure.0) {
@@ -910,34 +920,8 @@ fn hold(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure) {
         return;
     }
     editor.begin_gesture();
-    let mut doc_hold = base;
-    match key.filter(|key| doc_hold.per_class.contains_key(key)) {
-        // Only what actually differs from the base is written down, so an
-        // override stays a statement about what this class does differently
-        // rather than a copy that stops tracking.
-        Some(key) => {
-            let over = HoldOverride {
-                grip: (edited.grip != doc_hold.grip).then_some(edited.grip),
-                grip_rotation: (edited.grip_rotation != doc_hold.grip_rotation)
-                    .then_some(edited.grip_rotation),
-                support: (edited.support != doc_hold.support).then_some(edited.support),
-                support_rotation: (edited.support_rotation != doc_hold.support_rotation)
-                    .then_some(edited.support_rotation),
-                two_handed: (edited.two_handed != doc_hold.two_handed)
-                    .then_some(edited.two_handed),
-                carry: (edited.carry != doc_hold.carry).then_some(edited.carry),
-                carry_rotation: (edited.carry_rotation != doc_hold.carry_rotation)
-                    .then_some(edited.carry_rotation),
-            };
-            doc_hold.per_class.insert(key, over);
-        }
-        None => {
-            let per_class = std::mem::take(&mut doc_hold.per_class);
-            doc_hold = edited;
-            doc_hold.per_class = per_class;
-        }
-    }
-    editor.doc_mut().hold = doc_hold;
+    let applied = base.applied(figure.0, &edited);
+    editor.doc_mut().hold = applied;
 }
 
 /// Three drag boxes in degrees, over a field stored in radians.

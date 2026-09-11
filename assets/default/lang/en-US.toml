@@ -347,6 +347,7 @@ hold = "Hold"
 problems = "Problems"
 
 [prop.hold]
+handles = "Handles in the viewport"
 trigger_hand = "Trigger hand"
 two_handed = "Support hand"
 at = "At"

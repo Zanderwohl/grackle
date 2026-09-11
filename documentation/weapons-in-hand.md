@@ -80,10 +80,11 @@ prop editor already has for features.
   person. A gizmo on the chest would be a handle on the body that secretly
   edits the prop.
 
-`reach_for` already returns a [`Reach`](../src/common/skeleton/ik.rs), so the
-editor should **colour an arm that cannot make it**. An unreachable grip is
-caught by a test today, which is the wrong moment: with the class dropdown
-right there, it should be visible while you drag.
+**An arm that cannot make it says so.** `grip_with` returns a
+[`Reach`](../src/common/skeleton/ik.rs) per hand, the figure keeps it, and the
+grip's handle turns amber with a line drawn across the gap it fell short by.
+A test catches an unreachable grip, but that is the wrong moment when the class
+dropdown is right there.
 
 ### A class may override a hold, and inherits what it does not
 
@@ -245,7 +246,7 @@ Each stands alone and each is worth having on its own.
 | 1 | ~~**Hold the thing.**~~ **Done.** The prop cache is `prop::baked`, the grip transform is `figure::grip_in_hand_space`, and `game::held` hangs the model off `hand.r`. | `Weapon.model` end to end. Looks wrong while walking — no upper-body layer yet, which is expected. |
 | 2 | ~~**Split the aim.**~~ **Done.** `head_pitch` narrows `Player.pitch` to 45° up and 70° down at the one place that bends the neck. | The head stops; the aim does not. Nothing takes up the remainder until stage 3 — the arms are not aimed by pitch at all yet. |
 | 3 | ~~**The upper-body layer.**~~ **Done, bar authoring.** `HoldSpec` is on the prop, `hold_the_weapon` places the weapon from the aim and solves both arms to it. What is missing is a way to *author* a hold — every prop uses its file's values and nothing in the editor writes them. | The idea at the top of this document. |
-| 3b | **Authoring a hold.** Three gizmos — the two grips, and the figure — plus per-class overrides. The unification is done; the gizmos are not. | A weapon shaped unlike a rifle. |
+| 3b | ~~**Authoring a hold.**~~ **Done.** The two grips and the figure are draggable, the Hold panel carries every number, per-class overrides work, and an arm that cannot reach says so. Rotations are typed rather than dragged. | A weapon shaped unlike a rifle. |
 | 4 | **Prop sync.** Documents on connect, after the catalogue. | A server can ship a weapon nobody else has. |
 | 5 | **The viewmodel pipeline.** Second camera, layer, near plane. | First person. Needs 3: the arms have to be posed before they are worth drawing close up. |
 | 6 | **Weapon animations.** Fire, reload, deploy, as parametric poses over the hold. An editor for them, someday. | |

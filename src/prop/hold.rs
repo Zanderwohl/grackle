@@ -181,6 +181,43 @@ impl HoldSpec {
         }
     }
 
+    /// This hold with `edited` written into it as `class` sees it.
+    ///
+    /// **The one place an edit to a hold is applied**, so the panel's boxes
+    /// and the viewport's handles cannot write it two different ways. An
+    /// override keeps only what actually differs from the base, so it stays a
+    /// statement about what a class does differently rather than a copy that
+    /// quietly stops tracking.
+    pub fn applied(&self, class: Option<Class>, edited: &HoldSpec) -> HoldSpec {
+        let key = class
+            .map(Class::key)
+            .filter(|key| self.per_class.contains_key(key));
+
+        let Some(key) = key else {
+            // No override in play: the base takes the edit and keeps whatever
+            // overrides it was carrying.
+            let mut base = edited.clone();
+            base.per_class = self.per_class.clone();
+            return base;
+        };
+
+        let differs = |a: [f32; 3], b: [f32; 3]| (a != b).then_some(a);
+        let mut applied = self.clone();
+        applied.per_class.insert(
+            key,
+            HoldOverride {
+                grip: differs(edited.grip, self.grip),
+                grip_rotation: differs(edited.grip_rotation, self.grip_rotation),
+                support: differs(edited.support, self.support),
+                support_rotation: differs(edited.support_rotation, self.support_rotation),
+                two_handed: (edited.two_handed != self.two_handed).then_some(edited.two_handed),
+                carry: differs(edited.carry, self.carry),
+                carry_rotation: differs(edited.carry_rotation, self.carry_rotation),
+            },
+        );
+        applied
+    }
+
     pub fn grip(&self) -> Vec3 {
         Vec3::from_array(self.grip)
     }
@@ -359,6 +396,31 @@ mod tests {
         // A class nobody mentioned, and no class at all, both get the base.
         assert_eq!(base.for_class(Some(Class::Scout)).carry, base.carry);
         assert_eq!(base.for_class(None).carry, base.carry);
+    }
+
+    /// An edit lands on the base when no override is in play, and in the
+    /// override when one is — writing down only what differs, so the rest goes
+    /// on tracking the base.
+    #[test]
+    fn an_edit_goes_wherever_the_class_is_being_edited() {
+        let base = HoldSpec::default();
+
+        let mut edited = base.clone();
+        edited.carry = [9.0, 9.0, 9.0];
+        let to_base = base.applied(Some(Class::Heavy), &edited);
+        assert_eq!(to_base.carry, [9.0, 9.0, 9.0], "an edit with no override missed the base");
+        assert!(to_base.per_class.is_empty());
+
+        let mut with_override = base.clone();
+        with_override
+            .per_class
+            .insert(Class::key(Class::Heavy), HoldOverride::default());
+        let to_class = with_override.applied(Some(Class::Heavy), &edited);
+        assert_eq!(to_class.carry, base.carry, "an override leaked into the base");
+        let over = &to_class.per_class[&Class::key(Class::Heavy)];
+        assert_eq!(over.carry, Some([9.0, 9.0, 9.0]));
+        assert_eq!(over.grip, None, "an unchanged field was written down anyway");
+        assert_eq!(to_class.for_class(Some(Class::Heavy)).carry, [9.0, 9.0, 9.0]);
     }
 
     /// An override describing further overrides would be a class holding a

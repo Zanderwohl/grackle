@@ -529,7 +529,14 @@ and TOML has no null.
 
 **In the prop editor the prop does not move; the figure does.** A prop is
 authored around its own origin and its feature gizmos are drawn there, so the
-body is placed by inverting where the hold says the weapon would be.
+body is placed by inverting where the hold says the weapon would be — and
+dragging the figure is therefore how a carry is authored. `carry_handle` and
+the drag that reads it are exact inverses, which has a test, because a sign
+error there is a handle that runs away from the pointer.
+
+The hold's handles and a feature's are **mutually exclusive**, on a toggle in
+the Hold panel that is off by default: a grip sits at the prop's origin by
+convention, which is exactly where a feature's move arrows are.
 
 **`prop::baked` is the only thing that bakes a prop.** The prop editor's
 viewport and a weapon in somebody's hand go through it alike; two bakers for

@@ -22,6 +22,7 @@
 use bevy::prelude::*;
 
 use crate::common::class::Class;
+use crate::common::skeleton::ik::Reach;
 use crate::common::skeleton::{humanoid, Pose, Skeleton};
 use crate::game::body_mesh::BodyTint;
 use crate::prop::document::PropEditor;
@@ -36,6 +37,16 @@ pub struct ScaleFigure(pub Option<Class>);
 
 #[derive(Component)]
 pub struct ScaleFigureMarker;
+
+/// Whether each hand made it onto the weapon, trigger hand first.
+///
+/// Written where the arms are solved and read where the handles are drawn, so
+/// a grip nobody can reach says so on screen. Without it an unreachable grip
+/// is a figure standing slightly beside its weapon for a reason you have to
+/// guess at — and the class dropdown is right there, so it is a reason you
+/// would have to guess at eleven times.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct FigureReach(pub [Reach; 2]);
 
 /// Grey-green and unmistakably not the prop. A team colour would be a lie —
 /// the figure has no side.
@@ -73,6 +84,7 @@ pub fn refresh_the_figure(
         Visibility::Inherited,
         BodyTint(FIGURE_TINT),
         Name::new("Scale figure"),
+        FigureReach([Reach::Impossible; 2]),
         humanoid(class.proportions()),
     ));
 }
@@ -94,12 +106,15 @@ pub fn refresh_the_figure(
 pub fn pose_the_figure(
     editor: Res<PropEditor>,
     choice: Res<ScaleFigure>,
-    mut figures: Query<(&Skeleton, &mut Pose, &mut Transform), With<ScaleFigureMarker>>,
+    mut figures: Query<
+        (&Skeleton, &mut Pose, &mut Transform, &mut FigureReach),
+        With<ScaleFigureMarker>,
+    >,
 ) {
     // As the class on show performs it, so an override is authored against the
     // body that will actually hold the thing.
     let hold = editor.doc().hold.for_class(choice.0);
-    for (skeleton, mut pose, mut transform) in &mut figures {
+    for (skeleton, mut pose, mut transform, mut reach) in &mut figures {
         let mut standing = Pose::rest();
 
         // Where the weapon would be if the body stood at the origin; the
@@ -114,7 +129,7 @@ pub fn pose_the_figure(
             .with_rotation(rotation);
 
         // The weapon is at the prop's origin, which is where its geometry is.
-        grip_with(skeleton, &mut standing, &root, &hold, &Transform::IDENTITY);
+        reach.0 = grip_with(skeleton, &mut standing, &root, &hold, &Transform::IDENTITY);
 
         *pose = standing;
         *transform = root;

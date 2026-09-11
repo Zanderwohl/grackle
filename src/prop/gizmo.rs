@@ -21,9 +21,14 @@
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
+use crate::common::rotation::quat_from_euler;
+use crate::common::skeleton::rig::bone;
+use crate::common::skeleton::{Pose, Skeleton};
 use crate::editor::input::CurrentMouseInput;
 use crate::prop::document::PropEditor;
 use crate::prop::feature::FeatureOp;
+use crate::prop::figure::{FigureReach, ScaleFigure, ScaleFigureMarker};
+use crate::prop::hold::HoldSpec;
 use crate::prop::profile::Placement;
 use crate::prop::solid::{Shape, MIN_EXTENT};
 use crate::tool::tool_helpers::{closest_param_on_axis, ray_point_distance};
@@ -51,7 +56,36 @@ pub enum Handle {
     Move(usize),
     /// Move one face along its own axis. `max` is the `+` end.
     Face { axis: usize, max: bool },
+    /// Move a hand's grip along one of the prop's own axes.
+    Grip { support: bool, axis: usize },
+    /// Move the figure, which is how a carry is authored — the prop is the
+    /// document and stays where it is.
+    Carry(usize),
 }
+
+impl Handle {
+    fn axis(self) -> usize {
+        match self {
+            Handle::Move(axis)
+            | Handle::Face { axis, .. }
+            | Handle::Grip { axis, .. }
+            | Handle::Carry(axis) => axis,
+        }
+    }
+}
+
+/// Whether the hold's handles are up instead of the selected feature's.
+///
+/// Off by default and ticked in the Hold panel. The two sets are mutually
+/// exclusive because a grip sits at the prop's origin by convention, which is
+/// exactly where a feature's move arrows are — both drawn at once would be two
+/// things to aim between in the same half-inch.
+#[derive(Resource, Default)]
+pub struct HoldHandles(pub bool);
+
+/// How big a grip handle is. Small: a grip is a precise thing on a small
+/// object, and the arrows are what you grab rather than the cube.
+const GRIP_SIZE: f32 = 0.02;
 
 /// The drag in progress, if any.
 ///
@@ -68,6 +102,7 @@ pub struct PropGizmoPlugin;
 impl Plugin for PropGizmoPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GizmoGrab>()
+            .init_resource::<HoldHandles>()
             .add_systems(Update, drag_the_selected.run_if(in_state(AppMode::Prop)))
             .add_systems(OnExit(AppMode::Prop), |mut grab: ResMut<GizmoGrab>| {
                 grab.held = None;
@@ -145,12 +180,21 @@ pub fn drag_face(
 ///
 /// One system rather than three: picking, dragging and drawing all want the
 /// same handle positions and the same frame's pointer ray.
+#[allow(clippy::too_many_arguments)]
 fn drag_the_selected(
     mut editor: ResMut<PropEditor>,
     mouse: Res<CurrentMouseInput>,
     mut grab: ResMut<GizmoGrab>,
+    hold_handles: Res<HoldHandles>,
+    choice: Res<ScaleFigure>,
+    figures: Query<(&Skeleton, &Pose, &Transform, &FigureReach), With<ScaleFigureMarker>>,
     mut gizmos: Gizmos,
 ) {
+    if hold_handles.0 {
+        drag_the_hold(&mut editor, &mouse, &mut grab, *choice, &figures, &mut gizmos);
+        return;
+    }
+
     let Some(selected) = editor.selected else {
         grab.held = None;
         return;
@@ -212,9 +256,7 @@ fn drag_the_selected(
         && mouse.pressed == Some(MouseButton::Left)
         && let Some(handle) = nearest
     {
-        let axis = match handle {
-            Handle::Move(axis) | Handle::Face { axis, .. } => axis,
-        };
+        let axis = handle.axis();
         let local = points
             .iter()
             .find(|(candidate, _)| *candidate == handle)
@@ -229,9 +271,7 @@ fn drag_the_selected(
     }
 
     if let Some((handle, offset)) = grab.held {
-        let axis = match handle {
-            Handle::Move(axis) | Handle::Face { axis, .. } => axis,
-        };
+        let axis = handle.axis();
         if let Some(on_axis) = closest_param_on_axis(ray, origin, axis_direction(axis)) {
             let local_t = on_axis - offset;
             match handle {
@@ -254,11 +294,191 @@ fn drag_the_selected(
                         }
                     }
                 }
+                // The hold's handles never reach this system's branch.
+                Handle::Grip { .. } | Handle::Carry(_) => {}
             }
         }
     }
 
     draw(&mut gizmos, &points, &world, scale, grab.held.map(|(handle, _)| handle).or(nearest));
+}
+
+/// Drag the hold's handles: a grip per hand, and the figure for the carry.
+///
+/// Shares the picking and the axis drag with the feature handles above rather
+/// than growing a second copy — what differs is which points exist and what a
+/// drag writes, and both of those are a few lines.
+fn drag_the_hold(
+    editor: &mut PropEditor,
+    mouse: &CurrentMouseInput,
+    grab: &mut GizmoGrab,
+    choice: ScaleFigure,
+    figures: &Query<(&Skeleton, &Pose, &Transform, &FigureReach), With<ScaleFigureMarker>>,
+    gizmos: &mut Gizmos,
+) {
+    let base = editor.doc().hold.clone();
+    let hold = base.for_class(choice.0);
+    let figure = figures.iter().next();
+
+    // Handles live in the prop's own space: the weapon is at the origin here,
+    // which is the whole reason a grip is authored against it.
+    let mut points = vec![
+        (Handle::Grip { support: false, axis: 0 }, hold.grip()),
+        (Handle::Grip { support: false, axis: 1 }, hold.grip()),
+        (Handle::Grip { support: false, axis: 2 }, hold.grip()),
+    ];
+    if let Some(support) = hold.support() {
+        for axis in 0..3 {
+            points.push((Handle::Grip { support: true, axis }, support));
+        }
+    }
+    // The carry is where the *body* is, so it needs one to be standing there.
+    let arm = figure.map(|(skeleton, ..)| {
+        let proportions = skeleton.proportions();
+        proportions.height * proportions.arm_length
+    });
+    let carry_rotation = quat_from_euler(Vec3::from_array(hold.carry_rotation));
+    if let Some(arm) = arm {
+        let chest = carry_handle(&hold, carry_rotation, arm);
+        for axis in 0..3 {
+            points.push((Handle::Carry(axis), chest));
+        }
+    }
+
+    let Some(ray) = mouse.world_pos else {
+        if grab.held.take().is_some() {
+            editor.end_gesture();
+        }
+        draw_hold(gizmos, &points, &hold, figure, None);
+        return;
+    };
+    if mouse.released == Some(MouseButton::Left) || mouse.pressed != Some(MouseButton::Left) {
+        if grab.held.take().is_some() {
+            editor.end_gesture();
+        }
+    }
+
+    let nearest = points
+        .iter()
+        .map(|(handle, at)| (*handle, ray_point_distance(&ray, *at)))
+        .filter(|(_, distance)| *distance < GRIP_SIZE * PICK_SLACK * 2.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(handle, _)| handle);
+
+    if grab.held.is_none()
+        && mouse.just_pressed
+        && mouse.pressed == Some(MouseButton::Left)
+        && let Some(handle) = nearest
+    {
+        let axis = handle.axis();
+        let at = points
+            .iter()
+            .find(|(candidate, _)| *candidate == handle)
+            .map(|(_, at)| *at)
+            .unwrap_or(Vec3::ZERO);
+        let mut unit = Vec3::ZERO;
+        unit[axis] = 1.0;
+        if let Some(on_axis) = closest_param_on_axis(ray, Vec3::ZERO, unit) {
+            grab.held = Some((handle, on_axis - at[axis]));
+            editor.begin_gesture();
+        }
+    }
+
+    if let Some((handle, offset)) = grab.held {
+        let axis = handle.axis();
+        let mut unit = Vec3::ZERO;
+        unit[axis] = 1.0;
+        if let Some(on_axis) = closest_param_on_axis(ray, Vec3::ZERO, unit) {
+            let at = on_axis - offset;
+            let mut edited = hold.clone();
+            match handle {
+                Handle::Grip { support: false, axis } => edited.grip[axis] = at,
+                Handle::Grip { support: true, axis } => edited.support[axis] = at,
+                Handle::Carry(axis) => {
+                    if let Some(arm) = arm {
+                        // The figure's chest sits at `-R⁻¹ · carry`, so a
+                        // dragged chest inverts straight back into a carry.
+                        // Arm lengths, not metres, because that is the unit a
+                        // carry is stated in.
+                        let mut chest = carry_handle(&hold, carry_rotation, arm);
+                        chest[axis] = at;
+                        edited.carry = ((carry_rotation * -chest) / arm).to_array();
+                    }
+                }
+                Handle::Move(_) | Handle::Face { .. } => {}
+            }
+            let applied = base.applied(choice.0, &edited);
+            editor.doc_mut().hold = applied;
+        }
+    }
+
+    draw_hold(gizmos, &points, &hold, figure, grab.held.map(|(handle, _)| handle).or(nearest));
+}
+
+/// Where the figure's chest ends up for a given carry.
+///
+/// `pose_the_figure` stands the body by inverting where the hold says the
+/// weapon would be, which puts the chest at `-R⁻¹ · carry` — so this is that
+/// derivation read once rather than guessed at twice.
+fn carry_handle(hold: &HoldSpec, carry_rotation: Quat, arm: f32) -> Vec3 {
+    carry_rotation.inverse() * -hold.carry(arm)
+}
+
+/// The hold's handles, and a complaint about any hand that cannot reach.
+fn draw_hold(
+    gizmos: &mut Gizmos,
+    points: &[(Handle, Vec3)],
+    hold: &HoldSpec,
+    figure: Option<(&Skeleton, &Pose, &Transform, &FigureReach)>,
+    lit: Option<Handle>,
+) {
+    const AXIS_COLOURS: [Color; 3] = [
+        Color::srgb(0.9, 0.3, 0.3),
+        Color::srgb(0.3, 0.9, 0.3),
+        Color::srgb(0.4, 0.5, 1.0),
+    ];
+    let highlight = Color::srgb(1.0, 0.95, 0.6);
+    let unreachable = Color::srgb(1.0, 0.45, 0.2);
+
+    let short = |support: bool| {
+        figure.is_some_and(|(_, _, _, reach)| {
+            reach.0[usize::from(support)] != crate::common::skeleton::ik::Reach::Reached
+        })
+    };
+
+    for (handle, at) in points {
+        let axis = handle.axis();
+        let mut unit = Vec3::ZERO;
+        unit[axis] = 1.0;
+        let colour = match (lit == Some(*handle), handle) {
+            (true, _) => highlight,
+            // A grip nobody can reach is the thing worth seeing before
+            // anything else about it.
+            (false, Handle::Grip { support, .. }) if short(*support) => unreachable,
+            _ => AXIS_COLOURS[axis],
+        };
+        gizmos.arrow(*at, *at + unit * GRIP_SIZE * 3.0, colour);
+    }
+
+    // The gap itself, drawn from the hand that fell short to the grip it was
+    // reaching for — "it stopped" and "it stopped this far away" being
+    // different amounts of help.
+    if let Some((skeleton, pose, root, reach)) = figure {
+        let bones = skeleton.posed_bones(pose, root);
+        for (index, (name, target)) in [
+            (bone::HAND_R, Some(hold.grip())),
+            (bone::HAND_L, hold.support()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (Some(target), Some(at)) = (target, skeleton.index_of(name)) else { continue };
+            if reach.0[index] == crate::common::skeleton::ik::Reach::Reached {
+                continue;
+            }
+            gizmos.line(bones[at].head, target, unreachable);
+        }
+    }
 }
 
 /// The arrows and the little cubes.
@@ -278,12 +498,9 @@ fn draw(
     let highlight = Color::srgb(1.0, 0.95, 0.6);
 
     for (handle, local) in points {
-        let axis = match handle {
-            Handle::Move(axis) | Handle::Face { axis, .. } => *axis,
-        };
         let colour = match lit == Some(*handle) {
             true => highlight,
-            false => AXIS_COLOURS[axis],
+            false => AXIS_COLOURS[handle.axis()],
         };
         match handle {
             Handle::Move(_) => {
@@ -295,6 +512,8 @@ fn draw(
                     colour,
                 );
             }
+            // The hold's handles are drawn by `draw_hold`.
+            Handle::Grip { .. } | Handle::Carry(_) => {}
         }
     }
 }
@@ -400,6 +619,29 @@ mod tests {
             }
         }
         assert_eq!(handles(None, 0.05).len(), 3);
+    }
+
+    /// Dragging the figure is how a carry is authored, so the two directions
+    /// have to be exact inverses: where the chest ends up for a carry, and
+    /// what carry a chest dragged there means. A sign error is a handle that
+    /// runs away from the pointer.
+    #[test]
+    fn a_dragged_chest_inverts_back_into_the_carry_that_put_it_there() {
+        let arm = 0.55;
+        for rotation in [Vec3::ZERO, Vec3::new(0.2, -0.4, 0.1)] {
+            let mut hold = HoldSpec::default();
+            hold.carry_rotation = rotation.to_array();
+            let turn = quat_from_euler(rotation);
+
+            let chest = carry_handle(&hold, turn, arm);
+            let back = ((turn * -chest) / arm).to_array();
+
+            assert!(
+                Vec3::from_array(back).abs_diff_eq(Vec3::from_array(hold.carry), 1e-5),
+                "a carry of {:?} came back as {back:?}",
+                hold.carry,
+            );
+        }
     }
 
     /// A shape dragged down to nothing still has to be grabbable.
