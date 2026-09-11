@@ -47,6 +47,18 @@ impl Default for CurrentFilePath {
     }
 }
 
+/// Room the toolbar panel opens with, and the least it can be dragged to.
+///
+/// A top panel with no size of its own takes its height from its contents, and
+/// a `DockArea` asks for almost nothing — so the toolbar opened at a tab bar
+/// and a sliver, with every tool below the fold. Stated as the tab bar plus a
+/// full row of buttons, so it is a number that follows from what is in there
+/// rather than one somebody guessed.
+const TAB_BAR_HEIGHT: f32 = 26.0;
+const TOOLBAR_ROW_HEIGHT: f32 = Tools::BUTTON_HEIGHT + Tools::ROW_PADDING * 2.0;
+const TOOLBAR_DEFAULT_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT * 2.0;
+const TOOLBAR_MIN_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT;
+
 enum TabKinds {
     Empty(String),
     Tools,
@@ -201,7 +213,7 @@ impl EditorPanels {
             top_tabs: DockState::new(default_top_tabs),
             toolbar_height: 20.0,
             menu_bar_height: 0.0,
-            top_height: 60.0,
+            top_height: TOOLBAR_DEFAULT_HEIGHT,
             bottom_tabs: DockState::new(default_bottom_tabs),
             bottom_height: 30.0,
             left_tabs: DockState::new(default_left_tabs),
@@ -311,6 +323,8 @@ impl EditorPanels {
 
         panels.top_height = egui::Panel::top("top_panel")
             .resizable(true)
+            .default_size(TOOLBAR_DEFAULT_HEIGHT)
+            .min_size(TOOLBAR_MIN_HEIGHT)
             .show(&mut viewport_ui, |ui| {
                 DockArea::new(&mut panels.top_tabs)
                     .id(egui::Id::new("egui_dock::DockArea::top"))
