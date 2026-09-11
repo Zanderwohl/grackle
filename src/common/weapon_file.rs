@@ -33,7 +33,6 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-use strum::IntoEnumIterator;
 
 use crate::common::assets::Assets;
 use crate::common::class::Class;
