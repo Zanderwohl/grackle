@@ -351,6 +351,28 @@ fn dress_new_players(
 const NECK_SHARE: f32 = 0.4;
 const HEAD_SHARE: f32 = 1.0 - NECK_SHARE;
 
+/// How far the head will follow the look direction, up and down.
+///
+/// **The head stops; the aim does not.** `Player.pitch` reaches almost
+/// straight up and down, and a neck that went with it folds a face through its
+/// own chest. Past these the head holds still and the weapon keeps going — a
+/// body aiming at its own feet looks down at them rather than inspecting them,
+/// which is what a person does and what every shooter draws.
+///
+/// Further down than up, because a body has more room to look at the floor
+/// than at the sky and spends more time doing it.
+const HEAD_PITCH_UP: f32 = 45.0 * std::f32::consts::PI / 180.0;
+const HEAD_PITCH_DOWN: f32 = -70.0 * std::f32::consts::PI / 180.0;
+
+/// How far the head actually turns for a given look direction.
+///
+/// The one place `Player.pitch` is narrowed, so the aim stays the truth and
+/// the head's angle is derived from it. A second opinion about which is which
+/// is a body whose head and weapon disagree about where it is looking.
+fn head_pitch(look: f32) -> f32 {
+    look.clamp(HEAD_PITCH_DOWN, HEAD_PITCH_UP)
+}
+
 /// Tilt the head and neck to where the body is looking.
 ///
 /// **Positive is down.** A spine bone's `+Y` runs up its length and the rig
@@ -377,13 +399,14 @@ fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
             // keeps a still body from dirtying its pose every frame.
             continue;
         }
+        let pitch = head_pitch(player.pitch);
         for (joint, share) in [(bone::NECK, NECK_SHARE), (bone::HEAD, HEAD_SHARE)] {
             // Composed onto whatever the animation said rather than replacing
             // it, and in the joint's own frame — a bone's `+Y` runs down its
             // length, so a rotation about local `X` pitches the face the same
             // way the camera pitches.
             let animated = pose.joint(joint);
-            pose.set(joint, animated * Quat::from_rotation_x(-player.pitch * share));
+            pose.set(joint, animated * Quat::from_rotation_x(-pitch * share));
         }
     }
 }
@@ -819,13 +842,51 @@ mod tests {
         assert!(up.z < 0.0 && down.z < 0.0, "the head turned to face backwards");
     }
 
+    /// **The head stops and the aim does not.** A neck that followed the look
+    /// direction all the way folds a face through its own chest, and the point
+    /// of stopping it is that the weapon carries on — a body aiming at its own
+    /// feet looks down at them rather than inspecting them.
+    ///
+    /// Asymmetric on purpose: further down than up.
+    #[test]
+    fn the_head_stops_short_of_the_aim() {
+        // Most of the way to straight up and straight down, which is where
+        // `PITCH_LIMIT` lets a player actually look.
+        let up = face_at(1.5);
+        let down = face_at(-1.5);
+
+        assert!(
+            (up.y - HEAD_PITCH_UP.sin()).abs() < 1e-3,
+            "the head reached {} looking up rather than stopping at {}",
+            up.y.asin().to_degrees(),
+            HEAD_PITCH_UP.to_degrees(),
+        );
+        assert!(
+            (down.y - HEAD_PITCH_DOWN.sin()).abs() < 1e-3,
+            "the head reached {} looking down rather than stopping at {}",
+            down.y.asin().to_degrees(),
+            HEAD_PITCH_DOWN.to_degrees(),
+        );
+        assert!(
+            down.y.abs() > up.y.abs(),
+            "a body should be able to look further down than up",
+        );
+
+        // And within the limits it still tracks exactly, or the clamp would be
+        // a cap on the whole range rather than at the ends of it.
+        let modest = face_at(0.3);
+        assert!((modest.y - 0.3_f32.sin()).abs() < 1e-3, "the head lagged its own aim");
+    }
+
     /// The head takes the larger share and the neck the rest, and together
-    /// they add up to the whole pitch — a body looking straight up is looking
-    /// straight up, not four fifths of the way there.
+    /// they add up to the whole of the pitch the head is allowed — a body
+    /// looking up is looking up, not four fifths of the way there.
     #[test]
     fn the_neck_and_the_head_share_the_whole_pitch() {
         let mut app = App::new();
-        let pitch = 0.9;
+        // Inside `HEAD_PITCH_UP`, so this stays a test about the *split*. What
+        // happens past the limit is `the_head_stops_short_of_the_aim`.
+        let pitch = 0.7;
         let body = app
             .world_mut()
             .spawn((Player { pitch, ..default() }, Pose::rest()))

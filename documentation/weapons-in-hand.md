@@ -194,7 +194,7 @@ Each stands alone and each is worth having on its own.
 | # | Stage | Proves |
 | --- | --- | --- |
 | 1 | ~~**Hold the thing.**~~ **Done.** The prop cache is `prop::baked`, the grip transform is `figure::grip_in_hand_space`, and `game::held` hangs the model off `hand.r`. | `Weapon.model` end to end. Looks wrong while walking — no upper-body layer yet, which is expected. |
-| 2 | **Split the aim.** Clamp the head, leave `Player.pitch` alone. | Independent of the rest; visible immediately. |
+| 2 | ~~**Split the aim.**~~ **Done.** `head_pitch` narrows `Player.pitch` to 45° up and 70° down at the one place that bends the neck. | The head stops; the aim does not. Nothing takes up the remainder until stage 3 — the arms are not aimed by pitch at all yet. |
 | 3 | **The upper-body layer.** `HoldSpec` on the prop; aim the weapon from the chest; solve both arms to its grip points. | The idea at the top of this document. This is where it starts looking right. |
 | 4 | **Prop sync.** Documents on connect, after the catalogue. | A server can ship a weapon nobody else has. |
 | 5 | **The viewmodel pipeline.** Second camera, layer, near plane. | First person. Needs 3: the arms have to be posed before they are worth drawing close up. |

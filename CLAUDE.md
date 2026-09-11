@@ -1194,7 +1194,15 @@ they do different things to a body:
   `advance_animators` and composing onto the pose it left — which is the
   arrangement that system's own docs describe for a look-at. The pitch is split
   0.4/0.6 between neck and head, because a head alone at eighty degrees reads
-  as a broken neck, and the shares sum to one so straight up is straight up.
+  as a broken neck, and the shares sum to one.
+
+  **The head stops at 45° up and 70° down; the aim does not.** `head_pitch` is
+  the one place `Player.pitch` is narrowed, so the aim stays the truth and the
+  head's angle is derived from it — a second opinion about which is which is a
+  body whose head and weapon disagree about where it is looking. Past the limit
+  the head holds still and the weapon carries on, which is what a person does
+  and what every shooter draws. Further down than up, because a body has more
+  room to look at the floor and spends more time doing it.
 
 **A spine bone's positive `X` rotation is *down*, and pitch is positive *up*,**
 so the look pass negates. A bone's `+Y` runs up its length and the rig faces
