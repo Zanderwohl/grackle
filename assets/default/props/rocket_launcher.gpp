@@ -18,8 +18,8 @@ height = 0.9
 [features.op.placement]
 origin = [
     0.0,
-    0.0,
-    0.0,
+    0.22,
+    -0.12,
 ]
 rotation = [
     -1.5707964,
@@ -53,8 +53,8 @@ radius = 0.038
 [features.op.placement]
 origin = [
     0.0,
-    0.0,
-    -0.5,
+    0.22,
+    -0.62,
 ]
 rotation = [
     0.0,
@@ -100,8 +100,8 @@ size = [
 [features.op.placement]
 origin = [
     0.0,
-    -0.11,
-    0.06,
+    0.11,
+    -0.06,
 ]
 rotation = [
     0.21,
@@ -147,8 +147,8 @@ size = [
 [features.op.placement]
 origin = [
     0.0,
-    0.062,
-    -0.15,
+    0.282,
+    -0.27,
 ]
 rotation = [
     0.0,
@@ -192,8 +192,8 @@ height = 0.12
 [features.op.placement]
 origin = [
     0.0,
-    0.0,
-    0.45,
+    0.22,
+    0.32999998,
 ]
 rotation = [
     -1.5707964,
@@ -219,3 +219,21 @@ feature = "boolean"
 op = "union"
 target = 6
 tool = 7
+
+[hold]
+grip = [
+    0.0,
+    0.0,
+    0.0,
+]
+support = [
+    0.0,
+    0.0,
+    -0.25,
+]
+two_handed = false
+carry = [
+    0.26,
+    -0.1,
+    -0.16,
+]

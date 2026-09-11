@@ -16,6 +16,7 @@ use bevy::prelude::*;
 use crate::common::assets::{default_packs, Assets as PackAssets};
 use crate::prop::document;
 use crate::prop::feature::Evaluated;
+use crate::prop::hold::HoldSpec;
 use crate::prop::surface::Surface;
 
 /// Materials cached per surface for the life of the process.
@@ -58,6 +59,7 @@ pub fn parts(evaluated: &Evaluated) -> Vec<(Surface, Mesh)> {
 /// One prop, ready to hang on an entity.
 pub struct BakedProp {
     pub parts: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    pub hold: HoldSpec,
 }
 
 /// Props baked from their documents, by the name a weapon knows them by.
@@ -121,5 +123,5 @@ fn bake(
         .map(|(surface, mesh)| (meshes.add(mesh), surfaces.get(surface, materials)))
         .collect();
     info!("Baked prop {name}");
-    Some(BakedProp { parts })
+    Some(BakedProp { parts, hold: doc.hold })
 }

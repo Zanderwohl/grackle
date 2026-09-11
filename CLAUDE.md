@@ -483,6 +483,32 @@ the upper-body layer that fixes it is stage 3 of
 where the grip convention, the aim split, sending models on connect and the
 viewmodel pipeline are all written down.
 
+**The weapon is placed first and the hands follow it.** `hold_the_weapon` runs
+last in the pose chain, composing onto what the animator and the look pass
+left: it puts the weapon in front of the chest along `Player.pitch` and then
+solves both arms onto its grip points with `ik::solve`. Parenting the model to
+`hand.r` instead — which is what stage 1 did — makes a hold a property of the
+*body's* animation, so every weapon would need poses per class and per movement
+state.
+
+Three things there are load-bearing:
+
+- **The pivot's position comes from the animated chest and its orientation from
+  the aim.** Following the chest's rotation would make a crouch's lean tilt the
+  weapon away from where the shot goes; ignoring its position would detach the
+  weapon from a body that is bobbing.
+- **`carry` is in fractions of arm length**, the way a crouch's root offset is
+  in hip-heights. A Heavy's arms are not a Scout's, and a carry in metres puts
+  one of them out of its own reach.
+- **A hand that cannot reach does not stretch for it.** `ik::solve` writes a
+  straightened limb and *then* reports `Short` — right for a foot pointed at a
+  floor, wrong for an arm, which reads as broken rather than as not holding. So
+  `reach_for` puts the joints back.
+
+`every_class_can_reach_every_shipped_props_grip` is what keeps a hold
+authorable: a build whose hand cannot get to the grip holds nothing while its
+arm swings past it, and nothing about that is loud.
+
 **The grip convention is stated once**, in
 [`figure::grip_in_hand_space`](src/prop/figure.rs), and *derived* from the
 reference figure rather than written beside it: the figure is stood so a prop's

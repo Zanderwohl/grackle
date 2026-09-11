@@ -54,6 +54,11 @@ wrong in the hand, and somebody tunes two numbers against each other forever.
 `HoldSpec`: where the trigger hand goes and where the support hand goes, in the
 weapon's own space, plus a rest offset from the shoulder.
 
+Expressed as a grip, a support point, a `two_handed` flag and a carry offset —
+a flag rather than an `Option`, because **TOML has no null**: an absent field
+would have to mean one-handed, so a `[hold]` that set only the carry would
+silently drop the support hand.
+
 **On the prop, not on the weapon.** A hold is a fact about the model's *shape*,
 it wants authoring next to the geometry, and the prop editor is already the
 place where a reference figure is standing there to judge it against. A weapon
@@ -195,7 +200,8 @@ Each stands alone and each is worth having on its own.
 | --- | --- | --- |
 | 1 | ~~**Hold the thing.**~~ **Done.** The prop cache is `prop::baked`, the grip transform is `figure::grip_in_hand_space`, and `game::held` hangs the model off `hand.r`. | `Weapon.model` end to end. Looks wrong while walking — no upper-body layer yet, which is expected. |
 | 2 | ~~**Split the aim.**~~ **Done.** `head_pitch` narrows `Player.pitch` to 45° up and 70° down at the one place that bends the neck. | The head stops; the aim does not. Nothing takes up the remainder until stage 3 — the arms are not aimed by pitch at all yet. |
-| 3 | **The upper-body layer.** `HoldSpec` on the prop; aim the weapon from the chest; solve both arms to its grip points. | The idea at the top of this document. This is where it starts looking right. |
+| 3 | ~~**The upper-body layer.**~~ **Done, bar authoring.** `HoldSpec` is on the prop, `hold_the_weapon` places the weapon from the aim and solves both arms to it. What is missing is a way to *author* a hold — every prop uses its file's values and nothing in the editor writes them. | The idea at the top of this document. |
+| 3b | **Authoring a hold.** Grip and carry as draggable gizmos in the prop editor, with the reference figure holding the result. | A weapon shaped unlike a rifle. |
 | 4 | **Prop sync.** Documents on connect, after the catalogue. | A server can ship a weapon nobody else has. |
 | 5 | **The viewmodel pipeline.** Second camera, layer, near plane. | First person. Needs 3: the arms have to be posed before they are worth drawing close up. |
 | 6 | **Weapon animations.** Fire, reload, deploy, as parametric poses over the hold. An editor for them, someday. | |

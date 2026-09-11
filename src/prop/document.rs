@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Evaluated, FeatureOp, PropFeature, PropFeatureId};
+use crate::prop::hold::HoldSpec;
 
 /// Grackle Prop. Flat text, one prop per file.
 pub const PROP_EXTENSION: &str = "gpp";
@@ -42,6 +43,10 @@ pub struct PropDoc {
     pub name_key: String,
     #[serde(default)]
     pub features: Vec<PropFeature>,
+    /// How this prop is held, if anything holds it. Every prop has one and
+    /// almost every prop will keep the default — see [`HoldSpec`].
+    #[serde(default)]
+    pub hold: HoldSpec,
     /// The next id to hand out. Stored rather than derived from the highest in
     /// use, so deleting the last feature cannot make the next reuse its number.
     #[serde(default)]
@@ -50,7 +55,7 @@ pub struct PropDoc {
 
 impl PropDoc {
     pub fn new(name_key: impl Into<String>) -> PropDoc {
-        PropDoc { name_key: name_key.into(), features: vec![], next_id: 0 }
+        PropDoc { name_key: name_key.into(), features: vec![], hold: HoldSpec::default(), next_id: 0 }
     }
 
     fn take_id(&mut self) -> PropFeatureId {

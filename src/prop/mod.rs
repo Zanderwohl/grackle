@@ -13,6 +13,7 @@
 //! | [`solid`] | Sweeps, primitives, transforms, and the bake to a `Mesh`. |
 //! | [`nice_f32`] | Writing numbers to the file the way somebody typed them. |
 //! | [`surface`] | Style and tint. |
+//! | [`hold`] | Where the hands go on a weapon, and where it is carried. |
 //! | [`feature`] | The feature list and the evaluator that replays it. |
 //! | [`document`] | The document, undo, and the file format. |
 //! | [`figure`] | The body standing behind the prop, for scale. |
@@ -45,6 +46,7 @@ pub mod document;
 pub mod feature;
 pub mod figure;
 pub mod gizmo;
+pub mod hold;
 pub mod nice_f32;
 pub mod profile;
 pub mod solid;

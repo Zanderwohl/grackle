@@ -100,6 +100,11 @@ impl Plugin for SkeletonPlugin {
                 // And after the animator, editing the pose it left. Ordered by
                 // the `.chain()` below rather than by name.
                 look_with_the_head,
+                // Last, composing onto the pose everything above it left: the
+                // arms are solved to the weapon, so the weapon has to be
+                // placed by an aim the animation has already had its say
+                // about.
+                crate::game::held::hold_the_weapon,
             ).chain())
             // After propagation, so a rig is drawn where its body is now.
             // `interpolate_bodies` has already run by here, so a player's
