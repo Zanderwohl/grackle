@@ -474,7 +474,10 @@ which is the trade for being text somebody can read, so the guard is replaying
 each file and insisting it comes out as geometry with nothing to complain
 about.
 
-**A weapon names its model and nothing reads that name yet.** `Weapon.model`
+**A weapon names its model and nothing reads that name yet.** The plan for
+holding one — the grip convention, the aim split, the upper-body layer, sending
+models on connect, and the viewmodel pipeline — is written down in
+[documentation/weapons-in-hand.md](documentation/weapons-in-hand.md). `Weapon.model`
 is an `Option<String>` naming a prop under a pack's `props/`; it crosses the
 wire with the rest of the catalogue, so each machine builds the model from its
 own pack — the same arrangement `Equipped` already has, one level down.
