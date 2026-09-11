@@ -22,16 +22,13 @@
 use bevy::prelude::*;
 
 use crate::common::assets::Assets as PackAssets;
-use crate::common::skeleton::ik::{solve, Chain, Reach, LEFT_ARM, RIGHT_ARM};
-use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::weapon::{Equipped, WeaponCatalogue, WeaponId};
 use crate::game::body_mesh::FirstPersonHidden;
 use crate::game::player::Player;
 use crate::game::skeleton::SkeletonRoot;
 use crate::prop::baked::{PropCache, SurfaceMaterials};
-use crate::prop::figure::grip_in_hand_space;
-use crate::prop::hold::HoldSpec;
+use crate::prop::hold::{grip_with, weapon_transform, HoldSpec};
 
 /// One drawn part of the weapon a body is holding.
 #[derive(Component)]
@@ -199,27 +196,14 @@ fn replace_parts(
         .insert((HeldModel { weapon, resolved, parts, hold }, WeaponInHand::default()));
 }
 
-/// Which way an elbow points.
-///
-/// Backwards and a little out and down, which is where a person's elbow goes
-/// when they hold something in front of them. The solver cannot work this out
-/// — it is the one thing about a two-bone chain that the target does not
-/// determine — and getting it wrong is an arm bent the wrong way at the elbow.
-fn elbow_pole(side: f32) -> Vec3 {
-    Vec3::new(0.35 * side, -0.85, 0.55).normalize()
-}
-
 /// Put the weapon where the body is aiming, and the hands on the weapon.
 ///
 /// Runs after the animator and the look pass, composing onto the pose they
-/// left — the arrangement `look_with_the_head` already uses. The lower body is
-/// untouched, which is the point: a hold has to survive whatever the legs are
-/// doing.
+/// left. The lower body is untouched, which is the point: a hold has to
+/// survive whatever the legs are doing.
 ///
-/// **The pivot's position comes from the animated chest and its orientation
-/// from the aim.** Following the chest's rotation too would make a crouch's
-/// lean tilt the weapon away from where the shot goes; ignoring its position
-/// would detach the weapon from a body that is bobbing.
+/// All of the work is [`prop::hold`]'s, because the reference figure in the
+/// prop editor does exactly this and the two must not be able to disagree.
 pub(crate) fn hold_the_weapon(
     mut bodies: Query<(
         &Player,
@@ -234,107 +218,22 @@ pub(crate) fn hold_the_weapon(
         if !held.resolved || held.weapon.is_none() {
             continue;
         }
-        let Some(chest) = skeleton.index_of(bone::CHEST) else { continue };
 
         let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
-        let posed = skeleton.posed_bones(&pose, &root);
-        // The chest's tail is the point between the shoulders.
-        let pivot = posed[chest].tail;
-
-        let proportions = skeleton.proportions();
-        let arm = proportions.height * proportions.arm_length;
-
-        // `-Z` is forward in the body's own frame, and a positive rotation
-        // about `X` lifts it — the opposite sign to a spine bone, whose `+Y`
-        // runs up its own length.
+        // `-Z` is forward in the body's own frame and a positive rotation about
+        // `X` lifts it — the opposite sign to a spine bone, whose `+Y` runs up
+        // its own length.
         let aim = Quat::from_rotation_x(player.pitch);
-        let placed = Transform::from_translation(pivot + aim * held.hold.carry(arm))
-            .with_rotation(aim);
+
+        let Some(placed) = weapon_transform(skeleton, &pose, &root, &held.hold, aim) else {
+            continue;
+        };
+        grip_with(skeleton, &mut pose, &root, &held.hold, &placed);
         weapon.0 = placed;
-
-        let grip = placed.transform_point(held.hold.grip());
-        reach_for(skeleton, &mut pose, &root, &RIGHT_ARM, grip, elbow_pole(1.0));
-
-        // The support hand only takes hold if it can. A body's arms are short
-        // and a weapon carried forward is often out of the off hand's range,
-        // and an arm stretched at something it cannot touch looks far worse
-        // than one left doing whatever the animation had it doing.
-        if let Some(support) = held.hold.support() {
-            let support = placed.transform_point(support);
-            reach_for(skeleton, &mut pose, &root, &LEFT_ARM, support, elbow_pole(-1.0));
-        }
-
-        // Last, because it wants the arm as the solve left it: the hand takes
-        // the grip's orientation rather than the one the animation gave it, or
-        // a body holds a launcher with the back of its wrist.
-        let grip_rotation = grip_in_hand_space(skeleton).rotation;
-        set_world_rotation(
-            skeleton,
-            &mut pose,
-            &root,
-            bone::HAND_R,
-            placed.rotation * grip_rotation.inverse(),
-        );
     }
 }
 
-/// Solve a chain onto a target, or leave it exactly as it was.
-///
-/// [`ik::solve`] writes a straightened limb and *then* reports `Short`, which
-/// is right for a leg — a foot pointed at a floor it cannot reach still wants
-/// to be pointing at it — and wrong for a hand: an arm stretched towards a
-/// grip it cannot hold reads as broken, where one still swinging with the walk
-/// cycle merely reads as not holding.
-fn reach_for(
-    skeleton: &Skeleton,
-    pose: &mut Pose,
-    root: &Transform,
-    chain: &Chain,
-    target: Vec3,
-    pole: Vec3,
-) -> Reach {
-    let before = [chain.upper, chain.lower]
-        .into_iter()
-        .chain(chain.tip)
-        .map(|joint| (joint, pose.joint(joint)))
-        .collect::<Vec<_>>();
-
-    let reach = solve(skeleton, pose, root, chain, target, pole);
-    if reach != Reach::Reached {
-        for (joint, rotation) in before {
-            pose.set(joint, rotation);
-        }
-    }
-    reach
-}
-
-/// Turn a bone so it ends up facing a given way in the body's frame.
-///
-/// A pose stores a joint's rotation relative to its rest and its parent, so a
-/// world orientation has to be divided back through both. Read off the posed
-/// skeleton rather than walked up the parent chain, because the posed bone
-/// already carries the product of everything above it.
-fn set_world_rotation(
-    skeleton: &Skeleton,
-    pose: &mut Pose,
-    root: &Transform,
-    name: &'static str,
-    wanted: Quat,
-) {
-    let Some(index) = skeleton.index_of(name) else { return };
-    let posed = skeleton.posed_bones(pose, root)[index].rotation;
-    // `posed == parent_global * rest * joint`, so dividing the current joint
-    // out leaves exactly the part this has no business changing.
-    let base = posed * pose.joint(name).inverse();
-    pose.set(name, base.inverse() * wanted);
-}
-
-/// Put every held part where the right hand is.
-///
-/// The same forward kinematics `pose_body_meshes` runs, composed with the grip
-/// transform — which comes from [`grip_in_hand_space`] and therefore from the
-/// reference figure, so a weapon sits in the hand the way the prop editor drew
-/// it being held.
+/// Put every drawn part where the hold decided the weapon is.
 fn place_held_weapons(
     bodies: Query<(&HeldModel, &WeaponInHand)>,
     mut parts: Query<&mut Transform, With<HeldPart>>,
@@ -354,6 +253,7 @@ mod tests {
     use super::*;
     use crate::common::weapon::{Magazine, Mounted, Slot, Weapon};
     use crate::common::class::Class;
+    use crate::common::skeleton::rig::bone;
     use crate::common::skeleton::{default_humanoid, humanoid, Pose};
 
     fn weapon(name: &str, model: Option<&str>) -> Weapon {
@@ -504,57 +404,6 @@ mod tests {
         assert!(up.translation.y > level.translation.y, "aiming up did not lift the weapon");
     }
 
-    /// **Every class has to be able to reach every prop the pack ships.** A
-    /// carry is authored in fractions of arm length so that it retargets, and
-    /// a build whose hand cannot get to the grip holds nothing while its arm
-    /// swings past it — which is silent, and which a per-prop hold makes easy
-    /// to author your way into.
-    #[test]
-    fn every_class_can_reach_every_shipped_props_grip() {
-        let directory = std::path::Path::new("assets/default/props");
-        let Ok(entries) = std::fs::read_dir(directory) else { return };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("gpp") {
-                continue;
-            }
-            let doc = crate::prop::document::parse(&std::fs::read_to_string(&path).unwrap())
-                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-
-            for class in EVERY_CLASS {
-                let skeleton = humanoid(class.proportions());
-                let mut pose = Pose::rest();
-                let root = Transform::IDENTITY;
-
-                let chest = skeleton.index_of(bone::CHEST).expect("bone is in the rig");
-                let proportions = skeleton.proportions();
-                let arm = proportions.height * proportions.arm_length;
-                let pivot = skeleton.posed_bones(&pose, &root)[chest].tail;
-                let placed = Transform::from_translation(pivot + doc.hold.carry(arm));
-
-                let grip = placed.transform_point(doc.hold.grip());
-                assert_eq!(
-                    reach_for(&skeleton, &mut pose, &root, &RIGHT_ARM, grip, elbow_pole(1.0)),
-                    Reach::Reached,
-                    "{class:?} cannot reach the grip of {}",
-                    path.display(),
-                );
-
-                if let Some(support) = doc.hold.support() {
-                    let support = placed.transform_point(support);
-                    assert_eq!(
-                        reach_for(&skeleton, &mut pose, &root, &LEFT_ARM, support, elbow_pole(-1.0)),
-                        Reach::Reached,
-                        "{class:?} cannot reach the support grip of {} — either move it \
-                         or set `two_handed = false`",
-                        path.display(),
-                    );
-                }
-            }
-        }
-    }
-
     /// **Every class has to be able to reach its own weapon.** A carry is
     /// authored in fractions of arm length precisely so it retargets, and a
     /// build whose hand cannot get to the grip holds nothing while its arm
@@ -580,30 +429,6 @@ mod tests {
                 hand.head,
             );
         }
-    }
-
-    /// A hand that cannot reach does not stretch for it. `ik::solve` writes a
-    /// straightened limb *and then* reports `Short`, which is right for a foot
-    /// pointed at a floor and wrong for an arm reaching at a grip it cannot
-    /// hold.
-    #[test]
-    fn an_arm_that_cannot_reach_is_left_where_the_animation_had_it() {
-        let skeleton = humanoid(Class::Scout.proportions());
-        let mut pose = Pose::rest();
-        let before = pose.joint(bone::UPPER_ARM_R);
-
-        let out_of_reach = Vec3::new(0.0, 1.4, -8.0);
-        let reach = reach_for(
-            &skeleton,
-            &mut pose,
-            &Transform::IDENTITY,
-            &RIGHT_ARM,
-            out_of_reach,
-            elbow_pole(1.0),
-        );
-
-        assert_eq!(reach, Reach::Short);
-        assert_eq!(pose.joint(bone::UPPER_ARM_R), before, "the arm stretched for it anyway");
     }
 
     /// The drawn parts go wherever `hold_the_weapon` decided, and nowhere

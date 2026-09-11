@@ -32,7 +32,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::prop::baked::{parts, SurfaceMaterials};
-use crate::prop::figure::{clear_the_figure, refresh_the_figure, ScaleFigure};
+use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure, ScaleFigure};
 use crate::prop::document::PropEditor;
 use crate::prop::feature::Evaluated;
 
@@ -114,7 +114,7 @@ impl Plugin for PropViewPlugin {
             // somewhere plausible and wrong.
             .add_systems(
                 OnEnter(AppMode::Prop),
-                (light_the_stage, refresh_the_figure, set_the_world_aside, rebuild_the_prop)
+                (light_the_stage, refresh_the_figure, pose_the_figure, set_the_world_aside, rebuild_the_prop)
                     .chain()
                     .in_set(PropSceneSystems::Build),
             )
@@ -126,6 +126,9 @@ impl Plugin for PropViewPlugin {
                 Update,
                 (
                     refresh_the_figure,
+                    // After the rig exists and before anything draws it: the
+                    // figure's whole pose comes from the document's hold.
+                    pose_the_figure,
                     // Every frame rather than only on the way in: a map edit
                     // can land mid-session — `sync_entities` is deliberately
                     // ungated — and a room that appeared while somebody was

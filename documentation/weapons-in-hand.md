@@ -54,6 +54,50 @@ wrong in the hand, and somebody tunes two numbers against each other forever.
 `HoldSpec`: where the trigger hand goes and where the support hand goes, in the
 weapon's own space, plus a rest offset from the shoulder.
 
+### A grip is a frame, and the figure performs the game's hold
+
+There were two descriptions of how a body holds a thing: the reference figure
+had an authored pose of `aim` calls and a torso twist, while the game solved
+arms with IK — and the game read its *hand orientation* out of the figure's
+pose, so the runtime was deriving a number from a prop in the editor. The
+editor therefore showed a hold the game did not perform, which makes authoring
+against it worthless.
+
+Both now go through [`prop::hold`](../src/prop/hold.rs). What that needed was
+for a **grip to be a frame rather than a point** — a hand at the right place
+with the wrong rotation holds a weapon by the back of its wrist, and once the
+figure stops being the source of that rotation it has to be stated. Which is
+also what makes a grip gizmo meaningful: move *and* rotate, both of which the
+prop editor already has for features.
+
+### Three gizmos, and the figure is what moves
+
+- **The trigger grip** — move and rotate, in weapon space. Not optional.
+- **The support grip** — the same, shown only when `two_handed`.
+- **The carry** — by dragging *the figure*. The prop is the document: its
+  geometry is authored around the origin and its feature gizmos are drawn
+  there, so the person moves around the gun rather than the gun around the
+  person. A gizmo on the chest would be a handle on the body that secretly
+  edits the prop.
+
+`reach_for` already returns a [`Reach`](../src/common/skeleton/ik.rs), so the
+editor should **colour an arm that cannot make it**. An unreachable grip is
+caught by a test today, which is the wrong moment: with the class dropdown
+right there, it should be visible while you drag.
+
+### A class may override a hold, and inherits what it does not
+
+Per-class entries carry the *same fields as optional ones*, and an absent field
+means "not overridden" rather than "use the global default". That is the
+opposite reading of absence from the base hold, and both are honest because
+they are different questions: a base hold with no `support` is a weapon nobody
+stated a support point for, while an override with no `support` is a class that
+did not want to move it.
+
+A `two_handed` flag stays the right shape for the base hold, where absence has
+to mean *something* and TOML has no null. In an override, `Option<bool>` is
+exactly right.
+
 Expressed as a grip, a support point, a `two_handed` flag and a carry offset —
 a flag rather than an `Option`, because **TOML has no null**: an absent field
 would have to mean one-handed, so a `[hold]` that set only the carry would
@@ -201,7 +245,7 @@ Each stands alone and each is worth having on its own.
 | 1 | ~~**Hold the thing.**~~ **Done.** The prop cache is `prop::baked`, the grip transform is `figure::grip_in_hand_space`, and `game::held` hangs the model off `hand.r`. | `Weapon.model` end to end. Looks wrong while walking — no upper-body layer yet, which is expected. |
 | 2 | ~~**Split the aim.**~~ **Done.** `head_pitch` narrows `Player.pitch` to 45° up and 70° down at the one place that bends the neck. | The head stops; the aim does not. Nothing takes up the remainder until stage 3 — the arms are not aimed by pitch at all yet. |
 | 3 | ~~**The upper-body layer.**~~ **Done, bar authoring.** `HoldSpec` is on the prop, `hold_the_weapon` places the weapon from the aim and solves both arms to it. What is missing is a way to *author* a hold — every prop uses its file's values and nothing in the editor writes them. | The idea at the top of this document. |
-| 3b | **Authoring a hold.** Grip and carry as draggable gizmos in the prop editor, with the reference figure holding the result. | A weapon shaped unlike a rifle. |
+| 3b | **Authoring a hold.** Three gizmos — the two grips, and the figure — plus per-class overrides. The unification is done; the gizmos are not. | A weapon shaped unlike a rifle. |
 | 4 | **Prop sync.** Documents on connect, after the catalogue. | A server can ship a weapon nobody else has. |
 | 5 | **The viewmodel pipeline.** Second camera, layer, near plane. | First person. Needs 3: the arms have to be posed before they are worth drawing close up. |
 | 6 | **Weapon animations.** Fire, reload, deploy, as parametric poses over the hold. An editor for them, someday. | |

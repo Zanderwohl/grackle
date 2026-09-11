@@ -509,12 +509,18 @@ Three things there are load-bearing:
 authorable: a build whose hand cannot get to the grip holds nothing while its
 arm swings past it, and nothing about that is loud.
 
-**The grip convention is stated once**, in
-[`figure::grip_in_hand_space`](src/prop/figure.rs), and *derived* from the
-reference figure rather than written beside it: the figure is stood so a prop's
-origin is at its right hand, so a weapon in the hand is the inverse of that.
-Two constants here would be a weapon that looks right in the prop editor and
-sits wrong in the hand, with no way to tell which number was wrong.
+**[`prop::hold`](src/prop/hold.rs) is the one description of how a body holds
+a thing**, and both the reference figure and a body in a match go through it.
+They did not always: the figure had an authored pose of its own and the game
+read its *hand orientation* back out of that, so the editor showed a hold the
+game did not perform. Unifying them needed a **grip to be a frame rather than a
+point** — a hand in the right place with the wrong rotation holds a weapon by
+the back of its wrist, and once the figure is no longer the source of that
+rotation it has to be stated on the hold.
+
+**In the prop editor the prop does not move; the figure does.** A prop is
+authored around its own origin and its feature gizmos are drawn there, so the
+body is placed by inverting where the hold says the weapon would be.
 
 **`prop::baked` is the only thing that bakes a prop.** The prop editor's
 viewport and a weapon in somebody's hand go through it alike; two bakers for
