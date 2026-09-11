@@ -139,18 +139,31 @@ fn send_models_to_new_clients(
 
 /// Tell everybody when the models change under them.
 ///
-/// Which today means when the *catalogue* does, since nothing re-reads a prop
-/// at runtime. A server that reloaded its files mid-match would otherwise be
-/// the only machine holding the new ones.
+/// Two things make them change: the catalogue naming a different set, and
+/// somebody on this machine saving one in the prop editor. The second is the
+/// interesting one — a host who retouches a barrel between rounds would
+/// otherwise be the only person in the match holding the new shape.
+///
+/// **The gate is cheap and the work is not**: `models_named_by` re-reads every
+/// model off disk, so it is asked only when something says the answer may have
+/// moved. The comparison against what was last sent is what decides.
 fn broadcast_model_changes(
     catalogue: Res<WeaponCatalogue>,
     packs: Res<PackAssets>,
+    // Absent in a build with no prop editor in it, which is every client the
+    // moment there is one to ship.
+    editor: Option<Res<crate::prop::document::PropEditor>>,
     server: Option<Single<&Server>>,
     mut last: ResMut<LastModelsSent>,
+    mut saves: Local<u64>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
+    let saved = editor.map(|editor| editor.saves()).unwrap_or(0);
+    let just_saved = saved != *saves;
+    *saves = saved;
+
     let Some(server) = server else { return Ok(()) };
-    if !catalogue.is_changed() {
+    if !catalogue.is_changed() && !just_saved {
         return Ok(());
     }
 

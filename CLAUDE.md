@@ -574,6 +574,22 @@ The hold's handles and a feature's are **mutually exclusive**, on a toggle in
 the Hold panel that is off by default: a grip sits at the prop's origin by
 convention, which is exactly where a feature's move arrows are.
 
+**Saving a model is publishing it.** `PropCache` is keyed by name and bakes
+once, so without something saying otherwise a weapon drawn before an edit keeps
+the shape it had for the rest of the process — you save, press F5, and are
+holding the old barrel. `publish_the_saved_prop` adopts the document the moment
+it is written, through the same `PropCache::adopt` the server's models come
+through, and the generation bump is what makes every body redress. On a listen
+server `broadcast_model_changes` fires on the same counter, so a host who
+retouches a barrel between rounds is not the only person holding the new shape.
+
+The trigger is a **count of saves, not `Res::is_changed`**: every frame of a
+drag changes the editor, and re-baking a boolean kernel at frame rate for
+nobody is the cost this cache exists to avoid. The name it publishes under is
+the file's **stem**, because that is what `load` turns back into a path — a
+document that has never been saved has no name and so is nothing the game could
+be holding.
+
 **`prop::baked` is the only thing that bakes a prop.** The prop editor's
 viewport and a weapon in somebody's hand go through it alike; two bakers for
 one format would show up as a weapon that looks one way in the editor it was

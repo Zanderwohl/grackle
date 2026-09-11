@@ -185,6 +185,9 @@ pub struct PropEditor {
     /// Bumped on every change, so the viewport can tell without comparing two
     /// feature lists.
     generation: u64,
+    /// Bumped on every successful save, which is what tells the *game* to pick
+    /// the model up — see `publish_the_saved_prop`.
+    saves: u64,
 }
 
 impl Default for PropEditor {
@@ -198,6 +201,7 @@ impl Default for PropEditor {
             path: None,
             dirty: false,
             generation: 0,
+            saves: 0,
         }
     }
 }
@@ -209,6 +213,18 @@ impl PropEditor {
 
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// How many times this document has been written out.
+    pub fn saves(&self) -> u64 {
+        self.saves
+    }
+
+    /// The name a weapon would know this prop by, which is its file's stem —
+    /// the same name [`load`] turns back into a path. A document that has
+    /// never been saved has none, and so is nothing the game could be holding.
+    pub fn saved_name(&self) -> Option<&str> {
+        self.path.as_ref()?.file_stem()?.to_str()
     }
 
     /// Edit the document, recording an undo step if anything changed.
@@ -307,6 +323,7 @@ impl PropEditor {
     pub fn mark_saved(&mut self, path: PathBuf) {
         self.path = Some(path);
         self.dirty = false;
+        self.saves += 1;
     }
 }
 

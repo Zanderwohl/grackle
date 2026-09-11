@@ -252,3 +252,15 @@ carry_rotation = [
     -0.0,
     0.0,
 ]
+
+[viewmodel]
+across = [
+    1.1,
+    -2.0,
+]
+depth = 0.29
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
