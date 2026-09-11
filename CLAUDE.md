@@ -133,6 +133,28 @@ third mode key would be something to remember in exchange for saving a click
 on something nobody does mid-fight. `--prop` opens it at startup, which is the
 only way to reach it from a script.
 
+**Both editors answer the same chords**, defined once in
+[`src/common/shortcuts.rs`](src/common/shortcuts.rs): `Ctrl+S` saves,
+`Ctrl+Shift+S` saves as, `Ctrl+Z` undoes and `Ctrl+Shift+Z` or `Ctrl+Y` redoes,
+with `Super` counting as the modifier too. **Nothing fires while egui wants the
+keyboard** — `Ctrl+Z` in a text field means undo the text, and stealing it
+loses work rather than merely looking wrong. `typing` is passed in rather than
+read from `EguiWantsInput` inside the module, so the chords are testable
+without an egui context.
+
+**A save with nowhere to save to is a save-as**, in both editors and from both
+the menu and the chord. That is one function each (`ask_where_to_save`), shared
+by *Save As* and by a *Save* on a document that has never been written, because
+it is the same question either way.
+
+The map editor's shortcuts are their own system rather than more parameters on
+`EditorPanels::ui`, which is at Bevy's limit; they hand the request over in
+`CurrentFilePath::requested_op` so a keyboard save and a menu save are answered
+by the same code. Note that the prop editor opens onto the *shipped* example
+with its path already set, so `Ctrl+S` there writes straight to
+`assets/default/props/rocket_launcher.gpp` — which is intended when you are
+tuning it and worth knowing when you are not.
+
 `AppMode::selectable_from` is the whole rule, out of the egui closure so it can
 be tested: you are never offered the mode you are in — `NextState::set` runs
 the transition even for the same state, and `OnEnter(Play)` tears the match

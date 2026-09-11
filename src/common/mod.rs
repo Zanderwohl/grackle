@@ -31,6 +31,7 @@ pub mod cuboid;
 pub mod rect_subtract;
 pub mod rotation;
 pub mod mode;
+pub mod shortcuts;
 
 #[derive(Debug)]
 pub enum PointResolutionError {

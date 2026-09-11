@@ -30,6 +30,7 @@ use crate::editor::multicam::MulticamState;
 use crate::get;
 use crate::prop::document::{self, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::common::class::Class;
+use crate::common::shortcuts::chords;
 use crate::prop::feature::{Axis, BooleanOp, FeatureOp, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
 use crate::prop::profile::{Placement, Profile, MIN_SIDES};
@@ -150,7 +151,8 @@ impl Plugin for PropUiPlugin {
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 panels.run_if(in_state(AppMode::Prop)),
-            );
+            )
+            .add_systems(Update, prop_shortcuts.run_if(in_state(AppMode::Prop)));
     }
 }
 
@@ -1068,6 +1070,67 @@ fn body_picker(
     changed
 }
 
+/// Write the prop to the path it came from, or ask for one if it has none.
+///
+/// **A save with nowhere to save to is a save-as**, which is the same question
+/// either way. Shared so the menu item and `Ctrl+S` cannot answer it
+/// differently.
+pub fn save_or_ask(editor: &mut PropEditor, dialog: &PropFileDialog) {
+    let Some(path) = editor.path.clone() else {
+        ask_where_to_save(editor, dialog);
+        return;
+    };
+    match document::save(&path, editor.doc()) {
+        Ok(()) => {
+            info!("Saved prop to {path:?}");
+            editor.mark_saved(path);
+        }
+        Err(e) => error!("Saving the prop failed: {e}"),
+    }
+}
+
+/// Ask where to put the prop, on a background thread.
+pub fn ask_where_to_save(editor: &PropEditor, dialog: &PropFileDialog) {
+    let slot = dialog.result.clone();
+    let existing = editor.path.clone();
+    std::thread::spawn(move || {
+        let mut chooser = rfd::AsyncFileDialog::new()
+            .add_filter("Grackle Prop", &[PROP_EXTENSION])
+            .set_file_name(format!("untitled.{PROP_EXTENSION}"));
+        if let Some(directory) = existing.as_ref().and_then(|path| path.parent()) {
+            chooser = chooser.set_directory(directory);
+        }
+        if let Some(handle) = pollster::block_on(chooser.save_file()) {
+            *slot.lock().unwrap() = Some(DialogResult::Save(handle.path().to_path_buf()));
+        }
+    });
+}
+
+/// `Ctrl+S`, `Ctrl+Shift+S`, and the undo pair, for the prop editor.
+///
+/// The map editor's undo has always had this; the prop editor's lived only on
+/// two buttons in the Features panel, so `Ctrl+Z` did nothing at all — which
+/// reads as a bug rather than as an absence.
+fn prop_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    egui: Res<bevy_egui::input::EguiWantsInput>,
+    dialog: Res<PropFileDialog>,
+    mut editor: ResMut<PropEditor>,
+) {
+    let chords = chords(&keys, egui.wants_keyboard_input());
+    if chords.redo {
+        editor.redo();
+    } else if chords.undo {
+        editor.undo();
+    }
+
+    if chords.save {
+        save_or_ask(&mut editor, &dialog);
+    } else if chords.save_as {
+        ask_where_to_save(&editor, &dialog);
+    }
+}
+
 /// New, open, save, including the file dialog on its own thread.
 fn handle_files(requests: &PropRequests, editor: &mut PropEditor, dialog: &PropFileDialog) {
     if requests.new {
@@ -1096,33 +1159,10 @@ fn handle_files(requests: &PropRequests, editor: &mut PropEditor, dialog: &PropF
         }
     }
 
-    if requests.save && editor.path.is_some() {
-        let path = editor.path.clone().expect("checked just above");
-        match document::save(&path, editor.doc()) {
-            Ok(()) => {
-                info!("Saved prop to {path:?}");
-                editor.mark_saved(path);
-            }
-            Err(e) => error!("Saving the prop failed: {e}"),
-        }
-        return;
-    }
-
-    // A save with nowhere to save to is a save-as.
-    if requests.save_as || requests.save {
-        let slot = dialog.result.clone();
-        let existing = editor.path.clone();
-        std::thread::spawn(move || {
-            let mut chooser = rfd::AsyncFileDialog::new()
-                .add_filter("Grackle Prop", &[PROP_EXTENSION])
-                .set_file_name(format!("untitled.{PROP_EXTENSION}"));
-            if let Some(directory) = existing.as_ref().and_then(|path| path.parent()) {
-                chooser = chooser.set_directory(directory);
-            }
-            if let Some(handle) = pollster::block_on(chooser.save_file()) {
-                *slot.lock().unwrap() = Some(DialogResult::Save(handle.path().to_path_buf()));
-            }
-        });
+    if requests.save {
+        save_or_ask(editor, dialog);
+    } else if requests.save_as {
+        ask_where_to_save(editor, dialog);
     }
 
     if requests.open {

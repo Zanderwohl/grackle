@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::egui;
 use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
 use crate::common::app_mode::AppMode;
+use crate::common::shortcuts::chords;
 use crate::common::PointResolutionError;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::editor::action::{Action, FeatureDelta, FeatureSnapshot};
@@ -786,26 +787,13 @@ impl FeatureTimeline {
 
     fn undo_redo_shortcuts(
         keys: Res<ButtonInput<KeyCode>>,
+        egui: Res<bevy_egui::input::EguiWantsInput>,
         mut features: ResMut<FeatureTimeline>,
-        mut egui_contexts: EguiContexts,
     ) {
-        if let Ok(ctx) = egui_contexts.ctx_mut() {
-            if ctx.egui_wants_keyboard_input() {
-                return;
-            }
-        }
-
-        let cmd = keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight);
-        let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-
-        let undo = (cmd || ctrl) && !shift && keys.just_pressed(KeyCode::KeyZ);
-        let redo = ((cmd || ctrl) && shift && keys.just_pressed(KeyCode::KeyZ))
-            || (ctrl && keys.just_pressed(KeyCode::KeyY));
-
-        if redo {
+        let chords = chords(&keys, egui.wants_keyboard_input());
+        if chords.redo {
             features.redo_action();
-        } else if undo {
+        } else if chords.undo {
             features.undo_action();
         }
     }
