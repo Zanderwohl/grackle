@@ -139,7 +139,9 @@ pub fn body_look(
 pub struct BodyMaterials(HashMap<([u8; 4], bool), Handle<StandardMaterial>>);
 
 impl BodyMaterials {
-    fn get(
+    /// `pub(crate)` because the viewmodel's arms are *this* body drawn again:
+    /// your own team colour, and alight when you are.
+    pub(crate) fn get(
         &mut self,
         look: BodyLook,
         materials: &mut Assets<StandardMaterial>,
@@ -163,6 +165,25 @@ impl BodyMaterials {
 /// Built meshes, keyed by the numbers they were built from.
 #[derive(Resource, Default)]
 pub struct BodyMeshCache(HashMap<BuildKey, Vec<Handle<Mesh>>>);
+
+impl BodyMeshCache {
+    /// One handle per bone, in [`Skeleton::bones`] order, built on the first
+    /// ask for a build.
+    ///
+    /// Asked by the viewmodel as well as by the body, which is the whole
+    /// reason it is reachable from outside: a first-person forearm is the same
+    /// forearm seen from closer up, and a second set of handles would be a
+    /// second silhouette to keep in step.
+    pub fn handles(
+        &mut self,
+        skeleton: &Skeleton,
+        meshes: &mut Assets<Mesh>,
+    ) -> &Vec<Handle<Mesh>> {
+        self.0.entry(BuildKey::of(&skeleton.proportions())).or_insert_with(|| {
+            body_meshes(skeleton).into_iter().map(|mesh| meshes.add(mesh)).collect()
+        })
+    }
+}
 
 /// A [`Proportions`] as something that can be hashed.
 ///
@@ -239,15 +260,7 @@ fn build_body_meshes(
 
         let material = palette.get(body_look(team, tint, burning), &mut materials);
 
-        let handles = cache
-            .0
-            .entry(BuildKey::of(&skeleton.proportions()))
-            .or_insert_with(|| {
-                body_meshes(skeleton)
-                    .into_iter()
-                    .map(|mesh| meshes.add(mesh))
-                    .collect()
-            });
+        let handles = cache.handles(skeleton, &mut meshes);
 
         let mut parts = Vec::with_capacity(handles.len());
         commands.entity(body).with_children(|body| {

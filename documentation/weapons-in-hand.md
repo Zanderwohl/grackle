@@ -265,7 +265,34 @@ today (layer 31, for the UI painter), so there is no infrastructure and no
 conflict.
 
 `hide_own_body` already hides your own body in first person; the viewmodel arms
-are what it has to stop hiding.
+sidestep it entirely by being a second set of entities under the viewmodel
+camera rather than the body's own parts.
+
+**The arms are solved, not authored.** `grip_with` is what puts a body's hands
+on a weapon, and it is what puts these on it too — so the grip frames tuned in
+the prop editor are the ones first person uses, and there is no second set of
+numbers to drift. What differs is the frame: the body's arms are solved where
+the body is, and these in **eye space**, with the rig stood so its own eye sits
+at the camera, from the **rest pose**. The arms are welded to the view and must
+not bob with the walk cycle or drop when you crouch, because the camera does
+neither.
+
+Only **forearms and hands**. An upper arm runs back to a shoulder beside the
+camera rather than in front of it, and at a five-millimetre near plane it reads
+as a slab of shoulder in the corner of the screen. A sleeve entering at the
+elbow is what a person sees down their own sights.
+
+**An arm that did not reach is not drawn.** `grip_with` leaves a hand it could
+not solve exactly where it was, which on a body reads as not holding and in
+front of an eye is a forearm lying across the screen at the camera's own depth.
+A weapon with `two_handed = false` — the shipped launcher — has no left arm at
+all until there is an idle pose for one to be in, which is stage 6.
+
+The eye comes off the **rig**, not the movement hull: that one is a flat 1.8 m
+for every class, so a Scout's arms would hang from a Heavy's shoulders. And the
+meshes and material are the body's own, from `BodyMeshCache` and
+`BodyMaterials` — a first-person forearm is that forearm seen from closer up,
+so your hands are your team's colour and alight when you are.
 
 ## Stages
 
@@ -278,7 +305,7 @@ Each stands alone and each is worth having on its own.
 | 3 | ~~**The upper-body layer.**~~ **Done, bar authoring.** `HoldSpec` is on the prop, `hold_the_weapon` places the weapon from the aim and solves both arms to it. What is missing is a way to *author* a hold — every prop uses its file's values and nothing in the editor writes them. | The idea at the top of this document. |
 | 3b | ~~**Authoring a hold.**~~ **Done.** The two grips and the figure are draggable, the Hold panel carries every number, per-class overrides work, and an arm that cannot reach says so. Rotations are typed rather than dragged. | A weapon shaped unlike a rifle. |
 | 4 | ~~**Prop sync.**~~ **Done.** `prop::sync` sends every model the catalogue names, as the text its file holds. | A server can ship a weapon nobody else has. |
-| 5 | **The viewmodel pipeline.** Second camera, layer, near plane. | First person. Needs 3: the arms have to be posed before they are worth drawing close up. |
+| 5 | ~~**The viewmodel pipeline.**~~ **Done.** Second camera on its own layer and near plane, the weapon placed by `ViewmodelSpec`, and a pair of arms solved onto the prop's own grip frames by `grip_with`. | First person. Needs 3: the arms have to be posed before they are worth drawing close up. |
 | 6 | **Weapon animations.** Fire, reload, deploy, as parametric poses over the hold. An editor for them, someday. | |
 
 Stage 1 comes before stage 2 only because the aim split is easier to judge with

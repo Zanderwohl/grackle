@@ -219,6 +219,25 @@ Three things there are easy to get wrong and none of them errors:
 The play camera carries `IsDefaultUiCamera`: the window has six cameras in it
 and Bevy UI otherwise picks one by ambiguity rules rather than by being told.
 
+**The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
+calls the same `grip_with` that puts a body's hands on a weapon, so a grip
+tuned in the prop editor is the grip first person uses and there is no second
+set of numbers to drift. What differs is the frame: a body's arms are solved
+where the body is, and these in **eye space** — the rig stood so its own eye is
+at the camera — from the **rest pose**, never the animated one, because the
+arms are welded to a view that neither bobs nor crouches. The eye is taken off
+the **rig** rather than the movement hull, whose 1.8 m is the same for every
+class and would hang a Scout's arms from a Heavy's shoulders.
+
+Three consequences: only **forearms and hands** are drawn, since an upper arm
+runs back to a shoulder beside the camera and at a 5 mm near plane reads as a
+slab of shoulder in the corner; **an arm that did not reach is not drawn**,
+because `grip_with` leaves an unsolved hand where it was and in front of an eye
+that is a forearm lying across the screen; and the meshes and material are the
+**body's own**, from `BodyMeshCache` and `BodyMaterials`, so a first-person
+forearm is that forearm seen closer up, in your team's colour, alight when you
+are.
+
 A prop's `ViewmodelSpec` is **not** its carry: a carry is anatomical, in arm
 lengths, putting the weapon where a body really holds it — well below the eye —
 while a viewmodel is a framing decision. Reusing the carry drew the weapon
