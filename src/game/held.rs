@@ -22,6 +22,7 @@
 use bevy::prelude::*;
 
 use crate::common::assets::Assets as PackAssets;
+use crate::common::class::Class;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::weapon::{Equipped, WeaponCatalogue, WeaponId};
 use crate::game::body_mesh::FirstPersonHidden;
@@ -120,9 +121,9 @@ fn dress_held_weapons(
     mut surfaces: ResMut<SurfaceMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    bodies: Query<(Entity, &Equipped, Option<&HeldModel>), With<Skeleton>>,
+    bodies: Query<(Entity, &Equipped, Option<&Class>, Option<&HeldModel>), With<Skeleton>>,
 ) {
-    for (body, equipped, drawn) in &bodies {
+    for (body, equipped, class, drawn) in &bodies {
         let held = equipped.held();
         if let Some(drawn) = drawn
             && drawn.weapon == held
@@ -149,7 +150,7 @@ fn dress_held_weapons(
                     cache.ensure(model, &packs, &mut meshes, &mut materials, &mut surfaces)
                 {
                     let parts = baked.parts.clone();
-                    hold = baked.hold;
+                    hold = baked.hold.for_class(class.copied());
                     commands.entity(body).with_children(|body| {
                         for (mesh, material) in parts {
                             spawned.push(

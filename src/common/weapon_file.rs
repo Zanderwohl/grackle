@@ -89,29 +89,6 @@ struct SlotEntry {
     default: String,
 }
 
-/// How a class is written in a data file.
-///
-/// Derived from the variant rather than kept as a table beside the enum, so a
-/// class cannot exist in one place and be missing from the other. That is the
-/// same reason `Class::iter()` is what the animation grid lays itself out
-/// from.
-fn class_key(class: Class) -> String {
-    let name = format!("{class:?}");
-    let mut key = String::with_capacity(name.len() + 2);
-    for (index, character) in name.char_indices() {
-        if character.is_uppercase() && index > 0 {
-            key.push('_');
-        }
-        key.extend(character.to_lowercase());
-    }
-    key
-}
-
-/// The class a data file means, if any.
-fn class_named(key: &str) -> Option<Class> {
-    Class::iter().find(|class| class_key(*class) == key)
-}
-
 /// Read the catalogue out of every pack, lowest priority first.
 ///
 /// A pack that has no weapons file is not an error — most packs will be map
@@ -204,7 +181,7 @@ fn load_loadouts(assets: &Assets, pack: &Path, catalogue: &mut WeaponCatalogue) 
     };
 
     for (key, slots) in file.loadouts {
-        let Some(class) = class_named(&key) else {
+        let Some(class) = Class::named(&key) else {
             error!("{}/{LOADOUTS_FILE}: no class called {key}", pack.display());
             continue;
         };
@@ -418,12 +395,12 @@ mod tests {
     fn every_class_has_a_key_and_it_is_its_own() {
         let mut keys: Vec<String> = Vec::new();
         for class in Class::iter() {
-            let key = class_key(class);
-            assert_eq!(class_named(&key), Some(class), "{key} did not come back as {class:?}");
+            let key = Class::key(class);
+            assert_eq!(Class::named(&key), Some(class), "{key} did not come back as {class:?}");
             assert!(!keys.contains(&key), "two classes are written the same way: {key}");
             keys.push(key);
         }
-        assert_eq!(class_named("no_such_class"), None);
+        assert_eq!(Class::named("no_such_class"), None);
     }
 
     /// A default the class may not carry is a permitted list that means

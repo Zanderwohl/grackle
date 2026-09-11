@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
+use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
 use crate::common::skeleton::Proportions;
@@ -289,6 +290,29 @@ impl Class {
             // looked distinctive would be a design decision made by accident.
             Class::Mercenary => Proportions::DEFAULT,
         }
+    }
+
+    /// How a class is written in a data file.
+    ///
+    /// Derived from the variant rather than kept as a table beside the enum, so a
+    /// class cannot exist in one place and be missing from the other. That is the
+    /// same reason `Class::iter()` is what the animation grid lays itself out
+    /// from.
+    pub fn key(class: Class) -> String {
+        let name = format!("{class:?}");
+        let mut key = String::with_capacity(name.len() + 2);
+        for (index, character) in name.char_indices() {
+            if character.is_uppercase() && index > 0 {
+                key.push('_');
+            }
+            key.extend(character.to_lowercase());
+        }
+        key
+    }
+
+    /// The class a data file means, if any.
+    pub fn named(key: &str) -> Option<Class> {
+        Class::iter().find(|class| Self::key(*class) == key)
     }
 
     pub fn name(&self) -> String {

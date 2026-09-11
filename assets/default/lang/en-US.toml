@@ -343,7 +343,17 @@ frame = "Frame"
 features = "Features"
 inspector = "Inspector"
 scene = "Scene"
+hold = "Hold"
 problems = "Problems"
+
+[prop.hold]
+trigger_hand = "Trigger hand"
+two_handed = "Support hand"
+at = "At"
+carry = "Carry"
+offset = "Offset (arm lengths)"
+override_for = "Override for the { class }"
+no_figure = "Pick a reference figure to author a per-class hold."
 
 [prop.scene]
 figure = "Reference figure"

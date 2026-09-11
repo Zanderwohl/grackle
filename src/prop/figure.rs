@@ -93,9 +93,12 @@ pub fn refresh_the_figure(
 /// makes dragging the figure the natural way to author a carry.
 pub fn pose_the_figure(
     editor: Res<PropEditor>,
+    choice: Res<ScaleFigure>,
     mut figures: Query<(&Skeleton, &mut Pose, &mut Transform), With<ScaleFigureMarker>>,
 ) {
-    let hold = editor.doc().hold;
+    // As the class on show performs it, so an override is authored against the
+    // body that will actually hold the thing.
+    let hold = editor.doc().hold.for_class(choice.0);
     for (skeleton, mut pose, mut transform) in &mut figures {
         let mut standing = Pose::rest();
 

@@ -33,6 +33,7 @@ use crate::common::class::Class;
 use crate::common::shortcuts::chords;
 use crate::prop::feature::{Axis, BooleanOp, FeatureOp, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
+use crate::prop::hold::HoldOverride;
 use crate::prop::profile::{Placement, Profile, MIN_SIDES};
 use crate::prop::solid::Shape;
 use crate::prop::surface::{Style, Surface};
@@ -62,6 +63,7 @@ enum PropTab {
     Features,
     Inspector,
     Scene,
+    Hold,
     Problems,
 }
 
@@ -81,7 +83,7 @@ impl Default for PropPanels {
     fn default() -> Self {
         Self {
             left: DockState::new(vec![PropTab::Features]),
-            right: DockState::new(vec![PropTab::Inspector, PropTab::Scene]),
+            right: DockState::new(vec![PropTab::Inspector, PropTab::Scene, PropTab::Hold]),
             bottom: DockState::new(vec![PropTab::Problems]),
             menu_bar_height: 0.0,
             left_width: 260.0,
@@ -119,6 +121,7 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Features => "prop_features",
             PropTab::Inspector => "prop_inspector",
             PropTab::Scene => "prop_scene",
+            PropTab::Hold => "prop_hold",
             PropTab::Problems => "prop_problems",
         })
     }
@@ -128,6 +131,7 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Features => get!("prop.panels.features").into(),
             PropTab::Inspector => get!("prop.panels.inspector").into(),
             PropTab::Scene => get!("prop.panels.scene").into(),
+            PropTab::Hold => get!("prop.panels.hold").into(),
             PropTab::Problems => get!("prop.panels.problems").into(),
         }
     }
@@ -137,6 +141,7 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Features => feature_tree(ui, self.editor, self.build),
             PropTab::Inspector => inspector(ui, self.editor, self.build),
             PropTab::Scene => scene(ui, self.figure),
+            PropTab::Hold => hold(ui, self.editor, *self.figure),
             PropTab::Problems => problems(ui, self.editor, self.build),
         }
     }
@@ -835,6 +840,114 @@ fn scene(ui: &mut Ui, figure: &mut ScaleFigure) {
                 ui.selectable_value(&mut figure.0, Some(class), class.name());
             }
         });
+}
+
+/// How this prop is held.
+///
+/// Numbers rather than handles, for now — the gizmos are the next piece. What
+/// makes them worth typing at all is that the reference figure performs *this*
+/// hold, so the effect of a change is on screen the moment it is made.
+///
+/// **The class on show is the class being edited.** One question, asked once:
+/// ticking the override edits the entry for whoever is standing there, which
+/// is also the body you are judging it against.
+fn hold(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure) {
+    let base = editor.doc().hold.clone();
+    let key = figure.0.map(Class::key);
+    let overriding = key.as_ref().is_some_and(|key| base.per_class.contains_key(key));
+
+    let mut changed = false;
+    let mut edited = base.for_class(figure.0);
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        match (&key, figure.0) {
+            (Some(key), Some(class)) => {
+                let mut on = overriding;
+                if ui
+                    .checkbox(&mut on, get!("prop.hold.override_for", "class", class.name()))
+                    .changed()
+                {
+                    let mut doc_hold = base.clone();
+                    match on {
+                        true => {
+                            doc_hold.per_class.insert(key.clone(), HoldOverride::default());
+                        }
+                        false => {
+                            doc_hold.per_class.remove(key);
+                        }
+                    }
+                    editor.edit(|doc| doc.hold = doc_hold);
+                }
+                let _ = class;
+            }
+            _ => {
+                ui.label(egui::RichText::new(get!("prop.hold.no_figure")).weak());
+            }
+        }
+        ui.separator();
+
+        ui.label(get!("prop.hold.trigger_hand"));
+        changed |= vec3_ui(ui, get!("prop.hold.at"), &mut edited.grip, 0.001, "m");
+        changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.grip_rotation);
+
+        ui.separator();
+        changed |= ui.checkbox(&mut edited.two_handed, get!("prop.hold.two_handed")).changed();
+        ui.add_enabled_ui(edited.two_handed, |ui| {
+            changed |= vec3_ui(ui, get!("prop.hold.at"), &mut edited.support, 0.001, "m");
+            changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.support_rotation);
+        });
+
+        ui.separator();
+        ui.label(get!("prop.hold.carry"));
+        // Arm lengths, not metres, so a carry means the same thing on a Heavy
+        // as on a Scout. Dragged in hundredths because the whole useful range
+        // is under one arm.
+        changed |= vec3_ui(ui, get!("prop.hold.offset"), &mut edited.carry, 0.005, "");
+        changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.carry_rotation);
+    });
+
+    if !changed {
+        return;
+    }
+    editor.begin_gesture();
+    let mut doc_hold = base;
+    match key.filter(|key| doc_hold.per_class.contains_key(key)) {
+        // Only what actually differs from the base is written down, so an
+        // override stays a statement about what this class does differently
+        // rather than a copy that stops tracking.
+        Some(key) => {
+            let over = HoldOverride {
+                grip: (edited.grip != doc_hold.grip).then_some(edited.grip),
+                grip_rotation: (edited.grip_rotation != doc_hold.grip_rotation)
+                    .then_some(edited.grip_rotation),
+                support: (edited.support != doc_hold.support).then_some(edited.support),
+                support_rotation: (edited.support_rotation != doc_hold.support_rotation)
+                    .then_some(edited.support_rotation),
+                two_handed: (edited.two_handed != doc_hold.two_handed)
+                    .then_some(edited.two_handed),
+                carry: (edited.carry != doc_hold.carry).then_some(edited.carry),
+                carry_rotation: (edited.carry_rotation != doc_hold.carry_rotation)
+                    .then_some(edited.carry_rotation),
+            };
+            doc_hold.per_class.insert(key, over);
+        }
+        None => {
+            let per_class = std::mem::take(&mut doc_hold.per_class);
+            doc_hold = edited;
+            doc_hold.per_class = per_class;
+        }
+    }
+    editor.doc_mut().hold = doc_hold;
+}
+
+/// Three drag boxes in degrees, over a field stored in radians.
+fn degrees_ui(ui: &mut Ui, label: String, radians: &mut [f32; 3]) -> bool {
+    let mut degrees = radians.map(f32::to_degrees);
+    if vec3_ui(ui, label, &mut degrees, 1.0, "°") {
+        *radians = degrees.map(f32::to_radians);
+        return true;
+    }
+    false
 }
 
 fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {

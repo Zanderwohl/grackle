@@ -518,6 +518,15 @@ point** — a hand in the right place with the wrong rotation holds a weapon by
 the back of its wrist, and once the figure is no longer the source of that
 rotation it has to be stated on the hold.
 
+**A class may hold a thing differently**, through `HoldSpec::per_class` —
+keyed the way `loadouts.toml` keys a class, which is `Class::key`, moved onto
+the enum from `weapon_file` so how a class is written down lives in one place.
+An override states only what differs. Absence means "not overridden" there and
+"use the default" in the base hold: opposite readings, both honest, because
+they are different questions — which is also why `two_handed` is an `Option` in
+an override and a plain flag in the base, where absence has to mean *something*
+and TOML has no null.
+
 **In the prop editor the prop does not move; the figure does.** A prop is
 authored around its own origin and its feature gizmos are drawn there, so the
 body is placed by inverting where the hold says the weapon would be.
@@ -1289,13 +1298,14 @@ crosses; the corpse carries a `CorpseBuild` — the `Proportions` read straight
 off the rig the body had — and `dress_corpses_from_elsewhere` puts the rig
 back from it.
 
-**The build comes off the rig, not off a `Class`.** A player's body has no
-`Class` at all: it is rigged from `Proportions::DEFAULT` by `dress_new_players`,
-and only the animation grid's bodies carry one. Keyed on a class, every corpse
-in the game replicated correctly *except* a player's — the one death anybody
-actually watches — and it failed as an invisible corpse rather than as an
-error. Every body has a rig by definition, and a rig knows what it was built
-from.
+**The build comes off the rig, not off a `Class`.** Keyed on a class, every
+corpse in the game replicated correctly *except* a player's — the one death
+anybody actually watches — because a player's body did not carry one, and it
+failed as an invisible corpse rather than as an error. Player bodies *do* carry
+a `Class` now (`dress_new_players` builds their rig from it), so the bug is no
+longer reachable that way; the rule stands anyway, because every body has a rig
+by definition and a rig knows what it was built from, whereas not every body
+has to have a class.
 
 Four things about that are load-bearing:
 

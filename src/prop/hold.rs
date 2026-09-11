@@ -13,15 +13,19 @@
 //! grip, so the only guess here is where the support hand goes and how far out
 //! the thing is carried.
 
+use std::collections::BTreeMap;
+
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
+
+use crate::common::class::Class;
 
 use crate::common::rotation::quat_from_euler;
 use crate::common::skeleton::ik::{solve, Chain, Reach, LEFT_ARM, RIGHT_ARM};
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{Pose, Skeleton};
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HoldSpec {
     /// Where the trigger hand grips, in the weapon's own space.
     ///
@@ -66,6 +70,50 @@ pub struct HoldSpec {
     /// what cants a weapon or angles it across the body.
     #[serde(default, with = "crate::prop::nice_f32::array")]
     pub carry_rotation: [f32; 3],
+    /// Classes that hold this thing differently, keyed the way
+    /// `loadouts.toml` keys them.
+    ///
+    /// A Heavy plausibly carries a weapon unlike a Scout, and `carry` being in
+    /// arm-length fractions retargets the *size* of a build but not its
+    /// habits. Nothing fills this in yet; a prop with no entries is a prop
+    /// everybody holds the same way.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub per_class: BTreeMap<String, HoldOverride>,
+}
+
+/// What one class does differently.
+///
+/// **Absence means "not overridden" here, and "use the default" in the base
+/// hold.** Opposite readings, and both honest because they are different
+/// questions: a base hold with no `support` is a weapon nobody stated a
+/// support point for, while an override with no `support` is a class that did
+/// not want to move it. That is also why `two_handed` is an `Option` here and
+/// a plain flag there — in an override, absence is exactly what `Option`
+/// means, and TOML can express it by leaving the field out.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HoldOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grip: Option<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grip_rotation: Option<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub support: Option<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub support_rotation: Option<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub two_handed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carry: Option<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carry_rotation: Option<[f32; 3]>,
+}
+
+impl HoldOverride {
+    /// Whether this says anything at all. An entry that overrides nothing is
+    /// worth dropping rather than writing to the file.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 fn default_support() -> [f32; 3] {
@@ -104,11 +152,35 @@ impl Default for HoldSpec {
             // something a body being animated by the state machine does not do.
             carry: [0.05, -0.14, -0.22],
             carry_rotation: [0.0; 3],
+            per_class: BTreeMap::new(),
         }
     }
 }
 
 impl HoldSpec {
+    /// This hold as a given class performs it.
+    ///
+    /// The base hold with whatever that class overrode laid on top. A class
+    /// with no entry gets the base, which is the common case and the reason
+    /// this returns a value rather than an `Option`.
+    pub fn for_class(&self, class: Option<Class>) -> HoldSpec {
+        let Some(over) = class.and_then(|class| self.per_class.get(&Class::key(class))) else {
+            return self.clone();
+        };
+        HoldSpec {
+            grip: over.grip.unwrap_or(self.grip),
+            grip_rotation: over.grip_rotation.unwrap_or(self.grip_rotation),
+            support: over.support.unwrap_or(self.support),
+            support_rotation: over.support_rotation.unwrap_or(self.support_rotation),
+            two_handed: over.two_handed.unwrap_or(self.two_handed),
+            carry: over.carry.unwrap_or(self.carry),
+            carry_rotation: over.carry_rotation.unwrap_or(self.carry_rotation),
+            // Not inherited: an override describing further overrides would be
+            // a class holding a thing as another class holds it.
+            per_class: BTreeMap::new(),
+        }
+    }
+
     pub fn grip(&self) -> Vec3 {
         Vec3::from_array(self.grip)
     }
@@ -268,6 +340,39 @@ mod tests {
         Class::Spy, Class::Civilian, Class::Mercenary,
     ];
 
+    /// Absence in an override means "not overridden", which is the opposite
+    /// reading from the base hold — where absence means "use the default" —
+    /// and the reason the two use different types for the same question.
+    #[test]
+    fn a_class_inherits_everything_it_does_not_override() {
+        let mut base = HoldSpec::default();
+        base.per_class.insert(
+            Class::key(Class::Heavy),
+            HoldOverride { carry: Some([1.0, 2.0, 3.0]), ..default() },
+        );
+
+        let heavy = base.for_class(Some(Class::Heavy));
+        assert_eq!(heavy.carry, [1.0, 2.0, 3.0], "the override did not take");
+        assert_eq!(heavy.grip, base.grip, "the grip was not inherited");
+        assert_eq!(heavy.two_handed, base.two_handed, "two-handedness was not inherited");
+
+        // A class nobody mentioned, and no class at all, both get the base.
+        assert_eq!(base.for_class(Some(Class::Scout)).carry, base.carry);
+        assert_eq!(base.for_class(None).carry, base.carry);
+    }
+
+    /// An override describing further overrides would be a class holding a
+    /// thing as another class holds it.
+    #[test]
+    fn an_overridden_hold_carries_no_overrides_of_its_own() {
+        let mut base = HoldSpec::default();
+        base.per_class.insert(
+            Class::key(Class::Heavy),
+            HoldOverride { two_handed: Some(false), ..default() },
+        );
+        assert!(base.for_class(Some(Class::Heavy)).per_class.is_empty());
+    }
+
     /// **Every class has to be able to reach every prop the pack ships.** A
     /// carry is authored in fractions of arm length so that it retargets, and
     /// a build whose hand cannot get to the grip holds nothing while its arm
@@ -287,6 +392,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
 
             for class in EVERY_CLASS {
+                let hold = doc.hold.for_class(Some(class));
                 let skeleton = humanoid(class.proportions());
                 let mut pose = Pose::rest();
                 let root = Transform::IDENTITY;
@@ -295,9 +401,9 @@ mod tests {
                 let proportions = skeleton.proportions();
                 let arm = proportions.height * proportions.arm_length;
                 let pivot = skeleton.posed_bones(&pose, &root)[chest].tail;
-                let placed = Transform::from_translation(pivot + doc.hold.carry(arm));
+                let placed = Transform::from_translation(pivot + hold.carry(arm));
 
-                let grip = placed.transform_point(doc.hold.grip());
+                let grip = placed.transform_point(hold.grip());
                 assert_eq!(
                     reach_for(&skeleton, &mut pose, &root, &RIGHT_ARM, grip, elbow_pole(1.0)),
                     Reach::Reached,
@@ -305,7 +411,7 @@ mod tests {
                     path.display(),
                 );
 
-                if let Some(support) = doc.hold.support() {
+                if let Some(support) = hold.support() {
                     let support = placed.transform_point(support);
                     assert_eq!(
                         reach_for(&skeleton, &mut pose, &root, &LEFT_ARM, support, elbow_pole(-1.0)),
