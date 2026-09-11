@@ -356,10 +356,6 @@ redo = "Redo"
 # ships one font set and a glyph outside it renders as a hollow box. These are
 # emoji rather than the Geometric Shapes triangles they replaced, which is what
 # that failure looked like: NotoEmoji is the font egui actually has.
-move_up = "🔼"
-move_up_hint = "Move earlier"
-move_down = "🔽"
-move_down_hint = "Move later"
 # Right-click menu. "Suppress" and "Unsuppress" name the *action*, not the
 # state: whichever is showing is what clicking will do.
 suppress = "Suppress"

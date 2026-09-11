@@ -106,30 +106,70 @@ impl PropDoc {
             .collect()
     }
 
-    /// Move a feature one place earlier or later in the list.
+    /// Where a feature may be moved to, as indices in the finished list.
     ///
-    /// Refuses a move that would carry a feature past something it consumes,
-    /// because the evaluator replays top to bottom and a boolean above its own
-    /// operands is a boolean that can never find them. Refusing is kinder than
-    /// allowing it and showing the dangling-reference note.
-    pub fn shift(&mut self, id: PropFeatureId, later: bool) -> bool {
+    /// **Always a contiguous interval**, and that is what makes dragging one
+    /// around tractable. The evaluator replays top to bottom, so a feature has
+    /// to sit after everything it consumes and before everything that consumes
+    /// it — and since moving *one* item leaves every other item's relative
+    /// order alone, those two conditions are a single window: after the last
+    /// operand, before the first dependant. There is no scattered set of legal
+    /// slots to describe, so the panel can clamp a drag into the range rather
+    /// than needing a way to refuse a drop.
+    ///
+    /// **Direct relations are enough.** An indirect operand is already above a
+    /// direct one, so keeping clear of the direct ones keeps clear of all of
+    /// them.
+    ///
+    /// Indices are counted in the list **with this feature taken out**, which
+    /// is the same thing as the index it will end up at.
+    pub fn legal_range(&self, id: PropFeatureId) -> Option<std::ops::RangeInclusive<usize>> {
+        let at = self.index_of(id)?;
+        let feature = self.feature(id)?;
+
+        // Where an item at `i` sits once this feature is lifted out.
+        let without = |i: usize| if i < at { i } else { i - 1 };
+
+        let mut low = 0;
+        for operand in feature.op.consumes() {
+            if let Some(index) = self.index_of(operand) {
+                low = low.max(without(index) + 1);
+            }
+        }
+
+        let mut high = self.features.len().saturating_sub(1);
+        for dependant in self.dependants(id) {
+            if let Some(index) = self.index_of(dependant) {
+                high = high.min(without(index));
+            }
+        }
+
+        // A document whose features are already out of order would give an
+        // inverted range, and an inverted range is a panic waiting in whatever
+        // clamps with it. The lower bound wins: staying put is always legal.
+        Some(low..=high.max(low))
+    }
+
+    /// Move a feature to `target`, or as close to it as the dependencies allow.
+    ///
+    /// **Clamped rather than refused.** A drag that would carry a boolean
+    /// above its own operands stops at the last legal place instead of
+    /// snapping back or landing somewhere broken — which is the whole of how
+    /// the panel prevents an illegal order, and why it needs no way to mark a
+    /// drop target as forbidden.
+    ///
+    /// Returns whether anything moved.
+    pub fn move_to(&mut self, id: PropFeatureId, target: usize) -> bool {
         let Some(at) = self.index_of(id) else { return false };
-        let to = if later { at + 1 } else { at.checked_sub(1).unwrap_or(at) };
-        if to == at || to >= self.features.len() {
+        let Some(legal) = self.legal_range(id) else { return false };
+
+        let target = target.clamp(*legal.start(), *legal.end());
+        if target == at {
             return false;
         }
 
-        let (mover, other) = (&self.features[at], &self.features[to]);
-        let blocked = if later {
-            other.op.consumes().contains(&mover.id)
-        } else {
-            mover.op.consumes().contains(&other.id)
-        };
-        if blocked {
-            return false;
-        }
-
-        self.features.swap(at, to);
+        let feature = self.features.remove(at);
+        self.features.insert(target, feature);
         true
     }
 
@@ -454,19 +494,111 @@ mod tests {
         );
     }
 
-    /// The evaluator replays top to bottom, so a boolean above its operands
-    /// can never find them. Refusing the move is the only answer that does not
-    /// break the prop.
+    /// The claim the whole drag interaction rests on: what a feature may do is
+    /// one unbroken span, so a drag can be clamped into it rather than needing
+    /// a way to refuse a drop.
     #[test]
-    fn a_feature_cannot_be_dragged_above_what_it_consumes() {
+    fn what_a_feature_may_be_moved_to_is_one_unbroken_range() {
         let mut doc = PropDoc::new("x");
         let a = doc.push(FeatureOp::default());
         let b = doc.push(FeatureOp::default());
         let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
+        let spare = doc.push(FeatureOp::default());
 
-        assert!(!doc.shift(cut, false), "the boolean moved above its own tool");
-        assert!(!doc.shift(b, true), "the tool moved below the boolean that eats it");
-        assert!(doc.shift(a, true), "an unrelated swap was refused");
+        // The boolean eats the first two, so it can go anywhere after them:
+        // with itself lifted out that is index 2 (the end) and nowhere else,
+        // since `spare` is the only thing left to sit before.
+        assert_eq!(doc.legal_range(cut), Some(2..=3));
+        // `a` is consumed by the boolean at index 2, so with `a` lifted out the
+        // boolean is at 1 and `a` must land before it.
+        assert_eq!(doc.legal_range(a), Some(0..=1));
+        // Nothing depends on `spare` and it depends on nothing.
+        assert_eq!(doc.legal_range(spare), Some(0..=3));
+    }
+
+    /// The evaluator replays top to bottom, so a boolean above its operands can
+    /// never find them. A drag that would do it stops at the last legal place
+    /// rather than snapping back — you get the nearest thing you asked for.
+    #[test]
+    fn a_drag_past_a_dependency_stops_against_it() {
+        let mut doc = PropDoc::new("x");
+        let a = doc.push(FeatureOp::default());
+        let b = doc.push(FeatureOp::default());
+        let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
+        doc.push(FeatureOp::default());
+
+        // Dragged to the very top, it lands directly under its own operands.
+        doc.move_to(cut, 0);
+        assert_eq!(doc.index_of(cut), Some(2), "the boolean got above its operands");
+        assert_eq!(doc.index_of(a), Some(0));
+        assert_eq!(doc.index_of(b), Some(1));
+
+        // And a tool dragged to the bottom stops above the boolean that eats it.
+        doc.move_to(b, 3);
+        assert_eq!(doc.index_of(b), Some(1));
+        assert_eq!(doc.index_of(cut), Some(2));
+    }
+
+    /// A move that *is* legal has to actually happen, or the clamp is just a
+    /// way of never moving anything.
+    #[test]
+    fn an_unconstrained_feature_goes_where_it_is_put() {
+        let mut doc = PropDoc::new("x");
+        let first = doc.push(FeatureOp::default());
+        doc.push(FeatureOp::default());
+        doc.push(FeatureOp::default());
+
+        assert!(doc.move_to(first, 2));
+        assert_eq!(doc.index_of(first), Some(2));
+        assert_eq!(doc.features.len(), 3, "the move lost or duplicated a feature");
+
+        assert!(!doc.move_to(first, 2), "moving to where it already is counted as a move");
+    }
+
+    /// Every feature in a document stays somewhere it is allowed to be, however
+    /// it is dragged about — including the one being dragged. Checked by
+    /// re-evaluating, because "legal" means exactly "the evaluator finds
+    /// everything it needs".
+    #[test]
+    fn no_sequence_of_drags_can_break_a_prop() {
+        // Offset from each other on purpose: `FeatureOp::default()` is the
+        // same box at the same place every time, so subtracting one from
+        // another leaves nothing — a real problem, and not the kind this test
+        // is looking for.
+        let solid = |x: f32| FeatureOp::Primitive {
+            shape: Shape::Box { size: [0.2, 0.2, 0.2] },
+            placement: Placement::at(x, 0.0, 0.0),
+            surface: Surface::default(),
+        };
+
+        let mut doc = PropDoc::new("x");
+        let a = doc.push(solid(0.0));
+        let b = doc.push(solid(0.1));
+        let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
+        let c = doc.push(solid(0.05));
+        let joined = doc.push(FeatureOp::Boolean { op: BooleanOp::Union, target: cut, tool: c });
+        doc.push(FeatureOp::Mirror {
+            target: joined,
+            axis: Axis::X,
+            offset: 0.0,
+            keep_original: true,
+        });
+
+        let ids: Vec<PropFeatureId> = doc.features.iter().map(|feature| feature.id).collect();
+        // Every feature dragged to every slot, in both directions, including
+        // the ones a careful user would never try.
+        for _ in 0..3 {
+            for id in &ids {
+                for target in 0..ids.len() {
+                    doc.move_to(*id, target);
+                    assert!(
+                        doc.evaluate().problems.is_empty(),
+                        "dragging {id} to {target} broke the prop: {:?}",
+                        doc.evaluate().problems,
+                    );
+                }
+            }
+        }
     }
 
     /// A drag reports an edit every frame. One gesture is one undo step, or

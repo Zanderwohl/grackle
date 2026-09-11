@@ -338,6 +338,13 @@ struct Row {
     /// How many features name this one as an operand, so deleting it can say
     /// what that costs.
     dependants: usize,
+    /// The features this one may not be dragged past, in either direction —
+    /// its operands and its dependants together. Marked while it is being
+    /// dragged, so the reason the insertion line stops is on screen rather
+    /// than only in the behaviour.
+    pins: Vec<PropFeatureId>,
+    /// Where this feature may end up, as indices in the finished list.
+    legal: std::ops::RangeInclusive<usize>,
 }
 
 /// The ordered list, which *is* the prop.
@@ -363,11 +370,19 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
         .doc()
         .features
         .iter()
-        .map(|feature| Row {
-            id: feature.id,
-            name: feature.name.clone(),
-            enabled: feature.enabled,
-            dependants: editor.doc().dependants(feature.id).len(),
+        .map(|feature| {
+            let dependants = editor.doc().dependants(feature.id);
+            Row {
+                id: feature.id,
+                name: feature.name.clone(),
+                enabled: feature.enabled,
+                dependants: dependants.len(),
+                pins: feature.op.consumes().into_iter().chain(dependants).collect(),
+                legal: editor
+                    .doc()
+                    .legal_range(feature.id)
+                    .unwrap_or(0..=0),
+            }
         })
         .collect();
     let live: Vec<PropFeatureId> = build.evaluated.bodies.iter().map(|(id, _)| *id).collect();
@@ -381,9 +396,19 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let mut select: Option<PropFeatureId> = None;
     let mut pending: Option<Box<dyn FnOnce(&mut PropEditor)>> = None;
 
+    // Collected as the rows are drawn, and used once they all have been: where
+    // an insertion line goes is a question about the whole list, and the
+    // dragged row is not known until the row that reports it has been drawn.
+    // Discovering it this way rather than remembering it between frames means
+    // there is no drag state to get out of step with the document.
+    let mut rects: Vec<(PropFeatureId, egui::Rect)> = Vec::new();
+    let mut dragging: Option<usize> = None;
+    let mut dropped = false;
+
     egui::ScrollArea::vertical().show(ui, |ui| {
-        for row in entries {
-            let Row { id, name, enabled, dependants } = row;
+        for (at, row) in entries.iter().enumerate() {
+            let Row { id, enabled, dependants, .. } = *row;
+            let name = &row.name;
 
             // Reserved before the row is drawn and filled in after, because
             // whether to paint it depends on a hover the row has not reported
@@ -437,41 +462,35 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     // exactly as they did when it was a `SelectableLabel`.
                     // The I-beam cursor is the visible half of the same thing.
                     ui.add(egui::Label::new(text).selectable(false));
+                    // Claims the rest of the line so the row is a full-width
+                    // target. Without it `horizontal` shrinks to the text, and
+                    // both the highlight and the place you can grab would be
+                    // as wide as a feature happened to be named.
+                    ui.allocate_space(egui::vec2(ui.available_width(), 0.0));
 
-                    // Reordering stays on the row rather than joining the menu:
-                    // it is the one thing here done several times in a row, and
-                    // a menu per nudge would be three clicks a place.
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button(get!("prop.tree.move_down"))
-                            .on_hover_text(get!("prop.tree.move_down_hint"))
-                            .clicked()
-                        {
-                            pending = Some(Box::new(move |editor: &mut PropEditor| {
-                                editor.edit(|doc| doc.shift(id, true));
-                            }));
-                        }
-                        if ui
-                            .small_button(get!("prop.tree.move_up"))
-                            .on_hover_text(get!("prop.tree.move_up_hint"))
-                            .clicked()
-                        {
-                            pending = Some(Box::new(move |editor: &mut PropEditor| {
-                                editor.edit(|doc| doc.shift(id, false));
-                            }));
-                        }
-                    });
                 })
                 .response
-                .interact(egui::Sense::click());
+                .interact(egui::Sense::click_and_drag());
 
+            rects.push((id, response.rect));
+            // `dragged` stays true for the row the drag began on even once the
+            // pointer has left it, which is exactly what a reorder needs.
+            if response.dragged() {
+                dragging = Some(at);
+            }
+            if response.drag_stopped() {
+                dragging = Some(at);
+                dropped = true;
+            }
             if response.clicked() {
                 select = Some(id);
             }
 
             // Selection outranks hover: a row you are pointing at that is
             // already chosen should not dim to say so.
-            let fill = if selected == Some(id) {
+            let fill = if response.dragged() {
+                Some(ui.visuals().widgets.active.weak_bg_fill)
+            } else if selected == Some(id) {
                 Some(ui.visuals().selection.bg_fill)
             } else if response.hovered() {
                 Some(ui.visuals().widgets.hovered.weak_bg_fill)
@@ -542,6 +561,20 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 }
             });
         }
+
+        // Everything about the drag is decided here, after every row has
+        // reported its rect: what the insertion line means is a fact about the
+        // list rather than about any one row.
+        if let Some(at) = dragging {
+            let row = &entries[at];
+            let target = show_the_drop(ui, &rects, row);
+            if dropped {
+                let id = row.id;
+                pending = Some(Box::new(move |editor: &mut PropEditor| {
+                    editor.edit(|doc| doc.move_to(id, target));
+                }));
+            }
+        }
     });
 
     if let Some(id) = select {
@@ -550,6 +583,68 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     if let Some(action) = pending {
         action(editor);
     }
+}
+
+/// Draw where a dragged feature would land, and say where it may land.
+///
+/// Returns the index it would drop at — **clamped into the legal range**,
+/// which is what makes an illegal order unreachable rather than merely
+/// discouraged. Because the legal positions are one contiguous span (see
+/// `PropDoc::legal_range`), clamping is all it takes: the line follows the
+/// pointer and then stops dead against the feature that is pinning it, which
+/// is a thing you can feel rather than a rule you have to have read.
+///
+/// The features doing the pinning — this one's operands and dependants — are
+/// marked at the same time, because "it stopped" and "it stopped *there*" are
+/// different amounts of help.
+fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row) -> usize {
+    let others: Vec<egui::Rect> = rects
+        .iter()
+        .filter(|(id, _)| *id != row.id)
+        .map(|(_, rect)| *rect)
+        .collect();
+    if others.is_empty() {
+        return 0;
+    }
+
+    let pointer = ui
+        .ctx()
+        .pointer_interact_pos()
+        .map(|pointer| pointer.y)
+        .unwrap_or(f32::NEG_INFINITY);
+    // How many rows the pointer has passed the middle of. Midpoints rather
+    // than edges, so the line flips over to the next gap when the pointer is
+    // more than half way into a row — which is where you would expect it to.
+    let wanted = others.iter().take_while(|rect| rect.center().y < pointer).count();
+    let target = wanted.clamp(*row.legal.start(), *row.legal.end());
+
+    let painter = ui.painter();
+    for (id, rect) in rects {
+        if row.pins.contains(id) {
+            // A bar down the leading edge rather than an outline: it reads as
+            // "this is holding you" without competing with the selection
+            // highlight the row may already be wearing.
+            painter.rect_filled(
+                egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
+                0.0,
+                ui.visuals().warn_fg_color,
+            );
+        }
+    }
+
+    let line = match others.get(target) {
+        Some(rect) => rect.top(),
+        // Past the last row, which is where a feature with nothing depending
+        // on it is allowed to go.
+        None => others.last().expect("checked non-empty above").bottom(),
+    };
+    painter.hline(
+        others[0].x_range(),
+        line,
+        egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+    );
+
+    target
 }
 
 /// Adding a feature.
