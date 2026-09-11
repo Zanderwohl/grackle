@@ -265,6 +265,8 @@ pub fn default_catalogue() -> WeaponCatalogue {
 
 #[cfg(test)]
 mod tests {
+    use strum::IntoEnumIterator;
+
     use super::*;
     use crate::common::weapon::WeaponAction;
 
