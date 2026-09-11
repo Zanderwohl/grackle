@@ -108,26 +108,44 @@ impl Tools {
         matches!(self, Self::Retarget)
     }
     
+    /// Height a tool button is drawn at, and the gap left around the row.
+    ///
+    /// The toolbar is the one panel a mapper hits with the mouse without
+    /// looking, so the buttons are deliberately taller than egui's default
+    /// row. `TOOLBAR_HEIGHT` in [`crate::editor::panels`] is derived from
+    /// these, so a change here takes the panel with it.
+    pub const BUTTON_HEIGHT: f32 = 28.0;
+    pub const BUTTON_MIN_WIDTH: f32 = 72.0;
+    pub const ROW_PADDING: f32 = 6.0;
+
     pub fn ui(
         ui: &mut egui::Ui,
         current_tool: &State<Self>,
         next_tool: &mut NextState<Self>,
     ) {
-        egui::Grid::new("tools").show(ui, |ui| {
+        ui.add_space(Self::ROW_PADDING);
+        // Wrapped rather than a `Grid`: a grid row runs off the end of a
+        // narrow panel and takes the tools past the fold with it, which is
+        // exactly the toolbar that starts empty. Wrapping spends height —
+        // which the panel can be dragged to give — instead of hiding buttons.
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             for item in Self::iter() {
                 if item.is_hidden() { continue; }
+                let size = egui::vec2(Self::BUTTON_MIN_WIDTH, Self::BUTTON_HEIGHT);
                 if current_tool.eq(&item) {
                     ui.scope(|ui| {
                         ui.disable();
-                        let _ = ui.button(item.name());
+                        let _ = ui.add(egui::Button::new(item.name()).min_size(size));
                     });
                 } else {
-                    if ui.button(item.name()).clicked() {
+                    if ui.add(egui::Button::new(item.name()).min_size(size)).clicked() {
                         next_tool.set(item);
                     }
                 }
             }
         });
+        ui.add_space(Self::ROW_PADDING);
     }
 }
 
