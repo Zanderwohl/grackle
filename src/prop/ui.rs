@@ -385,6 +385,26 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
         for row in entries {
             let Row { id, name, enabled, dependants } = row;
 
+            // Reserved before the row is drawn and filled in after, because
+            // whether to paint it depends on a hover the row has not reported
+            // yet. Painting afterwards without reserving would put the
+            // highlight *over* the name.
+            let background = ui.painter().add(egui::Shape::Noop);
+
+            // **The row is the widget; the name is just text.** A
+            // `SelectableLabel` senses clicks, so it swallowed the secondary
+            // click over the one part of the row anybody aims at, and the menu
+            // appeared everywhere except on the name. A plain `Label` senses
+            // only hover, and egui's click hit-testing filters to widgets that
+            // sense clicks — so the click falls through to the row.
+            //
+            // `.interact(Sense::click())` is then what makes the row a widget
+            // at all: a `Ui`'s own response is allocated with `Sense::hover()`,
+            // and `Popup::context_menu` opens on `secondary_clicked()`, which a
+            // hover-only response can never report. It updates the row in
+            // place rather than moving it to the top of the order, so the
+            // reorder buttons — registered after it — still win their own
+            // clicks.
             let response = ui
                 .horizontal(|ui| {
                     // Three states, and they are not the same thing, so they
@@ -408,9 +428,15 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                         text = text.weak();
                     }
 
-                    if ui.selectable_label(selected == Some(id), text).clicked() {
-                        select = Some(id);
-                    }
+                    // `.selectable(false)` is the other half of making the row
+                    // the widget, and it is not about the caret. A label that
+                    // can have its text selected picks up
+                    // `Sense::click_and_drag()` for that, which puts it back in
+                    // the click hit-test and wins over the row — so both the
+                    // select and the context menu stop working over the name,
+                    // exactly as they did when it was a `SelectableLabel`.
+                    // The I-beam cursor is the visible half of the same thing.
+                    ui.add(egui::Label::new(text).selectable(false));
 
                     // Reordering stays on the row rather than joining the menu:
                     // it is the one thing here done several times in a row, and
@@ -436,7 +462,32 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                         }
                     });
                 })
-                .response;
+                .response
+                .interact(egui::Sense::click());
+
+            if response.clicked() {
+                select = Some(id);
+            }
+
+            // Selection outranks hover: a row you are pointing at that is
+            // already chosen should not dim to say so.
+            let fill = if selected == Some(id) {
+                Some(ui.visuals().selection.bg_fill)
+            } else if response.hovered() {
+                Some(ui.visuals().widgets.hovered.weak_bg_fill)
+            } else {
+                None
+            };
+            if let Some(fill) = fill {
+                ui.painter().set(
+                    background,
+                    egui::Shape::rect_filled(
+                        response.rect,
+                        ui.visuals().widgets.active.corner_radius,
+                        fill,
+                    ),
+                );
+            }
 
             response.context_menu(|ui| {
                 // Right-clicking a thing is a way of pointing at it, so it
