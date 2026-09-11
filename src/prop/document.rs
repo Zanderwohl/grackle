@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Evaluated, FeatureOp, PropFeature, PropFeatureId};
-use crate::prop::hold::HoldSpec;
+use crate::prop::hold::{HoldSpec, ViewmodelSpec};
 
 /// Grackle Prop. Flat text, one prop per file.
 pub const PROP_EXTENSION: &str = "gpp";
@@ -47,6 +47,10 @@ pub struct PropDoc {
     /// almost every prop will keep the default — see [`HoldSpec`].
     #[serde(default)]
     pub hold: HoldSpec,
+    /// Where it hangs in first person, which is a different question from how
+    /// a body holds it — see [`ViewmodelSpec`].
+    #[serde(default)]
+    pub viewmodel: ViewmodelSpec,
     /// The next id to hand out. Stored rather than derived from the highest in
     /// use, so deleting the last feature cannot make the next reuse its number.
     #[serde(default)]
@@ -55,7 +59,13 @@ pub struct PropDoc {
 
 impl PropDoc {
     pub fn new(name_key: impl Into<String>) -> PropDoc {
-        PropDoc { name_key: name_key.into(), features: vec![], hold: HoldSpec::default(), next_id: 0 }
+        PropDoc {
+            name_key: name_key.into(),
+            features: vec![],
+            hold: HoldSpec::default(),
+            viewmodel: ViewmodelSpec::default(),
+            next_id: 0,
+        }
     }
 
     fn take_id(&mut self) -> PropFeatureId {

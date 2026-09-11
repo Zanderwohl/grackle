@@ -23,11 +23,16 @@
 //!
 //! ## What it draws
 //!
-//! Its own copy of the held weapon's meshes, on [`VIEWMODEL_LAYER`], placed
-//! from the same [`HoldSpec`] the body uses but against the camera rather than
-//! against a chest. The aim needs no term of its own: the camera is already
-//! pointed where the player is looking, so in its frame the weapon is simply
-//! held still.
+//! Its own copy of the held weapon's meshes, on [`VIEWMODEL_LAYER`], placed by
+//! the prop's [`ViewmodelSpec`] — **not** by the carry the body uses. A carry
+//! is anatomical, stated in arm lengths and putting the weapon where a body
+//! would really hold it, which is well below the eye; a viewmodel is a framing
+//! decision on a screen. Reusing the carry put the grip 0.39 m under an eye
+//! whose frustum is 0.16 m tall at that distance, so the weapon rendered
+//! perfectly, off the bottom of the screen.
+//!
+//! The aim needs no term of its own: the camera is already pointed where the
+//! player is looking, so in its frame the weapon is simply held still.
 //!
 //! The arms are not here yet — that is the rest of stage 5 in
 //! [the plan](../../documentation/weapons-in-hand.md).
@@ -37,11 +42,9 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::skeleton::Skeleton;
 use crate::common::weapon::WeaponId;
 use crate::game::held::{HeldModel, HeldPart};
 use crate::game::player::{LocalPlayer, PlayerCamera, ViewMode};
-use crate::prop::hold::HoldSpec;
 
 /// The layer only the viewmodel camera draws.
 ///
@@ -58,14 +61,6 @@ const VIEWMODEL_NEAR: f32 = 0.005;
 /// Narrower than the play camera's, which is deliberately wide. A weapon drawn
 /// at 90° across the eye is a weapon bent round the edges of the screen.
 const VIEWMODEL_FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
-
-/// Where the shoulder sits relative to the eye.
-///
-/// A carry is stated relative to the point between the shoulders, and in first
-/// person there is no chest to measure from — the camera *is* the head. One
-/// number rather than reaching into the rig for a bone the viewmodel does not
-/// otherwise need.
-const SHOULDER_BELOW_EYE: Vec3 = Vec3::new(0.0, -0.22, 0.0);
 
 /// The second camera, and the reason a query for `&Camera` is never enough.
 #[derive(Component)]
@@ -138,7 +133,7 @@ fn give_the_view_its_own_camera(
 /// [`HeldModel`] is keyed — the model may still be in flight.
 fn dress_the_viewmodel(
     mut commands: Commands,
-    held: Query<(&HeldModel, &Skeleton), With<LocalPlayer>>,
+    held: Query<&HeldModel, With<LocalPlayer>>,
     // Copied off the body's own parts rather than looked up in the cache
     // again: whatever the body is drawing is by definition the right meshes,
     // and a second lookup is a second chance to disagree.
@@ -146,7 +141,7 @@ fn dress_the_viewmodel(
     mut views: Query<(Entity, &mut Viewmodel)>,
     cameras: Query<Entity, With<ViewmodelCamera>>,
 ) {
-    let Ok((held, skeleton)) = held.single() else { return };
+    let Ok(held) = held.single() else { return };
     let Ok(camera) = cameras.single() else { return };
 
     for (_, mut viewmodel) in &mut views {
@@ -160,9 +155,7 @@ fn dress_the_viewmodel(
             commands.entity(part).despawn();
         }
 
-        let hold = held.hold();
-        let proportions = skeleton.proportions();
-        let placed = weapon_in_view(hold, proportions.height * proportions.arm_length);
+        let placed = held.viewmodel().transform();
 
         let mut parts = Vec::new();
         commands.entity(camera).with_children(|camera| {
@@ -185,17 +178,6 @@ fn dress_the_viewmodel(
     }
 }
 
-/// Where the weapon sits in the camera's own frame.
-///
-/// The same carry the body uses, measured from the eye rather than from a
-/// chest. No aim term: the camera is already pointed where the player is
-/// looking, so in its frame the weapon is held still.
-fn weapon_in_view(hold: &HoldSpec, arm_length: f32) -> Transform {
-    Transform::from_translation(SHOULDER_BELOW_EYE + hold.carry(arm_length)).with_rotation(
-        crate::common::rotation::quat_from_euler(Vec3::from_array(hold.carry_rotation)),
-    )
-}
-
 /// A viewmodel is what you see *instead of* your own body.
 fn show_it_only_in_first_person(
     view: Res<ViewMode>,
@@ -214,6 +196,8 @@ fn show_it_only_in_first_person(
 #[cfg(test)]
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
+
+    use crate::prop::hold::ViewmodelSpec;
 
     use super::*;
 
@@ -271,11 +255,23 @@ mod tests {
         assert_ne!(VIEWMODEL_LAYER, 31);
     }
 
-    /// In front of the eye and below it, or the weapon is behind your head.
+    /// **A viewmodel has to be inside the frustum it is drawn by**, which the
+    /// body's carry is not: it is anatomical, and puts the grip well below the
+    /// eye. Reusing it rendered the weapon perfectly, off the bottom of the
+    /// screen — visible in the ECS, `ViewVisibility` true, and nowhere on
+    /// screen.
     #[test]
-    fn the_weapon_hangs_in_front_of_and_below_the_eye() {
-        let placed = weapon_in_view(&HoldSpec::default(), 0.55);
-        assert!(placed.translation.z < -0.05, "the weapon is not in front: {}", placed.translation);
-        assert!(placed.translation.y < -0.1, "the weapon is not below the eye");
+    fn the_default_viewmodel_is_somewhere_the_camera_can_see() {
+        let placed = ViewmodelSpec::default().transform();
+        let depth = -placed.translation.z;
+        assert!(depth > VIEWMODEL_NEAR, "the weapon is behind the near plane");
+
+        let half_height = depth * (VIEWMODEL_FOV / 2.0).tan();
+        assert!(
+            placed.translation.y.abs() < half_height,
+            "the grip sits {:.3} m off the view axis where the frustum is {half_height:.3} m tall",
+            placed.translation.y,
+        );
     }
 }
+

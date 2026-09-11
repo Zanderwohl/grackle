@@ -81,6 +81,47 @@ pub struct HoldSpec {
     pub per_class: BTreeMap<String, HoldOverride>,
 }
 
+/// Where the weapon hangs in first person.
+///
+/// **Its own placement, in metres, and not the carry.** A carry is anatomical
+/// — it is stated in arm lengths because a Heavy's reach is not a Scout's, and
+/// it puts the weapon where a body would actually hold it, which is well below
+/// the eye. A viewmodel is a *framing* decision: a composition on a screen that
+/// should not shrink because a shorter class is holding it, and which sits far
+/// closer to the view axis than any real hold does.
+///
+/// Reusing the carry put the grip 0.39 m below an eye whose frustum is 0.16 m
+/// tall at that distance — the weapon was rendering perfectly, off the bottom
+/// of the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ViewmodelSpec {
+    /// Where the grip sits relative to the eye, in metres.
+    #[serde(default = "default_viewmodel_at", with = "crate::prop::nice_f32::array")]
+    pub at: [f32; 3],
+    /// How the weapon is turned there, in axis order.
+    #[serde(default, with = "crate::prop::nice_f32::array")]
+    pub rotation: [f32; 3],
+}
+
+impl Default for ViewmodelSpec {
+    fn default() -> Self {
+        // Down and to the right of the view axis, and far enough forward to be
+        // in front of the near plane — the usual place a shooter puts one.
+        Self { at: [0.13, -0.15, -0.30], rotation: [0.0; 3] }
+    }
+}
+
+fn default_viewmodel_at() -> [f32; 3] {
+    ViewmodelSpec::default().at
+}
+
+impl ViewmodelSpec {
+    pub fn transform(&self) -> Transform {
+        Transform::from_translation(Vec3::from_array(self.at))
+            .with_rotation(quat_from_euler(Vec3::from_array(self.rotation)))
+    }
+}
+
 /// What one class does differently.
 ///
 /// **Absence means "not overridden" here, and "use the default" in the base

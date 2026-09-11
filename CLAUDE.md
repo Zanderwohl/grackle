@@ -219,6 +219,11 @@ Three things there are easy to get wrong and none of them errors:
 The play camera carries `IsDefaultUiCamera`: the window has six cameras in it
 and Bevy UI otherwise picks one by ambiguity rules rather than by being told.
 
+A prop's `ViewmodelSpec` is **not** its carry: a carry is anatomical, in arm
+lengths, putting the weapon where a body really holds it — well below the eye —
+while a viewmodel is a framing decision in metres. Reusing the carry drew the
+weapon perfectly, off the bottom of the screen.
+
 **Every camera carries a zero-sized marker and every query filters on one** —
 `Multicam` for the four editor viewports, `PlayerCamera` for the view,
 `ViewmodelCamera` for the one drawn over it. A query that asks for `&Camera`

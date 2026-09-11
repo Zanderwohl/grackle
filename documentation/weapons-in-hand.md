@@ -233,6 +233,19 @@ muzzle — changes hit registration and what a corner peek is worth, which is a
 gameplay change wearing a visual fix's clothes. Written down here so that
 nobody later "fixes" it.
 
+### A viewmodel is a framing, not a hold
+
+The carry is **anatomical** — stated in arm lengths so a Heavy's reach is not a
+Scout's, and putting the weapon where a body would really hold it, which is
+well below the eye. A viewmodel is a **composition on a screen**: it should not
+shrink because a shorter class is holding it, and it sits far closer to the
+view axis than any real hold does.
+
+So a prop carries a `ViewmodelSpec` of its own, in metres. Reusing the carry
+put the grip 0.39 m under an eye whose frustum is 0.16 m tall at that distance
+— the weapon rendered perfectly, with `ViewVisibility` true, off the bottom of
+the screen.
+
 ### The viewmodel is two arms, not a floating weapon
 
 First person gets a pair of arms holding the weapon, normally out of frame,

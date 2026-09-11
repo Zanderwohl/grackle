@@ -26,10 +26,10 @@ use crate::common::class::Class;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::weapon::{Equipped, WeaponCatalogue, WeaponId};
 use crate::game::body_mesh::FirstPersonHidden;
-use crate::game::player::Player;
+use crate::game::player::{LocalPlayer, Player, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
 use crate::prop::baked::{PropCache, SurfaceMaterials};
-use crate::prop::hold::{grip_with, weapon_transform, HoldSpec};
+use crate::prop::hold::{grip_with, weapon_transform, HoldSpec, ViewmodelSpec};
 
 /// One drawn part of the weapon a body is holding.
 #[derive(Component)]
@@ -67,6 +67,8 @@ pub struct HeldModel {
     /// Taken off the model when there is one, so the pose layer never has to
     /// reach for the prop cache.
     hold: HoldSpec,
+    /// And where the viewmodel hangs it, which is a different question.
+    viewmodel: ViewmodelSpec,
 }
 
 impl HeldModel {
@@ -84,6 +86,10 @@ impl HeldModel {
 
     pub fn hold(&self) -> &HoldSpec {
         &self.hold
+    }
+
+    pub fn viewmodel(&self) -> ViewmodelSpec {
+        self.viewmodel
     }
 }
 
@@ -145,9 +151,13 @@ fn dress_held_weapons(
     mut surfaces: ResMut<SurfaceMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    bodies: Query<(Entity, &Equipped, Option<&Class>, Option<&HeldModel>), With<Skeleton>>,
+    view: Res<ViewMode>,
+    bodies: Query<
+        (Entity, &Equipped, Option<&Class>, Option<&LocalPlayer>, Option<&HeldModel>),
+        With<Skeleton>,
+    >,
 ) {
-    for (body, equipped, class, drawn) in &bodies {
+    for (body, equipped, class, ours, drawn) in &bodies {
         let held = equipped.held();
         if let Some(drawn) = drawn
             && drawn.weapon == held
@@ -162,23 +172,28 @@ fn dress_held_weapons(
             // catalogue does not re-insert the component every frame.
             Wanted::Unknown => {
                 if drawn.is_none_or(|drawn| drawn.weapon != held) {
-                    replace_parts(&mut commands, body, drawn, vec![], held, false, HoldSpec::default(), cache.generation());
+                    replace_parts(
+                        &mut commands, body, drawn, vec![], held, false, HoldSpec::default(),
+                        ViewmodelSpec::default(), cache.generation(),
+                    );
                 }
             }
             Wanted::Nothing => {
                 replace_parts(
                     &mut commands, body, drawn, vec![], held, true, HoldSpec::default(),
-                    cache.generation(),
+                    ViewmodelSpec::default(), cache.generation(),
                 )
             }
             Wanted::Model(model) => {
                 let mut spawned = Vec::new();
                 let mut hold = HoldSpec::default();
+                let mut viewmodel = ViewmodelSpec::default();
                 if let Some(baked) =
                     cache.ensure(model, &packs, &mut meshes, &mut materials, &mut surfaces)
                 {
                     let parts = baked.parts.clone();
                     hold = baked.hold.for_class(class.copied());
+                    viewmodel = baked.viewmodel;
                     commands.entity(body).with_children(|body| {
                         for (mesh, material) in parts {
                             spawned.push(
@@ -187,6 +202,16 @@ fn dress_held_weapons(
                                     // Hidden from inside your own head, along
                                     // with the body it hangs off.
                                     FirstPersonHidden,
+                                    // Spawned *already* hidden when it should
+                                    // be. `hide_own_body` would catch it, but
+                                    // not until the frame after the command
+                                    // lands — which is a weapon flashing
+                                    // across your own view every time you
+                                    // switch to it.
+                                    match ours.is_some() && !view.shows_own_body() {
+                                        true => Visibility::Hidden,
+                                        false => Visibility::Inherited,
+                                    },
                                     Mesh3d(mesh),
                                     MeshMaterial3d(material),
                                     // Overwritten by `place_held_weapons`
@@ -200,7 +225,9 @@ fn dress_held_weapons(
                     });
                 }
                 let cached_at = cache.generation();
-                replace_parts(&mut commands, body, drawn, spawned, held, true, hold, cached_at);
+                replace_parts(
+                    &mut commands, body, drawn, spawned, held, true, hold, viewmodel, cached_at,
+                );
             }
         }
     }
@@ -215,6 +242,7 @@ fn replace_parts(
     weapon: Option<WeaponId>,
     resolved: bool,
     hold: HoldSpec,
+    viewmodel: ViewmodelSpec,
     cached_at: u64,
 ) {
     if let Some(drawn) = drawn {
@@ -224,7 +252,10 @@ fn replace_parts(
     }
     commands
         .entity(body)
-        .insert((HeldModel { weapon, resolved, parts, hold, cached_at }, WeaponInHand::default()));
+        .insert((
+            HeldModel { weapon, resolved, parts, hold, viewmodel, cached_at },
+            WeaponInHand::default(),
+        ));
 }
 
 /// Put the weapon where the body is aiming, and the hands on the weapon.
@@ -343,6 +374,7 @@ mod tests {
         world.init_resource::<PropCache>();
         world.init_resource::<SurfaceMaterials>();
         world.init_resource::<PackAssets>();
+        world.init_resource::<ViewMode>();
 
         let mut catalogue = WeaponCatalogue::default();
         catalogue.insert(weapon("launcher", Some("rocket_launcher")));
@@ -399,6 +431,7 @@ mod tests {
                     resolved: true,
                     parts: vec![],
                     hold: HoldSpec::default(),
+                    viewmodel: ViewmodelSpec::default(),
                     cached_at: 0,
                 },
                 WeaponInHand::default(),
@@ -473,7 +506,10 @@ mod tests {
         let mut world = World::new();
         let part = world.spawn((HeldPart, Transform::IDENTITY)).id();
         world.spawn((
-            HeldModel { weapon: None, resolved: true, parts: vec![part], hold: HoldSpec::default(), cached_at: 0 },
+            HeldModel {
+                weapon: None, resolved: true, parts: vec![part],
+                hold: HoldSpec::default(), viewmodel: ViewmodelSpec::default(), cached_at: 0,
+            },
             WeaponInHand(decided),
         ));
 
