@@ -91,7 +91,6 @@ struct TabViewerAndResources<'a> {
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
     retarget_request: &'a mut Option<(FeatureId, String)>,
-    gizmos: Gizmos<'a, 'a>,
 }
 
 impl<'a> TabViewer for TabViewerAndResources<'a> {
@@ -222,7 +221,6 @@ impl EditorPanels {
         windows: Query<&Window, With<PrimaryWindow>>,
 
         current_tool: Res<State<Tools>>,
-        mut gizmos: Gizmos,
         mut next_tool: ResMut<NextState<Tools>>,
         mut editor_features: ResMut<FeatureTimeline>,
         mut gizmo_visibility: ResMut<GizmoVisibility>,
@@ -264,7 +262,6 @@ impl EditorPanels {
         
         let mut viewer = TabViewerAndResources  {
             current_tool: & *current_tool,
-            gizmos,
             next_tool: &mut *next_tool,
             editor_features: &mut *editor_features,
             map_metadata: &mut *map_metadata,
@@ -535,10 +532,6 @@ impl EditorPanels {
         }
 
         Self::set_multicam_size(panels, multicam_state, windows);
-    }
-
-    fn ui_for_panel(ui: &mut Ui) {
-        ui.label("Panel is empty.");
     }
 
     fn set_multicam_size(

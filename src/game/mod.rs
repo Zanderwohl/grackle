@@ -5,7 +5,6 @@ use crate::common::app_mode::{start_in_play, AppMode, StartInPlay};
 use crate::common::damage::NextPlayerId;
 use crate::common::net::NetRole;
 use crate::common::skeleton::AnimationClock;
-use crate::common::team::Team;
 use crate::editor::multicam::Multicam;
 use crate::game::collision::CollisionWorld;
 use crate::game::ragdoll::RagdollPlugin;
@@ -326,6 +325,8 @@ fn rebuild_collision_when_rooms_change(
 mod tests {
     use std::time::Duration;
 
+    use crate::common::team::Team;
+
     use crate::editor::spawn_point::SpawnPointMarker;
     use crate::game::player::{spawn_player, Spawn};
 
@@ -451,7 +452,7 @@ mod tests {
 
     #[test]
     fn the_editor_is_what_starts() {
-        let mut app = headless(&[]);
+        let app = headless(&[]);
         assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Editor);
     }
 

@@ -30,7 +30,7 @@ use crate::common::skeleton::mesh::body_meshes;
 use crate::common::skeleton::rig::Proportions;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::team::Team;
-use crate::game::player::{LocalPlayer, Player, ViewMode};
+use crate::game::player::{LocalPlayer, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
 
 /// A body that has had its parts built.
@@ -372,6 +372,7 @@ fn hide_own_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::player::Player;
     use crate::common::class::Class;
     use crate::common::team::Team;
     use crate::common::skeleton::rig::{bone, humanoid};
@@ -390,7 +391,7 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(ViewMode::FirstPerson);
 
-        let mut body_with_parts = |world: &mut World, local: bool| {
+        let body_with_parts = |world: &mut World, local: bool| {
             let parts: Vec<Entity> = (0..3)
                 .map(|index| world.spawn((BoneMesh(index), Visibility::Inherited)).id())
                 .collect();

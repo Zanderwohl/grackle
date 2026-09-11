@@ -846,7 +846,7 @@ mod tests {
     #[test]
     fn a_spawn_point_in_the_undo_history_survives_a_save_and_load() {
         let mut timeline = FeatureTimeline::default();
-        let id = timeline.apply_feature(Box::new(SpawnPoint::new(5.0, 1.0, 2.0)));
+        let _id = timeline.apply_feature(Box::new(SpawnPoint::new(5.0, 1.0, 2.0)));
 
         let path = temp_path("spawn-history-round-trip");
         save(&path, &timeline, &MapMetadata::default()).unwrap();

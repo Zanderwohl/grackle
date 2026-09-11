@@ -10,8 +10,7 @@ use crate::common::damage::{Damageable, PlayerId};
 use crate::common::hitbox::Hitboxes;
 use crate::common::team::Team;
 use crate::common::class::{
-    body_centre_from_feet, Stance, CLASS_HALF_EXTENTS, TALLEST_CLASS_EYE_HEIGHT,
-    TALLEST_CLASS_HEIGHT,
+    body_centre_from_feet, Stance, CLASS_HALF_EXTENTS,
 };
 use crate::game::collision::CollisionWorld;
 use crate::common::class::Class;
@@ -22,10 +21,6 @@ use crate::tool::room::Room;
 /// Half-extents of the body box. The tallest class, since there is only one
 /// body so far and a spawn point is checked against the tallest.
 pub const PLAYER_HALF: Vec3 = CLASS_HALF_EXTENTS;
-/// Where the camera sits relative to the body's *centre* — the class metric is
-/// measured from the feet, so half the height comes back off.
-const EYE_OFFSET: f32 = TALLEST_CLASS_EYE_HEIGHT - TALLEST_CLASS_HEIGHT * 0.5;
-
 /// How fast a body moves without being asked to hurry, in metres per second.
 ///
 /// A walking pace, which is what makes the gait a walk: the animation reads
@@ -858,6 +853,8 @@ pub fn interpolate_bodies(
 #[cfg(test)]
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
+
+    use crate::common::class::TALLEST_CLASS_EYE_HEIGHT;
 
     use super::*;
     use crate::tool::room::Room;

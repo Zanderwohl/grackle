@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use bevy::log::{info, warn};
 use rand::Rng;
-use crate::common::item::{item, PARTICLES, PROTOTYPES};
+use crate::common::item::{PARTICLES, PROTOTYPES};
 use crate::common::item::item::{Item, ParticleEffect, StatTracker};
 use crate::get;
 use crate::unlock::stat_tracker::StatTrackerEntry;
@@ -71,7 +71,7 @@ impl CrateSeriesEntry {
             loops += 1;
             if self.total_particle_effect_odds > 0 {
                 let mut current_odds = 0;
-                let random_number = rand::thread_rng().gen_range(0..self.total_particle_effect_odds);
+                let random_number = rand::rng().random_range(0..self.total_particle_effect_odds);
                 info!("Particle effect: {}", random_number);
                 'particle: for entry in &self.particle_effects {
                     current_odds += entry.odds;
@@ -89,7 +89,7 @@ impl CrateSeriesEntry {
             }
 
             if self.total_stat_tracker_odds > 0 {
-                let random_number = rand::thread_rng().gen_range(0..self.total_stat_tracker_odds);
+                let random_number = rand::rng().random_range(0..self.total_stat_tracker_odds);
                 let mut current_odds = 0;
                 info!("Stat tracker: {}", random_number);
                 'stat_tracker: for entry in &self.stat_trackers {

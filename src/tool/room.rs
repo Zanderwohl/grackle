@@ -870,7 +870,6 @@ pub struct ClearRoomGeometry;
 
 #[cfg(test)]
 mod tests {
-    use bevy::prelude::*;
     use super::*;
     
     fn triangle_count(mesh: &Mesh) -> usize {

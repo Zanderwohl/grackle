@@ -102,7 +102,7 @@ pub trait FeatureTrait: Send + Sync {
     /// `axis`: 0=X, 1=Y, 2=Z.
     /// `new_world_value`: the desired world-space coordinate for this axis.
     /// Returns true if the object was modified.
-    fn drag_handle(&mut self, is_max: bool, axis: u8, new_world_value: f32) -> bool { false }
+    fn drag_handle(&mut self, _is_max: bool, _axis: u8, _new_world_value: f32) -> bool { false }
 
     /// Returns the resolved min and max bounds if this object is a room-like
     /// object with drag handles. Used to position handles.
@@ -535,7 +535,7 @@ impl FeatureTimeline {
                         self.features.insert(feature_id, feature);
                     }
                 } else {
-                    let mut object = snapshot.blank_object();
+                    let object = snapshot.blank_object();
                     let feature = Feature::new(feature_id, object, snapshot.parents.clone());
                     let idx = snapshot.order_index.min(self.feature_order.len());
                     self.feature_order.insert(idx, feature_id);
@@ -636,7 +636,7 @@ impl FeatureTimeline {
 
                 egui::Panel::bottom("editor_feature_panel")
                     .resizable(false)
-                    .show_inside(ui, |ui| {
+                    .show(ui, |ui| {
                         ui.separator();
                         let before_snap = features.feature_snapshot(selected_id);
                         if let Some(mut feature) = features.features.remove(&selected_id) {
@@ -1161,7 +1161,7 @@ impl PointRef {
 
     /// Draw a taxicab path from the reference point to the resolved point,
     /// stepping along X then Z then Y, with per-axis colored dashed lines.
-    pub fn debug_gizmos(&self, resolved: Vec3, gizmos: &mut Gizmos) {
+    pub fn debug_gizmos(&self, _resolved: Vec3, gizmos: &mut Gizmos) {
         let Some(base) = self.resolved_reference else { return; };
         const DASH: f32 = 0.15;
         const GAP: f32 = 0.1;

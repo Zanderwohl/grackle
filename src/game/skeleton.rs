@@ -19,7 +19,6 @@
 //! resources the game's headless tests do not have.
 
 use bevy::prelude::*;
-use lightyear::prelude::input::native::ActionState;
 use bevy::transform::TransformSystems;
 
 use crate::common::app_mode::{showing_the_world, AppMode};
@@ -37,7 +36,7 @@ use crate::game::body_mesh::BodyMeshPlugin;
 use crate::game::hitbox::HitboxPlugin;
 use crate::game::weapon::WeaponPlugin;
 use crate::game::player::{
-    step_player, Inputs, LocalPlayer, PhysicsBody, Player, PlayerInput, ViewMode, PLAYER_HALF,
+    step_player, Inputs, LocalPlayer, PhysicsBody, Player, ViewMode, PLAYER_HALF,
 };
 
 /// Where a skeleton's feet sit relative to the entity carrying it.
@@ -532,6 +531,10 @@ pub fn draw_skeletons(
 
 #[cfg(test)]
 mod tests {
+    use lightyear::prelude::input::native::ActionState;
+
+    use crate::game::player::PlayerInput;
+
     use super::*;
     use crate::common::hitbox::Hitboxes;
     use crate::common::skeleton::rig::{humanoid, Proportions};
