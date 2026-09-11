@@ -426,6 +426,16 @@ radius into forty presses of Ctrl+Z. The gesture closes when the pointer *and*
 the keyboard are idle, which is what makes typing a name one step rather than
 one per letter.
 
+The feature list's rows carry **reordering** and nothing else; suppressing and
+deleting are on a **right-click menu**, which is also where a feature is told
+what is built on it before it is deleted rather than after (`dependants`). The
+menu item names the *action* — "Suppress" on something that is on — because a
+label naming the state reads as a checkbox with no box, and you would have to
+guess whether clicking agreed or disagreed with it. Right-clicking selects, so
+the inspector is not still showing something else. Three row states are drawn
+three ways and are not the same thing: **struck through** is suppressed,
+**weak** is a body a later feature has already eaten, **orange** is broken.
+
 **What a boolean may point at is what was live when it ran**, not what is live
 now — and the evaluator records that (`Evaluated::live_before`) rather than the
 panel working it out. Two implementations of the consuming rule is two that

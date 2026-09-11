@@ -360,8 +360,12 @@ move_up = "🔼"
 move_up_hint = "Move earlier"
 move_down = "🔽"
 move_down_hint = "Move later"
-delete = "🗑"
-delete_hint = "Delete"
+# Right-click menu. "Suppress" and "Unsuppress" name the *action*, not the
+# state: whichever is showing is what clicking will do.
+suppress = "Suppress"
+unsuppress = "Unsuppress"
+delete = "🗑 Delete"
+delete_breaks = "{ count } other features build on this one"
 
 [prop.add]
 solid = "Solid"
@@ -399,7 +403,7 @@ paint = "Paint"
 [prop.inspector]
 nothing = "Select a feature."
 name = "Name"
-enabled = "Enabled"
+suppressed = "Suppressed"
 shape = "Shape"
 profile = "Profile"
 size = "Size"
@@ -423,7 +427,8 @@ plane = "Plane"
 offset = "Offset"
 keep_original = "Keep the original"
 add_point = "Add point"
-remove_point = "Remove point"
+remove_point = "🗑"
+remove_point_hint = "Remove point"
 missing = "missing { id }"
 
 [prop.stats]

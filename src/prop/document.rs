@@ -424,6 +424,36 @@ mod tests {
         assert_ne!(first, second);
     }
 
+    /// What deleting a feature would break, which the tree's context menu
+    /// warns about before the fact rather than leaving the evaluator to report
+    /// four separate problems afterwards.
+    ///
+    /// Counted by **who names it**, not by who comes after it: two features
+    /// can sit either side of a third without either caring about it.
+    #[test]
+    fn a_feature_knows_what_is_built_on_it() {
+        let mut doc = PropDoc::new("x");
+        let a = doc.push(FeatureOp::default());
+        let b = doc.push(FeatureOp::default());
+        let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
+        let mirrored = doc.push(FeatureOp::Mirror {
+            target: cut,
+            axis: Axis::X,
+            offset: 0.0,
+            keep_original: true,
+        });
+        let unrelated = doc.push(FeatureOp::default());
+
+        assert_eq!(doc.dependants(a), vec![cut]);
+        assert_eq!(doc.dependants(b), vec![cut], "a tool is depended on like a target");
+        assert_eq!(doc.dependants(cut), vec![mirrored]);
+        assert!(doc.dependants(mirrored).is_empty(), "nothing is built on the last feature");
+        assert!(
+            doc.dependants(unrelated).is_empty(),
+            "a feature later in the list is not a dependant of one earlier",
+        );
+    }
+
     /// The evaluator replays top to bottom, so a boolean above its operands
     /// can never find them. Refusing the move is the only answer that does not
     /// break the prop.

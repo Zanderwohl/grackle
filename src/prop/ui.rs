@@ -325,6 +325,21 @@ fn panels(
     }
 }
 
+/// One line of the feature list, read out of the document before any of it is
+/// drawn.
+///
+/// Collected up front because the rows write back — a selection, an action —
+/// and holding a borrow on the editor across the closures that draw them would
+/// leave the context menu with nothing it could change.
+struct Row {
+    id: PropFeatureId,
+    name: String,
+    enabled: bool,
+    /// How many features name this one as an operand, so deleting it can say
+    /// what that costs.
+    dependants: usize,
+}
+
 /// The ordered list, which *is* the prop.
 fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     ui.horizontal(|ui| {
@@ -344,89 +359,143 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     add_menu(ui, editor, build);
     ui.separator();
 
-    let entries: Vec<(PropFeatureId, String, bool)> = editor
+    let entries: Vec<Row> = editor
         .doc()
         .features
         .iter()
-        .map(|feature| (feature.id, feature.name.clone(), feature.enabled))
+        .map(|feature| Row {
+            id: feature.id,
+            name: feature.name.clone(),
+            enabled: feature.enabled,
+            dependants: editor.doc().dependants(feature.id).len(),
+        })
         .collect();
     let live: Vec<PropFeatureId> = build.evaluated.bodies.iter().map(|(id, _)| *id).collect();
     let broken: Vec<PropFeatureId> =
         build.evaluated.problems.iter().map(|problem| problem.feature).collect();
 
+    // Read out rather than borrowed through the closures below: the rows write
+    // back a selection and an action, and holding `editor` across them would
+    // mean the context menu could not touch either.
+    let selected = editor.selected;
+    let mut select: Option<PropFeatureId> = None;
     let mut pending: Option<Box<dyn FnOnce(&mut PropEditor)>> = None;
+
     egui::ScrollArea::vertical().show(ui, |ui| {
-        for (id, name, enabled) in entries {
-            ui.horizontal(|ui| {
-                let mut on = enabled;
-                if ui.checkbox(&mut on, "").changed() {
-                    pending = Some(Box::new(move |editor: &mut PropEditor| {
-                        editor.begin_gesture();
-                        if let Some(feature) = editor.doc_mut().feature_mut(id) {
-                            feature.enabled = on;
+        for row in entries {
+            let Row { id, name, enabled, dependants } = row;
+
+            let response = ui
+                .horizontal(|ui| {
+                    // Three states, and they are not the same thing, so they
+                    // are not drawn the same way. **Struck through** is
+                    // suppressed — deliberately switched off, and the only cue
+                    // left now that the checkbox has moved into the menu.
+                    // **Weak** is consumed: a body a later feature has already
+                    // eaten, which is history rather than a problem. **Orange**
+                    // is broken, which is the one worth looking at.
+                    let mut text = egui::RichText::new(if broken.contains(&id) {
+                        format!("{name}  {}", get!("prop.problems.marker"))
+                    } else {
+                        name.clone()
+                    });
+                    if !enabled {
+                        text = text.strikethrough();
+                    }
+                    if broken.contains(&id) {
+                        text = text.color(egui::Color32::from_rgb(230, 130, 80));
+                    } else if !live.contains(&id) {
+                        text = text.weak();
+                    }
+
+                    if ui.selectable_label(selected == Some(id), text).clicked() {
+                        select = Some(id);
+                    }
+
+                    // Reordering stays on the row rather than joining the menu:
+                    // it is the one thing here done several times in a row, and
+                    // a menu per nudge would be three clicks a place.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button(get!("prop.tree.move_down"))
+                            .on_hover_text(get!("prop.tree.move_down_hint"))
+                            .clicked()
+                        {
+                            pending = Some(Box::new(move |editor: &mut PropEditor| {
+                                editor.edit(|doc| doc.shift(id, true));
+                            }));
                         }
-                        editor.end_gesture();
+                        if ui
+                            .small_button(get!("prop.tree.move_up"))
+                            .on_hover_text(get!("prop.tree.move_up_hint"))
+                            .clicked()
+                        {
+                            pending = Some(Box::new(move |editor: &mut PropEditor| {
+                                editor.edit(|doc| doc.shift(id, false));
+                            }));
+                        }
+                    });
+                })
+                .response;
+
+            response.context_menu(|ui| {
+                // Right-clicking a thing is a way of pointing at it, so it
+                // selects as well as opening the menu — otherwise the inspector
+                // goes on showing whatever was selected before, beside a menu
+                // acting on something else.
+                select = Some(id);
+
+                // The item names the **action**, not the state: "Suppress" on
+                // something that is on. A label that named the state would read
+                // as a checkbox with no box, and you would have to guess
+                // whether clicking it agreed or disagreed with what it said.
+                let action = match enabled {
+                    true => get!("prop.tree.suppress"),
+                    false => get!("prop.tree.unsuppress"),
+                };
+                if ui.button(action).clicked() {
+                    ui.close_kind(UiKind::Menu);
+                    pending = Some(Box::new(move |editor: &mut PropEditor| {
+                        editor.edit(|doc| {
+                            if let Some(feature) = doc.feature_mut(id) {
+                                feature.enabled = !enabled;
+                            }
+                        });
                     }));
                 }
 
-                // A feature that is still a body is what you can point a
-                // boolean at; one that has been eaten is history. Saying so in
-                // the list is what stops the target dropdowns looking arbitrary.
-                let label = if broken.contains(&id) {
-                    egui::RichText::new(format!("{name}  {}", get!("prop.problems.marker")))
-                        .color(egui::Color32::from_rgb(230, 130, 80))
-                } else if live.contains(&id) {
-                    egui::RichText::new(name)
-                } else {
-                    egui::RichText::new(name).weak()
-                };
-                if ui.selectable_label(editor.selected == Some(id), label).clicked() {
-                    editor.selected = Some(id);
-                }
+                ui.separator();
 
-                // Icons through the lang layer like any other display text,
-                // and for a reason this panel has already been bitten by: egui
-                // ships one font set, a glyph outside it renders as a hollow
-                // box, and a pack whose language needs a different mark has
-                // nowhere else to say so. The hover text is not decoration
-                // either — an icon button with no name is a button you have to
-                // press to find out about.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button(get!("prop.tree.delete"))
-                        .on_hover_text(get!("prop.tree.delete_hint"))
-                        .clicked()
-                    {
-                        pending = Some(Box::new(move |editor: &mut PropEditor| {
-                            editor.edit(|doc| doc.remove(id));
-                            if editor.selected == Some(id) {
-                                editor.selected = None;
-                            }
-                        }));
-                    }
-                    if ui
-                        .small_button(get!("prop.tree.move_down"))
-                        .on_hover_text(get!("prop.tree.move_down_hint"))
-                        .clicked()
-                    {
-                        pending = Some(Box::new(move |editor: &mut PropEditor| {
-                            editor.edit(|doc| doc.shift(id, true));
-                        }));
-                    }
-                    if ui
-                        .small_button(get!("prop.tree.move_up"))
-                        .on_hover_text(get!("prop.tree.move_up_hint"))
-                        .clicked()
-                    {
-                        pending = Some(Box::new(move |editor: &mut PropEditor| {
-                            editor.edit(|doc| doc.shift(id, false));
-                        }));
-                    }
-                });
+                let delete = ui.button(get!("prop.tree.delete"));
+                // Said before rather than after: everything that names this
+                // feature as an operand breaks the moment it goes, and the
+                // evaluator will report each of them as a problem. Undo is
+                // there, but knowing beforehand is cheaper than reading four
+                // warnings and working out what they have in common.
+                let delete = match dependants {
+                    0 => delete,
+                    count => delete.on_hover_text(get!(
+                        "prop.tree.delete_breaks",
+                        "count",
+                        count
+                    )),
+                };
+                if delete.clicked() {
+                    ui.close_kind(UiKind::Menu);
+                    pending = Some(Box::new(move |editor: &mut PropEditor| {
+                        editor.edit(|doc| doc.remove(id));
+                        if editor.selected == Some(id) {
+                            editor.selected = None;
+                        }
+                    }));
+                }
             });
         }
     });
 
+    if let Some(id) = select {
+        editor.selected = Some(id);
+    }
     if let Some(action) = pending {
         action(editor);
     }
@@ -560,7 +629,15 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             ui.label(get!("prop.inspector.name"));
             changed |= ui.text_edit_singleline(&mut feature.name).changed();
         });
-        changed |= ui.checkbox(&mut feature.enabled, get!("prop.inspector.enabled")).changed();
+        // Phrased as *suppressed* rather than *enabled*, so the inspector and
+        // the tree's context menu are one word for one concept. The stored
+        // field stays `enabled` — it is on disk, and the format has no
+        // migration chain to rename it through.
+        let mut suppressed = !feature.enabled;
+        if ui.checkbox(&mut suppressed, get!("prop.inspector.suppressed")).changed() {
+            feature.enabled = !suppressed;
+            changed = true;
+        }
         ui.separator();
 
         match &mut feature.op {
@@ -842,8 +919,8 @@ fn profile_ui(ui: &mut Ui, profile: &mut Profile) -> bool {
                         changed |= ui.add(egui::DragValue::new(component).speed(0.001)).changed();
                     }
                     if ui
-                        .small_button(get!("prop.tree.delete"))
-                        .on_hover_text(get!("prop.inspector.remove_point"))
+                        .small_button(get!("prop.inspector.remove_point"))
+                        .on_hover_text(get!("prop.inspector.remove_point_hint"))
                         .clicked()
                     {
                         remove = Some(at);
