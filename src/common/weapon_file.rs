@@ -28,7 +28,7 @@
 //! rocket launcher", which is visible in the HUD, rather than as a panic on a
 //! listen server with people connected.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
@@ -45,9 +45,16 @@ pub const WEAPONS_FILE: &str = "weapons.toml";
 pub const LOADOUTS_FILE: &str = "loadouts.toml";
 
 /// `weapons.toml`: one entry per weapon, keyed by its id.
+///
+/// **Ordered maps, and that is load-bearing.** The catalogue is a list because
+/// it crosses the wire and is compared for equality to decide whether to send
+/// it; filling that list in `HashMap` order would make two reads of the same
+/// file compare unequal, often enough to be maddening and rarely enough to
+/// ship. A `BTreeMap` walks in the order the ids sort in, which is an order
+/// somebody chose.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WeaponFile {
-    weapons: HashMap<String, WeaponEntry>,
+    weapons: BTreeMap<String, WeaponEntry>,
 }
 
 /// A weapon as it is written down. [`Weapon`] minus the id, which is the key.
@@ -62,7 +69,7 @@ struct WeaponEntry {
 /// `loadouts.toml`: one entry per class, keyed by its snake_case name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LoadoutFile {
-    loadouts: HashMap<String, HashMap<Slot, SlotEntry>>,
+    loadouts: BTreeMap<String, BTreeMap<Slot, SlotEntry>>,
 }
 
 /// A slot as it is written down: weapons named as strings rather than hashes.
@@ -164,16 +171,13 @@ fn load_weapons(assets: &Assets, pack: &Path, catalogue: &mut WeaponCatalogue) {
             }
         }
 
-        catalogue.weapons.insert(
+        catalogue.insert(Weapon {
             id,
-            Weapon {
-                id,
-                name_key: entry.name_key,
-                primary: entry.primary,
-                secondary: entry.secondary,
-                magazine: entry.magazine,
-            },
-        );
+            name_key: entry.name_key,
+            primary: entry.primary,
+            secondary: entry.secondary,
+            magazine: entry.magazine,
+        });
     }
 }
 
@@ -199,9 +203,9 @@ fn load_loadouts(assets: &Assets, pack: &Path, catalogue: &mut WeaponCatalogue) 
             let Some(choices) = slot_choices(catalogue, &key, slot, &entry, pack) else {
                 continue;
             };
-            loadout.slots.insert(slot, choices);
+            loadout.set(slot, choices);
         }
-        catalogue.loadouts.insert(class, loadout);
+        catalogue.set_loadout(class, loadout);
     }
 }
 
@@ -291,7 +295,7 @@ mod tests {
         let catalogue = the_default_pack();
         assert!(!catalogue.weapons.is_empty(), "no weapons loaded");
         assert!(
-            catalogue.loadouts.contains_key(&Class::Mercenary),
+            catalogue.loadout(Class::Mercenary).is_some(),
             "the class everybody plays as carries nothing"
         );
     }
@@ -302,10 +306,10 @@ mod tests {
     #[test]
     fn the_placeholder_class_carries_one_of_everything() {
         let catalogue = the_default_pack();
-        let loadout = &catalogue.loadouts[&Class::Mercenary];
+        let loadout = catalogue.loadout(Class::Mercenary).expect("no placeholder loadout");
 
         let mut seen: Vec<std::mem::Discriminant<WeaponAction>> = Vec::new();
-        for choices in loadout.slots.values() {
+        for (_, choices) in &loadout.slots {
             for id in &choices.permitted {
                 let weapon = catalogue.get(*id).expect("a permitted weapon is missing");
                 for mounted in [weapon.primary, weapon.secondary] {

@@ -16,8 +16,6 @@
 //! about what a rocket does; and nothing in this module reads a file, because
 //! a client is *told* its catalogue by the server and must never disagree.
 
-use std::collections::HashMap;
-
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
@@ -270,7 +268,8 @@ pub const SLOTS: usize = 6;
 /// named for what they are *for* rather than after any class, so a class
 /// needing one does not have to be the class the slot was named after.
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnumIter, Reflect, Serialize, Deserialize,
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, Reflect,
+    Serialize, Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum Slot {
@@ -420,11 +419,28 @@ pub struct SlotChoices {
 
 /// What a class may carry, slot by slot.
 ///
-/// A map rather than an array, because most classes leave most slots empty and
-/// an array of `Option` in a *data* file reads as six rows of nothing.
+/// A list of pairs rather than a map, and for the same reason the catalogue is
+/// one: this crosses the wire, and a `HashMap` iterates in an order nobody
+/// chose. Only slots the class actually uses appear, so a class that carries
+/// three is three entries rather than six rows of nothing.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Loadout {
-    pub slots: HashMap<Slot, SlotChoices>,
+    pub slots: Vec<(Slot, SlotChoices)>,
+}
+
+impl Loadout {
+    pub fn at(&self, slot: Slot) -> Option<&SlotChoices> {
+        self.slots.iter().find(|(at, _)| *at == slot).map(|(_, choices)| choices)
+    }
+
+    /// State what a slot carries, replacing whatever it carried before — so a
+    /// pack later in the list can retool a class the base pack described.
+    pub fn set(&mut self, slot: Slot, choices: SlotChoices) {
+        match self.slots.iter_mut().find(|(at, _)| *at == slot) {
+            Some(entry) => entry.1 = choices,
+            None => self.slots.push((slot, choices)),
+        }
+    }
 }
 
 /// Every weapon this match has, and what each class may hold.
@@ -433,15 +449,41 @@ pub struct Loadout {
 /// body. The authority reads it from disk; a client's is replaced wholesale by
 /// what the server sends — the same arrangement the map already has, and for
 /// the same reason: two descriptions of one thing is where the bugs live.
+/// Lists rather than maps, deliberately. This is a value that crosses the wire
+/// and is compared for equality to decide whether to send it, and a `HashMap`
+/// iterates in an order nobody chose — so two machines holding the same
+/// catalogue would encode it two different ways. There are a few dozen weapons
+/// and a lookup is a scan, which costs nothing beside being able to say that
+/// the thing sent is the thing held.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct WeaponCatalogue {
-    pub weapons: HashMap<WeaponId, Weapon>,
-    pub loadouts: HashMap<Class, Loadout>,
+    pub weapons: Vec<Weapon>,
+    pub loadouts: Vec<(Class, Loadout)>,
 }
 
 impl WeaponCatalogue {
     pub fn get(&self, id: WeaponId) -> Option<&Weapon> {
-        self.weapons.get(&id)
+        self.weapons.iter().find(|weapon| weapon.id == id)
+    }
+
+    /// Add a weapon, replacing one of the same id — which is how a pack later
+    /// in the list retunes a weapon the base pack described.
+    pub fn insert(&mut self, weapon: Weapon) {
+        match self.weapons.iter_mut().find(|already| already.id == weapon.id) {
+            Some(already) => *already = weapon,
+            None => self.weapons.push(weapon),
+        }
+    }
+
+    pub fn loadout(&self, class: Class) -> Option<&Loadout> {
+        self.loadouts.iter().find(|(for_class, _)| *for_class == class).map(|(_, l)| l)
+    }
+
+    pub fn set_loadout(&mut self, class: Class, loadout: Loadout) {
+        match self.loadouts.iter_mut().find(|(for_class, _)| *for_class == class) {
+            Some(entry) => entry.1 = loadout,
+            None => self.loadouts.push((class, loadout)),
+        }
     }
 
     /// The weapon in a body's hands, if the catalogue has heard of it.
@@ -465,12 +507,12 @@ impl WeaponCatalogue {
         let mut equipped = Equipped::default();
         let mut ammo = Ammo::default();
 
-        let Some(loadout) = self.loadouts.get(&class) else {
+        let Some(loadout) = self.loadout(class) else {
             return (equipped, ammo);
         };
 
         for slot in Slot::ALL {
-            let Some(choices) = loadout.slots.get(&slot) else { continue };
+            let Some(choices) = loadout.at(slot) else { continue };
             let Some(weapon) = self.get(choices.default) else { continue };
             equipped.slots[slot.index()] = Some(weapon.id);
             ammo.slots[slot.index()] = Ammo::full(&weapon.magazine);

@@ -425,14 +425,14 @@ mod tests {
     fn one_weapon(weapon: Weapon) -> WeaponCatalogue {
         let id = weapon.id;
         let mut catalogue = WeaponCatalogue::default();
-        catalogue.weapons.insert(id, weapon);
+        catalogue.insert(weapon);
 
         let mut loadout = crate::common::weapon::Loadout::default();
-        loadout.slots.insert(
+        loadout.set(
             Slot::Primary,
             crate::common::weapon::SlotChoices { permitted: vec![id], default: id },
         );
-        catalogue.loadouts.insert(crate::common::class::Class::Mercenary, loadout);
+        catalogue.set_loadout(crate::common::class::Class::Mercenary, loadout);
         catalogue
     }
 

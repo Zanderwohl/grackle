@@ -111,6 +111,24 @@ impl Plugin for ProtocolPlugin {
         // re-sending it every update would be bandwidth spent restating it.
         // It is also what an animation phase is derived from, so that two
         // clients put the same body at the same point in its cycle.
+        // What a body is holding, so a viewer can say so. Ids only; the
+        // numbers they name are in the catalogue, which is sent once on
+        // connect. Replicated rather than replicated-once, because the held
+        // slot changes within a life — and one component rather than two,
+        // because replication does not promise to deliver two components in
+        // one packet and half an answer is a body nothing can describe.
+        //
+        // **Not predicted.** A client guessing that its switch landed is the
+        // same class of mistake as guessing a kill. The price is that the HUD
+        // names a new weapon a round trip late, which is the right price for
+        // there being one writer.
+        app.component::<crate::common::weapon::Equipped>().replicate();
+
+        // Ammo, likewise unpredicted. Its own component rather than fields on
+        // `Equipped` because it changes on every shot while a switch is rare,
+        // and replication is change-detected per component.
+        app.component::<crate::common::weapon::Ammo>().replicate();
+
         app.component::<PlayerId>().replicate_once();
     }
 }
@@ -144,6 +162,9 @@ mod tests {
             tick_duration: std::time::Duration::from_secs_f64(1.0 / crate::constants::TICK_HZ),
         });
         app.add_plugins(ProtocolPlugin);
+        // The catalogue's channel and message too, so a registration that will
+        // not build fails here rather than at the first connection.
+        app.add_plugins(crate::common::weapon_sync::WeaponSyncPlugin);
         app.finish();
     }
 }
