@@ -635,15 +635,37 @@ impl FeatureTimeline {
                 let selected_idx = selected_idx.unwrap();
                 let prior_order: Vec<FeatureId> = features.feature_order[..selected_idx].to_vec();
 
+                // Resizable, and opening at half the tab: a feature editor is
+                // where the actual work happens, and the construction list
+                // above it is a list of names you glance at. A fixed panel
+                // sized to whatever fits left a room's eight axis rows to be
+                // scrolled through four at a time.
+                //
+                // The bounds are stated against the space the tab actually
+                // has rather than as two constants, so neither half can be
+                // dragged — or opened — out of existence in a short panel.
+                let available = ui.available_height();
                 egui::Panel::bottom("editor_feature_panel")
-                    .resizable(false)
+                    .resizable(true)
+                    .default_size(feature_editor_default_height(available))
+                    .size_range(feature_editor_height_range(available))
                     .show(ui, |ui| {
                         ui.separator();
                         let before_snap = features.feature_snapshot(selected_id);
                         if let Some(mut feature) = features.features.remove(&selected_id) {
-                            ui.heading(feature.type_name_with_id());
                             let mut retarget_request: Option<String> = None;
-                            let edited = feature.object_mut().editor_ui(ui, &features.features, &prior_order, &mut retarget_request);
+                            // The whole feature editor is padded and loosened
+                            // here rather than in each `editor_ui`: a feature
+                            // type describes its own fields and should not
+                            // also have to know what the panel around them
+                            // looks like, and nine implementations each
+                            // choosing their own margins is nine chances for
+                            // one of them to look like a different program.
+                            let edited = feature_editor_frame(ui, |ui| {
+                                ui.heading(feature.type_name_with_id());
+                                ui.add_space(FEATURE_EDITOR_PADDING * 0.5);
+                                feature.object_mut().editor_ui(ui, &features.features, &prior_order, &mut retarget_request)
+                            });
                             if let Some(label) = retarget_request {
                                 *retarget_out = Some((selected_id, label));
                             }
@@ -1055,6 +1077,7 @@ impl PointRef {
 
         egui::ComboBox::from_id_salt(format!("{}_ref", label))
             .selected_text(&ref_label)
+            .width(ui.available_width())
             .show_ui(ui, |ui| {
                 if ui.selectable_label(self.reference.is_none(), "None").clicked() && self.reference.is_some() {
                     new_reference = None;
@@ -1112,6 +1135,7 @@ impl PointRef {
 
                     egui::ComboBox::from_id_salt(format!("{}_key", label))
                         .selected_text(current_display)
+                        .width(ui.available_width())
                         .show_ui(ui, |ui| {
                             for (key, display) in &keys {
                                 if ui.selectable_label(&self.point_key == key, display).clicked() && &self.point_key != key {
@@ -1172,6 +1196,61 @@ impl PointRef {
     }
 }
 
+/// Least room the construction list keeps, and the least the feature editor
+/// opens with, whatever the panel is dragged to.
+const FEATURE_LIST_MIN_HEIGHT: f32 = 96.0;
+const FEATURE_EDITOR_MIN_HEIGHT: f32 = 120.0;
+
+/// How tall the feature editor opens in a tab with `available` height.
+///
+/// Half, so the two halves of the tab read as equals — but never at the cost
+/// of the list's own minimum, which is what keeps a short panel from opening
+/// with nothing to select in it.
+fn feature_editor_default_height(available: f32) -> f32 {
+    let range = feature_editor_height_range(available);
+    (available * 0.5).clamp(range.min, range.max)
+}
+
+/// What the feature editor may be dragged to in a tab with `available` height.
+///
+/// Both ends give way in a panel too short to honour them: the maximum is
+/// never below the minimum, so the range stays valid rather than inverting.
+fn feature_editor_height_range(available: f32) -> egui::Rangef {
+    let min = FEATURE_EDITOR_MIN_HEIGHT.min(available);
+    let max = (available - FEATURE_LIST_MIN_HEIGHT).max(min);
+    egui::Rangef::new(min, max)
+}
+
+/// Gap left around and between the fields of the feature editor.
+pub const FEATURE_EDITOR_PADDING: f32 = 8.0;
+
+/// Draw a feature's own editor with room to breathe.
+///
+/// Everything a feature puts in the panel goes through here: a margin so no
+/// control is flush against the panel edge, and a taller row so stacked
+/// sliders and dropdowns are not one continuous band of widget. The scroll
+/// area is part of the padding rather than around it — a feature with more
+/// fields than the panel is tall (a room has two `PointRef`s, which is eight
+/// rows) otherwise loses the last of them off the bottom with no way to reach
+/// them.
+fn feature_editor_frame<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::new()
+        .inner_margin(egui::Margin::same(FEATURE_EDITOR_PADDING as i8))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(
+                FEATURE_EDITOR_PADDING,
+                FEATURE_EDITOR_PADDING * 0.75,
+            );
+            ui.spacing_mut().interact_size.y = 22.0;
+            ui.spacing_mut().slider_width = (ui.available_width() - 90.0).max(80.0);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, add_contents)
+                .inner
+        })
+        .inner
+}
+
 fn axis_row(ui: &mut egui::Ui, axis_ref: &mut AxisRef, label: &str, has_ref: bool, base_val: f32) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -1205,5 +1284,31 @@ fn dashed_line(gizmos: &mut Gizmos, start: Vec3, end: Vec3, color: Color, dash: 
         let dash_end = (t + dash).min(len);
         gizmos.line(start + norm * t, start + norm * dash_end, color);
         t = dash_end + gap;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tab too short for both halves must still give a valid range.
+    ///
+    /// `feature_editor_default_height` clamps into it, and `f32::clamp`
+    /// panics when its bounds are inverted — so a panel dragged narrow enough
+    /// would take the editor down rather than merely look wrong.
+    #[test]
+    fn the_feature_editor_range_never_inverts() {
+        for available in [0.0, 1.0, 50.0, 120.0, 200.0, 216.0, 400.0, 2000.0] {
+            let range = feature_editor_height_range(available);
+            assert!(
+                range.min <= range.max,
+                "inverted range at {available}: {range:?}"
+            );
+            let default = feature_editor_default_height(available);
+            assert!(
+                (range.min..=range.max).contains(&default),
+                "default {default} outside {range:?} at {available}"
+            );
+        }
     }
 }
