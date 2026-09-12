@@ -112,6 +112,12 @@ impl Plugin for PropViewPlugin {
             // way in the last build belongs to a previous visit or to no
             // visit at all, and framing on stale bounds puts the cameras
             // somewhere plausible and wrong.
+            // Registered for **both** prop modes rather than for `Prop` alone.
+            // They are one scene asked two questions, so swapping between them
+            // runs an exit and an entry — both in the same `StateTransition`,
+            // before anything is drawn, so there is no flicker and the world
+            // is set aside again before a frame of it could be seen. A rebuild
+            // per swap is real work, but a mode swap is not a frame.
             .add_systems(
                 OnEnter(AppMode::Prop),
                 (light_the_stage, refresh_the_figure, pose_the_figure, set_the_world_aside, rebuild_the_prop)
@@ -119,7 +125,17 @@ impl Plugin for PropViewPlugin {
                     .in_set(PropSceneSystems::Build),
             )
             .add_systems(
+                OnEnter(AppMode::Animation),
+                (light_the_stage, refresh_the_figure, pose_the_figure, set_the_world_aside, rebuild_the_prop)
+                    .chain()
+                    .in_set(PropSceneSystems::Build),
+            )
+            .add_systems(
                 OnExit(AppMode::Prop),
+                (clear_the_stage, clear_the_figure, put_the_world_back),
+            )
+            .add_systems(
+                OnExit(AppMode::Animation),
                 (clear_the_stage, clear_the_figure, put_the_world_back),
             )
             .add_systems(
@@ -140,7 +156,7 @@ impl Plugin for PropViewPlugin {
                 )
                     .chain()
                     .in_set(PropSceneSystems::Build)
-                    .run_if(in_state(AppMode::Prop)),
+                    .run_if(crate::common::app_mode::showing_a_prop),
             );
     }
 }

@@ -1,4 +1,5 @@
 pub mod startup;
+pub mod anim;
 pub mod common;
 pub mod constants;
 pub mod editor;

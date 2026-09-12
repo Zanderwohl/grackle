@@ -218,8 +218,14 @@ fn toggle_mode(
     next.set(match mode.get() {
         AppMode::Editor => AppMode::Play,
         AppMode::Play => AppMode::Editor,
-        AppMode::Prop => {
-            info!("F5 swaps the map editor and Play; use the Mode menu to leave the prop editor.");
+        // Matched as a pair rather than with a wildcard: a fifth mode should
+        // have to decide what F5 means to it, and `_ =>` is how one quietly
+        // inherits an answer nobody chose for it.
+        mode @ (AppMode::Prop | AppMode::Animation) => {
+            info!(
+                "F5 swaps the map editor and Play; use the Mode menu to leave {}.",
+                mode.name(),
+            );
             return;
         }
     });

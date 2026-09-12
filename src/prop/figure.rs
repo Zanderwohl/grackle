@@ -27,7 +27,8 @@ use crate::common::skeleton::{humanoid, Pose, Skeleton};
 use crate::game::body_mesh::BodyTint;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::document::PropEditor;
-use crate::prop::hold::{grip_with, weapon_transform};
+use crate::common::skeleton::play::{apply_stack, ClipStack, Frames};
+use crate::prop::hold::{carry_frame, grip_with, weapon_transform};
 
 /// Which class is standing there, if any.
 ///
@@ -48,6 +49,16 @@ pub struct ScaleFigureMarker;
 /// would have to guess at eleven times.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct FigureReach(pub [Reach; 2]);
+
+/// What the reference figure is performing, if anything.
+///
+/// A resource rather than a component on the figure because the figure is
+/// respawned whenever the class on show changes, and a performance that went
+/// away with it would stop every time somebody compared two builds. Absent
+/// entirely — the animation editor is not open — means the figure stands in
+/// its hold, which is what the modelling surface wants.
+#[derive(Resource, Default)]
+pub struct FigurePerformance(pub ClipStack);
 
 /// Grey-green and unmistakably not the prop. A team colour would be a lie —
 /// the figure has no side.
@@ -108,6 +119,7 @@ pub fn pose_the_figure(
     editor: Res<PropEditor>,
     choice: Res<ScaleFigure>,
     preview: Res<ViewmodelPreview>,
+    performance: Option<Res<FigurePerformance>>,
     mut figures: Query<
         (&Skeleton, &mut Pose, &mut Transform, &mut FigureReach, &mut Visibility),
         With<ScaleFigureMarker>,
@@ -136,6 +148,28 @@ pub fn pose_the_figure(
         else {
             continue;
         };
+        // **In here the prop does not move; the figure does.** A prop is
+        // authored around its own origin and its gizmos are drawn there, so a
+        // clip that would dip the weapon towards the body instead lifts the
+        // body away from the weapon — the same inversion the carry handle is,
+        // one layer along, and the reason a clip can be watched here at all.
+        let mut local = local;
+        if let Some(performance) = performance.as_deref() {
+            let ground = |_: Vec3| 0.0;
+            let frames = Frames {
+                // The figure has not been placed yet — that is what this
+                // whole function is working out — so the clip is read in the
+                // frame it is authored in and the placement follows from it.
+                body: Transform::IDENTITY,
+                carry: carry_frame(skeleton, &standing, &Transform::IDENTITY, Quat::IDENTITY)
+                    .unwrap_or_default(),
+                weapon: Some(local),
+                eye: None,
+                ground: &ground,
+            };
+            apply_stack(&performance.0, skeleton, &mut standing, &frames, Some(&mut local));
+        }
+
         let rotation = local.rotation.inverse();
         let root = Transform::from_translation(rotation * -local.translation)
             .with_rotation(rotation);

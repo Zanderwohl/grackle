@@ -318,6 +318,18 @@ failed = "Failed: { reason }"
 [pause]
 title = "Esc Menu"
 
+[anim]
+no_clips = "No animations in this prop."
+read_only = "Editing arrives with the next stage; scrub, zoom and pan work now."
+clock_is = "Runs on: { clock }"
+
+[anim.panels]
+clips = "Clips"
+track = "Tracks"
+key = "Key"
+scene = "Scene"
+problems = "Problems"
+
 [anim.clips]
 deploy = "Deploy"
 
@@ -368,6 +380,7 @@ smoother_step = "Smoother"
 [app_mode]
 editor = "Map Editor"
 prop = "Prop Editor"
+animation = "Animation Editor"
 play = "Play"
 
 [app_mode.menu]

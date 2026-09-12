@@ -77,10 +77,22 @@ impl Plugin for MulticamPlugin {
                 Self::setup_first_camera,
                 Self::setup.after(Self::setup_first_camera),
             ))
-            .add_systems(Update, (
-                Self::set_camera_viewports,
-                Self::debug_boxes,
-            ).run_if(in_state(AppMode::Editor)))
+            // **Applying the rects runs in every authoring mode**, not just
+            // the map editor. `MulticamState` is written by whichever panel
+            // module is up — each measures its own docks and turns the insets
+            // into normalised rects — but nothing was reading it outside the
+            // map editor, so the four cameras simply kept whatever viewport
+            // the editor had last set. The prop editor gets away with it
+            // because its panels happen to be about the same size; a mode that
+            // reserves a strip along the bottom does not, and the symptom is
+            // viewports drawn straight over it.
+            //
+            // The debug boxes stay in the map editor, being a map editor tool.
+            .add_systems(
+                Update,
+                Self::set_camera_viewports.run_if(crate::common::app_mode::authoring),
+            )
+            .add_systems(Update, Self::debug_boxes.run_if(in_state(AppMode::Editor)))
             // Global transforms are propagated from transforms during PostUpdate, so we need to draw the camera after that.
             .add_systems(PostUpdate, Self::draw_camera_gizmos.after(TransformSystems::Propagate).run_if(in_state(AppMode::Editor)))
             .add_systems(EguiPrimaryContextPass, Self::debug_window.run_if(in_state(AppMode::Editor)))

@@ -112,8 +112,18 @@ impl Plugin for PropCameraPlugin {
             .add_message::<FrameTheProp>()
             // After the scene is built, because framing reads the prop's
             // bounds — stale ones put the cameras somewhere plausible and wrong.
+            // Both prop modes, for the reason `prop::view` gives. One
+            // consequence worth knowing: swapping between them re-frames, so a
+            // viewpoint dragged somewhere useful in one is not carried into
+            // the other. Framing on entry is the documented behaviour and this
+            // keeps it true rather than making the two modes disagree about
+            // what entering means.
             .add_systems(
                 OnEnter(AppMode::Prop),
+                frame_on_entering.after(PropSceneSystems::Build),
+            )
+            .add_systems(
+                OnEnter(AppMode::Animation),
                 frame_on_entering.after(PropSceneSystems::Build),
             )
             // Forgetting the preview before restoring: leaving the mode
@@ -121,6 +131,10 @@ impl Plugin for PropCameraPlugin {
             // over the framing on the way back in.
             .add_systems(
                 OnExit(AppMode::Prop),
+                (forget_the_preview, restore_viewpoints, let_go_of_the_cursor).chain(),
+            )
+            .add_systems(
+                OnExit(AppMode::Animation),
                 (forget_the_preview, restore_viewpoints, let_go_of_the_cursor).chain(),
             )
             .add_systems(
@@ -135,7 +149,7 @@ impl Plugin for PropCameraPlugin {
                     reset_the_hovered_view,
                 )
                     .after(PropSceneSystems::Build)
-                    .run_if(in_state(AppMode::Prop)),
+                    .run_if(crate::common::app_mode::showing_a_prop),
             );
     }
 }
