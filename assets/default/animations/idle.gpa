@@ -16,7 +16,7 @@ bone = "chest"
 
 [[tracks.channel.keys]]
 at = 0.0
-turn = [
+to = [
     -0.0,
     0.0,
     0.0,
@@ -25,7 +25,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.2125
-turn = [
+to = [
     0.0017127113,
     0.0,
     0.0,
@@ -34,7 +34,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.425
-turn = [
+to = [
     0.0065900977,
     0.0,
     0.0,
@@ -43,7 +43,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.63750005
-turn = [
+to = [
     0.013889623,
     0.0,
     0.0,
@@ -52,7 +52,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.85
-turn = [
+to = [
     0.022499999,
     0.0,
     0.0,
@@ -61,7 +61,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.0625
-turn = [
+to = [
     0.031110376,
     0.0,
     0.0,
@@ -70,7 +70,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.2750001
-turn = [
+to = [
     0.038409904,
     0.0,
     0.0,
@@ -79,7 +79,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.4875001
-turn = [
+to = [
     0.043287296,
     0.0,
     0.0,
@@ -88,7 +88,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.7
-turn = [
+to = [
     0.045,
     0.0,
     0.0,
@@ -97,7 +97,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.9125
-turn = [
+to = [
     0.043287296,
     0.0,
     0.0,
@@ -106,7 +106,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.125
-turn = [
+to = [
     0.0384099,
     0.0,
     0.0,
@@ -115,7 +115,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.3375
-turn = [
+to = [
     0.031110369,
     0.0,
     0.0,
@@ -124,7 +124,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.5500002
-turn = [
+to = [
     0.022499999,
     0.0,
     0.0,
@@ -133,7 +133,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.7625
-turn = [
+to = [
     0.013889618,
     0.0,
     0.0,
@@ -142,7 +142,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.9750001
-turn = [
+to = [
     0.006590092,
     0.0,
     0.0,
@@ -151,7 +151,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 3.1875
-turn = [
+to = [
     0.0017127059,
     0.0,
     0.0,
@@ -170,7 +170,7 @@ bone = "neck"
 
 [[tracks.channel.keys]]
 at = 0.0
-turn = [
+to = [
     -0.0,
     0.0,
     0.0,
@@ -179,7 +179,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.2125
-turn = [
+to = [
     -0.0010276269,
     0.0,
     0.0,
@@ -188,7 +188,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.425
-turn = [
+to = [
     -0.0039540585,
     0.0,
     0.0,
@@ -197,7 +197,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.63750005
-turn = [
+to = [
     -0.008333774,
     0.0,
     0.0,
@@ -206,7 +206,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.85
-turn = [
+to = [
     -0.013500001,
     0.0,
     0.0,
@@ -215,7 +215,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.0625
-turn = [
+to = [
     -0.018666228,
     0.0,
     0.0,
@@ -224,7 +224,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.2750001
-turn = [
+to = [
     -0.02304594,
     0.0,
     0.0,
@@ -233,7 +233,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.4875001
-turn = [
+to = [
     -0.025972376,
     0.0,
     0.0,
@@ -242,7 +242,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.7
-turn = [
+to = [
     -0.027000004,
     0.0,
     0.0,
@@ -251,7 +251,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.9125
-turn = [
+to = [
     -0.025972376,
     0.0,
     0.0,
@@ -260,7 +260,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.125
-turn = [
+to = [
     -0.023045938,
     0.0,
     0.0,
@@ -269,7 +269,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.3375
-turn = [
+to = [
     -0.018666225,
     0.0,
     0.0,
@@ -278,7 +278,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.5500002
-turn = [
+to = [
     -0.013500001,
     0.0,
     0.0,
@@ -287,7 +287,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.7625
-turn = [
+to = [
     -0.0083337715,
     0.0,
     0.0,
@@ -296,7 +296,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.9750001
-turn = [
+to = [
     -0.0039540553,
     0.0,
     0.0,
@@ -305,7 +305,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 3.1875
-turn = [
+to = [
     -0.0010276237,
     0.0,
     0.0,
@@ -324,7 +324,7 @@ bone = "upper_arm.l"
 
 [[tracks.channel.keys]]
 at = 0.0
-turn = [
+to = [
     -0.041261297,
     0.02824816,
     -0.60058284,
@@ -333,7 +333,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.2125
-turn = [
+to = [
     -0.03812121,
     0.026095726,
     -0.60049754,
@@ -342,7 +342,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.425
-turn = [
+to = [
     -0.029178087,
     0.019968798,
     -0.60029143,
@@ -351,7 +351,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.63750005
-turn = [
+to = [
     -0.015791807,
     0.010804866,
     -0.6000853,
@@ -360,7 +360,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.85
-turn = [
+to = [
     0.0,
     0.0,
     -0.6,
@@ -369,7 +369,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.0625
-turn = [
+to = [
     0.015791807,
     -0.010804866,
     -0.6000853,
@@ -378,7 +378,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.2750001
-turn = [
+to = [
     0.029178087,
     -0.019968798,
     -0.60029143,
@@ -387,7 +387,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.4875001
-turn = [
+to = [
     0.038121212,
     -0.02609573,
     -0.60049754,
@@ -396,7 +396,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.7
-turn = [
+to = [
     0.041261297,
     -0.02824816,
     -0.60058284,
@@ -405,7 +405,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.9125
-turn = [
+to = [
     0.038121212,
     -0.02609573,
     -0.60049754,
@@ -414,7 +414,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.125
-turn = [
+to = [
     0.029178087,
     -0.019968798,
     -0.60029143,
@@ -423,7 +423,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.3375
-turn = [
+to = [
     0.015791798,
     -0.010804861,
     -0.6000853,
@@ -432,7 +432,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.5500002
-turn = [
+to = [
     0.0000000062311107,
     -0.0000000042629322,
     -0.6,
@@ -441,7 +441,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.7625
-turn = [
+to = [
     -0.015791807,
     0.010804866,
     -0.6000853,
@@ -450,7 +450,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.9750001
-turn = [
+to = [
     -0.02917809,
     0.0199688,
     -0.60029143,
@@ -459,7 +459,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 3.1875
-turn = [
+to = [
     -0.038121216,
     0.026095731,
     -0.60049754,
@@ -478,7 +478,7 @@ bone = "forearm.l"
 
 [[tracks.channel.keys]]
 at = 0.0
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -487,7 +487,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.2125
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -496,7 +496,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.425
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -505,7 +505,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.63750005
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -514,7 +514,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.85
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -523,7 +523,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.0625
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -532,7 +532,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.2750001
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -541,7 +541,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.4875001
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -550,7 +550,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.7
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -559,7 +559,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.9125
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -568,7 +568,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.125
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -577,7 +577,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.3375
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -586,7 +586,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.5500002
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -595,7 +595,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.7625
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -604,7 +604,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.9750001
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -613,7 +613,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 3.1875
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -632,7 +632,7 @@ bone = "upper_arm.r"
 
 [[tracks.channel.keys]]
 at = 0.0
-turn = [
+to = [
     -0.041261297,
     -0.02824816,
     0.60058284,
@@ -641,7 +641,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.2125
-turn = [
+to = [
     -0.03812121,
     -0.026095726,
     0.60049754,
@@ -650,7 +650,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.425
-turn = [
+to = [
     -0.029178087,
     -0.019968798,
     0.60029143,
@@ -659,7 +659,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.63750005
-turn = [
+to = [
     -0.015791807,
     -0.010804866,
     0.6000853,
@@ -668,7 +668,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.85
-turn = [
+to = [
     -0.0,
     0.0,
     0.6,
@@ -677,7 +677,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.0625
-turn = [
+to = [
     0.015791807,
     0.010804866,
     0.6000853,
@@ -686,7 +686,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.2750001
-turn = [
+to = [
     0.029178087,
     0.019968798,
     0.60029143,
@@ -695,7 +695,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.4875001
-turn = [
+to = [
     0.038121212,
     0.02609573,
     0.60049754,
@@ -704,7 +704,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.7
-turn = [
+to = [
     0.041261297,
     0.02824816,
     0.60058284,
@@ -713,7 +713,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.9125
-turn = [
+to = [
     0.038121212,
     0.02609573,
     0.60049754,
@@ -722,7 +722,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.125
-turn = [
+to = [
     0.029178087,
     0.019968798,
     0.60029143,
@@ -731,7 +731,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.3375
-turn = [
+to = [
     0.015791798,
     0.010804861,
     0.6000853,
@@ -740,7 +740,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.5500002
-turn = [
+to = [
     0.0000000062311107,
     0.0000000042629322,
     0.6,
@@ -749,7 +749,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.7625
-turn = [
+to = [
     -0.015791807,
     -0.010804866,
     0.6000853,
@@ -758,7 +758,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.9750001
-turn = [
+to = [
     -0.02917809,
     -0.0199688,
     0.60029143,
@@ -767,7 +767,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 3.1875
-turn = [
+to = [
     -0.038121216,
     -0.026095731,
     0.60049754,
@@ -786,7 +786,7 @@ bone = "forearm.r"
 
 [[tracks.channel.keys]]
 at = 0.0
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -795,7 +795,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.2125
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -804,7 +804,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.425
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -813,7 +813,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.63750005
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -822,7 +822,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 0.85
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -831,7 +831,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.0625
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -840,7 +840,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.2750001
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -849,7 +849,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.4875001
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -858,7 +858,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.7
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -867,7 +867,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 1.9125
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -876,7 +876,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.125
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -885,7 +885,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.3375
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -894,7 +894,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.5500002
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -903,7 +903,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.7625
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -912,7 +912,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 2.9750001
-turn = [
+to = [
     0.3,
     0.0,
     0.0,
@@ -921,7 +921,7 @@ ease = "smoother_step"
 
 [[tracks.channel.keys]]
 at = 3.1875
-turn = [
+to = [
     0.3,
     0.0,
     0.0,

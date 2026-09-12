@@ -471,7 +471,7 @@ mod tests {
     #[test]
     fn animations_survive_the_round_trip_beside_the_features() {
         use crate::common::skeleton::clip::{
-            Axis, Channel, Clip, Clock, Combine, PointKey, Space, Track, Unit,
+            Axis, Channel, Clip, Clock, Combine, Key, Space, Track, Unit,
         };
         use crate::common::skeleton::Interpolation;
 
@@ -493,12 +493,12 @@ mod tests {
                     enabled: true,
                     channel: Channel::Weapon {
                         keys: vec![
-                            PointKey {
+                            Key {
                                 at: 0.0,
                                 to: [Axis::Free, Axis::Value(-0.8), Axis::Free],
                                 ease: Interpolation::CubicOut,
                             },
-                            PointKey {
+                            Key {
                                 at: 0.45,
                                 to: [Axis::Free, Axis::Value(0.0), Axis::Free],
                                 ease: Interpolation::Linear,

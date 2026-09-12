@@ -543,26 +543,24 @@ impl AnimTabs<'_> {
         let Some(clip) = self.clip() else { return };
         let Some(track) = clip.tracks.get(first.track) else { return };
 
-        let mut edited = match &track.channel {
-            Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
-                keys.get(first.key).copied()
-            }
-            _ => None,
-        };
-
-        let Some(key) = edited.as_mut() else {
-            // A rotation key is three angles and has no datum to choose, so it
-            // is the ordinary `degrees_ui` case rather than this one. Stated
-            // rather than silently drawing nothing.
-            ui.label(get!("anim.rotation_key"));
+        // **Every kind of key is the same three optional axes.** What differs
+        // is only what they are measured in — angles or a place — which is why
+        // there is one inspector rather than one per channel.
+        let angles = track.channel.is_rotation();
+        let Some(mut key) = track.channel.keys().get(first.key).copied() else {
             return;
         };
+        let key = &mut key;
 
         let mut changed = false;
         ui.label(get!("anim.at", "time", format!("{:.3}", key.at)));
         ui.separator();
 
-        for (index, label) in ["anim.axis.x", "anim.axis.y", "anim.axis.z"].iter().enumerate() {
+        let labels = match angles {
+            true => ["anim.axis.pitch", "anim.axis.yaw", "anim.axis.roll"],
+            false => ["anim.axis.x", "anim.axis.y", "anim.axis.z"],
+        };
+        for (index, label) in labels.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.label(get!(*label));
                 let axis = &mut key.to[index];
@@ -581,10 +579,11 @@ impl AnimTabs<'_> {
                     }))
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut kind, 0, get!("anim.axis.free"));
-                        // Only the vertical axis has a floor under it. Offered
-                        // and refused would be a control that does nothing;
-                        // not offered is an answer.
-                        if index == 1 {
+                        // Only a vertical *place* has a floor under it — not a
+                        // sideways one, and certainly not an angle. Offered and
+                        // refused would be a control that does nothing; not
+                        // offered is an answer.
+                        if index == 1 && !angles {
                             ui.selectable_value(&mut kind, 1, get!("anim.axis.ground"));
                         }
                         ui.selectable_value(&mut kind, 2, get!("anim.axis.value"));
@@ -603,11 +602,25 @@ impl AnimTabs<'_> {
                     changed = true;
                 }
 
-                if let Some(mut number) = axis.offset() {
-                    if ui
-                        .add(egui::DragValue::new(&mut number).speed(0.005).max_decimals(4))
-                        .changed()
-                    {
+                if let Some(stored) = axis.offset() {
+                    // Degrees for an angle, for the reason `degrees_ui` exists
+                    // one layer along: nobody types radians, and a file full
+                    // of them is one nobody can check by eye. Stored in
+                    // radians either way — the conversion is the panel's, not
+                    // the format's.
+                    let mut shown = match angles {
+                        true => stored.to_degrees(),
+                        false => stored,
+                    };
+                    let drag = match angles {
+                        true => egui::DragValue::new(&mut shown).speed(0.25).max_decimals(2),
+                        false => egui::DragValue::new(&mut shown).speed(0.005).max_decimals(4),
+                    };
+                    if ui.add(drag).changed() {
+                        let number = match angles {
+                            true => shown.to_radians(),
+                            false => shown,
+                        };
                         *axis = match axis {
                             Axis::Ground { .. } => Axis::Ground { clearance: number },
                             _ => Axis::Value(number),
@@ -648,19 +661,12 @@ impl AnimTabs<'_> {
         self.edit(|clip| {
             for picked in &picked {
                 let Some(track) = clip.tracks.get_mut(picked.track) else { continue };
-                match &mut track.channel {
-                    Channel::Effector { keys, .. }
-                    | Channel::Weapon { keys }
-                    | Channel::Root { keys } => {
-                        if let Some(key) = keys.get_mut(picked.key) {
-                            // The time is not written across: a multiple
-                            // selection edited together should change its
-                            // shape, not collapse onto one moment.
-                            key.to = written.to;
-                            key.ease = written.ease;
-                        }
-                    }
-                    _ => {}
+                if let Some(key) = track.channel.keys_mut().get_mut(picked.key) {
+                    // The time is not written across: a multiple selection
+                    // edited together should change its shape, not collapse
+                    // onto one moment.
+                    key.to = written.to;
+                    key.ease = written.ease;
                 }
             }
         });

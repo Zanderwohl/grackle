@@ -306,6 +306,8 @@ enabled = true
 [animations.clips.deploy.tracks.channel]
 channel = "weapon_rotation"
 keys = [
-    { at = 0.0, turn = [-0.9, 0.0, 0.0], ease = "cubic_out" },
-    { at = 0.45, turn = [0.0, 0.0, 0.0], ease = "linear" },
+    # Pitch only. The other two axes are left free, so the clip says nothing
+    # about the weapon's yaw or roll and whatever the hold had them at stands.
+    { at = 0.0, to = [-0.9, "free", "free"], ease = "cubic_out" },
+    { at = 0.45, to = [0.0, "free", "free"], ease = "linear" },
 ]

@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 
-use super::clip::{Axis, ChainRef, Channel, Clip, Combine, PointKey, RotationKey, Space, Unit};
+use super::clip::{Axis, ChainRef, Channel, Clip, Combine, Key, Space, Unit};
 use super::ik::{self, Chain, Reach};
 use super::interpolation::Interpolation;
 use super::rig::{Pose, Skeleton};
@@ -118,26 +118,13 @@ pub fn sample_at<K, T: Copy>(
     Some(value(last))
 }
 
-/// Sample a rotation track.
-pub fn sample_rotation(keys: &[RotationKey], time: f32, length: f32, looping: bool) -> Option<Quat> {
-    sample_at(
-        keys,
-        time,
-        length,
-        looping,
-        |key| key.at,
-        |key| quat_from_euler(Vec3::from_array(key.turn)),
-        |key| key.ease,
-        |from, to, ease, along| ease.quat(from, to, along),
-    )
-}
-
-/// Sample a point track.
+/// Sample a track — any track.
 ///
-/// Each axis is eased independently, which is what makes a mixed key —
-/// `[0.2, "ground", "free"]` — mean anything at all: the axes are three
-/// separate little channels that happen to share a time.
-pub fn sample_point(keys: &[PointKey], time: f32, length: f32, looping: bool) -> Option<[Axis; 3]> {
+/// Each axis is eased independently, which is what makes a mixed key mean
+/// anything at all: the three axes are three little channels that happen to
+/// share a time and a curve. `[0.2, "ground", "free"]` is a foot a fifth of a
+/// leg forward, on the floor, and left alone sideways.
+pub fn sample_key(keys: &[Key], time: f32, length: f32, looping: bool) -> Option<[Axis; 3]> {
     sample_at(
         keys,
         time,
@@ -160,12 +147,13 @@ pub fn sample_point(keys: &[PointKey], time: f32, length: f32, looping: bool) ->
                     (Axis::Ground { clearance: a }, Axis::Ground { clearance: b }) => {
                         Axis::Ground { clearance: ease.f32(a, b, along) }
                     }
-                    // Anything else is a change of *kind* — a foot that was
-                    // pinned to the floor and is now at a height — and there
-                    // is no halfway between "the floor" and a number. It
-                    // switches on arrival, the way `Step` does, because the
-                    // alternative is inventing a blend between a constraint
-                    // and a value.
+                    // Anything else is a change of *kind* — an axis that was
+                    // free and is now a number, or pinned to the floor and is
+                    // now a height — and there is no halfway between a
+                    // constraint and a value, nor between having an opinion
+                    // and not having one. It switches on arrival, the way
+                    // `Step` does, because the alternative is inventing a
+                    // blend nobody could predict.
                     (a, b) => {
                         if ease.ease(along) >= 1.0 {
                             b
@@ -180,6 +168,50 @@ pub fn sample_point(keys: &[PointKey], time: f32, length: f32, looping: bool) ->
     )
 }
 
+/// The angles a sampled rotation key asks for, against what is already there.
+///
+/// **`Free` means the layer beneath keeps that angle**, which is the whole
+/// point of a key being three optional axes: a key can turn a bone about one
+/// axis and say nothing about the other two.
+///
+/// Reading an angle back out of a quaternion is not unique — several Euler
+/// triples name the same orientation — so what comes back is the
+/// decomposition in [`EULER_ORDER`], which is the one the file is written in.
+/// For the angles a rig actually uses that is the reading anybody would
+/// expect; near a gimbal it is a choice rather than a fact, and a key that
+/// wants certainty should say all three.
+///
+/// [`EULER_ORDER`]: crate::common::rotation::EULER_ORDER
+fn angles_for(to: [Axis; 3], beneath: Quat) -> Vec3 {
+    let already = crate::common::rotation::euler_from_quat(beneath);
+    let mut wanted = already;
+    for axis in 0..3 {
+        wanted[axis] = match to[axis] {
+            Axis::Free => already[axis],
+            Axis::Value(at) => at,
+            // No floor under an angle; `Clip::problems` says so.
+            Axis::Ground { .. } => already[axis],
+        };
+    }
+    wanted
+}
+
+/// The same, for a rotation composed onto whatever is beneath it.
+///
+/// `Free` contributes **nothing** here rather than reading the layer beneath,
+/// because composing what is already there onto itself would double it. An
+/// axis with no opinion turns the bone by zero, which is what "says nothing"
+/// has to mean when the operation is a multiply.
+fn angles_onto(to: [Axis; 3]) -> Vec3 {
+    let mut wanted = Vec3::ZERO;
+    for axis in 0..3 {
+        if let Axis::Value(at) = to[axis] {
+            wanted[axis] = at;
+        }
+    }
+    wanted
+}
+
 /// Put a key on a channel at `at`, holding whatever the channel already said
 /// there.
 ///
@@ -189,31 +221,23 @@ pub fn sample_point(keys: &[PointKey], time: f32, length: f32, looping: bool) ->
 /// everywhere else and what makes it safe to do while looking at something you
 /// like. A key inserted at a default would jump the body the moment it landed.
 ///
+/// A track with nothing on it yet gets a key that says nothing either: three
+/// free axes, which changes no pose at all. A place to start rather than a
+/// pose somebody has to undo.
+///
 /// Returns where it ended up, so a caller can select it.
 pub fn key_the_channel(channel: &mut Channel, at: f32, length: f32, looping: bool) -> usize {
     let at = at.clamp(0.0, length);
+    let keys = channel.keys_mut();
 
-    match channel {
-        Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
-            let turn = sample_rotation(keys, at, length, looping)
-                .map(|turn| crate::common::rotation::euler_from_quat(turn).to_array())
-                .unwrap_or([0.0; 3]);
-            let ease = keys.last().map(|key| key.ease).unwrap_or_default();
-            keys.push(RotationKey { at, turn, ease });
-            keys.sort_by(|a, b| a.at.total_cmp(&b.at));
-            keys.iter().position(|key| key.at == at).unwrap_or(0)
-        }
-        Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
-            let to = sample_point(keys, at, length, looping).unwrap_or([Axis::Free; 3]);
-            let ease = keys.last().map(|key| key.ease).unwrap_or_default();
-            keys.push(PointKey { at, to, ease });
-            keys.sort_by(|a, b| a.at.total_cmp(&b.at));
-            keys.iter().position(|key| key.at == at).unwrap_or(0)
-        }
-    }
+    let to = sample_key(keys, at, length, looping).unwrap_or([Axis::Free; 3]);
+    let ease = keys.last().map(|key| key.ease).unwrap_or_default();
+    keys.push(Key { at, to, ease });
+    keys.sort_by(|a, b| a.at.total_cmp(&b.at));
+    keys.iter().position(|key| key.at == at).unwrap_or(0)
 }
 
-/// How many metres one of `unit` is on this body.
+/// How many metres one of `unit` is on this body./// How many metres one of `unit` is on this body.
 ///
 /// One function so two call sites cannot disagree, and the reason the whole
 /// format is worth having: a clip authored in leg-lengths fits every build,
@@ -386,7 +410,7 @@ pub fn apply(
 
         match &track.channel {
             Channel::Rotation { bone, keys } => {
-                let Some(turn) = sample_rotation(keys, time, length, looping) else {
+                let Some(to) = sample_key(keys, time, length, looping) else {
                     continue;
                 };
                 // `Pose::set` takes a `&'static str` and a clip's names are
@@ -399,16 +423,25 @@ pub fn apply(
                     continue;
                 };
                 let name = skeleton.bones()[index].name;
+                let beneath = pose.joint(name);
                 match track.combine {
-                    Combine::Replace => pose.set(name, turn),
+                    // Whatever the key does not mention keeps the angle it
+                    // already had, which is what lets a key turn one axis and
+                    // leave the other two to the layer beneath.
+                    Combine::Replace => {
+                        pose.set(name, quat_from_euler(angles_for(to, beneath)))
+                    }
                     // The composition `look_with_the_head` performs: in the
-                    // joint's own frame, on top of whatever was there.
-                    Combine::Compose => pose.set(name, pose.joint(name) * turn),
+                    // joint's own frame, on top of whatever was there. An axis
+                    // with no opinion turns it by nothing.
+                    Combine::Compose => {
+                        pose.set(name, beneath * quat_from_euler(angles_onto(to)))
+                    }
                 }
             }
 
             Channel::Effector { chain, pole, keys } => {
-                let Some(to) = sample_point(keys, time, length, looping) else {
+                let Some(to) = sample_key(keys, time, length, looping) else {
                     continue;
                 };
                 // Nothing to do, and *not* a solve onto where the tip already
@@ -452,7 +485,7 @@ pub fn apply(
             }
 
             Channel::Root { keys } => {
-                let Some(to) = sample_point(keys, time, length, looping) else {
+                let Some(to) = sample_key(keys, time, length, looping) else {
                     continue;
                 };
                 // In hip-heights and in the body's own frame, so neither the
@@ -476,7 +509,7 @@ pub fn apply(
                 let Some(placed) = weapon.as_deref_mut() else {
                     continue;
                 };
-                let Some(to) = sample_point(keys, time, length, looping) else {
+                let Some(to) = sample_key(keys, time, length, looping) else {
                     continue;
                 };
                 let Some(frame) = frames.of(track.space) else {
@@ -496,20 +529,26 @@ pub fn apply(
                 let Some(placed) = weapon.as_deref_mut() else {
                     continue;
                 };
-                let Some(turn) = sample_rotation(keys, time, length, looping) else {
+                let Some(to) = sample_key(keys, time, length, looping) else {
                     continue;
                 };
                 match track.combine {
                     // Stated in the track's own space, so a clip can say "the
-                    // muzzle points up the body" without knowing the aim.
+                    // muzzle points up the body" without knowing the aim — and
+                    // an axis it says nothing about keeps whatever the hold
+                    // had it at.
                     Combine::Replace => {
                         if let Some(frame) = frames.of(track.space) {
-                            placed.rotation = frame.rotation * turn;
+                            let beneath = frame.rotation.inverse() * placed.rotation;
+                            placed.rotation =
+                                frame.rotation * quat_from_euler(angles_for(to, beneath));
                         }
                     }
                     // On top of wherever the hold put it — a kick, which is
                     // what almost every weapon clip wants.
-                    Combine::Compose => placed.rotation *= turn,
+                    Combine::Compose => {
+                        placed.rotation *= quat_from_euler(angles_onto(to));
+                    }
                 }
             }
         }
@@ -592,11 +631,11 @@ mod tests {
     use crate::common::skeleton::clip::{Clock, Track};
     use crate::common::skeleton::rig::{bone, default_humanoid};
 
-    fn keys(times: &[f32]) -> Vec<PointKey> {
+    fn keys(times: &[f32]) -> Vec<Key> {
         times
             .iter()
             .enumerate()
-            .map(|(index, at)| PointKey {
+            .map(|(index, at)| Key {
                 at: *at,
                 to: [Axis::Value(index as f32), Axis::Free, Axis::Free],
                 ease: Interpolation::Linear,
@@ -615,8 +654,8 @@ mod tests {
     /// be a layer that overwrote the one beneath it.
     #[test]
     fn an_empty_track_has_nothing_to_say() {
-        assert!(sample_point(&[], 0.5, 1.0, false).is_none());
-        assert!(sample_rotation(&[], 0.5, 1.0, false).is_none());
+        assert!(sample_key(&[], 0.5, 1.0, false).is_none());
+        assert!(sample_key(&[], 0.5, 1.0, false).is_none());
     }
 
     /// One key is a constant, not a degenerate segment.
@@ -624,7 +663,7 @@ mod tests {
     fn one_key_is_a_constant() {
         let keys = keys(&[0.4]);
         for time in [0.0, 0.4, 0.9] {
-            assert_eq!(first_axis(sample_point(&keys, time, 1.0, false)), 0.0);
+            assert_eq!(first_axis(sample_key(&keys, time, 1.0, false)), 0.0);
         }
     }
 
@@ -634,8 +673,8 @@ mod tests {
     #[test]
     fn a_one_shot_holds_at_both_ends() {
         let keys = keys(&[0.25, 0.75]);
-        assert_eq!(first_axis(sample_point(&keys, 0.0, 1.0, false)), 0.0);
-        assert_eq!(first_axis(sample_point(&keys, 1.0, 1.0, false)), 1.0);
+        assert_eq!(first_axis(sample_key(&keys, 0.0, 1.0, false)), 0.0);
+        assert_eq!(first_axis(sample_key(&keys, 1.0, 1.0, false)), 1.0);
     }
 
     /// The sampler has no cursor, so the order times are asked in cannot
@@ -646,11 +685,11 @@ mod tests {
     fn sampling_is_stateless() {
         let keys = keys(&[0.0, 0.5, 1.0]);
         let forwards: Vec<f32> = (0..=20)
-            .map(|step| first_axis(sample_point(&keys, step as f32 / 20.0, 1.0, false)))
+            .map(|step| first_axis(sample_key(&keys, step as f32 / 20.0, 1.0, false)))
             .collect();
         let backwards: Vec<f32> = (0..=20)
             .rev()
-            .map(|step| first_axis(sample_point(&keys, step as f32 / 20.0, 1.0, false)))
+            .map(|step| first_axis(sample_key(&keys, step as f32 / 20.0, 1.0, false)))
             .collect();
 
         let mut backwards = backwards;
@@ -665,8 +704,8 @@ mod tests {
         let keys = keys(&[0.0, 0.6]);
         let length = 1.0;
 
-        let before = first_axis(sample_point(&keys, length - 1e-4, length, true));
-        let after = first_axis(sample_point(&keys, 0.0, length, true));
+        let before = first_axis(sample_key(&keys, length - 1e-4, length, true));
+        let after = first_axis(sample_key(&keys, 0.0, length, true));
 
         assert!(
             (before - after).abs() < 0.01,
@@ -681,11 +720,11 @@ mod tests {
     #[test]
     fn a_change_of_kind_switches_rather_than_blending() {
         let keys = vec![
-            PointKey { at: 0.0, to: [Axis::Free, Axis::ON_THE_GROUND, Axis::Free], ease: Interpolation::Linear },
-            PointKey { at: 1.0, to: [Axis::Free, Axis::Value(0.5), Axis::Free], ease: Interpolation::Linear },
+            Key { at: 0.0, to: [Axis::Free, Axis::ON_THE_GROUND, Axis::Free], ease: Interpolation::Linear },
+            Key { at: 1.0, to: [Axis::Free, Axis::Value(0.5), Axis::Free], ease: Interpolation::Linear },
         ];
-        assert_eq!(sample_point(&keys, 0.5, 1.0, false).unwrap()[1], Axis::ON_THE_GROUND);
-        assert_eq!(sample_point(&keys, 1.0, 1.0, false).unwrap()[1], Axis::Value(0.5));
+        assert_eq!(sample_key(&keys, 0.5, 1.0, false).unwrap()[1], Axis::ON_THE_GROUND);
+        assert_eq!(sample_key(&keys, 1.0, 1.0, false).unwrap()[1], Axis::Value(0.5));
     }
 
     /// Two keys stacked at one time is a legal way to write a snap. Dividing
@@ -693,7 +732,7 @@ mod tests {
     #[test]
     fn two_keys_at_one_time_do_not_divide_by_zero() {
         let keys = keys(&[0.5, 0.5]);
-        let sampled = first_axis(sample_point(&keys, 0.5, 1.0, false));
+        let sampled = first_axis(sample_key(&keys, 0.5, 1.0, false));
         assert!(sampled.is_finite(), "a zero-length segment produced {sampled}");
     }
 
@@ -738,7 +777,7 @@ mod tests {
                 channel: Channel::Effector {
                     chain: ChainRef::RightLeg,
                     pole: None,
-                    keys: vec![PointKey {
+                    keys: vec![Key {
                         at: 0.0,
                         to: [Axis::Free, Axis::Ground { clearance }, Axis::Free],
                         ease: Interpolation::Linear,
@@ -794,7 +833,7 @@ mod tests {
                 channel: Channel::Effector {
                     chain: ChainRef::RightArm,
                     pole: None,
-                    keys: vec![PointKey {
+                    keys: vec![Key {
                         at: 0.0,
                         to: [Axis::Free; 3],
                         ease: Interpolation::Linear,
@@ -820,6 +859,97 @@ mod tests {
         );
     }
 
+    /// **A rotation key can say nothing about an axis**, and that axis keeps
+    /// whatever the layer beneath put there.
+    ///
+    /// The After Effects reading, and the reason every key is three optional
+    /// axes rather than three numbers: a key that turns a bone about one axis
+    /// should not quietly zero the other two. Written against `Replace`,
+    /// where "leave it" means reading the angle back out of what is already
+    /// there.
+    #[test]
+    fn a_rotation_key_that_frees_an_axis_leaves_it_alone() {
+        let rig = default_humanoid().clone();
+        let ground = |_: Vec3| 0.0;
+        let frames = Frames::standing(Transform::IDENTITY, Transform::IDENTITY, &ground);
+
+        let mut clip = Clip {
+            length: 1.0,
+            tracks: vec![Track::rotation(bone::CHEST)],
+            ..Clip::default()
+        };
+        let Channel::Rotation { keys, .. } = &mut clip.tracks[0].channel else { unreachable!() };
+        // Pitch only; yaw and roll are nobody's business here.
+        keys.push(Key {
+            at: 0.0,
+            to: [Axis::Value(0.3), Axis::Free, Axis::Free],
+            ease: Interpolation::Linear,
+        });
+
+        // Something underneath with an opinion about all three.
+        let beneath = quat_from_euler(Vec3::new(-0.9, 0.4, -0.25));
+        let mut pose = Pose::rest().with(bone::CHEST, beneath);
+        apply(&clip, 0.0, &rig, &mut pose, &frames, None);
+
+        let after = crate::common::rotation::euler_from_quat(pose.joint(bone::CHEST));
+        assert!((after.x - 0.3).abs() < 1e-4, "the keyed axis did not take: {after:?}");
+        assert!((after.y - 0.4).abs() < 1e-4, "a free axis was overwritten: {after:?}");
+        assert!((after.z + 0.25).abs() < 1e-4, "a free axis was overwritten: {after:?}");
+    }
+
+    /// Composed, a free axis turns the bone by **nothing** rather than by what
+    /// was already there.
+    ///
+    /// The two readings differ and both look reasonable until you write them
+    /// down: under a multiply, "keep what is beneath" would compose the
+    /// existing angle onto itself and double it. Saying nothing has to mean
+    /// contributing nothing.
+    #[test]
+    fn a_composed_rotation_key_turns_a_free_axis_by_nothing() {
+        let rig = default_humanoid().clone();
+        let ground = |_: Vec3| 0.0;
+        let frames = Frames::standing(Transform::IDENTITY, Transform::IDENTITY, &ground);
+
+        let mut clip = Clip {
+            length: 1.0,
+            tracks: vec![Track {
+                combine: Combine::Compose,
+                ..Track::rotation(bone::CHEST)
+            }],
+            ..Clip::default()
+        };
+        let Channel::Rotation { keys, .. } = &mut clip.tracks[0].channel else { unreachable!() };
+        keys.push(Key {
+            at: 0.0,
+            to: [Axis::Value(0.2), Axis::Free, Axis::Free],
+            ease: Interpolation::Linear,
+        });
+
+        let beneath = quat_from_euler(Vec3::new(0.0, 0.5, 0.0));
+        let mut pose = Pose::rest().with(bone::CHEST, beneath);
+        apply(&clip, 0.0, &rig, &mut pose, &frames, None);
+
+        let wanted = beneath * quat_from_euler(Vec3::new(0.2, 0.0, 0.0));
+        assert!(
+            pose.joint(bone::CHEST).abs_diff_eq(wanted, 1e-5),
+            "a free axis contributed a turn of its own",
+        );
+    }
+
+    /// A key on a track with nothing on it says nothing either, so keying at
+    /// the playhead on a fresh track cannot move a body.
+    #[test]
+    fn keying_an_empty_track_changes_no_pose() {
+        let mut channel = Channel::Rotation {
+            bone: bone::CHEST.to_string(),
+            keys: Vec::new(),
+        };
+        key_the_channel(&mut channel, 0.5, 1.0, false);
+
+        let Channel::Rotation { keys, .. } = &channel else { unreachable!() };
+        assert_eq!(keys[0].to, [Axis::Free; 3], "a fresh key had an opinion");
+    }
+
     /// A disabled track is off. It is what anybody debugging a layered thing
     /// reaches for first, so it had better actually do nothing.
     #[test]
@@ -836,7 +966,7 @@ mod tests {
         let Channel::Rotation { keys, .. } = &mut clip.tracks[0].channel else {
             unreachable!()
         };
-        keys.push(RotationKey { at: 0.0, turn: [0.5, 0.0, 0.0], ease: Interpolation::Linear });
+        keys.push(Key::all(0.0, [0.5, 0.0, 0.0], Interpolation::Linear));
 
         let ground = |_: Vec3| 0.0;
         let frames = Frames::standing(Transform::IDENTITY, Transform::IDENTITY, &ground);
@@ -859,7 +989,7 @@ mod tests {
         let build = |combine| {
             let mut clip = Clip { length: 1.0, tracks: vec![Track { combine, ..Track::rotation(bone::CHEST) }], ..Clip::default() };
             let Channel::Rotation { keys, .. } = &mut clip.tracks[0].channel else { unreachable!() };
-            keys.push(RotationKey { at: 0.0, turn, ease: Interpolation::Linear });
+            keys.push(Key::all(0.0, turn, Interpolation::Linear));
             clip
         };
 
@@ -888,7 +1018,7 @@ mod tests {
         };
         for track in &mut clip.tracks {
             let Channel::Rotation { keys, .. } = &mut track.channel else { unreachable!() };
-            keys.push(RotationKey { at: 0.0, turn: [0.4, 0.0, 0.0], ease: Interpolation::Linear });
+            keys.push(Key::all(0.0, [0.4, 0.0, 0.0], Interpolation::Linear));
         }
 
         let ground = |_: Vec3| 0.0;
@@ -913,7 +1043,7 @@ mod tests {
                 unit: Unit::Metres,
                 enabled: true,
                 channel: Channel::Weapon {
-                    keys: vec![PointKey {
+                    keys: vec![Key {
                         at: 0.0,
                         to: [Axis::Free, Axis::Value(-0.2), Axis::Free],
                         ease: Interpolation::Linear,
@@ -952,7 +1082,7 @@ mod tests {
                 unit: Unit::Metres,
                 enabled: true,
                 channel: Channel::Weapon {
-                    keys: vec![PointKey { at: 0.0, to: [Axis::Value(1.0); 3], ease: Interpolation::Linear }],
+                    keys: vec![Key { at: 0.0, to: [Axis::Value(1.0); 3], ease: Interpolation::Linear }],
                 },
             }],
             ..Clip::default()
@@ -974,12 +1104,12 @@ mod tests {
     fn inserting_a_key_holds_what_the_track_already_said() {
         let mut channel = Channel::Weapon {
             keys: vec![
-                PointKey { at: 0.0, to: [Axis::Value(0.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
-                PointKey { at: 1.0, to: [Axis::Value(1.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
+                Key { at: 0.0, to: [Axis::Value(0.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
+                Key { at: 1.0, to: [Axis::Value(1.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
             ],
         };
 
-        let before = sample_point(
+        let before = sample_key(
             match &channel { Channel::Weapon { keys } => keys, _ => unreachable!() },
             0.25, 1.0, false,
         );
@@ -1001,12 +1131,12 @@ mod tests {
     #[test]
     fn inserting_a_key_does_not_bend_the_curve_around_it() {
         let keys = vec![
-            PointKey { at: 0.0, to: [Axis::Value(0.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
-            PointKey { at: 1.0, to: [Axis::Value(1.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
+            Key { at: 0.0, to: [Axis::Value(0.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
+            Key { at: 1.0, to: [Axis::Value(1.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
         ];
         let before: Vec<f32> = (0..=20)
             .map(|step| {
-                sample_point(&keys, step as f32 / 20.0, 1.0, false).unwrap()[0].value().unwrap()
+                sample_key(&keys, step as f32 / 20.0, 1.0, false).unwrap()[0].value().unwrap()
             })
             .collect();
 
@@ -1015,7 +1145,7 @@ mod tests {
         let Channel::Weapon { keys } = &channel else { unreachable!() };
 
         for (step, was) in before.iter().enumerate() {
-            let now = sample_point(keys, step as f32 / 20.0, 1.0, false).unwrap()[0]
+            let now = sample_key(keys, step as f32 / 20.0, 1.0, false).unwrap()[0]
                 .value()
                 .unwrap();
             assert!(
@@ -1035,7 +1165,7 @@ mod tests {
 
         let mut clip = Clip { length: 1.0, tracks: vec![Track::rotation(bone::CHEST)], ..Clip::default() };
         let Channel::Rotation { keys, .. } = &mut clip.tracks[0].channel else { unreachable!() };
-        keys.push(RotationKey { at: 0.0, turn: [0.6, 0.0, 0.0], ease: Interpolation::Linear });
+        keys.push(Key::all(0.0, [0.6, 0.0, 0.0], Interpolation::Linear));
         let clip = Arc::new(clip);
 
         let full = {

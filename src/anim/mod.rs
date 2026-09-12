@@ -756,7 +756,7 @@ mod tests {
     }
 
     use crate::common::skeleton::clip::{
-        Axis, Channel, Clip, Combine, PointKey, Space, Track, Unit,
+        Axis, Channel, Clip, Combine, Key, Space, Track, Unit,
     };
     use crate::common::skeleton::Interpolation;
     use crate::prop::document::PropDoc;
@@ -776,7 +776,7 @@ mod tests {
                     channel: Channel::Weapon {
                         keys: at
                             .iter()
-                            .map(|at| PointKey {
+                            .map(|at| Key {
                                 at: *at,
                                 to: [Axis::Value(*at), Axis::Free, Axis::Free],
                                 ease: Interpolation::Linear,

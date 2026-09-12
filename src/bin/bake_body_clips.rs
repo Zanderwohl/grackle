@@ -33,9 +33,7 @@ use std::path::Path;
 use bevy::prelude::*;
 
 use grackle::common::rotation::euler_from_quat;
-use grackle::common::skeleton::clip::{
-    Axis, Channel, Clip, Clock, Combine, PointKey, RotationKey, Space, Track, Unit,
-};
+use grackle::common::skeleton::clip::{Channel, Clip, Clock, Combine, Key, Space, Track, Unit};
 use grackle::common::skeleton::state::{AnimationState, PoseInputs};
 use grackle::common::skeleton::{default_humanoid, Interpolation, Pose};
 
@@ -133,10 +131,12 @@ fn bake(state: AnimationState, length: f32, looping: bool, note: &str) -> Clip {
                 bone: bone.to_string(),
                 keys: taken
                     .iter()
-                    .map(|(at, pose)| RotationKey {
-                        at: *at,
-                        turn: euler_from_quat(pose.joint(bone)).to_array(),
-                        ease: EASE,
+                    // All three, because this is a faithful recording of what a
+                    // function did — it had an opinion about every axis, so
+                    // the clip says so. A key somebody authors afterwards may
+                    // free whichever axes it has nothing to say about.
+                    .map(|(at, pose)| {
+                        Key::all(*at, euler_from_quat(pose.joint(bone)).to_array(), EASE)
                     })
                     .collect(),
             },
@@ -156,15 +156,7 @@ fn bake(state: AnimationState, length: f32, looping: bool, note: &str) -> Clip {
             channel: Channel::Root {
                 keys: taken
                     .iter()
-                    .map(|(at, pose)| PointKey {
-                        at: *at,
-                        to: [
-                            Axis::Value(pose.root_offset.x),
-                            Axis::Value(pose.root_offset.y),
-                            Axis::Value(pose.root_offset.z),
-                        ],
-                        ease: EASE,
-                    })
+                    .map(|(at, pose)| Key::all(*at, pose.root_offset.to_array(), EASE))
                     .collect(),
             },
         });

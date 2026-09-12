@@ -16,7 +16,7 @@ bone = "chest"
 
 [[tracks.channel.keys]]
 at = 0.0
-turn = [
+to = [
     1.02,
     0.0,
     0.0,
@@ -35,7 +35,7 @@ bone = "neck"
 
 [[tracks.channel.keys]]
 at = 0.0
-turn = [
+to = [
     -0.612,
     0.0,
     0.0,
@@ -54,7 +54,7 @@ bone = "upper_arm.l"
 
 [[tracks.channel.keys]]
 at = 0.0
-turn = [
+to = [
     0.28692657,
     -0.20326418,
     -0.62946206,
@@ -73,7 +73,7 @@ bone = "forearm.l"
 
 [[tracks.channel.keys]]
 at = 0.0
-turn = [
+to = [
     1.1000001,
     0.0,
     0.0,
@@ -92,7 +92,7 @@ bone = "upper_arm.r"
 
 [[tracks.channel.keys]]
 at = 0.0
-turn = [
+to = [
     0.28692657,
     0.20326418,
     0.62946206,
@@ -111,7 +111,7 @@ bone = "forearm.r"
 
 [[tracks.channel.keys]]
 at = 0.0
-turn = [
+to = [
     1.1000001,
     0.0,
     0.0,

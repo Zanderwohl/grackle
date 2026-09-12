@@ -309,30 +309,46 @@ impl<'de> Deserialize<'de> for Axis {
     }
 }
 
-/// A key on a rotation track.
+/// One key: a time, three **optional** axes, and the curve out of it.
+///
+/// One type for every kind of track, and the optionality is the reason. A
+/// rotation key's three axes are Euler angles and a point key's are
+/// coordinates, but the question each asks is identical — *does this key have
+/// an opinion about this axis at all?* — and a key that has none leaves that
+/// axis to the layer beneath. Two types would be two places to get that wrong,
+/// and it is the same answer both times.
+///
+/// So a key can set a bone's pitch and say nothing about its yaw and roll, or
+/// pin a foot's height while leaving where it is along the floor to whatever
+/// is already happening. That is what [`Axis::Free`] means, and it means it
+/// everywhere.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RotationKey {
+pub struct Key {
     /// Where on the clip's own clock this key sits.
     #[serde(with = "crate::prop::nice_f32::scalar")]
     pub at: f32,
-    /// Euler angles in the order [`crate::common::rotation`] owns, which is
-    /// the one `HoldSpec::grip_rotation` already uses — so the Hold panel's
-    /// `degrees_ui` works on a key without a second spelling of "rotation".
-    #[serde(with = "crate::prop::nice_f32::array")]
-    pub turn: [f32; 3],
+    /// The three axes, in axis order.
+    ///
+    /// For a rotation these are Euler angles in the order
+    /// [`crate::common::rotation`] owns — the one `HoldSpec::grip_rotation`
+    /// already uses — so the Hold panel's `degrees_ui` works on one without a
+    /// second spelling of "rotation".
+    pub to: [Axis; 3],
     /// Used **leaving** this key. See [`Interpolation`].
     #[serde(default)]
     pub ease: Interpolation,
 }
 
-/// A key on a track that drives a point.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct PointKey {
-    #[serde(with = "crate::prop::nice_f32::scalar")]
-    pub at: f32,
-    pub to: [Axis; 3],
-    #[serde(default)]
-    pub ease: Interpolation,
+impl Key {
+    /// A key that says all three, which is what a generator writes and what
+    /// keying at the playhead produces.
+    pub fn all(at: f32, to: [f32; 3], ease: Interpolation) -> Key {
+        Key {
+            at,
+            to: to.map(Axis::Value),
+            ease,
+        }
+    }
 }
 
 /// What a track drives.
@@ -349,7 +365,7 @@ pub enum Channel {
     Rotation {
         bone: String,
         #[serde(default)]
-        keys: Vec<RotationKey>,
+        keys: Vec<Key>,
     },
     /// A two-bone chain solved onto a target through [`ik::solve`].
     Effector {
@@ -358,7 +374,7 @@ pub enum Channel {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pole: Option<[f32; 3]>,
         #[serde(default)]
-        keys: Vec<PointKey>,
+        keys: Vec<Key>,
     },
     /// Where the weapon itself is, as a deviation from the hold's carry.
     ///
@@ -368,12 +384,12 @@ pub enum Channel {
     /// is correct for a Scout and a Heavy alike.
     Weapon {
         #[serde(default)]
-        keys: Vec<PointKey>,
+        keys: Vec<Key>,
     },
     /// And how it is turned there.
     WeaponRotation {
         #[serde(default)]
-        keys: Vec<RotationKey>,
+        keys: Vec<Key>,
     },
     /// Where the whole body sits, in **hip-heights** — [`Pose::root_offset`],
     /// the one thing a pose says that is not a rotation.
@@ -387,7 +403,7 @@ pub enum Channel {
     /// [`Pose::root_offset`]: super::rig::Pose::root_offset
     Root {
         #[serde(default)]
-        keys: Vec<PointKey>,
+        keys: Vec<Key>,
     },
     // Feature { feature: PropFeatureId, .. } — reserved for a magazine that
     // drops out. Building it needs `prop::baked` to bake per-feature groups
@@ -410,23 +426,59 @@ impl Channel {
     /// How many keys it has, whichever kind of key those are.
     pub fn key_count(&self) -> usize {
         match self {
-            Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => keys.len(),
-            Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
-                keys.len()
-            }
+            Channel::Rotation { keys, .. }
+            | Channel::WeaponRotation { keys }
+            | Channel::Effector { keys, .. }
+            | Channel::Weapon { keys }
+            | Channel::Root { keys } => keys.len(),
         }
     }
 
     /// When each key sits, in order. What the timeline draws.
     pub fn key_times(&self) -> Vec<f32> {
         match self {
-            Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
-                keys.iter().map(|key| key.at).collect()
-            }
-            Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
-                keys.iter().map(|key| key.at).collect()
-            }
+            Channel::Rotation { keys, .. }
+            | Channel::WeaponRotation { keys }
+            | Channel::Effector { keys, .. }
+            | Channel::Weapon { keys }
+            | Channel::Root { keys } => keys.iter().map(|key| key.at).collect(),
         }
+    }
+
+    /// The keys on this channel, whatever kind it is.
+    pub fn keys(&self) -> &[Key] {
+        match self {
+            Channel::Rotation { keys, .. }
+            | Channel::WeaponRotation { keys }
+            | Channel::Effector { keys, .. }
+            | Channel::Weapon { keys }
+            | Channel::Root { keys } => keys,
+        }
+    }
+
+    /// The same, to write.
+    ///
+    /// One accessor because every channel holds the same [`Key`]: what differs
+    /// between them is what the three axes *mean*, not how they are stored.
+    pub fn keys_mut(&mut self) -> &mut Vec<Key> {
+        match self {
+            Channel::Rotation { keys, .. }
+            | Channel::WeaponRotation { keys }
+            | Channel::Effector { keys, .. }
+            | Channel::Weapon { keys }
+            | Channel::Root { keys } => keys,
+        }
+    }
+
+    /// Whether this channel's axes are angles rather than a place.
+    ///
+    /// The one thing a panel has to know to show degrees instead of metres,
+    /// and asked of the channel rather than matched at each call site.
+    pub fn is_rotation(&self) -> bool {
+        matches!(
+            self,
+            Channel::Rotation { .. } | Channel::WeaponRotation { .. }
+        )
     }
 
     /// Move some keys in time, put the whole track back in order, and say
@@ -472,7 +524,11 @@ impl Channel {
         }
 
         match self {
-            Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => shuffle(
+            Channel::Rotation { keys, .. }
+            | Channel::WeaponRotation { keys }
+            | Channel::Effector { keys, .. }
+            | Channel::Weapon { keys }
+            | Channel::Root { keys } => shuffle(
                 keys,
                 held,
                 by,
@@ -480,16 +536,6 @@ impl Channel {
                 |key| key.at,
                 |key, at| key.at = at,
             ),
-            Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
-                shuffle(
-                    keys,
-                    held,
-                    by,
-                    within,
-                    |key| key.at,
-                    |key, at| key.at = at,
-                )
-            }
         }
     }
 
@@ -504,14 +550,11 @@ impl Channel {
         doomed.dedup();
 
         match self {
-            Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
-                for index in doomed.iter().rev() {
-                    if *index < keys.len() {
-                        keys.remove(*index);
-                    }
-                }
-            }
-            Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
+            Channel::Rotation { keys, .. }
+            | Channel::WeaponRotation { keys }
+            | Channel::Effector { keys, .. }
+            | Channel::Weapon { keys }
+            | Channel::Root { keys } => {
                 for index in doomed.iter().rev() {
                     if *index < keys.len() {
                         keys.remove(*index);
@@ -528,12 +571,11 @@ impl Channel {
     /// the sampler is the one thing in here that runs in a match.
     pub fn sort(&mut self) {
         match self {
-            Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
-                keys.sort_by(|a, b| a.at.total_cmp(&b.at))
-            }
-            Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
-                keys.sort_by(|a, b| a.at.total_cmp(&b.at))
-            }
+            Channel::Rotation { keys, .. }
+            | Channel::WeaponRotation { keys }
+            | Channel::Effector { keys, .. }
+            | Channel::Weapon { keys }
+            | Channel::Root { keys } => keys.sort_by(|a, b| a.at.total_cmp(&b.at)),
         }
     }
 }
@@ -670,6 +712,21 @@ impl Clip {
                 Channel::Rotation { bone, .. } if !known_bone(bone) => {
                     problems.push(format!("track {index} names bone '{bone}', which this rig has not got"));
                 }
+                Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
+                    for key in keys {
+                        // An angle has no floor under it. `Free` is the useful
+                        // thing here — a key that turns a bone about one axis
+                        // and says nothing about the others — and `Ground` is
+                        // the one reading that cannot mean anything.
+                        if key.to.iter().any(|axis| axis.is_ground()) {
+                            problems.push(format!(
+                                "track {index} grounds an angle at {}, which has no floor \
+                                 under it",
+                                key.at
+                            ));
+                        }
+                    }
+                }
                 Channel::Effector { keys, .. } | Channel::Weapon { keys } => {
                     for key in keys {
                         // Sideways has no floor to find. Rejected rather than
@@ -698,7 +755,6 @@ impl Clip {
                         }
                     }
                 }
-                _ => {}
             }
 
             for at in track.channel.key_times() {
@@ -765,12 +821,12 @@ mod tests {
                         chain: ChainRef::RightLeg,
                         pole: None,
                         keys: vec![
-                            PointKey {
+                            Key {
                                 at: 0.0,
                                 to: [Axis::Value(0.25), Axis::Ground { clearance: 0.04 }, Axis::Free],
                                 ease: Interpolation::SmoothStep,
                             },
-                            PointKey {
+                            Key {
                                 at: 1.5,
                                 to: [Axis::Value(-0.25), Axis::Value(0.1), Axis::Free],
                                 ease: Interpolation::Linear,
@@ -785,11 +841,7 @@ mod tests {
                     enabled: true,
                     channel: Channel::Rotation {
                         bone: "chest".into(),
-                        keys: vec![RotationKey {
-                            at: 0.5,
-                            turn: [0.05, 0.0, 0.0],
-                            ease: Interpolation::CubicOut,
-                        }],
+                        keys: vec![Key::all(0.5, [0.05, 0.0, 0.0], Interpolation::CubicOut)],
                     },
                 },
             ],
@@ -898,7 +950,7 @@ mod tests {
             unit: Unit::Metres,
             enabled: true,
             channel: Channel::Weapon {
-                keys: vec![PointKey {
+                keys: vec![Key {
                     at: 0.5,
                     to: [Axis::ON_THE_GROUND, Axis::Free, Axis::Free],
                     ease: Interpolation::Linear,
@@ -943,7 +995,7 @@ mod tests {
         Channel::Weapon {
             keys: at
                 .iter()
-                .map(|at| PointKey {
+                .map(|at| Key {
                     at: *at,
                     to: [Axis::Value(*at), Axis::Free, Axis::Free],
                     ease: Interpolation::Linear,
@@ -1034,6 +1086,61 @@ mod tests {
         let mut channel = point_track(&[0.0, 0.5]);
         channel.remove_keys(&[1, 1, 9]);
         assert_eq!(times(&channel), vec![0.0]);
+    }
+
+    /// Every kind of key is the same three optional axes.
+    ///
+    /// Worth a test of its own because it is the format's central claim: what
+    /// differs between a rotation and a place is what the axes *mean*, not how
+    /// they are stored — so a channel can hand back its keys without anyone
+    /// asking what kind it is.
+    #[test]
+    fn every_channel_holds_the_same_kind_of_key() {
+        let mut channels = vec![
+            Channel::Rotation { bone: "chest".into(), keys: vec![] },
+            Channel::WeaponRotation { keys: vec![] },
+            Channel::Effector { chain: ChainRef::RightArm, pole: None, keys: vec![] },
+            Channel::Weapon { keys: vec![] },
+            Channel::Root { keys: vec![] },
+        ];
+
+        for channel in &mut channels {
+            channel
+                .keys_mut()
+                .push(Key::all(0.5, [1.0, 2.0, 3.0], Interpolation::Linear));
+            assert_eq!(channel.key_count(), 1);
+            assert_eq!(channel.keys()[0].to[1], Axis::Value(2.0));
+        }
+
+        // And only the two rotations say they are angles, which is the one
+        // thing a panel has to know to show degrees.
+        let angles: Vec<bool> = channels.iter().map(|c| c.is_rotation()).collect();
+        assert_eq!(angles, vec![true, true, false, false, false]);
+    }
+
+    /// An angle has no floor under it, and saying so is the only reading of
+    /// `Ground` on a rotation that is not invented.
+    #[test]
+    fn grounding_an_angle_is_a_problem() {
+        let clip = Clip {
+            length: 1.0,
+            tracks: vec![Track {
+                channel: Channel::Rotation {
+                    bone: "chest".into(),
+                    keys: vec![Key {
+                        at: 0.0,
+                        to: [Axis::ON_THE_GROUND, Axis::Free, Axis::Free],
+                        ease: Interpolation::Linear,
+                    }],
+                },
+                ..Track::rotation("chest")
+            }],
+            ..Clip::default()
+        };
+        assert!(
+            clip.problems(|_| true).iter().any(|note| note.contains("no floor")),
+            "a grounded angle went unmentioned",
+        );
     }
 
     /// A looping clip wraps; a one-shot holds past its end rather than

@@ -746,7 +746,7 @@ mod tests {
     /// clip to go.
     #[test]
     fn a_clip_moves_the_weapon_and_the_hands_follow_it() {
-        use crate::common::skeleton::clip::{Axis, Channel, Clip, Combine, PointKey, Space, Track, Unit};
+        use crate::common::skeleton::clip::{Axis, Channel, Clip, Combine, Key, Space, Track, Unit};
         use crate::common::skeleton::play::{ClipStack, Playing};
         use crate::common::skeleton::Interpolation;
         use std::sync::Arc;
@@ -776,7 +776,7 @@ mod tests {
                 unit: Unit::Metres,
                 enabled: true,
                 channel: Channel::Weapon {
-                    keys: vec![PointKey {
+                    keys: vec![Key {
                         at: 0.0,
                         to: [Axis::Free, Axis::Value(-0.2), Axis::Free],
                         ease: Interpolation::Linear,

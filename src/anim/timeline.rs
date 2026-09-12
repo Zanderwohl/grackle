@@ -1002,7 +1002,7 @@ mod tests {
     use super::*;
 
     use crate::common::skeleton::clip::{
-        Axis, Channel, Clip, Combine, PointKey, Space, Track, Unit,
+        Axis, Channel, Clip, Combine, Key, Space, Track, Unit,
     };
     use crate::common::skeleton::Interpolation;
 
@@ -1019,7 +1019,7 @@ mod tests {
                 channel: Channel::Weapon {
                     keys: [0.0_f32, 0.5, 1.0]
                         .into_iter()
-                        .map(|at| PointKey {
+                        .map(|at| Key {
                             at,
                             to: [Axis::Free; 3],
                             ease: Interpolation::Linear,

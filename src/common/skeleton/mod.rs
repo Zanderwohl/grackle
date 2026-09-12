@@ -36,7 +36,9 @@ pub mod play;
 pub mod rig;
 pub mod state;
 
-pub use clip::{Axis, ChainRef, Channel, Clip, ClipSet, Clock, Combine, PointKey, RotationKey, Space, Track, Unit};
+pub use clip::{
+    Axis, ChainRef, Channel, Clip, ClipSet, Clock, Combine, Key, Space, Track, Unit,
+};
 pub use draw::{draw_skeleton, SkeletonPalette};
 pub use interpolation::Interpolation;
 pub use play::{apply, apply_stack, ClipStack, Frames, Playing};
