@@ -50,6 +50,14 @@ use timeline::{
 #[derive(Resource, Debug, Default)]
 pub struct AnimEditor {
     pub selected: Option<String>,
+    /// Still waiting to frame the clip and the figure.
+    ///
+    /// Neither can be done on the way in. egui has not measured the strip yet,
+    /// so the view's rect is zero-sized and fitting a clip across it fits it
+    /// across nothing; and `refresh_the_figure` spawns the body through
+    /// `Commands`, so there is nobody to frame the cameras on either. Both
+    /// wait for the thing they need rather than for a count of frames.
+    pending_frame: bool,
 }
 
 /// Whether `--anim` was given.
@@ -99,7 +107,7 @@ impl Plugin for AnimPlugin {
                 (
                     // What is on the strip, before anything asks where to draw
                     // it or what to perform.
-                    frame_once_the_figure_is_up,
+                    frame_when_there_is_something_to_frame,
                     follow_the_document,
                     timeline_input,
                     edit_keys,
@@ -121,7 +129,7 @@ impl Plugin for AnimPlugin {
 fn frame_on_entering(
     editor: Res<PropEditor>,
     mut anim: ResMut<AnimEditor>,
-    mut view: ResMut<TimelineView>,
+    view: Res<TimelineView>,
     mut cursor: ResMut<TimelineCursor>,
     mut figure: ResMut<crate::prop::figure::ScaleFigure>,
 ) {
@@ -137,14 +145,9 @@ fn frame_on_entering(
     if anim.selected.as_deref().is_none_or(|name| clips.get(name).is_none()) {
         anim.selected = clips.clips.keys().next().cloned();
     }
-    let length = anim
-        .selected
-        .as_deref()
-        .and_then(|name| clips.get(name))
-        .map_or(1.0, |clip| clip.length);
-
     cursor.time = 0.0;
-    view.frame(length);
+    anim.pending_frame = true;
+    let _ = view;
 }
 
 /// Frame again once the figure is actually standing there.
@@ -156,24 +159,26 @@ fn frame_on_entering(
 ///
 /// Keyed on the figure being **present** rather than on a frame count, so it
 /// waits exactly as long as it needs to and not a frame more.
-fn frame_once_the_figure_is_up(
+fn frame_when_there_is_something_to_frame(
     figures: Query<(), With<crate::prop::figure::ScaleFigureMarker>>,
+    editor: Res<PropEditor>,
+    mut anim: ResMut<AnimEditor>,
+    mut view: ResMut<TimelineView>,
     mut frame: MessageWriter<crate::prop::camera::FrameTheProp>,
-    mut waiting: Local<bool>,
-    mode: Res<State<AppMode>>,
-    mut was: Local<Option<AppMode>>,
 ) {
-    // Entering arms it; anything else disarms, so a figure turned on later
-    // does not yank the cameras out from under somebody.
-    let now = *mode.get();
-    if was.replace(now) != Some(now) {
-        *waiting = now == AppMode::Animation;
-    }
-    if !*waiting || figures.is_empty() {
+    if !anim.pending_frame || figures.is_empty() || !view.has_room() {
         return;
     }
+
+    let length = anim
+        .selected
+        .as_deref()
+        .and_then(|name| editor.doc().animations.get(name))
+        .map_or(1.0, |clip| clip.length);
+    view.frame(length);
+
     frame.write(crate::prop::camera::FrameTheProp);
-    *waiting = false;
+    anim.pending_frame = false;
 }
 
 /// The figure goes back to standing in its hold when the mode closes.
@@ -572,7 +577,7 @@ mod tests {
 
         let mut editor = PropEditor::default();
         editor.open(doc, None);
-        let anim = AnimEditor { selected: Some("fire".into()) };
+        let anim = AnimEditor { selected: Some("fire".into()), pending_frame: false };
         (editor, anim)
     }
 

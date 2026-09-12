@@ -37,12 +37,26 @@ use bevy::prelude::*;
 
 use crate::common::skeleton::clip::Clip;
 
-pub const RULER_HEIGHT: f32 = 18.0;
-pub const ROW_HEIGHT: f32 = 18.0;
+pub const RULER_HEIGHT: f32 = 20.0;
+pub const ROW_HEIGHT: f32 = 22.0;
 pub const NAMES_WIDTH: f32 = 150.0;
 
 /// A key is drawn this wide, and picked in a box this wide.
-const KEY_SIZE: f32 = 9.0;
+///
+/// Round, like the reference implementation's, rather than square. A keyframe
+/// marker is read at a glance in a field of gridlines, and a circle is the one
+/// shape nothing else on the strip has — every line here is axis-aligned.
+const KEY_SIZE: f32 = 11.0;
+
+/// How tall the playhead's grabbable head is.
+const HEAD_SIZE: f32 = 9.0;
+
+/// How many unlabelled divisions between labelled gridlines.
+///
+/// The thing that makes a ruler read as a ruler rather than as a few stray
+/// lines: the eye counts subdivisions to judge a distance, and a grid with
+/// only labelled lines gives it nothing to count.
+const MINOR_PER_MAJOR: usize = 5;
 
 /// The playhead is one pixel and its grab zone is thirteen.
 ///
@@ -54,10 +68,39 @@ const GRAB_WIDTH: f32 = 13.0;
 /// How many gridlines to keep around. Bounded by how many fit on a strip at a
 /// readable spacing rather than by how long a clip is, which is why zooming
 /// out does not allocate.
-const MAX_GRID: usize = 64;
+const MAX_GRID: usize = 200;
 
 /// The narrowest a labelled gridline may be before the spacing steps up.
 const MIN_GRID_GAP: f32 = 55.0;
+
+/// The strip's colours, in one place.
+///
+/// Dark to sit beside the egui panels without arguing with them, and stated
+/// here rather than inline so the contrast steps between the bands are
+/// visible as numbers — every one of them is a decision about what should read
+/// as in front of what.
+mod paint {
+    use bevy::prelude::Color;
+
+    pub const STRIP: Color = Color::srgb(0.075, 0.075, 0.085);
+    pub const NAMES: Color = Color::srgb(0.105, 0.105, 0.118);
+    pub const RULER: Color = Color::srgb(0.125, 0.125, 0.140);
+    /// The band the clip actually occupies. Outside it is the same strip,
+    /// darker — which is what stops a clip looking as though it runs forever.
+    pub const EXTENT: Color = Color::srgb(0.098, 0.098, 0.110);
+    pub const ROW_ODD: Color = Color::srgb(0.118, 0.118, 0.132);
+    pub const EDGE: Color = Color::srgb(0.215, 0.215, 0.235);
+    pub const MINOR: Color = Color::srgb(0.140, 0.140, 0.155);
+    pub const MAJOR: Color = Color::srgb(0.190, 0.190, 0.210);
+    pub const LABEL: Color = Color::srgb(0.560, 0.560, 0.600);
+    pub const NAME: Color = Color::srgb(0.780, 0.780, 0.820);
+    pub const KEY: Color = Color::srgb(0.855, 0.720, 0.350);
+    pub const KEY_EDGE: Color = Color::srgb(0.420, 0.340, 0.140);
+    pub const KEY_PICKED: Color = Color::srgb(1.0, 0.945, 0.760);
+    pub const KEY_PICKED_EDGE: Color = Color::srgb(1.0, 1.0, 1.0);
+    pub const PLAYHEAD: Color = Color::srgb(0.950, 0.300, 0.250);
+    pub const BAND: Color = Color::srgba(0.55, 0.70, 0.95, 0.18);
+}
 
 /// What part of the clip is on screen, and how big a second is.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -114,6 +157,15 @@ impl TimelineView {
         let length = length.max(0.01);
         self.pixels_per_second = (lanes * 0.92 / length).clamp(8.0, 8000.0);
         self.start = -(lanes * 0.04) / self.pixels_per_second;
+    }
+
+    /// Whether the strip has been measured and has room to draw in.
+    ///
+    /// The rect is zero-sized until egui has laid the panel out, and every
+    /// piece of arithmetic here — framing, the lanes' width, the clamp on the
+    /// clip's extent — is nonsense before then.
+    pub fn has_room(&self) -> bool {
+        self.rect.width() > NAMES_WIDTH && self.rect.height() > RULER_HEIGHT
     }
 
     /// Whether a window point is over the lanes rather than the names column
@@ -192,9 +244,6 @@ pub struct TimelineCamera;
 struct TimelineRoot;
 
 #[derive(Component)]
-struct PlayheadLine;
-
-#[derive(Component)]
 struct PlayheadGrab;
 
 #[derive(Component)]
@@ -221,10 +270,21 @@ struct BandBox;
 pub struct TimelinePools {
     camera: Option<Entity>,
     root: Option<Entity>,
+    /// The band the clip occupies, so its end is visible.
+    extent: Option<Entity>,
+    /// The ruler's own ground, and the hairline under it.
+    ruler: Option<Entity>,
+    ruler_edge: Option<Entity>,
+    /// The names column's ground, and the hairline down its right side.
+    names: Option<Entity>,
+    names_edge: Option<Entity>,
     playhead: Option<Entity>,
+    head: Option<Entity>,
     grab: Option<Entity>,
     band: Option<Entity>,
-    grid: Vec<(Entity, Entity)>,
+    /// Per division: the line down the lanes, the tick in the ruler, and the
+    /// label — the last two shown only on labelled divisions.
+    grid: Vec<(Entity, Entity, Entity)>,
     rows: Vec<(Entity, Entity)>,
     keys: Vec<Entity>,
 }
@@ -263,6 +323,23 @@ pub fn spawn_the_strip(
         return;
     };
 
+    // A plain absolutely-positioned node per piece of chrome. Bevy UI has no
+    // painter, so every band, hairline and tick is a node — which is fine
+    // because there is a fixed number of them and they are never respawned.
+    let bare = |commands: &mut Commands, colour: Color, z: i32| {
+        commands
+            .spawn((
+                UiTargetCamera(camera),
+                Node {
+                    position_type: PositionType::Absolute,
+                    ..default()
+                },
+                BackgroundColor(colour),
+                GlobalZIndex(z),
+            ))
+            .id()
+    };
+
     let root = commands
         .spawn((
             TimelineRoot,
@@ -271,26 +348,43 @@ pub fn spawn_the_strip(
                 position_type: PositionType::Absolute,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.09, 0.09, 0.10)),
+            BackgroundColor(paint::STRIP),
         ))
         .id();
 
-    let playhead = commands
+    // Under everything: the span the clip actually occupies. Without it a clip
+    // that ends two thirds of the way across looks like one that runs off the
+    // edge, and there is nothing on the strip to say otherwise.
+    let extent = bare(&mut commands, paint::EXTENT, 0);
+    let ruler = bare(&mut commands, paint::RULER, 1);
+    let ruler_edge = bare(&mut commands, paint::EDGE, 2);
+
+    // Above the lanes, so a key scrolled off the left goes *behind* the names
+    // rather than being drawn over them.
+    let names = bare(&mut commands, paint::NAMES, 4);
+    let names_edge = bare(&mut commands, paint::EDGE, 5);
+
+    let playhead = bare(&mut commands, paint::PLAYHEAD, 3);
+    // A head, so it reads as something you can take hold of. A bare line is
+    // indistinguishable from a gridline until you happen to drag it.
+    let head = commands
         .spawn((
-            PlayheadLine,
             UiTargetCamera(camera),
-            // **Children of the root**, like everything else on the strip.
-            // Their positions are computed relative to the strip's own
-            // top-left, so as loose roots they were laid out against the
-            // window instead and the playhead drew a red line up the middle
-            // of a 3D viewport.
-            ChildOf(root),
             Node {
                 position_type: PositionType::Absolute,
-                width: Val::Px(PLAYHEAD_WIDTH),
+                width: Val::Px(HEAD_SIZE),
+                height: Val::Px(HEAD_SIZE),
+                // Square-topped and round-bottomed: a pointer shape, and the
+                // nearest thing to a triangle a flexbox node can be.
+                border_radius: BorderRadius {
+                    top_left: Val::Px(1.0),
+                    top_right: Val::Px(1.0),
+                    bottom_left: Val::Px(HEAD_SIZE / 2.0),
+                    bottom_right: Val::Px(HEAD_SIZE / 2.0),
+                },
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.95, 0.30, 0.25)),
+            BackgroundColor(paint::PLAYHEAD),
             GlobalZIndex(3),
         ))
         .id();
@@ -306,35 +400,50 @@ pub fn spawn_the_strip(
                 width: Val::Px(GRAB_WIDTH),
                 ..default()
             },
-            GlobalZIndex(4),
+            GlobalZIndex(6),
         ))
         .id();
 
-    // The rubber band, drawn only while one is being pulled.
     let band = commands
         .spawn((
             BandBox,
             UiTargetCamera(camera),
             ChildOf(root),
             off(),
-            BackgroundColor(Color::srgba(0.55, 0.70, 0.95, 0.18)),
-            GlobalZIndex(1),
+            BackgroundColor(paint::BAND),
+            GlobalZIndex(2),
         ))
         .id();
 
-    pools.band = Some(band);
-    pools.camera = Some(camera);
-    pools.root = Some(root);
+    for piece in [extent, ruler, ruler_edge, names, names_edge, playhead, head] {
+        commands.entity(piece).insert(ChildOf(root));
+    }
+
+    pools.extent = Some(extent);
+    pools.ruler = Some(ruler);
+    pools.ruler_edge = Some(ruler_edge);
+    pools.names = Some(names);
+    pools.names_edge = Some(names_edge);
     pools.playhead = Some(playhead);
+    pools.head = Some(head);
     pools.grab = Some(grab);
+    pools.band = Some(band);
+    pools.root = Some(root);
+    pools.camera = Some(camera);
 }
 
 pub fn take_the_strip_down(mut commands: Commands, mut pools: ResMut<TimelinePools>) {
     let mut everything: Vec<Entity> = Vec::new();
-    everything.extend(pools.grid.drain(..).flat_map(|(line, label)| [line, label]));
+    everything.extend(pools.grid.drain(..).flat_map(|(line, tick, label)| [line, tick, label]));
     everything.extend(pools.rows.drain(..).flat_map(|(stripe, label)| [stripe, label]));
     everything.extend(pools.keys.drain(..));
     everything.extend(pools.band.take());
+    everything.extend(pools.extent.take());
+    everything.extend(pools.ruler.take());
+    everything.extend(pools.ruler_edge.take());
+    everything.extend(pools.names.take());
+    everything.extend(pools.names_edge.take());
+    everything.extend(pools.head.take());
     everything.extend(pools.root.take());
     everything.extend(pools.playhead.take());
     everything.extend(pools.grab.take());
@@ -370,7 +479,21 @@ fn reserve(
                 UiTargetCamera(camera),
                 ChildOf(root),
                 off(),
-                BackgroundColor(Color::srgb(0.17, 0.17, 0.19)),
+                BackgroundColor(paint::MINOR),
+                GlobalZIndex(1),
+            ))
+            .id();
+        // A longer mark in the ruler, shown only where there is a label. The
+        // lanes' own lines stop at the ruler so the two do not run together
+        // into one full-height bar.
+        let tick = commands
+            .spawn((
+                GridLine,
+                UiTargetCamera(camera),
+                ChildOf(root),
+                off(),
+                BackgroundColor(paint::MAJOR),
+                GlobalZIndex(2),
             ))
             .id();
         let label = commands
@@ -384,10 +507,11 @@ fn reserve(
                     font_size: bevy::text::FontSize::Px(10.0),
                     ..default()
                 },
-                TextColor(Color::srgb(0.55, 0.55, 0.58)),
+                TextColor(paint::LABEL),
+                GlobalZIndex(2),
             ))
             .id();
-        pools.grid.push((line, label));
+        pools.grid.push((line, tick, label));
     }
 
     while pools.rows.len() < rows {
@@ -397,7 +521,7 @@ fn reserve(
                 UiTargetCamera(camera),
                 ChildOf(root),
                 off(),
-                BackgroundColor(Color::srgb(0.13, 0.13, 0.15)),
+                BackgroundColor(paint::ROW_ODD),
             ))
             .id();
         let label = commands
@@ -411,7 +535,9 @@ fn reserve(
                     font_size: bevy::text::FontSize::Px(11.0),
                     ..default()
                 },
-                TextColor(Color::srgb(0.78, 0.78, 0.82)),
+                TextColor(paint::NAME),
+                // In the names column, which sits above the lanes.
+                GlobalZIndex(5),
             ))
             .id();
         pools.rows.push((stripe, label));
@@ -427,7 +553,8 @@ fn reserve(
                     UiTargetCamera(camera),
                     ChildOf(root),
                     off(),
-                    BackgroundColor(Color::srgb(0.85, 0.72, 0.35)),
+                    BackgroundColor(paint::KEY),
+                    BorderColor::all(paint::KEY_EDGE),
                     GlobalZIndex(2),
                 ))
                 .id();
@@ -535,6 +662,7 @@ pub fn lay_out_the_timeline(
     mut pools: ResMut<TimelinePools>,
     mut nodes: Query<&mut Node>,
     mut colours: Query<&mut BackgroundColor>,
+    mut borders: Query<&mut BorderColor>,
     mut texts: Query<&mut Text>,
 ) {
     let (Some(camera), Some(root)) = (pools.camera, pools.root) else {
@@ -554,53 +682,113 @@ pub fn lay_out_the_timeline(
         node.top = Val::Px(rect.min.y);
         node.width = Val::Px(rect.width());
         node.height = Val::Px(rect.height());
-        node.display = if rect.width() > 1.0 {
-            Display::Flex
-        } else {
-            Display::None
-        };
+        node.display = Display::Flex;
     }
 
-    // Gridlines. Laid out from the *view*, so zooming moves them and allocates
-    // nothing.
+    // **Nothing is laid out until there is somewhere to lay it out.** On the
+    // first frame of the mode egui has not measured the strip yet, so the rect
+    // is zero-sized — and a lanes-to-width clamp on that is `clamp(150, 0)`,
+    // which panics rather than producing a silly number. Hiding the root is
+    // already the right answer for a strip dragged shut, so this is the same
+    // answer one frame earlier.
+    if !view.has_room() {
+        return;
+    }
+
+    let length = clip.map_or(0.0, |clip| clip.length);
+    let lanes = view.lanes_left() - rect.min.x;
+    let inside = |x: f32| (x - rect.min.x).clamp(lanes, rect.width());
+
+    // The band the clip occupies, so its end is somewhere rather than nowhere.
+    if let Some(extent) = pools.extent {
+        if let Ok(mut node) = nodes.get_mut(extent) {
+            let from = inside(view.x_of(0.0));
+            let to = inside(view.x_of(length));
+            node.display = if to > from { Display::Flex } else { Display::None };
+            node.left = Val::Px(from);
+            node.top = Val::Px(RULER_HEIGHT);
+            node.width = Val::Px((to - from).max(0.0));
+            node.height = Val::Px((rect.height() - RULER_HEIGHT).max(0.0));
+        }
+    }
+
+    // The ruler's ground and the hairline under it.
+    for (piece, top, height) in [
+        (pools.ruler, 0.0, RULER_HEIGHT),
+        (pools.ruler_edge, RULER_HEIGHT - 1.0, 1.0),
+    ] {
+        let Some(piece) = piece else { continue };
+        if let Ok(mut node) = nodes.get_mut(piece) {
+            node.display = Display::Flex;
+            node.left = Val::Px(0.0);
+            node.top = Val::Px(top);
+            node.width = Val::Px(rect.width());
+            node.height = Val::Px(height);
+        }
+    }
+
+    // Gridlines, laid out from the *view*, so zooming moves them and allocates
+    // nothing. Drawn at the minor division and labelled every fifth, because
+    // the eye judges a distance by counting subdivisions and a grid with only
+    // labelled lines gives it nothing to count.
     let step = grid_step(view.pixels_per_second);
-    let first = (view.start / step).ceil() * step;
-    let mut used = 0;
+    let minor = step / MINOR_PER_MAJOR as f32;
+    // Counted from zero rather than from the left edge, so a labelled line
+    // always lands on a round number however far the strip has been panned.
+    let first = (view.start / minor).ceil() as i64;
     for slot in 0..pools.grid.len() {
-        let time = first + slot as f32 * step;
+        let division = first + slot as i64;
+        let time = division as f32 * minor;
         let x = view.x_of(time);
-        let (line, label) = pools.grid[slot];
-        if x > rect.max.x || used >= MAX_GRID {
-            for entity in [line, label] {
+        let (line, tick, label) = pools.grid[slot];
+        let major = division.rem_euclid(MINOR_PER_MAJOR as i64) == 0;
+
+        if x > rect.max.x || x < view.lanes_left() {
+            for entity in [line, tick, label] {
                 if let Ok(mut node) = nodes.get_mut(entity) {
                     node.display = Display::None;
                 }
             }
             continue;
         }
-        used += 1;
 
         if let Ok(mut node) = nodes.get_mut(line) {
             node.display = Display::Flex;
-            node.position_type = PositionType::Absolute;
             node.left = Val::Px(x - rect.min.x);
-            node.top = Val::Px(0.0);
+            node.top = Val::Px(RULER_HEIGHT);
             node.width = Val::Px(1.0);
-            node.height = Val::Px(rect.height());
+            node.height = Val::Px((rect.height() - RULER_HEIGHT).max(0.0));
+        }
+        if let Ok(mut colour) = colours.get_mut(line) {
+            let wanted = if major { paint::MAJOR } else { paint::MINOR };
+            if colour.0 != wanted {
+                colour.0 = wanted;
+            }
+        }
+
+        // The ruler carries marks only where there is a number, so the two
+        // bands do not merge into one full-height bar.
+        if let Ok(mut node) = nodes.get_mut(tick) {
+            node.display = if major { Display::Flex } else { Display::None };
+            node.left = Val::Px(x - rect.min.x);
+            node.top = Val::Px(RULER_HEIGHT - 6.0);
+            node.width = Val::Px(1.0);
+            node.height = Val::Px(5.0);
         }
         if let Ok(mut node) = nodes.get_mut(label) {
-            node.display = Display::Flex;
-            node.position_type = PositionType::Absolute;
+            node.display = if major { Display::Flex } else { Display::None };
             node.left = Val::Px(x - rect.min.x + 3.0);
             node.top = Val::Px(2.0);
         }
-        if let Ok(mut text) = texts.get_mut(label) {
-            // Written only when it changes: a `Text` write re-lays out the
-            // node, and a ruler that rewrote every label every frame would be
-            // the most expensive thing on the strip.
-            let wanted = format_time(time, step);
-            if text.0 != wanted {
-                text.0 = wanted;
+        if major {
+            if let Ok(mut text) = texts.get_mut(label) {
+                // Written only when it changes: a `Text` write re-lays out the
+                // node, and a ruler that rewrote every label every frame would
+                // be the most expensive thing on the strip.
+                let wanted = format_time(time, step);
+                if text.0 != wanted {
+                    text.0 = wanted;
+                }
             }
         }
     }
@@ -618,9 +806,10 @@ pub fn lay_out_the_timeline(
             continue;
         };
 
-        let top = RULER_HEIGHT + slot as f32 * ROW_HEIGHT;
+        let top = row_top(slot);
         if let Ok(mut node) = nodes.get_mut(stripe) {
-            node.display = if slot % 2 == 0 { Display::Flex } else { Display::None };
+            // Every other row, so a long list of tracks can be read across.
+            node.display = if slot % 2 == 1 { Display::Flex } else { Display::None };
             node.position_type = PositionType::Absolute;
             node.left = Val::Px(0.0);
             node.top = Val::Px(top);
@@ -630,8 +819,8 @@ pub fn lay_out_the_timeline(
         if let Ok(mut node) = nodes.get_mut(label) {
             node.display = Display::Flex;
             node.position_type = PositionType::Absolute;
-            node.left = Val::Px(6.0);
-            node.top = Val::Px(top + 3.0);
+            node.left = Val::Px(8.0);
+            node.top = Val::Px(top + (ROW_HEIGHT - 13.0) / 2.0);
         }
         if let Ok(mut text) = texts.get_mut(label) {
             let wanted = track_name(track);
@@ -657,22 +846,39 @@ pub fn lay_out_the_timeline(
             });
             if let Ok(mut colour) = colours.get_mut(key) {
                 let wanted = match picked {
-                    true => Color::srgb(1.0, 0.93, 0.70),
-                    false => Color::srgb(0.85, 0.72, 0.35),
+                    true => paint::KEY_PICKED,
+                    false => paint::KEY,
                 };
                 if colour.0 != wanted {
                     colour.0 = wanted;
                 }
             }
+            if let Ok(mut border) = borders.get_mut(key) {
+                let wanted = match picked {
+                    true => paint::KEY_PICKED_EDGE,
+                    false => paint::KEY_EDGE,
+                };
+                if border.left != wanted {
+                    *border = BorderColor::all(wanted);
+                }
+            }
 
             if let Ok(mut node) = nodes.get_mut(key) {
-                let on = x >= view.lanes_left() - KEY_SIZE && x <= rect.max.x;
+                // Hidden before it reaches the names column rather than
+                // clipped by it — the column is opaque and above, so a key
+                // sliding under it disappears cleanly either way, but this
+                // keeps it out of the pointer's way too.
+                let on = x >= view.lanes_left() && x <= rect.max.x;
                 node.display = if on { Display::Flex } else { Display::None };
                 node.position_type = PositionType::Absolute;
                 node.left = Val::Px(x - rect.min.x - KEY_SIZE / 2.0);
                 node.top = Val::Px(top + (ROW_HEIGHT - KEY_SIZE) / 2.0);
                 node.width = Val::Px(KEY_SIZE);
                 node.height = Val::Px(KEY_SIZE);
+                node.border = UiRect::all(Val::Px(1.0));
+                // Round. Every other mark on the strip is axis-aligned, so a
+                // circle is the one shape that cannot be mistaken for chrome.
+                node.border_radius = BorderRadius::all(Val::Percent(50.0));
             }
         }
     }
@@ -705,10 +911,27 @@ pub fn lay_out_the_timeline(
         }
     }
 
-    // The playhead, and the wider zone that grabs it.
+    // The names column last of the grounds, so anything that scrolled off the
+    // left goes behind it rather than over it.
+    for (piece, left, width) in [
+        (pools.names, 0.0, lanes),
+        (pools.names_edge, lanes - 1.0, 1.0),
+    ] {
+        let Some(piece) = piece else { continue };
+        if let Ok(mut node) = nodes.get_mut(piece) {
+            node.display = Display::Flex;
+            node.left = Val::Px(left);
+            node.top = Val::Px(0.0);
+            node.width = Val::Px(width.max(0.0));
+            node.height = Val::Px(rect.height());
+        }
+    }
+
+    // The playhead: a line, a head to take hold of, and a zone wider than
+    // either to catch the pointer.
     let x = view.x_of(cursor.time);
     let on = x >= view.lanes_left() && x <= rect.max.x;
-    if let (Some(line), Some(grab)) = (pools.playhead, pools.grab) {
+    if let (Some(line), Some(head), Some(grab)) = (pools.playhead, pools.head, pools.grab) {
         if let Ok(mut node) = nodes.get_mut(line) {
             node.display = if on { Display::Flex } else { Display::None };
             node.position_type = PositionType::Absolute;
@@ -716,6 +939,12 @@ pub fn lay_out_the_timeline(
             node.top = Val::Px(0.0);
             node.width = Val::Px(PLAYHEAD_WIDTH);
             node.height = Val::Px(rect.height());
+        }
+        if let Ok(mut node) = nodes.get_mut(head) {
+            node.display = if on { Display::Flex } else { Display::None };
+            node.position_type = PositionType::Absolute;
+            node.left = Val::Px(x - rect.min.x - HEAD_SIZE / 2.0);
+            node.top = Val::Px(0.0);
         }
         if let Ok(mut node) = nodes.get_mut(grab) {
             node.display = if on { Display::Flex } else { Display::None };
@@ -826,6 +1055,27 @@ mod tests {
 
         let pools = world.remove_resource::<TimelinePools>().unwrap();
         (world, pools)
+    }
+
+    /// A strip with no room in it draws nothing, and in particular does not
+    /// panic.
+    ///
+    /// On the first frame of the mode egui has not measured the panel yet, so
+    /// the rect really is zero-sized — this is the ordinary case, not an edge
+    /// one, and it took the whole editor down the first time.
+    #[test]
+    fn a_strip_with_no_room_lays_nothing_out() {
+        for rect in [
+            Rect::from_corners(Vec2::ZERO, Vec2::ZERO),
+            // Wide enough for the names column and not a pixel more.
+            Rect::from_corners(Vec2::ZERO, Vec2::new(NAMES_WIDTH, 400.0)),
+            // Tall enough for the ruler and no lanes at all.
+            Rect::from_corners(Vec2::ZERO, Vec2::new(900.0, RULER_HEIGHT)),
+        ] {
+            let view = TimelineView { rect, ..TimelineView::default() };
+            let (_world, pools) = laid_out(view, Some(a_clip()));
+            assert!(pools.root.is_some(), "the strip was not built at all");
+        }
     }
 
     /// With no UI camera to hang on, the strip builds nothing rather than
