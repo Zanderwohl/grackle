@@ -29,15 +29,17 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::common::app_mode::AppMode;
-use crate::common::skeleton::play::Playing;
+use crate::common::skeleton::clip::Clip;
+use crate::common::skeleton::play::{key_the_channel, Playing};
 use crate::prop::document::PropEditor;
 use crate::prop::figure::FigurePerformance;
 use crate::prop::view::PropSceneSystems;
 use std::sync::Arc;
 
 use timeline::{
-    lay_out_the_timeline, size_the_strip_camera, spawn_the_strip, take_the_strip_down, Grab,
-    ShownClip, TimelineCursor, TimelineGrab, TimelinePools, TimelineView,
+    grab_radius, grid_step, key_at, keys_within, lay_out_the_timeline, over_ruler,
+    size_the_strip_camera, spawn_the_strip, take_the_strip_down, DraggedTrack, Grab, KeyAt,
+    ShownClip, TimelineCursor, TimelineGrab, TimelinePools, TimelineSelection, TimelineView,
 };
 
 /// Which clip is being looked at.
@@ -80,6 +82,7 @@ impl Plugin for AnimPlugin {
             .init_resource::<TimelineView>()
             .init_resource::<TimelineCursor>()
             .init_resource::<TimelineGrab>()
+            .init_resource::<TimelineSelection>()
             .init_resource::<TimelinePools>()
             .init_resource::<ShownClip>()
             .init_resource::<FigurePerformance>()
@@ -97,6 +100,7 @@ impl Plugin for AnimPlugin {
                     // it or what to perform.
                     follow_the_document,
                     timeline_input,
+                    edit_keys,
                     size_the_strip_camera,
                     lay_out_the_timeline,
                     // Before the scene poses the figure, so a scrub is seen on
@@ -177,7 +181,7 @@ fn follow_the_document(
     shown.0 = wanted;
 }
 
-/// Scrub, zoom and pan.
+/// Scrub, zoom, pan, select and drag.
 ///
 /// Deliberately does **not** ask whether the pointer is over egui. The strip
 /// *is* an egui panel's rect — that is what reserves the space — so
@@ -185,14 +189,24 @@ fn follow_the_document(
 /// would mean the timeline never saw a click. What it asks instead is whether
 /// egui is actively *using* the pointer, which is true for an open menu or a
 /// widget mid-drag and false for a panel merely sitting there.
+///
+/// The ruler scrubs and the lanes select. Told apart by where the press
+/// landed rather than by what is under it, because a press on an empty lane is
+/// the start of a band rather than a jump of the playhead — and "nothing is
+/// under the pointer" is exactly when a band is what you meant.
+#[allow(clippy::too_many_arguments)]
 fn timeline_input(
     buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut scrolls: MessageReader<MouseWheel>,
     windows: Query<&Window, With<PrimaryWindow>>,
     panels: Res<ui::AnimPanels>,
+    anim: Res<AnimEditor>,
+    mut editor: ResMut<PropEditor>,
     mut view: ResMut<TimelineView>,
     mut cursor: ResMut<TimelineCursor>,
     mut grab: ResMut<TimelineGrab>,
+    mut selection: ResMut<TimelineSelection>,
     shown: Res<ShownClip>,
 ) {
     // Read every frame whatever happens: a `MessageReader` has its own cursor,
@@ -223,13 +237,26 @@ fn timeline_input(
 
     let length = shown.0.as_ref().map_or(1.0, |clip| clip.length);
     let over = view.rect.contains(at);
+    let adding = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let free = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
 
     if over && notches.abs() > 0.0 {
         view.zoom_about(at.x, notches);
     }
 
-    // Finish whatever was running first, so a release is never also a press.
+    // Finish first, so a release is never also a press. A band is the one
+    // gesture whose whole effect happens on the way up.
     if !buttons.pressed(MouseButton::Left) && !buttons.pressed(MouseButton::Middle) {
+        if let Some(Grab::Band { from, to }) = grab.0 {
+            if let Some(clip) = shown.0.as_ref() {
+                if !adding {
+                    selection.0.clear();
+                }
+                selection
+                    .0
+                    .extend(keys_within(&view, clip, Rect::from_corners(from, to)));
+            }
+        }
         grab.0 = None;
     }
 
@@ -238,14 +265,46 @@ fn timeline_input(
             from_x: at.x,
             from_start: view.start,
         });
-    } else if view.over_lanes(at) && buttons.just_pressed(MouseButton::Left) {
-        grab.0 = Some(Grab::Scrub {
-            from_x: at.x,
-            from_time: cursor.time,
-        });
+    } else if buttons.just_pressed(MouseButton::Left) && over {
+        let on_playhead = (view.x_of(cursor.time) - at.x).abs() <= grab_radius();
+        if over_ruler(&view, at) || (on_playhead && at.x >= view.lanes_left()) {
+            grab.0 = Some(Grab::Scrub {
+                from_x: at.x,
+                from_time: cursor.time,
+            });
+        } else if view.over_lanes(at) {
+            let hit = shown.0.as_ref().and_then(|clip| key_at(&view, clip, at));
+            match hit {
+                Some(hit) => {
+                    if adding {
+                        if !selection.0.remove(&hit) {
+                            selection.0.insert(hit);
+                        }
+                    } else if !selection.0.contains(&hit) {
+                        // Pressing an unselected key selects just it. Pressing
+                        // one that is already selected keeps the rest, so a
+                        // multiple selection can be dragged as a whole.
+                        selection.0.clear();
+                        selection.0.insert(hit);
+                    }
+                    if let Some(clip) = shown.0.as_ref() {
+                        grab.0 = Some(Grab::Keys {
+                            from_x: at.x,
+                            tracks: dragged_tracks(clip, &selection),
+                        });
+                    }
+                }
+                None => {
+                    if !adding {
+                        selection.0.clear();
+                    }
+                    grab.0 = Some(Grab::Band { from: at, to: at });
+                }
+            }
+        }
     }
 
-    match grab.0 {
+    match &grab.0 {
         Some(Grab::Scrub { from_x, from_time }) => {
             let moved = (at.x - from_x) / view.pixels_per_second;
             cursor.time = (from_time + moved).clamp(0.0, length);
@@ -253,8 +312,158 @@ fn timeline_input(
         Some(Grab::Pan { from_x, from_start }) => {
             view.start = from_start - (at.x - from_x) / view.pixels_per_second;
         }
+        Some(Grab::Keys { from_x, tracks }) => {
+            let mut by = (at.x - from_x) / view.pixels_per_second;
+            // Snapped by default, and **the offset is snapped rather than each
+            // key** — so several keys dragged together keep the spacing they
+            // were authored with instead of collapsing onto the grid. Alt is
+            // the escape hatch, the way it is in every editor that snaps.
+            if !free {
+                let step = grid_step(view.pixels_per_second);
+                by = (by / step).round() * step;
+            }
+            nudge_the_selection(&mut editor, &anim, tracks, by, length, &mut selection);
+        }
+        // The band follows the pointer here rather than in the layout, which
+        // has no idea where the pointer is and is better off not learning.
+        Some(Grab::Band { from, .. }) => {
+            let from = *from;
+            grab.0 = Some(Grab::Band { from, to: at });
+        }
         None => {}
     }
+}
+
+/// Turn the current selection into the per-track snapshots a drag works from.
+fn dragged_tracks(clip: &Clip, selection: &TimelineSelection) -> Vec<DraggedTrack> {
+    let mut tracks: Vec<DraggedTrack> = Vec::new();
+    for picked in &selection.0 {
+        let Some(track) = clip.tracks.get(picked.track) else {
+            continue;
+        };
+        match tracks.iter_mut().find(|held| held.track == picked.track) {
+            Some(held) => held.held.push(picked.key),
+            None => tracks.push(DraggedTrack {
+                track: picked.track,
+                original: track.channel.clone(),
+                held: vec![picked.key],
+            }),
+        }
+    }
+    tracks
+}
+
+/// Apply a drag, and follow the keys to wherever the re-sort put them.
+///
+/// One `begin_gesture` for the whole drag and one `doc_mut` per frame, which
+/// is what makes a pull on a key **one** press of Ctrl+Z rather than forty.
+/// The gesture is closed by the panels, which is also why they have to know a
+/// drag is running — see `AnimPanels`.
+fn nudge_the_selection(
+    editor: &mut PropEditor,
+    anim: &AnimEditor,
+    tracks: &[DraggedTrack],
+    by: f32,
+    length: f32,
+    selection: &mut TimelineSelection,
+) {
+    let Some(name) = anim.selected.clone() else { return };
+
+    editor.begin_gesture();
+    let Some(clip) = editor.doc_mut().animations.clips.get_mut(&name) else {
+        return;
+    };
+
+    let mut landed = std::collections::BTreeSet::new();
+    for dragged in tracks {
+        let Some(track) = clip.tracks.get_mut(dragged.track) else {
+            continue;
+        };
+        // From the original every frame, never from last frame's result: an
+        // accumulated drag drifts on every clamp and cannot be dragged back to
+        // where it started.
+        track.channel = dragged.original.clone();
+        for key in track.channel.nudge(&dragged.held, by, length) {
+            landed.insert(KeyAt {
+                track: dragged.track,
+                key,
+            });
+        }
+    }
+    selection.0 = landed;
+}
+
+/// Add a key at the playhead, or take the selected ones away.
+///
+/// Gated on egui wanting the keyboard, the way `shortcuts` is: `Delete` in a
+/// text field deletes a character, and stealing it loses what somebody typed
+/// rather than merely looking wrong.
+fn edit_keys(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    panels: Res<ui::AnimPanels>,
+    anim: Res<AnimEditor>,
+    cursor: Res<TimelineCursor>,
+    mut editor: ResMut<PropEditor>,
+    mut selection: ResMut<TimelineSelection>,
+) {
+    if panels.egui_wants_keyboard {
+        return;
+    }
+    let Some(name) = anim.selected.clone() else { return };
+
+    let removing = keyboard.any_just_pressed([KeyCode::Delete, KeyCode::Backspace]);
+    let keying = keyboard.just_pressed(KeyCode::KeyK);
+    if !removing && !keying {
+        return;
+    }
+
+    // One step per press, opened and closed here rather than left to the
+    // panels: a keypress is not a gesture somebody is still in the middle of.
+    editor.begin_gesture();
+    let time = cursor.time;
+    let Some(clip) = editor.doc_mut().animations.clips.get_mut(&name) else {
+        return;
+    };
+    let (length, looping) = (clip.length, clip.looping);
+
+    if removing {
+        // Grouped by track and removed back to front, so one index cannot
+        // invalidate another.
+        for track in 0..clip.tracks.len() {
+            let doomed: Vec<usize> = selection
+                .0
+                .iter()
+                .filter(|picked| picked.track == track)
+                .map(|picked| picked.key)
+                .collect();
+            if !doomed.is_empty() {
+                clip.tracks[track].channel.remove_keys(&doomed);
+            }
+        }
+        selection.0.clear();
+    } else {
+        // On every track a selection touches, or on all of them when nothing
+        // is picked — which is what "key everything here" means and what you
+        // want the first time you press it.
+        let tracks: Vec<usize> = match selection.0.is_empty() {
+            true => (0..clip.tracks.len()).collect(),
+            false => {
+                let mut tracks: Vec<usize> =
+                    selection.0.iter().map(|picked| picked.track).collect();
+                tracks.dedup();
+                tracks
+            }
+        };
+        let mut landed = std::collections::BTreeSet::new();
+        for track in tracks {
+            let Some(spec) = clip.tracks.get_mut(track) else { continue };
+            let key = key_the_channel(&mut spec.channel, time, length, looping);
+            landed.insert(KeyAt { track, key });
+        }
+        selection.0 = landed;
+    }
+
+    editor.end_gesture();
 }
 
 /// Put the clip on the reference figure at the playhead.
@@ -278,4 +487,142 @@ fn drive_the_preview(
         time: cursor.time,
         weight: 1.0,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::skeleton::clip::{
+        Axis, Channel, Clip, Combine, PointKey, Space, Track, Unit,
+    };
+    use crate::common::skeleton::Interpolation;
+    use crate::prop::document::PropDoc;
+    use timeline::KeyAt;
+
+    fn editor_with_a_clip(at: &[f32]) -> (PropEditor, AnimEditor) {
+        let mut doc = PropDoc::new("prop.test");
+        doc.animations.clips.insert(
+            "fire".into(),
+            Clip {
+                length: 1.0,
+                tracks: vec![Track {
+                    combine: Combine::Replace,
+                    space: Space::Body,
+                    unit: Unit::Metres,
+                    enabled: true,
+                    channel: Channel::Weapon {
+                        keys: at
+                            .iter()
+                            .map(|at| PointKey {
+                                at: *at,
+                                to: [Axis::Value(*at), Axis::Free, Axis::Free],
+                                ease: Interpolation::Linear,
+                            })
+                            .collect(),
+                    },
+                }],
+                ..Clip::default()
+            },
+        );
+
+        let mut editor = PropEditor::default();
+        editor.open(doc, None);
+        let anim = AnimEditor { selected: Some("fire".into()) };
+        (editor, anim)
+    }
+
+    fn times(editor: &PropEditor) -> Vec<f32> {
+        editor.doc().animations.get("fire").unwrap().tracks[0]
+            .channel
+            .key_times()
+    }
+
+    fn holding(editor: &PropEditor, keys: &[usize]) -> Vec<DraggedTrack> {
+        let clip = editor.doc().animations.get("fire").unwrap();
+        vec![DraggedTrack {
+            track: 0,
+            original: clip.tracks[0].channel.clone(),
+            held: keys.to_vec(),
+        }]
+    }
+
+    /// **One drag is one press of Ctrl+Z.**
+    ///
+    /// A drag writes the document on every frame it moves, so without the
+    /// gesture each frame would be its own undo step and undoing a pull on a
+    /// key would take forty presses. The failure is not visible while
+    /// dragging — it is only felt later, which is why it is worth pinning.
+    #[test]
+    fn one_drag_is_one_undo_step() {
+        let (mut editor, anim) = editor_with_a_clip(&[0.0, 0.5]);
+        let mut selection = TimelineSelection::default();
+        selection.0.insert(KeyAt { track: 0, key: 0 });
+        let tracks = holding(&editor, &[0]);
+
+        // Forty frames of a drag, as one gesture.
+        for frame in 1..=40 {
+            nudge_the_selection(
+                &mut editor,
+                &anim,
+                &tracks,
+                frame as f32 * 0.005,
+                1.0,
+                &mut selection,
+            );
+        }
+        editor.end_gesture();
+
+        assert!((times(&editor)[0] - 0.2).abs() < 1e-5, "the drag did not land");
+
+        assert!(editor.can_undo(), "a drag left nothing to undo");
+        editor.undo();
+        assert_eq!(times(&editor), vec![0.0, 0.5], "one undo did not undo the drag");
+        assert!(!editor.can_undo(), "the drag left more than one step behind");
+    }
+
+    /// Dragging out and back leaves the clip exactly as it was.
+    ///
+    /// This is what recomputing from the original every frame buys. An
+    /// accumulated drag drifts on every clamp and every re-sort, so a nudge
+    /// you talked yourself out of would not come home — and you would not
+    /// notice until the numbers were already wrong.
+    #[test]
+    fn dragging_a_key_and_dragging_it_back_changes_nothing() {
+        let (mut editor, anim) = editor_with_a_clip(&[0.1, 0.4, 0.9]);
+        let before = times(&editor);
+
+        let mut selection = TimelineSelection::default();
+        selection.0.insert(KeyAt { track: 0, key: 1 });
+        let tracks = holding(&editor, &[1]);
+
+        // Out past both neighbours, hard into the end, and back to nothing.
+        for by in [0.2_f32, 0.6, 2.0, -3.0, -0.4, 0.0] {
+            nudge_the_selection(&mut editor, &anim, &tracks, by, 1.0, &mut selection);
+        }
+
+        assert_eq!(times(&editor), before, "a drag out and back did not come home");
+    }
+
+    /// The selection follows the keys through a re-sort.
+    ///
+    /// Addressed by index and dragged past a neighbour, a selection that was
+    /// not remapped would be holding whichever key inherited the index — so
+    /// the next frame would move a different key and leave the one you grabbed
+    /// behind. Nothing errors; the keys just start swapping under the pointer.
+    #[test]
+    fn the_selection_follows_a_key_across_its_neighbour() {
+        let (mut editor, anim) = editor_with_a_clip(&[0.1, 0.4, 0.9]);
+        let mut selection = TimelineSelection::default();
+        selection.0.insert(KeyAt { track: 0, key: 0 });
+        let tracks = holding(&editor, &[0]);
+
+        nudge_the_selection(&mut editor, &anim, &tracks, 0.5, 1.0, &mut selection);
+
+        assert_eq!(times(&editor), vec![0.4, 0.6, 0.9]);
+        assert_eq!(
+            selection.0.iter().copied().collect::<Vec<_>>(),
+            vec![KeyAt { track: 0, key: 1 }],
+            "the selection did not follow the key it was holding",
+        );
+    }
 }

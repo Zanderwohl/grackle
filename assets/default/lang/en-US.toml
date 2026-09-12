@@ -320,7 +320,11 @@ title = "Esc Menu"
 
 [anim]
 no_clips = "No animations in this prop."
-read_only = "Editing arrives with the next stage; scrub, zoom and pan work now."
+no_key = "No key picked. Click one on the strip, or drag a box across several."
+many_keys = "{ count } keys picked; editing writes to all of them."
+rotation_key = "A rotation key is three angles; there is no datum to pick."
+at = "At { time } s"
+leaving = "Leaving"
 clock_is = "Runs on: { clock }"
 
 [anim.panels]
@@ -364,6 +368,9 @@ compose = "Compose"
 free = "Free"
 ground = "Ground"
 value = "Value"
+x = "Across"
+y = "Up"
+z = "Along"
 
 [anim.ease]
 step = "Step"

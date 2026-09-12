@@ -412,6 +412,96 @@ impl Channel {
         }
     }
 
+    /// Move some keys in time, put the whole track back in order, and say
+    /// where the moved ones ended up.
+    ///
+    /// Indices in, indices out, because **a key is addressed by where it is
+    /// and a drag changes that.** The alternative — giving every key an id —
+    /// is a field on disk that exists only so a pointer can hold onto
+    /// something for a few hundred milliseconds. Reporting the new positions
+    /// keeps the selection following the keys it selected without either side
+    /// storing an identity the file would have to carry.
+    ///
+    /// The sort is **stable**, so two keys dragged onto the same time keep the
+    /// order they had rather than swapping on a rounding error.
+    pub fn nudge(&mut self, held: &[usize], by: f32, within: f32) -> Vec<usize> {
+        fn shuffle<K: Copy>(
+            keys: &mut Vec<K>,
+            held: &[usize],
+            by: f32,
+            within: f32,
+            at: impl Fn(&K) -> f32,
+            set: impl Fn(&mut K, f32),
+        ) -> Vec<usize> {
+            let mut marked: Vec<(K, bool)> = keys
+                .iter()
+                .enumerate()
+                .map(|(index, key)| (*key, held.contains(&index)))
+                .collect();
+
+            for (key, moving) in &mut marked {
+                if *moving {
+                    set(key, (at(key) + by).clamp(0.0, within));
+                }
+            }
+            marked.sort_by(|a, b| at(&a.0).total_cmp(&at(&b.0)));
+
+            *keys = marked.iter().map(|(key, _)| *key).collect();
+            marked
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (_, moving))| moving.then_some(index))
+                .collect()
+        }
+
+        match self {
+            Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => shuffle(
+                keys,
+                held,
+                by,
+                within,
+                |key| key.at,
+                |key, at| key.at = at,
+            ),
+            Channel::Effector { keys, .. } | Channel::Weapon { keys } => shuffle(
+                keys,
+                held,
+                by,
+                within,
+                |key| key.at,
+                |key, at| key.at = at,
+            ),
+        }
+    }
+
+    /// Take some keys out, addressed by index.
+    ///
+    /// Removed back to front so an index is never invalidated by a removal
+    /// before it — the ordinary way to get this wrong is to delete forwards
+    /// and take out the wrong keys from the second one onward.
+    pub fn remove_keys(&mut self, indices: &[usize]) {
+        let mut doomed: Vec<usize> = indices.to_vec();
+        doomed.sort_unstable();
+        doomed.dedup();
+
+        match self {
+            Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
+                for index in doomed.iter().rev() {
+                    if *index < keys.len() {
+                        keys.remove(*index);
+                    }
+                }
+            }
+            Channel::Effector { keys, .. } | Channel::Weapon { keys } => {
+                for index in doomed.iter().rev() {
+                    if *index < keys.len() {
+                        keys.remove(*index);
+                    }
+                }
+            }
+        }
+    }
+
     /// Put the keys back in time order.
     ///
     /// Called at load and after every edit rather than at sample time: sorting
@@ -788,6 +878,107 @@ mod tests {
             clip.problems(|_| true).iter().any(|note| note.contains("whole number")),
             "a fractional stride length went unmentioned"
         );
+    }
+
+    fn times(channel: &Channel) -> Vec<f32> {
+        channel.key_times()
+    }
+
+    fn point_track(at: &[f32]) -> Channel {
+        Channel::Weapon {
+            keys: at
+                .iter()
+                .map(|at| PointKey {
+                    at: *at,
+                    to: [Axis::Value(*at), Axis::Free, Axis::Free],
+                    ease: Interpolation::Linear,
+                })
+                .collect(),
+        }
+    }
+
+    /// A key dragged past its neighbour lands in order, and the caller is told
+    /// where it went.
+    ///
+    /// This is the whole reason `nudge` reports indices. Addressed by position
+    /// and re-sorted underneath you, a selection that was not remapped would
+    /// be holding whichever key happened to inherit the index — so the next
+    /// frame of the drag would move a *different* key, and the one you grabbed
+    /// would be left behind.
+    #[test]
+    fn a_key_dragged_across_its_neighbour_is_followed() {
+        let mut channel = point_track(&[0.0, 0.25, 0.5]);
+        let landed = channel.nudge(&[0], 0.4, 1.0);
+
+        assert_eq!(times(&channel), vec![0.25, 0.4, 0.5]);
+        assert_eq!(landed, vec![1], "the moved key was not followed");
+
+        // And it is still the key it was: the value travelled with the time.
+        let Channel::Weapon { keys } = &channel else { unreachable!() };
+        assert_eq!(keys[1].to[0], Axis::Value(0.0), "a key's value was left behind");
+    }
+
+    /// Several keys dragged together keep the spacing they were authored with.
+    #[test]
+    fn dragging_several_keys_moves_them_as_one() {
+        let mut channel = point_track(&[0.0, 0.2, 0.8]);
+        channel.nudge(&[0, 1], 0.1, 1.0);
+        assert_eq!(times(&channel), vec![0.1, 0.3, 0.8]);
+    }
+
+    /// A drag is clamped to the clip. A key outside it is one the sampler
+    /// holds forever and the strip cannot show.
+    #[test]
+    fn a_drag_stops_at_the_ends() {
+        let mut channel = point_track(&[0.2, 0.5]);
+        channel.nudge(&[0, 1], -10.0, 1.0);
+        assert_eq!(times(&channel), vec![0.0, 0.0]);
+
+        let mut channel = point_track(&[0.2, 0.5]);
+        channel.nudge(&[0, 1], 10.0, 1.0);
+        assert_eq!(times(&channel), vec![1.0, 1.0]);
+    }
+
+    /// Two keys landing on one time keep the order they had. Unstable, they
+    /// swap on a rounding error, and the swap shows up as a segment's easing
+    /// inverting for no reason anybody can see.
+    #[test]
+    fn keys_landing_together_keep_their_order() {
+        // Quarters, so the arithmetic is exact in binary and the two really do
+        // tie. With times that merely look equal — 0.1 + 0.8 is 0.90000004 —
+        // the sort never sees a tie and the test proves nothing.
+        let mut channel = point_track(&[0.25, 0.5]);
+        let landed = channel.nudge(&[0], 0.25, 1.0);
+
+        let times = times(&channel);
+        assert_eq!(times, vec![0.5, 0.5], "the keys did not land together");
+
+        let Channel::Weapon { keys } = &channel else { unreachable!() };
+        assert_eq!(landed, vec![0], "a stable sort should leave the tie as it found it");
+        assert_eq!(
+            keys[landed[0]].to[0],
+            Axis::Value(0.25),
+            "the dragged key is not the one reported",
+        );
+    }
+
+    /// Removing several keys takes exactly those keys. Removed forwards, every
+    /// index after the first is off by one and the wrong keys go.
+    #[test]
+    fn removing_keys_takes_the_ones_asked_for() {
+        let mut channel = point_track(&[0.0, 0.1, 0.2, 0.3, 0.4]);
+        channel.remove_keys(&[1, 3]);
+        assert_eq!(times(&channel), vec![0.0, 0.2, 0.4]);
+    }
+
+    /// Out of range and repeated indices are survivable. They arrive from a
+    /// selection that a re-sort or an undo has left stale, which is a thing
+    /// that happens rather than a thing to assert against.
+    #[test]
+    fn removing_nonsense_indices_does_not_panic() {
+        let mut channel = point_track(&[0.0, 0.5]);
+        channel.remove_keys(&[1, 1, 9]);
+        assert_eq!(times(&channel), vec![0.0]);
     }
 
     /// A looping clip wraps; a one-shot holds past its end rather than

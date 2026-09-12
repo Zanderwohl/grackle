@@ -11,8 +11,10 @@ use bevy_egui::egui::{Id, LayerId, Ui, UiBuilder, WidgetText};
 use bevy_egui::{egui, EguiContexts};
 use egui_dock::{DockArea, DockState, TabViewer};
 
-use crate::anim::timeline::{TimelineCursor, TimelineView};
+use crate::anim::timeline::{KeyAt, TimelineCursor, TimelineSelection, TimelineView};
 use crate::anim::AnimEditor;
+use crate::common::skeleton::clip::{Axis, Channel};
+use crate::common::skeleton::Interpolation;
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::class::Class;
 use crate::common::net::NetRole;
@@ -61,6 +63,10 @@ pub struct AnimPanels {
     /// egui" is true across all of it and answering that would mean the
     /// timeline never saw a click.
     pub egui_wants_pointer: bool,
+    /// The same question for the keyboard, and the reason is the one
+    /// `shortcuts` already gives: `Delete` in a text field deletes a
+    /// character, and stealing it loses what somebody typed.
+    pub egui_wants_keyboard: bool,
 }
 
 impl Default for AnimPanels {
@@ -80,6 +86,7 @@ impl Default for AnimPanels {
             right_width: 300.0,
             timeline_height: DEFAULT_STRIP,
             egui_wants_pointer: false,
+            egui_wants_keyboard: false,
         }
     }
 }
@@ -100,6 +107,7 @@ struct AnimTabs<'a> {
     anim: &'a mut AnimEditor,
     figure: &'a mut ScaleFigure,
     cursor: &'a mut TimelineCursor,
+    selection: &'a TimelineSelection,
     mode: &'a mut Option<AppMode>,
 }
 
@@ -185,10 +193,155 @@ impl AnimTabs<'_> {
         }
     }
 
+    /// The per-axis control, and the centre of the whole feature.
+    ///
+    /// A target is what to move, where, in which space and unit — and **per
+    /// axis**, so "don't hit a height, hit the floor" is one dropdown and not
+    /// a different kind of key. The three axes are drawn as three identical
+    /// rows on purpose: they are the same question asked three times, and a
+    /// vertical axis that looked special would suggest `Ground` is a property
+    /// of the key rather than of the axis.
     fn key(&mut self, ui: &mut Ui) {
-        // Stage 6c. Read-only until there is an undo story for a drag, which
-        // is the whole of what makes editing safe rather than merely possible.
-        ui.label(get!("anim.read_only"));
+        let Some(name) = self.anim.selected.clone() else {
+            ui.label(get!("anim.no_clips"));
+            return;
+        };
+        let picked: Vec<KeyAt> = self.selection.0.iter().copied().collect();
+        if picked.is_empty() {
+            ui.label(get!("anim.no_key"));
+            return;
+        }
+        if picked.len() > 1 {
+            ui.label(get!("anim.many_keys", "count", picked.len().to_string()));
+            ui.separator();
+        }
+
+        // The first of the selection is what is edited, and a write goes to
+        // every picked key of the same kind — which is what makes setting six
+        // feet to the floor one gesture rather than six.
+        let first = picked[0];
+        let Some(clip) = self.editor.doc().animations.get(&name) else { return };
+        let Some(track) = clip.tracks.get(first.track) else { return };
+
+        let mut edited = match &track.channel {
+            Channel::Effector { keys, .. } | Channel::Weapon { keys } => {
+                keys.get(first.key).copied()
+            }
+            _ => None,
+        };
+
+        let Some(key) = edited.as_mut() else {
+            // A rotation key is three angles and has no datum to choose, so it
+            // is the ordinary `degrees_ui` case rather than this one. Stated
+            // rather than silently drawing nothing.
+            ui.label(get!("anim.rotation_key"));
+            return;
+        };
+
+        let mut changed = false;
+        ui.label(get!("anim.at", "time", format!("{:.3}", key.at)));
+        ui.separator();
+
+        for (index, label) in ["anim.axis.x", "anim.axis.y", "anim.axis.z"].iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(get!(*label));
+                let axis = &mut key.to[index];
+
+                let mut kind = match axis {
+                    Axis::Free => 0,
+                    Axis::Ground { .. } => 1,
+                    Axis::Value(_) => 2,
+                };
+                let before = kind;
+                egui::ComboBox::from_id_salt(("anim_axis", index))
+                    .selected_text(get!(match kind {
+                        0 => "anim.axis.free",
+                        1 => "anim.axis.ground",
+                        _ => "anim.axis.value",
+                    }))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut kind, 0, get!("anim.axis.free"));
+                        // Only the vertical axis has a floor under it. Offered
+                        // and refused would be a control that does nothing;
+                        // not offered is an answer.
+                        if index == 1 {
+                            ui.selectable_value(&mut kind, 1, get!("anim.axis.ground"));
+                        }
+                        ui.selectable_value(&mut kind, 2, get!("anim.axis.value"));
+                    });
+
+                if kind != before {
+                    // Carrying the number across, so switching a height to a
+                    // clearance keeps the number somebody typed rather than
+                    // resetting it to nothing.
+                    let carried = axis.offset().unwrap_or(0.0);
+                    *axis = match kind {
+                        0 => Axis::Free,
+                        1 => Axis::Ground { clearance: carried },
+                        _ => Axis::Value(carried),
+                    };
+                    changed = true;
+                }
+
+                if let Some(mut number) = axis.offset() {
+                    if ui
+                        .add(egui::DragValue::new(&mut number).speed(0.005).max_decimals(4))
+                        .changed()
+                    {
+                        *axis = match axis {
+                            Axis::Ground { .. } => Axis::Ground { clearance: number },
+                            _ => Axis::Value(number),
+                        };
+                        changed = true;
+                    }
+                }
+            });
+        }
+
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(get!("anim.leaving"));
+            egui::ComboBox::from_id_salt("anim_ease")
+                .selected_text(get!(key.ease.name_key()))
+                .show_ui(ui, |ui| {
+                    for ease in Interpolation::ALL {
+                        if ui
+                            .selectable_label(key.ease == *ease, get!(ease.name_key()))
+                            .clicked()
+                            && key.ease != *ease
+                        {
+                            key.ease = *ease;
+                            changed = true;
+                        }
+                    }
+                });
+        });
+
+        if !changed {
+            return;
+        }
+
+        // Through the gesture, like every other write: egui reports a drag as
+        // a change per frame, and per-change undo steps would turn one pull on
+        // a number into forty presses of Ctrl+Z.
+        let written = *key;
+        self.editor.begin_gesture();
+        let Some(clip) = self.editor.doc_mut().animations.clips.get_mut(&name) else { return };
+        for picked in &picked {
+            let Some(track) = clip.tracks.get_mut(picked.track) else { continue };
+            match &mut track.channel {
+                Channel::Effector { keys, .. } | Channel::Weapon { keys } => {
+                    if let Some(key) = keys.get_mut(picked.key) {
+                        // The time is not written across: a multiple selection
+                        // edited together should change its shape, not collapse
+                        // onto one moment.
+                        key.to = written.to;
+                        key.ease = written.ease;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn scene(&mut self, ui: &mut Ui) {
@@ -238,7 +391,9 @@ fn panels(
     mut anim: ResMut<AnimEditor>,
     mut figure: ResMut<ScaleFigure>,
     mut cursor: ResMut<TimelineCursor>,
+    selection: Res<TimelineSelection>,
     mut view: ResMut<TimelineView>,
+    grab: Res<crate::anim::timeline::TimelineGrab>,
     mut multicam: ResMut<MulticamState>,
     mut next_mode: ResMut<NextState<AppMode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -261,6 +416,7 @@ fn panels(
         anim: &mut anim,
         figure: &mut figure,
         cursor: &mut cursor,
+        selection: &selection,
         mode: &mut requested,
     };
 
@@ -349,9 +505,15 @@ fn panels(
     );
 
     layout.egui_wants_pointer = ctx.egui_wants_pointer_input();
+    layout.egui_wants_keyboard = ctx.egui_wants_keyboard_input();
 
-    // One undo step per gesture, exactly as the prop editor closes its own.
-    if !ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input() {
+    // One undo step per gesture, exactly as the prop editor closes its own —
+    // **and the timeline's drags count.** egui is not "using the pointer"
+    // while somebody drags a key, because the strip is a frameless panel with
+    // nothing in it but a hover sense, so without the third clause a drag
+    // would close its gesture on every frame and land in the undo stack forty
+    // times over. That is the whole reason this system knows a grab exists.
+    if !ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input() && grab.0.is_none() {
         editor.end_gesture();
     }
 

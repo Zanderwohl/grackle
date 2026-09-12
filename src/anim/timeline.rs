@@ -133,6 +133,40 @@ pub struct TimelineCursor {
     pub playing: bool,
 }
 
+/// One key, addressed by where it sits.
+///
+/// An address rather than an identity, and the consequence is faced rather
+/// than avoided: a drag reorders a track, so the address of a key you are
+/// holding changes underneath you. [`Channel::nudge`] reports the new indices
+/// for exactly that reason, and the selection is remapped from what it says.
+/// The alternative is an id per key on disk, existing only so a pointer can
+/// hold something for a few hundred milliseconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct KeyAt {
+    pub track: usize,
+    pub key: usize,
+}
+
+/// Which keys are picked.
+#[derive(Resource, Debug, Default)]
+pub struct TimelineSelection(pub std::collections::BTreeSet<KeyAt>);
+
+/// One track caught up in a drag.
+#[derive(Debug, Clone)]
+pub struct DraggedTrack {
+    pub track: usize,
+    /// The channel exactly as it was when the drag began.
+    ///
+    /// **Every frame recomputes from this rather than accumulating.** A drag
+    /// that added this frame's delta to last frame's result drifts on every
+    /// clamp and every re-sort, and dragging out to the edge and back would
+    /// not come home — which is the difference between a nudge you can undo by
+    /// eye and one you have to undo with Ctrl+Z.
+    pub original: crate::common::skeleton::clip::Channel,
+    /// Which keys, by index **in `original`**, are moving.
+    pub held: Vec<usize>,
+}
+
 /// A gesture in progress, anchored to where it began.
 ///
 /// **Delta, not mapping.** Setting the time to `time_at(cursor)` makes the
@@ -140,10 +174,15 @@ pub struct TimelineCursor {
 /// twice over: the grab zone is deliberately wider than the line, so a
 /// legitimate grab is usually a few pixels off it, and a scrub that jumps on
 /// mouse-down cannot be used to nudge.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Grab {
     Scrub { from_x: f32, from_time: f32 },
     Pan { from_x: f32, from_start: f32 },
+    Keys { from_x: f32, tracks: Vec<DraggedTrack> },
+    /// Both corners, because the layout has no idea where the pointer is and
+    /// should not have to: the gesture is the thing that knows, so it carries
+    /// what it has swept.
+    Band { from: Vec2, to: Vec2 },
 }
 
 #[derive(Resource, Debug, Default)]
@@ -176,6 +215,9 @@ struct RowLabel;
 #[derive(Component)]
 struct KeyMark;
 
+#[derive(Component)]
+struct BandBox;
+
 /// The pooled nodes, held by index so the layout pass can address them without
 /// a query sort.
 #[derive(Resource, Default)]
@@ -184,6 +226,7 @@ pub struct TimelinePools {
     root: Option<Entity>,
     playhead: Option<Entity>,
     grab: Option<Entity>,
+    band: Option<Entity>,
     grid: Vec<(Entity, Entity)>,
     rows: Vec<(Entity, Entity)>,
     keys: Vec<Entity>,
@@ -272,6 +315,19 @@ pub fn spawn_the_strip(mut commands: Commands, mut pools: ResMut<TimelinePools>)
         ))
         .id();
 
+    // The rubber band, drawn only while one is being pulled.
+    let band = commands
+        .spawn((
+            BandBox,
+            UiTargetCamera(camera),
+            layer(),
+            off(),
+            BackgroundColor(Color::srgba(0.55, 0.70, 0.95, 0.18)),
+            GlobalZIndex(1),
+        ))
+        .id();
+
+    pools.band = Some(band);
     pools.camera = Some(camera);
     pools.root = Some(root);
     pools.playhead = Some(playhead);
@@ -283,6 +339,7 @@ pub fn take_the_strip_down(mut commands: Commands, mut pools: ResMut<TimelinePoo
     everything.extend(pools.grid.drain(..).flat_map(|(line, label)| [line, label]));
     everything.extend(pools.rows.drain(..).flat_map(|(stripe, label)| [stripe, label]));
     everything.extend(pools.keys.drain(..));
+    everything.extend(pools.band.take());
     everything.extend(pools.root.take());
     everything.extend(pools.playhead.take());
     everything.extend(pools.grab.take());
@@ -386,6 +443,70 @@ fn reserve(
     }
 }
 
+/// How close to the playhead counts as grabbing it.
+///
+/// Half the grab zone, which is deliberately much wider than the line it
+/// grabs: a hit target the width of one pixel is a hit target nobody can hit.
+pub fn grab_radius() -> f32 {
+    GRAB_WIDTH / 2.0
+}
+
+/// Where a track's row starts, measured down from the top of the strip.
+pub fn row_top(slot: usize) -> f32 {
+    RULER_HEIGHT + slot as f32 * ROW_HEIGHT
+}
+
+/// Which track row a window point is over, if any.
+pub fn row_at(view: &TimelineView, y: f32) -> Option<usize> {
+    let local = y - view.rect.min.y - RULER_HEIGHT;
+    (local >= 0.0).then(|| (local / ROW_HEIGHT) as usize)
+}
+
+/// Whether a window point is in the ruler band along the top.
+///
+/// The ruler scrubs and the lanes select, which is why they are told apart
+/// here rather than by whatever happens to be under the pointer: a click on an
+/// empty lane is the start of a band, not a jump of the playhead.
+pub fn over_ruler(view: &TimelineView, at: Vec2) -> bool {
+    view.rect.contains(at) && at.y < view.rect.min.y + RULER_HEIGHT && at.x >= view.lanes_left()
+}
+
+/// Which key a window point is on, if any.
+///
+/// Geometric rather than picked off the node, and derived from the **same**
+/// `x_of` the layout uses — so it is one function read two ways rather than
+/// two copies of where a key is. It is also then testable without standing up
+/// a renderer, which is what most of the strip's tests rely on.
+pub fn key_at(view: &TimelineView, clip: &Clip, at: Vec2) -> Option<KeyAt> {
+    let track = row_at(view, at.y)?;
+    let channel = &clip.tracks.get(track)?.channel;
+
+    channel
+        .key_times()
+        .into_iter()
+        .enumerate()
+        .find(|(_, time)| (view.x_of(*time) - at.x).abs() <= KEY_SIZE)
+        .map(|(key, _)| KeyAt { track, key })
+}
+
+/// Every key inside a rectangle dragged across the lanes.
+pub fn keys_within(view: &TimelineView, clip: &Clip, band: Rect) -> Vec<KeyAt> {
+    let mut found = Vec::new();
+    for (track, spec) in clip.tracks.iter().enumerate() {
+        let top = view.rect.min.y + row_top(track);
+        if top + ROW_HEIGHT < band.min.y || top > band.max.y {
+            continue;
+        }
+        for (key, time) in spec.channel.key_times().into_iter().enumerate() {
+            let x = view.x_of(time);
+            if x >= band.min.x && x <= band.max.x {
+                found.push(KeyAt { track, key });
+            }
+        }
+    }
+    found
+}
+
 /// How far apart to put labelled gridlines so they stay readable at this zoom.
 ///
 /// A 1-2-5 ladder, which is what every ruler uses: the steps are all round
@@ -467,8 +588,11 @@ pub fn lay_out_the_timeline(
     view: Res<TimelineView>,
     cursor: Res<TimelineCursor>,
     clip: Option<Res<ShownClip>>,
+    selection: Option<Res<TimelineSelection>>,
+    grab: Option<Res<TimelineGrab>>,
     mut pools: ResMut<TimelinePools>,
     mut nodes: Query<&mut Node>,
+    mut colours: Query<&mut BackgroundColor>,
     mut texts: Query<&mut Text>,
 ) {
     let (Some(camera), Some(root)) = (pools.camera, pools.root) else {
@@ -576,12 +700,31 @@ pub fn lay_out_the_timeline(
             }
         }
 
-        for at in track.channel.key_times() {
+        for (index, at) in track.channel.key_times().into_iter().enumerate() {
             let Some(key) = pools.keys.get(key_slot).copied() else {
                 break;
             };
             key_slot += 1;
             let x = view.x_of(at);
+
+            // Picked keys are lit rather than outlined: an outline on a nine
+            // pixel diamond is two pixels of fill and reads as a smudge.
+            let picked = selection.as_deref().is_some_and(|picked| {
+                picked.0.contains(&KeyAt {
+                    track: slot,
+                    key: index,
+                })
+            });
+            if let Ok(mut colour) = colours.get_mut(key) {
+                let wanted = match picked {
+                    true => Color::srgb(1.0, 0.93, 0.70),
+                    false => Color::srgb(0.85, 0.72, 0.35),
+                };
+                if colour.0 != wanted {
+                    colour.0 = wanted;
+                }
+            }
+
             if let Ok(mut node) = nodes.get_mut(key) {
                 let on = x >= view.lanes_left() - KEY_SIZE && x <= rect.max.x;
                 node.display = if on { Display::Flex } else { Display::None };
@@ -598,6 +741,27 @@ pub fn lay_out_the_timeline(
     for slot in key_slot..pools.keys.len() {
         if let Ok(mut node) = nodes.get_mut(pools.keys[slot]) {
             node.display = Display::None;
+        }
+    }
+
+    // The rubber band, while one is being pulled.
+    if let Some(band) = pools.band {
+        let pulling = match grab.as_deref().and_then(|grab| grab.0.as_ref()) {
+            Some(Grab::Band { from, to }) => Some(Rect::from_corners(*from, *to)),
+            _ => None,
+        };
+        if let Ok(mut node) = nodes.get_mut(band) {
+            match pulling {
+                Some(box_rect) => {
+                    node.display = Display::Flex;
+                    node.position_type = PositionType::Absolute;
+                    node.left = Val::Px(box_rect.min.x - rect.min.x);
+                    node.top = Val::Px(box_rect.min.y - rect.min.y);
+                    node.width = Val::Px(box_rect.width().max(1.0));
+                    node.height = Val::Px(box_rect.height().max(1.0));
+                }
+                None => node.display = Display::None,
+            }
         }
     }
 

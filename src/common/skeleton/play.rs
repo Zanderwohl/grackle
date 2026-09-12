@@ -180,6 +180,42 @@ pub fn sample_point(keys: &[PointKey], time: f32, length: f32, looping: bool) ->
     )
 }
 
+/// Put a key on a channel at `at`, holding whatever the channel already said
+/// there.
+///
+/// **Inserting a key does not change the pose.** The value is sampled from the
+/// track as it stands, so adding a key is a way of *pinning* what is already
+/// happening before you change it — which is what keying at the playhead means
+/// everywhere else and what makes it safe to do while looking at something you
+/// like. A key inserted at a default would jump the body the moment it landed.
+///
+/// Returns where it ended up, so a caller can select it.
+pub fn key_the_channel(channel: &mut Channel, at: f32, length: f32, looping: bool) -> usize {
+    let at = at.clamp(0.0, length);
+
+    match channel {
+        Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
+            let turn = sample_rotation(keys, at, length, looping)
+                .map(|turn| {
+                    let (y, x, z) = turn.to_euler(crate::common::rotation::EULER_ORDER);
+                    [x, y, z]
+                })
+                .unwrap_or([0.0; 3]);
+            let ease = keys.last().map(|key| key.ease).unwrap_or_default();
+            keys.push(RotationKey { at, turn, ease });
+            keys.sort_by(|a, b| a.at.total_cmp(&b.at));
+            keys.iter().position(|key| key.at == at).unwrap_or(0)
+        }
+        Channel::Effector { keys, .. } | Channel::Weapon { keys } => {
+            let to = sample_point(keys, at, length, looping).unwrap_or([Axis::Free; 3]);
+            let ease = keys.last().map(|key| key.ease).unwrap_or_default();
+            keys.push(PointKey { at, to, ease });
+            keys.sort_by(|a, b| a.at.total_cmp(&b.at));
+            keys.iter().position(|key| key.at == at).unwrap_or(0)
+        }
+    }
+}
+
 /// How many metres one of `unit` is on this body.
 ///
 /// One function so two call sites cannot disagree, and the reason the whole
@@ -910,6 +946,66 @@ mod tests {
         // The point is that this does not panic and writes nothing.
         apply(&clip, 0.0, &rig, &mut pose, &frames, None);
         assert!(pose.posed_joints().next().is_none());
+    }
+
+    /// Keying at the playhead pins what is already happening. A key that
+    /// landed on a default would jump the body the moment it was added, which
+    /// makes keying unusable for the thing it is for: fixing something you
+    /// like before changing what comes after it.
+    #[test]
+    fn inserting_a_key_holds_what_the_track_already_said() {
+        let mut channel = Channel::Weapon {
+            keys: vec![
+                PointKey { at: 0.0, to: [Axis::Value(0.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
+                PointKey { at: 1.0, to: [Axis::Value(1.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
+            ],
+        };
+
+        let before = sample_point(
+            match &channel { Channel::Weapon { keys } => keys, _ => unreachable!() },
+            0.25, 1.0, false,
+        );
+
+        let landed = key_the_channel(&mut channel, 0.25, 1.0, false);
+
+        let Channel::Weapon { keys } = &channel else { unreachable!() };
+        assert_eq!(keys.len(), 3, "the key was not added");
+        assert_eq!(keys[landed].at, 0.25, "the key did not land where it was asked for");
+        assert_eq!(
+            Some(keys[landed].to), before,
+            "adding a key changed what the track said at that moment",
+        );
+    }
+
+    /// And the track still samples the same everywhere else, not just at the
+    /// key. A key that pinned its own moment while bending the curve either
+    /// side of it would be worse than one that jumped.
+    #[test]
+    fn inserting_a_key_does_not_bend_the_curve_around_it() {
+        let keys = vec![
+            PointKey { at: 0.0, to: [Axis::Value(0.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
+            PointKey { at: 1.0, to: [Axis::Value(1.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
+        ];
+        let before: Vec<f32> = (0..=20)
+            .map(|step| {
+                sample_point(&keys, step as f32 / 20.0, 1.0, false).unwrap()[0].value().unwrap()
+            })
+            .collect();
+
+        let mut channel = Channel::Weapon { keys };
+        key_the_channel(&mut channel, 0.25, 1.0, false);
+        let Channel::Weapon { keys } = &channel else { unreachable!() };
+
+        for (step, was) in before.iter().enumerate() {
+            let now = sample_point(keys, step as f32 / 20.0, 1.0, false).unwrap()[0]
+                .value()
+                .unwrap();
+            assert!(
+                (now - was).abs() < 1e-5,
+                "adding a key moved the curve at {}: {was} became {now}",
+                step as f32 / 20.0,
+            );
+        }
     }
 
     /// A layer at half weight is half of itself, and at zero it is not there.
