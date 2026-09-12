@@ -50,6 +50,13 @@ use timeline::{
 #[derive(Resource, Debug, Default)]
 pub struct AnimEditor {
     pub selected: Option<String>,
+    /// Which track the panels are showing, if any.
+    ///
+    /// Separate from the key selection: you pick a track to change what it
+    /// *is* — its space, its unit, what it drives — and keys to change when
+    /// they happen. Conflating them would mean choosing a track by choosing
+    /// one of its keys, which is impossible on a track that has none yet.
+    pub track: Option<usize>,
     /// Still waiting to frame the clip and the figure.
     ///
     /// Neither can be done on the way in. egui has not measured the strip yet,
@@ -577,7 +584,7 @@ mod tests {
 
         let mut editor = PropEditor::default();
         editor.open(doc, None);
-        let anim = AnimEditor { selected: Some("fire".into()), pending_frame: false };
+        let anim = AnimEditor { selected: Some("fire".into()), track: None, pending_frame: false };
         (editor, anim)
     }
 

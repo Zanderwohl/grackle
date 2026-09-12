@@ -736,6 +736,41 @@ mod tests {
         assert_eq!(get_parsed("tools.foo"), "Foo Tool");
     }
 
+    /// Every lang file the repo ships has to be TOML.
+    ///
+    /// The loader is deliberately forgiving — a pack with a broken file falls
+    /// back to the others rather than taking the process down — which is right
+    /// at runtime and means a mistake here surfaces as some unrelated test
+    /// failing with a message about something else. Twice now that mistake has
+    /// been the same one: a key used both as a string and as a table, which
+    /// TOML refuses. Named here so it says so.
+    #[test]
+    fn every_shipped_lang_file_parses() {
+        let mut checked = 0;
+        let Ok(entries) = std::fs::read_dir(std::path::Path::new("assets")) else {
+            // Run from somewhere other than the repo root.
+            return;
+        };
+
+        for pack in entries.flatten() {
+            let Ok(files) = std::fs::read_dir(pack.path().join("lang")) else {
+                continue;
+            };
+            for file in files.flatten() {
+                let path = file.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                toml::from_str::<toml::Value>(&text)
+                    .unwrap_or_else(|e| panic!("{} is not valid TOML: {e}", path.display()));
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "no lang files were found to check");
+    }
+
     /// One pack's typo must cost that pack its strings, never another pack's.
     #[test]
     fn a_broken_lang_file_in_one_pack_does_not_break_the_others() {

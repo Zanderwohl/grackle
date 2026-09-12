@@ -113,6 +113,18 @@ impl Plugin for SkeletonPlugin {
                 // and gripping in one system leaves nowhere for the clip to
                 // go — which is why `hold_the_weapon` was split rather than
                 // the clip layer being bolted on either side of it.
+                // **A clip's leg track needs no special handling against
+                // `plant_feet`.** Planting happens inside `finish_pose`, which
+                // `advance_animators` has already run by here, so a clip that
+                // pins a foot is simply the later writer and wins — and its
+                // `Free` axes read the *planted* tip, which is what "leave
+                // this axis where the layer beneath put it" should mean.
+                //
+                // That stops being true the moment body animations move into
+                // `finish_pose` itself, where a clip would run *before*
+                // planting rather than after. Suppressing the plant for a leg
+                // a clip owns is that stage's problem, and it is written down
+                // here because this is where the order is decided.
                 crate::game::held::place_the_weapon,
                 // In the chain rather than loose in `Update`, so what starts a
                 // clip and what plays it cannot end up a frame apart — which

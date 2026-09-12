@@ -326,6 +326,25 @@ rotation_key = "A rotation key is three angles; there is no datum to pick."
 at = "At { time } s"
 leaving = "Leaving"
 clock_is = "Runs on: { clock }"
+new_clip = "New"
+delete_clip = "Delete"
+no_tracks = "No tracks. Add one above."
+add_track = "Add track…"
+delete_track = "Remove"
+
+# Field labels live under their own table: several of them share a name with a
+# table of values — `clock`, `space`, `unit`, `combine`, `chain` — and TOML
+# will not have a key be both a string and a table.
+[anim.label]
+length = "Length"
+clock = "Clock"
+looping = "Loops"
+enabled = "On"
+space = "Measured from"
+unit = "In"
+combine = "Onto the layer beneath"
+bone = "Bone"
+chain = "Limb"
 
 [anim.panels]
 clips = "Clips"
@@ -363,6 +382,12 @@ shared = "Shared clock"
 [anim.combine]
 replace = "Replace"
 compose = "Compose"
+
+[anim.chain]
+right_arm = "Right arm"
+left_arm = "Left arm"
+right_leg = "Right leg"
+left_leg = "Left leg"
 
 [anim.axis]
 free = "Free"

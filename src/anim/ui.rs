@@ -7,14 +7,16 @@
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_egui::egui::{Id, LayerId, Ui, UiBuilder, WidgetText};
+use bevy_egui::egui::{Id, LayerId, Ui, UiBuilder, UiKind, WidgetText};
 use bevy_egui::{egui, EguiContexts};
 use egui_dock::{DockArea, DockState, TabViewer};
 
 use crate::anim::timeline::{KeyAt, TimelineCursor, TimelineSelection, TimelineView};
 use crate::anim::AnimEditor;
-use crate::common::skeleton::clip::{Axis, Channel};
-use crate::common::skeleton::Interpolation;
+use crate::common::skeleton::clip::{
+    Axis, ChainRef, Channel, Clip, Clock, Combine, Space, Track, Unit,
+};
+use crate::common::skeleton::{default_humanoid, Interpolation};
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::class::Class;
 use crate::common::net::NetRole;
@@ -109,6 +111,10 @@ struct AnimTabs<'a> {
     cursor: &'a mut TimelineCursor,
     selection: &'a TimelineSelection,
     mode: &'a mut Option<AppMode>,
+    /// Set when an edit has invalidated the key selection — a track removed,
+    /// say — so it can be cleared outside the closures that draw the panels,
+    /// which only hold it by shared reference.
+    clear_keys: bool,
 }
 
 impl TabViewer for AnimTabs<'_> {
@@ -149,47 +155,277 @@ impl TabViewer for AnimTabs<'_> {
 impl AnimTabs<'_> {
     fn clips(&mut self, ui: &mut Ui) {
         let names: Vec<String> = self.editor.doc().animations.clips.keys().cloned().collect();
+
+        ui.horizontal(|ui| {
+            if ui.button(get!("anim.new_clip")).clicked() {
+                // Named by counting rather than by asking. A dialog before the
+                // first keyframe is a dialog between somebody and the thing
+                // they came here to do; the name is editable below.
+                let name = unused_name("clip", &names);
+                self.editor.begin_gesture();
+                self.editor
+                    .doc_mut()
+                    .animations
+                    .clips
+                    .insert(name.clone(), Clip { length: 1.0, ..Clip::default() });
+                self.anim.selected = Some(name);
+            }
+            let picked = self.anim.selected.clone();
+            if ui
+                .add_enabled(picked.is_some(), egui::Button::new(get!("anim.delete_clip")))
+                .clicked()
+            {
+                if let Some(name) = picked {
+                    self.editor.begin_gesture();
+                    self.editor.doc_mut().animations.clips.remove(&name);
+                    self.anim.selected = None;
+                }
+            }
+        });
+        ui.separator();
+
         if names.is_empty() {
             ui.label(get!("anim.no_clips"));
             return;
         }
-        for name in names {
+        for name in &names {
             let picked = self.anim.selected.as_deref() == Some(name.as_str());
-            if ui.selectable_label(picked, &name).clicked() && !picked {
-                self.anim.selected = Some(name);
+            if ui.selectable_label(picked, name).clicked() && !picked {
+                self.anim.selected = Some(name.clone());
+            }
+        }
+
+        let Some(name) = self.anim.selected.clone() else { return };
+        let Some(clip) = self.editor.doc().animations.get(&name) else { return };
+        let mut edited = clip.clone();
+        let mut changed = false;
+
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(get!("anim.label.length"));
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut edited.length)
+                        .speed(0.01)
+                        .range(0.01..=600.0)
+                        .max_decimals(3),
+                )
+                .changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label(get!("anim.label.clock"));
+            egui::ComboBox::from_id_salt("anim_clock")
+                .selected_text(get!(clock_key(edited.clock)))
+                .show_ui(ui, |ui| {
+                    for clock in [Clock::Seconds, Clock::Stride, Clock::Shared] {
+                        changed |= ui
+                            .selectable_value(&mut edited.clock, clock, get!(clock_key(clock)))
+                            .changed();
+                    }
+                });
+        });
+        changed |= ui.checkbox(&mut edited.looping, get!("anim.label.looping")).changed();
+
+        if changed {
+            self.editor.begin_gesture();
+            if let Some(clip) = self.editor.doc_mut().animations.clips.get_mut(&name) {
+                clip.length = edited.length;
+                clip.clock = edited.clock;
+                clip.looping = edited.looping;
             }
         }
     }
 
+    /// The tracks a clip has, and how to get another one.
+    ///
+    /// Adding a track is where the format's choices actually become reachable:
+    /// until there is a way to make an effector track in a space and a unit,
+    /// "a key holds a target" is a sentence in a file nobody can write.
     fn tracks(&mut self, ui: &mut Ui) {
-        let Some(clip) = self
-            .anim
-            .selected
-            .as_deref()
-            .and_then(|name| self.editor.doc().animations.get(name))
-        else {
+        let Some(name) = self.anim.selected.clone() else {
             ui.label(get!("anim.no_clips"));
             return;
         };
+        let Some(clip) = self.editor.doc().animations.get(&name).cloned() else {
+            return;
+        };
 
-        ui.label(format!("{:.3} s", clip.length));
-        ui.label(get!(
-            "anim.clock_is",
-            "clock",
-            get!(match clip.clock {
-                crate::common::skeleton::clip::Clock::Seconds => "anim.clock.seconds",
-                crate::common::skeleton::clip::Clock::Stride => "anim.clock.stride",
-                crate::common::skeleton::clip::Clock::Shared => "anim.clock.shared",
-            })
-        ));
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("anim_add_track")
+                .selected_text(get!("anim.add_track"))
+                .show_ui(ui, |ui| {
+                    for (label, channel) in new_channels() {
+                        if ui.button(get!(label)).clicked() {
+                            self.editor.begin_gesture();
+                            if let Some(clip) =
+                                self.editor.doc_mut().animations.clips.get_mut(&name)
+                            {
+                                clip.tracks.push(Track {
+                                    combine: Combine::Replace,
+                                    space: Space::Body,
+                                    unit: Unit::Metres,
+                                    enabled: true,
+                                    channel,
+                                });
+                                self.anim.track = Some(clip.tracks.len() - 1);
+                            }
+                            ui.close_kind(UiKind::Menu);
+                        }
+                    }
+                });
+
+            let picked = self.anim.track.filter(|index| *index < clip.tracks.len());
+            if ui
+                .add_enabled(picked.is_some(), egui::Button::new(get!("anim.delete_track")))
+                .clicked()
+            {
+                if let Some(index) = picked {
+                    self.editor.begin_gesture();
+                    if let Some(clip) = self.editor.doc_mut().animations.clips.get_mut(&name) {
+                        clip.tracks.remove(index);
+                    }
+                    self.anim.track = None;
+                    // The key selection addresses tracks by index, so leaving
+                    // it alone after a removal would leave it pointing at
+                    // whichever track slid down into the gap.
+                    self.clear_keys = true;
+                }
+            }
+        });
         ui.separator();
 
+        if clip.tracks.is_empty() {
+            ui.label(get!("anim.no_tracks"));
+            return;
+        }
+
         for (index, track) in clip.tracks.iter().enumerate() {
-            ui.label(format!(
+            let picked = self.anim.track == Some(index);
+            let label = format!(
                 "{index}. {} — {}",
                 get!(track.channel.kind_key()),
                 track.channel.key_count(),
-            ));
+            );
+            if ui.selectable_label(picked, label).clicked() {
+                self.anim.track = Some(index);
+            }
+        }
+
+        let Some(index) = self.anim.track.filter(|index| *index < clip.tracks.len()) else {
+            return;
+        };
+        let mut edited = clip.tracks[index].clone();
+        let mut changed = false;
+
+        ui.separator();
+        changed |= ui
+            .checkbox(&mut edited.enabled, get!("anim.label.enabled"))
+            .changed();
+
+        // Space and unit mean nothing to a rotation, which is stated in the
+        // bone's own rest frame — so they are not offered rather than offered
+        // and ignored.
+        let positional = matches!(
+            edited.channel,
+            Channel::Effector { .. } | Channel::Weapon { .. }
+        );
+        if positional {
+            ui.horizontal(|ui| {
+                ui.label(get!("anim.label.space"));
+                egui::ComboBox::from_id_salt("anim_space")
+                    .selected_text(get!(space_key(edited.space)))
+                    .show_ui(ui, |ui| {
+                        for space in [Space::Body, Space::Carry, Space::Weapon, Space::Eye] {
+                            changed |= ui
+                                .selectable_value(&mut edited.space, space, get!(space_key(space)))
+                                .changed();
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label(get!("anim.label.unit"));
+                egui::ComboBox::from_id_salt("anim_unit")
+                    .selected_text(get!(unit_key(edited.unit)))
+                    .show_ui(ui, |ui| {
+                        for unit in [
+                            Unit::Metres,
+                            Unit::LegLengths,
+                            Unit::ArmLengths,
+                            Unit::HipHeights,
+                        ] {
+                            changed |= ui
+                                .selectable_value(&mut edited.unit, unit, get!(unit_key(unit)))
+                                .changed();
+                        }
+                    });
+            });
+        }
+
+        ui.horizontal(|ui| {
+            ui.label(get!("anim.label.combine"));
+            egui::ComboBox::from_id_salt("anim_combine")
+                .selected_text(get!(combine_key(edited.combine)))
+                .show_ui(ui, |ui| {
+                    for combine in [Combine::Replace, Combine::Compose] {
+                        changed |= ui
+                            .selectable_value(
+                                &mut edited.combine,
+                                combine,
+                                get!(combine_key(combine)),
+                            )
+                            .changed();
+                    }
+                });
+        });
+
+        // Which bone or which limb, depending on what kind of track it is.
+        match &mut edited.channel {
+            Channel::Rotation { bone, .. } => {
+                ui.horizontal(|ui| {
+                    ui.label(get!("anim.label.bone"));
+                    egui::ComboBox::from_id_salt("anim_bone")
+                        .selected_text(bone.clone())
+                        .show_ui(ui, |ui| {
+                            for name in default_humanoid().bones().iter().map(|b| b.name) {
+                                if ui.selectable_label(bone == name, name).clicked()
+                                    && bone != name
+                                {
+                                    *bone = name.to_string();
+                                    changed = true;
+                                }
+                            }
+                        });
+                });
+            }
+            Channel::Effector { chain, .. } => {
+                ui.horizontal(|ui| {
+                    ui.label(get!("anim.label.chain"));
+                    egui::ComboBox::from_id_salt("anim_chain")
+                        .selected_text(get!(chain_key(*chain)))
+                        .show_ui(ui, |ui| {
+                            for option in [
+                                ChainRef::RightArm,
+                                ChainRef::LeftArm,
+                                ChainRef::RightLeg,
+                                ChainRef::LeftLeg,
+                            ] {
+                                changed |= ui
+                                    .selectable_value(chain, option, get!(chain_key(option)))
+                                    .changed();
+                            }
+                        });
+                });
+            }
+            _ => {}
+        }
+
+        if changed {
+            self.editor.begin_gesture();
+            if let Some(clip) = self.editor.doc_mut().animations.clips.get_mut(&name) {
+                if let Some(track) = clip.tracks.get_mut(index) {
+                    *track = edited;
+                }
+            }
         }
     }
 
@@ -391,7 +627,7 @@ fn panels(
     mut anim: ResMut<AnimEditor>,
     mut figure: ResMut<ScaleFigure>,
     mut cursor: ResMut<TimelineCursor>,
-    selection: Res<TimelineSelection>,
+    mut selection: ResMut<TimelineSelection>,
     mut view: ResMut<TimelineView>,
     grab: Res<crate::anim::timeline::TimelineGrab>,
     mut multicam: ResMut<MulticamState>,
@@ -418,6 +654,7 @@ fn panels(
         cursor: &mut cursor,
         selection: &selection,
         mode: &mut requested,
+        clear_keys: false,
     };
 
     layout.menu_bar_height = egui::Panel::top("anim_menu_bar")
@@ -471,7 +708,11 @@ fn panels(
         .rect
         .width();
 
+    let clear_keys = tabs.clear_keys;
     drop(tabs);
+    if clear_keys {
+        selection.0.clear();
+    }
 
     // **Reserved, not drawn.** egui owns the *layout* — so the viewports
     // shrink, and the splitter between them and the strip is egui's own resize
@@ -534,6 +775,91 @@ fn panels(
     }
 }
 
+fn clock_key(clock: Clock) -> &'static str {
+    match clock {
+        Clock::Seconds => "anim.clock.seconds",
+        Clock::Stride => "anim.clock.stride",
+        Clock::Shared => "anim.clock.shared",
+    }
+}
+
+fn space_key(space: Space) -> &'static str {
+    match space {
+        Space::Body => "anim.space.body",
+        Space::Carry => "anim.space.carry",
+        Space::Weapon => "anim.space.weapon",
+        Space::Eye => "anim.space.eye",
+    }
+}
+
+fn unit_key(unit: Unit) -> &'static str {
+    match unit {
+        Unit::Metres => "anim.unit.metres",
+        Unit::LegLengths => "anim.unit.leg_lengths",
+        Unit::ArmLengths => "anim.unit.arm_lengths",
+        Unit::HipHeights => "anim.unit.hip_heights",
+    }
+}
+
+fn combine_key(combine: Combine) -> &'static str {
+    match combine {
+        Combine::Replace => "anim.combine.replace",
+        Combine::Compose => "anim.combine.compose",
+    }
+}
+
+fn chain_key(chain: ChainRef) -> &'static str {
+    match chain {
+        ChainRef::RightArm => "anim.chain.right_arm",
+        ChainRef::LeftArm => "anim.chain.left_arm",
+        ChainRef::RightLeg => "anim.chain.right_leg",
+        ChainRef::LeftLeg => "anim.chain.left_leg",
+    }
+}
+
+/// The kinds of track that can be added, each with the emptiest form of
+/// itself.
+///
+/// A list rather than an enum-of-enums: what a new track *is* is one of four
+/// literal values, and a fifth channel joins by being written here next to the
+/// arm in `apply` that answers for it.
+fn new_channels() -> [(&'static str, Channel); 4] {
+    [
+        (
+            "anim.channel.rotation",
+            Channel::Rotation {
+                bone: crate::common::skeleton::rig::bone::CHEST.to_string(),
+                keys: Vec::new(),
+            },
+        ),
+        (
+            "anim.channel.effector",
+            Channel::Effector {
+                chain: ChainRef::RightArm,
+                pole: None,
+                keys: Vec::new(),
+            },
+        ),
+        ("anim.channel.weapon", Channel::Weapon { keys: Vec::new() }),
+        (
+            "anim.channel.weapon_rotation",
+            Channel::WeaponRotation { keys: Vec::new() },
+        ),
+    ]
+}
+
+/// A name nothing else is using, by counting.
+///
+/// Counting rather than asking: a dialog before the first keyframe stands
+/// between somebody and the thing they opened the editor to do, and the name
+/// is editable afterwards.
+fn unused_name(stem: &str, taken: &[String]) -> String {
+    (1..)
+        .map(|n| format!("{stem}{n}"))
+        .find(|name| !taken.contains(name))
+        .unwrap_or_else(|| stem.to_string())
+}
+
 /// Where the strip's own content starts, given what egui reserved.
 ///
 /// Pulled out of the closure so the partition can be checked without an egui
@@ -548,6 +874,37 @@ pub fn strip_rect(reserved: Rect, zoom: f32) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A new clip gets a name nothing else is using, without asking for one.
+    ///
+    /// The counting matters: `clip1` taken and `clip2` free has to produce
+    /// `clip2`, not `clip1` again — a second clip silently replacing the first
+    /// through a `BTreeMap` insert is a lost afternoon with no error.
+    #[test]
+    fn a_new_name_is_one_nothing_else_has() {
+        let taken = vec!["clip1".to_string(), "clip3".to_string()];
+        assert_eq!(unused_name("clip", &[]), "clip1");
+        assert_eq!(unused_name("clip", &taken), "clip2");
+        assert_eq!(
+            unused_name("clip", &["clip1".into(), "clip2".into()]),
+            "clip3",
+        );
+    }
+
+    /// Every kind of channel can be made from the panel.
+    ///
+    /// The list is hand-written beside the arms in `apply` that answer for
+    /// each, so a fifth channel added to the format and forgotten here would
+    /// be one nobody can author. Counted rather than named, because the names
+    /// are the lang keys and those are checked elsewhere.
+    #[test]
+    fn every_kind_of_track_can_be_added() {
+        let made = new_channels();
+        assert_eq!(made.len(), 4);
+        for (_, channel) in &made {
+            assert_eq!(channel.key_count(), 0, "a new track arrived with keys on it");
+        }
+    }
 
     /// The strip and the viewports partition the window: neither eats the
     /// other, and the strip never reaches above what egui gave it.
