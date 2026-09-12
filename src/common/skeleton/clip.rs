@@ -375,6 +375,20 @@ pub enum Channel {
         #[serde(default)]
         keys: Vec<RotationKey>,
     },
+    /// Where the whole body sits, in **hip-heights** — [`Pose::root_offset`],
+    /// the one thing a pose says that is not a rotation.
+    ///
+    /// A channel of its own rather than a unit on a point track, because a
+    /// root offset is not measured from a space: it is a displacement of the
+    /// body from where it would otherwise stand, and the only frame that could
+    /// mean anything in is the body's own. An idle's bob and a crouch's sink
+    /// are both this.
+    ///
+    /// [`Pose::root_offset`]: super::rig::Pose::root_offset
+    Root {
+        #[serde(default)]
+        keys: Vec<PointKey>,
+    },
     // Feature { feature: PropFeatureId, .. } — reserved for a magazine that
     // drops out. Building it needs `prop::baked` to bake per-feature groups
     // rather than one mesh per surface, which is a baking change rather than a
@@ -385,6 +399,7 @@ impl Channel {
     /// The lang key for what kind of channel this is.
     pub fn kind_key(&self) -> &'static str {
         match self {
+            Channel::Root { .. } => "anim.channel.root",
             Channel::Rotation { .. } => "anim.channel.rotation",
             Channel::Effector { .. } => "anim.channel.effector",
             Channel::Weapon { .. } => "anim.channel.weapon",
@@ -396,7 +411,9 @@ impl Channel {
     pub fn key_count(&self) -> usize {
         match self {
             Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => keys.len(),
-            Channel::Effector { keys, .. } | Channel::Weapon { keys } => keys.len(),
+            Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
+                keys.len()
+            }
         }
     }
 
@@ -406,7 +423,7 @@ impl Channel {
             Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
                 keys.iter().map(|key| key.at).collect()
             }
-            Channel::Effector { keys, .. } | Channel::Weapon { keys } => {
+            Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
                 keys.iter().map(|key| key.at).collect()
             }
         }
@@ -463,14 +480,16 @@ impl Channel {
                 |key| key.at,
                 |key, at| key.at = at,
             ),
-            Channel::Effector { keys, .. } | Channel::Weapon { keys } => shuffle(
-                keys,
-                held,
-                by,
-                within,
-                |key| key.at,
-                |key, at| key.at = at,
-            ),
+            Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
+                shuffle(
+                    keys,
+                    held,
+                    by,
+                    within,
+                    |key| key.at,
+                    |key, at| key.at = at,
+                )
+            }
         }
     }
 
@@ -492,7 +511,7 @@ impl Channel {
                     }
                 }
             }
-            Channel::Effector { keys, .. } | Channel::Weapon { keys } => {
+            Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
                 for index in doomed.iter().rev() {
                     if *index < keys.len() {
                         keys.remove(*index);
@@ -512,7 +531,7 @@ impl Channel {
             Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
                 keys.sort_by(|a, b| a.at.total_cmp(&b.at))
             }
-            Channel::Effector { keys, .. } | Channel::Weapon { keys } => {
+            Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
                 keys.sort_by(|a, b| a.at.total_cmp(&b.at))
             }
         }
@@ -580,6 +599,27 @@ pub struct Clip {
 }
 
 impl Clip {
+    /// Where this clip has got to, given what the body is doing.
+    ///
+    /// The whole point of [`Clock`] arriving at one place: a reload runs on
+    /// seconds, an idle on the shared clock, and a walk on **distance
+    /// travelled**, and every one of those is already a field on
+    /// [`PoseInputs`]. Without this the caller would have to know which clock
+    /// a clip was authored against, which is exactly the thing the file is
+    /// supposed to say.
+    ///
+    /// [`PoseInputs`]: super::state::PoseInputs
+    pub fn time_from(&self, inputs: &super::state::PoseInputs) -> f32 {
+        match self.clock {
+            // Both read the shared clock; what they differ in is whether the
+            // clip wraps, which `looping` already says.
+            Clock::Seconds | Clock::Shared => inputs.seconds,
+            // Already wrapping at 1, so a clip a stride long is a clip that
+            // plays once per step.
+            Clock::Stride => inputs.stride * self.length.max(1.0),
+        }
+    }
+
     /// Put every track's keys back in time order.
     pub fn normalise(&mut self) {
         for track in &mut self.tracks {
@@ -638,6 +678,21 @@ impl Clip {
                         if key.to[0].is_ground() || key.to[2].is_ground() {
                             problems.push(format!(
                                 "track {index} has a key grounded on a horizontal axis at {}",
+                                key.at
+                            ));
+                        }
+                    }
+                }
+                Channel::Root { keys } => {
+                    for key in keys {
+                        // A root offset is in hip-heights above where the body
+                        // would otherwise stand, which the floor has already
+                        // decided. Grounding it is asking for the floor to be
+                        // measured from the floor.
+                        if key.to.iter().any(|axis| axis.is_ground()) {
+                            problems.push(format!(
+                                "track {index} grounds a root offset at {}, which is already \
+                                 measured from where the body stands",
                                 key.at
                             ));
                         }

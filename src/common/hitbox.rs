@@ -268,8 +268,8 @@ mod tests {
         let root = Transform::from_xyz(1.0, 0.0, 2.0);
         let inputs = PoseInputs::default();
 
-        let ducked = finish_pose(&skeleton, AnimationState::Crouch, &inputs, &root);
-        let standing = finish_pose(&skeleton, AnimationState::Idle, &inputs, &root);
+        let ducked = finish_pose(&skeleton, AnimationState::Crouch, &inputs, &root, None);
+        let standing = finish_pose(&skeleton, AnimationState::Idle, &inputs, &root, None);
 
         let up = hitboxes(&skeleton, &standing, &standing, &root, Stance::Standing).head;
         let down = hitboxes(&skeleton, &ducked, &ducked, &root, Stance::Crouched).head;

@@ -1,0 +1,157 @@
+name_key = "animation.states.airborne"
+length = 1.0
+clock = "shared"
+looping = false
+note = "Sampled from `airborne_pose`. Still, for now: a real jump wants keys through the arc, which is what having a timeline is for."
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "upper_arm.l"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    0.4068158,
+    -0.29920518,
+    -0.6621587,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "forearm.l"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    1.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "thigh.l"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    0.54999995,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "shin.l"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    -1.25,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "upper_arm.r"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    0.70299774,
+    0.61842823,
+    0.8332475,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "forearm.r"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    1.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "thigh.r"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    0.099999994,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "shin.r"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    -1.0499998,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"

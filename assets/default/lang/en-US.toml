@@ -357,6 +357,7 @@ problems = "Problems"
 deploy = "Deploy"
 
 [anim.channel]
+root = "Body"
 rotation = "Bone"
 effector = "Reach"
 weapon = "Weapon"

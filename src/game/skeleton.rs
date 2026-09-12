@@ -25,6 +25,7 @@ use crate::common::app_mode::{showing_the_world, AppMode};
 use crate::common::class::Stance;
 use crate::common::damage::PlayerId;
 use crate::common::class::Class;
+use crate::common::skeleton::state::ClipLibrary;
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{
     draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
@@ -515,6 +516,10 @@ fn phase_bodies_by_id(
 fn advance_animators(
     time: Res<Time>,
     clock: Res<AnimationClock>,
+    // The authored body animations, if any have been loaded. Absent is a build
+    // where every state is still a Rust function, which is exactly what this
+    // did before there were clips.
+    library: Option<Res<ClipLibrary>>,
     mut bodies: Query<(
         &Skeleton,
         &mut SkeletonAnimator,
@@ -528,6 +533,7 @@ fn advance_animators(
     )>,
 ) {
     let dt = time.delta_secs();
+    let clips = library.as_deref();
     for (skeleton, mut animator, mut pose, global, offset, requests, forced, phase, gait) in
         &mut bodies
     {
@@ -553,7 +559,13 @@ fn advance_animators(
             speed: gait.speed(),
             travel: gait.travel(),
         };
-        *pose = animator_pose(skeleton, &animator, &inputs, &skeleton_root(global, offset));
+        *pose = animator_pose(
+            skeleton,
+            &animator,
+            &inputs,
+            &skeleton_root(global, offset),
+            clips,
+        );
     }
 }
 

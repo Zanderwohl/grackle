@@ -1,6 +1,7 @@
 pub mod app_mode;
 pub mod assets;
 pub mod class;
+pub mod clip_file;
 pub mod damage;
 pub mod team;
 pub mod weapon;

@@ -196,17 +196,14 @@ pub fn key_the_channel(channel: &mut Channel, at: f32, length: f32, looping: boo
     match channel {
         Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
             let turn = sample_rotation(keys, at, length, looping)
-                .map(|turn| {
-                    let (y, x, z) = turn.to_euler(crate::common::rotation::EULER_ORDER);
-                    [x, y, z]
-                })
+                .map(|turn| crate::common::rotation::euler_from_quat(turn).to_array())
                 .unwrap_or([0.0; 3]);
             let ease = keys.last().map(|key| key.ease).unwrap_or_default();
             keys.push(RotationKey { at, turn, ease });
             keys.sort_by(|a, b| a.at.total_cmp(&b.at));
             keys.iter().position(|key| key.at == at).unwrap_or(0)
         }
-        Channel::Effector { keys, .. } | Channel::Weapon { keys } => {
+        Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
             let to = sample_point(keys, at, length, looping).unwrap_or([Axis::Free; 3]);
             let ease = keys.last().map(|key| key.ease).unwrap_or_default();
             keys.push(PointKey { at, to, ease });
@@ -452,6 +449,27 @@ pub fn apply(
                 } else {
                     ik::reach_or_leave(skeleton, pose, &frames.body, &solved, target, pole)
                 });
+            }
+
+            Channel::Root { keys } => {
+                let Some(to) = sample_point(keys, time, length, looping) else {
+                    continue;
+                };
+                // In hip-heights and in the body's own frame, so neither the
+                // track's space nor its unit is consulted — a root offset is a
+                // displacement of the body from where it would otherwise
+                // stand, and there is no other frame it could be read in.
+                for axis in 0..3 {
+                    let was = pose.root_offset[axis];
+                    pose.root_offset[axis] = match (to[axis], track.combine) {
+                        (Axis::Free, _) => was,
+                        (Axis::Value(at), Combine::Replace) => at,
+                        (Axis::Value(at), Combine::Compose) => was + at,
+                        // There is no floor to find in hip-heights above a
+                        // body's own feet; `Clip::problems` says so.
+                        (Axis::Ground { .. }, _) => was,
+                    };
+                }
             }
 
             Channel::Weapon { keys } => {

@@ -649,7 +649,7 @@ mod tests {
                     let root = Transform::from_xyz(0.0, 0.0, -travelled);
                     let inputs = PoseInputs { seconds: 0.0, stride: phase, speed, travel: Vec2::Y };
                     let pose =
-                        finish_pose(&skeleton, AnimationState::RunForward, &inputs, &root);
+                        finish_pose(&skeleton, AnimationState::RunForward, &inputs, &root, None);
                     let ankle = skeleton
                         .posed_bones(&pose, &root)
                         .into_iter()
@@ -908,7 +908,7 @@ mod tests {
                         speed: 1.0,
                         ..default()
                     };
-                    let pose = finish_pose(&skeleton, state, &inputs, &root);
+                    let pose = finish_pose(&skeleton, state, &inputs, &root, None);
 
                     let highest = skeleton
                         .posed_bones(&pose, &root)
@@ -982,7 +982,7 @@ mod tests {
                     speed: 2.0,
                     travel: Vec2::new(towards, 0.0),
                 };
-                let pose = finish_pose(&skeleton, state, &inputs, &root);
+                let pose = finish_pose(&skeleton, state, &inputs, &root, None);
                 let ankle = skeleton
                     .posed_bones(&pose, &root)
                     .into_iter()
@@ -1106,7 +1106,7 @@ mod tests {
                 speed: RUNNING,
                 travel,
             };
-            let pose = finish_pose(&skeleton, AnimationState::RunForward, &inputs, &root);
+            let pose = finish_pose(&skeleton, AnimationState::RunForward, &inputs, &root, None);
             let ankle = skeleton
                 .posed_bones(&pose, &root)
                 .into_iter()

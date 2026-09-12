@@ -325,6 +325,11 @@ impl AnimTabs<'_> {
         // Space and unit mean nothing to a rotation, which is stated in the
         // bone's own rest frame — so they are not offered rather than offered
         // and ignored.
+        // A root offset is positional but has no frame to be measured in — it
+        // is a displacement of the body from where it would otherwise stand,
+        // and hip-heights is the only unit that could mean. So it is left out
+        // here with the rotations rather than offered a choice that does
+        // nothing.
         let positional = matches!(
             edited.channel,
             Channel::Effector { .. } | Channel::Weapon { .. }
@@ -460,7 +465,7 @@ impl AnimTabs<'_> {
         let Some(track) = clip.tracks.get(first.track) else { return };
 
         let mut edited = match &track.channel {
-            Channel::Effector { keys, .. } | Channel::Weapon { keys } => {
+            Channel::Effector { keys, .. } | Channel::Weapon { keys } | Channel::Root { keys } => {
                 keys.get(first.key).copied()
             }
             _ => None,
@@ -566,7 +571,9 @@ impl AnimTabs<'_> {
         for picked in &picked {
             let Some(track) = clip.tracks.get_mut(picked.track) else { continue };
             match &mut track.channel {
-                Channel::Effector { keys, .. } | Channel::Weapon { keys } => {
+                Channel::Effector { keys, .. }
+                | Channel::Weapon { keys }
+                | Channel::Root { keys } => {
                     if let Some(key) = keys.get_mut(picked.key) {
                         // The time is not written across: a multiple selection
                         // edited together should change its shape, not collapse
@@ -823,7 +830,7 @@ fn chain_key(chain: ChainRef) -> &'static str {
 /// A list rather than an enum-of-enums: what a new track *is* is one of four
 /// literal values, and a fifth channel joins by being written here next to the
 /// arm in `apply` that answers for it.
-fn new_channels() -> [(&'static str, Channel); 4] {
+fn new_channels() -> [(&'static str, Channel); 5] {
     [
         (
             "anim.channel.rotation",
@@ -840,6 +847,7 @@ fn new_channels() -> [(&'static str, Channel); 4] {
                 keys: Vec::new(),
             },
         ),
+        ("anim.channel.root", Channel::Root { keys: Vec::new() }),
         ("anim.channel.weapon", Channel::Weapon { keys: Vec::new() }),
         (
             "anim.channel.weapon_rotation",
@@ -900,7 +908,7 @@ mod tests {
     #[test]
     fn every_kind_of_track_can_be_added() {
         let made = new_channels();
-        assert_eq!(made.len(), 4);
+        assert_eq!(made.len(), 5);
         for (_, channel) in &made {
             assert_eq!(channel.key_count(), 0, "a new track arrived with keys on it");
         }

@@ -29,6 +29,11 @@
 //! else is written against, and the transitions are testable before there is
 //! anything to look at.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use super::clip::Clip;
+
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
@@ -209,7 +214,9 @@ impl BodyRequests {
 /// stores the state as [`AnimationState::index`] — so **add new states at the
 /// end** and do not reorder. A shuffled list would silently repoint every
 /// saved display at a different animation.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, EnumIter, Reflect)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, Reflect,
+)]
 pub enum AnimationState {
     #[default]
     Idle,
@@ -387,6 +394,35 @@ impl AnimationState {
         matches!(self, AnimationState::Airborne)
     }
 
+    /// The name a clip for this state is filed under.
+    ///
+    /// Spelled out rather than derived from the variant, because these are
+    /// **file names on disk** — the same reason `Class::key` is written out —
+    /// and a rename that silently orphaned every shipped clip would show up as
+    /// bodies quietly going back to their Rust poses.
+    ///
+    /// It is also what makes the library loadable without listing a
+    /// directory: the names come from the enum, so the runtime asks for each
+    /// by name rather than enumerating, which is the rule `Assets` is built
+    /// on and the only thing that works behind a `fetch`.
+    pub fn clip_name(self) -> &'static str {
+        match self {
+            AnimationState::Idle => "idle",
+            AnimationState::RunForward => "run_forward",
+            AnimationState::RunBackward => "run_backward",
+            AnimationState::StrafeLeft => "strafe_left",
+            AnimationState::StrafeRight => "strafe_right",
+            AnimationState::PushingWall => "pushing_wall",
+            AnimationState::Airborne => "airborne",
+            AnimationState::Crouch => "crouch",
+            AnimationState::CrouchWalk => "crouch_walk",
+            AnimationState::CrouchWalkBackward => "crouch_walk_backward",
+            AnimationState::CrouchStrafeLeft => "crouch_strafe_left",
+            AnimationState::CrouchStrafeRight => "crouch_strafe_right",
+            AnimationState::CrouchAirborne => "crouch_airborne",
+        }
+    }
+
     /// The pose this state is in at `seconds` on the shared clock.
     ///
     /// `seconds` is [`AnimationClock`] plus the body's [`AnimationPhase`], not
@@ -486,6 +522,45 @@ impl AnimationState {
 }
 
 /// The state machine, and the only thing that writes a [`Pose`].
+/// The body animations that have been authored as data.
+///
+/// **Per state, so the migration is thirteen independent decisions.** A state
+/// with a clip plays it; one without is still a function, and a half-migrated
+/// build is not a broken one — which is the whole reason this is a lookup
+/// rather than a switch.
+///
+/// Empty by default, so anything that has not been handed a library behaves
+/// exactly as it did before there were clips. That is what every test that
+/// passes `None` relies on, including the one that compares a migrated clip
+/// against the function it replaced.
+#[derive(Resource, Debug, Default, Clone)]
+pub struct ClipLibrary {
+    by_state: HashMap<AnimationState, Arc<Clip>>,
+}
+
+impl ClipLibrary {
+    pub fn get(&self, state: AnimationState) -> Option<&Arc<Clip>> {
+        self.by_state.get(&state)
+    }
+
+    pub fn insert(&mut self, state: AnimationState, clip: Clip) {
+        self.by_state.insert(state, Arc::new(clip));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_state.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_state.len()
+    }
+
+    /// Which states are being played from data rather than from code.
+    pub fn states(&self) -> impl Iterator<Item = AnimationState> + '_ {
+        self.by_state.keys().copied()
+    }
+}
+
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct SkeletonAnimator {
     state: AnimationState,
@@ -568,7 +643,7 @@ impl SkeletonAnimator {
 pub struct ForcedAnimation(pub AnimationState);
 
 /// How long one idle cycle takes, in seconds.
-const IDLE_PERIOD: f32 = 3.4;
+pub const IDLE_PERIOD: f32 = 3.4;
 
 /// How far the hips drop at the bottom of the cycle, in hip-heights.
 ///
@@ -707,6 +782,7 @@ mod tests {
                     AnimationState::Idle,
                     &PoseInputs { seconds, ..default() },
                     &Transform::IDENTITY,
+                    None,
                 );
                 let (ankle, toe) = bone_at(proportions, &pose, bone::FOOT_L);
 

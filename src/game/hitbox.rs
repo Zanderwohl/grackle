@@ -19,6 +19,7 @@ use bevy::transform::TransformSystems;
 
 use crate::common::class::Stance;
 use crate::common::hitbox::{hitboxes, Hitboxes};
+use crate::common::skeleton::state::ClipLibrary;
 use crate::common::skeleton::{
     animator_pose, AnimationClock, AnimationPhase, Gait, PoseInputs, Skeleton, SkeletonAnimator,
 };
@@ -80,6 +81,11 @@ fn toggle_hitboxes(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowHitboxe
 /// Recompute every body's boxes from a pose sampled on this tick.
 pub fn update_hitboxes(
     clock: Res<AnimationClock>,
+    // **Hitboxes are worked out from the same pose the body is drawn in**, so
+    // a state played from a clip has to reach here too. Absent means every
+    // state is still a function, which is what a build with no clips loaded
+    // does and what every test relies on.
+    library: Option<Res<ClipLibrary>>,
     mut bodies: Query<(
         &Skeleton,
         &SkeletonAnimator,
@@ -109,6 +115,7 @@ pub fn update_hitboxes(
         // The same pipeline the drawing goes through, corrections and all: a
         // hitbox worked out from an uncorrected pose would sit where the body
         // visibly is not.
+        let clips = library.as_deref();
         let gait = gait.copied().unwrap_or_default();
         let inputs = PoseInputs {
             seconds: clock.seconds() + phase.copied().unwrap_or_default().0,
@@ -116,7 +123,7 @@ pub fn update_hitboxes(
             speed: gait.speed(),
             travel: gait.travel(),
         };
-        let pose = animator_pose(skeleton, animator, &inputs, &root);
+        let pose = animator_pose(skeleton, animator, &inputs, &root, clips);
         // The same body in the same state with the cycle stood still: where
         // its head settles, rather than where this instant of a stride has
         // taken it. Ducking moves this; a step bob does not.
@@ -125,6 +132,7 @@ pub fn update_hitboxes(
             animator,
             &PoseInputs { seconds: 0.0, stride: 0.0, ..inputs },
             &root,
+            clips,
         );
         // A simulated body's stance is a fact its step owns, and it wins. A
         // body being shown rather than played has no step and no stance — all

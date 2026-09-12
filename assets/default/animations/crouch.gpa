@@ -1,0 +1,137 @@
+name_key = "animation.states.crouch"
+length = 1.0
+clock = "shared"
+looping = false
+note = "Sampled from `crouch_posture`. Still, so one key says all of it — the length is a formality."
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "chest"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    1.02,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "neck"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    -0.612,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "upper_arm.l"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    0.28692657,
+    -0.20326418,
+    -0.62946206,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "forearm.l"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    1.1000001,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "upper_arm.r"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    0.28692657,
+    0.20326418,
+    0.62946206,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "forearm.r"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    1.1000001,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "hip_heights"
+enabled = true
+
+[tracks.channel]
+channel = "root"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    -0.7,
+    0.0,
+]
+ease = "smoother_step"

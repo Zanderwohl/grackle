@@ -23,7 +23,9 @@ use bevy::prelude::*;
 use crate::common::class::CROUCH_HEIGHT;
 use crate::common::skeleton::gait::FootOffset;
 use crate::common::skeleton::rig::{bone, Pose, Skeleton};
-use crate::common::skeleton::state::{AnimationState, PoseInputs, SkeletonAnimator};
+use crate::common::skeleton::clip::Clip;
+use crate::common::skeleton::play::{apply, Frames};
+use crate::common::skeleton::state::{AnimationState, ClipLibrary, PoseInputs, SkeletonAnimator};
 
 /// How far from straight, and from folded, a limb is kept.
 ///
@@ -374,13 +376,14 @@ pub fn animator_pose(
     animator: &SkeletonAnimator,
     inputs: &PoseInputs,
     root: &Transform,
+    clips: Option<&ClipLibrary>,
 ) -> Pose {
-    let arriving = finish_pose(skeleton, animator.state(), inputs, root);
+    let arriving = finish_pose(skeleton, animator.state(), inputs, root, clips);
     if animator.blend() >= 1.0 || animator.previous() == animator.state() {
         return arriving;
     }
 
-    let leaving = finish_pose(skeleton, animator.previous(), inputs, root);
+    let leaving = finish_pose(skeleton, animator.previous(), inputs, root, clips);
     // Eased, so the change starts and ends gently rather than setting off at
     // full speed.
     let t = animator.blend();
@@ -399,8 +402,17 @@ pub fn finish_pose(
     state: AnimationState,
     inputs: &PoseInputs,
     root: &Transform,
+    clips: Option<&ClipLibrary>,
 ) -> Pose {
-    let mut pose = state.pose(inputs);
+    // **A state with an authored clip plays it; one without is still a
+    // function.** Per state, so the migration is thirteen independent
+    // decisions and a half-migrated build is not a broken one — and so that
+    // passing `None` here is exactly the behaviour there was before clips
+    // existed, which is what the comparison tests measure against.
+    let mut pose = clips
+        .and_then(|library| library.get(state))
+        .map(|clip| clip_pose(clip, inputs, skeleton, root))
+        .unwrap_or_else(|| state.pose(inputs));
     // Ducking first: it lowers the hips, and planting is what puts the knees
     // back underneath wherever they end up.
     if state.ducks() {
@@ -409,6 +421,32 @@ pub fn finish_pose(
     if state.plants_feet() {
         plant_feet(skeleton, &mut pose, root, state.foot_offsets(inputs));
     }
+    pose
+}
+
+/// What a clip makes of a body, before the corrections a state calls for.
+///
+/// The frames are the body's own and nothing else: a body animation is
+/// rotations, a root offset and limbs reaching for places on the body, so
+/// there is no weapon and no eye to measure from. The floor is the one the
+/// body is standing on, which is what `Ground` means for a footfall.
+fn clip_pose(
+    clip: &Clip,
+    inputs: &PoseInputs,
+    skeleton: &Skeleton,
+    root: &Transform,
+) -> Pose {
+    let mut pose = Pose::rest();
+    let floor = root.translation.y;
+    let ground = move |_: Vec3| floor;
+    let frames = Frames {
+        body: *root,
+        carry: *root,
+        weapon: None,
+        eye: None,
+        ground: &ground,
+    };
+    apply(clip, clip.time_from(inputs), skeleton, &mut pose, &frames, None);
     pose
 }
 
@@ -646,7 +684,7 @@ mod tests {
                         speed,
                         travel,
                     };
-                    let pose = finish_pose(&skeleton, state, &inputs, &root);
+                    let pose = finish_pose(&skeleton, state, &inputs, &root, None);
 
                     if let Some(before) = &previous {
                         for bone in skeleton.bones() {
@@ -680,12 +718,12 @@ mod tests {
         // And the pipeline honours it: an airborne body's legs come out of the
         // pipeline exactly as its own pose left them, tuck and all.
         let inputs = PoseInputs { seconds: 1.0, ..default() };
-        let finished = finish_pose(&skeleton, AnimationState::Airborne, &inputs, &root);
+        let finished = finish_pose(&skeleton, AnimationState::Airborne, &inputs, &root, None);
         let untouched = AnimationState::Airborne.pose(&inputs);
         assert_eq!(finished.joint(bone::THIGH_L), untouched.joint(bone::THIGH_L));
         assert_eq!(finished.joint(bone::SHIN_L), untouched.joint(bone::SHIN_L));
 
-        let idling = finish_pose(&skeleton, AnimationState::Idle, &inputs, &root);
+        let idling = finish_pose(&skeleton, AnimationState::Idle, &inputs, &root, None);
         assert_ne!(idling.joint(bone::THIGH_L), Quat::IDENTITY, "the idle was never corrected");
     }
 }

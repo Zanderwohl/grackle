@@ -1,0 +1,1082 @@
+name_key = "animation.states.idle"
+length = 3.4
+clock = "shared"
+looping = true
+note = "Sampled from `idle_pose`. A settle the body sinks into and comes back out of, with the chest leaning into it and the arms trailing a quarter cycle behind."
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "chest"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.2125
+turn = [
+    0.0017127113,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.425
+turn = [
+    0.0065900977,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.63750005
+turn = [
+    0.013889623,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.85
+turn = [
+    0.022499999,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.0625
+turn = [
+    0.031110376,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.2750001
+turn = [
+    0.038409904,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.4875001
+turn = [
+    0.043287296,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.7
+turn = [
+    0.045,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.9125
+turn = [
+    0.043287296,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.125
+turn = [
+    0.0384099,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.3375
+turn = [
+    0.031110369,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.5500002
+turn = [
+    0.022499999,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.7625
+turn = [
+    0.013889618,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.9750001
+turn = [
+    0.006590092,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 3.1875
+turn = [
+    0.0017127059,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "neck"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.2125
+turn = [
+    -0.0010276269,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.425
+turn = [
+    -0.0039540585,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.63750005
+turn = [
+    -0.008333774,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.85
+turn = [
+    -0.013500001,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.0625
+turn = [
+    -0.018666228,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.2750001
+turn = [
+    -0.02304594,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.4875001
+turn = [
+    -0.025972376,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.7
+turn = [
+    -0.027000004,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.9125
+turn = [
+    -0.025972376,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.125
+turn = [
+    -0.023045938,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.3375
+turn = [
+    -0.018666225,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.5500002
+turn = [
+    -0.013500001,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.7625
+turn = [
+    -0.0083337715,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.9750001
+turn = [
+    -0.0039540553,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 3.1875
+turn = [
+    -0.0010276237,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "upper_arm.l"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    -0.041261297,
+    0.02824816,
+    -0.60058284,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.2125
+turn = [
+    -0.03812121,
+    0.026095726,
+    -0.60049754,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.425
+turn = [
+    -0.029178087,
+    0.019968798,
+    -0.60029143,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.63750005
+turn = [
+    -0.015791807,
+    0.010804866,
+    -0.6000853,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.85
+turn = [
+    0.0,
+    0.0,
+    -0.6,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.0625
+turn = [
+    0.015791807,
+    -0.010804866,
+    -0.6000853,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.2750001
+turn = [
+    0.029178087,
+    -0.019968798,
+    -0.60029143,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.4875001
+turn = [
+    0.038121212,
+    -0.02609573,
+    -0.60049754,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.7
+turn = [
+    0.041261297,
+    -0.02824816,
+    -0.60058284,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.9125
+turn = [
+    0.038121212,
+    -0.02609573,
+    -0.60049754,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.125
+turn = [
+    0.029178087,
+    -0.019968798,
+    -0.60029143,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.3375
+turn = [
+    0.015791798,
+    -0.010804861,
+    -0.6000853,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.5500002
+turn = [
+    0.0000000062311107,
+    -0.0000000042629322,
+    -0.6,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.7625
+turn = [
+    -0.015791807,
+    0.010804866,
+    -0.6000853,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.9750001
+turn = [
+    -0.02917809,
+    0.0199688,
+    -0.60029143,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 3.1875
+turn = [
+    -0.038121216,
+    0.026095731,
+    -0.60049754,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "forearm.l"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.2125
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.425
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.63750005
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.85
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.0625
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.2750001
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.4875001
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.7
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.9125
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.125
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.3375
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.5500002
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.7625
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.9750001
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 3.1875
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "upper_arm.r"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    -0.041261297,
+    -0.02824816,
+    0.60058284,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.2125
+turn = [
+    -0.03812121,
+    -0.026095726,
+    0.60049754,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.425
+turn = [
+    -0.029178087,
+    -0.019968798,
+    0.60029143,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.63750005
+turn = [
+    -0.015791807,
+    -0.010804866,
+    0.6000853,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.85
+turn = [
+    -0.0,
+    0.0,
+    0.6,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.0625
+turn = [
+    0.015791807,
+    0.010804866,
+    0.6000853,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.2750001
+turn = [
+    0.029178087,
+    0.019968798,
+    0.60029143,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.4875001
+turn = [
+    0.038121212,
+    0.02609573,
+    0.60049754,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.7
+turn = [
+    0.041261297,
+    0.02824816,
+    0.60058284,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.9125
+turn = [
+    0.038121212,
+    0.02609573,
+    0.60049754,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.125
+turn = [
+    0.029178087,
+    0.019968798,
+    0.60029143,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.3375
+turn = [
+    0.015791798,
+    0.010804861,
+    0.6000853,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.5500002
+turn = [
+    0.0000000062311107,
+    0.0000000042629322,
+    0.6,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.7625
+turn = [
+    -0.015791807,
+    -0.010804866,
+    0.6000853,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.9750001
+turn = [
+    -0.02917809,
+    -0.0199688,
+    0.60029143,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 3.1875
+turn = [
+    -0.038121216,
+    -0.026095731,
+    0.60049754,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "forearm.r"
+
+[[tracks.channel.keys]]
+at = 0.0
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.2125
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.425
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.63750005
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.85
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.0625
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.2750001
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.4875001
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.7
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.9125
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.125
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.3375
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.5500002
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.7625
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.9750001
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 3.1875
+turn = [
+    0.3,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "hip_heights"
+enabled = true
+
+[tracks.channel]
+channel = "root"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    -0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.2125
+to = [
+    0.0,
+    -0.00083732547,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.425
+to = [
+    0.0,
+    -0.0032218255,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.63750005
+to = [
+    0.0,
+    -0.0067904824,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.85
+to = [
+    0.0,
+    -0.011,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.0625
+to = [
+    0.0,
+    -0.015209518,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.2750001
+to = [
+    0.0,
+    -0.018778175,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.4875001
+to = [
+    0.0,
+    -0.021162676,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.7
+to = [
+    0.0,
+    -0.022,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.9125
+to = [
+    0.0,
+    -0.021162674,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.125
+to = [
+    0.0,
+    -0.018778173,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.3375
+to = [
+    0.0,
+    -0.015209515,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.5500002
+to = [
+    0.0,
+    -0.011,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.7625
+to = [
+    0.0,
+    -0.00679048,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.9750001
+to = [
+    0.0,
+    -0.003221823,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 3.1875
+to = [
+    0.0,
+    -0.00083732285,
+    0.0,
+]
+ease = "smoother_step"

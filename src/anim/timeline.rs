@@ -971,6 +971,7 @@ fn track_name(track: &crate::common::skeleton::clip::Track) -> String {
     match &track.channel {
         Channel::Rotation { bone, .. } => bone.clone(),
         Channel::Effector { chain, .. } => format!("{chain:?}"),
+        Channel::Root { .. } => "root".into(),
         Channel::Weapon { .. } => "weapon".into(),
         Channel::WeaponRotation { .. } => "weapon turn".into(),
     }

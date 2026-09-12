@@ -28,6 +28,18 @@ pub fn quat_from_euler(angles: Vec3) -> Quat {
     Quat::from_euler(EULER_ORDER, angles.y, angles.x, angles.z)
 }
 
+/// The three angles, in axis order, that [`quat_from_euler`] would turn back
+/// into `turn`.
+///
+/// The exact inverse, and here rather than written out at each call site
+/// because the *order* is the trap: `Quat::to_euler` hands them back in
+/// application order — yaw, pitch, roll — and these are indexed by axis. One
+/// transposition and a body leans when it meant to turn.
+pub fn euler_from_quat(turn: Quat) -> Vec3 {
+    let (y, x, z) = turn.to_euler(EULER_ORDER);
+    Vec3::new(x, y, z)
+}
+
 /// The world-space axis that a change to Euler component `axis` actually
 /// rotates the object around, given the other two angles.
 ///
@@ -81,5 +93,37 @@ mod tests {
         assert_eq!(euler_axis_world(angles, 1), Vec3::Y);
         assert!(quat_from_euler(Vec3::new(0.0, 1.2, 0.0))
             .abs_diff_eq(Quat::from_rotation_y(1.2), 1e-6));
+    }
+}
+
+#[cfg(test)]
+mod euler_tests {
+    use super::*;
+
+    /// The two conversions are each other's inverse.
+    ///
+    /// Worth pinning because the failure is quiet and asymmetric: `to_euler`
+    /// returns yaw-pitch-roll and these are indexed by axis, so a transposed
+    /// pair round-trips *some* rotations perfectly — anything with only one
+    /// non-zero angle — and silently swaps two axes on everything else. A
+    /// migration that wrote poses out through this would put a lean where a
+    /// turn belongs, on a subset of bones.
+    #[test]
+    fn a_rotation_survives_being_written_as_three_angles() {
+        for angles in [
+            Vec3::ZERO,
+            Vec3::new(0.4, 0.0, 0.0),
+            Vec3::new(0.0, 0.7, 0.0),
+            Vec3::new(0.0, 0.0, -0.3),
+            Vec3::new(0.25, -0.6, 0.45),
+            Vec3::new(-1.1, 0.2, 0.9),
+        ] {
+            let turn = quat_from_euler(angles);
+            let back = quat_from_euler(euler_from_quat(turn));
+            assert!(
+                turn.abs_diff_eq(back, 1e-5),
+                "{angles:?} did not survive: {turn:?} became {back:?}",
+            );
+        }
     }
 }

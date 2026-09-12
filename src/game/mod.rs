@@ -80,6 +80,13 @@ impl Plugin for GamePlugin {
                 Startup,
                 crate::common::weapon_file::load_catalogue_at_startup,
             )
+            // Beside the weapons and for the same reason: pack content, read
+            // once at startup, and a pack that ships none is a pack whose
+            // bodies use the built-in poses.
+            .add_systems(
+                Startup,
+                crate::common::clip_file::load_body_clips_at_startup,
+            )
 
             .init_resource::<CollisionWorld>()
             .init_resource::<NextPlayerId>()
