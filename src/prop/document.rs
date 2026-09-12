@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::common::skeleton::clip::ClipSet;
 use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Evaluated, FeatureOp, PropFeature, PropFeatureId};
 use crate::prop::hold::{HoldSpec, ViewmodelSpec};
@@ -55,6 +56,22 @@ pub struct PropDoc {
     /// use, so deleting the last feature cannot make the next reuse its number.
     #[serde(default)]
     next_id: u32,
+    /// What this prop does over time — a fire, a reload, a deploy.
+    ///
+    /// Here rather than in `weapons.toml` because an animation is stated as a
+    /// *deviation from the hold*, and a deviation wants to live beside the
+    /// thing it deviates from. It also reaches clients free: a `.gpp` already
+    /// crosses the wire as the text the file holds, which is the only way an
+    /// internally tagged enum can cross at all.
+    ///
+    /// **Declared last, and it has to stay last.** A TOML array-of-tables
+    /// header captures every key after it, so a field written out below
+    /// `[[features]]` or `[[...tracks]]` would be swallowed by it — the rule
+    /// `weapons.toml` already documents, and it applies to
+    /// `toml::to_string_pretty`'s output exactly as it does to a hand-written
+    /// file.
+    #[serde(default, skip_serializing_if = "ClipSet::is_empty")]
+    pub animations: ClipSet,
 }
 
 impl PropDoc {
@@ -65,6 +82,7 @@ impl PropDoc {
             hold: HoldSpec::default(),
             viewmodel: ViewmodelSpec::default(),
             next_id: 0,
+            animations: ClipSet::default(),
         }
     }
 
@@ -440,6 +458,67 @@ mod tests {
         }
     }
 
+    /// A clip lives in the same file as the geometry, below an
+    /// `[[features]]` array of tables — and a TOML array-of-tables header
+    /// captures **every key after it**, so a field written out in the wrong
+    /// place is silently swallowed into the last feature.
+    ///
+    /// That failure does not error and does not even lose the file: it loads,
+    /// the geometry is fine, and the animations are simply gone. Worth a test
+    /// of its own rather than trusting the field order in the struct, because
+    /// the thing that decides it is `toml::to_string_pretty`'s own idea of
+    /// what to emit when.
+    #[test]
+    fn animations_survive_the_round_trip_beside_the_features() {
+        use crate::common::skeleton::clip::{
+            Axis, Channel, Clip, Clock, Combine, PointKey, Space, Track, Unit,
+        };
+        use crate::common::skeleton::Interpolation;
+
+        let mut doc = sample();
+        assert!(!doc.features.is_empty(), "the point is a clip *after* features");
+
+        doc.animations.clips.insert(
+            "deploy".into(),
+            Clip {
+                name_key: "prop.animations.deploy".into(),
+                length: 0.45,
+                clock: Clock::Seconds,
+                looping: false,
+                note: "the launcher swings up as it comes out".into(),
+                tracks: vec![Track {
+                    combine: Combine::Compose,
+                    space: Space::Carry,
+                    unit: Unit::ArmLengths,
+                    enabled: true,
+                    channel: Channel::Weapon {
+                        keys: vec![
+                            PointKey {
+                                at: 0.0,
+                                to: [Axis::Free, Axis::Value(-0.8), Axis::Free],
+                                ease: Interpolation::CubicOut,
+                            },
+                            PointKey {
+                                at: 0.45,
+                                to: [Axis::Free, Axis::Value(0.0), Axis::Free],
+                                ease: Interpolation::Linear,
+                            },
+                        ],
+                    },
+                }],
+            },
+        );
+
+        let text = to_text(&doc).expect("a prop with a clip should serialise");
+        let back = parse(&text).expect("a prop with a clip should come back");
+
+        assert_eq!(
+            doc.animations, back.animations,
+            "the clip did not survive the file:\n{text}"
+        );
+        assert_eq!(doc.features.len(), back.features.len(), "the features changed");
+    }
+
     /// A reused id would make a reference mean a different shape.
     #[test]
     fn deleting_the_last_feature_does_not_free_its_id() {
@@ -662,6 +741,90 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0, "{} has no props in it", directory.display());
+    }
+
+    /// The same guard, one layer up: every clip every shipped prop carries has
+    /// to sample cleanly, on every build, all the way through.
+    ///
+    /// Here for exactly the reason the geometry guard is here. There is no
+    /// schema version and no migration chain, so replaying the shipped files
+    /// *is* the check — and a clip fails in a way nobody notices. A bone
+    /// dropped for being misspelled is one hand that does not move; a unit
+    /// renamed is a weapon somewhere it has never been. Neither errors.
+    ///
+    /// Sampled across the whole length rather than at the keys, because the
+    /// keys are the part somebody looked at.
+    #[test]
+    fn every_clip_the_default_pack_ships_samples_on_every_class() {
+        use crate::common::class::Class;
+        use crate::common::skeleton::play::{apply, Frames};
+        use crate::common::skeleton::rig::humanoid;
+        use crate::common::skeleton::Pose;
+        use strum::IntoEnumIterator;
+
+        let directory = std::path::Path::new("assets/default").join(PROPS_DIR);
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            return;
+        };
+
+        let mut checked = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some(PROP_EXTENSION) {
+                continue;
+            }
+            let doc = parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let named = path.display();
+
+            for (name, clip) in &doc.animations.clips {
+                for class in Class::iter() {
+                    let rig = humanoid(class.proportions());
+                    let problems = clip.problems(|bone| rig.index_of(bone).is_some());
+                    assert!(
+                        problems.is_empty(),
+                        "{named}: clip '{name}' on {class:?}: {problems:?}",
+                    );
+
+                    let ground = |_: Vec3| 0.0;
+                    let frames = Frames {
+                        body: Transform::IDENTITY,
+                        carry: Transform::IDENTITY,
+                        weapon: Some(Transform::IDENTITY),
+                        eye: None,
+                        ground: &ground,
+                    };
+
+                    // Past the end as well as through the middle: a one-shot
+                    // holds there, and holding is where a clip that runs off
+                    // the end of its own keys shows up.
+                    for step in 0..=120 {
+                        let time = clip.length * step as f32 / 100.0;
+                        let mut pose = Pose::rest();
+                        let mut weapon = Transform::IDENTITY;
+                        apply(clip, time, &rig, &mut pose, &frames, Some(&mut weapon));
+
+                        for (bone, rotation) in pose.posed_joints() {
+                            assert!(
+                                rotation.is_finite() && rotation.is_normalized(),
+                                "{named}: clip '{name}' on {class:?} at {time}s left \
+                                 '{bone}' at {rotation:?}",
+                            );
+                        }
+                        assert!(
+                            weapon.translation.is_finite() && weapon.rotation.is_finite(),
+                            "{named}: clip '{name}' on {class:?} at {time}s put the \
+                             weapon at {weapon:?}",
+                        );
+                    }
+                }
+                checked += 1;
+            }
+        }
+
+        // Zero is a pass here rather than a failure: not every prop has to
+        // move. It is the geometry guard above that insists the pack is not
+        // empty.
+        let _ = checked;
     }
 
     /// The generation is what the rebuild is keyed on, so a reader that bumped

@@ -23,13 +23,26 @@ use bevy::prelude::*;
 
 use crate::common::assets::Assets as PackAssets;
 use crate::common::class::Class;
+use std::sync::Arc;
+
+use crate::common::skeleton::clip::ClipSet;
+use crate::common::skeleton::play::{apply_stack, ClipStack, Frames, Playing};
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::weapon::{Equipped, WeaponCatalogue, WeaponId};
 use crate::game::body_mesh::FirstPersonHidden;
 use crate::game::player::{LocalPlayer, Player, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
 use crate::prop::baked::{PropCache, SurfaceMaterials};
-use crate::prop::hold::{grip_with, weapon_transform, HoldSpec, ViewmodelSpec};
+use crate::game::collision::CollisionWorld;
+use crate::prop::hold::{carry_frame, grip_with, weapon_transform, HoldSpec, ViewmodelSpec};
+
+/// How far above a point to start looking for the floor, and how far below it
+/// to keep looking.
+///
+/// Generous both ways on purpose: a foot keyed to the ground while the body is
+/// mid-stride is above it, and one on a step down is below.
+const GROUND_PROBE: f32 = 2.0;
+const GROUND_DROP: f32 = 4.0;
 
 /// One drawn part of the weapon a body is holding.
 #[derive(Component)]
@@ -51,6 +64,7 @@ pub struct WeaponInHand(pub Transform);
 /// tries again. Without `resolved` a weapon whose entry had not arrived would
 /// be recorded as "nothing to draw" and never revisited.
 #[derive(Component, Default)]
+#[require(ClipStack, Performance)]
 pub struct HeldModel {
     weapon: Option<WeaponId>,
     /// Whether the catalogue and the prop cache have both had their say —
@@ -69,6 +83,25 @@ pub struct HeldModel {
     hold: HoldSpec,
     /// And where the viewmodel hangs it, which is a different question.
     viewmodel: ViewmodelSpec,
+    /// What it does over time, shared straight off the bake.
+    clips: Arc<ClipSet>,
+}
+
+/// What a body's weapon is in the middle of doing.
+///
+/// A name and a clock, and deliberately not a handle: the clips come off
+/// `HeldModel`, which is rebuilt whenever the weapon or the cache changes, so
+/// a performance that outlived a re-bake would be holding a clip from the
+/// shape the weapon used to be. Keyed on absence the way everything else in
+/// this file is — the name is looked up every frame and one that resolves to
+/// nothing simply stops.
+#[derive(Component, Default)]
+pub struct Performance {
+    /// What is running, and how far into it, on the clip's own clock.
+    playing: Option<(String, f32)>,
+    /// Which weapon it was started for. A switch is what restarts it, and
+    /// comparing is what makes that need no event.
+    started_for: Option<WeaponId>,
 }
 
 impl HeldModel {
@@ -174,26 +207,28 @@ fn dress_held_weapons(
                 if drawn.is_none_or(|drawn| drawn.weapon != held) {
                     replace_parts(
                         &mut commands, body, drawn, vec![], held, false, HoldSpec::default(),
-                        ViewmodelSpec::default(), cache.generation(),
+                        ViewmodelSpec::default(), Arc::default(), cache.generation(),
                     );
                 }
             }
             Wanted::Nothing => {
                 replace_parts(
                     &mut commands, body, drawn, vec![], held, true, HoldSpec::default(),
-                    ViewmodelSpec::default(), cache.generation(),
+                    ViewmodelSpec::default(), Arc::default(), cache.generation(),
                 )
             }
             Wanted::Model(model) => {
                 let mut spawned = Vec::new();
                 let mut hold = HoldSpec::default();
                 let mut viewmodel = ViewmodelSpec::default();
+                let mut clips = Arc::<ClipSet>::default();
                 if let Some(baked) =
                     cache.ensure(model, &packs, &mut meshes, &mut materials, &mut surfaces)
                 {
                     let parts = baked.parts.clone();
                     hold = baked.hold.for_class(class.copied());
                     viewmodel = baked.viewmodel;
+                    clips = baked.clips.clone();
                     commands.entity(body).with_children(|body| {
                         for (mesh, material) in parts {
                             spawned.push(
@@ -226,7 +261,8 @@ fn dress_held_weapons(
                 }
                 let cached_at = cache.generation();
                 replace_parts(
-                    &mut commands, body, drawn, spawned, held, true, hold, viewmodel, cached_at,
+                    &mut commands, body, drawn, spawned, held, true, hold, viewmodel, clips,
+                    cached_at,
                 );
             }
         }
@@ -243,6 +279,7 @@ fn replace_parts(
     resolved: bool,
     hold: HoldSpec,
     viewmodel: ViewmodelSpec,
+    clips: Arc<ClipSet>,
     cached_at: u64,
 ) {
     if let Some(drawn) = drawn {
@@ -253,30 +290,35 @@ fn replace_parts(
     commands
         .entity(body)
         .insert((
-            HeldModel { weapon, resolved, parts, hold, viewmodel, cached_at },
+            HeldModel { weapon, resolved, parts, hold, viewmodel, clips, cached_at },
             WeaponInHand::default(),
         ));
 }
 
-/// Put the weapon where the body is aiming, and the hands on the weapon.
+/// Put the weapon where the hold says it goes.
+///
+/// The first half of what used to be one system, and the split is what lets a
+/// clip animate a weapon at all: a track in [`Space::Weapon`] needs the weapon
+/// *placed* before it can be read against, and the arms have to be solved onto
+/// wherever the clip left it — so the clip layer goes between the two halves
+/// rather than before or after the whole thing.
 ///
 /// Runs after the animator and the look pass, composing onto the pose they
 /// left. The lower body is untouched, which is the point: a hold has to
 /// survive whatever the legs are doing.
 ///
-/// All of the work is [`prop::hold`]'s, because the reference figure in the
-/// prop editor does exactly this and the two must not be able to disagree.
-pub(crate) fn hold_the_weapon(
+/// [`Space::Weapon`]: crate::common::skeleton::Space::Weapon
+pub(crate) fn place_the_weapon(
     mut bodies: Query<(
         &Player,
         &Skeleton,
-        &mut Pose,
+        &Pose,
         Option<&SkeletonRoot>,
         &HeldModel,
         &mut WeaponInHand,
     )>,
 ) {
-    for (player, skeleton, mut pose, offset, held, mut weapon) in &mut bodies {
+    for (player, skeleton, pose, offset, held, mut weapon) in &mut bodies {
         if !held.resolved || held.weapon.is_none() {
             continue;
         }
@@ -287,11 +329,178 @@ pub(crate) fn hold_the_weapon(
         // its own length.
         let aim = Quat::from_rotation_x(player.pitch);
 
-        let Some(placed) = weapon_transform(skeleton, &pose, &root, &held.hold, aim) else {
+        let Some(placed) = weapon_transform(skeleton, pose, &root, &held.hold, aim) else {
             continue;
         };
-        grip_with(skeleton, &mut pose, &root, &held.hold, &placed);
         weapon.0 = placed;
+    }
+}
+
+/// Start a clip when a weapon is brought out, and keep the running one ticking.
+///
+/// The whole of the driving layer for now, and deliberately small. A switch is
+/// noticed by **comparing** rather than by an event — the same "key on
+/// absence, not on arrival" rule the rest of this file follows — so a weapon
+/// whose catalogue entry or model turned up late still deploys when it finally
+/// resolves, rather than having missed its one chance.
+///
+/// A one-shot is dropped when it runs out. That is seamless here because a
+/// deploy composes onto the carry and ends at no offset at all, so the last
+/// frame of the clip and the first frame without it are the same pose — a clip
+/// that ended somewhere else would need blending out, which is what
+/// `Playing::weight` is for and what a real performance layer will use.
+///
+/// **Not simulation.** Nothing here is predicted, replicated or reconciled: a
+/// deploy is something you watch, and `WeaponActionFired` is where a fire will
+/// come from when there is one. How a remote viewer is told is the open
+/// question this stage deliberately leaves alone.
+pub(crate) fn perform_weapon_clips(
+    time: Res<Time>,
+    mut bodies: Query<(&HeldModel, &mut Performance, &mut ClipStack)>,
+) {
+    let delta = time.delta_secs();
+
+    for (held, mut performance, mut stack) in &mut bodies {
+        // Bringing out a different weapon restarts the performance; the same
+        // weapon re-resolving — a re-bake, a catalogue arriving — does not,
+        // because redrawing a model is not drawing it again.
+        if performance.started_for != held.weapon {
+            performance.started_for = held.weapon;
+            performance.playing = held
+                .clips
+                .get(DEPLOY)
+                .map(|_| (DEPLOY.to_string(), 0.0));
+        }
+
+        stack.0.clear();
+        let Some((name, elapsed)) = performance.playing.as_mut() else {
+            continue;
+        };
+        *elapsed += delta;
+
+        // Looked up every frame rather than cached, so a model saved in the
+        // prop editor mid-round is the one being performed a frame later.
+        let Some(clip) = held.clips.get(name) else {
+            performance.playing = None;
+            continue;
+        };
+        if !clip.looping && *elapsed > clip.length {
+            performance.playing = None;
+            continue;
+        }
+
+        stack.0.push(Playing {
+            clip: Arc::new(clip.clone()),
+            time: *elapsed,
+            weight: 1.0,
+        });
+    }
+}
+
+/// The clip a weapon plays when it is brought out.
+///
+/// A convention rather than a field: a prop that has one gets a deploy and one
+/// that does not simply appears, which is the same reading `Weapon.model`
+/// already takes of an absent model.
+const DEPLOY: &str = "deploy";
+
+/// Run whatever clips a body has on it, between the weapon being placed and
+/// the hands being put on it.
+///
+/// The whole arrangement stage 6 rests on. A weapon clip dips, kicks or swings
+/// `WeaponInHand`, and `grip_the_weapon` — which runs next — solves both arms
+/// onto wherever it ended up. So a recoil is authored once, in the weapon's
+/// own file, and is correct for a Scout and a Heavy alike, with no hand ever
+/// keyed and no pose authored per class.
+///
+/// **The ground closure is the honest half of `Axis::Ground`.** In a match it
+/// is a ray down the collision world; with no collision built — the editor,
+/// a test, a body standing in an animation grid — it is the body's own floor.
+/// Degrading to a plane is a decision rather than a fallback: a clip authored
+/// against "nothing" would play differently from how it was drawn, which is
+/// the failure the weapons plan already names about holds.
+pub(crate) fn play_the_clips(
+    mut bodies: Query<(
+        &Player,
+        &Skeleton,
+        &mut Pose,
+        Option<&SkeletonRoot>,
+        &ClipStack,
+        Option<&mut WeaponInHand>,
+    )>,
+    world: Option<Res<CollisionWorld>>,
+) {
+    for (player, skeleton, mut pose, offset, stack, weapon) in &mut bodies {
+        if stack.0.is_empty() {
+            continue;
+        }
+
+        let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
+        let aim = Quat::from_rotation_x(player.pitch);
+
+        // Read once, before the closure borrows anything: the floor a body is
+        // standing on is what a plane-shaped ground answers with.
+        let floor = root.translation.y;
+        let world = world.as_deref();
+        let ground = move |at: Vec3| match world {
+            Some(world) => {
+                let from = at + Vec3::Y * GROUND_PROBE;
+                world
+                    .ray_hit(&Ray3d::new(from, Dir3::NEG_Y), GROUND_PROBE + GROUND_DROP)
+                    .map(|(distance, _)| from.y - distance)
+                    .unwrap_or(floor)
+            }
+            None => floor,
+        };
+
+        let mut weapon = weapon;
+        let placed = weapon.as_deref().map(|weapon| weapon.0);
+        let frames = Frames {
+            body: root,
+            carry: carry_frame(skeleton, &pose, &root, aim).unwrap_or(root),
+            weapon: placed,
+            // A viewmodel clip is framed against the eye, and a third-person
+            // body has no viewmodel — so this is `None` here and filled in by
+            // the viewmodel pass, which solves in eye space already.
+            eye: None,
+            ground: &ground,
+        };
+
+        let mut moving = placed.unwrap_or_default();
+        apply_stack(stack, skeleton, &mut pose, &frames, Some(&mut moving));
+        if let Some(weapon) = weapon.as_deref_mut() {
+            weapon.0 = moving;
+        }
+    }
+}
+
+/// Solve both arms onto wherever the weapon ended up.
+///
+/// The second half, and it deliberately reads `WeaponInHand` rather than
+/// recomputing the placement: whatever moved the weapon between the two — a
+/// recoil, a reload, nothing at all — is invisible from here, which is exactly
+/// what makes a weapon clip need no per-hand authoring and work on every build.
+///
+/// All of the work is [`prop::hold`]'s, because the reference figure in the
+/// prop editor does exactly this and the two must not be able to disagree.
+///
+/// [`prop::hold`]: crate::prop::hold
+pub(crate) fn grip_the_weapon(
+    mut bodies: Query<(
+        &Skeleton,
+        &mut Pose,
+        Option<&SkeletonRoot>,
+        &HeldModel,
+        &WeaponInHand,
+    )>,
+) {
+    for (skeleton, mut pose, offset, held, weapon) in &mut bodies {
+        if !held.resolved || held.weapon.is_none() {
+            continue;
+        }
+
+        let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
+        grip_with(skeleton, &mut pose, &root, &held.hold, &weapon.0);
     }
 }
 
@@ -432,6 +641,7 @@ mod tests {
                     parts: vec![],
                     hold: HoldSpec::default(),
                     viewmodel: ViewmodelSpec::default(),
+                    clips: Arc::default(),
                     cached_at: 0,
                 },
                 WeaponInHand::default(),
@@ -447,7 +657,7 @@ mod tests {
         let mut world = World::new();
         let level = body_holding(&mut world, Class::Soldier, 0.0);
         let up = body_holding(&mut world, Class::Soldier, 0.6);
-        world.run_system_once(hold_the_weapon).unwrap();
+        world.run_system_once(place_the_weapon).unwrap();
 
         let at = |body| world.get::<WeaponInHand>(body).unwrap().0;
         let level = at(level);
@@ -469,6 +679,138 @@ mod tests {
         assert!(up.translation.y > level.translation.y, "aiming up did not lift the weapon");
     }
 
+    /// Bringing out a weapon starts its deploy, and the deploy ends.
+    ///
+    /// Both halves matter. A clip that never started is a weapon that appears;
+    /// one that never ended is a body stuck holding its launcher halfway up
+    /// for the rest of the match, and neither of those errors.
+    #[test]
+    fn bringing_out_a_weapon_deploys_it_once() {
+        use crate::common::skeleton::clip::{Clip, ClipSet};
+        use std::time::Duration;
+
+        let mut clips = ClipSet::default();
+        clips.clips.insert(
+            DEPLOY.into(),
+            Clip { length: 0.4, ..Clip::default() },
+        );
+
+        let mut world = World::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs_f32(0.1));
+        world.insert_resource(time);
+
+        let body = world
+            .spawn((
+                HeldModel {
+                    weapon: Some(WeaponId::of("something")),
+                    resolved: true,
+                    parts: vec![],
+                    hold: HoldSpec::default(),
+                    viewmodel: ViewmodelSpec::default(),
+                    clips: Arc::new(clips),
+                    cached_at: 0,
+                },
+                Performance::default(),
+                ClipStack::default(),
+            ))
+            .id();
+
+        // First tick: the weapon is new, so the deploy is on the stack.
+        world.run_system_once(perform_weapon_clips).unwrap();
+        assert_eq!(world.get::<ClipStack>(body).unwrap().0.len(), 1, "nothing deployed");
+
+        // And it is still running a moment later, rather than restarting —
+        // the weapon has not changed, and a re-resolve is not a re-draw.
+        world.run_system_once(perform_weapon_clips).unwrap();
+        let stack = world.get::<ClipStack>(body).unwrap();
+        assert!(stack.0[0].time > 0.1, "the deploy did not advance: {}", stack.0[0].time);
+
+        // Past its length it comes off, and the body simply holds the weapon.
+        for _ in 0..8 {
+            world.run_system_once(perform_weapon_clips).unwrap();
+        }
+        assert!(
+            world.get::<ClipStack>(body).unwrap().0.is_empty(),
+            "the deploy never ended",
+        );
+    }
+
+    /// The reason `hold_the_weapon` was split in three.
+    ///
+    /// A clip moves the weapon between the placing and the gripping, and the
+    /// hands follow it there — without the clip knowing a hand exists and
+    /// without a single key being authored for one. That is what makes a
+    /// recoil written once correct on every build, and it is the whole of what
+    /// the split buys: placing and gripping in one system leaves nowhere for a
+    /// clip to go.
+    #[test]
+    fn a_clip_moves_the_weapon_and_the_hands_follow_it() {
+        use crate::common::skeleton::clip::{Axis, Channel, Clip, Combine, PointKey, Space, Track, Unit};
+        use crate::common::skeleton::play::{ClipStack, Playing};
+        use crate::common::skeleton::Interpolation;
+        use std::sync::Arc;
+
+        let wrist = |world: &World, body: Entity| {
+            let skeleton = world.get::<Skeleton>(body).unwrap().clone();
+            let pose = world.get::<Pose>(body).unwrap().clone();
+            let index = skeleton.index_of(crate::common::skeleton::rig::bone::FOREARM_R).unwrap();
+            skeleton.posed_bones(&pose, &Transform::IDENTITY)[index].tail
+        };
+
+        // The same body twice: once held plainly, once with a clip that drops
+        // the weapon a fifth of a metre.
+        let mut plain = World::new();
+        let still = body_holding(&mut plain, Class::Soldier, 0.0);
+        plain.run_system_once(place_the_weapon).unwrap();
+        plain.run_system_once(play_the_clips).unwrap();
+        plain.run_system_once(grip_the_weapon).unwrap();
+
+        let mut world = World::new();
+        let moved = body_holding(&mut world, Class::Soldier, 0.0);
+        let clip = Clip {
+            length: 1.0,
+            tracks: vec![Track {
+                combine: Combine::Compose,
+                space: Space::Carry,
+                unit: Unit::Metres,
+                enabled: true,
+                channel: Channel::Weapon {
+                    keys: vec![PointKey {
+                        at: 0.0,
+                        to: [Axis::Free, Axis::Value(-0.2), Axis::Free],
+                        ease: Interpolation::Linear,
+                    }],
+                },
+            }],
+            ..Clip::default()
+        };
+        world.entity_mut(moved).insert(ClipStack(vec![Playing {
+            clip: Arc::new(clip),
+            time: 0.0,
+            weight: 1.0,
+        }]));
+        world.run_system_once(place_the_weapon).unwrap();
+        world.run_system_once(play_the_clips).unwrap();
+        world.run_system_once(grip_the_weapon).unwrap();
+
+        let dropped = world.get::<WeaponInHand>(moved).unwrap().0;
+        let held = plain.get::<WeaponInHand>(still).unwrap().0;
+        assert!(
+            (held.translation.y - dropped.translation.y - 0.2).abs() < 1e-4,
+            "the clip did not move the weapon: {} then {}",
+            held.translation.y,
+            dropped.translation.y,
+        );
+
+        assert!(
+            wrist(&plain, still).y - wrist(&world, moved).y > 0.05,
+            "the weapon moved and the hand stayed behind: {} then {}",
+            wrist(&plain, still).y,
+            wrist(&world, moved).y,
+        );
+    }
+
     /// **Every class has to be able to reach its own weapon.** A carry is
     /// authored in fractions of arm length precisely so it retargets, and a
     /// build whose hand cannot get to the grip holds nothing while its arm
@@ -478,7 +820,8 @@ mod tests {
         for class in EVERY_CLASS {
             let mut world = World::new();
             let body = body_holding(&mut world, class, 0.0);
-            world.run_system_once(hold_the_weapon).unwrap();
+            world.run_system_once(place_the_weapon).unwrap();
+            world.run_system_once(grip_the_weapon).unwrap();
 
             let skeleton = world.get::<Skeleton>(body).unwrap().clone();
             let pose = world.get::<Pose>(body).unwrap().clone();
@@ -508,7 +851,8 @@ mod tests {
         world.spawn((
             HeldModel {
                 weapon: None, resolved: true, parts: vec![part],
-                hold: HoldSpec::default(), viewmodel: ViewmodelSpec::default(), cached_at: 0,
+                hold: HoldSpec::default(), viewmodel: ViewmodelSpec::default(),
+                clips: Arc::default(), cached_at: 0,
             },
             WeaponInHand(decided),
         ));

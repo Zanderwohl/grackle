@@ -237,6 +237,79 @@ pub fn plant_feet(
     reached
 }
 
+/// Reach for `target`, and if the limb cannot get there, leave it exactly
+/// where it was.
+///
+/// [`solve`] writes a straightened limb and *then* reports [`Reach::Short`],
+/// which is right for a foot pointed at a floor further away than the leg is
+/// long — a body that should be falling — and wrong for an arm, where a limb
+/// stretched at a grip it cannot hold reads as broken rather than as not
+/// holding. So the joints are recorded first and put back when the reach
+/// fails.
+///
+/// Here rather than beside the one caller that first needed it, because a
+/// clip's hand targets want exactly the same thing and two copies of "solve,
+/// or put it back" is two that drift.
+pub fn reach_or_leave(
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    root: &Transform,
+    chain: &Chain,
+    target: Vec3,
+    pole: Vec3,
+) -> Reach {
+    let before = [chain.upper, chain.lower]
+        .into_iter()
+        .chain(chain.tip)
+        .map(|joint| (joint, pose.joint(joint)))
+        .collect::<Vec<_>>();
+
+    let reach = solve(skeleton, pose, root, chain, target, pole);
+    if reach != Reach::Reached {
+        for (joint, rotation) in before {
+            pose.set(joint, rotation);
+        }
+    }
+    reach
+}
+
+/// Turn a bone to a world orientation, whatever its parents are doing.
+///
+/// Divides the wanted orientation back through the chain that produced the
+/// one it has, so the caller can say "this hand points along the grip"
+/// without knowing what the shoulder and elbow were left at.
+pub fn set_world_rotation(
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    root: &Transform,
+    name: &'static str,
+    wanted: Quat,
+) {
+    let Some(index) = skeleton.index_of(name) else { return };
+    let posed = skeleton.posed_bones(pose, root)[index].rotation;
+    let base = posed * pose.joint(name).inverse();
+    pose.set(name, base.inverse() * wanted);
+}
+
+/// Which way an elbow points.
+///
+/// Backwards and a little out and down, which is where a person's elbow goes
+/// holding something in front of them. The solver cannot work this out — it is
+/// the one thing about a two-bone chain the target does not determine — and
+/// getting it wrong is an arm bent the wrong way at the elbow.
+///
+/// **Taken as world space by every caller**, which is only the same as the
+/// body's own frame while the root is not turned. In a match it is not turned
+/// — `SkeletonRoot` is an offset and `face_bodies` turns the entity rather
+/// than the rig — but the prop editor's reference figure *is* turned, so its
+/// elbows are poled against a fixed direction rather than against its own
+/// shoulders. That is how the shipped holds were authored and tuned, so it is
+/// left alone deliberately rather than quietly corrected; correcting it means
+/// re-tuning `rocket_launcher.gpp`.
+pub fn elbow_pole(side: f32) -> Vec3 {
+    Vec3::new(0.35 * side, -0.85, 0.55).normalize()
+}
+
 /// How long a chain is, end to end, fully extended.
 pub fn chain_length(skeleton: &Skeleton, chain: &Chain) -> f32 {
     let bones = skeleton.bones();

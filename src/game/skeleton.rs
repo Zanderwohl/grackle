@@ -105,7 +105,21 @@ impl Plugin for SkeletonPlugin {
                 // arms are solved to the weapon, so the weapon has to be
                 // placed by an aim the animation has already had its say
                 // about.
-                crate::game::held::hold_the_weapon,
+                //
+                // Three systems rather than one, and the order is the whole
+                // reason: a clip track in `Space::Weapon` has to be read
+                // against a weapon that has already been placed, and the arms
+                // have to be solved onto wherever that clip left it. Placing
+                // and gripping in one system leaves nowhere for the clip to
+                // go — which is why `hold_the_weapon` was split rather than
+                // the clip layer being bolted on either side of it.
+                crate::game::held::place_the_weapon,
+                // In the chain rather than loose in `Update`, so what starts a
+                // clip and what plays it cannot end up a frame apart — which
+                // would read as a deploy that begins on its second frame.
+                crate::game::held::perform_weapon_clips,
+                crate::game::held::play_the_clips,
+                crate::game::held::grip_the_weapon,
             ).chain())
             // After propagation, so a rig is drawn where its body is now.
             // `interpolate_bodies` has already run by here, so a player's

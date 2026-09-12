@@ -16,7 +16,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The shortest decimal that reads back as this exact `f32`.
-fn widen(value: f32) -> f64 {
+pub(crate) fn widen(value: f32) -> f64 {
     // Infinities and NaN have no decimal form to shorten, and cannot be written
     // to TOML either — so the failure stays serde's rather than a panic here.
     format!("{value}").parse().unwrap_or(value as f64)

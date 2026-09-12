@@ -16,6 +16,9 @@ use bevy::prelude::*;
 use crate::common::assets::{default_packs, Assets as PackAssets};
 use crate::prop::document::{self, PropDoc};
 use crate::prop::feature::Evaluated;
+use std::sync::Arc;
+
+use crate::common::skeleton::clip::ClipSet;
 use crate::prop::hold::{HoldSpec, ViewmodelSpec};
 use crate::prop::surface::Surface;
 
@@ -61,6 +64,10 @@ pub struct BakedProp {
     pub parts: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     pub hold: HoldSpec,
     pub viewmodel: ViewmodelSpec,
+    /// What it does over time. Shared rather than cloned onto each body: a
+    /// clip is a couple of kilobytes and everybody holding a launcher is
+    /// playing the same one.
+    pub clips: Arc<ClipSet>,
 }
 
 /// Props baked from their documents, by the name a weapon knows them by.
@@ -165,5 +172,10 @@ fn bake_doc(
         .map(|(surface, mesh)| (meshes.add(mesh), surfaces.get(surface, materials)))
         .collect();
     info!("Baked prop {name}");
-    BakedProp { parts, hold: doc.hold.clone(), viewmodel: doc.viewmodel }
+    BakedProp {
+        parts,
+        hold: doc.hold.clone(),
+        viewmodel: doc.viewmodel,
+        clips: Arc::new(doc.animations.clone()),
+    }
 }

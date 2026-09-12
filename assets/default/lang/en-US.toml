@@ -318,6 +318,53 @@ failed = "Failed: { reason }"
 [pause]
 title = "Esc Menu"
 
+[anim.clips]
+deploy = "Deploy"
+
+[anim.channel]
+rotation = "Bone"
+effector = "Reach"
+weapon = "Weapon"
+weapon_rotation = "Weapon turn"
+
+[anim.space]
+body = "Body"
+carry = "Carry"
+weapon = "Weapon"
+eye = "Eye"
+
+[anim.unit]
+metres = "Metres"
+leg_lengths = "Leg lengths"
+arm_lengths = "Arm lengths"
+hip_heights = "Hip heights"
+
+[anim.clock]
+seconds = "Seconds"
+stride = "Strides"
+shared = "Shared clock"
+
+[anim.combine]
+replace = "Replace"
+compose = "Compose"
+
+[anim.axis]
+free = "Free"
+ground = "Ground"
+value = "Value"
+
+[anim.ease]
+step = "Step"
+linear = "Linear"
+quadratic_in = "Quadratic in"
+quadratic_out = "Quadratic out"
+quadratic_in_out = "Quadratic in and out"
+cubic_in = "Cubic in"
+cubic_out = "Cubic out"
+cubic_in_out = "Cubic in and out"
+smooth_step = "Smooth"
+smoother_step = "Smoother"
+
 [app_mode]
 editor = "Map Editor"
 prop = "Prop Editor"
