@@ -31,12 +31,9 @@
 //! camera sits one below the egui context camera so an egui popup straying
 //! over the strip draws on top of it, which is the right way round.
 
-use bevy::camera::visibility::RenderLayers;
 #[cfg(test)]
 use bevy::ecs::system::RunSystemOnce;
-use bevy::camera::{ClearColorConfig, Viewport};
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 
 use crate::common::skeleton::clip::Clip;
 
@@ -232,17 +229,6 @@ pub struct TimelinePools {
     keys: Vec<Entity>,
 }
 
-/// The layer the strip lives on.
-///
-/// On the camera **and on every node**. A layer on one and not the other is a
-/// camera that renders nothing, silently — an empty render is not an error —
-/// which is exactly how this was got wrong the first time.
-const LAYER: usize = 30;
-
-fn layer() -> RenderLayers {
-    RenderLayers::layer(LAYER)
-}
-
 fn off() -> Node {
     Node {
         display: Display::None,
@@ -252,31 +238,35 @@ fn off() -> Node {
 
 /// Stand the strip up: a camera, a root, and the two nodes that are always
 /// there.
-pub fn spawn_the_strip(mut commands: Commands, mut pools: ResMut<TimelinePools>) {
-    let camera = commands
-        .spawn((
-            TimelineCamera,
-            Camera2d,
-            Camera {
-                // One below the egui context camera at `isize::MAX`, so an
-                // egui menu dropping over the strip draws on top of it.
-                order: isize::MAX - 1,
-                // **Composited, not cleared.** A camera at this order with the
-                // default clear config paints the whole window its own
-                // background first, and the four viewports underneath it
-                // vanish. It is drawing a strip over a scene, not a scene.
-                clear_color: ClearColorConfig::None,
-                ..default()
-            },
-            layer(),
-        ))
-        .id();
+pub fn spawn_the_strip(
+    mut commands: Commands,
+    mut pools: ResMut<TimelinePools>,
+    egui_camera: Query<Entity, With<bevy_egui::PrimaryEguiContext>>,
+) {
+    // **The editor's own UI camera, not one of ours.**
+    //
+    // A second `Camera2d` over this window was the obvious thing and it never
+    // drew a pixel: active, correctly ordered, viewport set, nodes laid out
+    // with the right computed sizes — and nothing on screen, not even a clear
+    // colour, which is how it was finally pinned down. A camera that renders
+    // nothing is not an error, so there was no diagnostic anywhere.
+    //
+    // There is no reason to have a second one. `UiTargetCamera` already ties
+    // these nodes to a camera, the multicam's egui context camera is a
+    // `Camera2d` that demonstrably renders over the whole window, and
+    // targeting it means no viewport arithmetic, no clear-colour config, and
+    // no ordering question. Bevy's UI pass runs before egui's own node, so an
+    // egui popup over the strip still draws on top — the z-order the second
+    // camera was supposed to buy.
+    let Ok(camera) = egui_camera.single() else {
+        warn!("no egui camera to hang the timeline on; the strip will not be drawn");
+        return;
+    };
 
     let root = commands
         .spawn((
             TimelineRoot,
             UiTargetCamera(camera),
-            layer(),
             Node {
                 position_type: PositionType::Absolute,
                 ..default()
@@ -289,7 +279,12 @@ pub fn spawn_the_strip(mut commands: Commands, mut pools: ResMut<TimelinePools>)
         .spawn((
             PlayheadLine,
             UiTargetCamera(camera),
-            layer(),
+            // **Children of the root**, like everything else on the strip.
+            // Their positions are computed relative to the strip's own
+            // top-left, so as loose roots they were laid out against the
+            // window instead and the playhead drew a red line up the middle
+            // of a 3D viewport.
+            ChildOf(root),
             Node {
                 position_type: PositionType::Absolute,
                 width: Val::Px(PLAYHEAD_WIDTH),
@@ -305,7 +300,7 @@ pub fn spawn_the_strip(mut commands: Commands, mut pools: ResMut<TimelinePools>)
         .spawn((
             PlayheadGrab,
             UiTargetCamera(camera),
-            layer(),
+            ChildOf(root),
             Node {
                 position_type: PositionType::Absolute,
                 width: Val::Px(GRAB_WIDTH),
@@ -320,7 +315,7 @@ pub fn spawn_the_strip(mut commands: Commands, mut pools: ResMut<TimelinePools>)
         .spawn((
             BandBox,
             UiTargetCamera(camera),
-            layer(),
+            ChildOf(root),
             off(),
             BackgroundColor(Color::srgba(0.55, 0.70, 0.95, 0.18)),
             GlobalZIndex(1),
@@ -343,7 +338,9 @@ pub fn take_the_strip_down(mut commands: Commands, mut pools: ResMut<TimelinePoo
     everything.extend(pools.root.take());
     everything.extend(pools.playhead.take());
     everything.extend(pools.grab.take());
-    everything.extend(pools.camera.take());
+    // Deliberately **not** `pools.camera`: it belongs to the multicam and
+    // taking it down would take the whole editor's UI with it.
+    pools.camera = None;
 
     for entity in everything {
         // The root's children go with it, but the pools are addressed by
@@ -371,7 +368,6 @@ fn reserve(
             .spawn((
                 GridLine,
                 UiTargetCamera(camera),
-                layer(),
                 ChildOf(root),
                 off(),
                 BackgroundColor(Color::srgb(0.17, 0.17, 0.19)),
@@ -381,7 +377,6 @@ fn reserve(
             .spawn((
                 GridLabel,
                 UiTargetCamera(camera),
-                layer(),
                 ChildOf(root),
                 off(),
                 Text::new(String::new()),
@@ -400,7 +395,6 @@ fn reserve(
             .spawn((
                 RowStripe,
                 UiTargetCamera(camera),
-                layer(),
                 ChildOf(root),
                 off(),
                 BackgroundColor(Color::srgb(0.13, 0.13, 0.15)),
@@ -410,7 +404,6 @@ fn reserve(
             .spawn((
                 RowLabel,
                 UiTargetCamera(camera),
-                layer(),
                 ChildOf(root),
                 off(),
                 Text::new(String::new()),
@@ -527,57 +520,6 @@ pub fn grid_step(pixels_per_second: f32) -> f32 {
     step
 }
 
-/// Give the camera the strip and nothing else.
-///
-/// A `Camera2d` with no viewport owns the **whole window**, and one ordered
-/// above the four editor views then renders over all of them — which is a
-/// black window, because what it has to draw there is nothing. Cutting it down
-/// to the reserved rect is what makes it a strip rather than a curtain, and it
-/// is why the root node sits at the viewport's own origin rather than at the
-/// window's.
-pub fn size_the_strip_camera(
-    view: Res<TimelineView>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    pools: Res<TimelinePools>,
-    mut cameras: Query<&mut Camera, With<TimelineCamera>>,
-) {
-    let (Some(entity), Ok(window)) = (pools.camera, windows.single()) else {
-        return;
-    };
-    let Ok(mut camera) = cameras.get_mut(entity) else {
-        return;
-    };
-
-    let scale = window.scale_factor();
-    let size = (view.rect.size() * scale).max(Vec2::ONE).as_uvec2();
-    let at = (view.rect.min * scale).max(Vec2::ZERO).as_uvec2();
-
-    // A viewport running off the window is a validation error rather than a
-    // clamp, and the strip is briefly off-window on the frame the mode opens,
-    // before egui has measured anything.
-    let window_size = UVec2::new(window.physical_width(), window.physical_height());
-    let fits = at.x + size.x <= window_size.x && at.y + size.y <= window_size.y;
-
-    let wanted = fits.then(|| Viewport {
-        physical_position: at,
-        physical_size: size,
-        ..default()
-    });
-    // Compared by hand because `Viewport` is not `PartialEq`, and writing it
-    // every frame would mark the camera changed every frame.
-    let same = match (&camera.viewport, &wanted) {
-        (None, None) => true,
-        (Some(have), Some(want)) => {
-            have.physical_position == want.physical_position
-                && have.physical_size == want.physical_size
-        }
-        _ => false,
-    };
-    if !same {
-        camera.viewport = wanted;
-    }
-}
-
 /// Put every pooled node where the view says it goes.
 ///
 /// The only writer of `Node` on a pooled entity, which is what keeps "where is
@@ -608,10 +550,8 @@ pub fn lay_out_the_timeline(
 
     let rect = view.rect;
     if let Ok(mut node) = nodes.get_mut(root) {
-        // At the viewport's own origin, not the window's: the camera has been
-        // cut down to the strip, so `0, 0` here *is* the strip's top-left.
-        node.left = Val::Px(0.0);
-        node.top = Val::Px(0.0);
+        node.left = Val::Px(rect.min.x);
+        node.top = Val::Px(rect.min.y);
         node.width = Val::Px(rect.width());
         node.height = Val::Px(rect.height());
         node.display = if rect.width() > 1.0 {
@@ -861,9 +801,18 @@ mod tests {
         }
     }
 
+    /// The camera the strip hangs on. In a real window it is the multicam's
+    /// egui context camera; here it only has to exist, because `spawn_the_strip`
+    /// declines to build anything without one.
+    fn with_a_ui_camera() -> World {
+        let mut world = World::new();
+        world.spawn(bevy_egui::PrimaryEguiContext);
+        world
+    }
+
     /// Stand the strip up and lay it out, for real, in a `World`.
     fn laid_out(view: TimelineView, clip: Option<Clip>) -> (World, TimelinePools) {
-        let mut world = World::new();
+        let mut world = with_a_ui_camera();
         world.insert_resource(view);
         world.insert_resource(TimelineCursor { time: 0.25, playing: false });
         world.insert_resource(ShownClip(clip));
@@ -877,6 +826,24 @@ mod tests {
 
         let pools = world.remove_resource::<TimelinePools>().unwrap();
         (world, pools)
+    }
+
+    /// With no UI camera to hang on, the strip builds nothing rather than
+    /// half of something. The warning is the useful part: a blank strip with
+    /// no explanation is what this whole area cost an afternoon to.
+    #[test]
+    fn without_a_camera_the_strip_is_not_built() {
+        let mut world = World::new();
+        world.insert_resource(view());
+        world.insert_resource(TimelineCursor::default());
+        world.insert_resource(ShownClip(None));
+        world.init_resource::<TimelinePools>();
+
+        world.run_system_once(spawn_the_strip).unwrap();
+
+        let pools = world.resource::<TimelinePools>();
+        assert!(pools.root.is_none(), "a root was built with nothing to draw it");
+        assert!(pools.keys.is_empty());
     }
 
     /// Keys land where the arithmetic says, in the strip's own coordinates.
@@ -921,7 +888,7 @@ mod tests {
     #[test]
     fn switching_to_an_empty_clip_leaves_nothing_behind() {
         let view = view();
-        let mut world = World::new();
+        let mut world = with_a_ui_camera();
         world.insert_resource(view);
         world.insert_resource(TimelineCursor::default());
         world.insert_resource(ShownClip(Some(a_clip())));
@@ -952,7 +919,7 @@ mod tests {
     #[test]
     fn the_pool_grows_and_never_despawns() {
         let view = view();
-        let mut world = World::new();
+        let mut world = with_a_ui_camera();
         world.insert_resource(view);
         world.insert_resource(TimelineCursor::default());
         world.insert_resource(ShownClip(Some(a_clip())));

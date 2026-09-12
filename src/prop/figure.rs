@@ -60,6 +60,27 @@ pub struct FigureReach(pub [Reach; 2]);
 #[derive(Resource, Default)]
 pub struct FigurePerformance(pub ClipStack);
 
+/// Where the prop is being held, once a performance has moved it.
+///
+/// **In the animation editor the weapon moves and the body stands still**,
+/// which is the opposite of the modelling surface and deliberately so. There,
+/// a prop is pinned to its own origin because that is where its feature gizmos
+/// are drawn and a carry is authored by dragging the body around it. Here
+/// nothing is being dragged, and a clip that lowers a weapon would tilt the
+/// *body* through the same inversion — so you would watch a figure lie down
+/// rather than watch a launcher come up, which is the one thing the mode
+/// exists to show.
+///
+/// Identity when nothing is performing, so the modelling surface is unchanged.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct FigureWeapon(pub Transform);
+
+impl Default for FigureWeapon {
+    fn default() -> Self {
+        FigureWeapon(Transform::IDENTITY)
+    }
+}
+
 /// Grey-green and unmistakably not the prop. A team colour would be a lie —
 /// the figure has no side.
 const FIGURE_TINT: Color = Color::srgb(0.34, 0.40, 0.36);
@@ -120,6 +141,7 @@ pub fn pose_the_figure(
     choice: Res<ScaleFigure>,
     preview: Res<ViewmodelPreview>,
     performance: Option<Res<FigurePerformance>>,
+    mut held: Option<ResMut<FigureWeapon>>,
     mut figures: Query<
         (&Skeleton, &mut Pose, &mut Transform, &mut FigureReach, &mut Visibility),
         With<ScaleFigureMarker>,
@@ -148,34 +170,40 @@ pub fn pose_the_figure(
         else {
             continue;
         };
-        // **In here the prop does not move; the figure does.** A prop is
-        // authored around its own origin and its gizmos are drawn there, so a
-        // clip that would dip the weapon towards the body instead lifts the
-        // body away from the weapon — the same inversion the carry handle is,
-        // one layer along, and the reason a clip can be watched here at all.
-        let mut local = local;
-        if let Some(performance) = performance.as_deref() {
-            let ground = |_: Vec3| 0.0;
-            let frames = Frames {
-                // The figure has not been placed yet — that is what this
-                // whole function is working out — so the clip is read in the
-                // frame it is authored in and the placement follows from it.
-                body: Transform::IDENTITY,
-                carry: carry_frame(skeleton, &standing, &Transform::IDENTITY, Quat::IDENTITY)
-                    .unwrap_or_default(),
-                weapon: Some(local),
-                eye: None,
-                ground: &ground,
-            };
-            apply_stack(&performance.0, skeleton, &mut standing, &frames, Some(&mut local));
-        }
-
+        // **The body is placed from the hold alone**, before any clip runs.
+        // That is what keeps it standing still while a performance moves the
+        // weapon: place it from the *animated* weapon instead and the same
+        // inversion tips the body over, so a deploy reads as a figure lying
+        // down rather than as a launcher coming up.
         let rotation = local.rotation.inverse();
         let root = Transform::from_translation(rotation * -local.translation)
             .with_rotation(rotation);
 
-        // The weapon is at the prop's origin, which is where its geometry is.
-        reach.0 = grip_with(skeleton, &mut standing, &root, &hold, &Transform::IDENTITY);
+        // With no performance the weapon sits at the prop's own origin, which
+        // is where its geometry is — the modelling surface, unchanged.
+        let mut placed = Transform::IDENTITY;
+        if let Some(performance) = performance.as_deref() {
+            let ground = move |_: Vec3| root.translation.y;
+            let frames = Frames {
+                body: root,
+                carry: carry_frame(skeleton, &standing, &root, Quat::IDENTITY)
+                    .unwrap_or(root),
+                weapon: Some(placed),
+                eye: None,
+                ground: &ground,
+            };
+            apply_stack(&performance.0, skeleton, &mut standing, &frames, Some(&mut placed));
+        }
+
+        if let Some(held) = held.as_deref_mut() {
+            if held.0 != placed {
+                held.0 = placed;
+            }
+        }
+
+        // Onto wherever the clip left it, which is the same order the game
+        // runs in: place the weapon, then put the hands on it.
+        reach.0 = grip_with(skeleton, &mut standing, &root, &hold, &placed);
 
         *pose = standing;
         *transform = root;

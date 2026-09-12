@@ -18,6 +18,9 @@
 
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+
+use crate::common::skeleton::{Pose, Skeleton};
+use crate::prop::figure::ScaleFigureMarker;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::common::app_mode::AppMode;
@@ -224,13 +227,50 @@ fn remember(saved: &mut MapViewpoints, entity: Entity, transform: &Transform, pr
     }
 }
 
+/// What the cameras are framing: the prop, and the figure if one is up.
+///
+/// **The figure counts.** A prop is centimetres across and a body is nearly
+/// two metres, so framing on the prop alone puts a reference figure mostly
+/// off-screen and enormous — merely odd while modelling, and useless while
+/// animating, where the whole question is what the body is doing.
+///
+/// Asked of the figure rather than of the mode: if somebody turned one on,
+/// they want to see it, and that is as true on the modelling surface.
+///
+/// One function because there are two framing paths — entering, and the Frame
+/// button — and two copies would mean the button quietly undid what entering
+/// did, which is exactly what happened when there were.
+///
+/// Measured from the rig's **rest** pose rather than the animated one: a
+/// deploy starts with the weapon down by the hip, and framing on a body
+/// mid-gesture means the view jumps every time the playhead moves.
+type FigureQuery<'w, 's> =
+    Query<'w, 's, (&'static Transform, &'static Skeleton), (With<ScaleFigureMarker>, Without<Multicam>)>;
+
+fn framing_bounds(build: &PropBuild, figure: &FigureQuery) -> Option<(Vec3, Vec3)> {
+    figure
+        .iter()
+        .flat_map(|(root, skeleton)| {
+            skeleton
+                .posed_bones(&Pose::rest(), root)
+                .into_iter()
+                .flat_map(|bone| [bone.head, bone.tail])
+        })
+        .fold(build.evaluated.bounds(), |bounds, point| match bounds {
+            Some((min, max)) => Some((min.min(point), max.max(point))),
+            None => Some((point, point)),
+        })
+}
+
 fn frame_on_entering(
     mut cameras: Query<(Entity, &mut Transform, &mut Projection, &Camera, &Multicam)>,
     mut saved: ResMut<MapViewpoints>,
     mut pivot: ResMut<OrbitPivot>,
     build: Res<PropBuild>,
+    figure: FigureQuery,
 ) {
-    frame_all(&mut cameras, &mut saved, &mut pivot, build.evaluated.bounds());
+    let bounds = framing_bounds(&build, &figure);
+    frame_all(&mut cameras, &mut saved, &mut pivot, bounds);
 }
 
 fn frame_on_request(
@@ -239,11 +279,13 @@ fn frame_on_request(
     mut saved: ResMut<MapViewpoints>,
     mut pivot: ResMut<OrbitPivot>,
     build: Res<PropBuild>,
+    figure: FigureQuery,
 ) {
     if requests.read().count() == 0 {
         return;
     }
-    frame_all(&mut cameras, &mut saved, &mut pivot, build.evaluated.bounds());
+    let bounds = framing_bounds(&build, &figure);
+    frame_all(&mut cameras, &mut saved, &mut pivot, bounds);
 }
 
 /// `Numpad0` resets the view under the cursor, and nowhere else. Over no

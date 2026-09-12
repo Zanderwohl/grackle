@@ -152,12 +152,35 @@ impl Plugin for PropViewPlugin {
                     // replicated from a server that is still playing.
                     set_the_world_aside,
                     rebuild_the_prop,
+                    // After the rebuild, which respawns the stage at the
+                    // origin: a weapon mid-deploy must not snap home for one
+                    // frame every time the geometry changes.
+                    carry_the_prop,
                     draw_the_bench,
                 )
                     .chain()
                     .in_set(PropSceneSystems::Build)
                     .run_if(crate::common::app_mode::showing_a_prop),
             );
+    }
+}
+
+/// Put the prop where a performance says it is being held.
+///
+/// Identity on the modelling surface — the prop is pinned to its own origin,
+/// which is where its feature gizmos are drawn — and moved only while
+/// something is animating it. Its own system rather than part of the rebuild,
+/// because the mesh is rebuilt on `PropEditor::generation` and a weapon that
+/// only moved when somebody edited the geometry would be a weapon that does
+/// not move.
+pub fn carry_the_prop(
+    held: Res<crate::prop::figure::FigureWeapon>,
+    mut stage: Query<&mut Transform, With<PropStage>>,
+) {
+    for mut transform in &mut stage {
+        if *transform != held.0 {
+            *transform = held.0;
+        }
     }
 }
 

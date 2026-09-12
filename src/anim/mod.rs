@@ -38,7 +38,7 @@ use std::sync::Arc;
 
 use timeline::{
     grab_radius, grid_step, key_at, keys_within, lay_out_the_timeline, over_ruler,
-    size_the_strip_camera, spawn_the_strip, take_the_strip_down, DraggedTrack, Grab, KeyAt,
+    spawn_the_strip, take_the_strip_down, DraggedTrack, Grab, KeyAt,
     ShownClip, TimelineCursor, TimelineGrab, TimelinePools, TimelineSelection, TimelineView,
 };
 
@@ -86,6 +86,7 @@ impl Plugin for AnimPlugin {
             .init_resource::<TimelinePools>()
             .init_resource::<ShownClip>()
             .init_resource::<FigurePerformance>()
+            .init_resource::<crate::prop::figure::FigureWeapon>()
             .init_resource::<StartInAnimEditor>()
             // Ungated, like the prop editor's own: it has to run in whatever
             // mode the process started in.
@@ -98,11 +99,11 @@ impl Plugin for AnimPlugin {
                 (
                     // What is on the strip, before anything asks where to draw
                     // it or what to perform.
+                    frame_once_the_figure_is_up,
                     follow_the_document,
                     timeline_input,
                     edit_keys,
-                    size_the_strip_camera,
-                    lay_out_the_timeline,
+                                    lay_out_the_timeline,
                     // Before the scene poses the figure, so a scrub is seen on
                     // the frame it happened rather than the one after.
                     drive_the_preview.before(PropSceneSystems::Build),
@@ -122,7 +123,16 @@ fn frame_on_entering(
     mut anim: ResMut<AnimEditor>,
     mut view: ResMut<TimelineView>,
     mut cursor: ResMut<TimelineCursor>,
+    mut figure: ResMut<crate::prop::figure::ScaleFigure>,
 ) {
+    // **A body by default here**, unlike the modelling surface. The prop
+    // editor is about what shape a thing is and a figure is a scale reference
+    // you ask for; this is about how a body moves holding it, and an animation
+    // editor with nobody in it is a weapon swinging around on its own. Left
+    // alone if somebody has already chosen, including "none".
+    if figure.is_added() || figure.0.is_none() {
+        figure.0 = Some(crate::common::class::Class::Mercenary);
+    }
     let clips = &editor.doc().animations;
     if anim.selected.as_deref().is_none_or(|name| clips.get(name).is_none()) {
         anim.selected = clips.clips.keys().next().cloned();
@@ -137,12 +147,47 @@ fn frame_on_entering(
     view.frame(length);
 }
 
+/// Frame again once the figure is actually standing there.
+///
+/// `OnEnter` cannot do it: `refresh_the_figure` spawns the body through
+/// `Commands`, so during the transition the figure does not exist yet and
+/// framing sees only the prop — a weapon thirty centimetres across, with a
+/// body nearly two metres tall arriving a frame later and filling the screen.
+///
+/// Keyed on the figure being **present** rather than on a frame count, so it
+/// waits exactly as long as it needs to and not a frame more.
+fn frame_once_the_figure_is_up(
+    figures: Query<(), With<crate::prop::figure::ScaleFigureMarker>>,
+    mut frame: MessageWriter<crate::prop::camera::FrameTheProp>,
+    mut waiting: Local<bool>,
+    mode: Res<State<AppMode>>,
+    mut was: Local<Option<AppMode>>,
+) {
+    // Entering arms it; anything else disarms, so a figure turned on later
+    // does not yank the cameras out from under somebody.
+    let now = *mode.get();
+    if was.replace(now) != Some(now) {
+        *waiting = now == AppMode::Animation;
+    }
+    if !*waiting || figures.is_empty() {
+        return;
+    }
+    frame.write(crate::prop::camera::FrameTheProp);
+    *waiting = false;
+}
+
 /// The figure goes back to standing in its hold when the mode closes.
 ///
 /// Not tidiness: the resource outlives the mode, and a figure left holding
 /// frame nineteen of a reload is what the *modelling* surface would then show.
-fn stop_performing(mut performance: ResMut<FigurePerformance>) {
+fn stop_performing(
+    mut performance: ResMut<FigurePerformance>,
+    mut held: ResMut<crate::prop::figure::FigureWeapon>,
+) {
     performance.0 .0.clear();
+    // And the prop goes back to its own origin, or the modelling surface would
+    // open with the geometry parked wherever a clip left it.
+    held.0 = Transform::IDENTITY;
 }
 
 /// Keep [`ShownClip`] in step with the document.
