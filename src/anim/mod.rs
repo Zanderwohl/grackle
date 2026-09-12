@@ -21,6 +21,7 @@
 //! neither of them has to learn what a timeline is; and egui paints nothing
 //! over the nodes.
 
+pub mod body;
 pub mod timeline;
 pub mod ui;
 
@@ -42,13 +43,41 @@ use timeline::{
     ShownClip, TimelineCursor, TimelineGrab, TimelinePools, TimelineSelection, TimelineView,
 };
 
-/// Which clip is being looked at.
+/// Where the clip being edited lives.
 ///
-/// A name rather than an index: a clip lives in a `BTreeMap` keyed by the name
-/// the game asks for it by, and an index into a sorted map is a fact about
-/// what else is in the map.
+/// Two homes because there are two genuinely different things: a weapon's
+/// motion belongs to the weapon and rides in its `.gpp` beside the hold it
+/// deviates from, and a body's belongs to the pack and is named by the state
+/// it plays for. One editor, because they are the same kind of thing and a
+/// second timeline would be a second set of bugs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClipSource {
+    /// The open prop's own animations.
+    #[default]
+    Prop,
+    /// The pack's body animations, one per `AnimationState`.
+    Body,
+}
+
+impl ClipSource {
+    pub fn name_key(self) -> &'static str {
+        match self {
+            ClipSource::Prop => "anim.source.prop",
+            ClipSource::Body => "anim.source.body",
+        }
+    }
+}
+
+/// What the animation editor is looking at.
 #[derive(Resource, Debug, Default)]
 pub struct AnimEditor {
+    /// Which set of clips the panels and the strip are showing.
+    pub source: ClipSource,
+    /// Which clip, by the name it is filed under.
+    ///
+    /// A name rather than an index: a clip lives in a `BTreeMap` keyed by the
+    /// name the game asks for it by, and an index into a sorted map is a fact
+    /// about what else is in the map.
     pub selected: Option<String>,
     /// Which track the panels are showing, if any.
     ///
@@ -103,6 +132,8 @@ impl Plugin for AnimPlugin {
             .init_resource::<FigurePerformance>()
             .init_resource::<crate::prop::figure::FigureWeapon>()
             .init_resource::<StartInAnimEditor>()
+            .init_resource::<body::BodyClips>()
+            .init_resource::<crate::common::skeleton::state::ClipLibrary>()
             // Ungated, like the prop editor's own: it has to run in whatever
             // mode the process started in.
             .add_systems(Update, start_in_the_anim_editor)
@@ -114,6 +145,14 @@ impl Plugin for AnimPlugin {
                 (
                     // What is on the strip, before anything asks where to draw
                     // it or what to perform.
+                    // Before anything reads them, and only the first time.
+                    load_the_body_clips,
+                    // After loading, so the first thing it sees is the real
+                    // list rather than an empty one.
+                    keep_a_clip_selected,
+                    // And straight back out to the game, so an idle retimed
+                    // here is retimed on every body in the map.
+                    body::publish_the_body_clips,
                     frame_when_there_is_something_to_frame,
                     follow_the_document,
                     timeline_input,
@@ -129,12 +168,84 @@ impl Plugin for AnimPlugin {
     }
 }
 
+/// The clip being edited, whichever document it lives in.
+///
+/// Cloned rather than borrowed, because the two documents are two resources
+/// and a borrow of one would tie up the other for the whole of a panel. A clip
+/// is a couple of kilobytes and this runs once a frame.
+pub fn selected_clip(
+    anim: &AnimEditor,
+    prop: &PropEditor,
+    body: &body::BodyClips,
+) -> Option<Clip> {
+    let name = anim.selected.as_deref()?;
+    match anim.source {
+        ClipSource::Prop => prop.doc().animations.get(name).cloned(),
+        ClipSource::Body => body.get(name).cloned(),
+    }
+}
+
+/// Every clip the current source has, in the order it files them.
+pub fn clip_names(anim: &AnimEditor, prop: &PropEditor, body: &body::BodyClips) -> Vec<String> {
+    match anim.source {
+        ClipSource::Prop => prop.doc().animations.clips.keys().cloned().collect(),
+        ClipSource::Body => body.names(),
+    }
+}
+
+/// Change the selected clip, through whichever document owns it.
+///
+/// **One gesture either way.** Both documents have the same `begin_gesture` /
+/// `doc_mut` / `end_gesture` shape, which is why the source can be switched
+/// without any caller learning what a `BodyClips` is — and why adding a third
+/// source would be one arm here rather than a branch at every write.
+pub fn edit_selected(
+    anim: &AnimEditor,
+    prop: &mut PropEditor,
+    body: &mut body::BodyClips,
+    change: impl FnOnce(&mut Clip),
+) {
+    let Some(name) = anim.selected.as_deref() else { return };
+    match anim.source {
+        ClipSource::Prop => {
+            prop.begin_gesture();
+            if let Some(clip) = prop.doc_mut().animations.clips.get_mut(name) {
+                change(clip);
+            }
+        }
+        ClipSource::Body => {
+            body.begin_gesture();
+            if let Some(clip) = body.doc_mut().get_mut(name) {
+                change(clip);
+            }
+        }
+    }
+}
+
+/// How to tell whether either document has moved.
+///
+/// Both counters, because the strip shows one source at a time but the *other*
+/// can still change underneath — a prop saved in the modelling surface, say —
+/// and a single counter would have to be written by two owners.
+pub fn documents_at(prop: &PropEditor, body: &body::BodyClips) -> (u64, u64) {
+    (prop.generation(), body.generation())
+}
+
+/// Read the pack's body animations, once, the first time the mode is open.
+///
+/// Here rather than at startup because a process that never opens this mode
+/// should not pay for them. The *game* gets its own copy through
+/// `clip_file::load_body_clips_at_startup`, which is a different path with a
+/// different lifetime — this one is a document somebody is editing.
+fn load_the_body_clips(assets: Res<crate::common::assets::Assets>, mut clips: ResMut<body::BodyClips>) {
+    clips.ensure_loaded(&assets);
+}
+
 /// Pick a clip and fit it across the strip on the way in.
 ///
 /// Opening onto nothing is a blank strip with no sense of scale, which is the
 /// same argument that has the prop editor open onto the shipped launcher.
 fn frame_on_entering(
-    editor: Res<PropEditor>,
     mut anim: ResMut<AnimEditor>,
     view: Res<TimelineView>,
     mut cursor: ResMut<TimelineCursor>,
@@ -148,13 +259,40 @@ fn frame_on_entering(
     if figure.is_added() || figure.0.is_none() {
         figure.0 = Some(crate::common::class::Class::Mercenary);
     }
-    let clips = &editor.doc().animations;
-    if anim.selected.as_deref().is_none_or(|name| clips.get(name).is_none()) {
-        anim.selected = clips.clips.keys().next().cloned();
-    }
     cursor.time = 0.0;
     anim.pending_frame = true;
     let _ = view;
+}
+
+/// Keep the selection on a clip that actually exists.
+///
+/// **Self-correcting rather than chosen once.** The body clips are read on the
+/// first `Update` of the mode, so at `OnEnter` there is nothing to pick yet;
+/// switching source invalidates whatever was picked; and deleting a clip
+/// leaves the name pointing at nothing. One rule about absence covers all
+/// three, which is the same shape `give_bodies_to_whoever_needs_one` takes.
+fn keep_a_clip_selected(
+    editor: Res<PropEditor>,
+    body: Res<body::BodyClips>,
+    mut anim: ResMut<AnimEditor>,
+) {
+    let names = clip_names(&anim, &editor, &body);
+    let still_there = anim
+        .selected
+        .as_deref()
+        .is_some_and(|name| names.iter().any(|had| had == name));
+    if still_there {
+        return;
+    }
+
+    let wanted = names.first().cloned();
+    // Written only when it differs: `AnimEditor` is watched for changes, and a
+    // write every frame with nothing to select would re-frame the strip
+    // continuously.
+    if anim.selected != wanted {
+        anim.selected = wanted;
+        anim.track = None;
+    }
 }
 
 /// Frame again once the figure is actually standing there.
@@ -169,6 +307,7 @@ fn frame_on_entering(
 fn frame_when_there_is_something_to_frame(
     figures: Query<(), With<crate::prop::figure::ScaleFigureMarker>>,
     editor: Res<PropEditor>,
+    clips: Res<body::BodyClips>,
     mut anim: ResMut<AnimEditor>,
     mut view: ResMut<TimelineView>,
     mut frame: MessageWriter<crate::prop::camera::FrameTheProp>,
@@ -177,11 +316,7 @@ fn frame_when_there_is_something_to_frame(
         return;
     }
 
-    let length = anim
-        .selected
-        .as_deref()
-        .and_then(|name| editor.doc().animations.get(name))
-        .map_or(1.0, |clip| clip.length);
+    let length = selected_clip(&anim, &editor, &clips).map_or(1.0, |clip| clip.length);
     view.frame(length);
 
     frame.write(crate::prop::camera::FrameTheProp);
@@ -210,22 +345,19 @@ fn stop_performing(
 /// because somebody moved the mouse is work nobody asked for.
 fn follow_the_document(
     editor: Res<PropEditor>,
+    clips: Res<body::BodyClips>,
     anim: Res<AnimEditor>,
     mut shown: ResMut<ShownClip>,
     mut view: ResMut<TimelineView>,
-    mut seen: Local<u64>,
+    mut seen: Local<(u64, u64)>,
 ) {
-    let generation = editor.generation();
+    let generation = documents_at(&editor, &clips);
     if generation == *seen && !anim.is_changed() {
         return;
     }
     *seen = generation;
 
-    let wanted = anim
-        .selected
-        .as_deref()
-        .and_then(|name| editor.doc().animations.get(name))
-        .cloned();
+    let wanted = selected_clip(&anim, &editor, &clips);
 
     // A clip picked in the panel is fitted across the strip; one that merely
     // *changed* is left where it was being looked at, because re-framing under
@@ -260,6 +392,7 @@ fn timeline_input(
     panels: Res<ui::AnimPanels>,
     anim: Res<AnimEditor>,
     mut editor: ResMut<PropEditor>,
+    mut clips: ResMut<body::BodyClips>,
     mut view: ResMut<TimelineView>,
     mut cursor: ResMut<TimelineCursor>,
     mut grab: ResMut<TimelineGrab>,
@@ -379,7 +512,7 @@ fn timeline_input(
                 let step = grid_step(view.pixels_per_second);
                 by = (by / step).round() * step;
             }
-            nudge_the_selection(&mut editor, &anim, tracks, by, length, &mut selection);
+            nudge_the_selection(&mut editor, &mut clips, &anim, tracks, by, length, &mut selection);
         }
         // The band follows the pointer here rather than in the layout, which
         // has no idea where the pointer is and is better off not learning.
@@ -418,35 +551,33 @@ fn dragged_tracks(clip: &Clip, selection: &TimelineSelection) -> Vec<DraggedTrac
 /// drag is running — see `AnimPanels`.
 fn nudge_the_selection(
     editor: &mut PropEditor,
+    clips: &mut body::BodyClips,
     anim: &AnimEditor,
     tracks: &[DraggedTrack],
     by: f32,
     length: f32,
     selection: &mut TimelineSelection,
 ) {
-    let Some(name) = anim.selected.clone() else { return };
-
-    editor.begin_gesture();
-    let Some(clip) = editor.doc_mut().animations.clips.get_mut(&name) else {
-        return;
-    };
-
     let mut landed = std::collections::BTreeSet::new();
-    for dragged in tracks {
-        let Some(track) = clip.tracks.get_mut(dragged.track) else {
-            continue;
-        };
-        // From the original every frame, never from last frame's result: an
-        // accumulated drag drifts on every clamp and cannot be dragged back to
-        // where it started.
-        track.channel = dragged.original.clone();
-        for key in track.channel.nudge(&dragged.held, by, length) {
-            landed.insert(KeyAt {
-                track: dragged.track,
-                key,
-            });
+
+    edit_selected(anim, editor, clips, |clip| {
+        for dragged in tracks {
+            let Some(track) = clip.tracks.get_mut(dragged.track) else {
+                continue;
+            };
+            // From the original every frame, never from last frame's result:
+            // an accumulated drag drifts on every clamp and cannot be dragged
+            // back to where it started.
+            track.channel = dragged.original.clone();
+            for key in track.channel.nudge(&dragged.held, by, length) {
+                landed.insert(KeyAt {
+                    track: dragged.track,
+                    key,
+                });
+            }
         }
-    }
+    });
+
     selection.0 = landed;
 }
 
@@ -461,12 +592,12 @@ fn edit_keys(
     anim: Res<AnimEditor>,
     cursor: Res<TimelineCursor>,
     mut editor: ResMut<PropEditor>,
+    mut body: ResMut<body::BodyClips>,
     mut selection: ResMut<TimelineSelection>,
 ) {
     if panels.egui_wants_keyboard {
         return;
     }
-    let Some(name) = anim.selected.clone() else { return };
 
     let removing = keyboard.any_just_pressed([KeyCode::Delete, KeyCode::Backspace]);
     let keying = keyboard.just_pressed(KeyCode::KeyK);
@@ -474,21 +605,20 @@ fn edit_keys(
         return;
     }
 
+    let time = cursor.time;
+    let mut picked = std::mem::take(&mut selection.0);
+
     // One step per press, opened and closed here rather than left to the
     // panels: a keypress is not a gesture somebody is still in the middle of.
-    editor.begin_gesture();
-    let time = cursor.time;
-    let Some(clip) = editor.doc_mut().animations.clips.get_mut(&name) else {
-        return;
-    };
+    edit_selected(&anim, &mut editor, &mut body, |clip| {
     let (length, looping) = (clip.length, clip.looping);
+    let selection = &mut picked;
 
     if removing {
         // Grouped by track and removed back to front, so one index cannot
         // invalidate another.
         for track in 0..clip.tracks.len() {
             let doomed: Vec<usize> = selection
-                .0
                 .iter()
                 .filter(|picked| picked.track == track)
                 .map(|picked| picked.key)
@@ -497,16 +627,15 @@ fn edit_keys(
                 clip.tracks[track].channel.remove_keys(&doomed);
             }
         }
-        selection.0.clear();
+        selection.clear();
     } else {
         // On every track a selection touches, or on all of them when nothing
         // is picked — which is what "key everything here" means and what you
         // want the first time you press it.
-        let tracks: Vec<usize> = match selection.0.is_empty() {
+        let tracks: Vec<usize> = match selection.is_empty() {
             true => (0..clip.tracks.len()).collect(),
             false => {
-                let mut tracks: Vec<usize> =
-                    selection.0.iter().map(|picked| picked.track).collect();
+                let mut tracks: Vec<usize> = selection.iter().map(|picked| picked.track).collect();
                 tracks.dedup();
                 tracks
             }
@@ -517,10 +646,13 @@ fn edit_keys(
             let key = key_the_channel(&mut spec.channel, time, length, looping);
             landed.insert(KeyAt { track, key });
         }
-        selection.0 = landed;
+        *selection = landed;
     }
+    });
 
+    selection.0 = picked;
     editor.end_gesture();
+    body.end_gesture();
 }
 
 /// Put the clip on the reference figure at the playhead.
@@ -549,6 +681,80 @@ fn drive_the_preview(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Switching source cannot leave a selection pointing at nothing, and the
+    /// selection re-resolves on its own rather than being chosen once.
+    ///
+    /// Three cases with one rule, which is why it is asked about absence: the
+    /// body clips are read on the first `Update` of the mode so there is
+    /// nothing to pick at `OnEnter`; switching source invalidates whatever was
+    /// picked; and deleting a clip leaves the name pointing at nothing.
+    #[test]
+    fn the_selection_settles_on_a_clip_that_exists() {
+        let (editor, _) = editor_with_a_clip(&[0.0, 0.5]);
+        let mut body = body::BodyClips::default();
+        body.edit(|clips| {
+            clips.insert("idle".into(), Clip { length: 1.0, ..Clip::default() });
+        });
+
+        // Nothing picked yet: the prop's own clip is what there is.
+        let mut anim = AnimEditor::default();
+        assert_eq!(clip_names(&anim, &editor, &body), vec!["fire".to_string()]);
+        assert!(selected_clip(&anim, &editor, &body).is_none());
+
+        anim.selected = Some("fire".into());
+        assert!(selected_clip(&anim, &editor, &body).is_some());
+
+        // The same name means nothing on the other side.
+        anim.source = ClipSource::Body;
+        assert!(selected_clip(&anim, &editor, &body).is_none());
+        assert_eq!(clip_names(&anim, &editor, &body), vec!["idle".to_string()]);
+    }
+
+    /// An edit goes to whichever document owns the clip, and leaves the other
+    /// alone.
+    ///
+    /// The whole of what the source selector has to get right: two documents,
+    /// two undo stacks, one set of panels — and a write that landed in the
+    /// wrong one would be an edit you cannot undo and a file you did not mean
+    /// to dirty.
+    #[test]
+    fn an_edit_goes_to_the_document_that_owns_the_clip() {
+        let (mut editor, _) = editor_with_a_clip(&[0.0, 0.5]);
+        let mut body = body::BodyClips::default();
+        body.edit(|clips| {
+            clips.insert("idle".into(), Clip { length: 1.0, ..Clip::default() });
+        });
+
+        let prop_generation = editor.generation();
+        let mut anim = AnimEditor {
+            source: ClipSource::Body,
+            selected: Some("idle".into()),
+            ..AnimEditor::default()
+        };
+
+        edit_selected(&anim, &mut editor, &mut body, |clip| clip.length = 2.0);
+        assert_eq!(body.get("idle").map(|clip| clip.length), Some(2.0));
+        assert_eq!(
+            editor.generation(),
+            prop_generation,
+            "editing a body clip touched the prop",
+        );
+
+        anim.source = ClipSource::Prop;
+        anim.selected = Some("fire".into());
+        edit_selected(&anim, &mut editor, &mut body, |clip| clip.length = 3.0);
+        assert_eq!(
+            editor.doc().animations.get("fire").map(|clip| clip.length),
+            Some(3.0),
+        );
+        assert_eq!(
+            body.get("idle").map(|clip| clip.length),
+            Some(2.0),
+            "editing a prop clip touched the body clips",
+        );
+    }
+
     use crate::common::skeleton::clip::{
         Axis, Channel, Clip, Combine, PointKey, Space, Track, Unit,
     };
@@ -584,7 +790,12 @@ mod tests {
 
         let mut editor = PropEditor::default();
         editor.open(doc, None);
-        let anim = AnimEditor { selected: Some("fire".into()), track: None, pending_frame: false };
+        let anim = AnimEditor {
+            source: ClipSource::Prop,
+            selected: Some("fire".into()),
+            track: None,
+            pending_frame: false,
+        };
         (editor, anim)
     }
 
@@ -620,6 +831,7 @@ mod tests {
         for frame in 1..=40 {
             nudge_the_selection(
                 &mut editor,
+                &mut body::BodyClips::default(),
                 &anim,
                 &tracks,
                 frame as f32 * 0.005,
@@ -654,7 +866,15 @@ mod tests {
 
         // Out past both neighbours, hard into the end, and back to nothing.
         for by in [0.2_f32, 0.6, 2.0, -3.0, -0.4, 0.0] {
-            nudge_the_selection(&mut editor, &anim, &tracks, by, 1.0, &mut selection);
+            nudge_the_selection(
+                &mut editor,
+                &mut body::BodyClips::default(),
+                &anim,
+                &tracks,
+                by,
+                1.0,
+                &mut selection,
+            );
         }
 
         assert_eq!(times(&editor), before, "a drag out and back did not come home");
@@ -673,7 +893,15 @@ mod tests {
         selection.0.insert(KeyAt { track: 0, key: 0 });
         let tracks = holding(&editor, &[0]);
 
-        nudge_the_selection(&mut editor, &anim, &tracks, 0.5, 1.0, &mut selection);
+        nudge_the_selection(
+            &mut editor,
+            &mut body::BodyClips::default(),
+            &anim,
+            &tracks,
+            0.5,
+            1.0,
+            &mut selection,
+        );
 
         assert_eq!(times(&editor), vec![0.4, 0.6, 0.9]);
         assert_eq!(

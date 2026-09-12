@@ -12,11 +12,14 @@ use bevy_egui::{egui, EguiContexts};
 use egui_dock::{DockArea, DockState, TabViewer};
 
 use crate::anim::timeline::{KeyAt, TimelineCursor, TimelineSelection, TimelineView};
-use crate::anim::AnimEditor;
+use crate::anim::body::BodyClips;
+use crate::anim::{clip_names, edit_selected, selected_clip, AnimEditor, ClipSource};
 use crate::common::skeleton::clip::{
     Axis, ChainRef, Channel, Clip, Clock, Combine, Space, Track, Unit,
 };
+use crate::common::skeleton::state::AnimationState;
 use crate::common::skeleton::{default_humanoid, Interpolation};
+use strum::IntoEnumIterator;
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::class::Class;
 use crate::common::net::NetRole;
@@ -106,11 +109,15 @@ impl Plugin for AnimUiPlugin {
 
 struct AnimTabs<'a> {
     editor: &'a mut PropEditor,
+    body: &'a mut BodyClips,
     anim: &'a mut AnimEditor,
     figure: &'a mut ScaleFigure,
     cursor: &'a mut TimelineCursor,
     selection: &'a TimelineSelection,
     mode: &'a mut Option<AppMode>,
+    /// Set when the menu bar asked for a save, so the writing happens outside
+    /// the closure that drew the button.
+    save: bool,
     /// Set when an edit has invalidated the key selection — a track removed,
     /// say — so it can be cleared outside the closures that draw the panels,
     /// which only hold it by shared reference.
@@ -153,11 +160,51 @@ impl TabViewer for AnimTabs<'_> {
 }
 
 impl AnimTabs<'_> {
-    fn clips(&mut self, ui: &mut Ui) {
-        let names: Vec<String> = self.editor.doc().animations.clips.keys().cloned().collect();
+    /// The clip on show, whichever source it came from.
+    fn clip(&self) -> Option<Clip> {
+        selected_clip(self.anim, self.editor, self.body)
+    }
 
+    /// Change it, through whichever document owns it.
+    fn edit(&mut self, change: impl FnOnce(&mut Clip)) {
+        edit_selected(self.anim, self.editor, self.body, change);
+    }
+
+    fn clips(&mut self, ui: &mut Ui) {
+        // **Which set of clips**, before which clip. A weapon's motion lives
+        // in its `.gpp` beside the hold it deviates from; a body's is pack
+        // content named by the state it plays for. Same editor, because they
+        // are the same kind of thing.
         ui.horizontal(|ui| {
-            if ui.button(get!("anim.new_clip")).clicked() {
+            for source in [ClipSource::Prop, ClipSource::Body] {
+                let picked = self.anim.source == source;
+                if ui
+                    .selectable_label(picked, get!(source.name_key()))
+                    .clicked()
+                    && !picked
+                {
+                    self.anim.source = source;
+                    // The name means nothing in the other source, and a
+                    // selection carried across would point at a clip that is
+                    // not there — or worse, at one that is and is unrelated.
+                    self.anim.selected = None;
+                    self.anim.track = None;
+                    self.clear_keys = true;
+                }
+            }
+        });
+        ui.separator();
+
+        let names: Vec<String> = clip_names(self.anim, self.editor, self.body);
+
+        // A body clip is one of thirteen fixed states, so there is nothing to
+        // create or delete — a state either has an animation or falls back to
+        // its built-in pose. Making one is `New`, which fills in the state's
+        // own name; the states without a clip are offered below.
+        ui.horizontal(|ui| {
+            if self.anim.source == ClipSource::Prop
+                && ui.button(get!("anim.new_clip")).clicked()
+            {
                 // Named by counting rather than by asking. A dialog before the
                 // first keyframe is a dialog between somebody and the thing
                 // they came here to do; the name is editable below.
@@ -171,9 +218,10 @@ impl AnimTabs<'_> {
                 self.anim.selected = Some(name);
             }
             let picked = self.anim.selected.clone();
-            if ui
-                .add_enabled(picked.is_some(), egui::Button::new(get!("anim.delete_clip")))
-                .clicked()
+            if self.anim.source == ClipSource::Prop
+                && ui
+                    .add_enabled(picked.is_some(), egui::Button::new(get!("anim.delete_clip")))
+                    .clicked()
             {
                 if let Some(name) = picked {
                     self.editor.begin_gesture();
@@ -182,6 +230,10 @@ impl AnimTabs<'_> {
                 }
             }
         });
+
+        if self.anim.source == ClipSource::Body {
+            self.offer_the_unanimated_states(ui, &names);
+        }
         ui.separator();
 
         if names.is_empty() {
@@ -192,11 +244,12 @@ impl AnimTabs<'_> {
             let picked = self.anim.selected.as_deref() == Some(name.as_str());
             if ui.selectable_label(picked, name).clicked() && !picked {
                 self.anim.selected = Some(name.clone());
+                self.anim.track = None;
+                self.clear_keys = true;
             }
         }
 
-        let Some(name) = self.anim.selected.clone() else { return };
-        let Some(clip) = self.editor.doc().animations.get(&name) else { return };
+        let Some(clip) = self.clip() else { return };
         let mut edited = clip.clone();
         let mut changed = false;
 
@@ -227,13 +280,49 @@ impl AnimTabs<'_> {
         changed |= ui.checkbox(&mut edited.looping, get!("anim.label.looping")).changed();
 
         if changed {
-            self.editor.begin_gesture();
-            if let Some(clip) = self.editor.doc_mut().animations.clips.get_mut(&name) {
+            self.edit(|clip| {
                 clip.length = edited.length;
                 clip.clock = edited.clock;
                 clip.looping = edited.looping;
-            }
+            });
         }
+    }
+
+    /// The states that have no animation yet, each one click from having one.
+    ///
+    /// Listed rather than left to be guessed: a body clip's name is not free
+    /// text, it is one of thirteen, and a file under any other name is one
+    /// nothing will ever play.
+    fn offer_the_unanimated_states(&mut self, ui: &mut Ui, have: &[String]) {
+        let missing: Vec<AnimationState> = AnimationState::iter()
+            .filter(|state| !have.iter().any(|name| name == state.clip_name()))
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+
+        egui::ComboBox::from_id_salt("anim_new_body")
+            .selected_text(get!("anim.animate_a_state"))
+            .show_ui(ui, |ui| {
+                for state in missing {
+                    if ui.button(state.name()).clicked() {
+                        let name = state.clip_name().to_string();
+                        self.body.edit(|clips| {
+                            clips.insert(
+                                name.clone(),
+                                Clip {
+                                    name_key: format!("animation.states.{name}"),
+                                    length: 1.0,
+                                    ..Clip::default()
+                                },
+                            );
+                        });
+                        self.anim.selected = Some(name);
+                        self.anim.track = None;
+                        ui.close_kind(UiKind::Menu);
+                    }
+                }
+            });
     }
 
     /// The tracks a clip has, and how to get another one.
@@ -242,11 +331,8 @@ impl AnimTabs<'_> {
     /// until there is a way to make an effector track in a space and a unit,
     /// "a key holds a target" is a sentence in a file nobody can write.
     fn tracks(&mut self, ui: &mut Ui) {
-        let Some(name) = self.anim.selected.clone() else {
+        let Some(clip) = self.clip() else {
             ui.label(get!("anim.no_clips"));
-            return;
-        };
-        let Some(clip) = self.editor.doc().animations.get(&name).cloned() else {
             return;
         };
 
@@ -256,10 +342,8 @@ impl AnimTabs<'_> {
                 .show_ui(ui, |ui| {
                     for (label, channel) in new_channels() {
                         if ui.button(get!(label)).clicked() {
-                            self.editor.begin_gesture();
-                            if let Some(clip) =
-                                self.editor.doc_mut().animations.clips.get_mut(&name)
-                            {
+                            let mut landed = None;
+                            self.edit(|clip| {
                                 clip.tracks.push(Track {
                                     combine: Combine::Replace,
                                     space: Space::Body,
@@ -267,8 +351,9 @@ impl AnimTabs<'_> {
                                     enabled: true,
                                     channel,
                                 });
-                                self.anim.track = Some(clip.tracks.len() - 1);
-                            }
+                                landed = Some(clip.tracks.len() - 1);
+                            });
+                            self.anim.track = landed;
                             ui.close_kind(UiKind::Menu);
                         }
                     }
@@ -280,10 +365,9 @@ impl AnimTabs<'_> {
                 .clicked()
             {
                 if let Some(index) = picked {
-                    self.editor.begin_gesture();
-                    if let Some(clip) = self.editor.doc_mut().animations.clips.get_mut(&name) {
+                    self.edit(|clip| {
                         clip.tracks.remove(index);
-                    }
+                    });
                     self.anim.track = None;
                     // The key selection addresses tracks by index, so leaving
                     // it alone after a removal would leave it pointing at
@@ -425,12 +509,11 @@ impl AnimTabs<'_> {
         }
 
         if changed {
-            self.editor.begin_gesture();
-            if let Some(clip) = self.editor.doc_mut().animations.clips.get_mut(&name) {
+            self.edit(|clip| {
                 if let Some(track) = clip.tracks.get_mut(index) {
                     *track = edited;
                 }
-            }
+            });
         }
     }
 
@@ -443,10 +526,6 @@ impl AnimTabs<'_> {
     /// vertical axis that looked special would suggest `Ground` is a property
     /// of the key rather than of the axis.
     fn key(&mut self, ui: &mut Ui) {
-        let Some(name) = self.anim.selected.clone() else {
-            ui.label(get!("anim.no_clips"));
-            return;
-        };
         let picked: Vec<KeyAt> = self.selection.0.iter().copied().collect();
         if picked.is_empty() {
             ui.label(get!("anim.no_key"));
@@ -461,7 +540,7 @@ impl AnimTabs<'_> {
         // every picked key of the same kind — which is what makes setting six
         // feet to the floor one gesture rather than six.
         let first = picked[0];
-        let Some(clip) = self.editor.doc().animations.get(&name) else { return };
+        let Some(clip) = self.clip() else { return };
         let Some(track) = clip.tracks.get(first.track) else { return };
 
         let mut edited = match &track.channel {
@@ -566,25 +645,25 @@ impl AnimTabs<'_> {
         // a change per frame, and per-change undo steps would turn one pull on
         // a number into forty presses of Ctrl+Z.
         let written = *key;
-        self.editor.begin_gesture();
-        let Some(clip) = self.editor.doc_mut().animations.clips.get_mut(&name) else { return };
-        for picked in &picked {
-            let Some(track) = clip.tracks.get_mut(picked.track) else { continue };
-            match &mut track.channel {
-                Channel::Effector { keys, .. }
-                | Channel::Weapon { keys }
-                | Channel::Root { keys } => {
-                    if let Some(key) = keys.get_mut(picked.key) {
-                        // The time is not written across: a multiple selection
-                        // edited together should change its shape, not collapse
-                        // onto one moment.
-                        key.to = written.to;
-                        key.ease = written.ease;
+        self.edit(|clip| {
+            for picked in &picked {
+                let Some(track) = clip.tracks.get_mut(picked.track) else { continue };
+                match &mut track.channel {
+                    Channel::Effector { keys, .. }
+                    | Channel::Weapon { keys }
+                    | Channel::Root { keys } => {
+                        if let Some(key) = keys.get_mut(picked.key) {
+                            // The time is not written across: a multiple
+                            // selection edited together should change its
+                            // shape, not collapse onto one moment.
+                            key.to = written.to;
+                            key.ease = written.ease;
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
-        }
+        });
     }
 
     fn scene(&mut self, ui: &mut Ui) {
@@ -607,14 +686,7 @@ impl AnimTabs<'_> {
     }
 
     fn problems(&mut self, ui: &mut Ui) {
-        let Some(clip) = self
-            .anim
-            .selected
-            .as_deref()
-            .and_then(|name| self.editor.doc().animations.get(name))
-        else {
-            return;
-        };
+        let Some(clip) = self.clip() else { return };
         // The rig the figure is actually wearing, so a bone that exists on one
         // build and not another is reported against the one on screen.
         let rig = crate::common::skeleton::humanoid(
@@ -631,6 +703,7 @@ fn panels(
     mut contexts: EguiContexts,
     mut layout: ResMut<AnimPanels>,
     mut editor: ResMut<PropEditor>,
+    mut body: ResMut<BodyClips>,
     mut anim: ResMut<AnimEditor>,
     mut figure: ResMut<ScaleFigure>,
     mut cursor: ResMut<TimelineCursor>,
@@ -656,12 +729,14 @@ fn panels(
     let mut requested: Option<AppMode> = None;
     let mut tabs = AnimTabs {
         editor: &mut editor,
+        body: &mut body,
         anim: &mut anim,
         figure: &mut figure,
         cursor: &mut cursor,
         selection: &selection,
         mode: &mut requested,
         clear_keys: false,
+        save: false,
     };
 
     layout.menu_bar_height = egui::Panel::top("anim_menu_bar")
@@ -672,11 +747,23 @@ fn panels(
                 // prop editor's is: this system is gated on the mode it draws
                 // for, so which one that is is not in question.
                 mode_menu(ui, AppMode::Animation, role.as_deref(), tabs.mode);
+                if ui.button(get!("anim.save")).clicked() {
+                    tabs.save = true;
+                }
                 ui.separator();
                 ui.label(match tabs.anim.selected.as_deref() {
                     Some(name) => name.to_string(),
                     None => get!("anim.no_clips"),
                 });
+                // The same asterisk the prop editor shows, and the same
+                // question: whichever document this source writes to.
+                let dirty = match tabs.anim.source {
+                    ClipSource::Prop => tabs.editor.dirty,
+                    ClipSource::Body => tabs.body.dirty,
+                };
+                if dirty {
+                    ui.label("*");
+                }
             });
         })
         .response
@@ -716,9 +803,13 @@ fn panels(
         .width();
 
     let clear_keys = tabs.clear_keys;
+    let asked_to_save = tabs.save;
     drop(tabs);
     if clear_keys {
         selection.0.clear();
+    }
+    if asked_to_save {
+        save_the_clips(anim.source, &mut editor, &mut body);
     }
 
     // **Reserved, not drawn.** egui owns the *layout* — so the viewports
@@ -755,6 +846,9 @@ fn panels(
     layout.egui_wants_pointer = ctx.egui_wants_pointer_input();
     layout.egui_wants_keyboard = ctx.egui_wants_keyboard_input();
 
+    // Both documents, because the source can be switched mid-session and a
+    // gesture left open on the one not showing would fold the next unrelated
+    // edit into it.
     // One undo step per gesture, exactly as the prop editor closes its own —
     // **and the timeline's drags count.** egui is not "using the pointer"
     // while somebody drags a key, because the strip is a frameless panel with
@@ -763,6 +857,7 @@ fn panels(
     // times over. That is the whole reason this system knows a grab exists.
     if !ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input() && grab.0.is_none() {
         editor.end_gesture();
+        body.end_gesture();
     }
 
     if let Some(mode) = requested {
@@ -779,6 +874,41 @@ fn panels(
         let bottom = layout.timeline_height / window.height();
         multicam.start = Vec2::new(left, top);
         multicam.end = Vec2::new(1.0 - right, 1.0 - bottom);
+    }
+}
+
+/// Write whichever document the current source edits.
+///
+/// The two save quite differently and that is not hidden behind a trait: a
+/// prop is one file the editor already has a path for, and the body clips are
+/// a directory of them named by state. A trait over "save yourself" would have
+/// to invent a shared idea of *where*, which they do not have.
+///
+/// A prop that has never been written has no path, and **save-as belongs to
+/// the prop editor** — it owns the file dialog and the thread it runs on. Said
+/// in the log rather than silently doing nothing.
+fn save_the_clips(source: ClipSource, editor: &mut PropEditor, body: &mut BodyClips) {
+    match source {
+        ClipSource::Prop => match editor.path.clone() {
+            Some(path) => match crate::prop::document::save(&path, editor.doc()) {
+                Ok(()) => {
+                    editor.mark_saved(path.clone());
+                    info!("Saved {}", path.display());
+                }
+                Err(why) => warn!("Could not save {}: {why}", path.display()),
+            },
+            None => warn!(
+                "This prop has never been saved; use Save As in the prop editor, \
+                 which owns the file dialog",
+            ),
+        },
+        ClipSource::Body => {
+            let pack = BodyClips::default_pack();
+            match body.save(&pack) {
+                Ok(count) => info!("Saved {count} body animation(s) to {}", pack.display()),
+                Err(why) => warn!("Could not save body animations: {why}"),
+            }
+        }
     }
 }
 

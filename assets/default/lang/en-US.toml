@@ -319,7 +319,7 @@ failed = "Failed: { reason }"
 title = "Esc Menu"
 
 [anim]
-no_clips = "No animations in this prop."
+no_clips = "No animation selected."
 no_key = "No key picked. Click one on the strip, or drag a box across several."
 many_keys = "{ count } keys picked; editing writes to all of them."
 rotation_key = "A rotation key is three angles; there is no datum to pick."
@@ -331,10 +331,18 @@ delete_clip = "Delete"
 no_tracks = "No tracks. Add one above."
 add_track = "Add track…"
 delete_track = "Remove"
+animate_a_state = "Animate a state…"
+save = "Save"
+saved = "Saved { count } animation(s)"
+save_failed = "Could not save: { why }"
 
 # Field labels live under their own table: several of them share a name with a
 # table of values — `clock`, `space`, `unit`, `combine`, `chain` — and TOML
 # will not have a key be both a string and a table.
+[anim.source]
+prop = "This prop"
+body = "Bodies"
+
 [anim.label]
 length = "Length"
 clock = "Clock"
