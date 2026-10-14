@@ -464,6 +464,8 @@ pub(crate) fn play_the_clips(
             // the viewmodel pass, which solves in eye space already.
             eye: None,
             ground: &ground,
+            // A weapon clip runs on seconds, and has no feet to follow.
+            footfalls: None,
         };
 
         let mut moving = placed.unwrap_or_default();
@@ -775,6 +777,7 @@ mod tests {
                 space: Space::Carry,
                 unit: Unit::Metres,
                 enabled: true,
+                timing: Default::default(),
                 channel: Channel::Weapon {
                     keys: vec![Key {
                         at: 0.0,

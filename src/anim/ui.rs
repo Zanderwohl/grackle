@@ -15,7 +15,8 @@ use crate::anim::timeline::{KeyAt, TimelineCursor, TimelineSelection, TimelineVi
 use crate::anim::body::{BodyClipDialog, BodyClips};
 use crate::anim::{edit_selected, selected_clip, AnimEditor, ClipSource};
 use crate::common::skeleton::clip::{
-    Axis, ChainRef, Channel, Clip, Clock, Combine, Key, Space, Track, Unit,
+    Axis, ChainRef, Channel, Clip, Clock, Combine, Key, Space, StateAnimation, Timing, Track,
+    Unit, Variant,
 };
 use crate::common::skeleton::state::AnimationState;
 use crate::common::skeleton::{default_humanoid, Interpolation};
@@ -235,21 +236,28 @@ impl AnimTabs<'_> {
                 // Every state, in the enum's order, whether or not it has a
                 // clip — a state with none is still played, by its built-in
                 // pose, and that is worth seeing rather than inferring.
+                // A copy, because the rows edit the document they are drawn
+                // from. A handful of clips is a few kilobytes.
+                let animations = self.body.animations().clone();
                 for state in AnimationState::iter() {
                     let name = state.clip_name();
-                    if body_names.iter().any(|had| had == name) {
-                        self.library_row(ui, ClipSource::Body, name, &body_names);
-                    } else {
-                        self.unmade_row(
+                    match animations.get(name) {
+                        None => self.unmade_row(
                             ui,
                             ClipSource::Body,
                             name,
                             format!("animation.states.{name}"),
-                        );
+                        ),
+                        Some(StateAnimation::Single(_)) => {
+                            self.library_row(ui, ClipSource::Body, name, &body_names)
+                        }
+                        Some(StateAnimation::Blend(variants)) => {
+                            self.blend_rows(ui, state, variants)
+                        }
                     }
                 }
                 // A file under a name no state has, which nothing will play.
-                for name in &body_names {
+                for name in animations.keys() {
                     if BodyClips::state_of(name).is_none() {
                         self.library_row(ui, ClipSource::Body, name, &body_names);
                     }
@@ -308,11 +316,80 @@ impl AnimTabs<'_> {
                 // A body clip's name is the state it plays for, so there is no
                 // renaming one — and deleting one is putting the state back on
                 // its built-in pose, so that is what it is called.
+                if ui.button(get!("anim.library.blend")).clicked() {
+                    let state = name.to_string();
+                    self.body.edit(|clips| {
+                        if let Some(animation) = clips.get_mut(&state) {
+                            crate::anim::body::blend_by_heading(animation);
+                        }
+                    });
+                    // The straight-ahead variant, which is the clip it was.
+                    self.pick(ClipSource::Body, &crate::anim::body::variant_name(name, 1));
+                    ui.close_kind(UiKind::Menu);
+                }
                 if ui.button(get!("anim.library.revert")).clicked() {
                     let name = name.to_string();
                     self.body.edit(|clips| clips.remove(&name));
                     ui.close_kind(UiKind::Menu);
                 }
+            }
+        });
+    }
+
+    /// A blended state: its name, and a row per variant beneath it.
+    fn blend_rows(&mut self, ui: &mut Ui, state: AnimationState, variants: &[Variant]) {
+        let name = state.clip_name();
+        let header = ui.add(egui::Label::new(state.name()).selectable(false).sense(egui::Sense::click()));
+        header.context_menu(|ui| {
+            if ui.button(get!("anim.library.revert")).clicked() {
+                let name = name.to_string();
+                self.body.edit(|clips| clips.remove(&name));
+                ui.close_kind(UiKind::Menu);
+            }
+        });
+
+        ui.indent(("anim_variants", name), |ui| {
+            for (index, variant) in variants.iter().enumerate() {
+                let address = crate::anim::body::variant_name(name, index);
+                let picked = self.anim.source == ClipSource::Body
+                    && self.anim.selected.as_deref() == Some(address.as_str());
+                let label = get!(
+                    "anim.library.variant",
+                    "heading",
+                    format!("{:+.0}°", variant.heading.to_degrees())
+                );
+                let row = ui.selectable_label(picked, label);
+                if row.clicked() && !picked {
+                    self.pick(ClipSource::Body, &address);
+                }
+                row.context_menu(|ui| {
+                    if ui.button(get!("anim.library.duplicate")).clicked() {
+                        let mut landed = None;
+                        self.body.edit(|clips| {
+                            if let Some(StateAnimation::Blend(variants)) = clips.get_mut(name) {
+                                landed = Some(crate::anim::body::duplicate_variant(variants, index));
+                            }
+                        });
+                        if let Some(landed) = landed {
+                            self.pick(ClipSource::Body, &crate::anim::body::variant_name(name, landed));
+                        }
+                        ui.close_kind(UiKind::Menu);
+                    }
+                    // The last variant is the blend; removing it is reverting
+                    // the state, which the state's own menu says.
+                    if ui
+                        .add_enabled(variants.len() > 1, egui::Button::new(get!("anim.library.remove_variant")))
+                        .clicked()
+                    {
+                        self.body.edit(|clips| {
+                            if let Some(StateAnimation::Blend(variants)) = clips.get_mut(name) {
+                                variants.remove(index);
+                            }
+                        });
+                        self.clear_keys = true;
+                        ui.close_kind(UiKind::Menu);
+                    }
+                });
             }
         });
     }
@@ -346,7 +423,7 @@ impl AnimTabs<'_> {
             }
             ClipSource::Body => {
                 let name = name.to_string();
-                self.body.edit(|clips| clips.insert(name, clip));
+                self.body.edit(|clips| clips.insert(name, clip.into()));
             }
         }
         self.pick(source, name);
@@ -416,6 +493,41 @@ impl AnimTabs<'_> {
     /// Here rather than under the clip list, because these are what set the
     /// scale of the strip the clip is being edited on.
     fn clip_section(&mut self, ui: &mut Ui, clip: &Clip) {
+        // A variant of a blend says which heading it is for.
+        if self.anim.source == ClipSource::Body {
+            if let Some((state, Some(index))) = self
+                .anim
+                .selected
+                .as_deref()
+                .map(crate::anim::body::address)
+                .map(|(state, index)| (state.to_string(), index))
+            {
+                let heading = match self.body.animations().get(&state) {
+                    Some(StateAnimation::Blend(variants)) => variants.get(index).map(|v| v.heading),
+                    _ => None,
+                };
+                if let Some(heading) = heading {
+                    ui.horizontal(|ui| {
+                        ui.label(get!("anim.label.heading"));
+                        let mut degrees = heading.to_degrees();
+                        if ui
+                            .add(egui::DragValue::new(&mut degrees).speed(0.5).range(-180.0..=180.0).suffix("°"))
+                            .changed()
+                        {
+                            self.body.begin_gesture();
+                            if let Some(StateAnimation::Blend(variants)) =
+                                self.body.doc_mut().get_mut(&state)
+                            {
+                                if let Some(variant) = variants.get_mut(index) {
+                                    variant.heading = degrees.to_radians();
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
         // The why, kept with the numbers. Saved as data because the file is
         // rewritten on every save and a comment would not survive one.
         ui.label(get!("anim.label.note"));
@@ -488,6 +600,26 @@ impl AnimTabs<'_> {
             });
         }
 
+        // A variant of a blend can be previewed as the whole blend instead.
+        if self.anim.source == ClipSource::Body
+            && self.anim.selected.as_deref().is_some_and(|name| name.contains('#'))
+        {
+            ui.separator();
+            let mut blending = self.anim.blend_preview.is_some();
+            if ui.checkbox(&mut blending, get!("anim.label.blend_preview")).changed() {
+                self.anim.blend_preview = blending.then_some(0.0);
+            }
+            if let Some(heading) = self.anim.blend_preview.as_mut() {
+                let mut degrees = heading.to_degrees();
+                if ui
+                    .add(egui::DragValue::new(&mut degrees).speed(0.5).range(-180.0..=180.0).suffix("°"))
+                    .changed()
+                {
+                    *heading = degrees.to_radians();
+                }
+            }
+        }
+
         ui.separator();
         let mut snap = !self.anim.free_drag;
         if ui.checkbox(&mut snap, get!("anim.label.snap")).changed() {
@@ -526,6 +658,7 @@ impl AnimTabs<'_> {
                     space: Space::Body,
                     unit: Unit::Metres,
                     enabled: true,
+                    timing: Default::default(),
                     channel,
                 });
                 landed = Some(clip.tracks.len() - 1);
@@ -701,6 +834,22 @@ impl AnimTabs<'_> {
                         ] {
                             changed |= ui
                                 .selectable_value(&mut edited.unit, unit, get!(unit_key(unit)))
+                                .changed();
+                        }
+                    });
+            });
+        }
+
+        // Only a stride clip has feet to time anything by.
+        if clip.clock == Clock::Stride {
+            ui.horizontal(|ui| {
+                ui.label(get!("anim.label.timing"));
+                egui::ComboBox::from_id_salt("anim_timing")
+                    .selected_text(get!(edited.timing.name_key()))
+                    .show_ui(ui, |ui| {
+                        for timing in Timing::ALL {
+                            changed |= ui
+                                .selectable_value(&mut edited.timing, timing, get!(timing.name_key()))
                                 .changed();
                         }
                     });
@@ -1571,6 +1720,7 @@ mod tests {
                     space: Space::Body,
                     unit: Unit::Metres,
                     enabled: true,
+                    timing: Default::default(),
                     channel: Channel::Weapon {
                         keys: vec![key(0.0, [0.1, 0.2, 0.3]), key(0.5, [0.4, 0.5, 0.6])],
                     },

@@ -84,6 +84,9 @@ pub struct AnimEditor {
     /// Stated as the exception so the default — snapping — is what a
     /// `Default` gives. Alt held during a drag is the same thing for one drag.
     pub free_drag: bool,
+    /// Preview a blended state's whole blend at this heading, rather than the
+    /// variant being edited on its own. Radians; `None` is the variant alone.
+    pub blend_preview: Option<f32>,
     /// Still waiting to frame the clip and the figure.
     ///
     /// Neither can be done on the way in. egui has not measured the strip yet,
@@ -217,7 +220,7 @@ pub fn edit_selected(
         }
         ClipSource::Body => {
             body.begin_gesture();
-            if let Some(clip) = body.doc_mut().get_mut(name) {
+            if let Some(clip) = body.clip_mut(name) {
                 change(clip);
             }
         }
@@ -830,15 +833,32 @@ fn edit_keys(
 ///
 /// The playhead is on the clip's own clock, so a stride clip's time is
 /// strides and becomes the stride a gait's foot targets are read from.
-pub fn preview_inputs(clip: &Clip, time: f32) -> crate::common::skeleton::state::PoseInputs {
+///
+/// A gait is also told which way it is going, `heading` off its own facing,
+/// so its feet are planted for that direction.
+pub fn preview_inputs(
+    clip: &Clip,
+    time: f32,
+    state: crate::common::skeleton::state::AnimationState,
+    heading: f32,
+) -> crate::common::skeleton::state::PoseInputs {
     use crate::common::skeleton::clip::Clock;
     let stride = match clip.clock {
         Clock::Stride => (time / clip.length.max(1.0)).rem_euclid(1.0),
         Clock::Seconds | Clock::Shared => 0.0,
     };
+    let travel = match state.uses_gait() {
+        true => {
+            let facing = crate::common::skeleton::gait::direction_of(state);
+            let (sin, cos) = heading.sin_cos();
+            Vec2::new(facing.x * cos - facing.y * sin, facing.x * sin + facing.y * cos)
+        }
+        false => Vec2::ZERO,
+    };
     crate::common::skeleton::state::PoseInputs {
         seconds: time,
         stride,
+        travel,
         ..Default::default()
     }
 }
@@ -853,6 +873,7 @@ fn drive_the_preview(
     shown: Res<ShownClip>,
     cursor: Res<TimelineCursor>,
     anim: Res<AnimEditor>,
+    clips: Res<body::BodyClips>,
     mut performance: ResMut<FigurePerformance>,
     mut corrections: ResMut<crate::prop::figure::FigureCorrections>,
 ) {
@@ -861,10 +882,37 @@ fn drive_the_preview(
     let Some(clip) = shown.0.as_ref() else { return };
 
     // A body clip is played through its state's corrections in a match, so it
-    // is previewed through them too.
+    // is previewed through them too — at the heading it is for, so a
+    // diagonal variant is seen with the feet stepping diagonally.
     if anim.source == ClipSource::Body {
-        if let Some(state) = anim.selected.as_deref().and_then(body::BodyClips::state_of) {
-            corrections.0 = Some((state, preview_inputs(clip, cursor.time)));
+        let (filed, variant) = anim.selected.as_deref().map_or(("", None), body::address);
+        let animation = clips.animations().get(filed);
+        if let Some(state) = body::BodyClips::state_of(filed) {
+            let blend = match animation {
+                Some(crate::common::skeleton::clip::StateAnimation::Blend(variants)) => Some(variants),
+                _ => None,
+            };
+            let heading = match (anim.blend_preview, blend) {
+                (Some(heading), Some(_)) => heading,
+                (None, Some(variants)) => variant
+                    .and_then(|index| variants.get(index))
+                    .map_or(0.0, |variant| variant.heading),
+                _ => 0.0,
+            };
+            corrections.0 = Some((state, preview_inputs(clip, cursor.time, state, heading)));
+
+            // The whole blend, as a match plays it: the two variants either
+            // side, the upper at the blend weight. `apply_stack` lerps a
+            // partial layer, which is the same lerp `animation_pose` makes.
+            if let (Some(heading), Some(animation)) = (anim.blend_preview, animation.filter(|_| blend.is_some())) {
+                if let Some((first, second)) = animation.at_heading(heading) {
+                    performance.0 .0.push(Playing { clip: Arc::new(first.clone()), time: cursor.time, weight: 1.0 });
+                    if let Some((other, t)) = second {
+                        performance.0 .0.push(Playing { clip: Arc::new(other.clone()), time: cursor.time, weight: t });
+                    }
+                    return;
+                }
+            }
         }
     }
 
@@ -893,7 +941,7 @@ mod tests {
         let (editor, _) = editor_with_a_clip(&[0.0, 0.5]);
         let mut body = body::BodyClips::default();
         body.edit(|clips| {
-            clips.insert("idle".into(), Clip { length: 1.0, ..Clip::default() });
+            clips.insert("idle".into(), Clip { length: 1.0, ..Clip::default() }.into());
         });
 
         // Nothing picked yet: the prop's own clip is what there is.
@@ -922,7 +970,7 @@ mod tests {
         let (mut editor, _) = editor_with_a_clip(&[0.0, 0.5]);
         let mut body = body::BodyClips::default();
         body.edit(|clips| {
-            clips.insert("idle".into(), Clip { length: 1.0, ..Clip::default() });
+            clips.insert("idle".into(), Clip { length: 1.0, ..Clip::default() }.into());
         });
 
         let prop_generation = editor.generation();
@@ -972,6 +1020,7 @@ mod tests {
                     space: Space::Body,
                     unit: Unit::Metres,
                     enabled: true,
+                    timing: Default::default(),
                     channel: Channel::Weapon {
                         keys: at
                             .iter()
@@ -994,6 +1043,7 @@ mod tests {
             selected: Some("fire".into()),
             track: None,
             free_drag: false,
+            blend_preview: None,
             pending_frame: false,
         };
         (editor, anim)

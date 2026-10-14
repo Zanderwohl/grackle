@@ -32,7 +32,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::clip::Clip;
+use super::clip::StateAnimation;
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -512,6 +512,17 @@ impl AnimationState {
     ///
     /// Empty offsets mean "where a body standing still has them", which is
     /// what an idle wants. A clip will answer this from its contact spans.
+    /// How much of a stride each foot is down for, if this state takes steps.
+    pub fn stance(&self, inputs: &PoseInputs) -> Option<f32> {
+        self.uses_gait().then(|| self.gait_style(inputs).shape.stance)
+    }
+
+    /// Which way this body is going relative to the way its state faces — the
+    /// axis a [`StateAnimation::Blend`] is blended along.
+    pub fn heading(&self, inputs: &PoseInputs) -> f32 {
+        super::gait::heading_between(direction_of(*self), self.travel(inputs))
+    }
+
     pub fn foot_offsets(&self, inputs: &PoseInputs) -> [FootOffset; 2] {
         if self.uses_gait() {
             gait_foot_offsets(inputs.stride, self.travel(inputs), self.gait_style(inputs).shape)
@@ -535,16 +546,16 @@ impl AnimationState {
 /// against the function it replaced.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct ClipLibrary {
-    by_state: HashMap<AnimationState, Arc<Clip>>,
+    by_state: HashMap<AnimationState, Arc<StateAnimation>>,
 }
 
 impl ClipLibrary {
-    pub fn get(&self, state: AnimationState) -> Option<&Arc<Clip>> {
+    pub fn get(&self, state: AnimationState) -> Option<&Arc<StateAnimation>> {
         self.by_state.get(&state)
     }
 
-    pub fn insert(&mut self, state: AnimationState, clip: Clip) {
-        self.by_state.insert(state, Arc::new(clip));
+    pub fn insert(&mut self, state: AnimationState, animation: impl Into<StateAnimation>) {
+        self.by_state.insert(state, Arc::new(animation.into()));
     }
 
     /// Put a state back on its built-in pose.

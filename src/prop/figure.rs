@@ -275,6 +275,14 @@ pub fn pose_the_figure(
                 weapon: stage.holding.then_some(placed),
                 eye: None,
                 ground: &ground,
+                // Where the feet are in a gait at the preview's inputs, so a
+                // foot-timed track is seen at the speed it is being previewed
+                // at — the same answer `ik::animation_pose` gives in a match.
+                footfalls: corrections.as_deref().and_then(|c| c.0).and_then(|(state, inputs)| {
+                    state
+                        .stance(&inputs)
+                        .map(|stance| crate::common::skeleton::gait::footfalls(inputs.stride, stance))
+                }),
             };
             let weapon = stage.holding.then_some(&mut placed);
             apply_stack(&performance.0, skeleton, &mut standing, &frames, weapon);

@@ -133,6 +133,8 @@ items as they land; anything struck out was decided against, with why.
 - Stride clips are scrubbed and played against a seconds ruler.
 - A solo control on track headers (switch off every other track).
 - The strip does not scroll vertically; headers stop at its bottom edge.
+- ~~The walking states are not ported.~~ They are, through foot-timed tracks
+  and heading blends — see [animation-blending.md](animation-blending.md).
 
 ## Checklist
 

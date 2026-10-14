@@ -1034,6 +1034,7 @@ mod tests {
                 space: Space::Body,
                 unit: Unit::Metres,
                 enabled: true,
+                timing: Default::default(),
                 channel: Channel::Weapon {
                     keys: [0.0_f32, 0.5, 1.0]
                         .into_iter()
