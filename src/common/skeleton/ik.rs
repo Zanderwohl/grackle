@@ -413,15 +413,32 @@ pub fn finish_pose(
         .and_then(|library| library.get(state))
         .map(|clip| clip_pose(clip, inputs, skeleton, root))
         .unwrap_or_else(|| state.pose(inputs));
+    correct_for_state(skeleton, &mut pose, state, inputs, root);
+    pose
+}
+
+/// The corrections a state calls for, on top of whatever made its pose.
+///
+/// Its own function so the animation editor's figure can run exactly these
+/// after previewing a body clip. Without them a clip is shown as it is
+/// authored rather than as it is played — an idle's settle lowers the whole
+/// body, feet and all, instead of bending the knees over feet that stay put —
+/// and the editor would be showing something no body in a match ever does.
+pub fn correct_for_state(
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    state: AnimationState,
+    inputs: &PoseInputs,
+    root: &Transform,
+) {
     // Ducking first: it lowers the hips, and planting is what puts the knees
     // back underneath wherever they end up.
     if state.ducks() {
-        duck_under(skeleton, &mut pose, root, CROUCH_HEIGHT);
+        duck_under(skeleton, pose, root, CROUCH_HEIGHT);
     }
     if state.plants_feet() {
-        plant_feet(skeleton, &mut pose, root, state.foot_offsets(inputs));
+        plant_feet(skeleton, pose, root, state.foot_offsets(inputs));
     }
-    pose
 }
 
 /// What a clip makes of a body, before the corrections a state calls for.

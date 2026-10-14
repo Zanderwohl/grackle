@@ -320,25 +320,19 @@ title = "Esc Menu"
 
 [anim]
 no_clips = "No animation selected."
-no_key = "No key picked. Click one on the strip, or drag a box across several."
+no_key = "No key picked."
 many_keys = "{ count } keys picked; editing writes to all of them."
 at = "At { time } s"
 leaving = "Leaving"
 clock_is = "Runs on: { clock }"
-new_clip = "New"
-delete_clip = "Delete"
-no_tracks = "No tracks. Add one above."
+no_tracks = "No tracks."
 add_track = "Add track…"
-delete_track = "Remove"
-animate_a_state = "Animate a state…"
+no_track = "No track picked."
+mixed_keys = "{ count } other picked key(s) measure something else and are left alone."
 
 # Field labels live under their own table: several of them share a name with a
 # table of values — `clock`, `space`, `unit`, `combine`, `chain` — and TOML
 # will not have a key be both a string and a table.
-[anim.source]
-prop = "This prop"
-body = "Bodies"
-
 [anim.label]
 length = "Length"
 clock = "Clock"
@@ -349,13 +343,56 @@ unit = "In"
 combine = "Onto the layer beneath"
 bone = "Bone"
 chain = "Limb"
+note = "Note"
+pole = "Pole"
+holding = "Holding"
+anchor = "Grid Frame"
+at = "At"
+snap = "Snap"
 
 [anim.panels]
-clips = "Clips"
-track = "Tracks"
-key = "Key"
-scene = "Scene"
+library = "Library"
+inspector = "Inspector"
 problems = "Problems"
+
+[anim.section]
+clip = "Clip"
+track = "Track"
+key = "Key"
+
+[anim.problem]
+no_length = "Length is { length }: no time at all."
+stride_length = "Length is { length } strides, not a whole number of them."
+unknown_bone = "Bone '{ bone }' is not on this rig."
+ground_angle = "Key at { at } grounds an angle, which has no floor under it."
+ground_sideways = "Key at { at } is grounded on a horizontal axis."
+ground_root = "Key at { at } grounds a root offset, which is already measured from where the body stands."
+outside = "Key at { at } is outside the clip."
+
+[anim.library]
+weapon = "Weapon"
+body = "Bodies"
+unsaved = "unsaved"
+body_pack = "Body animations"
+new_clip = "New clip"
+built_in = "Built-in pose"
+animate = "Animate"
+rename = "Rename"
+duplicate = "Duplicate"
+delete = "Delete"
+revert = "Revert to built-in"
+
+[anim.anchor]
+weapon = "Weapon"
+floor = "Floor"
+
+[anim.track_menu]
+switch_off = "Switch off"
+switch_on = "Switch on"
+duplicate = "Duplicate"
+move_up = "Move up"
+move_down = "Move down"
+remove = "Remove"
 
 [anim.clips]
 deploy = "Deploy"

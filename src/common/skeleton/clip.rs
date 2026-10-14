@@ -152,6 +152,14 @@ pub enum ChainRef {
 }
 
 impl ChainRef {
+    /// Every limb, in the order a menu lists them.
+    pub const ALL: [ChainRef; 4] = [
+        ChainRef::RightArm,
+        ChainRef::LeftArm,
+        ChainRef::RightLeg,
+        ChainRef::LeftLeg,
+    ];
+
     pub fn chain(self) -> Chain {
         match self {
             ChainRef::LeftArm => ik::LEFT_ARM,
@@ -167,6 +175,16 @@ impl ChainRef {
         match self {
             ChainRef::LeftArm | ChainRef::LeftLeg => -1.0,
             ChainRef::RightArm | ChainRef::RightLeg => 1.0,
+        }
+    }
+
+    /// The lang key for this limb.
+    pub fn name_key(self) -> &'static str {
+        match self {
+            ChainRef::RightArm => "anim.chain.right_arm",
+            ChainRef::LeftArm => "anim.chain.left_arm",
+            ChainRef::RightLeg => "anim.chain.right_leg",
+            ChainRef::LeftLeg => "anim.chain.left_leg",
         }
     }
 
@@ -691,26 +709,36 @@ impl Clip {
     /// note is what tells you why one hand is not moving. A tool that stopped
     /// at the first bad track would blank the viewport every time somebody
     /// mistyped a name.
-    pub fn problems(&self, known_bone: impl Fn(&str) -> bool) -> Vec<String> {
+    pub fn problems(&self, known_bone: impl Fn(&str) -> bool) -> Vec<ClipProblem> {
+        use crate::get;
         let mut problems = Vec::new();
-
+        let clip_wide = |message: String| ClipProblem { track: None, message };
         if self.length <= 0.0 {
-            problems.push(format!("length is {}, which is no time at all", self.length));
+            problems.push(clip_wide(get!(
+                "anim.problem.no_length",
+                "length",
+                self.length.to_string()
+            )));
         }
-
         // A stride is a whole cycle of the gait, so half of one is a clip that
         // lurches every other step — and the symptom is a limp nobody authored.
         if self.clock == Clock::Stride && (self.length - self.length.round()).abs() > 1e-3 {
-            problems.push(format!(
-                "a stride clip's length should be a whole number of strides, not {}",
-                self.length
-            ));
+            problems.push(clip_wide(get!(
+                "anim.problem.stride_length",
+                "length",
+                self.length.to_string()
+            )));
         }
-
         for (index, track) in self.tracks.iter().enumerate() {
+            let mut on_track = |message: String| {
+                problems.push(ClipProblem {
+                    track: Some(index),
+                    message,
+                })
+            };
             match &track.channel {
                 Channel::Rotation { bone, .. } if !known_bone(bone) => {
-                    problems.push(format!("track {index} names bone '{bone}', which this rig has not got"));
+                    on_track(get!("anim.problem.unknown_bone", "bone", bone.clone()));
                 }
                 Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
                     for key in keys {
@@ -719,11 +747,7 @@ impl Clip {
                         // and says nothing about the others — and `Ground` is
                         // the one reading that cannot mean anything.
                         if key.to.iter().any(|axis| axis.is_ground()) {
-                            problems.push(format!(
-                                "track {index} grounds an angle at {}, which has no floor \
-                                 under it",
-                                key.at
-                            ));
+                            on_track(get!("anim.problem.ground_angle", "at", key.at.to_string()));
                         }
                     }
                 }
@@ -733,9 +757,10 @@ impl Clip {
                         // given a meaning, because any meaning invented here
                         // would be one nobody could guess from the panel.
                         if key.to[0].is_ground() || key.to[2].is_ground() {
-                            problems.push(format!(
-                                "track {index} has a key grounded on a horizontal axis at {}",
-                                key.at
+                            on_track(get!(
+                                "anim.problem.ground_sideways",
+                                "at",
+                                key.at.to_string()
                             ));
                         }
                     }
@@ -747,25 +772,31 @@ impl Clip {
                         // decided. Grounding it is asking for the floor to be
                         // measured from the floor.
                         if key.to.iter().any(|axis| axis.is_ground()) {
-                            problems.push(format!(
-                                "track {index} grounds a root offset at {}, which is already \
-                                 measured from where the body stands",
-                                key.at
-                            ));
+                            on_track(get!("anim.problem.ground_root", "at", key.at.to_string()));
                         }
                     }
                 }
             }
-
             for at in track.channel.key_times() {
                 if at < 0.0 || at > self.length {
-                    problems.push(format!("track {index} has a key at {at}, outside the clip"));
+                    on_track(get!("anim.problem.outside", "at", at.to_string()));
                 }
             }
         }
-
         problems
     }
+}
+
+/// One thing wrong with a clip, and which track it is about.
+///
+/// The track is carried rather than written into the message, so the strip can
+/// badge the row it belongs to and the Problems panel can name the track the
+/// way the strip does — by its bone or limb, not by an index nobody can see.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipProblem {
+    /// `None` for something about the whole clip.
+    pub track: Option<usize>,
+    pub message: String,
 }
 
 /// Everything a prop, or a pack, has to say about motion.
@@ -962,11 +993,11 @@ mod tests {
         let problems = clip.problems(known);
 
         assert!(
-            problems.iter().any(|note| note.contains("elbow.q")),
+            problems.iter().any(|note| note.message.contains("elbow.q")),
             "a bone the rig has not got went unmentioned: {problems:?}"
         );
         assert!(
-            problems.iter().any(|note| note.contains("horizontal")),
+            problems.iter().any(|note| note.message.contains("horizontal")),
             "a sideways ground axis went unmentioned: {problems:?}"
         );
     }
@@ -982,7 +1013,7 @@ mod tests {
             ..Clip::default()
         };
         assert!(
-            clip.problems(|_| true).iter().any(|note| note.contains("whole number")),
+            clip.problems(|_| true).iter().any(|note| note.message.contains("whole number")),
             "a fractional stride length went unmentioned"
         );
     }
@@ -1138,7 +1169,7 @@ mod tests {
             ..Clip::default()
         };
         assert!(
-            clip.problems(|_| true).iter().any(|note| note.contains("no floor")),
+            clip.problems(|_| true).iter().any(|note| note.message.contains("no floor")),
             "a grounded angle went unmentioned",
         );
     }

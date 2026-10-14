@@ -19,7 +19,9 @@
 //! `EditorInputPlugin` and `prop::camera` both already bail on
 //! `is_pointer_over_egui`, so an orbit cannot start on the timeline and
 //! neither of them has to learn what a timeline is; and egui paints nothing
-//! over the nodes.
+//! over the lanes. It does paint the transport along the top of that panel and
+//! the track headers over the names column — rows of controls, which Bevy UI
+//! has none of — and the strip's own input never reads either place.
 
 pub mod body;
 pub mod timeline;
@@ -59,15 +61,6 @@ pub enum ClipSource {
     Body,
 }
 
-impl ClipSource {
-    pub fn name_key(self) -> &'static str {
-        match self {
-            ClipSource::Prop => "anim.source.prop",
-            ClipSource::Body => "anim.source.body",
-        }
-    }
-}
-
 /// What the animation editor is looking at.
 #[derive(Resource, Debug, Default)]
 pub struct AnimEditor {
@@ -86,6 +79,11 @@ pub struct AnimEditor {
     /// they happen. Conflating them would mean choosing a track by choosing
     /// one of its keys, which is impossible on a track that has none yet.
     pub track: Option<usize>,
+    /// Keys dragged on the strip land anywhere rather than on the grid.
+    ///
+    /// Stated as the exception so the default — snapping — is what a
+    /// `Default` gives. Alt held during a drag is the same thing for one drag.
+    pub free_drag: bool,
     /// Still waiting to frame the clip and the figure.
     ///
     /// Neither can be done on the way in. egui has not measured the strip yet,
@@ -130,6 +128,7 @@ impl Plugin for AnimPlugin {
             .init_resource::<TimelinePools>()
             .init_resource::<ShownClip>()
             .init_resource::<FigurePerformance>()
+            .init_resource::<crate::prop::figure::FigureCorrections>()
             .init_resource::<crate::prop::figure::FigureWeapon>()
             .init_resource::<StartInAnimEditor>()
             .init_resource::<body::BodyClips>()
@@ -157,6 +156,9 @@ impl Plugin for AnimPlugin {
                     follow_the_document,
                     timeline_input,
                     edit_keys,
+                    follow_the_key_selection,
+                    play_or_pause,
+                    play_the_cursor,
                                     lay_out_the_timeline,
                     // Before the scene poses the figure, so a scrub is seen on
                     // the frame it happened rather than the one after.
@@ -329,9 +331,11 @@ fn frame_when_there_is_something_to_frame(
 /// frame nineteen of a reload is what the *modelling* surface would then show.
 fn stop_performing(
     mut performance: ResMut<FigurePerformance>,
+    mut corrections: ResMut<crate::prop::figure::FigureCorrections>,
     mut held: ResMut<crate::prop::figure::FigureWeapon>,
 ) {
     performance.0 .0.clear();
+    corrections.0 = None;
     // And the prop goes back to its own origin, or the modelling surface would
     // open with the geometry parked wherever a clip left it.
     held.0 = Transform::IDENTITY;
@@ -350,19 +354,31 @@ fn follow_the_document(
     mut shown: ResMut<ShownClip>,
     mut view: ResMut<TimelineView>,
     mut seen: Local<(u64, u64)>,
+    mut showing: Local<Option<(ClipSource, String)>>,
 ) {
     let generation = documents_at(&editor, &clips);
-    if generation == *seen && !anim.is_changed() {
+    let picked = anim
+        .selected
+        .as_ref()
+        .map(|name| (anim.source, name.clone()));
+    let repicked = picked != *showing;
+    if generation == *seen && !repicked {
         return;
     }
     *seen = generation;
+    *showing = picked;
 
     let wanted = selected_clip(&anim, &editor, &clips);
 
     // A clip picked in the panel is fitted across the strip; one that merely
     // *changed* is left where it was being looked at, because re-framing under
     // somebody mid-edit is worse than a clip running off the edge.
-    if anim.is_changed() {
+    //
+    // **Asked of which clip is picked, not of `AnimEditor` changing.** Picking
+    // a track writes the same resource, and so does the panels' mutable borrow
+    // every frame — keyed on the resource, the strip snapped back to fit on
+    // every frame anybody had zoomed it.
+    if repicked {
         if let Some(clip) = &wanted {
             view.frame(clip.length);
         }
@@ -496,6 +512,9 @@ fn timeline_input(
 
     match &grab.0 {
         Some(Grab::Scrub { from_x, from_time }) => {
+            // Taking hold of the playhead takes it from the transport too: a
+            // scrub fighting playback is a playhead that will not stay put.
+            cursor.playing = false;
             let moved = (at.x - from_x) / view.pixels_per_second;
             cursor.time = (from_time + moved).clamp(0.0, length);
         }
@@ -508,7 +527,7 @@ fn timeline_input(
             // key** — so several keys dragged together keep the spacing they
             // were authored with instead of collapsing onto the grid. Alt is
             // the escape hatch, the way it is in every editor that snaps.
-            if !free {
+            if !free && !anim.free_drag {
                 let step = grid_step(view.pixels_per_second);
                 by = (by / step).round() * step;
             }
@@ -521,6 +540,155 @@ fn timeline_input(
             grab.0 = Some(Grab::Band { from, to: at });
         }
         None => {}
+    }
+}
+
+/// The track a key selection implies: the track of its first key.
+///
+/// `None` for an empty selection, which means "no opinion" rather than "no
+/// track" — a track picked by its header has no keys picked and must stay
+/// picked.
+pub fn track_of_the_selection(selection: &TimelineSelection) -> Option<usize> {
+    selection.0.iter().next().map(|picked| picked.track)
+}
+
+/// **Picking a key picks its track.**
+///
+/// One selection rather than two: the Inspector shows a key under its track's
+/// settings, and the two are only ever both meaningful if they describe the
+/// same row. Run after everything that writes the key selection, so whichever
+/// of the strip, `K` or `Delete` changed it, the track follows on the same
+/// frame.
+fn follow_the_key_selection(selection: Res<TimelineSelection>, mut anim: ResMut<AnimEditor>) {
+    if !selection.is_changed() {
+        return;
+    }
+    if let Some(track) = track_of_the_selection(&selection) {
+        if anim.track != Some(track) {
+            anim.track = Some(track);
+        }
+    }
+}
+
+/// `Space` starts and stops playback.
+///
+/// Gated on egui wanting the keyboard, for the reason `edit_keys` is: a space
+/// typed into the note is a space.
+fn play_or_pause(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    panels: Res<ui::AnimPanels>,
+    shown: Res<ShownClip>,
+    mut cursor: ResMut<TimelineCursor>,
+) {
+    if panels.egui_wants_keyboard || !keyboard.just_pressed(KeyCode::Space) {
+        return;
+    }
+    let Some(clip) = shown.0.as_ref() else { return };
+    toggle_playback(&mut cursor, clip);
+}
+
+/// Start or stop, and start from the top if a one-shot has already finished —
+/// pressing play on a clip that has ended and seeing nothing happen reads as
+/// the button being broken.
+pub fn toggle_playback(cursor: &mut TimelineCursor, clip: &Clip) {
+    if cursor.playing {
+        cursor.playing = false;
+        return;
+    }
+    if !clip.looping && cursor.time >= clip.length {
+        cursor.time = 0.0;
+    }
+    cursor.playing = true;
+}
+
+/// Move the playhead along while playing.
+///
+/// The preview reads the playhead and nothing else, so playback is the
+/// playhead moving on its own — one path into `apply` whether somebody is
+/// scrubbing or watching. A stride clip is played at one stride a second,
+/// which is a viewing rate rather than any body's walking speed.
+fn play_the_cursor(time: Res<Time>, shown: Res<ShownClip>, mut cursor: ResMut<TimelineCursor>) {
+    if !cursor.playing {
+        return;
+    }
+    let Some(clip) = shown.0.as_ref() else {
+        cursor.playing = false;
+        return;
+    };
+    advance(&mut cursor, clip, time.delta_secs());
+}
+
+pub fn advance(cursor: &mut TimelineCursor, clip: &Clip, by: f32) {
+    let length = clip.length.max(1e-3);
+    let next = cursor.time + by;
+    if clip.looping {
+        cursor.time = next.rem_euclid(length);
+    } else if next >= length {
+        // Held on the last frame rather than wrapped, which is what a one-shot
+        // does in a match too.
+        cursor.time = length;
+        cursor.playing = false;
+    } else {
+        cursor.time = next;
+    }
+}
+
+/// Something done to a whole track from its header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackOp {
+    Toggle,
+    Duplicate,
+    MoveUp,
+    MoveDown,
+    Remove,
+}
+
+impl TrackOp {
+    /// What the menu item says: the action, never the state.
+    pub fn name_key(self, enabled: bool) -> &'static str {
+        match self {
+            TrackOp::Toggle if enabled => "anim.track_menu.switch_off",
+            TrackOp::Toggle => "anim.track_menu.switch_on",
+            TrackOp::Duplicate => "anim.track_menu.duplicate",
+            TrackOp::MoveUp => "anim.track_menu.move_up",
+            TrackOp::MoveDown => "anim.track_menu.move_down",
+            TrackOp::Remove => "anim.track_menu.remove",
+        }
+    }
+}
+
+/// Do it, and say which track should be picked afterwards.
+///
+/// **Order is meaning**, not tidiness: tracks apply bottom layer first, so a
+/// `Compose` above a `Replace` is a recoil on a pose and below it is a recoil
+/// thrown away. Which is why moving one is a real operation.
+pub fn apply_track_op(clip: &mut Clip, track: usize, op: TrackOp) -> Option<usize> {
+    if track >= clip.tracks.len() {
+        return None;
+    }
+    match op {
+        TrackOp::Toggle => {
+            clip.tracks[track].enabled = !clip.tracks[track].enabled;
+            Some(track)
+        }
+        TrackOp::Duplicate => {
+            let copy = clip.tracks[track].clone();
+            clip.tracks.insert(track + 1, copy);
+            Some(track + 1)
+        }
+        TrackOp::MoveUp if track > 0 => {
+            clip.tracks.swap(track, track - 1);
+            Some(track - 1)
+        }
+        TrackOp::MoveDown if track + 1 < clip.tracks.len() => {
+            clip.tracks.swap(track, track + 1);
+            Some(track + 1)
+        }
+        TrackOp::MoveUp | TrackOp::MoveDown => Some(track),
+        TrackOp::Remove => {
+            clip.tracks.remove(track);
+            None
+        }
     }
 }
 
@@ -606,6 +774,7 @@ fn edit_keys(
     }
 
     let time = cursor.time;
+    let picked_track = anim.track;
     let mut picked = std::mem::take(&mut selection.0);
 
     // One step per press, opened and closed here rather than left to the
@@ -629,12 +798,14 @@ fn edit_keys(
         }
         selection.clear();
     } else {
-        // On every track a selection touches, or on all of them when nothing
-        // is picked — which is what "key everything here" means and what you
-        // want the first time you press it.
-        let tracks: Vec<usize> = match selection.is_empty() {
-            true => (0..clip.tracks.len()).collect(),
-            false => {
+        // On every track a selection touches; failing that the picked track;
+        // and on all of them when nothing at all is picked — which is what
+        // "key everything here" means and what you want the first time you
+        // press it.
+        let tracks: Vec<usize> = match (selection.is_empty(), picked_track) {
+            (true, Some(track)) if track < clip.tracks.len() => vec![track],
+            (true, _) => (0..clip.tracks.len()).collect(),
+            (false, _) => {
                 let mut tracks: Vec<usize> = selection.iter().map(|picked| picked.track).collect();
                 tracks.dedup();
                 tracks
@@ -655,6 +826,23 @@ fn edit_keys(
     body.end_gesture();
 }
 
+/// What a body would be telling its state at this point of the clip.
+///
+/// The playhead is on the clip's own clock, so a stride clip's time is
+/// strides and becomes the stride a gait's foot targets are read from.
+pub fn preview_inputs(clip: &Clip, time: f32) -> crate::common::skeleton::state::PoseInputs {
+    use crate::common::skeleton::clip::Clock;
+    let stride = match clip.clock {
+        Clock::Stride => (time / clip.length.max(1.0)).rem_euclid(1.0),
+        Clock::Seconds | Clock::Shared => 0.0,
+    };
+    crate::common::skeleton::state::PoseInputs {
+        seconds: time,
+        stride,
+        ..Default::default()
+    }
+}
+
 /// Put the clip on the reference figure at the playhead.
 ///
 /// Through the **same** `apply` a body in a match goes through, which is the
@@ -664,10 +852,21 @@ fn edit_keys(
 fn drive_the_preview(
     shown: Res<ShownClip>,
     cursor: Res<TimelineCursor>,
+    anim: Res<AnimEditor>,
     mut performance: ResMut<FigurePerformance>,
+    mut corrections: ResMut<crate::prop::figure::FigureCorrections>,
 ) {
     performance.0 .0.clear();
+    corrections.0 = None;
     let Some(clip) = shown.0.as_ref() else { return };
+
+    // A body clip is played through its state's corrections in a match, so it
+    // is previewed through them too.
+    if anim.source == ClipSource::Body {
+        if let Some(state) = anim.selected.as_deref().and_then(body::BodyClips::state_of) {
+            corrections.0 = Some((state, preview_inputs(clip, cursor.time)));
+        }
+    }
 
     performance.0 .0.push(Playing {
         // Cloned per change rather than held: `ShownClip` is already a copy
@@ -794,6 +993,7 @@ mod tests {
             source: ClipSource::Prop,
             selected: Some("fire".into()),
             track: None,
+            free_drag: false,
             pending_frame: false,
         };
         (editor, anim)
@@ -812,6 +1012,61 @@ mod tests {
             original: clip.tracks[0].channel.clone(),
             held: keys.to_vec(),
         }]
+    }
+
+    /// Picking keys implies a track, and picking none implies nothing — so a
+    /// track picked by its header is not unpicked by the empty key selection
+    /// that comes with it.
+    #[test]
+    fn the_key_selection_names_its_track_or_says_nothing() {
+        let mut selection = TimelineSelection::default();
+        assert_eq!(track_of_the_selection(&selection), None);
+        selection.0.insert(KeyAt { track: 2, key: 1 });
+        selection.0.insert(KeyAt { track: 3, key: 0 });
+        assert_eq!(track_of_the_selection(&selection), Some(2));
+    }
+
+    /// Moving a track carries the pick with it, and the ends stay put.
+    #[test]
+    fn track_operations_keep_the_pick_on_the_track() {
+        let (mut editor, _) = editor_with_a_clip(&[0.0]);
+        let mut clip = editor.doc().animations.get("fire").unwrap().clone();
+        clip.tracks.push(Track::rotation("chest"));
+
+        assert_eq!(apply_track_op(&mut clip, 0, TrackOp::MoveDown), Some(1));
+        assert!(clip.tracks[0].channel.is_rotation(), "the tracks did not swap");
+        assert_eq!(apply_track_op(&mut clip, 1, TrackOp::MoveDown), Some(1));
+        assert_eq!(apply_track_op(&mut clip, 0, TrackOp::MoveUp), Some(0));
+
+        assert_eq!(apply_track_op(&mut clip, 0, TrackOp::Duplicate), Some(1));
+        assert_eq!(clip.tracks.len(), 3);
+        assert_eq!(apply_track_op(&mut clip, 1, TrackOp::Toggle), Some(1));
+        assert!(!clip.tracks[1].enabled);
+        assert_eq!(apply_track_op(&mut clip, 1, TrackOp::Remove), None);
+        assert_eq!(clip.tracks.len(), 2);
+        assert_eq!(apply_track_op(&mut clip, 9, TrackOp::Remove), None);
+        let _ = &mut editor;
+    }
+
+    /// A one-shot stops on its last frame; a loop comes round; and play on a
+    /// finished one-shot starts it again.
+    #[test]
+    fn playback_holds_a_one_shot_and_wraps_a_loop() {
+        let mut clip = Clip { length: 1.0, ..Clip::default() };
+        let mut cursor = TimelineCursor { time: 0.9, playing: true };
+        advance(&mut cursor, &clip, 0.25);
+        assert_eq!(cursor.time, 1.0);
+        assert!(!cursor.playing, "a finished one-shot kept playing");
+
+        toggle_playback(&mut cursor, &clip);
+        assert!(cursor.playing);
+        assert_eq!(cursor.time, 0.0, "play on a finished clip did not restart it");
+
+        clip.looping = true;
+        cursor.time = 0.9;
+        advance(&mut cursor, &clip, 0.25);
+        assert!((cursor.time - 0.15).abs() < 1e-5, "a loop did not come round: {}", cursor.time);
+        assert!(cursor.playing);
     }
 
     /// **One drag is one press of Ctrl+Z.**

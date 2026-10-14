@@ -402,7 +402,7 @@ pub(crate) fn perform_weapon_clips(
 /// A convention rather than a field: a prop that has one gets a deploy and one
 /// that does not simply appears, which is the same reading `Weapon.model`
 /// already takes of an absent model.
-const DEPLOY: &str = "deploy";
+pub const DEPLOY: &str = "deploy";
 
 /// Run whatever clips a body has on it, between the weapon being placed and
 /// the hands being put on it.
