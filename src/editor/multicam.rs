@@ -77,7 +77,17 @@ impl MulticamState {
 
     /// The arithmetic half, without a `Window` to stand up in a test.
     pub fn reserve_from(&mut self, insets: Insets, width: f32, height: f32) {
-        if width <= 0.0 || height <= 0.0 {
+        // A window under a pixel across is a window mid-move, not a layout.
+        // Said out loud because dividing by it is how a panel inset a few
+        // hundred pixels wide becomes a *fraction* in the thousands, and the
+        // crash that follows names a bloom texture and nothing else.
+        if (0.0..1.0).contains(&width) || (0.0..1.0).contains(&height) {
+            warn_once!(
+                "window reported an implausible logical size of {width}x{height}; \
+                 viewports left where they were",
+            );
+        }
+        if width < 1.0 || height < 1.0 {
             // Nothing sensible to say this frame, so the last good rect
             // stands. A window with no area is a window mid-move, not a
             // layout anybody asked for.
@@ -95,6 +105,15 @@ impl MulticamState {
     }
 }
 
+/// The largest a render texture may be, which is what bounds a viewport.
+///
+/// wgpu's `max_texture_dimension_2d` is 8192 at its lowest tier and 16384 on
+/// anything this runs on — and 16384 is the number the validation error names
+/// when it refuses. Written down rather than read off the adapter because this
+/// is a sanity bound on a transitional window size, not a capability query: a
+/// viewport anywhere near it is already nonsense.
+const MAX_TEXTURE_SIDE: u32 = 16384;
+
 /// The viewport a pair of fractions describes, or `None` if they describe
 /// nothing a texture could be made from.
 ///
@@ -106,6 +125,19 @@ fn clamped_viewport(start: Vec2, end: Vec2, window: UVec2) -> Option<(UVec2, UVe
         return None;
     }
 
+    // **The window's own size is not to be trusted either.**
+    //
+    // Clamping the viewport to the window is only a guard while the window is
+    // a plausible size, and during a drag between two monitors it is not:
+    // winit reports a transitional size as the scale factor changes, and a
+    // window a few million pixels across lets a viewport be half of that,
+    // which is the same crash with the clamp in place. The first version of
+    // this guard clamped to the window alone and the crash survived it.
+    //
+    // So the real bound is the device's, not the window's. Every dimension
+    // here ends up as a render texture — the bloom chain most of all — and
+    // `max_texture_dimension_2d` is what wgpu refuses past.
+    let window = window.min(UVec2::splat(MAX_TEXTURE_SIDE));
     let window_f = window.as_vec2();
     let first = start.clamp(Vec2::ZERO, Vec2::ONE);
     let second = end.clamp(Vec2::ZERO, Vec2::ONE);
@@ -407,6 +439,16 @@ impl MulticamPlugin {
         //
         // Clamped here rather than at the three places that write the
         // fractions, because this is the one place they become a texture.
+        // Named once if it ever happens again, because the crash this guards
+        // reports a bloom texture and a number, and nothing about where the
+        // number came from.
+        if window_size.x > MAX_TEXTURE_SIDE || window_size.y > MAX_TEXTURE_SIDE {
+            warn_once!(
+                "window reported an implausible physical size of {window_size:?}; \
+                 viewports clamped to {MAX_TEXTURE_SIDE}",
+            );
+        }
+
         let Some((viewport_start, viewport_size)) =
             clamped_viewport(state.start, state.end, window_size)
         else {
@@ -672,6 +714,31 @@ mod tests {
                 "{start:?}..{end:?} put a viewport off the edge: {position:?} + {size:?}",
             );
         }
+    }
+
+    /// **The window's own size is not to be trusted either**, which is what
+    /// the first version of this guard got wrong: it clamped the viewport to
+    /// the window, and a window reporting a few million pixels across while
+    /// being dragged between two monitors let the viewport be half of that.
+    /// The crash survived the fix.
+    ///
+    /// The number in that crash — 2211840 against a limit of 16384 — is half
+    /// a viewport, so the viewport was about four and a half million across,
+    /// which no fraction of a real window produces.
+    #[test]
+    fn a_window_reporting_nonsense_cannot_make_a_texture_wgpu_refuses() {
+        let absurd = UVec2::new(4_423_680, 2_160);
+        let (position, size) =
+            clamped_viewport(Vec2::ZERO, Vec2::ONE, absurd).expect("a size is still describable");
+
+        assert!(
+            size.x <= MAX_TEXTURE_SIDE && size.y <= MAX_TEXTURE_SIDE,
+            "a viewport larger than any texture: {size:?}",
+        );
+        assert!(
+            position.x <= MAX_TEXTURE_SIDE && position.y <= MAX_TEXTURE_SIDE,
+            "a viewport positioned off the end of any texture: {position:?}",
+        );
     }
 
     /// And an ordinary reservation still lands where it used to.
