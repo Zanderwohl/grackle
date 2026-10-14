@@ -1,5 +1,4 @@
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::diagnostic::FrameCount;
 use bevy::ecs::query::QuerySingleError;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
@@ -104,6 +103,46 @@ impl MulticamState {
         self.end = end.clamp(Vec2::ZERO, Vec2::ONE);
     }
 }
+
+/// Whether a camera this size can actually be rendered.
+///
+/// Not a matter of taste. Bloom sizes its mip chain by **height**:
+///
+/// ```text
+/// ratio = max_mip_dimension / viewport.y
+/// size  = viewport * ratio
+/// ```
+///
+/// so a viewport one pixel tall asks for a texture `viewport.x * 512` wide,
+/// and wgpu refuses anything past `max_texture_dimension_2d`. That is the
+/// whole of the crash: dragging the window between two monitors, or simply
+/// opening it somewhere the panels do not fit, collapses the strip left for
+/// the cameras, and a 1760-pixel-wide viewport one pixel tall asks for 901120
+/// — which is exactly the number the error reports.
+///
+/// Rearranged, the condition is `height >= width * max_mip / max_texture`,
+/// and the minimum side is there because a viewport a few pixels across shows
+/// nothing worth the pass anyway.
+///
+/// Switched off rather than clamped to something renderable: the panels have
+/// said there is no room, and inventing a viewport they did not leave would
+/// draw the scene over them. The next frame brings a real layout.
+fn renderable(camera: UVec2) -> bool {
+    if camera.x < MIN_CAMERA_SIDE || camera.y < MIN_CAMERA_SIDE {
+        return false;
+    }
+    // The bloom chain's widest mip must still be a texture wgpu will make.
+    let widest = camera.x as u64 * BLOOM_MAX_MIP as u64 / camera.y.max(1) as u64;
+    widest <= MAX_TEXTURE_SIDE as u64
+}
+
+/// Below this a viewport shows nothing worth a render pass.
+const MIN_CAMERA_SIDE: u32 = 16;
+
+/// `Bloom::max_mip_dimension`'s default, which is what scales the bloom
+/// texture against a viewport's height. Written down because the arithmetic
+/// that crashes depends on it and the number lives upstream.
+const BLOOM_MAX_MIP: u32 = 512;
 
 /// The largest a render texture may be, which is what bounds a viewport.
 ///
@@ -404,17 +443,56 @@ impl MulticamPlugin {
         }
     }
 
+    /// Keep the four viewports on the part of the window the panels left.
+    ///
+    /// **Nothing is rendered on the frame the window changes size.** Dragging
+    /// between monitors of different scale takes the window from 1280x720 to
+    /// 2560x1440 in one step, and for that frame the `Window` already reports
+    /// the new size while the surface is still the old one. A viewport sized
+    /// and positioned for the new window then lands outside the old surface,
+    /// gets clamped down to a sliver — and bloom scales its mip chain by
+    /// `max_mip_dimension / viewport.height`, so a viewport one pixel tall
+    /// asks for a texture `viewport.width * 512` across. That is the crash:
+    /// 1760 wide against one pixel tall is 901120, which is exactly what wgpu
+    /// reported refusing.
+    ///
+    /// Switching the cameras off for that one frame is the whole fix. It costs
+    /// a single frame with no 3D in it, during a gesture that is already
+    /// visibly rearranging the window, and nothing asks the device for a
+    /// texture while the two sizes disagree.
+    ///
+    /// Note that the viewport *arithmetic* was never wrong here: the log that
+    /// found this showed a camera of 880x548, which is entirely sane. It was
+    /// sane for a surface that no longer existed.
     fn set_camera_viewports(
         window: Single<&Window, With<PrimaryWindow>>,
         mut resize_events: MessageReader<WindowResized>,
         mut cameras: Query<(&mut Camera, &Multicam)>,
         state: Res<MulticamState>,
-        frames: Res<FrameCount>,
+        mut last_size: Local<UVec2>,
     ) {
-        if frames.0 < 3 || state.is_changed() || !resize_events.is_empty() {
+        let size = window.physical_size();
+        let settling = size != *last_size;
+        *last_size = size;
+
+        if settling {
+            for (mut camera, _) in &mut cameras {
+                if camera.is_active {
+                    camera.is_active = false;
+                }
+            }
+            // The events are spent here: the rects are applied next frame,
+            // when the window and the surface agree about how big they are.
             resize_events.clear();
-            Self::calculate_resize(&mut cameras, &state, &window);
+            return;
         }
+
+        // Unconditional now, rather than gated on a change or a frame count.
+        // `calculate_resize` compares before it writes, so an idle frame costs
+        // four comparisons — and the cameras have to be switched back *on*
+        // after a settling frame, which a gate on `state.is_changed()` would
+        // not do when the panels happen not to have moved.
+        Self::calculate_resize(&mut cameras, &state, &window);
     }
     
     fn calculate_resize(cameras: &mut Query<(&mut Camera, &Multicam)>, state: &Res<MulticamState>, window: &Window) {
@@ -458,18 +536,38 @@ impl MulticamPlugin {
             (viewport_size.y / 2).max(1),
         );
 
+        // **A viewport too small or too wide to render is switched off, not
+        // made anyway.** See `renderable`.
+        let showing = renderable(camera_size);
+
         for (mut camera, multicam) in cameras {
+            if camera.is_active != showing {
+                camera.is_active = showing;
+            }
+            if !showing {
+                continue;
+            }
             // Calculate this camera's position within the viewport
             let camera_pos = viewport_start + UVec2::new(
                 multicam.screen_pos.x * camera_size.x,
                 multicam.screen_pos.y * camera_size.y,
             );
 
-            camera.viewport = Some(Viewport {
+            let wanted = Viewport {
                 physical_position: camera_pos,
                 physical_size: camera_size,
                 ..Default::default()
+            };
+            // Compared before writing, so this can run every frame without
+            // marking every camera changed every frame — which is what lets
+            // the settling check below be unconditional.
+            let same = camera.viewport.as_ref().is_some_and(|had| {
+                had.physical_position == wanted.physical_position
+                    && had.physical_size == wanted.physical_size
             });
+            if !same {
+                camera.viewport = Some(wanted);
+            }
         }
     }
 
@@ -742,6 +840,103 @@ mod tests {
 
         // And the largest plausible window is still served.
         assert!(clamped_viewport(Vec2::ZERO, Vec2::ONE, UVec2::splat(MAX_TEXTURE_SIDE)).is_some());
+    }
+
+    /// The bloom texture a camera of this size would ask wgpu for.
+    ///
+    /// Bevy's own arithmetic, copied here deliberately: the crash is a
+    /// property of *that* formula meeting our viewport, so a test that made up
+    /// its own would pass while the program still died.
+    fn bloom_texture_width(camera: UVec2) -> u64 {
+        let ratio = BLOOM_MAX_MIP as f64 / camera.y as f64;
+        (camera.x as f64 * ratio).round() as u64
+    }
+
+    /// **No layout may ask for a bloom texture wgpu will refuse.**
+    ///
+    /// The crash, stated as the thing that actually went wrong. Bloom scales
+    /// its mip chain by height, so a viewport one pixel tall asks for one
+    /// `viewport.x * 512` wide — 901120 and 2211840 in the two reports, which
+    /// is 1760 and 4320 pixels wide against a single pixel of height.
+    ///
+    /// Swept across window sizes and panel insets, including the ones that
+    /// leave nothing: panels taller than the window, wider than the window,
+    /// and both at once.
+    #[test]
+    fn no_layout_asks_for_a_bloom_texture_the_device_refuses() {
+        let windows = [
+            UVec2::new(1280, 720),
+            UVec2::new(2560, 1440),
+            UVec2::new(3840, 2160),
+            UVec2::new(1760, 100),
+            UVec2::new(400, 300),
+        ];
+        // Insets as fractions of the window, including several that take more
+        // than all of it.
+        let insets = [
+            (0.0, 0.0, 0.0, 0.0),
+            (0.2, 0.25, 0.05, 0.3),
+            (0.0, 0.0, 0.6, 0.6),
+            (0.0, 0.0, 0.98, 0.02),
+            (0.6, 0.6, 0.0, 0.0),
+            (0.9, 0.9, 0.9, 0.9),
+            (0.0, 0.0, 0.999, 0.0),
+        ];
+
+        for window in windows {
+            for (left, right, top, bottom) in insets {
+                let mut state = MulticamState::default();
+                state.reserve_from(
+                    Insets {
+                        left: left * window.x as f32,
+                        right: right * window.x as f32,
+                        top: top * window.y as f32,
+                        bottom: bottom * window.y as f32,
+                    },
+                    window.x as f32,
+                    window.y as f32,
+                );
+
+                let Some((_, viewport)) = clamped_viewport(state.start, state.end, window) else {
+                    continue;
+                };
+                let camera = UVec2::new((viewport.x / 2).max(1), (viewport.y / 2).max(1));
+
+                if !renderable(camera) {
+                    // Switched off, so nothing is asked of the device at all.
+                    continue;
+                }
+
+                let width = bloom_texture_width(camera);
+                assert!(
+                    width <= MAX_TEXTURE_SIDE as u64,
+                    "window {window:?} with insets {left},{right},{top},{bottom} \
+                     gave a camera of {camera:?}, whose bloom texture would be \
+                     {width} wide against a limit of {}",
+                    MAX_TEXTURE_SIDE,
+                );
+            }
+        }
+    }
+
+    /// The two viewports from the reported crashes are refused outright.
+    #[test]
+    fn the_viewports_that_crashed_are_not_rendered() {
+        for camera in [UVec2::new(1760, 1), UVec2::new(4320, 1), UVec2::new(1760, 16)] {
+            assert!(
+                !renderable(camera),
+                "{camera:?} would be rendered, asking for a bloom texture {} wide",
+                bloom_texture_width(camera),
+            );
+        }
+    }
+
+    /// And an ordinary four-up layout still renders.
+    #[test]
+    fn an_ordinary_layout_still_renders() {
+        for camera in [UVec2::new(640, 360), UVec2::new(1280, 720), UVec2::splat(16)] {
+            assert!(renderable(camera), "{camera:?} was refused");
+        }
     }
 
     /// And an ordinary reservation still lands where it used to.
