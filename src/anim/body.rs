@@ -23,7 +23,7 @@ use strum::IntoEnumIterator;
 
 use crate::common::assets::{default_packs, Assets};
 use crate::common::clip_file::{read_clip, CLIPS_DIR, CLIP_EXTENSION};
-use crate::common::skeleton::clip::Clip;
+use crate::common::skeleton::clip::{Clip, StateAnimation};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary};
 
 /// How much history to keep, matching `PropEditor`'s.
@@ -38,31 +38,55 @@ const UNDO_DEPTH: usize = 256;
 /// rather than hides.
 #[derive(Resource, Debug, Default)]
 pub struct BodyClips {
-    clips: BTreeMap<String, Clip>,
+    clips: BTreeMap<String, StateAnimation>,
     /// Whether the files have been read yet. Read on first use rather than at
     /// startup, because a process that never opens the animation editor should
     /// not pay for them — the *game* gets its copy through
     /// `clip_file::load_body_clips_at_startup`, which is a different path with
     /// a different lifetime.
     loaded: bool,
-    undo: Vec<BTreeMap<String, Clip>>,
-    redo: Vec<BTreeMap<String, Clip>>,
-    pending: Option<BTreeMap<String, Clip>>,
+    undo: Vec<BTreeMap<String, StateAnimation>>,
+    redo: Vec<BTreeMap<String, StateAnimation>>,
+    pending: Option<BTreeMap<String, StateAnimation>>,
     generation: u64,
     pub dirty: bool,
 }
 
 impl BodyClips {
-    pub fn clips(&self) -> &BTreeMap<String, Clip> {
+    pub fn animations(&self) -> &BTreeMap<String, StateAnimation> {
         &self.clips
     }
 
+    /// A clip, by the name the panels pick it by: a state's name for a plain
+    /// clip, `state#index` for one variant of a blend.
+    ///
+    /// **One string for both**, so everything that holds "which clip" —
+    /// the selection, the strip, the preview — goes on holding a name and
+    /// none of it learns what a blend is.
     pub fn get(&self, name: &str) -> Option<&Clip> {
-        self.clips.get(name)
+        let (state, variant) = address(name);
+        self.clips.get(state)?.clip(variant)
     }
 
+    /// The same, to write — inside a gesture, as `doc_mut` is.
+    pub fn clip_mut(&mut self, name: &str) -> Option<&mut Clip> {
+        let (state, variant) = address(name);
+        self.changed();
+        self.clips.get_mut(state)?.clip_mut(variant)
+    }
+
+    /// Every clip there is to pick, by name: one per plain state, one per
+    /// variant of a blended one.
     pub fn names(&self) -> Vec<String> {
-        self.clips.keys().cloned().collect()
+        self.clips
+            .iter()
+            .flat_map(|(state, animation)| match animation {
+                StateAnimation::Single(_) => vec![state.clone()],
+                StateAnimation::Blend(variants) => {
+                    (0..variants.len()).map(|index| variant_name(state, index)).collect()
+                }
+            })
+            .collect()
     }
 
     pub fn generation(&self) -> u64 {
@@ -126,7 +150,7 @@ impl BodyClips {
     }
 
     /// One edit, recorded as one undo step if it changed anything.
-    pub fn edit<T>(&mut self, change: impl FnOnce(&mut BTreeMap<String, Clip>) -> T) -> T {
+    pub fn edit<T>(&mut self, change: impl FnOnce(&mut BTreeMap<String, StateAnimation>) -> T) -> T {
         let before = self.clips.clone();
         let out = change(&mut self.clips);
         if before != self.clips {
@@ -144,7 +168,7 @@ impl BodyClips {
         }
     }
 
-    pub fn doc_mut(&mut self) -> &mut BTreeMap<String, Clip> {
+    pub fn doc_mut(&mut self) -> &mut BTreeMap<String, StateAnimation> {
         self.changed();
         &mut self.clips
     }
@@ -176,7 +200,7 @@ impl BodyClips {
         self.changed();
     }
 
-    fn push_undo(&mut self, before: BTreeMap<String, Clip>) {
+    fn push_undo(&mut self, before: BTreeMap<String, StateAnimation>) {
         self.undo.push(before);
         if self.undo.len() > UNDO_DEPTH {
             self.undo.remove(0);
@@ -199,9 +223,9 @@ impl BodyClips {
         std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
 
         let mut written = 0;
-        for (name, clip) in &self.clips {
+        for (name, animation) in &self.clips {
             let path = directory.join(format!("{name}.{CLIP_EXTENSION}"));
-            let text = toml::to_string_pretty(clip).map_err(|e| e.to_string())?;
+            let text = animation.to_toml().map_err(|e| e.to_string())?;
             std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
             written += 1;
         }
@@ -216,6 +240,55 @@ impl BodyClips {
             .next()
             .unwrap_or_else(|| PathBuf::from("assets/default"))
     }
+}
+
+/// A clip's name taken apart: the state it is filed under, and which variant
+/// of that state's blend, if it names one.
+pub fn address(name: &str) -> (&str, Option<usize>) {
+    match name.split_once('#') {
+        Some((state, index)) => (state, index.parse().ok()),
+        None => (name, None),
+    }
+}
+
+/// The name one variant of a blend is picked by.
+pub fn variant_name(state: &str, index: usize) -> String {
+    format!("{state}#{index}")
+}
+
+/// Turn a plain clip into a blend of three copies of it, at the two diagonals
+/// and straight ahead — the headings a keyboard can ask a gait for. The copies
+/// are identical, so nothing moves until one of them is edited.
+pub fn blend_by_heading(animation: &mut StateAnimation) {
+    use crate::common::skeleton::clip::Variant;
+    let StateAnimation::Single(clip) = animation else { return };
+    let quarter = std::f32::consts::FRAC_PI_4;
+    *animation = StateAnimation::Blend(
+        [-quarter, 0.0, quarter]
+            .into_iter()
+            .map(|heading| Variant { heading, clip: clip.clone() })
+            .collect(),
+    );
+}
+
+/// Copy a variant to a new heading beside it, and say where the copy went.
+///
+/// Halfway to its neighbour above, or fifteen degrees past it if it is the
+/// last: a duplicate at the same heading would be a variant nothing could
+/// ever blend towards.
+pub fn duplicate_variant(variants: &mut Vec<crate::common::skeleton::clip::Variant>, index: usize) -> usize {
+    let Some(original) = variants.get(index).cloned() else { return index };
+    let above = variants
+        .iter()
+        .map(|variant| variant.heading)
+        .filter(|heading| *heading > original.heading)
+        .min_by(|a, b| a.total_cmp(b));
+    let heading = match above {
+        Some(above) => (original.heading + above) / 2.0,
+        None => original.heading + 15f32.to_radians(),
+    };
+    variants.insert(index + 1, crate::common::skeleton::clip::Variant { heading, ..original });
+    index + 1
 }
 
 /// Where a *Save As* landed, filled in on the dialog's own thread.
@@ -272,7 +345,7 @@ impl BodyClipDialog {
 ///
 /// Shared by the first load and by *Open*, so a revert cannot read the packs
 /// differently from the way they were read to begin with.
-fn read_the_packs(assets: &Assets, packs: &[PathBuf]) -> BTreeMap<String, Clip> {
+fn read_the_packs(assets: &Assets, packs: &[PathBuf]) -> BTreeMap<String, StateAnimation> {
     let mut clips = BTreeMap::new();
     for pack in packs {
         for state in AnimationState::iter() {
@@ -319,8 +392,8 @@ pub fn publish_the_body_clips(
     // which is only safe to act on once it has been read — hence the guard
     // above.
     for state in AnimationState::iter() {
-        match clips.get(state.clip_name()) {
-            Some(clip) => library.insert(state, clip.clone()),
+        match clips.animations().get(state.clip_name()) {
+            Some(animation) => library.insert(state, animation.clone()),
             None => library.remove(state),
         }
     }
@@ -344,12 +417,12 @@ mod tests {
     fn an_edit_is_one_undo_step() {
         let mut clips = BodyClips::default();
         clips.edit(|clips| {
-            clips.insert("idle".into(), a_clip(1.0));
+            clips.insert("idle".into(), a_clip(1.0).into());
         });
         assert!(clips.can_undo());
 
         clips.edit(|clips| {
-            clips.get_mut("idle").unwrap().length = 2.0;
+            clips.get_mut("idle").unwrap().clip_mut(None).unwrap().length = 2.0;
         });
         clips.undo();
         assert_eq!(clips.get("idle").map(|clip| clip.length), Some(1.0));
@@ -364,12 +437,12 @@ mod tests {
     fn writing_back_what_was_there_is_not_a_step() {
         let mut clips = BodyClips::default();
         clips.edit(|clips| {
-            clips.insert("idle".into(), a_clip(1.0));
+            clips.insert("idle".into(), a_clip(1.0).into());
         });
         let steps = clips.undo.len();
 
         clips.edit(|clips| {
-            clips.insert("idle".into(), a_clip(1.0));
+            clips.insert("idle".into(), a_clip(1.0).into());
         });
         assert_eq!(clips.undo.len(), steps, "a no-op edit became an undo step");
     }
@@ -379,19 +452,64 @@ mod tests {
     fn a_gesture_is_one_step() {
         let mut clips = BodyClips::default();
         clips.edit(|clips| {
-            clips.insert("idle".into(), a_clip(1.0));
+            clips.insert("idle".into(), a_clip(1.0).into());
         });
         let steps = clips.undo.len();
 
         clips.begin_gesture();
         for frame in 1..=20 {
-            clips.doc_mut().get_mut("idle").unwrap().length = 1.0 + frame as f32 * 0.01;
+            clips.clip_mut("idle").unwrap().length = 1.0 + frame as f32 * 0.01;
         }
         clips.end_gesture();
 
         assert_eq!(clips.undo.len(), steps + 1, "a drag was not one step");
         clips.undo();
         assert_eq!(clips.get("idle").map(|clip| clip.length), Some(1.0));
+    }
+
+    /// A variant is picked by `state#index`, and a plain clip by its state.
+    #[test]
+    fn a_variant_is_addressed_by_its_state_and_index() {
+        use crate::common::skeleton::clip::Variant;
+        let mut clips = BodyClips::default();
+        clips.edit(|clips| {
+            clips.insert("idle".into(), a_clip(1.0).into());
+            clips.insert(
+                "run_forward".into(),
+                StateAnimation::Blend(vec![
+                    Variant { heading: -0.5, clip: a_clip(2.0) },
+                    Variant { heading: 0.5, clip: a_clip(3.0) },
+                ]),
+            );
+        });
+        assert_eq!(
+            clips.names(),
+            vec!["idle".to_string(), "run_forward#0".into(), "run_forward#1".into()],
+        );
+        assert_eq!(clips.get("run_forward#1").map(|clip| clip.length), Some(3.0));
+        assert_eq!(clips.get("idle").map(|clip| clip.length), Some(1.0));
+        assert!(clips.get("run_forward").is_none(), "a blend is not one clip");
+        assert!(clips.get("idle#0").is_none(), "a plain clip has no variants");
+    }
+
+    /// Blending a clip keeps it as the straight-ahead variant, and a duplicate
+    /// lands at a heading of its own.
+    #[test]
+    fn a_clip_blends_into_three_and_duplicates_beside_itself() {
+        let mut animation: StateAnimation = a_clip(1.0).into();
+        blend_by_heading(&mut animation);
+        let StateAnimation::Blend(variants) = &mut animation else {
+            panic!("blending made no blend");
+        };
+        assert_eq!(variants.len(), 3);
+        assert_eq!(variants[1].heading, 0.0);
+        assert!(variants.iter().all(|variant| variant.clip == a_clip(1.0)));
+
+        let landed = duplicate_variant(variants, 1);
+        assert_eq!(landed, 2);
+        assert!((variants[2].heading - std::f32::consts::FRAC_PI_8).abs() < 1e-5);
+        let last = duplicate_variant(variants, 3);
+        assert!(variants[last].heading > variants[3].heading);
     }
 
     /// Every state's file name maps back to the state it plays for.

@@ -93,7 +93,14 @@ mod paint {
     pub const MINOR: Color = Color::srgb(0.140, 0.140, 0.155);
     pub const MAJOR: Color = Color::srgb(0.190, 0.190, 0.210);
     pub const LABEL: Color = Color::srgb(0.560, 0.560, 0.600);
-    pub const NAME: Color = Color::srgb(0.780, 0.780, 0.820);
+    /// A switched-off track's keys. Dimmed rather than hidden: the track is
+    /// still there to switch back on, and its keys can still be edited.
+    pub const KEY_OFF: Color = Color::srgb(0.420, 0.380, 0.280);
+    /// The picked track's header, in the names column — the one place the
+    /// strip says which track the Inspector is describing.
+    pub const ROW_PICKED: Color = Color::srgb(0.200, 0.255, 0.350);
+    /// And its lane, quieter, so keys on it still read against it.
+    pub const ROW_PICKED_LANE: Color = Color::srgb(0.135, 0.150, 0.185);
     pub const KEY: Color = Color::srgb(0.855, 0.720, 0.350);
     pub const KEY_EDGE: Color = Color::srgb(0.420, 0.340, 0.140);
     pub const KEY_PICKED: Color = Color::srgb(1.0, 0.945, 0.760);
@@ -255,8 +262,6 @@ struct GridLabel;
 #[derive(Component)]
 struct RowStripe;
 
-#[derive(Component)]
-struct RowLabel;
 
 #[derive(Component)]
 struct KeyMark;
@@ -278,6 +283,8 @@ pub struct TimelinePools {
     /// The names column's ground, and the hairline down its right side.
     names: Option<Entity>,
     names_edge: Option<Entity>,
+    /// The picked track's header in the names column.
+    picked_row: Option<Entity>,
     playhead: Option<Entity>,
     head: Option<Entity>,
     grab: Option<Entity>,
@@ -285,7 +292,7 @@ pub struct TimelinePools {
     /// Per division: the line down the lanes, the tick in the ruler, and the
     /// label — the last two shown only on labelled divisions.
     grid: Vec<(Entity, Entity, Entity)>,
-    rows: Vec<(Entity, Entity)>,
+    rows: Vec<Entity>,
     keys: Vec<Entity>,
 }
 
@@ -363,6 +370,9 @@ pub fn spawn_the_strip(
     // rather than being drawn over them.
     let names = bare(&mut commands, paint::NAMES, 4);
     let names_edge = bare(&mut commands, paint::EDGE, 5);
+    // Over the names column's ground and under the row labels, which share its
+    // z and are spawned after it.
+    let picked_row = bare(&mut commands, paint::ROW_PICKED, 5);
 
     let playhead = bare(&mut commands, paint::PLAYHEAD, 3);
     // A head, so it reads as something you can take hold of. A bare line is
@@ -415,7 +425,7 @@ pub fn spawn_the_strip(
         ))
         .id();
 
-    for piece in [extent, ruler, ruler_edge, names, names_edge, playhead, head] {
+    for piece in [extent, ruler, ruler_edge, names, names_edge, picked_row, playhead, head] {
         commands.entity(piece).insert(ChildOf(root));
     }
 
@@ -424,6 +434,7 @@ pub fn spawn_the_strip(
     pools.ruler_edge = Some(ruler_edge);
     pools.names = Some(names);
     pools.names_edge = Some(names_edge);
+    pools.picked_row = Some(picked_row);
     pools.playhead = Some(playhead);
     pools.head = Some(head);
     pools.grab = Some(grab);
@@ -435,7 +446,7 @@ pub fn spawn_the_strip(
 pub fn take_the_strip_down(mut commands: Commands, mut pools: ResMut<TimelinePools>) {
     let mut everything: Vec<Entity> = Vec::new();
     everything.extend(pools.grid.drain(..).flat_map(|(line, tick, label)| [line, tick, label]));
-    everything.extend(pools.rows.drain(..).flat_map(|(stripe, label)| [stripe, label]));
+    everything.extend(pools.rows.drain(..));
     everything.extend(pools.keys.drain(..));
     everything.extend(pools.band.take());
     everything.extend(pools.extent.take());
@@ -443,6 +454,7 @@ pub fn take_the_strip_down(mut commands: Commands, mut pools: ResMut<TimelinePoo
     everything.extend(pools.ruler_edge.take());
     everything.extend(pools.names.take());
     everything.extend(pools.names_edge.take());
+    everything.extend(pools.picked_row.take());
     everything.extend(pools.head.take());
     everything.extend(pools.root.take());
     everything.extend(pools.playhead.take());
@@ -514,6 +526,9 @@ fn reserve(
         pools.grid.push((line, tick, label));
     }
 
+    // Rows are a stripe each and nothing else: the track's header is egui,
+    // drawn over the names column by the panels, because it is a row of
+    // controls and Bevy UI has none.
     while pools.rows.len() < rows {
         let stripe = commands
             .spawn((
@@ -524,23 +539,7 @@ fn reserve(
                 BackgroundColor(paint::ROW_ODD),
             ))
             .id();
-        let label = commands
-            .spawn((
-                RowLabel,
-                UiTargetCamera(camera),
-                ChildOf(root),
-                off(),
-                Text::new(String::new()),
-                TextFont {
-                    font_size: bevy::text::FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(paint::NAME),
-                // In the names column, which sits above the lanes.
-                GlobalZIndex(5),
-            ))
-            .id();
-        pools.rows.push((stripe, label));
+        pools.rows.push(stripe);
     }
 
     // In chunks, so a clip gaining one key at a time does not spawn one entity
@@ -659,6 +658,7 @@ pub fn lay_out_the_timeline(
     clip: Option<Res<ShownClip>>,
     selection: Option<Res<TimelineSelection>>,
     grab: Option<Res<TimelineGrab>>,
+    anim: Option<Res<crate::anim::AnimEditor>>,
     mut pools: ResMut<TimelinePools>,
     mut nodes: Query<&mut Node>,
     mut colours: Query<&mut BackgroundColor>,
@@ -794,41 +794,55 @@ pub fn lay_out_the_timeline(
     }
 
     // Rows, and the keys on them.
+    let picked_track = anim
+        .as_deref()
+        .and_then(|anim| anim.track)
+        .filter(|track| *track < tracks);
+    if let Some(header) = pools.picked_row {
+        if let Ok(mut node) = nodes.get_mut(header) {
+            match picked_track {
+                Some(track) => {
+                    node.display = Display::Flex;
+                    node.left = Val::Px(0.0);
+                    node.top = Val::Px(row_top(track));
+                    node.width = Val::Px((lanes - 1.0).max(0.0));
+                    node.height = Val::Px(ROW_HEIGHT);
+                }
+                None => node.display = Display::None,
+            }
+        }
+    }
     let mut key_slot = 0;
     for slot in 0..pools.rows.len() {
-        let (stripe, label) = pools.rows[slot];
+        let stripe = pools.rows[slot];
         let Some(track) = clip.and_then(|clip| clip.tracks.get(slot)) else {
-            for entity in [stripe, label] {
-                if let Ok(mut node) = nodes.get_mut(entity) {
-                    node.display = Display::None;
-                }
+            if let Ok(mut node) = nodes.get_mut(stripe) {
+                node.display = Display::None;
             }
             continue;
         };
 
         let top = row_top(slot);
+        let picked = picked_track == Some(slot);
+        if let Ok(mut colour) = colours.get_mut(stripe) {
+            let wanted = match picked {
+                true => paint::ROW_PICKED_LANE,
+                false => paint::ROW_ODD,
+            };
+            if colour.0 != wanted {
+                colour.0 = wanted;
+            }
+        }
         if let Ok(mut node) = nodes.get_mut(stripe) {
-            // Every other row, so a long list of tracks can be read across.
-            node.display = if slot % 2 == 1 { Display::Flex } else { Display::None };
+            // Every other row, so a long list of tracks can be read across —
+            // and the picked one whichever it is.
+            node.display = if slot % 2 == 1 || picked { Display::Flex } else { Display::None };
             node.position_type = PositionType::Absolute;
             node.left = Val::Px(0.0);
             node.top = Val::Px(top);
             node.width = Val::Px(rect.width());
             node.height = Val::Px(ROW_HEIGHT);
         }
-        if let Ok(mut node) = nodes.get_mut(label) {
-            node.display = Display::Flex;
-            node.position_type = PositionType::Absolute;
-            node.left = Val::Px(8.0);
-            node.top = Val::Px(top + (ROW_HEIGHT - 13.0) / 2.0);
-        }
-        if let Ok(mut text) = texts.get_mut(label) {
-            let wanted = track_name(track);
-            if text.0 != wanted {
-                text.0 = wanted;
-            }
-        }
-
         for (index, at) in track.channel.key_times().into_iter().enumerate() {
             let Some(key) = pools.keys.get(key_slot).copied() else {
                 break;
@@ -845,9 +859,10 @@ pub fn lay_out_the_timeline(
                 })
             });
             if let Ok(mut colour) = colours.get_mut(key) {
-                let wanted = match picked {
-                    true => paint::KEY_PICKED,
-                    false => paint::KEY,
+                let wanted = match (picked, track.enabled) {
+                    (true, _) => paint::KEY_PICKED,
+                    (false, true) => paint::KEY,
+                    (false, false) => paint::KEY_OFF,
                 };
                 if colour.0 != wanted {
                     colour.0 = wanted;
@@ -966,14 +981,17 @@ pub fn lay_out_the_timeline(
 #[derive(Resource, Default)]
 pub struct ShownClip(pub Option<Clip>);
 
-fn track_name(track: &crate::common::skeleton::clip::Track) -> String {
+/// What a track's row is labelled, which is also what the Inspector calls it.
+///
+/// A bone is named by its own name — that is an identifier the rig owns and
+/// the file stores, not display text — and everything else through the lang
+/// layer.
+pub fn track_name(track: &crate::common::skeleton::clip::Track) -> String {
     use crate::common::skeleton::clip::Channel;
     match &track.channel {
         Channel::Rotation { bone, .. } => bone.clone(),
-        Channel::Effector { chain, .. } => format!("{chain:?}"),
-        Channel::Root { .. } => "root".into(),
-        Channel::Weapon { .. } => "weapon".into(),
-        Channel::WeaponRotation { .. } => "weapon turn".into(),
+        Channel::Effector { chain, .. } => crate::get!(chain.name_key()),
+        other => crate::get!(other.kind_key()),
     }
 }
 
@@ -1016,6 +1034,7 @@ mod tests {
                 space: Space::Body,
                 unit: Unit::Metres,
                 enabled: true,
+                timing: Default::default(),
                 channel: Channel::Weapon {
                     keys: [0.0_f32, 0.5, 1.0]
                         .into_iter()
@@ -1156,7 +1175,7 @@ mod tests {
         let drawn = pools
             .keys
             .iter()
-            .chain(pools.rows.iter().map(|(stripe, _)| stripe))
+            .chain(pools.rows.iter())
             .filter_map(|entity| world.get::<Node>(*entity))
             .filter(|node| node.display != Display::None)
             .count();

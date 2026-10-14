@@ -23,7 +23,7 @@ use bevy::prelude::*;
 use crate::common::class::CROUCH_HEIGHT;
 use crate::common::skeleton::gait::FootOffset;
 use crate::common::skeleton::rig::{bone, Pose, Skeleton};
-use crate::common::skeleton::clip::Clip;
+use crate::common::skeleton::clip::{Clip, StateAnimation};
 use crate::common::skeleton::play::{apply, Frames};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary, PoseInputs, SkeletonAnimator};
 
@@ -411,20 +411,66 @@ pub fn finish_pose(
     // existed, which is what the comparison tests measure against.
     let mut pose = clips
         .and_then(|library| library.get(state))
-        .map(|clip| clip_pose(clip, inputs, skeleton, root))
+        .map(|animation| animation_pose(animation, state, inputs, skeleton, root))
         .unwrap_or_else(|| state.pose(inputs));
-    // Ducking first: it lowers the hips, and planting is what puts the knees
-    // back underneath wherever they end up.
-    if state.ducks() {
-        duck_under(skeleton, &mut pose, root, CROUCH_HEIGHT);
-    }
-    if state.plants_feet() {
-        plant_feet(skeleton, &mut pose, root, state.foot_offsets(inputs));
-    }
+    correct_for_state(skeleton, &mut pose, state, inputs, root);
     pose
 }
 
-/// What a clip makes of a body, before the corrections a state calls for.
+/// The corrections a state calls for, on top of whatever made its pose.
+///
+/// Its own function so the animation editor's figure can run exactly these
+/// after previewing a body clip. Without them a clip is shown as it is
+/// authored rather than as it is played — an idle's settle lowers the whole
+/// body, feet and all, instead of bending the knees over feet that stay put —
+/// and the editor would be showing something no body in a match ever does.
+pub fn correct_for_state(
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    state: AnimationState,
+    inputs: &PoseInputs,
+    root: &Transform,
+) {
+    // Ducking first: it lowers the hips, and planting is what puts the knees
+    // back underneath wherever they end up.
+    if state.ducks() {
+        duck_under(skeleton, pose, root, CROUCH_HEIGHT);
+    }
+    if state.plants_feet() {
+        plant_feet(skeleton, pose, root, state.foot_offsets(inputs));
+    }
+}
+
+/// What a state's animation makes of a body, before the corrections the
+/// state calls for.
+///
+/// A blend is its two variants either side of the body's heading, each posed
+/// from rest and lerped — joint by joint, which is why `StateAnimation`'s
+/// problems insist neighbouring variants drive the same joints.
+///
+/// Public because the animation editor's figure poses a body clip through
+/// exactly this, and two ways of playing a blend are two that disagree.
+pub fn animation_pose(
+    animation: &StateAnimation,
+    state: AnimationState,
+    inputs: &PoseInputs,
+    skeleton: &Skeleton,
+    root: &Transform,
+) -> Pose {
+    let Some((first, second)) = animation.at_heading(state.heading(inputs)) else {
+        return state.pose(inputs);
+    };
+    let footfalls = state
+        .stance(inputs)
+        .map(|stance| super::gait::footfalls(inputs.stride, stance));
+    let pose = clip_pose(first, inputs, footfalls, skeleton, root);
+    match second {
+        Some((other, t)) => Pose::lerp(&pose, &clip_pose(other, inputs, footfalls, skeleton, root), t),
+        None => pose,
+    }
+}
+
+/// What one clip makes of a body.
 ///
 /// The frames are the body's own and nothing else: a body animation is
 /// rotations, a root offset and limbs reaching for places on the body, so
@@ -433,6 +479,7 @@ pub fn finish_pose(
 fn clip_pose(
     clip: &Clip,
     inputs: &PoseInputs,
+    footfalls: Option<[f32; 2]>,
     skeleton: &Skeleton,
     root: &Transform,
 ) -> Pose {
@@ -445,6 +492,7 @@ fn clip_pose(
         weapon: None,
         eye: None,
         ground: &ground,
+        footfalls,
     };
     apply(clip, clip.time_from(inputs), skeleton, &mut pose, &frames, None);
     pose

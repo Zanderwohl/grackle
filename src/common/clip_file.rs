@@ -21,19 +21,19 @@ use bevy::prelude::*;
 use strum::IntoEnumIterator;
 
 use crate::common::assets::{default_packs, AssetError, Assets};
-use crate::common::skeleton::clip::Clip;
+use crate::common::skeleton::clip::StateAnimation;
 use crate::common::skeleton::state::{AnimationState, ClipLibrary};
 
 /// Where a pack keeps them, and what they are called.
 pub const CLIPS_DIR: &str = "animations";
 pub const CLIP_EXTENSION: &str = "gpa";
 
-/// Read one state's clip out of one pack.
+/// Read one state's animation out of one pack: a clip, or a blend of them.
 pub fn read_clip(
     assets: &Assets,
     pack: &Path,
     state: AnimationState,
-) -> Result<Option<Clip>, String> {
+) -> Result<Option<StateAnimation>, String> {
     let relative = format!("{CLIPS_DIR}/{}.{CLIP_EXTENSION}", state.clip_name());
     let bytes = match assets.read(pack, &relative) {
         Ok(bytes) => bytes,
@@ -43,12 +43,11 @@ pub fn read_clip(
     };
 
     let text = String::from_utf8(bytes).map_err(|error| error.to_string())?;
-    let mut clip: Clip = toml::from_str(&text).map_err(|error| error.to_string())?;
     // Sorted on the way in rather than at sample time, for the reason
     // `Channel::sort` gives: the sampler is the one thing here that runs in a
-    // match.
-    clip.normalise();
-    Ok(Some(clip))
+    // match. `from_toml` does it.
+    let animation = StateAnimation::from_toml(&text).map_err(|error| error.to_string())?;
+    Ok(Some(animation))
 }
 
 /// Every body clip the packs provide, lowest priority first.
@@ -91,10 +90,8 @@ pub fn load_body_clips_at_startup(mut commands: Commands, assets: Res<Assets>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::skeleton::play::{apply, Frames};
     use crate::common::skeleton::rig::humanoid;
     use crate::common::skeleton::state::PoseInputs;
-    use crate::common::skeleton::Pose;
     use crate::common::class::Class;
     use crate::common::skeleton::seed;
 
@@ -106,12 +103,12 @@ mod tests {
     /// point of having the number here rather than inline.
     const TOLERANCE: f32 = 0.2_f32.to_radians();
 
-    fn shipped(state: AnimationState) -> Option<Clip> {
+    fn shipped(state: AnimationState) -> Option<StateAnimation> {
         let path = Path::new("assets/default")
             .join(CLIPS_DIR)
             .join(format!("{}.{CLIP_EXTENSION}", state.clip_name()));
         let text = std::fs::read_to_string(path).ok()?;
-        Some(toml::from_str(&text).expect("a shipped clip should parse"))
+        Some(StateAnimation::from_toml(&text).expect("a shipped clip should parse"))
     }
 
     /// **The migration safety net.**
@@ -132,6 +129,21 @@ mod tests {
     /// Sampled across the whole cycle rather than at the keys, because the
     /// keys are the part the generator got right by construction — what is
     /// being tested is the easing between them.
+    /// How far a blend may be from the function **between** its headings.
+    ///
+    /// Looser than [`TOLERANCE`], and not because the baking is careless: a
+    /// blend is a lerp between two poses, and a diagonal is not quite the
+    /// average of its neighbours. Measured worst: 1.35° for an upright gait
+    /// at five headings, 1.51° for a crouched one at three.
+    const BETWEEN: f32 = 2.0_f32.to_radians();
+
+    /// A body travelling at `heading` from the way its state faces.
+    fn travelling(state: AnimationState, heading: f32) -> Vec2 {
+        let facing = crate::common::skeleton::gait::direction_of(state);
+        let (sin, cos) = heading.sin_cos();
+        Vec2::new(facing.x * cos - facing.y * sin, facing.x * sin + facing.y * cos)
+    }
+
     #[test]
     fn every_baked_clip_still_matches_its_function() {
         assert!(
@@ -140,38 +152,68 @@ mod tests {
              by not looking at anything",
         );
 
+        // **Through the path the game plays them by**, `animation_pose`, so a
+        // foot-timed track is read at the footfalls a body at that speed
+        // really has and a blend is blended the way a match blends it.
+        let rig = humanoid(Class::Mercenary.proportions());
+        let root = Transform::IDENTITY;
+
         for entry in seed::SEEDS {
             let state = entry.state;
-            let clip = seed::bake(*entry);
-            let rig = humanoid(Class::Mercenary.proportions());
-            let root = Transform::IDENTITY;
-            let ground = |_: Vec3| 0.0;
-            let frames = Frames::standing(root, root, &ground);
+            let animation = seed::bake(*entry);
+            let clip = animation.clips()[0].clone();
+            let gait = state.uses_gait();
 
-            for step in 0..=200 {
-                let seconds = clip.length * step as f32 / 200.0;
-                let inputs = PoseInputs { seconds, ..default() };
+            // Every speed a body really moves at, from standing to a sprint —
+            // which is what foot timing is supposed to make one clip right at.
+            let speeds: &[f32] = if gait { &[0.0, 2.8, 3.6, 4.5, 7.5] } else { &[0.0] };
+            let headings: Vec<(f32, f32)> = match entry.headings {
+                [] => vec![(0.0, TOLERANCE)],
+                authored => {
+                    let (low, high) = (authored[0], authored[authored.len() - 1]);
+                    (0..=12)
+                        .map(|step| {
+                            let heading = low + (high - low) * step as f32 / 12.0;
+                            let on_a_variant =
+                                authored.iter().any(|at| (at - heading).abs() < 1e-4);
+                            (heading, if on_a_variant { TOLERANCE } else { BETWEEN })
+                        })
+                        .collect()
+                }
+            };
 
-                let was = state.pose(&inputs);
-                let mut now = Pose::rest();
-                apply(&clip, clip.time_from(&inputs), &rig, &mut now, &frames, None);
+            for &speed in speeds {
+                for &(heading, tolerance) in &headings {
+                    for step in 0..=200 {
+                        let at = clip.length * step as f32 / 200.0;
+                        let inputs = PoseInputs {
+                            speed,
+                            travel: if gait { travelling(state, heading) } else { Vec2::ZERO },
+                            ..seed::inputs_at(clip.clock, at, clip.length)
+                        };
 
-                assert!(
-                    (now.root_offset - was.root_offset).length() < 0.001,
-                    "{state:?} at {seconds:.3}s: the root moved to {:?}, not {:?}",
-                    now.root_offset,
-                    was.root_offset,
-                );
+                        let was = state.pose(&inputs);
+                        let now = crate::common::skeleton::ik::animation_pose(
+                            &animation, state, &inputs, &rig, &root,
+                        );
 
-                for (bone, wanted) in was.posed_joints() {
-                    let got = now.joint(bone);
-                    let apart = got.angle_between(wanted);
-                    assert!(
-                        apart < TOLERANCE,
-                        "{state:?} at {seconds:.3}s: '{bone}' is {:.3}° from where \
-                         the function put it",
-                        apart.to_degrees(),
-                    );
+                        assert!(
+                            (now.root_offset - was.root_offset).length() < 0.001,
+                            "{state:?} at {at:.3}: the root moved to {:?}, not {:?}",
+                            now.root_offset,
+                            was.root_offset,
+                        );
+                        for (bone, wanted) in was.posed_joints() {
+                            let apart = now.joint(bone).angle_between(wanted);
+                            assert!(
+                                apart < tolerance,
+                                "{state:?} at {at:.3}, speed {speed}, heading {:.1}°: \
+                                 '{bone}' is {:.3}° from where the function put it",
+                                heading.to_degrees(),
+                                apart.to_degrees(),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -224,23 +266,26 @@ mod tests {
         for proportions in [Proportions::DEFAULT, Class::Heavy.proportions()] {
             let rig = humanoid(proportions);
             let root = Transform::IDENTITY;
-            let ground = |_: Vec3| 0.0;
-            let frames = Frames::standing(root, root, &ground);
 
             for state in AnimationState::iter() {
-                let Some(clip) = shipped(state) else { continue };
+                let Some(animation) = shipped(state) else { continue };
+                let clip = animation.clips()[0].clone();
                 if !clip.looping {
                     // A still pose cannot lurch, and one that does not loop has
                     // no seam to come round to.
                     continue;
                 }
 
+                // Through the path the game plays by, at a sprint: the fastest
+                // the footfalls move, so the most a foot-timed track is asked
+                // to cover in one step.
                 let at = |step: usize| {
-                    let seconds = clip.length * step as f32 / STEPS as f32;
-                    let inputs = PoseInputs { seconds, ..default() };
-                    let mut pose = Pose::rest();
-                    apply(&clip, clip.time_from(&inputs), &rig, &mut pose, &frames, None);
-                    pose
+                    let time = clip.length * step as f32 / STEPS as f32;
+                    let inputs = PoseInputs {
+                        speed: 7.5,
+                        ..seed::inputs_at(clip.clock, time, clip.length)
+                    };
+                    crate::common::skeleton::ik::animation_pose(&animation, state, &inputs, &rig, &root)
                 };
 
                 // `..=STEPS` rather than `..STEPS`: the last step *is* the

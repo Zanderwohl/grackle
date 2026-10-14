@@ -281,6 +281,14 @@ pub struct Frames<'a> {
     /// how it plays — which is the failure the weapons plan already names
     /// about holds.
     pub ground: &'a dyn Fn(Vec3) -> f32,
+    /// Where each foot is in its own cycle, left first — see
+    /// [`Timing`](super::clip::Timing). Stated by whoever knows the gait, the
+    /// way the floor is.
+    ///
+    /// `None` reads a foot-timed track as though the stance were exactly one
+    /// half: the left foot at the stride, the right half a stride on. Right
+    /// for nothing in particular, and the honest answer for a body with no gait.
+    pub footfalls: Option<[f32; 2]>,
 }
 
 impl Frames<'_> {
@@ -293,6 +301,7 @@ impl Frames<'_> {
             weapon: None,
             eye: None,
             ground,
+            footfalls: None,
         }
     }
 
@@ -390,6 +399,25 @@ fn resolve_point(
 /// Returns what each effector track managed, in track order, so a caller can
 /// tell an arm that did not reach from one that did — the same thing
 /// `grip_with` hands back and for the same reason.
+/// When a track is, given when its clip is.
+///
+/// A foot-timed track keeps the clip's whole strides and swaps the fraction
+/// for its foot's own cycle, so a clip several strides long still walks
+/// through its strides in order.
+pub fn track_time(timing: super::clip::Timing, time: f32, footfalls: Option<[f32; 2]>) -> f32 {
+    use super::clip::Timing;
+    let foot = match timing {
+        Timing::Clip => return time,
+        Timing::LeftFoot => 0,
+        Timing::RightFoot => 1,
+    };
+    let fraction = match footfalls {
+        Some(feet) => feet[foot],
+        None => (time + 0.5 * foot as f32).rem_euclid(1.0),
+    };
+    time.floor() + fraction
+}
+
 pub fn apply(
     clip: &Clip,
     time: f32,
@@ -407,6 +435,7 @@ pub fn apply(
         if !track.enabled {
             continue;
         }
+        let time = track_time(track.timing, time, frames.footfalls);
 
         match &track.channel {
             Channel::Rotation { bone, keys } => {
@@ -774,6 +803,7 @@ mod tests {
                 space: Space::Body,
                 unit: Unit::LegLengths,
                 enabled: true,
+                timing: Default::default(),
                 channel: Channel::Effector {
                     chain: ChainRef::RightLeg,
                     pole: None,
@@ -830,6 +860,7 @@ mod tests {
                 space: Space::Body,
                 unit: Unit::Metres,
                 enabled: true,
+                timing: Default::default(),
                 channel: Channel::Effector {
                     chain: ChainRef::RightArm,
                     pole: None,
@@ -959,6 +990,7 @@ mod tests {
             length: 1.0,
             tracks: vec![Track {
                 enabled: false,
+                timing: Default::default(),
                 ..Track::rotation(bone::CHEST)
             }],
             ..Clip::default()
@@ -1042,6 +1074,7 @@ mod tests {
                 space: Space::Carry,
                 unit: Unit::Metres,
                 enabled: true,
+                timing: Default::default(),
                 channel: Channel::Weapon {
                     keys: vec![Key {
                         at: 0.0,
@@ -1060,6 +1093,7 @@ mod tests {
             weapon: Some(Transform::IDENTITY),
             eye: None,
             ground: &ground,
+            footfalls: None,
         };
 
         let mut placed = Transform::IDENTITY;
@@ -1081,6 +1115,7 @@ mod tests {
                 space: Space::Weapon,
                 unit: Unit::Metres,
                 enabled: true,
+                timing: Default::default(),
                 channel: Channel::Weapon {
                     keys: vec![Key { at: 0.0, to: [Axis::Value(1.0); 3], ease: Interpolation::Linear }],
                 },
