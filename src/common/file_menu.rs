@@ -20,6 +20,7 @@
 use bevy_egui::egui;
 use bevy_egui::egui::UiKind;
 
+use crate::common::shortcuts::EditorChords;
 use crate::get;
 
 /// What the File menu was asked for.
@@ -32,20 +33,20 @@ pub enum FileAction {
     New,
     Save,
     SaveAs,
-    Load,
+    Open,
     Quit,
 }
 
 /// Every action, in the order the menu offers them.
 ///
-/// Hand-ordered rather than derived: *New* and *Load* are how you get a
+/// Hand-ordered rather than derived: *New* and *Open* are how you get a
 /// document, *Save* and *Save As* are what you do to one, and *Quit* is on its
 /// own below a separator because it is the one that cannot be undone.
 pub const ALL: &[FileAction] = &[
     FileAction::New,
     FileAction::Save,
     FileAction::SaveAs,
-    FileAction::Load,
+    FileAction::Open,
     FileAction::Quit,
 ];
 
@@ -56,8 +57,33 @@ impl FileAction {
             FileAction::New => "file.menu.new",
             FileAction::Save => "file.menu.save",
             FileAction::SaveAs => "file.menu.save_as",
-            FileAction::Load => "file.menu.load",
+            FileAction::Open => "file.menu.open",
             FileAction::Quit => "file.menu.quit",
+        }
+    }
+
+    /// Which action the keyboard asked for, if it asked for one.
+    ///
+    /// **The one translation from a chord to a file action**, so that `Ctrl+S`
+    /// in the three editors cannot mean three slightly different things — they
+    /// each hand what comes back to the same handler the menu feeds, which is
+    /// the whole arrangement in one line per editor.
+    ///
+    /// *Open* and *Quit* have no chord. `Ctrl+O` is free and could have one;
+    /// `Ctrl+Q` is a quit you hit by accident on the way to something else,
+    /// and there is nowhere to ask about unsaved work yet.
+    pub fn from_chords(chords: EditorChords) -> Option<FileAction> {
+        if chords.new {
+            Some(FileAction::New)
+        } else if chords.save_as {
+            // Before the plain save: `Ctrl+Shift+S` sets only `save_as`, but
+            // reading them the other way round is how a save-as becomes a
+            // silent overwrite if that ever stops being true.
+            Some(FileAction::SaveAs)
+        } else if chords.save {
+            Some(FileAction::Save)
+        } else {
+            None
         }
     }
 
@@ -72,9 +98,10 @@ impl FileAction {
     /// [`shortcuts`]: crate::common::shortcuts
     pub fn chord(self) -> Option<&'static str> {
         match self {
+            FileAction::New => Some("Ctrl+N"),
             FileAction::Save => Some("Ctrl+S"),
             FileAction::SaveAs => Some("Ctrl+Shift+S"),
-            FileAction::New | FileAction::Load | FileAction::Quit => None,
+            FileAction::Open | FileAction::Quit => None,
         }
     }
 }
@@ -128,7 +155,7 @@ mod tests {
 
     /// Every entry has a name in the shipped lang file.
     ///
-    /// A missing key renders as `<file.menu.load>` on screen rather than
+    /// A missing key renders as `<file.menu.open>` on screen rather than
     /// panicking, which is the right behaviour and means nothing fails — the
     /// menu just has a word in angle brackets in it. Read out of the file
     /// rather than through `get!`, because the language in force is global
@@ -169,14 +196,28 @@ mod tests {
 
         for action in ALL {
             let Some(chord) = action.chord() else { continue };
-            let fired = match chord {
-                "Ctrl+S" => hit(&[KeyCode::ControlLeft], KeyCode::KeyS).save,
-                "Ctrl+Shift+S" => {
-                    hit(&[KeyCode::ControlLeft, KeyCode::ShiftLeft], KeyCode::KeyS).save_as
-                }
+            let pressed = match chord {
+                "Ctrl+N" => hit(&[KeyCode::ControlLeft], KeyCode::KeyN),
+                "Ctrl+S" => hit(&[KeyCode::ControlLeft], KeyCode::KeyS),
+                "Ctrl+Shift+S" => hit(&[KeyCode::ControlLeft, KeyCode::ShiftLeft], KeyCode::KeyS),
                 other => panic!("{action:?} claims '{other}', which this test cannot press"),
             };
-            assert!(fired, "{action:?} claims '{chord}', which nothing answers");
+            // Not merely "a chord fired" but "*this* action came back", which
+            // is what every editor acts on. `Ctrl+Shift+S` reaching `Save`
+            // would be a save-as that silently overwrote.
+            assert_eq!(
+                FileAction::from_chords(pressed),
+                Some(*action),
+                "{action:?} claims '{chord}', which asks for something else",
+            );
         }
+    }
+
+    /// An idle keyboard asks for nothing. Said out loud because every editor
+    /// calls its file handler with whatever this returns, and a `Some` here
+    /// would be a save a frame, forever.
+    #[test]
+    fn nothing_held_asks_for_nothing() {
+        assert_eq!(FileAction::from_chords(EditorChords::default()), None);
     }
 }

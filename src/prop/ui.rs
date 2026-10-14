@@ -217,9 +217,8 @@ fn panels(
         .resizable(false)
         .show(&mut viewport_ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                // The shared pulldown. *Load* is what this used to call
-                // *Open* — the same action under the name every other mode
-                // gives it, which is the whole of what sharing the menu buys.
+                // The shared pulldown rather than four buttons written
+                // here, which is what it used to be.
                 file_menu(ui, &mut tabs.requests.file);
                 // `Prop` spelled out rather than read from the state: this
                 // whole system is gated on it, so the mode it is drawing for
@@ -1306,11 +1305,15 @@ pub fn ask_where_to_save(editor: &PropEditor, dialog: &PropFileDialog) {
     });
 }
 
-/// `Ctrl+S`, `Ctrl+Shift+S`, and the undo pair, for the prop editor.
+/// `Ctrl+N`, `Ctrl+S`, `Ctrl+Shift+S`, and the undo pair, for the prop editor.
 ///
 /// The map editor's undo has always had this; the prop editor's lived only on
 /// two buttons in the Features panel, so `Ctrl+Z` did nothing at all — which
 /// reads as a bug rather than as an absence.
+///
+/// The file half goes through `handle_files`, which is what the File menu
+/// feeds: a chord and the menu item it is the shortcut for have to be the same
+/// action, and the way to guarantee that is for them to *be* the same call.
 fn prop_shortcuts(
     keys: Res<ButtonInput<KeyCode>>,
     egui: Res<bevy_egui::input::EguiWantsInput>,
@@ -1324,14 +1327,12 @@ fn prop_shortcuts(
         editor.undo();
     }
 
-    if chords.save {
-        save_or_ask(&mut editor, &dialog);
-    } else if chords.save_as {
-        ask_where_to_save(&editor, &dialog);
+    if let Some(action) = FileAction::from_chords(chords) {
+        handle_files(Some(action), &mut editor, &dialog);
     }
 }
 
-/// New, load, save, including the file dialog on its own thread.
+/// New, open, save, including the file dialog on its own thread.
 ///
 /// Takes the action rather than the whole request bundle, because the
 /// **animation editor** calls it too: a prop's clips live in its `.gpp`, so
@@ -1377,7 +1378,7 @@ pub(crate) fn handle_files(
         ask_where_to_save(editor, dialog);
     }
 
-    if action == Some(FileAction::Load) {
+    if action == Some(FileAction::Open) {
         let slot = dialog.result.clone();
         std::thread::spawn(move || {
             let chooser = rfd::AsyncFileDialog::new().add_filter("Grackle Prop", &[PROP_EXTENSION]);

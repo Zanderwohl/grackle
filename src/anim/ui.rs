@@ -922,7 +922,7 @@ fn panels(
 ///   same file, and an animation editor with a second idea of where that file
 ///   goes is two paths for one document.
 /// - **The body clips are a pack**, one file per state under `animations/`.
-///   There is no file to browse for, so *Load* re-reads the packs and *Save As*
+///   There is no file to browse for, so *Open* re-reads the packs and *Save As*
 ///   asks which pack to write into. *New* is an empty set, which is exactly
 ///   what a pack that ships no animations has — every state back on its Rust
 ///   function, and one `Ctrl+Z` from where it was.
@@ -955,7 +955,7 @@ fn handle_files(
                     body.clear();
                     info!("Every state is back on its built-in pose");
                 }
-                Some(FileAction::Load) => {
+                Some(FileAction::Open) => {
                     let count = body.reload(&files.assets);
                     info!("Re-read {count} body animation(s) from the packs");
                 }
@@ -974,7 +974,8 @@ fn save_the_body_clips(body: &mut BodyClips, pack: &std::path::Path) {
     }
 }
 
-/// `Ctrl+S`, `Ctrl+Shift+S` and the undo pair, for the animation editor.
+/// `Ctrl+N`, `Ctrl+S`, `Ctrl+Shift+S` and the undo pair, for the animation
+/// editor.
 ///
 /// The other two authoring modes have had these and this one had none, so the
 /// chord hints the File menu draws would have been a promise the keyboard did
@@ -1005,15 +1006,8 @@ fn anim_shortcuts(
         }
     }
 
-    let asked = if chords.save {
-        Some(FileAction::Save)
-    } else if chords.save_as {
-        Some(FileAction::SaveAs)
-    } else {
-        None
-    };
-    if asked.is_some() {
-        handle_files(asked, anim.source, &mut editor, &mut body, &mut files);
+    if let Some(action) = FileAction::from_chords(chords) {
+        handle_files(Some(action), anim.source, &mut editor, &mut body, &mut files);
     }
 }
 

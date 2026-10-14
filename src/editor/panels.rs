@@ -29,7 +29,7 @@ use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
 
 enum DialogResult {
     SavePath(PathBuf),
-    LoadPath(PathBuf),
+    OpenPath(PathBuf),
 }
 
 /// Ask where to put the blueprint, on a background thread.
@@ -62,7 +62,7 @@ fn ask_where_to_save(current_file: &CurrentFilePath) {
     });
 }
 
-/// `Ctrl+S`, `Ctrl+Shift+S`, and the undo pair, for the map editor.
+/// `Ctrl+N`, `Ctrl+S`, `Ctrl+Shift+S`, and the undo pair, for the map editor.
 ///
 /// Its own system rather than more parameters on [`EditorPanels::ui`], which is
 /// at Bevy's limit already. It hands the request over in `CurrentFilePath` so
@@ -74,11 +74,12 @@ fn file_shortcuts(
     egui: Res<bevy_egui::input::EguiWantsInput>,
     mut current_file: ResMut<CurrentFilePath>,
 ) {
-    let chords = chords(&keys, egui.wants_keyboard_input());
-    if chords.save {
-        current_file.requested_op = Some(FileAction::Save);
-    } else if chords.save_as {
-        current_file.requested_op = Some(FileAction::SaveAs);
+    // `FileAction::from_chords` rather than a match written here, so the three
+    // editors cannot disagree about which chord means what.
+    if let Some(action) = FileAction::from_chords(chords(&keys, egui.wants_keyboard_input())) {
+        // Only on `Some`: a frame with nothing held must not clear a request
+        // the menu made in the same frame.
+        current_file.requested_op = Some(action);
     }
 }
 
@@ -456,7 +457,7 @@ impl EditorPanels {
                         Err(e) => error!("Save failed: {}", e),
                     }
                 }
-                DialogResult::LoadPath(path) => {
+                DialogResult::OpenPath(path) => {
                     match save::load(&path) {
                         Ok(loaded) => {
                             info!("Loaded from {:?}", path);
@@ -507,7 +508,7 @@ impl EditorPanels {
                     info!("Quitting, as asked");
                     messages.exit.write(AppExit::Success);
                 }
-                FileAction::Load => {
+                FileAction::Open => {
                     let slot = current_file.dialog_result.clone();
                     std::thread::spawn(move || {
                         let handle = pollster::block_on(
@@ -516,7 +517,7 @@ impl EditorPanels {
                                 .pick_file()
                         );
                         if let Some(h) = handle {
-                            *slot.lock().unwrap() = Some(DialogResult::LoadPath(h.path().to_path_buf()));
+                            *slot.lock().unwrap() = Some(DialogResult::OpenPath(h.path().to_path_buf()));
                         }
                     });
                 }

@@ -431,7 +431,7 @@ title = "File"
 new = "New"
 save = "Save"
 save_as = "Save As"
-load = "Load"
+open = "Open"
 quit = "Quit"
 
 [app_mode.menu]

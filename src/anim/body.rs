@@ -96,7 +96,7 @@ impl BodyClips {
 
     /// Throw the edits away and take what is on disk.
     ///
-    /// The File menu's *Load*, and the honest reading of it for a document
+    /// The File menu's *Open*, and the honest reading of it for a document
     /// that is a pack rather than a file: there is nothing to browse for,
     /// because which packs are in force is a property of the build. What it is
     /// *for* is the same as anywhere else — getting back to the last saved
@@ -270,7 +270,7 @@ impl BodyClipDialog {
 
 /// Read one set of clips out of a list of packs, lowest priority first.
 ///
-/// Shared by the first load and by *Load*, so a revert cannot read the packs
+/// Shared by the first load and by *Open*, so a revert cannot read the packs
 /// differently from the way they were read to begin with.
 fn read_the_packs(assets: &Assets, packs: &[PathBuf]) -> BTreeMap<String, Clip> {
     let mut clips = BTreeMap::new();
