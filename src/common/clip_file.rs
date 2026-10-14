@@ -96,6 +96,7 @@ mod tests {
     use crate::common::skeleton::state::PoseInputs;
     use crate::common::skeleton::Pose;
     use crate::common::class::Class;
+    use crate::common::skeleton::seed;
 
     /// How far a migrated clip may be from the function it replaced.
     ///
@@ -115,20 +116,33 @@ mod tests {
 
     /// **The migration safety net.**
     ///
-    /// Every state the default pack ships a clip for has to move the way the
-    /// Rust function it replaced moved. Without this, migrating is a change
+    /// Seeding a pack has to produce clips that move the way the Rust
+    /// functions they replace move. Without this, migrating is a change
     /// nothing can check: the bodies still animate, and whether they animate
     /// the way they used to is a matter of somebody's memory.
+    ///
+    /// It bakes in memory rather than reading `assets/default`, and that is
+    /// the difference between a net and a muzzle. The shipped clips are *meant*
+    /// to be edited — that is the whole point of having them as data — and
+    /// while this test read them, the first retimed idle failed it. What has to
+    /// stay faithful is the generator; what a file says after somebody has
+    /// worked on it is their business, and `no_migrated_clip_lurches_anywhere_including_its_seam`
+    /// below is what still holds the shipped files to something.
     ///
     /// Sampled across the whole cycle rather than at the keys, because the
     /// keys are the part the generator got right by construction — what is
     /// being tested is the easing between them.
     #[test]
-    fn every_migrated_clip_still_matches_its_function() {
-        let mut checked = 0;
+    fn every_baked_clip_still_matches_its_function() {
+        assert!(
+            !seed::SEEDS.is_empty(),
+            "no states are seeded — if the table moved, this test is passing \
+             by not looking at anything",
+        );
 
-        for state in AnimationState::iter() {
-            let Some(clip) = shipped(state) else { continue };
+        for entry in seed::SEEDS {
+            let state = entry.state;
+            let clip = seed::bake(*entry);
             let rig = humanoid(Class::Mercenary.proportions());
             let root = Transform::IDENTITY;
             let ground = |_: Vec3| 0.0;
@@ -160,14 +174,33 @@ mod tests {
                     );
                 }
             }
-            checked += 1;
         }
+    }
 
-        assert!(
-            checked > 0,
-            "no migrated clips were found — if the files moved, this test is \
-             passing by not looking at anything",
-        );
+    /// Every clip the default pack ships parses and has nothing to complain
+    /// about — the same question the Problems panel asks.
+    ///
+    /// This is what the fidelity test above used to cover incidentally, and the
+    /// part of it that survives a hand edit: a retimed idle is fine, an idle
+    /// with a track naming a bone this rig does not have is not, and the
+    /// failure at runtime is a track that silently does nothing.
+    #[test]
+    fn every_shipped_body_clip_is_one_the_editor_would_not_flag() {
+        let rig = humanoid(Class::Mercenary.proportions());
+        let known = |name: &str| rig.bones().iter().any(|bone| bone.name == name);
+
+        let mut found = 0;
+        for state in AnimationState::iter() {
+            let Some(clip) = shipped(state) else { continue };
+            let problems = clip.problems(known);
+            assert!(
+                problems.is_empty(),
+                "{}.{CLIP_EXTENSION}: {problems:?}",
+                state.clip_name(),
+            );
+            found += 1;
+        }
+        assert!(found > 0, "no shipped body clips were found");
     }
 
     /// **No migrated clip lurches**, including across its loop seam.

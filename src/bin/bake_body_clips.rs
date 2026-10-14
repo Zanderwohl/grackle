@@ -1,5 +1,5 @@
-//! Writes the body animations the default pack ships, from the Rust functions
-//! they replace.
+//! Seeds the body animations a pack ships, from the Rust functions they
+//! replace.
 //!
 //! Run from the repo root:
 //!
@@ -7,167 +7,156 @@
 //! cargo run --bin bake_body_clips
 //! ```
 //!
-//! # Why a generator rather than hand-authoring
+//! The sampling itself is [`grackle::common::skeleton::seed`], in the library,
+//! because the fidelity test bakes a clip too and two samplers would be two
+//! that drift. This program is the part that touches the disk, and the whole of
+//! what it adds is the decision about **when not to**.
 //!
-//! The point of migrating is that these become editable — but the *first*
-//! version has to be faithful, and nobody can hand-place a cosine. So this
-//! samples `AnimationState::pose` and writes down what it found, and after
-//! that the file is the source of truth and this program is only how it was
-//! seeded. The same arrangement `new_map_template` has with the blueprint a
-//! new map starts from.
+//! # It will not overwrite what you have authored
 //!
-//! Re-running it **overwrites** whatever has been authored since. That is the
-//! price of keeping the seeding reviewable, and it is why it is a separate
-//! binary rather than something that runs on startup.
+//! A clip is seeded once and edited thereafter, so a re-bake is almost always
+//! somebody running the command again — for a state that has just been added,
+//! or because it is in a README — and not somebody asking for three days of
+//! timeline work to be thrown away. So each file is compared with what would be
+//! written and **left alone if it differs**, with `--force` as the way to say
+//! you meant it.
 //!
-//! # What is lost
+//! The comparison is on the parsed clip rather than on the bytes: saving from
+//! the animation editor is `toml::to_string_pretty`, which reorders nothing but
+//! does lay a file out its own way, and a file that is textually different and
+//! semantically identical has had nothing authored in it.
 //!
-//! The functions carry named constants with doc comments arguing the number —
-//! `IDLE_BOB` is `0.022` "in hip-heights" and says why. A clip has numbers and
-//! no argument, so each one gets a `note` saying where it came from; the
-//! reasoning stays in the Rust the generator reads, which is why the functions
-//! are not deleted.
+//! A file that will not parse is also kept, not replaced. It is more likely to
+//! be a clip mid-edit with a typo in it than a file anybody wants reverted, and
+//! `--force` says so either way.
 
-use std::path::Path;
+use std::path::PathBuf;
 
-use bevy::prelude::*;
+use clap::Parser;
 
-use grackle::common::rotation::euler_from_quat;
-use grackle::common::skeleton::clip::{Channel, Clip, Clock, Combine, Key, Space, Track, Unit};
-use grackle::common::skeleton::state::{AnimationState, PoseInputs};
-use grackle::common::skeleton::{default_humanoid, Interpolation, Pose};
+use grackle::common::clip_file::{CLIPS_DIR, CLIP_EXTENSION};
+use grackle::common::skeleton::clip::Clip;
+use grackle::common::skeleton::seed::{bake, Seed, SEEDS};
 
-/// How many keys to lay across a cycle.
-///
-/// Sixteen, which is enough that a cosine sampled at these points and eased
-/// between them is within a fifth of a degree of the real thing everywhere —
-/// `every_migrated_clip_still_matches_its_function` is what actually holds
-/// that, and it is the number to raise if it ever stops passing.
-const KEYS_PER_CYCLE: usize = 16;
+#[derive(Parser)]
+#[command(about = "Seed a pack's body animations from the built-in pose functions")]
+struct Args {
+    /// Which states to seed. Every migrated one, if none are named.
+    states: Vec<String>,
 
-/// Smooth at both ends in the second derivative too, so a loop seam does not
-/// show as a kink. An idle is a cosine and a cosine has no corners.
-const EASE: Interpolation = Interpolation::SmootherStep;
+    /// Replace files that have been edited since they were seeded.
+    #[arg(long)]
+    force: bool,
+
+    /// The pack to write into.
+    #[arg(long, default_value = "assets/default")]
+    pack: PathBuf,
+}
+
+/// What became of one state.
+enum Outcome {
+    Written,
+    /// Already says what a bake would say. Nothing to do and nothing at risk.
+    Unchanged,
+    /// Edited since it was seeded, so it was left where it was.
+    Kept(String),
+}
 
 fn main() {
-    let directory = Path::new("assets/default/animations");
-    std::fs::create_dir_all(directory).expect("assets/default/animations should be creatable");
+    let args = Args::parse();
 
-    for (state, length, looping, note) in [
-        (
-            AnimationState::Idle,
-            grackle::common::skeleton::state::IDLE_PERIOD,
-            true,
-            "Sampled from `idle_pose`. A settle the body sinks into and comes back \
-             out of, with the chest leaning into it and the arms trailing a quarter \
-             cycle behind.",
-        ),
-        (
-            AnimationState::Crouch,
-            1.0,
-            false,
-            "Sampled from `crouch_posture`. Still, so one key says all of it — the \
-             length is a formality.",
-        ),
-        (
-            AnimationState::Airborne,
-            1.0,
-            false,
-            "Sampled from `airborne_pose`. Still, for now: a real jump wants keys \
-             through the arc, which is what having a timeline is for.",
-        ),
-    ] {
-        let clip = bake(state, length, looping, note);
-        let path = directory.join(format!("{}.gpa", state.clip_name()));
+    let chosen: Vec<Seed> = if args.states.is_empty() {
+        SEEDS.to_vec()
+    } else {
+        let mut chosen = Vec::new();
+        for name in &args.states {
+            match SEEDS.iter().find(|seed| seed.state.clip_name() == name) {
+                Some(seed) => chosen.push(*seed),
+                None => {
+                    eprintln!(
+                        "'{name}' is not a migrated state. Try one of: {}",
+                        SEEDS
+                            .iter()
+                            .map(|seed| seed.state.clip_name())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
+                    std::process::exit(2);
+                }
+            }
+        }
+        chosen
+    };
+
+    let directory = args.pack.join(CLIPS_DIR);
+    std::fs::create_dir_all(&directory)
+        .unwrap_or_else(|e| panic!("{}: {e}", directory.display()));
+
+    let mut kept = 0;
+    for seed in chosen {
+        let clip = bake(seed);
+        let path = directory.join(format!("{}.{CLIP_EXTENSION}", seed.state.clip_name()));
         let text = toml::to_string_pretty(&clip).expect("a clip should serialise");
-        std::fs::write(&path, text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        println!(
-            "{} — {} track(s), {} key(s)",
-            path.display(),
-            clip.tracks.len(),
-            clip.tracks
-                .iter()
-                .map(|track| track.channel.key_count())
-                .sum::<usize>(),
+
+        match outcome(&path, &clip, &text, args.force) {
+            Outcome::Written => {
+                std::fs::write(&path, &text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                println!(
+                    "{} — {} track(s), {} key(s)",
+                    path.display(),
+                    clip.tracks.len(),
+                    clip.tracks
+                        .iter()
+                        .map(|track| track.channel.key_count())
+                        .sum::<usize>(),
+                );
+            }
+            Outcome::Unchanged => {
+                println!("{} — already a faithful seeding; left alone", path.display());
+            }
+            Outcome::Kept(why) => {
+                println!("{} — kept: {why}", path.display());
+                kept += 1;
+            }
+        }
+    }
+
+    if kept > 0 {
+        // Non-zero, so a script that bakes as a build step notices rather than
+        // carrying on against files it did not write.
+        eprintln!(
+            "\n{kept} file(s) kept. Pass --force to replace them with a fresh \
+             seeding, losing whatever has been authored in them.",
         );
+        std::process::exit(1);
     }
 }
 
-/// Sample a state's own pose function across a cycle and write down what it
-/// did.
-fn bake(state: AnimationState, length: f32, looping: bool, note: &str) -> Clip {
-    // Still poses get one key, not sixteen identical ones: a track that says
-    // the same thing sixteen times is one nobody can read, and the sampler
-    // treats a single key as a constant anyway.
-    let samples = if looping { KEYS_PER_CYCLE } else { 1 };
-    let taken: Vec<(f32, Pose)> = (0..samples)
-        .map(|step| {
-            let at = length * step as f32 / samples as f32;
-            let inputs = PoseInputs {
-                seconds: at,
-                ..default()
-            };
-            (at, state.pose(&inputs))
-        })
-        .collect();
-
-    // Every joint any sample had an opinion about, in the rig's own order so
-    // the file is stable between runs — a `Pose`'s joints are a `HashMap`, and
-    // writing them in its order would make every re-bake a diff.
-    let mut tracks = Vec::new();
-    for bone in default_humanoid().bones().iter().map(|bone| bone.name) {
-        if !taken
-            .iter()
-            .any(|(_, pose)| pose.posed_joints().any(|(name, _)| name == bone))
-        {
-            continue;
+/// What to do about one file, given what a bake would put there.
+fn outcome(path: &std::path::Path, clip: &Clip, text: &str, force: bool) -> Outcome {
+    let Ok(existing) = std::fs::read_to_string(path) else {
+        // Not there, or unreadable. Either way there is nothing to lose.
+        return Outcome::Written;
+    };
+    if force {
+        return Outcome::Written;
+    }
+    // Identical bytes needs no parse, and is the usual answer for a pack
+    // nobody has touched.
+    if existing == text {
+        return Outcome::Unchanged;
+    }
+    match toml::from_str::<Clip>(&existing) {
+        Ok(mut found) => {
+            found.normalise();
+            let mut fresh = clip.clone();
+            fresh.normalise();
+            if found == fresh {
+                Outcome::Unchanged
+            } else {
+                Outcome::Kept("edited since it was seeded".into())
+            }
         }
-        tracks.push(Track {
-            combine: Combine::Replace,
-            space: Space::Body,
-            unit: Unit::Metres,
-            enabled: true,
-            channel: Channel::Rotation {
-                bone: bone.to_string(),
-                keys: taken
-                    .iter()
-                    // All three, because this is a faithful recording of what a
-                    // function did — it had an opinion about every axis, so
-                    // the clip says so. A key somebody authors afterwards may
-                    // free whichever axes it has nothing to say about.
-                    .map(|(at, pose)| {
-                        Key::all(*at, euler_from_quat(pose.joint(bone)).to_array(), EASE)
-                    })
-                    .collect(),
-            },
-        });
-    }
-
-    // And the root, if the state moves it at all.
-    if taken
-        .iter()
-        .any(|(_, pose)| pose.root_offset.length_squared() > 0.0)
-    {
-        tracks.push(Track {
-            combine: Combine::Replace,
-            space: Space::Body,
-            unit: Unit::HipHeights,
-            enabled: true,
-            channel: Channel::Root {
-                keys: taken
-                    .iter()
-                    .map(|(at, pose)| Key::all(*at, pose.root_offset.to_array(), EASE))
-                    .collect(),
-            },
-        });
-    }
-
-    Clip {
-        name_key: format!("animation.states.{}", state.clip_name()),
-        length,
-        clock: Clock::Shared,
-        looping,
-        note: note.to_string(),
-        tracks,
+        Err(why) => Outcome::Kept(format!("will not parse ({why}), so it is not ours to replace")),
     }
 }

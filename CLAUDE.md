@@ -74,7 +74,7 @@ looks like.
 | `src/prop/` | The prop editor: a CSG kernel, the modelling feature list, and the mode around it. |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`. |
 
 ## Spawn points and class metrics

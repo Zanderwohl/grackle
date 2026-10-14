@@ -21,6 +21,9 @@
 //! - [`play`] — sampling a clip and composing it onto a pose. The pure half
 //!   and the half that needs to know where the floor is, kept apart.
 //! - [`interpolation`] — the named curves a key eases along.
+//! - [`seed`] — how the shipped body clips were sampled out of the pose
+//!   functions they replace. The generator, not the files: once seeded, a clip
+//!   is edited and the functions are only where its reasoning is written down.
 //! - [`draw`] — one prism per bone, for anything that wants to see a rig.
 //! - [`mesh`] — the solid a body is actually drawn as, built from the same
 //!   proportions the bones are.
@@ -34,6 +37,7 @@ pub mod joints;
 pub mod mesh;
 pub mod play;
 pub mod rig;
+pub mod seed;
 pub mod state;
 
 pub use clip::{
