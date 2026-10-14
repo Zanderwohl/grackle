@@ -92,6 +92,15 @@ impl PropDoc {
         id
     }
 
+    /// Add a feature at `at` in the list and return its id. Clamped to the
+    /// end.
+    pub fn insert_at(&mut self, at: usize, op: FeatureOp) -> PropFeatureId {
+        let id = self.take_id();
+        let at = at.min(self.features.len());
+        self.features.insert(at, PropFeature::new(id, op));
+        id
+    }
+
     /// Add a feature at the end and return its id.
     pub fn push(&mut self, op: FeatureOp) -> PropFeatureId {
         let id = self.take_id();
@@ -228,6 +237,14 @@ pub struct PropEditor {
     /// `selected` rather than folded into one list so the many readers that
     /// only want "the thing being edited" go on reading one field.
     pub also_selected: Vec<PropFeatureId>,
+    /// The **rollback bar**: the last feature evaluated, when the view is
+    /// showing the prop as it stood partway down the list. `None` is the whole
+    /// prop.
+    ///
+    /// An id rather than a count, so inserting, deleting or reordering above
+    /// the bar cannot quietly move it to a different feature. View state, not
+    /// document: it is not saved, not undone, and does not dirty the file.
+    rollback: Option<PropFeatureId>,
     pub path: Option<PathBuf>,
     /// Whether the document differs from what is on disk.
     pub dirty: bool,
@@ -248,6 +265,7 @@ impl Default for PropEditor {
             pending: None,
             selected: None,
             also_selected: vec![],
+            rollback: None,
             path: None,
             dirty: false,
             generation: 0,
@@ -355,6 +373,51 @@ impl PropEditor {
         self.doc_changed();
     }
 
+    /// Where the rollback bar is, if the view is rolled back.
+    pub fn rollback(&self) -> Option<PropFeatureId> {
+        self.rollback
+    }
+
+    /// Move the rollback bar to just after `at`, or take it away with `None`.
+    /// A bar after the last feature is no bar, and is stored as none so there
+    /// is one way to say "everything".
+    ///
+    /// Bumps the generation — the viewport has to rebuild — but not the dirty
+    /// flag, since the document has not changed.
+    pub fn roll_back_to(&mut self, at: Option<PropFeatureId>) {
+        let at = at.filter(|id| {
+            self.doc.features.last().is_some_and(|last| last.id != *id) && self.doc.feature(*id).is_some()
+        });
+        if at != self.rollback {
+            self.rollback = at;
+            self.generation += 1;
+        }
+    }
+
+    /// The features the view evaluates: everything, or everything down to the
+    /// rollback bar.
+    pub fn shown(&self) -> &[PropFeature] {
+        match self.rollback.and_then(|id| self.doc.index_of(id)) {
+            Some(at) => &self.doc.features[..=at],
+            None => &self.doc.features,
+        }
+    }
+
+    /// Add a feature **at the rollback bar** and move the bar past it, or at
+    /// the end with no bar. Adding while rolled back is building on the prop
+    /// as it stood there, which is the reason to roll back at all.
+    pub fn add(&mut self, op: FeatureOp) -> PropFeatureId {
+        let anchor = self.rollback;
+        let id = self.edit(|doc| match anchor.and_then(|anchor| doc.index_of(anchor)) {
+            Some(at) => doc.insert_at(at + 1, op),
+            None => doc.push(op),
+        });
+        if anchor.is_some() {
+            self.roll_back_to(Some(id));
+        }
+        id
+    }
+
     /// Everything selected, in the order it was picked; the primary last.
     pub fn selection(&self) -> Vec<PropFeatureId> {
         self.also_selected.iter().copied().chain(self.selected).collect()
@@ -385,8 +448,13 @@ impl PropEditor {
         }
     }
 
-    /// Drop anything selected that the document no longer has.
+    /// Drop anything selected that the document no longer has — and the
+    /// rollback bar, if the feature it sat after has gone.
     pub fn forget_missing(&mut self) {
+        if self.rollback.is_some_and(|id| self.doc.feature(id).is_none()) {
+            self.rollback = None;
+            self.generation += 1;
+        }
         let doc = &self.doc;
         self.also_selected.retain(|id| doc.feature(*id).is_some());
         if self.selected.is_some_and(|id| doc.feature(id).is_none()) {
@@ -421,6 +489,7 @@ impl PropEditor {
         self.redo.clear();
         self.pending = None;
         self.clear_selection();
+        self.rollback = None;
         self.path = path;
         self.generation += 1;
         self.dirty = false;
@@ -489,7 +558,7 @@ pub fn save(path: &Path, doc: &PropDoc) -> Result<(), PropFileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prop::feature::{Axis, BooleanOp};
+    use crate::prop::feature::{Axis, BooleanOp, PatternKind};
     use crate::prop::profile::{Placement, Profile};
     use crate::prop::solid::Shape;
     use crate::prop::surface::{Style, Surface, Tint};
@@ -534,6 +603,26 @@ mod tests {
 
     /// A format that rounded would move a bore off-centre by too little to see
     /// and enough to leave a sliver of metal inside the barrel.
+    /// Both layouts of a pattern come back as written — the nested tag is
+    /// the kind of thing TOML gets wrong quietly.
+    #[test]
+    fn a_pattern_round_trips() {
+        let mut doc = PropDoc::new("x");
+        let a = doc.push(FeatureOp::default());
+        let row = doc.push(FeatureOp::Pattern {
+            target: a,
+            count: 3,
+            along: PatternKind::Linear { step: [0.0, 0.0, 0.05] },
+        });
+        doc.push(FeatureOp::Pattern {
+            target: row,
+            count: 6,
+            along: PatternKind::Radial { axis: Axis::Z, centre: [0.0, 0.1, 0.0], degrees: 360.0 },
+        });
+        let text = to_text(&doc).unwrap();
+        assert_eq!(parse(&text).unwrap(), doc, "{text}");
+    }
+
     #[test]
     fn the_geometry_survives_the_round_trip() {
         let doc = sample();
@@ -1015,6 +1104,42 @@ mod tests {
         assert_eq!(doc.feature(copy).unwrap().op, doc.feature(a).unwrap().op);
         assert_eq!(doc.duplicate(cut, "no".into()), None);
         assert_eq!(doc.evaluate().problems.len(), problems_before, "the copy broke nothing");
+    }
+
+    /// Rolled back, a new feature lands at the bar and the bar follows it;
+    /// the view evaluates down to the bar and no further.
+    #[test]
+    fn adding_while_rolled_back_builds_at_the_bar() {
+        let mut editor = PropEditor::default();
+        let a = editor.add(FeatureOp::default());
+        let b = editor.add(FeatureOp::default());
+        editor.dirty = false;
+        editor.roll_back_to(Some(a));
+        assert_eq!(editor.shown().len(), 1);
+        assert!(!editor.dirty, "rolling back is not an edit");
+
+        let c = editor.add(FeatureOp::default());
+        let order: Vec<_> = editor.doc().features.iter().map(|f| f.id).collect();
+        assert_eq!(order, vec![a, c, b]);
+        assert_eq!(editor.rollback(), Some(c));
+        assert_eq!(editor.shown().len(), 2);
+    }
+
+    /// A bar after the last feature is no bar, and a bar whose feature is
+    /// deleted goes with it rather than pointing at nothing.
+    #[test]
+    fn the_bar_never_points_at_nothing() {
+        let mut editor = PropEditor::default();
+        let a = editor.add(FeatureOp::default());
+        let b = editor.add(FeatureOp::default());
+        editor.roll_back_to(Some(b));
+        assert_eq!(editor.rollback(), None);
+
+        editor.roll_back_to(Some(a));
+        editor.edit(|doc| doc.remove(a));
+        editor.forget_missing();
+        assert_eq!(editor.rollback(), None);
+        assert_eq!(editor.shown().len(), 1);
     }
 
     /// Undo can take away a secondary pick as well as the primary.

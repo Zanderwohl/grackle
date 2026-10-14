@@ -99,14 +99,25 @@ a toolbar under the menu bar.
 
 ### Larger
 
-- [ ] **Model / Fit workspaces.** Fit absorbs the Hold and Scene tabs and the
-      handles checkbox; class picker in the toolbar.
-- [ ] Nested operands in History (a boolean shows what it consumed beneath it).
-- [ ] Rollback bar: show the model as of feature *N* (`Evaluated::live_before`
-      already records what each step saw).
-- [ ] Ghost consumed tool bodies while a boolean is selected.
-- [ ] Linear / radial pattern feature.
-- [ ] Revert to saved.
+- [x] **Model / Fit workspaces.** Fit absorbs the Hold and Scene tabs and the
+      handles checkbox; class picker in the toolbar; the figure is also on a
+      View menu in both. Hold panel in sections: class, Grip, Carry,
+      Viewmodel.
+- [x] Operands in History: a consuming feature lists what it ate beneath it,
+      clickable. The rows themselves stay flat and in document order — the
+      order *is* the prop, and drag-reordering needs it flat — so the nesting
+      is drawn, not structural.
+- [x] Rollback bar: drag it up the History to scrub, or "Roll back to here" /
+      "Roll to end" on the right-click menu. Stored as the id of the last
+      feature shown; new features land at the bar. View state only — not
+      saved, not undone, cleared on leaving the prop editor.
+- [x] Ghost the operands of a selected boolean / mirror / repaint / pattern as
+      faint wireframe where they stood, cached on generation + selection.
+- [x] Linear / radial pattern feature (`FeatureOp::Pattern`).
+- [ ] Revert to saved. **Needs a decision:** the File menu is shared and
+      every mode answers every entry, so this means writing Revert for the map
+      editor (reload the blueprint) and the animation editor too, not just
+      here.
 
 ### Deferred
 

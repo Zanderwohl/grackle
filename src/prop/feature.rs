@@ -139,6 +139,57 @@ pub enum FeatureOp {
     /// Repaint a body. Its own feature because what gets repainted is usually
     /// the *result* of a boolean, which no earlier feature named.
     Paint { target: PropFeatureId, surface: Surface },
+    /// Copies of a body, in a row or around an axis, joined into one — vents
+    /// along a shroud, flutes round a cylinder, rungs on a rail. The original
+    /// is the first copy, so a count of one changes nothing.
+    Pattern {
+        target: PropFeatureId,
+        count: u32,
+        along: PatternKind,
+    },
+}
+
+/// How a pattern's copies are laid out.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PatternKind {
+    /// Each copy `step` further on than the last.
+    Linear {
+        #[serde(with = "crate::prop::nice_f32::array")]
+        step: [f32; 3],
+    },
+    /// Turned about a line through `centre` parallel to `axis`, spread across
+    /// `degrees`. A whole turn spaces them evenly round it; anything less puts
+    /// the first copy at one end and the last at the other.
+    Radial {
+        axis: Axis,
+        #[serde(default, with = "crate::prop::nice_f32::array")]
+        centre: [f32; 3],
+        #[serde(with = "crate::prop::nice_f32::scalar")]
+        degrees: f32,
+    },
+}
+
+impl PatternKind {
+    /// Where copy `index` of `count` goes, as a transform of the original.
+    pub fn copy(&self, index: u32, count: u32) -> Transform {
+        match *self {
+            PatternKind::Linear { step } => {
+                Transform::from_translation(Vec3::from_array(step) * index as f32)
+            }
+            PatternKind::Radial { axis, centre, degrees } => {
+                // A whole turn would put the last copy on top of the first.
+                let gaps = match degrees.abs() >= 360.0 - 1e-3 {
+                    true => count,
+                    false => count.saturating_sub(1).max(1),
+                };
+                let angle = (degrees / gaps as f32).to_radians() * index as f32;
+                let centre = Vec3::from_array(centre);
+                let turn = Quat::from_axis_angle(axis.normal(), angle);
+                Transform::from_translation(centre - turn * centre).with_rotation(turn)
+            }
+        }
+    }
 }
 
 impl Default for FeatureOp {
@@ -161,6 +212,7 @@ impl FeatureOp {
             FeatureOp::Boolean { op, .. } => op.name(),
             FeatureOp::Mirror { .. } => get!("prop.features.mirror"),
             FeatureOp::Paint { .. } => get!("prop.features.paint"),
+            FeatureOp::Pattern { .. } => get!("prop.features.pattern"),
         }
     }
 
@@ -172,7 +224,9 @@ impl FeatureOp {
             | FeatureOp::Extrude { .. }
             | FeatureOp::Revolve { .. } => vec![],
             FeatureOp::Boolean { target, tool, .. } => vec![*target, *tool],
-            FeatureOp::Mirror { target, .. } | FeatureOp::Paint { target, .. } => vec![*target],
+            FeatureOp::Mirror { target, .. }
+            | FeatureOp::Paint { target, .. }
+            | FeatureOp::Pattern { target, .. } => vec![*target],
         }
     }
 
@@ -182,7 +236,10 @@ impl FeatureOp {
             FeatureOp::Primitive { placement, .. }
             | FeatureOp::Extrude { placement, .. }
             | FeatureOp::Revolve { placement, .. } => Some(placement),
-            FeatureOp::Boolean { .. } | FeatureOp::Mirror { .. } | FeatureOp::Paint { .. } => None,
+            FeatureOp::Boolean { .. }
+            | FeatureOp::Mirror { .. }
+            | FeatureOp::Paint { .. }
+            | FeatureOp::Pattern { .. } => None,
         }
     }
 
@@ -443,6 +500,23 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 };
                 live.push((feature.id, solid.painted(*surface)));
             }
+            FeatureOp::Pattern { target, count, along } => {
+                let Some(solid) = find(*target, &live).map(|at| live.remove(at).1) else {
+                    problems.push(Problem {
+                        feature: feature.id,
+                        message: get!("prop.problems.missing_body"),
+                    });
+                    continue;
+                };
+                let count = (*count).max(1);
+                // Unioned rather than concatenated: copies close enough to
+                // touch have to become one closed surface, or the inside of
+                // the overlap is drawn and a later boolean keeps the wrong half.
+                let result = (1..count).fold(solid.clone(), |joined, index| {
+                    joined.union(&solid.clone().transformed(along.copy(index, count)))
+                });
+                live.push((feature.id, result));
+            }
         }
     }
 
@@ -452,6 +526,31 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A row of three ten-centimetre cubes twenty centimetres apart is three
+    /// times the volume of one; four round a whole turn are four, none on top
+    /// of another — and a count of one is the body untouched.
+    #[test]
+    fn a_pattern_makes_that_many_separate_copies() {
+        let cube = primitive(0, Shape::Box { size: [0.1, 0.1, 0.1] }, Vec3::new(0.3, 0.0, 0.0));
+        let one = evaluate(std::slice::from_ref(&cube)).bodies[0].1.volume();
+        let pattern = |count: u32, along: PatternKind| {
+            let evaluated = evaluate(&[
+                cube.clone(),
+                PropFeature::new(PropFeatureId(1), FeatureOp::Pattern { target: PropFeatureId(0), count, along }),
+            ]);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            assert_eq!(evaluated.bodies.len(), 1, "the copies are one body");
+            evaluated.bodies[0].1.volume()
+        };
+
+        let row = pattern(3, PatternKind::Linear { step: [0.0, 0.0, 0.2] });
+        assert!((row - 3.0 * one).abs() < 1e-6, "{row} vs {}", 3.0 * one);
+        let round = pattern(4, PatternKind::Radial { axis: Axis::Y, centre: [0.0; 3], degrees: 360.0 });
+        assert!((round - 4.0 * one).abs() < 1e-6, "{round} vs {}", 4.0 * one);
+        let alone = pattern(1, PatternKind::Linear { step: [0.0, 0.0, 0.2] });
+        assert!((alone - one).abs() < 1e-9);
+    }
 
     /// A click lands on the nearer of two bodies in a line, and passes
     /// straight down a hole drilled through the first to reach the second.

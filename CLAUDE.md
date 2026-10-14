@@ -455,7 +455,7 @@ appears.
 
 **The reference figure** ([`figure.rs`](src/prop/figure.rs)) is a body standing
 holding the prop, off by default — a `ScaleFigure` resource of `Option<Class>`,
-picked in the **Scene** tab. A weapon is modelled in metres and nothing in an
+picked from the **View** menu, and always up in the Fit workspace. A weapon is modelled in metres and nothing in an
 empty viewport says how big a metre is; the question being asked is never "how
 long is this" but "does this look right in somebody's hands". It is a rig with
 a `Pose` and deliberately **no `SkeletonAnimator`** — the pose is set once and
@@ -507,8 +507,18 @@ what is stored, and are behind a fold. The plan this is part of, with what is le
 states what is; it is not a tutorial** — no hover text or empty state telling
 somebody what to click.
 
+**The rollback bar** (`PropEditor::rollback`) shows the prop as it stood
+partway down the list: the view evaluates `PropEditor::shown()` rather than
+the whole document, so meshes, picking, framing and which bodies the toolbar
+offers all agree. It is the **id** of the last feature shown rather than a
+count, so edits above it cannot quietly move it; new features go in at it
+(`PropEditor::add`, which everything that creates a feature calls instead of
+`push`). It is view state — not saved, not undone, not dirtying — and is
+cleared on leaving the mode, since the animation editor builds the same prop.
+
 The feature list's rows carry **reordering** and nothing else; suppressing,
-**repainting** and deleting are on a **right-click menu**, which is also where a feature is told
+**repainting**, duplicating, rolling back and deleting are on a **right-click
+menu**, which is also where a feature is told
 what is built on it before it is deleted rather than after (`dependants`). The
 menu item names the *action* — "Suppress" on something that is on — because a
 label naming the state reads as a checkbox with no box, and you would have to
@@ -606,9 +616,15 @@ dragging the figure is therefore how a carry is authored. `carry_handle` and
 the drag that reads it are exact inverses, which has a test, because a sign
 error there is a handle that runs away from the pointer.
 
-The hold's handles and a feature's are **mutually exclusive**, on a toggle in
-the Hold panel that is off by default: a grip sits at the prop's origin by
-convention, which is exactly where a feature's move arrows are.
+The hold's handles and a feature's are **mutually exclusive**, and which are up
+is the **workspace**: a toggle at the start of the toolbar, **Model** or
+**Fit**. A grip sits at the prop's origin by convention, which is exactly where
+a feature's move arrows are, so the two cannot share a viewport — and modelling
+and fitting are different jobs anyway. Model has the verbs, the inspector and
+the feature handles; Fit has the Hold panel, the hold's handles, and a body
+standing there (`PropPanels::switch_to` stands one up, remembers the class, and
+gives Model back whatever figure it had). `HoldHandles` is derived from the
+workspace every frame, never ticked.
 
 **Saving a model is publishing it.** `PropCache` is keyed by name and bakes
 once, so without something saying otherwise a weapon drawn before an edit keeps

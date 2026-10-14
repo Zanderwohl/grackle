@@ -33,7 +33,7 @@ use crate::prop::document::{self, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::common::class::Class;
 use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
 use crate::common::shortcuts::chords;
-use crate::prop::feature::{Axis, BooleanOp, FeatureOp, PropFeatureId};
+use crate::prop::feature::{Axis, BooleanOp, FeatureOp, PatternKind, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::gizmo::HoldHandles;
@@ -66,17 +66,41 @@ impl Default for PropFileDialog {
 enum PropTab {
     Features,
     Inspector,
-    Scene,
     Hold,
     Problems,
+}
+
+/// Which job the editor is set up for.
+///
+/// **Modelling a prop and fitting it to a hand are different activities**, and
+/// they were one panel apart with a checkbox between them that silently
+/// swapped which handles the viewport answered. A workspace makes that swap
+/// the thing you chose: Model has the verbs, the inspector and the feature
+/// handles; Fit has the hold editor, the hold's handles and a body standing
+/// there holding the thing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Workspace {
+    #[default]
+    Model,
+    Fit,
 }
 
 /// The panel layout.
 #[derive(Resource)]
 pub struct PropPanels {
     left: DockState<PropTab>,
-    right: DockState<PropTab>,
+    /// The right-hand panel per workspace: the inspector to model with, the
+    /// hold editor to fit with.
+    right_model: DockState<PropTab>,
+    right_fit: DockState<PropTab>,
     bottom: DockState<PropTab>,
+    workspace: Workspace,
+    /// What the reference figure was in Model before Fit stood a body up, so
+    /// coming back puts it back — usually to nobody.
+    model_figure: Option<Class>,
+    /// Who was standing there last time Fit was open, so a hold tuned for a
+    /// Heavy is still being tuned for a Heavy after a trip to Model.
+    fit_class: Option<Class>,
     menu_bar_height: f32,
     left_width: f32,
     right_width: f32,
@@ -87,13 +111,50 @@ impl Default for PropPanels {
     fn default() -> Self {
         Self {
             left: DockState::new(vec![PropTab::Features]),
-            right: DockState::new(vec![PropTab::Inspector, PropTab::Scene, PropTab::Hold]),
+            right_model: DockState::new(vec![PropTab::Inspector]),
+            right_fit: DockState::new(vec![PropTab::Hold]),
             bottom: DockState::new(vec![PropTab::Problems]),
+            workspace: Workspace::Model,
+            model_figure: None,
+            fit_class: None,
             menu_bar_height: 0.0,
             left_width: 260.0,
             right_width: 300.0,
             bottom_height: 80.0,
         }
+    }
+}
+
+impl PropPanels {
+    /// Move to another workspace, standing up or taking away the figure as
+    /// the move implies.
+    ///
+    /// **Fit always has a body**, since fitting to nobody is not fitting; the
+    /// class is whoever was there last time, then whoever Model happened to be
+    /// showing, then the placeholder everybody plays as. **Model gets back
+    /// what it had**, so a trip to Fit does not leave somebody standing in the
+    /// modelling view.
+    ///
+    /// Writes the figure only when it differs: `ScaleFigure` changing is what
+    /// rebuilds a rig.
+    fn switch_to(&mut self, to: Workspace, figure: &mut ScaleFigure) {
+        if self.workspace == to {
+            return;
+        }
+        let wanted = match to {
+            Workspace::Fit => {
+                self.model_figure = figure.0;
+                Some(self.fit_class.or(figure.0).unwrap_or(Class::Mercenary))
+            }
+            Workspace::Model => {
+                self.fit_class = figure.0;
+                self.model_figure
+            }
+        };
+        if figure.0 != wanted {
+            figure.0 = wanted;
+        }
+        self.workspace = to;
     }
 }
 
@@ -108,13 +169,14 @@ struct PropRequests {
     frame: Option<bool>,
     /// The mode picked from the **Mode** menu, if one was.
     mode: Option<AppMode>,
+    /// The workspace picked from the toolbar, if one was.
+    workspace: Option<Workspace>,
 }
 
 struct PropTabs<'a> {
     editor: &'a mut PropEditor,
     build: &'a PropBuild,
     figure: &'a mut ScaleFigure,
-    handles: &'a mut HoldHandles,
     preview: &'a mut ViewmodelPreview,
     requests: &'a mut PropRequests,
 }
@@ -126,7 +188,6 @@ impl<'a> TabViewer for PropTabs<'a> {
         Id::new(match tab {
             PropTab::Features => "prop_features",
             PropTab::Inspector => "prop_inspector",
-            PropTab::Scene => "prop_scene",
             PropTab::Hold => "prop_hold",
             PropTab::Problems => "prop_problems",
         })
@@ -136,7 +197,6 @@ impl<'a> TabViewer for PropTabs<'a> {
         match tab {
             PropTab::Features => get!("prop.panels.features").into(),
             PropTab::Inspector => get!("prop.panels.inspector").into(),
-            PropTab::Scene => get!("prop.panels.scene").into(),
             PropTab::Hold => get!("prop.panels.hold").into(),
             // The count in the title, so problems are visible with the tab
             // folded behind another one.
@@ -151,8 +211,7 @@ impl<'a> TabViewer for PropTabs<'a> {
         match tab {
             PropTab::Features => feature_tree(ui, self.editor, self.build),
             PropTab::Inspector => inspector(ui, self.editor, self.build),
-            PropTab::Scene => scene(ui, self.figure),
-            PropTab::Hold => hold(ui, self.editor, *self.figure, self.handles, self.preview),
+            PropTab::Hold => hold(ui, self.editor, *self.figure, self.preview),
             PropTab::Problems => problems(ui, self.editor, self.build),
         }
     }
@@ -168,7 +227,15 @@ impl Plugin for PropUiPlugin {
                 bevy_egui::EguiPrimaryContextPass,
                 panels.run_if(in_state(AppMode::Prop)),
             )
-            .add_systems(Update, prop_shortcuts.run_if(in_state(AppMode::Prop)));
+            .add_systems(Update, prop_shortcuts.run_if(in_state(AppMode::Prop)))
+            // The rollback bar is a way of looking at the list, which only the
+            // prop editor shows. Left in, the animation editor — which builds
+            // the same prop — would animate a weapon missing its last features
+            // with nothing on screen saying so. Before `OnEnter` of the next
+            // mode, which is where that rebuild happens.
+            .add_systems(OnExit(AppMode::Prop), |mut editor: ResMut<PropEditor>| {
+                editor.roll_back_to(None);
+            });
     }
 }
 
@@ -216,10 +283,10 @@ fn panels(
         // and a write every frame would throw the figure's meshes away every
         // frame.
         figure: &mut figure,
-        handles: &mut handles,
         preview: &mut preview,
         requests: &mut requests,
     };
+    let workspace = layout.workspace;
 
     layout.menu_bar_height = egui::Panel::top("prop_menu_bar")
         .resizable(false)
@@ -229,6 +296,7 @@ fn panels(
                 // here, which is what it used to be.
                 file_menu(ui, &mut tabs.requests.file);
                 edit_menu(ui, tabs.editor);
+                view_menu(ui, workspace, tabs.figure);
                 // `Prop` spelled out rather than read from the state: this
                 // whole system is gated on it, so the mode it is drawing for
                 // is not in question.
@@ -251,7 +319,22 @@ fn panels(
                 }
             });
             ui.separator();
-            toolbar(ui, tabs.editor, tabs.build, &mut tabs.requests.frame);
+            ui.horizontal_wrapped(|ui| {
+                // First, and the same in both workspaces, so the way back is
+                // always where the way in was.
+                for (candidate, key) in
+                    [(Workspace::Model, "prop.workspace.model"), (Workspace::Fit, "prop.workspace.fit")]
+                {
+                    if ui.selectable_label(workspace == candidate, get!(key)).clicked() {
+                        tabs.requests.workspace = Some(candidate);
+                    }
+                }
+                ui.separator();
+                match workspace {
+                    Workspace::Model => toolbar(ui, tabs.editor, tabs.build, &mut tabs.requests.frame),
+                    Workspace::Fit => fit_toolbar(ui, tabs.figure, &mut tabs.requests.frame),
+                }
+            });
         })
         .response
         .rect
@@ -276,7 +359,11 @@ fn panels(
     layout.right_width = egui::Panel::right("prop_right")
         .resizable(true)
         .show(&mut viewport_ui, |ui| {
-            DockArea::new(&mut layout.right)
+            let right = match workspace {
+                Workspace::Model => &mut layout.right_model,
+                Workspace::Fit => &mut layout.right_fit,
+            };
+            DockArea::new(right)
                 .id(Id::new("egui_dock::DockArea::prop_right"))
                 .show_close_buttons(false)
                 .show_leaf_close_all_buttons(false)
@@ -321,6 +408,16 @@ fn panels(
         editor.end_gesture();
     }
 
+    if let Some(to) = requests.workspace {
+        layout.switch_to(to, &mut figure);
+    }
+    // Derived from the workspace rather than ticked: in Fit the viewport's
+    // handles are the hold's, in Model the selected feature's.
+    let fitting = layout.workspace == Workspace::Fit;
+    if handles.0 != fitting {
+        handles.0 = fitting;
+    }
+
     if let Some(selected) = requests.frame {
         frame.write(FrameTheProp { selected });
     }
@@ -363,6 +460,8 @@ struct Row {
     pins: Vec<PropFeatureId>,
     /// Where this feature may end up, as indices in the finished list.
     legal: std::ops::RangeInclusive<usize>,
+    /// What this feature eats, by name, listed under it.
+    operands: Vec<(PropFeatureId, String)>,
 }
 
 /// The ordered list, which *is* the prop.
@@ -387,6 +486,15 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     .doc()
                     .legal_range(feature.id)
                     .unwrap_or(0..=0),
+                operands: feature
+                    .op
+                    .consumes()
+                    .into_iter()
+                    .map(|id| {
+                        let name = editor.doc().feature(id).map(|f| f.name.clone());
+                        (id, name.unwrap_or_else(|| get!("prop.inspector.missing", "id", id)))
+                    })
+                    .collect(),
             }
         })
         .collect();
@@ -409,6 +517,14 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let mut dragging: Option<usize> = None;
     let mut dropped = false;
 
+    // The rollback bar sits after this row. With no rollback it sits after the
+    // last, where it is a handle to grab rather than a statement.
+    let rollback = editor.rollback();
+    let bar_after = rollback
+        .and_then(|id| entries.iter().position(|row| row.id == id))
+        .unwrap_or(entries.len().saturating_sub(1));
+    let mut bar_dragged = false;
+
     egui::ScrollArea::vertical().show(ui, |ui| {
         for (at, row) in entries.iter().enumerate() {
             let Row { id, enabled, dependants, .. } = *row;
@@ -429,8 +545,15 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             // all: a `Ui`'s own response is `Sense::hover()`, and
             // `Popup::context_menu` opens on `secondary_clicked()`, which such
             // a response can never report.
+            let past_the_bar = at > bar_after;
             let response = ui
                 .horizontal(|ui| {
+                    // Past the rollback bar: in the document, not in the view.
+                    // Faded rather than struck or dimmed, which already mean
+                    // suppressed and eaten.
+                    if past_the_bar {
+                        ui.multiply_opacity(0.4);
+                    }
                     // Three states, and they are not the same thing, so they
                     // are not drawn the same way. **Struck through** is
                     // suppressed — deliberately switched off, and the only cue
@@ -531,6 +654,19 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     }));
                 }
 
+                if at != bar_after && ui.button(get!("prop.tree.roll_back_here")).clicked() {
+                    ui.close_kind(UiKind::Menu);
+                    pending = Some(Box::new(move |editor: &mut PropEditor| {
+                        editor.roll_back_to(Some(id));
+                    }));
+                }
+                if rollback.is_some() && ui.button(get!("prop.tree.roll_to_end")).clicked() {
+                    ui.close_kind(UiKind::Menu);
+                    pending = Some(Box::new(|editor: &mut PropEditor| editor.roll_back_to(None)));
+                }
+
+                ui.separator();
+
                 // Only for what consumes nothing: a boolean's copy would find
                 // its operands already eaten by the original.
                 let copyable = editor.doc().feature(id).is_some_and(|feature| feature.op.consumes().is_empty());
@@ -542,6 +678,11 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     let name = get!("prop.tree.copy_of", "name", name);
                     pending = Some(Box::new(move |editor: &mut PropEditor| {
                         if let Some(copy) = editor.edit(|doc| doc.duplicate(id, name)) {
+                            // A copy of the last thing above the bar is above
+                            // it too.
+                            if editor.rollback() == Some(id) {
+                                editor.roll_back_to(Some(copy));
+                            }
                             editor.select(copy);
                         }
                     }));
@@ -562,7 +703,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     ui.close_kind(UiKind::Menu);
                     let surface = standing.map(|(_, solid)| solid.dominant_surface()).unwrap_or_default();
                     pending = Some(Box::new(move |editor: &mut PropEditor| {
-                        let added = editor.edit(|doc| doc.push(FeatureOp::Paint { target: id, surface }));
+                        let added = editor.add(FeatureOp::Paint { target: id, surface });
                         editor.select(added);
                     }));
                 }
@@ -589,6 +730,56 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     }));
                 }
             });
+
+            // **What this feature ate, beneath it.** The list stays in document
+            // order — the order *is* the prop, and reordering needs it flat —
+            // so the structure a boolean makes is shown under it rather than by
+            // moving its operands there. Clicking one selects it.
+            for (operand, operand_name) in &row.operands {
+                ui.horizontal(|ui| {
+                    if past_the_bar {
+                        ui.multiply_opacity(0.4);
+                    }
+                    ui.add_space(16.0);
+                    let text = egui::RichText::new(format!("· {operand_name}")).weak().small();
+                    let line = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
+                    if line.clicked() {
+                        select = Some((*operand, Pick::Only));
+                    }
+                });
+            }
+
+            // **The rollback bar**, dragged up the list to see the prop as it
+            // stood there. Thin and faint at the bottom where it changes
+            // nothing; bold anywhere else, because a view that is not showing
+            // the whole prop must not be mistaken for one that is.
+            if at == bar_after {
+                let (rect, bar) =
+                    ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::drag());
+                let bar = bar.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                let lit = rollback.is_some() || bar.hovered() || bar.dragged();
+                let stroke = match lit {
+                    true => egui::Stroke::new(3.0, ui.visuals().selection.stroke.color),
+                    false => egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
+                };
+                ui.painter().hline(rect.x_range(), rect.center().y, stroke);
+                bar_dragged = bar.dragged();
+            }
+        }
+
+        // Live while dragging, so the viewport scrubs through the history
+        // under the pointer. Never above the first feature: a prop rolled back
+        // to nothing is an empty viewport, which says nothing.
+        if bar_dragged
+            && let Some(pointer) = ui.ctx().pointer_interact_pos()
+        {
+            let above = rects.iter().take_while(|(_, rect)| rect.center().y < pointer.y).count();
+            if let Some((anchor, _)) = rects.get(above.max(1) - 1) {
+                let anchor = *anchor;
+                pending = Some(Box::new(move |editor: &mut PropEditor| {
+                    editor.roll_back_to(Some(anchor));
+                }));
+            }
         }
 
         // After every row has reported its rect: where the line goes is a fact
@@ -765,6 +956,15 @@ fn toolbar(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, frame: &mut 
                 keep_original: true,
             });
         }
+        let pattern = ui
+            .add_enabled(single.is_some(), egui::Button::new(get!("prop.features.pattern")));
+        if let (true, Some(target)) = (pattern.clicked(), single) {
+            added = Some(FeatureOp::Pattern {
+                target,
+                count: 3,
+                along: PatternKind::Linear { step: [0.0, 0.0, 0.05] },
+            });
+        }
 
         ui.separator();
 
@@ -781,7 +981,7 @@ fn toolbar(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, frame: &mut 
     });
 
     if let Some(op) = added {
-        let id = editor.edit(|doc| doc.push(op));
+        let id = editor.add(op);
         editor.select(id);
     }
 }
@@ -829,8 +1029,17 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     // What this feature could point at is what was live *when it ran* — not
     // what is live now, which is after it has already eaten something.
     // Recorded by the evaluator so there is one answer rather than two.
-    let choices: Vec<PropFeatureId> =
-        build.evaluated.live_before.get(index).cloned().unwrap_or_default();
+    //
+    // Past the rollback bar there is no record, since the view did not
+    // evaluate that far; everything listed above the feature stands in.
+    // Re-evaluating the whole prop here would run the kernel every frame for as
+    // long as the feature was selected.
+    let choices: Vec<PropFeatureId> = build
+        .evaluated
+        .live_before
+        .get(index)
+        .cloned()
+        .unwrap_or_else(|| editor.doc().features[..index].iter().map(|f| f.id).collect());
     let names: Vec<(PropFeatureId, String)> = choices
         .iter()
         .map(|id| {
@@ -956,6 +1165,14 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     changed |= surface_ui(ui, surface);
                 });
             }
+            FeatureOp::Pattern { target, count, along } => {
+                section(ui, "operands", get!("prop.inspector.sections.operands"), |ui| {
+                    changed |= body_picker(ui, get!("prop.inspector.target"), target, &names);
+                });
+                section(ui, "pattern", get!("prop.inspector.sections.pattern"), |ui| {
+                    changed |= pattern_ui(ui, count, along);
+                });
+            }
         }
     });
 
@@ -1019,24 +1236,40 @@ fn prop_overview(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     }
 }
 
-/// What is in the viewport besides the prop. Its own tab because the inspector
-/// is about the selected feature and this is about the whole view — the
-/// distinction the map editor's **Show** tab makes.
-fn scene(ui: &mut Ui, figure: &mut ScaleFigure) {
-    ui.label(get!("prop.scene.figure"));
-    // `None` first and default: the figure is a ruler, not part of the prop.
-    egui::ComboBox::from_id_salt("prop_scale_figure")
-        .selected_text(match figure.0 {
-            Some(class) => class.name(),
-            None => get!("prop.scene.no_figure"),
-        })
-        .width(ui.available_width())
-        .show_ui(ui, |ui| {
+/// What is in the viewport besides the prop: for now, who is standing there.
+///
+/// In both workspaces, so it is in one place; in Fit "nobody" is not offered,
+/// since a hold fitted to nobody is not being fitted.
+fn view_menu(ui: &mut Ui, workspace: Workspace, figure: &mut ScaleFigure) {
+    ui.menu_button(get!("prop.menu.view"), |ui| {
+        ui.label(egui::RichText::new(get!("prop.scene.figure")).weak());
+        if workspace == Workspace::Model {
             ui.selectable_value(&mut figure.0, None, get!("prop.scene.no_figure"));
+        }
+        for class in Class::iter() {
+            ui.selectable_value(&mut figure.0, Some(class), class.name());
+        }
+    });
+}
+
+/// Fit's toolbar: who the hold is being fitted to, and framing.
+///
+/// **The class on show is the class being edited** — one question, asked
+/// once. Picking a class here both changes who is standing there and which
+/// per-class override the Hold panel is editing.
+fn fit_toolbar(ui: &mut Ui, figure: &mut ScaleFigure, frame: &mut Option<bool>) {
+    ui.label(get!("prop.scene.figure"));
+    egui::ComboBox::from_id_salt("prop_fit_class")
+        .selected_text(figure.0.map(|class| class.name()).unwrap_or_default())
+        .show_ui(ui, |ui| {
             for class in Class::iter() {
                 ui.selectable_value(&mut figure.0, Some(class), class.name());
             }
         });
+    ui.separator();
+    if ui.button(get!("prop.menu.frame")).clicked() {
+        *frame = Some(false);
+    }
 }
 
 /// How this prop is held.
@@ -1053,7 +1286,6 @@ fn hold(
     ui: &mut Ui,
     editor: &mut PropEditor,
     figure: ScaleFigure,
-    handles: &mut HoldHandles,
     preview: &mut ViewmodelPreview,
 ) {
     let base = editor.doc().hold.clone();
@@ -1067,15 +1299,12 @@ fn hold(
     let mut viewmodel = editor.doc().viewmodel;
     let mut view_changed = false;
 
-    // Off by default and exclusive with the feature handles: a grip sits at
-    // the prop's origin by convention, which is exactly where a feature's move
-    // arrows are.
-    ui.checkbox(&mut handles.0, get!("prop.hold.handles"));
-    ui.separator();
-
     egui::ScrollArea::vertical().show(ui, |ui| {
-        match (&key, figure.0) {
-            (Some(key), Some(class)) => {
+        // Whether the numbers below are this class's own or everybody's. Fit
+        // always has somebody standing there, so there is always a class to
+        // ask about.
+        if let (Some(key), Some(class)) = (&key, figure.0) {
+            section(ui, "hold_class", class.name(), |ui| {
                 let mut on = overriding;
                 if ui
                     .checkbox(&mut on, get!("prop.hold.override_for", "class", class.name()))
@@ -1092,69 +1321,68 @@ fn hold(
                     }
                     editor.edit(|doc| doc.hold = doc_hold);
                 }
-                let _ = class;
-            }
-            _ => {
-                ui.label(egui::RichText::new(get!("prop.hold.no_figure")).weak());
-            }
+            });
         }
-        ui.separator();
 
-        ui.label(get!("prop.hold.trigger_hand"));
-        changed |= vec3_ui(ui, get!("prop.hold.at"), &mut edited.grip, 0.001, "m");
-        changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.grip_rotation);
+        section(ui, "hold_grip", get!("prop.hold.grip"), |ui| {
+            ui.label(get!("prop.hold.trigger_hand"));
+            changed |= vec3_ui(ui, get!("prop.hold.at"), &mut edited.grip, 0.001, "m");
+            changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.grip_rotation);
 
-        ui.separator();
-        changed |= ui.checkbox(&mut edited.two_handed, get!("prop.hold.two_handed")).changed();
-        ui.add_enabled_ui(edited.two_handed, |ui| {
-            changed |= vec3_ui(ui, get!("prop.hold.at"), &mut edited.support, 0.001, "m");
-            changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.support_rotation);
+            ui.separator();
+            changed |= ui.checkbox(&mut edited.two_handed, get!("prop.hold.two_handed")).changed();
+            ui.add_enabled_ui(edited.two_handed, |ui| {
+                changed |= vec3_ui(ui, get!("prop.hold.at"), &mut edited.support, 0.001, "m");
+                changed |=
+                    degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.support_rotation);
+            });
         });
 
-        ui.separator();
-        ui.label(get!("prop.hold.carry"));
-        // Arm lengths, not metres, so a carry means the same thing on a Heavy
-        // as on a Scout. Dragged in hundredths because the whole useful range
-        // is under one arm.
-        changed |= vec3_ui(ui, get!("prop.hold.offset"), &mut edited.carry, 0.005, "");
-        changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.carry_rotation);
+        section(ui, "hold_carry", get!("prop.hold.carry"), |ui| {
+            // Arm lengths, not metres, so a carry means the same thing on a
+            // Heavy as on a Scout. Dragged in hundredths because the whole
+            // useful range is under one arm.
+            changed |= vec3_ui(ui, get!("prop.hold.offset"), &mut edited.carry, 0.005, "");
+            changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.carry_rotation);
+        });
 
-        ui.separator();
-        ui.label(get!("prop.hold.viewmodel"));
-        // Fractions of the frustum, so the same numbers mean the same place on
-        // screen at any field of view and any window — which is what stops a
-        // weapon drifting in from the edge it is meant to hang off.
-        // **The preview is on while a viewmodel number is being held.** Which
-        // is the only moment it is worth having: you are looking for where the
-        // weapon lands, and the answer is on screen while your hand is still
-        // on the number rather than after a save and a round.
+        // Outside the fold, so a folded section is a preview that is off.
         let mut holding = false;
-        ui.horizontal(|ui| {
-            ui.label(get!("prop.hold.across"));
-            for (component, axis) in viewmodel.across.iter_mut().zip(["x", "y"]) {
-                let response = ui.add(
-                    egui::DragValue::new(component)
-                        .speed(0.01)
-                        .range(-2.0..=2.0)
-                        .prefix(format!("{axis} ")),
-                );
-                view_changed |= response.changed();
-                holding |= response.dragged() || response.has_focus();
-            }
-        });
-        let (depth_changed, depth_held) =
-            held_drag(ui, get!("prop.hold.depth"), &mut viewmodel.depth, 0.005, "m");
-        view_changed |= depth_changed;
-        holding |= depth_held;
+        section(ui, "hold_viewmodel", get!("prop.hold.viewmodel"), |ui| {
+            // Fractions of the frustum, so the same numbers mean the same place on
+            // screen at any field of view and any window — which is what stops a
+            // weapon drifting in from the edge it is meant to hang off.
+            // **The preview is on while a viewmodel number is being held.** Which
+            // is the only moment it is worth having: you are looking for where the
+            // weapon lands, and the answer is on screen while your hand is still
+            // on the number rather than after a save and a round.
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.hold.across"));
+                for (component, axis) in viewmodel.across.iter_mut().zip(["x", "y"]) {
+                    let response = ui.add(
+                        egui::DragValue::new(component)
+                            .speed(0.01)
+                            .range(-2.0..=2.0)
+                            .prefix(format!("{axis} ")),
+                    );
+                    view_changed |= response.changed();
+                    holding |= response.dragged() || response.has_focus();
+                }
+            });
+            let (depth_changed, depth_held) =
+                held_drag(ui, get!("prop.hold.depth"), &mut viewmodel.depth, 0.005, "m");
+            view_changed |= depth_changed;
+            holding |= depth_held;
 
-        let mut degrees = viewmodel.rotation.map(f32::to_degrees);
-        let (turned, turn_held) =
-            held_vec3(ui, get!("prop.inspector.rotation"), &mut degrees, 1.0, "°");
-        if turned {
-            viewmodel.rotation = degrees.map(f32::to_radians);
-            view_changed = true;
-        }
-        holding |= turn_held;
+            let mut degrees = viewmodel.rotation.map(f32::to_degrees);
+            let (turned, turn_held) =
+                held_vec3(ui, get!("prop.inspector.rotation"), &mut degrees, 1.0, "°");
+            if turned {
+                viewmodel.rotation = degrees.map(f32::to_radians);
+                view_changed = true;
+            }
+            holding |= turn_held;
+        });
 
         if preview.0 != holding {
             preview.0 = holding;
@@ -1200,6 +1428,15 @@ fn status_line(ui: &mut Ui, editor: &PropEditor, build: &PropBuild) {
             true => get!("prop.inspector.nothing"),
             false => get!("prop.stats.selected", "names", names.join(", ")),
         });
+        // Said in the one place visible whatever tab is up, and in the warning
+        // colour: a rolled-back view is a partial prop.
+        if let Some(name) = editor.rollback().and_then(|id| editor.doc().feature(id)).map(|f| f.name.clone()) {
+            ui.separator();
+            ui.label(
+                egui::RichText::new(get!("prop.stats.rolled_back", "name", name))
+                    .color(ui.visuals().warn_fg_color),
+            );
+        }
         ui.separator();
         ui.label(get!("prop.stats.bodies", "count", build.evaluated.bodies.len()));
         ui.separator();
@@ -1507,6 +1744,47 @@ fn profile_ui(ui: &mut Ui, profile: &mut Profile) -> bool {
     changed
 }
 
+/// How many copies and where they go. Switching between a row and a circle
+/// replaces the layout rather than converting it, as a profile does: a step
+/// has no angle to carry across.
+fn pattern_ui(ui: &mut Ui, count: &mut u32, along: &mut PatternKind) -> bool {
+    let mut changed = ui
+        .horizontal(|ui| {
+            ui.label(get!("prop.inspector.copies"));
+            // Capped, because every copy is a boolean union and sixty-four is
+            // already more vents than anything has.
+            ui.add(egui::DragValue::new(count).speed(0.1).range(1..=64)).changed()
+        })
+        .inner;
+    ui.horizontal(|ui| {
+        let linear = matches!(along, PatternKind::Linear { .. });
+        if ui.selectable_label(linear, get!("prop.inspector.pattern_linear")).clicked() && !linear {
+            *along = PatternKind::Linear { step: [0.0, 0.0, 0.05] };
+            changed = true;
+        }
+        if ui.selectable_label(!linear, get!("prop.inspector.pattern_radial")).clicked() && linear {
+            *along = PatternKind::Radial { axis: Axis::Z, centre: [0.0; 3], degrees: 360.0 };
+            changed = true;
+        }
+    });
+    match along {
+        PatternKind::Linear { step } => {
+            changed |= vec3_ui(ui, get!("prop.inspector.step"), step, 0.001, "m");
+        }
+        PatternKind::Radial { axis, centre, degrees } => {
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.inspector.axis"));
+                for candidate in Axis::ALL {
+                    changed |= ui.selectable_value(axis, candidate, candidate.name()).changed();
+                }
+            });
+            changed |= vec3_ui(ui, get!("prop.inspector.centre"), centre, 0.001, "m");
+            changed |= drag(ui, get!("prop.inspector.degrees"), degrees, 1.0, "°");
+        }
+    }
+    changed
+}
+
 fn body_picker(
     ui: &mut Ui,
     label: String,
@@ -1659,5 +1937,31 @@ pub(crate) fn handle_files(
                 *slot.lock().unwrap() = Some(DialogResult::Open(handle.path().to_path_buf()));
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fit always stands somebody up and Model gets back what it had — so a
+    /// trip to Fit does not leave a body in the modelling view, and the class
+    /// being fitted survives a trip back to Model.
+    #[test]
+    fn workspaces_hand_the_figure_back() {
+        let mut layout = PropPanels::default();
+        let mut figure = ScaleFigure(None);
+
+        layout.switch_to(Workspace::Fit, &mut figure);
+        assert_eq!(figure.0, Some(Class::Mercenary), "Fit is never fitted to nobody");
+        let other = Class::iter().find(|class| *class != Class::Mercenary);
+        figure.0 = other.or(Some(Class::Mercenary));
+        let fitted = figure.0;
+
+        layout.switch_to(Workspace::Model, &mut figure);
+        assert_eq!(figure.0, None, "Model gets its own choice back");
+
+        layout.switch_to(Workspace::Fit, &mut figure);
+        assert_eq!(figure.0, fitted, "Fit remembers who it was fitting");
     }
 }
