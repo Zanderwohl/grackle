@@ -12,12 +12,21 @@
 //! `typing` is passed in rather than read from `EguiWantsInput` here, so the
 //! chords can be tested without an egui context and this module does not have
 //! to know there is one.
+//!
+//! **Both `Super` and `Control` count as the modifier.** On a Mac that is the
+//! command key, which is where the habit lives; `Alt`/`Option` deliberately is
+//! not one, because it is what composes characters and is nobody's save key.
 
 use bevy::prelude::*;
 
 /// What the keyboard asked for this frame.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct EditorChords {
+    /// `Ctrl+N`. **Throws the open document away without asking**, exactly as
+    /// the File menu's *New* does — neither editor has anywhere to ask the
+    /// question yet, and a chord that did something different from the menu
+    /// item it is the shortcut for would be worse than one that did nothing.
+    pub new: bool,
     /// `Ctrl+S`. **Means save-as on a document that has never been saved** —
     /// see each editor's handler; a save with nowhere to save to is a question,
     /// not an error and not a silent nothing.
@@ -48,6 +57,7 @@ pub fn chords(keys: &ButtonInput<KeyCode>, typing: bool) -> EditorChords {
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
 
     EditorChords {
+        new: modifier && !shift && keys.just_pressed(KeyCode::KeyN),
         save: modifier && !shift && keys.just_pressed(KeyCode::KeyS),
         save_as: modifier && shift && keys.just_pressed(KeyCode::KeyS),
         undo: modifier && !shift && keys.just_pressed(KeyCode::KeyZ),
@@ -93,13 +103,24 @@ mod tests {
         let bare = pressed(&[], KeyCode::KeyS, false);
         assert_eq!(bare, EditorChords::default());
         assert_eq!(pressed(&[], KeyCode::KeyZ, false), EditorChords::default());
+        assert_eq!(pressed(&[], KeyCode::KeyN, false), EditorChords::default());
+    }
+
+    /// `Ctrl+N` is a new document, on either modifier, and `Ctrl+Shift+N` is
+    /// not it. Nothing uses the shifted pair, and a chord that fired on both
+    /// would make a *New* out of somebody reaching for something else.
+    #[test]
+    fn new_is_the_unshifted_n() {
+        assert!(pressed(&[KeyCode::ControlLeft], KeyCode::KeyN, false).new);
+        assert!(pressed(&[KeyCode::SuperLeft], KeyCode::KeyN, false).new);
+        assert!(!pressed(&[KeyCode::ControlLeft, KeyCode::ShiftLeft], KeyCode::KeyN, false).new);
     }
 
     /// The one that loses work if it is wrong: `Ctrl+Z` while renaming a
     /// feature means undo the *text*, not throw away the document's last edit.
     #[test]
     fn nothing_fires_while_egui_has_the_keyboard() {
-        for key in [KeyCode::KeyS, KeyCode::KeyZ, KeyCode::KeyY] {
+        for key in [KeyCode::KeyS, KeyCode::KeyZ, KeyCode::KeyY, KeyCode::KeyN] {
             assert_eq!(
                 pressed(&[KeyCode::ControlLeft, KeyCode::ShiftLeft], key, true),
                 EditorChords::default(),

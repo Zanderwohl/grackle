@@ -318,25 +318,130 @@ failed = "Failed: { reason }"
 [pause]
 title = "Esc Menu"
 
+[anim]
+no_clips = "No animation selected."
+no_key = "No key picked. Click one on the strip, or drag a box across several."
+many_keys = "{ count } keys picked; editing writes to all of them."
+at = "At { time } s"
+leaving = "Leaving"
+clock_is = "Runs on: { clock }"
+new_clip = "New"
+delete_clip = "Delete"
+no_tracks = "No tracks. Add one above."
+add_track = "Add track…"
+delete_track = "Remove"
+animate_a_state = "Animate a state…"
+
+# Field labels live under their own table: several of them share a name with a
+# table of values — `clock`, `space`, `unit`, `combine`, `chain` — and TOML
+# will not have a key be both a string and a table.
+[anim.source]
+prop = "This prop"
+body = "Bodies"
+
+[anim.label]
+length = "Length"
+clock = "Clock"
+looping = "Loops"
+enabled = "On"
+space = "Measured from"
+unit = "In"
+combine = "Onto the layer beneath"
+bone = "Bone"
+chain = "Limb"
+
+[anim.panels]
+clips = "Clips"
+track = "Tracks"
+key = "Key"
+scene = "Scene"
+problems = "Problems"
+
+[anim.clips]
+deploy = "Deploy"
+
+[anim.channel]
+root = "Body"
+rotation = "Bone"
+effector = "Reach"
+weapon = "Weapon"
+weapon_rotation = "Weapon turn"
+
+[anim.space]
+body = "Body"
+carry = "Carry"
+weapon = "Weapon"
+eye = "Eye"
+
+[anim.unit]
+metres = "Metres"
+leg_lengths = "Leg lengths"
+arm_lengths = "Arm lengths"
+hip_heights = "Hip heights"
+
+[anim.clock]
+seconds = "Seconds"
+stride = "Strides"
+shared = "Shared clock"
+
+[anim.combine]
+replace = "Replace"
+compose = "Compose"
+
+[anim.chain]
+right_arm = "Right arm"
+left_arm = "Left arm"
+right_leg = "Right leg"
+left_leg = "Left leg"
+
+[anim.axis]
+free = "Free"
+ground = "Ground"
+value = "Value"
+x = "Across"
+y = "Up"
+z = "Along"
+pitch = "Pitch"
+yaw = "Yaw"
+roll = "Roll"
+
+[anim.ease]
+step = "Step"
+linear = "Linear"
+quadratic_in = "Quadratic in"
+quadratic_out = "Quadratic out"
+quadratic_in_out = "Quadratic in and out"
+cubic_in = "Cubic in"
+cubic_out = "Cubic out"
+cubic_in_out = "Cubic in and out"
+smooth_step = "Smooth"
+smoother_step = "Smoother"
+
 [app_mode]
 editor = "Map Editor"
 prop = "Prop Editor"
+animation = "Animation Editor"
 play = "Play"
+
+# Every authoring mode's File pulldown. The entries mean whatever the thing
+# you are editing makes of them — a blueprint, a prop, a set of clips — which
+# is why the names are generic and live in one place.
+[file.menu]
+title = "File"
+new = "New"
+save = "Save"
+save_as = "Save As"
+open = "Open"
+quit = "Quit"
 
 [app_mode.menu]
 title = "Mode"
-current = "In: { mode }"
 server_decides = "The server decides when the match is played."
 
 [prop]
 untitled = "Untitled prop"
 
 [prop.menu]
-file = "File"
-new = "New"
-open = "Open"
-save = "Save"
-save_as = "Save As"
 frame = "Frame"
 
 [prop.panels]

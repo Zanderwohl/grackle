@@ -80,6 +80,13 @@ impl Plugin for GamePlugin {
                 Startup,
                 crate::common::weapon_file::load_catalogue_at_startup,
             )
+            // Beside the weapons and for the same reason: pack content, read
+            // once at startup, and a pack that ships none is a pack whose
+            // bodies use the built-in poses.
+            .add_systems(
+                Startup,
+                crate::common::clip_file::load_body_clips_at_startup,
+            )
 
             .init_resource::<CollisionWorld>()
             .init_resource::<NextPlayerId>()
@@ -218,8 +225,14 @@ fn toggle_mode(
     next.set(match mode.get() {
         AppMode::Editor => AppMode::Play,
         AppMode::Play => AppMode::Editor,
-        AppMode::Prop => {
-            info!("F5 swaps the map editor and Play; use the Mode menu to leave the prop editor.");
+        // Matched as a pair rather than with a wildcard: a fifth mode should
+        // have to decide what F5 means to it, and `_ =>` is how one quietly
+        // inherits an answer nobody chose for it.
+        mode @ (AppMode::Prop | AppMode::Animation) => {
+            info!(
+                "F5 swaps the map editor and Play; use the Mode menu to leave {}.",
+                mode.name(),
+            );
             return;
         }
     });

@@ -264,3 +264,64 @@ rotation = [
     0.0,
     0.0,
 ]
+
+[animations.clips.deploy]
+name_key = "anim.clips.deploy"
+length = 0.45
+clock = "seconds"
+looping = false
+note = "Composed onto the carry rather than replacing it, so the hold stays the one description of where this is held."
+
+[[animations.clips.deploy.tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips.deploy.tracks.channel]
+channel = "weapon"
+
+[[animations.clips.deploy.tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    -0.71,
+    0.35,
+]
+ease = "cubic_out"
+
+[[animations.clips.deploy.tracks.channel.keys]]
+at = 0.45
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.deploy.tracks]]
+combine = "compose"
+space = "carry"
+unit = "metres"
+enabled = true
+
+[animations.clips.deploy.tracks.channel]
+channel = "weapon_rotation"
+
+[[animations.clips.deploy.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.9,
+    "free",
+    "free",
+]
+ease = "cubic_out"
+
+[[animations.clips.deploy.tracks.channel.keys]]
+at = 0.45
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "linear"

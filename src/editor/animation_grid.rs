@@ -290,7 +290,7 @@ pub fn body_depth() -> f32 {
                     speed: row.speed,
                     ..default()
                 };
-                let pose = finish_pose(skeleton, row.state, &inputs, &Transform::IDENTITY);
+                let pose = finish_pose(skeleton, row.state, &inputs, &Transform::IDENTITY, None);
                 skeleton
                     .posed_bones(&pose, &Transform::IDENTITY)
                     .iter()
@@ -823,7 +823,7 @@ mod tests {
                     speed: row.speed,
                     ..default()
                 };
-                let pose = finish_pose(skeleton, row.state, &inputs, &Transform::IDENTITY);
+                let pose = finish_pose(skeleton, row.state, &inputs, &Transform::IDENTITY, None);
                 let deepest = skeleton
                     .posed_bones(&pose, &Transform::IDENTITY)
                     .iter()

@@ -36,6 +36,12 @@ pub enum AppMode {
     #[default]
     Editor,
     Prop,
+    /// Authoring what a prop *does* — the timeline over the clips a weapon
+    /// carries. A mode of its own rather than a tab in the prop editor because
+    /// it is a different question about the same file, wants the whole window
+    /// while it is asked, and has a body in it that the modelling surface does
+    /// not.
+    Animation,
     Play,
 }
 
@@ -48,7 +54,7 @@ impl AppMode {
     /// then joins by answering `true` here rather than by being found again in
     /// every match that forgot about it.
     pub fn is_authoring(self) -> bool {
-        matches!(self, AppMode::Editor | AppMode::Prop)
+        matches!(self, AppMode::Editor | AppMode::Prop | AppMode::Animation)
     }
 
     /// Whether this mode is a view of **the map and the match in it**.
@@ -71,10 +77,23 @@ impl AppMode {
         matches!(self, AppMode::Editor | AppMode::Play)
     }
 
+    /// Whether this mode is looking at **a prop on a bench** rather than at
+    /// the map.
+    ///
+    /// The two prop modes are one scene asked two questions — what shape is
+    /// this, and what does it do — so the stage, the lights, the four framed
+    /// cameras and the rule that sets the world aside are shared rather than
+    /// written twice. A question rather than two named variants at each call
+    /// site, for the same reason [`AppMode::is_authoring`] is one.
+    pub fn shows_a_prop(self) -> bool {
+        matches!(self, AppMode::Prop | AppMode::Animation)
+    }
+
     pub fn name(self) -> String {
         match self {
             AppMode::Editor => get!("app_mode.editor"),
             AppMode::Prop => get!("app_mode.prop"),
+            AppMode::Animation => get!("app_mode.animation"),
             AppMode::Play => get!("app_mode.play"),
         }
     }
@@ -117,6 +136,12 @@ pub fn authoring(mode: Res<State<AppMode>>) -> bool {
     mode.get().is_authoring()
 }
 
+/// A run condition for [`AppMode::shows_a_prop`] — the scene both prop modes
+/// share.
+pub fn showing_a_prop(mode: Res<State<AppMode>>) -> bool {
+    mode.get().shows_a_prop()
+}
+
 /// A run condition for [`AppMode::shows_the_world`] — what the debug overlays
 /// that draw the map and the bodies in it are gated on.
 pub fn showing_the_world(mode: Res<State<AppMode>>) -> bool {
@@ -145,13 +170,11 @@ pub fn mode_menu(
     let authority = role.is_none_or(|role| role.is_authority());
 
     ui.menu_button(get!("app_mode.menu.title"), |ui| {
-        // What we are, before what we could become — the same shape the
-        // network menu has, and for the same reason: "which mode am I in"
-        // should not be answered by noticing which entry is greyed out.
-        ui.label(get!("app_mode.menu.current", "mode", current.name()));
-        ui.separator();
-
-        for mode in [AppMode::Editor, AppMode::Prop, AppMode::Play] {
+        // No "In: Prop Editor" line above the entries. It said what the greyed
+        // out entry already says — the one mode you cannot pick is the one you
+        // are in — and a menu that states its own state is a menu you read
+        // twice.
+        for mode in [AppMode::Editor, AppMode::Prop, AppMode::Animation, AppMode::Play] {
             let enabled = mode.selectable_from(current, authority);
             let entry = ui.add_enabled(enabled, egui::Button::new(mode.name()));
             if entry.clicked() {
@@ -224,7 +247,7 @@ mod tests {
     /// caller to compare first.
     #[test]
     fn the_mode_you_are_in_is_never_offered() {
-        for mode in [AppMode::Editor, AppMode::Prop, AppMode::Play] {
+        for mode in [AppMode::Editor, AppMode::Prop, AppMode::Animation, AppMode::Play] {
             assert!(!mode.selectable_from(mode, true), "{mode:?} offered itself");
         }
     }
@@ -242,6 +265,21 @@ mod tests {
         assert!(AppMode::Editor.shows_the_world());
         assert!(AppMode::Play.shows_the_world());
         assert!(!AppMode::Prop.shows_the_world());
+        // And the animation editor is the prop editor's own view of the same
+        // set-aside world: a body holding a weapon on a bench, not the map.
+        assert!(!AppMode::Animation.shows_the_world());
+    }
+
+    /// The two prop modes share one scene, so anything that sets it up has to
+    /// answer for both. Written down because the failure of forgetting is a
+    /// mode that opens onto an unlit, unframed, empty bench with the whole map
+    /// still standing around it.
+    #[test]
+    fn both_prop_modes_are_a_view_of_a_prop() {
+        assert!(AppMode::Prop.shows_a_prop());
+        assert!(AppMode::Animation.shows_a_prop());
+        assert!(!AppMode::Editor.shows_a_prop());
+        assert!(!AppMode::Play.shows_a_prop());
     }
 
     /// Swapping which thing you are authoring is local and concerns nobody
@@ -257,7 +295,7 @@ mod tests {
     /// walk out of the round everybody else is still playing.
     #[test]
     fn only_the_authority_starts_or_ends_a_round() {
-        for authoring in [AppMode::Editor, AppMode::Prop] {
+        for authoring in [AppMode::Editor, AppMode::Prop, AppMode::Animation] {
             assert!(AppMode::Play.selectable_from(authoring, true));
             assert!(!AppMode::Play.selectable_from(authoring, false));
             assert!(authoring.selectable_from(AppMode::Play, true));

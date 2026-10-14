@@ -25,6 +25,7 @@ use crate::common::app_mode::{showing_the_world, AppMode};
 use crate::common::class::Stance;
 use crate::common::damage::PlayerId;
 use crate::common::class::Class;
+use crate::common::skeleton::state::ClipLibrary;
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{
     draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
@@ -105,7 +106,33 @@ impl Plugin for SkeletonPlugin {
                 // arms are solved to the weapon, so the weapon has to be
                 // placed by an aim the animation has already had its say
                 // about.
-                crate::game::held::hold_the_weapon,
+                //
+                // Three systems rather than one, and the order is the whole
+                // reason: a clip track in `Space::Weapon` has to be read
+                // against a weapon that has already been placed, and the arms
+                // have to be solved onto wherever that clip left it. Placing
+                // and gripping in one system leaves nowhere for the clip to
+                // go — which is why `hold_the_weapon` was split rather than
+                // the clip layer being bolted on either side of it.
+                // **A clip's leg track needs no special handling against
+                // `plant_feet`.** Planting happens inside `finish_pose`, which
+                // `advance_animators` has already run by here, so a clip that
+                // pins a foot is simply the later writer and wins — and its
+                // `Free` axes read the *planted* tip, which is what "leave
+                // this axis where the layer beneath put it" should mean.
+                //
+                // That stops being true the moment body animations move into
+                // `finish_pose` itself, where a clip would run *before*
+                // planting rather than after. Suppressing the plant for a leg
+                // a clip owns is that stage's problem, and it is written down
+                // here because this is where the order is decided.
+                crate::game::held::place_the_weapon,
+                // In the chain rather than loose in `Update`, so what starts a
+                // clip and what plays it cannot end up a frame apart — which
+                // would read as a deploy that begins on its second frame.
+                crate::game::held::perform_weapon_clips,
+                crate::game::held::play_the_clips,
+                crate::game::held::grip_the_weapon,
             ).chain())
             // After propagation, so a rig is drawn where its body is now.
             // `interpolate_bodies` has already run by here, so a player's
@@ -489,6 +516,10 @@ fn phase_bodies_by_id(
 fn advance_animators(
     time: Res<Time>,
     clock: Res<AnimationClock>,
+    // The authored body animations, if any have been loaded. Absent is a build
+    // where every state is still a Rust function, which is exactly what this
+    // did before there were clips.
+    library: Option<Res<ClipLibrary>>,
     mut bodies: Query<(
         &Skeleton,
         &mut SkeletonAnimator,
@@ -502,6 +533,7 @@ fn advance_animators(
     )>,
 ) {
     let dt = time.delta_secs();
+    let clips = library.as_deref();
     for (skeleton, mut animator, mut pose, global, offset, requests, forced, phase, gait) in
         &mut bodies
     {
@@ -527,7 +559,13 @@ fn advance_animators(
             speed: gait.speed(),
             travel: gait.travel(),
         };
-        *pose = animator_pose(skeleton, &animator, &inputs, &skeleton_root(global, offset));
+        *pose = animator_pose(
+            skeleton,
+            &animator,
+            &inputs,
+            &skeleton_root(global, offset),
+            clips,
+        );
     }
 }
 

@@ -15,19 +15,37 @@
 //!   that applies such corrections to whatever a state produced.
 //! - [`joints`] — how far each joint bends, for the one caller that does not
 //!   already know: a solver handed positions rather than an animation.
+//! - [`clip`] — an animation **as data**: keys that hold a *target* rather
+//!   than a value, so one clip fits every build and a foot can be keyed to
+//!   the floor rather than to a height.
+//! - [`play`] — sampling a clip and composing it onto a pose. The pure half
+//!   and the half that needs to know where the floor is, kept apart.
+//! - [`interpolation`] — the named curves a key eases along.
+//! - [`seed`] — how the shipped body clips were sampled out of the pose
+//!   functions they replace. The generator, not the files: once seeded, a clip
+//!   is edited and the functions are only where its reasoning is written down.
 //! - [`draw`] — one prism per bone, for anything that wants to see a rig.
 //! - [`mesh`] — the solid a body is actually drawn as, built from the same
 //!   proportions the bones are.
 
+pub mod clip;
 pub mod draw;
 pub mod gait;
 pub mod ik;
+pub mod interpolation;
 pub mod joints;
 pub mod mesh;
+pub mod play;
 pub mod rig;
+pub mod seed;
 pub mod state;
 
+pub use clip::{
+    Axis, ChainRef, Channel, Clip, ClipSet, Clock, Combine, Key, Space, Track, Unit,
+};
 pub use draw::{draw_skeleton, SkeletonPalette};
+pub use interpolation::Interpolation;
+pub use play::{apply, apply_stack, ClipStack, Frames, Playing};
 pub use mesh::{body_meshes, bone_mesh, Profile, Ring};
 pub use joints::{limit_of, Hinge, JointLimit};
 pub use gait::{direction_of, DisplaySpeed, FootOffset, Gait, GaitShape};

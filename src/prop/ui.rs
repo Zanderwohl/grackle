@@ -25,8 +25,9 @@ use egui_dock::{DockArea, DockState, TabViewer};
 use strum::IntoEnumIterator;
 
 use crate::common::app_mode::{mode_menu, AppMode};
+use crate::common::file_menu::{file_menu, FileAction};
 use crate::common::net::NetRole;
-use crate::editor::multicam::MulticamState;
+use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
 use crate::prop::document::{self, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::common::class::Class;
@@ -99,10 +100,8 @@ impl Default for PropPanels {
 /// reachable from inside an egui closure.
 #[derive(Default)]
 struct PropRequests {
-    new: bool,
-    open: bool,
-    save: bool,
-    save_as: bool,
+    /// What the File menu asked of the prop in front of us.
+    file: Option<FileAction>,
     frame: bool,
     /// The mode picked from the **Mode** menu, if one was.
     mode: Option<AppMode>,
@@ -183,6 +182,7 @@ fn panels(
     // with no `NetPlugin` is a closed game, and a closed game is its own
     // authority.
     role: Option<Res<NetRole>>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let ctx = ctx.clone();
@@ -217,24 +217,9 @@ fn panels(
         .resizable(false)
         .show(&mut viewport_ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button(get!("prop.menu.file"), |ui| {
-                    if ui.button(get!("prop.menu.new")).clicked() {
-                        ui.close_kind(UiKind::Menu);
-                        tabs.requests.new = true;
-                    }
-                    if ui.button(get!("prop.menu.open")).clicked() {
-                        ui.close_kind(UiKind::Menu);
-                        tabs.requests.open = true;
-                    }
-                    if ui.button(get!("prop.menu.save")).clicked() {
-                        ui.close_kind(UiKind::Menu);
-                        tabs.requests.save = true;
-                    }
-                    if ui.button(get!("prop.menu.save_as")).clicked() {
-                        ui.close_kind(UiKind::Menu);
-                        tabs.requests.save_as = true;
-                    }
-                });
+                // The shared pulldown rather than four buttons written
+                // here, which is what it used to be.
+                file_menu(ui, &mut tabs.requests.file);
                 // `Prop` spelled out rather than read from the state: this
                 // whole system is gated on it, so the mode it is drawing for
                 // is not in question.
@@ -327,15 +312,22 @@ fn panels(
     if let Some(mode) = requests.mode {
         next_mode.set(mode);
     }
-    handle_files(&requests, &mut editor, &dialog);
+    handle_files(requests.file, &mut editor, &dialog);
+    if requests.file == Some(FileAction::Quit) {
+        info!("Quitting, as asked");
+        exit.write(AppExit::Success);
+    }
 
     if let Ok(window) = windows.single() {
-        let left = layout.left_width / window.width();
-        let right = layout.right_width / window.width();
-        let top = layout.menu_bar_height / window.height();
-        let bottom = layout.bottom_height / window.height();
-        multicam.start = Vec2::new(left, top);
-        multicam.end = Vec2::new(1.0 - right, 1.0 - bottom);
+        multicam.reserve(
+            Insets {
+                left: layout.left_width,
+                right: layout.right_width,
+                top: layout.menu_bar_height,
+                bottom: layout.bottom_height,
+            },
+            window,
+        );
     }
 }
 
@@ -1313,11 +1305,15 @@ pub fn ask_where_to_save(editor: &PropEditor, dialog: &PropFileDialog) {
     });
 }
 
-/// `Ctrl+S`, `Ctrl+Shift+S`, and the undo pair, for the prop editor.
+/// `Ctrl+N`, `Ctrl+S`, `Ctrl+Shift+S`, and the undo pair, for the prop editor.
 ///
 /// The map editor's undo has always had this; the prop editor's lived only on
 /// two buttons in the Features panel, so `Ctrl+Z` did nothing at all — which
 /// reads as a bug rather than as an absence.
+///
+/// The file half goes through `handle_files`, which is what the File menu
+/// feeds: a chord and the menu item it is the shortcut for have to be the same
+/// action, and the way to guarantee that is for them to *be* the same call.
 fn prop_shortcuts(
     keys: Res<ButtonInput<KeyCode>>,
     egui: Res<bevy_egui::input::EguiWantsInput>,
@@ -1331,16 +1327,26 @@ fn prop_shortcuts(
         editor.undo();
     }
 
-    if chords.save {
-        save_or_ask(&mut editor, &dialog);
-    } else if chords.save_as {
-        ask_where_to_save(&editor, &dialog);
+    if let Some(action) = FileAction::from_chords(chords) {
+        handle_files(Some(action), &mut editor, &dialog);
     }
 }
 
 /// New, open, save, including the file dialog on its own thread.
-fn handle_files(requests: &PropRequests, editor: &mut PropEditor, dialog: &PropFileDialog) {
-    if requests.new {
+///
+/// Takes the action rather than the whole request bundle, because the
+/// **animation editor** calls it too: a prop's clips live in its `.gpp`, so
+/// *Save* there is this save, and two answers to "where does this prop go"
+/// would be two that drift.
+///
+/// Quit is not here. It is a message, not a file, and this function has no
+/// writer — see the caller.
+pub(crate) fn handle_files(
+    action: Option<FileAction>,
+    editor: &mut PropEditor,
+    dialog: &PropFileDialog,
+) {
+    if action == Some(FileAction::New) {
         editor.open(PropDoc::new("prop.untitled"), None);
     }
 
@@ -1366,13 +1372,13 @@ fn handle_files(requests: &PropRequests, editor: &mut PropEditor, dialog: &PropF
         }
     }
 
-    if requests.save {
+    if action == Some(FileAction::Save) {
         save_or_ask(editor, dialog);
-    } else if requests.save_as {
+    } else if action == Some(FileAction::SaveAs) {
         ask_where_to_save(editor, dialog);
     }
 
-    if requests.open {
+    if action == Some(FileAction::Open) {
         let slot = dialog.result.clone();
         std::thread::spawn(move || {
             let chooser = rfd::AsyncFileDialog::new().add_filter("Grackle Prop", &[PROP_EXTENSION]);

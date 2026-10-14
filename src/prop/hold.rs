@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::class::Class;
 
 use crate::common::rotation::quat_from_euler;
-use crate::common::skeleton::ik::{solve, Chain, Reach, LEFT_ARM, RIGHT_ARM};
+use crate::common::skeleton::ik::{self, reach_or_leave, Reach, LEFT_ARM, RIGHT_ARM};
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{Pose, Skeleton};
 
@@ -336,6 +336,26 @@ pub fn weapon_transform(
     )
 }
 
+/// The frame a weapon hangs from: the point between the shoulders, turned by
+/// the aim.
+///
+/// The space half of what [`weapon_transform`] does — that function goes on to
+/// apply the hold's own carry offset, and this is the frame that offset is
+/// measured in. Split out because a clip's `Space::Carry` needs the frame
+/// without the offset: a track that said "the weapon is here relative to the
+/// carry" would otherwise be measured from a point the carry had already
+/// moved, and the offset would count twice.
+pub fn carry_frame(
+    skeleton: &Skeleton,
+    pose: &Pose,
+    root: &Transform,
+    aim: Quat,
+) -> Option<Transform> {
+    let chest = skeleton.index_of(bone::CHEST)?;
+    let pivot = skeleton.posed_bones(pose, root)[chest].tail;
+    Some(Transform::from_translation(pivot).with_rotation(aim))
+}
+
 /// Put the hands on a weapon that is already placed.
 ///
 /// **The one description of how a body holds a thing**, so the reference
@@ -360,75 +380,19 @@ pub fn grip_with(
     for (index, (chain, hand, side, frame)) in hands.into_iter().enumerate() {
         let Some(frame) = frame else { continue };
         let placed = weapon.mul_transform(frame);
-        reached[index] = reach_for(skeleton, pose, root, &chain, placed.translation, elbow_pole(side));
+        reached[index] = reach_or_leave(skeleton, pose, root, &chain, placed.translation, ik::elbow_pole(side));
         if reached[index] == Reach::Reached {
             // Last for this hand, because it wants the arm as the solve left
             // it: the hand takes the grip's orientation rather than the one
             // the animation gave it.
-            set_world_rotation(skeleton, pose, root, hand, placed.rotation);
+            ik::set_world_rotation(skeleton, pose, root, hand, placed.rotation);
         }
     }
     reached
 }
 
-/// Which way an elbow points.
-///
-/// Backwards and a little out and down, which is where a person's elbow goes
-/// holding something in front of them. The solver cannot work this out — it is
-/// the one thing about a two-bone chain the target does not determine — and
-/// getting it wrong is an arm bent the wrong way at the elbow.
-fn elbow_pole(side: f32) -> Vec3 {
-    Vec3::new(0.35 * side, -0.85, 0.55).normalize()
-}
 
-/// Solve a chain onto a target, or leave it exactly as it was.
-///
-/// [`solve`] writes a straightened limb and *then* reports `Short`, which is
-/// right for a leg — a foot pointed at a floor it cannot reach still wants to
-/// point at it — and wrong for a hand: an arm stretched at a grip it cannot
-/// hold reads as broken, where one still swinging with the walk cycle merely
-/// reads as not holding.
-fn reach_for(
-    skeleton: &Skeleton,
-    pose: &mut Pose,
-    root: &Transform,
-    chain: &Chain,
-    target: Vec3,
-    pole: Vec3,
-) -> Reach {
-    let before = [chain.upper, chain.lower]
-        .into_iter()
-        .chain(chain.tip)
-        .map(|joint| (joint, pose.joint(joint)))
-        .collect::<Vec<_>>();
 
-    let reach = solve(skeleton, pose, root, chain, target, pole);
-    if reach != Reach::Reached {
-        for (joint, rotation) in before {
-            pose.set(joint, rotation);
-        }
-    }
-    reach
-}
-
-/// Turn a bone so it ends up facing a given way in `root`'s frame.
-///
-/// A pose stores a joint's rotation relative to its rest and its parent, so a
-/// world orientation has to be divided back through both. Read off the posed
-/// skeleton rather than walked up the parent chain, because the posed bone
-/// already carries the product of everything above it.
-fn set_world_rotation(
-    skeleton: &Skeleton,
-    pose: &mut Pose,
-    root: &Transform,
-    name: &'static str,
-    wanted: Quat,
-) {
-    let Some(index) = skeleton.index_of(name) else { return };
-    let posed = skeleton.posed_bones(pose, root)[index].rotation;
-    let base = posed * pose.joint(name).inverse();
-    pose.set(name, base.inverse() * wanted);
-}
 
 #[cfg(test)]
 mod tests {
@@ -532,7 +496,7 @@ mod tests {
 
                 let grip = placed.transform_point(hold.grip());
                 assert_eq!(
-                    reach_for(&skeleton, &mut pose, &root, &RIGHT_ARM, grip, elbow_pole(1.0)),
+                    reach_or_leave(&skeleton, &mut pose, &root, &RIGHT_ARM, grip, ik::elbow_pole(1.0)),
                     Reach::Reached,
                     "{class:?} cannot reach the grip of {}",
                     path.display(),
@@ -541,7 +505,7 @@ mod tests {
                 if let Some(support) = hold.support() {
                     let support = placed.transform_point(support);
                     assert_eq!(
-                        reach_for(&skeleton, &mut pose, &root, &LEFT_ARM, support, elbow_pole(-1.0)),
+                        reach_or_leave(&skeleton, &mut pose, &root, &LEFT_ARM, support, ik::elbow_pole(-1.0)),
                         Reach::Reached,
                         "{class:?} cannot reach the support grip of {} — either move it \
                          or set `two_handed = false`",
@@ -563,13 +527,13 @@ mod tests {
         let before = pose.joint(bone::UPPER_ARM_R);
 
         let out_of_reach = Vec3::new(0.0, 1.4, -8.0);
-        let reach = reach_for(
+        let reach = reach_or_leave(
             &skeleton,
             &mut pose,
             &Transform::IDENTITY,
             &RIGHT_ARM,
             out_of_reach,
-            elbow_pole(1.0),
+            ik::elbow_pole(1.0),
         );
 
         assert_eq!(reach, Reach::Short);

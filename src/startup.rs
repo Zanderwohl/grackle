@@ -11,6 +11,8 @@ pub struct EditorParams {
     pub net: NetRole,
     /// Whether to drop straight into a round instead of opening the editor.
     pub start_playing: bool,
+    /// Whether to open the animation editor instead of the map editor.
+    pub start_animating: bool,
     /// Whether to open the prop editor instead of the map editor.
     pub start_modelling: bool,
 }
@@ -76,6 +78,19 @@ impl EditorParams {
                     .conflicts_with("play")
                     .help("Open the prop editor rather than the map editor.")
             )
+            // And the animation editor's, for the third time and the same
+            // reason. All three are flags rather than one `--mode=` because a
+            // mode you can be started in is a fact about that mode, and a
+            // shared option is a list somewhere else that a fourth one has to
+            // be remembered into.
+            .arg(
+                Arg::new("anim")
+                    .long("anim")
+                    .action(ArgAction::SetTrue)
+                    .conflicts_with("play")
+                    .conflicts_with("prop")
+                    .help("Open the animation editor rather than the map editor.")
+            )
             .arg(
                 Arg::new("connect")
                     .long("connect")
@@ -121,6 +136,7 @@ impl EditorParams {
             net,
             start_playing: matches.get_flag("play"),
             start_modelling: matches.get_flag("prop"),
+            start_animating: matches.get_flag("anim"),
         })
     }
 }
@@ -189,6 +205,8 @@ mod tests {
     fn the_prop_editor_is_off_unless_asked_for() {
         assert!(!parse(&[]).unwrap().start_modelling);
         assert!(parse(&["--prop"]).unwrap().start_modelling);
+        assert!(!parse(&[]).unwrap().start_animating);
+        assert!(parse(&["--anim"]).unwrap().start_animating);
     }
 
     /// Starting in a round and starting in the prop editor are two different
@@ -197,6 +215,11 @@ mod tests {
     #[test]
     fn playing_and_modelling_at_once_is_refused() {
         assert!(parse(&["--play", "--prop"]).is_err());
+        // And all three are mutually exclusive for the same reason: a process
+        // cannot open in two modes, and silently picking one would be a flag
+        // that appears to do nothing.
+        assert!(parse(&["--play", "--anim"]).is_err());
+        assert!(parse(&["--prop", "--anim"]).is_err());
     }
 
     /// The flags that were there before still are.

@@ -3,9 +3,10 @@ use std::sync::{Arc, Mutex};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crate::common::app_mode::{mode_menu, AppMode};
+use crate::common::file_menu::{file_menu, FileAction};
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
-use bevy_egui::egui::{Id, LayerId, Ui, UiBuilder, UiKind, WidgetText};
+use bevy_egui::egui::{Id, LayerId, Ui, UiBuilder, WidgetText};
 use egui_dock::{DockArea, DockState, TabViewer};
 use strum::IntoEnumIterator;
 use strum_macros::Display;
@@ -28,16 +29,7 @@ use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
 
 enum DialogResult {
     SavePath(PathBuf),
-    LoadPath(PathBuf),
-}
-
-/// What the File menu — or `Ctrl+S` — asked for.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FileOp {
-    New,
-    Save,
-    SaveAs,
-    Load,
+    OpenPath(PathBuf),
 }
 
 /// Ask where to put the blueprint, on a background thread.
@@ -70,7 +62,7 @@ fn ask_where_to_save(current_file: &CurrentFilePath) {
     });
 }
 
-/// `Ctrl+S`, `Ctrl+Shift+S`, and the undo pair, for the map editor.
+/// `Ctrl+N`, `Ctrl+S`, `Ctrl+Shift+S`, and the undo pair, for the map editor.
 ///
 /// Its own system rather than more parameters on [`EditorPanels::ui`], which is
 /// at Bevy's limit already. It hands the request over in `CurrentFilePath` so
@@ -82,11 +74,12 @@ fn file_shortcuts(
     egui: Res<bevy_egui::input::EguiWantsInput>,
     mut current_file: ResMut<CurrentFilePath>,
 ) {
-    let chords = chords(&keys, egui.wants_keyboard_input());
-    if chords.save {
-        current_file.requested_op = Some(FileOp::Save);
-    } else if chords.save_as {
-        current_file.requested_op = Some(FileOp::SaveAs);
+    // `FileAction::from_chords` rather than a match written here, so the three
+    // editors cannot disagree about which chord means what.
+    if let Some(action) = FileAction::from_chords(chords(&keys, egui.wants_keyboard_input())) {
+        // Only on `Some`: a frame with nothing held must not clear a request
+        // the menu made in the same frame.
+        current_file.requested_op = Some(action);
     }
 }
 
@@ -97,7 +90,7 @@ pub struct CurrentFilePath {
     deferred_room_bake: u8,
     /// Set by the keyboard, taken by the panel. The two cannot be one system:
     /// `EditorPanels::ui` is at Bevy's parameter limit.
-    requested_op: Option<FileOp>,
+    requested_op: Option<FileAction>,
 }
 
 impl Default for CurrentFilePath {
@@ -149,6 +142,9 @@ struct PanelMessages<'w> {
     log_ecs: MessageWriter<'w, LogECS>,
     edits: MessageWriter<'w, EditEvent>,
     net: MessageWriter<'w, NetRequest>,
+    /// The File menu's *Quit*. A writer rather than one more parameter on
+    /// `ui`, which has none to spare.
+    exit: MessageWriter<'w, AppExit>,
     mode: ResMut<'w, NextState<AppMode>>,
 }
 
@@ -337,7 +333,7 @@ impl EditorPanels {
 
         // The menu and the keyboard both ask for these, so the request is a
         // value either can produce and one place answers.
-        let mut pending_file_op: Option<FileOp> = current_file.requested_op.take();
+        let mut pending_file_op: Option<FileAction> = current_file.requested_op.take();
         let mut wanted_mode: Option<AppMode> = None;
         
         let mut viewer = TabViewerAndResources  {
@@ -356,28 +352,10 @@ impl EditorPanels {
             .resizable(false)
             .show(&mut viewport_ui, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
-                    ui.menu_button("File", |ui| {
-                        if ui.button("New").clicked() {
-                            ui.close_kind(UiKind::Menu);
-                            pending_file_op = Some(FileOp::New);
-                        }
-                        if ui.button("Save").clicked() {
-                            ui.close_kind(UiKind::Menu);
-                            pending_file_op = Some(FileOp::Save);
-                        }
-                        if ui.button("Save As").clicked() {
-                            ui.close_kind(UiKind::Menu);
-                            pending_file_op = Some(FileOp::SaveAs);
-                        }
-                        if ui.button("Load").clicked() {
-                            ui.close_kind(UiKind::Menu);
-                            pending_file_op = Some(FileOp::Load);
-                        }
-                        ui.separator();
-                        if ui.button("Quit").clicked() {
-                            ui.close_kind(UiKind::Menu);
-                        }
-                    });
+                    // The shared pulldown rather than five buttons written
+                    // here, which is what it used to be — in hardcoded
+                    // English, with a *Quit* that only closed the menu.
+                    file_menu(ui, &mut pending_file_op);
                     // `Editor` spelled out rather than read from the state:
                     // this whole system is gated on it, so the mode it is
                     // drawing for is not in question.
@@ -479,7 +457,7 @@ impl EditorPanels {
                         Err(e) => error!("Save failed: {}", e),
                     }
                 }
-                DialogResult::LoadPath(path) => {
+                DialogResult::OpenPath(path) => {
                     match save::load(&path) {
                         Ok(loaded) => {
                             info!("Loaded from {:?}", path);
@@ -495,7 +473,7 @@ impl EditorPanels {
         // Spawn async file dialogs on background thread (non-blocking)
         if let Some(op) = pending_file_op {
             match op {
-                FileOp::New => {
+                FileAction::New => {
                     let template = PathBuf::from(format!(
                         "assets/default/blueprints/new.{}", MAP_BLUEPRINT_EXTENSION
                     ));
@@ -513,15 +491,24 @@ impl EditorPanels {
                 }
                 // A save with nowhere to save to is a save-as. Stated here so
                 // it holds for the menu item and the chord alike.
-                FileOp::Save => match current_file.path.clone() {
+                FileAction::Save => match current_file.path.clone() {
                     Some(path) => match save::save(&path, &editor_features, &map_metadata) {
                         Ok(()) => info!("Saved to {:?}", path),
                         Err(e) => error!("Save failed: {}", e),
                     },
                     None => ask_where_to_save(&current_file),
                 },
-                FileOp::SaveAs => ask_where_to_save(&current_file),
-                FileOp::Load => {
+                FileAction::SaveAs => ask_where_to_save(&current_file),
+                // Straight out, with no "you have unsaved changes" between.
+                // That is what the entry has always looked like it would do,
+                // and the editor has nowhere to ask the question yet — the
+                // modal `egui::Window` the network menu uses is the shape it
+                // would take when there is one.
+                FileAction::Quit => {
+                    info!("Quitting, as asked");
+                    messages.exit.write(AppExit::Success);
+                }
+                FileAction::Open => {
                     let slot = current_file.dialog_result.clone();
                     std::thread::spawn(move || {
                         let handle = pollster::block_on(
@@ -530,7 +517,7 @@ impl EditorPanels {
                                 .pick_file()
                         );
                         if let Some(h) = handle {
-                            *slot.lock().unwrap() = Some(DialogResult::LoadPath(h.path().to_path_buf()));
+                            *slot.lock().unwrap() = Some(DialogResult::OpenPath(h.path().to_path_buf()));
                         }
                     });
                 }
@@ -592,14 +579,15 @@ impl EditorPanels {
             return;
         };
 
-        let left_taken = panels.left_width / window.width();
-        let right_taken = panels.right_width / window.width();
-        let bottom_taken = panels.bottom_height / window.height();
-        let top_taken = (panels.toolbar_height + panels.menu_bar_height + panels.top_height) / window.height();
-        // info!("[{} {}] -> [{}, {}]", left_taken, top_taken, 1.0 - right_taken, 1.0 - bottom_taken);
-
-        multicam_state.start = Vec2::new(left_taken, top_taken);
-        multicam_state.end = Vec2::new(1.0 - right_taken, 1.0 - bottom_taken);
+        multicam_state.reserve(
+            crate::editor::multicam::Insets {
+                left: panels.left_width,
+                right: panels.right_width,
+                top: panels.toolbar_height + panels.menu_bar_height + panels.top_height,
+                bottom: panels.bottom_height,
+            },
+            window,
+        );
     }
 }
 

@@ -112,6 +112,12 @@ impl Plugin for PropViewPlugin {
             // way in the last build belongs to a previous visit or to no
             // visit at all, and framing on stale bounds puts the cameras
             // somewhere plausible and wrong.
+            // Registered for **both** prop modes rather than for `Prop` alone.
+            // They are one scene asked two questions, so swapping between them
+            // runs an exit and an entry — both in the same `StateTransition`,
+            // before anything is drawn, so there is no flicker and the world
+            // is set aside again before a frame of it could be seen. A rebuild
+            // per swap is real work, but a mode swap is not a frame.
             .add_systems(
                 OnEnter(AppMode::Prop),
                 (light_the_stage, refresh_the_figure, pose_the_figure, set_the_world_aside, rebuild_the_prop)
@@ -119,7 +125,17 @@ impl Plugin for PropViewPlugin {
                     .in_set(PropSceneSystems::Build),
             )
             .add_systems(
+                OnEnter(AppMode::Animation),
+                (light_the_stage, refresh_the_figure, pose_the_figure, set_the_world_aside, rebuild_the_prop)
+                    .chain()
+                    .in_set(PropSceneSystems::Build),
+            )
+            .add_systems(
                 OnExit(AppMode::Prop),
+                (clear_the_stage, clear_the_figure, put_the_world_back),
+            )
+            .add_systems(
+                OnExit(AppMode::Animation),
                 (clear_the_stage, clear_the_figure, put_the_world_back),
             )
             .add_systems(
@@ -136,12 +152,35 @@ impl Plugin for PropViewPlugin {
                     // replicated from a server that is still playing.
                     set_the_world_aside,
                     rebuild_the_prop,
+                    // After the rebuild, which respawns the stage at the
+                    // origin: a weapon mid-deploy must not snap home for one
+                    // frame every time the geometry changes.
+                    carry_the_prop,
                     draw_the_bench,
                 )
                     .chain()
                     .in_set(PropSceneSystems::Build)
-                    .run_if(in_state(AppMode::Prop)),
+                    .run_if(crate::common::app_mode::showing_a_prop),
             );
+    }
+}
+
+/// Put the prop where a performance says it is being held.
+///
+/// Identity on the modelling surface — the prop is pinned to its own origin,
+/// which is where its feature gizmos are drawn — and moved only while
+/// something is animating it. Its own system rather than part of the rebuild,
+/// because the mesh is rebuilt on `PropEditor::generation` and a weapon that
+/// only moved when somebody edited the geometry would be a weapon that does
+/// not move.
+pub fn carry_the_prop(
+    held: Res<crate::prop::figure::FigureWeapon>,
+    mut stage: Query<&mut Transform, With<PropStage>>,
+) {
+    for mut transform in &mut stage {
+        if *transform != held.0 {
+            *transform = held.0;
+        }
     }
 }
 
