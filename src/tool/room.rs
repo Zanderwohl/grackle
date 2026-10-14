@@ -623,6 +623,54 @@ impl Room {
         slabs
     }
 
+    /// How far along `ray` it first meets this room's solid wall **from the
+    /// inside**, and where.
+    ///
+    /// The outside of a wall is not there to be hit: from outside a room a ray
+    /// passes in through the near wall and stops at the far one, so whatever
+    /// stands inside is nearer than the room and wins the pick. That is the
+    /// same face the renderer draws from that side, since a wall's outside is
+    /// culled.
+    ///
+    /// Openings are tested against the same holes [`Room::bake_faces`] cuts —
+    /// a hit is on the face's rectangle and in none of the holes, which is the
+    /// subtraction asked one point at a time. Testing the whole box instead
+    /// puts an invisible wall across every doorway, and the room beyond it and
+    /// everything in it cannot be picked through it.
+    pub fn ray_hit_from_inside(&self, others: &[Room], ray: &Ray3d) -> Option<(f32, Vec3)> {
+        let dir = Vec3::from(ray.direction);
+        let mut best: Option<(f32, Vec3)> = None;
+
+        for face in RoomFace::enumerate(self) {
+            if face.normal.dot(dir) >= 0.0 {
+                continue;
+            }
+            let axis = face.fixed_axis as usize;
+            if dir[axis].abs() < 1e-8 {
+                continue;
+            }
+            let t = (face.fixed_value - ray.origin[axis]) / dir[axis];
+            if t < 0.0 || best.is_some_and(|(best_t, _)| t >= best_t) {
+                continue;
+            }
+
+            let hit = ray.origin + dir * t;
+            let (u, v) = face.uv(hit);
+            let on_face = u >= face.rect.min_u && u <= face.rect.max_u
+                && v >= face.rect.min_v && v <= face.rect.max_v;
+            // Strictly inside: a hit on a hole's edge is still on wall.
+            let in_a_hole = others.iter().filter_map(|other| face.clip_rect(other)).any(|hole| {
+                u > hole.min_u && u < hole.max_u && v > hole.min_v && v < hole.max_v
+            });
+
+            if on_face && !in_a_hole {
+                best = Some((t, hit));
+            }
+        }
+
+        best
+    }
+
     /// Bake this room's wall geometry, carving openings where other rooms
     /// overlap or share walls. Returns a single Mesh with inward-facing normals.
     pub fn bake_faces(&self, others: &[Room]) -> Mesh {
@@ -807,6 +855,17 @@ impl RoomFace {
         self.rect.intersection(&clip)
     }
 
+    /// A world-space point on this face's plane, in the face's `(u, v)`.
+    /// The inverse of [`RoomFace::rect_to_3d`]'s axis mapping.
+    fn uv(&self, p: Vec3) -> (f32, f32) {
+        match self.fixed_axis {
+            0 => (p.z, p.y),
+            1 => (p.x, p.z),
+            2 => (p.x, p.y),
+            _ => unreachable!(),
+        }
+    }
+
     /// Convert a 2D sub-rectangle into a solid box standing behind this face.
     ///
     /// The interior lies toward `opposite_value`, so the box is grown from the
@@ -947,6 +1006,45 @@ mod tests {
         // A should also be unaffected (B is fully inside, doesn't reach A's faces)
         let mesh_a = a.bake_faces(&[b.clone()]);
         assert_eq!(triangle_count(&mesh_a), 12, "engulfing room should keep all 6 faces");
+    }
+
+    fn ray(origin: Vec3, direction: Vec3) -> Ray3d {
+        Ray3d::new(origin, Dir3::new(direction).unwrap())
+    }
+
+    /// From outside, the near wall is not there: the ray goes in and stops at
+    /// the far one, so anything standing in the room is nearer than the room.
+    #[test]
+    fn a_pick_from_outside_passes_the_near_wall_and_lands_on_the_far_one() {
+        let room = Room::new(Vec3::ZERO, Vec3::splat(10.0));
+        let (t, hit) = room.ray_hit_from_inside(&[], &ray(Vec3::new(-5.0, 5.0, 5.0), Vec3::X)).unwrap();
+        assert!((t - 15.0).abs() < 1e-4, "{t}");
+        assert!((hit.x - 10.0).abs() < 1e-4, "{hit}");
+    }
+
+    #[test]
+    fn a_pick_from_inside_lands_on_the_wall_in_front() {
+        let room = Room::new(Vec3::ZERO, Vec3::splat(10.0));
+        let (t, _) = room.ray_hit_from_inside(&[], &ray(Vec3::splat(5.0), Vec3::X)).unwrap();
+        assert!((t - 5.0).abs() < 1e-4, "{t}");
+    }
+
+    /// The wall across a doorway is the one the bake cut away, so a pick goes
+    /// through it to the room beyond — and the wall beside the doorway is
+    /// still wall.
+    #[test]
+    fn a_pick_goes_through_an_opening_and_not_through_the_wall_beside_it() {
+        let a = Room::new(Vec3::ZERO, Vec3::splat(10.0));
+        let b = Room::new(Vec3::new(10.0, 0.0, 2.0), Vec3::new(20.0, 4.0, 4.0));
+
+        let through = ray(Vec3::new(5.0, 2.0, 3.0), Vec3::X);
+        assert_eq!(a.ray_hit_from_inside(&[b.clone()], &through), None, "A has no wall in the doorway");
+        let (t, _) = b.ray_hit_from_inside(&[a.clone()], &through).unwrap();
+        assert!((t - 15.0).abs() < 1e-4, "B's far wall, got {t}");
+
+        let beside = ray(Vec3::new(5.0, 7.0, 7.0), Vec3::X);
+        let (t, _) = a.ray_hit_from_inside(&[b.clone()], &beside).unwrap();
+        assert!((t - 5.0).abs() < 1e-4, "A's wall beside the doorway, got {t}");
     }
 
     #[test]

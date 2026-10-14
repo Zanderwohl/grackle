@@ -59,9 +59,8 @@ pub fn snap_vec3(v: Vec3, granularity: f32) -> Vec3 {
 ///
 /// For orthographic cameras, projects the ray origin onto the plane defined by the
 /// camera axis, using `last_position` for the constrained component.
-/// For the perspective camera (`CameraAxis::None`), performs analytical ray-vs-face
-/// intersection against all `Room` AABBs and returns the closest hit point whose
-/// inward-facing normal faces the camera.
+/// For the perspective camera (`CameraAxis::None`), returns where the ray first
+/// meets solid wall from inside a room ([`Room::ray_hit_from_inside`]).
 pub fn compute_cursor(
     mouse_input: &CurrentMouseInput,
     cameras: &Query<(Entity, &Multicam)>,
@@ -93,75 +92,24 @@ pub fn compute_cursor(
     None
 }
 
-/// For each room, test the ray against all 6 axis-aligned faces. Accept only hits
-/// whose inward-facing normal points toward the camera (dot(normal, ray_dir) < 0),
-/// meaning the face is visible. Return the closest such hit, snapped.
+/// Where the ray first meets solid wall from inside any room, snapped — so a
+/// cursor goes through a doorway rather than stopping in it.
 fn cursor_from_room_faces(
     ray: &Ray3d,
     rooms: &Query<&Room>,
     snap: bool,
     snap_granularity: f32,
 ) -> Option<Vec3> {
-    let dir = Vec3::from(ray.direction);
-    let mut best_t = f32::MAX;
-    let mut best_pos: Option<Vec3> = None;
+    let rooms: Vec<Room> = rooms.iter().cloned().collect();
+    (0..rooms.len())
+        .filter_map(|index| rooms[index].ray_hit_from_inside(&rooms_but(&rooms, index), ray))
+        .min_by(|(a, _), (b, _)| a.total_cmp(b))
+        .map(|(_, pos)| if snap { snap_vec3(pos, snap_granularity) } else { pos })
+}
 
-    for room in rooms.iter() {
-        // 6 faces: (fixed axis, fixed value, inward normal)
-        let faces: [(usize, f32, Vec3); 6] = [
-            (0, room.min.x, Vec3::X),      // -X face, inward normal +X
-            (0, room.max.x, Vec3::NEG_X),   // +X face, inward normal -X
-            (1, room.min.y, Vec3::Y),        // -Y face (floor), inward normal +Y
-            (1, room.max.y, Vec3::NEG_Y),    // +Y face (ceiling), inward normal -Y
-            (2, room.min.z, Vec3::Z),        // -Z face, inward normal +Z
-            (2, room.max.z, Vec3::NEG_Z),    // +Z face, inward normal -Z
-        ];
-
-        for (axis, plane_val, normal) in faces {
-            // Must face the camera
-            if normal.dot(dir) >= 0.0 {
-                continue;
-            }
-
-            let dir_component = match axis {
-                0 => dir.x,
-                1 => dir.y,
-                _ => dir.z,
-            };
-
-            // Ray parallel to face
-            if dir_component.abs() < 1e-8 {
-                continue;
-            }
-
-            let origin_component = match axis {
-                0 => ray.origin.x,
-                1 => ray.origin.y,
-                _ => ray.origin.z,
-            };
-
-            let t = (plane_val - origin_component) / dir_component;
-            if t < 0.0 || t >= best_t {
-                continue;
-            }
-
-            let hit = ray.origin + dir * t;
-
-            // Check the hit point is within the face's 2D bounds
-            let in_bounds = match axis {
-                0 => hit.y >= room.min.y && hit.y <= room.max.y && hit.z >= room.min.z && hit.z <= room.max.z,
-                1 => hit.x >= room.min.x && hit.x <= room.max.x && hit.z >= room.min.z && hit.z <= room.max.z,
-                _ => hit.x >= room.min.x && hit.x <= room.max.x && hit.y >= room.min.y && hit.y <= room.max.y,
-            };
-
-            if in_bounds {
-                best_t = t;
-                best_pos = Some(hit);
-            }
-        }
-    }
-
-    best_pos.map(|pos| if snap { snap_vec3(pos, snap_granularity) } else { pos })
+/// Every room except the one at `index` — what carves openings into it.
+fn rooms_but(rooms: &[Room], index: usize) -> Vec<Room> {
+    rooms.iter().enumerate().filter(|(i, _)| *i != index).map(|(_, room)| room.clone()).collect()
 }
 
 /// Find the closest reference point to the mouse ray within `pick_radius`.
@@ -315,8 +263,10 @@ pub fn bounds_gizmo(gizmos: &mut Gizmos, min: Vec3, max: Vec3, color: Color) {
 }
 
 /// Find the nearest visible editor feature hit by a ray.
-/// For rooms, tests against all 6 AABB faces (visible ones only).
-/// For points/lights, tests ray proximity within SELECT_POINT_RADIUS.
+/// For rooms, tests against solid wall seen from inside
+/// ([`Room::ray_hit_from_inside`]), so a room never hides what stands in it.
+/// For everything else, its pick boxes (`FeatureTrait::pick_boxes`) and ray
+/// proximity to its point within SELECT_POINT_RADIUS.
 /// Returns the feature ID and hit position of the closest hit across all types.
 pub fn find_nearest_feature_hit(
     ray: &Ray3d,
@@ -326,6 +276,17 @@ pub fn find_nearest_feature_hit(
     let dir = Vec3::from(ray.direction);
     let mut best_t = f32::MAX;
     let mut best: Option<(FeatureId, Vec3)> = None;
+
+    // Every room, hidden or not: a hidden room still carves its openings into
+    // the rooms around it, and the holes picked through are the baked ones.
+    let (room_ids, rooms): (Vec<FeatureId>, Vec<Room>) = features
+        .active_features()
+        .filter(|(_, feature)| feature.object().type_key() == "editor_room")
+        .filter_map(|(id, feature)| {
+            let (min, max) = feature.object().drag_handle_bounds()?;
+            Some((id, Room::new(min, max)))
+        })
+        .unzip();
 
     for (feature_id, feature) in features.active_features() {
         let key = feature.object().type_key();
@@ -343,41 +304,26 @@ pub fn find_nearest_feature_hit(
 
         match key {
             "editor_room" => {
-                if let Some((min, max)) = feature.object().drag_handle_bounds() {
-                    let faces: [(usize, f32, Vec3); 6] = [
-                        (0, min.x, Vec3::X),
-                        (0, max.x, Vec3::NEG_X),
-                        (1, min.y, Vec3::Y),
-                        (1, max.y, Vec3::NEG_Y),
-                        (2, min.z, Vec3::Z),
-                        (2, max.z, Vec3::NEG_Z),
-                    ];
-
-                    for (axis, plane_val, normal) in faces {
-                        if normal.dot(dir) >= 0.0 { continue; }
-
-                        let dir_c = match axis { 0 => dir.x, 1 => dir.y, _ => dir.z };
-                        if dir_c.abs() < 1e-8 { continue; }
-
-                        let origin_c = match axis { 0 => ray.origin.x, 1 => ray.origin.y, _ => ray.origin.z };
-                        let t = (plane_val - origin_c) / dir_c;
-                        if t < 0.0 || t >= best_t { continue; }
-
-                        let hit = ray.origin + dir * t;
-                        let in_bounds = match axis {
-                            0 => hit.y >= min.y && hit.y <= max.y && hit.z >= min.z && hit.z <= max.z,
-                            1 => hit.x >= min.x && hit.x <= max.x && hit.z >= min.z && hit.z <= max.z,
-                            _ => hit.x >= min.x && hit.x <= max.x && hit.y >= min.y && hit.y <= max.y,
-                        };
-
-                        if in_bounds {
-                            best_t = t;
-                            best = Some((feature_id, hit));
-                        }
+                let Some(index) = room_ids.iter().position(|id| *id == feature_id) else { continue };
+                let others = rooms_but(&rooms, index);
+                if let Some((t, hit)) = rooms[index].ray_hit_from_inside(&others, ray) {
+                    if t < best_t {
+                        best_t = t;
+                        best = Some((feature_id, hit));
                     }
                 }
             }
             "global_point" | "grackle_point_light" | "spawn_point" | "prop" | "animation_display" | "animation_grid" => {
+                // The boxes and the point both: a grid's point is between
+                // its two middle bodies, inside none of them.
+                for pick_box in feature.object().pick_boxes() {
+                    if let Some(t) = pick_box.ray_distance(ray) {
+                        if t < best_t {
+                            best_t = t;
+                            best = Some((feature_id, ray.origin + dir * t));
+                        }
+                    }
+                }
                 if let Ok(pos) = feature.object().get_point("") {
                     let dist = ray_point_distance(ray, pos);
                     if dist < SELECT_POINT_RADIUS {

@@ -131,6 +131,13 @@ pub trait FeatureTrait: Send + Sync {
     /// Returns true if the object was modified.
     fn drag_handle(&mut self, _is_max: bool, _axis: u8, _new_world_value: f32) -> bool { false }
 
+    /// The boxes this feature can be clicked on by, beside its point. A
+    /// feature that stands something up — a body, a prop — is picked by the
+    /// space that thing takes up rather than only by a point at its feet.
+    /// Computed from the feature alone, never from its entities, so it is
+    /// cheap and agrees on every machine.
+    fn pick_boxes(&self) -> Vec<crate::common::ray::PickBox> { Vec::new() }
+
     /// Returns the resolved min and max bounds if this object is a room-like
     /// object with drag handles. Used to position handles.
     fn drag_handle_bounds(&self) -> Option<(Vec3, Vec3)> { None }

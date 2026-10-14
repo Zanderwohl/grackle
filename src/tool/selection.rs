@@ -68,7 +68,13 @@ impl SelectionPlugin {
                 }
             }
             _ => {
-                gizmos.sphere(Isometry3d::from_translation(hit_pos), 0.15, highlight);
+                let pick_boxes = feature.object().pick_boxes();
+                if pick_boxes.is_empty() {
+                    gizmos.sphere(Isometry3d::from_translation(hit_pos), 0.15, highlight);
+                }
+                for pick_box in pick_boxes {
+                    gizmos.cube(pick_box.transform(), highlight);
+                }
             }
         }
     }

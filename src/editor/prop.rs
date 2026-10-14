@@ -149,6 +149,15 @@ impl FeatureTrait for Prop {
         vec![("".into(), self.resolved_location)]
     }
 
+    /// The placeholder cube [`crate::tool::prop`] puts on the entity.
+    fn pick_boxes(&self) -> Vec<crate::common::ray::PickBox> {
+        vec![crate::common::ray::PickBox {
+            centre: self.resolved_location,
+            rotation: quat_from_euler(self.rotation),
+            half_extents: Vec3::splat(PROP_SIZE * 0.5),
+        }]
+    }
+
     fn rotation_axes(&self) -> Vec<u8> { vec![0, 1, 2] }
 
     fn euler_angles(&self) -> Vec3 { self.rotation }
