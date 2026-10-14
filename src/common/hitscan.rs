@@ -1,16 +1,8 @@
 //! Firing a ray at bodies and finding out what it hit.
 //!
-//! Deliberately a function of values rather than a system: a shot is
-//! `(ray, range, the boxes)` in and a hit out, with no `World` in sight. That
-//! is the same reason the player's step takes a [`crate::game::player::PlayerInput`]
-//! — once there is a server, hit registration has to be re-runnable against a
-//! rewound set of boxes, and something that queried the live world could not
-//! be.
-//!
-//! What it does *not* know about is walls. The caller shortens `range` to the
-//! nearest solid surface before asking, which keeps this free of the collision
-//! world and means "shoot through a wall" is one decision in one place rather
-//! than a flag threaded through here.
+//! A function of values with no `World`, so hit registration can be re-run
+//! against a rewound set of boxes. It knows nothing of walls: the caller
+//! shortens `range` to the nearest solid surface first.
 
 use bevy::prelude::*;
 
@@ -18,29 +10,22 @@ use crate::common::hitbox::{Box3, Hitboxes};
 use crate::common::ray::ray_aabb_distance;
 
 /// Which box a shot landed on.
-///
-/// Two, because there are two — see [`crate::common::hitbox::Hitboxes`]. Limbs
-/// arrive here when they arrive there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HitZone {
     Body,
     Head,
 }
 
-/// What a ray found.
-///
-/// `target` is whatever the caller used to name its bodies — an `Entity`, in
-/// the game; an index, in a test.
+/// `target` is whatever the caller names its bodies by: an `Entity` in the
+/// game, an index in a test.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hit<T> {
     pub target: T,
-    /// Where the ray entered the box it is reported against, in world space.
+    /// World space, where the ray entered the box it is reported against.
     pub point: Vec3,
-    /// How far along the ray this body was first touched.
-    ///
-    /// The *body's* entry, not the reported zone's: a head shot enters the
-    /// full-height body column a hair before the head box, and that hair is
-    /// what decides which of two overlapping bodies is in front.
+    /// The body's first entry, not the reported zone's: a head shot enters the
+    /// body column a hair before the head box, and that hair decides which of
+    /// two overlapping bodies is in front.
     pub distance: f32,
     pub zone: HitZone,
 }
@@ -57,12 +42,8 @@ pub fn trace<T>(
         .min_by(|a, b| a.distance.total_cmp(&b.distance))
 }
 
-/// One body's answer: did the ray touch it, and did it touch the head.
-///
-/// The head box sits *inside* the body column rather than on top of it, so
-/// "whichever box the ray reaches first" would report every head shot as a
-/// body shot. The head wins whenever it is hit at all, which is also the rule
-/// a player expects.
+/// The head box sits inside the body column, so "first box reached" would make
+/// every head shot a body shot. The head wins whenever it is hit at all.
 fn hit_body<T>(ray: &Ray3d, range: f32, target: T, boxes: Hitboxes) -> Option<Hit<T>> {
     let reach = |hitbox: Box3| {
         ray_aabb_distance(ray, hitbox.min(), hitbox.max()).filter(|distance| *distance <= range)
@@ -92,7 +73,6 @@ mod tests {
     use crate::common::skeleton::rig::Pose;
     use crate::common::skeleton::{humanoid, Proportions};
 
-    /// A body standing with its feet at `feet`, boxed as it rests.
     fn body(feet: Vec3) -> Hitboxes {
         let skeleton = humanoid(Proportions::DEFAULT);
         let root = Transform::from_translation(feet);
@@ -103,8 +83,8 @@ mod tests {
         Ray3d::new(origin, Dir3::new(at - origin).unwrap())
     }
 
-    /// The point of the whole exercise: aim at the head and the head is what
-    /// is reported, even though the ray crossed the body column to get there.
+    /// The ray crosses the body column to reach the head, and must still
+    /// report the head.
     #[test]
     fn a_shot_through_the_head_is_a_head_shot() {
         let boxes = body(Vec3::ZERO);
@@ -123,10 +103,7 @@ mod tests {
         assert_eq!(hit.zone, HitZone::Body);
     }
 
-    /// Nearest wins, and it is the *body's* entry that decides — the near
-    /// body is hit in the chest and the far one in the head, so ranking on
-    /// the reported zone's distance would pick the wrong one only if the
-    /// chest shot were ranked by the head box it never touched.
+    /// Ranking is by the body's entry, not the reported zone's.
     #[test]
     fn the_nearer_body_is_the_one_that_is_hit() {
         let near = body(Vec3::new(0.0, 0.0, 0.0));
@@ -137,8 +114,7 @@ mod tests {
         assert_eq!(hit.target, "near");
     }
 
-    /// Range is a hard stop, which is how the caller keeps a shot from
-    /// carrying through the wall in front of it.
+    /// Range is a hard stop; it is how the caller stops a shot at a wall.
     #[test]
     fn a_body_past_the_range_is_not_hit() {
         let boxes = body(Vec3::new(0.0, 0.0, 20.0));

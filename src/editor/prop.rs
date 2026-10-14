@@ -8,32 +8,20 @@ use crate::common::PointResolutionError;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::get;
 
-/// The edge length of the stand-in box, in metres.
-///
-/// Props have no models yet, and a box that is exactly half a metre on a side
-/// is a ruler as much as a placeholder: a mapper can count them along a wall
-/// and know how big the room is before any art exists.
+/// Edge length of the stand-in box, in metres. Exactly half a metre so mappers can count them.
 pub const PROP_SIZE: f32 = 0.5;
 
-/// Marks the entity a [`Prop`] feature drives, so the mesh that stands in for
-/// its model can be attached without the feature reaching for `Assets` — the
-/// same arrangement `SpawnPoint` has with `SpawnPointMarker`.
+/// Marks the entity a [`Prop`] feature drives, so its mesh can be attached without the feature
+/// reaching for `Assets`.
 #[derive(Component, Debug)]
 pub struct PropMarker;
 
-/// A placed piece of map furniture.
-///
-/// Its point is the **centre** of the box, not a corner and not the feet: a
-/// prop is a thing you rotate, and rotating about anything but the centre
-/// would slide it across the floor as it turned.
-///
-/// All three angles are exposed, unlike a spawn point's yaw — a crate on its
-/// side is a legitimate thing to want, and a body standing sideways is not.
+/// A placed piece of map furniture. Its point is the centre of the box, so rotating does not slide
+/// it across the floor.
 #[derive(Serialize, Deserialize)]
 pub struct Prop {
     location: PointRef,
-    /// Pitch, yaw and roll in radians, in axis order. See
-    /// [`crate::common::rotation`] for how the three combine.
+    /// Pitch, yaw and roll in radians, in axis order. See [`crate::common::rotation`].
     rotation: Vec3,
     #[serde(skip)]
     resolved_location: Vec3,
@@ -54,8 +42,7 @@ impl FeatureTrait for Prop {
 
         ui.separator();
         ui.label(get!("editor.features.prop.rotation"));
-        // Degrees in the boxes, radians in the field: a prop is lined up
-        // against a wall in degrees, and everything downstream is trigonometry.
+        // Degrees in the UI, radians stored.
         let rows: [(usize, String); 3] = [
             (1, get!("editor.features.prop.yaw")),
             (0, get!("editor.features.prop.pitch")),
@@ -91,9 +78,7 @@ impl FeatureTrait for Prop {
 
     fn type_key(&self) -> &'static str { "prop" }
 
-    /// The box, turned the way the prop is turned, with a stub out of its
-    /// front face — without that there is no telling a yaw of 0 from one of
-    /// 180 on a shape this symmetrical.
+    /// The stub out of the front face tells a yaw of 0 from 180.
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let rotation = quat_from_euler(self.rotation);
         let teal = Color::srgb_u8(90, 220, 200);
@@ -237,9 +222,7 @@ mod tests {
 
     use super::*;
 
-    /// The stand-in mesh is hung off [`PropMarker`], which only ever gets
-    /// inserted here. Break the link and props are simply invisible — nothing
-    /// fails, the map just quietly loses its furniture.
+    /// Props are invisible without [`PropMarker`], which only this inserts.
     #[test]
     fn applying_a_prop_marks_and_turns_its_entity() {
         let mut world = World::new();

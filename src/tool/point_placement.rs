@@ -1,13 +1,6 @@
-//! The shared state machine behind every point-placing tool.
-//!
-//! Placing a point, a light, a spawn or a prop is one interaction: hover to
-//! see where the thing would land, click to commit, or hold shift to pick an
-//! existing reference point first and place relative to it. The tools differ
-//! only in which feature comes out at the end and what the preview looks like,
-//! so that is all a tool has to supply — see [`PlaceablePoint`].
-//!
-//! Each tool keeps its own `Plugin`, its own [`Tools`] variant and its own
-//! lang key; what it does not keep is a fifth copy of the state machine.
+//! The shared state machine behind every point-placing tool: hover to
+//! preview, click to commit, or hold shift to pick a reference point and place
+//! relative to it. A tool supplies only a [`PlaceablePoint`].
 
 use std::marker::PhantomData;
 
@@ -24,27 +17,18 @@ use crate::tool::Tools;
 
 const DEFAULT_SNAP_GRANULARITY: f32 = 0.1;
 
-/// What a tool has to provide to be a point-placing tool: which feature to
-/// build (absolutely, and relative to another feature's point), which [`Tools`]
-/// state it runs in, and what the cursor preview looks like.
 pub trait PlaceablePoint: Send + Sync + 'static {
-    /// The tool state this tool's systems are gated on.
     const TOOL: Tools;
 
-    /// Build the feature at an absolute world position.
     fn from_position(position: Vec3) -> Box<dyn FeatureTrait>;
 
-    /// Build the feature anchored to another feature's point.
     fn from_point_ref(point_ref: PointRef) -> Box<dyn FeatureTrait>;
 
-    /// Preview colour while placing absolutely.
     fn normal_color() -> Color;
 
-    /// Preview colour while placing relative to a picked reference point.
     fn relative_color() -> Color;
 
-    /// Draw the shape that would land at `cursor`, so its size and footprint
-    /// are visible before it is committed rather than after.
+    /// Draw the shape that would land at `cursor`, at its real size.
     fn draw_preview(gizmos: &mut Gizmos, cursor: Vec3, color: Color);
 }
 
@@ -86,11 +70,7 @@ impl<F: PlaceablePoint> Default for PointPlacementTool<F> {
     }
 }
 
-/// Wire up a point-placing tool: its resource, its two systems gated on
-/// `F::TOOL`, and the reset on leaving the tool.
-///
-/// Call this from the tool's own `Plugin::build`; anything else the tool needs
-/// (a mesh-attaching system, extra resources) stays with the tool.
+/// Wire up a point-placing tool from its own `Plugin::build`.
 pub fn add_point_placement_tool<F: PlaceablePoint>(app: &mut App) {
     app
         .init_resource::<PointPlacementTool<F>>()

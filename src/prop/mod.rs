@@ -1,9 +1,5 @@
-//! Modelling the things a map and a class refer to.
-//!
-//! A **prop** is geometry with a life of its own — a weapon, a crate, a
-//! control point. Not map content: it lives in a pack beside `weapons.toml`
-//! and is referred to by name, so one model serves a weapon a class carries,
-//! a prop a mapper places, and whatever comes next.
+//! Modelling props: geometry referred to by name from a pack, not map
+//! content. See "Modelling a prop" in `CLAUDE.md`.
 //!
 //! | Module | What is in it |
 //! | --- | --- |
@@ -23,16 +19,11 @@
 //! | [`sync`] | Handing every weapon's model to whoever connects. |
 //! | [`ui`] | The panels. |
 //!
-//! Two things hold the design together, both argued in "Modelling a prop" in
-//! `CLAUDE.md`:
-//!
-//! - **Nothing above [`view`] touches a `World`.** Evaluating a prop is a pure
-//!   function of its feature list, which is what makes the kernel testable
-//!   without a Bevy app and what will let the *game* build a weapon's mesh on
-//!   a machine with no editor in it.
-//! - **All of it has to reach a browser.** Hence flat text through
-//!   [`AssetSource`](crate::common::assets::AssetSource), a hand-written
-//!   kernel rather than a C library, and `std::fs` only on the saving side.
+//! - Nothing above [`view`] touches a `World`, so the kernel is testable
+//!   without an app and the game can build a mesh with no editor present.
+//! - All of it has to reach a browser: flat text through
+//!   [`AssetSource`](crate::common::assets::AssetSource), no C library, and
+//!   `std::fs` only on the saving side.
 
 use bevy::prelude::*;
 
@@ -64,8 +55,6 @@ impl Plugin for PropEditorPlugin {
         // Also initialised by `GamePlugin`; done again here so reading pack
         // files does not depend on the game layer being wired up first.
         app.init_resource::<Assets>()
-            // Shared with the game, which bakes the same props to put them in
-            // somebody's hands — see `prop::baked`.
             .init_resource::<baked::PropCache>()
             .init_resource::<baked::SurfaceMaterials>()
             .init_resource::<document::PropEditor>()
@@ -77,19 +66,14 @@ impl Plugin for PropEditorPlugin {
                 ui::PropUiPlugin,
             ))
             .add_systems(Startup, load_the_example_prop)
-            // Ungated: saving happens in the prop editor and the thing that
-            // has to notice is a body in a round, so a system that stopped at
-            // the mode boundary would be one that only ever ran where it had
-            // nothing to do.
+            // Ungated: the save happens here but what must notice it is a
+            // body in a round.
             .add_systems(Update, (start_in_the_prop_editor, publish_the_saved_prop));
     }
 }
 
-/// What the prop editor opens onto.
-///
-/// A weapon rather than an empty document: a blank modelling tool gives no
-/// sense of scale, and it means the path the *game* will read a model by is
-/// exercised every time the editor starts.
+/// A weapon rather than an empty document: a blank tool gives no sense of
+/// scale, and it exercises the game's load path on every start.
 const EXAMPLE_PROP: &str = "rocket_launcher";
 
 fn load_the_example_prop(assets: Res<Assets>, mut editor: ResMut<PropEditor>) {
@@ -111,16 +95,11 @@ fn load_the_example_prop(assets: Res<Assets>, mut editor: ResMut<PropEditor>) {
     }
 }
 
-/// Hand a saved model to whatever is holding one.
+/// Saving is publishing: the cache bakes once per name, so without this a
+/// held weapon keeps its pre-save shape for the rest of the process.
 ///
-/// **Saving is the publish.** The cache is keyed by name and bakes once, so
-/// without this a weapon drawn before the edit keeps the shape it had for the
-/// rest of the process — you save, press F5, and are holding the old barrel.
-/// [`PropCache::adopt`] is the same door the server's models come through, and
-/// it bumps the generation, which is what makes a body redress.
-///
-/// Watched through a counter rather than `Res::is_changed`, because every
-/// frame of a drag changes the editor and only a write to disk is a publish.
+/// Watches a save counter rather than `Res::is_changed`, which fires on
+/// every frame of a drag.
 fn publish_the_saved_prop(
     editor: Res<PropEditor>,
     mut cache: ResMut<baked::PropCache>,
@@ -139,17 +118,11 @@ fn publish_the_saved_prop(
     cache.adopt(name, editor.doc(), &mut meshes, &mut materials, &mut surfaces);
 }
 
-/// Whether `--prop` was given.
-///
-/// A resource rather than a different initial state, for the reason
-/// [`StartInPlay`](crate::common::app_mode::StartInPlay) is one: entering has
-/// to go through `OnEnter(AppMode::Prop)`, where the map is set aside and the
-/// cameras are framed. A state set before the app runs skips all of it.
+/// Whether `--prop` was given. A resource rather than an initial state so
+/// that entering still runs `OnEnter(AppMode::Prop)`.
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct StartInPropEditor(pub bool);
 
-/// Unlike `start_in_play` there is nothing to wait for: a prop is built from
-/// its own document, not from the map's entities.
 fn start_in_the_prop_editor(
     start: Res<StartInPropEditor>,
     mut next: ResMut<NextState<AppMode>>,
@@ -179,8 +152,7 @@ mod tests {
         app
     }
 
-    /// The whole point: a model edited in the prop editor is the model in
-    /// somebody's hands, without restarting the process.
+    /// Fails if a saved model does not reach the cache the game draws from.
     #[test]
     fn saving_a_prop_hands_it_to_the_game() {
         let mut app = app_with_assets();
@@ -200,8 +172,7 @@ mod tests {
         assert!(cache.generation() > 0, "nothing holding one would look again");
     }
 
-    /// The cache is what the *game* reads, and re-baking it on every frame of
-    /// a drag would be the boolean kernel running at frame rate for nobody.
+    /// Fails if an unsaved edit re-bakes the cache.
     #[test]
     fn merely_editing_publishes_nothing() {
         let mut app = app_with_assets();
@@ -223,8 +194,6 @@ mod tests {
         );
     }
 
-    /// The mode has no keyboard shortcut, so this flag is the only way into it
-    /// from a script.
     #[test]
     fn the_flag_opens_the_prop_editor() {
         let mut app = App::new();

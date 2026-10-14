@@ -1,11 +1,7 @@
 //! The F3 performance overlay.
 //!
-//! Deliberately hand-rolled on top of `bevy_egui` rather than pulled from a
-//! crate: the one that used to serve this (`iyes_perf_ui`) is unmaintained
-//! upstream and was pinned to a git branch per Bevy release, which is a wasm
-//! blocker and a recurring cost at every engine bump. Everything shown here
-//! comes out of `FrameTimeDiagnosticsPlugin` and the fixed clock, so there is
-//! nothing to port next time.
+//! Hand-rolled on `bevy_egui` rather than a crate that would need a fork per
+//! Bevy release; reads only `FrameTimeDiagnosticsPlugin` and the fixed clock.
 
 use bevy::app::{App, Plugin, Update};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
@@ -104,9 +100,8 @@ fn perf_ui(
                         },
                     );
 
-                    // The fixed clock is the one physics runs on, so its rate
-                    // and how far behind it is are what actually matter when a
-                    // step starts costing more than its budget.
+                    // Physics runs on the fixed clock, so its rate and lag are
+                    // what matter when a step overruns its budget.
                     row(
                         get!("debug.perf.fixed_rate"),
                         format!("{:.0} Hz", 1.0 / fixed.timestep().as_secs_f64()),

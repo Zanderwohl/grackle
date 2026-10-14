@@ -1,48 +1,21 @@
-//! What an animation *is*, as data.
+//! Animation clips as data.
 //!
-//! The first thing in the project to have a notion of time in a file, and the
-//! answer to the question left open at the bottom of
-//! [the weapons plan](../../../documentation/weapons-in-hand.md).
+//! A key holds a target, not a value: what to move, where, in which [`Space`]
+//! and [`Unit`], per axis. Points are in leg- or arm-lengths for the same
+//! reason [`FootOffset`] and [`HoldSpec::carry`] are: a point in metres is
+//! right for one build only. The per-axis shape mirrors the map editor's
+//! `PointRef`.
 //!
-//! # A key holds a target, not a value
+//! A clip is sparse: a channel with no keys samples to `None`, not a default,
+//! so a layer never overwrites the one beneath it with zeros. Absence means
+//! rest, as in [`Pose`].
 //!
-//! This is the whole idea, and it is not new — it is the generalisation of two
-//! things the rig already does. [`FootOffset`] is a target in **leg-lengths**
-//! resolved against the floor by [`plant_feet`]; [`HoldSpec::carry`] is a
-//! target in **arm-lengths** resolved against the chest. Both are that way
-//! because a Heavy's arms are not a Scout's, so a point in metres is wrong for
-//! somebody. A key that stored a *value* would throw that away on the first
-//! clip anybody authored.
-//!
-//! So a key says four things rather than one: what to move, **where**, in
-//! which [`Space`], in which [`Unit`] — and it says the position per axis, so
-//! "don't hit a height, hit the floor" is one axis set to [`Axis::Ground`] and
-//! "relative to the weapon, not the player" is one track set to
-//! [`Space::Weapon`]. That is deliberately the shape the map editor's
-//! `PointRef` already has: a per-axis absolute-or-relative reference.
-//!
-//! # A clip is sparse, the way a pose is
-//!
-//! A clip names the channels it has an opinion about and says nothing about
-//! the rest, and a sampled channel with no keys returns `None` rather than a
-//! default. That is what makes layering work: a layer that wrote a zero would
-//! be a layer that overwrote the one beneath it, and the rule "absence means
-//! rest" is already how [`Pose`] is read.
-//!
-//! # The wire
-//!
-//! [`Channel`] is internally tagged and [`Axis`] serialises as a bare string
-//! or a bare number. **Neither may ever cross the wire as a typed value** —
-//! postcard refuses `deserialize_any`, and the failure is on the *receive*
-//! side, inside Lightyear, silently, which is the bug `weapon_sync` and
-//! `prop::sync` were both written against. It is handled by construction: a
-//! `.gpp` already crosses as the text the file holds, so clips in a prop reach
-//! clients through machinery that exists, and nothing here is registered as a
-//! message. `a_clip_would_not_survive_the_wire` pins that rather than trusting
-//! it.
+//! [`Channel`] is internally tagged and [`Axis`] needs `deserialize_any`, so
+//! neither survives postcard; the failure is silent, on the receive side.
+//! Clips reach clients as the text of the `.gpp` holding them, and nothing
+//! here is registered as a message (`a_clip_would_not_survive_the_wire`).
 //!
 //! [`FootOffset`]: super::gait::FootOffset
-//! [`plant_feet`]: super::ik::plant_feet
 //! [`HoldSpec::carry`]: crate::prop::hold::HoldSpec::carry
 //! [`Pose`]: super::rig::Pose
 
@@ -65,11 +38,8 @@ fn yes() -> bool {
 
 /// Where a point is measured from.
 ///
-/// The frames themselves are supplied by the caller rather than looked up
-/// here — see `play::Frames`. `common::skeleton` must not reach for a
-/// `CollisionWorld` or a `HoldSpec`, because a clip has to be samplable in a
-/// unit test with no App, which is the same rule `src/prop/` states as
-/// "nothing above `view` touches a `World`".
+/// The frames are supplied by the caller (`play::Frames`) so a clip can be
+/// sampled in a unit test with no `World`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Space {
@@ -77,21 +47,16 @@ pub enum Space {
     /// it faces.
     #[default]
     Body,
-    /// The carry pivot — the point between the shoulders, turned by the aim.
-    /// What a weapon hangs from.
+    /// The point between the shoulders, turned by the aim.
     Carry,
-    /// The weapon's own frame, origin at its grip. A target here stays put
-    /// when the weapon moves, which is what makes a hand on a magazine well
-    /// stay on it through a recoil.
+    /// The weapon's frame, origin at its grip. A target here stays on the weapon
+    /// through a recoil.
     Weapon,
     /// The eye, for a viewmodel clip.
     Eye,
 }
 
 /// What a number on a key is measured in.
-///
-/// The parametric half. A clip authored in leg-lengths fits every build; one
-/// authored in metres fits the build it was drawn against and nobody else.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Unit {
@@ -103,13 +68,6 @@ pub enum Unit {
 }
 
 /// What drives a clip's time.
-///
-/// The axis nothing in the repo had: a reload runs on seconds, an idle on the
-/// shared clock, and a walk on **distance travelled**, which is what
-/// [`Gait::phase`] already is. Unifying those is what lets one timeline show
-/// every animation.
-///
-/// [`Gait::phase`]: super::gait::Gait::phase
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Clock {
@@ -118,9 +76,8 @@ pub enum Clock {
     Seconds,
     /// The body's stride, wrapping at 1. A walk, a run.
     Stride,
-    /// The shared clock plus the body's own phase, wrapping at `length`. An
-    /// idle — which is what keeps sixty bodies in an animation grid out of
-    /// lockstep without anything storing a per-body time.
+    /// The shared clock plus the body's own phase, wrapping at `length`. The
+    /// per-body phase keeps an animation grid out of lockstep.
     Shared,
 }
 
@@ -128,27 +85,18 @@ pub enum Clock {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Combine {
-    /// Overwrite whatever was there.
     #[default]
     Replace,
-    /// Multiply onto it, in the joint's own frame — the composition
-    /// `look_with_the_head` performs onto the pose the animator left. What a
-    /// recoil wants: "thirty millimetres back from wherever the hands are".
+    /// Multiplied onto the layer beneath, in the joint's own frame.
     Compose,
 }
 
-/// What a track's time is.
+/// What a track's keys are timed against.
 ///
-/// **A foot's own cycle, for anything that follows a foot.** A gait's stance
-/// fraction slides with speed — a walk's foot is down for most of a stride, a
-/// sprint's for a third of one — so the moment a foot lifts is not a fixed
-/// point on the stride, and an arm keyed against the stride is right at one
-/// speed only. Keyed against the foot it follows, normalised so **0–½ is that
-/// foot on the ground and ½–1 is it in the air**, the same keys are right at
-/// every speed: what moves with speed is where the foot changes over, and this
-/// moves the keys with it.
-///
-/// Only meaningful on the stride clock; [`Clip::problems`] says so otherwise.
+/// A foot's cycle is normalised so 0–½ is that foot on the ground and ½–1 in
+/// the air. Stance fraction changes with speed, so keys timed against a foot
+/// stay right at every speed where keys timed against the stride would not.
+/// Only meaningful on the stride clock.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Timing {
@@ -177,9 +125,7 @@ impl Timing {
 
 /// Which two-bone chain an effector track drives.
 ///
-/// Named rather than spelled as two bone names, because `ik::LEFT_ARM` and
-/// friends are consts and `Pose::set` takes a `&'static str` that cannot be
-/// built at runtime.
+/// An enum rather than bone names because `Pose::set` takes a `&'static str`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChainRef {
@@ -190,7 +136,7 @@ pub enum ChainRef {
 }
 
 impl ChainRef {
-    /// Every limb, in the order a menu lists them.
+    /// In menu order.
     pub const ALL: [ChainRef; 4] = [
         ChainRef::RightArm,
         ChainRef::LeftArm,
@@ -207,8 +153,7 @@ impl ChainRef {
         }
     }
 
-    /// Which side of the body, as a multiplier — what an elbow or knee pole is
-    /// mirrored by.
+    /// -1 on the left, 1 on the right; what a pole is mirrored by.
     pub fn side(self) -> f32 {
         match self {
             ChainRef::LeftArm | ChainRef::LeftLeg => -1.0,
@@ -216,7 +161,6 @@ impl ChainRef {
         }
     }
 
-    /// The lang key for this limb.
     pub fn name_key(self) -> &'static str {
         match self {
             ChainRef::RightArm => "anim.chain.right_arm",
@@ -232,26 +176,14 @@ impl ChainRef {
 }
 
 /// One component of a target.
-///
-/// The centre of the whole design, and the reason a key is not three floats.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Axis {
     /// Leave whatever the layer beneath put here.
-    ///
-    /// The default, so a track that only cares about height says only that.
     #[default]
     Free,
-    /// `clearance` above whatever surface is under the point, measured at
-    /// sample time and in the track's own unit.
-    ///
-    /// The offset is not decoration. A leg chain's effector is the **ankle**,
-    /// which is never on the floor — the sole is — so "this foot is planted"
-    /// is the ankle at its own resting height above the ground, and a bare
-    /// floor height is a target the leg cannot even reach. A hand held five
-    /// centimetres off a crate is the same shape with a different number.
-    ///
-    /// Meaningful on the vertical axis only; [`Clip::problems`] says so rather
-    /// than the resolver inventing a meaning for the others.
+    /// `clearance` above the surface under the point, measured at sample time, in
+    /// the track's unit. A leg's effector is the ankle, so a planted foot is the
+    /// ankle's resting height off the floor, not zero. Vertical axis only.
     Ground { clearance: f32 },
     /// A number, in the track's own unit.
     Value(f32),
@@ -265,14 +197,12 @@ impl Axis {
         }
     }
 
-    /// Resting on the surface itself.
     pub const ON_THE_GROUND: Axis = Axis::Ground { clearance: 0.0 };
 
     pub fn is_ground(self) -> bool {
         matches!(self, Axis::Ground { .. })
     }
 
-    /// The number the panel edits, whichever kind of axis this is.
     pub fn offset(self) -> Option<f32> {
         match self {
             Axis::Value(at) | Axis::Ground { clearance: at } => Some(at),
@@ -281,24 +211,9 @@ impl Axis {
     }
 }
 
-/// Hand-written rather than derived, and the reason is the file.
-///
-/// Derived, `Value(f32)` is a table — `{ value = 0.3 }` — which is unreadable
-/// three times over on one line. `#[serde(untagged)]` gives the right shape
-/// but routes the float through serde's own widening, which prints
-/// `0.05000000074505806` and is the whole reason `nice_f32` exists. So both
-/// halves are written out, and a key reads
-///
-/// ```toml
-/// to = [0.0, "ground", "free"]
-/// to = [0.2, ["ground", 0.08], "free"]
-/// ```
-///
-/// Three forms because there are three things to say and one of them takes a
-/// number: a bare word for "leave it" and "on the floor", a bare number for an
-/// ordinary coordinate, and a pair for "this far off the floor". A clearance
-/// of nothing writes itself back as the bare word, so the common case stays
-/// the short one.
+/// Hand-written so a key reads `to = [0.2, ["ground", 0.08], "free"]`.
+/// Derived, `Value` is a table; `#[serde(untagged)]` widens the float through
+/// serde and prints `0.05000000074505806`, which `nice_f32` exists to avoid.
 impl Serialize for Axis {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
@@ -335,9 +250,7 @@ impl<'de> Deserialize<'de> for Axis {
                 Ok(Axis::Value(value as f32))
             }
 
-            // TOML tells integers and floats apart, so a hand-typed `0` is an
-            // integer and would otherwise be rejected as the wrong type — an
-            // error about a number that is plainly a number.
+            // TOML parses a hand-typed `0` as an integer.
             fn visit_i64<E: de::Error>(self, value: i64) -> Result<Axis, E> {
                 Ok(Axis::Value(value as f32))
             }
@@ -365,30 +278,18 @@ impl<'de> Deserialize<'de> for Axis {
     }
 }
 
-/// One key: a time, three **optional** axes, and the curve out of it.
+/// One key: a time, three optional axes, and the curve out of it.
 ///
-/// One type for every kind of track, and the optionality is the reason. A
-/// rotation key's three axes are Euler angles and a point key's are
-/// coordinates, but the question each asks is identical — *does this key have
-/// an opinion about this axis at all?* — and a key that has none leaves that
-/// axis to the layer beneath. Two types would be two places to get that wrong,
-/// and it is the same answer both times.
-///
-/// So a key can set a bone's pitch and say nothing about its yaw and roll, or
-/// pin a foot's height while leaving where it is along the floor to whatever
-/// is already happening. That is what [`Axis::Free`] means, and it means it
-/// everywhere.
+/// One type for every channel: a rotation's axes are Euler angles and a
+/// point's are coordinates, and [`Axis::Free`] leaves an axis to the layer
+/// beneath either way.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Key {
-    /// Where on the clip's own clock this key sits.
+    /// On the clip's own clock.
     #[serde(with = "crate::prop::nice_f32::scalar")]
     pub at: f32,
-    /// The three axes, in axis order.
-    ///
-    /// For a rotation these are Euler angles in the order
-    /// [`crate::common::rotation`] owns — the one `HoldSpec::grip_rotation`
-    /// already uses — so the Hold panel's `degrees_ui` works on one without a
-    /// second spelling of "rotation".
+    /// For a rotation, Euler angles in the order [`crate::common::rotation`]
+    /// owns, as `HoldSpec::grip_rotation` uses.
     pub to: [Axis; 3],
     /// Used **leaving** this key. See [`Interpolation`].
     #[serde(default)]
@@ -396,8 +297,6 @@ pub struct Key {
 }
 
 impl Key {
-    /// A key that says all three, which is what a generator writes and what
-    /// keying at the playhead produces.
     pub fn all(at: f32, to: [f32; 3], ease: Interpolation) -> Key {
         Key {
             at,
@@ -409,13 +308,11 @@ impl Key {
 
 /// What a track drives.
 ///
-/// Internally tagged for the same reason `FeatureOp` is: it is what makes the
-/// file readable. See the note on the wire at the top of this module.
+/// Internally tagged for a readable file; see the module doc on the wire.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]
 pub enum Channel {
-    /// A bone's rotation in its own rest frame — exactly what a [`Pose`]
-    /// stores, so this is the channel with no translation to do at all.
+    /// A bone's rotation in its own rest frame, exactly as a [`Pose`] stores it.
     ///
     /// [`Pose`]: super::rig::Pose
     Rotation {
@@ -432,43 +329,32 @@ pub enum Channel {
         #[serde(default)]
         keys: Vec<Key>,
     },
-    /// Where the weapon itself is, as a deviation from the hold's carry.
-    ///
-    /// This is what a reload *is*: the weapon dips and the hands follow it,
-    /// because `grip_the_weapon` runs afterwards and solves both arms onto
-    /// wherever it ended up. No per-hand authoring, and a recoil written once
-    /// is correct for a Scout and a Heavy alike.
+    /// Where the weapon is, as a deviation from the hold's carry. The hands
+    /// follow because `grip_the_weapon` solves both arms onto it afterwards.
     Weapon {
         #[serde(default)]
         keys: Vec<Key>,
     },
-    /// And how it is turned there.
+    /// How the weapon is turned there.
     WeaponRotation {
         #[serde(default)]
         keys: Vec<Key>,
     },
-    /// Where the whole body sits, in **hip-heights** — [`Pose::root_offset`],
-    /// the one thing a pose says that is not a rotation.
-    ///
-    /// A channel of its own rather than a unit on a point track, because a
-    /// root offset is not measured from a space: it is a displacement of the
-    /// body from where it would otherwise stand, and the only frame that could
-    /// mean anything in is the body's own. An idle's bob and a crouch's sink
-    /// are both this.
+    /// Where the whole body sits, in hip-heights: [`Pose::root_offset`]. Its own
+    /// channel because a root offset is a displacement in the body's own frame
+    /// and has no [`Space`] to choose.
     ///
     /// [`Pose::root_offset`]: super::rig::Pose::root_offset
     Root {
         #[serde(default)]
         keys: Vec<Key>,
     },
-    // Feature { feature: PropFeatureId, .. } — reserved for a magazine that
-    // drops out. Building it needs `prop::baked` to bake per-feature groups
-    // rather than one mesh per surface, which is a baking change rather than a
-    // timeline one.
+    // Reserved: `Feature { feature: PropFeatureId, .. }`, for a dropped magazine.
+    // Needs `prop::baked` to bake per-feature groups rather than one mesh per
+    // surface.
 }
 
 impl Channel {
-    /// The lang key for what kind of channel this is.
     pub fn kind_key(&self) -> &'static str {
         match self {
             Channel::Root { .. } => "anim.channel.root",
@@ -479,7 +365,6 @@ impl Channel {
         }
     }
 
-    /// How many keys it has, whichever kind of key those are.
     pub fn key_count(&self) -> usize {
         match self {
             Channel::Rotation { keys, .. }
@@ -490,7 +375,6 @@ impl Channel {
         }
     }
 
-    /// When each key sits, in order. What the timeline draws.
     pub fn key_times(&self) -> Vec<f32> {
         match self {
             Channel::Rotation { keys, .. }
@@ -501,7 +385,6 @@ impl Channel {
         }
     }
 
-    /// The keys on this channel, whatever kind it is.
     pub fn keys(&self) -> &[Key] {
         match self {
             Channel::Rotation { keys, .. }
@@ -512,10 +395,6 @@ impl Channel {
         }
     }
 
-    /// The same, to write.
-    ///
-    /// One accessor because every channel holds the same [`Key`]: what differs
-    /// between them is what the three axes *mean*, not how they are stored.
     pub fn keys_mut(&mut self) -> &mut Vec<Key> {
         match self {
             Channel::Rotation { keys, .. }
@@ -526,10 +405,6 @@ impl Channel {
         }
     }
 
-    /// Whether this channel's axes are angles rather than a place.
-    ///
-    /// The one thing a panel has to know to show degrees instead of metres,
-    /// and asked of the channel rather than matched at each call site.
     pub fn is_rotation(&self) -> bool {
         matches!(
             self,
@@ -537,18 +412,11 @@ impl Channel {
         )
     }
 
-    /// Move some keys in time, put the whole track back in order, and say
-    /// where the moved ones ended up.
+    /// Move keys in time, re-sort, and return where the moved ones landed.
     ///
-    /// Indices in, indices out, because **a key is addressed by where it is
-    /// and a drag changes that.** The alternative — giving every key an id —
-    /// is a field on disk that exists only so a pointer can hold onto
-    /// something for a few hundred milliseconds. Reporting the new positions
-    /// keeps the selection following the keys it selected without either side
-    /// storing an identity the file would have to carry.
-    ///
-    /// The sort is **stable**, so two keys dragged onto the same time keep the
-    /// order they had rather than swapping on a rounding error.
+    /// Keys are addressed by index rather than id, so a drag that reorders them
+    /// has to report new indices for the selection to follow. The sort is stable,
+    /// so keys dragged onto the same time keep their order.
     pub fn nudge(&mut self, held: &[usize], by: f32, within: f32) -> Vec<usize> {
         fn shuffle<K: Copy>(
             keys: &mut Vec<K>,
@@ -595,11 +463,7 @@ impl Channel {
         }
     }
 
-    /// Take some keys out, addressed by index.
-    ///
-    /// Removed back to front so an index is never invalidated by a removal
-    /// before it — the ordinary way to get this wrong is to delete forwards
-    /// and take out the wrong keys from the second one onward.
+    /// Removed back to front so a removal does not shift later indices.
     pub fn remove_keys(&mut self, indices: &[usize]) {
         let mut doomed: Vec<usize> = indices.to_vec();
         doomed.sort_unstable();
@@ -620,11 +484,8 @@ impl Channel {
         }
     }
 
-    /// Put the keys back in time order.
-    ///
-    /// Called at load and after every edit rather than at sample time: sorting
-    /// inside the sampler would be a sort per channel per body per frame, and
-    /// the sampler is the one thing in here that runs in a match.
+    /// Called on load and after edits rather than in the sampler, which runs per
+    /// channel per body per frame.
     pub fn sort(&mut self) {
         match self {
             Channel::Rotation { keys, .. }
@@ -645,21 +506,16 @@ pub struct Track {
     pub space: Space,
     #[serde(default)]
     pub unit: Unit,
-    /// Off for a track being auditioned. Mirrors `PropFeature`'s own flag, and
-    /// for the same reason: turning one off to see what it was doing is how
-    /// anybody debugs a layered thing.
+    /// Off for a track being auditioned.
     #[serde(default = "yes")]
     pub enabled: bool,
-    /// What its keys' times are measured on. Left out of a file when it is
-    /// the clip's own clock, so every clip written before this existed reads
-    /// back the same.
+    /// Left out of a file when it is the clip's own clock.
     #[serde(default, skip_serializing_if = "Timing::is_default")]
     pub timing: Timing,
     pub channel: Channel,
 }
 
 impl Track {
-    /// A rotation track on a named bone, with nothing on it yet.
     pub fn rotation(bone: impl Into<String>) -> Track {
         Track {
             combine: Combine::default(),
@@ -681,64 +537,45 @@ pub struct Clip {
     /// The lang key this clip's name is under. Empty for one nobody has named.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name_key: String,
-    /// How long, **in this clip's own clock's unit** — seconds, or strides.
+    /// In this clip's own clock's unit: seconds, or strides.
     #[serde(default = "one", with = "crate::prop::nice_f32::scalar")]
     pub length: f32,
     #[serde(default)]
     pub clock: Clock,
     #[serde(default)]
     pub looping: bool,
-    /// Why the numbers in it are what they are.
-    ///
-    /// Saved as data rather than left as a comment, because
-    /// `toml::to_string_pretty` does not preserve comments and the editor
-    /// rewrites the file on save — so an argument written as a comment is an
-    /// argument that survives until somebody drags a key. The hand-written
-    /// animation functions carry theirs as doc comments on named constants;
-    /// this is where those go when one is migrated.
+    /// Why the numbers are what they are. Data rather than a TOML comment,
+    /// because the editor rewrites the file on save and `toml` drops comments.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tracks: Vec<Track>,
 }
 
+/// How many strides a [`Clock::Stride`] clip of `length` is played over, never
+/// fewer than one. `stride` wraps at 1, so a one-stride clip plays once per step.
+pub fn strides_spanned(length: f32) -> f32 {
+    length.max(1.0)
+}
+
 impl Clip {
-    /// Where this clip has got to, given what the body is doing.
-    ///
-    /// The whole point of [`Clock`] arriving at one place: a reload runs on
-    /// seconds, an idle on the shared clock, and a walk on **distance
-    /// travelled**, and every one of those is already a field on
-    /// [`PoseInputs`]. Without this the caller would have to know which clock
-    /// a clip was authored against, which is exactly the thing the file is
-    /// supposed to say.
-    ///
-    /// [`PoseInputs`]: super::state::PoseInputs
+    /// Where this clip has got to, on whichever [`Clock`] it is authored against.
     pub fn time_from(&self, inputs: &super::state::PoseInputs) -> f32 {
         match self.clock {
-            // Both read the shared clock; what they differ in is whether the
-            // clip wraps, which `looping` already says.
+            // They differ only in whether the clip wraps, which `looping` says.
             Clock::Seconds | Clock::Shared => inputs.seconds,
-            // Already wrapping at 1, so a clip a stride long is a clip that
-            // plays once per step.
-            Clock::Stride => inputs.stride * self.length.max(1.0),
+            Clock::Stride => inputs.stride * strides_spanned(self.length),
         }
     }
 
-    /// Put every track's keys back in time order.
     pub fn normalise(&mut self) {
         for track in &mut self.tracks {
             track.channel.sort();
         }
     }
 
-    /// How far through the clip `time` is, in the clip's own units, having
-    /// wrapped if it loops.
-    ///
-    /// A clip that does not loop holds its last key rather than stopping: the
-    /// sampler clamps, so a one-shot that has finished keeps the pose it
-    /// ended in until something takes it off the stack. That is the right
-    /// resting state — the alternative is a weapon that snaps back to the
-    /// hold the instant a reload's last key passes.
+    /// `time` wrapped if the clip loops. A one-shot is left unwrapped and the
+    /// sampler clamps, so it holds its last key rather than snapping back.
     pub fn wrap(&self, time: f32) -> f32 {
         if !self.looping || self.length <= 0.0 {
             return time;
@@ -746,13 +583,8 @@ impl Clip {
         time.rem_euclid(self.length)
     }
 
-    /// What is wrong with this clip, in words, for the Problems panel.
-    ///
-    /// Nothing here refuses — the rule `prop::feature`'s evaluator already
-    /// keeps. A clip with a dangling bone name plays its other tracks, and the
-    /// note is what tells you why one hand is not moving. A tool that stopped
-    /// at the first bad track would blank the viewport every time somebody
-    /// mistyped a name.
+    /// What is wrong with this clip, for the Problems panel. Nothing refuses: a
+    /// clip with a dangling bone name still plays its other tracks.
     pub fn problems(&self, known_bone: impl Fn(&str) -> bool) -> Vec<ClipProblem> {
         use crate::get;
         let mut problems = Vec::new();
@@ -764,8 +596,7 @@ impl Clip {
                 self.length.to_string()
             )));
         }
-        // A stride is a whole cycle of the gait, so half of one is a clip that
-        // lurches every other step — and the symptom is a limp nobody authored.
+        // A fractional stride count lurches every other step.
         if self.clock == Clock::Stride && (self.length - self.length.round()).abs() > 1e-3 {
             problems.push(clip_wide(get!(
                 "anim.problem.stride_length",
@@ -786,10 +617,7 @@ impl Clip {
                 }
                 Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
                     for key in keys {
-                        // An angle has no floor under it. `Free` is the useful
-                        // thing here — a key that turns a bone about one axis
-                        // and says nothing about the others — and `Ground` is
-                        // the one reading that cannot mean anything.
+                        // An angle has no floor under it.
                         if key.to.iter().any(|axis| axis.is_ground()) {
                             on_track(get!("anim.problem.ground_angle", "at", key.at.to_string()));
                         }
@@ -797,9 +625,7 @@ impl Clip {
                 }
                 Channel::Effector { keys, .. } | Channel::Weapon { keys } => {
                     for key in keys {
-                        // Sideways has no floor to find. Rejected rather than
-                        // given a meaning, because any meaning invented here
-                        // would be one nobody could guess from the panel.
+                        // Sideways has no floor; rejected rather than given an invented meaning.
                         if key.to[0].is_ground() || key.to[2].is_ground() {
                             on_track(get!(
                                 "anim.problem.ground_sideways",
@@ -811,10 +637,7 @@ impl Clip {
                 }
                 Channel::Root { keys } => {
                     for key in keys {
-                        // A root offset is in hip-heights above where the body
-                        // would otherwise stand, which the floor has already
-                        // decided. Grounding it is asking for the floor to be
-                        // measured from the floor.
+                        // A root offset is already measured from where the floor put the body.
                         if key.to.iter().any(|axis| axis.is_ground()) {
                             on_track(get!("anim.problem.ground_root", "at", key.at.to_string()));
                         }
@@ -834,11 +657,8 @@ impl Clip {
     }
 }
 
-/// One thing wrong with a clip, and which track it is about.
-///
-/// The track is carried rather than written into the message, so the strip can
-/// badge the row it belongs to and the Problems panel can name the track the
-/// way the strip does — by its bone or limb, not by an index nobody can see.
+/// One thing wrong with a clip. The track is carried rather than written into
+/// the message so the strip can badge its row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClipProblem {
     /// `None` for something about the whole clip.
@@ -848,18 +668,11 @@ pub struct ClipProblem {
 
 /// What a body state plays: one clip, or several blended by heading.
 ///
-/// **Heading is the one thing a gait needs blending for.** Speed is answered
-/// by timing the limbs that follow a foot by that foot ([`Timing`]), which is
-/// exact; which way the body is going relative to the way its state faces is
-/// not, because a diagonal tips the chest and mixes the swing. So a blend is a
-/// list of clips each authored at one heading, and a body between two of them
-/// is drawn between them.
-///
-/// On disk a blend is `[[blend]]` tables, each a clip with a `heading`, and a
-/// file without one is a plain clip exactly as before. Told apart by looking
-/// for the key rather than by `#[serde(untagged)]`, whose only error is "did
-/// not match any variant" — and a body clip that will not parse has to say
-/// what is wrong with it.
+/// Speed is handled exactly by [`Timing`]; heading is not, because a diagonal
+/// tips the chest and mixes the swing, so a blend holds clips authored at
+/// several headings. On disk a blend is `[[blend]]` tables, told apart by
+/// looking for the key because `#[serde(untagged)]` only reports "did not
+/// match any variant".
 #[derive(Clone, Debug, PartialEq)]
 pub enum StateAnimation {
     Single(Clip),
@@ -944,7 +757,6 @@ impl StateAnimation {
         }
     }
 
-    /// Every clip in it.
     pub fn clips(&self) -> Vec<&Clip> {
         match self {
             StateAnimation::Single(clip) => vec![clip],
@@ -981,8 +793,7 @@ impl StateAnimation {
         }
     }
 
-    /// What is wrong with it, for the Problems panel: every clip's own
-    /// problems, and whether the variants of a blend can be blended at all.
+    /// Every clip's problems, plus whether a blend's variants can be blended.
     pub fn problems(&self, known_bone: impl Fn(&str) -> bool) -> Vec<ClipProblem> {
         let mut problems = Vec::new();
         for clip in self.clips() {
@@ -995,9 +806,8 @@ impl StateAnimation {
                     message: crate::get!("anim.problem.empty_blend"),
                 });
             }
-            // A blend is a lerp between two poses, joint by joint; a joint
-            // one variant drives and its neighbour leaves alone blends towards
-            // rest, which is a body sagging halfway between two headings.
+            // A joint one variant drives and its neighbour does not blends towards
+            // rest, so the body sags between headings.
             for pair in variants.windows(2) {
                 let drives = |clip: &Clip| -> Vec<String> {
                     let mut names: Vec<String> = clip
@@ -1029,16 +839,11 @@ impl StateAnimation {
     }
 }
 
-/// Everything a prop, or a pack, has to say about motion.
+/// The clips a prop or pack has. A `.gpp`'s `[animations]` table and a `.gpa`
+/// file are read the same way.
 ///
-/// One container type so the sampler never sees which home a clip came from —
-/// a `.gpp`'s `[animations]` table and a pack's `.gpa` file are the same
-/// bytes, read the same way.
-///
-/// A `BTreeMap` rather than a `HashMap` for the reason `weapon_file` gives:
-/// a catalogue compared for equality to decide whether to re-send walks in an
-/// order nobody chose otherwise, and two reads of one file then compare
-/// unequal often enough to broadcast at frame rate and rarely enough to ship.
+/// `BTreeMap` because it is compared for equality to decide whether to
+/// resend, and `HashMap` order made equal reads compare unequal.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ClipSet {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1111,8 +916,6 @@ mod tests {
         }
     }
 
-    /// The format is text so somebody can read it, which is worth nothing if
-    /// what comes back is not what went in.
     #[test]
     fn a_clip_round_trips_through_its_own_text() {
         let clip = a_clip();
@@ -1121,9 +924,7 @@ mod tests {
         assert_eq!(clip, back, "round trip changed the clip:\n{text}");
     }
 
-    /// `Axis` is hand-written on both sides precisely so a file reads
-    /// `to = [0.0, "ground", "free"]` rather than three tables — and so the
-    /// number goes through `nice_f32` instead of serde's exact widening.
+    /// A derived `Axis` writes tables and widens floats exactly.
     #[test]
     fn an_axis_is_a_bare_number_or_a_bare_word() {
         #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -1148,10 +949,7 @@ mod tests {
         assert_eq!(holder, back);
     }
 
-    /// A hand-typed `0` is an integer in TOML, not a float. Without
-    /// `visit_i64` it is refused, and the error is about a number that is
-    /// plainly a number — which is the kind of thing somebody hits once and
-    /// then works around by typing `0.0` forever.
+    /// TOML reads a hand-typed `0` as an integer, which `visit_i64` must accept.
     #[test]
     fn a_whole_number_axis_is_still_a_number() {
         #[derive(Deserialize)]
@@ -1165,11 +963,8 @@ mod tests {
         );
     }
 
-    /// Postcard refuses `deserialize_any`, which is what an internally tagged
-    /// enum and a bare-word-or-number need to read themselves back. Encoding
-    /// is *not* the half that fails, which is why this was worth a test: the
-    /// send reports success and the receive errors inside Lightyear, on
-    /// somebody else's machine.
+    /// Postcard refuses `deserialize_any`: encoding succeeds and decoding fails,
+    /// so clips must not be sent typed.
     #[test]
     fn a_clip_would_not_survive_the_wire() {
         let clip = a_clip();
@@ -1181,9 +976,7 @@ mod tests {
         );
     }
 
-    /// Sorting happens on edit, not in the sampler, so it has to actually
-    /// happen. A key dragged past its neighbour and left out of order is a
-    /// segment the sampler reads backwards.
+    /// Keys left out of order are a segment the sampler reads backwards.
     #[test]
     fn normalising_puts_keys_back_in_order() {
         let mut clip = a_clip();
@@ -1201,8 +994,6 @@ mod tests {
         );
     }
 
-    /// Nothing refuses — a bad track is a note in a panel, not a blank
-    /// viewport. But the notes have to name the real problems.
     #[test]
     fn problems_names_what_is_actually_wrong() {
         let mut clip = a_clip();
@@ -1235,9 +1026,7 @@ mod tests {
         );
     }
 
-    /// A stride clip's length is a count of gait cycles. Half of one is a limp
-    /// that nobody authored and that looks like a bug in the gait rather than
-    /// in the clip.
+    /// A fractional stride count is a limp that looks like a gait bug.
     #[test]
     fn half_a_stride_is_a_problem() {
         let clip = Clip {
@@ -1268,14 +1057,8 @@ mod tests {
         }
     }
 
-    /// A key dragged past its neighbour lands in order, and the caller is told
-    /// where it went.
-    ///
-    /// This is the whole reason `nudge` reports indices. Addressed by position
-    /// and re-sorted underneath you, a selection that was not remapped would
-    /// be holding whichever key happened to inherit the index — so the next
-    /// frame of the drag would move a *different* key, and the one you grabbed
-    /// would be left behind.
+    /// `nudge` must report where a dragged key landed, or the next frame of the
+    /// drag moves whichever key inherited its index.
     #[test]
     fn a_key_dragged_across_its_neighbour_is_followed() {
         let mut channel = point_track(&[0.0, 0.25, 0.5]);
@@ -1289,7 +1072,6 @@ mod tests {
         assert_eq!(keys[1].to[0], Axis::Value(0.0), "a key's value was left behind");
     }
 
-    /// Several keys dragged together keep the spacing they were authored with.
     #[test]
     fn dragging_several_keys_moves_them_as_one() {
         let mut channel = point_track(&[0.0, 0.2, 0.8]);
@@ -1297,8 +1079,7 @@ mod tests {
         assert_eq!(times(&channel), vec![0.1, 0.3, 0.8]);
     }
 
-    /// A drag is clamped to the clip. A key outside it is one the sampler
-    /// holds forever and the strip cannot show.
+    /// A key outside the clip is held forever and the strip cannot show it.
     #[test]
     fn a_drag_stops_at_the_ends() {
         let mut channel = point_track(&[0.2, 0.5]);
@@ -1310,14 +1091,10 @@ mod tests {
         assert_eq!(times(&channel), vec![1.0, 1.0]);
     }
 
-    /// Two keys landing on one time keep the order they had. Unstable, they
-    /// swap on a rounding error, and the swap shows up as a segment's easing
-    /// inverting for no reason anybody can see.
+    /// An unstable sort swaps tied keys and inverts a segment's easing.
     #[test]
     fn keys_landing_together_keep_their_order() {
-        // Quarters, so the arithmetic is exact in binary and the two really do
-        // tie. With times that merely look equal — 0.1 + 0.8 is 0.90000004 —
-        // the sort never sees a tie and the test proves nothing.
+        // Quarters, so the tie is exact; 0.1 + 0.8 is 0.90000004 and would not tie.
         let mut channel = point_track(&[0.25, 0.5]);
         let landed = channel.nudge(&[0], 0.25, 1.0);
 
@@ -1333,8 +1110,7 @@ mod tests {
         );
     }
 
-    /// Removing several keys takes exactly those keys. Removed forwards, every
-    /// index after the first is off by one and the wrong keys go.
+    /// Removed forwards, every index after the first is off by one.
     #[test]
     fn removing_keys_takes_the_ones_asked_for() {
         let mut channel = point_track(&[0.0, 0.1, 0.2, 0.3, 0.4]);
@@ -1342,9 +1118,7 @@ mod tests {
         assert_eq!(times(&channel), vec![0.0, 0.2, 0.4]);
     }
 
-    /// Out of range and repeated indices are survivable. They arrive from a
-    /// selection that a re-sort or an undo has left stale, which is a thing
-    /// that happens rather than a thing to assert against.
+    /// Stale indices come from a selection a re-sort or undo left behind.
     #[test]
     fn removing_nonsense_indices_does_not_panic() {
         let mut channel = point_track(&[0.0, 0.5]);
@@ -1352,12 +1126,8 @@ mod tests {
         assert_eq!(times(&channel), vec![0.0]);
     }
 
-    /// Every kind of key is the same three optional axes.
-    ///
-    /// Worth a test of its own because it is the format's central claim: what
-    /// differs between a rotation and a place is what the axes *mean*, not how
-    /// they are stored — so a channel can hand back its keys without anyone
-    /// asking what kind it is.
+    /// Every channel stores the same three optional axes, so keys can be read
+    /// without asking which kind a channel is.
     #[test]
     fn every_channel_holds_the_same_kind_of_key() {
         let mut channels = vec![
@@ -1376,14 +1146,10 @@ mod tests {
             assert_eq!(channel.keys()[0].to[1], Axis::Value(2.0));
         }
 
-        // And only the two rotations say they are angles, which is the one
-        // thing a panel has to know to show degrees.
         let angles: Vec<bool> = channels.iter().map(|c| c.is_rotation()).collect();
         assert_eq!(angles, vec![true, true, false, false, false]);
     }
 
-    /// An angle has no floor under it, and saying so is the only reading of
-    /// `Ground` on a rotation that is not invented.
     #[test]
     fn grounding_an_angle_is_a_problem() {
         let clip = Clip {
@@ -1407,9 +1173,8 @@ mod tests {
         );
     }
 
-    /// A looping clip wraps; a one-shot holds past its end rather than
-    /// snapping back, because the alternative is a weapon that returns to the
-    /// hold the instant a reload's last key passes.
+    /// A one-shot that wrapped would snap the weapon back to the hold as a reload
+    /// ends.
     #[test]
     fn a_one_shot_holds_where_a_loop_wraps() {
         let looping = Clip { length: 2.0, looping: true, ..Clip::default() };

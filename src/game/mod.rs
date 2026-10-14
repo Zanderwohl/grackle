@@ -41,48 +41,32 @@ pub mod skeleton;
 pub mod viewmodel;
 
 /// Playing the map that is currently open in the editor.
-///
-/// Deliberately small: this is the swap between editing and playing, plus
-/// enough of a body to walk around and find out whether a room is the right
-/// size. It is not the game — there is no health, no weapon, no network.
 pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app
-            // What is left of a body once it stops holding itself up. Here
-            // rather than beside the damage layer because it is physics: it
-            // wants the same fixed steps and the same `CollisionWorld` the
-            // player's own step does, and no renderer at all.
+            // Here rather than beside the damage layer: it is physics, on the
+            // same fixed steps and `CollisionWorld` as the player step.
             .add_plugins(RagdollPlugin)
-            // Escape, and the mouse comes back. Part of the game rather than
-            // of the editor, so plain Bevy UI and no egui.
             .add_plugins(PauseMenuPlugin)
-            // The crosshair and what you are holding. Beside the pause menu
-            // and for the same reason: plain Bevy UI, because this is the game
-            // rather than the editor.
             .add_plugins(crate::game::hud::HudPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
 
-            // Where a pack's bytes come from. One trait, chosen once, so that
-            // a browser build replaces this line and nothing else.
+            // A browser build replaces this line and nothing else.
             .init_resource::<crate::common::assets::Assets>()
-            // The catalogue lives here rather than in `WeaponPlugin` because
-            // it is a fact about the match and not about the firing systems:
-            // what a body is handed at spawn is read by `spawn_player`, which
-            // is this layer's. On a client it is replaced wholesale by the
-            // server's on connect — the same arrangement the map has, and for
-            // the same reason: two descriptions of one thing is where the bugs
-            // live.
+            // Here rather than in `WeaponPlugin` because `spawn_player` reads
+            // it. On a client it is replaced by the server's on connect.
             .init_resource::<crate::common::weapon::WeaponCatalogue>()
             .add_systems(
                 Startup,
                 crate::common::weapon_file::load_catalogue_at_startup,
             )
-            // Beside the weapons and for the same reason: pack content, read
-            // once at startup, and a pack that ships none is a pack whose
-            // bodies use the built-in poses.
+            // Bodies are rigged from it; replaced by the server's on connect.
+            .init_resource::<crate::common::class::ClassBuilds>()
+            .add_systems(Startup, crate::common::class_file::load_builds_at_startup)
+            // A pack that ships no clips leaves bodies on the built-in poses.
             .add_systems(
                 Startup,
                 crate::common::clip_file::load_body_clips_at_startup,
@@ -90,93 +74,55 @@ impl Plugin for GamePlugin {
 
             .init_resource::<CollisionWorld>()
             .init_resource::<NextPlayerId>()
-            // Owned by `SkeletonPlugin`, initialised here as well because the
-            // reset writes it and a game without the skeleton layer would
-            // otherwise fail on the first F5 rather than at startup.
+            // Owned by `SkeletonPlugin`, initialised here too because the
+            // reset writes it: without that plugin the first F5 would fail.
             .init_resource::<AnimationClock>()
             .init_resource::<InputLatch>()
             .init_resource::<ViewMode>()
             .add_systems(Update, (toggle_mode, start_in_play))
             .add_systems(Update, (
                 toggle_view,
-                // Not gated on being the one who spawned it: on a client the
-                // body turns up from the server some time after the round
-                // starts, and the view has to appear whenever it does.
+                // Ungated: on a client the body arrives from the server some
+                // time after the round starts.
                 spawn_the_view,
             ).run_if(in_state(AppMode::Play)))
-            // Clear the table, then set it: a new match starts from a known
-            // state rather than from whatever the last one left behind.
-            // After `BakeSystems::All`, so the round is set up against a map
-            // that has been rebuilt. The bake is what makes the map visible;
-            // entering before it means a round played in a world you cannot
-            // see, which is exactly what a client that has just been handed
-            // the server's map would get.
+            // After `BakeSystems::All`: a round entered before the bake is
+            // played in a map nobody can see, which is what a client just
+            // handed the server's map would get.
             .add_systems(
                 OnEnter(AppMode::Play),
                 (reset_for_play, enter_play).chain().after(BakeSystems::All),
             )
             .add_systems(OnExit(AppMode::Play), (leave_play, despawn_the_view))
-            // Aim and input sampling stay at frame rate — the first because
-            // 64 Hz aim is latency you can feel, the second so a press made on
-            // this frame reaches the steps taken on this frame.
-            // In `PreUpdate`, which is the only place early enough. The body
-            // is created by a command in `Update`, so the mark lands at the
-            // end of that frame; `write_client_inputs` runs in the fixed loop
-            // of the *next* frame, before `Update` gets another turn. Seeded
-            // any later and the latch's zero is copied onto the body first,
-            // and a spawn point's facing is thrown away by the input that was
-            // supposed to preserve it.
+            // `PreUpdate` is the only place early enough: the body's mark
+            // lands at the end of `Update`, and `write_client_inputs` runs in
+            // the next frame's fixed loop before `Update` does. Any later and
+            // the latch's zero overwrites the spawn point's facing.
             .add_systems(PreUpdate, aim_the_view_at_our_body.run_if(in_state(AppMode::Play)))
-            // Reading the peripherals into the latch, and pointing the view.
-            // Nothing here touches a body: aim is an input, and where a body
-            // ends up facing is the step's answer alone.
             .add_systems(RunFixedMainLoop, (
-                // Not while the menu is up: a released cursor that still
-                // walked the body would be worse than a captured one.
+                // A released cursor must not walk the body.
                 gather_input.run_if(pause_menu::not_paused),
-                // `gather_aim` is *not* gated — it has to drain the mouse
-                // motion made while paused rather than save it up for the
-                // frame the menu closes. It answers the question itself.
+                // Ungated: it drains motion made while paused rather than
+                // applying all of it on the frame the menu closes.
                 gather_aim,
             ).chain().in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop)
                 .run_if(in_state(AppMode::Play)))
-            // Everything that decides where a body ends up runs at a fixed
-            // rate, so the same inputs give the same trajectory whatever the
-            // frame rate is doing. Prediction against a server needs that;
-            // so does a browser tab whose refresh rate is anyone's guess.
-            // The frame-rate latch becomes this tick's input here, in the set
-            // Lightyear buffers and sends from. Everything downstream reads
-            // that value and never consumes it, because rollback replays it.
+            // Rollback replays this tick's input, so nothing downstream may
+            // consume it.
             .add_systems(FixedPreUpdate, write_client_inputs
                 .in_set(lightyear::prelude::client::input::InputSystems::WriteClientInputs)
                 .run_if(in_state(AppMode::Play)))
-            // The simulation, and only where this process is believed. A
-            // client runs none of it: it sends inputs and draws what it is
-            // told, which is what leaves every value with one writer.
-            // Not gated on authority any more: a client steps its own body
-            // ahead of the server and is corrected when the two disagree, and
-            // `step_player` picks its bodies with `Simulated` rather than the
-            // whole system being switched off. The collision rebuild comes
-            // with it — a client predicting movement is walking into its own
-            // copy of the walls, so that copy has to be current.
-            //
-            // Lightyear re-runs `FixedUpdate` to replay a rollback, so
-            // everything here is run several times on a frame where the server
-            // disagreed. That is exactly why nothing in it may consume what it
-            // reads.
+            // Not authority-gated: a client predicts its own body
+            // (`step_player` picks bodies by `Simulated`) and walks into its
+            // own copy of the walls. Lightyear re-runs `FixedUpdate` to replay
+            // a rollback, so nothing here may consume what it reads.
             .add_systems(FixedUpdate, (
                 rebuild_collision_when_rooms_change,
                 step_player,
             ).chain().run_if(in_state(AppMode::Play)))
-            // Draws the body between fixed steps, so a 64 Hz simulation does
-            // not step visibly on a 144 Hz display. `place_camera` is ordered
-            // after it — see below — because a view placed at a body has to be
-            // placed after the body is.
-            // Not gated on `AppMode::Play`, unlike everything around it:
-            // `PhysicsBody` is where a thing *is*, and that is as true of a
-            // body standing in an animation grid in the editor as it is of a
-            // player mid-round. Gated, a replicated display body sits at the
-            // origin until somebody starts a round.
+            // `interpolate_bodies` is not gated on Play: a replicated display
+            // body in an editor animation grid would otherwise sit at the
+            // origin until a round starts.
             .add_systems(RunFixedMainLoop, interpolate_bodies
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop))
             .add_systems(RunFixedMainLoop, (face_bodies, place_camera)
@@ -188,23 +134,13 @@ impl Plugin for GamePlugin {
     }
 }
 
-/// `F5` both ways, as in Hammer.
-///
-/// Deliberately the only way back to the editor: `Escape` is spoken for by the
-/// pause menu, and a key that sometimes pauses and sometimes throws you into
-/// the editor would be worse than either.
-///
-/// **Only where this process holds authority.** A client is shown the match
-/// the server is running: everyone drops into the editor between rounds
-/// together and drops back into the round together, which only works if one
-/// process owns the transition. The press is answered with a line in the log
-/// rather than swallowed, because a key that silently does nothing reads as a
-/// bug.
+/// `F5` swaps the map editor and Play, only where this process holds
+/// authority. A client's press is logged rather than swallowed, because a key
+/// that silently does nothing reads as a bug.
 fn toggle_mode(
     keys: Res<ButtonInput<KeyCode>>,
-    // Optional so that the game layer does not require the network layer: a
-    // build or a test with no `NetPlugin` in it is a closed game, and a closed
-    // game is its own authority.
+    // Optional: a build or test without `NetPlugin` is a closed game, which is
+    // its own authority.
     role: Option<Res<NetRole>>,
     mode: Res<State<AppMode>>,
     mut next: ResMut<NextState<AppMode>>,
@@ -216,18 +152,10 @@ fn toggle_mode(
         info!("The server decides when the match is played; F5 does nothing here.");
         return;
     }
-    // **`F5` is the map editor and Play, and nothing else.** From the prop
-    // editor it is answered with a line rather than starting a round: the
-    // key's whole meaning is that it toggles between two modes, and one that
-    // went one way from a third would have no way back to where it came from.
-    // The Mode menu is how the prop editor is left, and it has an entry for
-    // Play like everything else.
     next.set(match mode.get() {
         AppMode::Editor => AppMode::Play,
         AppMode::Play => AppMode::Editor,
-        // Matched as a pair rather than with a wildcard: a fifth mode should
-        // have to decide what F5 means to it, and `_ =>` is how one quietly
-        // inherits an answer nobody chose for it.
+        // No wildcard: a new mode should have to decide what F5 means to it.
         mode @ (AppMode::Prop | AppMode::Animation) => {
             info!(
                 "F5 swaps the map editor and Play; use the Mode menu to leave {}.",
@@ -246,19 +174,12 @@ fn enter_play(
     window: Query<Entity, With<PrimaryWindow>>,
 ) {
     let rooms: Vec<Room> = rooms.iter().cloned().collect();
-    // The walls first, because everything that follows asks questions about
-    // them — including where a body can stand, which
-    // `give_bodies_to_whoever_needs_one` decides on the next Update.
+    // First: `give_bodies_to_whoever_needs_one` asks it where a body can stand
+    // on the next Update.
     collision.rebuild(&rooms);
 
-    // Whoever was here last match is not who is here this one: a new match is
-    // a new player, and dropping the identity is what makes the next body
-    // stood up allocate a fresh id. Dying *inside* a match is the other case
-    // and keeps it — see [`crate::game::respawn::Identity`].
-    //
-    // Nothing is spawned here. A player with no body gets one from
-    // `give_bodies_to_whoever_needs_one` on the next `Update`, which is the
-    // same rule that covers joining, respawning and starting a round.
+    // A new match is a new player: dropping the identity makes the next body
+    // allocate a fresh id. Dying inside a match keeps it.
     commands.remove_resource::<OurIdentity>();
 
 
@@ -277,19 +198,14 @@ fn leave_play(
     mut editor_cameras: Query<&mut Camera, With<Multicam>>,
     window: Query<Entity, With<PrimaryWindow>>,
 ) {
-    // Only bodies this process owns. A client's bodies belong to the server,
-    // which despawns them when the round ends and replicates that; despawning
-    // them here as well would delete entities the receiver still has a record
-    // of and expects to keep updating.
+    // Only on the authority: a client's bodies are the server's to despawn,
+    // and that despawn replicates.
     if role.is_none_or(|role| role.is_authority()) {
         for player in &players {
-            // Despawns the camera with it: it is a child of the body.
             commands.entity(player).despawn();
         }
     }
-    // And with the body gone, nobody left to be. Kept, this would be the
-    // identity a body stood up in the *next* match inherited, which is the
-    // opposite of what F5 means: a new match is a new player.
+    // Kept, the next match's first body would inherit it.
     commands.remove_resource::<OurIdentity>();
 
     for mut camera in &mut editor_cameras {
@@ -299,9 +215,8 @@ fn leave_play(
     set_cursor_captured(&mut commands, &window, false);
 }
 
-/// The window is created with `primary_cursor_options: None`, so it has no
-/// `CursorOptions` component to reach for — insert one rather than expecting
-/// to find it.
+/// The window is created with `primary_cursor_options: None`, so there is no
+/// `CursorOptions` to find; insert one.
 pub(crate) fn set_cursor_captured(
     commands: &mut Commands,
     window: &Query<Entity, With<PrimaryWindow>>,
@@ -315,15 +230,8 @@ pub(crate) fn set_cursor_captured(
     });
 }
 
-/// Keep the solid world in step with the rooms while playing.
-///
-/// This is the between-round editing feature in its smallest form: change a
-/// room and the thing you are standing in changes under you, with no reload
-/// and no re-bake. `Changed` also fires on the frame a room is added, and
-/// rebuilding is cheap enough at prototype map sizes that a whole-world
-/// rebuild is the right trade for now. Removing a room is not detected —
-/// `RemovedComponents` would cover it, and will have to once rooms can be
-/// deleted mid-match.
+/// Removing a room is not detected; `RemovedComponents` will be needed once
+/// rooms can be deleted mid-match.
 fn rebuild_collision_when_rooms_change(
     mut collision: ResMut<CollisionWorld>,
     changed: Query<(), Changed<Room>>,
@@ -338,7 +246,7 @@ fn rebuild_collision_when_rooms_change(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use crate::constants::one_tick;
 
     use crate::common::team::Team;
 
@@ -352,24 +260,17 @@ mod tests {
     use crate::common::class::Stance;
     use crate::game::player::{Inputs, LocalPlayer, PhysicsBody, PLAYER_HALF, SPAWN_YAW};
 
-    /// One fixed step, matching Bevy's 64 Hz default.
-    const STEP: Duration = Duration::from_micros(15625);
+/// Bevy's default 64 Hz.
 
-    /// Enough of an app to drive the swap and a few steps of walking, with no
-    /// window and no renderer.
-    ///
-    /// Virtual time is paused so the fixed loop never advances on its own:
-    /// these tests drive `FixedUpdate` by hand, which is the whole point of
-    /// having moved physics there. A test whose result depended on how long
-    /// the machine took to get to it would be testing the machine.
+    /// No window or renderer. Virtual time is paused so `FixedUpdate` runs
+    /// only when a test drives it.
     fn headless(rooms: &[Room]) -> App {
         let mut app = App::new();
         app.add_plugins(bevy::state::app::StatesPlugin);
         app.add_plugins(bevy::input::InputPlugin);
         app.add_plugins(bevy::time::TimePlugin);
         app.add_plugins(GamePlugin);
-        // Where bodies come from now: one absence-driven rule, rather than a
-        // spawn buried in `enter_play`. A closed game is its own authority.
+        // Bodies are handed out by `NetBodiesPlugin`.
         app.insert_resource(crate::common::net::NetRole::Solo);
         app.add_plugins(crate::game::net_bodies::NetBodiesPlugin);
         app.world_mut().resource_mut::<Time<Virtual>>().pause();
@@ -388,20 +289,16 @@ mod tests {
         app.update();
     }
 
-    /// Take whole fixed steps, the way the fixed loop would.
     fn tick(app: &mut App, steps: usize) {
         for _ in 0..steps {
-            app.world_mut().resource_mut::<Time>().advance_by(STEP);
-            // The drain first, as the real schedule has it: the latch becomes
-            // this tick's input and only then is the step taken.
+            app.world_mut().resource_mut::<Time>().advance_by(one_tick());
+            // Inputs are written before the step, as in the real schedule.
             app.world_mut().run_schedule(FixedPreUpdate);
             app.world_mut().run_schedule(FixedUpdate);
         }
     }
 
-    /// The locally driven body's input, to poke at the way `gather_input`
-    /// would. Filtered on `LocalPlayer` rather than `Player`, because a test
-    /// may well have put another body in the world.
+    /// Filtered on `LocalPlayer`, since a test may add other bodies.
     fn input(app: &mut App) -> Mut<'_, Inputs> {
         let body = app
             .world_mut()
@@ -411,8 +308,7 @@ mod tests {
         app.world_mut().get_mut::<Inputs>(body).expect("body has no input")
     }
 
-    /// The simulated position, which is the one physics writes. `Transform` is
-    /// the drawn position and lags it by up to a step.
+    /// `PhysicsBody`, not `Transform`, which lags it by up to a step.
     fn player_position(app: &mut App) -> Vec3 {
         app.world_mut()
             .query_filtered::<&PhysicsBody, With<LocalPlayer>>()
@@ -425,20 +321,13 @@ mod tests {
         Room::new(min, max)
     }
 
-    /// `F5` means one thing: the map editor and Play, swapping either way.
-    ///
-    /// From the prop editor it deliberately does nothing — the key's whole
-    /// meaning is that it toggles between two modes, and one that went one way
-    /// from a third would have no way back to where it came from. The Mode
-    /// menu is how that mode is left, and it offers Play like everything else.
+    /// F5 swaps the map editor and Play, and does nothing from the prop editor.
     #[test]
     fn f5_toggles_the_map_editor_and_play_and_nothing_else() {
         fn press(app: &mut App) {
             app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::F5);
             app.update();
-            // Released rather than only cleared: `clear` drops the just-pressed
-            // edge but leaves the key held, and a held key produces no second
-            // edge.
+            // Released, not only cleared: a held key produces no second edge.
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.release(KeyCode::F5);
             keys.clear();
@@ -484,8 +373,7 @@ mod tests {
         assert!((position.z - 0.0).abs() < 0.01, "spawned at {position}");
     }
 
-    /// The swap has to be reversible without leaving anything behind — it
-    /// happens between every round, not once.
+    /// The swap happens every round, so it must leave nothing behind.
     #[test]
     fn leaving_play_takes_the_body_with_it() {
         let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 4.0, 5.0))]);
@@ -515,9 +403,8 @@ mod tests {
         );
     }
 
-    /// Gravity with nothing under it. Guards against a floor slab that is
-    /// present but facing the wrong way, which would read as "landed" only
-    /// because the body never moved.
+    /// Catches a floor slab facing the wrong way, which would pass the landing
+    /// test only because the body never moved.
     #[test]
     fn a_body_with_no_map_under_it_falls() {
         let mut app = headless(&[]);
@@ -528,9 +415,7 @@ mod tests {
         assert!(player_position(&mut app).y < start.y - 1.0, "did not fall");
     }
 
-    /// Holding jump has to keep bouncing: the input is read as held rather
-    /// than as an edge, so a landing with the key still down takes off again
-    /// instead of swallowing it.
+    /// Jump is read as held, so landing with it down takes off again.
     #[test]
     fn holding_jump_bounces_without_releasing() {
         let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 8.0, 5.0))]);
@@ -558,14 +443,12 @@ mod tests {
         assert!(landings >= 2, "bounced {landings} time(s) while jump was held");
     }
 
-    /// The frame-rate latch, to poke the way `gather_input` would.
     fn latch(app: &mut App) -> Mut<'_, InputLatch> {
         app.world_mut().resource_mut::<InputLatch>()
     }
 
-    /// A tap has to survive to the next fixed step. `FixedUpdate` runs zero
-    /// times on a fast frame, and a press read straight from the keyboard in
-    /// there would simply be gone.
+    /// `FixedUpdate` runs zero times on a fast frame; a press must survive to
+    /// the next step.
     #[test]
     fn a_press_between_fixed_steps_is_not_lost() {
         let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 8.0, 5.0))]);
@@ -589,9 +472,8 @@ mod tests {
         assert!(player_position(&mut app).y > rest + 0.05, "the latched press did not jump");
     }
 
-    /// And it fires once, not once per step it survives into. The tick that
-    /// takes the latch is what consumes it — not the step, which must be able
-    /// to read the same input again when rollback replays it.
+    /// The tick that takes the latch empties it; the step must not, so a
+    /// rollback can replay it.
     #[test]
     fn the_tick_that_takes_the_latch_is_what_empties_it() {
         let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 8.0, 5.0))]);
@@ -608,10 +490,7 @@ mod tests {
         );
     }
 
-    /// The invariant the whole arrangement exists for: a tick's input can be
-    /// read as many times as rollback needs to replay it, and says the same
-    /// thing every time. A step that consumed what it read would replay as a
-    /// step that was never asked to jump.
+    /// A step that consumed its input would replay as one that never jumped.
     #[test]
     fn replaying_a_tick_reads_the_same_input_again() {
         let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 20.0, 5.0))]);
@@ -624,8 +503,7 @@ mod tests {
         let once = player_position(&mut app).y;
         assert!(once > rest, "the jump did not happen the first time");
 
-        // Replay the same tick from the same state, as a rollback would:
-        // rewind the body and step again without touching the input.
+        // Rewind the body and step again without touching the input.
         {
             let body = app
                 .world_mut()
@@ -638,7 +516,7 @@ mod tests {
             player.velocity = Vec3::ZERO;
             player.on_ground = true;
         }
-        app.world_mut().resource_mut::<Time>().advance_by(STEP);
+        app.world_mut().resource_mut::<Time>().advance_by(one_tick());
         app.world_mut().run_schedule(FixedUpdate);
 
         assert!(
@@ -647,28 +525,23 @@ mod tests {
         );
     }
 
-    /// The body is simulated at 64 Hz but drawn whenever the frame lands, so
-    /// what is drawn has to be the position in between.
+    /// Simulated at 64 Hz, drawn between the last two steps.
     #[test]
     fn the_drawn_position_sits_between_the_last_two_steps() {
         let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 20.0, 5.0))]);
         enter(&mut app);
         tick(&mut app, 10);
 
-        // Mid-jump, so the two step positions differ. A body at rest on the
-        // floor interpolates between two identical points and would pass this
-        // however the maths was written.
+        // Mid-jump, so the two step positions differ; at rest any
+        // interpolation would pass.
         latch(&mut app).0.jump = true;
         tick(&mut app, 3);
 
-        // A frame worth one and a half steps: the loop takes one and keeps
-        // half a step of overstep, which is the gap the renderer has to draw
-        // across. Driven through the real schedule rather than by poking the
-        // clock, because `Time<Fixed>` only accumulates from inside it — and
-        // this way the ordering of the three schedules is under test too.
+        // One and a half steps, through the real schedule: `Time<Fixed>` only
+        // accumulates from inside it.
         app.world_mut()
             .resource_mut::<Time<Virtual>>()
-            .advance_by(STEP + STEP / 2);
+            .advance_by(one_tick() + one_tick() / 2);
         app.world_mut().run_schedule(RunFixedMainLoop);
 
         let body = *app
@@ -689,8 +562,6 @@ mod tests {
         assert!((drawn.y - midpoint.y).abs() < 0.001, "drew {} not {}", drawn.y, midpoint.y);
     }
 
-    /// Spawn the app with some spawn points placed, as the editor's feature
-    /// sync would have left them.
     fn with_spawns(rooms: &[Room], feet: &[Vec3]) -> App {
         let mut app = headless(rooms);
         for position in feet {
@@ -715,9 +586,8 @@ mod tests {
         assert!((position.y - PLAYER_HALF.y).abs() < 0.01, "feet are not on the point: {position}");
     }
 
-    /// A spawn point with a ceiling too close over it cannot be stood in, and
-    /// has to be passed over rather than used and then resolved by shoving the
-    /// body somewhere the mapper did not choose.
+    /// A spawn point the body does not fit is skipped, not used and then
+    /// depenetrated somewhere the mapper did not choose.
     #[test]
     fn a_spawn_point_without_headroom_is_skipped() {
         let mut app = with_spawns(
@@ -750,13 +620,7 @@ mod tests {
         assert!(position.y < 7.0, "used the unusable spawn anyway: {position}");
     }
 
-    /// A spawn point's facing has to survive the whole trip: the feature
-    /// writes it into the marked entity's rotation, `enter_play` reads it back
-    /// out, and the body is turned by it. Anywhere along there it could be
-    /// dropped and every spawn would silently face north again.
-    ///
-    /// `Player::yaw` matters as much as the transform, because `mouse_look`
-    /// owns the rotation from the next frame on and drives it from that field.
+    /// A spawn point's facing reaches both `Player::yaw` and the transform.
     #[test]
     fn a_spawn_point_turns_the_body_it_spawns() {
         let yaw = std::f32::consts::FRAC_PI_2;
@@ -780,9 +644,7 @@ mod tests {
         );
     }
 
-    /// With no spawn point to ask, facing falls back to a fixed direction, and
-    /// the body has to actually be turned that way rather than the yaw being
-    /// written and never applied.
+    /// Without a facing, the body is turned to `SPAWN_YAW`, not only given it.
     #[test]
     fn a_spawned_body_faces_the_fixed_direction() {
         let mut app = with_spawns(
@@ -819,10 +681,8 @@ mod tests {
         assert!(seen.len() > 1, "always picked the same spawn point: {seen:?}");
     }
 
-    /// Aim travels as input and the step is what turns the body. `mouse_look`
-    /// points the transform for the sake of the view, but a server replaying
-    /// these inputs has only the yaw in them to go on — so the step has to be
-    /// the thing that applies it.
+    /// A server replaying inputs has only the yaw in them, so the step must
+    /// apply it.
     #[test]
     fn the_step_turns_the_body_to_the_aim_it_was_given() {
         let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 8.0, 5.0))]);
@@ -840,9 +700,8 @@ mod tests {
         assert!((player.yaw - yaw).abs() < 1e-5, "the body was not turned by its input");
     }
 
-    /// And turning changes which way forward is, since movement is in the
-    /// body's own frame. This is the half a server cannot guess: fed the
-    /// movement without the aim it would walk the body the wrong way.
+    /// Movement is in the body's frame, so a server fed movement without aim
+    /// walks the body the wrong way.
     #[test]
     fn aim_decides_which_way_forward_is() {
         let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
@@ -865,15 +724,8 @@ mod tests {
         );
     }
 
-    /// A body we are not aiming for is turned to the yaw it reports.
-    ///
-    /// Nothing used to turn one: `mouse_look` writes the rotation of the body
-    /// `LocalPlayer` marks and stops there, so every other body — a remote
-    /// player on a client, and every client's body on a server — faced
-    /// wherever it spawned however hard its owner was turning. Hitboxes are
-    /// built from the body's transform, so it is not only a drawing problem: a
-    /// shot that visibly lands on a head does not register on one that is
-    /// boxed facing the other way.
+    /// Hitboxes are built from the body's transform, so an unturned remote body
+    /// is boxed facing the wrong way and visible hits do not register.
     #[test]
     fn a_body_we_do_not_aim_for_is_turned_to_where_it_is_looking() {
         let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
@@ -900,13 +752,7 @@ mod tests {
         );
     }
 
-    /// And our own body is turned by the same system, from the same value.
-    ///
-    /// It used to be excluded, because the mouse turned it directly for the
-    /// sake of an instant view. Two writers for one rotation is how the two
-    /// ends came to disagree about which way somebody was looking; the view
-    /// is a separate entity now and takes its aim from the latch, so the body
-    /// has exactly one writer like every other.
+    /// `face_bodies` is the only writer of every body's rotation, ours included.
     #[test]
     fn our_own_body_is_turned_by_its_yaw_like_any_other() {
         let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
@@ -931,20 +777,14 @@ mod tests {
         );
     }
 
-    /// A body we do not step is not stepped.
-    ///
-    /// The one thing that would quietly undo prediction: `step_player` picks
-    /// its bodies by `Simulated`, and a client marks only the body it
-    /// predicts. Step everybody and a client runs the whole match from inputs
-    /// it does not have, disagrees with the server about every body at once,
-    /// and rolls back for ever.
+    /// `step_player` must pick bodies by `Simulated`; stepping all of them, a
+    /// client disagrees with the server about every body and rolls back for ever.
     #[test]
     fn a_body_we_do_not_simulate_is_left_where_the_server_put_it() {
         let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
         enter(&mut app);
 
-        // As one replicated from the server arrives: a body, and no mark
-        // saying we are the ones running it.
+        // As a replicated body arrives: no `Simulated`.
         let placed = Vec3::new(5.0, 4.0, 0.0);
         let theirs = app
             .world_mut()
@@ -959,12 +799,8 @@ mod tests {
         );
     }
 
-    /// A spawn point's facing reaches the view, not just the body.
-    ///
-    /// The body is turned by `Player.yaw`, but the *view* is aimed from the
-    /// latch and the latch is what the next tick sends — so a latch left at
-    /// zero snapped the body back round on the first input after spawning,
-    /// which is a spawn point's facing quietly ignored.
+    /// The latch is seeded from the body; left at zero, the first tick's input
+    /// snaps the body back round.
     #[test]
     fn a_spawn_points_facing_is_what_we_start_looking_along() {
         let yaw = std::f32::consts::FRAC_PI_2;
@@ -974,8 +810,7 @@ mod tests {
             SpawnPointMarker,
         ));
         enter(&mut app);
-        // The body is created by a command in `Update`, so the mark it is
-        // recognised by lands at the end of that frame.
+        // The body's mark lands at the end of the frame that spawned it.
         app.update();
 
         assert!(
@@ -985,13 +820,7 @@ mod tests {
         );
     }
 
-    /// Being alive is the resting state: a body that goes away comes back.
-    ///
-    /// Respawn is not a system of its own and deliberately never was. Bodies
-    /// are handed out by asking who has not got one, so dying is just another
-    /// way to be somebody without a body — the same answer that covers joining
-    /// mid-round, being connected when the round starts, and starting a solo
-    /// game.
+    /// Bodies go to whoever lacks one, so dying needs no respawn system.
     #[test]
     fn a_player_whose_body_is_gone_gets_another_one() {
         let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
@@ -1015,15 +844,7 @@ mod tests {
         assert_ne!(second, first, "the old body came back rather than a new one");
     }
 
-    /// And the person inside it is the *same* person.
-    ///
-    /// A new body, a new entity, a new health pool — but the same
-    /// [`PlayerId`](crate::common::damage::PlayerId) and the same side, because
-    /// an identity outlives the body wearing it. A fresh id per life is a
-    /// scoreboard showing one player per death, and a fresh team is being put
-    /// on the other side for dying. `F5` is the case that *does* reallocate:
-    /// a new match is a new player, and `enter_play` drops the resource to say
-    /// so.
+    /// A new body keeps the same `PlayerId` and team. Only F5 reallocates.
     #[test]
     fn the_person_who_comes_back_is_the_same_person() {
         let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
@@ -1049,14 +870,8 @@ mod tests {
         assert_eq!(who(&mut app), before, "a life cost the player their identity");
     }
 
-    /// A server spawns a body for everybody and drives none of them.
-    ///
-    /// This is the bug that produced a whole crop of unrelated-looking
-    /// symptoms: `spawn_player` marked every body `LocalPlayer`, so on a host
-    /// the second player to join made `gather_input` — a `Single` — match two
-    /// entities and quietly stop running, froze the host in place, hid every
-    /// body in the match, and gave each body its own camera. None of it
-    /// errored.
+    /// Two `LocalPlayer` bodies on a host make `gather_input`'s `Single`
+    /// silently stop running.
     #[test]
     fn only_one_body_is_ever_the_local_one() {
         let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
@@ -1075,9 +890,8 @@ mod tests {
         );
     }
 
-    /// And the one that is local is still driven. A `Single` that matches
-    /// twice does not error, it skips — so this is the half that would go
-    /// unnoticed.
+    /// A `Single` matching twice skips rather than errors, so check the local
+    /// body still moves.
     #[test]
     fn a_second_body_does_not_stop_the_first_being_driven() {
         let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
@@ -1113,16 +927,12 @@ mod tests {
         app.update();
     }
 
-    /// The reason the input moved onto the body at all: two bodies stepping in
-    /// the same tick from different inputs. A single global input would walk
-    /// both of them wherever the last writer said.
+    /// Two bodies in one tick step from their own inputs, not the last writer's.
     #[test]
     fn two_bodies_step_from_their_own_inputs() {
         let mut app = headless(&[room(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 8.0, 20.0))]);
         enter(&mut app);
 
-        // A second body beside the one the spawn made, as a server holding
-        // somebody else's player would have.
         let other = app
             .world_mut()
             .spawn((
@@ -1151,13 +961,10 @@ mod tests {
         );
     }
 
-    /// The between-round feature in miniature: resize the room while the body
-    /// is standing in it, and the solid world follows without a reload.
+    /// Raising the floor mid-round moves the ground under the body.
     #[test]
     fn editing_a_room_while_playing_moves_the_ground() {
-        // Tall enough that raising the floor still leaves room to stand: a
-        // body in a gap exactly its own height cannot be placed with
-        // clearance either side, which is a different situation entirely.
+        // Tall enough that the raised floor still leaves standing room.
         let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 8.0, 5.0))]);
         enter(&mut app);
         tick(&mut app, 60);

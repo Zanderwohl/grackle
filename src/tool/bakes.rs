@@ -9,20 +9,10 @@ use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, Room};
 #[derive(Message)]
 pub struct LogECS;
 
-/// Everything that has to be rebuilt from the map before a round can start.
-///
-/// A set rather than a list of named systems, for the same reason
-/// `DamageSystems` is one: a second kind of bake — navmesh, lightmap, whatever
-/// the compiled map format ends up wanting — joins by naming this set, and
-/// nothing else has to be edited to wait for it. Naming the systems instead
-/// means the ordering is stated in a place that does not know about them, and
-/// forgetting one produces no error at all — just a round that starts before
-/// its world is finished.
-///
-/// Rooms are the only thing in it today.
+/// Everything rebuilt from the map before a round starts. A set so a new kind
+/// of bake joins by naming it, and the round setup orders after all of them.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BakeSystems {
-    /// Everything a round needs baked, before the round is set up.
     All,
 }
 
@@ -35,14 +25,8 @@ impl Plugin for BakePlugin {
             .add_message::<ClearRoomGeometry>()
             .add_message::<LogECS>()
             .add_systems(Update, (Self::post_startup, Self::clear_room_geometry, Self::log_ecs).run_if(in_state(AppMode::Editor)))
-            // Not gated on `AppMode::Editor`, unlike the rest: a map can
-            // change while a round is being played — that is the whole
-            // between-round editing feature — and geometry that stopped being
-            // rebuilt the moment somebody pressed F5 would leave the match
-            // looking at the map as it was before the edit.
+            // Ungated: the map can be edited during a round.
             .add_systems(Update, Self::bake_room_geometry)
-            // Before the round is set up, so `enter_play` finds a world that
-            // has been finished rather than one that is about to be.
             .configure_sets(OnEnter(AppMode::Play), BakeSystems::All)
             .add_systems(
                 OnEnter(AppMode::Play),
@@ -94,16 +78,10 @@ impl BakePlugin {
         bake_rooms(&rooms, &existing_bakes, &mut commands, &mut meshes, &mut materials);
     }
 
-    /// Rebuild the room meshes before a round starts, whether or not anybody
-    /// asked.
-    ///
-    /// Unconditional rather than message-driven: the map may have been edited
-    /// since the last bake, or — on a client — may have arrived from the
-    /// server moments ago, and the request that would have carried a bake is
-    /// read on a later frame than the one the round starts on. Collision is
-    /// built from the `Room` components rather than from these meshes, so what
-    /// a missing bake costs is not a body falling through the world; it is a
-    /// round played in a map you cannot see.
+    /// Rebuild the room meshes before a round starts, unconditionally. A
+    /// client adopting the server's map enters Play the same frame, and the
+    /// bake request it wrote is read a frame later. Collision does not need
+    /// these meshes, so a missed bake is an invisible map, not a fall.
     fn bake_everything_for_the_round(
         rooms: Query<&Room>,
         existing_bakes: Query<Entity, With<BakedRoomGeometry>>,
@@ -157,13 +135,8 @@ impl BakePlugin {
     }
 }
 
-/// Build one mesh per room, with the faces the neighbouring rooms open up
-/// taken out of it.
-///
-/// A free function rather than a system so that both the "somebody pressed
-/// the button" path and the "a round is starting" path do exactly the same
-/// thing. Two systems that each baked for themselves would be two chances to
-/// bake slightly differently.
+/// Build one mesh per room, minus the faces neighbouring rooms open up. Shared
+/// by the editor's bake and the round-start bake.
 fn bake_rooms(
     rooms: &Query<&Room>,
     existing_bakes: &Query<Entity, With<BakedRoomGeometry>>,
@@ -206,15 +179,13 @@ mod tests {
     use super::*;
     use crate::game::GamePlugin;
 
-    /// Enough of an app to drive the swap into Play with a room in it, and no
-    /// window, renderer or editor.
+    /// A headless app with a room, enough to swap into Play.
     fn headless_with_a_room() -> App {
         let mut app = App::new();
         app.add_plugins((
             bevy::state::app::StatesPlugin,
             bevy::asset::AssetPlugin::default(),
-            // `post_startup` reads the frame count. It fires its own bake at
-            // frame five, which is comfortably past anything these tests do.
+            // `post_startup` bakes at frame five, past anything these tests do.
             bevy::diagnostic::FrameCountPlugin,
             bevy::input::InputPlugin,
             bevy::time::TimePlugin,
@@ -238,14 +209,8 @@ mod tests {
             .count()
     }
 
-    /// A round starts against a map that has been rebuilt, whether or not
-    /// anybody asked for a bake.
-    ///
-    /// The case this exists for is a client: it is handed the server's map and
-    /// enters Play in the same breath, and the request that would have carried
-    /// a bake is read on a later frame than the one the round starts on. Miss
-    /// this and the round is played in a world nobody can see — collision
-    /// comes from the `Room` components, so the walls are all still there.
+    /// Breaks if entering Play stops baking unasked; a client's round is then
+    /// played in an invisible map.
     #[test]
     fn entering_play_bakes_without_being_asked() {
         let mut app = headless_with_a_room();
@@ -259,7 +224,6 @@ mod tests {
         assert_eq!(baked(&mut app), 1, "the round started against an unbaked map");
     }
 
-    /// And it bakes what is there *now*, not what was there last time.
     #[test]
     fn a_room_added_since_the_last_bake_is_in_the_new_one() {
         let mut app = headless_with_a_room();
@@ -269,8 +233,7 @@ mod tests {
         app.update();
         assert_eq!(baked(&mut app), 1);
 
-        // Back to the editor, add a room, and start another round — the
-        // between-round loop in miniature.
+        // Back to the editor, add a room, and start another round.
         app.world_mut()
             .resource_mut::<NextState<AppMode>>()
             .set(AppMode::Editor);

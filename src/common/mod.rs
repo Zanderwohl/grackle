@@ -9,7 +9,8 @@ pub mod damage;
 pub mod team;
 pub mod weapon;
 pub mod weapon_file;
-pub mod weapon_sync;
+pub mod pack_sync;
+pub mod class_file;
 pub mod hitbox;
 pub mod flame;
 pub mod hitscan;
@@ -24,9 +25,7 @@ pub mod net;
 pub mod net_events;
 pub mod net_transport;
 pub mod protocol;
-// `pub` rather than `pub(crate)`: the `editor` binary wires `PerfPlugin` up
-// from outside the library now that it no longer compiles its own copy of the
-// tree.
+// `pub` because the `editor` binary wires `PerfPlugin` up from outside the library.
 pub mod perf;
 pub(crate) mod painter;
 pub(crate) mod ray;

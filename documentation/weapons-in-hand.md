@@ -167,7 +167,7 @@ than early.
 
 ### Models cross the wire as documents, not as meshes
 
-After the catalogue, on connect, the way `weapon_sync` sends the catalogue and
+After the catalogue, on connect, the way `pack_sync` sends the catalogue and
 `map_sync` sends the feature timeline.
 
 - **The document, not the baked geometry.** A prop is parametric and small,

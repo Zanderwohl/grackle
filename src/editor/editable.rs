@@ -27,12 +27,8 @@ impl Plugin for EditorStepsPlugin {
             .init_resource::<MapMetadata>()
             .add_message::<EditEvent>()
             .add_systems(Startup, load_startup_blueprint)
-            // **A round is played on the whole map.** On the transition itself
-            // rather than on entering Play, and followed by `sync_entities`:
-            // `BakeSystems` and the collision rebuild run in `OnEnter(Play)`,
-            // and the features past the bar have to have their entities by
-            // then — which means spawned here, in a schedule whose commands
-            // are applied before that one runs.
+            // A round is played on the whole map. On the transition rather than `OnEnter(Play)`, so the
+            // features past the bar have entities before the bake and collision rebuild run there.
             .add_systems(
                 OnTransition { exited: AppMode::Editor, entered: AppMode::Play },
                 (
@@ -41,11 +37,7 @@ impl Plugin for EditorStepsPlugin {
                 )
                     .chain(),
             )
-            // `sync_entities` and `handle_edits` are deliberately not
-            // gated on `AppMode::Editor`: features have to keep reaching their
-            // entities while playing, which is what lets an edit land
-            // mid-match without a reload. Only the two that read editor input
-            // or draw editor gizmos are switched off.
+            // `sync_entities` and `handle_edits` are deliberately ungated so an edit lands mid-match.
             .add_systems(Update, (
                 FeatureTimeline::undo_redo_shortcuts.run_if(in_state(AppMode::Editor)),
                 FeatureTimeline::sync_entities,
@@ -57,15 +49,9 @@ impl Plugin for EditorStepsPlugin {
     }
 }
 
-/// Record an undo step whenever the editor goes idle with the map changed.
-///
-/// Idle is **no mouse button held and no text field holding the keyboard**:
-/// a drag in a viewport or on a number is one step because the button is down
-/// for all of it, and typing a name is one step because the field keeps the
-/// keyboard until it is let go. See [`FeatureTimeline::checkpoint`].
-///
-/// Through `bypass_change_detection`, or this system's own write would read
-/// as a change next frame and it would checkpoint forever.
+/// Idle is no mouse button held and no text field holding the keyboard, so a drag or a typed name is
+/// one step. Through `bypass_change_detection`, or this system's own write would read as a change
+/// next frame and it would checkpoint forever.
 fn checkpoint_when_idle(
     mut features: ResMut<FeatureTimeline>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -114,63 +100,42 @@ pub trait FeatureTrait: Send + Sync {
     fn entity(&self) -> Option<Entity>;
     fn set_entity(&mut self, entity: Option<Entity>);
     fn apply_to_entity(&self, commands: &mut Commands, entity: Entity);
-    /// Resolve all PointRef fields against the current state of the features map.
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>);
-    /// Return the FeatureIds this object's PointRefs depend on.
     fn parent_ids(&self) -> Vec<FeatureId>;
-    /// Return the named points this object exposes for referencing.
     fn available_point_keys(&self) -> Vec<(String, String)>;
-    /// Return reference points relevant to the given ray. Point-like objects
-    /// always return their location; volumetric objects test ray-AABB intersection first.
+    /// Point-like objects always return their location; volumetric ones test the ray against their AABB
+    /// first.
     fn reference_points_for_ray(&self, ray: &Ray3d) -> Vec<(String, Vec3)>;
 
-    /// Adjust a single axis of a bound point (used by drag handles).
-    /// `is_max`: true for the max point, false for the min point.
-    /// `axis`: 0=X, 1=Y, 2=Z.
-    /// `new_world_value`: the desired world-space coordinate for this axis.
-    /// Returns true if the object was modified.
+    /// For drag handles. `axis`: 0=X, 1=Y, 2=Z. `new_world_value` is in world space. Returns true if
+    /// modified.
     fn drag_handle(&mut self, _is_max: bool, _axis: u8, _new_world_value: f32) -> bool { false }
 
-    /// The boxes this feature can be clicked on by, beside its point. A
-    /// feature that stands something up — a body, a prop — is picked by the
-    /// space that thing takes up rather than only by a point at its feet.
-    /// Computed from the feature alone, never from its entities, so it is
-    /// cheap and agrees on every machine.
+    /// Boxes this feature can be clicked by, beside its point. Computed from the feature alone, never
+    /// its entities, so it agrees on every machine.
     fn pick_boxes(&self) -> Vec<crate::common::ray::PickBox> { Vec::new() }
 
-    /// Returns the resolved min and max bounds if this object is a room-like
-    /// object with drag handles. Used to position handles.
+    /// Resolved bounds of a room-like object, for placing drag handles.
     fn drag_handle_bounds(&self) -> Option<(Vec3, Vec3)> { None }
 
-    /// Get a reference to a named PointRef on this object.
     fn get_point_ref(&self, _key: &str) -> Option<&PointRef> { None }
 
-    /// Get a mutable reference to a named PointRef on this object.
-    /// Keys: GlobalPoint/GracklePointLight use "location" (or ""),
-    /// EditorRoom uses "min" / "max".
+    /// Keys: GlobalPoint/GracklePointLight use "location" (or ""), EditorRoom uses "min" / "max".
     fn get_point_ref_mut(&mut self, _key: &str) -> Option<&mut PointRef> { None }
 
-    /// Which Euler components (0=X pitch, 1=Y yaw, 2=Z roll) this feature lets
-    /// the user turn. Empty — the default — means the feature has no facing,
-    /// and the rotation rings are not drawn for it at all.
-    ///
-    /// A spawn point returns just `1`: a body stands upright, so pitching or
-    /// rolling one would only ever describe a spawn that cannot be used.
+    /// Which Euler components (0=X pitch, 1=Y yaw, 2=Z roll) the user may turn. Empty means no facing
+    /// and no rotation rings.
     fn rotation_axes(&self) -> Vec<u8> { vec![] }
 
-    /// The three angles in radians, in axis order — see
-    /// [`crate::common::rotation`] for what they mean together.
+    /// Radians, in axis order; see [`crate::common::rotation`].
     fn euler_angles(&self) -> Vec3 { Vec3::ZERO }
 
-    /// Set one Euler component, in radians. Returns true if it was modified,
-    /// so a drag on an axis the feature does not expose changes nothing.
+    /// Radians. Returns false for an axis the feature does not expose.
     fn set_euler_angle(&mut self, _axis: u8, _radians: f32) -> bool { false }
 }
 
-/// What a row of the feature list asked for, answered once the list is drawn.
 enum RowAction {
     Delete(FeatureId),
-    /// Move the rollback bar to just after this feature, or to the end.
     RollBackTo(Option<FeatureId>),
 }
 
@@ -193,53 +158,33 @@ pub struct FeatureTimeline {
     feature_order: Vec<FeatureId>,
     id_counter: u64,
     selected_feature: Option<FeatureId>,
-    /// Topologically sorted list of the selected feature and all its DAG descendants.
-    /// Parents always appear before their dependants.
+    /// The selected feature and all its descendants, parents before dependants.
     selection_affected: Option<Vec<FeatureId>>,
-    /// The **rollback bar**: the last feature shown, when the map is being
-    /// looked at as it stood partway down the list. `None` is the whole map.
-    ///
-    /// An id rather than a count, so an edit above the bar cannot quietly
-    /// move it onto a different feature. **View state, not the map**: not
-    /// saved, not sent to clients, not part of an undo snapshot — the prop
-    /// editor's rule.
+    /// The rollback bar: the last feature shown, `None` for the whole map. An id rather than a count, so
+    /// an edit above it cannot move it. View state: not saved, not sent, not in undo snapshots.
     rollback: Option<FeatureId>,
     pending_despawns: Vec<Entity>,
-    /// Whole-map snapshots to go back to, oldest first. **Undo is not a list
-    /// of what each edit did** — it is what the map *was*, the prop editor's
-    /// model: no before/after pair to get the wrong way round, no edit that
-    /// can forget to record itself. Lives in memory only; a blueprint does not
-    /// carry it.
+    /// Whole-map snapshots, oldest first. In memory only.
     undo: Vec<MapState>,
     redo: Vec<MapState>,
-    /// The map as of the last checkpoint — what an undo goes back *from*, and
-    /// what the next checkpoint compares against. `None` until the first.
+    /// The map as of the last checkpoint: what undo goes back from and the next checkpoint compares
+    /// against.
     checkpoint: Option<MapState>,
-    /// The map as last saved or loaded, so the editor can say whether there
-    /// is anything to save and anything to revert.
     saved: Option<MapState>,
-    /// Whether the last checkpoint differs from what was saved. Kept rather
-    /// than computed, because computing it means serializing the map.
+    /// Kept rather than computed, because computing it means serializing the map.
     dirty: bool,
 }
 
-/// One feature as undo stores it. JSON because it is the fastest of the
-/// encodings `typetag` gives and these strings never reach a file — the
-/// blueprint is RON, written by `save`.
+/// JSON because it is the fastest encoding `typetag` gives; these never reach a file.
 fn serialize_feature(feature: &Feature) -> String {
     serde_json::to_string(feature).unwrap_or_default()
 }
 
-/// How many steps back undo reaches.
 const UNDO_DEPTH: usize = 200;
 
-/// The map as undo sees it: every feature's serialized form, in order.
-///
-/// Serialized rather than cloned because a feature is a trait object, and
-/// because comparing two of these is then a string comparison — which is what
-/// lets a restore rebuild **only the features that differ** rather than every
-/// room on the map. Stable because everything a feature caches about the
-/// world (a `PointRef`'s resolved position, the entity) is `#[serde(skip)]`.
+/// Every feature's serialized form, in order. Serialized because a feature is a trait object, and so
+/// a restore can compare strings and rebuild only what differs. Stable because everything cached
+/// from the world is `#[serde(skip)]`.
 #[derive(Clone, PartialEq, Debug)]
 struct MapState {
     features: Vec<(FeatureId, String)>,
@@ -266,8 +211,7 @@ impl Default for FeatureTimeline {
 }
 
 impl FeatureTimeline {
-    /// A map from its parts, with nothing rolled back and no history: what
-    /// loading a file and adopting a server's map both mean.
+    /// No rollback and no history: what loading a file and adopting a server's map both mean.
     pub fn from_parts(
         features: HashMap<FeatureId, Feature>,
         feature_order: Vec<FeatureId>,
@@ -279,23 +223,15 @@ impl FeatureTimeline {
             id_counter,
             ..Default::default()
         };
-        // Whatever it came from — a file, a server — is what it matches.
         timeline.reset_history();
         timeline
     }
 
-    /// Replace the open map with another one, taking the old map's entities
-    /// down with it.
+    /// Replace the open map. The old entities' despawns are queued for `sync_entities` to perform with
+    /// the incoming spawns; dropping them strands the old rooms in the world.
     ///
-    /// The despawns are *queued* rather than done here, so they run in
-    /// `sync_entities` alongside the spawns of the incoming features — one
-    /// place that owns the world's shape, rather than two that have to agree
-    /// about which frame they run on. Leaving them out is what would strand
-    /// the old map's rooms in the world with nothing left pointing at them.
-    ///
-    /// The caller is responsible for re-baking room geometry afterwards: the
-    /// entities do not exist until `sync_entities` has run, so a bake fired in
-    /// the same frame would bake nothing.
+    /// The caller must re-bake room geometry a frame later: entities do not exist until
+    /// `sync_entities` has run.
     pub fn adopt(&mut self, incoming: FeatureTimeline) {
         let old: Vec<Entity> = self
             .active_features()
@@ -305,15 +241,12 @@ impl FeatureTimeline {
         for entity in old {
             self.queue_despawn(entity);
         }
-        // A selection is an index into the map that just went away.
         self.select(None);
-        // And so is the history: undoing back through opening a file, or
-        // through a server handing over its map, is editing a different map.
+        // History too: undoing through an adoption would edit a different map.
         self.reset_history();
     }
 
-    /// Remove a feature. Undoable like any other edit: the next checkpoint
-    /// records it.
+    /// Undoable through the next checkpoint.
     pub fn delete_feature(&mut self, feature_id: FeatureId) {
         self.remove_feature_internal(feature_id);
     }
@@ -322,7 +255,6 @@ impl FeatureTimeline {
         self.id_counter
     }
 
-    /// Where the rollback bar is, if the map is rolled back.
     pub fn rollback(&self) -> Option<FeatureId> {
         self.rollback
     }
@@ -334,9 +266,7 @@ impl FeatureTimeline {
             .map_or(self.feature_order.len(), |at| at + 1)
     }
 
-    /// Move the rollback bar to just after `at`, or take it away with `None`.
-    /// A bar after the last feature is no bar, stored as none so there is one
-    /// way to say "everything".
+    /// A bar after the last feature is stored as `None`, so "everything" has one form.
     pub fn roll_back_to(&mut self, at: Option<FeatureId>) {
         let at = at.filter(|id| {
             self.features.contains_key(id) && self.feature_order.last() != Some(id)
@@ -348,8 +278,7 @@ impl FeatureTimeline {
         self.deselect_past_the_bar();
     }
 
-    /// A selection past the bar is a feature with no entity and nothing to
-    /// edit against.
+    /// A selection past the bar has no entity to edit against.
     fn deselect_past_the_bar(&mut self) {
         let shown = self.shown_len();
         if let Some(selected) = self.selected_feature
@@ -393,8 +322,7 @@ impl FeatureTimeline {
         self.selection_affected.as_deref()
     }
 
-    /// Returns an iterator of (FeatureId, &Feature) for all active features
-    /// (those before the rollback bar).
+    /// Features before the rollback bar.
     pub fn active_features(&self) -> impl Iterator<Item = (FeatureId, &Feature)> {
         let shown = self.shown_len();
         self.feature_order[..shown].iter().filter_map(move |id| {
@@ -422,9 +350,7 @@ impl FeatureTimeline {
         self.pending_despawns.push(entity);
     }
 
-    /// Add a feature **at the rollback bar** and move the bar past it, or at
-    /// the end with no bar. Adding while rolled back is building on the map as
-    /// it stood there; nothing after the bar is lost, as it used to be.
+    /// Add at the rollback bar and move the bar past it, or at the end with no bar.
     pub fn apply_feature(&mut self, feature_object: Box<dyn FeatureTrait>) -> FeatureId {
         let parents = feature_object.parent_ids();
         let new_id = self.next_id();
@@ -447,7 +373,6 @@ impl FeatureTimeline {
         self.features.get(id)
     }
 
-    /// The map as undo sees it right now.
     fn state(&self) -> MapState {
         MapState {
             features: self
@@ -460,15 +385,8 @@ impl FeatureTimeline {
         }
     }
 
-    /// Record the map as one undo step if it has changed since the last
-    /// checkpoint.
-    ///
-    /// **Called when the editor is idle, not by each edit.** A drag is one
-    /// step because the button is held for all of it; typing a name is one
-    /// step because the field has the keyboard until it is let go. Nothing
-    /// that edits the map has to remember to record itself, which is the
-    /// failure the per-edit model had: a tool that forgot was an edit undo
-    /// walked straight past.
+    /// Record one undo step if the map changed since the last checkpoint. Called when idle, not by each
+    /// edit, so no tool can forget to record itself.
     pub fn checkpoint(&mut self) {
         let now = self.state();
         match self.checkpoint.take() {
@@ -479,10 +397,7 @@ impl FeatureTimeline {
         self.checkpoint = Some(now);
     }
 
-    /// Record a new step: capped at [`UNDO_DEPTH`], oldest dropped first, and
-    /// ending the redo branch. **Every new step goes through here** — undo and
-    /// redo only move steps between the two stacks, so this is the one place
-    /// the history can grow, and so the one place it has to be bounded.
+    /// The one place history grows, so the one place it is capped at [`UNDO_DEPTH`].
     fn push_undo(&mut self, before: MapState) {
         self.undo.push(before);
         if self.undo.len() > UNDO_DEPTH {
@@ -491,10 +406,8 @@ impl FeatureTimeline {
         self.redo.clear();
     }
 
-    /// Forget every step: the map in front of us is a different map, opened
-    /// from a file or handed over by a server. Undoing back through that is
-    /// not what anybody means — and on a client, undo would be editing a map
-    /// it does not own.
+    /// For a map opened from a file or handed over by a server; on a client, undo would edit a map it
+    /// does not own.
     pub fn reset_history(&mut self) {
         self.undo.clear();
         self.redo.clear();
@@ -504,7 +417,6 @@ impl FeatureTimeline {
         self.dirty = false;
     }
 
-    /// The map now matches its file.
     pub fn mark_saved(&mut self) {
         let now = self.state();
         self.checkpoint = Some(now.clone());
@@ -512,8 +424,7 @@ impl FeatureTimeline {
         self.dirty = false;
     }
 
-    /// Whether the map differs from what was last saved or loaded, as of the
-    /// last checkpoint.
+    /// As of the last checkpoint.
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
@@ -527,8 +438,7 @@ impl FeatureTimeline {
     }
 
     pub fn undo(&mut self) {
-        // Anything done since the last checkpoint is an edit too, and the one
-        // this undo should take back.
+        // An edit not yet checkpointed is the one this undo takes back.
         self.checkpoint();
         let Some(previous) = self.undo.pop() else { return };
         if let Some(current) = self.checkpoint.take() {
@@ -546,9 +456,7 @@ impl FeatureTimeline {
         self.restore(&next);
     }
 
-    /// Replace the map with `incoming` **as one undo step** — what reverting
-    /// to the file is. Then it matches the file, so it is not dirty; undoing
-    /// the revert makes it dirty again through the ordinary path.
+    /// One undo step, as reverting to the file is. Leaves the map clean.
     pub fn replace_as_edit(&mut self, incoming: FeatureTimeline) {
         self.checkpoint();
         let target = incoming.state();
@@ -561,13 +469,7 @@ impl FeatureTimeline {
         self.mark_saved();
     }
 
-    /// Make the map `target`, rebuilding **only the features that differ**.
-    ///
-    /// A feature whose serialized form is unchanged keeps its object and its
-    /// entity; one that changed, appeared or vanished is rebuilt, and so is
-    /// everything built on it, since a `PointRef` that moved moves its
-    /// dependants. An undo of one wall therefore respawns one wall rather
-    /// than every room on the map.
+    /// Rebuild only the features whose serialized form differs, and everything built on them.
     fn restore(&mut self, target: &MapState) {
         let mut changed: Vec<FeatureId> = Vec::new();
         let mut next: HashMap<FeatureId, Feature> = HashMap::new();
@@ -595,13 +497,11 @@ impl FeatureTimeline {
                     next.insert(*id, feature);
                     changed.push(*id);
                 }
-                // Cannot happen for a string this process wrote, and losing
-                // one feature is better than losing the undo.
+                // Cannot happen for a string this process wrote; losing one feature beats losing the undo.
                 Err(error) => error!("Undo could not rebuild feature {id:?}: {error}"),
             }
         }
 
-        // Whatever is left was not in the target: it goes.
         for (_, feature) in self.features.drain() {
             if let Some(entity) = feature.object.entity() {
                 self.pending_despawns.push(entity);
@@ -614,10 +514,8 @@ impl FeatureTimeline {
         for id in changed {
             self.queue_refresh_for_feature_and_descendants(id);
         }
-        // Resolved now, in order, rather than left for `sync_entities` to do as
-        // it respawns: a rebuilt feature's resolved position is not part of
-        // what was stored, and anything that reads it before the next spawn —
-        // a gizmo, the panel — would otherwise see the origin for a frame.
+        // Resolved now rather than by `sync_entities`, or a gizmo or the panel would read the origin for a
+        // frame.
         for id in self.feature_order.clone() {
             if let Some(mut feature) = self.features.remove(&id) {
                 feature.object.resolve_references(&self.features);
@@ -633,8 +531,6 @@ impl FeatureTimeline {
         self.checkpoint = Some(target.clone());
     }
 
-    /// The bar goes if the feature it sat after has gone, rather than
-    /// pointing at nothing.
     fn forget_a_missing_bar(&mut self) {
         if self.rollback.is_some_and(|id| !self.features.contains_key(&id)) {
             self.rollback = None;
@@ -693,9 +589,7 @@ impl FeatureTimeline {
         edit_events: &mut Vec<EditEvent>,
         retarget_out: &mut Option<(FeatureId, String)>,
     ) {
-        // Editor for selected feature (bottom, takes as much as needed)
-        // We render this into a bottom panel so it pins to the bottom,
-        // then the scroll area fills whatever's left.
+        // In a bottom panel so it pins to the bottom; the list scrolls in what is left.
         let mut was_edited = false;
         let mut edited_id = None;
         let mut entity_for_event: Option<Entity> = None;
@@ -709,15 +603,7 @@ impl FeatureTimeline {
                 let selected_idx = selected_idx.unwrap();
                 let prior_order: Vec<FeatureId> = features.feature_order[..selected_idx].to_vec();
 
-                // Resizable, and opening at half the tab: a feature editor is
-                // where the actual work happens, and the construction list
-                // above it is a list of names you glance at. A fixed panel
-                // sized to whatever fits left a room's eight axis rows to be
-                // scrolled through four at a time.
-                //
-                // The bounds are stated against the space the tab actually
-                // has rather than as two constants, so neither half can be
-                // dragged — or opened — out of existence in a short panel.
+                // Resizable, opening at half the tab; bounds are relative to the tab so neither half can vanish.
                 let available = ui.available_height();
                 egui::Panel::bottom("editor_feature_panel")
                     .resizable(true)
@@ -727,13 +613,7 @@ impl FeatureTimeline {
                         ui.separator();
                         if let Some(mut feature) = features.features.remove(&selected_id) {
                             let mut retarget_request: Option<String> = None;
-                            // The whole feature editor is padded and loosened
-                            // here rather than in each `editor_ui`: a feature
-                            // type describes its own fields and should not
-                            // also have to know what the panel around them
-                            // looks like, and nine implementations each
-                            // choosing their own margins is nine chances for
-                            // one of them to look like a different program.
+                            // Padded here rather than in each `editor_ui`, so every feature type's panel looks the same.
                             let edited = feature_editor_frame(ui, |ui| {
                                 ui.heading(feature.type_name_with_id());
                                 ui.add_space(FEATURE_EDITOR_PADDING * 0.5);
@@ -767,7 +647,6 @@ impl FeatureTimeline {
             }
         }
 
-        // The feature list, which *is* the map, with the rollback bar in it.
         let mut selection_changed = false;
         let mut next_selected = features.selected_feature;
         let pending: Rc<RefCell<Option<RowAction>>> = Rc::new(RefCell::new(None));
@@ -782,14 +661,9 @@ impl FeatureTimeline {
                 let is_selected = features.selected_feature == Some(*id);
                 let is_active = i < shown;
 
-                // The trailing `Atom::grow` is what left-justifies the title.
-                // These buttons are stretched to the panel width and egui
-                // centres a button's contents, so without it every title
-                // floats in the middle of the row and the list has no edge to
-                // read down.
+                // The trailing `Atom::grow` left-justifies the title; egui centres a stretched button's contents.
                 let label_text = feature.type_name_with_id();
-                // Past the bar: in the map, not in the world. Faded rather
-                // than struck through, which reads as deleted.
+                // Past the bar: faded rather than struck through, which reads as deleted.
                 let response = ui
                     .scope(|ui| {
                         if !is_active {
@@ -827,10 +701,8 @@ impl FeatureTimeline {
                     }
                 });
 
-                // **The rollback bar**, dragged up the list to see the map as
-                // it stood there. Thin and faint at the bottom where it changes
-                // nothing; bold anywhere else, because a world that is not the
-                // whole map must not be mistaken for one that is.
+                // Faint at the bottom, where it changes nothing; bold elsewhere so a partial map is not mistaken
+                // for the whole one.
                 if at_the_bar {
                     let (rect, bar) =
                         ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::drag());
@@ -845,9 +717,7 @@ impl FeatureTimeline {
                 }
             }
 
-            // Live while dragging, so the world scrubs through the map's
-            // construction under the pointer. Never above the first feature: a
-            // map rolled back to nothing is an empty world, which says nothing.
+            // Live while dragging. Never above the first feature: an empty world says nothing.
             if bar_dragged
                 && let Some(pointer) = ui.ctx().pointer_interact_pos()
             {
@@ -891,13 +761,10 @@ impl FeatureTimeline {
         }
     }
 
-    // `pub(crate)` so a test elsewhere in the crate can drive it directly:
-    // what a map adoption does to the world only shows up once this has run.
+    // `pub(crate)` so tests elsewhere can drive it.
     pub(crate) fn sync_entities(mut features: ResMut<Self>, mut commands: Commands) {
-        // Which entity stands for which feature is bookkeeping about this
-        // world, not an edit to the map, so it does not mark the timeline
-        // changed. Marked, it would read as changed every frame — to the undo
-        // checkpoint and to `map_sync`'s pre-filter alike.
+        // Entity bookkeeping is not an edit. Marked as a change, the timeline would read as edited every
+        // frame, to the undo checkpoint and `map_sync`'s pre-filter alike.
         let features = features.bypass_change_detection();
         for entity in features.pending_despawns.drain(..) {
             commands.entity(entity).despawn();
@@ -987,10 +854,7 @@ impl std::fmt::Display for FeatureId {
     }
 }
 
-// Essentially, these are nodes on a directed acyclic graph.
-// Editor features may depend on previous features to resolve.
-// They may also not depend on anything, with all descendants tracing their ancestry back --
-// such a case would lead to multiple disjoint graphs, which is okay.
+// A node in a DAG: a feature may depend on earlier features. Disjoint graphs are fine.
 #[derive(Serialize, Deserialize)]
 pub struct Feature {
     id: FeatureId,
@@ -1141,7 +1005,6 @@ impl PointRef {
             }
         });
 
-        // Reference feature dropdown
         let ref_label = self.reference
             .and_then(|id| features.get(&id))
             .map(|a| a.type_name_with_id())
@@ -1195,7 +1058,7 @@ impl PointRef {
             changed = true;
         }
 
-        // Point key dropdown (only when a reference is set and it has multiple keys)
+        // Only when a reference is set and it has several keys.
         if let Some(ref_id) = self.reference {
             if let Some(ref_feature) = features.get(&ref_id) {
                 let keys = ref_feature.object.available_point_keys();
@@ -1236,7 +1099,6 @@ impl PointRef {
             }
         }
 
-        // Per-axis rows: checkbox (relative toggle) + slider
         let has_ref = self.reference.is_some();
         let base = self.resolved_reference.unwrap_or(Vec3::ZERO);
         changed |= axis_row(ui, &mut self.x, "X", has_ref, base.x);
@@ -1246,8 +1108,7 @@ impl PointRef {
         changed
     }
 
-    /// Draw a taxicab path from the reference point to the resolved point,
-    /// stepping along X then Z then Y, with per-axis colored dashed lines.
+    /// A taxicab path from the reference to the resolved point: X, then Z, then Y.
     pub fn debug_gizmos(&self, _resolved: Vec3, gizmos: &mut Gizmos) {
         let Some(base) = self.resolved_reference else { return; };
         const DASH: f32 = 0.15;
@@ -1271,43 +1132,26 @@ impl PointRef {
     }
 }
 
-/// Least room the construction list keeps, and the least the feature editor
-/// opens with, whatever the panel is dragged to.
 const FEATURE_LIST_MIN_HEIGHT: f32 = 96.0;
 const FEATURE_EDITOR_MIN_HEIGHT: f32 = 120.0;
 
-/// How tall the feature editor opens in a tab with `available` height.
-///
-/// Half, so the two halves of the tab read as equals — but never at the cost
-/// of the list's own minimum, which is what keeps a short panel from opening
-/// with nothing to select in it.
+/// Half, but never below the list's own minimum.
 fn feature_editor_default_height(available: f32) -> f32 {
     let range = feature_editor_height_range(available);
     (available * 0.5).clamp(range.min, range.max)
 }
 
-/// What the feature editor may be dragged to in a tab with `available` height.
-///
-/// Both ends give way in a panel too short to honour them: the maximum is
-/// never below the minimum, so the range stays valid rather than inverting.
+/// The maximum is never below the minimum, so the range does not invert in a short panel.
 fn feature_editor_height_range(available: f32) -> egui::Rangef {
     let min = FEATURE_EDITOR_MIN_HEIGHT.min(available);
     let max = (available - FEATURE_LIST_MIN_HEIGHT).max(min);
     egui::Rangef::new(min, max)
 }
 
-/// Gap left around and between the fields of the feature editor.
 pub const FEATURE_EDITOR_PADDING: f32 = 8.0;
 
-/// Draw a feature's own editor with room to breathe.
-///
-/// Everything a feature puts in the panel goes through here: a margin so no
-/// control is flush against the panel edge, and a taller row so stacked
-/// sliders and dropdowns are not one continuous band of widget. The scroll
-/// area is part of the padding rather than around it — a feature with more
-/// fields than the panel is tall (a room has two `PointRef`s, which is eight
-/// rows) otherwise loses the last of them off the bottom with no way to reach
-/// them.
+/// A margin and taller rows for a feature's own editor. The scroll area is inside the padding, or a
+/// room's eight rows run off the bottom.
 fn feature_editor_frame<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::Frame::new()
         .inner_margin(egui::Margin::same(FEATURE_EDITOR_PADDING as i8))
@@ -1377,9 +1221,7 @@ mod tests {
         feature.object_mut().resolve_references(&HashMap::new());
     }
 
-    /// Edits between checkpoints are one step; undo goes back over it and
-    /// redo comes forward again — including an edit not yet checkpointed,
-    /// which an undo has to take back first rather than skip.
+    /// An un-checkpointed edit must be taken back by undo first rather than skipped.
     #[test]
     fn undo_and_redo_walk_whole_map_checkpoints() {
         let mut timeline = FeatureTimeline::default();
@@ -1399,8 +1241,6 @@ mod tests {
         assert_eq!(x_of(&timeline, a), Some(4.0));
     }
 
-    /// Adding and deleting are edits like any other — there is nothing for a
-    /// new kind of edit to remember to do.
     #[test]
     fn deleting_is_undone_by_the_same_mechanism() {
         let mut timeline = FeatureTimeline::default();
@@ -1412,8 +1252,7 @@ mod tests {
         assert_eq!(timeline.feature_order(), &[a]);
     }
 
-    /// A restore rebuilds only what differs: an untouched feature keeps its
-    /// entity, a changed one gives its entity up to be respawned.
+    /// An untouched feature keeps its entity; a changed one is respawned.
     #[test]
     fn undo_rebuilds_only_the_features_that_changed() {
         let mut timeline = FeatureTimeline::default();
@@ -1432,8 +1271,6 @@ mod tests {
         assert_eq!(timeline.pending_despawns.len(), 1);
     }
 
-    /// Reverting to the file is one undo step and leaves the map clean;
-    /// undoing it brings the edits back and makes it dirty again.
     #[test]
     fn reverting_is_one_undoable_step() {
         let mut timeline = FeatureTimeline::default();
@@ -1458,8 +1295,6 @@ mod tests {
         assert!(timeline.is_dirty());
     }
 
-    /// Rolled back, a new feature goes in at the bar and the bar follows it;
-    /// nothing past the bar is lost, which used to be the price of adding.
     #[test]
     fn adding_while_rolled_back_builds_at_the_bar() {
         let mut timeline = FeatureTimeline::default();
@@ -1475,8 +1310,6 @@ mod tests {
         assert_eq!(timeline.shown_len(), 2);
     }
 
-    /// A bar after the last feature is no bar, and a bar whose feature is
-    /// deleted goes with it rather than pointing at nothing.
     #[test]
     fn the_bar_never_points_at_nothing() {
         let mut timeline = FeatureTimeline::default();
@@ -1491,8 +1324,7 @@ mod tests {
         assert_eq!(timeline.shown_len(), 1);
     }
 
-    /// The bar is a way of looking at the map, not part of it: moving it is
-    /// no undo step, and a save writes every feature regardless.
+    /// Moving the bar is no undo step, and a save writes every feature regardless.
     #[test]
     fn rolling_back_is_not_an_edit() {
         let mut timeline = FeatureTimeline::default();
@@ -1509,8 +1341,7 @@ mod tests {
         assert_eq!(loaded.rollback(), None);
     }
 
-    /// Only what is above the bar stands in the world, and rolling to the
-    /// end stands up the rest — which is what entering Play relies on.
+    /// Rolling to the end must stand up the rest, which entering Play relies on.
     #[test]
     fn the_world_holds_what_is_above_the_bar() {
         let mut app = App::new();
@@ -1534,7 +1365,6 @@ mod tests {
         assert!(has_entity(&app, b));
     }
 
-    /// However many edits and reverts, the history stays at the cap.
     #[test]
     fn the_history_is_bounded() {
         let mut timeline = FeatureTimeline::default();
@@ -1553,8 +1383,6 @@ mod tests {
         assert_eq!(timeline.undo.len(), UNDO_DEPTH);
     }
 
-    /// A map that arrives from somewhere else — a file, a server — brings no
-    /// history with it and leaves none behind.
     #[test]
     fn adopting_a_map_forgets_the_history() {
         let mut timeline = FeatureTimeline::default();
@@ -1569,11 +1397,7 @@ mod tests {
         assert!(!timeline.is_dirty());
     }
 
-    /// A tab too short for both halves must still give a valid range.
-    ///
-    /// `feature_editor_default_height` clamps into it, and `f32::clamp`
-    /// panics when its bounds are inverted — so a panel dragged narrow enough
-    /// would take the editor down rather than merely look wrong.
+    /// `f32::clamp` panics on inverted bounds, so a short panel would crash the editor.
     #[test]
     fn the_feature_editor_range_never_inverts() {
         for available in [0.0, 1.0, 50.0, 120.0, 200.0, 216.0, 400.0, 2000.0] {

@@ -1,14 +1,10 @@
-//! What actually goes over the wire, and which end is believed about it.
+//! What goes over the wire, and which end is believed about it.
 //!
-//! Shared by both ends by construction: there is one binary, so a client and a
-//! server register the same components in the same order because they run the
-//! same code. Lightyear hashes the registries and refuses a connection whose
-//! hashes differ, which turns "these two builds disagree" into a refused
-//! handshake rather than two processes quietly reading each other's packets
-//! wrong.
+//! One binary, so both ends register the same components in the same order;
+//! Lightyear hashes the registries and refuses a handshake when they differ.
 //!
-//! Must be added **after** the client and server plugin groups and **before**
-//! any link entity is spawned — see [`NetTransportPlugin`].
+//! Must be added after the client and server plugin groups and before any
+//! link entity is spawned — see [`NetTransportPlugin`].
 //!
 //! [`NetTransportPlugin`]: crate::common::net_transport::NetTransportPlugin
 
@@ -22,124 +18,67 @@ use crate::common::damage::{Damageable, PlayerId};
 use crate::common::skeleton::BodyRequests;
 use crate::game::player::{PhysicsBody, Player, PlayerInput};
 
-/// Registers everything the two ends have to agree about.
 pub struct ProtocolPlugin;
 
 impl Plugin for ProtocolPlugin {
     fn build(&self, app: &mut App) {
-        // The input is not replicated like a component: it travels the other
-        // way, client to server, in its own redundant queue that carries the
-        // last several ticks so that one lost packet is not one lost step.
+        // Client to server, in a redundant queue of the last several ticks so
+        // one lost packet is not one lost step.
         app.add_plugins(InputPlugin::<PlayerInput>::default());
 
-        // What the step writes, and therefore both what a client is told and
-        // what has to be rewound and replayed when the server disagrees.
-        //
-        // All three, because a rollback replays the step and a step that
-        // started from the wrong state diverges again immediately:
-        // `PhysicsBody` is the position, `Player` carries the velocity and the
-        // on-ground flag, and `Stance` decides how tall the hull being swept
-        // is.
+        // Everything the step reads back, so a rollback replays from the right
+        // state: position, velocity and on-ground flag, and hull height.
         app.component::<PhysicsBody>().replicate().predict();
         app.component::<Player>().replicate().predict();
         app.component::<Stance>().replicate().predict();
 
-        // How a body is animated, in nine bools.
-        //
-        // **Poses are never sent.** A pose is twenty-odd quaternions per body
-        // per tick, and it is the output of a state machine that is
-        // deterministic and already present on every machine. What crosses is
-        // the input to that machine — what the body is being asked to do and
-        // what the world is doing to it — and each process runs the same
-        // `AnimationState` over it. `Gait` is not sent either: it is advanced
-        // from ground covered, and the ground covered is `PhysicsBody`, which
-        // is.
+        // Poses are never sent; each process runs `AnimationState` over these
+        // nine bools. `Gait` is derived from `PhysicsBody`.
         app.component::<BodyRequests>().replicate();
 
-        // Health, because a corpse is something every client has to see.
-        //
-        // Not predicted: a client guessing that its shot killed somebody and
-        // being wrong is a body that falls over and stands back up. Damage is
-        // the server's to decide and this is the client being told.
+        // Not predicted: a wrongly guessed kill is a body that falls over and
+        // stands back up.
         app.component::<Damageable>().replicate();
 
-        // What a body is built like, and what it is doing. Between them, plus
-        // the `PhysicsBody` above, they are everything a viewer needs to draw
-        // a body somebody else is driving — including one standing in an
-        // animation grid, which is why none of them mentions grids.
+        // With `PhysicsBody`, everything a viewer needs to draw a body somebody
+        // else drives, grid bodies included.
         app.component::<crate::common::class::Class>().replicate_once();
-        // Whose side a body is on. It decides what a body is *drawn* in, so a
-        // viewer that was not told would paint every remote body and every
-        // corpse the default grey and there would be no reading a fight by
-        // looking at it. Sent once: a body does not change sides while wearing
-        // it — a new side is a new life, and that is a new body.
+        // Once: a new side is a new life, which is a new body.
         app.component::<crate::common::team::Team>().replicate_once();
         app.component::<crate::common::skeleton::ForcedAnimation>().replicate();
         app.component::<crate::common::skeleton::gait::DisplaySpeed>().replicate();
 
-        // That a body has died. Its one job on the wire is to hide the body
-        // for the tick it outlives itself by — a death is always a despawn,
-        // and without this the body stands upright inside its own corpse until
-        // the despawn arrives.
+        // Hides the body for the tick it outlives itself by, so it does not
+        // stand inside its own corpse until the despawn arrives.
         app.component::<crate::game::death::Dying>().replicate_once();
 
-        // A corpse, and only its **seed**. `Ragdoll` carries two points per
-        // bone at the moment of death, and from there every machine runs the
-        // same solver over the same rig: nothing can touch a corpse, nothing
-        // collides with one, and it takes no input, so the simulation is a
-        // function of the seed alone. `replicate_once` is what keeps that
-        // affordable — twenty bones of physics per corpse once, not per tick.
-        //
-        // A corpse is a prop, so it is replicated the way a prop is. The
-        // alternative — every machine raising its own from the replicated fact
-        // that a body's health hit zero — cannot be made to work, because that
-        // fact and the despawn that follows arrive together and the body is
-        // gone by the time anything can copy its pose.
+        // A corpse's seed only; every machine runs the same solver from it.
+        // Raising corpses locally from a death cannot work: the death and the
+        // despawn arrive together, so the pose is gone before it can be copied.
         app.component::<crate::game::ragdoll::Ragdoll>().replicate_once();
-        // And what it was built from, read off the rig the body actually had.
-        // Not its `Class`: a player's body has none — it is rigged from
-        // `Proportions::DEFAULT` — so a corpse keyed on one is a corpse only
-        // the authority can draw, which is exactly how this was first wrong.
+        // The build is read off the rig, not a `Class`, which not every body has.
         app.component::<crate::game::ragdoll::CorpseBuild>().replicate_once();
 
-        // A projectile in flight, so everybody can see it coming. Replicated
-        // rather than re-simulated: see `replicate_projectiles`.
+        // Replicated rather than re-simulated: see `replicate_projectiles`.
         app.component::<crate::game::projectile::Projectile>().replicate();
 
-        // Sent once, on the insert that first carries it. An id is a fact
-        // about who a body belongs to, not a value that changes per tick, and
-        // re-sending it every update would be bandwidth spent restating it.
-        // It is also what an animation phase is derived from, so that two
-        // clients put the same body at the same point in its cycle.
-        // What a body is holding, so a viewer can say so. Ids only; the
-        // numbers they name are in the catalogue, which is sent once on
-        // connect. Replicated rather than replicated-once, because the held
-        // slot changes within a life — and one component rather than two,
-        // because replication does not promise to deliver two components in
-        // one packet and half an answer is a body nothing can describe.
-        //
-        // **Not predicted.** A client guessing that its switch landed is the
-        // same class of mistake as guessing a kill. The price is that the HUD
-        // names a new weapon a round trip late, which is the right price for
-        // there being one writer.
+        // One component rather than two: replication does not promise to
+        // deliver two components in one packet. Not predicted, so there is
+        // one writer.
         app.component::<crate::common::weapon::Equipped>().replicate();
 
-        // Ammo, likewise unpredicted. Its own component rather than fields on
-        // `Equipped` because it changes on every shot while a switch is rare,
-        // and replication is change-detected per component.
+        // Separate from `Equipped` because it changes every shot, and
+        // replication is change-detected per component.
         app.component::<crate::common::weapon::Ammo>().replicate();
 
+        // Once. Animation phase is derived from it, so every client puts a body
+        // at the same point in its cycle.
         app.component::<PlayerId>().replicate_once();
     }
 }
 
-/// Required by the input layer; there is nothing to map.
-///
-/// Inputs may name entities — "I am shooting at that one" — and those ids are
-/// the sender's, so they have to be translated on arrival. Nothing in
-/// [`PlayerInput`] is an entity: a weapon slot is a number and aim is an
-/// angle, deliberately, so that what a client asserts is what it did rather
-/// than what it hit.
+/// Nothing in [`PlayerInput`] is an entity, deliberately: a client asserts
+/// what it did (slot, aim), not what it hit.
 impl MapEntities for PlayerInput {
     fn map_entities<M: EntityMapper>(&mut self, _mapper: &mut M) {}
 }
@@ -148,23 +87,19 @@ impl MapEntities for PlayerInput {
 mod tests {
     use super::*;
 
-    /// The protocol has to build without a window, a renderer or a socket.
-    /// It is also the cheapest possible check that every registered component
-    /// still satisfies the bounds replication and prediction put on it — those
-    /// are trait bounds, so this failing is a compile error rather than a
-    /// failed assertion, which is the point.
+    /// Fails to compile if a registered component stops satisfying the
+    /// replication or prediction bounds, and fails at runtime if a
+    /// registration needs a window, renderer or socket.
     #[test]
     fn the_protocol_registers() {
         let mut app = App::new();
         app.add_plugins(bevy::state::app::StatesPlugin);
         app.add_plugins(bevy::time::TimePlugin);
         app.add_plugins(lightyear::prelude::client::ClientPlugins {
-            tick_duration: std::time::Duration::from_secs_f64(1.0 / crate::constants::TICK_HZ),
+            tick_duration: crate::constants::one_tick(),
         });
         app.add_plugins(ProtocolPlugin);
-        // The catalogue's channel and message too, so a registration that will
-        // not build fails here rather than at the first connection.
-        app.add_plugins(crate::common::weapon_sync::WeaponSyncPlugin);
+        app.add_plugins(crate::common::pack_sync::PackSyncPlugin);
         app.add_plugins(crate::prop::sync::PropSyncPlugin);
         app.finish();
     }

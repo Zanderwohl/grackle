@@ -1,26 +1,12 @@
-//! Handing every weapon's model to whoever connects.
+//! Handing every weapon's model to whoever connects, after
+//! [`crate::common::pack_sync`].
 //!
-//! Shaped on [`crate::common::weapon_sync`], which it follows on the heels of:
-//! a weapon names a model, and a client that has been told about the weapon
-//! and not the model draws empty hands.
+//! The document crosses, not meshes; each machine bakes its own. The
+//! catalogue says which models to send, so nothing enumerates a directory.
 //!
-//! **The document, not the meshes.** A prop is parametric and small, and the
-//! client already has the whole kernel — so a model crosses the wire as what
-//! the prop editor saved, and every machine builds its own triangles. That is
-//! the same choice [`crate::common::map_sync`] makes for the same reason: send
-//! what a thing *is*, not what it came out as.
-//!
-//! **Which models is a question the catalogue answers**, so nothing here has
-//! to enumerate a directory — the rule in
-//! [`crate::common::assets`] survives, and a browser client is told exactly
-//! the models its weapons name.
-//!
-//! **Order does not matter, and that is on purpose.** A model arriving before
-//! its weapon is cached under its own name and waits. A model arriving *after*
-//! a client already went looking in its own pack replaces the failure that
-//! search cached, and bodies redress because [`PropCache::generation`] moved.
-//! Anything that depended on the two channels arriving in a particular order
-//! would be depending on something neither of them promises.
+//! Arrival order relative to the catalogue does not matter: an early model
+//! waits in the cache, and a late one replaces a cached failure and bumps
+//! [`PropCache::generation`].
 
 use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
@@ -33,29 +19,19 @@ use crate::common::weapon::WeaponCatalogue;
 use crate::prop::baked::{PropCache, SurfaceMaterials};
 use crate::prop::document;
 
-/// Ordered and reliable, like the catalogue: a model is state, and the last
-/// one sent is the one that is true.
+/// Ordered and reliable: the last model sent is the true one.
 pub struct PropChannel;
 
-/// Each model as the text its file holds.
+/// `(name, file text)` per model.
 ///
-/// **Text, not the typed value.** Lightyear encodes with postcard, which
-/// refuses `deserialize_any` — exactly what an internally tagged enum needs to
-/// read itself back, and `FeatureOp`, `Shape` and `Profile` are all tagged
-/// that way because it is what makes a `.gpp` readable. A `PropDoc` on the
-/// wire therefore encodes and then cannot be decoded, silently: the send
-/// succeeds and the receive errors inside Lightyear.
-///
-/// Which turns out to be the better payload anyway. What crosses is exactly
-/// what the prop editor saved, parsed at the far end by the same
-/// [`document::parse`] that reads it off disk — one description of a prop,
-/// rather than one for a file and another for a connection.
+/// Text, not `PropDoc`: postcard refuses `deserialize_any`, which the
+/// internally tagged `FeatureOp`, `Shape` and `Profile` need, so a typed
+/// `PropDoc` encodes but fails to decode inside Lightyear while the send
+/// reports success.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ModelSnapshot(pub Vec<(String, String)>);
 
-/// What was last put on the wire, compared against rather than asking
-/// `Res::is_changed` — insertion counts as a change, and the startup load
-/// would otherwise broadcast to an empty room.
+/// Compared against rather than `Res::is_changed`, which counts insertion.
 #[derive(Resource, Default)]
 struct LastModelsSent(Vec<(String, String)>);
 
@@ -83,11 +59,8 @@ impl Plugin for PropSyncPlugin {
     }
 }
 
-/// Every model the catalogue names, read off this machine's packs.
-///
-/// A weapon whose model will not load is left out rather than sent empty: the
-/// client then goes looking in its own packs, which is the right fallback and
-/// the one it would have taken had the server said nothing.
+/// A model that will not load is left out rather than sent empty, so the
+/// client falls back to its own packs.
 fn models_named_by(catalogue: &WeaponCatalogue, packs: &PackAssets) -> Vec<(String, String)> {
     let mut named: Vec<&str> = catalogue
         .weapons
@@ -137,21 +110,12 @@ fn send_models_to_new_clients(
     Ok(())
 }
 
-/// Tell everybody when the models change under them.
-///
-/// Two things make them change: the catalogue naming a different set, and
-/// somebody on this machine saving one in the prop editor. The second is the
-/// interesting one — a host who retouches a barrel between rounds would
-/// otherwise be the only person in the match holding the new shape.
-///
-/// **The gate is cheap and the work is not**: `models_named_by` re-reads every
-/// model off disk, so it is asked only when something says the answer may have
-/// moved. The comparison against what was last sent is what decides.
+/// Resends when the catalogue changes or the host saves a prop. Gated
+/// because `models_named_by` re-reads every model off disk.
 fn broadcast_model_changes(
     catalogue: Res<WeaponCatalogue>,
     packs: Res<PackAssets>,
-    // Absent in a build with no prop editor in it, which is every client the
-    // moment there is one to ship.
+    // Absent in a build with no prop editor.
     editor: Option<Res<crate::prop::document::PropEditor>>,
     server: Option<Single<&Server>>,
     mut last: ResMut<LastModelsSent>,
@@ -178,11 +142,8 @@ fn broadcast_model_changes(
     Ok(())
 }
 
-/// Take the server's models over anything of ours.
-///
-/// Only on a client, and the guard is on authority rather than on holding a
-/// receiver: a listen server holds one too, and adopting its own models back
-/// would be a server taking instructions from itself.
+/// Guarded on authority rather than on holding a receiver, which a listen
+/// server also has.
 fn adopt_the_servers_models(
     role: Res<NetRole>,
     mut receivers: Query<&mut MessageReceiver<ModelSnapshot>>,
@@ -203,9 +164,6 @@ fn adopt_the_servers_models(
                     Ok(doc) => {
                         cache.adopt(name, &doc, &mut meshes, &mut materials, &mut surfaces)
                     }
-                    // Logged rather than fatal: one model nobody can read is a
-                    // weapon drawn with empty hands, not a client that falls
-                    // over.
                     Err(e) => error!("the server's prop {name} will not parse: {e}"),
                 }
             }
@@ -230,10 +188,7 @@ mod tests {
         }
     }
 
-    /// **The catalogue decides which models go**, so nothing has to list a
-    /// directory — which a browser client could not do anyway. A weapon
-    /// nobody has modelled contributes nothing, and two weapons sharing a
-    /// model send it once.
+    /// Fails if unnamed or unloadable models are sent, or a shared one twice.
     #[test]
     fn only_the_models_the_catalogue_names_are_sent() {
         let mut catalogue = WeaponCatalogue::default();
@@ -251,15 +206,8 @@ mod tests {
         );
     }
 
-    /// **Over the wire's own encoding**, which is the whole reason the payload
-    /// is text.
-    ///
-    /// Lightyear uses postcard, and postcard refuses `deserialize_any` — what
-    /// an internally tagged enum needs to read itself back. A `PropDoc` sent
-    /// directly encodes and then cannot be decoded, and it fails in the way
-    /// nobody notices: inside Lightyear, on the receiving machine, while the
-    /// send reports success. This asserts both halves so that putting the
-    /// typed value back fails here instead of on somebody's server.
+    /// Encodes with postcard as Lightyear does. Fails if the payload goes back
+    /// to a typed `PropDoc`, which would decode-fail silently on the client.
     #[test]
     fn a_model_survives_the_wire_as_text_and_would_not_as_a_document() {
         let mut catalogue = WeaponCatalogue::default();
@@ -271,7 +219,6 @@ mod tests {
         let back: ModelSnapshot = postcard::from_bytes(&wire).expect("and comes back off it");
         assert_eq!(sent, back);
 
-        // And it is still the same prop at the other end.
         let there = document::parse(&back.0[0].1).expect("the text is a prop");
         let here = document::parse(&sent.0[0].1).expect("the text is a prop");
         assert_eq!(there, here);

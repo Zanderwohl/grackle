@@ -89,6 +89,14 @@ checked for, and the gizmo the editor draws all read the same constants. Let
 those drift and a spawn point passes in the editor while wedging a head in the
 ceiling at runtime.
 
+What each class is *built* like is pack content: `assets/default/classes.toml`,
+read into the `ClassBuilds` resource by
+[`src/common/class_file.rs`](src/common/class_file.rs). A build taller than
+`TALLEST_CLASS_HEIGHT` is dropped at load for the reason above, and a class
+with no build is drawn as `Proportions::DEFAULT` rather than not at all. Tests
+and tools read `ClassBuilds::shipped()`; there is no table in Rust to drift
+from the file.
+
 Usability is decided by `CollisionWorld::fits` — the body box must be in the
 map and touching no wall. There is no separate notion of "headroom": a low
 ceiling *is* a slab the body overlaps. Unusable spawns are skipped with a
@@ -560,7 +568,7 @@ about.
 Lightyear encodes with postcard, which refuses `deserialize_any` — what
 `#[serde(tag = "kind")]` needs to read itself back — and that tagging is
 exactly what makes `weapons.toml` and a `.gpp` readable. So
-[`weapon_sync`](src/common/weapon_sync.rs) sends the catalogue as JSON bytes
+[`pack_sync`](src/common/pack_sync.rs) sends the catalogue as JSON bytes
 and [`prop::sync`](src/prop/sync.rs) sends a model as the text its file holds,
 the way [`map_sync`](src/common/map_sync.rs) already sent bytes for its own
 reason. **It failed in the way nobody notices**: the send reports success, the
@@ -1158,20 +1166,24 @@ because a player's body has a `Class` too now and that system inserts no
 `SkeletonRoot` — a player dressed by the wrong one is drawn half a metre off
 the ground.
 
-**The catalogue is one description, held by the authority.**
-[`src/common/weapon_sync.rs`](src/common/weapon_sync.rs) sends it to each
-client on connect, `map_sync` style — so a server can ship its own weapons and
-nobody else needs the files. Two differences from the map: the payload is the
-typed value rather than a bag of bytes, since nothing here is a `typetag`
-trait object, and there is no resend interval, because nothing edits a weapon
-at frame rate.
+**The catalogue and the class builds are one description each, held by the
+authority.** [`src/common/pack_sync.rs`](src/common/pack_sync.rs) sends both to
+each client on connect, `map_sync` style — so a server can ship its own weapons
+and builds and nobody else needs the files. It is one set of systems generic
+over `PackTable`, so a third table is an `impl` and a line in the plugin. There
+is no resend interval, because nothing edits these at frame rate.
+
+A client rigs its bodies from its own pack until the server's builds arrive,
+which can be after the bodies did, so `rebuild_rigs_for_new_builds` re-rigs any
+body whose rig no longer matches its class. Corpses are left alone: they keep
+the build they died with.
 
 Its collections are **lists and not maps**, and the on-disk types are
 `BTreeMap`s, because the catalogue is compared for equality to decide whether
 to send it and a `HashMap` walks in an order nobody chose. Filled in hash
 order, two reads of the same file compared unequal — often enough to broadcast
 the whole catalogue at frame rate, rarely enough to ship.
-`only_a_change_puts_the_catalogue_on_the_wire` caught it the day it was
+`only_a_change_puts_a_table_on_the_wire` caught it the day it was
 written.
 
 **A body carries ids, never numbers.** `Equipped` — six `Option<WeaponId>` and
@@ -1889,8 +1901,6 @@ key that has slots — fill those in by hand.
   directly.
 - Panels are `egui_dock` tabs — add a `TabKinds` variant in
   [`src/editor/panels.rs`](src/editor/panels.rs), not a floating `egui::Window`.
-  The commented-out `ToolPlugin::toolbar` is the old floating-window approach;
-  don't revive it.
 - Asset paths are relative to the working directory (`assets/default/...`), so
   binaries must run from the repo root.
 - **Every binary links `lib.rs`; none re-declares the module tree.** `main.rs`
@@ -1902,6 +1912,33 @@ key that has slots — fill those in by hand.
   moment a second copy exists there is no way to tell which one a bug is in.
   A new binary goes in `src/bin/` and imports; if something it needs is
   `pub(crate)`, widen it rather than reaching around it.
+
+## Comments
+
+Comments are a cost. Write the minimum a competent reader with the code in front of them
+actually needs. The `decimate-comments` skill is the pass that enforces this.
+
+Delete:
+
+- restatements of the code — `// increment i`, `/// Returns the name.` on `fn name()`
+- section banners and decorative rules
+- narration of obvious control flow
+- history — what something used to do or used to be; git remembers it
+- commented-out code
+- design-document prose. This file and `documentation/` exist; link to them instead of
+  inlining them.
+
+Keep:
+
+- **why**, where the why is not derivable: a constraint, a discarded alternative, a bug this
+  shape prevents
+- units, ranges and frames the type does not carry
+- numerical hazards — cancellation, overflow, saturation, tolerance choices
+- invariants a caller must uphold
+
+One line is usually enough. A paragraph needs a reason. Module docs carry shared context so
+items do not repeat it. Prefer making the code say it: a named constant, a smaller function,
+or a better type removes the comment that would have explained it.
 
 ## Targeting wasm
 

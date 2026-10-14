@@ -8,30 +8,21 @@ use crate::common::net_transport::NetStatus;
 use crate::constants::DEFAULT_PORT;
 use crate::get;
 
-/// Which half of the connect dialog is showing.
-///
-/// Hosting and joining are the same dialog because they are the same decision
-/// — "who is simulating" — and a mapper who picked the wrong one should be one
-/// click from the other rather than back out in the menu.
+/// Which half of the connect dialog is showing. One dialog, so a wrong pick is one click from the
+/// other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectMode {
     Host,
     Join,
 }
 
-/// The little modal that asks for a host and a port.
-///
-/// A floating `egui::Window` rather than an `egui_dock` tab, deliberately: the
-/// panels rule exists so that editor *tools* dock alongside each other, and
-/// this is a modal question with an answer, not a surface you work in. It also
-/// has to be reachable while a map is open in any layout.
+/// A floating window rather than a dock tab: it is a modal question, not a work surface, and must
+/// be reachable in any layout.
 #[derive(Resource)]
 pub struct ConnectDialog {
     pub open: bool,
     pub mode: ConnectMode,
-    /// What the user is typing. Kept as text rather than a parsed host and
-    /// port so that a half-typed address is not repeatedly rejected while it
-    /// is still being typed.
+    /// Text rather than a parsed address, so a half-typed one is not rejected while typing.
     pub endpoint: String,
     /// Filled in on a refused submit, cleared on the next keystroke.
     pub error: Option<String>,
@@ -50,8 +41,7 @@ impl Default for ConnectDialog {
 
 impl ConnectDialog {
     fn show(&mut self, mode: ConnectMode) {
-        // Not reset if it is already open in this mode: re-picking the menu
-        // item should not throw away a half-typed address.
+        // Not reset when already open in this mode, so a half-typed address survives.
         if !self.open || self.mode != mode {
             self.endpoint = match mode {
                 ConnectMode::Host => DEFAULT_PORT.to_string(),
@@ -63,10 +53,7 @@ impl ConnectDialog {
         self.open = true;
     }
 
-    /// Turn what was typed into a request, or into a reason it was refused.
-    ///
-    /// Split out from the drawing so the grammar of the box is testable
-    /// without an egui context.
+    /// Separate from drawing so it is testable without egui.
     pub fn submit(&self) -> Result<NetRequest, String> {
         match self.mode {
             ConnectMode::Host => {
@@ -84,11 +71,7 @@ impl ConnectDialog {
     }
 }
 
-/// Owns the connect dialog and draws it.
-///
-/// The menu item that opens it lives in the editor's menu bar — see
-/// [`network_menu`] — but the window itself is drawn here, so that adding to
-/// it does not mean reaching into the panel layout.
+/// Draws the connect dialog; the menu item that opens it is [`network_menu`].
 pub struct NetMenuPlugin;
 
 impl Plugin for NetMenuPlugin {
@@ -101,11 +84,8 @@ impl Plugin for NetMenuPlugin {
     }
 }
 
-/// The `Multiplayer` menu, drawn into the editor's existing menu bar.
-///
-/// Takes the pieces it needs rather than being a system of its own: two menu
-/// bars in one window is two menu bars, and `egui::MenuBar` is built in one
-/// pass by whoever owns the top panel.
+/// The `Multiplayer` menu, drawn into the editor's existing menu bar, which is built in one pass by
+/// whoever owns the top panel.
 pub fn network_menu(
     ui: &mut egui::Ui,
     role: &NetRole,
@@ -114,13 +94,8 @@ pub fn network_menu(
     requests: &mut MessageWriter<NetRequest>,
 ) {
     ui.menu_button(get!("net.menu.title"), |ui| {
-        // What we currently are, before what we could become: the answer to
-        // "am I hosting?" should not require opening a dialog to find out.
-        //
-        // Both lines, because they answer different questions. The role is
-        // what was asked for and is true the instant it is picked; the status
-        // is what the socket is actually doing, and a host that never answered
-        // shows as a role of `Client` and a status of `Connecting`.
+        // The role is what was asked for; the status is what the socket is doing. A host that never
+        // answered shows as `Client` and `Connecting`.
         ui.label(role.describe());
         ui.label(status.describe());
         ui.separator();
@@ -134,8 +109,6 @@ pub fn network_menu(
             dialog.show(ConnectMode::Join);
         }
         ui.separator();
-        // Enabled only when there is something to leave, so the menu says
-        // whether we are online without being read carefully.
         if ui
             .add_enabled(role.is_online(), egui::Button::new(get!("net.menu.solo")))
             .clicked()
@@ -161,9 +134,7 @@ fn connect_dialog(
         ConnectMode::Join => get!("net.dialog.join_title"),
     };
 
-    // `open` drives the window's own close button; `submitted` is set by the
-    // buttons inside it. Both are read after the closure, because the closure
-    // borrows `dialog` and the request writer would be a second borrow.
+    // Read after the closure, because the closure borrows `dialog`.
     let mut open = true;
     let mut submitted = false;
     let mut cancelled = false;
@@ -188,12 +159,9 @@ fn connect_dialog(
                     .desired_width(240.0)
                     .hint_text(hint),
             );
-            // A stale complaint about an address that has since been corrected
-            // reads as the correction having been rejected too.
             if field.changed() {
                 dialog.error = None;
             }
-            // Return submits, as in every other address box.
             if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 submitted = true;
             }
@@ -215,12 +183,6 @@ fn connect_dialog(
                     cancelled = true;
                 }
             });
-
-            // The link is real, but nothing is replicated across it yet, and
-            // the box should say so rather than leaving somebody wondering why
-            // a connected server has no other players in it.
-            ui.separator();
-            ui.label(get!("net.dialog.no_replication"));
         });
 
     if cancelled || !open {
@@ -267,8 +229,6 @@ mod tests {
         ));
     }
 
-    /// The host box is a port, not an address: typing a hostname into it is a
-    /// mistake worth naming rather than binding something surprising.
     #[test]
     fn hosting_takes_only_a_port() {
         assert!(matches!(
@@ -285,8 +245,8 @@ mod tests {
         assert!(dialog(ConnectMode::Host, "").submit().is_err());
     }
 
-    /// Switching modes has to replace the default, or the port box opens
-    /// holding `localhost:27100` and refuses it.
+    /// Switching modes must replace the default, or the port box opens holding `localhost:27100` and
+    /// refuses it.
     #[test]
     fn switching_mode_reseeds_the_box() {
         let mut dialog = ConnectDialog::default();
@@ -296,8 +256,6 @@ mod tests {
         assert!(dialog.submit().is_ok(), "the join default was left in the port box");
     }
 
-    /// But re-opening the mode already showing must not: somebody halfway
-    /// through typing an address who brushes the menu should not lose it.
     #[test]
     fn reopening_the_same_mode_keeps_what_was_typed() {
         let mut dialog = ConnectDialog::default();

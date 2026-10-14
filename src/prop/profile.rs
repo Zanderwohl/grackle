@@ -1,37 +1,31 @@
-//! The 2D shapes a solid is swept from, and where the paper they are drawn on
-//! sits.
+//! Closed 2D loops in a sketch plane, which [`super::solid`] extrudes along
+//! the plane's normal or revolves about its vertical.
 //!
-//! A profile is a **closed loop in a sketch plane**, and everything volumetric
-//! in [`super::solid`] is one pushed along the plane's normal or spun about its
-//! vertical — so "extrude this" and "revolve this" are one gesture with two
-//! verbs.
-//!
-//! **A circle is an n-gon**, and there is no curve type coming: the look is
-//! faceted, and a side count is both the silhouette and a triangle budget
-//! stated out loud.
+//! A circle is an n-gon; there is no curve type, deliberately — the look is
+//! faceted and the side count is the triangle budget.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::common::rotation::quat_from_euler;
 
-/// The fewest sides anything round is allowed, so no caller has to check.
 pub const MIN_SIDES: u32 = 3;
 
-/// Where a sketch is, and which way up it is.
-///
-/// The sketch's own X and Y are the plane's; its **normal is local `+Z`**, the
-/// direction an extrusion travels. A revolve spins about local `+Y`.
-///
-/// Angles are the three Euler components in axis order, radians — the same
-/// convention every map feature stores and [`crate::common::rotation`] owns, so
-/// a prop turns by one rule everywhere.
+/// How many sides a request for `requested` gets: raised to [`MIN_SIDES`]
+/// rather than refused, so a file asking for fewer still builds.
+pub fn sides(requested: u32) -> u32 {
+    requested.max(MIN_SIDES)
+}
+
+/// A sketch plane. Its normal is local `+Z`, the direction an extrusion
+/// travels; a revolve spins about local `+Y`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Placement {
-    /// Where the sketch origin sits, in the prop's own space.
+    /// In the prop's own space.
     #[serde(default, with = "crate::prop::nice_f32::array")]
     pub origin: [f32; 3],
-    /// Pitch, yaw and roll in radians, in axis order.
+    /// Euler angles in radians, in axis order, as [`crate::common::rotation`]
+    /// defines them.
     #[serde(default, with = "crate::prop::nice_f32::array")]
     pub rotation: [f32; 3],
 }
@@ -49,16 +43,12 @@ impl Placement {
         quat_from_euler(Vec3::from_array(self.rotation))
     }
 
-    /// The transform a solid built in this placement's local space wants.
     pub fn transform(&self) -> Transform {
         Transform::from_translation(self.origin()).with_rotation(self.rotation())
     }
 }
 
 /// A closed loop, in sketch coordinates.
-///
-/// A rectangle and an n-gon are both a [`Profile::Points`] somebody would have
-/// had to type out, kept as variants so a radius stays one number.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "shape", rename_all = "snake_case")]
 pub enum Profile {
@@ -67,14 +57,13 @@ pub enum Profile {
         #[serde(with = "crate::prop::nice_f32::array")]
         half: [f32; 2],
     },
-    /// A regular polygon, `radius` to its **corners** rather than its flats —
-    /// the number that decides whether it fits through a hole.
+    /// `radius` is to the corners, not the flats.
     Ngon {
         sides: u32,
         #[serde(with = "crate::prop::nice_f32::scalar")]
         radius: f32,
     },
-    /// Whatever was typed in, wound counter-clockwise.
+    /// Either winding; see [`Profile::wound_ccw`].
     Points {
         #[serde(with = "crate::prop::nice_f32::pairs")]
         points: Vec<[f32; 2]>,
@@ -101,7 +90,7 @@ impl Profile {
                 ]
             }
             Profile::Ngon { sides, radius } => {
-                let sides = (*sides).max(MIN_SIDES);
+                let sides = self::sides(*sides);
                 (0..sides)
                     .map(|i| {
                         // A quarter turn in, so an even-sided n-gon rests on a
@@ -116,9 +105,7 @@ impl Profile {
         }
     }
 
-    /// Twice the signed area the loop encloses, positive when counter-
-    /// clockwise. The sign is what orients everything downstream, so a
-    /// hand-typed profile entered backwards still comes out solid.
+    /// Twice the signed area, positive when counter-clockwise.
     pub fn signed_area_x2(&self) -> f32 {
         let points = self.points();
         let mut total = 0.0;
@@ -129,7 +116,6 @@ impl Profile {
         total
     }
 
-    /// The loop, guaranteed counter-clockwise.
     pub fn wound_ccw(&self) -> Vec<Vec2> {
         let mut points = self.points();
         if self.signed_area_x2() < 0.0 {
@@ -147,14 +133,9 @@ impl Profile {
     }
 }
 
-/// Cut a loop into triangles, by ear clipping.
-///
-/// The kernel only accepts convex polygons, so a cap cannot be the profile: a
-/// fan from the centroid is right for a rectangle and silently wrong for
-/// anything with a notch in it.
-///
-/// Gives up and returns what it has on a self-intersecting loop — a half-capped
-/// solid can be looked at and diagnosed, and a panic mid-edit cannot.
+/// Ear clipping. The kernel needs convex polygons, and a fan is wrong for any
+/// profile with a notch. On a self-intersecting loop it returns what it has
+/// rather than panicking mid-edit.
 pub fn triangulate(points: &[Vec2]) -> Vec<[usize; 3]> {
     if points.len() < 3 {
         return vec![];
@@ -212,14 +193,12 @@ pub fn triangulate(points: &[Vec2]) -> Vec<[usize; 3]> {
 mod tests {
     use super::*;
 
-    /// Winding is read as "which way is out", so clockwise builds inside out.
     #[test]
     fn the_built_in_profiles_are_wound_counter_clockwise() {
         assert!(Profile::Rect { half: [1.0, 2.0] }.signed_area_x2() > 0.0);
         assert!(Profile::Ngon { sides: 8, radius: 1.0 }.signed_area_x2() > 0.0);
     }
 
-    /// A radius is to the corners, not the flats.
     #[test]
     fn an_ngon_measures_its_radius_to_a_corner() {
         let points = Profile::Ngon { sides: 6, radius: 2.0 }.points();
@@ -229,15 +208,13 @@ mod tests {
         }
     }
 
-    /// Clamped rather than refused: the number comes off a drag box, and one
-    /// you cannot drag through 2 on the way to 3 fights you.
+    /// Clamped rather than refused, so a drag box can pass through 2.
     #[test]
     fn an_ngon_cannot_be_given_fewer_than_three_sides() {
         assert_eq!(Profile::Ngon { sides: 1, radius: 1.0 }.points().len(), 3);
     }
 
-    /// The property the kernel's convexity rule depends on: the triangles
-    /// cover the profile exactly once.
+    /// Fails if a notched cap is not covered exactly once.
     #[test]
     fn triangulating_a_notched_profile_covers_its_area_once() {
         // An L: convex-hull area 4, actual area 3.

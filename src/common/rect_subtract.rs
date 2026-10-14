@@ -60,7 +60,6 @@ pub fn subtract_rects(face: &Rect2D, holes: &[Rect2D]) -> Vec<Rect2D> {
     us.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
     vs.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
 
-    // Filter to only breakpoints inside the face
     us.retain(|&u| u >= face.min_u && u <= face.max_u);
     vs.retain(|&v| v >= face.min_v && v <= face.max_v);
 
@@ -102,13 +101,11 @@ pub fn subtract_rects(face: &Rect2D, holes: &[Rect2D]) -> Vec<Rect2D> {
                 continue;
             }
 
-            // Extend right
             let mut end_col = col;
             while end_col + 1 < cols && solid[row][end_col + 1] && !visited[row][end_col + 1] {
                 end_col += 1;
             }
 
-            // Extend down
             let mut end_row = row;
             'outer: while end_row + 1 < rows {
                 for c in col..=end_col {
@@ -119,7 +116,6 @@ pub fn subtract_rects(face: &Rect2D, holes: &[Rect2D]) -> Vec<Rect2D> {
                 end_row += 1;
             }
 
-            // Mark visited
             for r in row..=end_row {
                 for c in col..=end_col {
                     visited[r][c] = true;

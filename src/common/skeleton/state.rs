@@ -1,33 +1,16 @@
 //! What a body is doing, and who gets to say so.
 //!
-//! The rule this module exists to enforce: **nothing outside picks an
-//! animation.** A local player, an NPC, a body being driven by the network and
-//! a preview standing in the editor all have completely different ideas of
-//! where their information comes from, and if each of them chose a clip you
-//! would have four copies of the same state machine drifting apart — the walk
-//! that only breaks for remote players is exactly that bug.
+//! Nothing outside this module picks an animation: a local player, an NPC, a
+//! networked body and an editor preview each choosing a clip would be four
+//! copies of one state machine drifting apart.
 //!
-//! So there are two components and one direction of flow:
+//! - [`BodyRequests`] describes the situation (running forward, airborne, a
+//!   wall ahead) and names no animation. Several systems each own a field.
+//! - [`SkeletonAnimator`] reads requests, picks an [`AnimationState`], and is
+//!   the only writer of a [`Pose`]. Transitions, blending and dwell live there.
 //!
-//! - [`BodyRequests`] is a description of the situation: running forward,
-//!   airborne, a wall in front. Anything may write it, and several systems
-//!   can each own a field of it — input writes what is being asked for, the
-//!   physics step writes what the world did about it. It contains no
-//!   animation names at all.
-//! - [`SkeletonAnimator`] is the state machine. It reads requests, decides
-//!   which [`AnimationState`] follows from them, and is the only thing that
-//!   writes a [`Pose`]. Transitions, blending and dwell times are its problem
-//!   and nobody else's.
-//!
-//! [`ForcedAnimation`] is the deliberate exception: it pins a body to one
-//! state regardless of requests, which is what the editor's Animation Display
-//! feature needs — there is no situation to describe, a mapper is asking to
-//! see a particular state.
-//!
-//! There are no animation clips yet, so every state currently poses as the
-//! A-pose. The machine is still worth having now: it is the seam everything
-//! else is written against, and the transitions are testable before there is
-//! anything to look at.
+//! [`ForcedAnimation`] pins a body to one state regardless of requests, for
+//! the editor's Animation Display feature.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -47,45 +30,27 @@ use crate::get;
 
 /// Everything a state needs to know to pose a body.
 ///
-/// Two clocks, deliberately, because animations are not all functions of the
-/// same thing. An idle is a function of time; a run is a function of how far
-/// you have gone, which is what stops its feet sliding when you speed up. Both
-/// are quantities every viewer of a body can agree on — see [`AnimationClock`]
-/// and [`crate::common::skeleton::gait::Gait`] — and a state says which it
-/// uses simply by reading it.
+/// Two clocks: an idle is a function of time, a run of distance covered, which
+/// keeps its feet from sliding as speed changes. Every viewer agrees on both.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PoseInputs {
     /// The shared clock, plus this body's own [`AnimationPhase`].
     pub seconds: f32,
     /// Where in its stride the body is, wrapping at 1.
     pub stride: f32,
-    /// How fast it is going, in leg-lengths per second.
-    ///
-    /// Measured from ground covered rather than asked for, so a body dragged
-    /// along by something else animates as moving and a body pushing at a wall
-    /// does not. It is what decides whether a gait is a walk or a run.
+    /// How fast it is going, in leg-lengths per second. Measured from ground
+    /// covered rather than requested, so a body pushing at a wall does not
+    /// animate as moving.
     pub speed: f32,
     /// Which way it is going, in its own frame: `x` right, `y` forwards.
-    ///
-    /// The state says what a body is doing in the coarse — running, shuffling,
-    /// ducked — and this says exactly which way, which is the only way a
-    /// diagonal can be one thing rather than a choice between two states.
     pub travel: Vec2,
 }
 
 /// The clock every animation is sampled against.
 ///
-/// Not each viewer's own elapsed time, and not the animator's time-in-state:
-/// two people watching the same body on the same tick have to see it in the
-/// same part of its cycle, or a spectator and a player disagree about where a
-/// head is. So the clock is a shared quantity — advanced by whole fixed steps,
-/// which is what makes it a number a server can state and a client can be
-/// corrected to.
-///
-/// Sampling on tick boundaries rather than at frame rate is deliberate for the
-/// same reason. An idle cycle is seconds long; 64 Hz is far finer than
-/// anything the eye can catch in one, and it is the rate everything else that
-/// has to agree already runs at.
+/// Shared rather than per-viewer or time-in-state, so two viewers see a body
+/// at the same point in its cycle. Advanced by whole fixed steps so a server
+/// can state it and a client be corrected to it.
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub struct AnimationClock {
     ticks: u64,
@@ -93,7 +58,6 @@ pub struct AnimationClock {
 }
 
 impl AnimationClock {
-    /// Seconds since the clock started.
     pub fn seconds(&self) -> f32 {
         self.seconds
     }
@@ -102,34 +66,25 @@ impl AnimationClock {
         self.ticks
     }
 
-    /// One fixed step. `dt` is the fixed timestep, so this is exact rather
-    /// than accumulated frame time.
+    /// One fixed step; `dt` is the fixed timestep.
     pub fn advance(&mut self, dt: f32) {
         self.ticks += 1;
-        // From the tick count rather than by adding `dt` each time: a float
-        // added sixty-four times a second drifts, and two machines that had
-        // been running for different lengths of time would drift apart.
+        // From the tick count rather than summed, so machines that have run for
+        // different lengths of time do not drift apart.
         self.seconds = self.ticks as f32 * dt;
     }
 }
 
 /// Where in its cycle a body is, relative to the shared clock.
 ///
-/// Bodies that all bounced on the same frame would read as one machine rather
-/// than ten people, so each is offset. The offset is derived from an
-/// identifier everyone agrees on rather than rolled locally: two viewers of
-/// the same body must land on the same phase, which is exactly what an RNG
-/// would not give them.
+/// Keeps bodies from bouncing in unison. Derived from an id rather than rolled
+/// locally, so every viewer lands on the same phase.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct AnimationPhase(pub f32);
 
 impl AnimationPhase {
-    /// A phase from a stable identifier.
-    ///
-    /// The identifier has to be one every machine computes the same way — a
-    /// cell's index in a grid, and a body's network id once there is a
-    /// network. Not an `Entity`, whose index is local to one `World` and would
-    /// put a body in a different part of its cycle on every machine.
+    /// From an id every machine computes the same way (a grid cell index, a
+    /// network id), never an `Entity`, whose index is local to one `World`.
     pub fn from_id(id: u64) -> AnimationPhase {
         // SplitMix64's finaliser: integer-only, so every machine agrees, and
         // it scatters consecutive ids rather than leaving neighbours in step.
@@ -143,77 +98,48 @@ impl AnimationPhase {
     }
 }
 
-/// How far apart in time two bodies can be put.
-///
-/// Longer than the longest cycle, so a phase can land anywhere in one.
+/// Seconds. Longer than the longest cycle, so a phase can land anywhere in one.
 const PHASE_SPREAD: f32 = 10.0;
 
-/// How long it takes to change from one state to the next, in seconds.
-///
-/// Without it a body cuts between poses: standing up out of a crouch happens
-/// entirely between two frames, which reads as a jerk rather than as a
-/// movement. Short enough that a state change is still a state change and not
-/// a slow dissolve.
+/// How long a state change blends over, in seconds. Short enough to read as a
+/// change rather than a dissolve.
 const BLEND_TIME: f32 = 0.15;
 
-/// How long a state has to hold before another one can take over.
-///
-/// Without it, a body pressed against a wall alternates between running and
-/// pushing at whatever rate collision happens to resolve, and the animation
-/// flickers. A tenth of a second is below the threshold where a real
-/// transition feels delayed and above the rate anything chatters at.
+/// Seconds a state holds before another can take over. Stops a body against a
+/// wall flickering between running and pushing at the collision rate.
 const MIN_DWELL: f32 = 0.1;
 
-/// What is happening to a body, in terms anything can observe.
+/// What is happening to a body, as observable facts rather than animation
+/// names, so input, an NPC planner and the network can fill the same struct.
 ///
-/// Deliberately not "which animation": these are facts about the world and
-/// the body's intent, so an NPC's planner and a network packet can fill in the
-/// same struct that keyboard input does.
-///
-/// Each field is *assigned* by whoever owns it, every frame, rather than
-/// accumulated — a field nobody writes stays false, and a writer that stops
-/// having an opinion clears its own field. That is why there is no reset
-/// system: a stale `wall_ahead` that nothing ever cleared would be a body
-/// pushing at thin air forever.
+/// Each field is assigned by its owner every frame, not accumulated, which is
+/// why there is no reset system.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct BodyRequests {
-    /// Being asked to move forwards — a held W, an NPC's path, a replayed
-    /// input. Asked for, not achieved: a body walking into a wall is still
-    /// running forward, and the difference is [`BodyRequests::wall_ahead`].
+    /// Asked for, not achieved: a body walking into a wall is still running
+    /// forward, and the difference is [`BodyRequests::wall_ahead`].
     pub running_forward: bool,
-    /// Being asked to move backwards.
     pub running_backward: bool,
-    /// Being asked to step sideways, towards the character's own left or
-    /// right. Two fields rather than one, for the same reason forwards and
-    /// backwards are two: which way the feet travel is not something a pose
-    /// can work out for itself.
+    /// Towards the character's own left or right.
     pub strafing_left: bool,
     pub strafing_right: bool,
-    /// Movement is being stopped by something solid in the direction asked
-    /// for. Written by whatever ran the movement, because it is the only thing
-    /// that knows.
+    /// Movement is stopped by something solid. Written by whatever ran the
+    /// movement.
     pub wall_ahead: bool,
     /// Not standing on anything.
     pub airborne: bool,
-    /// Ducked. What the body *is*, not what it was asked to be — a body under
-    /// a vent stays crouched after the key comes up, and it should animate
-    /// that way.
+    /// What the body is, not what was asked: a body under a vent stays crouched
+    /// after the key comes up.
     pub crouching: bool,
 }
 
 impl BodyRequests {
-    /// Being asked to move at all, in any direction.
     pub fn moving(&self) -> bool {
         self.running_forward || self.running_backward || self.strafing_left || self.strafing_right
     }
 }
 
-/// One animation state. There are no clips behind them yet.
-///
-/// The order of these is on disk — the editor's Animation Display feature
-/// stores the state as [`AnimationState::index`] — so **add new states at the
-/// end** and do not reorder. A shuffled list would silently repoint every
-/// saved display at a different animation.
+/// One animation state.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, Reflect,
 )]
@@ -222,12 +148,8 @@ pub enum AnimationState {
     Idle,
     RunForward,
     RunBackward,
-    /// Stepping sideways towards the character's own left. Was simply
-    /// `Strafe` before there were sides to it, and keeps that index.
     StrafeLeft,
-    /// Asking to move forwards into something solid. Its own state rather than
-    /// a variant of running, because a body whose legs keep cycling against a
-    /// wall is the single most obvious animation bug there is.
+    /// Its own state so the legs do not keep cycling against a wall.
     PushingWall,
     Airborne,
     /// Ducked and still.
@@ -235,62 +157,17 @@ pub enum AnimationState {
     /// Ducked and moving: a short-stepped shuffle that always keeps a foot
     /// down.
     CrouchWalk,
-    /// The same shuffle, backwards. Its own state for the same reason
-    /// [`AnimationState::RunBackward`] is: which way the feet travel is not
-    /// something a pose can be asked to work out for itself.
+    /// Its own state because a pose cannot tell which way the feet travel.
     CrouchWalkBackward,
     StrafeRight,
     CrouchStrafeLeft,
     CrouchStrafeRight,
-    /// In the air and ducked — the crouch-jump. Both halves at once, because
-    /// it is both: the legs are tucked because there is no ground, and the
-    /// body is folded because the hull it is flying through is the short one.
+    /// The crouch posture with airborne legs, since the body is flying
+    /// through the short hull.
     CrouchAirborne,
 }
 
 impl AnimationState {
-    /// Stable index for the save format. See the type's note about ordering.
-    pub fn index(&self) -> u32 {
-        match self {
-            AnimationState::Idle => 0,
-            AnimationState::RunForward => 1,
-            AnimationState::RunBackward => 2,
-            AnimationState::StrafeLeft => 3,
-            AnimationState::PushingWall => 4,
-            AnimationState::Airborne => 5,
-            AnimationState::Crouch => 6,
-            AnimationState::CrouchWalk => 7,
-            AnimationState::CrouchWalkBackward => 8,
-            AnimationState::StrafeRight => 9,
-            AnimationState::CrouchStrafeLeft => 10,
-            AnimationState::CrouchStrafeRight => 11,
-            AnimationState::CrouchAirborne => 12,
-        }
-    }
-
-    /// The state an index names, or [`AnimationState::Idle`] for one this
-    /// build does not know.
-    ///
-    /// A map saved by a later build naming a state this one has never heard of
-    /// is a display that stands there idle, not a refusal to open the map.
-    pub fn from_index(index: u32) -> AnimationState {
-        match index {
-            1 => AnimationState::RunForward,
-            2 => AnimationState::RunBackward,
-            3 => AnimationState::StrafeLeft,
-            4 => AnimationState::PushingWall,
-            5 => AnimationState::Airborne,
-            6 => AnimationState::Crouch,
-            7 => AnimationState::CrouchWalk,
-            8 => AnimationState::CrouchWalkBackward,
-            9 => AnimationState::StrafeRight,
-            10 => AnimationState::CrouchStrafeLeft,
-            11 => AnimationState::CrouchStrafeRight,
-            12 => AnimationState::CrouchAirborne,
-            _ => AnimationState::Idle,
-        }
-    }
-
     pub fn name(&self) -> String {
         match self {
             AnimationState::Idle => get!("animation.states.idle"),
@@ -309,25 +186,16 @@ impl AnimationState {
         }
     }
 
-    /// The state that follows from a situation.
-    ///
-    /// Priority order, most overriding first: being in the air beats anything
-    /// the legs were asked to do, and running into a wall beats running.
+    /// Priority order: airborne beats everything, crouching beats what the legs
+    /// were asked to do, and a wall beats running.
     pub fn from_requests(requests: &BodyRequests) -> AnimationState {
         if requests.airborne {
-            // A crouch-jump is not a jump that happens to be ducked: the hull
-            // shrinks, the feet come up, and a body drawn standing upright
-            // through a gap it is only clearing because it ducked would be
-            // showing the player the wrong thing at the moment it matters.
             if requests.crouching {
                 AnimationState::CrouchAirborne
             } else {
                 AnimationState::Airborne
             }
         } else if requests.crouching {
-            // Crouching outranks what the legs were asked to do, because it is
-            // the thing that decides what they can do at all. A body cannot
-            // sprint out of a duck.
             if requests.wall_ahead || !requests.moving() {
                 AnimationState::Crouch
             } else if requests.running_forward {
@@ -354,11 +222,8 @@ impl AnimationState {
         }
     }
 
-    /// Whether this state has to fit inside a crouched body's box.
-    ///
-    /// Being ducked is measured against a hull that is one size for every
-    /// build, so how far a particular body has to fold to get under it is
-    /// worked out per body rather than written down — see
+    /// Whether this state has to fit inside the crouched hull. How far a body
+    /// folds is worked out per build by
     /// [`crate::common::skeleton::ik::duck_under`].
     pub fn ducks(&self) -> bool {
         matches!(
@@ -372,12 +237,9 @@ impl AnimationState {
         )
     }
 
-    /// Whether this state's feet are pinned to the ground it is standing on.
-    ///
-    /// A correction the state asks for rather than something every body gets:
-    /// see [`crate::common::skeleton::ik::finish_pose`]. Airborne is the case
-    /// that makes the distinction real — feet welded to a floor a body has
-    /// left would be a body doing the splits on the way up.
+    /// Whether this state's feet are pinned to the ground; see
+    /// [`crate::common::skeleton::ik::finish_pose`]. False in the air, where
+    /// pinned feet would do the splits.
     pub fn plants_feet(&self) -> bool {
         !matches!(
             self,
@@ -385,26 +247,15 @@ impl AnimationState {
         )
     }
 
-    /// Transitions that must not wait for [`MIN_DWELL`].
-    ///
-    /// Leaving the ground and landing are the two the eye catches: a jump that
-    /// starts a tenth of a second late reads as the body being dragged
-    /// upwards, where a walk that starts late reads as nothing at all.
+    /// Transitions that must not wait for [`MIN_DWELL`]: a jump that starts late
+    /// reads as the body being dragged upwards.
     fn is_urgent(&self) -> bool {
         matches!(self, AnimationState::Airborne)
     }
 
-    /// The name a clip for this state is filed under.
-    ///
-    /// Spelled out rather than derived from the variant, because these are
-    /// **file names on disk** — the same reason `Class::key` is written out —
-    /// and a rename that silently orphaned every shipped clip would show up as
-    /// bodies quietly going back to their Rust poses.
-    ///
-    /// It is also what makes the library loadable without listing a
-    /// directory: the names come from the enum, so the runtime asks for each
-    /// by name rather than enumerating, which is the rule `Assets` is built
-    /// on and the only thing that works behind a `fetch`.
+    /// The file name a clip for this state is stored under. Written out rather
+    /// than derived so a rename cannot orphan shipped clips. Names come from the
+    /// enum so the library loads by name without listing a directory.
     pub fn clip_name(self) -> &'static str {
         match self {
             AnimationState::Idle => "idle",
@@ -423,30 +274,19 @@ impl AnimationState {
         }
     }
 
-    /// The pose this state is in at `seconds` on the shared clock.
+    /// The pose this state is in, before corrections.
     ///
-    /// `seconds` is [`AnimationClock`] plus the body's [`AnimationPhase`], not
-    /// time-in-state: a cycle that restarted on every transition would hitch
-    /// each time a body brushed a wall, and two viewers would only agree if
-    /// they had also agreed on the exact tick the state changed.
-    ///
-    /// The moving states are a gait, the idle is a settle, and being in the
-    /// air is still the A-pose — falling is the next thing worth writing, and
-    /// standing in for it with a guess would be worse than the placeholder
-    /// being obvious.
-    ///
-    /// Both are functions rather than sampled keys, because both genuinely are
-    /// functions. The first state that needs a clip is one nobody can derive:
-    /// a taunt.
+    /// `inputs.seconds` is the shared clock plus phase, not time-in-state: a
+    /// cycle restarted on every transition would hitch whenever a body brushed
+    /// a wall, and viewers would have to agree on the tick of every change.
     pub fn pose(&self, inputs: &PoseInputs) -> Pose {
         match self {
             AnimationState::Idle => idle_pose(inputs.seconds),
             AnimationState::Crouch => crouch_posture(),
             AnimationState::Airborne => airborne_pose(),
             AnimationState::CrouchAirborne => {
-                // Folded like a crouch, with the legs of a jump. Nothing is
-                // planted, so the tuck stands as written; `duck_under` then
-                // folds the whole thing under the short hull it is flying in.
+                // Nothing is planted, so the tuck stands; `duck_under` then
+                // folds it under the short hull.
                 let mut pose = crouch_posture();
                 airborne_legs(&mut pose);
                 pose
@@ -458,11 +298,8 @@ impl AnimationState {
         }
     }
 
-    /// Whether this state walks, in the sense of taking steps.
-    ///
-    /// `PushingWall` does, which is the interesting one: its cycle is driven
-    /// by ground covered, so a body shoving at a wall holds whatever step it
-    /// stopped on instead of running on the spot.
+    /// Whether this state takes steps. `PushingWall` does: its cycle runs on
+    /// ground covered, so a body shoving a wall holds its step.
     pub fn uses_gait(&self) -> bool {
         matches!(
             self,
@@ -478,12 +315,8 @@ impl AnimationState {
         )
     }
 
-    /// Which way this body is travelling, in its own frame.
-    ///
-    /// Measured movement where there is any, and the state's own coarse
-    /// direction where there is not — a display standing on the spot has
-    /// nothing to measure, and a body that has actually gone somewhere knows
-    /// better than its own label does.
+    /// Measured travel where there is any, else the state's own direction: a
+    /// display standing still has nothing to measure.
     fn travel(&self, inputs: &PoseInputs) -> Vec2 {
         if inputs.travel == Vec2::ZERO {
             direction_of(*self)
@@ -492,11 +325,7 @@ impl AnimationState {
         }
     }
 
-    /// How a state carries itself while it walks.
-    ///
-    /// A crouched walk is its own gait rather than the upright one played
-    /// lower: shorter steps, both feet down most of the time, and no speed at
-    /// which it turns into a run.
+    /// A crouched walk is its own gait, not the upright one played lower.
     fn gait_style(&self, inputs: &PoseInputs) -> GaitStyle {
         match self {
             AnimationState::CrouchWalk | AnimationState::CrouchWalkBackward => GaitStyle::CROUCHED,
@@ -508,10 +337,6 @@ impl AnimationState {
         }
     }
 
-    /// Where this state wants the feet, relative to where they rest.
-    ///
-    /// Empty offsets mean "where a body standing still has them", which is
-    /// what an idle wants. A clip will answer this from its contact spans.
     /// How much of a stride each foot is down for, if this state takes steps.
     pub fn stance(&self, inputs: &PoseInputs) -> Option<f32> {
         self.uses_gait().then(|| self.gait_style(inputs).shape.stance)
@@ -532,18 +357,8 @@ impl AnimationState {
     }
 }
 
-/// The state machine, and the only thing that writes a [`Pose`].
-/// The body animations that have been authored as data.
-///
-/// **Per state, so the migration is thirteen independent decisions.** A state
-/// with a clip plays it; one without is still a function, and a half-migrated
-/// build is not a broken one — which is the whole reason this is a lookup
-/// rather than a switch.
-///
-/// Empty by default, so anything that has not been handed a library behaves
-/// exactly as it did before there were clips. That is what every test that
-/// passes `None` relies on, including the one that compares a migrated clip
-/// against the function it replaced.
+/// Body animations authored as data, per state. A state without a clip uses
+/// its built-in function, so states migrate one at a time. Empty by default.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct ClipLibrary {
     by_state: HashMap<AnimationState, Arc<StateAnimation>>,
@@ -558,12 +373,8 @@ impl ClipLibrary {
         self.by_state.insert(state, Arc::new(animation.into()));
     }
 
-    /// Put a state back on its built-in pose.
-    ///
-    /// The other half of `insert`, and the animation editor needs it: a body
-    /// clip somebody deletes — or reverts, or loads a pack without — has to
-    /// stop playing, and a library that only ever grew would keep playing the
-    /// clip right up until the process ended.
+    /// Put a state back on its built-in pose, for a clip deleted, reverted, or
+    /// missing from a newly loaded pack.
     pub fn remove(&mut self, state: AnimationState) {
         self.by_state.remove(&state);
     }
@@ -582,15 +393,14 @@ impl ClipLibrary {
     }
 }
 
+/// The state machine, and the only thing that writes a [`Pose`].
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct SkeletonAnimator {
     state: AnimationState,
-    /// What it was doing before, and how far along the change is. A body is
-    /// somewhere between the two until the blend finishes.
+    /// The state being blended out of; `blend` runs 0 to 1 over [`BLEND_TIME`].
     previous: AnimationState,
     blend: f32,
-    /// How long the current state has been running, which is what a clip is
-    /// sampled at and what [`MIN_DWELL`] is measured against.
+    /// Time in the current state; what [`MIN_DWELL`] is measured against.
     elapsed: f32,
 }
 
@@ -603,10 +413,7 @@ impl SkeletonAnimator {
         self.elapsed
     }
 
-    /// The state being blended out of, and how far the change has got.
-    ///
-    /// One at rest, which is the common case: most of the time a body is
-    /// simply in a state and there is nothing to blend.
+    /// The state being blended out of. [`Self::blend`] is 1 once settled.
     pub fn previous(&self) -> AnimationState {
         self.previous
     }
@@ -632,14 +439,11 @@ impl SkeletonAnimator {
         if wanted == self.state {
             return;
         }
-        // Either the state has had its dwell, or the new one is too important
-        // to wait — leaving the state matters as much as arriving, so a jump
-        // out of a hundredth-of-a-second idle still plays.
+        // Leaving an urgent state matters as much as entering one, so a jump
+        // out of a very short idle still plays.
         if self.elapsed >= MIN_DWELL || wanted.is_urgent() || self.state.is_urgent() {
-            // Blending out of whatever it was, from the start again. A change
-            // that interrupts a change loses the pose it was part way to,
-            // which is a corner worth knowing about but not one the eye
-            // catches at this length.
+            // An interrupted blend restarts from the current state, losing
+            // the pose it was part way to; not visible at this blend length.
             self.previous = self.state;
             self.blend = 0.0;
             self.state = wanted;
@@ -653,11 +457,8 @@ impl SkeletonAnimator {
     }
 }
 
-/// Pin a body to one state and ignore its requests.
-///
-/// For showing an animation rather than driving a character: the editor's
-/// Animation Display feature, and anything else that wants a body to stand
-/// there doing one named thing.
+/// Pin a body to one state and ignore its requests, for showing an animation
+/// rather than driving a character.
 #[derive(
     Component, Clone, Copy, Debug, Default, PartialEq, Reflect, Serialize, Deserialize,
 )]
@@ -666,11 +467,8 @@ pub struct ForcedAnimation(pub AnimationState);
 /// How long one idle cycle takes, in seconds.
 pub const IDLE_PERIOD: f32 = 3.4;
 
-/// How far the hips drop at the bottom of the cycle, in hip-heights.
-///
-/// In hip-heights rather than metres so the same idle reads the same on every
-/// build — a two-centimetre drop is a settle on a tall body and a squat on a
-/// short one.
+/// How far the hips drop at the bottom of the cycle, in hip-heights so it
+/// reads the same on every build.
 const IDLE_BOB: f32 = 0.022;
 
 /// How far the chest leans forward at the bottom, in radians.
@@ -679,25 +477,21 @@ const IDLE_LEAN: f32 = 0.045;
 /// How far the arms swing, in radians.
 const IDLE_ARM_SWING: f32 = 0.05;
 
-/// How the legs are carried in the air, in radians: how far the hip is raised
-/// and how far the knee is bent under it.
-///
-/// The two legs do not match. A body with its legs together is a body at
-/// attention, which is not what anybody looks like mid-jump — one leads with
-/// the knee up and the other trails with the heel tucked behind. Which one
-/// leads is arbitrary and stays put; mirroring it would need a reason to
-/// mirror it by.
-/// The knee is what raises a foot; the hip mostly swings it forward. So both
-/// legs bend further at the knee than they lift at the hip, which is also what
-/// tucks the heels up rather than leaving the legs dangling.
+/// Radians.
+const IDLE_ELBOW_BEND: f32 = 0.3;
+
+/// Left and right arm forward and up, in radians. The arm opposite the
+/// leading leg carries higher, as when running.
+const AIRBORNE_ARM_SWING: [f32; 2] = [0.5, 0.9];
+const AIRBORNE_ELBOW_BEND: f32 = 1.3;
+
+/// Hip raise and knee bend in the air, in radians. One leg leads knee-up and
+/// the other trails heel-tucked; legs together read as standing to attention.
+/// The knee bends further than the hip lifts, which tucks the heels up.
 const AIRBORNE_LEADING: (f32, f32) = (0.55, -1.25);
 const AIRBORNE_TRAILING: (f32, f32) = (0.10, -1.05);
 
-/// One leading knee up and one trailing heel tucked, for a body with no ground
-/// under it.
-///
-/// Its own function because a crouch-jump wants these legs on a folded body:
-/// two states, one pair of legs, and no chance of them drifting apart.
+/// Shared by the airborne and crouch-airborne poses.
 fn airborne_legs(pose: &mut Pose) {
     for ((thigh, shin), (hip, knee)) in [
         ((bone::THIGH_L, bone::SHIN_L), AIRBORNE_LEADING),
@@ -708,53 +502,37 @@ fn airborne_legs(pose: &mut Pose) {
     }
 }
 
-/// Off the ground.
-///
-/// Nothing is planted, so this is the one state whose legs are written here
-/// rather than solved for — [`AnimationState::plants_feet`] is false, and a
-/// body whose feet were pinned to a floor it has left would be doing the
-/// splits on the way up.
+/// Off the ground. The legs are written here rather than solved, because
+/// nothing is planted ([`AnimationState::plants_feet`]).
 fn airborne_pose() -> Pose {
     let mut pose = Pose::rest();
     airborne_legs(&mut pose);
 
-    // Forward and up, the way arms go when the ground stops being there — and
-    // at the sides rather than out on the diagonal, like every other posture.
-    // The arm opposite the leading leg carries higher, as it would running.
-    arms_at_sides(&mut pose, [0.5, 0.9], 1.3);
+    arms_at_sides(&mut pose, AIRBORNE_ARM_SWING, AIRBORNE_ELBOW_BEND);
 
     pose
 }
 
 /// Standing still: a slow settle into the knees and back up.
 ///
-/// Only the hips and the spine. The legs are not mentioned at all — the feet
-/// are held by the planting pass in [`crate::common::skeleton::ik`], which is
-/// the same pass a run cycle and a taunt's contact spans will use. This
-/// function used to work the knee angles out itself, exactly and only for the
-/// case of a hip directly above a planted foot; the solver does the general
-/// thing, so the special case is gone.
+/// Only the hips and spine; the feet are held by the planting pass in
+/// [`crate::common::skeleton::ik`].
 fn idle_pose(seconds: f32) -> Pose {
-    // Down from rest and back, never up: rest already has the legs straight,
-    // so there is nowhere above it to go without leaving the floor.
+    // Down from rest and back, never up: rest already has the legs straight.
     let cycle = std::f32::consts::TAU * seconds / IDLE_PERIOD;
     let settle = (1.0 - cycle.cos()) * 0.5;
 
     let mut pose = Pose::rest();
     pose.root_offset = Vec3::NEG_Y * (settle * IDLE_BOB);
 
-    // A settle that only moved vertically would read as an elevator. The chest
-    // leans into it and the arms trail a quarter cycle behind, which is what
-    // makes it look like weight rather than translation.
+    // The chest leans and the arms trail a quarter cycle behind, so it reads
+    // as weight rather than translation.
     pose.set(bone::CHEST, Quat::from_rotation_x(settle * IDLE_LEAN));
     pose.set(bone::NECK, Quat::from_rotation_x(-settle * IDLE_LEAN * 0.6));
 
-    // At the sides, as in every other posture — an A-pose is for building a
-    // rig, not for standing about in. The sway is a fraction of a walk's, and
-    // both arms do it together: opposed swings are what walking looks like,
-    // and a body standing still is not taking steps.
+    // Both arms sway together; opposed swings read as walking.
     let trail = (cycle - std::f32::consts::FRAC_PI_2).sin() * IDLE_ARM_SWING;
-    arms_at_sides(&mut pose, [trail, trail], 0.3);
+    arms_at_sides(&mut pose, [trail, trail], IDLE_ELBOW_BEND);
 
     pose
 }
@@ -781,13 +559,8 @@ mod tests {
         (posed.head, posed.tail)
     }
 
-    /// The bounce lowers the hips and the legs hang off them, so on its own
-    /// the idle is a body sinking through the floor. What holds the feet is
-    /// the planting pass the state asks for — this is the whole pipeline, and
-    /// the thing a player would actually see.
-    ///
-    /// Across all three builds, because a foot that stayed put on one and
-    /// slid on another is exactly what a pose of rotations would do.
+    /// The idle lowers the hips; the planting pass must hold the feet still, on
+    /// every build.
     #[test]
     fn feet_stay_planted_through_the_whole_idle_cycle() {
         use crate::common::skeleton::ik::finish_pose;
@@ -817,8 +590,7 @@ mod tests {
         }
     }
 
-    /// And it does actually move — a planted-feet test passes perfectly on an
-    /// animation that does nothing at all.
+    /// A planted-feet test passes on an animation that does nothing.
     #[test]
     fn the_idle_settles_and_comes_back_up() {
         let standing = bone_at(Proportions::DEFAULT, &Pose::rest(), bone::HEAD).1.y;
@@ -829,8 +601,7 @@ mod tests {
         assert!((standing - back_up).abs() < 1e-4, "the cycle does not return to where it started");
     }
 
-    /// Standing about in an A-pose is a rig, not a person. The idle hangs its
-    /// arms where every other posture does.
+    /// The idle hangs its arms at its sides, not in the A-pose.
     #[test]
     fn the_idle_stands_with_its_arms_at_its_sides() {
         let skeleton = humanoid(Proportions::DEFAULT);
@@ -853,8 +624,7 @@ mod tests {
         }
     }
 
-    /// Both feet up, and not the same amount: a body in the air with its legs
-    /// together reads as standing to attention while falling.
+    /// Legs together in the air read as standing to attention.
     #[test]
     fn the_airborne_pose_lifts_both_feet_and_splits_them() {
         let skeleton = humanoid(Proportions::DEFAULT);
@@ -879,8 +649,7 @@ mod tests {
         assert!(split.abs() > 0.1, "the feet are {split:.2} m apart front to back");
     }
 
-    /// A one-sided idle would be a body leaning slightly for ever, and would
-    /// show up the moment it was played next to nine others.
+    /// A one-sided idle leans, visibly so beside other bodies.
     #[test]
     fn the_idle_is_symmetric() {
         let pose = idle_at(0.9);
@@ -893,8 +662,7 @@ mod tests {
         );
     }
 
-    /// The point of a shared clock: the same tick gives the same pose, on any
-    /// machine, whatever either of them was doing beforehand.
+    /// The same moment gives the same pose on any machine.
     #[test]
     fn the_same_moment_gives_the_same_pose() {
         let one = idle_at(12.25);
@@ -903,9 +671,8 @@ mod tests {
         assert_eq!(one.joint(bone::THIGH_L), other.joint(bone::THIGH_L));
     }
 
-    /// The clock counts ticks and derives seconds from the count, so a machine
-    /// that has been running for an hour is at the same time as one that has
-    /// been running for a minute if they are on the same tick.
+    /// Seconds come from the tick count, so equal ticks give equal time however
+    /// long each machine has run.
     #[test]
     fn the_clock_advances_by_whole_ticks() {
         let dt = 1.0 / 64.0;
@@ -918,10 +685,8 @@ mod tests {
         assert!((clock.seconds() - 10.0).abs() < 1e-4, "ten seconds is {}", clock.seconds());
     }
 
-    /// A phase has to be a function of the identifier and nothing else — two
-    /// viewers deriving it separately must land on the same number — and
-    /// consecutive ids must not come out next to each other, or a grid bounces
-    /// as a wave.
+    /// A phase depends only on its id, and consecutive ids are scattered so a
+    /// grid does not bounce as a wave.
     #[test]
     fn a_phase_is_derived_from_its_id_alone() {
         assert_eq!(AnimationPhase::from_id(7), AnimationPhase::from_id(7));
@@ -939,9 +704,7 @@ mod tests {
         assert!(neighbours < 6, "{neighbours} of 59 neighbouring ids are nearly in step");
     }
 
-    /// The example the whole arrangement is for: two independent facts, one
-    /// written by input and one by collision, and neither writer knows what
-    /// animation comes out.
+    /// Input and collision each write one fact; neither knows the animation.
     #[test]
     fn running_at_a_wall_is_not_running() {
         let mut requests = BodyRequests::default();
@@ -956,8 +719,7 @@ mod tests {
         assert_eq!(AnimationState::from_requests(&requests), AnimationState::Idle);
     }
 
-    /// Ducking outranks what the legs were asked to do, and moving while
-    /// ducked is its own thing rather than a walk played lower.
+    /// Ducking outranks what the legs were asked to do.
     #[test]
     fn a_ducked_body_crouches_whether_or_not_it_is_moving() {
         let still = BodyRequests { crouching: true, ..default() };
@@ -966,14 +728,7 @@ mod tests {
         let moving = BodyRequests { crouching: true, running_forward: true, ..default() };
         assert_eq!(AnimationState::from_requests(&moving), AnimationState::CrouchWalk);
 
-        // Even sprinting: a body cannot sprint out of a duck, and the stance
-        // is the thing that decides what the legs can do.
-        let hurrying = BodyRequests { crouching: true, running_forward: true, ..default() };
-        assert_ne!(AnimationState::from_requests(&hurrying), AnimationState::RunForward);
-
-        // And a crouch-jump is both at once rather than one of the two: the
-        // hull it is flying in is the short one, so the body flying in it is
-        // folded, with the legs of a jump.
+        // A crouch-jump is both: folded, with the legs of a jump.
         let jumping = BodyRequests { crouching: true, airborne: true, ..default() };
         assert_eq!(
             AnimationState::from_requests(&jumping),
@@ -986,7 +741,6 @@ mod tests {
         );
     }
 
-    /// Being in the air beats whatever the legs were asked for.
     #[test]
     fn airborne_overrides_everything_else() {
         let requests = BodyRequests {
@@ -998,9 +752,8 @@ mod tests {
         assert_eq!(AnimationState::from_requests(&requests), AnimationState::Airborne);
     }
 
-    /// A body scraping along a wall flickers `wall_ahead` at the rate
-    /// collision resolves it. The machine has to sit on that rather than
-    /// passing it through to the animation.
+    /// `wall_ahead` flickers at the collision rate along a wall; the state must
+    /// not.
     #[test]
     fn a_flickering_request_does_not_flicker_the_state() {
         let mut animator = SkeletonAnimator::default();
@@ -1045,8 +798,7 @@ mod tests {
         assert_eq!(animator.state(), AnimationState::RunForward, "the landing waited for the dwell");
     }
 
-    /// The elapsed time is what a clip will be sampled at, so it has to
-    /// restart with the state and keep running while the state holds.
+    /// Elapsed time restarts with the state and runs while it holds.
     #[test]
     fn elapsed_time_restarts_with_the_state() {
         let mut animator = SkeletonAnimator::default();
@@ -1059,9 +811,7 @@ mod tests {
         assert_eq!(animator.elapsed(), 0.0, "the new state started part-way through");
     }
 
-    /// A change of state is a movement rather than a cut: for a moment the
-    /// body is part way between the two, and only then is it wholly in the new
-    /// one.
+    /// A state change blends rather than cutting, and the blend finishes.
     #[test]
     fn a_state_change_blends_rather_than_snapping() {
         let mut animator = SkeletonAnimator::default();
@@ -1074,15 +824,13 @@ mod tests {
         assert_eq!(animator.previous(), AnimationState::Idle);
         assert!(animator.blend() < 0.5, "the change was most of the way done immediately");
 
-        // And it finishes, rather than hanging half way for ever.
         for _ in 0..16 {
             animator.advance(&crouching, 1.0 / 64.0);
         }
         assert_eq!(animator.blend(), 1.0);
     }
 
-    /// Stepping sideways is four states, not one: two directions, each of
-    /// which can be ducked. A single `Strafe` could only ever step one way.
+    /// Sideways is four states: two sides, each standing or ducked.
     #[test]
     fn stepping_sideways_has_a_side_and_a_stance() {
         let left = BodyRequests { strafing_left: true, ..default() };
@@ -1096,14 +844,12 @@ mod tests {
             AnimationState::CrouchStrafeLeft
         );
 
-        // Going forwards as well as sideways animates as going forwards: a
-        // diagonal is a run with a turn in it, not a shuffle.
+        // Forwards plus sideways animates as forwards.
         let diagonal = BodyRequests { running_forward: true, ..right };
         assert_eq!(AnimationState::from_requests(&diagonal), AnimationState::RunForward);
     }
 
-    /// Which way a ducked body is going is a state of its own, the same way it
-    /// is for running. Otherwise a body shuffling backwards steps forwards.
+    /// Without its own state, a body shuffling backwards steps forwards.
     #[test]
     fn a_ducked_body_walking_backwards_has_its_own_state() {
         let back = BodyRequests { crouching: true, running_backward: true, ..default() };
@@ -1117,8 +863,7 @@ mod tests {
         assert_eq!(direction_of(AnimationState::CrouchWalk), Vec2::Y);
     }
 
-    /// A forced state ignores requests entirely — that is the whole point of
-    /// it — but still ages, so a clip plays.
+    /// A forced state ignores requests but still ages.
     #[test]
     fn a_forced_state_ignores_requests() {
         let mut animator = SkeletonAnimator::default();
@@ -1126,18 +871,6 @@ mod tests {
         animator.force(AnimationState::Airborne, 0.5);
         assert_eq!(animator.state(), AnimationState::Airborne);
         assert!((animator.elapsed() - 0.5).abs() < 1e-6);
-    }
-
-    /// The index is on disk. Every state has to survive the trip, and an index
-    /// from a newer build has to land somewhere rather than failing the load.
-    #[test]
-    fn every_state_round_trips_through_its_index() {
-        use strum::IntoEnumIterator;
-
-        for state in AnimationState::iter() {
-            assert_eq!(AnimationState::from_index(state.index()), state);
-        }
-        assert_eq!(AnimationState::from_index(9999), AnimationState::Idle);
     }
 }
 

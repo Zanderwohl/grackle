@@ -1,28 +1,17 @@
 //! Writing an `f32` to a file the way somebody typed it.
 //!
-//! Serde widens an `f32` to the `f64` TOML stores, and the widening is exact
-//! rather than helpful: `0.05f32` comes out as `0.05000000074505806`. A file
-//! full of those is technically diffable and practically not.
-//!
-//! So a value is widened through its own shortest decimal instead. Rust prints
-//! the shortest decimal that reads back as the same `f32`, so parsing that as
-//! an `f64` is lossless by construction —
-//! `every_f32_survives_being_written_nicely` pins it.
-//!
-//! Applied by hand through `#[serde(with = ...)]` rather than to every float
-//! in the crate, which keeps it where the argument holds: a file somebody
-//! reads.
+//! Serde widens an `f32` to `f64` exactly, so `0.05f32` is written as
+//! `0.05000000074505806`. Widening through Rust's shortest round-tripping
+//! decimal instead is lossless. Applied per field with `#[serde(with = ...)]`.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The shortest decimal that reads back as this exact `f32`.
 pub(crate) fn widen(value: f32) -> f64 {
-    // Infinities and NaN have no decimal form to shorten, and cannot be written
-    // to TOML either — so the failure stays serde's rather than a panic here.
+    // Infinities and NaN: leave the failure to serde rather than panic here.
     format!("{value}").parse().unwrap_or(value as f64)
 }
 
-/// One `f32`.
 pub mod scalar {
     use super::*;
 
@@ -35,7 +24,6 @@ pub mod scalar {
     }
 }
 
-/// A fixed-length array of them — a position, a rotation, a colour.
 pub mod array {
     use super::*;
 
@@ -46,9 +34,7 @@ pub mod array {
         value.map(widen).serialize(serializer)
     }
 
-    /// Through a `Vec`, because serde writes its array impls out one length at
-    /// a time rather than over a const generic. The length check is what an
-    /// array impl would have done, and what a hand-edited file deserves.
+    /// Through a `Vec`, because serde has no const-generic array impl.
     pub fn deserialize<'de, D: Deserializer<'de>, const N: usize>(
         deserializer: D,
     ) -> Result<[f32; N], D::Error> {
@@ -60,7 +46,6 @@ pub mod array {
     }
 }
 
-/// A list of them, for a profile whose corners were typed out.
 pub mod pairs {
     use super::*;
 
@@ -83,9 +68,7 @@ pub mod pairs {
 mod tests {
     use super::*;
 
-    /// Shortening is a *presentation* change and never a numeric one. If this
-    /// fails, a prop reopens very slightly the wrong shape — the kind of drift
-    /// nobody notices until two parts stop meeting.
+    /// Fails if writing a value changes it, so a prop reopens slightly off.
     #[test]
     fn every_f32_survives_being_written_nicely() {
         let awkward = [
@@ -101,7 +84,6 @@ mod tests {
         }
     }
 
-    /// What a reviewer actually sees.
     #[test]
     fn a_typed_number_is_written_as_it_was_typed() {
         assert_eq!(widen(0.05), 0.05f64);

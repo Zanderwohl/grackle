@@ -56,10 +56,7 @@ impl Plugin for ToolPlugin {
             .add_plugins(AnimationDisplayPlugin)
             .add_plugins(AnimationGridPlugin)
             .add_plugins(RetargetPlugin)
-            .add_plugins(RoomPlugin)
-            // Toolbar moved to panels.rs Tools tab
-            // .add_systems(EguiPrimaryContextPass, Self::toolbar)
-        ;
+            .add_plugins(RoomPlugin);
     }
 }
 
@@ -108,12 +105,7 @@ impl Tools {
         matches!(self, Self::Retarget)
     }
     
-    /// Height a tool button is drawn at, and the gap left around the row.
-    ///
-    /// The toolbar is the one panel a mapper hits with the mouse without
-    /// looking, so the buttons are deliberately taller than egui's default
-    /// row. `TOOLBAR_HEIGHT` in [`crate::editor::panels`] is derived from
-    /// these, so a change here takes the panel with it.
+    /// `TOOLBAR_HEIGHT` in [`crate::editor::panels`] is derived from these.
     pub const BUTTON_HEIGHT: f32 = 28.0;
     pub const BUTTON_MIN_WIDTH: f32 = 72.0;
     pub const ROW_PADDING: f32 = 6.0;
@@ -124,10 +116,7 @@ impl Tools {
         next_tool: &mut NextState<Self>,
     ) {
         ui.add_space(Self::ROW_PADDING);
-        // Wrapped rather than a `Grid`: a grid row runs off the end of a
-        // narrow panel and takes the tools past the fold with it, which is
-        // exactly the toolbar that starts empty. Wrapping spends height —
-        // which the panel can be dragged to give — instead of hiding buttons.
+        // Wrapped, not a `Grid`, so a narrow panel does not hide buttons.
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             for item in Self::iter() {
@@ -147,36 +136,4 @@ impl Tools {
         });
         ui.add_space(Self::ROW_PADDING);
     }
-}
-
-impl ToolPlugin {
-    // Toolbar UI moved to panels.rs Tools tab
-    /*
-    fn toolbar(
-        mut contexts: EguiContexts,
-        current_tool: Res<State<Tools>>,
-        mut next_tool: ResMut<NextState<Tools>>,
-    ) {
-        let ctx = contexts.ctx_mut();
-        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
-        let ctx = ctx.unwrap();
-
-        egui::Window::new(get!("tools.title")).show(ctx, |ui| {
-           egui::Grid::new("tools").show(ui, |ui| {
-               for item in Tools::iter() {
-                   if current_tool.eq(&item) {
-                       ui.scope(|ui| {
-                           ui.disable();
-                           let _ = ui.button(item.name());
-                       });
-                   } else {
-                       if ui.button(item.name()).clicked() {
-                           next_tool.set(item);
-                       }
-                   }
-               }
-           })
-        });
-    }
-    */
 }

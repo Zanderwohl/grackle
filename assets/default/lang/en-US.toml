@@ -294,7 +294,6 @@ endpoint_label = "Address (host or host:port)"
 host_confirm = "Host"
 join_confirm = "Connect"
 cancel = "Cancel"
-no_replication = "Connects, but no game state is shared across it yet."
 
 [net.error]
 empty = "Enter a host to connect to."

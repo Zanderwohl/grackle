@@ -1,45 +1,29 @@
-//! Putting the end of a limb where it has to be, rather than where the joint
-//! angles happened to leave it.
+//! Putting the end of a limb where it has to be.
 //!
-//! Rotations retarget across builds for free; contacts do not. Two bodies with
-//! different leg lengths given the same joint angles put their feet in
-//! different places, and one of them is sliding along the floor. So a foot's
-//! position is stated as a *target* and the angles are solved for, which is
-//! the only formulation that means the same thing on every silhouette.
+//! Joint angles retarget across builds; contacts do not, since different leg
+//! lengths at the same angles put the feet in different places. So a contact
+//! is a target and the angles are solved for. The solver is a general two-bone
+//! chain, used by gaits and by clip contacts alike.
 //!
-//! That applies to authored motion as much as procedural: a taunt that plants
-//! a foot and pivots on it needs the same pinning a run cycle does, from the
-//! same solver, driven by contact spans in the clip instead of by a gait. The
-//! solver is deliberately general — a two-bone chain and a target — rather
-//! than a leg-shaped special case, because it has both jobs to do.
-//!
-//! Which corrections a body gets is the state machine's business:
-//! [`AnimationState::plants_feet`] decides, [`finish_pose`] applies. A body in
-//! the air is the case that makes the point — its feet belong wherever the
-//! animation put them, not welded to a floor it is nowhere near.
+//! [`AnimationState::plants_feet`] decides which corrections a body gets;
+//! [`finish_pose`] applies them.
 
 use bevy::prelude::*;
 
 use crate::common::class::CROUCH_HEIGHT;
 use crate::common::skeleton::gait::FootOffset;
+use crate::common::skeleton::interpolation::Interpolation;
 use crate::common::skeleton::rig::{bone, Pose, Skeleton};
 use crate::common::skeleton::clip::{Clip, StateAnimation};
 use crate::common::skeleton::play::{apply, Frames};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary, PoseInputs, SkeletonAnimator};
 
-/// How far from straight, and from folded, a limb is kept.
-///
-/// Both extremes leave the plane the limb bends in undefined. This is well
-/// below what anything measures a landing to, so a target at the very end of a
-/// limb's reach is still reported — and drawn — as reached.
+/// How far from straight and from folded a limb is kept, since both leave the
+/// bend plane undefined. Small enough that full stretch still counts as reached.
 const STRAIGHT_MARGIN: f32 = 1e-5;
 
-/// Two bones and, optionally, what hangs off the end of them.
-///
-/// The `tip` keeps the world orientation it had before the solve. That is what
-/// keeps a sole flat on the floor while the knee above it bends: without it, a
-/// foot points wherever its shin ended up, which is the tell-tale of IK
-/// applied without thinking about the joint below.
+/// Two bones and, optionally, a `tip` that keeps its world orientation through
+/// the solve, so a sole stays flat while the knee bends.
 #[derive(Clone, Copy, Debug)]
 pub struct Chain {
     pub upper: &'static str,
@@ -76,25 +60,15 @@ pub const RIGHT_ARM: Chain = Chain {
 pub enum Reach {
     /// The tip is on the target.
     Reached,
-    /// The target is further away than the limb is long, so it is pointed at
-    /// rather than reached. Worth telling a caller about: a leg that cannot
-    /// reach the ground is a body that should be falling, not one that should
-    /// stretch.
+    /// Out of reach: the limb is pointed straight at it, not stretched.
     Short,
-    /// The chain is not in this skeleton, or the target is on top of the
-    /// joint it hangs from. Nothing was written.
+    /// The chain is not in this skeleton, or the target is on its root joint.
+    /// Nothing was written.
     Impossible,
 }
 
 /// Bend `chain` so its end lands on `target`, with the joint pointing along
-/// `pole`.
-///
-/// Writes the two (or three) joints into `pose` and leaves everything else
-/// alone, so it composes with whatever produced the pose — a function, a clip,
-/// or an earlier correction.
-///
-/// `root` is the body's transform, feet on the floor, and `target` and `pole`
-/// are in world space alongside it.
+/// `pole`. Writes only the chain's joints. `target` and `pole` are world space.
 pub fn solve(
     skeleton: &Skeleton,
     pose: &mut Pose,
@@ -109,8 +83,7 @@ pub fn solve(
         return Reach::Impossible;
     };
 
-    // The chain as it stands, which is what the solve is relative to: the
-    // shoulder or hip may itself have been moved by the pose this is fixing up.
+    // Relative to the posed chain: the pose may have moved the hip or shoulder.
     let posed = skeleton.posed_bones(pose, root);
     let joint = posed[upper].head;
     let (first, second) = (bones[upper].length, bones[lower].length);
@@ -126,26 +99,18 @@ pub fn solve(
     }
     let direction = to_target / distance;
 
-    // Clamped just inside the limb's range: exactly straight and exactly
-    // folded are both places where the plane the limb bends in stops being
-    // defined, and a hair inside them is indistinguishable to look at. The
-    // hair is smaller than anything a caller checks a landing against, so a
-    // target at full stretch still counts as reached.
+    // See `STRAIGHT_MARGIN`.
     let reach = first + second;
     let usable = distance.clamp((first - second).abs() + STRAIGHT_MARGIN, reach - STRAIGHT_MARGIN);
 
-    // The angle between the limb's first bone and the line to the target, from
-    // the triangle the two bones and that line make.
+    // Law of cosines: the first bone's angle off the line to the target.
     let cosine = ((first * first + usable * usable - second * second) / (2.0 * first * usable))
         .clamp(-1.0, 1.0);
     let bend = cosine.acos();
 
-    // The limb bends in the plane containing the target and the pole, and
-    // towards the pole — that is what stops knees from choosing a side.
     let axis = direction.cross(pole);
     let axis = if axis.length_squared() < 1e-8 {
-        // The pole is along the limb, so it says nothing about the plane. Any
-        // plane will do; keeping it stable frame to frame is what matters.
+        // Pole along the limb: any plane, as long as it is stable.
         direction.any_orthonormal_vector()
     } else {
         axis.normalize()
@@ -159,18 +124,12 @@ pub fn solve(
         return Reach::Impossible;
     }
 
-    // Both bones framed about the joint's own hinge rather than about the
-    // pole. The pole says which way the limb bends and is a fine thing to
-    // measure that against, but it is a terrible thing to hang a *roll* on: a
-    // bone that comes near to pointing along it — a shin under a deep crouch —
-    // has no meaningful sideways left, and the frame flips through half a turn
-    // as it crosses. The hinge is square to both bones by construction and
-    // stays that way through the whole cycle.
+    // Roll from the hinge, not the pole: a bone near-parallel to the pole (a
+    // shin in a deep crouch) flips its frame half a turn. See `aim`.
     let upper_rotation = aim(upper_direction, axis);
     let lower_rotation = aim(lower_direction, axis);
 
-    // Back from world orientations to what a pose stores: the turn each joint
-    // makes away from its rest, in its parent's frame.
+    // World orientation to rest-relative, parent-frame rotation.
     pose.set(chain.upper, (parent * bones[upper].rest).inverse() * upper_rotation);
     pose.set(chain.lower, (upper_rotation * bones[lower].rest).inverse() * lower_rotation);
 
@@ -188,20 +147,8 @@ pub fn solve(
     }
 }
 
-/// Hold both feet where a body standing still would have them.
-///
-/// The targets come from the rest pose at the same place on the floor, so
-/// anything the animation does above the hips — a settle, a lean, a crouch —
-/// happens over feet that stay put, and the knees take the difference.
-///
-/// Translation-invariant by construction: targets and joints are both measured
-/// at `root`, so the whole thing depends on the body's facing and not on where
-/// it is standing.
-///
-/// Standing still is the only source of targets there is today. A gait will
-/// supply its own — a foot planted where it was put down, until the stride
-/// lifts it — and a clip's contact spans will supply theirs. Those replace the
-/// targets, not the solve underneath.
+/// Hold each foot at its rest position plus `offsets`, so whatever the
+/// animation does above the hips, the knees take the difference.
 pub fn plant_feet(
     skeleton: &Skeleton,
     pose: &mut Pose,
@@ -210,9 +157,7 @@ pub fn plant_feet(
 ) -> [Reach; 2] {
     let mut reached = [Reach::Impossible; 2];
     let standing = skeleton.posed_bones(&Pose::rest(), root);
-    // Knees bend forwards. The one thing the solver cannot work out for
-    // itself, and the one thing a body is never in two minds about — a
-    // sidestep still has its knees pointing the way its toes do.
+    // Knees bend forwards, even in a sidestep.
     let forward = root.rotation * Vec3::NEG_Z;
     let across = root.rotation * Vec3::X;
 
@@ -225,33 +170,19 @@ pub fn plant_feet(
             continue;
         };
 
-        // In leg-lengths, so a long-legged build takes a longer step in metres
-        // and the same step as a fraction of itself.
+        // Offsets are in leg-lengths.
         let leg = chain_length(skeleton, chain);
         let target = resting
             + (forward * offset.ahead + across * offset.across + Vec3::Y * offset.lift) * leg;
         reached[index] = solve(skeleton, pose, root, chain, target, forward);
     }
 
-    // Handed back rather than swallowed: a foot that cannot reach where the
-    // gait wants it is a stride the body is not built for, and eventually it
-    // is also how a leg finds out the ground is further away than it is long.
     reached
 }
 
-/// Reach for `target`, and if the limb cannot get there, leave it exactly
-/// where it was.
-///
-/// [`solve`] writes a straightened limb and *then* reports [`Reach::Short`],
-/// which is right for a foot pointed at a floor further away than the leg is
-/// long — a body that should be falling — and wrong for an arm, where a limb
-/// stretched at a grip it cannot hold reads as broken rather than as not
-/// holding. So the joints are recorded first and put back when the reach
-/// fails.
-///
-/// Here rather than beside the one caller that first needed it, because a
-/// clip's hand targets want exactly the same thing and two copies of "solve,
-/// or put it back" is two that drift.
+/// [`solve`], but a limb that does not reach is left as it was. [`solve`]
+/// writes a straightened limb before reporting [`Reach::Short`], which reads as
+/// broken on an arm at a grip it cannot hold.
 pub fn reach_or_leave(
     skeleton: &Skeleton,
     pose: &mut Pose,
@@ -276,10 +207,6 @@ pub fn reach_or_leave(
 }
 
 /// Turn a bone to a world orientation, whatever its parents are doing.
-///
-/// Divides the wanted orientation back through the chain that produced the
-/// one it has, so the caller can say "this hand points along the grip"
-/// without knowing what the shoulder and elbow were left at.
 pub fn set_world_rotation(
     skeleton: &Skeleton,
     pose: &mut Pose,
@@ -293,26 +220,14 @@ pub fn set_world_rotation(
     pose.set(name, base.inverse() * wanted);
 }
 
-/// Which way an elbow points.
-///
-/// Backwards and a little out and down, which is where a person's elbow goes
-/// holding something in front of them. The solver cannot work this out — it is
-/// the one thing about a two-bone chain the target does not determine — and
-/// getting it wrong is an arm bent the wrong way at the elbow.
-///
-/// **Taken as world space by every caller**, which is only the same as the
-/// body's own frame while the root is not turned. In a match it is not turned
-/// — `SkeletonRoot` is an offset and `face_bodies` turns the entity rather
-/// than the rig — but the prop editor's reference figure *is* turned, so its
-/// elbows are poled against a fixed direction rather than against its own
-/// shoulders. That is how the shipped holds were authored and tuned, so it is
-/// left alone deliberately rather than quietly corrected; correcting it means
-/// re-tuning `rocket_launcher.gpp`.
+/// Which way an elbow points: back, a little out and down. `side` is +1 on the
+/// right. In the body's frame; rotate it by the root before solving, or a
+/// turned body poles its elbows against a fixed direction.
 pub fn elbow_pole(side: f32) -> Vec3 {
     Vec3::new(0.35 * side, -0.85, 0.55).normalize()
 }
 
-/// How long a chain is, end to end, fully extended.
+/// Fully extended length, excluding the tip.
 pub fn chain_length(skeleton: &Skeleton, chain: &Chain) -> f32 {
     let bones = skeleton.bones();
     [chain.upper, chain.lower]
@@ -322,29 +237,18 @@ pub fn chain_length(skeleton: &Skeleton, chain: &Chain) -> f32 {
         .sum()
 }
 
-/// How long this body's legs are, which is the unit a gait's strides are
-/// measured in.
+/// The unit a gait's strides are measured in.
 pub fn leg_length(skeleton: &Skeleton) -> f32 {
     chain_length(skeleton, &LEFT_LEG)
 }
 
-/// Sit a body exactly under `ceiling`, measured from its feet: low enough to
-/// fit, and no lower.
+/// Sit a body exactly under `ceiling` (metres above its feet), never above
+/// rest. The crouch hull is one size for every build, so the duck depth is
+/// solved per build rather than authored.
 ///
-/// A crouched body has to fit inside the box it ducks through gaps with, and
-/// that box is one size for everybody while the bodies are not. A build with a
-/// long back and short legs cannot fold into it as easily as a lanky one, and
-/// a small build would be folding for no reason. So how far to duck is not a
-/// number that can be written down once — it is a constraint, like a planted
-/// foot, and it is solved the same way.
-///
-/// Both directions on purpose. Cancelling the slack is what keeps a crouched
-/// body's head still: a step bob that pushed the crown up would push it into
-/// the vent the body is ducking through, and holding the head level while the
-/// legs do the work is what crouching along a low gap actually looks like.
-///
-/// Exact in one pass, because the root offset translates the whole body
-/// rigidly. The knees are put back underneath afterwards by [`plant_feet`].
+/// Raises as well as lowers, which cancels a step bob so the head stays level.
+/// Exact in one pass since the root offset is rigid; [`plant_feet`] fixes the
+/// knees afterwards.
 pub fn duck_under(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, ceiling: f32) {
     let highest = skeleton
         .posed_bones(pose, root)
@@ -357,20 +261,13 @@ pub fn duck_under(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, ceilin
         return;
     }
 
-    // In hip-heights, which is what a root offset is measured in. Never above
-    // rest: a body small enough to walk under the gap stands up straight
-    // rather than being stretched to reach the ceiling.
+    // Clamped at rest, so a small body is not stretched up to the ceiling.
     let hips = pose.root_offset.y - slack / skeleton.proportions().hip_metres();
     pose.root_offset.y = hips.min(0.0);
 }
 
-/// The pose a body is actually in, part way through changing its mind.
-///
-/// The two states' *finished* poses are blended, not their raw ones. A crouch
-/// is only a crouch after the correction that folds it under the ceiling, so
-/// blending before that would take the body through poses neither state ever
-/// asked for — and half of a duck that has not been ducked is just a body
-/// standing in the floor.
+/// The pose during a state transition. Blends the finished poses, since a
+/// crouch is only a crouch after `duck_under`.
 pub fn animator_pose(
     skeleton: &Skeleton,
     animator: &SkeletonAnimator,
@@ -384,19 +281,11 @@ pub fn animator_pose(
     }
 
     let leaving = finish_pose(skeleton, animator.previous(), inputs, root, clips);
-    // Eased, so the change starts and ends gently rather than setting off at
-    // full speed.
-    let t = animator.blend();
-    Pose::lerp(&leaving, &arriving, t * t * (3.0 - 2.0 * t))
+    Pose::lerp(&leaving, &arriving, Interpolation::SmoothStep.ease(animator.blend()))
 }
 
-/// The pose a body is actually in: its state's own pose, plus the corrections
-/// that state calls for.
-///
-/// One function because there are two callers that must not disagree — the one
-/// that draws a body and the one that works out where it can be hit. A hitbox
-/// computed from an uncorrected pose would sit somewhere the body visibly is
-/// not.
+/// A state's pose plus its corrections. Shared by drawing and hitboxes, which
+/// must not disagree.
 pub fn finish_pose(
     skeleton: &Skeleton,
     state: AnimationState,
@@ -404,11 +293,8 @@ pub fn finish_pose(
     root: &Transform,
     clips: Option<&ClipLibrary>,
 ) -> Pose {
-    // **A state with an authored clip plays it; one without is still a
-    // function.** Per state, so the migration is thirteen independent
-    // decisions and a half-migrated build is not a broken one — and so that
-    // passing `None` here is exactly the behaviour there was before clips
-    // existed, which is what the comparison tests measure against.
+    // A state without a clip falls back to its function; `None` is the
+    // all-function baseline the comparison tests measure against.
     let mut pose = clips
         .and_then(|library| library.get(state))
         .map(|animation| animation_pose(animation, state, inputs, skeleton, root))
@@ -417,13 +303,8 @@ pub fn finish_pose(
     pose
 }
 
-/// The corrections a state calls for, on top of whatever made its pose.
-///
-/// Its own function so the animation editor's figure can run exactly these
-/// after previewing a body clip. Without them a clip is shown as it is
-/// authored rather than as it is played — an idle's settle lowers the whole
-/// body, feet and all, instead of bending the knees over feet that stay put —
-/// and the editor would be showing something no body in a match ever does.
+/// The corrections a state calls for. Public so the animation editor previews
+/// a clip as it is played rather than as authored.
 pub fn correct_for_state(
     skeleton: &Skeleton,
     pose: &mut Pose,
@@ -431,8 +312,7 @@ pub fn correct_for_state(
     inputs: &PoseInputs,
     root: &Transform,
 ) {
-    // Ducking first: it lowers the hips, and planting is what puts the knees
-    // back underneath wherever they end up.
+    // Duck first; planting puts the knees back under the lowered hips.
     if state.ducks() {
         duck_under(skeleton, pose, root, CROUCH_HEIGHT);
     }
@@ -441,15 +321,10 @@ pub fn correct_for_state(
     }
 }
 
-/// What a state's animation makes of a body, before the corrections the
-/// state calls for.
-///
-/// A blend is its two variants either side of the body's heading, each posed
-/// from rest and lerped — joint by joint, which is why `StateAnimation`'s
-/// problems insist neighbouring variants drive the same joints.
-///
-/// Public because the animation editor's figure poses a body clip through
-/// exactly this, and two ways of playing a blend are two that disagree.
+/// A state's animation before corrections. A blend lerps the two variants
+/// either side of the heading joint by joint, which is why neighbouring
+/// variants must drive the same joints. Public so the animation editor plays a
+/// blend the same way.
 pub fn animation_pose(
     animation: &StateAnimation,
     state: AnimationState,
@@ -470,12 +345,8 @@ pub fn animation_pose(
     }
 }
 
-/// What one clip makes of a body.
-///
-/// The frames are the body's own and nothing else: a body animation is
-/// rotations, a root offset and limbs reaching for places on the body, so
-/// there is no weapon and no eye to measure from. The floor is the one the
-/// body is standing on, which is what `Ground` means for a footfall.
+/// One clip on a body. A body clip has no weapon or eye frame; the ground is
+/// flat at the root's height.
 fn clip_pose(
     clip: &Clip,
     inputs: &PoseInputs,
@@ -498,15 +369,9 @@ fn clip_pose(
     pose
 }
 
-/// The orientation that points a bone's local `+Y` along `along`, turned so
-/// that its local `+X` lies along `hinge`.
-///
-/// The hinge is what fixes the roll, and it has to be something square to the
-/// bone. A knee's hinge is: it is the axis the joint bends about, so it stays
-/// perpendicular to both bones however far the limb folds. Anything that can
-/// come near to parallel with the bone — the pole, for one — leaves the frame
-/// undefined at that moment and flipped through half a turn just after it,
-/// which is a leg rolling right over in the middle of a stride.
+/// Points local `+Y` along `along` with local `+X` along `hinge`. The roll
+/// reference must stay square to the bone; a joint's hinge does, while a
+/// near-parallel reference flips the frame half a turn.
 fn aim(along: Vec3, hinge: Vec3) -> Quat {
     let y = along.normalize_or_zero();
     if y == Vec3::ZERO {
@@ -537,8 +402,6 @@ mod tests {
             .tail
     }
 
-    /// The whole contract in one line: ask for a place, get the joints that
-    /// put the limb's end there.
     #[test]
     fn the_end_of_a_chain_lands_on_its_target() {
         for proportions in [Proportions::DEFAULT, Proportions::STOCKY, Proportions::LANKY] {
@@ -565,8 +428,6 @@ mod tests {
         }
     }
 
-    /// Arms are legs with a different name — the solver has to be general,
-    /// because a clip's contact spans will want hands as well as feet.
     #[test]
     fn an_arm_reaches_too() {
         let skeleton = humanoid(Proportions::DEFAULT);
@@ -580,8 +441,6 @@ mod tests {
         assert!((tip_of(&skeleton, &pose, &root, bone::FOREARM_R) - target).length() < 1e-4);
     }
 
-    /// A target further away than the limb is long points the limb at it
-    /// rather than stretching, and says so.
     #[test]
     fn an_unreachable_target_is_reported_rather_than_stretched_to() {
         let skeleton = humanoid(Proportions::DEFAULT);
@@ -604,7 +463,6 @@ mod tests {
         let leg = (landed - hip).length();
         assert!(leg.is_finite(), "the solve produced {landed}");
         assert!((landed - hip).normalize().dot(Vec3::NEG_Z) > 0.99, "the leg is not pointing at the target");
-        // Straight, not stretched: still exactly as long as the two bones.
         let bones = skeleton.bones();
         let bone_length: f32 = [bone::THIGH_L, bone::SHIN_L]
             .iter()
@@ -613,9 +471,6 @@ mod tests {
         assert!((leg - bone_length).abs() < 1e-3, "the leg is {leg} long, not {bone_length}");
     }
 
-    /// Knees forward, always. Reverse the pole and the same target is reached
-    /// with the joint on the other side, which is what makes the parameter
-    /// worth having.
     #[test]
     fn the_joint_bends_towards_the_pole() {
         let skeleton = humanoid(Proportions::DEFAULT);
@@ -636,8 +491,6 @@ mod tests {
         assert!(knee(Vec3::NEG_Z).z < knee(Vec3::Z).z, "the pole did not choose the side");
     }
 
-    /// The sole stays flat while the knee above it bends. Without the tip
-    /// step, a planted foot points wherever its shin ended up.
     #[test]
     fn the_foot_keeps_its_orientation() {
         let skeleton = humanoid(Proportions::DEFAULT);
@@ -663,8 +516,6 @@ mod tests {
         );
     }
 
-    /// What the idle used to do with hand-worked arithmetic, now a
-    /// consequence of the solver: the hips move and the feet do not.
     #[test]
     fn planting_holds_the_feet_while_the_hips_drop() {
         for proportions in [Proportions::DEFAULT, Proportions::STOCKY, Proportions::LANKY] {
@@ -693,25 +544,15 @@ mod tests {
         }
     }
 
-    /// A solved limb must not lurch between one moment and the next.
-    ///
-    /// It did. The frame each bone was turned in was hung off the pole — the
-    /// direction the limb bends towards — which is fine until a bone comes
-    /// near to pointing along it, at which point there is no sideways left to
-    /// measure and the frame flips through half a turn. A shin under a deep
-    /// crouch does exactly that, so crouching and standing again rolled a
-    /// whole leg over on the way.
-    ///
-    /// Sampled far more finely than anything is drawn, so a flip cannot hide
-    /// between two frames, and across the states and directions that bring a
-    /// limb closest to its own pole.
+    /// A roll reference that can go parallel to a bone flips it half a turn
+    /// between samples; this samples the states that bring limbs nearest that.
     #[test]
     fn a_solved_limb_never_lurches() {
         use crate::common::class::Class;
         use crate::common::skeleton::rig::{humanoid, Proportions};
 
         let corner = Vec2::new(1.0, 1.0).normalize();
-        for proportions in [Proportions::DEFAULT, Class::Heavy.proportions()] {
+        for proportions in [Proportions::DEFAULT, crate::common::class::ClassBuilds::shipped().of(Class::Heavy)] {
             let skeleton = humanoid(proportions);
             let root = Transform::IDENTITY;
 
@@ -752,9 +593,7 @@ mod tests {
         }
     }
 
-    /// Planting is a property of the state, not of every body. A body in the
-    /// air whose feet were welded to the floor would be a body doing the
-    /// splits on the way up.
+    /// An airborne body with planted feet does the splits.
     #[test]
     fn only_states_that_ask_for_it_get_their_feet_planted() {
         let skeleton = humanoid(Proportions::DEFAULT);
@@ -763,8 +602,6 @@ mod tests {
         assert!(AnimationState::Idle.plants_feet());
         assert!(!AnimationState::Airborne.plants_feet());
 
-        // And the pipeline honours it: an airborne body's legs come out of the
-        // pipeline exactly as its own pose left them, tuck and all.
         let inputs = PoseInputs { seconds: 1.0, ..default() };
         let finished = finish_pose(&skeleton, AnimationState::Airborne, &inputs, &root, None);
         let untouched = AnimationState::Airborne.pose(&inputs);

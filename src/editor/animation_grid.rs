@@ -1,25 +1,10 @@
-//! The whole roster, running through every animation together.
+//! The whole roster running through every animation together: one body per [`Class`] in a line,
+//! all holding the same state for [`HOLD`] seconds, then the next. Comparing builds across time
+//! rather than laying states out in space keeps it to one readable line.
 //!
-//! One placed point turns into one body per [`Class`], standing in a line — and
-//! the second axis of the grid is *time* rather than floor. All ten hold the
-//! same animation at the same moment, for two seconds, and then move on to the
-//! next; when the list runs out it is shuffled and starts again.
-//!
-//! Laying the same thing out in space instead meant a body per class per state,
-//! which was a hundred and forty of them across a field forty metres deep. Ten
-//! is a line you can stand in front of and read, and a comparison across time
-//! is the one that matters anyway: an animation that reads well on one build
-//! and badly on another shows it in the moment they are both doing it.
-//!
-//! The order is shuffled so that neighbouring states are not always seen next
-//! to each other — but shuffled from the shared clock rather than rolled, so
-//! every viewer of the same map is watching the same animation at the same
-//! moment. It states no animation of its own: adding a state adds it to the
-//! rotation everywhere one of these is already placed.
-//!
-//! The bodies are ordinary skeleton entities, spawned as children by
-//! [`crate::tool::animation_grid`] and animated by the same systems that
-//! animate a player.
+//! The order is a shuffle seeded from the shared clock, so every viewer sees the same animation at
+//! the same moment. Bodies are spawned by [`crate::tool::animation_grid`] and animated by the same
+//! systems as a player.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -32,41 +17,27 @@ use std::sync::OnceLock;
 use crate::common::class::Class;
 use crate::common::team::Team;
 use crate::common::skeleton::{
-    default_humanoid, finish_pose, humanoid, AnimationState, Pose, PoseInputs,
+    default_humanoid, finish_pose, AnimationState, PoseInputs,
 };
 use crate::common::PointResolutionError;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::get;
 
-/// Marks the entity an [`AnimationGrid`] drives, so the bodies can be hung off
-/// it without the feature reaching past `Commands` — the same arrangement
-/// `Prop` has with `PropMarker`.
+/// Marks the entity an [`AnimationGrid`] drives.
 #[derive(Component, Debug)]
 pub struct AnimationGridMarker;
 
-/// What side the roster is on.
-///
-/// A grid is a harness, and which harness you want depends on what you are
-/// looking at. **Striped** deals the four teams round the roster in cell
-/// order, which makes the grid a friendly-fire range: shoot along a row and
-/// every fourth body refuses the hit. **One team** makes it a plain firing
-/// range again — all of them shoot back, or none of them do, depending on
-/// whether you picked your own.
-///
-/// `One(Team)` rather than four more variants, so a fifth team is a fifth
-/// entry in the combo box and nothing else. It goes to disk by name, through
-/// the grid's own serde, like everything else in a blueprint.
+/// What side the roster is on. Striped makes the grid a friendly-fire range; one team makes it a
+/// plain firing range.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RosterTeam {
-    /// One of each, round the roster in cell order.
     #[default]
     Striped,
-    /// All of them on the one side.
     One(Team),
 }
 
 impl RosterTeam {
-    /// Every choice, in the order the panel lists them.
+    /// In panel order.
     pub fn choices() -> Vec<RosterTeam> {
         std::iter::once(RosterTeam::Striped)
             .chain(Team::ALL.map(RosterTeam::One))
@@ -80,11 +51,7 @@ impl RosterTeam {
         }
     }
 
-    /// What side the body in `cell` is on.
-    ///
-    /// The stripe is by cell rather than rolled, like the animation phase
-    /// beside it: teams drawn locally would put two viewers of one map out of
-    /// step with each other about who is allowed to shoot whom.
+    /// By cell rather than rolled, so every viewer agrees on who may shoot whom.
     pub fn team_for(self, cell: usize) -> Team {
         match self {
             RosterTeam::Striped => Team::ALL[cell % Team::ALL.len()],
@@ -93,44 +60,35 @@ impl RosterTeam {
     }
 }
 
-/// Clear floor either side of a body, on top of its own width.
+/// Clear floor either side of a body, on top of its own width, in metres.
+#[cfg(test)]
 const COLUMN_MARGIN: f32 = 0.3;
 
-/// Clear floor between one row of bodies and the next, on top of how far they
-/// stride.
+/// Metres between bodies. Fixed rather than measured off the builds, which
+/// are pack content the layout would otherwise have to be handed; a test
+/// checks the widest shipped build plus [`COLUMN_MARGIN`] fits.
+pub const COLUMN_SPACING: f32 = 2.33;
+
+/// Clear floor between rows, on top of the stride, in metres.
 const ROW_MARGIN: f32 = 0.4;
 
-/// Walking, running and sprinting, in leg-lengths per second.
-///
-/// The upright gait changes shape with speed — the stance fraction falls, the
-/// stride grows, and somewhere in between the walk becomes a run — so one row
-/// of it would only ever show one of those. See
-/// [`crate::common::skeleton::GaitShape::for_speed`].
+/// Walking, running and sprinting, in leg-lengths per second. The upright gait changes shape with
+/// speed; see [`crate::common::skeleton::GaitShape::for_speed`].
 const DISPLAY_SPEEDS: [f32; 3] = [2.0, 4.5, 7.5];
 
-/// One row of the grid: a state, and the speed to show it at.
-///
-/// A row is not simply a state, because some states look like two different
-/// animations at two different speeds and there is no use in a grid that shows
-/// one of them.
+/// A state and the speed to show it at, since some states look different at different speeds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridRow {
     pub state: AnimationState,
-    /// In leg-lengths per second. Zero for the states that do not move.
+    /// Leg-lengths per second. Zero for states that do not move.
     pub speed: f32,
 }
 
-/// Every row, in the order they are read.
-///
-/// Written out rather than taken from [`AnimationState::iter`] so that related
-/// states stand next to each other: the enum's own order is the order states
-/// were added, since its indices are on disk and cannot be shuffled.
-/// `every_state_has_a_row` is what stops a state being added and quietly never
-/// shown.
+/// Written out rather than from [`AnimationState::iter`] so related states stand together; the enum's
+/// order is fixed by its on-disk indices. `every_state_has_a_row` catches a state left out.
 pub fn rows() -> Vec<GridRow> {
     let mut rows = vec![GridRow { state: AnimationState::Idle, speed: 0.0 }];
 
-    // The one state worth seeing three times.
     rows.extend(DISPLAY_SPEEDS.map(|speed| GridRow {
         state: AnimationState::RunForward,
         speed,
@@ -149,9 +107,6 @@ pub fn rows() -> Vec<GridRow> {
         AnimationState::CrouchStrafeLeft,
         AnimationState::CrouchStrafeRight,
     ] {
-        // A running pace for the ones that move, and nothing for the ones that
-        // do not — a body standing still at speed would be a lie the gait
-        // would then have to animate.
         let speed = if state.uses_gait() { DISPLAY_SPEEDS[1] } else { 0.0 };
         rows.push(GridRow { state, speed });
     }
@@ -159,26 +114,18 @@ pub fn rows() -> Vec<GridRow> {
     rows
 }
 
-/// How long each animation is held before the next, in seconds.
-///
-/// Long enough to see a cycle or two of it and to compare it across ten
-/// bodies; short enough that watching the whole rotation is not a chore.
+/// Seconds each animation is held.
 pub const HOLD: f32 = 2.0;
 
-/// The rotation the bodies are part way through, and which of it they are on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Showing {
     pub row: GridRow,
-    /// Which shuffle this is. Everything about the order follows from it.
+    /// Which shuffle this is; the order follows from it.
     pub cycle: u64,
-    /// How far through that shuffle, counting from zero.
     pub slot: usize,
 }
 
-/// What every body on a carousel is showing at `seconds` on the shared clock.
-///
-/// A function of the clock and nothing else, which is what makes ten bodies on
-/// one map and two people watching them agree without anybody being told.
+/// A function of the shared clock only, so every viewer agrees without being told.
 pub fn showing(seconds: f32) -> Showing {
     let rows = rows();
     let period = rows.len() as f32 * HOLD;
@@ -191,21 +138,14 @@ pub fn showing(seconds: f32) -> Showing {
     Showing { row: order(cycle)[slot], cycle, slot }
 }
 
-/// The order the rows are shown in on a given rotation.
-///
-/// A shuffle rather than a roll: the same rotation number gives the same order
-/// on every machine, for the same reason an [`AnimationPhase`] does. Two people
-/// watching one body have to see the same thing, and an order nobody could
-/// reproduce would be the one thing on the map that only made sense from one
-/// seat.
+/// Deterministic per rotation, so every machine sees the same order, as with [`AnimationPhase`].
 ///
 /// [`AnimationPhase`]: crate::common::skeleton::AnimationPhase
 pub fn order(cycle: u64) -> Vec<GridRow> {
     let mut rows = rows();
     let mut seed = cycle;
 
-    // Fisher-Yates, drawing from an integer hash so that every machine draws
-    // the same numbers.
+    // Fisher-Yates from an integer hash, so every machine draws the same numbers.
     for index in (1..rows.len()).rev() {
         seed = mixed(seed);
         rows.swap(index, (seed % (index as u64 + 1)) as usize);
@@ -213,8 +153,7 @@ pub fn order(cycle: u64) -> Vec<GridRow> {
     rows
 }
 
-/// SplitMix64's finaliser: integer-only, so every machine agrees, and it
-/// scatters consecutive seeds rather than leaving them in step.
+/// SplitMix64's finaliser: integer-only, so every machine agrees, and it scatters consecutive seeds.
 fn mixed(seed: u64) -> u64 {
     let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -222,35 +161,16 @@ fn mixed(seed: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// One body's place in the line: which class it is, and where it stands.
-///
-/// What it is *doing* is not here, because it is the same for all of them and
-/// changes every two seconds. See [`showing`].
+/// One body's place in the line. What it is doing is the same for all; see [`showing`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridCell {
     pub class: Class,
-    /// Where this body's feet go, relative to the grid's point.
+    /// Feet, relative to the grid's point.
     pub offset: Vec3,
 }
 
-/// How far apart columns stand.
-///
-/// Measured off the widest body rather than typed in, so a class that is given
-/// broader shoulders later pushes the grid apart instead of overlapping its
-/// neighbour. An A-pose is the widest a rest pose gets, which is what makes
-/// this measurable at all.
-pub fn column_spacing() -> f32 {
-    static SPACING: OnceLock<f32> = OnceLock::new();
-    *SPACING.get_or_init(|| {
-        Class::iter().map(body_width).fold(0.0_f32, f32::max) + COLUMN_MARGIN
-    })
-}
-
-/// How much floor a body needs front to back.
-///
-/// Measured off how far one actually reaches while it is moving, rather than a
-/// number picked to look right at the time. Sampled across the cycle because
-/// the deepest moment of a stride is not the moment anyone thinks to check.
+/// Front-to-back floor a body needs, measured across the stride cycle since the deepest moment is
+/// not an obvious one.
 pub fn body_depth() -> f32 {
     static SPACING: OnceLock<f32> = OnceLock::new();
     *SPACING.get_or_init(|| {
@@ -278,32 +198,10 @@ pub fn body_depth() -> f32 {
     })
 }
 
-/// How wide a class's body is across, in its rest pose.
-fn body_width(class: Class) -> f32 {
-    let proportions = class.proportions();
-    let owned;
-    let skeleton = if proportions == default_humanoid().proportions() {
-        default_humanoid()
-    } else {
-        owned = humanoid(proportions);
-        &owned
-    };
-
-    skeleton
-        .posed_bones(&Pose::rest(), &Transform::IDENTITY)
-        .iter()
-        .map(|bone| bone.head.x.abs().max(bone.tail.x.abs()) + bone.thickness.x * 0.5)
-        .fold(0.0_f32, f32::max)
-        * 2.0
-}
-
-/// Every body the grid stands up, in reading order: a row per state, a column
-/// per class, columns centred on the grid's own point.
+/// One body per class, centred on the grid's point.
 pub fn cells() -> Vec<GridCell> {
     let classes: Vec<Class> = Class::iter().collect();
-    let columns = column_spacing();
-    // Centred, so moving the point moves the middle of the line rather than
-    // its left edge.
+    let columns = COLUMN_SPACING;
     let centre = (classes.len() as f32 - 1.0) * 0.5;
 
     classes
@@ -316,17 +214,12 @@ pub fn cells() -> Vec<GridCell> {
         .collect()
 }
 
-/// The floor the grid covers, relative to its own point.
-///
-/// A grid is tens of metres across, and both a mapper placing one and the
-/// template that ships one want to know that before the bodies appear — the
-/// new-map room is sized from this rather than guessed at, so the room grows
-/// when the roster does.
+/// The floor the grid covers, relative to its point. The new-map room is sized from this.
 pub fn footprint() -> (Vec3, Vec3) {
     let cells = cells();
     let mut min = Vec3::splat(f32::MAX);
     let mut max = Vec3::splat(f32::MIN);
-    let half = Vec3::new(column_spacing(), 0.0, body_depth()) * 0.5;
+    let half = Vec3::new(COLUMN_SPACING, 0.0, body_depth()) * 0.5;
     for cell in &cells {
         min = min.min(cell.offset - half);
         max = max.max(cell.offset + half);
@@ -334,17 +227,13 @@ pub fn footprint() -> (Vec3, Vec3) {
     (min, max)
 }
 
-/// A place to stand the whole roster.
 #[derive(Serialize, Deserialize)]
 pub struct AnimationGrid {
-    /// The **feet** of the middle of the front row, so the point sits where a
-    /// mapper would stand to look at the grid.
+    /// The feet of the middle of the line.
     location: PointRef,
-    /// Which way the bodies face, in radians about world Y. The grid turns
-    /// with them.
+    /// Radians about world Y. The grid turns with the bodies.
     yaw: f32,
-    /// What side the roster is on. Defaulted rather than required, so a grid
-    /// saved before this existed loads striped instead of failing to load.
+    /// `serde(default)` so an older grid loads striped.
     #[serde(default)]
     teams: RosterTeam,
     #[serde(skip)]
@@ -378,10 +267,6 @@ impl FeatureTrait for AnimationGrid {
             changed = true;
         }
 
-        // Every choice from the type rather than written out here, for the
-        // same reason the display lists its states from the state machine: a
-        // team that existed and could not be picked would be one nobody could
-        // put on the floor.
         egui::ComboBox::from_label(get!("editor.features.animation_grid.teams"))
             .selected_text(self.teams.name())
             .show_ui(ui, |ui| {
@@ -395,9 +280,7 @@ impl FeatureTrait for AnimationGrid {
                 }
             });
 
-        // What it is about to put on the floor, in numbers: the answer is
-        // sixty bodies over eighteen metres by twelve, which is bigger than
-        // most rooms and worth knowing before placing one rather than after.
+        // Shown because a grid is bigger than most rooms.
         let (min, max) = footprint();
         let size = max - min;
         ui.label(get!(
@@ -424,10 +307,7 @@ impl FeatureTrait for AnimationGrid {
 
     fn type_key(&self) -> &'static str { "animation_grid" }
 
-    /// The point, the facing, and the floor it will cover.
-    ///
-    /// The bodies are entities and draw themselves; this draws the feature,
-    /// which is a placed point with a large footprint.
+    /// The point, the facing, and the floor it will cover; the bodies draw themselves.
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let feet = self.resolved_location;
         let rotation = Quat::from_rotation_y(self.yaw);
@@ -454,9 +334,7 @@ impl FeatureTrait for AnimationGrid {
         self.location.debug_gizmos(feet, gizmos);
     }
 
-    /// One per body, where [`crate::tool::animation_grid`] stands it — not
-    /// the footprint, which would make the floor between them a grid too and
-    /// hide anything placed there.
+    /// One per body, not the footprint, which would hide anything placed between them.
     fn pick_boxes(&self) -> Vec<crate::common::ray::PickBox> {
         let rotation = Quat::from_rotation_y(self.yaw);
         cells()
@@ -473,12 +351,8 @@ impl FeatureTrait for AnimationGrid {
         self.entity = entity;
     }
 
-    /// Marks the entity and turns it; the bodies are hung off it by
-    /// [`crate::tool::animation_grid::sync_animation_grids`].
-    ///
-    /// Spawning them here would mean spawning them again on every edit, since
-    /// this runs each time the feature changes — sixty more bodies for every
-    /// nudge of the point.
+    /// The bodies are spawned by [`crate::tool::animation_grid::sync_animation_grids`]; spawning them
+    /// here would respawn them on every edit.
     fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
         commands
             .entity(entity)
@@ -486,22 +360,10 @@ impl FeatureTrait for AnimationGrid {
                 Transform::from_translation(self.resolved_location)
                     .with_rotation(Quat::from_rotation_y(self.yaw)),
                 AnimationGridMarker,
-                // Plain `insert`, unlike the `Visibility` below: this is the
-                // authored value and re-asserting it on every edit is correct.
-                // It is re-inserted on every edit and so reads as changed on
-                // every frame of a drag, which is why `team_carousels`
-                // compares before it writes rather than trusting that.
+                // Re-inserted on every edit, so it reads as changed every frame of a drag; `team_carousels`
+                // compares before writing.
                 self.teams,
-            ))
-            // The bodies hang off this entity and each carries a `Visibility`
-            // of its own, which Bevy expects to inherit from a parent that has
-            // one. Without it every body warns (B0004) and the grid cannot be
-            // hidden as a unit.
-            //
-            // `insert_if_new`, like the rig on an animation display: this runs
-            // on every edit, and re-inserting a default would undo anything
-            // that had hidden the grid on the frame the point was nudged.
-            .insert_if_new(Visibility::default());
+            ));
     }
 
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {
@@ -608,10 +470,8 @@ impl AnimationGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::skeleton::{finish_pose, PoseInputs};
+    use crate::common::skeleton::{humanoid, Pose};
 
-    /// One body per class, standing in a line. What they are doing is a
-    /// question about the clock, not about where they are standing.
     #[test]
     fn the_line_is_one_body_per_class() {
         let cells = cells();
@@ -627,9 +487,7 @@ mod tests {
         assert!(cells.iter().all(|cell| cell.offset.z == 0.0), "the line is not a line");
     }
 
-    /// The rows are written out by hand so that related states stand together,
-    /// which is exactly the arrangement that lets one be forgotten. Adding a
-    /// state and never showing it is the failure this catches.
+    /// Catches a state added and never shown, since the rows are written by hand.
     #[test]
     fn every_state_has_a_row() {
         for state in AnimationState::iter() {
@@ -640,8 +498,6 @@ mod tests {
         }
     }
 
-    /// The states that look like two animations at two speeds get shown at
-    /// both, which is the whole reason a row is a state *and* a speed.
     #[test]
     fn a_gait_that_changes_with_speed_is_shown_at_several() {
         use crate::common::skeleton::GaitShape;
@@ -653,18 +509,13 @@ mod tests {
             .collect();
         assert!(speeds.len() > 1, "the run is only shown at one speed");
 
-        // Far enough apart to be different gaits rather than three rows of the
-        // same one: at least one walks and at least one runs.
+        // At least one walks and at least one runs.
         assert!(speeds.iter().any(|speed| !GaitShape::for_speed(*speed).has_flight()));
         assert!(speeds.iter().any(|speed| GaitShape::for_speed(*speed).has_flight()));
 
-        // A body that is not going anywhere is shown standing still, rather
-        // than running on the spot.
         assert!(rows().iter().all(|row| row.state.uses_gait() || row.speed == 0.0));
     }
 
-    /// Every rotation is a permutation: nothing is shown twice and nothing is
-    /// skipped, however the shuffle falls.
     #[test]
     fn a_rotation_shows_everything_exactly_once() {
         for cycle in 0..64 {
@@ -681,40 +532,12 @@ mod tests {
         }
     }
 
-    /// The grid entity carries a `Visibility` so the bodies hung off it have
-    /// one to inherit. Without it Bevy warns once per body per spawn (B0004)
-    /// and there is no way to hide the grid as a unit.
-    #[test]
-    fn a_grid_can_be_a_parent_to_visible_bodies() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = World::new();
-        let entity = world.spawn_empty().id();
-        let grid = AnimationGrid::new(0.0, 0.0, 0.0);
-        world
-            .run_system_once(move |mut commands: Commands| {
-                grid.apply_to_entity(&mut commands, entity);
-            })
-            .unwrap();
-
-        assert!(world.get::<Visibility>(entity).is_some());
-        assert!(
-            world.get::<InheritedVisibility>(entity).is_some(),
-            "the bodies have nothing to inherit visibility from"
-        );
-    }
-
-    /// Shuffled from the clock rather than rolled: asking twice gives the same
-    /// answer, which is what lets two people watching the same map watch the
-    /// same thing.
     #[test]
     fn the_shuffle_is_the_same_for_everyone() {
         for cycle in 0..16 {
             assert_eq!(order(cycle), order(cycle), "the order is not reproducible");
         }
 
-        // And it is genuinely shuffled: consecutive rotations differ, and over
-        // a few dozen the orders are nearly all distinct.
         let orders: Vec<Vec<GridRow>> = (0..32).map(order).collect();
         assert!(orders[0] != orders[1], "two rotations in a row are identical");
 
@@ -723,7 +546,6 @@ mod tests {
         assert!(distinct.len() > 28, "the shuffle repeats itself: {} of 32", distinct.len());
     }
 
-    /// Two seconds each, in the order the shuffle chose, then round again.
     #[test]
     fn each_animation_is_held_for_its_turn() {
         let rows = rows();
@@ -741,22 +563,29 @@ mod tests {
             }
         }
 
-        // Round again, on a different shuffle.
         let next = showing(period + 0.01);
         assert_eq!(next.cycle, 1);
         assert_eq!(next.slot, 0);
         assert_eq!(next.row, order(1)[0]);
     }
 
-    /// Bodies do not overlap, and the spacing is measured off the widest of
-    /// them rather than guessed.
+    fn body_width(class: Class) -> f32 {
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
+
+        skeleton
+            .posed_bones(&Pose::rest(), &Transform::IDENTITY)
+            .iter()
+            .map(|bone| bone.head.x.abs().max(bone.tail.x.abs()) + bone.thickness.x * 0.5)
+            .fold(0.0_f32, f32::max)
+            * 2.0
+    }
+
     #[test]
     fn neighbouring_bodies_do_not_overlap() {
         let widest = Class::iter().map(body_width).fold(0.0_f32, f32::max);
         assert!(
-            column_spacing() > widest,
-            "columns are {} apart for bodies {widest} wide",
-            column_spacing()
+            COLUMN_SPACING >= widest + COLUMN_MARGIN,
+            "columns are {COLUMN_SPACING} apart for bodies {widest} wide"
         );
 
         let places: Vec<f32> = cells().iter().map(|cell| cell.offset.x).collect();
@@ -765,8 +594,7 @@ mod tests {
         }
     }
 
-    /// The floor a body is given is enough for what it does on it — a stride
-    /// that reached past its own patch would reach into the next one.
+    /// A stride reaching past its own patch would reach into the next one.
     #[test]
     fn a_stride_stays_on_its_own_patch() {
         let skeleton = default_humanoid();
@@ -796,8 +624,6 @@ mod tests {
         }
     }
 
-    /// The point is the middle of the line, not one end: a grid is placed by
-    /// standing where you will look at it from.
     #[test]
     fn the_line_is_centred_on_its_point() {
         let places: Vec<f32> = cells().iter().map(|cell| cell.offset.x).collect();

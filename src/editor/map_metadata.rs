@@ -7,8 +7,7 @@ use crate::common::mode::GameMode;
 pub struct MapMetadata {
     pub authors: Vec<String>,
     pub game_mode: GameMode,
-    /// Comma-separated authors line in the metadata panel; kept in sync when `authors` is replaced
-    /// from disk. Not a separate persisted column.
+    /// The panel's comma-separated authors text, refreshed when `authors` is replaced from disk.
     authors_ui_text: String,
     authors_ui_synced_from: Vec<String>,
 }
@@ -27,13 +26,12 @@ impl Default for MapMetadata {
 }
 
 impl MapMetadata {
-    /// Reset to defaults when starting a new map from the editor.
     pub fn reset_to_new_map_defaults(&mut self) {
         *self = Self::default();
     }
 
-    /// Call each frame before drawing the metadata panel so a load/replace of `authors` refreshes
-    /// the text field without clobbering in-progress edits.
+    /// Call each frame before drawing the panel; refreshes the text only when `authors` changed, so an
+    /// in-progress edit is not clobbered.
     pub fn sync_authors_ui_buffer_from_authors(&mut self) {
         if self.authors_ui_synced_from != self.authors {
             self.authors_ui_synced_from.clone_from(&self.authors);
@@ -64,7 +62,6 @@ fn finalize_authors(out: Vec<String>) -> Vec<String> {
     }
 }
 
-/// Authors line for the metadata panel: plain comma-separated names (no quoting in the UI).
 pub fn format_authors_for_ui(authors: &[String]) -> String {
     if authors.is_empty() {
         return String::new();
@@ -72,9 +69,8 @@ pub fn format_authors_for_ui(authors: &[String]) -> String {
     authors.join(", ")
 }
 
-/// Parse the metadata authors field: split on commas only, trim each segment. Empty input yields
-/// `anonymous`. (Author names containing commas cannot be typed into this field; the blueprint
-/// itself stores a list, so they survive a save and load if set some other way.)
+/// Splits on commas only and trims. Empty input yields `anonymous`. A name with a comma cannot be
+/// typed here, but the blueprint stores a list, so one set elsewhere survives.
 pub fn parse_authors_from_ui(s: &str) -> Vec<String> {
     let s = s.trim();
     if s.is_empty() {

@@ -6,14 +6,10 @@ use crate::constants::DEFAULT_PORT_TEXT;
 pub struct EditorParams {
     pub lang: String,
     pub game_id: String,
-    /// Which end of the wire to start as. Defaults to a closed game: opening
-    /// the editor to lay out a room must not involve a socket.
+    /// Defaults to `Solo`: laying out a room must not involve a socket.
     pub net: NetRole,
-    /// Whether to drop straight into a round instead of opening the editor.
     pub start_playing: bool,
-    /// Whether to open the animation editor instead of the map editor.
     pub start_animating: bool,
-    /// Whether to open the prop editor instead of the map editor.
     pub start_modelling: bool,
 }
 
@@ -22,8 +18,7 @@ impl EditorParams {
         Self::from(std::env::args_os())
     }
 
-    /// Split out from [`EditorParams::new`] so the argument grammar can be
-    /// tested without a process to hand it to.
+    /// Split out from [`EditorParams::new`] so the grammar is testable.
     pub fn from<I, T>(args: I) -> Result<Self, String>
     where
         I: IntoIterator<Item = T>,
@@ -44,10 +39,7 @@ impl EditorParams {
                     .default_value("none")
                     .help("ID of game to launch with special tools.")
             )
-            // A listen server, not a dedicated one: the window still opens and
-            // the host is a player. `--serve` on its own takes the default
-            // port, because the common case is two people on a LAN who do not
-            // care which number it is.
+            // A listen server: the window still opens and the host plays.
             .arg(
                 Arg::new("serve")
                     .long("serve")
@@ -57,20 +49,14 @@ impl EditorParams {
                     .conflicts_with("connect")
                     .help("Host a game on PORT while playing locally.")
             )
-            // Mostly for a server: a host that is meant to be running a round
-            // should not need somebody to walk over and press F5. Also the
-            // only way to drive the mode from a script, which is what makes
-            // the networked spawn path testable at all.
+            // Lets a host start a round unattended, and is the only way to
+            // drive the mode from a script.
             .arg(
                 Arg::new("play")
                     .long("play")
                     .action(ArgAction::SetTrue)
                     .help("Start in Play rather than in the editor.")
             )
-            // The prop editor's equivalent of `--play`, and for the same
-            // reason: it is the only way to reach the mode from a script, and
-            // somebody who spends an afternoon modelling should not have to
-            // walk in through a map they are not editing.
             .arg(
                 Arg::new("prop")
                     .long("prop")
@@ -78,11 +64,8 @@ impl EditorParams {
                     .conflicts_with("play")
                     .help("Open the prop editor rather than the map editor.")
             )
-            // And the animation editor's, for the third time and the same
-            // reason. All three are flags rather than one `--mode=` because a
-            // mode you can be started in is a fact about that mode, and a
-            // shared option is a list somewhere else that a fourth one has to
-            // be remembered into.
+            // Separate flags rather than one `--mode=`, so a mode you can start
+            // in is stated with that mode rather than in a shared list.
             .arg(
                 Arg::new("anim")
                     .long("anim")
@@ -100,10 +83,8 @@ impl EditorParams {
                     .help("Join a game somebody else is hosting.")
             )
             .try_get_matches_from(args)
-            // `--help` is not a startup failure: clap knows to put it on
-            // stdout and leave with 0, whereas returning it as an error here
-            // would print the whole help text as "Editor Startup Error".
-            // Everything else comes back as a string so it stays testable.
+            // `--help` exits 0 on stdout rather than printing as a startup
+            // error; everything else comes back as a string so it is testable.
             .map_err(|error| match error.kind() {
                 clap::error::ErrorKind::DisplayHelp
                 | clap::error::ErrorKind::DisplayVersion => error.exit(),
@@ -113,8 +94,6 @@ impl EditorParams {
         let lang = matches.get_one::<String>("lang").ok_or("invalid language")?;
         let game_id = matches.get_one::<String>("game_id").ok_or("invalid game_id")?;
 
-        // `conflicts_with` above means at most one of these is present, so the
-        // order they are checked in cannot decide anything.
         let net = match (matches.get_one::<String>("serve"), matches.get_one::<String>("connect")) {
             (Some(port), _) => NetRole::Listen {
                 port: port
@@ -152,8 +131,6 @@ mod tests {
         EditorParams::from(argv)
     }
 
-    /// The whole point of the default: double-clicking the binary gives you an
-    /// editor and a closed game, with nothing listening.
     #[test]
     fn no_flags_is_a_closed_game() {
         assert_eq!(parse(&[]).unwrap().net, NetRole::Solo);
@@ -181,8 +158,7 @@ mod tests {
         );
     }
 
-    /// Being both ends of one wire is not a thing, and silently preferring one
-    /// would leave somebody wondering why their `--connect` did nothing.
+    /// Silently preferring one would make the other flag appear to do nothing.
     #[test]
     fn serving_and_connecting_at_once_is_refused() {
         assert!(parse(&["--serve", "--connect", "example.net"]).is_err());
@@ -209,20 +185,15 @@ mod tests {
         assert!(parse(&["--anim"]).unwrap().start_animating);
     }
 
-    /// Starting in a round and starting in the prop editor are two different
-    /// modes, and silently preferring one would leave somebody wondering why
-    /// their flag did nothing.
+    /// A process cannot open in two modes; silently picking one makes a flag
+    /// appear to do nothing.
     #[test]
     fn playing_and_modelling_at_once_is_refused() {
         assert!(parse(&["--play", "--prop"]).is_err());
-        // And all three are mutually exclusive for the same reason: a process
-        // cannot open in two modes, and silently picking one would be a flag
-        // that appears to do nothing.
         assert!(parse(&["--play", "--anim"]).is_err());
         assert!(parse(&["--prop", "--anim"]).is_err());
     }
 
-    /// The flags that were there before still are.
     #[test]
     fn the_older_flags_survive() {
         let params = parse(&["--lang", "de-DE", "--game", "unlock"]).unwrap();

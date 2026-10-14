@@ -1,14 +1,7 @@
-//! Props baked into mesh handles, by name.
+//! Props baked into mesh handles, by name. The only baker, shared by the prop
+//! editor and the game so a weapon looks the same in both.
 //!
-//! The prop editor rebuilds one document over and over; the game wants a
-//! named prop once and then every frame after. Both bake the same way, and
-//! **this is the only place that does it** — two bakers for one format is the
-//! failure this codebase keeps naming, and it would show up as a weapon that
-//! looks one way in the editor it was modelled in and another in the hand.
-//!
-//! Failures are cached as well as successes. A weapon naming a prop that is
-//! not there would otherwise re-read a missing file every frame for the rest
-//! of the match.
+//! Failures are cached too, or a missing prop is re-read every frame.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -22,10 +15,8 @@ use crate::common::skeleton::clip::ClipSet;
 use crate::prop::hold::{HoldSpec, ViewmodelSpec};
 use crate::prop::surface::Surface;
 
-/// Materials cached per surface for the life of the process.
-///
-/// A drag rebuilds the prop every frame, and minting a material per rebuild
-/// would fill `Assets<StandardMaterial>` with identical greys.
+/// Materials cached per surface for the life of the process, since a drag
+/// rebuilds the prop every frame.
 #[derive(Resource, Default)]
 pub struct SurfaceMaterials(Vec<(Surface, Handle<StandardMaterial>)>);
 
@@ -46,11 +37,8 @@ impl SurfaceMaterials {
     }
 }
 
-/// The meshes an evaluated prop draws as, one per body per distinct surface.
-///
-/// Not merged across bodies: a body is the unit the evaluator produced and the
-/// unit the editor outlines, and merging would save an entity at the cost of
-/// the two disagreeing about what a body is.
+/// One mesh per body per distinct surface. Not merged across bodies, because
+/// the body is the unit the editor outlines and picks.
 pub fn parts(evaluated: &Evaluated) -> Vec<(Surface, Mesh)> {
     evaluated
         .bodies
@@ -59,35 +47,26 @@ pub fn parts(evaluated: &Evaluated) -> Vec<(Surface, Mesh)> {
         .collect()
 }
 
-/// One prop, ready to hang on an entity.
 pub struct BakedProp {
     pub parts: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     pub hold: HoldSpec,
     pub viewmodel: ViewmodelSpec,
-    /// What it does over time. Shared rather than cloned onto each body: a
-    /// clip is a couple of kilobytes and everybody holding a launcher is
-    /// playing the same one.
+    /// Shared, since everybody holding one plays the same clips.
     pub clips: Arc<ClipSet>,
 }
 
-/// Props baked from their documents, by the name a weapon knows them by.
 #[derive(Resource, Default)]
 pub struct PropCache {
-    /// `None` means "looked for it and it is not there", which is an answer
-    /// worth keeping.
+    /// `None`: looked for and not there.
     baked: HashMap<String, Option<BakedProp>>,
     /// Bumped whenever an entry is replaced, so anything drawn from this
-    /// knows to look again.
-    ///
-    /// Needed because a *failure* is cached: a client that asked for a model
-    /// before the server sent it recorded "there is no such prop", and would
-    /// otherwise keep that answer for the rest of the match.
+    /// looks again — including a client that cached a failure before the
+    /// server's model arrived.
     generation: u64,
 }
 
 impl PropCache {
-    /// The prop under this name, loading and baking it if this is the first
-    /// ask. `None` once it is known not to exist.
+    /// `None` once it is known not to exist.
     pub fn ensure(
         &mut self,
         name: &str,
@@ -103,7 +82,6 @@ impl PropCache {
         self.baked.get(name).and_then(Option::as_ref)
     }
 
-    /// Whether this name has been asked about, whatever the answer was.
     pub fn knows(&self, name: &str) -> bool {
         self.baked.contains_key(name)
     }
@@ -112,13 +90,8 @@ impl PropCache {
         self.generation
     }
 
-    /// Take a prop somebody handed us, over whatever we had.
-    ///
-    /// **The document, not the meshes** — a prop is parametric and the client
-    /// has the whole kernel, so what crosses the wire is what the editor
-    /// saved. Replacing rather than filling a gap, because the entry being
-    /// replaced is often a cached *failure*: a client that went looking for
-    /// this model in its own pack before the server's arrived.
+    /// Replaces whatever was cached, which is often a failure from looking in
+    /// the local pack before the server's document arrived.
     pub fn adopt(
         &mut self,
         name: &str,
@@ -140,8 +113,7 @@ fn bake(
     materials: &mut Assets<StandardMaterial>,
     surfaces: &mut SurfaceMaterials,
 ) -> Option<BakedProp> {
-    // Highest priority last, the way the weapon catalogue is read, so a pack
-    // overriding a model wins.
+    // Highest priority last, so an overriding pack wins.
     let mut found = None;
     for pack in default_packs().iter() {
         match document::load(packs, pack, name) {

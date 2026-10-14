@@ -37,7 +37,6 @@ impl MovementPlugin {
         if let Some(cam_id) = mouse_input.started_in_camera {
             if let Some(button) = mouse_input.pressed {
                 if button == MouseButton::Right {
-                    // grab and hold mouse
                     cursor_options.grab_mode = CursorGrabMode::Locked;
                     cursor_options.visible = false;
 

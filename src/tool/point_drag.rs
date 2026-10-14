@@ -196,9 +196,8 @@ impl PointDragState {
     ) {
         let Some(feature_id) = state.tracked_feature else { return; };
 
-        // A ring drag in progress owns the mouse: the arrows reach into the
-        // rings, and grabbing one mid-rotation would move the feature as well
-        // as turn it, in what the user meant as one rotation.
+        // The arrows reach into the rings, so a rotation in progress must not
+        // also grab an arrow.
         if rotate_drag.is_dragging() {
             return;
         }

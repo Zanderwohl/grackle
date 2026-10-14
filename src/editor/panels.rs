@@ -33,11 +33,8 @@ enum DialogResult {
     OpenPath(PathBuf),
 }
 
-/// Ask where to put the blueprint, on a background thread.
-///
-/// Shared by *Save As* and by a *Save* with nowhere to save to, which is the
-/// same question either way. The thread and `pollster` are the wasm problem
-/// `CLAUDE.md` lists; this is the authoring side, where it is survivable.
+/// Shared by Save As and by a Save with no path. The thread and `pollster` are the wasm problem
+/// `CLAUDE.md` lists.
 fn ask_where_to_save(current_file: &CurrentFilePath) {
     let slot = current_file.dialog_result.clone();
     let existing = current_file.path.clone();
@@ -63,23 +60,15 @@ fn ask_where_to_save(current_file: &CurrentFilePath) {
     });
 }
 
-/// `Ctrl+N`, `Ctrl+S`, `Ctrl+Shift+S`, and the undo pair, for the map editor.
-///
-/// Its own system rather than more parameters on [`EditorPanels::ui`], which is
-/// at Bevy's limit already. It hands the request over in `CurrentFilePath` so
-/// that a keyboard save and a menu save are answered by the same code — the
-/// whole point being that `Ctrl+S` on a map that has never been saved has to
-/// open the same dialog the menu would.
+/// The map editor's file and undo chords. Its own system because [`EditorPanels::ui`] is at Bevy's
+/// parameter limit; the request goes through `CurrentFilePath` so the menu's code answers it.
 fn file_shortcuts(
     keys: Res<ButtonInput<KeyCode>>,
     egui: Res<bevy_egui::input::EguiWantsInput>,
     mut current_file: ResMut<CurrentFilePath>,
 ) {
-    // `FileAction::from_chords` rather than a match written here, so the three
-    // editors cannot disagree about which chord means what.
     if let Some(action) = FileAction::from_chords(chords(&keys, egui.wants_keyboard_input())) {
-        // Only on `Some`: a frame with nothing held must not clear a request
-        // the menu made in the same frame.
+        // Only on `Some`: a frame with nothing held must not clear a request the menu made this frame.
         current_file.requested_op = Some(action);
     }
 }
@@ -89,8 +78,7 @@ pub struct CurrentFilePath {
     pub path: Option<PathBuf>,
     dialog_result: Arc<Mutex<Option<DialogResult>>>,
     deferred_room_bake: u8,
-    /// Set by the keyboard, taken by the panel. The two cannot be one system:
-    /// `EditorPanels::ui` is at Bevy's parameter limit.
+    /// Set by the keyboard, taken by the panel.
     requested_op: Option<FileAction>,
 }
 
@@ -105,13 +93,8 @@ impl Default for CurrentFilePath {
     }
 }
 
-/// Room the toolbar panel opens with, and the least it can be dragged to.
-///
-/// A top panel with no size of its own takes its height from its contents, and
-/// a `DockArea` asks for almost nothing — so the toolbar opened at a tab bar
-/// and a sliver, with every tool below the fold. Stated as the tab bar plus a
-/// full row of buttons, so it is a number that follows from what is in there
-/// rather than one somebody guessed.
+/// A top panel sizes to its contents and a `DockArea` asks for almost nothing, so the default is
+/// stated as the tab bar plus two rows of buttons.
 const TAB_BAR_HEIGHT: f32 = 26.0;
 const TOOLBAR_ROW_HEIGHT: f32 = Tools::BUTTON_HEIGHT + Tools::ROW_PADDING * 2.0;
 const TOOLBAR_DEFAULT_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT * 2.0;
@@ -123,21 +106,11 @@ enum TabKinds {
     Bakes,
     Show,
     Metadata,
-    /// The feature list, which is the map, with its rollback bar — and the
-    /// selected feature's editor beneath. Undo is not here: it is a separate
-    /// axis, on the Edit menu.
+    /// The feature list with its rollback bar, and the selected feature's editor beneath.
     History,
 }
 
-/// Everything the panels write out, in one system parameter.
-///
-/// Bundled because a Bevy system takes at most sixteen parameters and `ui` was
-/// at exactly sixteen: the network menu needed a slot. Grouping the writers is
-/// cheaper than splitting the menu bar across two systems, which would then
-/// both want to own its measured height. The mode menu needed one next, which
-/// is why `mode` is here despite not being a message — what these have in
-/// common is that they are the panels' *writes*, and the alternative was
-/// evicting something to make room.
+/// The panels' writes, bundled because `ui` hit Bevy's sixteen-parameter limit.
 #[derive(SystemParam)]
 struct PanelMessages<'w> {
     room: MessageWriter<'w, CalculateRoomGeometry>,
@@ -145,8 +118,6 @@ struct PanelMessages<'w> {
     log_ecs: MessageWriter<'w, LogECS>,
     edits: MessageWriter<'w, EditEvent>,
     net: MessageWriter<'w, NetRequest>,
-    /// The File menu's *Quit*. A writer rather than one more parameter on
-    /// `ui`, which has none to spare.
     exit: MessageWriter<'w, AppExit>,
     mode: ResMut<'w, NextState<AppMode>>,
 }
@@ -225,8 +196,7 @@ impl Plugin for EditorPanelPlugin {
             .init_resource::<CurrentFilePath>()
             .add_systems(Startup, EditorPanels::set_multicam_size)
             .add_systems(EguiPrimaryContextPass, EditorPanels::ui.run_if(in_state(AppMode::Editor)))
-            // Before the panel, so a chord pressed this frame is answered this
-            // frame rather than on the next one.
+            // Before the panel, so a chord is answered this frame.
             .add_systems(Update, file_shortcuts.run_if(in_state(AppMode::Editor)))
         ;
     }
@@ -312,8 +282,8 @@ impl EditorPanels {
         }
         let ctx = ctx.unwrap();
 
-        // egui 0.36 hangs top-level panels off a root `Ui` covering the
-        // viewport instead of off the `Context` directly.
+        // egui 0.36 hangs top-level panels off a root `Ui` covering the viewport instead of off the
+        // `Context` directly.
         let mut viewport_ui = Ui::new(
             ctx.clone(),
             Id::new("grackle_editor_viewport"),
@@ -329,13 +299,10 @@ impl EditorPanels {
         let mut retarget_request: Option<(FeatureId, String)> = None;
         let mut loaded_blueprint: Option<LoadedBlueprint> = None;
 
-        // The menu and the keyboard both ask for these, so the request is a
-        // value either can produce and one place answers.
         let mut pending_file_op: Option<FileAction> = current_file.requested_op.take();
         let mut wanted_mode: Option<AppMode> = None;
         let mut pending_edit: Option<EditAction> = None;
-        // Read before the viewer borrows the timeline for the rest of the
-        // frame. Revert needs a file to go back to and something to lose.
+        // Read before the viewer borrows the timeline for the rest of the frame.
         let edit_available = EditAvailability {
             undo: editor_features.can_undo(),
             redo: editor_features.can_redo(),
@@ -359,14 +326,9 @@ impl EditorPanels {
             .resizable(false)
             .show(&mut viewport_ui, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
-                    // The shared pulldown rather than five buttons written
-                    // here, which is what it used to be — in hardcoded
-                    // English, with a *Quit* that only closed the menu.
                     file_menu(ui, &mut pending_file_op);
                     edit_menu(ui, edit_available, &mut pending_edit);
-                    // `Editor` spelled out rather than read from the state:
-                    // this whole system is gated on it, so the mode it is
-                    // drawing for is not in question.
+                    // `Editor` spelled out: this system is gated on it.
                     mode_menu(ui, AppMode::Editor, Some(&net_role), &mut wanted_mode);
                     network_menu(
                         ui,
@@ -375,8 +337,6 @@ impl EditorPanels {
                         &mut connect_dialog,
                         &mut messages.net,
                     );
-                    // The same asterisk the prop editor shows, now that the
-                    // map knows whether it matches its file.
                     if dirty {
                         ui.separator();
                         ui.label("*");
@@ -401,7 +361,6 @@ impl EditorPanels {
                     .show_leaf_collapse_buttons(false)
                     .draggable_tabs(false)
                     .show_inside(ui, &mut viewer);
-                //ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::hover());
             })
             .response
             .rect
@@ -449,7 +408,6 @@ impl EditorPanels {
                     .show_leaf_collapse_buttons(false)
                     .draggable_tabs(false)
                     .show_inside(ui, &mut viewer);
-                //ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::hover());
             })
             .response
             .rect
@@ -457,13 +415,11 @@ impl EditorPanels {
 
         drop(viewer);
 
-        // `set`, not `set_if_neq`: `mode_menu` never offers the mode already
-        // in force, so anything arriving here is a real change.
+        // `set`, not `set_if_neq`: `mode_menu` never offers the mode already in force.
         if let Some(mode) = wanted_mode {
             messages.mode.set(mode);
         }
 
-        // Poll for completed async file dialog results
         let dialog_result = current_file.dialog_result.lock().unwrap().take();
         if let Some(result) = dialog_result {
             match result {
@@ -490,7 +446,6 @@ impl EditorPanels {
             }
         }
 
-        // Spawn async file dialogs on background thread (non-blocking)
         if let Some(op) = pending_file_op {
             match op {
                 FileAction::New => {
@@ -509,8 +464,6 @@ impl EditorPanels {
                         Err(e) => error!("New failed: {}", e),
                     }
                 }
-                // A save with nowhere to save to is a save-as. Stated here so
-                // it holds for the menu item and the chord alike.
                 FileAction::Save => match current_file.path.clone() {
                     Some(path) => match save::save(&path, &editor_features, &map_metadata) {
                         Ok(()) => {
@@ -522,11 +475,7 @@ impl EditorPanels {
                     None => ask_where_to_save(&current_file),
                 },
                 FileAction::SaveAs => ask_where_to_save(&current_file),
-                // Straight out, with no "you have unsaved changes" between.
-                // That is what the entry has always looked like it would do,
-                // and the editor has nowhere to ask the question yet — the
-                // modal `egui::Window` the network menu uses is the shape it
-                // would take when there is one.
+                // No unsaved-changes prompt yet.
                 FileAction::Quit => {
                     info!("Quitting, as asked");
                     messages.exit.write(AppExit::Success);
@@ -547,12 +496,7 @@ impl EditorPanels {
             }
         }
 
-        // The Edit menu. Undo and redo are the same calls the chords make.
-        //
-        // **Revert is one undo step**, as in the prop editor: the map's history
-        // lives in memory, so going back to the file is just another edit, and
-        // a revert clicked by mistake is a `Ctrl+Z` away. Only the features
-        // that differ from the file are rebuilt.
+        // Revert is one undo step: only the features that differ from the file are rebuilt.
         match pending_edit {
             Some(EditAction::Undo) => editor_features.undo(),
             Some(EditAction::Redo) => editor_features.redo(),
@@ -572,14 +516,13 @@ impl EditorPanels {
             None => {}
         }
 
-        // Handle load / new from template
         if let Some(loaded) = loaded_blueprint {
             editor_features.adopt(loaded.timeline);
             *map_metadata = loaded.metadata;
             current_file.deferred_room_bake = 2;
         }
 
-        // Fire deferred room bake after entities have been spawned and flushed
+        // Deferred until the adopted features have entities.
         if current_file.deferred_room_bake > 0 {
             current_file.deferred_room_bake -= 1;
             if current_file.deferred_room_bake == 0 {
@@ -587,7 +530,6 @@ impl EditorPanels {
             }
         }
 
-        // Handle bake commands
         if bake_commands.calculate_room_geometry {
             messages.room.write(CalculateRoomGeometry);
         }
@@ -598,19 +540,15 @@ impl EditorPanels {
             messages.log_ecs.write(LogECS);
         }
 
-        // Handle retarget request
         if let Some((feature_id, label)) = retarget_request {
             retarget_state.target_feature = Some(feature_id);
             retarget_state.target_point_ref_key = label;
             retarget_state.hovered_point = None;
-            // `set_if_neq`, not `set`: since 0.18 a same-state `set` still runs
-            // the transition, and `OnExit(Tools::Retarget)` clears the
-            // `RetargetState` we just filled in. Starting a second retarget
-            // while the tool is already active would wipe its own request.
+            // `set_if_neq`, not `set`: a same-state `set` still runs the transition, and
+            // `OnExit(Tools::Retarget)` would clear the `RetargetState` just filled in.
             (&mut *next_tool).set_if_neq(Tools::Retarget);
         }
 
-        // Flush edit events
         for event in pending_edits.events.drain(..) {
             messages.edits.write(event);
         }
