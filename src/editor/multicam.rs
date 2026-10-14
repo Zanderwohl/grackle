@@ -125,19 +125,16 @@ fn clamped_viewport(start: Vec2, end: Vec2, window: UVec2) -> Option<(UVec2, UVe
         return None;
     }
 
-    // **The window's own size is not to be trusted either.**
-    //
-    // Clamping the viewport to the window is only a guard while the window is
-    // a plausible size, and during a drag between two monitors it is not:
-    // winit reports a transitional size as the scale factor changes, and a
-    // window a few million pixels across lets a viewport be half of that,
-    // which is the same crash with the clamp in place. The first version of
-    // this guard clamped to the window alone and the crash survived it.
-    //
-    // So the real bound is the device's, not the window's. Every dimension
-    // here ends up as a render texture — the bloom chain most of all — and
-    // `max_texture_dimension_2d` is what wgpu refuses past.
-    let window = window.min(UVec2::splat(MAX_TEXTURE_SIDE));
+    // **A window this size is not a window; it is a measurement taken
+    // mid-move.** Refused outright rather than clamped down to the limit,
+    // because clamping invents an answer: a viewport 16384 across on a target
+    // that is really 2560 is its own validation error, one frame later. The
+    // last good viewport is the better answer, and the next frame brings a
+    // real size.
+    if window.x > MAX_TEXTURE_SIDE || window.y > MAX_TEXTURE_SIDE {
+        return None;
+    }
+
     let window_f = window.as_vec2();
     let first = start.clamp(Vec2::ZERO, Vec2::ONE);
     let second = end.clamp(Vec2::ZERO, Vec2::ONE);
@@ -725,20 +722,26 @@ mod tests {
     /// The number in that crash — 2211840 against a limit of 16384 — is half
     /// a viewport, so the viewport was about four and a half million across,
     /// which no fraction of a real window produces.
+    ///
+    /// Refused rather than clamped, because clamping down to the limit
+    /// invents an answer: a viewport 16384 across on a target that is really
+    /// 2560 is the next frame's validation error. Keeping the last good one
+    /// costs a frame of a stale rect and nothing else.
     #[test]
-    fn a_window_reporting_nonsense_cannot_make_a_texture_wgpu_refuses() {
-        let absurd = UVec2::new(4_423_680, 2_160);
-        let (position, size) =
-            clamped_viewport(Vec2::ZERO, Vec2::ONE, absurd).expect("a size is still describable");
+    fn a_window_reporting_nonsense_is_refused_rather_than_clamped() {
+        for absurd in [
+            UVec2::new(4_423_680, 2_160),
+            UVec2::new(2_560, 4_423_680),
+            UVec2::splat(u32::MAX),
+        ] {
+            assert!(
+                clamped_viewport(Vec2::ZERO, Vec2::ONE, absurd).is_none(),
+                "{absurd:?} was given a viewport rather than refused",
+            );
+        }
 
-        assert!(
-            size.x <= MAX_TEXTURE_SIDE && size.y <= MAX_TEXTURE_SIDE,
-            "a viewport larger than any texture: {size:?}",
-        );
-        assert!(
-            position.x <= MAX_TEXTURE_SIDE && position.y <= MAX_TEXTURE_SIDE,
-            "a viewport positioned off the end of any texture: {position:?}",
-        );
+        // And the largest plausible window is still served.
+        assert!(clamped_viewport(Vec2::ZERO, Vec2::ONE, UVec2::splat(MAX_TEXTURE_SIDE)).is_some());
     }
 
     /// And an ordinary reservation still lands where it used to.
