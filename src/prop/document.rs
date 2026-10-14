@@ -1,12 +1,11 @@
 //! A prop as a document: the feature list, what is selected, and how to get
 //! back to what it looked like a moment ago.
 //!
-//! **Undo is whole-document snapshots**, not per-feature deltas like the map's
-//! [`Action`](crate::editor::action::Action). A prop is a few dozen features
-//! and a couple of kilobytes, so cloning per edit is free and correct by
-//! construction: no before-and-after pair to get the wrong way round, and no
-//! operation that can forget to record itself. The price is that history does
-//! not survive closing the file, which the map pays for and this does not.
+//! **Undo is whole-document snapshots**, the model the map's undo was later
+//! moved onto too. A prop is a few dozen features and a couple of kilobytes,
+//! so cloning per edit is free and correct by construction: no before-and-after
+//! pair to get the wrong way round, and no operation that can forget to record
+//! itself. The price is that history does not survive closing the file.
 //!
 //! **The file is flat text, not SQLite.** A blueprint is an authoring format
 //! the runtime never reads; a prop is read by the *game* and has to reach a

@@ -124,7 +124,6 @@ enum TabKinds {
     Show,
     Metadata,
     Timeline,
-    History,
 }
 
 /// Everything the panels write out, in one system parameter.
@@ -177,7 +176,6 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Show => "show".to_owned(),
             TabKinds::Metadata => "metadata".to_owned(),
             TabKinds::Timeline => "timeline".to_owned(),
-            TabKinds::History => "history".to_owned(),
         })
     }
 
@@ -189,7 +187,6 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Show => { get!("show.title").into() }
             TabKinds::Metadata => { get!("editor.metadata.title").into() }
             TabKinds::Timeline => { get!("editor.timeline.title").into() }
-            TabKinds::History => { get!("editor.history.title").into() }
         }
     }
 
@@ -212,9 +209,6 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             }
             TabKinds::Timeline => {
                 FeatureTimeline::ui(ui, self.editor_features, &mut self.pending_edits.events, self.retarget_request)
-            }
-            TabKinds::History => {
-                self.editor_features.history_ui(ui);
             }
         }
     }
@@ -273,7 +267,7 @@ impl EditorPanels {
     pub fn new() -> Self {
         let default_top_tabs = vec![TabKinds::Tools,];
         let default_left_tabs = vec![TabKinds::Timeline, TabKinds::Bakes,];
-        let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata, TabKinds::History,];
+        let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata];
         let default_bottom_tabs = vec![TabKinds::Empty("Delta".to_owned()), TabKinds::Empty("Epsilon".to_owned())];
         
         Self {
@@ -338,14 +332,13 @@ impl EditorPanels {
         let mut wanted_mode: Option<AppMode> = None;
         let mut pending_edit: Option<EditAction> = None;
         // Read before the viewer borrows the timeline for the rest of the
-        // frame. Revert needs only a file: the map has no dirty flag, and a
-        // blueprint carries its own history, so "matches the file" is not
-        // something this layer can ask cheaply.
+        // frame. Revert needs a file to go back to and something to lose.
         let edit_available = EditAvailability {
-            undo: editor_features.can_undo_action(),
-            redo: editor_features.can_redo_action(),
-            revert: current_file.path.is_some(),
+            undo: editor_features.can_undo(),
+            redo: editor_features.can_redo(),
+            revert: current_file.path.is_some() && editor_features.is_dirty(),
         };
+        let dirty = editor_features.is_dirty();
         
         let mut viewer = TabViewerAndResources  {
             current_tool: & *current_tool,
@@ -379,6 +372,12 @@ impl EditorPanels {
                         &mut connect_dialog,
                         &mut messages.net,
                     );
+                    // The same asterisk the prop editor shows, now that the
+                    // map knows whether it matches its file.
+                    if dirty {
+                        ui.separator();
+                        ui.label("*");
+                    }
                 });
             })
             .response
@@ -465,6 +464,7 @@ impl EditorPanels {
                         Ok(()) => {
                             info!("Saved to {:?}", path);
                             current_file.path = Some(path);
+                            editor_features.mark_saved();
                         }
                         Err(e) => error!("Save failed: {}", e),
                     }
@@ -505,7 +505,10 @@ impl EditorPanels {
                 // it holds for the menu item and the chord alike.
                 FileAction::Save => match current_file.path.clone() {
                     Some(path) => match save::save(&path, &editor_features, &map_metadata) {
-                        Ok(()) => info!("Saved to {:?}", path),
+                        Ok(()) => {
+                            info!("Saved to {:?}", path);
+                            editor_features.mark_saved();
+                        }
                         Err(e) => error!("Save failed: {}", e),
                     },
                     None => ask_where_to_save(&current_file),
@@ -538,20 +541,21 @@ impl EditorPanels {
 
         // The Edit menu. Undo and redo are the same calls the chords make.
         //
-        // **Revert reloads the blueprint, and is not itself undoable.** The
-        // map's history is stored in the file and comes back with it, so what
-        // was undoable at the last save still is — but edits made since are
-        // gone, unlike in the prop and animation editors, where a revert is
-        // one more step in a history that lives only in memory.
+        // **Revert is one undo step**, as in the prop editor: the map's history
+        // lives in memory, so going back to the file is just another edit, and
+        // a revert clicked by mistake is a `Ctrl+Z` away. Only the features
+        // that differ from the file are rebuilt.
         match pending_edit {
-            Some(EditAction::Undo) => editor_features.undo_action(),
-            Some(EditAction::Redo) => editor_features.redo_action(),
+            Some(EditAction::Undo) => editor_features.undo(),
+            Some(EditAction::Redo) => editor_features.redo(),
             Some(EditAction::Revert) => {
                 if let Some(path) = current_file.path.clone() {
                     match save::load(&path) {
                         Ok(loaded) => {
                             info!("Reverted to {:?}", path);
-                            loaded_blueprint = Some(loaded);
+                            editor_features.replace_as_edit(loaded.timeline);
+                            *map_metadata = loaded.metadata;
+                            current_file.deferred_room_bake = 2;
                         }
                         Err(e) => error!("Revert failed: {}", e),
                     }

@@ -109,9 +109,6 @@ delete = "Delete"
 
 [editor.history]
 title = "History"
-undo = "Undo"
-redo = "Redo"
-empty = "No actions yet."
 
 [editor.metadata]
 title = "Metadata"

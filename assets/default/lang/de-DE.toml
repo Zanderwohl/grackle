@@ -91,9 +91,6 @@ delete = "Löschen"
 
 [editor.history]
 title = "Verlauf"
-undo = "Rückgängig"
-redo = "Wiederholen"
-empty = "Noch keine Aktionen."
 
 [editor.metadata]
 title = "Metadaten"

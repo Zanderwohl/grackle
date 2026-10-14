@@ -23,7 +23,6 @@ use crate::common::skeleton::{
     default_humanoid, AnimationState, ForcedAnimation, Pose, SkeletonAnimator,
 };
 use crate::common::PointResolutionError;
-use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::common::damage::Damageable;
 use crate::common::hitbox::Hitboxes;
@@ -119,21 +118,6 @@ impl FeatureTrait for AnimationDisplay {
 
     fn type_key(&self) -> &'static str { "animation_display" }
 
-    fn snapshot(&self) -> FeatureData {
-        FeatureData::AnimationDisplay {
-            location: self.location.clone(),
-            yaw: self.yaw,
-            state: self.state,
-        }
-    }
-
-    fn apply_snapshot(&mut self, data: &FeatureData) {
-        let FeatureData::AnimationDisplay { location, yaw, state } = data else { return; };
-        self.location = location.clone();
-        self.yaw = *yaw;
-        self.state = *state;
-    }
-
     /// The point and the facing only.
     ///
     /// The body itself is drawn by the skeleton systems, off the entity this
@@ -207,23 +191,6 @@ impl FeatureTrait for AnimationDisplay {
             ("".into(), self.resolved_location),
             ("head".into(), self.resolved_location + Vec3::Y * default_humanoid().proportions().height),
         ]
-    }
-
-    fn point_ref_slots(&self) -> Vec<&str> { vec!["location"] }
-
-    /// Yaw and the state, both as scalars, because scalars are what the save
-    /// format carries. The state's number is [`AnimationState::index`], which
-    /// is stable across builds by contract.
-    fn scalar_fields(&self) -> Vec<(&str, f32)> {
-        vec![("yaw", self.yaw), ("state", self.state.index() as f32)]
-    }
-
-    fn set_scalar_field(&mut self, key: &str, value: f32) {
-        match key {
-            "yaw" => self.yaw = value,
-            "state" => self.state = AnimationState::from_index(value.max(0.0) as u32),
-            _ => {}
-        }
     }
 
     fn rotation_axes(&self) -> Vec<u8> { vec![1] }
@@ -343,21 +310,4 @@ mod tests {
         assert!(transform.rotation.abs_diff_eq(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), 1e-5));
     }
 
-    /// Yaw and the state go to disk as two scalars and have to come back as
-    /// the same two. The state especially: it is an enum squeezed through an
-    /// `f32`, which is exactly the sort of thing that rounds to Idle unnoticed.
-    #[test]
-    fn yaw_and_state_round_trip_through_the_scalar_fields() {
-        let display = AnimationDisplay::new(0.0, 0.0, 0.0)
-            .with_state(AnimationState::PushingWall)
-            .with_yaw(-1.25);
-
-        let mut loaded = AnimationDisplay::new(0.0, 0.0, 0.0);
-        for (key, value) in display.scalar_fields() {
-            loaded.set_scalar_field(key, value);
-        }
-
-        assert_eq!(loaded.state(), AnimationState::PushingWall);
-        assert_eq!(loaded.yaw(), -1.25);
-    }
 }

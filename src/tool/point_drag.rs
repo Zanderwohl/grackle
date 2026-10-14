@@ -197,8 +197,8 @@ impl PointDragState {
         let Some(feature_id) = state.tracked_feature else { return; };
 
         // A ring drag in progress owns the mouse: the arrows reach into the
-        // rings, and grabbing one mid-rotation would leave the rotation's
-        // `begin_edit` open with a translation recorded inside it.
+        // rings, and grabbing one mid-rotation would move the feature as well
+        // as turn it, in what the user meant as one rotation.
         if rotate_drag.is_dragging() {
             return;
         }
@@ -218,7 +218,6 @@ impl PointDragState {
 
         if mouse_released || ray.is_none() {
             if state.grabbed_axis.is_some() {
-                features.end_edit(feature_id);
                 state.grabbed_axis = None;
                 state.grab_offset = None;
                 Self::restore_all_materials(&arrows, &mut commands, &state);
@@ -285,7 +284,6 @@ impl PointDragState {
                     Self::highlight_axis(&arrows, axis, &mut commands, &state);
 
                     if mouse_just_pressed {
-                        features.begin_edit(feature_id);
                         state.grabbed_axis = Some(axis);
                         state.grab_offset = None;
                     }

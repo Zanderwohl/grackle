@@ -67,15 +67,17 @@ added while rolled back.
 
 ### Stage 2 — undo as snapshots
 
-- [ ] `MapState` snapshot + undo/redo stacks + checkpoint system.
-- [ ] Restore rebuilds only features whose serialized form changed (and their
-      descendants).
-- [ ] `adopt` and loading reset history (no history crosses the wire).
-- [ ] `action.rs`, `FeatureData`, `FeatureSnapshot`, `FeatureDelta`,
+- [x] `MapState` snapshot + undo/redo stacks + `checkpoint_when_idle`.
+      `sync_entities` bypasses change detection, so entity bookkeeping does
+      not read as an edit every frame.
+- [x] Restore rebuilds only features whose serialized form changed (and their
+      descendants), and re-resolves references at once.
+- [x] `adopt` and loading reset history (no history crosses the wire).
+- [x] `action.rs`, `FeatureData`, `FeatureSnapshot`, `FeatureDelta`,
       `snapshot`/`apply_snapshot`, `scalar_fields`/`set_scalar_field`,
       `point_ref_slots`, `create_object_from_type_key`, `begin_edit`/`end_edit`
-      removed where nothing else needs them.
-- [ ] Dirty flag; asterisk in the map editor's menu bar.
+      removed. The old action-list History panel goes with them.
+- [x] Dirty flag; asterisk in the map editor's menu bar.
 
 ### Stage 3 — rollback as a view
 
@@ -87,8 +89,8 @@ added while rolled back.
 
 ### Stage 4 — wiring and docs
 
-- [ ] Edit menu: Undo/Redo on the new history; Revert as one undo step,
-      enabled only when dirty.
+- [x] Edit menu: Undo/Redo on the new history; Revert as one undo step,
+      enabled only when dirty (pulled forward into stage 2).
 - [ ] CLAUDE.md: Save format, the feature model's registration list, map sync,
       targeting wasm, and the shipped template.
 

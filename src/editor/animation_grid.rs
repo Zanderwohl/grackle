@@ -35,7 +35,6 @@ use crate::common::skeleton::{
     default_humanoid, finish_pose, humanoid, AnimationState, Pose, PoseInputs,
 };
 use crate::common::PointResolutionError;
-use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::get;
 
@@ -449,21 +448,6 @@ impl FeatureTrait for AnimationGrid {
 
     fn type_key(&self) -> &'static str { "animation_grid" }
 
-    fn snapshot(&self) -> FeatureData {
-        FeatureData::AnimationGrid {
-            location: self.location.clone(),
-            yaw: self.yaw,
-            teams: self.teams,
-        }
-    }
-
-    fn apply_snapshot(&mut self, data: &FeatureData) {
-        let FeatureData::AnimationGrid { location, yaw, teams } = data else { return; };
-        self.location = location.clone();
-        self.yaw = *yaw;
-        self.teams = *teams;
-    }
-
     /// The point, the facing, and the floor it will cover.
     ///
     /// The bodies are entities and draw themselves; this draws the feature,
@@ -549,22 +533,6 @@ impl FeatureTrait for AnimationGrid {
 
     fn reference_points_for_ray(&self, _ray: &Ray3d) -> Vec<(String, Vec3)> {
         vec![("".into(), self.resolved_location)]
-    }
-
-    fn point_ref_slots(&self) -> Vec<&str> { vec!["location"] }
-
-    fn scalar_fields(&self) -> Vec<(&str, f32)> {
-        // The teams go out as an index, which is stable across builds by
-        // contract — see [`RosterTeam::index`].
-        vec![("yaw", self.yaw), ("teams", self.teams.index() as f32)]
-    }
-
-    fn set_scalar_field(&mut self, key: &str, value: f32) {
-        match key {
-            "yaw" => self.yaw = value,
-            "teams" => self.teams = RosterTeam::from_index(value.max(0.0) as u32),
-            _ => {}
-        }
     }
 
     fn rotation_axes(&self) -> Vec<u8> { vec![1] }
