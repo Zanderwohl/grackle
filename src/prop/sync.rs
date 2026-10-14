@@ -1,5 +1,5 @@
 //! Handing every weapon's model to whoever connects, after
-//! [`crate::common::weapon_sync`].
+//! [`crate::common::pack_sync`].
 //!
 //! The document crosses, not meshes; each machine bakes its own. The
 //! catalogue says which models to send, so nothing enumerates a directory.

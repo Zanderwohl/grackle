@@ -114,7 +114,7 @@ mod tests {
 
         // Through `animation_pose`, so foot timing and blends are read as a
         // match reads them.
-        let rig = humanoid(Class::Mercenary.proportions());
+        let rig = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Mercenary));
         let root = Transform::IDENTITY;
 
         for entry in seed::SEEDS {
@@ -180,7 +180,7 @@ mod tests {
     /// silently does nothing at runtime.
     #[test]
     fn every_shipped_body_clip_is_one_the_editor_would_not_flag() {
-        let rig = humanoid(Class::Mercenary.proportions());
+        let rig = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Mercenary));
         let known = |name: &str| rig.bones().iter().any(|bone| bone.name == name);
 
         let mut found = 0;
@@ -207,7 +207,7 @@ mod tests {
         // Same budget as `a_solved_limb_never_lurches`.
         const MOST: f32 = 0.2;
 
-        for proportions in [Proportions::DEFAULT, Class::Heavy.proportions()] {
+        for proportions in [Proportions::DEFAULT, crate::common::class::ClassBuilds::shipped().of(Class::Heavy)] {
             let rig = humanoid(proportions);
             let root = Transform::IDENTITY;
 

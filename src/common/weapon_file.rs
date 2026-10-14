@@ -3,7 +3,7 @@
 //! names them by hash.
 //!
 //! A client's startup catalogue is replaced by the server's on connect (see
-//! [`crate::common::weapon_sync`]).
+//! [`crate::common::pack_sync`]).
 //!
 //! Reads go through [`AssetSource`] so wasm has one thing to replace, and are
 //! one file per kind of thing because nothing behind a `fetch` can list a

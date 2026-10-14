@@ -1,0 +1,120 @@
+[builds.scout]
+height = 1.78
+hip_height = 0.57
+torso_length = 0.25
+arm_length = 0.30
+head_length = 0.135
+shoulder_half_width = 0.100
+hip_half_width = 0.048
+girth = 0.78
+belly = 1.0
+
+[builds.soldier]
+height = 1.90
+hip_height = 0.52
+torso_length = 0.29
+arm_length = 0.31
+head_length = 0.125
+shoulder_half_width = 0.135
+hip_half_width = 0.058
+girth = 1.25
+belly = 1.0
+
+[builds.pyro]
+height = 1.80
+hip_height = 0.50
+torso_length = 0.30
+arm_length = 0.30
+head_length = 0.150
+shoulder_half_width = 0.125
+hip_half_width = 0.062
+girth = 1.35
+belly = 1.08
+
+[builds.demoman]
+height = 1.86
+hip_height = 0.52
+torso_length = 0.29
+arm_length = 0.32
+head_length = 0.130
+shoulder_half_width = 0.120
+hip_half_width = 0.060
+girth = 1.12
+belly = 1.15
+
+[builds.heavy]
+height = 2.00
+hip_height = 0.47
+torso_length = 0.34
+arm_length = 0.32
+head_length = 0.125
+shoulder_half_width = 0.155
+hip_half_width = 0.075
+girth = 1.75
+belly = 1.0
+
+[builds.engineer]
+height = 1.76
+hip_height = 0.50
+torso_length = 0.30
+arm_length = 0.30
+head_length = 0.140
+shoulder_half_width = 0.130
+hip_half_width = 0.062
+girth = 1.20
+belly = 1.0
+
+[builds.medic]
+height = 1.88
+hip_height = 0.55
+torso_length = 0.27
+arm_length = 0.31
+head_length = 0.125
+shoulder_half_width = 0.108
+hip_half_width = 0.050
+girth = 0.88
+belly = 1.0
+
+[builds.sniper]
+height = 1.95
+hip_height = 0.58
+torso_length = 0.25
+arm_length = 0.34
+head_length = 0.120
+shoulder_half_width = 0.105
+hip_half_width = 0.048
+girth = 0.82
+belly = 1.0
+
+[builds.spy]
+height = 1.86
+hip_height = 0.55
+torso_length = 0.27
+arm_length = 0.31
+head_length = 0.120
+shoulder_half_width = 0.105
+hip_half_width = 0.048
+girth = 0.85
+belly = 1.0
+
+[builds.civilian]
+height = 1.70
+hip_height = 0.48
+torso_length = 0.32
+arm_length = 0.29
+head_length = 0.140
+shoulder_half_width = 0.100
+hip_half_width = 0.075
+girth = 1.40
+belly = 1.60
+
+[builds.mercenary]
+height = 2.0
+hip_height = 0.53
+torso_length = 0.28
+arm_length = 0.31
+head_length = 0.13
+shoulder_half_width = 0.115
+hip_half_width = 0.055
+girth = 1.0
+belly = 1.0

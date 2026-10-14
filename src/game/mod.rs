@@ -63,6 +63,9 @@ impl Plugin for GamePlugin {
                 Startup,
                 crate::common::weapon_file::load_catalogue_at_startup,
             )
+            // Bodies are rigged from it; replaced by the server's on connect.
+            .init_resource::<crate::common::class::ClassBuilds>()
+            .add_systems(Startup, crate::common::class_file::load_builds_at_startup)
             // A pack that ships no clips leaves bodies on the built-in poses.
             .add_systems(
                 Startup,

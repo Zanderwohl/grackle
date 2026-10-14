@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 use crate::common::class::Class;
 use crate::common::team::Team;
 use crate::common::skeleton::{
-    default_humanoid, finish_pose, humanoid, AnimationState, Pose, PoseInputs,
+    default_humanoid, finish_pose, AnimationState, PoseInputs,
 };
 use crate::common::PointResolutionError;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
@@ -61,7 +61,13 @@ impl RosterTeam {
 }
 
 /// Clear floor either side of a body, on top of its own width, in metres.
+#[cfg(test)]
 const COLUMN_MARGIN: f32 = 0.3;
+
+/// Metres between bodies. Fixed rather than measured off the builds, which
+/// are pack content the layout would otherwise have to be handed; a test
+/// checks the widest shipped build plus [`COLUMN_MARGIN`] fits.
+pub const COLUMN_SPACING: f32 = 2.33;
 
 /// Clear floor between rows, on top of the stride, in metres.
 const ROW_MARGIN: f32 = 0.4;
@@ -163,14 +169,6 @@ pub struct GridCell {
     pub offset: Vec3,
 }
 
-/// Measured off the widest class in its A-pose rest, so a broader class pushes the grid apart.
-pub fn column_spacing() -> f32 {
-    static SPACING: OnceLock<f32> = OnceLock::new();
-    *SPACING.get_or_init(|| {
-        Class::iter().map(body_width).fold(0.0_f32, f32::max) + COLUMN_MARGIN
-    })
-}
-
 /// Front-to-back floor a body needs, measured across the stride cycle since the deepest moment is
 /// not an obvious one.
 pub fn body_depth() -> f32 {
@@ -200,28 +198,10 @@ pub fn body_depth() -> f32 {
     })
 }
 
-fn body_width(class: Class) -> f32 {
-    let proportions = class.proportions();
-    let owned;
-    let skeleton = if proportions == default_humanoid().proportions() {
-        default_humanoid()
-    } else {
-        owned = humanoid(proportions);
-        &owned
-    };
-
-    skeleton
-        .posed_bones(&Pose::rest(), &Transform::IDENTITY)
-        .iter()
-        .map(|bone| bone.head.x.abs().max(bone.tail.x.abs()) + bone.thickness.x * 0.5)
-        .fold(0.0_f32, f32::max)
-        * 2.0
-}
-
 /// One body per class, centred on the grid's point.
 pub fn cells() -> Vec<GridCell> {
     let classes: Vec<Class> = Class::iter().collect();
-    let columns = column_spacing();
+    let columns = COLUMN_SPACING;
     let centre = (classes.len() as f32 - 1.0) * 0.5;
 
     classes
@@ -239,7 +219,7 @@ pub fn footprint() -> (Vec3, Vec3) {
     let cells = cells();
     let mut min = Vec3::splat(f32::MAX);
     let mut max = Vec3::splat(f32::MIN);
-    let half = Vec3::new(column_spacing(), 0.0, body_depth()) * 0.5;
+    let half = Vec3::new(COLUMN_SPACING, 0.0, body_depth()) * 0.5;
     for cell in &cells {
         min = min.min(cell.offset - half);
         max = max.max(cell.offset + half);
@@ -493,7 +473,7 @@ impl AnimationGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::skeleton::{finish_pose, PoseInputs};
+    use crate::common::skeleton::{humanoid, Pose};
 
     #[test]
     fn the_line_is_one_body_per_class() {
@@ -614,13 +594,23 @@ mod tests {
         assert_eq!(next.row, order(1)[0]);
     }
 
+    fn body_width(class: Class) -> f32 {
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
+
+        skeleton
+            .posed_bones(&Pose::rest(), &Transform::IDENTITY)
+            .iter()
+            .map(|bone| bone.head.x.abs().max(bone.tail.x.abs()) + bone.thickness.x * 0.5)
+            .fold(0.0_f32, f32::max)
+            * 2.0
+    }
+
     #[test]
     fn neighbouring_bodies_do_not_overlap() {
         let widest = Class::iter().map(body_width).fold(0.0_f32, f32::max);
         assert!(
-            column_spacing() > widest,
-            "columns are {} apart for bodies {widest} wide",
-            column_spacing()
+            COLUMN_SPACING >= widest + COLUMN_MARGIN,
+            "columns are {COLUMN_SPACING} apart for bodies {widest} wide"
         );
 
         let places: Vec<f32> = cells().iter().map(|cell| cell.offset.x).collect();

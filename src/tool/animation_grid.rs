@@ -7,6 +7,7 @@ use bevy::prelude::*;
 
 use crate::common::damage::Damageable;
 use crate::common::hitbox::Hitboxes;
+use crate::common::class::ClassBuilds;
 use crate::common::team::Team;
 use crate::game::player::PhysicsBody;
 use crate::common::skeleton::{
@@ -103,6 +104,7 @@ pub fn drive_carousels(
 pub fn sync_animation_grids(
     mut commands: Commands,
     clock: Res<AnimationClock>,
+    builds: Res<ClassBuilds>,
     grids: Query<(Entity, &Transform, Option<&RosterTeam>), With<AnimationGridMarker>>,
     bodies: Query<&OfGrid>,
     mut last_cycle: Local<Option<u64>>,
@@ -134,7 +136,7 @@ pub fn sync_animation_grids(
 
         let teams = teams.copied().unwrap_or_default();
         for cell in missing {
-            commands.spawn(carousel_body(grid, cell, &cells[cell], placed_at, teams));
+            commands.spawn(carousel_body(grid, cell, &cells[cell], placed_at, teams, &builds));
         }
     }
 }
@@ -164,10 +166,11 @@ fn carousel_body(
     placed: &GridCell,
     at: &Transform,
     teams: RosterTeam,
+    builds: &ClassBuilds,
 ) -> impl Bundle {
     let world = at.transform_point(placed.offset);
     (
-        humanoid(placed.class.proportions()),
+        humanoid(builds.of(placed.class)),
         Pose::rest(),
         SkeletonAnimator::default(),
         // From the cell, so phases vary but every machine agrees.
@@ -269,6 +272,7 @@ mod tests {
     fn grid_world() -> World {
         let mut world = World::new();
         world.init_resource::<AnimationClock>();
+        world.init_resource::<ClassBuilds>();
         world.spawn((AnimationGridMarker, Transform::IDENTITY));
         world.run_system_once(sync_animation_grids).unwrap();
         world.flush();
@@ -290,6 +294,7 @@ mod tests {
         for choice in RosterTeam::choices() {
             let mut world = World::new();
             world.init_resource::<AnimationClock>();
+            world.init_resource::<ClassBuilds>();
             world.spawn((AnimationGridMarker, Transform::IDENTITY, choice));
             world.run_system_once(sync_animation_grids).unwrap();
             world.flush();
@@ -309,6 +314,7 @@ mod tests {
     fn changing_the_choice_re_teams_the_bodies_already_standing() {
         let mut world = World::new();
         world.init_resource::<AnimationClock>();
+        world.init_resource::<ClassBuilds>();
         let grid = world.spawn((AnimationGridMarker, Transform::IDENTITY, RosterTeam::Striped)).id();
         world.run_system_once(sync_animation_grids).unwrap();
         world.flush();
@@ -328,6 +334,7 @@ mod tests {
     fn re_teaming_an_unchanged_roster_touches_nothing() {
         let mut world = World::new();
         world.init_resource::<AnimationClock>();
+        world.init_resource::<ClassBuilds>();
         world.spawn((AnimationGridMarker, Transform::IDENTITY, RosterTeam::Striped));
         world.run_system_once(sync_animation_grids).unwrap();
         world.flush();
@@ -355,6 +362,7 @@ mod tests {
     fn a_body_shot_out_of_the_roster_comes_back_at_the_next_shuffle() {
         let mut world = World::new();
         world.init_resource::<AnimationClock>();
+        world.init_resource::<ClassBuilds>();
         world.spawn((AnimationGridMarker, Transform::IDENTITY));
         let sync = world.register_system(sync_animation_grids);
 

@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn every_bone_of_every_class_has_a_solid_mesh() {
         for class in [Class::Scout, Class::Heavy, Class::Civilian, Class::Sniper] {
-            let skeleton = humanoid(class.proportions());
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             for (bone, mesh) in skeleton.bones().iter().zip(body_meshes(&skeleton)) {
                 assert!(
                     mesh.count_vertices() >= 12,
@@ -243,8 +243,8 @@ mod tests {
     /// A class's proportions must reach its silhouette.
     #[test]
     fn a_heavier_class_comes_out_heavier() {
-        let heavy = humanoid(Class::Heavy.proportions());
-        let sniper = humanoid(Class::Sniper.proportions());
+        let heavy = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Heavy));
+        let sniper = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Sniper));
 
         let width = |skeleton: &Skeleton| {
             let (min, max) = bounds(&named(skeleton, bone::CHEST));

@@ -553,7 +553,7 @@ mod tests {
         use crate::common::skeleton::rig::{humanoid, Proportions};
 
         let corner = Vec2::new(1.0, 1.0).normalize();
-        for proportions in [Proportions::DEFAULT, Class::Heavy.proportions()] {
+        for proportions in [Proportions::DEFAULT, crate::common::class::ClassBuilds::shipped().of(Class::Heavy)] {
             let skeleton = humanoid(proportions);
             let root = Transform::IDENTITY;
 

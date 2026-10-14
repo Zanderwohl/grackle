@@ -531,7 +531,7 @@ mod tests {
     ];
 
     fn body_holding(world: &mut World, class: Class, pitch: f32) -> Entity {
-        let skeleton = humanoid(class.proportions());
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
         world
             .spawn((
                 skeleton,

@@ -505,7 +505,7 @@ mod tests {
         use strum::IntoEnumIterator;
 
         for class in Class::iter() {
-            let proportions = class.proportions();
+            let proportions = crate::common::class::ClassBuilds::shipped().of(class);
             let skeleton = humanoid(proportions);
             let bones = posed(&skeleton, &Pose::rest());
             let chest_half = bones[bone::CHEST].thickness.x * 0.5;

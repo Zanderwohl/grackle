@@ -20,7 +20,7 @@ use bevy::transform::TransformSystems;
 use crate::common::app_mode::{showing_the_world, AppMode};
 use crate::common::class::Stance;
 use crate::common::damage::PlayerId;
-use crate::common::class::Class;
+use crate::common::class::{Class, ClassBuilds};
 use crate::common::skeleton::state::ClipLibrary;
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{
@@ -63,6 +63,7 @@ impl Plugin for SkeletonPlugin {
             .add_plugins((BodyMeshPlugin, HeldWeaponPlugin, ViewmodelPlugin))
             .add_plugins(GameTimePlugin)
             .init_resource::<ShowBones>()
+            .init_resource::<ClassBuilds>()
             .add_systems(Update, toggle_bones)
             .add_systems(Update, (
                 describe_player_bodies
@@ -71,6 +72,7 @@ impl Plugin for SkeletonPlugin {
                 // Not gated on `AppMode::Play`: a replicated body can arrive
                 // before this process has finished entering the round, and a
                 // body that misses its rig stays invisible.
+                rebuild_rigs_for_new_builds,
                 dress_new_players,
                 dress_bodies_from_elsewhere,
                 equip_new_bodies,
@@ -253,13 +255,14 @@ fn describe_player_bodies(
 /// Must not decide a corpse's build: `CorpseBuild` is read off the rig.
 fn dress_new_players(
     mut commands: Commands,
+    builds: Res<ClassBuilds>,
     players: Query<(Entity, &Class), (With<Player>, Without<Skeleton>)>,
 ) {
     for (player, class) in &players {
         // `insert_if_new`: a replicated body may already carry the server's
         // `Stance`.
         commands.entity(player).insert_if_new((
-            humanoid(class.proportions()),
+            humanoid(builds.of(*class)),
             Pose::rest(),
             SkeletonAnimator::default(),
             BodyRequests::default(),
@@ -322,11 +325,12 @@ fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
 /// inserts no `SkeletonRoot`, so a player dressed here floats half a metre up.
 fn dress_bodies_from_elsewhere(
     mut commands: Commands,
+    builds: Res<ClassBuilds>,
     bodies: Query<(Entity, &Class), (Added<Class>, Without<Skeleton>, Without<Player>)>,
 ) {
     for (body, class) in &bodies {
         commands.entity(body).insert_if_new((
-            humanoid(class.proportions()),
+            humanoid(builds.of(*class)),
             Pose::rest(),
             SkeletonAnimator::default(),
             BodyRequests::default(),
@@ -338,6 +342,25 @@ fn dress_bodies_from_elsewhere(
             Transform::default(),
             Visibility::default(),
         ));
+    }
+}
+
+/// A client rigs its bodies from its own pack until the server's builds
+/// arrive, and they may arrive after the bodies. Corpses keep the build they
+/// died with.
+fn rebuild_rigs_for_new_builds(
+    mut commands: Commands,
+    builds: Res<ClassBuilds>,
+    bodies: Query<(Entity, &Class, &Skeleton), Without<crate::game::ragdoll::Ragdoll>>,
+) {
+    if !builds.is_changed() {
+        return;
+    }
+    for (body, class, skeleton) in &bodies {
+        let wanted = builds.of(*class);
+        if skeleton.proportions() != wanted {
+            commands.entity(body).insert(humanoid(wanted));
+        }
     }
 }
 
@@ -454,6 +477,9 @@ mod tests {
 
     /// One pass of both dressing systems, commands applied.
     fn dress(world: &mut World) {
+        if !world.contains_resource::<ClassBuilds>() {
+            world.insert_resource(ClassBuilds::shipped());
+        }
         world.run_system_once(dress_new_players).unwrap();
         world.run_system_once(dress_bodies_from_elsewhere).unwrap();
         world.flush();
@@ -470,7 +496,7 @@ mod tests {
 
         let rig = world.get::<Skeleton>(body).expect("a body with a class went undressed");
         assert_eq!(
-            rig.proportions(), Class::Heavy.proportions(),
+            rig.proportions(), ClassBuilds::shipped().of(Class::Heavy),
             "the body was built from something other than its class"
         );
     }
@@ -491,7 +517,27 @@ mod tests {
         dress(&mut world);
 
         let rig = world.get::<Skeleton>(body).expect("the class arrived and nothing dressed it");
-        assert_eq!(rig.proportions(), Class::Sniper.proportions());
+        assert_eq!(rig.proportions(), ClassBuilds::shipped().of(Class::Sniper));
+    }
+
+    /// Fails if a body rigged before the server's builds arrived keeps the
+    /// build it was given first.
+    #[test]
+    fn new_builds_rebuild_the_rigs_they_change() {
+        let mut world = World::new();
+        world.insert_resource(ClassBuilds::default());
+        let body = world.spawn((Player::default(), Class::Heavy)).id();
+        dress(&mut world);
+        assert_eq!(world.get::<Skeleton>(body).unwrap().proportions(), Proportions::DEFAULT);
+
+        world.insert_resource(ClassBuilds::shipped());
+        world.run_system_once(rebuild_rigs_for_new_builds).unwrap();
+        world.flush();
+
+        assert_eq!(
+            world.get::<Skeleton>(body).unwrap().proportions(),
+            ClassBuilds::shipped().of(Class::Heavy),
+        );
     }
 
     /// A player's body is dressed by `dress_new_players`, which gives it a

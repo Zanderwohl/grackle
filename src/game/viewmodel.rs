@@ -363,7 +363,7 @@ mod tests {
         let weapon = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
 
         for class in EVERY_CLASS {
-            let skeleton = humanoid(class.proportions());
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let mut pose = Pose::rest();
             let reached = grip_with(&skeleton, &mut pose, &eye_space(&skeleton), &hold, &weapon);
             assert_eq!(
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn the_eye_is_the_rigs_own_and_the_shoulders_hang_below_it() {
         for class in EVERY_CLASS {
-            let skeleton = humanoid(class.proportions());
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let root = eye_space(&skeleton);
             let bones = skeleton.posed_bones(&Pose::rest(), &root);
 
@@ -398,7 +398,7 @@ mod tests {
     /// drawn across the screen.
     #[test]
     fn a_hand_with_no_grip_to_hold_does_not_reach() {
-        let skeleton = humanoid(Class::Soldier.proportions());
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Soldier));
         let weapon = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
         let mut pose = Pose::rest();
 
@@ -429,7 +429,7 @@ mod tests {
 
         let weapon = doc.viewmodel.transform(VIEWMODEL_FOV, 16.0 / 9.0);
         for class in EVERY_CLASS {
-            let skeleton = humanoid(class.proportions());
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let hold = doc.hold.for_class(Some(class));
             let mut pose = Pose::rest();
             let reached = grip_with(&skeleton, &mut pose, &eye_space(&skeleton), &hold, &weapon);
@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn a_bigger_build_has_its_own_arms() {
         let reach = |class: Class| {
-            let skeleton = humanoid(class.proportions());
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let bones = skeleton.posed_bones(&Pose::rest(), &eye_space(&skeleton));
             bones[skeleton.index_of(bone::UPPER_ARM_R).unwrap()].head
         };

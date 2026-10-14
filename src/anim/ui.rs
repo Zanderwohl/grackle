@@ -100,6 +100,7 @@ struct AnimFiles<'w> {
     prop: Res<'w, PropFileDialog>,
     body: Res<'w, BodyClipDialog>,
     assets: Res<'w, Assets>,
+    builds: Res<'w, crate::common::class::ClassBuilds>,
     exit: MessageWriter<'w, AppExit>,
 }
 
@@ -108,6 +109,7 @@ struct AnimTabs<'a> {
     body: &'a mut BodyClips,
     anim: &'a mut AnimEditor,
     figure: &'a mut ScaleFigure,
+    builds: &'a crate::common::class::ClassBuilds,
     stage: &'a mut FigureStage,
     cursor: &'a mut TimelineCursor,
     selection: &'a TimelineSelection,
@@ -613,7 +615,7 @@ impl AnimTabs<'_> {
         use crate::anim::timeline::{row_top, track_name, NAMES_WIDTH, ROW_HEIGHT};
         let Some(clip) = self.clip() else { return };
         let rig = crate::common::skeleton::humanoid(
-            self.figure.0.unwrap_or(Class::Mercenary).proportions(),
+            self.builds.of(self.figure.0.unwrap_or(Class::Mercenary)),
         );
         let problems = clip.problems(|bone| rig.index_of(bone).is_some());
 
@@ -1055,7 +1057,7 @@ impl AnimTabs<'_> {
         let Some(clip) = self.clip() else { return };
         // The rig on screen, so a bone missing on one build is reported against it.
         let rig = crate::common::skeleton::humanoid(
-            self.figure.0.unwrap_or(Class::Mercenary).proportions(),
+            self.builds.of(self.figure.0.unwrap_or(Class::Mercenary)),
         );
         for problem in clip.problems(|bone| rig.index_of(bone).is_some()) {
             // Named as the strip names the row.
@@ -1108,6 +1110,7 @@ fn panels(
         body: &mut body,
         anim: &mut anim,
         figure: &mut figure,
+        builds: &files.builds,
         stage: &mut stage,
         cursor: &mut cursor,
         selection: &selection,

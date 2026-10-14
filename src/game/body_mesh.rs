@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn a_body_is_dressed_from_its_rig_alone() {
         let mut app = app();
-        let skeleton = humanoid(Class::Heavy.proportions());
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Heavy));
         let bones = skeleton.bones().len();
         let body = app
             .world_mut()
@@ -430,7 +430,7 @@ mod tests {
         let mut app = app();
         for class in [Class::Heavy, Class::Heavy, Class::Scout] {
             app.world_mut()
-                .spawn((humanoid(class.proportions()), Pose::rest(), Transform::IDENTITY));
+                .spawn((humanoid(crate::common::class::ClassBuilds::shipped().of(class)), Pose::rest(), Transform::IDENTITY));
         }
 
         app.update();
@@ -498,14 +498,14 @@ mod tests {
         let mut app = app();
         let body = app
             .world_mut()
-            .spawn((humanoid(Class::Scout.proportions()), Pose::rest(), Transform::IDENTITY))
+            .spawn((humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Scout)), Pose::rest(), Transform::IDENTITY))
             .id();
         app.update();
 
         let before = app.world().get::<BodyMesh>(body).unwrap().parts.clone();
         app.world_mut()
             .entity_mut(body)
-            .insert(humanoid(Class::Heavy.proportions()));
+            .insert(humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Heavy)));
         app.update();
 
         let after = app.world().get::<BodyMesh>(body).unwrap().parts.clone();

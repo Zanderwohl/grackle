@@ -377,7 +377,7 @@ mod tests {
 
             for class in EVERY_CLASS {
                 let hold = doc.hold.for_class(Some(class));
-                let skeleton = humanoid(class.proportions());
+                let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
                 let mut pose = Pose::rest();
                 let root = Transform::IDENTITY;
 
@@ -413,7 +413,7 @@ mod tests {
     /// put back instead.
     #[test]
     fn an_arm_that_cannot_reach_is_left_where_the_animation_had_it() {
-        let skeleton = humanoid(Class::Scout.proportions());
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Scout));
         let mut pose = Pose::rest();
         let before = pose.joint(bone::UPPER_ARM_R);
 
@@ -436,7 +436,7 @@ mod tests {
     /// body in a match.
     #[test]
     fn a_turned_body_grips_a_turned_weapon_the_same_way() {
-        let skeleton = humanoid(Class::Soldier.proportions());
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Soldier));
         let hold = HoldSpec::default();
         let grip = |turn: Quat| {
             let root = Transform::from_rotation(turn);

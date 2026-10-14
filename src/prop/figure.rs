@@ -111,15 +111,16 @@ pub fn stage_in_force(
 /// Not a team colour: the figure has no side.
 const FIGURE_TINT: Color = Color::srgb(0.34, 0.40, 0.36);
 
-/// Keyed on the choice changing: re-inserting a `Skeleton` reads as changed
-/// and rebuilds the body's meshes.
+/// Keyed on the choice or the builds changing: re-inserting a `Skeleton`
+/// reads as changed and rebuilds the body's meshes.
 pub fn refresh_the_figure(
     mut commands: Commands,
     choice: Res<ScaleFigure>,
+    builds: Res<crate::common::class::ClassBuilds>,
     existing: Query<Entity, With<ScaleFigureMarker>>,
     mut last: Local<Option<ScaleFigure>>,
 ) {
-    if *last == Some(*choice) && !existing.is_empty() {
+    if *last == Some(*choice) && !existing.is_empty() && !builds.is_changed() {
         return;
     }
     *last = Some(*choice);
@@ -140,7 +141,7 @@ pub fn refresh_the_figure(
         BodyTint(FIGURE_TINT),
         Name::new("Scale figure"),
         FigureReach([Reach::Impossible; 2]),
-        humanoid(class.proportions()),
+        humanoid(builds.of(class)),
     ));
 }
 
@@ -284,7 +285,7 @@ mod tests {
                 Pose::rest(),
                 Visibility::Inherited,
                 FigureReach([Reach::Impossible; 2]),
-                humanoid(Class::Mercenary.proportions()),
+                humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Mercenary)),
             ))
             .id();
         world.run_system_once(pose_the_figure).unwrap();
@@ -370,7 +371,7 @@ mod tests {
             skeleton.posed_bones(pose, root)[index].head.y
         };
 
-        let skeleton = humanoid(Class::Mercenary.proportions());
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Mercenary));
         let index = skeleton.index_of(bone::FOOT_L).unwrap();
         let resting = skeleton.posed_bones(&Pose::rest(), &Transform::IDENTITY)[index].head.y;
 
@@ -395,7 +396,7 @@ mod tests {
             Class::Heavy, Class::Engineer, Class::Medic, Class::Sniper,
             Class::Spy, Class::Civilian, Class::Mercenary,
         ] {
-            let skeleton = humanoid(class.proportions());
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let mut pose = Pose::rest();
 
             let local = weapon_transform(

@@ -99,7 +99,7 @@ mod tests {
             tick_duration: std::time::Duration::from_secs_f64(1.0 / crate::constants::TICK_HZ),
         });
         app.add_plugins(ProtocolPlugin);
-        app.add_plugins(crate::common::weapon_sync::WeaponSyncPlugin);
+        app.add_plugins(crate::common::pack_sync::PackSyncPlugin);
         app.add_plugins(crate::prop::sync::PropSyncPlugin);
         app.finish();
     }

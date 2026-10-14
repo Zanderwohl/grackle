@@ -479,7 +479,7 @@ mod tests {
         use strum::IntoEnumIterator;
 
         Class::iter()
-            .map(|class| class.proportions())
+            .map(|class| crate::common::class::ClassBuilds::shipped().of(class))
             .chain([Proportions::STOCKY, Proportions::LANKY])
             .collect()
     }

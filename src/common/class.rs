@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
@@ -101,141 +103,6 @@ pub enum Class {
 }
 
 impl Class {
-    /// Classes differ by build more than height (1.70–2.00 m), because the
-    /// eye and collision hull are one size for everybody; a much shorter class
-    /// would see from above its own head.
-    ///
-    /// Stride is in leg lengths, so at equal speed the Engineer's legs turn
-    /// over about a third faster than the Sniper's. That is expected.
-    pub fn proportions(&self) -> Proportions {
-        match self {
-            // Small and wiry: a short body on long legs.
-            Class::Scout => Proportions {
-                height: 1.78,
-                hip_height: 0.57,
-                torso_length: 0.25,
-                arm_length: 0.30,
-                head_length: 0.135,
-                shoulder_half_width: 0.100,
-                hip_half_width: 0.048,
-                girth: 0.78,
-                belly: 1.0,
-            },
-            // Broad and blocky, square across the shoulders.
-            Class::Soldier => Proportions {
-                height: 1.90,
-                hip_height: 0.52,
-                torso_length: 0.29,
-                arm_length: 0.31,
-                head_length: 0.125,
-                shoulder_half_width: 0.135,
-                hip_half_width: 0.058,
-                girth: 1.25,
-                belly: 1.0,
-            },
-            // Bulky and round in a suit, with a big masked head on stubby legs.
-            Class::Pyro => Proportions {
-                height: 1.80,
-                hip_height: 0.50,
-                torso_length: 0.30,
-                arm_length: 0.30,
-                head_length: 0.150,
-                shoulder_half_width: 0.125,
-                hip_half_width: 0.062,
-                girth: 1.35,
-                belly: 1.08,
-            },
-            // An ordinary build, thickening round the middle.
-            Class::Demoman => Proportions {
-                height: 1.86,
-                hip_height: 0.52,
-                torso_length: 0.29,
-                arm_length: 0.32,
-                head_length: 0.130,
-                shoulder_half_width: 0.120,
-                hip_half_width: 0.060,
-                girth: 1.12,
-                belly: 1.15,
-            },
-            // The biggest of them: a barrel of a torso, short legs, no neck.
-            Class::Heavy => Proportions {
-                height: 2.00,
-                hip_height: 0.47,
-                torso_length: 0.34,
-                arm_length: 0.32,
-                head_length: 0.125,
-                shoulder_half_width: 0.155,
-                hip_half_width: 0.075,
-                girth: 1.75,
-                // Big rather than paunchy; round is the Civilian's.
-                belly: 1.0,
-            },
-            // The shortest, and wide for his height.
-            Class::Engineer => Proportions {
-                height: 1.76,
-                hip_height: 0.50,
-                torso_length: 0.30,
-                arm_length: 0.30,
-                head_length: 0.140,
-                shoulder_half_width: 0.130,
-                hip_half_width: 0.062,
-                girth: 1.20,
-                belly: 1.0,
-            },
-            // Tall, upright and narrow.
-            Class::Medic => Proportions {
-                height: 1.88,
-                hip_height: 0.55,
-                torso_length: 0.27,
-                arm_length: 0.31,
-                head_length: 0.125,
-                shoulder_half_width: 0.108,
-                hip_half_width: 0.050,
-                girth: 0.88,
-                belly: 1.0,
-            },
-            // Lanky: the longest legs and the longest arms.
-            Class::Sniper => Proportions {
-                height: 1.95,
-                hip_height: 0.58,
-                torso_length: 0.25,
-                arm_length: 0.34,
-                head_length: 0.120,
-                shoulder_half_width: 0.105,
-                hip_half_width: 0.048,
-                girth: 0.82,
-                belly: 1.0,
-            },
-            // Slim, narrow, unremarkable.
-            Class::Spy => Proportions {
-                height: 1.86,
-                hip_height: 0.55,
-                torso_length: 0.27,
-                arm_length: 0.31,
-                head_length: 0.120,
-                shoulder_half_width: 0.105,
-                hip_half_width: 0.048,
-                girth: 0.85,
-                belly: 1.0,
-            },
-            // Short and round: the belly is wider than the shoulders, legs set
-            // wide to clear it.
-            Class::Civilian => Proportions {
-                height: 1.70,
-                hip_height: 0.48,
-                torso_length: 0.32,
-                arm_length: 0.29,
-                head_length: 0.140,
-                shoulder_half_width: 0.100,
-                hip_half_width: 0.075,
-                girth: 1.40,
-                belly: 1.60,
-            },
-            // Deliberately ordinary, being a placeholder.
-            Class::Mercenary => Proportions::DEFAULT,
-        }
-    }
-
     /// The data-file key, derived from the variant (`snake_case`) so no table
     /// can fall out of step with the enum.
     pub fn key(class: Class) -> String {
@@ -271,6 +138,32 @@ impl Class {
     }
 }
 
+/// What each class is built like, read from a pack's `classes.toml` by
+/// [`crate::common::class_file`]. Held by the authority and sent to clients
+/// with the weapon catalogue, so every machine builds the same rigs.
+///
+/// Keyed by [`Class::key`] in a `BTreeMap` so two equal tables compare equal;
+/// see [`crate::common::pack_sync`].
+#[derive(Resource, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClassBuilds(pub BTreeMap<String, Proportions>);
+
+impl ClassBuilds {
+    /// A class the pack does not describe is built as [`Proportions::DEFAULT`]
+    /// rather than not at all.
+    pub fn of(&self, class: Class) -> Proportions {
+        self.0.get(&Class::key(class)).copied().unwrap_or(Proportions::DEFAULT)
+    }
+
+    /// The default pack's builds. What tests and tools use; there is
+    /// deliberately no table written in Rust to drift from the file.
+    pub fn shipped() -> Self {
+        crate::common::class_file::load_builds(
+            &crate::common::assets::Assets::default(),
+            &crate::common::assets::default_packs(),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use strum::IntoEnumIterator;
@@ -283,7 +176,7 @@ mod tests {
     #[test]
     fn no_class_is_taller_than_the_clearance_a_spawn_is_checked_for() {
         for class in Class::iter() {
-            let height = class.proportions().height;
+            let height = ClassBuilds::shipped().of(class).height;
             assert!(
                 height <= TALLEST_CLASS_HEIGHT,
                 "{class:?} is {height} m tall, taller than the {TALLEST_CLASS_HEIGHT} m a spawn point is checked for"
@@ -302,7 +195,7 @@ mod tests {
     /// tell apart at a glance.
     #[test]
     fn every_class_has_a_silhouette_of_its_own() {
-        let builds: Vec<Proportions> = Class::iter().map(|class| class.proportions()).collect();
+        let builds: Vec<Proportions> = Class::iter().map(|class| ClassBuilds::shipped().of(class)).collect();
 
         for (index, build) in builds.iter().enumerate() {
             for other in &builds[index + 1..] {
@@ -326,8 +219,8 @@ mod tests {
     /// while smaller overall, which needs `belly` separate from `girth`.
     #[test]
     fn the_civilian_is_rotund_rather_than_merely_large() {
-        let civilian = Class::Civilian.proportions();
-        let heavy = Class::Heavy.proportions();
+        let civilian = ClassBuilds::shipped().of(Class::Civilian);
+        let heavy = ClassBuilds::shipped().of(Class::Heavy);
 
         assert!(civilian.height < heavy.height, "the Civilian is not the smaller of the two");
         assert!(civilian.girth < heavy.girth, "the Civilian is built bigger than the Heavy");

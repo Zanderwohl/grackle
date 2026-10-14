@@ -237,7 +237,7 @@ mod tests {
 
         let mut heights = Vec::new();
         for class in Class::iter() {
-            let skeleton = humanoid(class.proportions());
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let root = Transform::IDENTITY;
             let boxes = hitboxes(&skeleton, &Pose::rest(), &Pose::rest(), &root, Stance::Standing);
 

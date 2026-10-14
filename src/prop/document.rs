@@ -834,7 +834,7 @@ mod tests {
 
             for (name, clip) in &doc.animations.clips {
                 for class in Class::iter() {
-                    let rig = humanoid(class.proportions());
+                    let rig = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
                     let problems = clip.problems(|bone| rig.index_of(bone).is_some());
                     assert!(
                         problems.is_empty(),
