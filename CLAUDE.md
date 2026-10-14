@@ -1903,6 +1903,33 @@ key that has slots — fill those in by hand.
   A new binary goes in `src/bin/` and imports; if something it needs is
   `pub(crate)`, widen it rather than reaching around it.
 
+## Comments
+
+Comments are a cost. Write the minimum a competent reader with the code in front of them
+actually needs. The `decimate-comments` skill is the pass that enforces this.
+
+Delete:
+
+- restatements of the code — `// increment i`, `/// Returns the name.` on `fn name()`
+- section banners and decorative rules
+- narration of obvious control flow
+- history — what something used to do or used to be; git remembers it
+- commented-out code
+- design-document prose. This file and `documentation/` exist; link to them instead of
+  inlining them.
+
+Keep:
+
+- **why**, where the why is not derivable: a constraint, a discarded alternative, a bug this
+  shape prevents
+- units, ranges and frames the type does not carry
+- numerical hazards — cancellation, overflow, saturation, tolerance choices
+- invariants a caller must uphold
+
+One line is usually enough. A paragraph needs a reason. Module docs carry shared context so
+items do not repeat it. Prefer making the code say it: a named constant, a smaller function,
+or a better type removes the comment that would have explained it.
+
 ## Targeting wasm
 
 Nothing here builds for `wasm32-unknown-unknown` today, but **every

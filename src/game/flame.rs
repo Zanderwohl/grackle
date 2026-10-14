@@ -1,32 +1,10 @@
-//! Setting things on fire, and what that costs them afterwards.
+//! Setting things on fire. `fire_flame` is the weapon; `burn` is afterburn,
+//! a damage source in `DamageSystems::Deal` with no weapon behind it.
 //!
-//! Two systems, and they are two because fire is two things. `fire_flame` is a
-//! weapon: a cone of traces, ten times a second, that hurts what it catches
-//! and lights it. `burn` is a damage source with no weapon behind it at all —
-//! it reads the [`Burning`] on a body and asks for a few points every half
-//! second until the fire is out. Both sit in
-//! [`DamageSystems::Deal`](crate::game::damage::DamageSystems) with everything
-//! else that hurts something, which is the whole reason afterburn took no new
-//! machinery: it writes a `Damage` like a bullet does.
-//!
-//! Three decisions worth knowing about:
-//!
-//! - **The cone is sampled, and the sampling is not worth anything.** A puff
-//!   is [`FlameSpec::rays`] traces, and a body caught by four of them takes
-//!   one puff's damage. How finely the cone is sampled is a fidelity knob; a
-//!   weapon that hurt more because it was traced more carefully would be a
-//!   weapon whose damage is a rendering setting.
-//! - **A wall stops fire**, ray by ray, through the same `ray_distance` that
-//!   shortens a bullet. Fire round a corner is fire through a wall.
-//! - **Afterburn is credited to whoever lit it last**, which is what
-//!   [`Burning::source`] is for. It is deliberately not the weapon's business:
-//!   the shooter may be dead, or gone from the match, by the time the last
-//!   tick lands.
-//!
-//! What a burning body looks like is [`crate::game::body_mesh`]'s business —
-//! the tint is computed from `Burning` where every other body colour is
-//! decided, rather than written onto the body from here. Two systems writing a
-//! body's colour is a body that stays scorched after the fire is out.
+//! A body caught by several of a puff's rays takes one puff, so the ray count
+//! is a fidelity setting and not a damage multiplier. Afterburn is credited
+//! to [`Burning::source`] because the shooter may be gone by the last tick.
+//! A burning body's look is decided in [`crate::game::body_mesh`], not here.
 
 use bevy::prelude::*;
 
@@ -51,19 +29,12 @@ impl Plugin for FlamePlugin {
         app
             .add_systems(FixedUpdate, (fire_flame, burn).in_set(DamageSystems::Deal))
             .add_systems(PostUpdate, draw_flame_cone.run_if(in_state(AppMode::Play)))
-            // Fire belongs to the match. A body left smouldering into the
-            // editor would keep taking damage while somebody resizes a room.
             .add_systems(OnExit(AppMode::Play), put_out_fires)
         ;
     }
 }
 
-/// One puff of flame, for every shooter whose trigger came up holding one.
-///
-/// Cadence is not this system's business — a flamethrower gets a
-/// [`WeaponActionFired`] ten times a second because the
-/// [`Cadence`](crate::common::weapon::Cadence) on that button says so, and
-/// this simply answers each one.
+/// One puff per [`WeaponActionFired`] carrying a flame action.
 pub fn fire_flame(
     mut commands: Commands,
     world: Res<CollisionWorld>,
@@ -82,9 +53,8 @@ pub fn fire_flame(
             Some(id) => DamageSource::Player(*id),
             None => DamageSource::World,
         };
-        // The step's own position, not the drawn one, for the same reason a
-        // bullet is fired from it: a shot taken from an interpolated body
-        // comes from a slightly different place on every machine.
+        // The step's position, not the interpolated one, so every machine
+        // agrees.
         let origin = eye(body.current, *stance);
 
         // One body, one puff, however many rays found it.
@@ -105,19 +75,13 @@ pub fn fire_flame(
             }
             caught.push(hit.target);
 
-            // The one place a weapon has to ask about teams for itself.
-            // Everything a flame *damages* is dropped by `apply_damage` like
-            // any other request, but setting somebody alight is a second
-            // effect that never goes through it — and a teammate walking away
-            // on fire from a flame that did them no damage would be the
-            // friendly fire rule with a hole straight through it.
+            // Lighting never passes through `apply_damage`'s team check, so
+            // this weapon has to ask for itself.
             if !allegiances.may_hurt(source, hit.target) {
                 continue;
             }
 
-            // A head is not worth more to fire. The zone is where the flame
-            // touched, not what it touched — and a flamethrower that rewarded
-            // aiming at heads at four metres would be a sniper rifle.
+            // No headshot multiplier for fire.
             damage.write(Damage {
                 target: hit.target,
                 source,
@@ -135,11 +99,7 @@ pub fn fire_flame(
     }
 }
 
-/// Everything that is on fire, burning.
-///
-/// `Time<Fixed>` like the rest of the tick, so a body does not smoulder while
-/// somebody is in the editor and two runs of the same match burn for the same
-/// number of ticks.
+/// `Time<Fixed>`, so a match burns for the same number of ticks every run.
 pub fn burn(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
@@ -150,9 +110,7 @@ pub fn burn(
     for (entity, mut burning, boxes, placed) in &mut bodies {
         let due = burning.tick(dt);
 
-        // Over the body, like splash — see [`crate::game::explosion`]. A
-        // number that appeared where the flame was fired from would be over
-        // the shooter.
+        // The damage number goes over the burning body.
         let at = boxes
             .map(|boxes| boxes.body.centre)
             .or_else(|| placed.map(|placed| placed.translation()))
@@ -168,9 +126,7 @@ pub fn burn(
         }
 
         if burning.is_out() {
-            // Removed rather than left at zero, so "is this body on fire" is
-            // the presence of a component and nothing has to ask a second
-            // question about it.
+            // Removed rather than left at zero: presence means on fire.
             commands.entity(entity).remove::<Burning>();
         }
     }
@@ -178,16 +134,10 @@ pub fn burn(
 
 /// The cone gizmo for a flame fired from `origin` along `direction`.
 ///
-/// Bevy draws a [`Cone`] with its **apex at local `+Y`** and its base at
-/// `-Y`, centred on the isometry's translation. So aiming one means mapping
-/// `+Y` onto the direction the shot travels *backwards* along, and placing it
-/// half a range down the barrel — at which point the apex lands on the eye and
-/// the base circle lands at the far end of the range.
-///
-/// A function of values rather than a lump inside the drawing, because the
-/// rotation is the one thing here that can be silently backwards: a cone
-/// pointing out of the back of your head is a picture nobody can check by
-/// reading it.
+/// Bevy draws a [`Cone`] with its apex at local `+Y`, centred on the
+/// isometry. So `+Y` maps onto `-direction` and the centre goes half a range
+/// out, putting the apex on the eye and the base at full range. Separate so a
+/// test can check the rotation.
 fn flame_cone(origin: Vec3, direction: Dir3, spec: &FlameSpec) -> (Cone, Isometry3d) {
     let cone = Cone {
         radius: spec.range * spec.spread.tan(),
@@ -200,17 +150,8 @@ fn flame_cone(origin: Vec3, direction: Dir3, spec: &FlameSpec) -> (Cone, Isometr
     (cone, isometry)
 }
 
-/// The cone the flame is actually traced through.
-///
-/// Drawn from the interpolated transform rather than the step's position —
-/// this is a picture, and a picture may be smooth. The shot it describes comes
-/// from the fixed step's own position, so the two are a fraction apart, which
-/// is the right way round.
-/// Unlike the firing systems this reads what a body is *holding* rather than
-/// what it fired, because it draws between shots. That is a read a client may
-/// make: it decides what is on the screen, never what happened. Reading a
-/// `Loadout` here was what made the cone invisible on every machine but the
-/// server's, since only the authority ever had one.
+/// Reads `Equipped` rather than what was fired, because it draws between
+/// shots. `Equipped` is replicated, so this works on clients.
 fn draw_flame_cone(
     mut gizmos: Gizmos,
     catalogue: Res<WeaponCatalogue>,
@@ -225,11 +166,8 @@ fn draw_flame_cone(
     }
 }
 
-/// Put every fire out.
-///
-/// Called on leaving Play, and again from
-/// [`reset_for_play`](crate::game::reset::reset_for_play) — the same belt and
-/// braces the corpses, the projectiles and the damage numbers get.
+/// Called on leaving Play and again from
+/// [`reset_for_play`](crate::game::reset::reset_for_play).
 pub fn put_out_fires(mut commands: Commands, alight: Query<Entity, With<Burning>>) {
     for body in &alight {
         commands.entity(body).remove::<Burning>();
@@ -262,7 +200,7 @@ mod tests {
         world
     }
 
-    /// A shooter at the origin, looking down -Z, holding the flamethrower.
+    /// A shooter at the origin, looking down -Z.
     fn a_shooter(world: &mut World) -> Entity {
         let centre = body_centre_from_feet(Vec3::ZERO);
         world
@@ -275,8 +213,7 @@ mod tests {
             .id()
     }
 
-    /// A body `away` metres down -Z and `across` metres to the side, boxed at
-    /// the shooter's eye height so a level shot meets it.
+    /// A body `away` metres down -Z and `across` to the side, at eye height.
     fn a_body(world: &mut World, away: f32, across: f32) -> Entity {
         let eye = crate::common::class::TALLEST_CLASS_EYE_HEIGHT;
         let centre = Vec3::new(across, eye, -away);
@@ -307,10 +244,8 @@ mod tests {
         cursor.read(messages).copied().collect()
     }
 
-    /// A teammate caught in the cone is neither hurt nor lit. The damage half
-    /// would be dropped by `apply_damage` anyway; the *lighting* is the half
-    /// that never passes through it, and a teammate walking away on fire from
-    /// a flame that did them no damage would be the rule with a hole in it.
+    /// Breaks if lighting skips the team check, which `apply_damage` cannot
+    /// do for it.
     #[test]
     fn a_teammate_in_the_cone_does_not_catch_fire() {
         use crate::common::team::Team;
@@ -327,8 +262,6 @@ mod tests {
         assert!(world.get::<Burning>(ally).is_none(), "set a teammate alight");
     }
 
-    /// The other side of it, through the same harness: an enemy in the same
-    /// place takes the puff and burns.
     #[test]
     fn an_enemy_in_the_cone_burns() {
         use crate::common::team::Team;
@@ -345,10 +278,7 @@ mod tests {
         assert!(world.get::<Burning>(enemy).is_some());
     }
 
-    /// The drawn cone has to describe the shot: apex on the eye, base at the
-    /// far end of the range, and a base radius that matches the spread. The
-    /// rotation is the piece that can be silently backwards — a cone out of
-    /// the back of your head draws perfectly well.
+    /// Breaks if the drawn cone's rotation is backwards.
     #[test]
     fn the_drawn_cone_points_where_the_flame_goes() {
         let spec = SPEC;
@@ -362,7 +292,6 @@ mod tests {
         ] {
             let (cone, isometry) = flame_cone(origin, direction, &spec);
 
-            // The two points Bevy actually draws the cone between.
             let apex = isometry * (Vec3::Y * cone.height * 0.5);
             let base = isometry * (Vec3::NEG_Y * cone.height * 0.5);
 
@@ -378,8 +307,6 @@ mod tests {
         }
     }
 
-    /// And it is as wide as the cone the rays are actually traced through: a
-    /// ray at the edge of the spread must land on the base circle's rim.
     #[test]
     fn the_drawn_cone_is_as_wide_as_the_traced_one() {
         let (cone, _) = flame_cone(Vec3::ZERO, Dir3::NEG_Z, &SPEC);
@@ -392,8 +319,6 @@ mod tests {
         );
     }
 
-    /// A puff hurts what it catches and leaves it alight, credited to
-    /// whoever pulled the trigger.
     #[test]
     fn a_puff_burns_what_it_catches_and_lights_it() {
         let mut world = a_world();
@@ -413,8 +338,7 @@ mod tests {
         assert_eq!(burning.source, DamageSource::Player(PlayerId(1)));
     }
 
-    /// How finely the cone is sampled must not be worth anything: a body
-    /// standing in the middle of it is found by every ray and takes one puff.
+    /// Breaks if damage scales with the number of rays that hit.
     #[test]
     fn a_body_caught_by_several_rays_takes_one_puffs_worth() {
         let mut world = a_world();
@@ -435,8 +359,6 @@ mod tests {
         assert_eq!(asked_for(&mut world).len(), 1, "the cone was worth its ray count");
     }
 
-    /// The cone is a cone: something off to the side, at a wider angle than
-    /// the spread, is not caught.
     #[test]
     fn a_body_outside_the_cone_is_not_caught() {
         let mut world = a_world();
@@ -448,8 +370,6 @@ mod tests {
         assert!(asked_for(&mut world).is_empty(), "the cone reached round the side");
     }
 
-    /// And it is short. A body past the range is out of reach however
-    /// squarely it is aimed at.
     #[test]
     fn a_body_past_the_range_is_not_caught() {
         let mut world = a_world();
@@ -460,8 +380,6 @@ mod tests {
         assert!(asked_for(&mut world).is_empty(), "the flame reached past its range");
     }
 
-    /// A wall stops fire, which is the same rule a bullet obeys and comes
-    /// from the same function.
     #[test]
     fn a_wall_between_you_and_a_body_stops_the_flame() {
         let mut world = a_world();
@@ -476,8 +394,7 @@ mod tests {
         assert!(asked_for(&mut world).is_empty(), "fire went through the wall");
     }
 
-    /// You cannot set fire to yourself with your own flamethrower — the cone
-    /// starts inside your own hitbox.
+    /// The cone starts inside the shooter's own hitbox.
     #[test]
     fn a_shooter_never_catches_its_own_flame() {
         let mut world = a_world();
@@ -492,7 +409,7 @@ mod tests {
         assert!(world.get::<Burning>(shooter).is_none(), "it set itself alight");
     }
 
-    /// Being caught again resets the timer, whichever way that moves it.
+    /// Re-lighting resets the timer rather than stacking it.
     #[test]
     fn a_second_puff_resets_the_burn_rather_than_stacking_it() {
         let mut world = a_world();
@@ -500,7 +417,6 @@ mod tests {
         let target = a_body(&mut world, 3.0, 0.0);
 
         puff(&mut world, shooter);
-        // Half the burn spent.
         for _ in 0..(64 * 3) {
             world.run_system_once(burn).unwrap();
             world.flush();
@@ -516,8 +432,6 @@ mod tests {
         );
     }
 
-    /// Afterburn asks for damage on its own, with no weapon involved, and
-    /// stops — and the fire goes out rather than sitting at zero.
     #[test]
     fn afterburn_ticks_on_its_own_and_then_goes_out() {
         let mut world = a_world();
@@ -546,8 +460,6 @@ mod tests {
         assert!(world.get::<Burning>(target).is_none(), "the fire never went out");
     }
 
-    /// The number goes over the body that is burning, not wherever it was
-    /// lit — it walks away, and the fire goes with it.
     #[test]
     fn an_afterburn_number_is_drawn_over_the_burning_body() {
         let mut world = a_world();

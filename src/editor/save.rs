@@ -1,28 +1,9 @@
-//! Reading and writing a map blueprint.
+//! Reading and writing a map blueprint: pretty RON of the metadata, the next id, and every feature
+//! in order, through the features' own serde (the same serde
+//! [`map_sync`](crate::common::map_sync) sends).
 //!
-//! **A blueprint is flat text: the feature list, written by the features'
-//! own serde.** Pretty RON of the map's metadata, the next id to hand out, and
-//! every feature in order. It used to be a SQLite database holding the
-//! undo history beside the features, with a migration chain and a per-type
-//! table registration in seven places; history now lives in memory (as the
-//! prop editor's does), and with it went the reason for a database.
-//!
-//! RON rather than the TOML a prop is written in, for reasons that are about
-//! the features rather than about taste: it writes an `f32` as its shortest
-//! decimal, so a file says `0.05` and not `0.05000000074505806`; it has
-//! `None` and `Some(..)`, so an `Option` field needs nothing special; and it
-//! reads as Rust, struct names and all, which is what the features are. It is
-//! also what Bevy writes scenes in. The features go through the same serde
-//! [`map_sync`](crate::common::map_sync) puts on the wire, so a feature that
-//! travels to a client is a feature that saves.
-//!
-//! **Adding a feature type needs nothing here.** `typetag` names it in the
-//! file, so a new `FeatureTrait` implementor saves and loads the day it is
-//! written — `every_feature_type_survives_a_save_and_load` is what fails if
-//! one does not.
-//!
-//! There is no version and no migration chain: no blueprint written before
-//! this format is read, deliberately.
+//! RON because it writes an `f32` as its shortest decimal and has `None`/`Some`. `typetag` names
+//! each feature type, so a new one needs nothing here. No version and no migration chain.
 
 use std::path::{Path, PathBuf};
 
@@ -35,7 +16,6 @@ use crate::constants::{MAP_BACKUP_EXTENSION, MAP_BLUEPRINT_EXTENSION};
 use crate::editor::editable::{Feature, FeatureId, FeatureTimeline};
 use crate::editor::map_metadata::MapMetadata;
 
-/// Result of loading a blueprint file (features + map metadata).
 pub struct LoadedBlueprint {
     pub timeline: FeatureTimeline,
     pub metadata: MapMetadata,
@@ -45,9 +25,7 @@ pub fn map_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{}.{}", name, MAP_BLUEPRINT_EXTENSION))
 }
 
-/// What a map says about itself, as it goes on disk. Its own type rather than
-/// `MapMetadata` derived, because that carries the metadata panel's text
-/// buffers, which are not facts about the map.
+/// Not `MapMetadata` itself, which carries the panel's text buffers.
 #[derive(Serialize, Deserialize)]
 #[serde(rename = "Metadata")]
 struct MetadataOnDisk {
@@ -56,8 +34,7 @@ struct MetadataOnDisk {
     game_mode: String,
 }
 
-/// The file's shape. Named `Blueprint` in the file for both directions, since
-/// RON writes struct names and the two halves are one format.
+/// Named `Blueprint` in both directions, since RON writes struct names.
 #[derive(Serialize)]
 #[serde(rename = "Blueprint")]
 struct BlueprintOut<'a> {
@@ -74,7 +51,6 @@ struct BlueprintIn {
     features: Vec<Feature>,
 }
 
-/// The blueprint's text, as [`save`] writes it.
 pub fn to_text(features: &FeatureTimeline, metadata: &MapMetadata) -> Result<String, String> {
     let blueprint = BlueprintOut {
         metadata: MetadataOnDisk {
@@ -88,13 +64,10 @@ pub fn to_text(features: &FeatureTimeline, metadata: &MapMetadata) -> Result<Str
             .filter_map(|id| features.get_feature(id))
             .collect(),
     };
-    // Indented, one field a line, and with struct names — the point of a text
-    // format is a diff that says which number on which feature moved.
     let config = ron::ser::PrettyConfig::new().struct_names(true);
     ron::ser::to_string_pretty(&blueprint, config).map_err(|e| e.to_string())
 }
 
-/// Read a blueprint's text back into a map.
 pub fn parse(text: &str) -> Result<LoadedBlueprint, String> {
     let blueprint: BlueprintIn = ron::from_str(text).map_err(|e| e.to_string())?;
 
@@ -103,9 +76,8 @@ pub fn parse(text: &str) -> Result<LoadedBlueprint, String> {
         blueprint.features.into_iter().map(|feature| (feature.id(), feature)).collect();
     let mut timeline = FeatureTimeline::from_parts(features, order, blueprint.next_id);
 
-    // In order, so every feature resolves against parents already resolved.
-    // A `PointRef`'s resolved position is not on disk — it is a fact about the
-    // features it points at, which have only just arrived.
+    // In order, so each feature resolves against parents already resolved. Resolved positions are
+    // not on disk.
     for id in timeline.feature_order().to_vec() {
         if let Some(mut feature) = timeline.features_mut().remove(&id) {
             feature.object_mut().resolve_references(timeline.features_map());
@@ -124,7 +96,6 @@ pub fn parse(text: &str) -> Result<LoadedBlueprint, String> {
     Ok(LoadedBlueprint { timeline, metadata })
 }
 
-/// Write a blueprint, through a backup that is put back if the write fails.
 pub fn save(path: &Path, features: &FeatureTimeline, metadata: &MapMetadata) -> Result<(), String> {
     let text = to_text(features, metadata)?;
 
@@ -169,11 +140,8 @@ mod tests {
     use crate::editor::spawn_point::SpawnPoint;
     use crate::tool::room::Room;
 
-    /// Each feature as a JSON value, in order — what a round trip has to give
-    /// back. JSON here only because `serde_json::Value` is a ready-made
-    /// comparable tree; the file itself is RON.
-    /// Compared as values rather than through each type's accessors, so a
-    /// field nobody thought to check still has to survive.
+    /// JSON only because `serde_json::Value` is a comparable tree. Compared as values so a field
+    /// nobody thought to check still has to survive.
     fn as_values(timeline: &FeatureTimeline) -> Vec<serde_json::Value> {
         timeline
             .feature_order()
@@ -183,13 +151,8 @@ mod tests {
             .collect()
     }
 
-    /// One of every feature type, each with the field most likely to come back
-    /// as a default set to something that is not one.
-    ///
-    /// **This is the test a new feature type joins.** There is no registration
-    /// to forget any more — `typetag` names the type in the file — but a field
-    /// that does not round-trip (a `#[serde(skip)]` on something that should
-    /// be saved, say) still loses data quietly, and this is where it shows.
+    /// One of every feature type, each with a non-default field. A new feature type joins this test;
+    /// a wrongly skipped field fails here.
     #[test]
     fn every_feature_type_survives_a_save_and_load() {
         let mut timeline = FeatureTimeline::default();
@@ -220,7 +183,6 @@ mod tests {
         assert_eq!(loaded.metadata.authors, metadata.authors);
         assert_eq!(loaded.metadata.game_mode, GameMode::CTF);
 
-        // And through the disk, since that is the path the editor takes.
         let dir = std::env::temp_dir().join("grackle-save-tests");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("round-trip.{MAP_BLUEPRINT_EXTENSION}"));
@@ -228,8 +190,6 @@ mod tests {
         assert_eq!(as_values(&load(&path).unwrap().timeline), as_values(&timeline));
     }
 
-    /// Floats are written as typed, which is half the reason the format is
-    /// text: a diff of a moved point should show the number that moved.
     #[test]
     fn numbers_are_written_the_way_they_were_typed() {
         let mut timeline = FeatureTimeline::default();
@@ -238,14 +198,8 @@ mod tests {
         assert!(text.contains("0.05") && !text.contains("0.0500000"), "{text}");
     }
 
-    /// What a new map has to give you, and no more than that.
-    ///
-    /// Most of what is in the template is taste and will change. Pinning the
-    /// spawn point's coordinates would just be a test that has to be edited
-    /// every time someone moves it. These are the things whose absence would
-    /// actually break something: no room and there is nothing to stand in, no
-    /// light and you cannot see it, no spawn with headroom and pressing F5
-    /// falls back to guessing.
+    /// Checks only what a new map must provide: a room, a light, and a spawn with headroom. Do not pin
+    /// coordinates here.
     #[test]
     fn a_new_map_can_be_stood_in_lit_and_spawned_into() {
         use crate::common::class::{body_centre_from_feet, CLASS_HALF_EXTENTS};

@@ -1,9 +1,5 @@
-//! Places [`SpawnPoint`] features.
-//!
-//! Deliberately the point tool with a different feature at the end of it:
-//! placing a spawn *is* placing a point, and a mapper who has learnt one has
-//! learnt the other — relative placement and shift-picking included. The
-//! shared half lives in [`crate::tool::point_placement`].
+//! Places [`SpawnPoint`] features. The point tool with a different feature at
+//! the end; the shared half is [`crate::tool::point_placement`].
 
 use bevy::app::App;
 use bevy::prelude::*;
@@ -19,16 +15,12 @@ pub struct SpawnPointPlugin;
 impl Plugin for SpawnPointPlugin {
     fn build(&self, app: &mut App) {
         add_point_placement_tool::<SpawnPoint>(app);
-        // Ungated: it is the system that has to notice the mode changed.
+        // Ungated: it has to notice the mode changing.
         app.add_systems(Update, hide_spawn_bodies_while_playing);
     }
 }
 
-/// A spawn point's body is drawn in the editor and not while playing: the one
-/// place it would certainly be in the way is where a player materialises,
-/// which is inside it.
-///
-/// Hidden rather than despawned, so F5 back brings it straight back.
+/// Hidden in Play, where a player spawns inside it.
 fn hide_spawn_bodies_while_playing(
     mode: Res<State<AppMode>>,
     mut bodies: Query<&mut Visibility, With<SpawnPointMarker>>,
@@ -38,8 +30,7 @@ fn hide_spawn_bodies_while_playing(
         false => Visibility::Hidden,
     };
     for mut visibility in &mut bodies {
-        // Assigned only on a change, so this does not dirty every spawn point
-        // on the map every frame.
+        // Only on a change, so it does not mark every spawn changed each frame.
         if *visibility != wanted {
             *visibility = wanted;
         }
@@ -65,8 +56,6 @@ impl PlaceablePoint for SpawnPoint {
         Color::srgb_u8(255, 233, 120)
     }
 
-    /// Preview the body that would stand here, so headroom is visible before
-    /// the spawn point is committed rather than after.
     fn draw_preview(gizmos: &mut Gizmos, cursor: Vec3, color: Color) {
         gizmos.sphere(Isometry3d::from_translation(cursor), 0.15, color);
         gizmos.line(cursor, cursor + Vec3::Y * TALLEST_CLASS_HEIGHT, color);

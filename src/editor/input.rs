@@ -15,19 +15,8 @@ impl Plugin for EditorInputPlugin {
         app
             .init_resource::<CurrentMouseInput>()
             .init_resource::<CurrentKeyboardInput>()
-            // Gating here is the belt to the tools' braces: with these
-            // resources frozen, no tool sees a click even if one slipped
-            // through its own run condition.
-            //
-            // **Both authoring modes**, not just the map editor. The prop
-            // editor drives the same four viewports and needs the same two
-            // questions answered — which viewport is the pointer over, and how
-            // far has it moved — and `in_camera` is exactly what tells
-            // `Numpad0` which view to reset. It stays off in Play, which is the
-            // gating that matters: that is where a stray click costs something.
-            //
-            // Safe because every tool carries `in_state(AppMode::Editor)` of
-            // its own, so waking the resources here does not wake a tool.
+            // Both authoring modes: the prop editor needs `in_camera` and the mouse delta too. Tools carry
+            // their own `in_state(AppMode::Editor)`, so this does not wake them.
             .add_systems(PreUpdate, (
                 Self::mouse_input,
                 Self::keyboard_input,
@@ -173,8 +162,7 @@ impl EditorInputPlugin {
         if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
 
-        // Always mirror Bevy button state so tools (e.g. drag end → history) see releases
-        // even when we skip world picking over egui.
+        // Mirror button state even over egui, so a drag that ends over a panel still sees its release.
         let (just_pressed, pressed, released) = mouse_precedence(mouse_buttons);
         current_input.just_pressed = just_pressed;
         current_input.pressed = pressed;

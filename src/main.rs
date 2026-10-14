@@ -1,10 +1,6 @@
-//! The `editor` binary: plugin wiring only.
-//!
-//! Everything it wires up comes from the `grackle` library rather than from a
-//! second `mod` tree of its own. That is load-bearing rather than tidiness: a
-//! client and a server that must reach the same position from the same inputs
-//! cannot be two compiled copies of the simulation, each with its own `LANG`
-//! table and its own caches.
+//! The `editor` binary: plugin wiring only. Everything comes from the
+//! `grackle` library; a second `mod` tree would be a second copy of the
+//! simulation, with its own `LANG` table and caches.
 
 use bevy::prelude::*;
 use bevy::window::{ExitCondition, PresentMode};

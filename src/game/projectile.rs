@@ -1,42 +1,18 @@
 //! Things that are thrown rather than traced: rockets, pipe bombs, and
-//! whatever else [`ProjectileSpec`] can be made to describe.
+//! whatever else [`ProjectileSpec`] describes. The arithmetic is in
+//! [`crate::common::projectile`]; this is the part that asks the world.
 //!
-//! One entity, one system, one spec. What the projectile *is* lives in
-//! [`crate::common::projectile`] as numbers and arithmetic with no `World` in
-//! them; what lives here is the part that has to ask the world questions —
-//! where the walls are, whose body is in the way, and who to credit.
+//! The move is swept against walls and hitboxes at once, nearer wins: a
+//! rocket covers half a metre a tick and a wall slab is half a metre thick, so
+//! a teleport-then-overlap test would pass through it. It uses the same
+//! [`trace`] and [`CollisionWorld::ray_hit`] as hit registration.
 //!
-//! **The move is swept, like the player's.** A rocket covers half a metre in a
-//! tick and a wall slab is half a metre thick, so a projectile teleported to
-//! its new position and then asked whether it overlaps anything would pass
-//! through the first thin thing it met at speed. It is traced instead, along
-//! the segment it would cover, against the walls and the hitboxes at once and
-//! whichever is nearer wins. That reuses the two functions hit registration
-//! already uses — [`trace`] for bodies, [`CollisionWorld::ray_hit`] for walls
-//! — so "what can a rocket hit" and "what can a bullet hit" cannot drift
-//! apart.
+//! Bounces are resolved inside the step, up to `MAX_CONTACTS`: a pipe bomb
+//! thrown into a corner meets two walls in one 15 ms tick.
 //!
-//! **Bounces are resolved inside the step**, not one per tick: a pipe bomb
-//! thrown into a corner meets two walls in the same 15 milliseconds, and
-//! taking one contact per tick would sink it into the second. The loop is
-//! bounded — a projectile wedged in a corner must not spin here forever — and
-//! whatever motion is left when the bound is reached is dropped.
-//!
-//! **A projectile never hits the body that fired it.** Not a friendly-fire
-//! rule — there are no teams yet, and the splash from your own rocket hurts
-//! you like anyone else's — but a muzzle inside your own hitbox, which would
-//! otherwise detonate every shot at zero metres.
-//!
-//! Everything a hit leads to leaves as an [`Explosion`], so this module knows
-//! nothing about splash, falloff, health or corpses. See
-//! [`crate::game::explosion`].
-//!
-//! Position goes through [`PhysicsBody`] rather than straight into
-//! `Transform`, which buys interpolation for free — `interpolate_bodies` takes
-//! every `PhysicsBody` there is — and matters more here than for a player: a
-//! rocket at 30 m/s moves half a metre between ticks, and drawn at the tick it
-//! would visibly stutter across the room. Rotation is this module's own, since
-//! nothing else writes a projectile's.
+//! A hit leaves as an [`Explosion`]; splash and damage are in
+//! [`crate::game::explosion`]. Position goes through [`PhysicsBody`] for
+//! interpolation: at 30 m/s a rocket drawn at the tick visibly stutters.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -53,52 +29,35 @@ use crate::game::player::{PhysicsBody, Player, GRAVITY};
 use crate::common::weapon::{Equipped, WeaponAction, WeaponCatalogue};
 use crate::game::weapon::WeaponActionFired;
 
-/// How many walls one projectile may meet in a single tick.
-///
-/// Four is a corner and then some. A projectile that has used them all keeps
-/// whatever velocity the last bounce gave it and simply stops travelling for
-/// the rest of the tick, which is a fraction of a millisecond of lost motion
-/// rather than a projectile that tunnels.
+/// Walls one projectile may meet in a single tick. Past it the rest of the
+/// tick's motion is dropped rather than risking a tunnel.
 const MAX_CONTACTS: usize = 4;
 
-/// How far off a wall a bounce leaves the projectile, in metres.
-///
-/// The same trick [`CollisionWorld::depenetrate`] uses: land exactly on a
-/// plane and the next trace of the same tick finds it at zero distance and
-/// bounces off it again, burning every contact in the corner it is not in.
+/// Metres a bounce leaves the projectile off the wall. Landing exactly on the
+/// plane, the next trace in the same tick finds it at zero distance and
+/// bounces again, burning every contact.
 const SKIN: f32 = 0.002;
 
-/// How far in front of the eye a projectile is born, in metres.
-///
-/// Far enough to be outside the shooter's own body, so that the first thing it
-/// traces against is the room rather than the inside of a chest. The shooter
-/// is excluded from its own direct hits as well; this is what stops it being
-/// born inside a *wall* when you fire with your face against one.
+/// Metres in front of the eye a projectile is born: outside the shooter's
+/// body, and not inside a wall when firing with your face against one.
 const MUZZLE_OFFSET: f32 = 0.5;
 
-/// Something in flight.
-///
-/// Everything mutable about it. The spec is copied onto it rather than looked
-/// up from the weapon, because a rocket that is already in the air was fired
-/// by the launcher as it was then: switching weapons, or an item that changes
-/// a number, must not reach back and change a shot that has left.
+/// Something in flight. The spec is copied on so that switching weapons
+/// cannot change a shot already in the air.
 #[derive(Component, Clone, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct Projectile {
     pub spec: ProjectileSpec,
-    /// Who gets the kill. `None` for anything the map threw — see
-    /// [`DamageSource::World`].
+    /// Who gets the kill; `None` is [`DamageSource::World`].
     pub owner: Option<PlayerId>,
     /// The body it came out of, which its own direct hits ignore.
     ///
-    /// Not sent. It is only ever asked by the process resolving the hit, and
-    /// that is always the authority — a client draws the rocket and decides
-    /// nothing about it. Skipping it also keeps this component off the list of
-    /// things that need entity mapping to cross a wire.
+    /// Not sent: only the authority resolves hits, and skipping it keeps this
+    /// component out of entity mapping.
     #[serde(skip)]
     #[reflect(ignore)]
     pub shooter: Option<Entity>,
     pub velocity: Vec3,
-    /// How far it has tumbled, in radians. Cosmetic.
+    /// Radians. Cosmetic.
     pub spin: f32,
     /// Seconds of game time in the air.
     pub age: f32,
@@ -106,7 +65,6 @@ pub struct Projectile {
 }
 
 impl Projectile {
-    /// Who to credit for what this does.
     pub fn source(&self) -> DamageSource {
         match self.owner {
             Some(id) => DamageSource::Player(id),
@@ -115,21 +73,15 @@ impl Projectile {
     }
 }
 
-/// A thing that fires a projectile every so often, at nobody in particular.
-///
-/// The test harness for all of this, and deliberately a component rather than
-/// a hard-coded prop: planted in front of the animation grid it turns sixty
-/// standing bodies into a firing range, and it is the only way to watch a
-/// pipe bomb bounce the same way twice. Plant one with `G` and clear them
-/// with `B` — see [`plant_emitters`].
+/// Fires a projectile every `interval` at nobody in particular. A test
+/// harness: `G` plants one, `B` clears them (see [`plant_emitters`]).
 #[derive(Component, Clone, Debug)]
 pub struct ProjectileEmitter {
     pub spec: ProjectileSpec,
     /// Seconds between shots.
     pub interval: f32,
-    /// Seconds since the last one. Starts at zero so a freshly planted
-    /// emitter waits a full interval — long enough for its transform to have
-    /// been propagated, and for whoever planted it to get out of the way.
+    /// Seconds since the last one. Starts at zero so a fresh emitter waits a
+    /// full interval, letting its transform propagate and its planter move.
     pub since: f32,
 }
 
@@ -144,32 +96,23 @@ pub struct ProjectilePlugin;
 impl Plugin for ProjectilePlugin {
     fn build(&self, app: &mut App) {
         app
-            // In `Deal` with the other weapons: what these systems write is
-            // `Explosion`, and `explode` turns that into `Damage` in the same
-            // set, in the same tick.
+            // In `Deal`: `explode` turns these `Explosion`s into `Damage` in the
+            // same tick.
             .add_systems(
                 FixedUpdate,
                 (fire_projectiles, run_emitters, step_projectiles)
                     .in_set(DamageSystems::Deal),
             )
             .add_systems(Update, plant_emitters.run_if(in_state(AppMode::Play)))
-            // Drawing, so everywhere: a client flies none of these and has to
-            // draw all of them.
+            // Drawing, so ungated: a client flies none of these and draws all.
             .add_systems(Update, (dress_projectiles, spin_projectiles))
             .init_resource::<ProjectileAssets>()
-            // Everything in flight belongs to the match, like the corpses and
-            // the damage numbers. A rocket left hanging in the editor would be
-            // a prop nothing owns.
             .add_systems(OnExit(AppMode::Play), clear_projectiles)
         ;
     }
 }
 
-/// Put a projectile in the air.
-///
-/// A function rather than only a system, because three things launch one — a
-/// player, an emitter, and a test — and the only thing they disagree about is
-/// where it starts and who to blame.
+/// A free function because a player, an emitter and a test all launch one.
 pub fn launch(
     commands: &mut Commands,
     spec: ProjectileSpec,
@@ -197,22 +140,16 @@ pub fn launch(
         .id()
 }
 
-/// Fire, for every shooter whose trigger was pulled and who is holding
-/// something that travels.
-///
-/// The mirror of [`fire_hitscan`](crate::game::hitscan::fire_hitscan), down to
-/// firing from the *step's* own position rather than the drawn one: a rocket
-/// launched from an interpolated body would leave a different place on every
-/// machine.
+/// Fires from the step's position, not the drawn one: an interpolated muzzle
+/// would differ on every machine.
 pub fn fire_projectiles(
     mut commands: Commands,
     mut fired: MessageReader<WeaponActionFired>,
     shooters: Query<(&PhysicsBody, &Player, &Stance, Option<&PlayerId>)>,
 ) {
     for shot in fired.read() {
-        // The spec comes out of the message, so a weapon switched in the same
-        // tick cannot change a shot already decided on — the same rule
-        // `launch` follows when it copies the spec onto the projectile.
+        // The spec comes from the message, so a switch in the same tick cannot
+        // change it.
         let WeaponAction::Projectile(spec) = shot.action else { continue };
         let Ok((body, player, stance, id)) = shooters.get(shot.shooter) else { continue };
 
@@ -222,11 +159,7 @@ pub fn fire_projectiles(
     }
 }
 
-/// Every emitter that is due, fired.
-///
-/// Game time, like everything else on the tick: an emitter does not fire while
-/// somebody is in the editor, and two runs of the same map put the same number
-/// of rockets in the air.
+/// Game time, so an emitter does not fire while somebody is in the editor.
 pub fn run_emitters(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
@@ -247,8 +180,7 @@ pub fn run_emitters(
             emitter.spec,
             placed.translation() + *direction * MUZZLE_OFFSET,
             direction,
-            // Nobody fired it. A kill it lands is the map's, which is exactly
-            // what `DamageSource::World` is for.
+            // Nobody fired it: `DamageSource::World`.
             None,
             None,
         );
@@ -286,8 +218,7 @@ pub fn step_projectiles(
             let Ok(direction) = Dir3::new(travel) else { break };
             let ray = Ray3d::new(position, direction);
 
-            // Your own body is around your own muzzle, and every shot would
-            // land on it at zero metres.
+            // The muzzle is inside your own hitbox.
             let others = bodies
                 .iter()
                 .filter(|(target, _)| Some(*target) != projectile.shooter)
@@ -296,8 +227,7 @@ pub fn step_projectiles(
             let body_hit = trace(&ray, distance, others);
             let wall = world.ray_hit(&ray, distance);
 
-            // Nearest wins. A rocket that passes a wall to reach a body it
-            // could not see would be a rocket that shoots through walls.
+            // Nearest wins, or rockets pass through walls to bodies behind.
             let body_first = match (&body_hit, &wall) {
                 (Some(hit), Some((wall, _))) => hit.distance <= *wall,
                 (Some(_), None) => true,
@@ -312,16 +242,14 @@ pub fn step_projectiles(
             }
 
             let Some((reached, normal)) = wall else {
-                // Nothing in the way: the whole step is travelled.
                 position += travel;
                 break;
             };
 
             let contact = ray.origin + *direction * reached;
             if projectile.bounces >= spec.max_bounces {
-                // Stood off the wall by its own radius, so the blast goes off
-                // in the room rather than inside the slab, where the sight
-                // check would find the wall between it and everything.
+                // Stood off by its radius, so the blast's sight check does not
+                // find the wall between it and everything.
                 position = contact + normal * spec.radius;
                 ending = Some((Ending::LastBounce, None));
                 break;
@@ -330,15 +258,12 @@ pub fn step_projectiles(
             projectile.bounces += 1;
             projectile.velocity = bounce(projectile.velocity, normal, spec.restitution);
             position = contact + normal * SKIN;
-            // What is left of the step, along the new direction. The speed it
-            // lost to the bounce shows up in the next tick rather than in the
-            // remainder of this one — a tick's worth of a difference nobody
-            // can see, against a much fiddlier sum.
+            // The rest of the step, along the new direction. Speed lost to the
+            // bounce applies from next tick; the error is invisible.
             travel = projectile.velocity.normalize_or_zero() * (distance - reached).max(0.0);
         }
 
-        // The fuse is checked after the move, so a pipe bomb that reaches its
-        // time part way through a tick still travelled that part.
+        // Checked after the move, so a fuse ending mid-tick still travelled.
         if ending.is_none() && projectile.age >= spec.max_lifetime {
             ending = Some((Ending::Fuse, None));
         }
@@ -359,37 +284,22 @@ pub fn step_projectiles(
             });
         }
 
-        // Whether or not it went off, its flight is over. A rocket that does
-        // not explode on contact still stops on the wall it hit.
+        // Its flight is over whether or not it went off.
         commands.entity(entity).despawn();
     }
 }
 
-/// The mesh and material every projectile is drawn with.
-///
-/// One of each, scaled per projectile by the transform: they differ by radius
-/// and nothing else, and a handle per weapon would be a handle per number.
-/// Filled on first use rather than at startup, so nothing here needs the
-/// renderer to have been set up before the plugin was added.
+/// One mesh and material for every projectile, scaled per projectile by the
+/// transform. Filled on first use so the plugin does not need the renderer.
 #[derive(Resource, Default)]
 struct ProjectileAssets {
     mesh: Option<Handle<Mesh>>,
     material: Option<Handle<StandardMaterial>>,
 }
 
-/// Give anything in flight something to look at.
-///
-/// A sphere, and unashamedly a placeholder: a projectile's *shape* is art, and
-/// what this layer owes is a thing you can see coming.
-/// Turn every projectile to the spin it is carrying.
-///
-/// Split out of the step, which only runs where the projectile is simulated. A
-/// replicated rocket is flown by the server and drawn here, and one that never
-/// turned would be a tumbling pipe bomb that does not tumble. `spin` rides
-/// along in the replicated `Projectile`, so both ends read the same number.
-///
-/// Rotation only — `interpolate_bodies` owns the translation, and writing it
-/// here would be overwritten and would skip the interpolation.
+/// `spin` is replicated and drawn here rather than in the step, which only
+/// runs where the projectile is simulated. Rotation only:
+/// `interpolate_bodies` owns the translation.
 fn spin_projectiles(mut projectiles: Query<(&Projectile, &mut Transform)>) {
     for (projectile, mut transform) in &mut projectiles {
         transform.rotation = Quat::from_rotation_x(projectile.spin)
@@ -408,7 +318,6 @@ fn dress_projectiles(
         return;
     }
 
-    // A unit sphere, because the transform carries the radius.
     let mesh = assets
         .mesh
         .get_or_insert_with(|| meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()))
@@ -425,10 +334,8 @@ fn dress_projectiles(
         .clone();
 
     for (entity, projectile) in &undressed {
-        // The scale comes from the spec rather than from whatever the spawn
-        // put in the transform: a replicated projectile is built by inserting
-        // components and never went through `launch`, so its transform starts
-        // at unit scale and a rocket would be drawn a metre wide.
+        // From the spec: a replicated projectile never went through `launch`,
+        // so its transform starts at unit scale.
         commands.entity(entity).insert((
             Mesh3d(mesh.clone()),
             MeshMaterial3d(material.clone()),
@@ -437,13 +344,9 @@ fn dress_projectiles(
     }
 }
 
-/// Plant an emitter where you are standing, or take them all away again.
-///
-/// A debug tool, and the one thing in this module that reads the keyboard
-/// directly rather than going through [`PlayerInput`](crate::game::player::PlayerInput).
-/// That is deliberate: the latch exists so that the *simulation* sees a press
-/// exactly once, and planting a prop is not part of the simulation. Nothing
-/// downstream of it has to be reproducible.
+/// `G` plants an emitter where you stand, `B` removes them all. Reads the
+/// keyboard directly: planting a prop is not part of the simulation, so it
+/// needs no latch.
 fn plant_emitters(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
@@ -451,8 +354,7 @@ fn plant_emitters(
     players: Query<(&Transform, &Player, &Equipped)>,
     emitters: Query<Entity, With<ProjectileEmitter>>,
 ) {
-    /// Seconds between an emitter's shots. Long enough to watch one flight
-    /// end before the next begins.
+    /// Seconds. Long enough to watch one flight end before the next.
     const EMITTER_INTERVAL: f32 = 2.0;
 
     if keys.just_pressed(KeyCode::KeyB) {
@@ -466,9 +368,7 @@ fn plant_emitters(
     }
 
     for (transform, player, equipped) in &players {
-        // Whatever you are holding, so choosing what an emitter fires is
-        // choosing a weapon and pressing G. The left-click half of it: an
-        // emitter is a prop with no right hand.
+        // Whatever you hold, primary only: an emitter has no right button.
         let held = catalogue.held_by(equipped).map(|weapon| weapon.primary.action);
         let Some(WeaponAction::Projectile(spec)) = held else {
             info!("Hold a projectile weapon to plant an emitter");
@@ -485,21 +385,16 @@ fn plant_emitters(
     }
 }
 
-/// Take everything in flight, and every emitter, away.
-///
-/// Called on leaving Play and again from
-/// [`reset_for_play`](crate::game::reset::reset_for_play) — the same belt and
-/// braces the corpses and the damage numbers get.
+/// Called on leaving Play and from
+/// [`reset_for_play`](crate::game::reset::reset_for_play).
 pub fn clear_projectiles(
     mut commands: Commands,
     role: Option<Res<crate::common::net::NetRole>>,
     projectiles: Query<Entity, With<Projectile>>,
     emitters: Query<Entity, With<ProjectileEmitter>>,
 ) {
-    // A client's projectiles are the server's, which despawns them when the
-    // round ends and replicates that. Despawning them here as well deletes
-    // entities the receiver still has a record of — the same rule that keeps a
-    // client from reaping a body.
+    // Authority only: a client's projectiles are despawned by the server and
+    // that replicates.
     if !role.is_none_or(|role| role.is_authority()) {
         return;
     }
@@ -515,9 +410,8 @@ mod tests {
 
     use crate::common::net::NetRole;
 
-    /// A projectile the server flew and replicated never went through
-    /// `launch`, so its transform arrives at unit scale. The size has to come
-    /// from the spec at dressing time, or a rocket is drawn a metre wide.
+    /// A replicated projectile never went through `launch`; without sizing from
+    /// the spec at dressing time a rocket is drawn a metre wide.
     #[test]
     fn a_projectile_is_sized_from_its_spec_rather_than_its_spawn() {
         let mut app = App::new();
@@ -526,7 +420,7 @@ mod tests {
         app.init_asset::<StandardMaterial>();
         app.init_resource::<ProjectileAssets>();
 
-        // As replication delivers one: the component, and nothing else.
+        // As replication delivers one: the component and nothing else.
         let spec = ProjectileSpec::ROCKET;
         let rocket = app
             .world_mut()
@@ -551,9 +445,8 @@ mod tests {
         assert!(app.world().get::<Mesh3d>(rocket).is_some(), "it was never dressed");
     }
 
-    /// Spin is drawn, not stepped, so it happens on a machine that flies
-    /// nothing. A replicated pipe bomb that never turned would be a tumbling
-    /// projectile that does not tumble.
+    /// Spin is drawn, not stepped, so a machine that flies nothing still turns
+    /// a replicated pipe bomb.
     #[test]
     fn a_projectile_turns_to_the_spin_it_carries() {
         let mut world = World::new();
@@ -580,10 +473,8 @@ mod tests {
         );
     }
 
-    /// A client's projectiles belong to the server, which despawns them when
-    /// the round ends and replicates that. Despawning them locally as well
-    /// deletes entities the receiver still expects to keep updating — the same
-    /// rule that keeps a client from reaping a body.
+    /// A client despawning the server's projectiles deletes entities
+    /// replication still expects to update.
     #[test]
     fn a_client_does_not_clear_the_servers_projectiles() {
         let mut world = World::new();
@@ -610,7 +501,7 @@ mod tests {
     use crate::common::hitbox::Box3;
     use crate::tool::room::Room;
 
-    /// One fixed step at Bevy's 64 Hz default.
+    /// Bevy's default 64 Hz.
     const STEP: Duration = Duration::from_micros(15625);
 
     fn a_world(rooms: &[Room]) -> World {
@@ -630,12 +521,10 @@ mod tests {
         Room::new(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 12.0, 20.0))
     }
 
-    /// Take whole ticks of the step, the way the fixed loop would.
     fn tick(world: &mut World, steps: usize) {
         for _ in 0..steps {
             world.run_system_once(step_projectiles).unwrap();
-            // `Commands` are queued, and a despawn that never landed would
-            // leave a detonated projectile flying for the rest of the test.
+            // Flush so a detonated projectile's despawn lands.
             world.flush();
         }
     }
@@ -669,8 +558,7 @@ mod tests {
             .id()
     }
 
-    /// A rocket flies flat down the room and goes off on the wall at the end
-    /// of it, crediting whoever fired it.
+    /// A flat rocket goes off on the far wall, crediting its shooter.
     #[test]
     fn a_rocket_flies_until_it_meets_a_wall_and_goes_off_there() {
         let mut world = a_world(&[a_room()]);
@@ -687,8 +575,7 @@ mod tests {
         assert_eq!(went_off[0].direct, None, "a wall is not a direct hit");
     }
 
-    /// A body in the way is a direct hit, worth the direct number, and the
-    /// rocket stops there rather than at the wall behind it.
+    /// A body in the way takes the direct number and stops the rocket there.
     #[test]
     fn a_body_in_the_way_takes_a_direct_hit() {
         let mut world = a_world(&[a_room()]);
@@ -706,8 +593,8 @@ mod tests {
         assert!(went_off[0].at.z > -1.0, "it flew past the body to {}", went_off[0].at);
     }
 
-    /// The muzzle is inside the shooter's own hitbox, and a projectile that
-    /// could hit its owner would detonate the instant it was fired.
+    /// The muzzle is inside the shooter's hitbox; a projectile that could hit
+    /// its owner would detonate on firing.
     #[test]
     fn a_projectile_never_hits_the_body_that_fired_it() {
         let mut world = a_world(&[a_room()]);
@@ -728,8 +615,7 @@ mod tests {
         assert!(blasts(&mut world).is_empty(), "the rocket went off in its own shooter");
     }
 
-    /// A wall stops a rocket before a body behind it: the same rule a bullet
-    /// obeys, from the same two functions.
+    /// A wall stops a rocket short of a body behind it.
     #[test]
     fn a_wall_stops_a_rocket_short_of_the_body_behind_it() {
         let mut world = a_world(&[Room::new(Vec3::new(-4.0, 0.0, -4.0), Vec3::new(4.0, 6.0, 4.0))]);
@@ -744,8 +630,7 @@ mod tests {
         assert!(went_off[0].at.z > -5.0, "it went off past the wall at {}", went_off[0].at);
     }
 
-    /// A pipe bomb arcs, bounces off the floor rather than stopping on it, and
-    /// is still in the air afterwards.
+    /// A pipe bomb bounces off the floor and keeps flying.
     #[test]
     fn a_pipe_bomb_bounces_off_the_floor_instead_of_going_off_on_it() {
         let mut world = a_world(&[a_room()]);
@@ -756,7 +641,7 @@ mod tests {
             Vec3::new(0.0, 0.1, -1.0),
         );
 
-        // Long enough to come down, and well short of the fuse.
+        // Long enough to come down, well short of the fuse.
         tick(&mut world, 40);
 
         let flying = world.get::<Projectile>(pipe).expect("the pipe bomb was destroyed by the floor");
@@ -768,14 +653,8 @@ mod tests {
         );
     }
 
-    /// And it goes off on its fuse wherever it happens to be, which is the
-    /// other half of what makes it a pipe bomb rather than a rocket.
-    ///
-    /// In an empty world, so that nothing it bounces off gets to end the
-    /// flight first — a pipe bomb thrown around a room runs out of bounces
-    /// well before it runs out of time, which is
-    /// [`a_pipe_bomb_bounces_off_the_floor_instead_of_going_off_on_it`]'s
-    /// business rather than this one's.
+    /// A pipe bomb goes off on its fuse. In an empty world, since in a room it
+    /// runs out of bounces before it runs out of time.
     #[test]
     fn a_pipe_bomb_goes_off_when_its_fuse_runs_out() {
         let mut world = a_world(&[]);
@@ -794,8 +673,8 @@ mod tests {
         assert_eq!(blasts(&mut world).len(), 1, "the fuse never ran out");
     }
 
-    /// A rocket that somehow flies for its whole lifetime without touching
-    /// anything simply goes away — it has no fuse.
+    /// A rocket that outlives its lifetime without touching anything vanishes;
+    /// it has no fuse.
     #[test]
     fn a_rocket_that_runs_out_of_time_does_not_go_off() {
         let mut world = a_world(&[]);
@@ -807,8 +686,7 @@ mod tests {
         assert!(blasts(&mut world).is_empty(), "a rocket grew a fuse");
     }
 
-    /// The bound on contacts per tick: a projectile fired straight into a
-    /// corner must not hang the step, however many walls it finds.
+    /// A projectile fired into a corner must not hang the step.
     #[test]
     fn a_projectile_fired_into_a_corner_still_finishes_its_tick() {
         let mut world = a_world(&[Room::new(Vec3::splat(-2.0), Vec3::new(2.0, 4.0, 2.0))]);
@@ -822,8 +700,7 @@ mod tests {
         tick(&mut world, 64);
     }
 
-    /// An emitter is the harness: left alone, it puts one in the air every
-    /// interval and no more often.
+    /// An emitter fires once per interval and no more often.
     #[test]
     fn an_emitter_fires_on_its_interval() {
         let mut world = a_world(&[a_room()]);

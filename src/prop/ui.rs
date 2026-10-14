@@ -2,17 +2,13 @@
 //!
 //! Its own `DockState` rather than tabs on
 //! [`EditorPanels`](crate::editor::panels::EditorPanels), which is already at
-//! Bevy's parameter limit — and the two surfaces are modes, never up at once,
-//! so a shared dock would need its tab set swapped anyway. What *is* shared is
-//! the shape: the same panels around the same four viewports, sized the same
-//! way, so the window does not rearrange itself under somebody swapping modes.
+//! Bevy's parameter limit. Laid out like the map editor so swapping modes does
+//! not rearrange the window.
 //!
 //! Writes go through [`PropEditor::begin_gesture`] and
-//! [`PropEditor::end_gesture`] rather than `edit`: egui reports a drag as a
-//! change every frame, so per-change undo steps would turn one pull on a radius
-//! into forty presses of Ctrl+Z. The gesture closes when the pointer *and* the
-//! keyboard are idle, which makes typing a name one step rather than one per
-//! letter.
+//! [`PropEditor::end_gesture`] rather than `edit`, because egui reports a drag
+//! as a change every frame. The gesture closes when the pointer and the
+//! keyboard are both idle, so typing a name is one undo step.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -45,9 +41,9 @@ use crate::prop::surface::{Style, Surface};
 use crate::prop::camera::FrameTheProp;
 use crate::prop::view::PropBuild;
 
-/// What a file dialog came back with. Mirrors the map editor's arrangement,
-/// including the background thread and its wasm problem. The *reading* half of
-/// the prop format deliberately does not come through here.
+/// What a file dialog came back with. Uses a background thread like the map
+/// editor, so it has the same wasm problem; reading props does not come
+/// through here.
 enum DialogResult {
     Save(PathBuf),
     Open(PathBuf),
@@ -71,14 +67,10 @@ enum PropTab {
     Problems,
 }
 
-/// Which job the editor is set up for.
-///
-/// **Modelling a prop and fitting it to a hand are different activities**, and
-/// they were one panel apart with a checkbox between them that silently
-/// swapped which handles the viewport answered. A workspace makes that swap
-/// the thing you chose: Model has the verbs, the inspector and the feature
-/// handles; Fit has the hold editor, the hold's handles and a body standing
-/// there holding the thing.
+/// Which job the editor is set up for. Model has the verbs, the inspector and
+/// the feature handles; Fit has the hold editor, the hold's handles and a body
+/// holding the prop. The two sets of handles both sit at the prop's origin, so
+/// only one can be up.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Workspace {
     #[default]
@@ -86,21 +78,16 @@ pub enum Workspace {
     Fit,
 }
 
-/// The panel layout.
 #[derive(Resource)]
 pub struct PropPanels {
     left: DockState<PropTab>,
-    /// The right-hand panel per workspace: the inspector to model with, the
-    /// hold editor to fit with.
     right_model: DockState<PropTab>,
     right_fit: DockState<PropTab>,
     bottom: DockState<PropTab>,
     workspace: Workspace,
-    /// What the reference figure was in Model before Fit stood a body up, so
-    /// coming back puts it back — usually to nobody.
+    /// The reference figure Model had before Fit stood a body up.
     model_figure: Option<Class>,
-    /// Who was standing there last time Fit was open, so a hold tuned for a
-    /// Heavy is still being tuned for a Heavy after a trip to Model.
+    /// The class Fit last showed, restored on returning to Fit.
     fit_class: Option<Class>,
     menu_bar_height: f32,
     left_width: f32,
@@ -127,14 +114,7 @@ impl Default for PropPanels {
 }
 
 impl PropPanels {
-    /// Move to another workspace, standing up or taking away the figure as
-    /// the move implies.
-    ///
-    /// **Fit always has a body**, since fitting to nobody is not fitting; the
-    /// class is whoever was there last time, then whoever Model happened to be
-    /// showing, then the placeholder everybody plays as. **Model gets back
-    /// what it had**, so a trip to Fit does not leave somebody standing in the
-    /// modelling view.
+    /// Fit always has a body; Model gets back the figure it had.
     ///
     /// Writes the figure only when it differs: `ScaleFigure` changing is what
     /// rebuilds a rig.
@@ -163,16 +143,11 @@ impl PropPanels {
 /// reachable from inside an egui closure.
 #[derive(Default)]
 struct PropRequests {
-    /// What the File menu asked of the prop in front of us.
     file: Option<FileAction>,
-    /// A framing asked for, and whether of the selection rather than the
-    /// whole prop.
+    /// `true` frames the selection rather than the whole prop.
     frame: Option<bool>,
-    /// The mode picked from the **Mode** menu, if one was.
     mode: Option<AppMode>,
-    /// The workspace picked from the toolbar, if one was.
     workspace: Option<Workspace>,
-    /// What the Edit menu asked of the prop.
     edit: Option<EditAction>,
 }
 
@@ -201,8 +176,7 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Features => get!("prop.panels.features").into(),
             PropTab::Inspector => get!("prop.panels.inspector").into(),
             PropTab::Hold => get!("prop.panels.hold").into(),
-            // The count in the title, so problems are visible with the tab
-            // folded behind another one.
+            // The count in the title, so problems show while the tab is behind another.
             PropTab::Problems => match self.build.evaluated.problems.len() {
                 0 => get!("prop.panels.problems").into(),
                 count => get!("prop.panels.problems_count", "count", count).into(),
@@ -231,11 +205,9 @@ impl Plugin for PropUiPlugin {
                 panels.run_if(in_state(AppMode::Prop)),
             )
             .add_systems(Update, prop_shortcuts.run_if(in_state(AppMode::Prop)))
-            // The rollback bar is a way of looking at the list, which only the
-            // prop editor shows. Left in, the animation editor — which builds
-            // the same prop — would animate a weapon missing its last features
-            // with nothing on screen saying so. Before `OnEnter` of the next
-            // mode, which is where that rebuild happens.
+            // Left in, the animation editor would build the prop missing its
+            // last features with nothing on screen saying so. `OnExit` runs
+            // before the next mode's `OnEnter` rebuild.
             .add_systems(OnExit(AppMode::Prop), |mut editor: ResMut<PropEditor>| {
                 editor.roll_back_to(None);
             });
@@ -256,9 +228,7 @@ fn panels(
     dialog: Res<PropFileDialog>,
     mut frame: MessageWriter<FrameTheProp>,
     mut next_mode: ResMut<NextState<AppMode>>,
-    // Optional so the prop editor does not drag in the network layer: a build
-    // with no `NetPlugin` is a closed game, and a closed game is its own
-    // authority.
+    // Optional: a build with no `NetPlugin` is a closed game, its own authority.
     role: Option<Res<NetRole>>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -271,8 +241,8 @@ fn panels(
         UiBuilder::new().layer_id(LayerId::background()).max_rect(ctx.viewport_rect()),
     );
 
-    // Off unless this frame's Hold tab turns it back on — a tab closed
-    // mid-drag would otherwise leave the view standing at the muzzle forever.
+    // Off unless this frame's Hold tab turns it back on, so a tab closed
+    // mid-drag cannot leave the preview stuck on.
     if preview.0 {
         preview.0 = false;
     }
@@ -281,10 +251,8 @@ fn panels(
     let mut tabs = PropTabs {
         editor: &mut editor,
         build: &build,
-        // Through the `ResMut` deref rather than cloned and written back:
-        // `ScaleFigure` drives a system that rebuilds a rig when it changes,
-        // and a write every frame would throw the figure's meshes away every
-        // frame.
+        // Not cloned and written back: a write every frame would rebuild the
+        // figure's rig every frame.
         figure: &mut figure,
         preview: &mut preview,
         requests: &mut requests,
@@ -295,15 +263,10 @@ fn panels(
         .resizable(false)
         .show(&mut viewport_ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                // The shared pulldown rather than four buttons written
-                // here, which is what it used to be.
                 file_menu(ui, &mut tabs.requests.file);
-                // Just right of File in every mode, and greyed per entry.
                 edit_menu(ui, edit_availability(tabs.editor), &mut tabs.requests.edit);
                 view_menu(ui, workspace, tabs.figure);
-                // `Prop` spelled out rather than read from the state: this
-                // whole system is gated on it, so the mode it is drawing for
-                // is not in question.
+                // This system is gated on `AppMode::Prop`.
                 mode_menu(
                     ui,
                     AppMode::Prop,
@@ -324,8 +287,7 @@ fn panels(
             });
             ui.separator();
             ui.horizontal_wrapped(|ui| {
-                // First, and the same in both workspaces, so the way back is
-                // always where the way in was.
+                // First and identical in both workspaces, so it does not move.
                 for (candidate, key) in
                     [(Workspace::Model, "prop.workspace.model"), (Workspace::Fit, "prop.workspace.fit")]
                 {
@@ -383,8 +345,7 @@ fn panels(
         .rect
         .width();
 
-    // Shown before the dock's bottom panel so it sits beneath it, along the
-    // window's edge.
+    // Before the dock's bottom panel, so it sits beneath it.
     let status_height = egui::Panel::bottom("prop_status")
         .resizable(false)
         .show(&mut viewport_ui, |ui| status_line(ui, tabs.editor, tabs.build))
@@ -431,8 +392,7 @@ fn panels(
     if let Some(selected) = requests.frame {
         frame.write(FrameTheProp { selected });
     }
-    // `set`, not `set_if_neq`: `mode_menu` never offers the mode already in
-    // force, so anything arriving here is a real change.
+    // `mode_menu` never offers the current mode, so this is always a change.
     if let Some(mode) = requests.mode {
         next_mode.set(mode);
     }
@@ -455,30 +415,22 @@ fn panels(
     }
 }
 
-/// One line of the feature list, read out before any of it is drawn: the rows
-/// write back, and holding a borrow on the editor across the closures that draw
-/// them would leave the context menu with nothing it could change.
+/// One line of the feature list, copied out before drawing so the closures
+/// need not borrow the editor.
 struct Row {
     id: PropFeatureId,
     name: String,
     enabled: bool,
-    /// How many features name this one as an operand, so deleting it can say
-    /// what that costs.
+    /// How many features name this one as an operand.
     dependants: usize,
-    /// Operands and dependants together — what this may not be dragged past.
-    /// Marked during a drag, so the reason the line stops is on screen.
+    /// Operands and dependants: what this may not be dragged past.
     pins: Vec<PropFeatureId>,
-    /// Where this feature may end up, as indices in the finished list.
+    /// Indices in the finished list.
     legal: std::ops::RangeInclusive<usize>,
-    /// What this feature eats, by name, listed under it.
     operands: Vec<(PropFeatureId, String)>,
 }
 
-/// The ordered list, which *is* the prop.
-///
-/// Rows and nothing else. Creating things is the toolbar's job and undoing
-/// them the Edit menu's; neither is a property of the list, and both used to
-/// sit on top of it pushing the rows down.
+/// The ordered feature list.
 fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let entries: Vec<Row> = editor
         .doc()
@@ -512,23 +464,20 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let broken: Vec<PropFeatureId> =
         build.evaluated.problems.iter().map(|problem| problem.feature).collect();
 
-    // Read out rather than borrowed through the closures below: the rows write
-    // back a selection and an action, and holding `editor` across them would
-    // mean the context menu could not touch either.
+    // Copied out, and changes deferred to after the closures, so `editor` is
+    // not borrowed across them.
     let selected = editor.selected;
     let also_selected = editor.also_selected.clone();
     let mut select: Option<(PropFeatureId, Pick)> = None;
     let mut pending: Option<Box<dyn FnOnce(&mut PropEditor)>> = None;
 
-    // Used once every row has been drawn: where an insertion line goes is a
-    // question about the whole list. Discovered this way rather than remembered
-    // between frames, so there is no drag state to get out of step.
+    // Rebuilt every frame rather than kept, so there is no drag state to get
+    // out of step.
     let mut rects: Vec<(PropFeatureId, egui::Rect)> = Vec::new();
     let mut dragging: Option<usize> = None;
     let mut dropped = false;
 
-    // The rollback bar sits after this row. With no rollback it sits after the
-    // last, where it is a handle to grab rather than a statement.
+    // The rollback bar sits after this row; with no rollback, after the last.
     let rollback = editor.rollback();
     let bar_after = rollback
         .and_then(|id| entries.iter().position(|row| row.id == id))
@@ -540,37 +489,27 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             let Row { id, enabled, dependants, .. } = *row;
             let name = &row.name;
 
-            // Reserved before the row and filled in after: the fill depends on
-            // a hover the row has not reported yet, and painting afterwards
-            // without reserving would put the highlight over the name.
+            // Reserved before the row and filled after: the fill depends on a
+            // hover the row has not reported yet, and painting later without
+            // reserving would cover the name.
             let background = ui.painter().add(egui::Shape::Noop);
 
-            // **The row is the widget; the name is just text.** egui's click
-            // hit-testing filters to widgets that sense clicks, so a plain
-            // hover-only `Label` lets both clicks fall through to the row — a
-            // `SelectableLabel` swallowed the secondary click over the one part
-            // of the row anybody aims at.
-            //
-            // `.interact(Sense::click())` is what makes the row a widget at
-            // all: a `Ui`'s own response is `Sense::hover()`, and
-            // `Popup::context_menu` opens on `secondary_clicked()`, which such
-            // a response can never report.
+            // The row is the widget; the name is plain text. egui hit-tests
+            // only widgets that sense clicks, so a hover-only label lets clicks
+            // through to the row (a `SelectableLabel` swallowed the right
+            // click). A `Ui`'s own response is `Sense::hover()`, which can
+            // never report the `secondary_clicked()` a context menu opens on,
+            // hence the `.interact`.
             let past_the_bar = at > bar_after;
             let response = ui
                 .horizontal(|ui| {
-                    // Past the rollback bar: in the document, not in the view.
-                    // Faded rather than struck or dimmed, which already mean
-                    // suppressed and eaten.
+                    // Faded, since struck and weak already mean suppressed
+                    // and eaten.
                     if past_the_bar {
                         ui.multiply_opacity(0.4);
                     }
-                    // Three states, and they are not the same thing, so they
-                    // are not drawn the same way. **Struck through** is
-                    // suppressed — deliberately switched off, and the only cue
-                    // left now that the checkbox has moved into the menu.
-                    // **Weak** is consumed: a body a later feature has already
-                    // eaten, which is history rather than a problem. **Orange**
-                    // is broken, which is the one worth looking at.
+                    // Struck through: suppressed. Weak: eaten by a later
+                    // feature. Orange: broken.
                     let mut text = egui::RichText::new(if broken.contains(&id) {
                         format!("{name}  {}", get!("prop.problems.marker"))
                     } else {
@@ -585,13 +524,11 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                         text = text.weak();
                     }
 
-                    // `.selectable(false)` is the other half, and not about the
-                    // caret: a selectable label picks up
-                    // `Sense::click_and_drag()` to support that, which puts it
-                    // back in the hit-test and wins over the row.
+                    // A selectable label senses click-and-drag, which puts it
+                    // back in the hit-test ahead of the row.
                     ui.add(egui::Label::new(text).selectable(false));
-                    // Claims the rest of the line, or `horizontal` shrinks to
-                    // the text and so does the grabbable area.
+                    // Otherwise `horizontal` shrinks to the text, and so does
+                    // the grabbable area.
                     ui.allocate_space(egui::vec2(ui.available_width(), 0.0));
 
                 })
@@ -599,8 +536,8 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 .interact(egui::Sense::click_and_drag());
 
             rects.push((id, response.rect));
-            // `dragged` stays true for the row the drag began on even once the
-            // pointer has left it.
+            // `dragged` stays true for the row the drag began on after the
+            // pointer leaves it.
             if response.dragged() {
                 dragging = Some(at);
             }
@@ -619,8 +556,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             } else if selected == Some(id) {
                 Some(ui.visuals().selection.bg_fill)
             } else if also_selected.contains(&id) {
-                // Picked but not primary: visibly in the selection, visibly
-                // not the one the inspector is showing.
+                // Picked but not primary.
                 Some(ui.visuals().selection.bg_fill.gamma_multiply(0.45))
             } else if response.hovered() {
                 Some(ui.visuals().widgets.hovered.weak_bg_fill)
@@ -639,16 +575,14 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             }
 
             response.context_menu(|ui| {
-                // Right-clicking is a way of pointing at a thing, so it selects
-                // too — otherwise the inspector shows something else. Unless it
-                // is already picked: right-clicking one of two bodies you have
-                // just Ctrl-clicked should not throw the other away.
+                // Right-click selects, unless already in the selection, so a
+                // Ctrl-clicked pair is not thrown away.
                 if selected != Some(id) && !also_selected.contains(&id) {
                     select = Some((id, Pick::Only));
                 }
 
-                // Names the **action**, not the state: a label naming the state
-                // reads as a checkbox with no box.
+                // Names the action, not the state: a state label reads as a
+                // checkbox with no box.
                 let action = match enabled {
                     true => get!("prop.tree.suppress"),
                     false => get!("prop.tree.unsuppress"),
@@ -688,8 +622,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     let name = get!("prop.tree.copy_of", "name", name);
                     pending = Some(Box::new(move |editor: &mut PropEditor| {
                         if let Some(copy) = editor.edit(|doc| doc.duplicate(id, name)) {
-                            // A copy of the last thing above the bar is above
-                            // it too.
+                            // Keep the copy above the bar too.
                             if editor.rollback() == Some(id) {
                                 editor.roll_back_to(Some(copy));
                             }
@@ -698,11 +631,9 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     }));
                 }
 
-                // **Repaint lives here, not beside Extrude.** It is a thing you
-                // do *to a body*, and a body-producing feature already carries
-                // its own surface — so it is the exception, reached from the
-                // body it applies to. Starts from what the body looks like
-                // now, so opening it changes nothing until something is moved.
+                // Here rather than in the toolbar because it acts on an
+                // existing body. Starts from the body's current surface, so
+                // adding it changes nothing yet.
                 let standing = build.evaluated.bodies.iter().find(|(body, _)| *body == id);
                 let repaint = ui.add_enabled(
                     standing.is_some(),
@@ -721,9 +652,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 ui.separator();
 
                 let delete = ui.button(get!("prop.tree.delete"));
-                // Beforehand rather than after: everything naming this feature
-                // breaks the moment it goes, and reading that here is cheaper
-                // than four warnings you have to find the common cause of.
+                // Said before deleting rather than as warnings after.
                 let delete = match dependants {
                     0 => delete,
                     count => delete.on_hover_text(get!(
@@ -741,10 +670,8 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 }
             });
 
-            // **What this feature ate, beneath it.** The list stays in document
-            // order — the order *is* the prop, and reordering needs it flat —
-            // so the structure a boolean makes is shown under it rather than by
-            // moving its operands there. Clicking one selects it.
+            // What this feature ate, listed under it. The rows stay in document
+            // order, which reordering needs.
             for (operand, operand_name) in &row.operands {
                 ui.horizontal(|ui| {
                     if past_the_bar {
@@ -759,10 +686,8 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 });
             }
 
-            // **The rollback bar**, dragged up the list to see the prop as it
-            // stood there. Thin and faint at the bottom where it changes
-            // nothing; bold anywhere else, because a view that is not showing
-            // the whole prop must not be mistaken for one that is.
+            // The rollback bar. Bold whenever it is not at the end, so a
+            // partial view is not mistaken for the whole prop.
             if at == bar_after {
                 let (rect, bar) =
                     ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::drag());
@@ -777,9 +702,8 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             }
         }
 
-        // Live while dragging, so the viewport scrubs through the history
-        // under the pointer. Never above the first feature: a prop rolled back
-        // to nothing is an empty viewport, which says nothing.
+        // Applied live while dragging. Never above the first feature: an empty
+        // viewport shows nothing useful.
         if bar_dragged
             && let Some(pointer) = ui.ctx().pointer_interact_pos()
         {
@@ -792,8 +716,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             }
         }
 
-        // After every row has reported its rect: where the line goes is a fact
-        // about the list, not about any one row.
+        // After every row has reported its rect.
         if let Some(at) = dragging {
             let row = &entries[at];
             let target = show_the_drop(ui, &rects, row);
@@ -816,24 +739,17 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     }
 }
 
-/// How a click on a row changes the selection.
 #[derive(Clone, Copy)]
 enum Pick {
-    /// A plain click: this and nothing else.
     Only,
-    /// Ctrl/Cmd held: add it, or take it out if it was in.
+    /// Ctrl/Cmd held.
     Toggle,
 }
 
-/// Draw where a dragged feature would land, and say where it may land.
+/// Draw where a dragged feature would land, and mark the features pinning it.
 ///
-/// Returns the index it would drop at, **clamped into the legal range**. The
-/// legal positions are one contiguous span (see `PropDoc::legal_range`), so
-/// clamping is all it takes: the line follows the pointer and stops dead
-/// against whatever is pinning it, which you feel rather than have to read.
-///
-/// The pinning features are marked at the same time, because "it stopped" and
-/// "it stopped *there*" are different amounts of help.
+/// Returns the drop index clamped into the legal range, which is one
+/// contiguous span (see `PropDoc::legal_range`), so clamping is enough.
 fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row) -> usize {
     let others: Vec<egui::Rect> = rects
         .iter()
@@ -857,8 +773,8 @@ fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row
     let painter = ui.painter();
     for (id, rect) in rects {
         if row.pins.contains(id) {
-            // A bar rather than an outline, so it does not compete with the
-            // selection highlight the row may already be wearing.
+            // A bar rather than an outline, so it does not clash with the
+            // selection highlight.
             painter.rect_filled(
                 egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
                 0.0,
@@ -881,17 +797,12 @@ fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row
     target
 }
 
-/// The verbs, in a row under the menu bar.
+/// The verbs under the menu bar. They act on the selection: Combine takes the
+/// two bodies picked (first as target, second as tool), Mirror and Pattern the
+/// primary.
 ///
-/// **They act on the selection, not on whatever was added last.** Combine
-/// takes the two bodies picked (first as target, second as tool), Mirror the
-/// one in the inspector; each is greyed out when the selection does not fit.
-/// No hover text explaining what to pick — the UI states what is, it is not a
-/// tutorial. Creating a solid needs nothing picked.
-///
-/// `frame` is here rather than in a View menu because it is the one button
-/// somebody reaches for after losing the prop, and a menu is one click further
-/// from it.
+/// Framing is here rather than in a menu so it is one click away after losing
+/// the prop.
 fn toolbar(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, frame: &mut Option<bool>) {
     let live: Vec<PropFeatureId> = build.evaluated.bodies.iter().map(|(id, _)| *id).collect();
     let pair = editor.pair_to_combine(&live);
@@ -996,10 +907,6 @@ fn toolbar(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, frame: &mut 
     }
 }
 
-/// What the Edit menu can do for the prop right now.
-///
-/// Revert needs a file to go back to and something to throw away: a document
-/// that matches its file has nothing to revert.
 pub(crate) fn edit_availability(editor: &PropEditor) -> EditAvailability {
     EditAvailability {
         undo: editor.can_undo(),
@@ -1008,10 +915,8 @@ pub(crate) fn edit_availability(editor: &PropEditor) -> EditAvailability {
     }
 }
 
-/// Answer the Edit menu, or the chord for one of its entries, for the prop.
-///
-/// Shared with the animation editor, whose clips live in the same file — two
-/// answers to "what does Revert do to a prop" would be two that drift.
+/// Answers both the Edit menu and its chords. Shared with the animation editor,
+/// whose clips live in the same file.
 pub(crate) fn handle_edit(action: Option<EditAction>, editor: &mut PropEditor) {
     match action {
         Some(EditAction::Undo) => editor.undo(),
@@ -1021,10 +926,8 @@ pub(crate) fn handle_edit(action: Option<EditAction>, editor: &mut PropEditor) {
     }
 }
 
-/// Read the prop's file again and go back to it, as one undo step.
-///
-/// Through `std::fs` like Open, because both are the authoring side; the game
-/// reads props through `Assets`.
+/// One undo step. `std::fs` is fine here because this is the authoring side;
+/// the game reads props through `Assets`.
 fn revert_from_disk(editor: &mut PropEditor) {
     let Some(path) = editor.path.clone() else { return };
     match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|text| {
@@ -1040,11 +943,9 @@ fn revert_from_disk(editor: &mut PropEditor) {
 
 /// The selected feature's numbers, or the prop's own when nothing is picked.
 ///
-/// **In sections, in a fixed order** — Feature, Shape or Profile, Placement,
-/// Material, Operands — so a number is in the same place whatever kind of
-/// feature it is on, and a section somebody never touches can be folded away
-/// for good. egui remembers which are open by id, so the ids are per section
-/// rather than per feature: folding Placement folds it everywhere.
+/// Sections come in a fixed order so a number is in the same place on every
+/// kind of feature. Section ids are per section, not per feature, so folding
+/// one folds it everywhere.
 fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let Some(selected) = editor.selected else {
         prop_overview(ui, editor, build);
@@ -1054,14 +955,9 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
         prop_overview(ui, editor, build);
         return;
     };
-    // What this feature could point at is what was live *when it ran* — not
-    // what is live now, which is after it has already eaten something.
-    // Recorded by the evaluator so there is one answer rather than two.
-    //
-    // Past the rollback bar there is no record, since the view did not
-    // evaluate that far; everything listed above the feature stands in.
-    // Re-evaluating the whole prop here would run the kernel every frame for as
-    // long as the feature was selected.
+    // What was live when this feature ran, as recorded by the evaluator. Past
+    // the rollback bar there is no record, so everything above the feature
+    // stands in; re-evaluating here would run the kernel every frame.
     let choices: Vec<PropFeatureId> = build
         .evaluated
         .live_before
@@ -1076,18 +972,14 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
         .collect();
     let picked = editor.selection().len();
 
-    // Drawn against a **copy**, written back only if something moved.
-    // `PropEditor::doc_mut` marks the document changed by being called, which
-    // is what makes the viewport rebuild — so an inspector that reached for it
-    // every frame would re-run the boolean kernel, and light the unsaved-work
-    // asterisk, for as long as anything was merely selected.
+    // Drawn against a copy: calling `PropEditor::doc_mut` marks the document
+    // changed, which would rebuild the viewport and mark it dirty every frame.
     let Some(mut edited) = editor.doc().feature(selected).cloned() else { return };
     let feature = &mut edited;
 
     let mut changed = false;
     egui::ScrollArea::vertical().show(ui, |ui| {
-        // States that more than one thing is selected, since the numbers below
-        // are only the primary's.
+        // The numbers below are only the primary's.
         if picked > 1 {
             ui.label(egui::RichText::new(get!("prop.inspector.picked", "count", picked)).weak());
         }
@@ -1101,13 +993,8 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 ui.label(get!("prop.inspector.name"));
                 changed |= ui.text_edit_singleline(&mut feature.name).changed();
             });
-            // **Positive, unlike the tree's menu, and that is not an
-            // inconsistency.** A menu item names an *action*, and the useful
-            // thing to say there is what clicking will do — "Suppress". A
-            // checkbox names a *state*, and a ticked box meaning "off" is the
-            // kind of thing you have to read twice. So the two differ because
-            // they are different questions, and the box is bound straight to
-            // the stored field with nothing to invert.
+            // Positive, unlike the tree's "Suppress": a menu item names an
+            // action, a checkbox names a state.
             changed |= ui.checkbox(&mut feature.enabled, get!("prop.inspector.active")).changed();
         });
 
@@ -1212,7 +1099,6 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     }
 }
 
-/// One fold of the inspector, open until somebody closes it.
 fn section(ui: &mut Ui, id: &str, title: String, body: impl FnOnce(&mut Ui)) {
     egui::CollapsingHeader::new(egui::RichText::new(title).strong())
         .id_salt(("prop_section", id))
@@ -1221,10 +1107,6 @@ fn section(ui: &mut Ui, id: &str, title: String, body: impl FnOnce(&mut Ui)) {
 }
 
 /// What the inspector shows with nothing picked: the prop itself.
-///
-/// An empty panel is a panel that says nothing, and there *is* something to
-/// say — the name a weapon list will show and how big the thing is, which
-/// otherwise lived only in a corner of the Problems tab.
 fn prop_overview(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let mut name_key = editor.doc().name_key.clone();
     let mut changed = false;
@@ -1236,8 +1118,7 @@ fn prop_overview(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 ui.label(get!("prop.inspector.name_key"));
                 changed |= ui.text_edit_singleline(&mut name_key).changed();
             });
-            // Resolved, so a key with a typo in it reads as `<key>` here
-            // rather than first in somebody's loadout.
+            // Resolved, so a mistyped key shows as `<key>` here.
             ui.horizontal(|ui| {
                 ui.label(get!("prop.inspector.shown_as"));
                 ui.label(egui::RichText::new(get!(name_key)).italics());
@@ -1264,10 +1145,7 @@ fn prop_overview(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     }
 }
 
-/// What is in the viewport besides the prop: for now, who is standing there.
-///
-/// In both workspaces, so it is in one place; in Fit "nobody" is not offered,
-/// since a hold fitted to nobody is not being fitted.
+/// Who is standing in the viewport. Fit does not offer "nobody".
 fn view_menu(ui: &mut Ui, workspace: Workspace, figure: &mut ScaleFigure) {
     ui.menu_button(get!("prop.menu.view"), |ui| {
         ui.label(egui::RichText::new(get!("prop.scene.figure")).weak());
@@ -1280,11 +1158,8 @@ fn view_menu(ui: &mut Ui, workspace: Workspace, figure: &mut ScaleFigure) {
     });
 }
 
-/// Fit's toolbar: who the hold is being fitted to, and framing.
-///
-/// **The class on show is the class being edited** — one question, asked
-/// once. Picking a class here both changes who is standing there and which
-/// per-class override the Hold panel is editing.
+/// Fit's toolbar. The class picked here is both the figure and the per-class
+/// override the Hold panel edits.
 fn fit_toolbar(ui: &mut Ui, figure: &mut ScaleFigure, frame: &mut Option<bool>) {
     ui.label(get!("prop.scene.figure"));
     egui::ComboBox::from_id_salt("prop_fit_class")
@@ -1300,15 +1175,8 @@ fn fit_toolbar(ui: &mut Ui, figure: &mut ScaleFigure, frame: &mut Option<bool>) 
     }
 }
 
-/// How this prop is held.
-///
-/// Numbers rather than handles, for now — the gizmos are the next piece. What
-/// makes them worth typing at all is that the reference figure performs *this*
-/// hold, so the effect of a change is on screen the moment it is made.
-///
-/// **The class on show is the class being edited.** One question, asked once:
-/// ticking the override edits the entry for whoever is standing there, which
-/// is also the body you are judging it against.
+/// How this prop is held. The override checkbox edits the entry for the class
+/// standing in the viewport.
 #[allow(clippy::too_many_arguments)]
 fn hold(
     ui: &mut Ui,
@@ -1322,15 +1190,11 @@ fn hold(
 
     let mut changed = false;
     let mut edited = base.for_class(figure.0);
-    // Not per class: a viewmodel is a framing on a screen, not a fact about
-    // whoever is holding the thing.
+    // Not per class: a viewmodel is a screen framing, not a property of a body.
     let mut viewmodel = editor.doc().viewmodel;
     let mut view_changed = false;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
-        // Whether the numbers below are this class's own or everybody's. Fit
-        // always has somebody standing there, so there is always a class to
-        // ask about.
         if let (Some(key), Some(class)) = (&key, figure.0) {
             section(ui, "hold_class", class.name(), |ui| {
                 let mut on = overriding;
@@ -1367,23 +1231,18 @@ fn hold(
         });
 
         section(ui, "hold_carry", get!("prop.hold.carry"), |ui| {
-            // Arm lengths, not metres, so a carry means the same thing on a
-            // Heavy as on a Scout. Dragged in hundredths because the whole
-            // useful range is under one arm.
+            // In arm lengths, not metres. Fine speed because the useful range
+            // is under one arm.
             changed |= vec3_ui(ui, get!("prop.hold.offset"), &mut edited.carry, 0.005, "");
             changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.carry_rotation);
         });
 
-        // Outside the fold, so a folded section is a preview that is off.
+        // Outside the fold, so a folded section leaves the preview off.
         let mut holding = false;
         section(ui, "hold_viewmodel", get!("prop.hold.viewmodel"), |ui| {
-            // Fractions of the frustum, so the same numbers mean the same place on
-            // screen at any field of view and any window — which is what stops a
-            // weapon drifting in from the edge it is meant to hang off.
-            // **The preview is on while a viewmodel number is being held.** Which
-            // is the only moment it is worth having: you are looking for where the
-            // weapon lands, and the answer is on screen while your hand is still
-            // on the number rather than after a save and a round.
+            // `across` is a fraction of the frustum, so it holds its place on
+            // screen at any field of view or aspect. The preview is on only
+            // while one of these numbers is held.
             ui.horizontal(|ui| {
                 ui.label(get!("prop.hold.across"));
                 for (component, axis) in viewmodel.across.iter_mut().zip(["x", "y"]) {
@@ -1430,7 +1289,6 @@ fn hold(
     editor.doc_mut().hold = applied;
 }
 
-/// Three drag boxes in degrees, over a field stored in radians.
 fn degrees_ui(ui: &mut Ui, label: String, radians: &mut [f32; 3]) -> bool {
     let mut degrees = radians.map(f32::to_degrees);
     if vec3_ui(ui, label, &mut degrees, 1.0, "°") {
@@ -1440,11 +1298,6 @@ fn degrees_ui(ui: &mut Ui, label: String, radians: &mut [f32; 3]) -> bool {
     false
 }
 
-/// One line along the bottom: what is selected, what the prop amounts to,
-/// and whether the viewport is still catching up.
-///
-/// Out of the Problems tab, where it used to be, because it is true whichever
-/// tab is in front.
 fn status_line(ui: &mut Ui, editor: &PropEditor, build: &PropBuild) {
     ui.horizontal(|ui| {
         let names: Vec<String> = editor
@@ -1456,8 +1309,6 @@ fn status_line(ui: &mut Ui, editor: &PropEditor, build: &PropBuild) {
             true => get!("prop.inspector.nothing"),
             false => get!("prop.stats.selected", "names", names.join(", ")),
         });
-        // Said in the one place visible whatever tab is up, and in the warning
-        // colour: a rolled-back view is a partial prop.
         if let Some(name) = editor.rollback().and_then(|id| editor.doc().feature(id)).map(|f| f.name.clone()) {
             ui.separator();
             ui.label(
@@ -1474,8 +1325,7 @@ fn status_line(ui: &mut Ui, editor: &PropEditor, build: &PropBuild) {
             let size = max - min;
             ui.label(format!("{:.3} × {:.3} × {:.3} m", size.x, size.y, size.z));
         }
-        // A viewport that stopped following a drag looks like one that stopped
-        // working.
+        // Otherwise a viewport lagging a drag looks broken.
         if build.settling() {
             ui.separator();
             ui.label(egui::RichText::new(get!("prop.stats.settling")).weak());
@@ -1513,8 +1363,7 @@ fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     });
 }
 
-/// As [`drag`], but says whether the box is being held as well as whether it
-/// changed — which is what the viewmodel preview is on for.
+/// As [`drag`], also returning whether the box is held.
 fn held_drag(
     ui: &mut Ui,
     label: String,
@@ -1530,7 +1379,6 @@ fn held_drag(
     .inner
 }
 
-/// Three of them.
 fn held_vec3(
     ui: &mut Ui,
     label: String,
@@ -1567,7 +1415,6 @@ fn drag(ui: &mut Ui, label: String, value: &mut f32, speed: f64, suffix: &str) -
 fn count(ui: &mut Ui, label: String, value: &mut u32) -> bool {
     ui.horizontal(|ui| {
         ui.label(label);
-        // Clamped low: fewer than three sides is not a shape.
         ui.add(egui::DragValue::new(value).speed(0.2).range(MIN_SIDES..=128)).changed()
     })
     .inner
@@ -1586,14 +1433,10 @@ fn vec3_ui(ui: &mut Ui, label: String, value: &mut [f32; 3], speed: f64, suffix:
     changed
 }
 
-/// Where a feature sits and which way it faces.
-///
-/// **Orientation is asked as "points along" and "spin"**, not as three Euler
-/// angles: lining up a barrel is "make its length run down −Z", and the
-/// answer to that in Euler angles depends on which of the three is applied
-/// first. `main` is the feature's own length axis
-/// ([`FeatureOp::main_axis`]). The angles themselves are still what is
-/// stored, and are behind a fold for the cases the presets do not reach.
+/// Orientation is edited as "points along" and "spin" about `main`, the
+/// feature's length axis ([`FeatureOp::main_axis`]), because the Euler answer
+/// to "point down −Z" depends on rotation order. The stored Euler angles are
+/// behind a fold.
 fn placement_ui(ui: &mut Ui, placement: &mut Placement, main: Vec3) -> bool {
     let mut changed = vec3_ui(ui, get!("prop.inspector.origin"), &mut placement.origin, 0.001, "");
 
@@ -1611,8 +1454,7 @@ fn placement_ui(ui: &mut Ui, placement: &mut Placement, main: Vec3) -> bool {
             ("−Z", Vec3::NEG_Z),
         ];
         for (label, direction) in directions {
-            // Lit when it is already the answer, so the current state reads
-            // off the row; an aim between the axes lights none of them.
+            // An aim between the axes lights none of them.
             let current = aim.dot(direction) > 0.9999;
             if ui.selectable_label(current, label).clicked() && !current {
                 wanted = Some((direction, spin));
@@ -1637,9 +1479,7 @@ fn placement_ui(ui: &mut Ui, placement: &mut Placement, main: Vec3) -> bool {
         .id_salt("prop_section_euler")
         .default_open(false)
         .show(ui, |ui| {
-            // Degrees in the boxes and radians in the field, as a map
-            // feature's rotation is: parts are lined up in degrees, maths is
-            // done in radians.
+            // Degrees in the boxes, radians in the field.
             let mut degrees = placement.rotation.map(f32::to_degrees);
             if vec3_ui(ui, get!("prop.inspector.rotation"), &mut degrees, 1.0, "°") {
                 placement.rotation = degrees.map(f32::to_radians);
@@ -1649,9 +1489,8 @@ fn placement_ui(ui: &mut Ui, placement: &mut Placement, main: Vec3) -> bool {
     changed
 }
 
-/// Angles as they go on disk after a preset: the rounding residue of a
-/// quaternion round trip snapped to zero, so pointing a barrel down −Z writes
-/// `0.0` rather than `-0.00000004` into a file somebody reads.
+/// Snaps the residue of a quaternion round trip to zero, so the file says
+/// `0.0` rather than `-0.00000004`.
 fn tidy_angles(angles: Vec3) -> [f32; 3] {
     angles.to_array().map(|angle| if angle.abs() < 1e-6 { 0.0 } else { angle })
 }
@@ -1704,8 +1543,8 @@ fn profile_ui(ui: &mut Ui, profile: &mut Profile) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.label(get!("prop.inspector.profile"));
-        // Switching kind replaces rather than converts: a rectangle has no side
-        // count to carry into an n-gon, so anything else invents numbers.
+        // Switching kind replaces rather than converts; there is nothing to
+        // carry across.
         if ui.selectable_label(matches!(profile, Profile::Rect { .. }), Profile::Rect { half: [0.0; 2] }.name()).clicked()
             && !matches!(profile, Profile::Rect { .. })
         {
@@ -1772,15 +1611,12 @@ fn profile_ui(ui: &mut Ui, profile: &mut Profile) -> bool {
     changed
 }
 
-/// How many copies and where they go. Switching between a row and a circle
-/// replaces the layout rather than converting it, as a profile does: a step
-/// has no angle to carry across.
+/// Switching between linear and radial replaces the layout, as with profiles.
 fn pattern_ui(ui: &mut Ui, count: &mut u32, along: &mut PatternKind) -> bool {
     let mut changed = ui
         .horizontal(|ui| {
             ui.label(get!("prop.inspector.copies"));
-            // Capped, because every copy is a boolean union and sixty-four is
-            // already more vents than anything has.
+            // Capped because every copy is a boolean union.
             ui.add(egui::DragValue::new(count).speed(0.1).range(1..=64)).changed()
         })
         .inner;
@@ -1826,8 +1662,7 @@ fn body_picker(
             .iter()
             .find(|(id, _)| id == value)
             .map(|(_, name)| name.clone())
-            // Falling back to the first thing in the list would silently
-            // repoint the feature.
+            // Not the first entry: that would silently repoint the feature.
             .unwrap_or_else(|| get!("prop.inspector.missing", "id", *value));
         egui::ComboBox::from_id_salt(format!("prop_body_{label}"))
             .selected_text(selected)
@@ -1840,11 +1675,7 @@ fn body_picker(
     changed
 }
 
-/// Write the prop to the path it came from, or ask for one if it has none.
-///
-/// **A save with nowhere to save to is a save-as**, which is the same question
-/// either way. Shared so the menu item and `Ctrl+S` cannot answer it
-/// differently.
+/// Write the prop to its path, or ask for one if it has none.
 pub fn save_or_ask(editor: &mut PropEditor, dialog: &PropFileDialog) {
     let Some(path) = editor.path.clone() else {
         ask_where_to_save(editor, dialog);
@@ -1859,7 +1690,6 @@ pub fn save_or_ask(editor: &mut PropEditor, dialog: &PropFileDialog) {
     }
 }
 
-/// Ask where to put the prop, on a background thread.
 pub fn ask_where_to_save(editor: &PropEditor, dialog: &PropFileDialog) {
     let slot = dialog.result.clone();
     let existing = editor.path.clone();
@@ -1876,15 +1706,8 @@ pub fn ask_where_to_save(editor: &PropEditor, dialog: &PropFileDialog) {
     });
 }
 
-/// `Ctrl+N`, `Ctrl+S`, `Ctrl+Shift+S`, and the undo pair, for the prop editor.
-///
-/// The map editor's undo has always had this; the prop editor's lived only on
-/// two buttons in the Features panel, so `Ctrl+Z` did nothing at all — which
-/// reads as a bug rather than as an absence.
-///
-/// The file half goes through `handle_files`, which is what the File menu
-/// feeds: a chord and the menu item it is the shortcut for have to be the same
-/// action, and the way to guarantee that is for them to *be* the same call.
+/// Chords go through the same handlers as the menus, so a chord and its menu
+/// entry are one action.
 fn prop_shortcuts(
     keys: Res<ButtonInput<KeyCode>>,
     egui: Res<bevy_egui::input::EguiWantsInput>,
@@ -1894,8 +1717,6 @@ fn prop_shortcuts(
 ) {
     let typing = egui.wants_keyboard_input();
     let chords = chords(&keys, typing);
-    // Through the menu's own handler, so the chord and the entry it is the
-    // shortcut for are one action.
     handle_edit(
         match (chords.redo, chords.undo) {
             (true, _) => Some(EditAction::Redo),
@@ -1904,9 +1725,8 @@ fn prop_shortcuts(
         },
         &mut editor,
     );
-    // `F` frames the selection, or the whole prop with nothing picked —
-    // `FrameTheProp` falls back by itself. A bare key, so it is answered only
-    // while nobody is typing a name.
+    // `FrameTheProp` falls back to the whole prop with nothing picked. A bare
+    // key, so not while typing.
     if !typing && keys.just_pressed(KeyCode::KeyF) {
         frame.write(FrameTheProp { selected: true });
     }
@@ -1915,15 +1735,8 @@ fn prop_shortcuts(
     }
 }
 
-/// New, open, save, including the file dialog on its own thread.
-///
-/// Takes the action rather than the whole request bundle, because the
-/// **animation editor** calls it too: a prop's clips live in its `.gpp`, so
-/// *Save* there is this save, and two answers to "where does this prop go"
-/// would be two that drift.
-///
-/// Quit is not here. It is a message, not a file, and this function has no
-/// writer — see the caller.
+/// New, open and save. Also called by the animation editor, since a prop's
+/// clips live in its `.gpp`. Quit is handled by the caller.
 pub(crate) fn handle_files(
     action: Option<FileAction>,
     editor: &mut PropEditor,
@@ -1976,9 +1789,8 @@ pub(crate) fn handle_files(
 mod tests {
     use super::*;
 
-    /// Fit always stands somebody up and Model gets back what it had — so a
-    /// trip to Fit does not leave a body in the modelling view, and the class
-    /// being fitted survives a trip back to Model.
+    /// Fails if Fit can show nobody, if Model does not get its figure back, or
+    /// if Fit forgets its class across a trip to Model.
     #[test]
     fn workspaces_hand_the_figure_back() {
         let mut layout = PropPanels::default();

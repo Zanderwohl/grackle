@@ -1,83 +1,53 @@
-//! What a projectile *is*, as numbers, and the arithmetic of moving one.
+//! What a projectile is, as numbers, and the arithmetic of moving one.
 //!
-//! One type covers the rocket launcher, the pipe bomb launcher and whatever
-//! else is thrown rather than traced, because the three things that actually
-//! differ between them are a curve, a bounce and a fuse. A grenade is a rocket
-//! that falls, spins, bounces four times and goes off on a timer; a rocket is a
-//! grenade that flies straight and goes off on contact. Writing them as two
-//! systems would mean two copies of the swept move, the splash and the
-//! provenance, and the second copy is where the bugs live.
+//! One type covers rockets, pipe bombs and anything else thrown rather than
+//! traced: they differ only in a curve, a bounce and a fuse, and two systems
+//! would mean two copies of the swept move and the splash.
 //!
-//! Deliberately a plain value with no `World` in it, for the same reason
-//! [`crate::common::hitscan::trace`] is: the step is a function of
-//! `(state, spec, dt)`, so a client and a server fed the same values put the
-//! projectile in the same place. A spec that read the clock or an RNG could
-//! not be reconciled.
-//!
-//! **Gravity is a parameter, not a constant here.** The number lives with the
-//! player's step in [`crate::game::player::GRAVITY`], and a second opinion
-//! about how hard things fall is exactly the kind of drift that leaves a rocket
-//! arcing differently from the man who fired it.
+//! No `World` here: the step is a function of `(state, spec, dt)`, so client
+//! and server reach the same position. Gravity is passed in so the number
+//! lives only in [`crate::game::player::GRAVITY`].
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Everything that distinguishes one thrown weapon from another.
-///
-/// A `const` per weapon rather than a trait per weapon: adding the flare gun
-/// should be adding thirteen numbers, not a type with thirteen methods that
-/// return them.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct ProjectileSpec {
-    /// How fast it leaves the muzzle, in metres per second.
+    /// Metres per second.
     pub initial_speed: f32,
-    /// How much of gravity it feels. `0.0` for a rocket that flies flat, `1.0`
-    /// for anything that arcs.
+    /// Fraction of gravity felt: `0.0` flies flat, `1.0` arcs.
     pub gravity_factor: f32,
-    /// Drag, as the fraction of its speed it sheds per second. `0.0` for a
-    /// rocket, which is under power the whole way.
+    /// Fraction of speed shed per second.
     pub air_resistance: f32,
-    /// How fast it tumbles, in radians per second. Cosmetic — nothing tests
-    /// against a projectile's rotation — but it is the difference between a
-    /// rocket that points where it is going and a pipe that end-over-ends.
+    /// Radians per second. Cosmetic; nothing tests against a projectile's rotation.
     pub spin_rate: f32,
-    /// How many walls it may bounce off before the next one is its last.
-    /// `0` for a rocket, so its first contact is already its last.
+    /// Walls it may bounce off before the next one is its last. `0` makes the
+    /// first contact the last.
     pub max_bounces: u32,
-    /// How much speed survives a bounce, as a fraction. Meaningless at
-    /// `max_bounces == 0`, and set to zero there rather than left to look like
-    /// a rocket has an opinion about being bouncy.
+    /// Fraction of speed that survives a bounce.
     pub restitution: f32,
-    /// How long it may live, in seconds of game time.
+    /// Seconds of game time.
     pub max_lifetime: f32,
-    /// Whether running out of bounces detonates it, rather than simply
-    /// stopping it. True for a rocket — its "last bounce" is the wall it hits.
+    /// Whether running out of bounces detonates it rather than stopping it.
     pub explodes_at_last_bounce: bool,
-    /// Whether the fuse running out detonates it. True for a pipe bomb, false
-    /// for a rocket that has somehow flown for its whole lifetime without
-    /// touching anything.
+    /// Whether the fuse running out detonates it.
     pub explodes_at_lifetime_end: bool,
-    /// How far the explosion reaches, in metres. Both the splash damage and
-    /// the shove fall off to nothing here — see
-    /// [`crate::common::damage::falloff`].
+    /// Metres. Splash and shove fall off to zero here
+    /// ([`crate::common::damage::falloff`]).
     pub explosion_radius: f32,
-    /// What hitting a body squarely is worth. Not stacked with the splash:
-    /// the body that was hit takes this instead, the way it reads to a player.
+    /// Taken by the body hit directly, instead of splash rather than on top of it.
     pub damage_direct_hit: u32,
-    /// What standing at the centre of the explosion is worth. Everyone else
-    /// in the radius takes a share of it.
+    /// Splash at the centre; others in the radius take a share.
     pub damage_splash: u32,
-    /// How hard the explosion throws a corpse at its centre, in metres per
-    /// second. A speed and not an impulse — see
-    /// [`crate::game::ragdoll::RagdollShove`] for why a corpse is deliberately
-    /// not a momentum simulation.
+    /// Speed given to a corpse at the centre, in metres per second; a speed, not
+    /// an impulse (see [`crate::game::ragdoll::RagdollShove`]).
     pub knockback: f32,
-    /// How big it is drawn, and how far off a wall it stops, in metres.
+    /// Metres. How big it is drawn and how far off a wall it stops.
     pub radius: f32,
 }
 
 impl ProjectileSpec {
-    /// A TF2 rocket: flat, fast, and gone the moment it touches anything.
     pub const ROCKET: Self = Self {
         initial_speed: 30.0,
         gravity_factor: 0.0,
@@ -95,17 +65,12 @@ impl ProjectileSpec {
         radius: 0.12,
     };
 
-    /// The TF2C-style RPG: the same rocket, but it falls.
-    ///
-    /// Here to prove the point of the spec — an arcing rocket is one number
-    /// away from a flat one, and neither is a second projectile type.
     pub const RPG: Self = Self {
         gravity_factor: 1.0,
         initial_speed: 34.0,
         ..Self::ROCKET
     };
 
-    /// A pipe bomb: arcs, tumbles, bounces, and goes off on its fuse.
     pub const PIPE_BOMB: Self = Self {
         initial_speed: 24.0,
         gravity_factor: 1.0,
@@ -114,8 +79,6 @@ impl ProjectileSpec {
         max_bounces: 4,
         restitution: 0.45,
         max_lifetime: 2.3,
-        // A pipe that has run out of bounces has run out of the thing that
-        // makes it a pipe; it goes off rather than lying there inert.
         explodes_at_last_bounce: true,
         explodes_at_lifetime_end: true,
         explosion_radius: 3.4,
@@ -126,52 +89,35 @@ impl ProjectileSpec {
     };
 }
 
-/// One step of flight, ignoring anything it might run into.
+/// One step of flight, ignoring collisions. Returns `(velocity, displacement)`;
+/// the caller must sweep the displacement against the world.
 ///
-/// Gravity first, then drag, then the move — Euler, at the fixed rate the rest
-/// of the physics runs at, which is what makes it reproducible rather than
-/// accurate. `air_resistance` is applied as a fraction of speed per second and
-/// clamped so that a large coefficient stops the projectile rather than
-/// reversing it.
-///
-/// Returns the velocity after the step and the displacement over it. The two
-/// are separate because the caller has to *sweep* the displacement against the
-/// world before it may be believed.
+/// Euler at the fixed rate, for reproducibility rather than accuracy. Drag is
+/// clamped so a large coefficient stops the projectile rather than reversing it.
 pub fn fly(velocity: Vec3, spec: &ProjectileSpec, gravity: f32, dt: f32) -> (Vec3, Vec3) {
     let mut moved = velocity + Vec3::Y * (gravity * spec.gravity_factor * dt);
     moved *= (1.0 - spec.air_resistance * dt).clamp(0.0, 1.0);
     (moved, moved * dt)
 }
 
-/// What a velocity becomes when it meets a wall whose face is `normal`.
-///
-/// Mirrored about the face and scaled by `restitution`, which is the whole of
-/// the bounce model. No friction along the surface: a pipe that skids has a
-/// tangential component this leaves alone, and a real friction term is a
-/// number to add here rather than a rewrite.
+/// Mirrors `velocity` about the face `normal` and scales by `restitution`.
+/// No friction along the surface.
 pub fn bounce(velocity: Vec3, normal: Vec3, restitution: f32) -> Vec3 {
     (velocity - 2.0 * velocity.dot(normal) * normal) * restitution
 }
 
-/// Why a projectile's flight ended.
-///
-/// Carried out of the step so that the decision — detonate, or simply go away
-/// — is made from the spec in one place rather than at each of the three
-/// points a projectile can die.
+/// Why a projectile's flight ended, so detonation is decided from the spec in
+/// one place ([`ProjectileSpec::detonates_on`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ending {
-    /// It hit a body. Always a detonation, for every spec: a pipe that landed
-    /// squarely on somebody and then dropped to the floor inert would be a
-    /// direct hit that did nothing.
+    /// Hit a body. Always detonates.
     DirectHit,
-    /// It hit a wall with no bounces left.
+    /// Hit a wall with no bounces left.
     LastBounce,
-    /// The fuse ran out.
     Fuse,
 }
 
 impl ProjectileSpec {
-    /// Whether an ending is an explosion or just an end.
     pub fn detonates_on(&self, ending: Ending) -> bool {
         match ending {
             Ending::DirectHit => true,
@@ -188,8 +134,6 @@ mod tests {
     const GRAVITY: f32 = -20.0;
     const DT: f32 = 1.0 / 64.0;
 
-    /// A rocket flies flat: no gravity, no drag, the same speed a second later
-    /// as it left with.
     #[test]
     fn a_rocket_does_not_fall_and_does_not_slow_down() {
         let mut velocity = Vec3::NEG_Z * ProjectileSpec::ROCKET.initial_speed;
@@ -204,7 +148,6 @@ mod tests {
         );
     }
 
-    /// A pipe bomb does both, which is the whole reason the two share a type.
     #[test]
     fn a_pipe_bomb_falls_and_slows_down() {
         let launched = Vec3::NEG_Z * ProjectileSpec::PIPE_BOMB.initial_speed;
@@ -217,8 +160,7 @@ mod tests {
         assert!(velocity.z > launched.z, "the pipe did not slow down: {velocity}");
     }
 
-    /// Drag slows a projectile down; it never turns one around, however
-    /// absurd the coefficient or however long the step.
+    /// Drag never turns a projectile around, however large the coefficient or step.
     #[test]
     fn drag_cannot_reverse_a_projectile() {
         let spec = ProjectileSpec { air_resistance: 1000.0, ..ProjectileSpec::PIPE_BOMB };
@@ -227,24 +169,18 @@ mod tests {
         assert_eq!(moved, Vec3::ZERO);
     }
 
-    /// Straight down onto a floor comes straight back up, at a fraction of
-    /// the speed.
     #[test]
     fn a_bounce_mirrors_the_velocity_about_the_face() {
         let bounced = bounce(Vec3::new(0.0, -10.0, 0.0), Vec3::Y, 0.5);
         assert!((bounced - Vec3::new(0.0, 5.0, 0.0)).length() < 1e-5, "{bounced}");
     }
 
-    /// And a glancing one keeps the part of its motion that was along the
-    /// wall rather than into it.
     #[test]
     fn a_glancing_bounce_keeps_its_sideways_motion() {
         let bounced = bounce(Vec3::new(6.0, -6.0, 0.0), Vec3::Y, 1.0);
         assert!((bounced - Vec3::new(6.0, 6.0, 0.0)).length() < 1e-5, "{bounced}");
     }
 
-    /// The three endings, per weapon. This table *is* the difference between
-    /// a rocket and a pipe bomb, so it is worth stating rather than trusting.
     #[test]
     fn each_weapon_goes_off_when_its_own_kind_should() {
         let rocket = ProjectileSpec::ROCKET;
@@ -257,8 +193,6 @@ mod tests {
         assert!(pipe.detonates_on(Ending::Fuse), "a pipe bomb is a fuse");
     }
 
-    /// The RPG is a rocket that falls and nothing else — the point of having
-    /// the spec at all.
     #[test]
     fn the_rpg_differs_from_the_rocket_only_in_falling_and_speed() {
         let flattened = ProjectileSpec {

@@ -1,36 +1,24 @@
 //! How a value gets from one keyframe to the next.
 //!
-//! A closed set of named curves rather than per-key bezier handles, and that
-//! is a decision rather than a stage on the way to handles. Handles are worth
-//! having when you can *draw* them — a curve editor with two tangents you drag
-//! — and the timeline is Bevy UI, which has no painter. A dropdown of named
-//! curves is a control that can actually be built, and a file that says
-//! `ease = "cubic_in_out"` is one somebody can read and edit by hand, which
-//! four extra floats per key would not be.
+//! A closed set of named curves rather than bezier handles: the timeline is
+//! Bevy UI, which has no painter to drag tangents in, and a named curve reads
+//! in a hand-edited file.
 //!
-//! **The curve belongs to the key you are leaving.** Stated once, here,
-//! because the other reading — that it belongs to the key you are arriving at
-//! — is equally defensible, and two call sites that disagree is a segment
-//! whose curve inverts halfway along it.
+//! The curve belongs to the key being left, not the one being arrived at.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// The shape of the ramp between two keys.
 ///
-/// A plain unit enum with no payload, so it is a bare string in TOML and
-/// survives postcard — the same reason `BooleanOp` is written this way. See
-/// the note on the wire in [`clip`](super::clip).
+/// A unit enum so it is a bare string in TOML and survives postcard; see
+/// [`clip`](super::clip).
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum Interpolation {
     /// Hold the outgoing value until the next key, then jump.
-    ///
-    /// Not a degenerate case to be tidied away: a muzzle flash that is on for
-    /// two frames and off after them is a step, and easing it would be a flash
-    /// that fades, which is not what a flash does.
     Step,
     #[default]
     Linear,
@@ -40,19 +28,15 @@ pub enum Interpolation {
     CubicIn,
     CubicOut,
     CubicInOut,
-    /// `3t² − 2t³`. Gentle at both ends, and the one most poses want.
+    /// `3t² − 2t³`.
     SmoothStep,
-    /// Perlin's `6t⁵ − 15t⁴ + 10t³` — flat at both ends in the second
-    /// derivative too, so a loop seam does not show as a kink.
+    /// Perlin's `6t⁵ − 15t⁴ + 10t³`: zero second derivative at both ends, so a
+    /// loop seam does not kink.
     SmootherStep,
 }
 
 impl Interpolation {
     /// Every curve, in the order the picker offers them.
-    ///
-    /// Hand-ordered rather than derived, so related curves sit together: the
-    /// enum's own order is the order they were added, and adding a fourth
-    /// cubic should not put it beside `Step`.
     pub const ALL: &'static [Interpolation] = &[
         Interpolation::Step,
         Interpolation::Linear,
@@ -66,7 +50,6 @@ impl Interpolation {
         Interpolation::CubicInOut,
     ];
 
-    /// The lang key this curve's name is under.
     pub fn name_key(self) -> &'static str {
         match self {
             Interpolation::Step => "anim.ease.step",
@@ -82,20 +65,12 @@ impl Interpolation {
         }
     }
 
-    /// Where along the segment the value has actually got to, given how far
-    /// along it in time we are.
-    ///
-    /// Clamped rather than extrapolated. Every caller has already decided that
-    /// `t` is inside this segment, so a value outside it is a bug upstream,
-    /// and extrapolating a cubic past its end is how a bone ends up somewhere
-    /// no key ever asked for.
+    /// Progress along the segment for time fraction `t`, clamped to 0..=1
+    /// rather than extrapolated: a cubic run past its end has no bound.
     pub fn ease(self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         match self {
-            // Not `t`, and not `t.round()`: the outgoing value holds for the
-            // whole segment and the jump happens *on arrival*, which is why
-            // the boundary is `>= 1.0` and not `> 0.5`. Rounding would jump
-            // half a segment early on every key in the clip.
+            // Jumps on arrival; rounding would jump half a segment early.
             Interpolation::Step => {
                 if t >= 1.0 {
                     1.0
@@ -140,10 +115,7 @@ impl Interpolation {
         from.lerp(to, self.ease(t))
     }
 
-    /// Rotations take the short way round, for the reason [`Pose::lerp`]
-    /// documents: two poses of one body are never more than a half-turn apart
-    /// at a joint, and a knee that took the long way bends backwards on the
-    /// way there.
+    /// The short way round; see [`Pose::lerp`].
     ///
     /// [`Pose::lerp`]: crate::common::skeleton::Pose::lerp
     pub fn quat(self, from: Quat, to: Quat, t: f32) -> Quat {
@@ -155,9 +127,7 @@ impl Interpolation {
 mod tests {
     use super::*;
 
-    /// Every curve starts where it started and ends where it ends. A curve
-    /// that did not would move a value the key either side of it never asked
-    /// for, and the tell is a joint that twitches at the moment it arrives.
+    /// A curve that misses its ends makes a joint twitch on arrival at a key.
     #[test]
     fn every_curve_joins_its_own_ends() {
         for ease in Interpolation::ALL {
@@ -166,9 +136,7 @@ mod tests {
         }
     }
 
-    /// A curve that went backwards partway would run the segment in reverse
-    /// for a while — which reads as a bone shaking rather than as an easing
-    /// choice. `Step` is the deliberate exception: it is flat and then jumps.
+    /// A non-monotonic curve reads as a bone shaking.
     #[test]
     fn no_curve_goes_backwards() {
         for ease in Interpolation::ALL {
@@ -184,9 +152,7 @@ mod tests {
         }
     }
 
-    /// Past the ends a curve clamps rather than extrapolating. A cubic run
-    /// past its own end climbs without bound, and the symptom is one frame
-    /// where a limb is somewhere impossible.
+    /// Extrapolating past the ends puts a limb somewhere impossible for a frame.
     #[test]
     fn a_curve_clamps_rather_than_extrapolating() {
         for ease in Interpolation::ALL {
@@ -195,9 +161,7 @@ mod tests {
         }
     }
 
-    /// `Step` holds the outgoing value for the whole segment. Written down
-    /// because the obvious implementations — `t`, or rounding — are both a
-    /// jump in the *middle*, which is half a frame early on every segment.
+    /// A step that jumps mid-segment is early on every key.
     #[test]
     fn a_step_holds_until_it_arrives() {
         for step in 0..100 {

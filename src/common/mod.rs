@@ -24,9 +24,7 @@ pub mod net;
 pub mod net_events;
 pub mod net_transport;
 pub mod protocol;
-// `pub` rather than `pub(crate)`: the `editor` binary wires `PerfPlugin` up
-// from outside the library now that it no longer compiles its own copy of the
-// tree.
+// `pub` because the `editor` binary wires `PerfPlugin` up from outside the library.
 pub mod perf;
 pub(crate) mod painter;
 pub(crate) mod ray;

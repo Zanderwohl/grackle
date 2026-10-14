@@ -1,27 +1,13 @@
-//! The animation editor: a timeline over the clips a prop carries.
+//! The animation editor: a timeline over a prop's clips and the pack's body clips.
 //!
-//! A fourth [`AppMode`], not a tab in the prop editor. The two are one scene
-//! asked two different questions — what shape is this, and what does it do —
-//! so the stage, the lights, the four framed cameras and the rule that sets
-//! the world aside are all *shared*, by widening `prop::view`'s run conditions
-//! rather than by writing a second copy of any of it. What this mode adds is a
-//! strip along the bottom and a body that moves.
+//! Its own [`AppMode`] sharing the prop editor's scene (stage, lights, cameras, world hiding) by
+//! widening `prop::view`'s run conditions, and editing the same [`PropEditor`] document, so there is
+//! one open file, one undo stack and one save.
 //!
-//! It edits the same [`PropEditor`] document, which means one open file, one
-//! undo stack and one save between the two modes — the argument for a mode
-//! over a separate tool.
-//!
-//! **The strip is Bevy UI under an egui dock**, and the seam that makes that
-//! work already existed: the prop editor measures each egui panel and turns
-//! the insets into the four cameras' viewport rects. So the bottom panel here
-//! is *reserved and not drawn* — `Frame::NONE`, with a hover sense allocated
-//! inside it — which gets three things at once. The viewports shrink for it;
-//! `EditorInputPlugin` and `prop::camera` both already bail on
-//! `is_pointer_over_egui`, so an orbit cannot start on the timeline and
-//! neither of them has to learn what a timeline is; and egui paints nothing
-//! over the lanes. It does paint the transport along the top of that panel and
-//! the track headers over the names column — rows of controls, which Bevy UI
-//! has none of — and the strip's own input never reads either place.
+//! The strip is Bevy UI under an egui bottom panel that is reserved but not drawn (`Frame::NONE`
+//! with a hover sense). The viewports shrink for it, and `EditorInputPlugin` and `prop::camera`
+//! already bail on `is_pointer_over_egui`, so an orbit cannot start on the timeline. egui does paint
+//! the transport and the track headers there; the strip's input never reads those places.
 
 pub mod body;
 pub mod timeline;
@@ -45,64 +31,35 @@ use timeline::{
     ShownClip, TimelineCursor, TimelineGrab, TimelinePools, TimelineSelection, TimelineView,
 };
 
-/// Where the clip being edited lives.
-///
-/// Two homes because there are two genuinely different things: a weapon's
-/// motion belongs to the weapon and rides in its `.gpp` beside the hold it
-/// deviates from, and a body's belongs to the pack and is named by the state
-/// it plays for. One editor, because they are the same kind of thing and a
-/// second timeline would be a second set of bugs.
+/// A weapon's motion rides in its `.gpp` beside its hold; a body's belongs to the pack, named by its
+/// state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClipSource {
-    /// The open prop's own animations.
     #[default]
     Prop,
-    /// The pack's body animations, one per `AnimationState`.
+    /// One per `AnimationState`.
     Body,
 }
 
-/// What the animation editor is looking at.
 #[derive(Resource, Debug, Default)]
 pub struct AnimEditor {
-    /// Which set of clips the panels and the strip are showing.
     pub source: ClipSource,
-    /// Which clip, by the name it is filed under.
-    ///
-    /// A name rather than an index: a clip lives in a `BTreeMap` keyed by the
-    /// name the game asks for it by, and an index into a sorted map is a fact
-    /// about what else is in the map.
+    /// A name rather than an index into the sorted `BTreeMap`, which would shift as clips are added.
     pub selected: Option<String>,
-    /// Which track the panels are showing, if any.
-    ///
-    /// Separate from the key selection: you pick a track to change what it
-    /// *is* — its space, its unit, what it drives — and keys to change when
-    /// they happen. Conflating them would mean choosing a track by choosing
-    /// one of its keys, which is impossible on a track that has none yet.
+    /// Separate from the key selection, so a track with no keys can still be picked.
     pub track: Option<usize>,
-    /// Keys dragged on the strip land anywhere rather than on the grid.
-    ///
-    /// Stated as the exception so the default — snapping — is what a
-    /// `Default` gives. Alt held during a drag is the same thing for one drag.
+    /// The exception, so `Default` snaps. Alt during a drag does the same for one drag.
     pub free_drag: bool,
-    /// Preview a blended state's whole blend at this heading, rather than the
-    /// variant being edited on its own. Radians; `None` is the variant alone.
+    /// Preview a blended state's whole blend at this heading. Radians; `None` is the edited variant
+    /// alone.
     pub blend_preview: Option<f32>,
-    /// Still waiting to frame the clip and the figure.
-    ///
-    /// Neither can be done on the way in. egui has not measured the strip yet,
-    /// so the view's rect is zero-sized and fitting a clip across it fits it
-    /// across nothing; and `refresh_the_figure` spawns the body through
-    /// `Commands`, so there is nobody to frame the cameras on either. Both
-    /// wait for the thing they need rather than for a count of frames.
+    /// Framing cannot happen on entry: egui has not measured the strip yet, and the figure is spawned
+    /// through `Commands`. Waits for both rather than for a frame count.
     pending_frame: bool,
 }
 
-/// Whether `--anim` was given.
-///
-/// A resource rather than a different initial state, for the reason
-/// [`StartInPropEditor`](crate::prop::StartInPropEditor) is one: entering has
-/// to go through `OnEnter(AppMode::Animation)`, where the strip is stood up
-/// and the cameras are framed. A state set before the app runs skips all of it.
+/// A resource rather than an initial state, so entering goes through `OnEnter(AppMode::Animation)`,
+/// as with [`StartInPropEditor`](crate::prop::StartInPropEditor).
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct StartInAnimEditor(pub bool);
 
@@ -136,8 +93,7 @@ impl Plugin for AnimPlugin {
             .init_resource::<StartInAnimEditor>()
             .init_resource::<body::BodyClips>()
             .init_resource::<crate::common::skeleton::state::ClipLibrary>()
-            // Ungated, like the prop editor's own: it has to run in whatever
-            // mode the process started in.
+            // Ungated: it has to run in whatever mode the process started in.
             .add_systems(Update, start_in_the_anim_editor)
             .add_plugins(ui::AnimUiPlugin)
             .add_systems(OnEnter(AppMode::Animation), (spawn_the_strip, frame_on_entering).chain())
@@ -145,15 +101,9 @@ impl Plugin for AnimPlugin {
             .add_systems(
                 Update,
                 (
-                    // What is on the strip, before anything asks where to draw
-                    // it or what to perform.
-                    // Before anything reads them, and only the first time.
                     load_the_body_clips,
-                    // After loading, so the first thing it sees is the real
-                    // list rather than an empty one.
+                    // After loading, so it sees the real list.
                     keep_a_clip_selected,
-                    // And straight back out to the game, so an idle retimed
-                    // here is retimed on every body in the map.
                     body::publish_the_body_clips,
                     frame_when_there_is_something_to_frame,
                     follow_the_document,
@@ -163,8 +113,7 @@ impl Plugin for AnimPlugin {
                     play_or_pause,
                     play_the_cursor,
                                     lay_out_the_timeline,
-                    // Before the scene poses the figure, so a scrub is seen on
-                    // the frame it happened rather than the one after.
+                    // Before the scene poses the figure, so a scrub shows on the same frame.
                     drive_the_preview.before(PropSceneSystems::Build),
                 )
                     .chain()
@@ -173,11 +122,8 @@ impl Plugin for AnimPlugin {
     }
 }
 
-/// The clip being edited, whichever document it lives in.
-///
-/// Cloned rather than borrowed, because the two documents are two resources
-/// and a borrow of one would tie up the other for the whole of a panel. A clip
-/// is a couple of kilobytes and this runs once a frame.
+/// Cloned rather than borrowed, so a borrow of one document does not tie up the other for a whole
+/// panel. A clip is a couple of kilobytes.
 pub fn selected_clip(
     anim: &AnimEditor,
     prop: &PropEditor,
@@ -190,7 +136,6 @@ pub fn selected_clip(
     }
 }
 
-/// Every clip the current source has, in the order it files them.
 pub fn clip_names(anim: &AnimEditor, prop: &PropEditor, body: &body::BodyClips) -> Vec<String> {
     match anim.source {
         ClipSource::Prop => prop.doc().animations.clips.keys().cloned().collect(),
@@ -198,12 +143,8 @@ pub fn clip_names(anim: &AnimEditor, prop: &PropEditor, body: &body::BodyClips) 
     }
 }
 
-/// Change the selected clip, through whichever document owns it.
-///
-/// **One gesture either way.** Both documents have the same `begin_gesture` /
-/// `doc_mut` / `end_gesture` shape, which is why the source can be switched
-/// without any caller learning what a `BodyClips` is — and why adding a third
-/// source would be one arm here rather than a branch at every write.
+/// Both documents share the `begin_gesture` / `doc_mut` / `end_gesture` shape, so callers need not
+/// know which owns the clip.
 pub fn edit_selected(
     anim: &AnimEditor,
     prop: &mut PropEditor,
@@ -227,40 +168,24 @@ pub fn edit_selected(
     }
 }
 
-/// How to tell whether either document has moved.
-///
-/// Both counters, because the strip shows one source at a time but the *other*
-/// can still change underneath — a prop saved in the modelling surface, say —
-/// and a single counter would have to be written by two owners.
+/// Both counters, since the source not shown can still change underneath.
 pub fn documents_at(prop: &PropEditor, body: &body::BodyClips) -> (u64, u64) {
     (prop.generation(), body.generation())
 }
 
-/// Read the pack's body animations, once, the first time the mode is open.
-///
-/// Here rather than at startup because a process that never opens this mode
-/// should not pay for them. The *game* gets its own copy through
-/// `clip_file::load_body_clips_at_startup`, which is a different path with a
-/// different lifetime — this one is a document somebody is editing.
+/// Here rather than at startup, so a process that never opens this mode does not pay.
 fn load_the_body_clips(assets: Res<crate::common::assets::Assets>, mut clips: ResMut<body::BodyClips>) {
     clips.ensure_loaded(&assets);
 }
 
-/// Pick a clip and fit it across the strip on the way in.
-///
-/// Opening onto nothing is a blank strip with no sense of scale, which is the
-/// same argument that has the prop editor open onto the shipped launcher.
 fn frame_on_entering(
     mut anim: ResMut<AnimEditor>,
     view: Res<TimelineView>,
     mut cursor: ResMut<TimelineCursor>,
     mut figure: ResMut<crate::prop::figure::ScaleFigure>,
 ) {
-    // **A body by default here**, unlike the modelling surface. The prop
-    // editor is about what shape a thing is and a figure is a scale reference
-    // you ask for; this is about how a body moves holding it, and an animation
-    // editor with nobody in it is a weapon swinging around on its own. Left
-    // alone if somebody has already chosen, including "none".
+    // A body by default here, unlike the modelling surface, unless somebody already chose (including
+    // "none").
     if figure.is_added() || figure.0.is_none() {
         figure.0 = Some(crate::common::class::Class::Mercenary);
     }
@@ -269,13 +194,8 @@ fn frame_on_entering(
     let _ = view;
 }
 
-/// Keep the selection on a clip that actually exists.
-///
-/// **Self-correcting rather than chosen once.** The body clips are read on the
-/// first `Update` of the mode, so at `OnEnter` there is nothing to pick yet;
-/// switching source invalidates whatever was picked; and deleting a clip
-/// leaves the name pointing at nothing. One rule about absence covers all
-/// three, which is the same shape `give_bodies_to_whoever_needs_one` takes.
+/// Self-correcting: body clips arrive after `OnEnter`, switching source invalidates the pick, and a
+/// deleted clip leaves the name dangling. One rule about absence covers all three.
 fn keep_a_clip_selected(
     editor: Res<PropEditor>,
     body: Res<body::BodyClips>,
@@ -291,24 +211,16 @@ fn keep_a_clip_selected(
     }
 
     let wanted = names.first().cloned();
-    // Written only when it differs: `AnimEditor` is watched for changes, and a
-    // write every frame with nothing to select would re-frame the strip
-    // continuously.
+    // Written only when it differs: `AnimEditor` is watched, and writing every frame would re-frame the
+    // strip continuously.
     if anim.selected != wanted {
         anim.selected = wanted;
         anim.track = None;
     }
 }
 
-/// Frame again once the figure is actually standing there.
-///
-/// `OnEnter` cannot do it: `refresh_the_figure` spawns the body through
-/// `Commands`, so during the transition the figure does not exist yet and
-/// framing sees only the prop — a weapon thirty centimetres across, with a
-/// body nearly two metres tall arriving a frame later and filling the screen.
-///
-/// Keyed on the figure being **present** rather than on a frame count, so it
-/// waits exactly as long as it needs to and not a frame more.
+/// The figure is spawned through `Commands`, so at `OnEnter` framing would see only the prop. Keyed
+/// on the figure being present rather than a frame count.
 fn frame_when_there_is_something_to_frame(
     figures: Query<(), With<crate::prop::figure::ScaleFigureMarker>>,
     editor: Res<PropEditor>,
@@ -328,10 +240,7 @@ fn frame_when_there_is_something_to_frame(
     anim.pending_frame = false;
 }
 
-/// The figure goes back to standing in its hold when the mode closes.
-///
-/// Not tidiness: the resource outlives the mode, and a figure left holding
-/// frame nineteen of a reload is what the *modelling* surface would then show.
+/// The resource outlives the mode, and a posed figure would show in the modelling surface.
 fn stop_performing(
     mut performance: ResMut<FigurePerformance>,
     mut corrections: ResMut<crate::prop::figure::FigureCorrections>,
@@ -339,17 +248,11 @@ fn stop_performing(
 ) {
     performance.0 .0.clear();
     corrections.0 = None;
-    // And the prop goes back to its own origin, or the modelling surface would
-    // open with the geometry parked wherever a clip left it.
+    // Or the modelling surface would open with the geometry wherever a clip left it.
     held.0 = Transform::IDENTITY;
 }
 
-/// Keep [`ShownClip`] in step with the document.
-///
-/// Watched through the editor's `generation` counter rather than
-/// `Res::is_changed`, for the reason `prop::view` gives about rebuilding on a
-/// hover: selecting a feature marks the editor changed, and cloning a clip
-/// because somebody moved the mouse is work nobody asked for.
+/// On the `generation` counter rather than `Res::is_changed`, which selection and hovers also trip.
 fn follow_the_document(
     editor: Res<PropEditor>,
     clips: Res<body::BodyClips>,
@@ -373,14 +276,9 @@ fn follow_the_document(
 
     let wanted = selected_clip(&anim, &editor, &clips);
 
-    // A clip picked in the panel is fitted across the strip; one that merely
-    // *changed* is left where it was being looked at, because re-framing under
-    // somebody mid-edit is worse than a clip running off the edge.
-    //
-    // **Asked of which clip is picked, not of `AnimEditor` changing.** Picking
-    // a track writes the same resource, and so does the panels' mutable borrow
-    // every frame — keyed on the resource, the strip snapped back to fit on
-    // every frame anybody had zoomed it.
+    // A newly picked clip is fitted across the strip; an edited one is left where it was being looked
+    // at. Keyed on which clip is picked, not on `AnimEditor` changing, which happens every frame the
+    // panels borrow it.
     if repicked {
         if let Some(clip) = &wanted {
             view.frame(clip.length);
@@ -389,19 +287,11 @@ fn follow_the_document(
     shown.0 = wanted;
 }
 
-/// Scrub, zoom, pan, select and drag.
+/// Does not ask `is_pointer_over_egui`: the strip is an egui panel's rect, so that is true across
+/// all of it. Asks whether egui is using the pointer instead (an open menu, a widget mid-drag).
 ///
-/// Deliberately does **not** ask whether the pointer is over egui. The strip
-/// *is* an egui panel's rect — that is what reserves the space — so
-/// `is_pointer_over_egui` is true across the whole of it, and consulting it
-/// would mean the timeline never saw a click. What it asks instead is whether
-/// egui is actively *using* the pointer, which is true for an open menu or a
-/// widget mid-drag and false for a panel merely sitting there.
-///
-/// The ruler scrubs and the lanes select. Told apart by where the press
-/// landed rather than by what is under it, because a press on an empty lane is
-/// the start of a band rather than a jump of the playhead — and "nothing is
-/// under the pointer" is exactly when a band is what you meant.
+/// The ruler scrubs and the lanes select, told apart by where the press landed, so a press on an
+/// empty lane starts a band.
 #[allow(clippy::too_many_arguments)]
 fn timeline_input(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -418,23 +308,20 @@ fn timeline_input(
     mut selection: ResMut<TimelineSelection>,
     shown: Res<ShownClip>,
 ) {
-    // Read every frame whatever happens: a `MessageReader` has its own cursor,
-    // so leaving them unread while the pointer is elsewhere means they all
-    // arrive at once the moment it comes back.
+    // Read every frame: a `MessageReader` keeps its own cursor, so unread scrolls would all arrive when
+    // the pointer came back.
     let notches: f32 = scrolls
         .read()
         .map(|scroll| match scroll.unit {
             MouseScrollUnit::Line => scroll.y,
-            // Trackpads report pixels, and a pixel is not a notch.
+            // Trackpads report pixels; 40 pixels to a notch.
             MouseScrollUnit::Pixel => scroll.y / 40.0,
         })
         .sum();
 
     let Ok(window) = windows.single() else { return };
     let Some(at) = window.cursor_position() else {
-        // The pointer left the window mid-drag. Ending the gesture is the
-        // honest answer — a grab that survived would resume from wherever the
-        // pointer came back in.
+        // The pointer left the window mid-drag; a surviving grab would resume from wherever it came back.
         grab.0 = None;
         return;
     };
@@ -453,8 +340,7 @@ fn timeline_input(
         view.zoom_about(at.x, notches);
     }
 
-    // Finish first, so a release is never also a press. A band is the one
-    // gesture whose whole effect happens on the way up.
+    // Finish first, so a release is never also a press. A band acts on release.
     if !buttons.pressed(MouseButton::Left) && !buttons.pressed(MouseButton::Middle) {
         if let Some(Grab::Band { from, to }) = grab.0 {
             if let Some(clip) = shown.0.as_ref() {
@@ -490,9 +376,7 @@ fn timeline_input(
                             selection.0.insert(hit);
                         }
                     } else if !selection.0.contains(&hit) {
-                        // Pressing an unselected key selects just it. Pressing
-                        // one that is already selected keeps the rest, so a
-                        // multiple selection can be dragged as a whole.
+                        // Pressing a selected key keeps the rest, so a multiple selection drags as a whole.
                         selection.0.clear();
                         selection.0.insert(hit);
                     }
@@ -515,8 +399,7 @@ fn timeline_input(
 
     match &grab.0 {
         Some(Grab::Scrub { from_x, from_time }) => {
-            // Taking hold of the playhead takes it from the transport too: a
-            // scrub fighting playback is a playhead that will not stay put.
+            // A scrub fighting playback would not stay put.
             cursor.playing = false;
             let moved = (at.x - from_x) / view.pixels_per_second;
             cursor.time = (from_time + moved).clamp(0.0, length);
@@ -526,18 +409,14 @@ fn timeline_input(
         }
         Some(Grab::Keys { from_x, tracks }) => {
             let mut by = (at.x - from_x) / view.pixels_per_second;
-            // Snapped by default, and **the offset is snapped rather than each
-            // key** — so several keys dragged together keep the spacing they
-            // were authored with instead of collapsing onto the grid. Alt is
-            // the escape hatch, the way it is in every editor that snaps.
+            // The offset is snapped rather than each key, so keys dragged together keep their spacing. Alt
+            // disables snapping.
             if !free && !anim.free_drag {
                 let step = grid_step(view.pixels_per_second);
                 by = (by / step).round() * step;
             }
             nudge_the_selection(&mut editor, &mut clips, &anim, tracks, by, length, &mut selection);
         }
-        // The band follows the pointer here rather than in the layout, which
-        // has no idea where the pointer is and is better off not learning.
         Some(Grab::Band { from, .. }) => {
             let from = *from;
             grab.0 = Some(Grab::Band { from, to: at });
@@ -546,22 +425,12 @@ fn timeline_input(
     }
 }
 
-/// The track a key selection implies: the track of its first key.
-///
-/// `None` for an empty selection, which means "no opinion" rather than "no
-/// track" — a track picked by its header has no keys picked and must stay
-/// picked.
+/// `None` for an empty selection means "no opinion", so a track picked by its header stays picked.
 pub fn track_of_the_selection(selection: &TimelineSelection) -> Option<usize> {
     selection.0.iter().next().map(|picked| picked.track)
 }
 
-/// **Picking a key picks its track.**
-///
-/// One selection rather than two: the Inspector shows a key under its track's
-/// settings, and the two are only ever both meaningful if they describe the
-/// same row. Run after everything that writes the key selection, so whichever
-/// of the strip, `K` or `Delete` changed it, the track follows on the same
-/// frame.
+/// Picking a key picks its track. Runs after everything that writes the key selection.
 fn follow_the_key_selection(selection: Res<TimelineSelection>, mut anim: ResMut<AnimEditor>) {
     if !selection.is_changed() {
         return;
@@ -573,10 +442,7 @@ fn follow_the_key_selection(selection: Res<TimelineSelection>, mut anim: ResMut<
     }
 }
 
-/// `Space` starts and stops playback.
-///
-/// Gated on egui wanting the keyboard, for the reason `edit_keys` is: a space
-/// typed into the note is a space.
+/// Not while egui wants the keyboard: a space typed into the note is a space.
 fn play_or_pause(
     keyboard: Res<ButtonInput<KeyCode>>,
     panels: Res<ui::AnimPanels>,
@@ -590,9 +456,7 @@ fn play_or_pause(
     toggle_playback(&mut cursor, clip);
 }
 
-/// Start or stop, and start from the top if a one-shot has already finished —
-/// pressing play on a clip that has ended and seeing nothing happen reads as
-/// the button being broken.
+/// Play on a finished one-shot restarts it.
 pub fn toggle_playback(cursor: &mut TimelineCursor, clip: &Clip) {
     if cursor.playing {
         cursor.playing = false;
@@ -604,12 +468,8 @@ pub fn toggle_playback(cursor: &mut TimelineCursor, clip: &Clip) {
     cursor.playing = true;
 }
 
-/// Move the playhead along while playing.
-///
-/// The preview reads the playhead and nothing else, so playback is the
-/// playhead moving on its own — one path into `apply` whether somebody is
-/// scrubbing or watching. A stride clip is played at one stride a second,
-/// which is a viewing rate rather than any body's walking speed.
+/// Playback only moves the playhead, so playing and scrubbing share one path into `apply`. A stride
+/// clip plays at one stride a second, a viewing rate.
 fn play_the_cursor(time: Res<Time>, shown: Res<ShownClip>, mut cursor: ResMut<TimelineCursor>) {
     if !cursor.playing {
         return;
@@ -627,8 +487,7 @@ pub fn advance(cursor: &mut TimelineCursor, clip: &Clip, by: f32) {
     if clip.looping {
         cursor.time = next.rem_euclid(length);
     } else if next >= length {
-        // Held on the last frame rather than wrapped, which is what a one-shot
-        // does in a match too.
+        // Held on the last frame, as a one-shot does in a match.
         cursor.time = length;
         cursor.playing = false;
     } else {
@@ -636,7 +495,6 @@ pub fn advance(cursor: &mut TimelineCursor, clip: &Clip, by: f32) {
     }
 }
 
-/// Something done to a whole track from its header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackOp {
     Toggle,
@@ -647,7 +505,7 @@ pub enum TrackOp {
 }
 
 impl TrackOp {
-    /// What the menu item says: the action, never the state.
+    /// The action, never the state.
     pub fn name_key(self, enabled: bool) -> &'static str {
         match self {
             TrackOp::Toggle if enabled => "anim.track_menu.switch_off",
@@ -660,11 +518,8 @@ impl TrackOp {
     }
 }
 
-/// Do it, and say which track should be picked afterwards.
-///
-/// **Order is meaning**, not tidiness: tracks apply bottom layer first, so a
-/// `Compose` above a `Replace` is a recoil on a pose and below it is a recoil
-/// thrown away. Which is why moving one is a real operation.
+/// Returns which track to pick afterwards. Order matters: tracks apply bottom layer first, so a
+/// `Compose` above a `Replace` composes onto it and below is discarded.
 pub fn apply_track_op(clip: &mut Clip, track: usize, op: TrackOp) -> Option<usize> {
     if track >= clip.tracks.len() {
         return None;
@@ -695,7 +550,6 @@ pub fn apply_track_op(clip: &mut Clip, track: usize, op: TrackOp) -> Option<usiz
     }
 }
 
-/// Turn the current selection into the per-track snapshots a drag works from.
 fn dragged_tracks(clip: &Clip, selection: &TimelineSelection) -> Vec<DraggedTrack> {
     let mut tracks: Vec<DraggedTrack> = Vec::new();
     for picked in &selection.0 {
@@ -714,12 +568,8 @@ fn dragged_tracks(clip: &Clip, selection: &TimelineSelection) -> Vec<DraggedTrac
     tracks
 }
 
-/// Apply a drag, and follow the keys to wherever the re-sort put them.
-///
-/// One `begin_gesture` for the whole drag and one `doc_mut` per frame, which
-/// is what makes a pull on a key **one** press of Ctrl+Z rather than forty.
-/// The gesture is closed by the panels, which is also why they have to know a
-/// drag is running — see `AnimPanels`.
+/// One `begin_gesture` per drag and one `doc_mut` per frame, so a drag is one undo step. The panels
+/// close the gesture; see `AnimPanels`.
 fn nudge_the_selection(
     editor: &mut PropEditor,
     clips: &mut body::BodyClips,
@@ -736,9 +586,8 @@ fn nudge_the_selection(
             let Some(track) = clip.tracks.get_mut(dragged.track) else {
                 continue;
             };
-            // From the original every frame, never from last frame's result:
-            // an accumulated drag drifts on every clamp and cannot be dragged
-            // back to where it started.
+            // From the original every frame: an accumulated drag drifts on every clamp and cannot come back to
+            // where it started.
             track.channel = dragged.original.clone();
             for key in track.channel.nudge(&dragged.held, by, length) {
                 landed.insert(KeyAt {
@@ -752,11 +601,7 @@ fn nudge_the_selection(
     selection.0 = landed;
 }
 
-/// Add a key at the playhead, or take the selected ones away.
-///
-/// Gated on egui wanting the keyboard, the way `shortcuts` is: `Delete` in a
-/// text field deletes a character, and stealing it loses what somebody typed
-/// rather than merely looking wrong.
+/// Not while egui wants the keyboard: `Delete` in a text field deletes a character.
 fn edit_keys(
     keyboard: Res<ButtonInput<KeyCode>>,
     panels: Res<ui::AnimPanels>,
@@ -780,15 +625,13 @@ fn edit_keys(
     let picked_track = anim.track;
     let mut picked = std::mem::take(&mut selection.0);
 
-    // One step per press, opened and closed here rather than left to the
-    // panels: a keypress is not a gesture somebody is still in the middle of.
+    // One step per press, opened and closed here, since a keypress is not an ongoing gesture.
     edit_selected(&anim, &mut editor, &mut body, |clip| {
     let (length, looping) = (clip.length, clip.looping);
     let selection = &mut picked;
 
     if removing {
-        // Grouped by track and removed back to front, so one index cannot
-        // invalidate another.
+        // Back to front per track, so one removal cannot shift another's index.
         for track in 0..clip.tracks.len() {
             let doomed: Vec<usize> = selection
                 .iter()
@@ -801,10 +644,7 @@ fn edit_keys(
         }
         selection.clear();
     } else {
-        // On every track a selection touches; failing that the picked track;
-        // and on all of them when nothing at all is picked — which is what
-        // "key everything here" means and what you want the first time you
-        // press it.
+        // On every track the selection touches, else the picked track, else all tracks.
         let tracks: Vec<usize> = match (selection.is_empty(), picked_track) {
             (true, Some(track)) if track < clip.tracks.len() => vec![track],
             (true, _) => (0..clip.tracks.len()).collect(),
@@ -829,13 +669,8 @@ fn edit_keys(
     body.end_gesture();
 }
 
-/// What a body would be telling its state at this point of the clip.
-///
-/// The playhead is on the clip's own clock, so a stride clip's time is
-/// strides and becomes the stride a gait's foot targets are read from.
-///
-/// A gait is also told which way it is going, `heading` off its own facing,
-/// so its feet are planted for that direction.
+/// The playhead is on the clip's own clock, so a stride clip's time is strides. `heading` is
+/// relative to the gait's facing, so the feet plant for that direction.
 pub fn preview_inputs(
     clip: &Clip,
     time: f32,
@@ -863,12 +698,7 @@ pub fn preview_inputs(
     }
 }
 
-/// Put the clip on the reference figure at the playhead.
-///
-/// Through the **same** `apply` a body in a match goes through, which is the
-/// whole argument `documentation/weapons-in-hand.md` makes about holds one
-/// layer down: an editor that showed something the game does not perform is
-/// worth less than no editor at all.
+/// Through the same `apply` a body in a match uses, so the editor shows what the game performs.
 fn drive_the_preview(
     shown: Res<ShownClip>,
     cursor: Res<TimelineCursor>,
@@ -881,9 +711,8 @@ fn drive_the_preview(
     corrections.0 = None;
     let Some(clip) = shown.0.as_ref() else { return };
 
-    // A body clip is played through its state's corrections in a match, so it
-    // is previewed through them too — at the heading it is for, so a
-    // diagonal variant is seen with the feet stepping diagonally.
+    // A body clip is previewed through its state's corrections, as a match plays it, at the variant's
+    // heading.
     if anim.source == ClipSource::Body {
         let (filed, variant) = anim.selected.as_deref().map_or(("", None), body::address);
         let animation = clips.animations().get(filed);
@@ -901,9 +730,8 @@ fn drive_the_preview(
             };
             corrections.0 = Some((state, preview_inputs(clip, cursor.time, state, heading)));
 
-            // The whole blend, as a match plays it: the two variants either
-            // side, the upper at the blend weight. `apply_stack` lerps a
-            // partial layer, which is the same lerp `animation_pose` makes.
+            // The whole blend: the two variants either side, the upper at the blend weight, the same lerp
+            // `animation_pose` makes.
             if let (Some(heading), Some(animation)) = (anim.blend_preview, animation.filter(|_| blend.is_some())) {
                 if let Some((first, second)) = animation.at_heading(heading) {
                     performance.0 .0.push(Playing { clip: Arc::new(first.clone()), time: cursor.time, weight: 1.0 });
@@ -917,8 +745,6 @@ fn drive_the_preview(
     }
 
     performance.0 .0.push(Playing {
-        // Cloned per change rather than held: `ShownClip` is already a copy
-        // taken off the document, and a clip is a couple of kilobytes.
         clip: Arc::new(clip.clone()),
         time: cursor.time,
         weight: 1.0,
@@ -929,13 +755,8 @@ fn drive_the_preview(
 mod tests {
     use super::*;
 
-    /// Switching source cannot leave a selection pointing at nothing, and the
-    /// selection re-resolves on its own rather than being chosen once.
-    ///
-    /// Three cases with one rule, which is why it is asked about absence: the
-    /// body clips are read on the first `Update` of the mode so there is
-    /// nothing to pick at `OnEnter`; switching source invalidates whatever was
-    /// picked; and deleting a clip leaves the name pointing at nothing.
+    /// Body clips arrive late, switching source invalidates the pick, and deletion leaves it dangling;
+    /// the selection must settle on a clip that exists in each case.
     #[test]
     fn the_selection_settles_on_a_clip_that_exists() {
         let (editor, _) = editor_with_a_clip(&[0.0, 0.5]);
@@ -944,7 +765,6 @@ mod tests {
             clips.insert("idle".into(), Clip { length: 1.0, ..Clip::default() }.into());
         });
 
-        // Nothing picked yet: the prop's own clip is what there is.
         let mut anim = AnimEditor::default();
         assert_eq!(clip_names(&anim, &editor, &body), vec!["fire".to_string()]);
         assert!(selected_clip(&anim, &editor, &body).is_none());
@@ -952,19 +772,13 @@ mod tests {
         anim.selected = Some("fire".into());
         assert!(selected_clip(&anim, &editor, &body).is_some());
 
-        // The same name means nothing on the other side.
         anim.source = ClipSource::Body;
         assert!(selected_clip(&anim, &editor, &body).is_none());
         assert_eq!(clip_names(&anim, &editor, &body), vec!["idle".to_string()]);
     }
 
-    /// An edit goes to whichever document owns the clip, and leaves the other
-    /// alone.
-    ///
-    /// The whole of what the source selector has to get right: two documents,
-    /// two undo stacks, one set of panels — and a write that landed in the
-    /// wrong one would be an edit you cannot undo and a file you did not mean
-    /// to dirty.
+    /// A write landing in the wrong document would be an edit you cannot undo and a file dirtied by
+    /// mistake.
     #[test]
     fn an_edit_goes_to_the_document_that_owns_the_clip() {
         let (mut editor, _) = editor_with_a_clip(&[0.0, 0.5]);
@@ -1064,9 +878,7 @@ mod tests {
         }]
     }
 
-    /// Picking keys implies a track, and picking none implies nothing — so a
-    /// track picked by its header is not unpicked by the empty key selection
-    /// that comes with it.
+    /// A track picked by its header must not be unpicked by the empty key selection that comes with it.
     #[test]
     fn the_key_selection_names_its_track_or_says_nothing() {
         let mut selection = TimelineSelection::default();
@@ -1076,7 +888,6 @@ mod tests {
         assert_eq!(track_of_the_selection(&selection), Some(2));
     }
 
-    /// Moving a track carries the pick with it, and the ends stay put.
     #[test]
     fn track_operations_keep_the_pick_on_the_track() {
         let (mut editor, _) = editor_with_a_clip(&[0.0]);
@@ -1098,8 +909,6 @@ mod tests {
         let _ = &mut editor;
     }
 
-    /// A one-shot stops on its last frame; a loop comes round; and play on a
-    /// finished one-shot starts it again.
     #[test]
     fn playback_holds_a_one_shot_and_wraps_a_loop() {
         let mut clip = Clip { length: 1.0, ..Clip::default() };
@@ -1119,12 +928,7 @@ mod tests {
         assert!(cursor.playing);
     }
 
-    /// **One drag is one press of Ctrl+Z.**
-    ///
-    /// A drag writes the document on every frame it moves, so without the
-    /// gesture each frame would be its own undo step and undoing a pull on a
-    /// key would take forty presses. The failure is not visible while
-    /// dragging — it is only felt later, which is why it is worth pinning.
+    /// Without the gesture each frame of a drag would be its own undo step.
     #[test]
     fn one_drag_is_one_undo_step() {
         let (mut editor, anim) = editor_with_a_clip(&[0.0, 0.5]);
@@ -1132,7 +936,6 @@ mod tests {
         selection.0.insert(KeyAt { track: 0, key: 0 });
         let tracks = holding(&editor, &[0]);
 
-        // Forty frames of a drag, as one gesture.
         for frame in 1..=40 {
             nudge_the_selection(
                 &mut editor,
@@ -1154,12 +957,8 @@ mod tests {
         assert!(!editor.can_undo(), "the drag left more than one step behind");
     }
 
-    /// Dragging out and back leaves the clip exactly as it was.
-    ///
-    /// This is what recomputing from the original every frame buys. An
-    /// accumulated drag drifts on every clamp and every re-sort, so a nudge
-    /// you talked yourself out of would not come home — and you would not
-    /// notice until the numbers were already wrong.
+    /// Catches a drag accumulating from last frame's result instead of the original, which drifts on
+    /// every clamp and re-sort.
     #[test]
     fn dragging_a_key_and_dragging_it_back_changes_nothing() {
         let (mut editor, anim) = editor_with_a_clip(&[0.1, 0.4, 0.9]);
@@ -1169,7 +968,6 @@ mod tests {
         selection.0.insert(KeyAt { track: 0, key: 1 });
         let tracks = holding(&editor, &[1]);
 
-        // Out past both neighbours, hard into the end, and back to nothing.
         for by in [0.2_f32, 0.6, 2.0, -3.0, -0.4, 0.0] {
             nudge_the_selection(
                 &mut editor,
@@ -1185,12 +983,8 @@ mod tests {
         assert_eq!(times(&editor), before, "a drag out and back did not come home");
     }
 
-    /// The selection follows the keys through a re-sort.
-    ///
-    /// Addressed by index and dragged past a neighbour, a selection that was
-    /// not remapped would be holding whichever key inherited the index — so
-    /// the next frame would move a different key and leave the one you grabbed
-    /// behind. Nothing errors; the keys just start swapping under the pointer.
+    /// A selection not remapped through the re-sort would hold whichever key inherited the index, so
+    /// keys swap under the pointer.
     #[test]
     fn the_selection_follows_a_key_across_its_neighbour() {
         let (mut editor, anim) = editor_with_a_clip(&[0.1, 0.4, 0.9]);

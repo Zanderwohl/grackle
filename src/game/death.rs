@@ -1,32 +1,11 @@
-//! Running out of health, and what gets said about it.
+//! Running out of health. In order on the tick: `record_damage` logs each
+//! hit, `announce_the_dead` writes [`Died`] and marks [`Dying`], and
+//! `reap_the_dead` despawns a tick later.
 //!
-//! Three systems in a row on the tick, and the order is the whole design:
-//!
-//! 1. `record_damage` writes every hit into the victim's [`DamageLog`].
-//! 2. `reap_the_dead` removes anything at zero and writes [`Died`].
-//! 3. `announce_deaths` says so.
-//!
-//! The first has to happen before the second **within the same tick**, or a
-//! body killed by the shot that was just fired is reaped before the log knows
-//! who fired it, and every kill is credited to nobody.
-//!
-//! Death is a property of health, not of being a player: `reap_the_dead` asks
-//! the world for [`Damageable`]s at zero and does not care what they are. A
-//! crate shot to pieces takes the same path a person does, and the message
-//! that comes out says so.
-//!
-//! **What happens after the entity goes is nobody's business here.** No
-//! respawn, no score. Those are gamemode questions, and answering any of them
-//! at this layer would answer it for every gamemode at once.
-//!
-//! The corpse is the one thing that has to happen *before* the entity goes,
-//! and it still is not this module's business: [`crate::game::ragdoll`] copies
-//! the body's pose out and stands its own entity up, ordered ahead of
-//! `reap_the_dead` from its own plugin. Nothing here knows that, and a
-//! gamemode that wants bodies to vanish switches that plugin off rather than
-//! editing this one — but if you reorder these systems, that is the ordering
-//! you would be breaking, and the symptom is a body that stops leaving a
-//! corpse rather than an error.
+//! Recording must precede announcing within the tick, or a killing shot is
+//! credited to nobody. Death is any [`Damageable`] at zero, player or not.
+//! [`crate::game::ragdoll`] orders itself before `reap_the_dead`; reordering
+//! these silently stops corpses appearing.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -34,12 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::common::damage::{DamageDealt, DamageLog, DamageSource, Damageable, Died, PlayerId};
 use crate::common::skeleton::AnimationClock;
 
-/// Put every hit into the victim's log, stamped with the tick it landed on.
-///
-/// Game time rather than wall time: it is the clock that stops with the match
-/// and starts again from zero, so an assist window means the same eight
-/// seconds on every machine and does not quietly expire while somebody is in
-/// the editor.
+/// Put every hit into the victim's log. Game time, not wall time, so the
+/// assist window does not run while somebody is in the editor.
 pub fn record_damage(
     clock: Res<AnimationClock>,
     mut hits: MessageReader<DamageDealt>,
@@ -47,42 +22,21 @@ pub fn record_damage(
 ) {
     let now = clock.seconds();
     for hit in hits.read() {
-        // A target that has already been reaped this tick. Its log went with
-        // it, and there is nothing left to credit.
+        // Already reaped.
         let Ok(mut log) = logs.get_mut(hit.target) else { continue };
         log.record(hit.source, now);
     }
 }
 
-/// Remove everything that has run out of health, and say who did it.
+/// This body has died and is despawned next tick.
 ///
-/// The whole entity, children included — a player's camera hangs off its body,
-/// which is a thing to know before anything can kill a player. Nothing can
-/// today: you cannot shoot yourself and there is no second shooter.
-/// This body has died and is on its way out.
-///
-/// **The death signal, and it is replicated.** A death is always a despawn, so
-/// the two must not be announced separately: `Died` travels on the event
-/// channel and the despawn travels through replication, and nothing orders one
-/// channel against another. Sent both ways, the despawn won — the body was
-/// gone before the message that was supposed to make a corpse of it arrived,
-/// every time.
-///
-/// Riding replication fixes that by construction. This is inserted a tick
-/// before the body is removed, and replication is ordered with itself, so
-/// every machine is told the body died *before* it is told the body is gone.
-/// `Died` remains, but only for what does not care about ordering: the kill
-/// feed.
-///
-/// The tick of grace is what gives this component a turn on the wire. The body
-/// is invisible for it — `raise_ragdolls` hides whatever it made a corpse of.
+/// Replicated, so every machine learns of the death before the despawn on the
+/// same ordered channel. `Died` goes on a separate channel with no ordering
+/// against replication, so it is used only for the kill feed.
 #[derive(Component, Debug, Default, Clone, Copy, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct Dying;
 
-/// Say who died, and mark the body for removal.
-///
-/// Split from the removal so that the zero this is reacting to gets a tick on
-/// the wire before the entity goes.
+/// Say who died, and mark the body for removal next tick.
 pub fn announce_the_dead(
     mut commands: Commands,
     clock: Res<AnimationClock>,
@@ -109,8 +63,6 @@ pub fn announce_the_dead(
             victim: entity,
             victim_name: name.map(|name| name.to_string()),
             victim_id: id.copied(),
-            // Nothing in the log means nothing hurt it — spawned at zero, or
-            // killed by something that has not learned to sign its work.
             killer: log.killer().unwrap_or(DamageSource::World),
             assist: log.assist(now),
             at: placed.map(|placed| placed.translation()).unwrap_or_default(),
@@ -120,9 +72,7 @@ pub fn announce_the_dead(
     }
 }
 
-/// Remove what died on an earlier tick.
-///
-/// A tick later than the death, which is the whole point — see [`Dying`].
+/// Remove what died on an earlier tick. See [`Dying`].
 pub fn reap_the_dead(mut commands: Commands, dying: Query<Entity, With<Dying>>) {
     for entity in &dying {
         commands.entity(entity).despawn();
@@ -163,16 +113,12 @@ mod tests {
         world
     }
 
-    /// Advance game time by whole ticks, since that is the only way it moves.
     fn advance(world: &mut World, seconds: f32) {
         world.resource_mut::<AnimationClock>().advance(seconds);
     }
 
-    /// Land one hit and let `record_damage` see it.
-    ///
-    /// The queue is drained afterwards because `run_system_once` builds a
-    /// fresh system, and a fresh system has a fresh cursor that would read
-    /// every message written so far all over again.
+    /// Land one hit and let `record_damage` see it. Drained afterwards, since
+    /// each `run_system_once` has a fresh cursor that would re-read it.
     fn land(world: &mut World, target: Entity, source: DamageSource) {
         world.write_message(DamageDealt {
             target,
@@ -191,13 +137,7 @@ mod tests {
         cursor.read(messages).cloned().collect()
     }
 
-    /// The ordinary case, end to end: two people hurt a body, the second one
-    /// Announcing and removing, in the order the schedule runs them.
-    ///
-    /// Two systems rather than one because a death has to be *visible* for a
-    /// tick before the body goes: health is replicated and a corpse is a local
-    /// reaction to it, and a body killed and removed inside one tick never has
-    /// its zero sent to anybody. One call here does a whole tick's worth.
+    /// Announcing and removing, in schedule order.
     fn resolve(world: &mut World) {
         world.run_system_once(announce_the_dead).unwrap();
         world.flush();
@@ -205,7 +145,7 @@ mod tests {
         world.flush();
     }
 
-    /// finishes it, and the record says so.
+    /// The last hit gets the kill and the one before it the assist.
     #[test]
     fn a_kill_credits_the_last_hit_and_the_one_before_it() {
         let mut world = a_world();
@@ -229,8 +169,6 @@ mod tests {
         assert!(world.get_entity(victim).is_err(), "the body was not removed");
     }
 
-    /// A hit from before the window is not an assist, and the kill still
-    /// stands on its own.
     #[test]
     fn a_stale_contributor_earns_nothing() {
         let mut world = a_world();
@@ -248,8 +186,6 @@ mod tests {
         assert_eq!(record[0].assist, None);
     }
 
-    /// Anything with health, not just a person. A crate is reaped the same
-    /// way and produces the same message.
     #[test]
     fn a_prop_dies_like_anything_else() {
         let mut world = a_world();
@@ -262,13 +198,10 @@ mod tests {
         let record = deaths(&mut world);
         assert_eq!(record[0].victim_name.as_deref(), Some("Crate"));
         assert_eq!(record[0].victim_id, None);
-        // Nothing signed for it, so there is nobody to credit.
         assert_eq!(record[0].killer, DamageSource::World);
         assert!(world.get_entity(crate_entity).is_err());
     }
 
-    /// A body with health left is left alone, which is most of them most of
-    /// the time.
     #[test]
     fn a_living_body_is_not_reaped() {
         let mut world = a_world();
@@ -280,12 +213,8 @@ mod tests {
         assert!(deaths(&mut world).is_empty());
     }
 
-    /// A body stays in the world for the tick after it dies.
-    ///
-    /// That gap is the whole reason the pair is two systems. Health is
-    /// replicated and a corpse is a local reaction to it, so a body killed and
-    /// removed inside one tick never has its zero sent anywhere — every
-    /// machine but this one would watch it vanish leaving nothing behind.
+    /// Breaks if the body is despawned in the tick it died, before `Dying`
+    /// has been replicated.
     #[test]
     fn a_dead_body_survives_the_tick_it_died_on() {
         let mut world = a_world();
@@ -306,9 +235,6 @@ mod tests {
         assert!(world.get_entity(body).is_err(), "the body was never removed");
     }
 
-    /// A death is announced once. Reaping is what removes the body, so a
-    /// second pass has nothing left to find — the check that a corpse does not
-    /// keep dying every tick.
     #[test]
     fn a_body_only_dies_once() {
         let mut world = a_world();

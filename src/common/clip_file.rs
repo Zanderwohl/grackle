@@ -1,19 +1,10 @@
 //! Reading the body animations a pack ships.
 //!
-//! One file per [`AnimationState`], named by the state — which is what lets
-//! this load **without listing a directory**. The names come from the enum, so
-//! the runtime asks for each by name and a pack that does not have one simply
-//! does not answer; nothing behind a `fetch` can enumerate, and a manifest
-//! saying what a pack holds would be a second description of the pack. The
-//! same rule `common::assets` is built on.
-//!
-//! **A missing file is the ordinary case, not a failure.** A state with no
-//! clip is a state that is still a Rust function, which is how the migration
-//! is thirteen independent decisions rather than one. A file that is *present*
-//! and will not parse is a different thing and says so in the log, then leaves
-//! that state on its function — the same reading `weapon_file` takes of a bad
-//! entry, and for the same reason: a bad file on a listen server with people
-//! connected should read as "that animation is the old one", not as a panic.
+//! One file per [`AnimationState`], named by the state, so nothing has to list
+//! a directory (see `common::assets`). A missing file is the ordinary case:
+//! that state stays on its Rust function. A file that is present and will not
+//! parse is logged and the state also stays on its function, so a bad file on
+//! a listen server does not panic.
 
 use std::path::{Path, PathBuf};
 
@@ -24,11 +15,9 @@ use crate::common::assets::{default_packs, AssetError, Assets};
 use crate::common::skeleton::clip::StateAnimation;
 use crate::common::skeleton::state::{AnimationState, ClipLibrary};
 
-/// Where a pack keeps them, and what they are called.
 pub const CLIPS_DIR: &str = "animations";
 pub const CLIP_EXTENSION: &str = "gpa";
 
-/// Read one state's animation out of one pack: a clip, or a blend of them.
 pub fn read_clip(
     assets: &Assets,
     pack: &Path,
@@ -37,26 +26,19 @@ pub fn read_clip(
     let relative = format!("{CLIPS_DIR}/{}.{CLIP_EXTENSION}", state.clip_name());
     let bytes = match assets.read(pack, &relative) {
         Ok(bytes) => bytes,
-        // Nothing to say: this pack does not animate this state.
         Err(AssetError::NotFound(_)) => return Ok(None),
         Err(error) => return Err(error.to_string()),
     };
 
     let text = String::from_utf8(bytes).map_err(|error| error.to_string())?;
-    // Sorted on the way in rather than at sample time, for the reason
-    // `Channel::sort` gives: the sampler is the one thing here that runs in a
-    // match. `from_toml` does it.
+    // `from_toml` sorts keys here so the sampler, which runs in a match, need not.
     let animation = StateAnimation::from_toml(&text).map_err(|error| error.to_string())?;
     Ok(Some(animation))
 }
 
-/// Every body clip the packs provide, lowest priority first.
-///
-/// A later pack replaces an earlier one's clip for the same state outright
-/// rather than merging tracks into it: an animation is one description of a
-/// motion, and half of somebody else's idle composed with half of yours is a
-/// motion neither of you authored. The lang layer merges per *key* because a
-/// translation genuinely is a bag of independent strings; this is not.
+/// Every body clip the packs provide, lowest priority first. A later pack
+/// replaces a state's clip outright rather than merging tracks: half of two
+/// authors' idles is a motion neither authored.
 pub fn load_body_clips(assets: &Assets, packs: &[PathBuf]) -> ClipLibrary {
     let mut library = ClipLibrary::default();
 
@@ -95,12 +77,8 @@ mod tests {
     use crate::common::class::Class;
     use crate::common::skeleton::seed;
 
-    /// How far a migrated clip may be from the function it replaced.
-    ///
-    /// A fifth of a degree at any joint, at any moment, on any build. The
-    /// migration is a *sampling* — sixteen keys eased between, standing in for
-    /// a cosine — so it cannot be exact, and saying how inexact is the whole
-    /// point of having the number here rather than inline.
+    /// A fifth of a degree: a baked clip is a sampling of a function, so it
+    /// cannot be exact.
     const TOLERANCE: f32 = 0.2_f32.to_radians();
 
     fn shipped(state: AnimationState) -> Option<StateAnimation> {
@@ -111,30 +89,9 @@ mod tests {
         Some(StateAnimation::from_toml(&text).expect("a shipped clip should parse"))
     }
 
-    /// **The migration safety net.**
-    ///
-    /// Seeding a pack has to produce clips that move the way the Rust
-    /// functions they replace move. Without this, migrating is a change
-    /// nothing can check: the bodies still animate, and whether they animate
-    /// the way they used to is a matter of somebody's memory.
-    ///
-    /// It bakes in memory rather than reading `assets/default`, and that is
-    /// the difference between a net and a muzzle. The shipped clips are *meant*
-    /// to be edited — that is the whole point of having them as data — and
-    /// while this test read them, the first retimed idle failed it. What has to
-    /// stay faithful is the generator; what a file says after somebody has
-    /// worked on it is their business, and `no_migrated_clip_lurches_anywhere_including_its_seam`
-    /// below is what still holds the shipped files to something.
-    ///
-    /// Sampled across the whole cycle rather than at the keys, because the
-    /// keys are the part the generator got right by construction — what is
-    /// being tested is the easing between them.
-    /// How far a blend may be from the function **between** its headings.
-    ///
-    /// Looser than [`TOLERANCE`], and not because the baking is careless: a
-    /// blend is a lerp between two poses, and a diagonal is not quite the
-    /// average of its neighbours. Measured worst: 1.35° for an upright gait
-    /// at five headings, 1.51° for a crouched one at three.
+    /// Tolerance between a blend's headings. Looser than [`TOLERANCE`]: a blend
+    /// lerps two poses and a diagonal is not quite their average. Measured worst:
+    /// 1.35° upright at five headings, 1.51° crouched at three.
     const BETWEEN: f32 = 2.0_f32.to_radians();
 
     /// A body travelling at `heading` from the way its state faces.
@@ -144,6 +101,9 @@ mod tests {
         Vec2::new(facing.x * cos - facing.y * sin, facing.x * sin + facing.y * cos)
     }
 
+    /// Seeded clips must move as the functions they replace, sampled across the
+    /// whole cycle through `animation_pose`. Bakes in memory rather than reading
+    /// `assets/default`, because the shipped clips are meant to be hand-edited.
     #[test]
     fn every_baked_clip_still_matches_its_function() {
         assert!(
@@ -152,9 +112,8 @@ mod tests {
              by not looking at anything",
         );
 
-        // **Through the path the game plays them by**, `animation_pose`, so a
-        // foot-timed track is read at the footfalls a body at that speed
-        // really has and a blend is blended the way a match blends it.
+        // Through `animation_pose`, so foot timing and blends are read as a
+        // match reads them.
         let rig = humanoid(Class::Mercenary.proportions());
         let root = Transform::IDENTITY;
 
@@ -164,8 +123,6 @@ mod tests {
             let clip = animation.clips()[0].clone();
             let gait = state.uses_gait();
 
-            // Every speed a body really moves at, from standing to a sprint —
-            // which is what foot timing is supposed to make one clip right at.
             let speeds: &[f32] = if gait { &[0.0, 2.8, 3.6, 4.5, 7.5] } else { &[0.0] };
             let headings: Vec<(f32, f32)> = match entry.headings {
                 [] => vec![(0.0, TOLERANCE)],
@@ -219,13 +176,8 @@ mod tests {
         }
     }
 
-    /// Every clip the default pack ships parses and has nothing to complain
-    /// about — the same question the Problems panel asks.
-    ///
-    /// This is what the fidelity test above used to cover incidentally, and the
-    /// part of it that survives a hand edit: a retimed idle is fine, an idle
-    /// with a track naming a bone this rig does not have is not, and the
-    /// failure at runtime is a track that silently does nothing.
+    /// A shipped clip with a problem (say, a track naming a bone the rig lacks)
+    /// silently does nothing at runtime.
     #[test]
     fn every_shipped_body_clip_is_one_the_editor_would_not_flag() {
         let rig = humanoid(Class::Mercenary.proportions());
@@ -245,22 +197,14 @@ mod tests {
         assert!(found > 0, "no shipped body clips were found");
     }
 
-    /// **No migrated clip lurches**, including across its loop seam.
-    ///
-    /// The risk the whole migration was weighed against. `a_solved_limb_never_lurches`
-    /// guards this for the parametric functions, which are structurally
-    /// incapable of it — a sine has no corners. Keyframes are not: a clip can
-    /// jump at every segment boundary, and *will* at the seam if the first and
-    /// last keys disagree. So the same property is asserted of the clip path,
-    /// and the seam is included by walking a whole cycle and wrapping round to
-    /// where it started rather than stopping at the end.
+    /// Keyframes can jump at a segment boundary, and at the loop seam if the
+    /// first and last keys disagree; the walk wraps round to include the seam.
     #[test]
     fn no_migrated_clip_lurches_anywhere_including_its_seam() {
         use crate::common::skeleton::rig::Proportions;
 
         const STEPS: usize = 400;
-        // A four-hundredth of a cycle, the same budget the parametric guard
-        // uses. Nothing here is solved, so this is the authored motion alone.
+        // Same budget as `a_solved_limb_never_lurches`.
         const MOST: f32 = 0.2;
 
         for proportions in [Proportions::DEFAULT, Class::Heavy.proportions()] {
@@ -271,14 +215,10 @@ mod tests {
                 let Some(animation) = shipped(state) else { continue };
                 let clip = animation.clips()[0].clone();
                 if !clip.looping {
-                    // A still pose cannot lurch, and one that does not loop has
-                    // no seam to come round to.
                     continue;
                 }
 
-                // Through the path the game plays by, at a sprint: the fastest
-                // the footfalls move, so the most a foot-timed track is asked
-                // to cover in one step.
+                // At a sprint: the most a foot-timed track covers in one step.
                 let at = |step: usize| {
                     let time = clip.length * step as f32 / STEPS as f32;
                     let inputs = PoseInputs {
@@ -288,9 +228,7 @@ mod tests {
                     crate::common::skeleton::ik::animation_pose(&animation, state, &inputs, &rig, &root)
                 };
 
-                // `..=STEPS` rather than `..STEPS`: the last step *is* the
-                // seam, having wrapped back to the start, and it is the one
-                // place a clip can jump that a function never could.
+                // `..=STEPS`: the last step is the seam.
                 let mut previous = at(0);
                 for step in 1..=STEPS {
                     let pose = at(step);
@@ -317,10 +255,7 @@ mod tests {
         }
     }
 
-    /// A pack that ships no animations leaves every state on its function.
-    ///
-    /// The ordinary case for any pack but the default one, and the thing that
-    /// makes a half-migrated build work rather than break.
+    /// A pack with no animations leaves every state on its function.
     #[test]
     fn a_pack_with_no_animations_says_nothing() {
         let library = load_body_clips(&Assets::default(), &[PathBuf::from("assets/nonexistent")]);

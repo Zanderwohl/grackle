@@ -10,33 +10,20 @@ use crate::common::PointResolutionError;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::get;
 
-/// Marks the entity a [`SpawnPoint`] feature drives, so the game can find
-/// somewhere to stand without reading the editor's timeline — the same
-/// arrangement `EditorRoom` has with `Room`.
+/// Marks the entity a [`SpawnPoint`] feature drives, so the game finds spawns without reading the
+/// timeline.
 #[derive(Component, Debug)]
 pub struct SpawnPointMarker;
 
-/// The green a spawn point's body is painted.
-///
-/// Bright, and nothing else on the map is: this is a drawing of the space a
-/// body takes up, and it has to be impossible to mistake for somebody standing
-/// there. The same green whether the spawn is selected or not.
+/// Nothing else on the map is this green, so the preview cannot be mistaken for a player.
 pub const SPAWN_BODY_COLOUR: Color = Color::srgb(0.13, 0.95, 0.35);
 
-/// Somewhere a player can be put at the start of a round.
-///
-/// The point is the **feet**: it is placed against a floor, which is the thing
-/// a mapper can actually see and line up. Everything about a body above it —
-/// the head clearance it needs, where its camera ends up — comes from the
-/// class metrics rather than being stored here, so a spawn point stays valid
-/// when those change.
+/// Somewhere a player can be put at the start of a round. The point is the feet; everything above
+/// comes from the class metrics, so a spawn stays valid when they change.
 #[derive(Serialize, Deserialize)]
 pub struct SpawnPoint {
     location: PointRef,
-    /// Which way the body faces, in radians about world Y.
-    ///
-    /// Only yaw, because a body stands upright: a pitched or rolled spawn
-    /// point could only ever describe a spawn nobody can be put in.
+    /// Radians about world Y. Only yaw, because a body stands upright.
     yaw: f32,
     #[serde(skip)]
     resolved_location: Vec3,
@@ -63,8 +50,7 @@ impl FeatureTrait for SpawnPoint {
             format!("{TALLEST_CLASS_HEIGHT:.1}")
         ));
 
-        // Degrees in the box, radians in the field: nobody lines a spawn up
-        // against a wall in radians, and everything downstream is trigonometry.
+        // Degrees in the UI, radians stored.
         let mut degrees = self.yaw.to_degrees();
         if ui
             .add(
@@ -93,12 +79,7 @@ impl FeatureTrait for SpawnPoint {
 
     fn type_key(&self) -> &'static str { "spawn_point" }
 
-    /// The feet, the eye and the facing — the spawn point rather than the
-    /// body, which is a rig on this feature's entity and drawn whatever this
-    /// does.
-    ///
-    /// Drawn while the feature is selected, and whenever spawn-point gizmos
-    /// are switched on.
+    /// The feet, the eye and the facing. The body is a rig on the entity and drawn separately.
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let feet = self.resolved_location;
         let eyes = feet + Vec3::Y * TALLEST_CLASS_EYE_HEIGHT;
@@ -107,8 +88,6 @@ impl FeatureTrait for SpawnPoint {
         gizmos.sphere(Isometry3d::from_translation(feet), 0.2, yellow);
         gizmos.sphere(Isometry3d::from_translation(eyes), 0.12, yellow);
 
-        // Which way the body looks, drawn from the eyes because that is where
-        // the view actually starts.
         let facing = Quat::from_rotation_y(self.yaw) * Vec3::NEG_Z;
         gizmos.arrow(eyes, eyes + facing, yellow);
 
@@ -123,16 +102,8 @@ impl FeatureTrait for SpawnPoint {
         self.entity = entity;
     }
 
-    /// The body that will stand here.
-    ///
-    /// The same rig the game puts on what it spawns, in its rest pose, so what
-    /// stands here is what turns up on F5: the space a body needs is a shape
-    /// rather than a height, and an arm through a doorframe is the sort of
-    /// thing a mapper can only see if it is drawn.
-    ///
-    /// A rig with no animator holds the pose it was given, so this stands
-    /// still without a system to make it. That and the absent hitboxes are the
-    /// difference between this body and an animation display's.
+    /// The rest-pose rig the game spawns, so a mapper sees the space a body really takes. No animator,
+    /// so it holds the pose; no hitboxes, so it cannot be shot.
     fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
         commands
             .entity(entity)
@@ -141,9 +112,8 @@ impl FeatureTrait for SpawnPoint {
                     .with_rotation(Quat::from_rotation_y(self.yaw)),
                 SpawnPointMarker,
             ))
-            // The body once, not once per edit. This runs on every change to
-            // the feature, and a re-inserted rig reads as a changed rig, so
-            // `insert` would rebuild the mesh on every frame of a drag.
+            // `insert_if_new`: this runs on every edit, and a re-inserted rig rebuilds the mesh every frame
+            // of a drag.
             .insert_if_new((
                 default_humanoid().clone(),
                 Pose::rest(),
@@ -242,7 +212,7 @@ impl SpawnPoint {
         }
     }
 
-    /// The heading a body put here faces, in radians about world Y.
+    /// Radians about world Y.
     pub fn yaw(&self) -> f32 {
         self.yaw
     }
@@ -259,9 +229,7 @@ mod tests {
 
     use super::*;
 
-    /// The game finds spawn points by [`SpawnPointMarker`], which only ever
-    /// gets inserted here. Break this link and nothing fails loudly: every map
-    /// simply appears to have no spawn points and quietly uses the fallback.
+    /// Without [`SpawnPointMarker`] every map silently has no spawns and uses the fallback.
     #[test]
     fn applying_a_spawn_point_marks_its_entity_for_the_game() {
         let mut world = World::new();
@@ -284,8 +252,6 @@ mod tests {
         );
     }
 
-    /// The body a mapper lines up against a floor: a real rig, in the green
-    /// that marks it a preview, with no hitboxes.
     #[test]
     fn a_spawn_point_stands_a_green_body_that_cannot_be_shot() {
         use crate::common::hitbox::Hitboxes;
@@ -312,9 +278,8 @@ mod tests {
         );
     }
 
-    /// Applying the feature again — which happens on every frame of a drag —
-    /// must leave the rig alone. A re-inserted `Skeleton` reads as a changed
-    /// one, and the mesh would be rebuilt for every frame the point moved.
+    /// A re-applied feature must not re-insert the `Skeleton`, or the mesh rebuilds every frame of a
+    /// drag.
     #[test]
     fn dragging_a_spawn_point_does_not_rebuild_its_body() {
         use crate::common::skeleton::Skeleton;
@@ -333,9 +298,8 @@ mod tests {
         assert!(!rig.is_changed(), "the rig was replaced by an edit that did not touch it");
     }
 
-    /// The gizmo's upper sphere is the eye height, and `available_point_keys`
-    /// advertises it as a reference — so it has to resolve to that, not to the
-    /// feet it would fall back to.
+    /// `available_point_keys` advertises the eyes, so they must resolve there and not fall back to the
+    /// feet.
     #[test]
     fn the_eyes_reference_point_is_above_the_feet() {
         let spawn = SpawnPoint::new(0.0, 4.0, 0.0);
