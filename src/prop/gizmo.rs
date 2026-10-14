@@ -166,7 +166,6 @@ pub fn drag_face(
 
 /// Pick, drag and draw in one system: all three want the same handle positions
 /// and pointer ray.
-#[allow(clippy::too_many_arguments)]
 fn drag_the_selected(
     mut editor: ResMut<PropEditor>,
     mouse: Res<CurrentMouseInput>,

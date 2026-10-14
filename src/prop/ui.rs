@@ -1177,7 +1177,6 @@ fn fit_toolbar(ui: &mut Ui, figure: &mut ScaleFigure, frame: &mut Option<bool>) 
 
 /// How this prop is held. The override checkbox edits the entry for the class
 /// standing in the viewport.
-#[allow(clippy::too_many_arguments)]
 fn hold(
     ui: &mut Ui,
     editor: &mut PropEditor,

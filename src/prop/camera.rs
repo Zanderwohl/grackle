@@ -264,7 +264,6 @@ fn reset_the_hovered_view(
     pivot.0 = centre;
 }
 
-#[allow(clippy::too_many_arguments)]
 fn navigate(
     mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
     mouse: Res<CurrentMouseInput>,

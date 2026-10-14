@@ -178,12 +178,11 @@ mod tests {
 
         a_turn(&mut world);
 
-        let (placed, id, team) = world
-            .query_filtered::<(&Transform, &PlayerId, &Team), With<Player>>()
+        let (placed, team) = world
+            .query_filtered::<(&Transform, &Team), (With<Player>, With<PlayerId>)>()
             .single(&world)
             .unwrap();
         assert_eq!(*team, Team::Red, "the first player was put on nobody's side");
-        assert!(id.0 > 0 || id.0 == 0, "a body with no identity: {id}");
         assert!(
             (placed.translation.x - 2.0).abs() < 0.01
                 && (placed.translation.z + 3.0).abs() < 0.01,

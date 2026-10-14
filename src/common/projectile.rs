@@ -47,6 +47,8 @@ pub struct ProjectileSpec {
     pub radius: f32,
 }
 
+/// Test fixtures; the game reads its projectiles from `weapons.toml`.
+#[cfg(test)]
 impl ProjectileSpec {
     pub const ROCKET: Self = Self {
         initial_speed: 30.0,

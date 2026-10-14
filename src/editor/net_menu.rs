@@ -183,9 +183,6 @@ fn connect_dialog(
                     cancelled = true;
                 }
             });
-
-            ui.separator();
-            ui.label(get!("net.dialog.no_replication"));
         });
 
     if cancelled || !open {

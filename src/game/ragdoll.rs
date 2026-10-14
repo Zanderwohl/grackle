@@ -927,12 +927,11 @@ mod tests {
         for _ in 0..64 * 4 {
             corpse.step(&skeleton, &world, DT);
 
-            let (root, pose) = corpse.pose(&skeleton);
+            let (_, pose) = corpse.pose(&skeleton);
             // The joint's own rotation, so this reads the bend itself.
             let bend = pose.joint(bone::SHIN_L);
             let tail = bend * Vec3::Y;
             assert!(tail.z <= 0.1, "the knee bent forwards: {tail}");
-            let _ = root;
         }
     }
 
@@ -1343,7 +1342,7 @@ mod tests {
     /// A corpse carries the build read off the rig, so a body with no `Class`
     /// can still be dressed on other machines.
     #[test]
-    fn a_players_corpse_carries_the_build_it_was_rigged_from() {
+    fn a_classless_corpse_carries_the_build_it_was_rigged_from() {
         use crate::common::class::Class;
         use crate::game::damage::DamagePlugin;
         use crate::game::GamePlugin;

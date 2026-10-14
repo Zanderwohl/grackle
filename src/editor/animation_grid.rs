@@ -363,10 +363,7 @@ impl FeatureTrait for AnimationGrid {
                 // Re-inserted on every edit, so it reads as changed every frame of a drag; `team_carousels`
                 // compares before writing.
                 self.teams,
-            ))
-            // `insert_if_new`: this runs on every edit, and re-inserting a default would undo anything that
-            // hid the grid.
-            .insert_if_new(Visibility::default());
+            ));
     }
 
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {
@@ -533,28 +530,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// Without a `Visibility` on the grid, Bevy warns per body (B0004) and the grid cannot be hidden as
-    /// a unit.
-    #[test]
-    fn a_grid_can_be_a_parent_to_visible_bodies() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = World::new();
-        let entity = world.spawn_empty().id();
-        let grid = AnimationGrid::new(0.0, 0.0, 0.0);
-        world
-            .run_system_once(move |mut commands: Commands| {
-                grid.apply_to_entity(&mut commands, entity);
-            })
-            .unwrap();
-
-        assert!(world.get::<Visibility>(entity).is_some());
-        assert!(
-            world.get::<InheritedVisibility>(entity).is_some(),
-            "the bodies have nothing to inherit visibility from"
-        );
     }
 
     #[test]

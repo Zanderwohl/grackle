@@ -764,10 +764,6 @@ mod tests {
         let moving = BodyRequests { crouching: true, running_forward: true, ..default() };
         assert_eq!(AnimationState::from_requests(&moving), AnimationState::CrouchWalk);
 
-        // A body cannot sprint out of a duck.
-        let hurrying = BodyRequests { crouching: true, running_forward: true, ..default() };
-        assert_ne!(AnimationState::from_requests(&hurrying), AnimationState::RunForward);
-
         // A crouch-jump is both: folded, with the legs of a jump.
         let jumping = BodyRequests { crouching: true, airborne: true, ..default() };
         assert_eq!(
