@@ -542,6 +542,38 @@ pub fn gait_pose(inputs: &PoseInputs, travel: Vec2, style: GaitStyle) -> Pose {
     pose
 }
 
+/// The signed angle from `facing` to `travel`, counter-clockwise positive,
+/// both in the body's own frame. No travel is no heading at all.
+pub fn heading_between(facing: Vec2, travel: Vec2) -> f32 {
+    if travel == Vec2::ZERO || facing == Vec2::ZERO {
+        return 0.0;
+    }
+    let (facing, travel) = (facing.normalize(), travel.normalize());
+    let cross = facing.x * travel.y - facing.y * travel.x;
+    cross.atan2(facing.dot(travel))
+}
+
+/// Where a foot is in its own cycle, normalised: 0–½ on the ground, ½–1 in
+/// the air, whatever the stance fraction.
+///
+/// `phase` is the foot's own phase — the stride for the left foot, the stride
+/// plus a half for the right, which is how [`foot_offsets`] offsets them.
+pub fn footfall(phase: f32, stance: f32) -> f32 {
+    let phase = phase.rem_euclid(1.0);
+    let stance = stance.clamp(1e-3, 1.0 - 1e-3);
+    if phase < stance {
+        0.5 * phase / stance
+    } else {
+        0.5 + 0.5 * (phase - stance) / (1.0 - stance)
+    }
+}
+
+/// Both feet's [`footfall`]s for a body at `stride` in a gait of this stance,
+/// left first.
+pub fn footfalls(stride: f32, stance: f32) -> [f32; 2] {
+    [footfall(stride, stance), footfall(stride + 0.5, stance)]
+}
+
 /// Which way a state's feet travel, in the body's own frame.
 ///
 /// A coarse answer, and only used for bodies with no movement to measure —

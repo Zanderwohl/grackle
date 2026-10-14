@@ -35,7 +35,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use grackle::common::clip_file::{CLIPS_DIR, CLIP_EXTENSION};
-use grackle::common::skeleton::clip::Clip;
+use grackle::common::skeleton::clip::StateAnimation;
 use grackle::common::skeleton::seed::{bake, Seed, SEEDS};
 
 #[derive(Parser)]
@@ -96,7 +96,7 @@ fn main() {
     for seed in chosen {
         let clip = bake(seed);
         let path = directory.join(format!("{}.{CLIP_EXTENSION}", seed.state.clip_name()));
-        let text = toml::to_string_pretty(&clip).expect("a clip should serialise");
+        let text = clip.to_toml().expect("a clip should serialise");
 
         match outcome(&path, &clip, &text, args.force) {
             Outcome::Written => {
@@ -104,9 +104,10 @@ fn main() {
                 println!(
                     "{} — {} track(s), {} key(s)",
                     path.display(),
-                    clip.tracks.len(),
-                    clip.tracks
+                    clip.clips().iter().map(|clip| clip.tracks.len()).sum::<usize>(),
+                    clip.clips()
                         .iter()
+                        .flat_map(|clip| &clip.tracks)
                         .map(|track| track.channel.key_count())
                         .sum::<usize>(),
                 );
@@ -133,7 +134,7 @@ fn main() {
 }
 
 /// What to do about one file, given what a bake would put there.
-fn outcome(path: &std::path::Path, clip: &Clip, text: &str, force: bool) -> Outcome {
+fn outcome(path: &std::path::Path, clip: &StateAnimation, text: &str, force: bool) -> Outcome {
     let Ok(existing) = std::fs::read_to_string(path) else {
         // Not there, or unreadable. Either way there is nothing to lose.
         return Outcome::Written;
@@ -146,9 +147,8 @@ fn outcome(path: &std::path::Path, clip: &Clip, text: &str, force: bool) -> Outc
     if existing == text {
         return Outcome::Unchanged;
     }
-    match toml::from_str::<Clip>(&existing) {
-        Ok(mut found) => {
-            found.normalise();
+    match StateAnimation::from_toml(&existing) {
+        Ok(found) => {
             let mut fresh = clip.clone();
             fresh.normalise();
             if found == fresh {

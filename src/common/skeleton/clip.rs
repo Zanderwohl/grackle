@@ -137,6 +137,44 @@ pub enum Combine {
     Compose,
 }
 
+/// What a track's time is.
+///
+/// **A foot's own cycle, for anything that follows a foot.** A gait's stance
+/// fraction slides with speed — a walk's foot is down for most of a stride, a
+/// sprint's for a third of one — so the moment a foot lifts is not a fixed
+/// point on the stride, and an arm keyed against the stride is right at one
+/// speed only. Keyed against the foot it follows, normalised so **0–½ is that
+/// foot on the ground and ½–1 is it in the air**, the same keys are right at
+/// every speed: what moves with speed is where the foot changes over, and this
+/// moves the keys with it.
+///
+/// Only meaningful on the stride clock; [`Clip::problems`] says so otherwise.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Timing {
+    /// The clip's own clock.
+    #[default]
+    Clip,
+    LeftFoot,
+    RightFoot,
+}
+
+impl Timing {
+    pub const ALL: [Timing; 3] = [Timing::Clip, Timing::LeftFoot, Timing::RightFoot];
+
+    pub fn name_key(self) -> &'static str {
+        match self {
+            Timing::Clip => "anim.timing.clip",
+            Timing::LeftFoot => "anim.timing.left_foot",
+            Timing::RightFoot => "anim.timing.right_foot",
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Timing::Clip
+    }
+}
+
 /// Which two-bone chain an effector track drives.
 ///
 /// Named rather than spelled as two bone names, because `ik::LEFT_ARM` and
@@ -152,6 +190,14 @@ pub enum ChainRef {
 }
 
 impl ChainRef {
+    /// Every limb, in the order a menu lists them.
+    pub const ALL: [ChainRef; 4] = [
+        ChainRef::RightArm,
+        ChainRef::LeftArm,
+        ChainRef::RightLeg,
+        ChainRef::LeftLeg,
+    ];
+
     pub fn chain(self) -> Chain {
         match self {
             ChainRef::LeftArm => ik::LEFT_ARM,
@@ -167,6 +213,16 @@ impl ChainRef {
         match self {
             ChainRef::LeftArm | ChainRef::LeftLeg => -1.0,
             ChainRef::RightArm | ChainRef::RightLeg => 1.0,
+        }
+    }
+
+    /// The lang key for this limb.
+    pub fn name_key(self) -> &'static str {
+        match self {
+            ChainRef::RightArm => "anim.chain.right_arm",
+            ChainRef::LeftArm => "anim.chain.left_arm",
+            ChainRef::RightLeg => "anim.chain.right_leg",
+            ChainRef::LeftLeg => "anim.chain.left_leg",
         }
     }
 
@@ -594,6 +650,11 @@ pub struct Track {
     /// anybody debugs a layered thing.
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// What its keys' times are measured on. Left out of a file when it is
+    /// the clip's own clock, so every clip written before this existed reads
+    /// back the same.
+    #[serde(default, skip_serializing_if = "Timing::is_default")]
+    pub timing: Timing,
     pub channel: Channel,
 }
 
@@ -605,6 +666,7 @@ impl Track {
             space: Space::default(),
             unit: Unit::default(),
             enabled: true,
+            timing: Default::default(),
             channel: Channel::Rotation {
                 bone: bone.into(),
                 keys: Vec::new(),
@@ -691,26 +753,36 @@ impl Clip {
     /// note is what tells you why one hand is not moving. A tool that stopped
     /// at the first bad track would blank the viewport every time somebody
     /// mistyped a name.
-    pub fn problems(&self, known_bone: impl Fn(&str) -> bool) -> Vec<String> {
+    pub fn problems(&self, known_bone: impl Fn(&str) -> bool) -> Vec<ClipProblem> {
+        use crate::get;
         let mut problems = Vec::new();
-
+        let clip_wide = |message: String| ClipProblem { track: None, message };
         if self.length <= 0.0 {
-            problems.push(format!("length is {}, which is no time at all", self.length));
+            problems.push(clip_wide(get!(
+                "anim.problem.no_length",
+                "length",
+                self.length.to_string()
+            )));
         }
-
         // A stride is a whole cycle of the gait, so half of one is a clip that
         // lurches every other step — and the symptom is a limp nobody authored.
         if self.clock == Clock::Stride && (self.length - self.length.round()).abs() > 1e-3 {
-            problems.push(format!(
-                "a stride clip's length should be a whole number of strides, not {}",
-                self.length
-            ));
+            problems.push(clip_wide(get!(
+                "anim.problem.stride_length",
+                "length",
+                self.length.to_string()
+            )));
         }
-
         for (index, track) in self.tracks.iter().enumerate() {
+            let mut on_track = |message: String| {
+                problems.push(ClipProblem {
+                    track: Some(index),
+                    message,
+                })
+            };
             match &track.channel {
                 Channel::Rotation { bone, .. } if !known_bone(bone) => {
-                    problems.push(format!("track {index} names bone '{bone}', which this rig has not got"));
+                    on_track(get!("anim.problem.unknown_bone", "bone", bone.clone()));
                 }
                 Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
                     for key in keys {
@@ -719,11 +791,7 @@ impl Clip {
                         // and says nothing about the others — and `Ground` is
                         // the one reading that cannot mean anything.
                         if key.to.iter().any(|axis| axis.is_ground()) {
-                            problems.push(format!(
-                                "track {index} grounds an angle at {}, which has no floor \
-                                 under it",
-                                key.at
-                            ));
+                            on_track(get!("anim.problem.ground_angle", "at", key.at.to_string()));
                         }
                     }
                 }
@@ -733,9 +801,10 @@ impl Clip {
                         // given a meaning, because any meaning invented here
                         // would be one nobody could guess from the panel.
                         if key.to[0].is_ground() || key.to[2].is_ground() {
-                            problems.push(format!(
-                                "track {index} has a key grounded on a horizontal axis at {}",
-                                key.at
+                            on_track(get!(
+                                "anim.problem.ground_sideways",
+                                "at",
+                                key.at.to_string()
                             ));
                         }
                     }
@@ -747,23 +816,215 @@ impl Clip {
                         // decided. Grounding it is asking for the floor to be
                         // measured from the floor.
                         if key.to.iter().any(|axis| axis.is_ground()) {
-                            problems.push(format!(
-                                "track {index} grounds a root offset at {}, which is already \
-                                 measured from where the body stands",
-                                key.at
-                            ));
+                            on_track(get!("anim.problem.ground_root", "at", key.at.to_string()));
                         }
                     }
                 }
             }
-
+            if !track.timing.is_default() && self.clock != Clock::Stride {
+                on_track(get!("anim.problem.foot_timing_off_stride"));
+            }
             for at in track.channel.key_times() {
                 if at < 0.0 || at > self.length {
-                    problems.push(format!("track {index} has a key at {at}, outside the clip"));
+                    on_track(get!("anim.problem.outside", "at", at.to_string()));
                 }
             }
         }
+        problems
+    }
+}
 
+/// One thing wrong with a clip, and which track it is about.
+///
+/// The track is carried rather than written into the message, so the strip can
+/// badge the row it belongs to and the Problems panel can name the track the
+/// way the strip does — by its bone or limb, not by an index nobody can see.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipProblem {
+    /// `None` for something about the whole clip.
+    pub track: Option<usize>,
+    pub message: String,
+}
+
+/// What a body state plays: one clip, or several blended by heading.
+///
+/// **Heading is the one thing a gait needs blending for.** Speed is answered
+/// by timing the limbs that follow a foot by that foot ([`Timing`]), which is
+/// exact; which way the body is going relative to the way its state faces is
+/// not, because a diagonal tips the chest and mixes the swing. So a blend is a
+/// list of clips each authored at one heading, and a body between two of them
+/// is drawn between them.
+///
+/// On disk a blend is `[[blend]]` tables, each a clip with a `heading`, and a
+/// file without one is a plain clip exactly as before. Told apart by looking
+/// for the key rather than by `#[serde(untagged)]`, whose only error is "did
+/// not match any variant" — and a body clip that will not parse has to say
+/// what is wrong with it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StateAnimation {
+    Single(Clip),
+    /// Kept in heading order.
+    Blend(Vec<Variant>),
+}
+
+/// One clip of a blend, and the heading it was authored at.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Variant {
+    /// Radians from the state's own direction to where the body is going.
+    /// Counter-clockwise seen from above is positive.
+    #[serde(with = "crate::prop::nice_f32::scalar")]
+    pub heading: f32,
+    #[serde(flatten)]
+    pub clip: Clip,
+}
+
+impl From<Clip> for StateAnimation {
+    fn from(clip: Clip) -> StateAnimation {
+        StateAnimation::Single(clip)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct BlendFile {
+    blend: Vec<Variant>,
+}
+
+impl StateAnimation {
+    pub fn from_toml(text: &str) -> Result<StateAnimation, toml::de::Error> {
+        let table: toml::Table = toml::from_str(text)?;
+        let mut animation = match table.contains_key("blend") {
+            true => StateAnimation::Blend(toml::from_str::<BlendFile>(text)?.blend),
+            false => StateAnimation::Single(toml::from_str(text)?),
+        };
+        animation.normalise();
+        Ok(animation)
+    }
+
+    pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
+        match self {
+            StateAnimation::Single(clip) => toml::to_string_pretty(clip),
+            StateAnimation::Blend(variants) => toml::to_string_pretty(&BlendFile {
+                blend: variants.clone(),
+            }),
+        }
+    }
+
+    /// Keys in time order, and variants in heading order.
+    pub fn normalise(&mut self) {
+        match self {
+            StateAnimation::Single(clip) => clip.normalise(),
+            StateAnimation::Blend(variants) => {
+                for variant in variants.iter_mut() {
+                    variant.clip.normalise();
+                }
+                variants.sort_by(|a, b| a.heading.total_cmp(&b.heading));
+            }
+        }
+    }
+
+    /// The clip a part of this names: the whole thing when it is one clip,
+    /// or one variant of a blend.
+    pub fn clip(&self, variant: Option<usize>) -> Option<&Clip> {
+        match (self, variant) {
+            (StateAnimation::Single(clip), None) => Some(clip),
+            (StateAnimation::Blend(variants), Some(index)) => {
+                variants.get(index).map(|variant| &variant.clip)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn clip_mut(&mut self, variant: Option<usize>) -> Option<&mut Clip> {
+        match (self, variant) {
+            (StateAnimation::Single(clip), None) => Some(clip),
+            (StateAnimation::Blend(variants), Some(index)) => {
+                variants.get_mut(index).map(|variant| &mut variant.clip)
+            }
+            _ => None,
+        }
+    }
+
+    /// Every clip in it.
+    pub fn clips(&self) -> Vec<&Clip> {
+        match self {
+            StateAnimation::Single(clip) => vec![clip],
+            StateAnimation::Blend(variants) => variants.iter().map(|variant| &variant.clip).collect(),
+        }
+    }
+
+    /// The two clips either side of `heading`, and how far from the first to
+    /// the second — or one clip at full weight, outside the range or for a
+    /// plain clip. `None` for a blend with nothing in it.
+    pub fn at_heading(&self, heading: f32) -> Option<(&Clip, Option<(&Clip, f32)>)> {
+        let variants = match self {
+            StateAnimation::Single(clip) => return Some((clip, None)),
+            StateAnimation::Blend(variants) => variants,
+        };
+        // Found by looking rather than by position, so a heading edited in
+        // the panel blends correctly before anything has re-sorted the list.
+        let below = variants
+            .iter()
+            .filter(|variant| variant.heading <= heading)
+            .max_by(|a, b| a.heading.total_cmp(&b.heading));
+        let above = variants
+            .iter()
+            .filter(|variant| variant.heading > heading)
+            .min_by(|a, b| a.heading.total_cmp(&b.heading));
+        match (below, above) {
+            (Some(below), Some(above)) => {
+                let span = above.heading - below.heading;
+                let t = if span > 0.0 { (heading - below.heading) / span } else { 0.0 };
+                Some((&below.clip, Some((&above.clip, t))))
+            }
+            (Some(only), None) | (None, Some(only)) => Some((&only.clip, None)),
+            (None, None) => None,
+        }
+    }
+
+    /// What is wrong with it, for the Problems panel: every clip's own
+    /// problems, and whether the variants of a blend can be blended at all.
+    pub fn problems(&self, known_bone: impl Fn(&str) -> bool) -> Vec<ClipProblem> {
+        let mut problems = Vec::new();
+        for clip in self.clips() {
+            problems.extend(clip.problems(&known_bone));
+        }
+        if let StateAnimation::Blend(variants) = self {
+            if variants.is_empty() {
+                problems.push(ClipProblem {
+                    track: None,
+                    message: crate::get!("anim.problem.empty_blend"),
+                });
+            }
+            // A blend is a lerp between two poses, joint by joint; a joint
+            // one variant drives and its neighbour leaves alone blends towards
+            // rest, which is a body sagging halfway between two headings.
+            for pair in variants.windows(2) {
+                let drives = |clip: &Clip| -> Vec<String> {
+                    let mut names: Vec<String> = clip
+                        .tracks
+                        .iter()
+                        .map(|track| match &track.channel {
+                            Channel::Rotation { bone, .. } => bone.clone(),
+                            other => other.kind_key().to_string(),
+                        })
+                        .collect();
+                    names.sort();
+                    names
+                };
+                if drives(&pair[0].clip) != drives(&pair[1].clip) {
+                    problems.push(ClipProblem {
+                        track: None,
+                        message: crate::get!(
+                            "anim.problem.unmatched_variants",
+                            "from",
+                            format!("{:.0}°", pair[0].heading.to_degrees()),
+                            "to",
+                            format!("{:.0}°", pair[1].heading.to_degrees())
+                        ),
+                    });
+                }
+            }
+        }
         problems
     }
 }
@@ -817,6 +1078,7 @@ mod tests {
                     space: Space::Body,
                     unit: Unit::LegLengths,
                     enabled: true,
+                    timing: Default::default(),
                     channel: Channel::Effector {
                         chain: ChainRef::RightLeg,
                         pole: None,
@@ -839,6 +1101,7 @@ mod tests {
                     space: Space::Carry,
                     unit: Unit::Metres,
                     enabled: true,
+                    timing: Default::default(),
                     channel: Channel::Rotation {
                         bone: "chest".into(),
                         keys: vec![Key::all(0.5, [0.05, 0.0, 0.0], Interpolation::CubicOut)],
@@ -949,6 +1212,7 @@ mod tests {
             space: Space::Body,
             unit: Unit::Metres,
             enabled: true,
+            timing: Default::default(),
             channel: Channel::Weapon {
                 keys: vec![Key {
                     at: 0.5,
@@ -962,11 +1226,11 @@ mod tests {
         let problems = clip.problems(known);
 
         assert!(
-            problems.iter().any(|note| note.contains("elbow.q")),
+            problems.iter().any(|note| note.message.contains("elbow.q")),
             "a bone the rig has not got went unmentioned: {problems:?}"
         );
         assert!(
-            problems.iter().any(|note| note.contains("horizontal")),
+            problems.iter().any(|note| note.message.contains("horizontal")),
             "a sideways ground axis went unmentioned: {problems:?}"
         );
     }
@@ -982,7 +1246,7 @@ mod tests {
             ..Clip::default()
         };
         assert!(
-            clip.problems(|_| true).iter().any(|note| note.contains("whole number")),
+            clip.problems(|_| true).iter().any(|note| note.message.contains("whole number")),
             "a fractional stride length went unmentioned"
         );
     }
@@ -1138,7 +1402,7 @@ mod tests {
             ..Clip::default()
         };
         assert!(
-            clip.problems(|_| true).iter().any(|note| note.contains("no floor")),
+            clip.problems(|_| true).iter().any(|note| note.message.contains("no floor")),
             "a grounded angle went unmentioned",
         );
     }

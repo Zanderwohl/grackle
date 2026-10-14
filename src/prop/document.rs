@@ -491,6 +491,7 @@ mod tests {
                     space: Space::Carry,
                     unit: Unit::ArmLengths,
                     enabled: true,
+                    timing: Default::default(),
                     channel: Channel::Weapon {
                         keys: vec![
                             Key {
@@ -792,6 +793,7 @@ mod tests {
                         weapon: Some(Transform::IDENTITY),
                         eye: None,
                         ground: &ground,
+                        footfalls: None,
                     };
 
                     // Past the end as well as through the middle: a one-shot

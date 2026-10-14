@@ -107,6 +107,7 @@ impl Plugin for PropViewPlugin {
             .init_resource::<SurfaceMaterials>()
             .init_resource::<HiddenForModelling>()
             .init_resource::<ScaleFigure>()
+            .init_resource::<crate::prop::figure::FigureStage>()
             // Chained, and the order is the point: framing reads the bounds
             // of the prop, so the prop has to have been built first. On the
             // way in the last build belongs to a previous visit or to no
@@ -173,13 +174,27 @@ impl Plugin for PropViewPlugin {
 /// because the mesh is rebuilt on `PropEditor::generation` and a weapon that
 /// only moved when somebody edited the geometry would be a weapon that does
 /// not move.
+///
+/// And hidden when the figure is staged holding nothing: a prop floating at
+/// the origin beside a body with empty hands would be a prop nobody is
+/// holding, which is not a thing the game ever draws.
 pub fn carry_the_prop(
     held: Res<crate::prop::figure::FigureWeapon>,
-    mut stage: Query<&mut Transform, With<PropStage>>,
+    figure: Option<Res<crate::prop::figure::FigureStage>>,
+    mode: Option<Res<State<AppMode>>>,
+    mut stage: Query<(&mut Transform, &mut Visibility), With<PropStage>>,
 ) {
-    for mut transform in &mut stage {
+    let staged = crate::prop::figure::stage_in_force(figure.as_deref(), mode.as_deref());
+    let wanted = match staged.holding {
+        true => Visibility::Inherited,
+        false => Visibility::Hidden,
+    };
+    for (mut transform, mut visibility) in &mut stage {
         if *transform != held.0 {
             *transform = held.0;
+        }
+        if *visibility != wanted {
+            *visibility = wanted;
         }
     }
 }

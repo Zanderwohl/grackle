@@ -1,0 +1,4616 @@
+[[blend]]
+heading = -0.7853982
+name_key = "animation.states.run_backward"
+length = 1.0
+clock = "stride"
+looping = true
+note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper body and the hips: the legs are the gait's own, planted from the stride. Each arm is timed by the foot on its side, so it is right at any speed."
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "chest"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.084546804,
+    0.007208549,
+    -0.08515774,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "neck"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.059396967,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "left_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "upper_arm.l"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.9091121,
+    1.0725915,
+    -1.1653967,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.017641129
+to = [
+    -0.88362527,
+    0.9857962,
+    -1.0975819,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.032762095
+to = [
+    -0.85900754,
+    0.9158324,
+    -1.044034,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.06216398
+to = [
+    -0.8048281,
+    0.7912784,
+    -0.9518729,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.07728495
+to = [
+    -0.77418065,
+    0.73280585,
+    -0.9103464,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.09324597
+to = [
+    -0.74009,
+    0.67486393,
+    -0.87053776,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.12264785
+to = [
+    -0.6733296,
+    0.57725734,
+    -0.80709404,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.15709005
+to = [
+    -0.5898986,
+    0.4757071,
+    -0.747048,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18397178
+to = [
+    -0.52176505,
+    0.40423518,
+    -0.7093023,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.21757393
+to = [
+    -0.43378526,
+    0.32245848,
+    -0.6716481,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.2452957
+to = [
+    -0.35940313,
+    0.25996312,
+    -0.64748406,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.27973792
+to = [
+    -0.26533297,
+    0.18699527,
+    -0.62502635,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.30829975
+to = [
+    -0.18633065,
+    0.12933198,
+    -0.61210096,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.3469422
+to = [
+    -0.07855989,
+    0.053882625,
+    -0.60211813,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.37298387
+to = [
+    -0.005647719,
+    0.0038638632,
+    -0.60001093,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.3998656
+to = [
+    0.06962913,
+    -0.047731113,
+    -0.6016628,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.43514785
+to = [
+    0.16811395,
+    -0.11637135,
+    -0.60981596,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.46790996
+to = [
+    0.258856,
+    -0.1821631,
+    -0.6237742,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.499832
+to = [
+    0.34619465,
+    -0.24935944,
+    -0.64382017,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5353619
+to = [
+    0.24983674,
+    -0.17546889,
+    -0.62208986,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5627741
+to = [
+    0.17389435,
+    -0.12047257,
+    -0.61051387,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.59566885
+to = [
+    0.082121514,
+    -0.05633879,
+    -0.6023153,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.627193
+to = [
+    -0.006143035,
+    0.004202741,
+    -0.60001296,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6641996
+to = [
+    -0.109705396,
+    0.07542755,
+    -0.60414344,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6916118
+to = [
+    -0.18608505,
+    0.12915652,
+    -0.61206853,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.72450656
+to = [
+    -0.27700576,
+    0.19575846,
+    -0.6273736,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.75466007
+to = [
+    -0.35928342,
+    0.25986648,
+    -0.6474501,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.7848136
+to = [
+    -0.4401226,
+    0.32803217,
+    -0.6740068,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8163377
+to = [
+    -0.5225621,
+    0.4050247,
+    -0.7096961,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.84786177
+to = [
+    -0.6021856,
+    0.48956445,
+    -0.7548274,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.87801534
+to = [
+    -0.6748851,
+    0.5793394,
+    -0.8083936,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.90953946
+to = [
+    -0.7461581,
+    0.68470895,
+    -0.87719893,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.939693
+to = [
+    -0.80847085,
+    0.79871196,
+    -0.95723975,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9533991
+to = [
+    -0.83447045,
+    0.8553579,
+    -0.9987217,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9698465
+to = [
+    -0.86342454,
+    0.92761034,
+    -1.0529692,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.98355263
+to = [
+    -0.88546383,
+    0.9914942,
+    -1.1019899,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "left_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "forearm.l"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    1.1000001,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "right_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "upper_arm.r"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.34665066,
+    -0.2497233,
+    0.6439437,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.036122337
+to = [
+    -0.24773893,
+    -0.17391746,
+    0.62170786,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.06300403
+to = [
+    -0.17325492,
+    -0.12001839,
+    0.6104354,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.09660625
+to = [
+    -0.079499565,
+    -0.05453047,
+    0.6021693,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.1285282
+to = [
+    0.009883386,
+    0.006761859,
+    0.6000334,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.1579301
+to = [
+    0.09218509,
+    0.06328871,
+    0.60292023,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.19237226
+to = [
+    0.18819723,
+    0.13066606,
+    0.6123494,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.22513443
+to = [
+    0.27873084,
+    0.19705968,
+    0.6277305,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.25453624
+to = [
+    0.3589481,
+    0.25959566,
+    0.64735496,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.2872984
+to = [
+    0.4467056,
+    0.33386856,
+    0.6765108,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.3158602
+to = [
+    0.5213324,
+    0.40380695,
+    0.7090889,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.3452621
+to = [
+    0.59574604,
+    0.4822606,
+    0.7507095,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.37718415
+to = [
+    0.67293507,
+    0.57673055,
+    0.80676556,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.40826616
+to = [
+    0.74339026,
+    0.6801949,
+    0.8741393,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.43850806
+to = [
+    0.8061495,
+    0.793962,
+    0.9538082,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.4561492
+to = [
+    0.8394895,
+    0.8671092,
+    1.0074486,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.47127017
+to = [
+    0.86580616,
+    0.93408966,
+    1.057899,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.499832
+to = [
+    0.908887,
+    1.0717392,
+    1.1647242,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.51891446
+to = [
+    0.8816466,
+    0.9797466,
+    1.092909,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.53125
+to = [
+    0.8615763,
+    0.92264485,
+    1.0491982,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5614035
+to = [
+    0.8063233,
+    0.7943158,
+    0.95406353,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.59292763
+to = [
+    0.7407859,
+    0.67598355,
+    0.87129307,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6217105
+to = [
+    0.67552775,
+    0.58020186,
+    0.80893266,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.64226973
+to = [
+    0.62639666,
+    0.5178905,
+    0.77115583,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6573465
+to = [
+    0.58925986,
+    0.4749958,
+    0.7466525,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6847587
+to = [
+    0.5197375,
+    0.40223086,
+    0.7083052,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.7162829
+to = [
+    0.4372135,
+    0.32546827,
+    0.67291784,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.74506575
+to = [
+    0.36002558,
+    0.26046616,
+    0.6476611,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.7793311
+to = [
+    0.2664526,
+    0.18783271,
+    0.6252463,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.80948466
+to = [
+    0.18303858,
+    0.12698187,
+    0.6116694,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8451206
+to = [
+    0.08365475,
+    0.05739668,
+    0.60240287,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.87253284
+to = [
+    0.006911094,
+    0.004728226,
+    0.60001636,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.90953946
+to = [
+    -0.096683785,
+    -0.066400595,
+    0.6032136,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.93832237
+to = [
+    -0.17694324,
+    -0.122639954,
+    0.6108921,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.97121704
+to = [
+    -0.267961,
+    -0.18896201,
+    0.6255445,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "right_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "forearm.r"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    1.1000001,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "hip_heights"
+enabled = true
+
+[blend.tracks.channel]
+channel = "root"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    -0.13,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.027083334
+to = [
+    0.0,
+    -0.13086037,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.055208333
+to = [
+    0.0,
+    -0.13346736,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.0875
+to = [
+    0.0,
+    -0.13819014,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.15520833
+to = [
+    0.0,
+    -0.15055835,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18541667
+to = [
+    0.0,
+    -0.15532532,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.21875
+to = [
+    0.0,
+    -0.1588582,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    0.0,
+    -0.16,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.28125
+to = [
+    0.0,
+    -0.15885818,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.31354168
+to = [
+    0.0,
+    -0.15546685,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.34375
+to = [
+    0.0,
+    -0.15074024,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.41458333
+to = [
+    0.0,
+    -0.13784261,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.45
+to = [
+    0.0,
+    -0.13286474,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.48333332
+to = [
+    0.0,
+    -0.13032778,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.51666665
+to = [
+    0.0,
+    -0.13032778,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.54375
+to = [
+    0.0,
+    -0.13221039,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.571875
+to = [
+    0.0,
+    -0.13571359,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.659375
+to = [
+    0.0,
+    -0.1512799,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.690625
+to = [
+    0.0,
+    -0.15601483,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.72083336
+to = [
+    0.0,
+    -0.1590037,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    0.0,
+    -0.16,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.78125
+to = [
+    0.0,
+    -0.15885818,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.81458336
+to = [
+    0.0,
+    -0.15532531,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.84479165
+to = [
+    0.0,
+    -0.15055835,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9125
+to = [
+    0.0,
+    -0.13819012,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9447917
+to = [
+    0.0,
+    -0.13346736,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.97291666
+to = [
+    0.0,
+    -0.13086037,
+    0.0,
+]
+ease = "linear"
+
+[[blend]]
+heading = -0.3926991
+name_key = "animation.states.run_backward"
+length = 1.0
+clock = "stride"
+looping = true
+note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper body and the hips: the legs are the gait's own, planted from the stride. Each arm is timed by the foot on its side, so it is right at any speed."
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "chest"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.110748194,
+    0.00511029,
+    -0.04620529,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "neck"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.07760587,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "left_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "upper_arm.l"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.7760608,
+    0.73620224,
+    -0.9127231,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.03108199
+to = [
+    -0.71375203,
+    0.63417494,
+    -0.8434926,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.06216398
+to = [
+    -0.64683217,
+    0.5429597,
+    -0.7860602,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.09408602
+to = [
+    -0.57435477,
+    0.45863572,
+    -0.7376618,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.12264785
+to = [
+    -0.50698626,
+    0.38976988,
+    -0.70218533,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.15288979
+to = [
+    -0.43362996,
+    0.3223225,
+    -0.671591,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18481183
+to = [
+    -0.35444972,
+    0.255971,
+    -0.6460892,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.21589382
+to = [
+    -0.27605215,
+    0.19503984,
+    -0.6271775,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.24613574
+to = [
+    -0.1988774,
+    0.1383227,
+    -0.6138219,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.28561828
+to = [
+    -0.097251445,
+    0.0667935,
+    -0.60325164,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.3125
+to = [
+    -0.02775077,
+    0.018991342,
+    -0.6002636,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.34526208
+to = [
+    0.05702287,
+    -0.039063714,
+    -0.6011142,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.37466398
+to = [
+    0.13294561,
+    -0.09162076,
+    -0.60610354,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.40490595
+to = [
+    0.210649,
+    -0.14680962,
+    -0.6155477,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.437668
+to = [
+    0.29409257,
+    -0.2087203,
+    -0.63102496,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.46790996
+to = [
+    0.37013453,
+    -0.26867825,
+    -0.6505931,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.499832
+to = [
+    0.44899875,
+    -0.3359131,
+    -0.6773962,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.53947365
+to = [
+    0.35167366,
+    -0.25374192,
+    -0.64531845,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5655153
+to = [
+    0.28602764,
+    -0.20258182,
+    -0.62926924,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5970395
+to = [
+    0.20566697,
+    -0.14321142,
+    -0.6148042,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.627193
+to = [
+    0.12815921,
+    -0.088276245,
+    -0.60566807,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6614583
+to = [
+    0.039639823,
+    -0.027136605,
+    -0.60053796,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.68887055
+to = [
+    -0.03129717,
+    0.021420177,
+    -0.60033524,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.72176534
+to = [
+    -0.11630903,
+    0.08001742,
+    -0.60466117,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.75328946
+to = [
+    -0.19740394,
+    0.13726397,
+    -0.61361355,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.7848136
+to = [
+    -0.277848,
+    0.19639358,
+    -0.6275475,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8163377
+to = [
+    -0.35732695,
+    0.2582876,
+    -0.6468965,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8492325
+to = [
+    -0.43883568,
+    0.3268968,
+    -0.67352366,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.87801534
+to = [
+    -0.50857335,
+    0.39130768,
+    -0.7029331,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9054277
+to = [
+    -0.5732259,
+    0.45741498,
+    -0.73699903,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.93832237
+to = [
+    -0.64790934,
+    0.5443131,
+    -0.7868764,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9698465
+to = [
+    -0.7156857,
+    0.6370567,
+    -0.84538126,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "left_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "forearm.l"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    1.1000001,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "right_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "upper_arm.r"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.4494092,
+    -0.33627963,
+    0.6775553,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.032762077
+to = [
+    -0.36845732,
+    -0.2673101,
+    0.6500993,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.06300403
+to = [
+    -0.29239088,
+    -0.20742194,
+    0.6306496,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.09324598
+to = [
+    -0.21537921,
+    -0.1502349,
+    0.6162719,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.1268481
+to = [
+    -0.12904818,
+    -0.08889703,
+    0.6057477,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.15625001
+to = [
+    -0.053112287,
+    -0.0363783,
+    0.60096645,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18985213
+to = [
+    0.03383685,
+    0.023159945,
+    0.600392,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.22597447
+to = [
+    0.12716416,
+    0.08758161,
+    0.6055798,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.25453624
+to = [
+    0.20059979,
+    0.13956127,
+    0.6140678,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.28897852
+to = [
+    0.28841135,
+    0.20439225,
+    0.6297821,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.31838033
+to = [
+    0.36243525,
+    0.2624163,
+    0.6483505,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.3469422
+to = [
+    0.4332175,
+    0.32196122,
+    0.67143923,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.3780242
+to = [
+    0.5085946,
+    0.39132822,
+    0.7029431,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.41078627
+to = [
+    0.5856267,
+    0.4709657,
+    0.744419,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.437668
+to = [
+    0.6464598,
+    0.54249275,
+    0.7857788,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.46875
+to = [
+    0.7134017,
+    0.6336543,
+    0.84315175,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.499832
+to = [
+    0.77573854,
+    0.73561853,
+    0.9123144,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5326206
+to = [
+    0.7105387,
+    0.62942034,
+    0.8403856,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5614035
+to = [
+    0.6485162,
+    0.54507685,
+    0.78733754,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.59566885
+to = [
+    0.5706782,
+    0.4546691,
+    0.7355128,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.62308115
+to = [
+    0.5059488,
+    0.3887666,
+    0.7016986,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6573465
+to = [
+    0.42267257,
+    0.3127878,
+    0.66763216,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6833881
+to = [
+    0.3580129,
+    0.2588408,
+    0.6470901,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.7121711
+to = [
+    0.2854975,
+    0.2021796,
+    0.6291559,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.74643636
+to = [
+    0.19810687,
+    0.13776891,
+    0.6137128,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.7820724
+to = [
+    0.106405884,
+    0.073137365,
+    0.60389656,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.81222594
+to = [
+    0.028459994,
+    0.019477021,
+    0.6002772,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8451206
+to = [
+    -0.05665705,
+    -0.03881244,
+    0.60109997,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8739035
+to = [
+    -0.13098569,
+    -0.090250626,
+    0.60592324,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.91091
+to = [
+    -0.22600776,
+    -0.15796392,
+    0.6179638,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.93832237
+to = [
+    -0.2957492,
+    -0.20998582,
+    0.63139284,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9725877
+to = [
+    -0.38179085,
+    -0.27825126,
+    0.6541081,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "right_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "forearm.r"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    1.1000001,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "hip_heights"
+enabled = true
+
+[blend.tracks.channel]
+channel = "root"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    -0.13,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.027083334
+to = [
+    0.0,
+    -0.13086037,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.055208333
+to = [
+    0.0,
+    -0.13346736,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.0875
+to = [
+    0.0,
+    -0.13819014,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.15520833
+to = [
+    0.0,
+    -0.15055835,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18541667
+to = [
+    0.0,
+    -0.15532532,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.21875
+to = [
+    0.0,
+    -0.1588582,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    0.0,
+    -0.16,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.28125
+to = [
+    0.0,
+    -0.15885818,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.31354168
+to = [
+    0.0,
+    -0.15546685,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.34375
+to = [
+    0.0,
+    -0.15074024,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.41458333
+to = [
+    0.0,
+    -0.13784261,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.45
+to = [
+    0.0,
+    -0.13286474,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.48333332
+to = [
+    0.0,
+    -0.13032778,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.51666665
+to = [
+    0.0,
+    -0.13032778,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.54375
+to = [
+    0.0,
+    -0.13221039,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.571875
+to = [
+    0.0,
+    -0.13571359,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.659375
+to = [
+    0.0,
+    -0.1512799,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.690625
+to = [
+    0.0,
+    -0.15601483,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.72083336
+to = [
+    0.0,
+    -0.1590037,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    0.0,
+    -0.16,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.78125
+to = [
+    0.0,
+    -0.15885818,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.81458336
+to = [
+    0.0,
+    -0.15532531,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.84479165
+to = [
+    0.0,
+    -0.15055835,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9125
+to = [
+    0.0,
+    -0.13819012,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9447917
+to = [
+    0.0,
+    -0.13346736,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.97291666
+to = [
+    0.0,
+    -0.13086037,
+    0.0,
+]
+ease = "linear"
+
+[[blend]]
+heading = 0.0
+name_key = "animation.states.run_backward"
+length = 1.0
+clock = "stride"
+looping = true
+note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper body and the hips: the legs are the gait's own, planted from the stride. Each arm is timed by the foot on its side, so it is right at any speed."
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "chest"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.12,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "neck"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.08400001,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "left_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "upper_arm.l"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.4847866,
+    0.36863416,
+    -0.69212776,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.057963707
+to = [
+    -0.3758487,
+    0.27335694,
+    -0.65229803,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.09828629
+to = [
+    -0.29832432,
+    0.21195634,
+    -0.6319695,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.123487905
+to = [
+    -0.2493387,
+    0.17510037,
+    -0.6219988,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18817204
+to = [
+    -0.12232505,
+    0.084206484,
+    -0.6051598,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.24949595
+to = [
+    -0.0009984183,
+    0.000683055,
+    -0.6000004,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.31334004
+to = [
+    0.12530932,
+    -0.086287305,
+    -0.60541666,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.37718412
+to = [
+    0.2506494,
+    -0.17607044,
+    -0.6222388,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.437668
+to = [
+    0.36750934,
+    -0.2665378,
+    -0.64982146,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.4771505
+to = [
+    0.44225958,
+    -0.32992154,
+    -0.6748136,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.499832
+to = [
+    0.4844762,
+    -0.36834347,
+    -0.6919924,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5353619
+to = [
+    0.41873053,
+    -0.3093879,
+    -0.6662437,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5655153
+to = [
+    0.36142236,
+    -0.261596,
+    -0.64805996,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.627193
+to = [
+    0.24210858,
+    -0.16976365,
+    -0.62070054,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.68887055
+to = [
+    0.12094625,
+    -0.08324573,
+    -0.6050433,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.75054824
+to = [
+    -0.0010859047,
+    0.0007429077,
+    -0.6000004,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8163377
+to = [
+    -0.13122396,
+    0.09041717,
+    -0.60594493,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.87664473
+to = [
+    -0.24959737,
+    0.17529178,
+    -0.62204605,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.92050445
+to = [
+    -0.33459735,
+    0.24015547,
+    -0.6407472,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.94106364
+to = [
+    -0.37399322,
+    0.2718347,
+    -0.65174055,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9725877
+to = [
+    -0.433698,
+    0.3223821,
+    -0.6716161,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "left_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "forearm.l"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    1.1000001,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "right_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "upper_arm.r"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.4847866,
+    -0.36863416,
+    0.69212776,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.041162584
+to = [
+    -0.4077698,
+    -0.3000155,
+    0.6624797,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.06132395
+to = [
+    -0.36943513,
+    -0.26810747,
+    0.6503868,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.1226479
+to = [
+    -0.25097695,
+    -0.176313,
+    0.62229896,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18649197
+to = [
+    -0.12564085,
+    -0.08651859,
+    0.60544574,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.249496
+to = [
+    -0.0009983297,
+    -0.0006829944,
+    0.6000004,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.31334007
+to = [
+    0.12530938,
+    0.08628735,
+    0.60541666,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.37718415
+to = [
+    0.25064945,
+    0.17607047,
+    0.6222388,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.437668
+to = [
+    0.36750934,
+    0.2665378,
+    0.64982146,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.47631046
+to = [
+    0.440685,
+    0.32852885,
+    0.67421854,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.499832
+to = [
+    0.4844762,
+    0.36834347,
+    0.6919924,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.53947365
+to = [
+    0.41096446,
+    0.30273506,
+    0.66356224,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5655154
+to = [
+    0.36142218,
+    0.2615959,
+    0.64805984,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.62719303
+to = [
+    0.24210839,
+    0.16976355,
+    0.6207005,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.68887067
+to = [
+    0.1209461,
+    0.08324563,
+    0.6050432,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.75054824
+to = [
+    -0.0010860227,
+    -0.0007429885,
+    0.6000004,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8190789
+to = [
+    -0.13663068,
+    -0.094199374,
+    0.6064501,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.87664473
+to = [
+    -0.24959737,
+    -0.17529178,
+    0.62204605,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.90953946
+to = [
+    -0.3134593,
+    -0.22361931,
+    0.63548183,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9410635
+to = [
+    -0.37399304,
+    -0.2718346,
+    0.65174055,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9725877
+to = [
+    -0.43369803,
+    -0.3223821,
+    0.671616,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "right_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "forearm.r"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    1.1000001,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "hip_heights"
+enabled = true
+
+[blend.tracks.channel]
+channel = "root"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    -0.13,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.027083334
+to = [
+    0.0,
+    -0.13086037,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.055208333
+to = [
+    0.0,
+    -0.13346736,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.0875
+to = [
+    0.0,
+    -0.13819014,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.15520833
+to = [
+    0.0,
+    -0.15055835,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18541667
+to = [
+    0.0,
+    -0.15532532,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.21875
+to = [
+    0.0,
+    -0.1588582,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    0.0,
+    -0.16,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.28125
+to = [
+    0.0,
+    -0.15885818,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.31354168
+to = [
+    0.0,
+    -0.15546685,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.34375
+to = [
+    0.0,
+    -0.15074024,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.41458333
+to = [
+    0.0,
+    -0.13784261,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.45
+to = [
+    0.0,
+    -0.13286474,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.48333332
+to = [
+    0.0,
+    -0.13032778,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.51666665
+to = [
+    0.0,
+    -0.13032778,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.54375
+to = [
+    0.0,
+    -0.13221039,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.571875
+to = [
+    0.0,
+    -0.13571359,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.659375
+to = [
+    0.0,
+    -0.1512799,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.690625
+to = [
+    0.0,
+    -0.15601483,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.72083336
+to = [
+    0.0,
+    -0.1590037,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    0.0,
+    -0.16,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.78125
+to = [
+    0.0,
+    -0.15885818,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.81458336
+to = [
+    0.0,
+    -0.15532531,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.84479165
+to = [
+    0.0,
+    -0.15055835,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9125
+to = [
+    0.0,
+    -0.13819012,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9447917
+to = [
+    0.0,
+    -0.13346736,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.97291666
+to = [
+    0.0,
+    -0.13086037,
+    0.0,
+]
+ease = "linear"
+
+[[blend]]
+heading = 0.3926991
+name_key = "animation.states.run_backward"
+length = 1.0
+clock = "stride"
+looping = true
+note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper body and the hips: the legs are the gait's own, planted from the stride. Each arm is timed by the foot on its side, so it is right at any speed."
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "chest"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.110748194,
+    -0.00511029,
+    0.04620529,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "neck"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.07760587,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "left_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "upper_arm.l"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.4494092,
+    0.33627963,
+    -0.6775553,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.032762095
+to = [
+    -0.3684573,
+    0.26731005,
+    -0.6500992,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.06300403
+to = [
+    -0.29239088,
+    0.20742194,
+    -0.6306496,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.09576613
+to = [
+    -0.20892821,
+    0.14556572,
+    -0.6152887,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.12768817
+to = [
+    -0.12688248,
+    0.087385,
+    -0.6055548,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.16549058
+to = [
+    -0.029207045,
+    0.01998863,
+    -0.60029185,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18985215
+to = [
+    0.033836875,
+    -0.023159964,
+    -0.600392,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.22597446
+to = [
+    0.12716414,
+    -0.087581575,
+    -0.6055798,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.2545363
+to = [
+    0.20059995,
+    -0.13956137,
+    -0.61406773,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.29065862
+to = [
+    0.2926676,
+    -0.20763296,
+    -0.63071054,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.3141801
+to = [
+    0.35192513,
+    -0.25394362,
+    -0.64538795,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.3486223
+to = [
+    0.43733975,
+    -0.32557932,
+    -0.6729649,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.37718412
+to = [
+    0.506584,
+    -0.38938063,
+    -0.7019964,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.4091062
+to = [
+    0.58174783,
+    -0.46669352,
+    -0.7420645,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.43850806
+to = [
+    0.64832044,
+    -0.54483026,
+    -0.78718865,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.46959004
+to = [
+    0.71515197,
+    -0.6362597,
+    -0.8448585,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.499832
+to = [
+    0.77573854,
+    -0.73561853,
+    -0.9123144,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.53125
+to = [
+    0.7134017,
+    -0.6336543,
+    -0.84315175,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5627741
+to = [
+    0.64547944,
+    -0.541265,
+    -0.7850398,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.59566885
+to = [
+    0.5706782,
+    -0.4546691,
+    -0.7355128,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6217105
+to = [
+    0.5092293,
+    -0.3919442,
+    -0.7032431,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.65460527
+to = [
+    0.42941624,
+    -0.31864104,
+    -0.67005116,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6833881
+to = [
+    0.3580129,
+    -0.2588408,
+    -0.6470901,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.72039473
+to = [
+    0.26461482,
+    -0.18645845,
+    -0.6248857,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.7464364
+to = [
+    0.19810665,
+    -0.13776876,
+    -0.6137128,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.7820724
+to = [
+    0.106405884,
+    -0.073137365,
+    -0.60389656,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8122258
+to = [
+    0.028460149,
+    -0.019477129,
+    -0.6002772,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8451206
+to = [
+    -0.05665705,
+    0.03881244,
+    -0.60109997,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8739035
+to = [
+    -0.13098553,
+    0.09025053,
+    -0.60592324,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.90816885
+to = [
+    -0.21899894,
+    0.15286195,
+    -0.6168379,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9355811
+to = [
+    -0.28880656,
+    0.2046927,
+    -0.6298676,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9753289
+to = [
+    -0.38860688,
+    0.28390276,
+    -0.65623164,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "left_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "forearm.l"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    1.1000001,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "right_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "upper_arm.r"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.7760608,
+    -0.73620224,
+    0.9127231,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.017641148
+to = [
+    -0.7413294,
+    -0.6768595,
+    0.87188447,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.034442257
+to = [
+    -0.7067198,
+    -0.62382513,
+    0.8367443,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.06048391
+to = [
+    -0.6505497,
+    -0.54764426,
+    0.78889036,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.08988573
+to = [
+    -0.5840763,
+    -0.46925429,
+    0.74347407,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.1226479
+to = [
+    -0.50698614,
+    -0.3897697,
+    0.7021852,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.15288976
+to = [
+    -0.43362996,
+    -0.3223225,
+    0.671591,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18481189
+to = [
+    -0.35444954,
+    -0.25597093,
+    0.6460892,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.21757387
+to = [
+    -0.2717852,
+    -0.19183032,
+    0.6263092,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.24613574
+to = [
+    -0.1988774,
+    -0.1383227,
+    0.6138219,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.28561834
+to = [
+    -0.09725129,
+    -0.06679339,
+    0.6032516,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.31250003
+to = [
+    -0.027750695,
+    -0.01899129,
+    0.6002636,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.35030246
+to = [
+    0.070055224,
+    0.04802437,
+    0.6016832,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.37466404
+to = [
+    0.13294575,
+    0.09162088,
+    0.60610354,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.40490595
+to = [
+    0.210649,
+    0.14680962,
+    0.6155477,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.437668
+to = [
+    0.29409257,
+    0.2087203,
+    0.63102496,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.4679099
+to = [
+    0.37013432,
+    0.26867813,
+    0.65059304,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.499832
+to = [
+    0.44899875,
+    0.3359131,
+    0.6773962,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5326206
+to = [
+    0.36881042,
+    0.26759794,
+    0.650203,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5627741
+to = [
+    0.29297307,
+    0.20786595,
+    0.6307778,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.59566885
+to = [
+    0.20917737,
+    0.14574577,
+    0.61532605,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.62445176
+to = [
+    0.13522434,
+    0.09321491,
+    0.6063167,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.65871716
+to = [
+    0.04673104,
+    0.03199918,
+    0.6007479,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6916118
+to = [
+    -0.038389657,
+    -0.026279714,
+    0.6005046,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.72450656
+to = [
+    -0.12337922,
+    -0.084941305,
+    0.6052498,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.75328946
+to = [
+    -0.19740394,
+    -0.13726397,
+    0.61361355,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.7848136
+to = [
+    -0.277848,
+    -0.19639358,
+    0.6275475,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8163377
+to = [
+    -0.35732695,
+    -0.2582876,
+    0.6468965,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.85197365
+to = [
+    -0.44554737,
+    -0.33283824,
+    0.6760663,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.87801534
+to = [
+    -0.50857335,
+    -0.39130768,
+    0.7029331,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9054277
+to = [
+    -0.5732259,
+    -0.45741498,
+    0.73699903,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.93832237
+to = [
+    -0.64790934,
+    -0.5443131,
+    0.7868764,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9657347
+to = [
+    -0.70709145,
+    -0.62436724,
+    0.8370963,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "right_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "forearm.r"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    1.1000001,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "hip_heights"
+enabled = true
+
+[blend.tracks.channel]
+channel = "root"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    -0.13,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.027083334
+to = [
+    0.0,
+    -0.13086037,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.055208333
+to = [
+    0.0,
+    -0.13346736,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.0875
+to = [
+    0.0,
+    -0.13819014,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.15520833
+to = [
+    0.0,
+    -0.15055835,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18541667
+to = [
+    0.0,
+    -0.15532532,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.21875
+to = [
+    0.0,
+    -0.1588582,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    0.0,
+    -0.16,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.28125
+to = [
+    0.0,
+    -0.15885818,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.31354168
+to = [
+    0.0,
+    -0.15546685,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.34375
+to = [
+    0.0,
+    -0.15074024,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.41458333
+to = [
+    0.0,
+    -0.13784261,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.45
+to = [
+    0.0,
+    -0.13286474,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.48333332
+to = [
+    0.0,
+    -0.13032778,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.51666665
+to = [
+    0.0,
+    -0.13032778,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.54375
+to = [
+    0.0,
+    -0.13221039,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.571875
+to = [
+    0.0,
+    -0.13571359,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.659375
+to = [
+    0.0,
+    -0.1512799,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.690625
+to = [
+    0.0,
+    -0.15601483,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.72083336
+to = [
+    0.0,
+    -0.1590037,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    0.0,
+    -0.16,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.78125
+to = [
+    0.0,
+    -0.15885818,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.81458336
+to = [
+    0.0,
+    -0.15532531,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.84479165
+to = [
+    0.0,
+    -0.15055835,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9125
+to = [
+    0.0,
+    -0.13819012,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9447917
+to = [
+    0.0,
+    -0.13346736,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.97291666
+to = [
+    0.0,
+    -0.13086037,
+    0.0,
+]
+ease = "linear"
+
+[[blend]]
+heading = 0.7853982
+name_key = "animation.states.run_backward"
+length = 1.0
+clock = "stride"
+looping = true
+note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper body and the hips: the legs are the gait's own, planted from the stride. Each arm is timed by the foot on its side, so it is right at any speed."
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "chest"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.084546804,
+    -0.007208549,
+    0.08515774,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "neck"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.059396967,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "left_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "upper_arm.l"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.34665066,
+    0.2497233,
+    -0.6439437,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.03612231
+to = [
+    -0.24773899,
+    0.17391747,
+    -0.62170786,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.06300403
+to = [
+    -0.17325492,
+    0.12001839,
+    -0.6104354,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.09576613
+to = [
+    -0.08184938,
+    0.056151062,
+    -0.60229987,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.12768817
+to = [
+    0.0075302874,
+    -0.005151867,
+    -0.60001945,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.16045026
+to = [
+    0.09922952,
+    -0.06816304,
+    -0.60338604,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.19405241
+to = [
+    0.19286263,
+    -0.1340058,
+    -0.6129819,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.22597446
+to = [
+    0.28103808,
+    -0.19880259,
+    -0.62821203,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.2545363
+to = [
+    0.3589483,
+    -0.2595958,
+    -0.6473551,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.28477824
+to = [
+    0.44002888,
+    -0.32794946,
+    -0.67397153,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.31838036
+to = [
+    0.5278152,
+    -0.41025385,
+    -0.71231794,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.3486223
+to = [
+    0.6040646,
+    -0.4917133,
+    -0.75604624,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.37718412
+to = [
+    0.67293495,
+    -0.5767303,
+    -0.80676544,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.40826616
+to = [
+    0.74339026,
+    -0.6801949,
+    -0.8741393,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.43850806
+to = [
+    0.8061495,
+    -0.793962,
+    -0.9538082,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.4561492
+to = [
+    0.8394895,
+    -0.8671092,
+    -1.0074486,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.47127017
+to = [
+    0.86580616,
+    -0.93408966,
+    -1.057899,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.499832
+to = [
+    0.908887,
+    -1.0717392,
+    -1.1647242,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.51891446
+to = [
+    0.8816466,
+    -0.9797466,
+    -1.092909,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.53125
+to = [
+    0.8615763,
+    -0.92264485,
+    -1.0491982,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5449561
+to = [
+    0.8374804,
+    -0.8623702,
+    -1.0039244,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5614035
+to = [
+    0.8063233,
+    -0.7943158,
+    -0.95406353,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.59292763
+to = [
+    0.7407859,
+    -0.67598355,
+    -0.87129307,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6217105
+to = [
+    0.67552775,
+    -0.58020186,
+    -0.80893266,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.65460527
+to = [
+    0.5960752,
+    -0.48263168,
+    -0.75091785,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.6833881
+to = [
+    0.5232678,
+    -0.4057247,
+    -0.7100457,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.7149123
+to = [
+    0.4408494,
+    -0.32867417,
+    -0.6742805,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.74506575
+to = [
+    0.36002558,
+    -0.26046616,
+    -0.6476611,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.7793311
+to = [
+    0.2664526,
+    -0.18783271,
+    -0.6252463,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.80948466
+to = [
+    0.18303858,
+    -0.12698187,
+    -0.6116694,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8451206
+to = [
+    0.08365475,
+    -0.05739668,
+    -0.60240287,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.87253284
+to = [
+    0.006911094,
+    -0.004728226,
+    -0.60001636,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.90953946
+to = [
+    -0.096683785,
+    0.066400595,
+    -0.6032136,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.93832237
+to = [
+    -0.17694324,
+    0.122639954,
+    -0.6108921,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.97121704
+to = [
+    -0.267961,
+    0.18896201,
+    -0.6255445,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "left_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "forearm.l"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    1.1000001,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "right_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "upper_arm.r"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.9091121,
+    -1.0725915,
+    1.1653967,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.01848119
+to = [
+    -0.8823219,
+    -0.9818017,
+    1.0944955,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.033602215
+to = [
+    -0.8575706,
+    -0.91206527,
+    1.0411834,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.06216399
+to = [
+    -0.8048281,
+    -0.7912784,
+    0.9518729,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.078965
+to = [
+    -0.77067244,
+    -0.7265289,
+    0.90596575,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.09408603
+to = [
+    -0.7382504,
+    -0.6719162,
+    0.86855197,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.1226479
+to = [
+    -0.67332935,
+    -0.57725704,
+    0.80709386,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.15625001
+to = [
+    -0.5919891,
+    -0.4780416,
+    0.7483488,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18397175
+to = [
+    -0.5217651,
+    -0.40423518,
+    0.70930237,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.21505375
+to = [
+    -0.44047442,
+    -0.3283429,
+    0.6741393,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.2452957
+to = [
+    -0.35940313,
+    -0.25996312,
+    0.64748406,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.27805778
+to = [
+    -0.26995593,
+    -0.19045733,
+    0.6259418,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.30829975
+to = [
+    -0.18633065,
+    -0.12933198,
+    0.61210096,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.3469422
+to = [
+    -0.07855989,
+    -0.053882625,
+    0.60211813,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.37298384
+to = [
+    -0.0056478,
+    -0.0038639186,
+    0.60001093,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.39986563
+to = [
+    0.069629215,
+    0.047731165,
+    0.6016629,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.43514785
+to = [
+    0.16811395,
+    0.11637135,
+    0.60981596,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.46706986
+to = [
+    0.25654116,
+    0.18044126,
+    0.6233354,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.499832
+to = [
+    0.34619465,
+    0.24935944,
+    0.64382017,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5353619
+to = [
+    0.24983674,
+    0.17546889,
+    0.62208986,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.5627741
+to = [
+    0.17389435,
+    0.12047257,
+    0.61051387,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.59566885
+to = [
+    0.082121514,
+    0.05633879,
+    0.6023153,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.62719303
+to = [
+    -0.0061432486,
+    -0.0042028874,
+    0.60001296,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.65871716
+to = [
+    -0.094385244,
+    -0.06481022,
+    0.6030619,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.69298244
+to = [
+    -0.18989177,
+    -0.13187824,
+    0.61257714,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.72450656
+to = [
+    -0.27700576,
+    -0.19575846,
+    0.6273736,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.75466007
+to = [
+    -0.35928342,
+    -0.25986648,
+    0.6474501,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.7848136
+to = [
+    -0.4401226,
+    -0.32803217,
+    0.6740068,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.8163377
+to = [
+    -0.5225621,
+    -0.4050247,
+    0.7096961,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.84786177
+to = [
+    -0.6021856,
+    -0.48956445,
+    0.7548274,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.87801534
+to = [
+    -0.6748851,
+    -0.5793394,
+    0.8083936,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.90953946
+to = [
+    -0.7461581,
+    -0.68470895,
+    0.87719893,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.939693
+to = [
+    -0.80847085,
+    -0.79871196,
+    0.95723975,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9533991
+to = [
+    -0.83447045,
+    -0.8553579,
+    0.9987217,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9698465
+to = [
+    -0.86342454,
+    -0.92761034,
+    1.0529692,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9862939
+to = [
+    -0.88962543,
+    -1.0046762,
+    1.1122129,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+timing = "right_foot"
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "forearm.r"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    1.1000001,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "hip_heights"
+enabled = true
+
+[blend.tracks.channel]
+channel = "root"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    -0.13,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.027083334
+to = [
+    0.0,
+    -0.13086037,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.055208333
+to = [
+    0.0,
+    -0.13346736,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.0875
+to = [
+    0.0,
+    -0.13819014,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.15520833
+to = [
+    0.0,
+    -0.15055835,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.18541667
+to = [
+    0.0,
+    -0.15532532,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.21875
+to = [
+    0.0,
+    -0.1588582,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    0.0,
+    -0.16,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.28125
+to = [
+    0.0,
+    -0.15885818,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.31354168
+to = [
+    0.0,
+    -0.15546685,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.34375
+to = [
+    0.0,
+    -0.15074024,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.41458333
+to = [
+    0.0,
+    -0.13784261,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.45
+to = [
+    0.0,
+    -0.13286474,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.48333332
+to = [
+    0.0,
+    -0.13032778,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.51666665
+to = [
+    0.0,
+    -0.13032778,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.54375
+to = [
+    0.0,
+    -0.13221039,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.571875
+to = [
+    0.0,
+    -0.13571359,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.659375
+to = [
+    0.0,
+    -0.1512799,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.690625
+to = [
+    0.0,
+    -0.15601483,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.72083336
+to = [
+    0.0,
+    -0.1590037,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    0.0,
+    -0.16,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.78125
+to = [
+    0.0,
+    -0.15885818,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.81458336
+to = [
+    0.0,
+    -0.15532531,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.84479165
+to = [
+    0.0,
+    -0.15055835,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9125
+to = [
+    0.0,
+    -0.13819012,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.9447917
+to = [
+    0.0,
+    -0.13346736,
+    0.0,
+]
+ease = "linear"
+
+[[blend.tracks.channel.keys]]
+at = 0.97291666
+to = [
+    0.0,
+    -0.13086037,
+    0.0,
+]
+ease = "linear"

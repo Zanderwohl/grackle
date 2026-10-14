@@ -402,7 +402,7 @@ pub(crate) fn perform_weapon_clips(
 /// A convention rather than a field: a prop that has one gets a deploy and one
 /// that does not simply appears, which is the same reading `Weapon.model`
 /// already takes of an absent model.
-const DEPLOY: &str = "deploy";
+pub const DEPLOY: &str = "deploy";
 
 /// Run whatever clips a body has on it, between the weapon being placed and
 /// the hands being put on it.
@@ -464,6 +464,8 @@ pub(crate) fn play_the_clips(
             // the viewmodel pass, which solves in eye space already.
             eye: None,
             ground: &ground,
+            // A weapon clip runs on seconds, and has no feet to follow.
+            footfalls: None,
         };
 
         let mut moving = placed.unwrap_or_default();
@@ -775,6 +777,7 @@ mod tests {
                 space: Space::Carry,
                 unit: Unit::Metres,
                 enabled: true,
+                timing: Default::default(),
                 channel: Channel::Weapon {
                     keys: vec![Key {
                         at: 0.0,
