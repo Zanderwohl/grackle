@@ -592,14 +592,15 @@ impl EditorPanels {
             return;
         };
 
-        let left_taken = panels.left_width / window.width();
-        let right_taken = panels.right_width / window.width();
-        let bottom_taken = panels.bottom_height / window.height();
-        let top_taken = (panels.toolbar_height + panels.menu_bar_height + panels.top_height) / window.height();
-        // info!("[{} {}] -> [{}, {}]", left_taken, top_taken, 1.0 - right_taken, 1.0 - bottom_taken);
-
-        multicam_state.start = Vec2::new(left_taken, top_taken);
-        multicam_state.end = Vec2::new(1.0 - right_taken, 1.0 - bottom_taken);
+        multicam_state.reserve(
+            crate::editor::multicam::Insets {
+                left: panels.left_width,
+                right: panels.right_width,
+                top: panels.toolbar_height + panels.menu_bar_height + panels.top_height,
+                bottom: panels.bottom_height,
+            },
+            window,
+        );
     }
 }
 

@@ -23,7 +23,7 @@ use strum::IntoEnumIterator;
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::class::Class;
 use crate::common::net::NetRole;
-use crate::editor::multicam::MulticamState;
+use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
 use crate::prop::document::PropEditor;
 use crate::prop::figure::ScaleFigure;
@@ -871,15 +871,19 @@ fn panels(
     }
 
     if let Ok(window) = windows.single() {
-        let left = layout.left_width / window.width();
-        let right = layout.right_width / window.width();
-        let top = layout.menu_bar_height / window.height();
-        // The strip and the dock below it share the bottom inset. There is no
-        // bottom dock here, so this is the strip alone — but adding one later
-        // means adding its height in, not replacing this.
-        let bottom = layout.timeline_height / window.height();
-        multicam.start = Vec2::new(left, top);
-        multicam.end = Vec2::new(1.0 - right, 1.0 - bottom);
+        multicam.reserve(
+            Insets {
+                left: layout.left_width,
+                right: layout.right_width,
+                top: layout.menu_bar_height,
+                // The strip and any dock below it share the bottom inset.
+                // There is no bottom dock here, so this is the strip alone —
+                // but adding one later means adding its height in, not
+                // replacing this.
+                bottom: layout.timeline_height,
+            },
+            window,
+        );
     }
 }
 

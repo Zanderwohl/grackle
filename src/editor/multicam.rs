@@ -18,6 +18,20 @@ pub struct MulticamPlugin {
     pub test_scene: bool,
 }
 
+/// How much of each edge of the window something else has taken, in logical
+/// pixels.
+///
+/// A struct rather than four arguments because every caller computes all four
+/// and the ordering of four `f32`s is exactly the kind of thing that is wrong
+/// once and then wrong forever.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Insets {
+    pub left: f32,
+    pub right: f32,
+    pub top: f32,
+    pub bottom: f32,
+}
+
 #[derive(Resource)]
 pub struct MulticamState {
     pub test_scene: bool,
@@ -49,6 +63,69 @@ pub enum CameraAxis {
 
 #[derive(Component)]
 pub struct MulticamTestScene;
+
+impl MulticamState {
+    /// Give the viewports what is left of the window after the panels.
+    ///
+    /// One function because there are three surfaces that reserve space — the
+    /// map editor, the prop editor and the animation editor — and three copies
+    /// of a division by a window size is three places for a zero-width window
+    /// to produce an infinity. What that costs is in `calculate_resize`.
+    pub fn reserve(&mut self, insets: Insets, window: &Window) {
+        self.reserve_from(insets, window.width(), window.height());
+    }
+
+    /// The arithmetic half, without a `Window` to stand up in a test.
+    pub fn reserve_from(&mut self, insets: Insets, width: f32, height: f32) {
+        if width <= 0.0 || height <= 0.0 {
+            // Nothing sensible to say this frame, so the last good rect
+            // stands. A window with no area is a window mid-move, not a
+            // layout anybody asked for.
+            return;
+        }
+
+        let start = Vec2::new(insets.left / width, insets.top / height);
+        let end = Vec2::new(1.0 - insets.right / width, 1.0 - insets.bottom / height);
+        if !start.is_finite() || !end.is_finite() {
+            return;
+        }
+
+        self.start = start.clamp(Vec2::ZERO, Vec2::ONE);
+        self.end = end.clamp(Vec2::ZERO, Vec2::ONE);
+    }
+}
+
+/// The viewport a pair of fractions describes, or `None` if they describe
+/// nothing a texture could be made from.
+///
+/// Out of the system so it can be tested without a window, a device or a
+/// render world — which is the only way to check a crash that only happens
+/// while a window is being dragged between two monitors.
+fn clamped_viewport(start: Vec2, end: Vec2, window: UVec2) -> Option<(UVec2, UVec2)> {
+    if window.x == 0 || window.y == 0 || !start.is_finite() || !end.is_finite() {
+        return None;
+    }
+
+    let window_f = window.as_vec2();
+    let first = start.clamp(Vec2::ZERO, Vec2::ONE);
+    let second = end.clamp(Vec2::ZERO, Vec2::ONE);
+    // Ordered rather than assumed: `end` before `start` is a rectangle inside
+    // out, which is a negative size and then, cast, a very large one.
+    let (low, high) = (first.min(second), first.max(second));
+
+    // Two pixels at least, since each camera gets half of it and a zero-sized
+    // viewport is as invalid as an enormous one.
+    let size = ((high - low) * window_f)
+        .max(Vec2::splat(2.0))
+        .min(window_f)
+        .as_uvec2();
+    let position = (low * window_f)
+        .min(window_f - size.as_vec2())
+        .max(Vec2::ZERO)
+        .as_uvec2();
+
+    Some((position, size))
+}
 
 impl Default for MulticamState {
     fn default() -> Self {
@@ -314,22 +391,32 @@ impl MulticamPlugin {
     fn calculate_resize(cameras: &mut Query<(&mut Camera, &Multicam)>, state: &Res<MulticamState>, window: &Window) {
         let window_size = window.physical_size();
 
-        // Calculate the viewport size based on start and end coordinates
-        let viewport_size = UVec2::new(
-            ((state.end.x - state.start.x) * window_size.x as f32) as u32,
-            ((state.end.y - state.start.y) * window_size.y as f32) as u32,
-        );
+        // **A viewport is never allowed to be bigger than the window it is
+        // in.** The fractions are arithmetic on sizes somebody else measured,
+        // and while a window is being dragged between monitors those
+        // measurements go through a frame or two of nonsense: a zero-width
+        // window divides to infinity, and egui can hand back an inverted panel
+        // rect whose width is negative, which turns `1.0 - right - left` into
+        // a number far greater than one.
+        //
+        // What that costs is not a wrong-looking frame. The viewport sizes the
+        // camera's render textures, so a fraction of a thousand asks for a
+        // bloom texture a couple of million pixels across, wgpu refuses it,
+        // and Bevy takes the process down — a crash on the way from one screen
+        // to another, with nothing in the message about viewports.
+        //
+        // Clamped here rather than at the three places that write the
+        // fractions, because this is the one place they become a texture.
+        let Some((viewport_start, viewport_size)) =
+            clamped_viewport(state.start, state.end, window_size)
+        else {
+            return;
+        };
 
-        // Calculate the starting position of the viewport
-        let viewport_start = UVec2::new(
-            (state.start.x * window_size.x as f32) as u32,
-            (state.start.y * window_size.y as f32) as u32,
-        );
-        
         // Calculate the size of each camera's viewport (2x2 grid)
         let camera_size = UVec2::new(
-            viewport_size.x / 2,
-            viewport_size.y / 2,
+            (viewport_size.x / 2).max(1),
+            (viewport_size.y / 2).max(1),
         );
 
         for (mut camera, multicam) in cameras {
@@ -535,4 +622,79 @@ fn draw_rect(
     painter.line(Vec3::new(min.x, max.y, 0.0), Vec3::new(max.x, max.y, 0.0)); // Top
     painter.line(Vec3::new(min.x, min.y, 0.0), Vec3::new(min.x, max.y, 0.0)); // Left
     painter.line(Vec3::new(max.x, min.y, 0.0), Vec3::new(max.x, max.y, 0.0)); // Right
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A viewport fraction is arithmetic on sizes somebody else measured, and
+    /// while a window is dragged between monitors those measurements go
+    /// through a frame or two of nonsense. None of it may reach a texture.
+    ///
+    /// The failure this guards is not a wrong-looking frame: the viewport
+    /// sizes the camera's render textures, so a fraction of a thousand asks
+    /// wgpu for a bloom texture a couple of million pixels across, wgpu
+    /// refuses, and Bevy quits the application. The message says `bloom_texture`
+    /// and nothing about viewports, which is why it is worth pinning here.
+    #[test]
+    fn no_measurement_can_ask_for_a_viewport_bigger_than_the_window() {
+        let window = Vec2::new(1280.0, 720.0);
+
+        // An inverted panel rect reads as a negative width, which turns
+        // `1.0 - right - left` into a number far greater than one.
+        let nonsense = [
+            (Vec2::new(-1000.0, -1000.0), Vec2::new(1024.0, 1024.0)),
+            (Vec2::new(0.0, 0.0), Vec2::new(f32::INFINITY, 1.0)),
+            (Vec2::new(f32::NAN, 0.0), Vec2::new(1.0, 1.0)),
+            // Inside out: `end` before `start`.
+            (Vec2::new(0.9, 0.9), Vec2::new(0.1, 0.1)),
+            // Degenerate: no area at all.
+            (Vec2::new(0.5, 0.5), Vec2::new(0.5, 0.5)),
+        ];
+
+        for (start, end) in nonsense {
+            let Some((position, size)) = clamped_viewport(start, end, window.as_uvec2()) else {
+                // Refusing outright is a fine answer; the last good rect stands.
+                continue;
+            };
+            assert!(
+                size.x >= 1 && size.y >= 1,
+                "{start:?}..{end:?} gave a viewport with no area: {size:?}",
+            );
+            assert!(
+                size.x <= window.x as u32 && size.y <= window.y as u32,
+                "{start:?}..{end:?} gave a viewport bigger than the window: {size:?}",
+            );
+            assert!(
+                position.x + size.x <= window.x as u32
+                    && position.y + size.y <= window.y as u32,
+                "{start:?}..{end:?} put a viewport off the edge: {position:?} + {size:?}",
+            );
+        }
+    }
+
+    /// And an ordinary reservation still lands where it used to.
+    #[test]
+    fn an_ordinary_reservation_is_untouched() {
+        let window = UVec2::new(1000, 1000);
+        let (position, size) =
+            clamped_viewport(Vec2::new(0.2, 0.1), Vec2::new(0.9, 0.8), window).expect("sane");
+        assert_eq!(position, UVec2::new(200, 100));
+        assert_eq!(size, UVec2::new(700, 700));
+    }
+
+    /// A window with no area is a window mid-move; the last good rect stands
+    /// rather than being replaced with a division by zero.
+    #[test]
+    fn a_window_with_no_area_changes_nothing() {
+        let mut state = MulticamState::default();
+        state.start = Vec2::new(0.25, 0.25);
+        state.end = Vec2::new(0.75, 0.75);
+
+        state.reserve_from(Insets { left: 260.0, right: 300.0, top: 24.0, bottom: 180.0 }, 0.0, 0.0);
+
+        assert_eq!(state.start, Vec2::new(0.25, 0.25));
+        assert_eq!(state.end, Vec2::new(0.75, 0.75));
+    }
 }

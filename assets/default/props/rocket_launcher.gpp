@@ -265,14 +265,6 @@ rotation = [
     0.0,
 ]
 
-# The launcher coming out: it starts low and turned down, the way somebody
-# brings a heavy thing up off their hip, and settles into the hold over a
-# little under half a second.
-#
-# Nothing here mentions a hand. The clip moves the weapon and the arms are
-# solved onto wherever it ended up, afterwards, by `grip_the_weapon` — which
-# is why one authored deviation is correct for every class rather than needing
-# a pose each.
 [animations.clips.deploy]
 name_key = "anim.clips.deploy"
 length = 0.45
@@ -280,7 +272,6 @@ clock = "seconds"
 looping = false
 note = "Composed onto the carry rather than replacing it, so the hold stays the one description of where this is held."
 
-# In arm-lengths, so a Heavy swings it up through a Heavy's arc.
 [[animations.clips.deploy.tracks]]
 combine = "compose"
 space = "carry"
@@ -289,14 +280,25 @@ enabled = true
 
 [animations.clips.deploy.tracks.channel]
 channel = "weapon"
-keys = [
-    { at = 0.0, to = ["free", -0.85, 0.35], ease = "cubic_out" },
-    { at = 0.45, to = ["free", 0.0, 0.0], ease = "linear" },
-]
 
-# The muzzle comes up as the weapon does. In metres because an angle is not a
-# length and does not retarget — a build with longer arms still points a
-# launcher the same way.
+[[animations.clips.deploy.tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    -0.71,
+    0.35,
+]
+ease = "cubic_out"
+
+[[animations.clips.deploy.tracks.channel.keys]]
+at = 0.45
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
 [[animations.clips.deploy.tracks]]
 combine = "compose"
 space = "carry"
@@ -305,9 +307,21 @@ enabled = true
 
 [animations.clips.deploy.tracks.channel]
 channel = "weapon_rotation"
-keys = [
-    # Pitch only. The other two axes are left free, so the clip says nothing
-    # about the weapon's yaw or roll and whatever the hold had them at stands.
-    { at = 0.0, to = [-0.9, "free", "free"], ease = "cubic_out" },
-    { at = 0.45, to = [0.0, "free", "free"], ease = "linear" },
+
+[[animations.clips.deploy.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.9,
+    "free",
+    "free",
 ]
+ease = "cubic_out"
+
+[[animations.clips.deploy.tracks.channel.keys]]
+at = 0.45
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "linear"

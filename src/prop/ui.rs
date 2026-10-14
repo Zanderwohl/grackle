@@ -26,7 +26,7 @@ use strum::IntoEnumIterator;
 
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::net::NetRole;
-use crate::editor::multicam::MulticamState;
+use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
 use crate::prop::document::{self, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::common::class::Class;
@@ -330,12 +330,15 @@ fn panels(
     handle_files(&requests, &mut editor, &dialog);
 
     if let Ok(window) = windows.single() {
-        let left = layout.left_width / window.width();
-        let right = layout.right_width / window.width();
-        let top = layout.menu_bar_height / window.height();
-        let bottom = layout.bottom_height / window.height();
-        multicam.start = Vec2::new(left, top);
-        multicam.end = Vec2::new(1.0 - right, 1.0 - bottom);
+        multicam.reserve(
+            Insets {
+                left: layout.left_width,
+                right: layout.right_width,
+                top: layout.menu_bar_height,
+                bottom: layout.bottom_height,
+            },
+            window,
+        );
     }
 }
 
