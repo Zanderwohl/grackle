@@ -59,7 +59,6 @@ fn main() {
         .insert_resource(StartInPlay(editor_params.start_playing))
         .insert_resource(StartInPropEditor(editor_params.start_modelling))
         .insert_resource(StartInAnimEditor(editor_params.start_animating))
-        .insert_resource(StartInAnimEditor(editor_params.start_animating))
         .add_plugins((
             EguiPlugin::default(),
             Shape2dPlugin::default(),

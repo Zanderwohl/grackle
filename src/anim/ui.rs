@@ -12,7 +12,7 @@ use bevy_egui::{egui, EguiContexts};
 use egui_dock::{DockArea, DockState, TabViewer};
 
 use crate::anim::timeline::{KeyAt, TimelineCursor, TimelineSelection, TimelineView};
-use crate::anim::body::BodyClips;
+use crate::anim::body::{BodyClipDialog, BodyClips};
 use crate::anim::{clip_names, edit_selected, selected_clip, AnimEditor, ClipSource};
 use crate::common::skeleton::clip::{
     Axis, ChainRef, Channel, Clip, Clock, Combine, Space, Track, Unit,
@@ -21,11 +21,14 @@ use crate::common::skeleton::state::AnimationState;
 use crate::common::skeleton::{default_humanoid, Interpolation};
 use strum::IntoEnumIterator;
 use crate::common::app_mode::{mode_menu, AppMode};
+use crate::common::assets::Assets;
+use crate::common::file_menu::{file_menu, FileAction};
 use crate::common::class::Class;
 use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
 use crate::prop::document::PropEditor;
+use crate::prop::ui::PropFileDialog;
 use crate::prop::figure::ScaleFigure;
 
 /// How tall the strip is when the mode first opens.
@@ -100,11 +103,31 @@ pub struct AnimUiPlugin;
 
 impl Plugin for AnimUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<AnimPanels>().add_systems(
-            bevy_egui::EguiPrimaryContextPass,
-            panels.run_if(in_state(AppMode::Animation)),
-        );
+        app.init_resource::<AnimPanels>()
+            .init_resource::<BodyClipDialog>()
+            .add_systems(
+                bevy_egui::EguiPrimaryContextPass,
+                panels.run_if(in_state(AppMode::Animation)),
+            )
+            .add_systems(Update, anim_shortcuts.run_if(in_state(AppMode::Animation)));
     }
+}
+
+/// The two dialogs and the pack reader, in one parameter.
+///
+/// Bundled for the reason `PanelMessages` is: `panels` is near Bevy's limit,
+/// and these four are one thing — everything answering the File menu needs and
+/// nothing a panel does.
+#[derive(bevy::ecs::system::SystemParam)]
+struct AnimFiles<'w> {
+    /// A prop's clips are in its `.gpp`, so its file dialog is the prop
+    /// editor's own — the same resource, not a second one.
+    prop: Res<'w, PropFileDialog>,
+    body: Res<'w, BodyClipDialog>,
+    /// Reading goes through `Assets` so it would reach a browser, the way
+    /// every other read of pack content does.
+    assets: Res<'w, Assets>,
+    exit: MessageWriter<'w, AppExit>,
 }
 
 struct AnimTabs<'a> {
@@ -115,9 +138,9 @@ struct AnimTabs<'a> {
     cursor: &'a mut TimelineCursor,
     selection: &'a TimelineSelection,
     mode: &'a mut Option<AppMode>,
-    /// Set when the menu bar asked for a save, so the writing happens outside
-    /// the closure that drew the button.
-    save: bool,
+    /// What the File menu asked of whichever document the current source
+    /// edits, answered outside the closure that drew the menu.
+    file: Option<FileAction>,
     /// Set when an edit has invalidated the key selection — a track removed,
     /// say — so it can be cleared outside the closures that draw the panels,
     /// which only hold it by shared reference.
@@ -720,6 +743,7 @@ fn panels(
     mut next_mode: ResMut<NextState<AppMode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     role: Option<Res<NetRole>>,
+    mut files: AnimFiles,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let ctx = ctx.clone();
@@ -742,7 +766,7 @@ fn panels(
         selection: &selection,
         mode: &mut requested,
         clear_keys: false,
-        save: false,
+        file: None,
     };
 
     layout.menu_bar_height = egui::Panel::top("anim_menu_bar")
@@ -752,10 +776,10 @@ fn panels(
                 // Spelled out rather than read from the state, the way the
                 // prop editor's is: this system is gated on the mode it draws
                 // for, so which one that is is not in question.
+                // Second rather than first, which is the order both other
+                // menu bars have.
+                file_menu(ui, &mut tabs.file);
                 mode_menu(ui, AppMode::Animation, role.as_deref(), tabs.mode);
-                if ui.button(get!("anim.save")).clicked() {
-                    tabs.save = true;
-                }
                 ui.separator();
                 ui.label(match tabs.anim.selected.as_deref() {
                     Some(name) => name.to_string(),
@@ -809,14 +833,12 @@ fn panels(
         .width();
 
     let clear_keys = tabs.clear_keys;
-    let asked_to_save = tabs.save;
+    let asked = tabs.file;
     drop(tabs);
     if clear_keys {
         selection.0.clear();
     }
-    if asked_to_save {
-        save_the_clips(anim.source, &mut editor, &mut body);
-    }
+    handle_files(asked, anim.source, &mut editor, &mut body, &mut files);
 
     // **Reserved, not drawn.** egui owns the *layout* — so the viewports
     // shrink, and the splitter between them and the strip is egui's own resize
@@ -887,38 +909,111 @@ fn panels(
     }
 }
 
-/// Write whichever document the current source edits.
+/// Answer the File menu for whichever document the current source edits.
 ///
-/// The two save quite differently and that is not hidden behind a trait: a
-/// prop is one file the editor already has a path for, and the body clips are
-/// a directory of them named by state. A trait over "save yourself" would have
-/// to invent a shared idea of *where*, which they do not have.
+/// **This is the whole of what "appropriate to the mode" means here**, and the
+/// animation editor is the one mode where it is not a single answer: the source
+/// selector decides which document the panels are writing to, so it decides
+/// what *Save* saves.
 ///
-/// A prop that has never been written has no path, and **save-as belongs to
-/// the prop editor** — it owns the file dialog and the thread it runs on. Said
-/// in the log rather than silently doing nothing.
-fn save_the_clips(source: ClipSource, editor: &mut PropEditor, body: &mut BodyClips) {
+/// - **A prop's clips live in its `.gpp`**, so every action is the prop
+///   editor's own — literally `prop::ui::handle_files`, dialog and all. Saving
+///   a clip set and saving the model are the same save, because they are the
+///   same file, and an animation editor with a second idea of where that file
+///   goes is two paths for one document.
+/// - **The body clips are a pack**, one file per state under `animations/`.
+///   There is no file to browse for, so *Load* re-reads the packs and *Save As*
+///   asks which pack to write into. *New* is an empty set, which is exactly
+///   what a pack that ships no animations has — every state back on its Rust
+///   function, and one `Ctrl+Z` from where it was.
+fn handle_files(
+    action: Option<FileAction>,
+    source: ClipSource,
+    editor: &mut PropEditor,
+    body: &mut BodyClips,
+    files: &mut AnimFiles,
+) {
+    // Quit is neither document's business, and is answered before either of
+    // them so that it reads the same from any source.
+    if action == Some(FileAction::Quit) {
+        info!("Quitting, as asked");
+        files.exit.write(AppExit::Success);
+        return;
+    }
+
     match source {
-        ClipSource::Prop => match editor.path.clone() {
-            Some(path) => match crate::prop::document::save(&path, editor.doc()) {
-                Ok(()) => {
-                    editor.mark_saved(path.clone());
-                    info!("Saved {}", path.display());
-                }
-                Err(why) => warn!("Could not save {}: {why}", path.display()),
-            },
-            None => warn!(
-                "This prop has never been saved; use Save As in the prop editor, \
-                 which owns the file dialog",
-            ),
-        },
+        ClipSource::Prop => crate::prop::ui::handle_files(action, editor, &files.prop),
         ClipSource::Body => {
-            let pack = BodyClips::default_pack();
-            match body.save(&pack) {
-                Ok(count) => info!("Saved {count} body animation(s) to {}", pack.display()),
-                Err(why) => warn!("Could not save body animations: {why}"),
+            // Polled every frame rather than only when something was asked
+            // for: the chooser answers on its own thread, whole seconds after
+            // the click that opened it.
+            if let Some(pack) = files.body.take() {
+                save_the_body_clips(body, &pack);
+            }
+            match action {
+                Some(FileAction::New) => {
+                    body.clear();
+                    info!("Every state is back on its built-in pose");
+                }
+                Some(FileAction::Load) => {
+                    let count = body.reload(&files.assets);
+                    info!("Re-read {count} body animation(s) from the packs");
+                }
+                Some(FileAction::Save) => save_the_body_clips(body, &BodyClips::default_pack()),
+                Some(FileAction::SaveAs) => files.body.ask_where_to_save(),
+                Some(FileAction::Quit) | None => {}
             }
         }
+    }
+}
+
+fn save_the_body_clips(body: &mut BodyClips, pack: &std::path::Path) {
+    match body.save(pack) {
+        Ok(count) => info!("Saved {count} body animation(s) to {}", pack.display()),
+        Err(why) => warn!("Could not save body animations: {why}"),
+    }
+}
+
+/// `Ctrl+S`, `Ctrl+Shift+S` and the undo pair, for the animation editor.
+///
+/// The other two authoring modes have had these and this one had none, so the
+/// chord hints the File menu draws would have been a promise the keyboard did
+/// not keep — and `Ctrl+Z` doing nothing at all in a timeline reads as lost
+/// work rather than as an absence.
+///
+/// Which document they reach is the source selector's answer, exactly as the
+/// menu's is.
+fn anim_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    egui: Res<bevy_egui::input::EguiWantsInput>,
+    anim: Res<AnimEditor>,
+    mut editor: ResMut<PropEditor>,
+    mut body: ResMut<BodyClips>,
+    mut files: AnimFiles,
+) {
+    let chords = crate::common::shortcuts::chords(&keys, egui.wants_keyboard_input());
+
+    if chords.redo {
+        match anim.source {
+            ClipSource::Prop => editor.redo(),
+            ClipSource::Body => body.redo(),
+        }
+    } else if chords.undo {
+        match anim.source {
+            ClipSource::Prop => editor.undo(),
+            ClipSource::Body => body.undo(),
+        }
+    }
+
+    let asked = if chords.save {
+        Some(FileAction::Save)
+    } else if chords.save_as {
+        Some(FileAction::SaveAs)
+    } else {
+        None
+    };
+    if asked.is_some() {
+        handle_files(asked, anim.source, &mut editor, &mut body, &mut files);
     }
 }
 

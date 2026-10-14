@@ -547,6 +547,16 @@ impl ClipLibrary {
         self.by_state.insert(state, Arc::new(clip));
     }
 
+    /// Put a state back on its built-in pose.
+    ///
+    /// The other half of `insert`, and the animation editor needs it: a body
+    /// clip somebody deletes — or reverts, or loads a pack without — has to
+    /// stop playing, and a library that only ever grew would keep playing the
+    /// clip right up until the process ended.
+    pub fn remove(&mut self, state: AnimationState) {
+        self.by_state.remove(&state);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.by_state.is_empty()
     }

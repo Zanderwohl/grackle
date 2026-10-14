@@ -170,12 +170,10 @@ pub fn mode_menu(
     let authority = role.is_none_or(|role| role.is_authority());
 
     ui.menu_button(get!("app_mode.menu.title"), |ui| {
-        // What we are, before what we could become — the same shape the
-        // network menu has, and for the same reason: "which mode am I in"
-        // should not be answered by noticing which entry is greyed out.
-        ui.label(get!("app_mode.menu.current", "mode", current.name()));
-        ui.separator();
-
+        // No "In: Prop Editor" line above the entries. It said what the greyed
+        // out entry already says — the one mode you cannot pick is the one you
+        // are in — and a menu that states its own state is a menu you read
+        // twice.
         for mode in [AppMode::Editor, AppMode::Prop, AppMode::Animation, AppMode::Play] {
             let enabled = mode.selectable_from(current, authority);
             let entry = ui.add_enabled(enabled, egui::Button::new(mode.name()));

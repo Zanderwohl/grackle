@@ -3,9 +3,10 @@ use std::sync::{Arc, Mutex};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crate::common::app_mode::{mode_menu, AppMode};
+use crate::common::file_menu::{file_menu, FileAction};
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
-use bevy_egui::egui::{Id, LayerId, Ui, UiBuilder, UiKind, WidgetText};
+use bevy_egui::egui::{Id, LayerId, Ui, UiBuilder, WidgetText};
 use egui_dock::{DockArea, DockState, TabViewer};
 use strum::IntoEnumIterator;
 use strum_macros::Display;
@@ -29,15 +30,6 @@ use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
 enum DialogResult {
     SavePath(PathBuf),
     LoadPath(PathBuf),
-}
-
-/// What the File menu — or `Ctrl+S` — asked for.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FileOp {
-    New,
-    Save,
-    SaveAs,
-    Load,
 }
 
 /// Ask where to put the blueprint, on a background thread.
@@ -84,9 +76,9 @@ fn file_shortcuts(
 ) {
     let chords = chords(&keys, egui.wants_keyboard_input());
     if chords.save {
-        current_file.requested_op = Some(FileOp::Save);
+        current_file.requested_op = Some(FileAction::Save);
     } else if chords.save_as {
-        current_file.requested_op = Some(FileOp::SaveAs);
+        current_file.requested_op = Some(FileAction::SaveAs);
     }
 }
 
@@ -97,7 +89,7 @@ pub struct CurrentFilePath {
     deferred_room_bake: u8,
     /// Set by the keyboard, taken by the panel. The two cannot be one system:
     /// `EditorPanels::ui` is at Bevy's parameter limit.
-    requested_op: Option<FileOp>,
+    requested_op: Option<FileAction>,
 }
 
 impl Default for CurrentFilePath {
@@ -149,6 +141,9 @@ struct PanelMessages<'w> {
     log_ecs: MessageWriter<'w, LogECS>,
     edits: MessageWriter<'w, EditEvent>,
     net: MessageWriter<'w, NetRequest>,
+    /// The File menu's *Quit*. A writer rather than one more parameter on
+    /// `ui`, which has none to spare.
+    exit: MessageWriter<'w, AppExit>,
     mode: ResMut<'w, NextState<AppMode>>,
 }
 
@@ -337,7 +332,7 @@ impl EditorPanels {
 
         // The menu and the keyboard both ask for these, so the request is a
         // value either can produce and one place answers.
-        let mut pending_file_op: Option<FileOp> = current_file.requested_op.take();
+        let mut pending_file_op: Option<FileAction> = current_file.requested_op.take();
         let mut wanted_mode: Option<AppMode> = None;
         
         let mut viewer = TabViewerAndResources  {
@@ -356,28 +351,10 @@ impl EditorPanels {
             .resizable(false)
             .show(&mut viewport_ui, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
-                    ui.menu_button("File", |ui| {
-                        if ui.button("New").clicked() {
-                            ui.close_kind(UiKind::Menu);
-                            pending_file_op = Some(FileOp::New);
-                        }
-                        if ui.button("Save").clicked() {
-                            ui.close_kind(UiKind::Menu);
-                            pending_file_op = Some(FileOp::Save);
-                        }
-                        if ui.button("Save As").clicked() {
-                            ui.close_kind(UiKind::Menu);
-                            pending_file_op = Some(FileOp::SaveAs);
-                        }
-                        if ui.button("Load").clicked() {
-                            ui.close_kind(UiKind::Menu);
-                            pending_file_op = Some(FileOp::Load);
-                        }
-                        ui.separator();
-                        if ui.button("Quit").clicked() {
-                            ui.close_kind(UiKind::Menu);
-                        }
-                    });
+                    // The shared pulldown rather than five buttons written
+                    // here, which is what it used to be — in hardcoded
+                    // English, with a *Quit* that only closed the menu.
+                    file_menu(ui, &mut pending_file_op);
                     // `Editor` spelled out rather than read from the state:
                     // this whole system is gated on it, so the mode it is
                     // drawing for is not in question.
@@ -495,7 +472,7 @@ impl EditorPanels {
         // Spawn async file dialogs on background thread (non-blocking)
         if let Some(op) = pending_file_op {
             match op {
-                FileOp::New => {
+                FileAction::New => {
                     let template = PathBuf::from(format!(
                         "assets/default/blueprints/new.{}", MAP_BLUEPRINT_EXTENSION
                     ));
@@ -513,15 +490,24 @@ impl EditorPanels {
                 }
                 // A save with nowhere to save to is a save-as. Stated here so
                 // it holds for the menu item and the chord alike.
-                FileOp::Save => match current_file.path.clone() {
+                FileAction::Save => match current_file.path.clone() {
                     Some(path) => match save::save(&path, &editor_features, &map_metadata) {
                         Ok(()) => info!("Saved to {:?}", path),
                         Err(e) => error!("Save failed: {}", e),
                     },
                     None => ask_where_to_save(&current_file),
                 },
-                FileOp::SaveAs => ask_where_to_save(&current_file),
-                FileOp::Load => {
+                FileAction::SaveAs => ask_where_to_save(&current_file),
+                // Straight out, with no "you have unsaved changes" between.
+                // That is what the entry has always looked like it would do,
+                // and the editor has nowhere to ask the question yet — the
+                // modal `egui::Window` the network menu uses is the shape it
+                // would take when there is one.
+                FileAction::Quit => {
+                    info!("Quitting, as asked");
+                    messages.exit.write(AppExit::Success);
+                }
+                FileAction::Load => {
                     let slot = current_file.dialog_result.clone();
                     std::thread::spawn(move || {
                         let handle = pollster::block_on(

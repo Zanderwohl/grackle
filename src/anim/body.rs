@@ -88,21 +88,41 @@ impl BodyClips {
             return;
         }
         self.loaded = true;
-
-        for pack in default_packs() {
-            for state in AnimationState::iter() {
-                match read_clip(assets, &pack, state) {
-                    Ok(Some(clip)) => {
-                        self.clips.insert(state.clip_name().to_string(), clip);
-                    }
-                    Ok(None) => {}
-                    Err(why) => warn!("{}: {why}", state.clip_name()),
-                }
-            }
-        }
+        self.clips = read_the_packs(assets, &default_packs());
         // Loading is not an edit. Bumped anyway so whatever rebuilds on this
         // counter notices the clips arriving.
         self.generation += 1;
+    }
+
+    /// Throw the edits away and take what is on disk.
+    ///
+    /// The File menu's *Load*, and the honest reading of it for a document
+    /// that is a pack rather than a file: there is nothing to browse for,
+    /// because which packs are in force is a property of the build. What it is
+    /// *for* is the same as anywhere else — getting back to the last saved
+    /// state — and going through [`BodyClips::edit`] is what makes it one
+    /// `Ctrl+Z` rather than a cliff.
+    pub fn reload(&mut self, assets: &Assets) -> usize {
+        let fresh = read_the_packs(assets, &default_packs());
+        let count = fresh.len();
+        self.loaded = true;
+        self.edit(|clips| *clips = fresh);
+        // `edit` only counts a change, and reloading over an unedited document
+        // is no change — but the caller still asked, and `dirty` has to come
+        // off either way.
+        self.dirty = false;
+        count
+    }
+
+    /// Every state back on its built-in pose.
+    ///
+    /// The File menu's *New*: an empty set of body clips is exactly what a
+    /// pack that ships none has, and that build animates perfectly well — it
+    /// is where this one started. So this is a new document in the full sense
+    /// rather than a destructive button wearing the word, and it is one undo
+    /// step like any other edit.
+    pub fn clear(&mut self) {
+        self.edit(|clips| clips.clear());
     }
 
     /// One edit, recorded as one undo step if it changed anything.
@@ -198,6 +218,76 @@ impl BodyClips {
     }
 }
 
+/// Where a *Save As* landed, filled in on the dialog's own thread.
+///
+/// A resource of its own rather than a field on [`BodyClips`], which is the
+/// document: where somebody is being asked to put it is not part of what is in
+/// it, and an undo snapshot that carried a half-answered dialog would restore
+/// one. The same shape `PropFileDialog` has, one directory instead of one file.
+#[derive(Resource, Clone)]
+pub struct BodyClipDialog {
+    result: std::sync::Arc<std::sync::Mutex<Option<PathBuf>>>,
+}
+
+impl Default for BodyClipDialog {
+    fn default() -> Self {
+        Self { result: std::sync::Arc::new(std::sync::Mutex::new(None)) }
+    }
+}
+
+impl BodyClipDialog {
+    /// Ask which pack to write into, on a background thread.
+    ///
+    /// A **directory**, not a file: the body clips are one file per state, so
+    /// the question is which pack rather than which name — and `animations/`
+    /// under it is added by the save, so what somebody picks is the pack they
+    /// would recognise.
+    pub fn ask_where_to_save(&self) {
+        let slot = self.result.clone();
+        let from = Self::default_directory();
+        std::thread::spawn(move || {
+            let mut chooser = rfd::AsyncFileDialog::new();
+            if from.is_dir() {
+                chooser = chooser.set_directory(&from);
+            }
+            if let Some(handle) = pollster::block_on(chooser.pick_folder()) {
+                *slot.lock().unwrap() = Some(handle.path().to_path_buf());
+            }
+        });
+    }
+
+    pub fn take(&self) -> Option<PathBuf> {
+        self.result.lock().unwrap().take()
+    }
+
+    /// Where the chooser opens: beside the packs, not wherever the process was
+    /// started from.
+    fn default_directory() -> PathBuf {
+        let pack = BodyClips::default_pack();
+        pack.parent().map(Path::to_path_buf).unwrap_or(pack)
+    }
+}
+
+/// Read one set of clips out of a list of packs, lowest priority first.
+///
+/// Shared by the first load and by *Load*, so a revert cannot read the packs
+/// differently from the way they were read to begin with.
+fn read_the_packs(assets: &Assets, packs: &[PathBuf]) -> BTreeMap<String, Clip> {
+    let mut clips = BTreeMap::new();
+    for pack in packs {
+        for state in AnimationState::iter() {
+            match read_clip(assets, pack, state) {
+                Ok(Some(clip)) => {
+                    clips.insert(state.clip_name().to_string(), clip);
+                }
+                Ok(None) => {}
+                Err(why) => warn!("{}: {why}", state.clip_name()),
+            }
+        }
+    }
+    clips
+}
+
 /// Hand the edited clips to the game.
 ///
 /// On the generation counter rather than `Res::is_changed`, for the reason
@@ -214,13 +304,25 @@ pub fn publish_the_body_clips(
     if clips.generation() == *seen {
         return;
     }
+    // Before the files have been read, an empty document means "not loaded"
+    // rather than "no clips" — and publishing it would take every state the
+    // *game* loaded at startup back off its clip.
+    if !clips.loaded() {
+        return;
+    }
     *seen = clips.generation();
 
-    for (name, clip) in clips.clips() {
-        let Some(state) = BodyClips::state_of(name) else {
-            continue;
-        };
-        library.insert(state, clip.clone());
+    // Every state, not every clip: a clip that has been deleted, reverted
+    // away or cleared has to *stop* playing, and a library that was only ever
+    // inserted into would keep playing it for the rest of the process. The
+    // document is the whole truth about which states are animated from data,
+    // which is only safe to act on once it has been read — hence the guard
+    // above.
+    for state in AnimationState::iter() {
+        match clips.get(state.clip_name()) {
+            Some(clip) => library.insert(state, clip.clone()),
+            None => library.remove(state),
+        }
     }
 }
 

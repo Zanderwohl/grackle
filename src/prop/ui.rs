@@ -25,6 +25,7 @@ use egui_dock::{DockArea, DockState, TabViewer};
 use strum::IntoEnumIterator;
 
 use crate::common::app_mode::{mode_menu, AppMode};
+use crate::common::file_menu::{file_menu, FileAction};
 use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
@@ -99,10 +100,8 @@ impl Default for PropPanels {
 /// reachable from inside an egui closure.
 #[derive(Default)]
 struct PropRequests {
-    new: bool,
-    open: bool,
-    save: bool,
-    save_as: bool,
+    /// What the File menu asked of the prop in front of us.
+    file: Option<FileAction>,
     frame: bool,
     /// The mode picked from the **Mode** menu, if one was.
     mode: Option<AppMode>,
@@ -183,6 +182,7 @@ fn panels(
     // with no `NetPlugin` is a closed game, and a closed game is its own
     // authority.
     role: Option<Res<NetRole>>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let ctx = ctx.clone();
@@ -217,24 +217,10 @@ fn panels(
         .resizable(false)
         .show(&mut viewport_ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button(get!("prop.menu.file"), |ui| {
-                    if ui.button(get!("prop.menu.new")).clicked() {
-                        ui.close_kind(UiKind::Menu);
-                        tabs.requests.new = true;
-                    }
-                    if ui.button(get!("prop.menu.open")).clicked() {
-                        ui.close_kind(UiKind::Menu);
-                        tabs.requests.open = true;
-                    }
-                    if ui.button(get!("prop.menu.save")).clicked() {
-                        ui.close_kind(UiKind::Menu);
-                        tabs.requests.save = true;
-                    }
-                    if ui.button(get!("prop.menu.save_as")).clicked() {
-                        ui.close_kind(UiKind::Menu);
-                        tabs.requests.save_as = true;
-                    }
-                });
+                // The shared pulldown. *Load* is what this used to call
+                // *Open* — the same action under the name every other mode
+                // gives it, which is the whole of what sharing the menu buys.
+                file_menu(ui, &mut tabs.requests.file);
                 // `Prop` spelled out rather than read from the state: this
                 // whole system is gated on it, so the mode it is drawing for
                 // is not in question.
@@ -327,7 +313,11 @@ fn panels(
     if let Some(mode) = requests.mode {
         next_mode.set(mode);
     }
-    handle_files(&requests, &mut editor, &dialog);
+    handle_files(requests.file, &mut editor, &dialog);
+    if requests.file == Some(FileAction::Quit) {
+        info!("Quitting, as asked");
+        exit.write(AppExit::Success);
+    }
 
     if let Ok(window) = windows.single() {
         multicam.reserve(
@@ -1341,9 +1331,21 @@ fn prop_shortcuts(
     }
 }
 
-/// New, open, save, including the file dialog on its own thread.
-fn handle_files(requests: &PropRequests, editor: &mut PropEditor, dialog: &PropFileDialog) {
-    if requests.new {
+/// New, load, save, including the file dialog on its own thread.
+///
+/// Takes the action rather than the whole request bundle, because the
+/// **animation editor** calls it too: a prop's clips live in its `.gpp`, so
+/// *Save* there is this save, and two answers to "where does this prop go"
+/// would be two that drift.
+///
+/// Quit is not here. It is a message, not a file, and this function has no
+/// writer — see the caller.
+pub(crate) fn handle_files(
+    action: Option<FileAction>,
+    editor: &mut PropEditor,
+    dialog: &PropFileDialog,
+) {
+    if action == Some(FileAction::New) {
         editor.open(PropDoc::new("prop.untitled"), None);
     }
 
@@ -1369,13 +1371,13 @@ fn handle_files(requests: &PropRequests, editor: &mut PropEditor, dialog: &PropF
         }
     }
 
-    if requests.save {
+    if action == Some(FileAction::Save) {
         save_or_ask(editor, dialog);
-    } else if requests.save_as {
+    } else if action == Some(FileAction::SaveAs) {
         ask_where_to_save(editor, dialog);
     }
 
-    if requests.open {
+    if action == Some(FileAction::Load) {
         let slot = dialog.result.clone();
         std::thread::spawn(move || {
             let chooser = rfd::AsyncFileDialog::new().add_filter("Grackle Prop", &[PROP_EXTENSION]);

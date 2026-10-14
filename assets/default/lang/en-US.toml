@@ -331,9 +331,6 @@ no_tracks = "No tracks. Add one above."
 add_track = "Add track…"
 delete_track = "Remove"
 animate_a_state = "Animate a state…"
-save = "Save"
-saved = "Saved { count } animation(s)"
-save_failed = "Could not save: { why }"
 
 # Field labels live under their own table: several of them share a name with a
 # table of values — `clock`, `space`, `unit`, `combine`, `chain` — and TOML
@@ -426,20 +423,25 @@ prop = "Prop Editor"
 animation = "Animation Editor"
 play = "Play"
 
+# Every authoring mode's File pulldown. The entries mean whatever the thing
+# you are editing makes of them — a blueprint, a prop, a set of clips — which
+# is why the names are generic and live in one place.
+[file.menu]
+title = "File"
+new = "New"
+save = "Save"
+save_as = "Save As"
+load = "Load"
+quit = "Quit"
+
 [app_mode.menu]
 title = "Mode"
-current = "In: { mode }"
 server_decides = "The server decides when the match is played."
 
 [prop]
 untitled = "Untitled prop"
 
 [prop.menu]
-file = "File"
-new = "New"
-open = "Open"
-save = "Save"
-save_as = "Save As"
 frame = "Frame"
 
 [prop.panels]
