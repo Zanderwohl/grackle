@@ -123,7 +123,10 @@ enum TabKinds {
     Bakes,
     Show,
     Metadata,
-    Timeline,
+    /// The feature list, which is the map, with its rollback bar — and the
+    /// selected feature's editor beneath. Undo is not here: it is a separate
+    /// axis, on the Edit menu.
+    History,
 }
 
 /// Everything the panels write out, in one system parameter.
@@ -175,7 +178,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Bakes => "bakes".to_owned(),
             TabKinds::Show => "show".to_owned(),
             TabKinds::Metadata => "metadata".to_owned(),
-            TabKinds::Timeline => "timeline".to_owned(),
+            TabKinds::History => "history".to_owned(),
         })
     }
 
@@ -186,7 +189,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Bakes => { get!("bakes.title").into() }
             TabKinds::Show => { get!("show.title").into() }
             TabKinds::Metadata => { get!("editor.metadata.title").into() }
-            TabKinds::Timeline => { get!("editor.timeline.title").into() }
+            TabKinds::History => { get!("editor.history.title").into() }
         }
     }
 
@@ -207,7 +210,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Metadata => {
                 map_metadata_panel_ui(ui, self.map_metadata);
             }
-            TabKinds::Timeline => {
+            TabKinds::History => {
                 FeatureTimeline::ui(ui, self.editor_features, &mut self.pending_edits.events, self.retarget_request)
             }
         }
@@ -266,7 +269,7 @@ impl Default for EditorPanels {
 impl EditorPanels {
     pub fn new() -> Self {
         let default_top_tabs = vec![TabKinds::Tools,];
-        let default_left_tabs = vec![TabKinds::Timeline, TabKinds::Bakes,];
+        let default_left_tabs = vec![TabKinds::History, TabKinds::Bakes,];
         let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata];
         let default_bottom_tabs = vec![TabKinds::Empty("Delta".to_owned()), TabKinds::Empty("Epsilon".to_owned())];
         

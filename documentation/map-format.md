@@ -81,11 +81,15 @@ added while rolled back.
 
 ### Stage 3 — rollback as a view
 
-- [ ] `rollback: Option<FeatureId>`; `active_features` evaluates to it.
-- [ ] Adding while rolled back inserts at the bar.
-- [ ] One **History** panel with a draggable bar and "Roll back to here" /
-      "Roll to end"; old History panel removed.
-- [ ] Entering Play rolls to the end; `map_sync` stops sending the bar.
+- [x] `rollback: Option<FeatureId>`; `active_features`/`shown_len` evaluate to
+      it; `sync_entities` stands up only what is above it.
+- [x] Adding while rolled back inserts at the bar.
+- [x] One **History** panel (the Timeline tab, renamed) with a draggable bar
+      and "Roll back to here" / "Roll to end"; Backward/Forward buttons and the
+      old History panel removed.
+- [x] Entering Play rolls to the end — on the Editor→Play transition, with
+      `sync_entities` after it, so the bake in `OnEnter(Play)` sees every room;
+      `map_sync` stops sending the bar (done in stage 1).
 
 ### Stage 4 — wiring and docs
 

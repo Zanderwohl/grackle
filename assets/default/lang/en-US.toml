@@ -102,10 +102,9 @@ granularity = "Granularity"
 active = "Snap to grid"
 
 [editor.timeline]
-title = "Features"
-undo = "Backward"
-redo = "Forward"
 delete = "Delete"
+roll_back_here = "Roll back to here"
+roll_to_end = "Roll to end"
 
 [editor.history]
 title = "History"

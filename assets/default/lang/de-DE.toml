@@ -84,9 +84,6 @@ granularity = "Granularität"
 active = "Am Raster einrasten"
 
 [editor.timeline]
-title = "Zeitleiste"
-undo = "Rückgängig"
-redo = "Wiederherstellen"
 delete = "Löschen"
 
 [editor.history]

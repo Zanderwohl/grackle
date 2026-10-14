@@ -27,6 +27,20 @@ impl Plugin for EditorStepsPlugin {
             .init_resource::<MapMetadata>()
             .add_message::<EditEvent>()
             .add_systems(Startup, load_startup_blueprint)
+            // **A round is played on the whole map.** On the transition itself
+            // rather than on entering Play, and followed by `sync_entities`:
+            // `BakeSystems` and the collision rebuild run in `OnEnter(Play)`,
+            // and the features past the bar have to have their entities by
+            // then — which means spawned here, in a schedule whose commands
+            // are applied before that one runs.
+            .add_systems(
+                OnTransition { exited: AppMode::Editor, entered: AppMode::Play },
+                (
+                    |mut features: ResMut<FeatureTimeline>| features.roll_back_to(None),
+                    FeatureTimeline::sync_entities,
+                )
+                    .chain(),
+            )
             // `sync_entities` and `handle_edits` are deliberately not
             // gated on `AppMode::Editor`: features have to keep reaching their
             // entities while playing, which is what lets an edit land
@@ -146,6 +160,13 @@ pub trait FeatureTrait: Send + Sync {
     fn set_euler_angle(&mut self, _axis: u8, _radians: f32) -> bool { false }
 }
 
+/// What a row of the feature list asked for, answered once the list is drawn.
+enum RowAction {
+    Delete(FeatureId),
+    /// Move the rollback bar to just after this feature, or to the end.
+    RollBackTo(Option<FeatureId>),
+}
+
 #[derive(Message)]
 pub struct EditEvent {
     pub editor_id: u64,
@@ -168,7 +189,14 @@ pub struct FeatureTimeline {
     /// Topologically sorted list of the selected feature and all its DAG descendants.
     /// Parents always appear before their dependants.
     selection_affected: Option<Vec<FeatureId>>,
-    rollback_bar: u64,
+    /// The **rollback bar**: the last feature shown, when the map is being
+    /// looked at as it stood partway down the list. `None` is the whole map.
+    ///
+    /// An id rather than a count, so an edit above the bar cannot quietly
+    /// move it onto a different feature. **View state, not the map**: not
+    /// saved, not sent to clients, not part of an undo snapshot — the prop
+    /// editor's rule.
+    rollback: Option<FeatureId>,
     pending_despawns: Vec<Entity>,
     /// Whole-map snapshots to go back to, oldest first. **Undo is not a list
     /// of what each edit did** — it is what the map *was*, the prop editor's
@@ -219,7 +247,7 @@ impl Default for FeatureTimeline {
             id_counter: 0,
             selected_feature: None,
             selection_affected: None,
-            rollback_bar: 0,
+            rollback: None,
             pending_despawns: vec![],
             undo: vec![],
             redo: vec![],
@@ -238,12 +266,10 @@ impl FeatureTimeline {
         feature_order: Vec<FeatureId>,
         id_counter: u64,
     ) -> Self {
-        let rollback_bar = feature_order.len() as u64;
         let mut timeline = Self {
             features,
             feature_order,
             id_counter,
-            rollback_bar,
             ..Default::default()
         };
         // Whatever it came from — a file, a server — is what it matches.
@@ -289,8 +315,41 @@ impl FeatureTimeline {
         self.id_counter
     }
 
-    pub fn rollback_bar(&self) -> u64 {
-        self.rollback_bar
+    /// Where the rollback bar is, if the map is rolled back.
+    pub fn rollback(&self) -> Option<FeatureId> {
+        self.rollback
+    }
+
+    /// How many features, from the top, are in force.
+    pub fn shown_len(&self) -> usize {
+        self.rollback
+            .and_then(|id| self.feature_order.iter().position(|candidate| *candidate == id))
+            .map_or(self.feature_order.len(), |at| at + 1)
+    }
+
+    /// Move the rollback bar to just after `at`, or take it away with `None`.
+    /// A bar after the last feature is no bar, stored as none so there is one
+    /// way to say "everything".
+    pub fn roll_back_to(&mut self, at: Option<FeatureId>) {
+        let at = at.filter(|id| {
+            self.features.contains_key(id) && self.feature_order.last() != Some(id)
+        });
+        if at == self.rollback {
+            return;
+        }
+        self.rollback = at;
+        self.deselect_past_the_bar();
+    }
+
+    /// A selection past the bar is a feature with no entity and nothing to
+    /// edit against.
+    fn deselect_past_the_bar(&mut self) {
+        let shown = self.shown_len();
+        if let Some(selected) = self.selected_feature
+            && self.feature_order.iter().position(|id| *id == selected).is_none_or(|at| at >= shown)
+        {
+            self.select(None);
+        }
     }
 
     pub fn next_id(&mut self) -> FeatureId {
@@ -330,8 +389,8 @@ impl FeatureTimeline {
     /// Returns an iterator of (FeatureId, &Feature) for all active features
     /// (those before the rollback bar).
     pub fn active_features(&self) -> impl Iterator<Item = (FeatureId, &Feature)> {
-        let rollback_bar = self.rollback_bar as usize;
-        self.feature_order[..rollback_bar].iter().filter_map(move |id| {
+        let shown = self.shown_len();
+        self.feature_order[..shown].iter().filter_map(move |id| {
             self.features.get(id).map(|a| (*id, a))
         })
     }
@@ -356,19 +415,10 @@ impl FeatureTimeline {
         self.pending_despawns.push(entity);
     }
 
+    /// Add a feature **at the rollback bar** and move the bar past it, or at
+    /// the end with no bar. Adding while rolled back is building on the map as
+    /// it stood there; nothing after the bar is lost, as it used to be.
     pub fn apply_feature(&mut self, feature_object: Box<dyn FeatureTrait>) -> FeatureId {
-        let rollback_at_end = self.rollback_bar == self.feature_order.len() as u64;
-        let cur = self.rollback_bar as usize;
-        if cur < self.feature_order.len() {
-            for id in self.feature_order.drain(cur..) {
-                if let Some(feature) = self.features.remove(&id) {
-                    if let Some(entity) = feature.object.entity() {
-                        self.pending_despawns.push(entity);
-                    }
-                }
-            }
-        }
-
         let parents = feature_object.parent_ids();
         let new_id = self.next_id();
         let new_feature = Feature {
@@ -377,11 +427,10 @@ impl FeatureTimeline {
             parents,
         };
         self.features.insert(new_feature.id, new_feature);
-        self.feature_order.push(new_id);
-        if rollback_at_end {
-            self.rollback_bar = self.feature_order.len() as u64;
-        } else {
-            self.clamp_rollback_bar();
+        let at = self.shown_len();
+        self.feature_order.insert(at, new_id);
+        if self.rollback.is_some() {
+            self.rollback = Some(new_id);
         }
 
         new_id
@@ -389,33 +438,6 @@ impl FeatureTimeline {
     
     pub fn get_feature(&self, id: &FeatureId) -> Option<&Feature> {
         self.features.get(id)
-    }
-
-    pub fn can_step_back(&self) -> bool {
-        self.rollback_bar > 0
-    }
-
-    pub fn can_step_forward(&self) -> bool {
-        self.rollback_bar < self.feature_order.len() as u64
-    }
-
-    /// Move the rollback bar back one feature.
-    pub fn step_back(&mut self) {
-        if !self.can_step_back() { return; }
-        self.rollback_bar -= 1;
-        if let Some(selected) = self.selected_feature {
-            if let Some(idx) = self.feature_order.iter().position(|id| *id == selected) {
-                if idx as u64 >= self.rollback_bar {
-                    self.select(None);
-                }
-            }
-        }
-    }
-
-    /// Move the rollback bar forward one feature.
-    pub fn step_forward(&mut self) {
-        if !self.can_step_forward() { return; }
-        self.rollback_bar += 1;
     }
 
     /// The map as undo sees it right now.
@@ -536,7 +558,6 @@ impl FeatureTimeline {
     /// dependants. An undo of one wall therefore respawns one wall rather
     /// than every room on the map.
     fn restore(&mut self, target: &MapState) {
-        let was_at_end = self.rollback_bar >= self.feature_order.len() as u64;
         let mut changed: Vec<FeatureId> = Vec::new();
         let mut next: HashMap<FeatureId, Feature> = HashMap::new();
         let mut order = Vec::with_capacity(target.features.len());
@@ -593,10 +614,7 @@ impl FeatureTimeline {
             }
         }
 
-        if was_at_end {
-            self.rollback_bar = self.feature_order.len() as u64;
-        }
-        self.clamp_rollback_bar();
+        self.forget_a_missing_bar();
         let selected = self.selected_feature.filter(|id| self.features.contains_key(id));
         self.select(selected);
 
@@ -604,20 +622,13 @@ impl FeatureTimeline {
         self.checkpoint = Some(target.clone());
     }
 
-    /// Keeps the construction rollback bar valid after feature-order changes from actions.
-    /// Action undo/redo does not otherwise move the bar except to stay in `[0, len]`.
-    fn clamp_rollback_bar(&mut self) {
-        let len = self.feature_order.len() as u64;
-        if self.rollback_bar > len {
-            self.rollback_bar = len;
+    /// The bar goes if the feature it sat after has gone, rather than
+    /// pointing at nothing.
+    fn forget_a_missing_bar(&mut self) {
+        if self.rollback.is_some_and(|id| !self.features.contains_key(&id)) {
+            self.rollback = None;
         }
-        if let Some(selected) = self.selected_feature {
-            if let Some(idx) = self.feature_order.iter().position(|id| *id == selected) {
-                if idx as u64 >= self.rollback_bar {
-                    self.select(None);
-                }
-            }
-        }
+        self.deselect_past_the_bar();
     }
 
     fn queue_refresh_for_feature_and_descendants(&mut self, root: FeatureId) {
@@ -662,7 +673,7 @@ impl FeatureTimeline {
             self.select(self.selected_feature);
         }
 
-        self.clamp_rollback_bar();
+        self.forget_a_missing_bar();
     }
     
     pub fn ui(
@@ -671,19 +682,7 @@ impl FeatureTimeline {
         edit_events: &mut Vec<EditEvent>,
         retarget_out: &mut Option<(FeatureId, String)>,
     ) {
-        // Section 1: Undo/Redo (compact, top)
-        ui.horizontal(|ui| {
-            if ui.add_enabled(features.can_step_back(), egui::Button::new("⮪ ".to_owned() + &get!("editor.timeline.undo"))).clicked() {
-                features.step_back();
-            }
-            if ui.add_enabled(features.can_step_forward(), egui::Button::new(get!("editor.timeline.redo") + " ⮫")).clicked() {
-                features.step_forward();
-            }
-        });
-
-        ui.separator();
-
-        // Section 3: Editor for selected feature (bottom, takes as much as needed)
+        // Editor for selected feature (bottom, takes as much as needed)
         // We render this into a bottom panel so it pins to the bottom,
         // then the scroll area fills whatever's left.
         let mut was_edited = false;
@@ -693,7 +692,7 @@ impl FeatureTimeline {
         if let Some(selected_id) = features.selected_feature {
             let selected_idx = features.feature_order.iter()
                 .position(|id| *id == selected_id);
-            let is_active = selected_idx.is_some_and(|idx| (idx as u64) < features.rollback_bar);
+            let is_active = selected_idx.is_some_and(|idx| idx < features.shown_len());
 
             if is_active {
                 let selected_idx = selected_idx.unwrap();
@@ -757,16 +756,20 @@ impl FeatureTimeline {
             }
         }
 
-        // Section 2: Feature order (construction timeline; fills remaining space)
+        // The feature list, which *is* the map, with the rollback bar in it.
         let mut selection_changed = false;
         let mut next_selected = features.selected_feature;
-        let pending_delete = Rc::new(RefCell::new(None::<FeatureId>));
+        let pending: Rc<RefCell<Option<RowAction>>> = Rc::new(RefCell::new(None));
+        let shown = features.shown_len();
+        let rolled_back = features.rollback.is_some();
+        let mut rows: Vec<(FeatureId, egui::Rect)> = Vec::new();
+        let mut bar_dragged = false;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (i, id) in features.feature_order.iter().enumerate() {
                 let feature = features.get_feature(id).unwrap();
                 let is_selected = features.selected_feature == Some(*id);
-                let is_active = (i as u64) < features.rollback_bar;
+                let is_active = i < shown;
 
                 // The trailing `Atom::grow` is what left-justifies the title.
                 // These buttons are stretched to the panel width and egui
@@ -774,29 +777,73 @@ impl FeatureTimeline {
                 // floats in the middle of the row and the list has no edge to
                 // read down.
                 let label_text = feature.type_name_with_id();
-                let label = if is_active {
-                    egui::Button::selectable(is_selected, (label_text, egui::Atom::grow()))
-                } else {
-                    egui::Button::selectable(false, (
-                        egui::RichText::new(label_text).strikethrough().weak(),
-                        egui::Atom::grow(),
-                    ))
-                };
-
-                let response = ui.add_sized([ui.available_width(), 0.0], label);
+                // Past the bar: in the map, not in the world. Faded rather
+                // than struck through, which reads as deleted.
+                let response = ui
+                    .scope(|ui| {
+                        if !is_active {
+                            ui.multiply_opacity(0.4);
+                        }
+                        let label = egui::Button::selectable(
+                            is_selected && is_active,
+                            (label_text, egui::Atom::grow()),
+                        );
+                        ui.add_sized([ui.available_width(), 0.0], label)
+                    })
+                    .inner;
+                rows.push((*id, response.rect));
                 if response.clicked() && is_active {
                     next_selected = Some(if is_selected { None } else { Some(*id) }).flatten();
                     selection_changed = true;
                 }
 
                 let fid = *id;
-                let pending = pending_delete.clone();
+                let menu = pending.clone();
+                let at_the_bar = i + 1 == shown;
                 response.context_menu(move |menu_ui| {
+                    if !at_the_bar && menu_ui.button(get!("editor.timeline.roll_back_here")).clicked() {
+                        *menu.borrow_mut() = Some(RowAction::RollBackTo(Some(fid)));
+                        menu_ui.close();
+                    }
+                    if rolled_back && menu_ui.button(get!("editor.timeline.roll_to_end")).clicked() {
+                        *menu.borrow_mut() = Some(RowAction::RollBackTo(None));
+                        menu_ui.close();
+                    }
+                    menu_ui.separator();
                     if menu_ui.button(get!("editor.timeline.delete")).clicked() {
-                        *pending.borrow_mut() = Some(fid);
+                        *menu.borrow_mut() = Some(RowAction::Delete(fid));
                         menu_ui.close();
                     }
                 });
+
+                // **The rollback bar**, dragged up the list to see the map as
+                // it stood there. Thin and faint at the bottom where it changes
+                // nothing; bold anywhere else, because a world that is not the
+                // whole map must not be mistaken for one that is.
+                if at_the_bar {
+                    let (rect, bar) =
+                        ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::drag());
+                    let bar = bar.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                    let lit = rolled_back || bar.hovered() || bar.dragged();
+                    let stroke = match lit {
+                        true => egui::Stroke::new(3.0, ui.visuals().selection.stroke.color),
+                        false => egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
+                    };
+                    ui.painter().hline(rect.x_range(), rect.center().y, stroke);
+                    bar_dragged = bar.dragged();
+                }
+            }
+
+            // Live while dragging, so the world scrubs through the map's
+            // construction under the pointer. Never above the first feature: a
+            // map rolled back to nothing is an empty world, which says nothing.
+            if bar_dragged
+                && let Some(pointer) = ui.ctx().pointer_interact_pos()
+            {
+                let above = rows.iter().take_while(|(_, rect)| rect.center().y < pointer.y).count();
+                if let Some((anchor, _)) = rows.get(above.max(1) - 1) {
+                    *pending.borrow_mut() = Some(RowAction::RollBackTo(Some(*anchor)));
+                }
             }
 
             let remaining = ui.available_size();
@@ -813,8 +860,10 @@ impl FeatureTimeline {
             features.select(next_selected);
         }
 
-        if let Some(id) = pending_delete.borrow_mut().take() {
-            features.delete_feature(id);
+        match pending.borrow_mut().take() {
+            Some(RowAction::Delete(id)) => features.delete_feature(id),
+            Some(RowAction::RollBackTo(at)) => features.roll_back_to(at),
+            None => {}
         }
     }
 
@@ -843,14 +892,14 @@ impl FeatureTimeline {
             commands.entity(entity).despawn();
         }
 
-        let rollback_bar = features.rollback_bar;
+        let shown = features.shown_len();
         let order: Vec<(usize, FeatureId)> = features.feature_order.iter()
             .enumerate()
             .map(|(i, id)| (i, *id))
             .collect();
 
         for (i, id) in order {
-            let should_exist = (i as u64) < rollback_bar;
+            let should_exist = i < shown;
             let needs_spawn = should_exist
                 && features.features.get(&id).is_some_and(|a| a.object.entity().is_none());
 
@@ -1396,6 +1445,82 @@ mod tests {
         timeline.undo();
         assert_eq!(x_of(&timeline, a), Some(9.0));
         assert!(timeline.is_dirty());
+    }
+
+    /// Rolled back, a new feature goes in at the bar and the bar follows it;
+    /// nothing past the bar is lost, which used to be the price of adding.
+    #[test]
+    fn adding_while_rolled_back_builds_at_the_bar() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        let b = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.roll_back_to(Some(a));
+        assert_eq!(timeline.shown_len(), 1);
+        assert_eq!(timeline.active_features().count(), 1);
+
+        let c = timeline.apply_feature(Box::new(GlobalPoint::new(2.0, 0.0, 0.0)));
+        assert_eq!(timeline.feature_order(), &[a, c, b]);
+        assert_eq!(timeline.rollback(), Some(c));
+        assert_eq!(timeline.shown_len(), 2);
+    }
+
+    /// A bar after the last feature is no bar, and a bar whose feature is
+    /// deleted goes with it rather than pointing at nothing.
+    #[test]
+    fn the_bar_never_points_at_nothing() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        let b = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.roll_back_to(Some(b));
+        assert_eq!(timeline.rollback(), None);
+
+        timeline.roll_back_to(Some(a));
+        timeline.delete_feature(a);
+        assert_eq!(timeline.rollback(), None);
+        assert_eq!(timeline.shown_len(), 1);
+    }
+
+    /// The bar is a way of looking at the map, not part of it: moving it is
+    /// no undo step, and a save writes every feature regardless.
+    #[test]
+    fn rolling_back_is_not_an_edit() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.mark_saved();
+        timeline.roll_back_to(Some(a));
+        timeline.checkpoint();
+        assert!(!timeline.can_undo() && !timeline.is_dirty());
+
+        let text = crate::editor::save::to_text(&timeline, &Default::default()).unwrap();
+        let loaded = crate::editor::save::parse(&text).unwrap().timeline;
+        assert_eq!(loaded.feature_order().len(), 2);
+        assert_eq!(loaded.rollback(), None);
+    }
+
+    /// Only what is above the bar stands in the world, and rolling to the
+    /// end stands up the rest — which is what entering Play relies on.
+    #[test]
+    fn the_world_holds_what_is_above_the_bar() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        let b = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.roll_back_to(Some(a));
+        app.insert_resource(timeline);
+        app.add_systems(Update, FeatureTimeline::sync_entities);
+        app.update();
+
+        let has_entity = |app: &App, id| {
+            app.world().resource::<FeatureTimeline>().get_feature(&id).unwrap().object().entity().is_some()
+        };
+        assert!(has_entity(&app, a));
+        assert!(!has_entity(&app, b), "a feature past the bar stood in the world");
+
+        app.world_mut().resource_mut::<FeatureTimeline>().roll_back_to(None);
+        app.update();
+        assert!(has_entity(&app, b));
     }
 
     /// A map that arrives from somewhere else — a file, a server — brings no
