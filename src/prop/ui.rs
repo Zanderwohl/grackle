@@ -344,8 +344,10 @@ fn panels(
         .rect
         .height();
 
+    let dock_frame = crate::common::dock::dock_panel_frame(viewport_ui.style());
     layout.left_width = egui::Panel::left("prop_left")
         .resizable(true)
+        .frame(dock_frame)
         .show(&mut viewport_ui, |ui| {
             DockArea::new(&mut layout.left)
                 .id(Id::new("egui_dock::DockArea::prop_left"))
@@ -362,6 +364,7 @@ fn panels(
 
     layout.right_width = egui::Panel::right("prop_right")
         .resizable(true)
+        .frame(dock_frame)
         .show(&mut viewport_ui, |ui| {
             let right = match workspace {
                 Workspace::Model => &mut layout.right_model,
@@ -391,6 +394,7 @@ fn panels(
 
     layout.bottom_height = egui::Panel::bottom("prop_bottom")
         .resizable(true)
+        .frame(dock_frame)
         .show(&mut viewport_ui, |ui| {
             DockArea::new(&mut layout.bottom)
                 .id(Id::new("egui_dock::DockArea::prop_bottom"))

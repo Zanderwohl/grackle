@@ -387,8 +387,10 @@ impl EditorPanels {
             .rect
             .height();
 
+        let dock_frame = crate::common::dock::dock_panel_frame(viewport_ui.style());
         panels.top_height = egui::Panel::top("top_panel")
             .resizable(true)
+            .frame(dock_frame)
             .default_size(TOOLBAR_DEFAULT_HEIGHT)
             .min_size(TOOLBAR_MIN_HEIGHT)
             .show(&mut viewport_ui, |ui| {
@@ -406,6 +408,7 @@ impl EditorPanels {
             .height();
         panels.left_width = egui::Panel::left("left_panel")
             .resizable(true)
+            .frame(dock_frame)
             .show(&mut viewport_ui, |ui| {
                 DockArea::new(&mut panels.left_tabs)
                     .id(egui::Id::new("egui_dock::DockArea::left"))
@@ -421,6 +424,7 @@ impl EditorPanels {
             .width();
         panels.right_width = egui::Panel::right("right_panel")
             .resizable(true)
+            .frame(dock_frame)
             .show(&mut viewport_ui, |ui| {
                 DockArea::new(&mut panels.right_tabs)
                     .id(egui::Id::new("egui_dock::DockArea::right"))
@@ -436,6 +440,7 @@ impl EditorPanels {
             .width();
         panels.bottom_height = egui::Panel::bottom("bottom_panel")
             .resizable(true)
+            .frame(dock_frame)
             .show(&mut viewport_ui, |ui| {
                 DockArea::new(&mut panels.bottom_tabs)
                     .id(egui::Id::new("egui_dock::DockArea::bottom"))

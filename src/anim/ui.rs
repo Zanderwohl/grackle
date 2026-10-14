@@ -1280,8 +1280,10 @@ fn panels(
         .rect
         .height();
 
+    let dock_frame = crate::common::dock::dock_panel_frame(viewport_ui.style());
     layout.left_width = egui::Panel::left("anim_left")
         .resizable(true)
+        .frame(dock_frame)
         .show(&mut viewport_ui, |ui| {
             DockArea::new(&mut layout.left)
                 .id(Id::new("egui_dock::DockArea::anim_left"))
@@ -1298,6 +1300,7 @@ fn panels(
 
     layout.right_width = egui::Panel::right("anim_right")
         .resizable(true)
+        .frame(dock_frame)
         .show(&mut viewport_ui, |ui| {
             DockArea::new(&mut layout.right)
                 .id(Id::new("egui_dock::DockArea::anim_right"))
