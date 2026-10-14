@@ -141,14 +141,17 @@ fn default_carry() -> [f32; 3] {
     HoldSpec::default().carry
 }
 
+/// Euler radians, from the reference figure's former authored pose.
+const DEFAULT_GRIP_ROTATION: [f32; 3] = [-0.8054, 0.9568, -1.2790];
+const DEFAULT_SUPPORT_ROTATION: [f32; 3] = [-1.3740, 0.3441, -1.2572];
+
 impl Default for HoldSpec {
     fn default() -> Self {
         Self {
             grip: [0.0; 3],
-            // Taken from the reference figure's former authored pose.
-            grip_rotation: [-0.8054, 0.9568, -1.2790],
+            grip_rotation: DEFAULT_GRIP_ROTATION,
             support: [0.0, 0.0, -0.07],
-            support_rotation: [-1.3740, 0.3441, -1.2572],
+            support_rotation: DEFAULT_SUPPORT_ROTATION,
             two_handed: true,
             // Close to the centreline: out at the shoulder, the support hand
             // cannot reach without a torso twist the state machine never does.

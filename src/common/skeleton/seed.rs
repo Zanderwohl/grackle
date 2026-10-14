@@ -23,8 +23,6 @@ use crate::common::skeleton::{default_humanoid, Interpolation, Pose};
 /// `every_baked_clip_still_matches_its_function` (0.2° tolerance) fails.
 const KEYS_PER_CYCLE: usize = 16;
 
-const EASE: Interpolation = Interpolation::SmootherStep;
-
 /// How finely a stride is sampled before keys are chosen from it.
 ///
 /// A gait has corners where a foot lands and lifts, which evenly spaced keys
@@ -206,7 +204,6 @@ fn bake_clip(seed: Seed, heading: f32) -> Clip {
     }
     // A still pose gets one key; the sampler reads one key as a constant.
     let samples = if looping { KEYS_PER_CYCLE } else { 1 };
-    let ease = EASE;
     let taken: Vec<(f32, Pose)> = (0..samples)
         .map(|step| {
             let at = length * step as f32 / samples as f32;
@@ -235,7 +232,7 @@ fn bake_clip(seed: Seed, heading: f32) -> Clip {
                 keys: taken
                     .iter()
                     .map(|(at, pose)| {
-                        Key::all(*at, euler_from_quat(pose.joint(bone)).to_array(), ease)
+                        Key::all(*at, euler_from_quat(pose.joint(bone)).to_array(), Interpolation::SmootherStep)
                     })
                     .collect(),
             },
@@ -255,7 +252,7 @@ fn bake_clip(seed: Seed, heading: f32) -> Clip {
             channel: Channel::Root {
                 keys: taken
                     .iter()
-                    .map(|(at, pose)| Key::all(*at, pose.root_offset.to_array(), ease))
+                    .map(|(at, pose)| Key::all(*at, pose.root_offset.to_array(), Interpolation::SmootherStep))
                     .collect(),
             },
         });
@@ -441,7 +438,7 @@ fn unwrapped(mut angles: Vec<Vec3>) -> Vec<Vec3> {
 pub fn inputs_at(clock: Clock, at: f32, length: f32) -> PoseInputs {
     match clock {
         Clock::Stride => PoseInputs {
-            stride: (at / length.max(1.0)).rem_euclid(1.0),
+            stride: (at / super::clip::strides_spanned(length)).rem_euclid(1.0),
             ..default()
         },
         Clock::Seconds | Clock::Shared => PoseInputs {

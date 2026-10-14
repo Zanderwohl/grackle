@@ -1432,6 +1432,10 @@ fn vec3_ui(ui: &mut Ui, label: String, value: &mut [f32; 3], speed: f64, suffix:
     changed
 }
 
+/// Cosine above which an aim lights an axis button; an aim between the axes
+/// lights none.
+const ON_AXIS_COS: f32 = 0.9999;
+
 /// Orientation is edited as "points along" and "spin" about `main`, the
 /// feature's length axis ([`FeatureOp::main_axis`]), because the Euler answer
 /// to "point down −Z" depends on rotation order. The stored Euler angles are
@@ -1453,8 +1457,7 @@ fn placement_ui(ui: &mut Ui, placement: &mut Placement, main: Vec3) -> bool {
             ("−Z", Vec3::NEG_Z),
         ];
         for (label, direction) in directions {
-            // An aim between the axes lights none of them.
-            let current = aim.dot(direction) > 0.9999;
+            let current = aim.dot(direction) > ON_AXIS_COS;
             if ui.selectable_label(current, label).clicked() && !current {
                 wanted = Some((direction, spin));
             }
@@ -1610,13 +1613,15 @@ fn profile_ui(ui: &mut Ui, profile: &mut Profile) -> bool {
     changed
 }
 
+/// Every copy is a boolean union, so this is a cost cap.
+const MAX_PATTERN_COPIES: u32 = 64;
+
 /// Switching between linear and radial replaces the layout, as with profiles.
 fn pattern_ui(ui: &mut Ui, count: &mut u32, along: &mut PatternKind) -> bool {
     let mut changed = ui
         .horizontal(|ui| {
             ui.label(get!("prop.inspector.copies"));
-            // Capped because every copy is a boolean union.
-            ui.add(egui::DragValue::new(count).speed(0.1).range(1..=64)).changed()
+            ui.add(egui::DragValue::new(count).speed(0.1).range(1..=MAX_PATTERN_COPIES)).changed()
         })
         .inner;
     ui.horizontal(|ui| {

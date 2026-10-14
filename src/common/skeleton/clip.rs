@@ -552,14 +552,19 @@ pub struct Clip {
     pub tracks: Vec<Track>,
 }
 
+/// How many strides a [`Clock::Stride`] clip of `length` is played over, never
+/// fewer than one. `stride` wraps at 1, so a one-stride clip plays once per step.
+pub fn strides_spanned(length: f32) -> f32 {
+    length.max(1.0)
+}
+
 impl Clip {
     /// Where this clip has got to, on whichever [`Clock`] it is authored against.
     pub fn time_from(&self, inputs: &super::state::PoseInputs) -> f32 {
         match self.clock {
             // They differ only in whether the clip wraps, which `looping` says.
             Clock::Seconds | Clock::Shared => inputs.seconds,
-            // `stride` wraps at 1, so a one-stride clip plays once per step.
-            Clock::Stride => inputs.stride * self.length.max(1.0),
+            Clock::Stride => inputs.stride * strides_spanned(self.length),
         }
     }
 

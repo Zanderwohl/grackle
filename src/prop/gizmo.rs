@@ -80,6 +80,9 @@ fn arrow_tip(anchor: Vec3, axis: usize, length: f32) -> Vec3 {
 /// Grip handle size, in metres.
 const GRIP_SIZE: f32 = 0.02;
 
+/// Metres from an arrow's tip that still grabs it.
+const GRIP_PICK_RADIUS: f32 = GRIP_SIZE * 2.0;
+
 /// Also sets how far apart the pick points are: more than twice the pick
 /// radius, so no two are in range at once.
 const GRIP_LENGTH: f32 = GRIP_SIZE * 3.0;
@@ -373,7 +376,7 @@ fn drag_the_hold(
         .map(|(handle, at)| {
             (*handle, ray_point_distance(&ray, arrow_tip(*at, handle.axis(), GRIP_LENGTH)))
         })
-        .filter(|(_, distance)| *distance < GRIP_SIZE * 2.0)
+        .filter(|(_, distance)| *distance < GRIP_PICK_RADIUS)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(handle, _)| handle);
 
@@ -601,7 +604,7 @@ mod tests {
         for (a, first) in tips.iter().enumerate() {
             for second in &tips[a + 1..] {
                 assert!(
-                    (*first - *second).length() > GRIP_SIZE * 2.0 * 2.0,
+                    (*first - *second).length() > GRIP_PICK_RADIUS * 2.0,
                     "two arrows are within each other's pick radius: {first} and {second}",
                 );
             }

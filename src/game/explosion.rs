@@ -106,17 +106,16 @@ pub fn explode(
     }
 }
 
-/// Whether there is a clear line from the blast to a point `distance` away.
-///
-/// Stops short of the target, because a body against a wall has the wall a
-/// few centimetres behind its chest.
-fn in_sight(world: &CollisionWorld, from: Vec3, to: Vec3, distance: f32) -> bool {
-    const CLEARANCE: f32 = 0.05;
+/// Metres short of its target a line of sight stops, because a body against a
+/// wall has the wall a few centimetres behind its chest.
+const SIGHT_CLEARANCE: f32 = 0.05;
 
+/// Whether there is a clear line from the blast to a point `distance` away.
+fn in_sight(world: &CollisionWorld, from: Vec3, to: Vec3, distance: f32) -> bool {
     let Ok(direction) = Dir3::new(to - from) else {
         return true;
     };
-    let reach = (distance - CLEARANCE).max(0.0);
+    let reach = (distance - SIGHT_CLEARANCE).max(0.0);
     world.ray_distance(&Ray3d::new(from, direction), reach).is_none()
 }
 

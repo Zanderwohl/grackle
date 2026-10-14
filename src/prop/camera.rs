@@ -33,13 +33,16 @@ const ZOOM_PER_NOTCH: f32 = 1.0 / 15.0;
 
 /// A trackpad reports pixels and a wheel lines; without this a trackpad flick
 /// crosses the whole zoom range.
-const PIXELS_PER_NOTCH: f32 = 40.0;
+pub(crate) const PIXELS_PER_NOTCH: f32 = 40.0;
 
 /// Metres from the pivot the perspective camera may be.
 const DISTANCE_RANGE: std::ops::RangeInclusive<f32> = 0.02..=40.0;
 
 /// World units per pixel in the orthographic views.
 const ORTHO_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.000_02..=0.05;
+
+/// Physical pixels assumed across a camera whose viewport is not laid out yet.
+const UNLAID_VIEWPORT_WIDTH: f32 = 600.0;
 
 /// Radians. Short of the poles, where `look_at` has no horizon to keep level.
 const MAX_ORBIT_PITCH: f32 = 1.54;
@@ -152,7 +155,7 @@ fn frame_one(
             .viewport
             .as_ref()
             .map(|viewport| viewport.physical_size.x.max(1) as f32)
-            .unwrap_or(600.0);
+            .unwrap_or(UNLAID_VIEWPORT_WIDTH);
         ortho.scale = (radius * FRAMING_MARGIN * 2.0 / across).clamp(
             *ORTHO_SCALE_RANGE.start(),
             *ORTHO_SCALE_RANGE.end(),

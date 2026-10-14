@@ -112,9 +112,11 @@ pub fn mode_menu(
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct StartInPlay(pub bool);
 
+/// Frames [`start_in_play`] waits for rooms before starting without any.
+const GIVE_UP_AFTER: u32 = 8;
+
 /// Waits for rooms to exist: features become entities only after
 /// `sync_entities`, and entering Play earlier builds an empty collision world.
-/// `GIVE_UP_AFTER` frames bounds the wait for a map with no rooms.
 pub fn start_in_play(
     start: Res<StartInPlay>,
     mut next: ResMut<NextState<AppMode>>,
@@ -122,8 +124,6 @@ pub fn start_in_play(
     mut done: Local<bool>,
     rooms: Query<(), With<crate::tool::room::Room>>,
 ) {
-    const GIVE_UP_AFTER: u32 = 8;
-
     if !start.0 || *done {
         return;
     }

@@ -818,6 +818,10 @@ mod tests {
         use crate::common::skeleton::Pose;
         use strum::IntoEnumIterator;
 
+        // Past the end, because a one-shot holds there.
+        const OVERSHOOT: f32 = 1.2;
+        const STEPS: u32 = 120;
+
         let directory = std::path::Path::new("assets/default").join(PROPS_DIR);
         let Ok(entries) = std::fs::read_dir(&directory) else {
             return;
@@ -851,9 +855,8 @@ mod tests {
                         footfalls: None,
                     };
 
-                    // To 120% of the length: a one-shot holds past its end.
-                    for step in 0..=120 {
-                        let time = clip.length * step as f32 / 100.0;
+                    for step in 0..=STEPS {
+                        let time = clip.length * OVERSHOOT * step as f32 / STEPS as f32;
                         let mut pose = Pose::rest();
                         let mut weapon = Transform::IDENTITY;
                         apply(clip, time, &rig, &mut pose, &frames, Some(&mut weapon));

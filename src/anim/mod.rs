@@ -314,8 +314,7 @@ fn timeline_input(
         .read()
         .map(|scroll| match scroll.unit {
             MouseScrollUnit::Line => scroll.y,
-            // Trackpads report pixels; 40 pixels to a notch.
-            MouseScrollUnit::Pixel => scroll.y / 40.0,
+            MouseScrollUnit::Pixel => scroll.y / crate::prop::camera::PIXELS_PER_NOTCH,
         })
         .sum();
 
@@ -677,9 +676,9 @@ pub fn preview_inputs(
     state: crate::common::skeleton::state::AnimationState,
     heading: f32,
 ) -> crate::common::skeleton::state::PoseInputs {
-    use crate::common::skeleton::clip::Clock;
+    use crate::common::skeleton::clip::{strides_spanned, Clock};
     let stride = match clip.clock {
-        Clock::Stride => (time / clip.length.max(1.0)).rem_euclid(1.0),
+        Clock::Stride => (time / strides_spanned(clip.length)).rem_euclid(1.0),
         Clock::Seconds | Clock::Shared => 0.0,
     };
     let travel = match state.uses_gait() {

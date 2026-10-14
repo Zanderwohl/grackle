@@ -25,7 +25,7 @@ use crate::common::team::Team;
 use crate::common::weapon::WeaponId;
 use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
 use crate::game::held::{HeldModel, HeldPart};
-use crate::game::player::{LocalPlayer, PlayerCamera, ViewMode};
+use crate::game::player::{LocalPlayer, PlayerCamera, ViewMode, PLAY_CAMERA_ORDER};
 use crate::prop::hold::grip_with;
 
 /// The layer only the viewmodel camera draws. 0 is everything else and 31 is
@@ -33,7 +33,7 @@ use crate::prop::hold::grip_with;
 pub const VIEWMODEL_LAYER: usize = 1;
 
 /// Drawn over the play camera, under the 2D UI camera at `isize::MAX`.
-const VIEWMODEL_CAMERA_ORDER: isize = 101;
+const VIEWMODEL_CAMERA_ORDER: isize = PLAY_CAMERA_ORDER + 1;
 
 /// Close enough that a weapon at arm's length never crosses it. `pub` so the
 /// prop editor's viewmodel preview matches it.
@@ -495,7 +495,7 @@ mod tests {
     /// Drawn over the world and under the UI, on a layer nothing else uses.
     #[test]
     fn it_sits_between_the_world_and_the_interface() {
-        assert!(VIEWMODEL_CAMERA_ORDER > 100, "the viewmodel draws under the world");
+        assert!(VIEWMODEL_CAMERA_ORDER > PLAY_CAMERA_ORDER, "the viewmodel draws under the world");
         assert!(VIEWMODEL_CAMERA_ORDER < isize::MAX, "the viewmodel draws over the interface");
         assert_ne!(VIEWMODEL_LAYER, 0);
         assert_ne!(VIEWMODEL_LAYER, 31);

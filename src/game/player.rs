@@ -184,7 +184,7 @@ impl PhysicsBody {
 pub struct PlayerCamera;
 
 /// Above the editor's four viewport cameras.
-const PLAY_CAMERA_ORDER: isize = 100;
+pub const PLAY_CAMERA_ORDER: isize = 100;
 
 /// Whether the player is watching from inside their own head or behind it.
 ///

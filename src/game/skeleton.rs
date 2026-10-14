@@ -224,6 +224,10 @@ pub fn skeleton_root(global: &GlobalTransform, offset: Option<&SkeletonRoot>) ->
     root
 }
 
+/// How far along an axis of `PlayerInput::movement` (-1 to 1) counts as asking
+/// to move that way.
+const MOVING: f32 = 0.5;
+
 /// Describe what a body we are simulating is doing.
 ///
 /// Authority only: `BodyRequests` is replicated, and a client has no `Inputs`
@@ -232,10 +236,10 @@ fn describe_player_bodies(
     mut players: Query<(&Player, &Stance, &Inputs, &mut BodyRequests)>,
 ) {
     for (player, stance, input, mut requests) in &mut players {
-        requests.running_forward = input.movement.y > 0.5;
-        requests.running_backward = input.movement.y < -0.5;
-        requests.strafing_left = input.movement.x < -0.5;
-        requests.strafing_right = input.movement.x > 0.5;
+        requests.running_forward = input.movement.y > MOVING;
+        requests.running_backward = input.movement.y < -MOVING;
+        requests.strafing_left = input.movement.x < -MOVING;
+        requests.strafing_right = input.movement.x > MOVING;
         requests.airborne = !player.on_ground;
         // The stance, not the key: a body that cannot stand up under a vent is
         // still crouched.

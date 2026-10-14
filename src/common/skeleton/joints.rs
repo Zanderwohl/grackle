@@ -98,36 +98,50 @@ impl JointLimit {
     }
 }
 
-const SHOULDER: JointLimit = JointLimit::Cone { radians: 1.9 };
+/// Forward fold is wider than sideways, which a cone cannot say; this takes
+/// the forward range, since doubled over reads as dead.
+const SPINE: JointLimit = JointLimit::Cone { radians: 0.9 };
 
-/// Narrow enough that a corpse's legs do not fold up over the chest.
-const HIP: JointLimit = JointLimit::Cone { radians: 1.3 };
+const NECK: JointLimit = JointLimit::Cone { radians: 0.7 };
+
+const HEAD: JointLimit = JointLimit::Cone { radians: 0.5 };
+
+/// A shrug only; swinging the clavicle moves the whole arm off the body.
+const CLAVICLE: JointLimit = JointLimit::Cone { radians: 0.35 };
+
+const SHOULDER: JointLimit = JointLimit::Cone { radians: 1.9 };
 
 /// The straight stop is just past rest, so rest sits inside the limit.
 const ELBOW: JointLimit = JointLimit::Hinge(Hinge { min: -0.05, max: 2.6 });
 
+/// A wrist bends two ways, so a cone rather than a hinge.
+const WRIST: JointLimit = JointLimit::Cone { radians: 0.8 };
+
+/// Narrow enough that a corpse's legs do not fold up over the chest.
+const HIP: JointLimit = JointLimit::Cone { radians: 1.3 };
+
 const KNEE: JointLimit = JointLimit::Hinge(Hinge { min: -2.4, max: 0.05 });
 
-/// What a named bone's joint will do. An unlisted bone gets a narrow cone, so
-/// a missing entry is not a limb that bends anywhere.
+const ANKLE: JointLimit = JointLimit::Cone { radians: 0.6 };
+
+/// Narrow, so a bone missing from [`limit_of`] is not a limb that bends anywhere.
+const UNLISTED: JointLimit = JointLimit::Cone { radians: 0.3 };
+
+/// What a named bone's joint will do.
 pub fn limit_of(bone_name: &str) -> JointLimit {
     match bone_name {
         bone::PELVIS => JointLimit::Fixed,
-        // Forward fold is wider than sideways, which a cone cannot say; this
-        // takes the forward range, since doubled over reads as dead.
-        bone::CHEST => JointLimit::Cone { radians: 0.9 },
-        bone::NECK => JointLimit::Cone { radians: 0.7 },
-        bone::HEAD => JointLimit::Cone { radians: 0.5 },
-        // A shrug only; swinging the clavicle moves the whole arm off the body.
-        bone::CLAVICLE_L | bone::CLAVICLE_R => JointLimit::Cone { radians: 0.35 },
+        bone::CHEST => SPINE,
+        bone::NECK => NECK,
+        bone::HEAD => HEAD,
+        bone::CLAVICLE_L | bone::CLAVICLE_R => CLAVICLE,
         bone::UPPER_ARM_L | bone::UPPER_ARM_R => SHOULDER,
         bone::FOREARM_L | bone::FOREARM_R => ELBOW,
-        // A wrist bends two ways, so a cone rather than a hinge.
-        bone::HAND_L | bone::HAND_R => JointLimit::Cone { radians: 0.8 },
+        bone::HAND_L | bone::HAND_R => WRIST,
         bone::THIGH_L | bone::THIGH_R => HIP,
         bone::SHIN_L | bone::SHIN_R => KNEE,
-        bone::FOOT_L | bone::FOOT_R => JointLimit::Cone { radians: 0.6 },
-        _ => JointLimit::Cone { radians: 0.3 },
+        bone::FOOT_L | bone::FOOT_R => ANKLE,
+        _ => UNLISTED,
     }
 }
 

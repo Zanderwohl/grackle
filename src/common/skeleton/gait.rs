@@ -61,6 +61,16 @@ const GAIT_BOB: f32 = 0.03;
 /// How far the arms swing fore and aft, in radians.
 const ARM_SWING: f32 = 0.6;
 
+/// Small: the arms are in front of a folded body, not swinging past it.
+const CROUCH_ARM_SWING: f32 = 0.2;
+const SIDESTEP_ARM_SWING: f32 = 0.25;
+const CROUCHED_SIDESTEP_ARM_SWING: f32 = 0.15;
+
+/// Share of the chest's lean the neck takes back, so the head looks ahead
+/// rather than at the floor.
+const CROUCH_NECK_LIFT: f32 = 0.6;
+const GAIT_NECK_LIFT: f32 = 0.7;
+
 /// How far the arms come in from the A-pose rest, in radians, leaving them a
 /// few degrees off vertical.
 const ARM_TUCK: f32 = 0.6;
@@ -329,8 +339,7 @@ impl GaitStyle {
         shape: GaitShape::CROUCHED,
         sink: CROUCH_DEPTH,
         lean: CROUCH_LEAN,
-        // Small: the arms are in front of a folded body, not swinging past it.
-        swing: 0.2,
+        swing: CROUCH_ARM_SWING,
     };
 
     /// Stepping sideways, upright.
@@ -339,7 +348,7 @@ impl GaitStyle {
         sink: GAIT_CROUCH,
         // No fold; `gait_pose` tips the body towards where it is going.
         lean: 0.0,
-        swing: 0.25,
+        swing: SIDESTEP_ARM_SWING,
     };
 
     /// Stepping sideways, ducked.
@@ -347,7 +356,7 @@ impl GaitStyle {
         shape: GaitShape::CROUCHED_SIDESTEP,
         sink: CROUCH_DEPTH,
         lean: CROUCH_LEAN,
-        swing: 0.15,
+        swing: CROUCHED_SIDESTEP_ARM_SWING,
     };
 }
 
@@ -374,8 +383,7 @@ pub fn crouch_posture() -> Pose {
     let mut pose = Pose::rest();
     pose.root_offset = Vec3::NEG_Y * CROUCH_DEPTH;
     pose.set(bone::CHEST, Quat::from_rotation_x(CROUCH_LEAN));
-    // The head comes back up to look ahead rather than at the floor.
-    pose.set(bone::NECK, Quat::from_rotation_x(-CROUCH_LEAN * 0.6));
+    pose.set(bone::NECK, Quat::from_rotation_x(-CROUCH_LEAN * CROUCH_NECK_LIFT));
 
     // Held in front of a folded body rather than hanging past it.
     arms_at_sides(&mut pose, [0.35, 0.35], ELBOW_BEND);
@@ -405,7 +413,7 @@ pub fn gait_pose(inputs: &PoseInputs, travel: Vec2, style: GaitStyle) -> Pose {
         bone::CHEST,
         Quat::from_rotation_z(travel.x * SIDESTEP_LEAN) * Quat::from_rotation_x(leaning),
     );
-    pose.set(bone::NECK, Quat::from_rotation_x(-leaning * 0.7));
+    pose.set(bone::NECK, Quat::from_rotation_x(-leaning * GAIT_NECK_LIFT));
 
     // Arms swing opposite the leg on the same side.
     let [left, right] = foot_offsets(phase, travel, shape);

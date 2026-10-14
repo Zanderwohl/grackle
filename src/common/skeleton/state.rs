@@ -519,6 +519,14 @@ const IDLE_LEAN: f32 = 0.045;
 /// How far the arms swing, in radians.
 const IDLE_ARM_SWING: f32 = 0.05;
 
+/// Radians.
+const IDLE_ELBOW_BEND: f32 = 0.3;
+
+/// Left and right arm forward and up, in radians. The arm opposite the
+/// leading leg carries higher, as when running.
+const AIRBORNE_ARM_SWING: [f32; 2] = [0.5, 0.9];
+const AIRBORNE_ELBOW_BEND: f32 = 1.3;
+
 /// Hip raise and knee bend in the air, in radians. One leg leads knee-up and
 /// the other trails heel-tucked; legs together read as standing to attention.
 /// The knee bends further than the hip lifts, which tucks the heels up.
@@ -542,9 +550,7 @@ fn airborne_pose() -> Pose {
     let mut pose = Pose::rest();
     airborne_legs(&mut pose);
 
-    // Forward and up, at the sides. The arm opposite the leading leg carries
-    // higher, as when running.
-    arms_at_sides(&mut pose, [0.5, 0.9], 1.3);
+    arms_at_sides(&mut pose, AIRBORNE_ARM_SWING, AIRBORNE_ELBOW_BEND);
 
     pose
 }
@@ -568,7 +574,7 @@ fn idle_pose(seconds: f32) -> Pose {
 
     // Both arms sway together; opposed swings read as walking.
     let trail = (cycle - std::f32::consts::FRAC_PI_2).sin() * IDLE_ARM_SWING;
-    arms_at_sides(&mut pose, [trail, trail], 0.3);
+    arms_at_sides(&mut pose, [trail, trail], IDLE_ELBOW_BEND);
 
     pose
 }
