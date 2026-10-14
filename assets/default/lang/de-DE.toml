@@ -97,7 +97,6 @@ empty = "Noch keine Aktionen."
 
 [editor.metadata]
 title = "Metadaten"
-schema_version = "Schemaversion"
 game_mode = "Spielmodus"
 authors = "Autoren"
 

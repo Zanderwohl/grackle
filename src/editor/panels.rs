@@ -634,12 +634,6 @@ fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata) {
             .spacing([10.0, 6.0])
             .striped(true)
             .show(ui, |ui| {
-                ui.label(get!("editor.metadata.schema_version"));
-                ui.add_enabled_ui(false, |ui| {
-                    ui.label(MapMetadata::map_schema_version().to_string());
-                });
-                ui.end_row();
-
                 ui.label(get!("editor.metadata.game_mode"));
                 ui.vertical(|ui| {
                     egui::ComboBox::from_id_salt("editor_map_game_mode")

@@ -1,11 +1,10 @@
 //! Writes `assets/default/blueprints/new.gmb`, the map you get on opening the
 //! editor.
 //!
-//! The template is a SQLite database, so it is a binary that shows up in a
-//! diff as "changed" and nothing more. Building it from a program rather than
-//! by saving over it from the editor is what makes it reviewable: what a new
+//! The template is text, so a diff of it is readable — but it is still
+//! written from here rather than by saving over it from the editor: what a new
 //! map contains is this file, and changing it is a code change with a reason
-//! attached.
+//! attached rather than whatever the editor happened to have open.
 //!
 //! Run from the repo root, since the path is relative:
 //!

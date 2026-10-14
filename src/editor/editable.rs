@@ -208,25 +208,20 @@ impl Default for FeatureTimeline {
 }
 
 impl FeatureTimeline {
+    /// A map from its parts, with nothing rolled back and no history: what
+    /// loading a file and adopting a server's map both mean.
     pub fn from_parts(
         features: HashMap<FeatureId, Feature>,
         feature_order: Vec<FeatureId>,
         id_counter: u64,
-        rollback_bar: u64,
-        actions: Vec<Action>,
     ) -> Self {
-        let action_cursor = actions.len();
+        let rollback_bar = feature_order.len() as u64;
         Self {
             features,
             feature_order,
             id_counter,
-            selected_feature: None,
-            selection_affected: None,
             rollback_bar,
-            pending_despawns: vec![],
-            actions,
-            action_cursor,
-            pending_snapshot: None,
+            ..Default::default()
         }
     }
 
