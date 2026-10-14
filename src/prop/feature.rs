@@ -139,6 +139,57 @@ pub enum FeatureOp {
     /// Repaint a body. Its own feature because what gets repainted is usually
     /// the *result* of a boolean, which no earlier feature named.
     Paint { target: PropFeatureId, surface: Surface },
+    /// Copies of a body, in a row or around an axis, joined into one — vents
+    /// along a shroud, flutes round a cylinder, rungs on a rail. The original
+    /// is the first copy, so a count of one changes nothing.
+    Pattern {
+        target: PropFeatureId,
+        count: u32,
+        along: PatternKind,
+    },
+}
+
+/// How a pattern's copies are laid out.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PatternKind {
+    /// Each copy `step` further on than the last.
+    Linear {
+        #[serde(with = "crate::prop::nice_f32::array")]
+        step: [f32; 3],
+    },
+    /// Turned about a line through `centre` parallel to `axis`, spread across
+    /// `degrees`. A whole turn spaces them evenly round it; anything less puts
+    /// the first copy at one end and the last at the other.
+    Radial {
+        axis: Axis,
+        #[serde(default, with = "crate::prop::nice_f32::array")]
+        centre: [f32; 3],
+        #[serde(with = "crate::prop::nice_f32::scalar")]
+        degrees: f32,
+    },
+}
+
+impl PatternKind {
+    /// Where copy `index` of `count` goes, as a transform of the original.
+    pub fn copy(&self, index: u32, count: u32) -> Transform {
+        match *self {
+            PatternKind::Linear { step } => {
+                Transform::from_translation(Vec3::from_array(step) * index as f32)
+            }
+            PatternKind::Radial { axis, centre, degrees } => {
+                // A whole turn would put the last copy on top of the first.
+                let gaps = match degrees.abs() >= 360.0 - 1e-3 {
+                    true => count,
+                    false => count.saturating_sub(1).max(1),
+                };
+                let angle = (degrees / gaps as f32).to_radians() * index as f32;
+                let centre = Vec3::from_array(centre);
+                let turn = Quat::from_axis_angle(axis.normal(), angle);
+                Transform::from_translation(centre - turn * centre).with_rotation(turn)
+            }
+        }
+    }
 }
 
 impl Default for FeatureOp {
@@ -161,6 +212,7 @@ impl FeatureOp {
             FeatureOp::Boolean { op, .. } => op.name(),
             FeatureOp::Mirror { .. } => get!("prop.features.mirror"),
             FeatureOp::Paint { .. } => get!("prop.features.paint"),
+            FeatureOp::Pattern { .. } => get!("prop.features.pattern"),
         }
     }
 
@@ -172,7 +224,9 @@ impl FeatureOp {
             | FeatureOp::Extrude { .. }
             | FeatureOp::Revolve { .. } => vec![],
             FeatureOp::Boolean { target, tool, .. } => vec![*target, *tool],
-            FeatureOp::Mirror { target, .. } | FeatureOp::Paint { target, .. } => vec![*target],
+            FeatureOp::Mirror { target, .. }
+            | FeatureOp::Paint { target, .. }
+            | FeatureOp::Pattern { target, .. } => vec![*target],
         }
     }
 
@@ -182,7 +236,25 @@ impl FeatureOp {
             FeatureOp::Primitive { placement, .. }
             | FeatureOp::Extrude { placement, .. }
             | FeatureOp::Revolve { placement, .. } => Some(placement),
-            FeatureOp::Boolean { .. } | FeatureOp::Mirror { .. } | FeatureOp::Paint { .. } => None,
+            FeatureOp::Boolean { .. }
+            | FeatureOp::Mirror { .. }
+            | FeatureOp::Paint { .. }
+            | FeatureOp::Pattern { .. } => None,
+        }
+    }
+
+    /// The local axis this feature's solid runs *along*, which is what
+    /// "point it along +Z" turns.
+    ///
+    /// Read off how each solid is built rather than chosen: a prism and a cone
+    /// stand on `+Y`, an extrude runs down `+Z`, a revolve spins about `+Y`. A
+    /// box, wedge or sphere has no length of its own, so it takes `+Z`, which
+    /// is where a new box's longest side already is.
+    pub fn main_axis(&self) -> Vec3 {
+        match self {
+            FeatureOp::Primitive { shape: Shape::Prism { .. } | Shape::Cone { .. }, .. } => Vec3::Y,
+            FeatureOp::Revolve { .. } => Vec3::Y,
+            _ => Vec3::Z,
         }
     }
 }
@@ -242,10 +314,73 @@ impl Evaluated {
 
     /// The box everything sits in.
     pub fn bounds(&self) -> Option<(Vec3, Vec3)> {
-        self.bodies.iter().filter_map(|(_, solid)| solid.bounds()).reduce(
-            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)),
-        )
+        self.bounds_of(|_| true)
     }
+
+    /// The box the standing bodies among `ids` sit in. A feature already eaten
+    /// has no body of its own, so it contributes nothing.
+    pub fn bounds_of_bodies(&self, ids: &[PropFeatureId]) -> Option<(Vec3, Vec3)> {
+        self.bounds_of(|id| ids.contains(&id))
+    }
+
+    fn bounds_of(&self, wanted: impl Fn(PropFeatureId) -> bool) -> Option<(Vec3, Vec3)> {
+        self.bodies
+            .iter()
+            .filter(|(id, _)| wanted(*id))
+            .filter_map(|(_, solid)| solid.bounds())
+            .reduce(|(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)))
+    }
+
+    /// The standing body a ray meets first, if any.
+    ///
+    /// Against the faces rather than the bounding boxes: a bore runs through a
+    /// barrel, and a click down it should reach whatever is behind rather than
+    /// select the barrel for having a box around the hole. Faces are convex,
+    /// so a fan is an exact triangulation of each.
+    pub fn body_under(&self, origin: Vec3, direction: Vec3) -> Option<PropFeatureId> {
+        self.bodies
+            .iter()
+            .filter_map(|(id, solid)| {
+                solid
+                    .polygons()
+                    .iter()
+                    .flat_map(|polygon| {
+                        let v = &polygon.vertices;
+                        (1..v.len().saturating_sub(1))
+                            .filter_map(move |i| ray_triangle(origin, direction, v[0], v[i], v[i + 1]))
+                    })
+                    .min_by(f32::total_cmp)
+                    .map(|distance| (*id, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id)
+    }
+}
+
+/// How far along a ray it meets a triangle, from either side — Möller–Trumbore.
+/// Both sides, because an inside-out face is still something somebody can see
+/// and click.
+fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let ab = b - a;
+    let ac = c - a;
+    let p = direction.cross(ac);
+    let det = ab.dot(p);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let t_vec = origin - a;
+    let u = t_vec.dot(p) * inv;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = t_vec.cross(ab);
+    let v = direction.dot(q) * inv;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = ac.dot(q) * inv;
+    (t > 0.0).then_some(t)
 }
 
 /// Replay a feature list into the bodies it describes. A pure function of the
@@ -365,6 +500,23 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 };
                 live.push((feature.id, solid.painted(*surface)));
             }
+            FeatureOp::Pattern { target, count, along } => {
+                let Some(solid) = find(*target, &live).map(|at| live.remove(at).1) else {
+                    problems.push(Problem {
+                        feature: feature.id,
+                        message: get!("prop.problems.missing_body"),
+                    });
+                    continue;
+                };
+                let count = (*count).max(1);
+                // Unioned rather than concatenated: copies close enough to
+                // touch have to become one closed surface, or the inside of
+                // the overlap is drawn and a later boolean keeps the wrong half.
+                let result = (1..count).fold(solid.clone(), |joined, index| {
+                    joined.union(&solid.clone().transformed(along.copy(index, count)))
+                });
+                live.push((feature.id, result));
+            }
         }
     }
 
@@ -374,6 +526,63 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A row of three ten-centimetre cubes twenty centimetres apart is three
+    /// times the volume of one; four round a whole turn are four, none on top
+    /// of another — and a count of one is the body untouched.
+    #[test]
+    fn a_pattern_makes_that_many_separate_copies() {
+        let cube = primitive(0, Shape::Box { size: [0.1, 0.1, 0.1] }, Vec3::new(0.3, 0.0, 0.0));
+        let one = evaluate(std::slice::from_ref(&cube)).bodies[0].1.volume();
+        let pattern = |count: u32, along: PatternKind| {
+            let evaluated = evaluate(&[
+                cube.clone(),
+                PropFeature::new(PropFeatureId(1), FeatureOp::Pattern { target: PropFeatureId(0), count, along }),
+            ]);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            assert_eq!(evaluated.bodies.len(), 1, "the copies are one body");
+            evaluated.bodies[0].1.volume()
+        };
+
+        let row = pattern(3, PatternKind::Linear { step: [0.0, 0.0, 0.2] });
+        assert!((row - 3.0 * one).abs() < 1e-6, "{row} vs {}", 3.0 * one);
+        let round = pattern(4, PatternKind::Radial { axis: Axis::Y, centre: [0.0; 3], degrees: 360.0 });
+        assert!((round - 4.0 * one).abs() < 1e-6, "{round} vs {}", 4.0 * one);
+        let alone = pattern(1, PatternKind::Linear { step: [0.0, 0.0, 0.2] });
+        assert!((alone - one).abs() < 1e-9);
+    }
+
+    /// A click lands on the nearer of two bodies in a line, and passes
+    /// straight down a hole drilled through the first to reach the second.
+    #[test]
+    fn a_ray_picks_the_nearest_face_not_the_nearest_box() {
+        let cube = |id: u32, z: f32| primitive(id, Shape::Box { size: [0.1, 0.1, 0.1] }, Vec3::new(0.0, 0.0, z));
+        let near = cube(0, 0.0);
+        let far = cube(1, -0.5);
+        let evaluated = evaluate(&[near.clone(), far.clone()]);
+        let from_front = evaluated.body_under(Vec3::new(0.0, 0.0, 1.0), Vec3::NEG_Z);
+        assert_eq!(from_front, Some(PropFeatureId(0)));
+        let beside = evaluated.body_under(Vec3::new(1.0, 0.0, 1.0), Vec3::NEG_Z);
+        assert_eq!(beside, None);
+
+        // A bore down the middle of the near cube, subtracted.
+        let bore = primitive(2, Shape::Box { size: [0.04, 0.04, 0.3] }, Vec3::ZERO);
+        let drilled = PropFeature::new(
+            PropFeatureId(3),
+            FeatureOp::Boolean { op: BooleanOp::Subtract, target: PropFeatureId(0), tool: PropFeatureId(2) },
+        );
+        let evaluated = evaluate(&[near, far, bore, drilled]);
+        assert_eq!(
+            evaluated.body_under(Vec3::new(0.0, 0.0, 1.0), Vec3::NEG_Z),
+            Some(PropFeatureId(1)),
+            "the ray goes down the hole",
+        );
+        assert_eq!(
+            evaluated.body_under(Vec3::new(0.04, 0.0, 1.0), Vec3::NEG_Z),
+            Some(PropFeatureId(3)),
+            "beside the hole is the drilled body, under its own id",
+        );
+    }
 
     fn primitive(id: u32, shape: Shape, at: Vec3) -> PropFeature {
         PropFeature::new(

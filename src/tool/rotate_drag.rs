@@ -13,8 +13,8 @@
 //! then vanish. It also reads `Window::cursor_position` against a single
 //! resolved camera, and the editor draws four viewports inside `egui_dock`
 //! whose rays come from [`CurrentMouseInput`] instead. Going through
-//! `set_euler_angle` also means a drag lands in the undo timeline, between
-//! `begin_edit` and `end_edit`, as one entry.
+//! `set_euler_angle` also means a drag lands in the undo history as one step:
+//! the map is checkpointed when the button comes back up, not per frame.
 //!
 //! A drag turns about *one* Euler component, and the ring for that component
 //! is drawn on the axis that component actually turns about — see
@@ -234,7 +234,6 @@ impl RotateDragState {
 
         if mouse_released || ray.is_none() {
             if state.grab.is_some() {
-                features.end_edit(feature_id);
                 state.grab = None;
             }
             Self::restore_all_materials(&rings, &mut commands, &state);
@@ -320,7 +319,6 @@ impl RotateDragState {
         // there is nothing to grab either.
         let Some(hit) = ray.plane_intersection_point(center, plane) else { return; };
 
-        features.begin_edit(feature_id);
         state.grab = Some(RingGrab {
             axis,
             axis_world,

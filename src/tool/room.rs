@@ -442,7 +442,6 @@ impl RoomDragState {
 
         if mouse_released || ray.is_none() {
             if state.grabbed_handle.is_some() {
-                features.end_edit(feature_id);
                 state.grabbed_handle = None;
                 state.grab_offset = None;
             }
@@ -528,7 +527,6 @@ impl RoomDragState {
                     }
 
                     if mouse_just_pressed {
-                        features.begin_edit(feature_id);
                         state.grabbed_handle = Some(handle.axis);
                         state.grab_offset = None;
                     }

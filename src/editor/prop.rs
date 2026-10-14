@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::rotation::quat_from_euler;
 use crate::common::PointResolutionError;
-use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::get;
 
@@ -92,19 +91,6 @@ impl FeatureTrait for Prop {
 
     fn type_key(&self) -> &'static str { "prop" }
 
-    fn snapshot(&self) -> FeatureData {
-        FeatureData::Prop {
-            location: self.location.clone(),
-            rotation: self.rotation,
-        }
-    }
-
-    fn apply_snapshot(&mut self, data: &FeatureData) {
-        let FeatureData::Prop { location, rotation } = data else { return; };
-        self.location = location.clone();
-        self.rotation = *rotation;
-    }
-
     /// The box, turned the way the prop is turned, with a stub out of its
     /// front face — without that there is no telling a yaw of 0 from one of
     /// 180 on a shape this symmetrical.
@@ -161,25 +147,6 @@ impl FeatureTrait for Prop {
 
     fn reference_points_for_ray(&self, _ray: &Ray3d) -> Vec<(String, Vec3)> {
         vec![("".into(), self.resolved_location)]
-    }
-
-    fn point_ref_slots(&self) -> Vec<&str> { vec!["location"] }
-
-    fn scalar_fields(&self) -> Vec<(&str, f32)> {
-        vec![
-            ("pitch", self.rotation.x),
-            ("yaw", self.rotation.y),
-            ("roll", self.rotation.z),
-        ]
-    }
-
-    fn set_scalar_field(&mut self, key: &str, value: f32) {
-        match key {
-            "pitch" => self.rotation.x = value,
-            "yaw" => self.rotation.y = value,
-            "roll" => self.rotation.z = value,
-            _ => {}
-        }
     }
 
     fn rotation_axes(&self) -> Vec<u8> { vec![0, 1, 2] }
@@ -288,15 +255,4 @@ mod tests {
         );
     }
 
-    /// Rotation goes to disk as three scalars, and has to come back as the
-    /// same three. A silent mismatch here loses every prop's facing on load.
-    #[test]
-    fn rotation_round_trips_through_the_scalar_fields() {
-        let prop = Prop::new(0.0, 0.0, 0.0).with_rotation(Vec3::new(0.1, 0.2, 0.3));
-        let mut loaded = Prop::new(0.0, 0.0, 0.0);
-        for (key, value) in prop.scalar_fields() {
-            loaded.set_scalar_field(key, value);
-        }
-        assert_eq!(loaded.rotation(), Vec3::new(0.1, 0.2, 0.3));
-    }
 }

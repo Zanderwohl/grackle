@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
 use crate::common::cuboid::CuboidPoint;
 use crate::common::ray::ray_intersects_aabb;
-use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::tool::room::Room;
 use crate::get;
@@ -84,19 +83,6 @@ impl FeatureTrait for EditorRoom {
     }
 
     fn type_key(&self) -> &'static str { "editor_room" }
-
-    fn snapshot(&self) -> FeatureData {
-        FeatureData::Room {
-            min: self.min.clone(),
-            max: self.max.clone(),
-        }
-    }
-
-    fn apply_snapshot(&mut self, data: &FeatureData) {
-        let FeatureData::Room { min, max } = data else { return; };
-        self.min = min.clone();
-        self.max = max.clone();
-    }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let min = self.resolved_min.min(self.resolved_max);
@@ -193,8 +179,6 @@ impl FeatureTrait for EditorRoom {
             ("top_right_edge_center".into(), "Top Right Edge".into()),
         ]
     }
-
-    fn point_ref_slots(&self) -> Vec<&str> { vec!["min", "max"] }
 
     fn get_point_ref(&self, key: &str) -> Option<&PointRef> {
         match key {

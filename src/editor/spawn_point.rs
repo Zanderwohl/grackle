@@ -7,7 +7,6 @@ use crate::common::class::{TALLEST_CLASS_EYE_HEIGHT, TALLEST_CLASS_HEIGHT};
 use crate::common::skeleton::{default_humanoid, Pose};
 use crate::game::body_mesh::BodyTint;
 use crate::common::PointResolutionError;
-use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::get;
 
@@ -94,19 +93,6 @@ impl FeatureTrait for SpawnPoint {
 
     fn type_key(&self) -> &'static str { "spawn_point" }
 
-    fn snapshot(&self) -> FeatureData {
-        FeatureData::SpawnPoint {
-            location: self.location.clone(),
-            yaw: self.yaw,
-        }
-    }
-
-    fn apply_snapshot(&mut self, data: &FeatureData) {
-        let FeatureData::SpawnPoint { location, yaw } = data else { return; };
-        self.location = location.clone();
-        self.yaw = *yaw;
-    }
-
     /// The feet, the eye and the facing — the spawn point rather than the
     /// body, which is a rig on this feature's entity and drawn whatever this
     /// does.
@@ -187,18 +173,6 @@ impl FeatureTrait for SpawnPoint {
             ("".into(), self.resolved_location),
             ("eyes".into(), self.resolved_location + Vec3::Y * TALLEST_CLASS_EYE_HEIGHT),
         ]
-    }
-
-    fn point_ref_slots(&self) -> Vec<&str> { vec!["location"] }
-
-    fn scalar_fields(&self) -> Vec<(&str, f32)> {
-        vec![("yaw", self.yaw)]
-    }
-
-    fn set_scalar_field(&mut self, key: &str, value: f32) {
-        if key == "yaw" {
-            self.yaw = value;
-        }
     }
 
     fn rotation_axes(&self) -> Vec<u8> { vec![1] }

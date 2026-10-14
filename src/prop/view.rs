@@ -158,6 +158,7 @@ impl Plugin for PropViewPlugin {
                     // frame every time the geometry changes.
                     carry_the_prop,
                     draw_the_bench,
+                    ghost_the_operands,
                 )
                     .chain()
                     .in_set(PropSceneSystems::Build)
@@ -314,7 +315,10 @@ fn rebuild_the_prop(
     build.built = Some(generation);
     // Bevy's `Instant`, not the standard library's, which panics on wasm.
     let started = Instant::now();
-    build.evaluated = editor.doc().evaluate();
+    // Down to the rollback bar, and everything downstream — the meshes, the
+    // picking, the framing, which bodies the toolbar offers — reads this, so
+    // rolled back is one consistent picture of the prop as it stood there.
+    build.evaluated = crate::prop::feature::evaluate(editor.shown());
     build.cost = started.elapsed();
 
     for entity in &stage {
@@ -352,15 +356,71 @@ fn draw_the_bench(mut gizmos: Gizmos, editor: Res<PropEditor>, build: Res<PropBu
 
     // A feature eaten by a later boolean has no body to outline, and drawing
     // its ingredients would show geometry that is not in the prop.
-    let Some(selected) = editor.selected else { return };
-    let Some((_, solid)) = build.evaluated.bodies.iter().find(|(id, _)| *id == selected) else {
+    // The primary bright and the rest of the selection dimmer, matching the
+    // tree's two highlights.
+    for picked in editor.selection() {
+        let Some((_, solid)) = build.evaluated.bodies.iter().find(|(id, _)| *id == picked) else {
+            continue;
+        };
+        let Some((min, max)) = solid.bounds() else { continue };
+        let colour = match editor.selected == Some(picked) {
+            true => Color::srgb(1.0, 0.8, 0.2),
+            false => Color::srgba(1.0, 0.8, 0.2, 0.35),
+        };
+        gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), colour);
+    }
+}
+
+/// The ghost's edges, and the generation and selection they were drawn for.
+#[derive(Default)]
+struct GhostCache {
+    key: Option<(u64, crate::prop::feature::PropFeatureId)>,
+    edges: Vec<(Vec3, Vec3)>,
+}
+
+/// What a selected boolean, mirror or repaint was given to work on, drawn as
+/// faint wireframe where it stood before the feature ate it.
+///
+/// A subtract that removes nothing visible is the hardest thing in the editor
+/// to debug from the result alone: the tool might be in the wrong place, the
+/// wrong size, or the wrong body. Showing it answers all three at once.
+///
+/// Re-evaluates the list *up to* the feature, so it is cached on the
+/// generation and the selection and recomputed only when one of them moves —
+/// not every frame something is merely selected.
+fn ghost_the_operands(
+    mut gizmos: Gizmos,
+    editor: Res<PropEditor>,
+    mut cache: Local<GhostCache>,
+) {
+    let Some(selected) = editor.selected else {
+        cache.key = None;
+        cache.edges.clear();
         return;
     };
-    let Some((min, max)) = solid.bounds() else { return };
-    gizmos.cube(
-        Transform::from_translation((min + max) / 2.0).with_scale(max - min),
-        Color::srgb(1.0, 0.8, 0.2),
-    );
+    let key = (editor.generation(), selected);
+    if cache.key != Some(key) {
+        cache.key = Some(key);
+        cache.edges.clear();
+        let features = editor.shown();
+        if let Some(at) = features.iter().position(|feature| feature.id == selected) {
+            let operands = features[at].op.consumes();
+            if !operands.is_empty() {
+                let before = crate::prop::feature::evaluate(&features[..at]);
+                for (_, solid) in before.bodies.iter().filter(|(id, _)| operands.contains(id)) {
+                    for polygon in solid.polygons() {
+                        let v = &polygon.vertices;
+                        for i in 0..v.len() {
+                            cache.edges.push((v[i], v[(i + 1) % v.len()]));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (a, b) in &cache.edges {
+        gizmos.line(*a, *b, Color::srgba(0.5, 0.8, 1.0, 0.25));
+    }
 }
 
 #[cfg(test)]

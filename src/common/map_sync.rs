@@ -70,7 +70,6 @@ struct Outgoing<'a> {
     features: Vec<&'a Feature>,
     order: &'a [FeatureId],
     id_counter: u64,
-    rollback_bar: u64,
 }
 
 /// The same shape, owned, on the way in. Serde reads the borrowed form above
@@ -80,7 +79,6 @@ struct Incoming {
     features: Vec<Feature>,
     order: Vec<FeatureId>,
     id_counter: u64,
-    rollback_bar: u64,
 }
 
 /// Sends the map to clients, and adopts it on them.
@@ -131,7 +129,6 @@ fn encode(timeline: &FeatureTimeline) -> Option<Vec<u8>> {
             .collect(),
         order: timeline.feature_order(),
         id_counter: timeline.id_counter(),
-        rollback_bar: timeline.rollback_bar(),
     };
     match serde_json::to_vec(&snapshot) {
         Ok(bytes) => Some(bytes),
@@ -249,12 +246,10 @@ fn adopt_the_servers_map(
             timeline.adopt(FeatureTimeline::from_parts(
                 features,
                 incoming.order,
-                incoming.id_counter,
-                incoming.rollback_bar,
                 // No history: undo is a fact about whoever made the edits, and
                 // a client that could undo the server's map would be editing
                 // its own copy of a map it does not own.
-                Vec::new(),
+                incoming.id_counter,
             ));
             // Queued, not immediate: the features have no entities until
             // `sync_entities` has run, and a bake this frame would bake an
@@ -341,7 +336,6 @@ mod tests {
                 .collect(),
             order: server.feature_order(),
             id_counter: server.id_counter(),
-            rollback_bar: server.rollback_bar(),
         };
         let bytes = serde_json::to_vec(&snapshot).expect("the map would not encode");
         let incoming: Incoming =
@@ -350,11 +344,6 @@ mod tests {
         assert_eq!(incoming.features.len(), 2);
         assert_eq!(incoming.order, *server.feature_order());
         assert_eq!(incoming.id_counter, server.id_counter());
-        assert_eq!(
-            incoming.rollback_bar, server.rollback_bar(),
-            "the bar decides which features exist; a map that arrives with it wrong is a map \
-             that is partly there"
-        );
     }
 
     /// Adopting a map has to take the previous one's entities down with it.
@@ -429,7 +418,6 @@ mod tests {
             features: server.feature_order().iter().filter_map(|id| server.get_feature(id)).collect(),
             order: server.feature_order(),
             id_counter: server.id_counter(),
-            rollback_bar: server.rollback_bar(),
         };
         let bytes = serde_json::to_vec(&snapshot).unwrap();
         let incoming: Incoming = serde_json::from_slice(&bytes).unwrap();

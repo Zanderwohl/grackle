@@ -102,20 +102,15 @@ granularity = "Granularity"
 active = "Snap to grid"
 
 [editor.timeline]
-title = "Features"
-undo = "Backward"
-redo = "Forward"
 delete = "Delete"
+roll_back_here = "Roll back to here"
+roll_to_end = "Roll to end"
 
 [editor.history]
 title = "History"
-undo = "Undo"
-redo = "Redo"
-empty = "No actions yet."
 
 [editor.metadata]
 title = "Metadata"
-schema_version = "Schema version"
 game_mode = "Game mode"
 authors = "Authors"
 
@@ -485,6 +480,12 @@ save_as = "Save As"
 open = "Open"
 quit = "Quit"
 
+[edit.menu]
+title = "Edit"
+undo = "Undo"
+redo = "Redo"
+revert = "Revert to Saved"
+
 [app_mode.menu]
 title = "Mode"
 server_decides = "The server decides when the match is played."
@@ -494,6 +495,12 @@ untitled = "Untitled prop"
 
 [prop.menu]
 frame = "Frame"
+frame_selected = "Frame selected"
+view = "View"
+
+[prop.workspace]
+model = "Model"
+fit = "Fit"
 
 [prop.panels]
 features = "Features"
@@ -501,9 +508,10 @@ inspector = "Inspector"
 scene = "Scene"
 hold = "Hold"
 problems = "Problems"
+problems_count = "Problems ({ count })"
 
 [prop.hold]
-handles = "Handles in the viewport"
+grip = "Grip"
 trigger_hand = "Trigger hand"
 two_handed = "Support hand"
 at = "At"
@@ -513,15 +521,12 @@ override_for = "Override for the { class }"
 viewmodel = "Viewmodel"
 across = "Across"
 depth = "Depth"
-no_figure = "Pick a reference figure to author a per-class hold."
 
 [prop.scene]
 figure = "Reference figure"
 no_figure = "None"
 
 [prop.tree]
-undo = "Undo"
-redo = "Redo"
 # Icons, not prose — but still here rather than in the source, because egui
 # ships one font set and a glyph outside it renders as a hollow box. These are
 # emoji rather than the Geometric Shapes triangles they replaced, which is what
@@ -530,13 +535,19 @@ redo = "Redo"
 # state: whichever is showing is what clicking will do.
 suppress = "Suppress"
 unsuppress = "Unsuppress"
+roll_back_here = "Roll back to here"
+roll_to_end = "Roll to end"
+duplicate = "Duplicate"
+copy_of = "{ name } copy"
+repaint = "Repaint…"
+repaint_eaten = "Already used by a later feature."
 delete = "🗑 Delete"
 delete_breaks = "{ count } other features build on this one"
 
 [prop.add]
 solid = "Solid"
 sweep = "Sweep"
-boolean = "Boolean"
+combine = "Combine"
 
 [prop.shapes]
 box = "Box"
@@ -564,11 +575,17 @@ intersect = "Intersect"
 extrude = "Extrude"
 revolve = "Revolve"
 mirror = "Mirror"
-paint = "Paint"
+paint = "Repaint"
+pattern = "Pattern"
 
 [prop.inspector]
-nothing = "Select a feature."
+nothing = "Nothing selected."
+picked = "{ count } selected"
+kind = "Kind"
 name = "Name"
+name_key = "Name key"
+shown_as = "Shown as"
+file = "File"
 active = "Active"
 shape = "Shape"
 profile = "Profile"
@@ -584,6 +601,9 @@ degrees = "Sweep"
 segments = "Segments"
 origin = "Origin"
 rotation = "Rotation"
+points_along = "Points along"
+spin = "Spin"
+euler = "Euler angles"
 style = "Style"
 tint = "Tint"
 operation = "Operation"
@@ -592,12 +612,33 @@ tool = "Tool"
 plane = "Plane"
 offset = "Offset"
 keep_original = "Keep the original"
+copies = "Copies"
+pattern_linear = "Row"
+pattern_radial = "Circle"
+step = "Step"
+axis = "Axis"
+centre = "Centre"
 add_point = "Add point"
 remove_point = "🗑"
 remove_point_hint = "Remove point"
 missing = "missing { id }"
 
+[prop.inspector.sections]
+prop = "Prop"
+size = "Size"
+feature = "Feature"
+shape = "Shape"
+profile = "Profile"
+placement = "Placement"
+material = "Material"
+operands = "Operands"
+mirror = "Mirror plane"
+pattern = "Pattern"
+
 [prop.stats]
+features = "{ count } features"
+selected = "Selected: { names }"
+rolled_back = "Rolled back to { name }"
 bodies = "{ count } bodies"
 triangles = "{ count } triangles"
 settling = "settling…"

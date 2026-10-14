@@ -35,7 +35,6 @@ use crate::common::skeleton::{
     default_humanoid, finish_pose, humanoid, AnimationState, Pose, PoseInputs,
 };
 use crate::common::PointResolutionError;
-use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::get;
 
@@ -55,8 +54,8 @@ pub struct AnimationGridMarker;
 /// whether you picked your own.
 ///
 /// `One(Team)` rather than four more variants, so a fifth team is a fifth
-/// entry in the combo box and nothing else. The one thing that is written out
-/// by hand is [`RosterTeam::index`], because those numbers are on disk.
+/// entry in the combo box and nothing else. It goes to disk by name, through
+/// the grid's own serde, like everything else in a blueprint.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RosterTeam {
     /// One of each, round the roster in cell order.
@@ -90,30 +89,6 @@ impl RosterTeam {
         match self {
             RosterTeam::Striped => Team::ALL[cell % Team::ALL.len()],
             RosterTeam::One(team) => team,
-        }
-    }
-
-    /// Stable index for the save format, as [`AnimationState::index`] is.
-    /// Zero is the default, so a file that predates this field loads striped.
-    pub fn index(self) -> u32 {
-        match self {
-            RosterTeam::Striped => 0,
-            RosterTeam::One(Team::Red) => 1,
-            RosterTeam::One(Team::Blue) => 2,
-            RosterTeam::One(Team::Yellow) => 3,
-            RosterTeam::One(Team::Green) => 4,
-        }
-    }
-
-    /// The choice an index names, or striped for one this build does not know
-    /// — a grid saved by a later build still stands up a roster.
-    pub fn from_index(index: u32) -> RosterTeam {
-        match index {
-            1 => RosterTeam::One(Team::Red),
-            2 => RosterTeam::One(Team::Blue),
-            3 => RosterTeam::One(Team::Yellow),
-            4 => RosterTeam::One(Team::Green),
-            _ => RosterTeam::Striped,
         }
     }
 }
@@ -449,21 +424,6 @@ impl FeatureTrait for AnimationGrid {
 
     fn type_key(&self) -> &'static str { "animation_grid" }
 
-    fn snapshot(&self) -> FeatureData {
-        FeatureData::AnimationGrid {
-            location: self.location.clone(),
-            yaw: self.yaw,
-            teams: self.teams,
-        }
-    }
-
-    fn apply_snapshot(&mut self, data: &FeatureData) {
-        let FeatureData::AnimationGrid { location, yaw, teams } = data else { return; };
-        self.location = location.clone();
-        self.yaw = *yaw;
-        self.teams = *teams;
-    }
-
     /// The point, the facing, and the floor it will cover.
     ///
     /// The bodies are entities and draw themselves; this draws the feature,
@@ -549,22 +509,6 @@ impl FeatureTrait for AnimationGrid {
 
     fn reference_points_for_ray(&self, _ray: &Ray3d) -> Vec<(String, Vec3)> {
         vec![("".into(), self.resolved_location)]
-    }
-
-    fn point_ref_slots(&self) -> Vec<&str> { vec!["location"] }
-
-    fn scalar_fields(&self) -> Vec<(&str, f32)> {
-        // The teams go out as an index, which is stable across builds by
-        // contract — see [`RosterTeam::index`].
-        vec![("yaw", self.yaw), ("teams", self.teams.index() as f32)]
-    }
-
-    fn set_scalar_field(&mut self, key: &str, value: f32) {
-        match key {
-            "yaw" => self.yaw = value,
-            "teams" => self.teams = RosterTeam::from_index(value.max(0.0) as u32),
-            _ => {}
-        }
     }
 
     fn rotation_axes(&self) -> Vec<u8> { vec![1] }

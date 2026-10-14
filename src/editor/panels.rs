@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crate::common::app_mode::{mode_menu, AppMode};
+use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
 use crate::common::file_menu::{file_menu, FileAction};
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
@@ -122,7 +123,9 @@ enum TabKinds {
     Bakes,
     Show,
     Metadata,
-    Timeline,
+    /// The feature list, which is the map, with its rollback bar — and the
+    /// selected feature's editor beneath. Undo is not here: it is a separate
+    /// axis, on the Edit menu.
     History,
 }
 
@@ -175,7 +178,6 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Bakes => "bakes".to_owned(),
             TabKinds::Show => "show".to_owned(),
             TabKinds::Metadata => "metadata".to_owned(),
-            TabKinds::Timeline => "timeline".to_owned(),
             TabKinds::History => "history".to_owned(),
         })
     }
@@ -187,7 +189,6 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Bakes => { get!("bakes.title").into() }
             TabKinds::Show => { get!("show.title").into() }
             TabKinds::Metadata => { get!("editor.metadata.title").into() }
-            TabKinds::Timeline => { get!("editor.timeline.title").into() }
             TabKinds::History => { get!("editor.history.title").into() }
         }
     }
@@ -209,11 +210,8 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Metadata => {
                 map_metadata_panel_ui(ui, self.map_metadata);
             }
-            TabKinds::Timeline => {
-                FeatureTimeline::ui(ui, self.editor_features, &mut self.pending_edits.events, self.retarget_request)
-            }
             TabKinds::History => {
-                self.editor_features.history_ui(ui);
+                FeatureTimeline::ui(ui, self.editor_features, &mut self.pending_edits.events, self.retarget_request)
             }
         }
     }
@@ -271,8 +269,8 @@ impl Default for EditorPanels {
 impl EditorPanels {
     pub fn new() -> Self {
         let default_top_tabs = vec![TabKinds::Tools,];
-        let default_left_tabs = vec![TabKinds::Timeline, TabKinds::Bakes,];
-        let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata, TabKinds::History,];
+        let default_left_tabs = vec![TabKinds::History, TabKinds::Bakes,];
+        let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata];
         let default_bottom_tabs = vec![TabKinds::Empty("Delta".to_owned()), TabKinds::Empty("Epsilon".to_owned())];
         
         Self {
@@ -335,6 +333,15 @@ impl EditorPanels {
         // value either can produce and one place answers.
         let mut pending_file_op: Option<FileAction> = current_file.requested_op.take();
         let mut wanted_mode: Option<AppMode> = None;
+        let mut pending_edit: Option<EditAction> = None;
+        // Read before the viewer borrows the timeline for the rest of the
+        // frame. Revert needs a file to go back to and something to lose.
+        let edit_available = EditAvailability {
+            undo: editor_features.can_undo(),
+            redo: editor_features.can_redo(),
+            revert: current_file.path.is_some() && editor_features.is_dirty(),
+        };
+        let dirty = editor_features.is_dirty();
         
         let mut viewer = TabViewerAndResources  {
             current_tool: & *current_tool,
@@ -356,6 +363,7 @@ impl EditorPanels {
                     // here, which is what it used to be — in hardcoded
                     // English, with a *Quit* that only closed the menu.
                     file_menu(ui, &mut pending_file_op);
+                    edit_menu(ui, edit_available, &mut pending_edit);
                     // `Editor` spelled out rather than read from the state:
                     // this whole system is gated on it, so the mode it is
                     // drawing for is not in question.
@@ -367,6 +375,12 @@ impl EditorPanels {
                         &mut connect_dialog,
                         &mut messages.net,
                     );
+                    // The same asterisk the prop editor shows, now that the
+                    // map knows whether it matches its file.
+                    if dirty {
+                        ui.separator();
+                        ui.label("*");
+                    }
                 });
             })
             .response
@@ -453,6 +467,7 @@ impl EditorPanels {
                         Ok(()) => {
                             info!("Saved to {:?}", path);
                             current_file.path = Some(path);
+                            editor_features.mark_saved();
                         }
                         Err(e) => error!("Save failed: {}", e),
                     }
@@ -493,7 +508,10 @@ impl EditorPanels {
                 // it holds for the menu item and the chord alike.
                 FileAction::Save => match current_file.path.clone() {
                     Some(path) => match save::save(&path, &editor_features, &map_metadata) {
-                        Ok(()) => info!("Saved to {:?}", path),
+                        Ok(()) => {
+                            info!("Saved to {:?}", path);
+                            editor_features.mark_saved();
+                        }
                         Err(e) => error!("Save failed: {}", e),
                     },
                     None => ask_where_to_save(&current_file),
@@ -522,6 +540,31 @@ impl EditorPanels {
                     });
                 }
             }
+        }
+
+        // The Edit menu. Undo and redo are the same calls the chords make.
+        //
+        // **Revert is one undo step**, as in the prop editor: the map's history
+        // lives in memory, so going back to the file is just another edit, and
+        // a revert clicked by mistake is a `Ctrl+Z` away. Only the features
+        // that differ from the file are rebuilt.
+        match pending_edit {
+            Some(EditAction::Undo) => editor_features.undo(),
+            Some(EditAction::Redo) => editor_features.redo(),
+            Some(EditAction::Revert) => {
+                if let Some(path) = current_file.path.clone() {
+                    match save::load(&path) {
+                        Ok(loaded) => {
+                            info!("Reverted to {:?}", path);
+                            editor_features.replace_as_edit(loaded.timeline);
+                            *map_metadata = loaded.metadata;
+                            current_file.deferred_room_bake = 2;
+                        }
+                        Err(e) => error!("Revert failed: {}", e),
+                    }
+                }
+            }
+            None => {}
         }
 
         // Handle load / new from template
@@ -598,12 +641,6 @@ fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata) {
             .spacing([10.0, 6.0])
             .striped(true)
             .show(ui, |ui| {
-                ui.label(get!("editor.metadata.schema_version"));
-                ui.add_enabled_ui(false, |ui| {
-                    ui.label(MapMetadata::map_schema_version().to_string());
-                });
-                ui.end_row();
-
                 ui.label(get!("editor.metadata.game_mode"));
                 ui.vertical(|ui| {
                     egui::ComboBox::from_id_salt("editor_map_game_mode")

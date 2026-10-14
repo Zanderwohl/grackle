@@ -101,8 +101,15 @@ pub struct OrbitPivot(pub Vec3);
 /// A message rather than a function the panel calls: framing needs every
 /// camera's `Transform`, `Projection` and viewport, and the panel system is
 /// already carrying most of the editor's resources.
+///
+/// `selected` frames the standing bodies in the selection instead of the whole
+/// prop and its figure. A selection with no standing body in it — everything
+/// picked has been eaten — falls back to the whole prop rather than doing
+/// nothing, since the press was still a request to see something.
 #[derive(Message, Default)]
-pub struct FrameTheProp;
+pub struct FrameTheProp {
+    pub selected: bool,
+}
 
 pub struct PropCameraPlugin;
 
@@ -279,12 +286,19 @@ fn frame_on_request(
     mut saved: ResMut<MapViewpoints>,
     mut pivot: ResMut<OrbitPivot>,
     build: Res<PropBuild>,
+    editor: Res<PropEditor>,
     figure: FigureQuery,
 ) {
-    if requests.read().count() == 0 {
+    // The last request of the frame wins; two in one frame is a button and a
+    // key at once, and either answer is fine.
+    let Some(request) = requests.read().last() else {
         return;
-    }
-    let bounds = framing_bounds(&build, &figure);
+    };
+    let selected = request
+        .selected
+        .then(|| build.evaluated.bounds_of_bodies(&editor.selection()))
+        .flatten();
+    let bounds = selected.or_else(|| framing_bounds(&build, &figure));
     frame_all(&mut cameras, &mut saved, &mut pivot, bounds);
 }
 

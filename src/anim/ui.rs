@@ -31,6 +31,7 @@ use crate::get;
 use crate::prop::document::PropEditor;
 use crate::prop::ui::PropFileDialog;
 use crate::prop::figure::{Anchor, FigureStage, ScaleFigure};
+use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
 
 /// How tall the strip is when the mode first opens.
 ///
@@ -146,6 +147,8 @@ struct AnimTabs<'a> {
     /// What the File menu asked of whichever document the current source
     /// edits, answered outside the closure that drew the menu.
     file: Option<FileAction>,
+    /// What the Edit menu asked, likewise.
+    edit: Option<EditAction>,
     /// Set when an edit has moved the one picked key, to wherever it landed.
     reselect: Option<KeyAt>,
     /// Set when an edit has invalidated the key selection — a track removed,
@@ -1238,6 +1241,7 @@ fn panels(
         clear_keys: false,
         reselect: None,
         file: None,
+        edit: None,
     };
 
     layout.menu_bar_height = egui::Panel::top("anim_menu_bar")
@@ -1250,6 +1254,8 @@ fn panels(
                 // Second rather than first, which is the order both other
                 // menu bars have.
                 file_menu(ui, &mut tabs.file);
+                let available = edit_availability(tabs.anim.source, tabs.editor, tabs.body);
+                edit_menu(ui, available, &mut tabs.edit);
                 mode_menu(ui, AppMode::Animation, role.as_deref(), tabs.mode);
                 ui.separator();
                 // **What Save will write**, named: the clip, and the document
@@ -1352,6 +1358,7 @@ fn panels(
     let clear_keys = tabs.clear_keys;
     let reselect = tabs.reselect;
     let asked = tabs.file;
+    let edit = tabs.edit;
     drop(tabs);
     if clear_keys {
         selection.0.clear();
@@ -1360,6 +1367,7 @@ fn panels(
         selection.0 = [key].into();
     }
     handle_files(asked, anim.source, &mut editor, &mut body, &mut files);
+    handle_edit(edit, anim.source, &mut editor, &mut body, &files.assets);
 
     // **Using the pointer, or with something floating under it** — a menu, a
     // combo's list, a context menu. Not "over egui": the strip is a panel's
@@ -1466,6 +1474,46 @@ fn handle_files(
     }
 }
 
+/// What the Edit menu can do for whichever document the source edits.
+///
+/// The body clips have no single file — they are a pack — so "something to go
+/// back to" is simply having changed them.
+fn edit_availability(source: ClipSource, editor: &PropEditor, body: &BodyClips) -> EditAvailability {
+    match source {
+        ClipSource::Prop => crate::prop::ui::edit_availability(editor),
+        ClipSource::Body => EditAvailability {
+            undo: body.can_undo(),
+            redo: body.can_redo(),
+            revert: body.dirty,
+        },
+    }
+}
+
+/// Answer the Edit menu, or one of its chords, for whichever document the
+/// source edits. A prop goes to the prop editor's own handler; the body clips
+/// revert by re-reading the packs, which `BodyClips::reload` already does as
+/// one undo step.
+fn handle_edit(
+    action: Option<EditAction>,
+    source: ClipSource,
+    editor: &mut PropEditor,
+    body: &mut BodyClips,
+    assets: &Assets,
+) {
+    match source {
+        ClipSource::Prop => crate::prop::ui::handle_edit(action, editor),
+        ClipSource::Body => match action {
+            Some(EditAction::Undo) => body.undo(),
+            Some(EditAction::Redo) => body.redo(),
+            Some(EditAction::Revert) => {
+                let count = body.reload(assets);
+                info!("Reverted to the {count} body animation(s) in the packs");
+            }
+            None => {}
+        },
+    }
+}
+
 fn save_the_body_clips(body: &mut BodyClips, pack: &std::path::Path) {
     match body.save(pack) {
         Ok(count) => info!("Saved {count} body animation(s) to {}", pack.display()),
@@ -1493,17 +1541,13 @@ fn anim_shortcuts(
 ) {
     let chords = crate::common::shortcuts::chords(&keys, egui.wants_keyboard_input());
 
-    if chords.redo {
-        match anim.source {
-            ClipSource::Prop => editor.redo(),
-            ClipSource::Body => body.redo(),
-        }
-    } else if chords.undo {
-        match anim.source {
-            ClipSource::Prop => editor.undo(),
-            ClipSource::Body => body.undo(),
-        }
-    }
+    // Through the Edit menu's handler, so a chord and its entry are one action.
+    let edit = match (chords.redo, chords.undo) {
+        (true, _) => Some(EditAction::Redo),
+        (false, true) => Some(EditAction::Undo),
+        _ => None,
+    };
+    handle_edit(edit, anim.source, &mut editor, &mut body, &files.assets);
 
     if let Some(action) = FileAction::from_chords(chords) {
         handle_files(Some(action), anim.source, &mut editor, &mut body, &mut files);

@@ -3,7 +3,6 @@ use bevy::platform::collections::HashMap;
 use bevy_egui::egui;
 use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
-use crate::editor::action::FeatureData;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::get;
 
@@ -53,23 +52,6 @@ impl FeatureTrait for GracklePointLight {
 
     fn type_key(&self) -> &'static str { "grackle_point_light" }
 
-    fn snapshot(&self) -> FeatureData {
-        FeatureData::PointLight {
-            location: self.location.clone(),
-            intensity: self.intensity,
-            radius: self.radius,
-            range: self.range,
-        }
-    }
-
-    fn apply_snapshot(&mut self, data: &FeatureData) {
-        let FeatureData::PointLight { location, intensity, radius, range } = data else { return; };
-        self.location = location.clone();
-        self.intensity = *intensity;
-        self.radius = *radius;
-        self.range = *range;
-    }
-
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         gizmos.sphere(Isometry3d::from_translation(self.resolved_location), 0.2, Color::srgb_u8(255, 255, 0));
         self.location.debug_gizmos(self.resolved_location, gizmos);
@@ -111,25 +93,6 @@ impl FeatureTrait for GracklePointLight {
 
     fn reference_points_for_ray(&self, _ray: &Ray3d) -> Vec<(String, Vec3)> {
         vec![("".into(), self.resolved_location)]
-    }
-
-    fn point_ref_slots(&self) -> Vec<&str> { vec!["location"] }
-
-    fn scalar_fields(&self) -> Vec<(&str, f32)> {
-        vec![
-            ("intensity", self.intensity),
-            ("radius", self.radius),
-            ("range_val", self.range),
-        ]
-    }
-
-    fn set_scalar_field(&mut self, key: &str, value: f32) {
-        match key {
-            "intensity" => self.intensity = value,
-            "radius" => self.radius = value,
-            "range_val" => self.range = value,
-            _ => {}
-        }
     }
 
     fn get_point_ref(&self, _key: &str) -> Option<&PointRef> {

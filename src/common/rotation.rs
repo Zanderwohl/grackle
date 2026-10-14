@@ -58,9 +58,77 @@ pub fn euler_axis_world(angles: Vec3, axis: u8) -> Vec3 {
     }
 }
 
+/// An orientation split into **where an axis points** and **how far it is
+/// spun about itself** — the two questions somebody lining up a barrel is
+/// actually asking, where three Euler angles are an answer to neither.
+///
+/// `axis` is the object's own axis (a prism's length, say). The aim is where
+/// `turn` sends it; the spin is what is left once the shortest swing onto that
+/// aim is taken out, measured about `axis` in the object's own frame. Exact:
+/// [`from_aim_and_spin`] puts back the rotation this took apart.
+pub fn aim_and_spin(turn: Quat, axis: Vec3) -> (Vec3, f32) {
+    let axis = axis.normalize();
+    let aim = (turn * axis).normalize();
+    let swing = Quat::from_rotation_arc(axis, aim);
+    let twist = swing.inverse() * turn;
+    // A rotation that leaves `axis` where it was is a rotation about it, so the
+    // twist's vector part is parallel to `axis` and its sign says which way.
+    let spin = 2.0 * twist.xyz().dot(axis).atan2(twist.w);
+    (aim, wrap_angle(spin))
+}
+
+/// The orientation that points `axis` along `aim`, spun `spin` radians about
+/// itself. The inverse of [`aim_and_spin`].
+pub fn from_aim_and_spin(axis: Vec3, aim: Vec3, spin: f32) -> Quat {
+    let axis = axis.normalize();
+    Quat::from_rotation_arc(axis, aim.normalize()) * Quat::from_axis_angle(axis, spin)
+}
+
+/// Into `(-π, π]`, so a spin reads as the short way round.
+fn wrap_angle(angle: f32) -> f32 {
+    let wrapped = (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    if wrapped <= -std::f32::consts::PI { wrapped + std::f32::consts::TAU } else { wrapped }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Taking an orientation apart into aim and spin and putting it back is
+    /// the identity — whatever the axis, including turns that point it
+    /// straight backwards, where the shortest swing is a choice.
+    #[test]
+    fn aim_and_spin_round_trip() {
+        let turns = [
+            Quat::IDENTITY,
+            quat_from_euler(Vec3::new(0.4, -1.1, 0.7)),
+            quat_from_euler(Vec3::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0)),
+            Quat::from_rotation_x(std::f32::consts::PI),
+            Quat::from_rotation_z(std::f32::consts::PI) * Quat::from_rotation_y(0.3),
+        ];
+        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+            for turn in turns {
+                let (aim, spin) = aim_and_spin(turn, axis);
+                let back = from_aim_and_spin(axis, aim, spin);
+                assert!(
+                    back.abs_diff_eq(turn, 1e-4) || back.abs_diff_eq(-turn, 1e-4),
+                    "{turn:?} about {axis:?} came back as {back:?}",
+                );
+            }
+        }
+    }
+
+    /// Spinning a thing about its own length does not move where it points.
+    #[test]
+    fn spin_leaves_the_aim_alone() {
+        let aim = Vec3::new(0.3, -0.2, 1.0).normalize();
+        for spin in [0.0, 0.5, -2.0, 3.0] {
+            let turn = from_aim_and_spin(Vec3::Y, aim, spin);
+            let (back, measured) = aim_and_spin(turn, Vec3::Y);
+            assert!(back.abs_diff_eq(aim, 1e-5));
+            assert!((measured - spin).abs() < 1e-4, "{spin} read back as {measured}");
+        }
+    }
 
     /// The claim [`euler_axis_world`] makes: adding `d` to one component is
     /// the same as turning by `d` about the axis it names. Break it and a

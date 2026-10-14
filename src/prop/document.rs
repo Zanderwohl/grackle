@@ -1,12 +1,11 @@
 //! A prop as a document: the feature list, what is selected, and how to get
 //! back to what it looked like a moment ago.
 //!
-//! **Undo is whole-document snapshots**, not per-feature deltas like the map's
-//! [`Action`](crate::editor::action::Action). A prop is a few dozen features
-//! and a couple of kilobytes, so cloning per edit is free and correct by
-//! construction: no before-and-after pair to get the wrong way round, and no
-//! operation that can forget to record itself. The price is that history does
-//! not survive closing the file, which the map pays for and this does not.
+//! **Undo is whole-document snapshots**, the model the map's undo was later
+//! moved onto too. A prop is a few dozen features and a couple of kilobytes,
+//! so cloning per edit is free and correct by construction: no before-and-after
+//! pair to get the wrong way round, and no operation that can forget to record
+//! itself. The price is that history does not survive closing the file.
 //!
 //! **The file is flat text, not SQLite.** A blueprint is an authoring format
 //! the runtime never reads; a prop is read by the *game* and has to reach a
@@ -92,11 +91,41 @@ impl PropDoc {
         id
     }
 
+    /// Add a feature at `at` in the list and return its id. Clamped to the
+    /// end.
+    pub fn insert_at(&mut self, at: usize, op: FeatureOp) -> PropFeatureId {
+        let id = self.take_id();
+        let at = at.min(self.features.len());
+        self.features.insert(at, PropFeature::new(id, op));
+        id
+    }
+
     /// Add a feature at the end and return its id.
     pub fn push(&mut self, op: FeatureOp) -> PropFeatureId {
         let id = self.take_id();
         self.features.push(PropFeature::new(id, op));
         id
+    }
+
+    /// Copy a feature in directly after itself and return the copy's id.
+    ///
+    /// Only something that consumes nothing can be copied: a boolean's copy
+    /// would find its operands already eaten by the original and arrive
+    /// broken. `None` for those, and for an id that is not here. `name` is
+    /// what to call the copy — the caller's, since what "copy" is called is
+    /// the lang layer's business, not the document's.
+    pub fn duplicate(&mut self, id: PropFeatureId, name: String) -> Option<PropFeatureId> {
+        let at = self.index_of(id)?;
+        let original = &self.features[at];
+        if !original.op.consumes().is_empty() {
+            return None;
+        }
+        let mut copy = original.clone();
+        let new = self.take_id();
+        copy.id = new;
+        copy.name = name;
+        self.features.insert(at + 1, copy);
+        Some(new)
     }
 
     pub fn feature(&self, id: PropFeatureId) -> Option<&PropFeature> {
@@ -196,7 +225,25 @@ pub struct PropEditor {
     /// undo stack only if it changed anything. egui reports a drag as an edit
     /// per frame, so without this one drag would be forty undo steps.
     pending: Option<PropDoc>,
+    /// The **primary** selection: what the inspector shows and the gizmos
+    /// drag. The last thing picked.
     pub selected: Option<PropFeatureId>,
+    /// Everything picked before the primary with Ctrl/Cmd held, oldest first.
+    ///
+    /// **Selection is ordered** because the verbs that take two operands care
+    /// which is which: pick the barrel, then the bore, and *Subtract* cuts the
+    /// bore out of the barrel — the order it is said in. Kept apart from
+    /// `selected` rather than folded into one list so the many readers that
+    /// only want "the thing being edited" go on reading one field.
+    pub also_selected: Vec<PropFeatureId>,
+    /// The **rollback bar**: the last feature evaluated, when the view is
+    /// showing the prop as it stood partway down the list. `None` is the whole
+    /// prop.
+    ///
+    /// An id rather than a count, so inserting, deleting or reordering above
+    /// the bar cannot quietly move it to a different feature. View state, not
+    /// document: it is not saved, not undone, and does not dirty the file.
+    rollback: Option<PropFeatureId>,
     pub path: Option<PathBuf>,
     /// Whether the document differs from what is on disk.
     pub dirty: bool,
@@ -216,6 +263,8 @@ impl Default for PropEditor {
             redo: vec![],
             pending: None,
             selected: None,
+            also_selected: vec![],
+            rollback: None,
             path: None,
             dirty: false,
             generation: 0,
@@ -319,10 +368,131 @@ impl PropEditor {
 
     fn after_history_move(&mut self) {
         // Undo can take the feature the selection names away.
-        if self.selected.is_some_and(|id| self.doc.feature(id).is_none()) {
-            self.selected = None;
-        }
+        self.forget_missing();
         self.doc_changed();
+    }
+
+    /// Where the rollback bar is, if the view is rolled back.
+    pub fn rollback(&self) -> Option<PropFeatureId> {
+        self.rollback
+    }
+
+    /// Move the rollback bar to just after `at`, or take it away with `None`.
+    /// A bar after the last feature is no bar, and is stored as none so there
+    /// is one way to say "everything".
+    ///
+    /// Bumps the generation — the viewport has to rebuild — but not the dirty
+    /// flag, since the document has not changed.
+    pub fn roll_back_to(&mut self, at: Option<PropFeatureId>) {
+        let at = at.filter(|id| {
+            self.doc.features.last().is_some_and(|last| last.id != *id) && self.doc.feature(*id).is_some()
+        });
+        if at != self.rollback {
+            self.rollback = at;
+            self.generation += 1;
+        }
+    }
+
+    /// The features the view evaluates: everything, or everything down to the
+    /// rollback bar.
+    pub fn shown(&self) -> &[PropFeature] {
+        match self.rollback.and_then(|id| self.doc.index_of(id)) {
+            Some(at) => &self.doc.features[..=at],
+            None => &self.doc.features,
+        }
+    }
+
+    /// Add a feature **at the rollback bar** and move the bar past it, or at
+    /// the end with no bar. Adding while rolled back is building on the prop
+    /// as it stood there, which is the reason to roll back at all.
+    pub fn add(&mut self, op: FeatureOp) -> PropFeatureId {
+        let anchor = self.rollback;
+        let id = self.edit(|doc| match anchor.and_then(|anchor| doc.index_of(anchor)) {
+            Some(at) => doc.insert_at(at + 1, op),
+            None => doc.push(op),
+        });
+        if anchor.is_some() {
+            self.roll_back_to(Some(id));
+        }
+        id
+    }
+
+    /// Everything selected, in the order it was picked; the primary last.
+    pub fn selection(&self) -> Vec<PropFeatureId> {
+        self.also_selected.iter().copied().chain(self.selected).collect()
+    }
+
+    /// Select one thing and nothing else.
+    pub fn select(&mut self, id: PropFeatureId) {
+        self.also_selected.clear();
+        self.selected = Some(id);
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.also_selected.clear();
+        self.selected = None;
+    }
+
+    /// Ctrl/Cmd-click: add `id` as the new primary, or take it out if it was
+    /// already picked. Taking out the primary promotes the most recent pick
+    /// before it, so the inspector lands on something that is still selected.
+    pub fn toggle_selected(&mut self, id: PropFeatureId) {
+        if self.selected == Some(id) {
+            self.selected = self.also_selected.pop();
+        } else if let Some(at) = self.also_selected.iter().position(|picked| *picked == id) {
+            self.also_selected.remove(at);
+        } else {
+            self.also_selected.extend(self.selected);
+            self.selected = Some(id);
+        }
+    }
+
+    /// Drop anything selected that the document no longer has — and the
+    /// rollback bar, if the feature it sat after has gone.
+    pub fn forget_missing(&mut self) {
+        if self.rollback.is_some_and(|id| self.doc.feature(id).is_none()) {
+            self.rollback = None;
+            self.generation += 1;
+        }
+        let doc = &self.doc;
+        self.also_selected.retain(|id| doc.feature(*id).is_some());
+        if self.selected.is_some_and(|id| doc.feature(id).is_none()) {
+            self.selected = self.also_selected.pop();
+        }
+    }
+
+    /// The two bodies a boolean would take from the selection, as
+    /// `(target, tool)`: exactly two picked, both standing at the end of the
+    /// list. A boolean is appended, so a body already eaten is not something
+    /// it could take — offering it would add a feature that is broken on
+    /// arrival.
+    pub fn pair_to_combine(&self, live: &[PropFeatureId]) -> Option<(PropFeatureId, PropFeatureId)> {
+        match self.selection()[..] {
+            [target, tool] if live.contains(&target) && live.contains(&tool) => Some((target, tool)),
+            _ => None,
+        }
+    }
+
+    /// The one body a mirror or a repaint would take: the primary, if it is
+    /// still standing. Single-operand verbs read the primary alone, so a
+    /// selection of three still mirrors the one in the inspector.
+    pub fn body_to_act_on(&self, live: &[PropFeatureId]) -> Option<PropFeatureId> {
+        self.selected.filter(|id| live.contains(id))
+    }
+
+    /// Go back to `saved` — what is on disk — as **one undo step**, so a
+    /// revert clicked by mistake is a `Ctrl+Z` away. Unlike [`Self::open`],
+    /// which clears the history because undoing back through opening a
+    /// different file is not what anybody means.
+    ///
+    /// Clean afterwards, since the document now matches its file; undoing the
+    /// revert marks it dirty again, through the ordinary history path.
+    pub fn revert_to(&mut self, saved: PropDoc) {
+        // A gesture left open would fold the revert into whatever drag it was.
+        self.end_gesture();
+        self.edit(|doc| *doc = saved);
+        self.forget_missing();
+        self.dirty = false;
     }
 
     /// Replace the document wholesale, clearing the history: undoing back
@@ -332,7 +502,8 @@ impl PropEditor {
         self.undo.clear();
         self.redo.clear();
         self.pending = None;
-        self.selected = None;
+        self.clear_selection();
+        self.rollback = None;
         self.path = path;
         self.generation += 1;
         self.dirty = false;
@@ -401,7 +572,7 @@ pub fn save(path: &Path, doc: &PropDoc) -> Result<(), PropFileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prop::feature::{Axis, BooleanOp};
+    use crate::prop::feature::{Axis, BooleanOp, PatternKind};
     use crate::prop::profile::{Placement, Profile};
     use crate::prop::solid::Shape;
     use crate::prop::surface::{Style, Surface, Tint};
@@ -446,6 +617,26 @@ mod tests {
 
     /// A format that rounded would move a bore off-centre by too little to see
     /// and enough to leave a sliver of metal inside the barrel.
+    /// Both layouts of a pattern come back as written — the nested tag is
+    /// the kind of thing TOML gets wrong quietly.
+    #[test]
+    fn a_pattern_round_trips() {
+        let mut doc = PropDoc::new("x");
+        let a = doc.push(FeatureOp::default());
+        let row = doc.push(FeatureOp::Pattern {
+            target: a,
+            count: 3,
+            along: PatternKind::Linear { step: [0.0, 0.0, 0.05] },
+        });
+        doc.push(FeatureOp::Pattern {
+            target: row,
+            count: 6,
+            along: PatternKind::Radial { axis: Axis::Z, centre: [0.0, 0.1, 0.0], degrees: 360.0 },
+        });
+        let text = to_text(&doc).unwrap();
+        assert_eq!(parse(&text).unwrap(), doc, "{text}");
+    }
+
     #[test]
     fn the_geometry_survives_the_round_trip() {
         let doc = sample();
@@ -860,5 +1051,144 @@ mod tests {
         editor.selected = Some(id);
         editor.undo();
         assert_eq!(editor.selected, None);
+    }
+
+    /// Picking the barrel then the bore subtracts the bore from the barrel —
+    /// the order it was said in, whichever way round they sit in the list.
+    #[test]
+    fn a_pair_is_taken_in_the_order_it_was_picked() {
+        let mut editor = PropEditor::default();
+        let barrel = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let bore = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let live = [barrel, bore];
+
+        editor.select(bore);
+        editor.toggle_selected(barrel);
+        assert_eq!(editor.pair_to_combine(&live), Some((bore, barrel)));
+
+        editor.select(barrel);
+        editor.toggle_selected(bore);
+        assert_eq!(editor.pair_to_combine(&live), Some((barrel, bore)));
+        assert_eq!(editor.selected, Some(bore), "the last pick is the one the inspector shows");
+    }
+
+    /// Only two standing bodies make a pair: one is not a boolean, three is a
+    /// question about which two, and an eaten body cannot be taken again.
+    #[test]
+    fn a_pair_needs_exactly_two_standing_bodies() {
+        let mut editor = PropEditor::default();
+        let a = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let b = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let c = editor.edit(|doc| doc.push(FeatureOp::default()));
+
+        editor.select(a);
+        assert_eq!(editor.pair_to_combine(&[a, b, c]), None);
+        editor.toggle_selected(b);
+        assert_eq!(editor.pair_to_combine(&[a, c]), None, "b has been eaten");
+        editor.toggle_selected(c);
+        assert_eq!(editor.pair_to_combine(&[a, b, c]), None);
+    }
+
+    /// Ctrl-clicking the primary again takes it out and hands the inspector
+    /// to the pick before it, rather than to nothing.
+    #[test]
+    fn unpicking_the_primary_promotes_the_one_before() {
+        let mut editor = PropEditor::default();
+        let a = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let b = editor.edit(|doc| doc.push(FeatureOp::default()));
+
+        editor.select(a);
+        editor.toggle_selected(b);
+        editor.toggle_selected(b);
+        assert_eq!(editor.selection(), vec![a]);
+        assert_eq!(editor.selected, Some(a));
+    }
+
+    /// A copy lands right after the original, under a new id; a boolean
+    /// cannot be copied, because its copy would have nothing left to eat.
+    #[test]
+    fn duplicating_copies_in_place_and_refuses_what_consumes() {
+        let mut doc = PropDoc::new("test");
+        let a = doc.push(FeatureOp::default());
+        let b = doc.push(FeatureOp::default());
+        let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
+        let problems_before = doc.evaluate().problems.len();
+
+        let copy = doc.duplicate(a, "A copy".into()).expect("a primitive copies");
+        assert_eq!(doc.index_of(copy), Some(1));
+        assert_ne!(copy, a);
+        assert_eq!(doc.feature(copy).unwrap().op, doc.feature(a).unwrap().op);
+        assert_eq!(doc.duplicate(cut, "no".into()), None);
+        assert_eq!(doc.evaluate().problems.len(), problems_before, "the copy broke nothing");
+    }
+
+    /// Rolled back, a new feature lands at the bar and the bar follows it;
+    /// the view evaluates down to the bar and no further.
+    #[test]
+    fn adding_while_rolled_back_builds_at_the_bar() {
+        let mut editor = PropEditor::default();
+        let a = editor.add(FeatureOp::default());
+        let b = editor.add(FeatureOp::default());
+        editor.dirty = false;
+        editor.roll_back_to(Some(a));
+        assert_eq!(editor.shown().len(), 1);
+        assert!(!editor.dirty, "rolling back is not an edit");
+
+        let c = editor.add(FeatureOp::default());
+        let order: Vec<_> = editor.doc().features.iter().map(|f| f.id).collect();
+        assert_eq!(order, vec![a, c, b]);
+        assert_eq!(editor.rollback(), Some(c));
+        assert_eq!(editor.shown().len(), 2);
+    }
+
+    /// A bar after the last feature is no bar, and a bar whose feature is
+    /// deleted goes with it rather than pointing at nothing.
+    #[test]
+    fn the_bar_never_points_at_nothing() {
+        let mut editor = PropEditor::default();
+        let a = editor.add(FeatureOp::default());
+        let b = editor.add(FeatureOp::default());
+        editor.roll_back_to(Some(b));
+        assert_eq!(editor.rollback(), None);
+
+        editor.roll_back_to(Some(a));
+        editor.edit(|doc| doc.remove(a));
+        editor.forget_missing();
+        assert_eq!(editor.rollback(), None);
+        assert_eq!(editor.shown().len(), 1);
+    }
+
+    /// Revert is one step back to the file and one `Ctrl+Z` forward again,
+    /// and the file is clean in between.
+    #[test]
+    fn reverting_is_one_undoable_step() {
+        let mut editor = PropEditor::default();
+        editor.edit(|doc| doc.push(FeatureOp::default()));
+        let saved = editor.doc().clone();
+        editor.dirty = false;
+
+        editor.edit(|doc| doc.push(FeatureOp::default()));
+        let edited = editor.doc().clone();
+        assert!(editor.dirty);
+
+        editor.revert_to(saved.clone());
+        assert_eq!(editor.doc(), &saved);
+        assert!(!editor.dirty, "reverted is the file");
+
+        editor.undo();
+        assert_eq!(editor.doc(), &edited, "the revert itself can be undone");
+        assert!(editor.dirty);
+    }
+
+    /// Undo can take away a secondary pick as well as the primary.
+    #[test]
+    fn undo_drops_every_pick_it_takes_away() {
+        let mut editor = PropEditor::default();
+        let a = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let b = editor.edit(|doc| doc.push(FeatureOp::default()));
+        editor.select(b);
+        editor.toggle_selected(a);
+        editor.undo();
+        assert_eq!(editor.selection(), vec![a]);
     }
 }

@@ -2,7 +2,6 @@ pub mod multicam;
 pub mod input;
 pub mod editable;
 pub mod map_metadata;
-pub mod action;
 pub mod global_point;
 pub mod grackle_point_light;
 pub mod editor_room;

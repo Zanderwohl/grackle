@@ -10,16 +10,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::shortcuts::chords;
 use crate::common::PointResolutionError;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
-use crate::editor::action::{Action, FeatureDelta, FeatureSnapshot};
-use crate::editor::action::FeatureData;
-use crate::editor::editor_room::EditorRoom;
-use crate::editor::global_point::GlobalPoint;
-use crate::editor::grackle_point_light::GracklePointLight;
 use crate::editor::map_metadata::MapMetadata;
-use crate::editor::animation_display::AnimationDisplay;
-use crate::editor::animation_grid::AnimationGrid;
-use crate::editor::prop::Prop;
-use crate::editor::spawn_point::SpawnPoint;
 use crate::editor::save;
 use crate::get;
 
@@ -27,7 +18,6 @@ lazy_static! {
     static ref MAP_EXT: String = "gmp".to_owned(); // Grackle MaP
     static ref MAP_ART: String = "gma".to_owned(); // Grackle Map Artifact
 }
-
 
 pub struct EditorStepsPlugin;
 impl Plugin for EditorStepsPlugin {
@@ -37,6 +27,20 @@ impl Plugin for EditorStepsPlugin {
             .init_resource::<MapMetadata>()
             .add_message::<EditEvent>()
             .add_systems(Startup, load_startup_blueprint)
+            // **A round is played on the whole map.** On the transition itself
+            // rather than on entering Play, and followed by `sync_entities`:
+            // `BakeSystems` and the collision rebuild run in `OnEnter(Play)`,
+            // and the features past the bar have to have their entities by
+            // then — which means spawned here, in a schedule whose commands
+            // are applied before that one runs.
+            .add_systems(
+                OnTransition { exited: AppMode::Editor, entered: AppMode::Play },
+                (
+                    |mut features: ResMut<FeatureTimeline>| features.roll_back_to(None),
+                    FeatureTimeline::sync_entities,
+                )
+                    .chain(),
+            )
             // `sync_entities` and `handle_edits` are deliberately not
             // gated on `AppMode::Editor`: features have to keep reaching their
             // entities while playing, which is what lets an edit land
@@ -47,8 +51,32 @@ impl Plugin for EditorStepsPlugin {
                 FeatureTimeline::sync_entities,
                 FeatureTimeline::handle_edits,
                 FeatureTimeline::draw_affected_gizmos.run_if(in_state(AppMode::Editor)),
+                checkpoint_when_idle.run_if(in_state(AppMode::Editor)),
             ).chain())
         ;
+    }
+}
+
+/// Record an undo step whenever the editor goes idle with the map changed.
+///
+/// Idle is **no mouse button held and no text field holding the keyboard**:
+/// a drag in a viewport or on a number is one step because the button is down
+/// for all of it, and typing a name is one step because the field keeps the
+/// keyboard until it is let go. See [`FeatureTimeline::checkpoint`].
+///
+/// Through `bypass_change_detection`, or this system's own write would read
+/// as a change next frame and it would checkpoint forever.
+fn checkpoint_when_idle(
+    mut features: ResMut<FeatureTimeline>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    egui: Res<bevy_egui::input::EguiWantsInput>,
+    mut pending: Local<bool>,
+) {
+    *pending |= features.is_changed();
+    let idle = mouse.get_pressed().next().is_none() && !egui.wants_keyboard_input();
+    if *pending && idle {
+        *pending = false;
+        features.bypass_change_detection().checkpoint();
     }
 }
 
@@ -82,8 +110,6 @@ pub trait FeatureTrait: Send + Sync {
     fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool;
     fn type_name(&self) -> String;
     fn type_key(&self) -> &'static str;
-    fn snapshot(&self) -> FeatureData;
-    fn apply_snapshot(&mut self, data: &FeatureData);
     fn debug_gizmos(&self, gizmos: &mut Gizmos);
     fn entity(&self) -> Option<Entity>;
     fn set_entity(&mut self, entity: Option<Entity>);
@@ -108,15 +134,6 @@ pub trait FeatureTrait: Send + Sync {
     /// Returns the resolved min and max bounds if this object is a room-like
     /// object with drag handles. Used to position handles.
     fn drag_handle_bounds(&self) -> Option<(Vec3, Vec3)> { None }
-
-    /// Return all named PointRef slots on this object (for save/load).
-    fn point_ref_slots(&self) -> Vec<&str> { vec![] }
-
-    /// Return extra scalar fields for save/load (e.g. light intensity).
-    fn scalar_fields(&self) -> Vec<(&str, f32)> { vec![] }
-
-    /// Set a scalar field by name (for loading).
-    fn set_scalar_field(&mut self, _key: &str, _value: f32) {}
 
     /// Get a reference to a named PointRef on this object.
     fn get_point_ref(&self, _key: &str) -> Option<&PointRef> { None }
@@ -143,22 +160,11 @@ pub trait FeatureTrait: Send + Sync {
     fn set_euler_angle(&mut self, _axis: u8, _radians: f32) -> bool { false }
 }
 
-/// Create a blank EditorObject from a type_key string (for loading from DB).
-/// PointRefs are initialized to absolute zero and must be overwritten after construction.
-pub fn create_object_from_type_key(type_key: &str) -> Option<Box<dyn FeatureTrait>> {
-    match type_key {
-        "global_point" => Some(Box::new(GlobalPoint::new(0.0, 0.0, 0.0))),
-        "grackle_point_light" => Some(Box::new(GracklePointLight::new(0.0, 0.0, 0.0))),
-        "spawn_point" => Some(Box::new(SpawnPoint::new(0.0, 0.0, 0.0))),
-        "prop" => Some(Box::new(Prop::new(0.0, 0.0, 0.0))),
-        "animation_display" => Some(Box::new(AnimationDisplay::new(0.0, 0.0, 0.0))),
-        "animation_grid" => Some(Box::new(AnimationGrid::new(0.0, 0.0, 0.0))),
-        "editor_room" => Some(Box::new(EditorRoom::from_point_refs(
-            PointRef::absolute(0.0, 0.0, 0.0),
-            PointRef::absolute(0.0, 0.0, 0.0),
-        ))),
-        _ => None,
-    }
+/// What a row of the feature list asked for, answered once the list is drawn.
+enum RowAction {
+    Delete(FeatureId),
+    /// Move the rollback bar to just after this feature, or to the end.
+    RollBackTo(Option<FeatureId>),
 }
 
 #[derive(Message)]
@@ -183,11 +189,54 @@ pub struct FeatureTimeline {
     /// Topologically sorted list of the selected feature and all its DAG descendants.
     /// Parents always appear before their dependants.
     selection_affected: Option<Vec<FeatureId>>,
-    rollback_bar: u64,
+    /// The **rollback bar**: the last feature shown, when the map is being
+    /// looked at as it stood partway down the list. `None` is the whole map.
+    ///
+    /// An id rather than a count, so an edit above the bar cannot quietly
+    /// move it onto a different feature. **View state, not the map**: not
+    /// saved, not sent to clients, not part of an undo snapshot — the prop
+    /// editor's rule.
+    rollback: Option<FeatureId>,
     pending_despawns: Vec<Entity>,
-    actions: Vec<Action>,
-    action_cursor: usize,
-    pending_snapshot: Option<(FeatureId, FeatureSnapshot)>,
+    /// Whole-map snapshots to go back to, oldest first. **Undo is not a list
+    /// of what each edit did** — it is what the map *was*, the prop editor's
+    /// model: no before/after pair to get the wrong way round, no edit that
+    /// can forget to record itself. Lives in memory only; a blueprint does not
+    /// carry it.
+    undo: Vec<MapState>,
+    redo: Vec<MapState>,
+    /// The map as of the last checkpoint — what an undo goes back *from*, and
+    /// what the next checkpoint compares against. `None` until the first.
+    checkpoint: Option<MapState>,
+    /// The map as last saved or loaded, so the editor can say whether there
+    /// is anything to save and anything to revert.
+    saved: Option<MapState>,
+    /// Whether the last checkpoint differs from what was saved. Kept rather
+    /// than computed, because computing it means serializing the map.
+    dirty: bool,
+}
+
+/// One feature as undo stores it. JSON because it is the fastest of the
+/// encodings `typetag` gives and these strings never reach a file — the
+/// blueprint is RON, written by `save`.
+fn serialize_feature(feature: &Feature) -> String {
+    serde_json::to_string(feature).unwrap_or_default()
+}
+
+/// How many steps back undo reaches.
+const UNDO_DEPTH: usize = 200;
+
+/// The map as undo sees it: every feature's serialized form, in order.
+///
+/// Serialized rather than cloned because a feature is a trait object, and
+/// because comparing two of these is then a string comparison — which is what
+/// lets a restore rebuild **only the features that differ** rather than every
+/// room on the map. Stable because everything a feature caches about the
+/// world (a `PointRef`'s resolved position, the entity) is `#[serde(skip)]`.
+#[derive(Clone, PartialEq, Debug)]
+struct MapState {
+    features: Vec<(FeatureId, String)>,
+    id_counter: u64,
 }
 
 impl Default for FeatureTimeline {
@@ -198,36 +247,34 @@ impl Default for FeatureTimeline {
             id_counter: 0,
             selected_feature: None,
             selection_affected: None,
-            rollback_bar: 0,
+            rollback: None,
             pending_despawns: vec![],
-            actions: vec![],
-            action_cursor: 0,
-            pending_snapshot: None,
+            undo: vec![],
+            redo: vec![],
+            checkpoint: None,
+            saved: None,
+            dirty: false,
         }
     }
 }
 
 impl FeatureTimeline {
+    /// A map from its parts, with nothing rolled back and no history: what
+    /// loading a file and adopting a server's map both mean.
     pub fn from_parts(
         features: HashMap<FeatureId, Feature>,
         feature_order: Vec<FeatureId>,
         id_counter: u64,
-        rollback_bar: u64,
-        actions: Vec<Action>,
     ) -> Self {
-        let action_cursor = actions.len();
-        Self {
+        let mut timeline = Self {
             features,
             feature_order,
             id_counter,
-            selected_feature: None,
-            selection_affected: None,
-            rollback_bar,
-            pending_despawns: vec![],
-            actions,
-            action_cursor,
-            pending_snapshot: None,
-        }
+            ..Default::default()
+        };
+        // Whatever it came from — a file, a server — is what it matches.
+        timeline.reset_history();
+        timeline
     }
 
     /// Replace the open map with another one, taking the old map's entities
@@ -253,25 +300,14 @@ impl FeatureTimeline {
         }
         // A selection is an index into the map that just went away.
         self.select(None);
+        // And so is the history: undoing back through opening a file, or
+        // through a server handing over its map, is editing a different map.
+        self.reset_history();
     }
 
-    /// Applied history entries only (excludes redo branch after undo).
-    pub fn applied_actions(&self) -> &[Action] {
-        &self.actions[..self.action_cursor]
-    }
-
-    /// Remove a feature and record a delete entry on the action history (undo restores it).
-    pub fn delete_feature_recorded(&mut self, feature_id: FeatureId) {
-        let Some(before) = self.feature_snapshot(feature_id) else {
-            return;
-        };
-        self.record_action(Action {
-            deltas: vec![FeatureDelta {
-                feature_id,
-                before: Some(before),
-                after: None,
-            }],
-        });
+    /// Remove a feature. Undoable like any other edit: the next checkpoint
+    /// records it.
+    pub fn delete_feature(&mut self, feature_id: FeatureId) {
         self.remove_feature_internal(feature_id);
     }
 
@@ -279,8 +315,41 @@ impl FeatureTimeline {
         self.id_counter
     }
 
-    pub fn rollback_bar(&self) -> u64 {
-        self.rollback_bar
+    /// Where the rollback bar is, if the map is rolled back.
+    pub fn rollback(&self) -> Option<FeatureId> {
+        self.rollback
+    }
+
+    /// How many features, from the top, are in force.
+    pub fn shown_len(&self) -> usize {
+        self.rollback
+            .and_then(|id| self.feature_order.iter().position(|candidate| *candidate == id))
+            .map_or(self.feature_order.len(), |at| at + 1)
+    }
+
+    /// Move the rollback bar to just after `at`, or take it away with `None`.
+    /// A bar after the last feature is no bar, stored as none so there is one
+    /// way to say "everything".
+    pub fn roll_back_to(&mut self, at: Option<FeatureId>) {
+        let at = at.filter(|id| {
+            self.features.contains_key(id) && self.feature_order.last() != Some(id)
+        });
+        if at == self.rollback {
+            return;
+        }
+        self.rollback = at;
+        self.deselect_past_the_bar();
+    }
+
+    /// A selection past the bar is a feature with no entity and nothing to
+    /// edit against.
+    fn deselect_past_the_bar(&mut self) {
+        let shown = self.shown_len();
+        if let Some(selected) = self.selected_feature
+            && self.feature_order.iter().position(|id| *id == selected).is_none_or(|at| at >= shown)
+        {
+            self.select(None);
+        }
     }
 
     pub fn next_id(&mut self) -> FeatureId {
@@ -320,8 +389,8 @@ impl FeatureTimeline {
     /// Returns an iterator of (FeatureId, &Feature) for all active features
     /// (those before the rollback bar).
     pub fn active_features(&self) -> impl Iterator<Item = (FeatureId, &Feature)> {
-        let rollback_bar = self.rollback_bar as usize;
-        self.feature_order[..rollback_bar].iter().filter_map(move |id| {
+        let shown = self.shown_len();
+        self.feature_order[..shown].iter().filter_map(move |id| {
             self.features.get(id).map(|a| (*id, a))
         })
     }
@@ -346,21 +415,11 @@ impl FeatureTimeline {
         self.pending_despawns.push(entity);
     }
 
+    /// Add a feature **at the rollback bar** and move the bar past it, or at
+    /// the end with no bar. Adding while rolled back is building on the map as
+    /// it stood there; nothing after the bar is lost, as it used to be.
     pub fn apply_feature(&mut self, feature_object: Box<dyn FeatureTrait>) -> FeatureId {
-        let rollback_at_end = self.rollback_bar == self.feature_order.len() as u64;
-        let cur = self.rollback_bar as usize;
-        if cur < self.feature_order.len() {
-            for id in self.feature_order.drain(cur..) {
-                if let Some(feature) = self.features.remove(&id) {
-                    if let Some(entity) = feature.object.entity() {
-                        self.pending_despawns.push(entity);
-                    }
-                }
-            }
-        }
-
         let parents = feature_object.parent_ids();
-        let after_data = feature_object.snapshot();
         let new_id = self.next_id();
         let new_feature = Feature {
             id: new_id,
@@ -368,25 +427,11 @@ impl FeatureTimeline {
             parents,
         };
         self.features.insert(new_feature.id, new_feature);
-        self.feature_order.push(new_id);
-        if rollback_at_end {
-            self.rollback_bar = self.feature_order.len() as u64;
-        } else {
-            self.clamp_rollback_bar();
+        let at = self.shown_len();
+        self.feature_order.insert(at, new_id);
+        if self.rollback.is_some() {
+            self.rollback = Some(new_id);
         }
-
-        let order_index = self.feature_order.len().saturating_sub(1);
-        self.record_action(Action {
-            deltas: vec![FeatureDelta {
-                feature_id: new_id,
-                before: None,
-                after: Some(FeatureSnapshot {
-                    data: after_data,
-                    parents: self.features.get(&new_id).map(|f| f.parents().to_vec()).unwrap_or_default(),
-                    order_index,
-                }),
-            }],
-        });
 
         new_id
     }
@@ -395,165 +440,199 @@ impl FeatureTimeline {
         self.features.get(id)
     }
 
+    /// The map as undo sees it right now.
+    fn state(&self) -> MapState {
+        MapState {
+            features: self
+                .feature_order
+                .iter()
+                .filter_map(|id| self.features.get(id))
+                .map(|feature| (feature.id, serialize_feature(feature)))
+                .collect(),
+            id_counter: self.id_counter,
+        }
+    }
+
+    /// Record the map as one undo step if it has changed since the last
+    /// checkpoint.
+    ///
+    /// **Called when the editor is idle, not by each edit.** A drag is one
+    /// step because the button is held for all of it; typing a name is one
+    /// step because the field has the keyboard until it is let go. Nothing
+    /// that edits the map has to remember to record itself, which is the
+    /// failure the per-edit model had: a tool that forgot was an edit undo
+    /// walked straight past.
+    pub fn checkpoint(&mut self) {
+        let now = self.state();
+        match self.checkpoint.take() {
+            Some(before) if before != now => self.push_undo(before),
+            _ => {}
+        }
+        self.dirty = self.saved.as_ref() != Some(&now);
+        self.checkpoint = Some(now);
+    }
+
+    /// Record a new step: capped at [`UNDO_DEPTH`], oldest dropped first, and
+    /// ending the redo branch. **Every new step goes through here** — undo and
+    /// redo only move steps between the two stacks, so this is the one place
+    /// the history can grow, and so the one place it has to be bounded.
+    fn push_undo(&mut self, before: MapState) {
+        self.undo.push(before);
+        if self.undo.len() > UNDO_DEPTH {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    /// Forget every step: the map in front of us is a different map, opened
+    /// from a file or handed over by a server. Undoing back through that is
+    /// not what anybody means — and on a client, undo would be editing a map
+    /// it does not own.
+    pub fn reset_history(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+        let now = self.state();
+        self.checkpoint = Some(now.clone());
+        self.saved = Some(now);
+        self.dirty = false;
+    }
+
+    /// The map now matches its file.
+    pub fn mark_saved(&mut self) {
+        let now = self.state();
+        self.checkpoint = Some(now.clone());
+        self.saved = Some(now);
+        self.dirty = false;
+    }
+
+    /// Whether the map differs from what was last saved or loaded, as of the
+    /// last checkpoint.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
     pub fn can_undo(&self) -> bool {
-        self.rollback_bar > 0
+        !self.undo.is_empty()
     }
 
     pub fn can_redo(&self) -> bool {
-        self.rollback_bar < self.feature_order.len() as u64
+        !self.redo.is_empty()
     }
 
     pub fn undo(&mut self) {
-        if !self.can_undo() { return; }
-        self.rollback_bar -= 1;
-        if let Some(selected) = self.selected_feature {
-            if let Some(idx) = self.feature_order.iter().position(|id| *id == selected) {
-                if idx as u64 >= self.rollback_bar {
-                    self.select(None);
-                }
-            }
+        // Anything done since the last checkpoint is an edit too, and the one
+        // this undo should take back.
+        self.checkpoint();
+        let Some(previous) = self.undo.pop() else { return };
+        if let Some(current) = self.checkpoint.take() {
+            self.redo.push(current);
         }
+        self.restore(&previous);
     }
 
     pub fn redo(&mut self) {
-        if !self.can_redo() { return; }
-        self.rollback_bar += 1;
+        self.checkpoint();
+        let Some(next) = self.redo.pop() else { return };
+        if let Some(current) = self.checkpoint.take() {
+            self.undo.push(current);
+        }
+        self.restore(&next);
     }
 
-    pub fn can_undo_action(&self) -> bool {
-        self.action_cursor > 0
+    /// Replace the map with `incoming` **as one undo step** — what reverting
+    /// to the file is. Then it matches the file, so it is not dirty; undoing
+    /// the revert makes it dirty again through the ordinary path.
+    pub fn replace_as_edit(&mut self, incoming: FeatureTimeline) {
+        self.checkpoint();
+        let target = incoming.state();
+        if let Some(current) = self.checkpoint.take()
+            && current != target
+        {
+            self.push_undo(current);
+        }
+        self.restore(&target);
+        self.mark_saved();
     }
 
-    pub fn can_redo_action(&self) -> bool {
-        self.action_cursor < self.actions.len()
-    }
+    /// Make the map `target`, rebuilding **only the features that differ**.
+    ///
+    /// A feature whose serialized form is unchanged keeps its object and its
+    /// entity; one that changed, appeared or vanished is rebuilt, and so is
+    /// everything built on it, since a `PointRef` that moved moves its
+    /// dependants. An undo of one wall therefore respawns one wall rather
+    /// than every room on the map.
+    fn restore(&mut self, target: &MapState) {
+        let mut changed: Vec<FeatureId> = Vec::new();
+        let mut next: HashMap<FeatureId, Feature> = HashMap::new();
+        let mut order = Vec::with_capacity(target.features.len());
 
-    pub fn record_action(&mut self, action: Action) {
-        // Drop any redo branch: actions past the cursor are destroyed and never reapplied.
-        if self.action_cursor < self.actions.len() {
-            self.actions.drain(self.action_cursor..);
-        }
-        if let Some(last) = self.actions.last_mut() {
-            if last.try_coalesce_incoming(&action) {
-                self.action_cursor = self.actions.len();
-                return;
-            }
-        }
-        self.actions.push(action);
-        self.action_cursor = self.actions.len();
-    }
-
-    pub fn undo_action(&mut self) {
-        if !self.can_undo_action() { return; }
-        let idx = self.action_cursor - 1;
-        let action = self.actions[idx].clone();
-        for delta in action.deltas.iter().rev() {
-            self.apply_delta(delta.feature_id, delta.before.as_ref());
-        }
-        self.action_cursor -= 1;
-        self.clamp_rollback_bar();
-    }
-
-    pub fn redo_action(&mut self) {
-        if !self.can_redo_action() { return; }
-        let was_at_end = self.rollback_bar >= self.feature_order.len() as u64;
-        let idx = self.action_cursor;
-        let action = self.actions[idx].clone();
-        for delta in action.deltas.iter() {
-            self.apply_delta(delta.feature_id, delta.after.as_ref());
-        }
-        self.action_cursor += 1;
-        self.clamp_rollback_bar();
-        if was_at_end {
-            self.rollback_bar = self.feature_order.len() as u64;
-        }
-    }
-
-    /// Keeps the construction rollback bar valid after feature-order changes from actions.
-    /// Action undo/redo does not otherwise move the bar except to stay in `[0, len]`.
-    fn clamp_rollback_bar(&mut self) {
-        let len = self.feature_order.len() as u64;
-        if self.rollback_bar > len {
-            self.rollback_bar = len;
-        }
-        if let Some(selected) = self.selected_feature {
-            if let Some(idx) = self.feature_order.iter().position(|id| *id == selected) {
-                if idx as u64 >= self.rollback_bar {
-                    self.select(None);
+        for (id, text) in &target.features {
+            order.push(*id);
+            let unchanged = self
+                .features
+                .get(id)
+                .is_some_and(|feature| serialize_feature(feature) == *text);
+            if unchanged {
+                if let Some(feature) = self.features.remove(id) {
+                    next.insert(*id, feature);
                 }
+                continue;
             }
-        }
-    }
-
-    pub fn begin_edit(&mut self, feature_id: FeatureId) {
-        if self.pending_snapshot.is_some() {
-            return;
-        }
-        let Some(before) = self.snapshot_feature(feature_id) else { return; };
-        self.pending_snapshot = Some((feature_id, before));
-    }
-
-    pub fn end_edit(&mut self, feature_id: FeatureId) {
-        let Some((pending_id, before)) = self.pending_snapshot.take() else { return; };
-        if pending_id != feature_id {
-            return;
-        }
-        let Some(after) = self.snapshot_feature(feature_id) else { return; };
-        if before == after {
-            return;
-        }
-
-        self.record_action(Action {
-            deltas: vec![FeatureDelta {
-                feature_id,
-                before: Some(before),
-                after: Some(after),
-            }],
-        });
-    }
-
-    fn snapshot_feature(&self, feature_id: FeatureId) -> Option<FeatureSnapshot> {
-        let order_index = self.feature_order.iter().position(|id| *id == feature_id)?;
-        let feature = self.features.get(&feature_id)?;
-        Some(FeatureSnapshot::from_feature(feature, order_index))
-    }
-
-    /// Immutable snapshot for history / UI (does not use `pending_snapshot`).
-    pub fn feature_snapshot(&self, feature_id: FeatureId) -> Option<FeatureSnapshot> {
-        self.snapshot_feature(feature_id)
-    }
-
-    fn apply_delta(&mut self, feature_id: FeatureId, target: Option<&FeatureSnapshot>) {
-        match target {
-            None => {
-                self.remove_feature_internal(feature_id);
-            }
-            Some(snapshot) => {
-                if self.features.contains_key(&feature_id) {
-                    if let Some(mut feature) = self.features.remove(&feature_id) {
-                        feature.object_mut().apply_snapshot(&snapshot.data);
-                        feature.parents = snapshot.parents.clone();
-                        self.features.insert(feature_id, feature);
+            match serde_json::from_str::<Feature>(text) {
+                Ok(feature) => {
+                    if let Some(old) = self.features.remove(id)
+                        && let Some(entity) = old.object.entity()
+                    {
+                        self.pending_despawns.push(entity);
                     }
-                } else {
-                    let object = snapshot.blank_object();
-                    let feature = Feature::new(feature_id, object, snapshot.parents.clone());
-                    let idx = snapshot.order_index.min(self.feature_order.len());
-                    self.feature_order.insert(idx, feature_id);
-                    self.features.insert(feature_id, feature);
+                    next.insert(*id, feature);
+                    changed.push(*id);
                 }
-
-                // Ensure selection propagation recomputes descendants on undo/redo.
-                if self.selected_feature == Some(feature_id) {
-                    self.select(Some(feature_id));
-                } else if self.selected_feature.is_some() {
-                    self.select(self.selected_feature);
-                }
+                // Cannot happen for a string this process wrote, and losing
+                // one feature is better than losing the undo.
+                Err(error) => error!("Undo could not rebuild feature {id:?}: {error}"),
             }
         }
 
-        self.queue_refresh_for_feature_and_descendants(feature_id);
-        self.clamp_rollback_bar();
+        // Whatever is left was not in the target: it goes.
+        for (_, feature) in self.features.drain() {
+            if let Some(entity) = feature.object.entity() {
+                self.pending_despawns.push(entity);
+            }
+        }
+
+        self.features = next;
+        self.feature_order = order;
+        self.id_counter = target.id_counter;
+        for id in changed {
+            self.queue_refresh_for_feature_and_descendants(id);
+        }
+        // Resolved now, in order, rather than left for `sync_entities` to do as
+        // it respawns: a rebuilt feature's resolved position is not part of
+        // what was stored, and anything that reads it before the next spawn —
+        // a gizmo, the panel — would otherwise see the origin for a frame.
+        for id in self.feature_order.clone() {
+            if let Some(mut feature) = self.features.remove(&id) {
+                feature.object.resolve_references(&self.features);
+                self.features.insert(id, feature);
+            }
+        }
+
+        self.forget_a_missing_bar();
+        let selected = self.selected_feature.filter(|id| self.features.contains_key(id));
+        self.select(selected);
+
+        self.dirty = self.saved.as_ref() != Some(target);
+        self.checkpoint = Some(target.clone());
+    }
+
+    /// The bar goes if the feature it sat after has gone, rather than
+    /// pointing at nothing.
+    fn forget_a_missing_bar(&mut self) {
+        if self.rollback.is_some_and(|id| !self.features.contains_key(&id)) {
+            self.rollback = None;
+        }
+        self.deselect_past_the_bar();
     }
 
     fn queue_refresh_for_feature_and_descendants(&mut self, root: FeatureId) {
@@ -598,7 +677,7 @@ impl FeatureTimeline {
             self.select(self.selected_feature);
         }
 
-        self.clamp_rollback_bar();
+        self.forget_a_missing_bar();
     }
     
     pub fn ui(
@@ -607,19 +686,7 @@ impl FeatureTimeline {
         edit_events: &mut Vec<EditEvent>,
         retarget_out: &mut Option<(FeatureId, String)>,
     ) {
-        // Section 1: Undo/Redo (compact, top)
-        ui.horizontal(|ui| {
-            if ui.add_enabled(features.can_undo(), egui::Button::new("⮪ ".to_owned() + &get!("editor.timeline.undo"))).clicked() {
-                features.undo();
-            }
-            if ui.add_enabled(features.can_redo(), egui::Button::new(get!("editor.timeline.redo") + " ⮫")).clicked() {
-                features.redo();
-            }
-        });
-
-        ui.separator();
-
-        // Section 3: Editor for selected feature (bottom, takes as much as needed)
+        // Editor for selected feature (bottom, takes as much as needed)
         // We render this into a bottom panel so it pins to the bottom,
         // then the scroll area fills whatever's left.
         let mut was_edited = false;
@@ -629,7 +696,7 @@ impl FeatureTimeline {
         if let Some(selected_id) = features.selected_feature {
             let selected_idx = features.feature_order.iter()
                 .position(|id| *id == selected_id);
-            let is_active = selected_idx.is_some_and(|idx| (idx as u64) < features.rollback_bar);
+            let is_active = selected_idx.is_some_and(|idx| idx < features.shown_len());
 
             if is_active {
                 let selected_idx = selected_idx.unwrap();
@@ -651,7 +718,6 @@ impl FeatureTimeline {
                     .size_range(feature_editor_height_range(available))
                     .show(ui, |ui| {
                         ui.separator();
-                        let before_snap = features.feature_snapshot(selected_id);
                         if let Some(mut feature) = features.features.remove(&selected_id) {
                             let mut retarget_request: Option<String> = None;
                             // The whole feature editor is padded and loosened
@@ -677,21 +743,6 @@ impl FeatureTimeline {
                             }
                             features.features.insert(selected_id, feature);
                         }
-                        if was_edited {
-                            if let (Some(before), Some(after)) =
-                                (before_snap, features.feature_snapshot(selected_id))
-                            {
-                                if before != after {
-                                    features.record_action(Action {
-                                        deltas: vec![FeatureDelta {
-                                            feature_id: selected_id,
-                                            before: Some(before),
-                                            after: Some(after),
-                                        }],
-                                    });
-                                }
-                            }
-                        }
                     });
             }
         }
@@ -709,16 +760,20 @@ impl FeatureTimeline {
             }
         }
 
-        // Section 2: Feature order (construction timeline; fills remaining space)
+        // The feature list, which *is* the map, with the rollback bar in it.
         let mut selection_changed = false;
         let mut next_selected = features.selected_feature;
-        let pending_delete = Rc::new(RefCell::new(None::<FeatureId>));
+        let pending: Rc<RefCell<Option<RowAction>>> = Rc::new(RefCell::new(None));
+        let shown = features.shown_len();
+        let rolled_back = features.rollback.is_some();
+        let mut rows: Vec<(FeatureId, egui::Rect)> = Vec::new();
+        let mut bar_dragged = false;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (i, id) in features.feature_order.iter().enumerate() {
                 let feature = features.get_feature(id).unwrap();
                 let is_selected = features.selected_feature == Some(*id);
-                let is_active = (i as u64) < features.rollback_bar;
+                let is_active = i < shown;
 
                 // The trailing `Atom::grow` is what left-justifies the title.
                 // These buttons are stretched to the panel width and egui
@@ -726,29 +781,73 @@ impl FeatureTimeline {
                 // floats in the middle of the row and the list has no edge to
                 // read down.
                 let label_text = feature.type_name_with_id();
-                let label = if is_active {
-                    egui::Button::selectable(is_selected, (label_text, egui::Atom::grow()))
-                } else {
-                    egui::Button::selectable(false, (
-                        egui::RichText::new(label_text).strikethrough().weak(),
-                        egui::Atom::grow(),
-                    ))
-                };
-
-                let response = ui.add_sized([ui.available_width(), 0.0], label);
+                // Past the bar: in the map, not in the world. Faded rather
+                // than struck through, which reads as deleted.
+                let response = ui
+                    .scope(|ui| {
+                        if !is_active {
+                            ui.multiply_opacity(0.4);
+                        }
+                        let label = egui::Button::selectable(
+                            is_selected && is_active,
+                            (label_text, egui::Atom::grow()),
+                        );
+                        ui.add_sized([ui.available_width(), 0.0], label)
+                    })
+                    .inner;
+                rows.push((*id, response.rect));
                 if response.clicked() && is_active {
                     next_selected = Some(if is_selected { None } else { Some(*id) }).flatten();
                     selection_changed = true;
                 }
 
                 let fid = *id;
-                let pending = pending_delete.clone();
+                let menu = pending.clone();
+                let at_the_bar = i + 1 == shown;
                 response.context_menu(move |menu_ui| {
+                    if !at_the_bar && menu_ui.button(get!("editor.timeline.roll_back_here")).clicked() {
+                        *menu.borrow_mut() = Some(RowAction::RollBackTo(Some(fid)));
+                        menu_ui.close();
+                    }
+                    if rolled_back && menu_ui.button(get!("editor.timeline.roll_to_end")).clicked() {
+                        *menu.borrow_mut() = Some(RowAction::RollBackTo(None));
+                        menu_ui.close();
+                    }
+                    menu_ui.separator();
                     if menu_ui.button(get!("editor.timeline.delete")).clicked() {
-                        *pending.borrow_mut() = Some(fid);
+                        *menu.borrow_mut() = Some(RowAction::Delete(fid));
                         menu_ui.close();
                     }
                 });
+
+                // **The rollback bar**, dragged up the list to see the map as
+                // it stood there. Thin and faint at the bottom where it changes
+                // nothing; bold anywhere else, because a world that is not the
+                // whole map must not be mistaken for one that is.
+                if at_the_bar {
+                    let (rect, bar) =
+                        ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::drag());
+                    let bar = bar.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                    let lit = rolled_back || bar.hovered() || bar.dragged();
+                    let stroke = match lit {
+                        true => egui::Stroke::new(3.0, ui.visuals().selection.stroke.color),
+                        false => egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
+                    };
+                    ui.painter().hline(rect.x_range(), rect.center().y, stroke);
+                    bar_dragged = bar.dragged();
+                }
+            }
+
+            // Live while dragging, so the world scrubs through the map's
+            // construction under the pointer. Never above the first feature: a
+            // map rolled back to nothing is an empty world, which says nothing.
+            if bar_dragged
+                && let Some(pointer) = ui.ctx().pointer_interact_pos()
+            {
+                let above = rows.iter().take_while(|(_, rect)| rect.center().y < pointer.y).count();
+                if let Some((anchor, _)) = rows.get(above.max(1) - 1) {
+                    *pending.borrow_mut() = Some(RowAction::RollBackTo(Some(*anchor)));
+                }
             }
 
             let remaining = ui.available_size();
@@ -765,46 +864,11 @@ impl FeatureTimeline {
             features.select(next_selected);
         }
 
-        if let Some(id) = pending_delete.borrow_mut().take() {
-            features.delete_feature_recorded(id);
+        match pending.borrow_mut().take() {
+            Some(RowAction::Delete(id)) => features.delete_feature(id),
+            Some(RowAction::RollBackTo(at)) => features.roll_back_to(at),
+            None => {}
         }
-    }
-
-    /// User action timeline (undo/redo of edits). Separate from the construction timeline (`ui`).
-    pub fn history_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui.add_enabled(
-                self.can_undo_action(),
-                egui::Button::new("⮪ ".to_owned() + &get!("editor.history.undo")),
-            ).clicked() {
-                self.undo_action();
-            }
-            if ui.add_enabled(
-                self.can_redo_action(),
-                egui::Button::new(get!("editor.history.redo") + " ⮫"),
-            ).clicked() {
-                self.redo_action();
-            }
-        });
-
-        ui.separator();
-
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            if self.actions.is_empty() {
-                ui.label(egui::RichText::new(get!("editor.history.empty")).weak());
-                return;
-            }
-            for (i, action) in self.actions.iter().enumerate() {
-                let applied = i < self.action_cursor;
-                let text = action.label();
-                let rich = if applied {
-                    egui::RichText::new(text)
-                } else {
-                    egui::RichText::new(text).strikethrough().weak()
-                };
-                ui.label(rich);
-            }
-        });
     }
 
     fn undo_redo_shortcuts(
@@ -814,28 +878,32 @@ impl FeatureTimeline {
     ) {
         let chords = chords(&keys, egui.wants_keyboard_input());
         if chords.redo {
-            features.redo_action();
+            features.redo();
         } else if chords.undo {
-            features.undo_action();
+            features.undo();
         }
     }
-
 
     // `pub(crate)` so a test elsewhere in the crate can drive it directly:
     // what a map adoption does to the world only shows up once this has run.
     pub(crate) fn sync_entities(mut features: ResMut<Self>, mut commands: Commands) {
+        // Which entity stands for which feature is bookkeeping about this
+        // world, not an edit to the map, so it does not mark the timeline
+        // changed. Marked, it would read as changed every frame — to the undo
+        // checkpoint and to `map_sync`'s pre-filter alike.
+        let features = features.bypass_change_detection();
         for entity in features.pending_despawns.drain(..) {
             commands.entity(entity).despawn();
         }
 
-        let rollback_bar = features.rollback_bar;
+        let shown = features.shown_len();
         let order: Vec<(usize, FeatureId)> = features.feature_order.iter()
             .enumerate()
             .map(|(i, id)| (i, *id))
             .collect();
 
         for (i, id) in order {
-            let should_exist = (i as u64) < rollback_bar;
+            let should_exist = i < shown;
             let needs_spawn = should_exist
                 && features.features.get(&id).is_some_and(|a| a.object.entity().is_none());
 
@@ -1290,6 +1358,209 @@ fn dashed_line(gizmos: &mut Gizmos, start: Vec3, end: Vec3, color: Color, dash: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::global_point::GlobalPoint;
+
+    fn x_of(timeline: &FeatureTimeline, id: FeatureId) -> Option<f32> {
+        timeline.get_feature(&id).map(|f| f.object().get_point("").unwrap().x)
+    }
+
+    fn move_to_x(timeline: &mut FeatureTimeline, id: FeatureId, x: f32) {
+        let feature = timeline.features_mut().get_mut(&id).unwrap();
+        feature.object_mut().get_point_ref_mut("location").unwrap().x = AxisRef::Absolute(x);
+        feature.object_mut().resolve_references(&HashMap::new());
+    }
+
+    /// Edits between checkpoints are one step; undo goes back over it and
+    /// redo comes forward again — including an edit not yet checkpointed,
+    /// which an undo has to take back first rather than skip.
+    #[test]
+    fn undo_and_redo_walk_whole_map_checkpoints() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.checkpoint();
+        move_to_x(&mut timeline, a, 2.0);
+        move_to_x(&mut timeline, a, 3.0);
+        timeline.checkpoint();
+        move_to_x(&mut timeline, a, 4.0);
+
+        timeline.undo();
+        assert_eq!(x_of(&timeline, a), Some(3.0), "the unrecorded edit is what undo takes back");
+        timeline.undo();
+        assert_eq!(x_of(&timeline, a), Some(1.0), "a whole gesture is one step");
+        timeline.redo();
+        timeline.redo();
+        assert_eq!(x_of(&timeline, a), Some(4.0));
+    }
+
+    /// Adding and deleting are edits like any other — there is nothing for a
+    /// new kind of edit to remember to do.
+    #[test]
+    fn deleting_is_undone_by_the_same_mechanism() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.checkpoint();
+        timeline.delete_feature(a);
+        timeline.undo();
+        assert_eq!(x_of(&timeline, a), Some(1.0));
+        assert_eq!(timeline.feature_order(), &[a]);
+    }
+
+    /// A restore rebuilds only what differs: an untouched feature keeps its
+    /// entity, a changed one gives its entity up to be respawned.
+    #[test]
+    fn undo_rebuilds_only_the_features_that_changed() {
+        let mut timeline = FeatureTimeline::default();
+        let still = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        let moved = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        for id in [still, moved] {
+            timeline.features_mut().get_mut(&id).unwrap().object_mut().set_entity(Some(Entity::PLACEHOLDER));
+        }
+        timeline.checkpoint();
+        move_to_x(&mut timeline, moved, 5.0);
+        timeline.undo();
+
+        let entity = |id| timeline.get_feature(&id).unwrap().object().entity();
+        assert_eq!(entity(still), Some(Entity::PLACEHOLDER), "an unchanged feature was rebuilt");
+        assert_eq!(entity(moved), None, "a changed feature kept its stale entity");
+        assert_eq!(timeline.pending_despawns.len(), 1);
+    }
+
+    /// Reverting to the file is one undo step and leaves the map clean;
+    /// undoing it brings the edits back and makes it dirty again.
+    #[test]
+    fn reverting_is_one_undoable_step() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.mark_saved();
+        let on_disk = crate::editor::save::parse(
+            &crate::editor::save::to_text(&timeline, &Default::default()).unwrap(),
+        )
+        .unwrap()
+        .timeline;
+
+        move_to_x(&mut timeline, a, 9.0);
+        timeline.checkpoint();
+        assert!(timeline.is_dirty());
+
+        timeline.replace_as_edit(on_disk);
+        assert_eq!(x_of(&timeline, a), Some(1.0));
+        assert!(!timeline.is_dirty());
+
+        timeline.undo();
+        assert_eq!(x_of(&timeline, a), Some(9.0));
+        assert!(timeline.is_dirty());
+    }
+
+    /// Rolled back, a new feature goes in at the bar and the bar follows it;
+    /// nothing past the bar is lost, which used to be the price of adding.
+    #[test]
+    fn adding_while_rolled_back_builds_at_the_bar() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        let b = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.roll_back_to(Some(a));
+        assert_eq!(timeline.shown_len(), 1);
+        assert_eq!(timeline.active_features().count(), 1);
+
+        let c = timeline.apply_feature(Box::new(GlobalPoint::new(2.0, 0.0, 0.0)));
+        assert_eq!(timeline.feature_order(), &[a, c, b]);
+        assert_eq!(timeline.rollback(), Some(c));
+        assert_eq!(timeline.shown_len(), 2);
+    }
+
+    /// A bar after the last feature is no bar, and a bar whose feature is
+    /// deleted goes with it rather than pointing at nothing.
+    #[test]
+    fn the_bar_never_points_at_nothing() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        let b = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.roll_back_to(Some(b));
+        assert_eq!(timeline.rollback(), None);
+
+        timeline.roll_back_to(Some(a));
+        timeline.delete_feature(a);
+        assert_eq!(timeline.rollback(), None);
+        assert_eq!(timeline.shown_len(), 1);
+    }
+
+    /// The bar is a way of looking at the map, not part of it: moving it is
+    /// no undo step, and a save writes every feature regardless.
+    #[test]
+    fn rolling_back_is_not_an_edit() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.mark_saved();
+        timeline.roll_back_to(Some(a));
+        timeline.checkpoint();
+        assert!(!timeline.can_undo() && !timeline.is_dirty());
+
+        let text = crate::editor::save::to_text(&timeline, &Default::default()).unwrap();
+        let loaded = crate::editor::save::parse(&text).unwrap().timeline;
+        assert_eq!(loaded.feature_order().len(), 2);
+        assert_eq!(loaded.rollback(), None);
+    }
+
+    /// Only what is above the bar stands in the world, and rolling to the
+    /// end stands up the rest — which is what entering Play relies on.
+    #[test]
+    fn the_world_holds_what_is_above_the_bar() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        let b = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.roll_back_to(Some(a));
+        app.insert_resource(timeline);
+        app.add_systems(Update, FeatureTimeline::sync_entities);
+        app.update();
+
+        let has_entity = |app: &App, id| {
+            app.world().resource::<FeatureTimeline>().get_feature(&id).unwrap().object().entity().is_some()
+        };
+        assert!(has_entity(&app, a));
+        assert!(!has_entity(&app, b), "a feature past the bar stood in the world");
+
+        app.world_mut().resource_mut::<FeatureTimeline>().roll_back_to(None);
+        app.update();
+        assert!(has_entity(&app, b));
+    }
+
+    /// However many edits and reverts, the history stays at the cap.
+    #[test]
+    fn the_history_is_bounded() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        timeline.mark_saved();
+        let on_disk = || {
+            let mut saved = FeatureTimeline::default();
+            saved.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+            saved
+        };
+        for step in 0..UNDO_DEPTH * 2 {
+            move_to_x(&mut timeline, a, step as f32 + 1.0);
+            timeline.checkpoint();
+            timeline.replace_as_edit(on_disk());
+        }
+        assert_eq!(timeline.undo.len(), UNDO_DEPTH);
+    }
+
+    /// A map that arrives from somewhere else — a file, a server — brings no
+    /// history with it and leaves none behind.
+    #[test]
+    fn adopting_a_map_forgets_the_history() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.checkpoint();
+        move_to_x(&mut timeline, a, 2.0);
+        timeline.checkpoint();
+        assert!(timeline.can_undo());
+
+        timeline.adopt(FeatureTimeline::default());
+        assert!(!timeline.can_undo() && !timeline.can_redo());
+        assert!(!timeline.is_dirty());
+    }
 
     /// A tab too short for both halves must still give a valid range.
     ///

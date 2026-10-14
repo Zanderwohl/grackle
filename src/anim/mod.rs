@@ -324,7 +324,7 @@ fn frame_when_there_is_something_to_frame(
     let length = selected_clip(&anim, &editor, &clips).map_or(1.0, |clip| clip.length);
     view.frame(length);
 
-    frame.write(crate::prop::camera::FrameTheProp);
+    frame.write(crate::prop::camera::FrameTheProp::default());
     anim.pending_frame = false;
 }
 
