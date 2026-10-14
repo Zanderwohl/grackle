@@ -443,6 +443,10 @@ untitled = "Untitled prop"
 
 [prop.menu]
 frame = "Frame"
+frame_selected = "Frame selected"
+edit = "Edit"
+undo = "Undo"
+redo = "Redo"
 
 [prop.panels]
 features = "Features"
@@ -450,6 +454,7 @@ inspector = "Inspector"
 scene = "Scene"
 hold = "Hold"
 problems = "Problems"
+problems_count = "Problems ({ count })"
 
 [prop.hold]
 handles = "Handles in the viewport"
@@ -469,8 +474,6 @@ figure = "Reference figure"
 no_figure = "None"
 
 [prop.tree]
-undo = "Undo"
-redo = "Redo"
 # Icons, not prose — but still here rather than in the source, because egui
 # ships one font set and a glyph outside it renders as a hollow box. These are
 # emoji rather than the Geometric Shapes triangles they replaced, which is what
@@ -479,13 +482,17 @@ redo = "Redo"
 # state: whichever is showing is what clicking will do.
 suppress = "Suppress"
 unsuppress = "Unsuppress"
+duplicate = "Duplicate"
+copy_of = "{ name } copy"
+repaint = "Repaint…"
+repaint_eaten = "Already used by a later feature."
 delete = "🗑 Delete"
 delete_breaks = "{ count } other features build on this one"
 
 [prop.add]
 solid = "Solid"
 sweep = "Sweep"
-boolean = "Boolean"
+combine = "Combine"
 
 [prop.shapes]
 box = "Box"
@@ -513,11 +520,16 @@ intersect = "Intersect"
 extrude = "Extrude"
 revolve = "Revolve"
 mirror = "Mirror"
-paint = "Paint"
+paint = "Repaint"
 
 [prop.inspector]
-nothing = "Select a feature."
+nothing = "Nothing selected."
+picked = "{ count } selected"
+kind = "Kind"
 name = "Name"
+name_key = "Name key"
+shown_as = "Shown as"
+file = "File"
 active = "Active"
 shape = "Shape"
 profile = "Profile"
@@ -533,6 +545,9 @@ degrees = "Sweep"
 segments = "Segments"
 origin = "Origin"
 rotation = "Rotation"
+points_along = "Points along"
+spin = "Spin"
+euler = "Euler angles"
 style = "Style"
 tint = "Tint"
 operation = "Operation"
@@ -546,7 +561,20 @@ remove_point = "🗑"
 remove_point_hint = "Remove point"
 missing = "missing { id }"
 
+[prop.inspector.sections]
+prop = "Prop"
+size = "Size"
+feature = "Feature"
+shape = "Shape"
+profile = "Profile"
+placement = "Placement"
+material = "Material"
+operands = "Operands"
+mirror = "Mirror plane"
+
 [prop.stats]
+features = "{ count } features"
+selected = "Selected: { names }"
 bodies = "{ count } bodies"
 triangles = "{ count } triangles"
 settling = "settling…"

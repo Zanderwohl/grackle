@@ -337,15 +337,19 @@ fn draw_the_bench(mut gizmos: Gizmos, editor: Res<PropEditor>, build: Res<PropBu
 
     // A feature eaten by a later boolean has no body to outline, and drawing
     // its ingredients would show geometry that is not in the prop.
-    let Some(selected) = editor.selected else { return };
-    let Some((_, solid)) = build.evaluated.bodies.iter().find(|(id, _)| *id == selected) else {
-        return;
-    };
-    let Some((min, max)) = solid.bounds() else { return };
-    gizmos.cube(
-        Transform::from_translation((min + max) / 2.0).with_scale(max - min),
-        Color::srgb(1.0, 0.8, 0.2),
-    );
+    // The primary bright and the rest of the selection dimmer, matching the
+    // tree's two highlights.
+    for picked in editor.selection() {
+        let Some((_, solid)) = build.evaluated.bodies.iter().find(|(id, _)| *id == picked) else {
+            continue;
+        };
+        let Some((min, max)) = solid.bounds() else { continue };
+        let colour = match editor.selected == Some(picked) {
+            true => Color::srgb(1.0, 0.8, 0.2),
+            false => Color::srgba(1.0, 0.8, 0.2, 0.35),
+        };
+        gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), colour);
+    }
 }
 
 #[cfg(test)]

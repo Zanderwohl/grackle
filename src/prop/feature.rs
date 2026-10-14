@@ -185,6 +185,21 @@ impl FeatureOp {
             FeatureOp::Boolean { .. } | FeatureOp::Mirror { .. } | FeatureOp::Paint { .. } => None,
         }
     }
+
+    /// The local axis this feature's solid runs *along*, which is what
+    /// "point it along +Z" turns.
+    ///
+    /// Read off how each solid is built rather than chosen: a prism and a cone
+    /// stand on `+Y`, an extrude runs down `+Z`, a revolve spins about `+Y`. A
+    /// box, wedge or sphere has no length of its own, so it takes `+Z`, which
+    /// is where a new box's longest side already is.
+    pub fn main_axis(&self) -> Vec3 {
+        match self {
+            FeatureOp::Primitive { shape: Shape::Prism { .. } | Shape::Cone { .. }, .. } => Vec3::Y,
+            FeatureOp::Revolve { .. } => Vec3::Y,
+            _ => Vec3::Z,
+        }
+    }
 }
 
 /// One entry in the list.
@@ -242,10 +257,73 @@ impl Evaluated {
 
     /// The box everything sits in.
     pub fn bounds(&self) -> Option<(Vec3, Vec3)> {
-        self.bodies.iter().filter_map(|(_, solid)| solid.bounds()).reduce(
-            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)),
-        )
+        self.bounds_of(|_| true)
     }
+
+    /// The box the standing bodies among `ids` sit in. A feature already eaten
+    /// has no body of its own, so it contributes nothing.
+    pub fn bounds_of_bodies(&self, ids: &[PropFeatureId]) -> Option<(Vec3, Vec3)> {
+        self.bounds_of(|id| ids.contains(&id))
+    }
+
+    fn bounds_of(&self, wanted: impl Fn(PropFeatureId) -> bool) -> Option<(Vec3, Vec3)> {
+        self.bodies
+            .iter()
+            .filter(|(id, _)| wanted(*id))
+            .filter_map(|(_, solid)| solid.bounds())
+            .reduce(|(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)))
+    }
+
+    /// The standing body a ray meets first, if any.
+    ///
+    /// Against the faces rather than the bounding boxes: a bore runs through a
+    /// barrel, and a click down it should reach whatever is behind rather than
+    /// select the barrel for having a box around the hole. Faces are convex,
+    /// so a fan is an exact triangulation of each.
+    pub fn body_under(&self, origin: Vec3, direction: Vec3) -> Option<PropFeatureId> {
+        self.bodies
+            .iter()
+            .filter_map(|(id, solid)| {
+                solid
+                    .polygons()
+                    .iter()
+                    .flat_map(|polygon| {
+                        let v = &polygon.vertices;
+                        (1..v.len().saturating_sub(1))
+                            .filter_map(move |i| ray_triangle(origin, direction, v[0], v[i], v[i + 1]))
+                    })
+                    .min_by(f32::total_cmp)
+                    .map(|distance| (*id, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id)
+    }
+}
+
+/// How far along a ray it meets a triangle, from either side — Möller–Trumbore.
+/// Both sides, because an inside-out face is still something somebody can see
+/// and click.
+fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let ab = b - a;
+    let ac = c - a;
+    let p = direction.cross(ac);
+    let det = ab.dot(p);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let t_vec = origin - a;
+    let u = t_vec.dot(p) * inv;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = t_vec.cross(ab);
+    let v = direction.dot(q) * inv;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = ac.dot(q) * inv;
+    (t > 0.0).then_some(t)
 }
 
 /// Replay a feature list into the bodies it describes. A pure function of the
@@ -374,6 +452,38 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A click lands on the nearer of two bodies in a line, and passes
+    /// straight down a hole drilled through the first to reach the second.
+    #[test]
+    fn a_ray_picks_the_nearest_face_not_the_nearest_box() {
+        let cube = |id: u32, z: f32| primitive(id, Shape::Box { size: [0.1, 0.1, 0.1] }, Vec3::new(0.0, 0.0, z));
+        let near = cube(0, 0.0);
+        let far = cube(1, -0.5);
+        let evaluated = evaluate(&[near.clone(), far.clone()]);
+        let from_front = evaluated.body_under(Vec3::new(0.0, 0.0, 1.0), Vec3::NEG_Z);
+        assert_eq!(from_front, Some(PropFeatureId(0)));
+        let beside = evaluated.body_under(Vec3::new(1.0, 0.0, 1.0), Vec3::NEG_Z);
+        assert_eq!(beside, None);
+
+        // A bore down the middle of the near cube, subtracted.
+        let bore = primitive(2, Shape::Box { size: [0.04, 0.04, 0.3] }, Vec3::ZERO);
+        let drilled = PropFeature::new(
+            PropFeatureId(3),
+            FeatureOp::Boolean { op: BooleanOp::Subtract, target: PropFeatureId(0), tool: PropFeatureId(2) },
+        );
+        let evaluated = evaluate(&[near, far, bore, drilled]);
+        assert_eq!(
+            evaluated.body_under(Vec3::new(0.0, 0.0, 1.0), Vec3::NEG_Z),
+            Some(PropFeatureId(1)),
+            "the ray goes down the hole",
+        );
+        assert_eq!(
+            evaluated.body_under(Vec3::new(0.04, 0.0, 1.0), Vec3::NEG_Z),
+            Some(PropFeatureId(3)),
+            "beside the hole is the drilled body, under its own id",
+        );
+    }
 
     fn primitive(id: u32, shape: Shape, at: Vec3) -> PropFeature {
         PropFeature::new(

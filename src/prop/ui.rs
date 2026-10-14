@@ -31,6 +31,7 @@ use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
 use crate::prop::document::{self, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::common::class::Class;
+use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
 use crate::common::shortcuts::chords;
 use crate::prop::feature::{Axis, BooleanOp, FeatureOp, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
@@ -102,7 +103,9 @@ impl Default for PropPanels {
 struct PropRequests {
     /// What the File menu asked of the prop in front of us.
     file: Option<FileAction>,
-    frame: bool,
+    /// A framing asked for, and whether of the selection rather than the
+    /// whole prop.
+    frame: Option<bool>,
     /// The mode picked from the **Mode** menu, if one was.
     mode: Option<AppMode>,
 }
@@ -135,7 +138,12 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Inspector => get!("prop.panels.inspector").into(),
             PropTab::Scene => get!("prop.panels.scene").into(),
             PropTab::Hold => get!("prop.panels.hold").into(),
-            PropTab::Problems => get!("prop.panels.problems").into(),
+            // The count in the title, so problems are visible with the tab
+            // folded behind another one.
+            PropTab::Problems => match self.build.evaluated.problems.len() {
+                0 => get!("prop.panels.problems").into(),
+                count => get!("prop.panels.problems_count", "count", count).into(),
+            },
         }
     }
 
@@ -220,6 +228,7 @@ fn panels(
                 // The shared pulldown rather than four buttons written
                 // here, which is what it used to be.
                 file_menu(ui, &mut tabs.requests.file);
+                edit_menu(ui, tabs.editor);
                 // `Prop` spelled out rather than read from the state: this
                 // whole system is gated on it, so the mode it is drawing for
                 // is not in question.
@@ -229,9 +238,6 @@ fn panels(
                     role.as_deref(),
                     &mut tabs.requests.mode,
                 );
-                if ui.button(get!("prop.menu.frame")).clicked() {
-                    tabs.requests.frame = true;
-                }
                 ui.separator();
                 ui.label(match &tabs.editor.path {
                     Some(path) => path
@@ -244,6 +250,8 @@ fn panels(
                     ui.label("*");
                 }
             });
+            ui.separator();
+            toolbar(ui, tabs.editor, tabs.build, &mut tabs.requests.frame);
         })
         .response
         .rect
@@ -281,6 +289,15 @@ fn panels(
         .rect
         .width();
 
+    // Shown before the dock's bottom panel so it sits beneath it, along the
+    // window's edge.
+    let status_height = egui::Panel::bottom("prop_status")
+        .resizable(false)
+        .show(&mut viewport_ui, |ui| status_line(ui, tabs.editor, tabs.build))
+        .response
+        .rect
+        .height();
+
     layout.bottom_height = egui::Panel::bottom("prop_bottom")
         .resizable(true)
         .show(&mut viewport_ui, |ui| {
@@ -304,8 +321,8 @@ fn panels(
         editor.end_gesture();
     }
 
-    if requests.frame {
-        frame.write(FrameTheProp);
+    if let Some(selected) = requests.frame {
+        frame.write(FrameTheProp { selected });
     }
     // `set`, not `set_if_neq`: `mode_menu` never offers the mode already in
     // force, so anything arriving here is a real change.
@@ -324,7 +341,7 @@ fn panels(
                 left: layout.left_width,
                 right: layout.right_width,
                 top: layout.menu_bar_height,
-                bottom: layout.bottom_height,
+                bottom: layout.bottom_height + status_height,
             },
             window,
         );
@@ -349,24 +366,11 @@ struct Row {
 }
 
 /// The ordered list, which *is* the prop.
+///
+/// Rows and nothing else. Creating things is the toolbar's job and undoing
+/// them the Edit menu's; neither is a property of the list, and both used to
+/// sit on top of it pushing the rows down.
 fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
-    ui.horizontal(|ui| {
-        ui.add_enabled_ui(editor.can_undo(), |ui| {
-            if ui.button(get!("prop.tree.undo")).clicked() {
-                editor.undo();
-            }
-        });
-        ui.add_enabled_ui(editor.can_redo(), |ui| {
-            if ui.button(get!("prop.tree.redo")).clicked() {
-                editor.redo();
-            }
-        });
-    });
-
-    ui.separator();
-    add_menu(ui, editor, build);
-    ui.separator();
-
     let entries: Vec<Row> = editor
         .doc()
         .features
@@ -394,7 +398,8 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     // back a selection and an action, and holding `editor` across them would
     // mean the context menu could not touch either.
     let selected = editor.selected;
-    let mut select: Option<PropFeatureId> = None;
+    let also_selected = editor.also_selected.clone();
+    let mut select: Option<(PropFeatureId, Pick)> = None;
     let mut pending: Option<Box<dyn FnOnce(&mut PropEditor)>> = None;
 
     // Used once every row has been drawn: where an insertion line goes is a
@@ -471,7 +476,8 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 dropped = true;
             }
             if response.clicked() {
-                select = Some(id);
+                let extending = ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
+                select = Some((id, if extending { Pick::Toggle } else { Pick::Only }));
             }
 
             // Selection outranks hover, or a chosen row dims when pointed at.
@@ -479,6 +485,10 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 Some(ui.visuals().widgets.active.weak_bg_fill)
             } else if selected == Some(id) {
                 Some(ui.visuals().selection.bg_fill)
+            } else if also_selected.contains(&id) {
+                // Picked but not primary: visibly in the selection, visibly
+                // not the one the inspector is showing.
+                Some(ui.visuals().selection.bg_fill.gamma_multiply(0.45))
             } else if response.hovered() {
                 Some(ui.visuals().widgets.hovered.weak_bg_fill)
             } else {
@@ -497,8 +507,12 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
 
             response.context_menu(|ui| {
                 // Right-clicking is a way of pointing at a thing, so it selects
-                // too — otherwise the inspector shows something else.
-                select = Some(id);
+                // too — otherwise the inspector shows something else. Unless it
+                // is already picked: right-clicking one of two bodies you have
+                // just Ctrl-clicked should not throw the other away.
+                if selected != Some(id) && !also_selected.contains(&id) {
+                    select = Some((id, Pick::Only));
+                }
 
                 // Names the **action**, not the state: a label naming the state
                 // reads as a checkbox with no box.
@@ -514,6 +528,42 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                                 feature.enabled = !enabled;
                             }
                         });
+                    }));
+                }
+
+                // Only for what consumes nothing: a boolean's copy would find
+                // its operands already eaten by the original.
+                let copyable = editor.doc().feature(id).is_some_and(|feature| feature.op.consumes().is_empty());
+                if ui
+                    .add_enabled(copyable, egui::Button::new(get!("prop.tree.duplicate")))
+                    .clicked()
+                {
+                    ui.close_kind(UiKind::Menu);
+                    let name = get!("prop.tree.copy_of", "name", name);
+                    pending = Some(Box::new(move |editor: &mut PropEditor| {
+                        if let Some(copy) = editor.edit(|doc| doc.duplicate(id, name)) {
+                            editor.select(copy);
+                        }
+                    }));
+                }
+
+                // **Repaint lives here, not beside Extrude.** It is a thing you
+                // do *to a body*, and a body-producing feature already carries
+                // its own surface — so it is the exception, reached from the
+                // body it applies to. Starts from what the body looks like
+                // now, so opening it changes nothing until something is moved.
+                let standing = build.evaluated.bodies.iter().find(|(body, _)| *body == id);
+                let repaint = ui.add_enabled(
+                    standing.is_some(),
+                    egui::Button::new(get!("prop.tree.repaint")),
+                );
+                let repaint = repaint.on_disabled_hover_text(get!("prop.tree.repaint_eaten"));
+                if repaint.clicked() {
+                    ui.close_kind(UiKind::Menu);
+                    let surface = standing.map(|(_, solid)| solid.dominant_surface()).unwrap_or_default();
+                    pending = Some(Box::new(move |editor: &mut PropEditor| {
+                        let added = editor.edit(|doc| doc.push(FeatureOp::Paint { target: id, surface }));
+                        editor.select(added);
                     }));
                 }
 
@@ -535,9 +585,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     ui.close_kind(UiKind::Menu);
                     pending = Some(Box::new(move |editor: &mut PropEditor| {
                         editor.edit(|doc| doc.remove(id));
-                        if editor.selected == Some(id) {
-                            editor.selected = None;
-                        }
+                        editor.forget_missing();
                     }));
                 }
             });
@@ -557,12 +605,23 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
         }
     });
 
-    if let Some(id) = select {
-        editor.selected = Some(id);
+    match select {
+        Some((id, Pick::Only)) => editor.select(id),
+        Some((id, Pick::Toggle)) => editor.toggle_selected(id),
+        None => {}
     }
     if let Some(action) = pending {
         action(editor);
     }
+}
+
+/// How a click on a row changes the selection.
+#[derive(Clone, Copy)]
+enum Pick {
+    /// A plain click: this and nothing else.
+    Only,
+    /// Ctrl/Cmd held: add it, or take it out if it was in.
+    Toggle,
 }
 
 /// Draw where a dragged feature would land, and say where it may land.
@@ -621,13 +680,21 @@ fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row
     target
 }
 
-/// Adding a feature.
+/// The verbs, in a row under the menu bar.
 ///
-/// Booleans arrive **already pointed at the last two bodies**: one that landed
-/// broken and had to be wired up in the inspector would be two steps where the
-/// intent — nearly always "cut this out of that" — was one.
-fn add_menu(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
+/// **They act on the selection, not on whatever was added last.** Combine
+/// takes the two bodies picked (first as target, second as tool), Mirror the
+/// one in the inspector; each is greyed out when the selection does not fit.
+/// No hover text explaining what to pick — the UI states what is, it is not a
+/// tutorial. Creating a solid needs nothing picked.
+///
+/// `frame` is here rather than in a View menu because it is the one button
+/// somebody reaches for after losing the prop, and a menu is one click further
+/// from it.
+fn toolbar(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, frame: &mut Option<bool>) {
     let live: Vec<PropFeatureId> = build.evaluated.bodies.iter().map(|(id, _)| *id).collect();
+    let pair = editor.pair_to_combine(&live);
+    let single = editor.body_to_act_on(&live);
     let mut added: Option<FeatureOp> = None;
 
     ui.horizontal_wrapped(|ui| {
@@ -674,51 +741,89 @@ fn add_menu(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             }
         });
 
-        ui.add_enabled_ui(live.len() >= 2, |ui| {
-            ui.menu_button(get!("prop.add.boolean"), |ui| {
+        ui.separator();
+
+        ui.add_enabled_ui(pair.is_some(), |ui| {
+            ui.menu_button(get!("prop.add.combine"), |ui| {
+                let Some((target, tool)) = pair else { return };
                 for op in BooleanOp::ALL {
                     if ui.button(op.name()).clicked() {
                         ui.close_kind(UiKind::Menu);
-                        added = Some(FeatureOp::Boolean {
-                            op,
-                            target: live[live.len() - 2],
-                            tool: live[live.len() - 1],
-                        });
+                        added = Some(FeatureOp::Boolean { op, target, tool });
                     }
                 }
             });
         });
 
-        ui.add_enabled_ui(!live.is_empty(), |ui| {
-            let target = live.last().copied().unwrap_or_default();
-            if ui.button(get!("prop.features.mirror")).clicked() {
-                added = Some(FeatureOp::Mirror {
-                    target,
-                    axis: Axis::X,
-                    offset: 0.0,
-                    keep_original: true,
-                });
-            }
-            if ui.button(get!("prop.features.paint")).clicked() {
-                added = Some(FeatureOp::Paint { target, surface: Surface::default() });
-            }
-        });
+        let mirror = ui
+            .add_enabled(single.is_some(), egui::Button::new(get!("prop.features.mirror")));
+        if let (true, Some(target)) = (mirror.clicked(), single) {
+            added = Some(FeatureOp::Mirror {
+                target,
+                axis: Axis::X,
+                offset: 0.0,
+                keep_original: true,
+            });
+        }
+
+        ui.separator();
+
+        if ui.button(get!("prop.menu.frame")).clicked() {
+            *frame = Some(false);
+        }
+        let framable = build.evaluated.bounds_of_bodies(&editor.selection()).is_some();
+        if ui
+            .add_enabled(framable, egui::Button::new(get!("prop.menu.frame_selected")))
+            .clicked()
+        {
+            *frame = Some(true);
+        }
     });
 
     if let Some(op) = added {
         let id = editor.edit(|doc| doc.push(op));
-        editor.selected = Some(id);
+        editor.select(id);
     }
 }
 
-/// The selected feature's numbers.
+/// Undo and redo, labelled with the chords that already do the same thing.
+fn edit_menu(ui: &mut Ui, editor: &mut PropEditor) {
+    ui.menu_button(get!("prop.menu.edit"), |ui| {
+        let ctx = ui.ctx().clone();
+        let chord = |shift: bool, key: egui::Key| {
+            let modifiers = match shift {
+                true => egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                false => egui::Modifiers::COMMAND,
+            };
+            ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key))
+        };
+        let undo = egui::Button::new(get!("prop.menu.undo")).shortcut_text(chord(false, egui::Key::Z));
+        if ui.add_enabled(editor.can_undo(), undo).clicked() {
+            ui.close_kind(UiKind::Menu);
+            editor.undo();
+        }
+        let redo = egui::Button::new(get!("prop.menu.redo")).shortcut_text(chord(true, egui::Key::Z));
+        if ui.add_enabled(editor.can_redo(), redo).clicked() {
+            ui.close_kind(UiKind::Menu);
+            editor.redo();
+        }
+    });
+}
+
+/// The selected feature's numbers, or the prop's own when nothing is picked.
+///
+/// **In sections, in a fixed order** — Feature, Shape or Profile, Placement,
+/// Material, Operands — so a number is in the same place whatever kind of
+/// feature it is on, and a section somebody never touches can be folded away
+/// for good. egui remembers which are open by id, so the ids are per section
+/// rather than per feature: folding Placement folds it everywhere.
 fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let Some(selected) = editor.selected else {
-        ui.label(get!("prop.inspector.nothing"));
+        prop_overview(ui, editor, build);
         return;
     };
     let Some(index) = editor.doc().index_of(selected) else {
-        ui.label(get!("prop.inspector.nothing"));
+        prop_overview(ui, editor, build);
         return;
     };
     // What this feature could point at is what was live *when it ran* — not
@@ -732,6 +837,7 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             (*id, editor.doc().feature(*id).map(|f| f.name.clone()).unwrap_or_else(|| id.to_string()))
         })
         .collect();
+    let picked = editor.selection().len();
 
     // Drawn against a **copy**, written back only if something moved.
     // `PropEditor::doc_mut` marks the document changed by being called, which
@@ -743,79 +849,112 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
 
     let mut changed = false;
     egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(get!("prop.inspector.name"));
-            changed |= ui.text_edit_singleline(&mut feature.name).changed();
-        });
-        // **Positive, unlike the tree's menu, and that is not an
-        // inconsistency.** A menu item names an *action*, and the useful thing
-        // to say there is what clicking will do — "Suppress". A checkbox names
-        // a *state*, and a ticked box meaning "off" is the kind of thing you
-        // have to read twice. So the two differ because they are different
-        // questions, and the box is bound straight to the stored field with
-        // nothing to invert.
-        changed |= ui.checkbox(&mut feature.enabled, get!("prop.inspector.active")).changed();
-        ui.separator();
+        // States that more than one thing is selected, since the numbers below
+        // are only the primary's.
+        if picked > 1 {
+            ui.label(egui::RichText::new(get!("prop.inspector.picked", "count", picked)).weak());
+        }
 
+        section(ui, "feature", get!("prop.inspector.sections.feature"), |ui| {
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.inspector.kind"));
+                ui.label(feature.op.type_name());
+            });
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.inspector.name"));
+                changed |= ui.text_edit_singleline(&mut feature.name).changed();
+            });
+            // **Positive, unlike the tree's menu, and that is not an
+            // inconsistency.** A menu item names an *action*, and the useful
+            // thing to say there is what clicking will do — "Suppress". A
+            // checkbox names a *state*, and a ticked box meaning "off" is the
+            // kind of thing you have to read twice. So the two differ because
+            // they are different questions, and the box is bound straight to
+            // the stored field with nothing to invert.
+            changed |= ui.checkbox(&mut feature.enabled, get!("prop.inspector.active")).changed();
+        });
+
+        let main = feature.op.main_axis();
         match &mut feature.op {
             FeatureOp::Primitive { shape, placement, surface } => {
-                changed |= shape_ui(ui, shape);
-                ui.separator();
-                changed |= placement_ui(ui, placement);
-                ui.separator();
-                changed |= surface_ui(ui, surface);
+                section(ui, "shape", get!("prop.inspector.sections.shape"), |ui| {
+                    changed |= shape_ui(ui, shape);
+                });
+                section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
+                    changed |= placement_ui(ui, placement, main);
+                });
+                section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
+                    changed |= surface_ui(ui, surface);
+                });
             }
             FeatureOp::Extrude { profile, placement, depth, midplane, surface } => {
-                changed |= profile_ui(ui, profile);
-                ui.separator();
-                changed |= drag(ui, get!("prop.inspector.depth"), depth, 0.001, "m");
-                changed |= ui.checkbox(midplane, get!("prop.inspector.midplane")).changed();
-                ui.separator();
-                changed |= placement_ui(ui, placement);
-                ui.separator();
-                changed |= surface_ui(ui, surface);
+                section(ui, "profile", get!("prop.inspector.sections.profile"), |ui| {
+                    changed |= profile_ui(ui, profile);
+                    ui.separator();
+                    changed |= drag(ui, get!("prop.inspector.depth"), depth, 0.001, "m");
+                    changed |= ui.checkbox(midplane, get!("prop.inspector.midplane")).changed();
+                });
+                section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
+                    changed |= placement_ui(ui, placement, main);
+                });
+                section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
+                    changed |= surface_ui(ui, surface);
+                });
             }
             FeatureOp::Revolve { profile, placement, degrees, segments, surface } => {
-                changed |= profile_ui(ui, profile);
-                ui.separator();
-                changed |= drag(ui, get!("prop.inspector.degrees"), degrees, 1.0, "°");
-                changed |= count(ui, get!("prop.inspector.segments"), segments);
-                ui.separator();
-                changed |= placement_ui(ui, placement);
-                ui.separator();
-                changed |= surface_ui(ui, surface);
+                section(ui, "profile", get!("prop.inspector.sections.profile"), |ui| {
+                    changed |= profile_ui(ui, profile);
+                    ui.separator();
+                    changed |= drag(ui, get!("prop.inspector.degrees"), degrees, 1.0, "°");
+                    changed |= count(ui, get!("prop.inspector.segments"), segments);
+                });
+                section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
+                    changed |= placement_ui(ui, placement, main);
+                });
+                section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
+                    changed |= surface_ui(ui, surface);
+                });
             }
             FeatureOp::Boolean { op, target, tool } => {
-                ui.horizontal(|ui| {
-                    ui.label(get!("prop.inspector.operation"));
-                    for candidate in BooleanOp::ALL {
-                        changed |= ui
-                            .selectable_value(op, candidate, candidate.name())
-                            .changed();
-                    }
+                section(ui, "operands", get!("prop.inspector.sections.operands"), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.operation"));
+                        for candidate in BooleanOp::ALL {
+                            changed |= ui
+                                .selectable_value(op, candidate, candidate.name())
+                                .changed();
+                        }
+                    });
+                    changed |= body_picker(ui, get!("prop.inspector.target"), target, &names);
+                    changed |= body_picker(ui, get!("prop.inspector.tool"), tool, &names);
                 });
-                changed |= body_picker(ui, get!("prop.inspector.target"), target, &names);
-                changed |= body_picker(ui, get!("prop.inspector.tool"), tool, &names);
             }
             FeatureOp::Mirror { target, axis, offset, keep_original } => {
-                changed |= body_picker(ui, get!("prop.inspector.target"), target, &names);
-                ui.horizontal(|ui| {
-                    ui.label(get!("prop.inspector.plane"));
-                    for candidate in Axis::ALL {
-                        changed |= ui
-                            .selectable_value(axis, candidate, candidate.name())
-                            .changed();
-                    }
+                section(ui, "operands", get!("prop.inspector.sections.operands"), |ui| {
+                    changed |= body_picker(ui, get!("prop.inspector.target"), target, &names);
                 });
-                changed |= drag(ui, get!("prop.inspector.offset"), offset, 0.001, "m");
-                changed |= ui
-                    .checkbox(keep_original, get!("prop.inspector.keep_original"))
-                    .changed();
+                section(ui, "mirror", get!("prop.inspector.sections.mirror"), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.plane"));
+                        for candidate in Axis::ALL {
+                            changed |= ui
+                                .selectable_value(axis, candidate, candidate.name())
+                                .changed();
+                        }
+                    });
+                    changed |= drag(ui, get!("prop.inspector.offset"), offset, 0.001, "m");
+                    changed |= ui
+                        .checkbox(keep_original, get!("prop.inspector.keep_original"))
+                        .changed();
+                });
             }
             FeatureOp::Paint { target, surface } => {
-                changed |= body_picker(ui, get!("prop.inspector.target"), target, &names);
-                ui.separator();
-                changed |= surface_ui(ui, surface);
+                section(ui, "operands", get!("prop.inspector.sections.operands"), |ui| {
+                    changed |= body_picker(ui, get!("prop.inspector.target"), target, &names);
+                });
+                section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
+                    changed |= surface_ui(ui, surface);
+                });
             }
         }
     });
@@ -825,6 +964,58 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
         if let Some(slot) = editor.doc_mut().feature_mut(selected) {
             *slot = edited;
         }
+    }
+}
+
+/// One fold of the inspector, open until somebody closes it.
+fn section(ui: &mut Ui, id: &str, title: String, body: impl FnOnce(&mut Ui)) {
+    egui::CollapsingHeader::new(egui::RichText::new(title).strong())
+        .id_salt(("prop_section", id))
+        .default_open(true)
+        .show(ui, body);
+}
+
+/// What the inspector shows with nothing picked: the prop itself.
+///
+/// An empty panel is a panel that says nothing, and there *is* something to
+/// say — the name a weapon list will show and how big the thing is, which
+/// otherwise lived only in a corner of the Problems tab.
+fn prop_overview(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
+    let mut name_key = editor.doc().name_key.clone();
+    let mut changed = false;
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.label(egui::RichText::new(get!("prop.inspector.nothing")).weak());
+        section(ui, "prop", get!("prop.inspector.sections.prop"), |ui| {
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.inspector.name_key"));
+                changed |= ui.text_edit_singleline(&mut name_key).changed();
+            });
+            // Resolved, so a key with a typo in it reads as `<key>` here
+            // rather than first in somebody's loadout.
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.inspector.shown_as"));
+                ui.label(egui::RichText::new(get!(name_key)).italics());
+            });
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.inspector.file"));
+                ui.label(editor.saved_name().map(str::to_owned).unwrap_or_else(|| get!("prop.untitled")));
+            });
+        });
+        section(ui, "size", get!("prop.inspector.sections.size"), |ui| {
+            if let Some((min, max)) = build.evaluated.bounds() {
+                let size = max - min;
+                ui.label(format!("{:.3} × {:.3} × {:.3} m", size.x, size.y, size.z));
+            }
+            ui.label(get!("prop.stats.features", "count", editor.doc().features.len()));
+            ui.label(get!("prop.stats.bodies", "count", build.evaluated.bodies.len()));
+            ui.label(get!("prop.stats.triangles", "count", build.evaluated.triangle_count()));
+        });
+    });
+
+    if changed {
+        editor.begin_gesture();
+        editor.doc_mut().name_key = name_key;
     }
 }
 
@@ -993,8 +1184,23 @@ fn degrees_ui(ui: &mut Ui, label: String, radians: &mut [f32; 3]) -> bool {
     false
 }
 
-fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
+/// One line along the bottom: what is selected, what the prop amounts to,
+/// and whether the viewport is still catching up.
+///
+/// Out of the Problems tab, where it used to be, because it is true whichever
+/// tab is in front.
+fn status_line(ui: &mut Ui, editor: &PropEditor, build: &PropBuild) {
     ui.horizontal(|ui| {
+        let names: Vec<String> = editor
+            .selection()
+            .iter()
+            .filter_map(|id| editor.doc().feature(*id).map(|feature| feature.name.clone()))
+            .collect();
+        ui.label(match names.is_empty() {
+            true => get!("prop.inspector.nothing"),
+            false => get!("prop.stats.selected", "names", names.join(", ")),
+        });
+        ui.separator();
         ui.label(get!("prop.stats.bodies", "count", build.evaluated.bodies.len()));
         ui.separator();
         ui.label(get!("prop.stats.triangles", "count", build.evaluated.triangle_count()));
@@ -1010,8 +1216,9 @@ fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             ui.label(egui::RichText::new(get!("prop.stats.settling")).weak());
         }
     });
-    ui.separator();
+}
 
+fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     if build.evaluated.problems.is_empty() {
         ui.label(get!("prop.problems.none"));
         return;
@@ -1035,7 +1242,7 @@ fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 )
                 .clicked()
             {
-                editor.selected = Some(problem.feature);
+                editor.select(problem.feature);
             }
         }
     });
@@ -1114,16 +1321,74 @@ fn vec3_ui(ui: &mut Ui, label: String, value: &mut [f32; 3], speed: f64, suffix:
     changed
 }
 
-fn placement_ui(ui: &mut Ui, placement: &mut Placement) -> bool {
+/// Where a feature sits and which way it faces.
+///
+/// **Orientation is asked as "points along" and "spin"**, not as three Euler
+/// angles: lining up a barrel is "make its length run down −Z", and the
+/// answer to that in Euler angles depends on which of the three is applied
+/// first. `main` is the feature's own length axis
+/// ([`FeatureOp::main_axis`]). The angles themselves are still what is
+/// stored, and are behind a fold for the cases the presets do not reach.
+fn placement_ui(ui: &mut Ui, placement: &mut Placement, main: Vec3) -> bool {
     let mut changed = vec3_ui(ui, get!("prop.inspector.origin"), &mut placement.origin, 0.001, "");
-    // Degrees in the boxes and radians in the field, as a map feature's
-    // rotation is: parts are lined up in degrees, maths is done in radians.
-    let mut degrees = placement.rotation.map(f32::to_degrees);
-    if vec3_ui(ui, get!("prop.inspector.rotation"), &mut degrees, 1.0, "°") {
-        placement.rotation = degrees.map(f32::to_radians);
+
+    let (aim, spin) = aim_and_spin(placement.rotation(), main);
+    let mut wanted: Option<(Vec3, f32)> = None;
+
+    ui.horizontal(|ui| {
+        ui.label(get!("prop.inspector.points_along"));
+        let directions = [
+            ("+X", Vec3::X),
+            ("−X", Vec3::NEG_X),
+            ("+Y", Vec3::Y),
+            ("−Y", Vec3::NEG_Y),
+            ("+Z", Vec3::Z),
+            ("−Z", Vec3::NEG_Z),
+        ];
+        for (label, direction) in directions {
+            // Lit when it is already the answer, so the current state reads
+            // off the row; an aim between the axes lights none of them.
+            let current = aim.dot(direction) > 0.9999;
+            if ui.selectable_label(current, label).clicked() && !current {
+                wanted = Some((direction, spin));
+            }
+        }
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(get!("prop.inspector.spin"));
+        let mut degrees = spin.to_degrees();
+        if ui.add(egui::DragValue::new(&mut degrees).speed(1.0).suffix("°")).changed() {
+            wanted = Some((aim, degrees.to_radians()));
+        }
+    });
+
+    if let Some((aim, spin)) = wanted {
+        placement.rotation = tidy_angles(euler_from_quat(from_aim_and_spin(main, aim, spin)));
         changed = true;
     }
+
+    egui::CollapsingHeader::new(get!("prop.inspector.euler"))
+        .id_salt("prop_section_euler")
+        .default_open(false)
+        .show(ui, |ui| {
+            // Degrees in the boxes and radians in the field, as a map
+            // feature's rotation is: parts are lined up in degrees, maths is
+            // done in radians.
+            let mut degrees = placement.rotation.map(f32::to_degrees);
+            if vec3_ui(ui, get!("prop.inspector.rotation"), &mut degrees, 1.0, "°") {
+                placement.rotation = degrees.map(f32::to_radians);
+                changed = true;
+            }
+        });
     changed
+}
+
+/// Angles as they go on disk after a preset: the rounding residue of a
+/// quaternion round trip snapped to zero, so pointing a barrel down −Z writes
+/// `0.0` rather than `-0.00000004` into a file somebody reads.
+fn tidy_angles(angles: Vec3) -> [f32; 3] {
+    angles.to_array().map(|angle| if angle.abs() < 1e-6 { 0.0 } else { angle })
 }
 
 fn surface_ui(ui: &mut Ui, surface: &mut Surface) -> bool {
@@ -1319,8 +1584,16 @@ fn prop_shortcuts(
     egui: Res<bevy_egui::input::EguiWantsInput>,
     dialog: Res<PropFileDialog>,
     mut editor: ResMut<PropEditor>,
+    mut frame: MessageWriter<FrameTheProp>,
 ) {
-    let chords = chords(&keys, egui.wants_keyboard_input());
+    let typing = egui.wants_keyboard_input();
+    let chords = chords(&keys, typing);
+    // `F` frames the selection, or the whole prop with nothing picked —
+    // `FrameTheProp` falls back by itself. A bare key, so it is answered only
+    // while nobody is typing a name.
+    if !typing && keys.just_pressed(KeyCode::KeyF) {
+        frame.write(FrameTheProp { selected: true });
+    }
     if chords.redo {
         editor.redo();
     } else if chords.undo {

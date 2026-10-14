@@ -490,8 +490,25 @@ radius into forty presses of Ctrl+Z. The gesture closes when the pointer *and*
 the keyboard are idle, which is what makes typing a name one step rather than
 one per letter.
 
-The feature list's rows carry **reordering** and nothing else; suppressing and
-deleting are on a **right-click menu**, which is also where a feature is told
+**The verbs act on the selection**, not on whatever was added last: they sit in
+a toolbar under the menu bar, Combine takes the two bodies picked (first as
+target, Ctrl/Cmd-clicked second as tool — the order it is said in), Mirror the
+primary, and each greys out when the selection does not fit. A body is picked
+by clicking it in a viewport too — against its faces, not its box, so a click
+down a bore reaches what is behind — in `pick_in_the_viewport`, which runs
+after the handle drag so a press that grabbed a handle does not also
+re-select. Undo and redo are on an **Edit** menu.
+
+A placement's orientation is edited as **"points along" and "spin"** about the
+feature's own length axis (`FeatureOp::main_axis`), via
+`rotation::aim_and_spin` and its exact inverse; the Euler angles are still
+what is stored, and are behind a fold. The plan this is part of, with what is left, is
+[documentation/prop-editor-ux.md](documentation/prop-editor-ux.md). **The UI
+states what is; it is not a tutorial** — no hover text or empty state telling
+somebody what to click.
+
+The feature list's rows carry **reordering** and nothing else; suppressing,
+**repainting** and deleting are on a **right-click menu**, which is also where a feature is told
 what is built on it before it is deleted rather than after (`dependants`). The
 menu item names the *action* — "Suppress" on something that is on — because a
 label naming the state reads as a checkbox with no box, and you would have to

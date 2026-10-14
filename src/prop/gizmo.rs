@@ -120,7 +120,12 @@ impl Plugin for PropGizmoPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GizmoGrab>()
             .init_resource::<HoldHandles>()
-            .add_systems(Update, drag_the_selected.run_if(in_state(AppMode::Prop)))
+            // Picking after dragging, so a press that grabbed a handle is
+            // already spoken for and does not also re-select.
+            .add_systems(
+                Update,
+                (drag_the_selected, pick_in_the_viewport).chain().run_if(in_state(AppMode::Prop)),
+            )
             .add_systems(OnExit(AppMode::Prop), |mut grab: ResMut<GizmoGrab>| {
                 grab.held = None;
             });
@@ -325,6 +330,45 @@ fn drag_the_selected(
     }
 
     draw(&mut gizmos, &points, &world, scale, grab.held.map(|(handle, _)| handle).or(nearest));
+}
+
+/// Click a body in a viewport to select it; Ctrl/Cmd-click to add it to the
+/// selection or take it out. A plain click on nothing clears the selection.
+///
+/// On the press, not the release, so the gizmos of what was clicked are
+/// already up by the time the button comes back. Off while the hold's handles
+/// are up: those sit on the prop, and a near-miss on a grip would otherwise
+/// rearrange the modelling selection somebody is not looking at.
+fn pick_in_the_viewport(
+    mut editor: ResMut<PropEditor>,
+    mouse: Res<CurrentMouseInput>,
+    keys: Res<ButtonInput<KeyCode>>,
+    grab: Res<GizmoGrab>,
+    hold_handles: Res<HoldHandles>,
+    build: Res<crate::prop::view::PropBuild>,
+) {
+    if hold_handles.0 || grab.held.is_some() {
+        return;
+    }
+    if !(mouse.just_pressed && mouse.pressed == Some(MouseButton::Left)) {
+        return;
+    }
+    let Some(ray) = mouse.world_pos else { return };
+
+    let extending = keys.any_pressed([
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+        KeyCode::SuperLeft,
+        KeyCode::SuperRight,
+    ]);
+    match (build.evaluated.body_under(ray.origin, *ray.direction), extending) {
+        (Some(id), true) => editor.toggle_selected(id),
+        (Some(id), false) => editor.select(id),
+        // Ctrl-clicking empty space is a miss while building a selection,
+        // not a request to throw it away.
+        (None, true) => {}
+        (None, false) => editor.clear_selection(),
+    }
 }
 
 /// Drag the hold's handles: a grip per hand, and the figure for the carry.
