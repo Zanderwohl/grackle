@@ -12,6 +12,11 @@ pub const DEFAULT_PORT_TEXT: &str = "27100";
 /// agree exactly, since prediction reconciles in ticks.
 pub const TICK_HZ: f64 = 64.0;
 
+/// One tick of [`TICK_HZ`].
+pub fn one_tick() -> std::time::Duration {
+    std::time::Duration::from_secs_f64(1.0 / TICK_HZ)
+}
+
 /// Bump on any change to what goes over the wire; netcode refuses a handshake
 /// between builds that differ.
 pub const NETCODE_PROTOCOL_ID: u64 = 0x6772_6163_6b6c_6501;

@@ -134,6 +134,12 @@ impl Proportions {
     pub fn hip_metres(&self) -> f32 {
         self.height * self.hip_height
     }
+
+    /// `arm_length` in metres: the unit of `HoldSpec::carry` and
+    /// `Unit::ArmLengths`.
+    pub fn arm_metres(&self) -> f32 {
+        self.height * self.arm_length
+    }
 }
 
 impl Default for Proportions {

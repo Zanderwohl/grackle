@@ -246,8 +246,7 @@ pub fn weapon_transform(
     let chest = skeleton.index_of(bone::CHEST)?;
     // The chest's tail is the point between the shoulders.
     let pivot = skeleton.posed_bones(pose, root)[chest].tail;
-    let proportions = skeleton.proportions();
-    let arm = proportions.height * proportions.arm_length;
+    let arm = skeleton.proportions().arm_metres();
 
     Some(
         Transform::from_translation(pivot + aim * hold.carry(arm))
@@ -302,14 +301,10 @@ pub fn grip_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strum::IntoEnumIterator;
     use crate::common::class::Class;
     use crate::common::skeleton::humanoid;
 
-    const EVERY_CLASS: [Class; 11] = [
-        Class::Scout, Class::Soldier, Class::Pyro, Class::Demoman,
-        Class::Heavy, Class::Engineer, Class::Medic, Class::Sniper,
-        Class::Spy, Class::Civilian, Class::Mercenary,
-    ];
 
     #[test]
     fn a_class_inherits_everything_it_does_not_override() {
@@ -375,15 +370,14 @@ mod tests {
             let doc = crate::prop::document::parse(&std::fs::read_to_string(&path).unwrap())
                 .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
 
-            for class in EVERY_CLASS {
+            for class in Class::iter() {
                 let hold = doc.hold.for_class(Some(class));
                 let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
                 let mut pose = Pose::rest();
                 let root = Transform::IDENTITY;
 
                 let chest = skeleton.index_of(bone::CHEST).expect("bone is in the rig");
-                let proportions = skeleton.proportions();
-                let arm = proportions.height * proportions.arm_length;
+                let arm = skeleton.proportions().arm_metres();
                 let pivot = skeleton.posed_bones(&pose, &root)[chest].tail;
                 let placed = Transform::from_translation(pivot + hold.carry(arm));
 

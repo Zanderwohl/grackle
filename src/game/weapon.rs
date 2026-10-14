@@ -318,7 +318,6 @@ mod tests {
     use crate::common::weapon_file::default_catalogue;
 
     /// Bevy's default 64 Hz.
-    const STEP: std::time::Duration = std::time::Duration::from_micros(15625);
 
     const LASER: HitscanSpec = HitscanSpec {
         range: 100.0,
@@ -334,7 +333,7 @@ mod tests {
         world.insert_resource(catalogue);
 
         let mut fixed = Time::<Fixed>::default();
-        fixed.advance_by(STEP);
+        fixed.advance_by(crate::constants::one_tick());
         world.insert_resource(fixed);
         world
     }

@@ -12,6 +12,7 @@ use bevy::prelude::*;
 
 use crate::common::class::CROUCH_HEIGHT;
 use crate::common::skeleton::gait::FootOffset;
+use crate::common::skeleton::interpolation::Interpolation;
 use crate::common::skeleton::rig::{bone, Pose, Skeleton};
 use crate::common::skeleton::clip::{Clip, StateAnimation};
 use crate::common::skeleton::play::{apply, Frames};
@@ -280,9 +281,7 @@ pub fn animator_pose(
     }
 
     let leaving = finish_pose(skeleton, animator.previous(), inputs, root, clips);
-    // Smoothstep.
-    let t = animator.blend();
-    Pose::lerp(&leaving, &arriving, t * t * (3.0 - 2.0 * t))
+    Pose::lerp(&leaving, &arriving, Interpolation::SmoothStep.ease(animator.blend()))
 }
 
 /// A state's pose plus its corrections. Shared by drawing and hitboxes, which

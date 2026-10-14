@@ -13,11 +13,10 @@ use crate::common::class::Stance;
 use crate::common::damage::{Damage, DamageSource, PlayerId};
 use crate::common::flame::{cone_directions, Burning, FlameSpec};
 use crate::common::hitbox::Hitboxes;
-use crate::common::hitscan::trace;
 use crate::common::team::Allegiances;
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
-use crate::game::hitscan::{aim, eye};
+use crate::game::hitscan::{aim, eye, trace_past};
 use crate::game::player::{Player, PhysicsBody};
 use crate::common::weapon::{Equipped, WeaponAction, WeaponCatalogue};
 use crate::game::weapon::WeaponActionFired;
@@ -64,12 +63,7 @@ pub fn fire_flame(
             let ray = Ray3d::new(origin, direction);
             let reach = world.ray_distance(&ray, spec.range).unwrap_or(spec.range);
 
-            let others = targets
-                .iter()
-                .filter(|(entity, _)| *entity != shot.shooter)
-                .map(|(entity, boxes)| (entity, *boxes));
-
-            let Some(hit) = trace(&ray, reach, others) else { continue };
+            let Some(hit) = trace_past(&ray, reach, shot.shooter, &targets) else { continue };
             if caught.contains(&hit.target) {
                 continue;
             }
@@ -177,7 +171,7 @@ pub fn put_out_fires(mut commands: Commands, alight: Query<Entity, With<Burning>
 #[cfg(test)]
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
-    use std::time::Duration;
+    use crate::constants::one_tick;
 
     use super::*;
     use crate::common::class::body_centre_from_feet;
@@ -185,7 +179,6 @@ mod tests {
     use crate::common::hitbox::Box3;
     use crate::tool::room::Room;
 
-    const STEP: Duration = Duration::from_micros(15625);
     const SPEC: FlameSpec = FlameSpec::FLAMETHROWER;
 
     fn a_world() -> World {
@@ -195,7 +188,7 @@ mod tests {
         world.init_resource::<Messages<Damage>>();
 
         let mut fixed = Time::<Fixed>::default();
-        fixed.advance_by(STEP);
+        fixed.advance_by(one_tick());
         world.insert_resource(fixed);
         world
     }

@@ -446,10 +446,7 @@ pub fn draw_skeletons(
         if own_body.is_some() && !view.shows_own_body() {
             continue;
         }
-        let mut root = global.compute_transform();
-        if let Some(SkeletonRoot(offset)) = offset {
-            root.translation += root.rotation * *offset;
-        }
+        let root = skeleton_root(global, offset);
         draw_skeleton(&mut gizmos, skeleton, pose, &root, &SkeletonPalette::SIDES);
     }
 }

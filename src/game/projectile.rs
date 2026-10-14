@@ -406,7 +406,7 @@ pub fn clear_projectiles(
 #[cfg(test)]
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
-    use std::time::Duration;
+    use crate::constants::one_tick;
 
     use crate::common::net::NetRole;
 
@@ -502,7 +502,6 @@ mod tests {
     use crate::tool::room::Room;
 
     /// Bevy's default 64 Hz.
-    const STEP: Duration = Duration::from_micros(15625);
 
     fn a_world(rooms: &[Room]) -> World {
         let mut world = World::new();
@@ -512,7 +511,7 @@ mod tests {
         world.init_resource::<Messages<Explosion>>();
 
         let mut fixed = Time::<Fixed>::default();
-        fixed.advance_by(STEP);
+        fixed.advance_by(one_tick());
         world.insert_resource(fixed);
         world
     }

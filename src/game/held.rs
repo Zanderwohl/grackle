@@ -427,6 +427,7 @@ fn place_held_weapons(
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
+    use strum::IntoEnumIterator;
     use super::*;
     use crate::common::weapon::{Magazine, Mounted, Slot, Weapon};
     use crate::common::class::Class;
@@ -524,11 +525,6 @@ mod tests {
         assert!(bare.parts.is_empty());
     }
 
-    const EVERY_CLASS: [Class; 11] = [
-        Class::Scout, Class::Soldier, Class::Pyro, Class::Demoman,
-        Class::Heavy, Class::Engineer, Class::Medic, Class::Sniper,
-        Class::Spy, Class::Civilian, Class::Mercenary,
-    ];
 
     fn body_holding(world: &mut World, class: Class, pitch: f32) -> Entity {
         let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
@@ -703,7 +699,7 @@ mod tests {
     /// hand cannot reach the grip holds nothing.
     #[test]
     fn every_class_can_get_its_trigger_hand_onto_the_grip() {
-        for class in EVERY_CLASS {
+        for class in Class::iter() {
             let mut world = World::new();
             let body = body_holding(&mut world, class, 0.0);
             world.run_system_once(place_the_weapon).unwrap();

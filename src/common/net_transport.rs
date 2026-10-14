@@ -13,7 +13,7 @@ use lightyear::prelude::server::{NetcodeConfig as ServerNetcodeConfig, NetcodeSe
 use lightyear::prelude::*;
 
 use crate::common::net::NetRole;
-use crate::constants::{DEV_PRIVATE_KEY, NETCODE_PROTOCOL_ID, TICK_HZ};
+use crate::constants::{one_tick, DEV_PRIVATE_KEY, NETCODE_PROTOCOL_ID, TICK_HZ};
 
 /// The link entity: our listen server or our client. A marker, so teardown
 /// cannot take a link entity somebody else spawned.
@@ -55,7 +55,7 @@ pub struct NetTransportPlugin;
 
 impl Plugin for NetTransportPlugin {
     fn build(&self, app: &mut App) {
-        let tick_duration = std::time::Duration::from_secs_f64(1.0 / TICK_HZ);
+        let tick_duration = one_tick();
 
         app
             // Tied to Lightyear's tick so the two clocks cannot drift apart.

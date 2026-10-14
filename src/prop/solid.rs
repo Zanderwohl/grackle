@@ -229,7 +229,7 @@ impl Solid {
             return Solid::default();
         }
 
-        let full = degrees.abs() >= 360.0 - 1e-3;
+        let full = is_full_turn(degrees);
         let sweep = if full { std::f32::consts::TAU } else { degrees.to_radians() };
         let steps = segments as usize;
 
@@ -341,6 +341,12 @@ impl MeshParts {
             .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
             .with_inserted_indices(Indices::U32(self.indices))
     }
+}
+
+/// Whether a sweep of `degrees` closes on itself. A tolerance, because a
+/// typed 360 that went through radians and back is not exactly 360.
+pub fn is_full_turn(degrees: f32) -> bool {
+    degrees.abs() >= 360.0 - 1e-3
 }
 
 /// Smallest half-extent, in metres, so a shape cannot be collapsed to nothing.

@@ -24,6 +24,37 @@ pub struct EditorChords {
     pub redo: bool,
 }
 
+/// A letter with the modifier held, and Shift or not. The menus' hint text is
+/// generated from the same value the keyboard is read by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Chord {
+    pub shift: bool,
+    pub key: KeyCode,
+}
+
+impl Chord {
+    pub const NEW: Chord = Chord { shift: false, key: KeyCode::KeyN };
+    pub const SAVE: Chord = Chord { shift: false, key: KeyCode::KeyS };
+    pub const SAVE_AS: Chord = Chord { shift: true, key: KeyCode::KeyS };
+    pub const UNDO: Chord = Chord { shift: false, key: KeyCode::KeyZ };
+    pub const REDO: Chord = Chord { shift: true, key: KeyCode::KeyZ };
+
+    fn pressed(self, keys: &ButtonInput<KeyCode>, modifier: bool, shift: bool) -> bool {
+        modifier && shift == self.shift && keys.just_pressed(self.key)
+    }
+
+    /// Menu hint text, e.g. `Ctrl+Shift+S`. Says `Ctrl` on macOS too, where
+    /// `Super` also counts.
+    pub fn hint(self) -> String {
+        let name = format!("{:?}", self.key);
+        let letter = name.strip_prefix("Key").unwrap_or(&name);
+        match self.shift {
+            true => format!("Ctrl+Shift+{letter}"),
+            false => format!("Ctrl+{letter}"),
+        }
+    }
+}
+
 /// All false while `typing`. `Ctrl+Y` is also redo, the Windows habit.
 pub fn chords(keys: &ButtonInput<KeyCode>, typing: bool) -> EditorChords {
     if typing {
@@ -37,14 +68,26 @@ pub fn chords(keys: &ButtonInput<KeyCode>, typing: bool) -> EditorChords {
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
 
+    let pressed = |chord: Chord| chord.pressed(keys, modifier, shift);
     EditorChords {
-        new: modifier && !shift && keys.just_pressed(KeyCode::KeyN),
-        save: modifier && !shift && keys.just_pressed(KeyCode::KeyS),
-        save_as: modifier && shift && keys.just_pressed(KeyCode::KeyS),
-        undo: modifier && !shift && keys.just_pressed(KeyCode::KeyZ),
-        redo: (modifier && shift && keys.just_pressed(KeyCode::KeyZ))
-            || (ctrl && keys.just_pressed(KeyCode::KeyY)),
+        new: pressed(Chord::NEW),
+        save: pressed(Chord::SAVE),
+        save_as: pressed(Chord::SAVE_AS),
+        undo: pressed(Chord::UNDO),
+        redo: pressed(Chord::REDO) || (ctrl && keys.just_pressed(KeyCode::KeyY)),
     }
+}
+
+/// What `chord` reads as with Control held. For the menus' tests.
+#[cfg(test)]
+pub fn press(chord: Chord) -> EditorChords {
+    let mut keys = ButtonInput::<KeyCode>::default();
+    keys.press(KeyCode::ControlLeft);
+    if chord.shift {
+        keys.press(KeyCode::ShiftLeft);
+    }
+    keys.press(chord.key);
+    chords(&keys, false)
 }
 
 #[cfg(test)]
@@ -94,6 +137,12 @@ mod tests {
         assert!(pressed(&[KeyCode::ControlLeft], KeyCode::KeyN, false).new);
         assert!(pressed(&[KeyCode::SuperLeft], KeyCode::KeyN, false).new);
         assert!(!pressed(&[KeyCode::ControlLeft, KeyCode::ShiftLeft], KeyCode::KeyN, false).new);
+    }
+
+    #[test]
+    fn a_hint_names_the_modifier_shift_and_letter() {
+        assert_eq!(Chord::SAVE.hint(), "Ctrl+S");
+        assert_eq!(Chord::SAVE_AS.hint(), "Ctrl+Shift+S");
     }
 
     /// `Ctrl+Z` while renaming a feature means undo the text.

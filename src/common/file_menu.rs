@@ -9,7 +9,7 @@
 use bevy_egui::egui;
 use bevy_egui::egui::UiKind;
 
-use crate::common::shortcuts::EditorChords;
+use crate::common::shortcuts::{Chord, EditorChords};
 use crate::get;
 
 /// What the File menu was asked for. Every mode answers all five.
@@ -60,14 +60,11 @@ impl FileAction {
         }
     }
 
-    /// The hint text beside the entry. Written by hand, so
-    /// `the_menu_only_claims_chords_that_exist` keeps it in step with
-    /// [`shortcuts`](crate::common::shortcuts).
-    pub fn chord(self) -> Option<&'static str> {
+    pub fn chord(self) -> Option<Chord> {
         match self {
-            FileAction::New => Some("Ctrl+N"),
-            FileAction::Save => Some("Ctrl+S"),
-            FileAction::SaveAs => Some("Ctrl+Shift+S"),
+            FileAction::New => Some(Chord::NEW),
+            FileAction::Save => Some(Chord::SAVE),
+            FileAction::SaveAs => Some(Chord::SAVE_AS),
             FileAction::Open | FileAction::Quit => None,
         }
     }
@@ -84,7 +81,7 @@ pub fn file_menu(ui: &mut egui::Ui, request: &mut Option<FileAction>) {
             }
             let mut button = egui::Button::new(get!(action.name_key()));
             if let Some(chord) = action.chord() {
-                button = button.shortcut_text(chord);
+                button = button.shortcut_text(chord.hint());
             }
             if ui.add(button).clicked() {
                 ui.close_kind(UiKind::Menu);
@@ -97,8 +94,7 @@ pub fn file_menu(ui: &mut egui::Ui, request: &mut Option<FileAction>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::shortcuts::chords;
-    use bevy::prelude::{ButtonInput, KeyCode};
+    use crate::common::shortcuts::press;
 
     #[test]
     fn the_menu_offers_each_action_once() {
@@ -135,34 +131,13 @@ mod tests {
         }
     }
 
-    /// A hint naming a chord nothing listens for is a promise the keyboard
-    /// does not keep.
+    /// `Ctrl+Shift+S` reaching `Save` would be a save-as that silently
+    /// overwrote.
     #[test]
-    fn the_menu_only_claims_chords_that_exist() {
-        let hit = |held: &[KeyCode], key: KeyCode| {
-            let mut keys = ButtonInput::<KeyCode>::default();
-            for code in held {
-                keys.press(*code);
-            }
-            keys.press(key);
-            chords(&keys, false)
-        };
-
+    fn each_entrys_chord_asks_for_that_entry() {
         for action in ALL {
             let Some(chord) = action.chord() else { continue };
-            let pressed = match chord {
-                "Ctrl+N" => hit(&[KeyCode::ControlLeft], KeyCode::KeyN),
-                "Ctrl+S" => hit(&[KeyCode::ControlLeft], KeyCode::KeyS),
-                "Ctrl+Shift+S" => hit(&[KeyCode::ControlLeft, KeyCode::ShiftLeft], KeyCode::KeyS),
-                other => panic!("{action:?} claims '{other}', which this test cannot press"),
-            };
-            // `Ctrl+Shift+S` reaching `Save` would be a save-as that silently
-            // overwrote.
-            assert_eq!(
-                FileAction::from_chords(pressed),
-                Some(*action),
-                "{action:?} claims '{chord}', which asks for something else",
-            );
+            assert_eq!(FileAction::from_chords(press(chord)), Some(*action), "{action:?}");
         }
     }
 

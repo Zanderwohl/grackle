@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::get;
 use crate::prop::profile::{Placement, Profile};
-use crate::prop::solid::{Shape, Solid};
+use crate::prop::solid::{is_full_turn, Shape, Solid};
 use crate::prop::surface::Surface;
 
 /// Never reused, so a reference survives reordering and deletion.
@@ -152,7 +152,7 @@ impl PatternKind {
             }
             PatternKind::Radial { axis, centre, degrees } => {
                 // A whole turn would put the last copy on top of the first.
-                let gaps = match degrees.abs() >= 360.0 - 1e-3 {
+                let gaps = match is_full_turn(degrees) {
                     true => count,
                     false => count.saturating_sub(1).max(1),
                 };
@@ -252,6 +252,12 @@ impl PropFeature {
 pub struct Problem {
     pub feature: PropFeatureId,
     pub message: String,
+}
+
+impl Problem {
+    fn missing_body(feature: PropFeatureId) -> Self {
+        Self { feature, message: get!("prop.problems.missing_body") }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -392,10 +398,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 }
                 let (Some(at_target), Some(at_tool)) = (find(*target, &live), find(*tool, &live))
                 else {
-                    problems.push(Problem {
-                        feature: feature.id,
-                        message: get!("prop.problems.missing_body"),
-                    });
+                    problems.push(Problem::missing_body(feature.id));
                     continue;
                 };
                 // Higher index first, or removing one shifts the other.
@@ -425,10 +428,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
             }
             FeatureOp::Mirror { target, axis, offset, keep_original } => {
                 let Some(solid) = find(*target, &live).map(|at| live.remove(at).1) else {
-                    problems.push(Problem {
-                        feature: feature.id,
-                        message: get!("prop.problems.missing_body"),
-                    });
+                    problems.push(Problem::missing_body(feature.id));
                     continue;
                 };
                 let origin = axis.normal() * *offset;
@@ -438,20 +438,14 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
             }
             FeatureOp::Paint { target, surface } => {
                 let Some(solid) = find(*target, &live).map(|at| live.remove(at).1) else {
-                    problems.push(Problem {
-                        feature: feature.id,
-                        message: get!("prop.problems.missing_body"),
-                    });
+                    problems.push(Problem::missing_body(feature.id));
                     continue;
                 };
                 live.push((feature.id, solid.painted(*surface)));
             }
             FeatureOp::Pattern { target, count, along } => {
                 let Some(solid) = find(*target, &live).map(|at| live.remove(at).1) else {
-                    problems.push(Problem {
-                        feature: feature.id,
-                        message: get!("prop.problems.missing_body"),
-                    });
+                    problems.push(Problem::missing_body(feature.id));
                     continue;
                 };
                 let count = (*count).max(1);

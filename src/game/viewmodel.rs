@@ -340,6 +340,7 @@ fn show_it_only_in_first_person(
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
+    use strum::IntoEnumIterator;
     use crate::common::class::Class;
     use crate::common::skeleton::humanoid;
     use crate::common::skeleton::ik::Reach;
@@ -348,11 +349,6 @@ mod tests {
 
     use super::*;
 
-    const EVERY_CLASS: [Class; 11] = [
-        Class::Scout, Class::Soldier, Class::Pyro, Class::Demoman,
-        Class::Heavy, Class::Engineer, Class::Medic, Class::Sniper,
-        Class::Spy, Class::Civilian, Class::Mercenary,
-    ];
 
     /// An arm that comes up short is left where it was, so a weapon floats in
     /// front of hands elsewhere. A viewmodel is not a hold, so the body tests
@@ -362,7 +358,7 @@ mod tests {
         let hold = HoldSpec::default();
         let weapon = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
 
-        for class in EVERY_CLASS {
+        for class in Class::iter() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let mut pose = Pose::rest();
             let reached = grip_with(&skeleton, &mut pose, &eye_space(&skeleton), &hold, &weapon);
@@ -377,7 +373,7 @@ mod tests {
     /// The eye is the rig's own, with the shoulders below it.
     #[test]
     fn the_eye_is_the_rigs_own_and_the_shoulders_hang_below_it() {
-        for class in EVERY_CLASS {
+        for class in Class::iter() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let root = eye_space(&skeleton);
             let bones = skeleton.posed_bones(&Pose::rest(), &root);
@@ -428,7 +424,7 @@ mod tests {
         .expect("the shipped launcher parses");
 
         let weapon = doc.viewmodel.transform(VIEWMODEL_FOV, 16.0 / 9.0);
-        for class in EVERY_CLASS {
+        for class in Class::iter() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let hold = doc.hold.for_class(Some(class));
             let mut pose = Pose::rest();

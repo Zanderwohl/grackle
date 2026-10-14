@@ -96,7 +96,7 @@ mod tests {
         app.add_plugins(bevy::state::app::StatesPlugin);
         app.add_plugins(bevy::time::TimePlugin);
         app.add_plugins(lightyear::prelude::client::ClientPlugins {
-            tick_duration: std::time::Duration::from_secs_f64(1.0 / crate::constants::TICK_HZ),
+            tick_duration: crate::constants::one_tick(),
         });
         app.add_plugins(ProtocolPlugin);
         app.add_plugins(crate::common::pack_sync::PackSyncPlugin);

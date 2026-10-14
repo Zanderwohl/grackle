@@ -15,7 +15,7 @@ use crate::common::class::Stance;
 use crate::common::effects::Effect;
 use crate::common::damage::{Damage, DamageSource, PlayerId};
 use crate::common::hitbox::Hitboxes;
-use crate::common::hitscan::{trace, HitZone};
+use crate::common::hitscan::{trace, Hit, HitZone};
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::hitbox::update_hitboxes;
@@ -73,6 +73,21 @@ pub(crate) fn eye(centre: Vec3, stance: Stance) -> Vec3 {
     centre + Vec3::Y * stance.eye_offset()
 }
 
+/// The nearest body `ray` reaches other than `shooter`, whose own boxes
+/// surround the eye the ray starts at.
+pub(crate) fn trace_past(
+    ray: &Ray3d,
+    range: f32,
+    shooter: Entity,
+    targets: &Query<(Entity, &Hitboxes)>,
+) -> Option<Hit<Entity>> {
+    let others = targets
+        .iter()
+        .filter(|(entity, _)| *entity != shooter)
+        .map(|(entity, boxes)| (entity, *boxes));
+    trace(ray, range, others)
+}
+
 fn damage_for(zone: HitZone, spec: &HitscanSpec) -> u32 {
     match zone {
         HitZone::Body => spec.damage,
@@ -101,12 +116,7 @@ pub fn fire_hitscan(
         let ray = Ray3d::new(eye(body.current, *stance), aim(player));
         let range = world.ray_distance(&ray, spec.range).unwrap_or(spec.range);
 
-        let others = targets
-            .iter()
-            .filter(|(entity, _)| *entity != shot.shooter)
-            .map(|(entity, boxes)| (entity, *boxes));
-
-        let hit = trace(&ray, range, others);
+        let hit = trace_past(&ray, range, shot.shooter, &targets);
 
         // Before the `continue`: a miss still draws a tracer.
         effects.write(Effect::Tracer {
@@ -205,13 +215,7 @@ fn draw_debug_laser(
 
         let range = world.ray_distance(&ray, LASER_RANGE).unwrap_or(LASER_RANGE);
 
-        // Your own boxes surround your eye.
-        let others = targets
-            .iter()
-            .filter(|(entity, _)| *entity != shooter)
-            .map(|(entity, boxes)| (entity, *boxes));
-
-        let hit = trace(&ray, range, others);
+        let hit = trace_past(&ray, range, shooter, &targets);
 
         let end = match hit {
             Some(hit) => hit.point,

@@ -38,6 +38,13 @@ const PICK_SLACK: f32 = 1.8;
 /// Metres. A floor so a tiny shape keeps something to grab.
 const MIN_GIZMO_SCALE: f32 = 0.02;
 
+/// X, Y, Z.
+const AXIS_COLOURS: [Color; 3] =
+    [Color::srgb(0.9, 0.3, 0.3), Color::srgb(0.3, 0.9, 0.3), Color::srgb(0.4, 0.5, 1.0)];
+
+/// The handle under the pointer, or being dragged.
+const HIGHLIGHT: Color = Color::srgb(1.0, 0.95, 0.6);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Handle {
     Move(usize),
@@ -67,9 +74,7 @@ pub struct HoldHandles(pub bool);
 /// Where an axis arrow is grabbed. Out along its own axis: three arrows picked
 /// at one shared point tie, and `min_by` would always pick X.
 fn arrow_tip(anchor: Vec3, axis: usize, length: f32) -> Vec3 {
-    let mut unit = Vec3::ZERO;
-    unit[axis] = 1.0;
-    anchor + unit * length
+    anchor + Vec3::AXES[axis] * length
 }
 
 /// Grip handle size, in metres.
@@ -108,9 +113,7 @@ impl Plugin for PropGizmoPlugin {
 fn handles(shape: Option<&Shape>, scale: f32) -> Vec<(Handle, Vec3)> {
     let mut found = Vec::with_capacity(9);
     for axis in 0..3 {
-        let mut direction = Vec3::ZERO;
-        direction[axis] = 1.0;
-        found.push((Handle::Move(axis), direction * scale * ARROW_REACH));
+        found.push((Handle::Move(axis), Vec3::AXES[axis] * scale * ARROW_REACH));
     }
     let Some(shape) = shape else { return found };
 
@@ -205,11 +208,7 @@ fn drag_the_selected(
     let rotation = placement.rotation();
     let origin = placement.origin();
     let world = |local: Vec3| origin + rotation * local;
-    let axis_direction = |axis: usize| {
-        let mut unit = Vec3::ZERO;
-        unit[axis] = 1.0;
-        rotation * unit
-    };
+    let axis_direction = |axis: usize| rotation * Vec3::AXES[axis];
 
     // Off every viewport: let go, or a drag continued from off screen keeps moving.
     let Some(ray) = mouse.world_pos else {
@@ -347,10 +346,7 @@ fn drag_the_hold(
         }
     }
     // The carry handle needs a figure standing there.
-    let arm = figure.map(|(skeleton, ..)| {
-        let proportions = skeleton.proportions();
-        proportions.height * proportions.arm_length
-    });
+    let arm = figure.map(|(skeleton, ..)| skeleton.proportions().arm_metres());
     let carry_rotation = quat_from_euler(Vec3::from_array(hold.carry_rotation));
     if let Some(arm) = arm {
         let chest = carry_handle(&hold, carry_rotation, arm);
@@ -392,9 +388,7 @@ fn drag_the_hold(
             .find(|(candidate, _)| *candidate == handle)
             .map(|(_, at)| *at)
             .unwrap_or(Vec3::ZERO);
-        let mut unit = Vec3::ZERO;
-        unit[axis] = 1.0;
-        if let Some(on_axis) = closest_param_on_axis(ray, Vec3::ZERO, unit) {
+        if let Some(on_axis) = closest_param_on_axis(ray, Vec3::ZERO, Vec3::AXES[axis]) {
             grab.held = Some((handle, on_axis - at[axis]));
             editor.begin_gesture();
         }
@@ -402,9 +396,7 @@ fn drag_the_hold(
 
     if let Some((handle, offset)) = grab.held {
         let axis = handle.axis();
-        let mut unit = Vec3::ZERO;
-        unit[axis] = 1.0;
-        if let Some(on_axis) = closest_param_on_axis(ray, Vec3::ZERO, unit) {
+        if let Some(on_axis) = closest_param_on_axis(ray, Vec3::ZERO, Vec3::AXES[axis]) {
             let at = on_axis - offset;
             let mut edited = hold.clone();
             match handle {
@@ -442,12 +434,6 @@ fn draw_hold(
     figure: Option<(&Skeleton, &Pose, &Transform, &FigureReach)>,
     lit: Option<Handle>,
 ) {
-    const AXIS_COLOURS: [Color; 3] = [
-        Color::srgb(0.9, 0.3, 0.3),
-        Color::srgb(0.3, 0.9, 0.3),
-        Color::srgb(0.4, 0.5, 1.0),
-    ];
-    let highlight = Color::srgb(1.0, 0.95, 0.6);
     let unreachable = Color::srgb(1.0, 0.45, 0.2);
 
     let short = |support: bool| {
@@ -459,7 +445,7 @@ fn draw_hold(
     for (handle, at) in points {
         let axis = handle.axis();
         let colour = match (lit == Some(*handle), handle) {
-            (true, _) => highlight,
+            (true, _) => HIGHLIGHT,
             (false, Handle::Grip { support, .. }) if short(*support) => unreachable,
             _ => AXIS_COLOURS[axis],
         };
@@ -491,16 +477,9 @@ fn draw(
     scale: f32,
     lit: Option<Handle>,
 ) {
-    const AXIS_COLOURS: [Color; 3] = [
-        Color::srgb(0.9, 0.3, 0.3),
-        Color::srgb(0.3, 0.9, 0.3),
-        Color::srgb(0.4, 0.5, 1.0),
-    ];
-    let highlight = Color::srgb(1.0, 0.95, 0.6);
-
     for (handle, local) in points {
         let colour = match lit == Some(*handle) {
-            true => highlight,
+            true => HIGHLIGHT,
             false => AXIS_COLOURS[handle.axis()],
         };
         match handle {

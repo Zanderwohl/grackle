@@ -167,8 +167,7 @@ pub fn metres_per(unit: Unit, skeleton: &Skeleton) -> f32 {
     match unit {
         Unit::Metres => 1.0,
         Unit::LegLengths => ik::leg_length(skeleton),
-        // Must match `weapon_transform`'s unit for `HoldSpec::carry`.
-        Unit::ArmLengths => proportions.height * proportions.arm_length,
+        Unit::ArmLengths => proportions.arm_metres(),
         Unit::HipHeights => proportions.hip_metres(),
     }
 }

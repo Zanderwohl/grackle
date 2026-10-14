@@ -7,6 +7,7 @@
 use bevy_egui::egui;
 use bevy_egui::egui::UiKind;
 
+use crate::common::shortcuts::Chord;
 use crate::get;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,13 +50,12 @@ impl EditAction {
         }
     }
 
-    /// Hint text, kept in step with the keyboard by
-    /// `the_menu_only_claims_chords_that_exist`. Revert has no chord: it throws
-    /// edits away and a chord is easy to hit by accident.
-    pub fn chord(self) -> Option<&'static str> {
+    /// Revert has no chord: it throws edits away and a chord is easy to hit
+    /// by accident.
+    pub fn chord(self) -> Option<Chord> {
         match self {
-            EditAction::Undo => Some("Ctrl+Z"),
-            EditAction::Redo => Some("Ctrl+Shift+Z"),
+            EditAction::Undo => Some(Chord::UNDO),
+            EditAction::Redo => Some(Chord::REDO),
             EditAction::Revert => None,
         }
     }
@@ -69,7 +69,7 @@ pub fn edit_menu(ui: &mut egui::Ui, available: EditAvailability, request: &mut O
             }
             let mut button = egui::Button::new(get!(action.name_key()));
             if let Some(chord) = action.chord() {
-                button = button.shortcut_text(chord);
+                button = button.shortcut_text(chord.hint());
             }
             if ui.add_enabled(available.allows(*action), button).clicked() {
                 ui.close_kind(UiKind::Menu);
@@ -82,8 +82,7 @@ pub fn edit_menu(ui: &mut egui::Ui, available: EditAvailability, request: &mut O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::shortcuts::chords;
-    use bevy::prelude::{ButtonInput, KeyCode};
+    use crate::common::shortcuts::press;
 
     /// Read from the file because the language in force is global state other
     /// tests move.
@@ -108,28 +107,16 @@ mod tests {
     }
 
     #[test]
-    fn the_menu_only_claims_chords_that_exist() {
-        let hit = |held: &[KeyCode], key: KeyCode| {
-            let mut keys = ButtonInput::<KeyCode>::default();
-            for code in held {
-                keys.press(*code);
-            }
-            keys.press(key);
-            chords(&keys, false)
-        };
+    fn each_entrys_chord_asks_for_that_entry() {
         for action in ALL {
             let Some(chord) = action.chord() else { continue };
-            let pressed = match chord {
-                "Ctrl+Z" => hit(&[KeyCode::ControlLeft], KeyCode::KeyZ),
-                "Ctrl+Shift+Z" => hit(&[KeyCode::ControlLeft, KeyCode::ShiftLeft], KeyCode::KeyZ),
-                other => panic!("{action:?} claims '{other}', which this test cannot press"),
-            };
+            let pressed = press(chord);
             let answered = match action {
                 EditAction::Undo => pressed.undo && !pressed.redo,
-                EditAction::Redo => pressed.redo,
+                EditAction::Redo => pressed.redo && !pressed.undo,
                 EditAction::Revert => false,
             };
-            assert!(answered, "{action:?} claims '{chord}', which asks for something else");
+            assert!(answered, "{action:?}");
         }
     }
 

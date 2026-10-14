@@ -246,7 +246,7 @@ fn rebuild_collision_when_rooms_change(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use crate::constants::one_tick;
 
     use crate::common::team::Team;
 
@@ -261,7 +261,6 @@ mod tests {
     use crate::game::player::{Inputs, LocalPlayer, PhysicsBody, PLAYER_HALF, SPAWN_YAW};
 
 /// Bevy's default 64 Hz.
-    const STEP: Duration = Duration::from_micros(15625);
 
     /// No window or renderer. Virtual time is paused so `FixedUpdate` runs
     /// only when a test drives it.
@@ -292,7 +291,7 @@ mod tests {
 
     fn tick(app: &mut App, steps: usize) {
         for _ in 0..steps {
-            app.world_mut().resource_mut::<Time>().advance_by(STEP);
+            app.world_mut().resource_mut::<Time>().advance_by(one_tick());
             // Inputs are written before the step, as in the real schedule.
             app.world_mut().run_schedule(FixedPreUpdate);
             app.world_mut().run_schedule(FixedUpdate);
@@ -517,7 +516,7 @@ mod tests {
             player.velocity = Vec3::ZERO;
             player.on_ground = true;
         }
-        app.world_mut().resource_mut::<Time>().advance_by(STEP);
+        app.world_mut().resource_mut::<Time>().advance_by(one_tick());
         app.world_mut().run_schedule(FixedUpdate);
 
         assert!(
@@ -542,7 +541,7 @@ mod tests {
         // accumulates from inside it.
         app.world_mut()
             .resource_mut::<Time<Virtual>>()
-            .advance_by(STEP + STEP / 2);
+            .advance_by(one_tick() + one_tick() / 2);
         app.world_mut().run_schedule(RunFixedMainLoop);
 
         let body = *app
