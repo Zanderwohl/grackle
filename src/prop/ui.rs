@@ -25,6 +25,7 @@ use egui_dock::{DockArea, DockState, TabViewer};
 use strum::IntoEnumIterator;
 
 use crate::common::app_mode::{mode_menu, AppMode};
+use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
 use crate::common::file_menu::{file_menu, FileAction};
 use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
@@ -171,6 +172,8 @@ struct PropRequests {
     mode: Option<AppMode>,
     /// The workspace picked from the toolbar, if one was.
     workspace: Option<Workspace>,
+    /// What the Edit menu asked of the prop.
+    edit: Option<EditAction>,
 }
 
 struct PropTabs<'a> {
@@ -295,7 +298,8 @@ fn panels(
                 // The shared pulldown rather than four buttons written
                 // here, which is what it used to be.
                 file_menu(ui, &mut tabs.requests.file);
-                edit_menu(ui, tabs.editor);
+                // Just right of File in every mode, and greyed per entry.
+                edit_menu(ui, edit_availability(tabs.editor), &mut tabs.requests.edit);
                 view_menu(ui, workspace, tabs.figure);
                 // `Prop` spelled out rather than read from the state: this
                 // whole system is gated on it, so the mode it is drawing for
@@ -407,6 +411,8 @@ fn panels(
     if !ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input() {
         editor.end_gesture();
     }
+
+    handle_edit(requests.edit, &mut editor);
 
     if let Some(to) = requests.workspace {
         layout.switch_to(to, &mut figure);
@@ -986,28 +992,46 @@ fn toolbar(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, frame: &mut 
     }
 }
 
-/// Undo and redo, labelled with the chords that already do the same thing.
-fn edit_menu(ui: &mut Ui, editor: &mut PropEditor) {
-    ui.menu_button(get!("prop.menu.edit"), |ui| {
-        let ctx = ui.ctx().clone();
-        let chord = |shift: bool, key: egui::Key| {
-            let modifiers = match shift {
-                true => egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-                false => egui::Modifiers::COMMAND,
-            };
-            ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key))
-        };
-        let undo = egui::Button::new(get!("prop.menu.undo")).shortcut_text(chord(false, egui::Key::Z));
-        if ui.add_enabled(editor.can_undo(), undo).clicked() {
-            ui.close_kind(UiKind::Menu);
-            editor.undo();
+/// What the Edit menu can do for the prop right now.
+///
+/// Revert needs a file to go back to and something to throw away: a document
+/// that matches its file has nothing to revert.
+pub(crate) fn edit_availability(editor: &PropEditor) -> EditAvailability {
+    EditAvailability {
+        undo: editor.can_undo(),
+        redo: editor.can_redo(),
+        revert: editor.path.is_some() && editor.dirty,
+    }
+}
+
+/// Answer the Edit menu, or the chord for one of its entries, for the prop.
+///
+/// Shared with the animation editor, whose clips live in the same file — two
+/// answers to "what does Revert do to a prop" would be two that drift.
+pub(crate) fn handle_edit(action: Option<EditAction>, editor: &mut PropEditor) {
+    match action {
+        Some(EditAction::Undo) => editor.undo(),
+        Some(EditAction::Redo) => editor.redo(),
+        Some(EditAction::Revert) => revert_from_disk(editor),
+        None => {}
+    }
+}
+
+/// Read the prop's file again and go back to it, as one undo step.
+///
+/// Through `std::fs` like Open, because both are the authoring side; the game
+/// reads props through `Assets`.
+fn revert_from_disk(editor: &mut PropEditor) {
+    let Some(path) = editor.path.clone() else { return };
+    match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|text| {
+        document::parse(&text).map_err(|e| e.to_string())
+    }) {
+        Ok(saved) => {
+            info!("Reverted the prop to {path:?}");
+            editor.revert_to(saved);
         }
-        let redo = egui::Button::new(get!("prop.menu.redo")).shortcut_text(chord(true, egui::Key::Z));
-        if ui.add_enabled(editor.can_redo(), redo).clicked() {
-            ui.close_kind(UiKind::Menu);
-            editor.redo();
-        }
-    });
+        Err(e) => error!("Reverting to {}: {e}", path.display()),
+    }
 }
 
 /// The selected feature's numbers, or the prop's own when nothing is picked.
@@ -1866,18 +1890,22 @@ fn prop_shortcuts(
 ) {
     let typing = egui.wants_keyboard_input();
     let chords = chords(&keys, typing);
+    // Through the menu's own handler, so the chord and the entry it is the
+    // shortcut for are one action.
+    handle_edit(
+        match (chords.redo, chords.undo) {
+            (true, _) => Some(EditAction::Redo),
+            (false, true) => Some(EditAction::Undo),
+            _ => None,
+        },
+        &mut editor,
+    );
     // `F` frames the selection, or the whole prop with nothing picked —
     // `FrameTheProp` falls back by itself. A bare key, so it is answered only
     // while nobody is typing a name.
     if !typing && keys.just_pressed(KeyCode::KeyF) {
         frame.write(FrameTheProp { selected: true });
     }
-    if chords.redo {
-        editor.redo();
-    } else if chords.undo {
-        editor.undo();
-    }
-
     if let Some(action) = FileAction::from_chords(chords) {
         handle_files(Some(action), &mut editor, &dialog);
     }

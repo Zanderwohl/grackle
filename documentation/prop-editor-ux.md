@@ -114,10 +114,10 @@ a toolbar under the menu bar.
 - [x] Ghost the operands of a selected boolean / mirror / repaint / pattern as
       faint wireframe where they stood, cached on generation + selection.
 - [x] Linear / radial pattern feature (`FeatureOp::Pattern`).
-- [ ] Revert to saved. **Needs a decision:** the File menu is shared and
-      every mode answers every entry, so this means writing Revert for the map
-      editor (reload the blueprint) and the animation editor too, not just
-      here.
+- [x] Revert to saved — on a shared **Edit** menu (Undo / Redo / Revert)
+      added to every authoring mode, each entry greyed out on its own. One
+      undo step in the prop and animation editors; a plain reload in the map
+      editor, whose history lives in the blueprint.
 
 ### Deferred
 

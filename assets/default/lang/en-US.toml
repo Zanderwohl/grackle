@@ -434,6 +434,12 @@ save_as = "Save As"
 open = "Open"
 quit = "Quit"
 
+[edit.menu]
+title = "Edit"
+undo = "Undo"
+redo = "Redo"
+revert = "Revert to Saved"
+
 [app_mode.menu]
 title = "Mode"
 server_decides = "The server decides when the match is played."
@@ -445,9 +451,6 @@ untitled = "Untitled prop"
 frame = "Frame"
 frame_selected = "Frame selected"
 view = "View"
-edit = "Edit"
-undo = "Undo"
-redo = "Redo"
 
 [prop.workspace]
 model = "Model"

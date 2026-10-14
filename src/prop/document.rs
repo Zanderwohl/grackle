@@ -481,6 +481,21 @@ impl PropEditor {
         self.selected.filter(|id| live.contains(id))
     }
 
+    /// Go back to `saved` — what is on disk — as **one undo step**, so a
+    /// revert clicked by mistake is a `Ctrl+Z` away. Unlike [`Self::open`],
+    /// which clears the history because undoing back through opening a
+    /// different file is not what anybody means.
+    ///
+    /// Clean afterwards, since the document now matches its file; undoing the
+    /// revert marks it dirty again, through the ordinary history path.
+    pub fn revert_to(&mut self, saved: PropDoc) {
+        // A gesture left open would fold the revert into whatever drag it was.
+        self.end_gesture();
+        self.edit(|doc| *doc = saved);
+        self.forget_missing();
+        self.dirty = false;
+    }
+
     /// Replace the document wholesale, clearing the history: undoing back
     /// *through* a file open is not what anybody means by Ctrl+Z.
     pub fn open(&mut self, doc: PropDoc, path: Option<PathBuf>) {
@@ -1140,6 +1155,28 @@ mod tests {
         editor.forget_missing();
         assert_eq!(editor.rollback(), None);
         assert_eq!(editor.shown().len(), 1);
+    }
+
+    /// Revert is one step back to the file and one `Ctrl+Z` forward again,
+    /// and the file is clean in between.
+    #[test]
+    fn reverting_is_one_undoable_step() {
+        let mut editor = PropEditor::default();
+        editor.edit(|doc| doc.push(FeatureOp::default()));
+        let saved = editor.doc().clone();
+        editor.dirty = false;
+
+        editor.edit(|doc| doc.push(FeatureOp::default()));
+        let edited = editor.doc().clone();
+        assert!(editor.dirty);
+
+        editor.revert_to(saved.clone());
+        assert_eq!(editor.doc(), &saved);
+        assert!(!editor.dirty, "reverted is the file");
+
+        editor.undo();
+        assert_eq!(editor.doc(), &edited, "the revert itself can be undone");
+        assert!(editor.dirty);
     }
 
     /// Undo can take away a secondary pick as well as the primary.

@@ -142,6 +142,19 @@ loses work rather than merely looking wrong. `typing` is passed in rather than
 read from `EguiWantsInput` inside the module, so the chords are testable
 without an egui context.
 
+**Every authoring mode has the same Edit menu**, just right of File:
+[`src/common/edit_menu.rs`](src/common/edit_menu.rs), with Undo, Redo and
+*Revert to Saved*. Each mode passes an `EditAvailability` and each entry is
+greyed out on its own when it cannot be done — nothing to undo, nothing to
+redo, no file to go back to, or (where a mode can tell) nothing changed since
+it was saved. Each mode answers the request with the same handler its chords
+go through, so a chord and its menu entry are one action. **Revert is one undo
+step in the prop and animation editors** (`PropEditor::revert_to`,
+`BodyClips::reload`), because their history lives only in memory, so a revert
+clicked by mistake is a `Ctrl+Z` away. **In the map editor it is not undoable**:
+the blueprint carries its own history, so reverting reloads that too — what
+was undoable at the last save still is, and edits made since are gone.
+
 **A save with nowhere to save to is a save-as**, in both editors and from both
 the menu and the chord. That is one function each (`ask_where_to_save`), shared
 by *Save As* and by a *Save* on a document that has never been written, because

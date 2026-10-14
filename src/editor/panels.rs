@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crate::common::app_mode::{mode_menu, AppMode};
+use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
 use crate::common::file_menu::{file_menu, FileAction};
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
@@ -335,6 +336,16 @@ impl EditorPanels {
         // value either can produce and one place answers.
         let mut pending_file_op: Option<FileAction> = current_file.requested_op.take();
         let mut wanted_mode: Option<AppMode> = None;
+        let mut pending_edit: Option<EditAction> = None;
+        // Read before the viewer borrows the timeline for the rest of the
+        // frame. Revert needs only a file: the map has no dirty flag, and a
+        // blueprint carries its own history, so "matches the file" is not
+        // something this layer can ask cheaply.
+        let edit_available = EditAvailability {
+            undo: editor_features.can_undo_action(),
+            redo: editor_features.can_redo_action(),
+            revert: current_file.path.is_some(),
+        };
         
         let mut viewer = TabViewerAndResources  {
             current_tool: & *current_tool,
@@ -356,6 +367,7 @@ impl EditorPanels {
                     // here, which is what it used to be — in hardcoded
                     // English, with a *Quit* that only closed the menu.
                     file_menu(ui, &mut pending_file_op);
+                    edit_menu(ui, edit_available, &mut pending_edit);
                     // `Editor` spelled out rather than read from the state:
                     // this whole system is gated on it, so the mode it is
                     // drawing for is not in question.
@@ -522,6 +534,30 @@ impl EditorPanels {
                     });
                 }
             }
+        }
+
+        // The Edit menu. Undo and redo are the same calls the chords make.
+        //
+        // **Revert reloads the blueprint, and is not itself undoable.** The
+        // map's history is stored in the file and comes back with it, so what
+        // was undoable at the last save still is — but edits made since are
+        // gone, unlike in the prop and animation editors, where a revert is
+        // one more step in a history that lives only in memory.
+        match pending_edit {
+            Some(EditAction::Undo) => editor_features.undo_action(),
+            Some(EditAction::Redo) => editor_features.redo_action(),
+            Some(EditAction::Revert) => {
+                if let Some(path) = current_file.path.clone() {
+                    match save::load(&path) {
+                        Ok(loaded) => {
+                            info!("Reverted to {:?}", path);
+                            loaded_blueprint = Some(loaded);
+                        }
+                        Err(e) => error!("Revert failed: {}", e),
+                    }
+                }
+            }
+            None => {}
         }
 
         // Handle load / new from template

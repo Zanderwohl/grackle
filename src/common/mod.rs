@@ -2,6 +2,7 @@ pub mod app_mode;
 pub mod assets;
 pub mod class;
 pub mod clip_file;
+pub mod edit_menu;
 pub mod file_menu;
 pub mod damage;
 pub mod team;
