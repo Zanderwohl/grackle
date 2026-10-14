@@ -220,13 +220,8 @@ pub fn set_world_rotation(
 }
 
 /// Which way an elbow points: back, a little out and down. `side` is +1 on the
-/// right.
-///
-/// Every caller takes this as world space, which matches the body frame only
-/// while the root is unturned. In a match it is (`face_bodies` turns the
-/// entity, not the rig); the prop editor's reference figure is turned, and the
-/// shipped holds were tuned that way, so fixing it means re-tuning
-/// `rocket_launcher.gpp`.
+/// right. In the body's frame; rotate it by the root before solving, or a
+/// turned body poles its elbows against a fixed direction.
 pub fn elbow_pole(side: f32) -> Vec3 {
     Vec3::new(0.35 * side, -0.85, 0.55).normalize()
 }

@@ -287,7 +287,7 @@ pub fn grip_with(
     for (index, (chain, hand, side, frame)) in hands.into_iter().enumerate() {
         let Some(frame) = frame else { continue };
         let placed = weapon.mul_transform(frame);
-        reached[index] = reach_or_leave(skeleton, pose, root, &chain, placed.translation, ik::elbow_pole(side));
+        reached[index] = reach_or_leave(skeleton, pose, root, &chain, placed.translation, root.rotation * ik::elbow_pole(side));
         if reached[index] == Reach::Reached {
             // After the solve: a world rotation depends on where the arm ended up.
             ik::set_world_rotation(skeleton, pose, root, hand, placed.rotation);
@@ -431,4 +431,30 @@ mod tests {
         assert_eq!(pose.joint(bone::UPPER_ARM_R), before, "the arm stretched for it anyway");
     }
 
+    /// Fails if elbows are poled in world space: the prop editor turns its
+    /// reference figure, and it would then hold a weapon differently from a
+    /// body in a match.
+    #[test]
+    fn a_turned_body_grips_a_turned_weapon_the_same_way() {
+        let skeleton = humanoid(Class::Soldier.proportions());
+        let hold = HoldSpec::default();
+        let grip = |turn: Quat| {
+            let root = Transform::from_rotation(turn);
+            let weapon = root.mul_transform(
+                weapon_transform(&skeleton, &Pose::rest(), &Transform::IDENTITY, &hold, Quat::IDENTITY)
+                    .expect("the rig has a chest"),
+            );
+            let mut pose = Pose::rest();
+            let reached = grip_with(&skeleton, &mut pose, &root, &hold, &weapon);
+            (reached, pose)
+        };
+
+        let (straight, at_rest) = grip(Quat::IDENTITY);
+        let (turned, after) = grip(Quat::from_euler(EulerRot::YXZ, 1.1, 0.4, -0.3));
+        assert_eq!(straight, turned);
+        for name in [bone::UPPER_ARM_R, bone::FOREARM_R, bone::UPPER_ARM_L, bone::FOREARM_L] {
+            let angle = at_rest.joint(name).angle_between(after.joint(name));
+            assert!(angle < 1e-3, "{name} bends {angle} rad differently once the body is turned");
+        }
+    }
 }

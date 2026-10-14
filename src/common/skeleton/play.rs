@@ -356,9 +356,9 @@ pub fn apply(
                     track.combine,
                     frames.ground,
                 );
-                let pole = pole
-                    .map(|pole| Vec3::from_array(pole))
-                    .unwrap_or_else(|| default_pole(*chain, &frames.body));
+                // Authored and default poles alike are in the body's frame.
+                let pole = frames.body.rotation
+                    * pole.map(Vec3::from_array).unwrap_or_else(|| default_pole(*chain));
 
                 // A short leg straightens and points; a short arm is left as
                 // the animation had it. See `ik::reach_or_leave`.
@@ -434,11 +434,12 @@ pub fn apply(
     reaches
 }
 
-/// Which way a knee or an elbow points when a track does not say.
-fn default_pole(chain: ChainRef, root: &Transform) -> Vec3 {
+/// Which way a knee or an elbow points when a track does not say, in the
+/// body's frame.
+fn default_pole(chain: ChainRef) -> Vec3 {
     if chain.is_leg() {
         // Knees bend forwards, even in a sidestep.
-        root.rotation * Vec3::NEG_Z
+        Vec3::NEG_Z
     } else {
         ik::elbow_pole(chain.side())
     }
