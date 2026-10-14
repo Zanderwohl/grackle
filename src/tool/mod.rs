@@ -56,10 +56,7 @@ impl Plugin for ToolPlugin {
             .add_plugins(AnimationDisplayPlugin)
             .add_plugins(AnimationGridPlugin)
             .add_plugins(RetargetPlugin)
-            .add_plugins(RoomPlugin)
-            // Toolbar moved to panels.rs Tools tab
-            // .add_systems(EguiPrimaryContextPass, Self::toolbar)
-        ;
+            .add_plugins(RoomPlugin);
     }
 }
 
@@ -139,36 +136,4 @@ impl Tools {
         });
         ui.add_space(Self::ROW_PADDING);
     }
-}
-
-impl ToolPlugin {
-    // Toolbar UI moved to panels.rs Tools tab
-    /*
-    fn toolbar(
-        mut contexts: EguiContexts,
-        current_tool: Res<State<Tools>>,
-        mut next_tool: ResMut<NextState<Tools>>,
-    ) {
-        let ctx = contexts.ctx_mut();
-        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
-        let ctx = ctx.unwrap();
-
-        egui::Window::new(get!("tools.title")).show(ctx, |ui| {
-           egui::Grid::new("tools").show(ui, |ui| {
-               for item in Tools::iter() {
-                   if current_tool.eq(&item) {
-                       ui.scope(|ui| {
-                           ui.disable();
-                           let _ = ui.button(item.name());
-                       });
-                   } else {
-                       if ui.button(item.name()).clicked() {
-                           next_tool.set(item);
-                       }
-                   }
-               }
-           })
-        });
-    }
-    */
 }

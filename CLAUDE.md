@@ -1889,8 +1889,6 @@ key that has slots — fill those in by hand.
   directly.
 - Panels are `egui_dock` tabs — add a `TabKinds` variant in
   [`src/editor/panels.rs`](src/editor/panels.rs), not a floating `egui::Window`.
-  The commented-out `ToolPlugin::toolbar` is the old floating-window approach;
-  don't revive it.
 - Asset paths are relative to the working directory (`assets/default/...`), so
   binaries must run from the repo root.
 - **Every binary links `lib.rs`; none re-declares the module tree.** `main.rs`
