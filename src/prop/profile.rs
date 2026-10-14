@@ -11,6 +11,12 @@ use crate::common::rotation::quat_from_euler;
 
 pub const MIN_SIDES: u32 = 3;
 
+/// How many sides a request for `requested` gets: raised to [`MIN_SIDES`]
+/// rather than refused, so a file asking for fewer still builds.
+pub fn sides(requested: u32) -> u32 {
+    requested.max(MIN_SIDES)
+}
+
 /// A sketch plane. Its normal is local `+Z`, the direction an extrusion
 /// travels; a revolve spins about local `+Y`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -84,7 +90,7 @@ impl Profile {
                 ]
             }
             Profile::Ngon { sides, radius } => {
-                let sides = (*sides).max(MIN_SIDES);
+                let sides = self::sides(*sides);
                 (0..sides)
                     .map(|i| {
                         // A quarter turn in, so an even-sided n-gon rests on a

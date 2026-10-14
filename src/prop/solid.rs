@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::prop::csg::{self, Polygon};
-use crate::prop::profile::{triangulate, Profile, MIN_SIDES};
+use crate::prop::profile::{sides, triangulate, Profile};
 use crate::prop::surface::Surface;
 
 /// Convex polygons meant to form a closed surface; see [`super::csg`].
@@ -224,7 +224,7 @@ impl Solid {
         surface: Surface,
     ) -> Solid {
         let points = profile.wound_ccw();
-        let segments = segments.max(MIN_SIDES);
+        let segments = sides(segments);
         if points.len() < 3 {
             return Solid::default();
         }

@@ -43,8 +43,11 @@ struct Outgoing<'a> {
     id_counter: u64,
 }
 
-/// Must keep the same fields as [`Outgoing`].
+/// [`Outgoing`]'s fields, owned. Unknown fields are refused, so
+/// `a_map_survives_the_round_trip` fails when one side gains a field the
+/// other lacks.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Incoming {
     features: Vec<Feature>,
     order: Vec<FeatureId>,

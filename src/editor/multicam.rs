@@ -90,10 +90,8 @@ impl MulticamState {
     }
 }
 
-/// Whether a camera this size can be rendered. Bloom sizes its mip chain by height
-/// (`size = viewport * max_mip / viewport.y`), so a viewport one pixel tall asks for a texture
-/// `viewport.x * 512` wide, and wgpu refuses past `max_texture_dimension_2d`. Measured: a viewport
-/// 1760 wide and one pixel tall asked for 901120.
+/// Whether a camera this size can be rendered: big enough to be worth it, and not so flat that
+/// bloom asks wgpu for a texture past `max_texture_dimension_2d`.
 ///
 /// Switched off rather than clamped: inventing a viewport the panels did not leave would draw over
 /// them.
@@ -101,8 +99,14 @@ fn renderable(camera: UVec2) -> bool {
     if camera.x < MIN_CAMERA_SIDE || camera.y < MIN_CAMERA_SIDE {
         return false;
     }
-    let widest = camera.x as u64 * BLOOM_MAX_MIP as u64 / camera.y.max(1) as u64;
-    widest <= MAX_TEXTURE_SIDE as u64
+    bloom_texture_width(camera) <= MAX_TEXTURE_SIDE as u64
+}
+
+/// Bloom sizes its mip chain by height (`size = viewport * max_mip / viewport.y`), so a viewport
+/// one pixel tall asks for a texture `viewport.x * 512` wide. Measured: a viewport 1760 wide and
+/// one pixel tall asked for 901120.
+fn bloom_texture_width(camera: UVec2) -> u64 {
+    camera.x as u64 * BLOOM_MAX_MIP as u64 / camera.y.max(1) as u64
 }
 
 /// Below this a viewport shows nothing worth a render pass.

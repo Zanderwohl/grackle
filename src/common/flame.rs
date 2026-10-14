@@ -12,32 +12,33 @@ use crate::common::damage::DamageSource;
 /// Rate of fire is on [`crate::common::weapon::Mounted`], not here.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct FlameSpec {
-    /// Metres.
-    pub range: f32,
+    #[serde(rename = "range")]
+    pub range_m: f32,
     /// Half-angle, radians.
     pub spread: f32,
     /// A sampling rate, not a multiplier: a body hit by several rays takes one
     /// puff.
     pub rays: u32,
     pub damage: u32,
-    /// Seconds.
-    pub afterburn_duration: f32,
+    #[serde(rename = "afterburn_duration")]
+    pub afterburn_duration_s: f32,
     pub afterburn_damage: u32,
-    /// Seconds between afterburn ticks.
-    pub afterburn_interval: f32,
+    /// Between afterburn ticks.
+    #[serde(rename = "afterburn_interval")]
+    pub afterburn_interval_s: f32,
 }
 
 impl FlameSpec {
     /// The afterburn (twelve ticks of four) is worth more than the direct
     /// damage, so leaving the fire is punished as much as staying.
     pub const FLAMETHROWER: Self = Self {
-        range: 6.0,
+        range_m: 6.0,
         spread: 0.28,
         rays: 5,
         damage: 7,
-        afterburn_duration: 6.0,
+        afterburn_duration_s: 6.0,
         afterburn_damage: 4,
-        afterburn_interval: 0.5,
+        afterburn_interval_s: 0.5,
     };
 }
 
@@ -47,23 +48,20 @@ impl FlameSpec {
 pub struct Burning {
     /// Whoever lit it most recently; afterburn is credited to them.
     pub source: DamageSource,
-    /// Seconds.
-    pub remaining: f32,
+    pub remaining_s: f32,
     pub damage: u32,
-    /// Seconds.
-    pub interval: f32,
-    /// Seconds.
-    pub until_next: f32,
+    pub interval_s: f32,
+    pub until_next_s: f32,
 }
 
 impl Burning {
     pub fn lit(spec: &FlameSpec, source: DamageSource) -> Self {
         Self {
             source,
-            remaining: spec.afterburn_duration,
+            remaining_s: spec.afterburn_duration_s,
             damage: spec.afterburn_damage,
-            interval: spec.afterburn_interval,
-            until_next: spec.afterburn_interval,
+            interval_s: spec.afterburn_interval_s,
+            until_next_s: spec.afterburn_interval_s,
         }
     }
 
@@ -75,31 +73,31 @@ impl Burning {
     /// tick clock would never tick.
     pub fn relight(&mut self, spec: &FlameSpec, source: DamageSource) {
         self.source = source;
-        self.remaining = spec.afterburn_duration;
+        self.remaining_s = spec.afterburn_duration_s;
         self.damage = spec.afterburn_damage;
-        self.interval = spec.afterburn_interval;
+        self.interval_s = spec.afterburn_interval_s;
     }
 
     /// Returns how many ticks fell due, possibly several, so a slow frame does
     /// not make afterburn cheaper. A zero interval yields none rather than
     /// looping forever.
     pub fn tick(&mut self, dt: f32) -> u32 {
-        self.remaining -= dt;
-        if self.interval <= 0.0 {
+        self.remaining_s -= dt;
+        if self.interval_s <= 0.0 {
             return 0;
         }
 
-        self.until_next -= dt;
+        self.until_next_s -= dt;
         let mut due = 0;
-        while self.until_next <= 0.0 {
+        while self.until_next_s <= 0.0 {
             due += 1;
-            self.until_next += self.interval;
+            self.until_next_s += self.interval_s;
         }
         due
     }
 
     pub fn is_out(&self) -> bool {
-        self.remaining <= 0.0
+        self.remaining_s <= 0.0
     }
 }
 
@@ -190,20 +188,20 @@ mod tests {
             ticks += burn.tick(dt);
         }
 
-        let expected = (FlameSpec::FLAMETHROWER.afterburn_duration
-            / FlameSpec::FLAMETHROWER.afterburn_interval) as u32;
+        let expected = (FlameSpec::FLAMETHROWER.afterburn_duration_s
+            / FlameSpec::FLAMETHROWER.afterburn_interval_s) as u32;
         assert_eq!(ticks, expected, "twelve ticks of four over six seconds");
     }
 
     #[test]
     fn relighting_resets_the_timer_even_when_it_shortens_it() {
-        let long = FlameSpec { afterburn_duration: 20.0, ..FlameSpec::FLAMETHROWER };
-        let short = FlameSpec { afterburn_duration: 2.0, ..FlameSpec::FLAMETHROWER };
+        let long = FlameSpec { afterburn_duration_s: 20.0, ..FlameSpec::FLAMETHROWER };
+        let short = FlameSpec { afterburn_duration_s: 2.0, ..FlameSpec::FLAMETHROWER };
 
         let mut burn = Burning::lit(&long, ME);
         burn.relight(&short, YOU);
 
-        assert_eq!(burn.remaining, 2.0, "the longer burn won");
+        assert_eq!(burn.remaining_s, 2.0, "the longer burn won");
         assert_eq!(burn.source, YOU, "the credit stayed with whoever lit it first");
     }
 
@@ -229,10 +227,10 @@ mod tests {
     #[test]
     fn an_interval_of_zero_does_not_loop_forever() {
         let mut burn = Burning::lit(
-            &FlameSpec { afterburn_interval: 0.0, ..FlameSpec::FLAMETHROWER },
+            &FlameSpec { afterburn_interval_s: 0.0, ..FlameSpec::FLAMETHROWER },
             ME,
         );
         assert_eq!(burn.tick(1.0), 0);
-        assert_eq!(burn.remaining, FlameSpec::FLAMETHROWER.afterburn_duration - 1.0);
+        assert_eq!(burn.remaining_s, FlameSpec::FLAMETHROWER.afterburn_duration_s - 1.0);
     }
 }

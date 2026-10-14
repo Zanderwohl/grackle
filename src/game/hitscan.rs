@@ -114,7 +114,7 @@ pub fn fire_hitscan(
         // The step's position, not `Transform`, which is interpolated at
         // frame rate and differs per machine.
         let ray = Ray3d::new(eye(body.current, *stance), aim(player));
-        let range = world.ray_distance(&ray, spec.range).unwrap_or(spec.range);
+        let range = world.ray_distance(&ray, spec.range_m).unwrap_or(spec.range_m);
 
         let hit = trace_past(&ray, range, shot.shooter, &targets);
 
@@ -142,7 +142,7 @@ pub fn fire_hitscan(
         shoves.write(RagdollShove {
             at: hit.point,
             push: Push::Along(*ray.direction * (worth as f32 * spec.shove_per_damage)),
-            radius: spec.shove_radius,
+            radius: spec.shove_radius_m,
         });
     }
 }
@@ -283,11 +283,11 @@ mod tests {
     }
 
     const LASER: HitscanSpec = HitscanSpec {
-        range: LASER_RANGE,
+        range_m: LASER_RANGE,
         damage: 30,
         headshot_multiplier: 3,
         shove_per_damage: 0.15,
-        shove_radius: 0.4,
+        shove_radius_m: 0.4,
     };
 
     fn fire(world: &mut World, shooter: Entity) {
@@ -340,7 +340,7 @@ mod tests {
             panic!("no tracer: {effects:?}");
         };
         assert!(hit, "the shot landed but the tracer says it did not");
-        assert!((to - from).length() < LASER.range, "the tracer ran to full range");
+        assert!((to - from).length() < LASER.range_m, "the tracer ran to full range");
         assert!((to.z - from.z).abs() > 1.0, "the tracer went nowhere");
     }
 

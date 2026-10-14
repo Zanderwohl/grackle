@@ -140,9 +140,6 @@ impl BodyRequests {
 }
 
 /// One animation state.
-///
-/// The order is on disk via [`AnimationState::index`]: add new states at the
-/// end and do not reorder.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, Reflect,
 )]
@@ -171,45 +168,6 @@ pub enum AnimationState {
 }
 
 impl AnimationState {
-    /// Stable index for the save format. See the type's note about ordering.
-    pub fn index(&self) -> u32 {
-        match self {
-            AnimationState::Idle => 0,
-            AnimationState::RunForward => 1,
-            AnimationState::RunBackward => 2,
-            AnimationState::StrafeLeft => 3,
-            AnimationState::PushingWall => 4,
-            AnimationState::Airborne => 5,
-            AnimationState::Crouch => 6,
-            AnimationState::CrouchWalk => 7,
-            AnimationState::CrouchWalkBackward => 8,
-            AnimationState::StrafeRight => 9,
-            AnimationState::CrouchStrafeLeft => 10,
-            AnimationState::CrouchStrafeRight => 11,
-            AnimationState::CrouchAirborne => 12,
-        }
-    }
-
-    /// An unknown index, from a later build, gives [`AnimationState::Idle`]
-    /// rather than refusing to open the map.
-    pub fn from_index(index: u32) -> AnimationState {
-        match index {
-            1 => AnimationState::RunForward,
-            2 => AnimationState::RunBackward,
-            3 => AnimationState::StrafeLeft,
-            4 => AnimationState::PushingWall,
-            5 => AnimationState::Airborne,
-            6 => AnimationState::Crouch,
-            7 => AnimationState::CrouchWalk,
-            8 => AnimationState::CrouchWalkBackward,
-            9 => AnimationState::StrafeRight,
-            10 => AnimationState::CrouchStrafeLeft,
-            11 => AnimationState::CrouchStrafeRight,
-            12 => AnimationState::CrouchAirborne,
-            _ => AnimationState::Idle,
-        }
-    }
-
     pub fn name(&self) -> String {
         match self {
             AnimationState::Idle => get!("animation.states.idle"),
@@ -913,18 +871,6 @@ mod tests {
         animator.force(AnimationState::Airborne, 0.5);
         assert_eq!(animator.state(), AnimationState::Airborne);
         assert!((animator.elapsed() - 0.5).abs() < 1e-6);
-    }
-
-    /// The index is on disk. Every state has to survive the trip, and an index
-    /// from a newer build has to land somewhere rather than failing the load.
-    #[test]
-    fn every_state_round_trips_through_its_index() {
-        use strum::IntoEnumIterator;
-
-        for state in AnimationState::iter() {
-            assert_eq!(AnimationState::from_index(state.index()), state);
-        }
-        assert_eq!(AnimationState::from_index(9999), AnimationState::Idle);
     }
 }
 

@@ -259,11 +259,11 @@ mod tests {
         let wanted = [
             WeaponAction::None,
             WeaponAction::Hitscan(crate::common::weapon::HitscanSpec {
-                range: 0.0,
+                range_m: 0.0,
                 damage: 0,
                 headshot_multiplier: 0,
                 shove_per_damage: 0.0,
-                shove_radius: 0.0,
+                shove_radius_m: 0.0,
             }),
             WeaponAction::Projectile(crate::common::projectile::ProjectileSpec::ROCKET),
             WeaponAction::Flame(crate::common::flame::FlameSpec::FLAMETHROWER),

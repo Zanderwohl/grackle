@@ -41,14 +41,14 @@ impl WeaponId {
 
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct HitscanSpec {
-    /// Metres.
-    pub range: f32,
+    #[serde(rename = "range")]
+    pub range_m: f32,
     pub damage: u32,
     pub headshot_multiplier: u32,
     /// Metres per second of corpse shove, per point of damage.
     pub shove_per_damage: f32,
-    /// Metres.
-    pub shove_radius: f32,
+    #[serde(rename = "shove_radius")]
+    pub shove_radius_m: f32,
 }
 
 /// Stub.

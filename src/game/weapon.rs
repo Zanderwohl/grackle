@@ -320,11 +320,11 @@ mod tests {
     /// Bevy's default 64 Hz.
 
     const LASER: HitscanSpec = HitscanSpec {
-        range: 100.0,
+        range_m: 100.0,
         damage: 30,
         headshot_multiplier: 3,
         shove_per_damage: 0.15,
-        shove_radius: 0.4,
+        shove_radius_m: 0.4,
     };
 
     fn a_world(catalogue: WeaponCatalogue) -> World {

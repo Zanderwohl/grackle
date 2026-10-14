@@ -23,15 +23,15 @@ use grackle::editor::map_metadata::MapMetadata;
 use grackle::editor::save;
 use grackle::editor::spawn_point::SpawnPoint;
 
-/// Clear floor between the grid and the walls, in metres: enough to back away
-/// and see a whole row.
-const ROOM_MARGIN: f32 = 3.0;
+/// Clear floor between the grid and the walls: enough to back away and see a
+/// whole row.
+const ROOM_MARGIN_M: f32 = 3.0;
 
-const ROOM_HEIGHT: f32 = 6.0;
+const ROOM_HEIGHT_M: f32 = 6.0;
 
-const SPAWN_DISTANCE: f32 = 2.5;
+const SPAWN_DISTANCE_M: f32 = 2.5;
 
-const LIGHT_HEIGHT: f32 = 4.5;
+const LIGHT_HEIGHT_M: f32 = 4.5;
 
 fn main() {
     let mut timeline = FeatureTimeline::default();
@@ -40,11 +40,11 @@ fn main() {
     let (grid_min, grid_max) = animation_grid::footprint();
     // The grid's point is the middle of its front row.
     let grid_offset = Vec3::new(0.0, 0.0, -(grid_min.z + grid_max.z) * 0.5);
-    let spawn_offset = grid_offset + Vec3::new(0.0, 0.0, grid_min.z - SPAWN_DISTANCE);
+    let spawn_offset = grid_offset + Vec3::new(0.0, 0.0, grid_min.z - SPAWN_DISTANCE_M);
 
     // Symmetric about the origin, so the floor centre everything is anchored
     // to is where these offsets were measured from.
-    let margin = Vec3::new(ROOM_MARGIN, 0.0, ROOM_MARGIN);
+    let margin = Vec3::new(ROOM_MARGIN_M, 0.0, ROOM_MARGIN_M);
     let corners = [
         grid_offset + grid_min - margin,
         grid_offset + grid_max + margin,
@@ -54,7 +54,7 @@ fn main() {
         .iter()
         .fold(Vec3::ZERO, |half, corner| half.max(corner.abs()));
     let room_min = Vec3::new(-half.x, 0.0, -half.z);
-    let room_max = Vec3::new(half.x, ROOM_HEIGHT, half.z);
+    let room_max = Vec3::new(half.x, ROOM_HEIGHT_M, half.z);
 
     // Two points and a room between them, so a corner is a point other
     // features can hang off.
@@ -63,7 +63,7 @@ fn main() {
     let room = timeline.apply_feature(Box::new(EditorRoom::from_points(min, max)));
 
     // Anchored to the floor centre so resizing the room takes the contents along.
-    let mut light = GracklePointLight::from_point_ref(on_the_floor(room, Vec3::Y * LIGHT_HEIGHT));
+    let mut light = GracklePointLight::from_point_ref(on_the_floor(room, Vec3::Y * LIGHT_HEIGHT_M));
     light.intensity = 250_000.0;
     light.radius = 3.1;
     // Reaches the far corner of whatever size the room came out.

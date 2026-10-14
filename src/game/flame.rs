@@ -61,7 +61,7 @@ pub fn fire_flame(
 
         for direction in cone_directions(aim(player), spec.spread, spec.rays) {
             let ray = Ray3d::new(origin, direction);
-            let reach = world.ray_distance(&ray, spec.range).unwrap_or(spec.range);
+            let reach = world.ray_distance(&ray, spec.range_m).unwrap_or(spec.range_m);
 
             let Some(hit) = trace_past(&ray, reach, shot.shooter, &targets) else { continue };
             if caught.contains(&hit.target) {
@@ -134,11 +134,11 @@ pub fn burn(
 /// test can check the rotation.
 fn flame_cone(origin: Vec3, direction: Dir3, spec: &FlameSpec) -> (Cone, Isometry3d) {
     let cone = Cone {
-        radius: spec.range * spec.spread.tan(),
-        height: spec.range,
+        radius: spec.range_m * spec.spread.tan(),
+        height: spec.range_m,
     };
     let isometry = Isometry3d::new(
-        origin + *direction * (spec.range * 0.5),
+        origin + *direction * (spec.range_m * 0.5),
         Quat::from_rotation_arc(Vec3::Y, -*direction),
     );
     (cone, isometry)
@@ -292,7 +292,7 @@ mod tests {
                 (apex - origin).length() < 1e-4,
                 "the apex is at {apex}, not on the eye at {origin}"
             );
-            let far = origin + *direction * spec.range;
+            let far = origin + *direction * spec.range_m;
             assert!(
                 (base - far).length() < 1e-4,
                 "the base is at {base}, not down the barrel at {far}"
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn the_drawn_cone_is_as_wide_as_the_traced_one() {
         let (cone, _) = flame_cone(Vec3::ZERO, Dir3::NEG_Z, &SPEC);
-        let edge = Vec3::NEG_Z * SPEC.range + Vec3::X * cone.radius;
+        let edge = Vec3::NEG_Z * SPEC.range_m + Vec3::X * cone.radius;
         assert!(
             (edge.angle_between(Vec3::NEG_Z) - SPEC.spread).abs() < 1e-5,
             "the drawn rim is {} rad off the axis, not {}",
@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(asked[0].source, DamageSource::Player(PlayerId(1)));
 
         let burning = world.get::<Burning>(target).expect("it did not catch fire");
-        assert_eq!(burning.remaining, SPEC.afterburn_duration);
+        assert_eq!(burning.remaining_s, SPEC.afterburn_duration_s);
         assert_eq!(burning.source, DamageSource::Player(PlayerId(1)));
     }
 
@@ -367,7 +367,7 @@ mod tests {
     fn a_body_past_the_range_is_not_caught() {
         let mut world = a_world();
         let shooter = a_shooter(&mut world);
-        a_body(&mut world, SPEC.range + 4.0, 0.0);
+        a_body(&mut world, SPEC.range_m + 4.0, 0.0);
 
         puff(&mut world, shooter);
         assert!(asked_for(&mut world).is_empty(), "the flame reached past its range");
@@ -414,13 +414,13 @@ mod tests {
             world.run_system_once(burn).unwrap();
             world.flush();
         }
-        let half_spent = world.get::<Burning>(target).unwrap().remaining;
-        assert!(half_spent < SPEC.afterburn_duration);
+        let half_spent = world.get::<Burning>(target).unwrap().remaining_s;
+        assert!(half_spent < SPEC.afterburn_duration_s);
 
         puff(&mut world, shooter);
         assert_eq!(
-            world.get::<Burning>(target).unwrap().remaining,
-            SPEC.afterburn_duration,
+            world.get::<Burning>(target).unwrap().remaining_s,
+            SPEC.afterburn_duration_s,
             "the second puff did not reset the fire"
         );
     }
@@ -441,7 +441,7 @@ mod tests {
         let ticks = asked_for(&mut world);
         assert_eq!(
             ticks.len() as f32,
-            SPEC.afterburn_duration / SPEC.afterburn_interval,
+            SPEC.afterburn_duration_s / SPEC.afterburn_interval_s,
             "{} ticks",
             ticks.len()
         );
