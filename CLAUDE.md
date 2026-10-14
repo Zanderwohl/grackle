@@ -16,10 +16,11 @@ not a convenience. Design accordingly:
   blocking call, a background thread, a C library) becomes a problem the moment
   editing happens mid-match in a browser tab. See "Targeting wasm" below.
 - Two map formats are intended, and the split is deliberate:
-  - **Blueprint (`.gmb`)** — the authoring format, a SQLite database. Holds the
-    full feature timeline with undo history. This is what the editor saves.
+  - **Blueprint (`.gmb`)** — the authoring format: the map's feature list as
+    RON text, written by the features' own serde. No undo history — that
+    lives in memory, as a prop's does. This is what the editor saves.
   - **Prop (`.gpp`)** — a *thing*, not a place: a weapon, a crate, a control
-    point. Flat text, not SQLite, because the game reads one — see "Modelling
+    point. Flat text, because the game reads one — see "Modelling
     a prop" below.
   - **Compiled map** — not written yet. A simpler, flatter runtime format that a
     more traditional art-filled map can be baked into and shipped. The game
@@ -101,8 +102,8 @@ is taste and will change; what a new map has to *provide* is a room, a light,
 and a spawn point with headroom, which is what the test at the bottom of
 [`save.rs`](src/editor/save.rs) checks. Don't pin its coordinates there.
 
-The template is a database, so a diff shows it as "changed" and nothing more.
-Don't edit it by saving over it from the editor — it is written by
+The template is text and diffs like it. Still, don't edit it by saving over it
+from the editor — it is written by
 `cargo run --bin new_map_template`
 ([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the
 repo root, and that file is where its contents are reviewable. It currently
@@ -312,10 +313,9 @@ and each is a decision rather than a shortcut:
   a couple of kilobytes, so cloning per edit is free and correct by
   construction: no pair to get the wrong way round, no operation that can
   forget to record itself. The price — history does not survive closing the
-  file — is one the map deliberately pays and this deliberately does not.
-- **The file is flat text.** A blueprint is SQLite because only the editor
-  reads one; a prop is read by the *game*, so it has to reach a browser tab,
-  where bundled C does not go. It goes through `AssetSource` like
+  file — is one the map now pays too, having moved onto the same model.
+- **The file is flat text.** A prop is read by the *game*, so it has to reach
+  a browser tab. It goes through `AssetSource` like
   `weapons.toml`, the kernel is hand-written, and the only `std::fs` is on the
   saving side.
 - **Numbers are written the way they were typed.** `src/prop/nice_f32.rs`
@@ -1009,13 +1009,9 @@ combo — *Striped*, or one of the four — and striped deals them round the ros
 in cell order, which turns the grid into a friendly-fire range as well as an
 animation one: shoot along a row and every fourth body refuses the hit. Pick a
 single team and it is a plain firing range again. `One(Team)` rather than four
-more variants, so a fifth team is one more entry and nothing else; the numbers
-in `RosterTeam::index` are on disk and must not be renumbered.
-
-It rides in the generic `scalar_fields` table and loads through
-`load_snapshot_scalar_or`, so **no migration and no schema bump** — a grid
-saved before the field existed comes back striped. That is the pattern for any
-new scalar on an existing feature; a migration is only for a table shape.
+more variants, so a fifth team is one more entry and nothing else. It goes to
+disk by name through the grid's serde, like every field of every feature —
+adding one to an existing feature is adding the field.
 
 `team_carousels` keeps standing bodies in step with the choice. It walks the
 bodies and asks each which grid it is on rather than walking a grid's children,
@@ -1802,33 +1798,58 @@ follows. Consequences to respect when adding a feature type:
   feature under-reports its parents.
 - `available_point_keys()` is what the Retarget tool offers; a point you don't
   publish there cannot be referenced.
-- Registering a type takes edits in **seven** places that do not reference
-  each other, and missing one makes load half-work — the file saves and the
-  feature is simply absent when it comes back. In
-  [`editable.rs`](src/editor/editable.rs): `create_object_from_type_key`. In
-  [`action.rs`](src/editor/action.rs): the `FeatureData` variant,
-  `FeatureSnapshot::blank_object`, and `feature_data_kind`. In
-  [`save.rs`](src/editor/save.rs): `snapshot_data_kind`, the save arm in
-  `save_feature_snapshot`, and the load arm in `load_feature_snapshot`.
-  Nothing in the type system catches an omission, so add a round-trip test
-  next to the ones at the bottom of `save.rs` — that is what they are for.
+- **Saving, loading, undo and sending to clients need nothing per type.**
+  They all go through the feature's own serde — `typetag` names the type —
+  so a new `FeatureTrait` implementor saves the day it is written. What can
+  still go wrong is a field that does not round-trip: anything the world can
+  recompute (a resolved position, the entity) must be `#[serde(skip)]`, and
+  anything that is the map must not be. Add the new type to
+  `every_feature_type_survives_a_save_and_load` at the bottom of
+  [`save.rs`](src/editor/save.rs); that is the test that notices.
 - To make it visible and clickable, also add arms in
   [`show.rs`](src/tool/show.rs) (`GizmoVisibility` plus both matches),
   [`tool_helpers.rs`](src/tool/tool_helpers.rs) (`find_nearest_feature_hit`),
   and [`point_drag.rs`](src/tool/point_drag.rs) (`is_point_like`) if it is
   point-shaped.
 
-Undo/redo is `FeatureTimeline` plus `Action`/`FeatureDelta`: before/after
-snapshots per feature, with `try_coalesce_incoming` folding a drag into one
-entry. History is persisted into the blueprint, so it survives save and load.
+**Undo is whole-map snapshots in memory**, the prop editor's model: each
+feature's serialized form, in order. Nothing records itself —
+`checkpoint_when_idle` takes a snapshot whenever the map has changed and the
+editor is idle (no mouse button held, no text field holding the keyboard), so
+a drag or a typed name is one step and a tool cannot forget to record its edit.
+Two things keep that cheap and correct:
+
+- **A restore rebuilds only the features whose serialized form differs**,
+  plus what is built on them, so undoing one wall does not respawn every room.
+- **`sync_entities` bypasses change detection.** Which entity stands for which
+  feature is bookkeeping, not an edit; marked as a change, it made the
+  timeline read as edited every frame.
+
+History is not saved and does not cross the wire: `adopt` — opening a file,
+or a client being handed the server's map — resets it. Revert to Saved is one
+undo step (`replace_as_edit`), and the map knows whether it matches its file
+(`is_dirty`), which is what greys Revert out and puts the asterisk in the menu
+bar.
+
+**The History panel is the feature list**, with a rollback bar drawn in it:
+drag it up to see the map as it stood partway through, or roll back from a
+row's menu. The bar is `rollback: Option<FeatureId>` — the last feature shown,
+by id, so edits above it cannot move it — and it is **view state**: not saved,
+not sent, not an undo step. Adding a feature while rolled back inserts it at
+the bar (`apply_feature`); it used to delete everything past it. **A round is
+always played on the whole map**: the Editor → Play transition rolls to the
+end and runs `sync_entities` there, before `OnEnter(Play)` bakes and builds
+collision, so the rooms past the bar have entities in time.
 
 ## Save format
 
-`.gmb` is a SQLite database with a numbered migration chain in
-[`src/editor/save.rs`](src/editor/save.rs) — currently `SCHEMA_VERSION = 3` in
-`src/constants.rs`. **Never edit an existing migration.** Add a new numbered
-entry to `migrations()` and bump `SCHEMA_VERSION`; files in the wild are at
-older versions. Saves write through a `.bak` and restore it on failure.
+`.gmb` is pretty RON: the map's metadata, the next id, and every feature in
+order, written straight from the features' serde by
+[`src/editor/save.rs`](src/editor/save.rs). RON because it writes an `f32` as
+its shortest decimal, has `None`/`Some`, and reads as the Rust it came from.
+**There is no version and no migration chain** — no blueprint from before this
+format is read, deliberately, and a field added to a feature is simply a field.
+Saves write through a `.bak` and restore it on failure.
 
 ## Strings
 
@@ -1884,24 +1905,25 @@ key that has slots — fill those in by hand.
 
 ## Targeting wasm
 
-Nothing here builds for `wasm32-unknown-unknown` today. Known blockers, roughly
-in order of how load-bearing they are:
+Nothing here builds for `wasm32-unknown-unknown` today, but **every
+dependency now does**: the blueprint is RON text, so `rusqlite` and its bundled
+C are gone. What is left is Grackle's own code:
 
-- **`rusqlite` with `bundled`** is a C library and will not compile to wasm. The
-  blueprint format depends on it. This is the main argument for the compiled map
-  format: let the editor stay native for authoring, and give the runtime a
-  format it can read in a browser.
+- **The UDP transport** in [`net_transport.rs`](src/common/net_transport.rs):
+  `ServerUdpIo`/`UdpIo` do not exist on wasm, where the transport has to be
+  WebTransport — the reason Lightyear was chosen.
 - **`rfd` + `pollster::block_on` inside `std::thread::spawn`**
   ([`panels.rs:402`](src/editor/panels.rs:402), and the same pattern in
   [`src/prop/ui.rs`](src/prop/ui.rs)) — no threads on wasm, and blocking the
-  main thread deadlocks. Both are on the *authoring* side; `src/prop/`'s
-  reading path deliberately is not, which is the whole reason the prop format
-  is flat text.
+  main thread deadlocks — and on wasm `FileHandle::path()` and `pick_folder`
+  do not exist at all, which is what the compiler stops on. All of it is on
+  the *authoring* side; `src/prop/`'s reading path deliberately is not.
 - **`lang.rs` reads `assets/` via `std::fs`** at first use, outside Bevy's
   `AssetServer`.
 
-Three are already dealt with: `objc2` is scoped to macOS, `getrandom` has its
-`wasm_js` feature plus the `getrandom_backend` rustflag in
+Four are already dealt with: the blueprint's SQLite (above), `objc2` is
+scoped to macOS, `getrandom` has its `wasm_js` feature plus the
+`getrandom_backend` rustflag in
 [`.cargo/config.toml`](.cargo/config.toml) — both halves are required, the
 feature alone selects nothing — and `iyes_perf_ui`, which was pinned to a git
 branch rather than a release, is gone: the F3 overlay in
@@ -1909,8 +1931,8 @@ branch rather than a release, is gone: the F3 overlay in
 over `FrameTimeDiagnosticsPlugin`, so there is no per-Bevy-release fork to
 chase.
 
-`cargo check --target wasm32-unknown-unknown` is worth running as a probe: it
-now gets all the way to `libsqlite3-sys` trying to compile bundled C, which is
-the real blocker and the reason the compiled map format exists.
+`cargo check --lib --target wasm32-unknown-unknown` is worth running as a
+probe: it now compiles every dependency and stops on seven errors in
+Grackle's own code — the transport and the file dialogs above.
 
 When adding runtime code, keep it free of these rather than porting them later.

@@ -95,12 +95,21 @@ added while rolled back.
 
 - [x] Edit menu: Undo/Redo on the new history; Revert as one undo step,
       enabled only when dirty (pulled forward into stage 2).
-- [ ] CLAUDE.md: Save format, the feature model's registration list, map sync,
-      targeting wasm, and the shipped template.
+- [x] CLAUDE.md: Save format, the feature model's registration list, undo and
+      the History panel, the RosterTeam note, targeting wasm, and the shipped
+      template. `RosterTeam::index`/`from_index`, which only existed for the
+      scalar-fields table, removed.
 
 ### Noticed along the way
 
-- [ ] Prop editor: `end_gesture` is called whenever egui is idle, including
-      mid-way through a viewport gizmo drag, so a drag records its first
-      frame as the undo step and later frames unrecorded. Close gestures only
-      when no mouse button is held as well.
+- [x] ~~Prop editor: `end_gesture` closes mid-way through a viewport gizmo
+      drag.~~ Checked, and not a bug: the first frame pushes the state from
+      *before* the drag, and `undo` pushes whatever is current onto redo, so
+      Ctrl+Z goes back to before the drag and redo comes back to its end.
+
+### Where wasm stands afterwards
+
+`cargo check --lib --target wasm32-unknown-unknown` compiles every dependency
+and stops on seven errors in Grackle's own code: the UDP transport in
+`net_transport.rs`, and the `rfd` file dialogs (`FileHandle::path`,
+`pick_folder`) in the three editors.

@@ -54,8 +54,8 @@ pub struct AnimationGridMarker;
 /// whether you picked your own.
 ///
 /// `One(Team)` rather than four more variants, so a fifth team is a fifth
-/// entry in the combo box and nothing else. The one thing that is written out
-/// by hand is [`RosterTeam::index`], because those numbers are on disk.
+/// entry in the combo box and nothing else. It goes to disk by name, through
+/// the grid's own serde, like everything else in a blueprint.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RosterTeam {
     /// One of each, round the roster in cell order.
@@ -89,30 +89,6 @@ impl RosterTeam {
         match self {
             RosterTeam::Striped => Team::ALL[cell % Team::ALL.len()],
             RosterTeam::One(team) => team,
-        }
-    }
-
-    /// Stable index for the save format, as [`AnimationState::index`] is.
-    /// Zero is the default, so a file that predates this field loads striped.
-    pub fn index(self) -> u32 {
-        match self {
-            RosterTeam::Striped => 0,
-            RosterTeam::One(Team::Red) => 1,
-            RosterTeam::One(Team::Blue) => 2,
-            RosterTeam::One(Team::Yellow) => 3,
-            RosterTeam::One(Team::Green) => 4,
-        }
-    }
-
-    /// The choice an index names, or striped for one this build does not know
-    /// — a grid saved by a later build still stands up a roster.
-    pub fn from_index(index: u32) -> RosterTeam {
-        match index {
-            1 => RosterTeam::One(Team::Red),
-            2 => RosterTeam::One(Team::Blue),
-            3 => RosterTeam::One(Team::Yellow),
-            4 => RosterTeam::One(Team::Green),
-            _ => RosterTeam::Striped,
         }
     }
 }
