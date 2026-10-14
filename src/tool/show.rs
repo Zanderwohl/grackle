@@ -19,13 +19,13 @@ pub struct GizmoVisibility {
 impl Default for GizmoVisibility {
     fn default() -> Self {
         Self {
-            points: false,
-            rooms: false,
-            point_lights: false,
-            spawn_points: false,
-            props: false,
-            animation_displays: false,
-            animation_grids: false,
+            points: true,
+            rooms: true,
+            point_lights: true,
+            spawn_points: true,
+            props: true,
+            animation_displays: true,
+            animation_grids: true,
         }
     }
 }

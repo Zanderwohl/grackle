@@ -454,6 +454,17 @@ impl FeatureTrait for AnimationGrid {
         self.location.debug_gizmos(feet, gizmos);
     }
 
+    /// One per body, where [`crate::tool::animation_grid`] stands it — not
+    /// the footprint, which would make the floor between them a grid too and
+    /// hide anything placed there.
+    fn pick_boxes(&self) -> Vec<crate::common::ray::PickBox> {
+        let rotation = Quat::from_rotation_y(self.yaw);
+        cells()
+            .iter()
+            .map(|cell| crate::common::ray::PickBox::standing_body(self.resolved_location + rotation * cell.offset, rotation))
+            .collect()
+    }
+
     fn entity(&self) -> Option<Entity> {
         self.entity
     }

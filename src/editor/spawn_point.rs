@@ -175,6 +175,11 @@ impl FeatureTrait for SpawnPoint {
         ]
     }
 
+    /// The preview body, which is the hull the spawn is checked for.
+    fn pick_boxes(&self) -> Vec<crate::common::ray::PickBox> {
+        vec![crate::common::ray::PickBox::standing_body(self.resolved_location, Quat::from_rotation_y(self.yaw))]
+    }
+
     fn rotation_axes(&self) -> Vec<u8> { vec![1] }
 
     fn euler_angles(&self) -> Vec3 { Vec3::new(0.0, self.yaw, 0.0) }

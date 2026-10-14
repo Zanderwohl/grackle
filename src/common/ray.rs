@@ -52,6 +52,49 @@ pub fn ray_aabb_distance(ray: &Ray3d, min: Vec3, max: Vec3) -> Option<f32> {
     ray_aabb_entry(ray, min, max).map(|(distance, _)| distance)
 }
 
+/// A box turned in the world — what a feature with a body offers to be picked
+/// by, in place of a point somebody has to click within a few centimetres of.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PickBox {
+    pub centre: Vec3,
+    pub rotation: Quat,
+    pub half_extents: Vec3,
+}
+
+impl PickBox {
+    /// The movement hull of a body standing with its feet at `feet` — the
+    /// same box a spawn point is checked for, from the same constants, so a
+    /// body is picked by the space it is known to take up rather than by a
+    /// pose that changes every frame.
+    pub fn standing_body(feet: Vec3, rotation: Quat) -> Self {
+        Self {
+            centre: crate::common::class::body_centre_from_feet(feet),
+            rotation,
+            half_extents: crate::common::class::CLASS_HALF_EXTENTS,
+        }
+    }
+
+    /// How far along the ray it first enters the box: the ray is taken into
+    /// the box's own frame, where the box is axis-aligned. A rotation keeps a
+    /// direction unit length, so distances come back unchanged.
+    pub fn ray_distance(&self, ray: &Ray3d) -> Option<f32> {
+        let inverse = self.rotation.inverse();
+        let local = Ray3d::new(
+            inverse * (ray.origin - self.centre),
+            Dir3::new_unchecked((inverse * *ray.direction).normalize()),
+        );
+        ray_aabb_distance(&local, -self.half_extents, self.half_extents)
+    }
+
+    /// The box as a transform on a unit cube, which is what `Gizmos::cube`
+    /// draws.
+    pub fn transform(&self) -> Transform {
+        Transform::from_translation(self.centre)
+            .with_rotation(self.rotation)
+            .with_scale(self.half_extents * 2.0)
+    }
+}
+
 pub fn ray_intersects_aabb(ray: &Ray3d, min: Vec3, max: Vec3) -> bool {
     ray_aabb_distance(ray, min, max).is_some()
 }
@@ -108,6 +151,20 @@ mod tests {
                 ray_aabb_entry(&ray(origin, direction), Vec3::splat(-1.0), Vec3::splat(1.0)).unwrap();
             assert!(normal.dot(direction) < 0.0, "{direction} entered through {normal}");
         }
+    }
+
+    /// Turned a quarter about Y, a long thin box's length runs along X rather
+    /// than Z, and a ray has to find it there.
+    #[test]
+    fn a_turned_box_is_hit_where_it_is_turned_to() {
+        let long_along_z = PickBox {
+            centre: Vec3::ZERO,
+            rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            half_extents: Vec3::new(0.1, 0.1, 2.0),
+        };
+        let hit = long_along_z.ray_distance(&ray(Vec3::new(1.5, 0.0, -5.0), Vec3::Z));
+        assert!((hit.unwrap() - 4.9).abs() < 1e-4, "{hit:?}");
+        assert_eq!(long_along_z.ray_distance(&ray(Vec3::new(-5.0, 0.0, 1.5), Vec3::X)), None);
     }
 
     /// An axis the ray does not move along divides by zero, and the slab test

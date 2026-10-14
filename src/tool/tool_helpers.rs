@@ -265,7 +265,8 @@ pub fn bounds_gizmo(gizmos: &mut Gizmos, min: Vec3, max: Vec3, color: Color) {
 /// Find the nearest visible editor feature hit by a ray.
 /// For rooms, tests against solid wall seen from inside
 /// ([`Room::ray_hit_from_inside`]), so a room never hides what stands in it.
-/// For points/lights, tests ray proximity within SELECT_POINT_RADIUS.
+/// For everything else, its pick boxes (`FeatureTrait::pick_boxes`) and ray
+/// proximity to its point within SELECT_POINT_RADIUS.
 /// Returns the feature ID and hit position of the closest hit across all types.
 pub fn find_nearest_feature_hit(
     ray: &Ray3d,
@@ -313,6 +314,16 @@ pub fn find_nearest_feature_hit(
                 }
             }
             "global_point" | "grackle_point_light" | "spawn_point" | "prop" | "animation_display" | "animation_grid" => {
+                // The boxes and the point both: a grid's point is between
+                // its two middle bodies, inside none of them.
+                for pick_box in feature.object().pick_boxes() {
+                    if let Some(t) = pick_box.ray_distance(ray) {
+                        if t < best_t {
+                            best_t = t;
+                            best = Some((feature_id, ray.origin + dir * t));
+                        }
+                    }
+                }
                 if let Ok(pos) = feature.object().get_point("") {
                     let dist = ray_point_distance(ray, pos);
                     if dist < SELECT_POINT_RADIUS {
