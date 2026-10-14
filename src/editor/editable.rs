@@ -465,18 +465,23 @@ impl FeatureTimeline {
     pub fn checkpoint(&mut self) {
         let now = self.state();
         match self.checkpoint.take() {
-            Some(before) if before != now => {
-                self.undo.push(before);
-                if self.undo.len() > UNDO_DEPTH {
-                    self.undo.remove(0);
-                }
-                // A fresh edit ends the redo branch.
-                self.redo.clear();
-            }
+            Some(before) if before != now => self.push_undo(before),
             _ => {}
         }
         self.dirty = self.saved.as_ref() != Some(&now);
         self.checkpoint = Some(now);
+    }
+
+    /// Record a new step: capped at [`UNDO_DEPTH`], oldest dropped first, and
+    /// ending the redo branch. **Every new step goes through here** — undo and
+    /// redo only move steps between the two stacks, so this is the one place
+    /// the history can grow, and so the one place it has to be bounded.
+    fn push_undo(&mut self, before: MapState) {
+        self.undo.push(before);
+        if self.undo.len() > UNDO_DEPTH {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
     }
 
     /// Forget every step: the map in front of us is a different map, opened
@@ -543,8 +548,7 @@ impl FeatureTimeline {
         if let Some(current) = self.checkpoint.take()
             && current != target
         {
-            self.undo.push(current);
-            self.redo.clear();
+            self.push_undo(current);
         }
         self.restore(&target);
         self.mark_saved();
@@ -1521,6 +1525,25 @@ mod tests {
         app.world_mut().resource_mut::<FeatureTimeline>().roll_back_to(None);
         app.update();
         assert!(has_entity(&app, b));
+    }
+
+    /// However many edits and reverts, the history stays at the cap.
+    #[test]
+    fn the_history_is_bounded() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        timeline.mark_saved();
+        let on_disk = || {
+            let mut saved = FeatureTimeline::default();
+            saved.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+            saved
+        };
+        for step in 0..UNDO_DEPTH * 2 {
+            move_to_x(&mut timeline, a, step as f32 + 1.0);
+            timeline.checkpoint();
+            timeline.replace_as_edit(on_disk());
+        }
+        assert_eq!(timeline.undo.len(), UNDO_DEPTH);
     }
 
     /// A map that arrives from somewhere else — a file, a server — brings no
