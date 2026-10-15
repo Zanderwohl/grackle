@@ -126,29 +126,33 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
 
 ## LOW
 
-- [ ] `Option<&LocalPlayer>` as a bool → `Has<LocalPlayer>`: `draw_hitboxes`,
+- [x] `Option<&LocalPlayer>` as a bool → `Has<LocalPlayer>`: `draw_hitboxes`,
   `draw_skeletons`, `dress_held_weapons`.
-- [ ] Unused fetches: `step_projectiles` `&mut Transform`; `&Multicam` in
+- [x] Unused fetches: `step_projectiles` `&mut Transform`; `&Multicam` in
   `navigate`, `mouse_input`, `draw_camera_gizmos` → `With<Multicam>`;
-  `draw_room_bounds` `Entity`.
-- [ ] Early returns that want `run_if`: F4/F6 draws, `debug_boxes` (also `ResMut`
+  `draw_room_bounds` `Entity`. (The `&mut Transform` never marked anything
+  changed; dropping it frees the system to run in parallel.)
+- [x] Early returns that want `run_if`: F4/F6 draws, `debug_boxes` (also `ResMut`
   → `Res`), `start_in_play`, adopt/send in `map_sync`, `weapon_sync`,
-  `prop::sync`, `announce_mode_change`.
-- [ ] `give_bodies_to_whoever_needs_one` builds rooms and spawns before checking
+  `prop::sync`, `announce_mode_change`. `debug_boxes` keeps its egui-hover
+  return, which needs the context.
+- [x] `give_bodies_to_whoever_needs_one` builds rooms and spawns before checking
   anyone needs a body.
-- [ ] `sync_animation_grids` allocates and scans per grid every frame.
-- [ ] `sync_entities` collects the whole feature order every frame.
-- [ ] `name_the_held_weapon` formats strings every frame.
-- [ ] `keep_a_clip_selected`, anim panels: clone clip names / every clip per
-  frame.
-- [ ] `Pose::lerp` slerps shared joints twice; `Skeleton::index_of` linear
+- [x] `sync_animation_grids` allocates and scans per grid every frame. Shuffle
+  frames and empty grids still take the full path.
+- [x] `sync_entities` collects the whole feature order every frame.
+- [x] `name_the_held_weapon` formats strings every frame.
+- [x] `keep_a_clip_selected`, anim panels: clone clip names / every clip per
+  frame. `AnimTabs::clip()` still clones the selected clip, deliberately —
+  borrowing would show a clip a frame stale after an edit.
+- [x] `Pose::lerp` slerps shared joints twice; `Skeleton::index_of` linear
   string scan on hot paths.
-- [ ] `build_body_meshes` rebuilds all parts on `Team`/`BodyTint` change; only
+- [x] `build_body_meshes` rebuilds all parts on `Team`/`BodyTint` change; only
   the material differs.
-- [ ] `announce_the_dead` could filter `Changed<Damageable>`.
-- [ ] `broadcast_catalogue_changes` deep-compares the catalogue every frame; add
+- [x] `announce_the_dead` could filter `Changed<Damageable>`.
+- [x] `broadcast_catalogue_changes` deep-compares the catalogue every frame; add
   an `is_changed` latch in front.
-- [ ] `fire_flame` traces every ray against every body; broad-phase first.
-- [ ] `retarget` builds `prior_features` twice a frame with `contains` checks;
+- [x] `fire_flame` traces every ray against every body; broad-phase first.
+- [x] `retarget` builds `prior_features` twice a frame with `contains` checks;
   iterate a prefix.
-- [ ] `mouse_input` computes an unused ray and scans every camera.
+- [x] `mouse_input` computes an unused ray and scans every camera.
