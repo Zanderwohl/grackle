@@ -419,7 +419,7 @@ impl RoomDragState {
     }
 
     fn handle_dragging(
-        handles: Query<(Entity, &RoomDragHandle)>,
+        mut handles: Query<(Entity, &RoomDragHandle, &mut MeshMaterial3d<StandardMaterial>)>,
         mut ray_cast: MeshRayCast,
         mouse_input: Res<CurrentMouseInput>,
         mut commands: Commands,
@@ -442,7 +442,7 @@ impl RoomDragState {
                 state.grabbed_handle = None;
                 state.grab_offset = None;
             }
-            Self::restore_all_materials(&handles, &idle, &mut commands);
+            Self::paint(&mut handles, None, &idle, &highlight);
             return;
         }
 
@@ -507,42 +507,40 @@ impl RoomDragState {
                 features.features_mut().insert(feature_id, feature);
             }
         } else {
-            let filter = |entity: Entity| handles.get(entity).is_ok();
-            let settings = MeshRayCastSettings::default().with_filter(&filter);
+            let hit = {
+                let filter = |entity: Entity| handles.contains(entity);
+                let settings = MeshRayCastSettings::default().with_filter(&filter);
+                ray_cast.cast_ray(ray, &settings).first().map(|(entity, _)| *entity)
+            };
 
-            if let Some((hit_entity, _)) = ray_cast.cast_ray(ray, &settings).first() {
-                if let Ok((_, handle)) = handles.get(*hit_entity) {
-                    commands.entity(*hit_entity)
-                        .remove::<MeshMaterial3d<StandardMaterial>>()
-                        .insert(MeshMaterial3d(highlight.clone()));
-                    for (entity, _) in &handles {
-                        if entity != *hit_entity {
-                            commands.entity(entity)
-                                .remove::<MeshMaterial3d<StandardMaterial>>()
-                                .insert(MeshMaterial3d(idle.clone()));
-                        }
-                    }
+            Self::paint(&mut handles, hit, &idle, &highlight);
 
-                    if mouse_just_pressed {
+            if let Some(hit) = hit {
+                if mouse_just_pressed {
+                    if let Ok((_, handle, _)) = handles.get(hit) {
                         state.grabbed_handle = Some(handle.axis);
                         state.grab_offset = None;
                     }
                 }
-            } else {
-                Self::restore_all_materials(&handles, &idle, &mut commands);
             }
         }
     }
 
-    fn restore_all_materials(
-        handles: &Query<(Entity, &RoomDragHandle)>,
+    /// Lights the handle under the pointer and puts the rest back, writing a
+    /// material only when it is not already the one wanted. This runs every
+    /// frame the pointer is over a viewport, and an unconditional write is a
+    /// changed component on every handle, each re-extracted for rendering.
+    fn paint(
+        handles: &mut Query<(Entity, &RoomDragHandle, &mut MeshMaterial3d<StandardMaterial>)>,
+        highlighted: Option<Entity>,
         idle: &Handle<StandardMaterial>,
-        commands: &mut Commands,
+        highlight: &Handle<StandardMaterial>,
     ) {
-        for (entity, _) in handles.iter() {
-            commands.entity(entity)
-                .remove::<MeshMaterial3d<StandardMaterial>>()
-                .insert(MeshMaterial3d(idle.clone()));
+        for (entity, _, mut material) in handles.iter_mut() {
+            let wanted = if highlighted == Some(entity) { highlight } else { idle };
+            if material.0 != *wanted {
+                material.0 = wanted.clone();
+            }
         }
     }
 
@@ -557,6 +555,46 @@ impl RoomDragState {
         state.tracked_feature = None;
         state.grabbed_handle = None;
         state.grab_offset = None;
+    }
+}
+
+#[cfg(test)]
+mod drag_handle_tests {
+    use super::*;
+
+    /// Hovering a handle frame after frame must not keep rewriting the
+    /// materials: a written `MeshMaterial3d` is a changed one, and every
+    /// changed one is re-extracted for rendering.
+    #[test]
+    fn hovering_the_same_handle_again_writes_nothing() {
+        let mut world = World::new();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let idle = materials.add(StandardMaterial::default());
+        let lit = materials.add(StandardMaterial::default());
+        let handles: Vec<Entity> = HandleAxis::face_centers(Vec3::ZERO, Vec3::ONE)
+            .into_iter()
+            .map(|(_, axis)| world.spawn((RoomDragHandle { axis }, MeshMaterial3d(idle.clone()))).id())
+            .collect();
+        let hovered = handles[3];
+
+        let mut schedule = Schedule::default();
+        let (i, l) = (idle.clone(), lit.clone());
+        schedule.add_systems(move |
+            mut handles: Query<(Entity, &RoomDragHandle, &mut MeshMaterial3d<StandardMaterial>)>,
+        | RoomDragState::paint(&mut handles, Some(hovered), &i, &l));
+
+        schedule.run(&mut world);
+        assert_eq!(world.get::<MeshMaterial3d<StandardMaterial>>(hovered).unwrap().0, lit);
+        assert_eq!(world.get::<MeshMaterial3d<StandardMaterial>>(handles[0]).unwrap().0, idle);
+
+        let archetypes: Vec<_> = handles.iter().map(|e| world.entity(*e).archetype().id()).collect();
+        world.clear_trackers();
+        schedule.run(&mut world);
+        for (handle, archetype) in handles.iter().zip(archetypes) {
+            let entity = world.entity(*handle);
+            assert_eq!(entity.archetype().id(), archetype);
+            assert!(!entity.get_ref::<MeshMaterial3d<StandardMaterial>>().unwrap().is_changed());
+        }
     }
 }
 
@@ -616,7 +654,14 @@ impl Room {
     /// Outsides are culled by the renderer and ignored here too, so whatever
     /// stands inside a room is nearer than the room. Openings use the same
     /// holes [`Room::bake_faces`] cuts, so a pick goes through a doorway.
-    pub fn ray_hit_from_inside(&self, others: &[Room], ray: &Ray3d) -> Option<(f32, Vec3)> {
+    /// `others` is an iterator, not a slice, so a picker asking this of every
+    /// room needs no `Vec` of everybody else.
+    pub fn ray_hit_from_inside<'a>(
+        &self,
+        others: impl IntoIterator<Item = &'a Room, IntoIter: Clone>,
+        ray: &Ray3d,
+    ) -> Option<(f32, Vec3)> {
+        let others = others.into_iter();
         let dir = Vec3::from(ray.direction);
         let mut best: Option<(f32, Vec3)> = None;
 
@@ -638,7 +683,7 @@ impl Room {
             let on_face = u >= face.rect.min_u && u <= face.rect.max_u
                 && v >= face.rect.min_v && v <= face.rect.max_v;
             // Strictly inside: a hit on a hole's edge is still on wall.
-            let in_a_hole = others.iter().filter_map(|other| face.clip_rect(other)).any(|hole| {
+            let in_a_hole = others.clone().filter_map(|other| face.clip_rect(other)).any(|hole| {
                 u > hole.min_u && u < hole.max_u && v > hole.min_v && v < hole.max_v
             });
 

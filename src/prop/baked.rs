@@ -9,9 +9,10 @@ use bevy::prelude::*;
 use crate::common::assets::{default_packs, Assets as PackAssets};
 use crate::prop::document::{self, PropDoc};
 use crate::prop::feature::Evaluated;
-use std::sync::Arc;
 
-use crate::common::skeleton::clip::ClipSet;
+use std::collections::BTreeMap;
+
+use crate::common::skeleton::clip::{Clip, ClipSet};
 use crate::prop::hold::{HoldSpec, ViewmodelSpec};
 use crate::prop::surface::Surface;
 
@@ -51,8 +52,9 @@ pub struct BakedProp {
     pub parts: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     pub hold: HoldSpec,
     pub viewmodel: ViewmodelSpec,
-    /// Shared, since everybody holding one plays the same clips.
-    pub clips: Arc<ClipSet>,
+    /// Handles, as `parts` are: a re-bake of the same name refills the same
+    /// handle, so a body mid-deploy plays the saved clip on its next frame.
+    pub clips: BTreeMap<String, Handle<Clip>>,
 }
 
 #[derive(Resource, Default)]
@@ -74,11 +76,17 @@ impl PropCache {
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
         surfaces: &mut SurfaceMaterials,
+        clips: &mut Assets<Clip>,
     ) -> Option<&BakedProp> {
         if !self.baked.contains_key(name) {
-            let baked = bake(name, packs, meshes, materials, surfaces);
+            let baked = bake(name, packs, meshes, materials, surfaces, clips);
             self.baked.insert(name.to_owned(), baked);
         }
+        self.baked.get(name).and_then(Option::as_ref)
+    }
+
+    /// What is baked under this name, without baking it if it is not.
+    pub fn get(&self, name: &str) -> Option<&BakedProp> {
         self.baked.get(name).and_then(Option::as_ref)
     }
 
@@ -91,7 +99,8 @@ impl PropCache {
     }
 
     /// Replaces whatever was cached, which is often a failure from looking in
-    /// the local pack before the server's document arrived.
+    /// the local pack before the server's document arrived. A clip the previous
+    /// bake also had keeps its handle, so a mid-round save reaches its players.
     pub fn adopt(
         &mut self,
         name: &str,
@@ -99,8 +108,11 @@ impl PropCache {
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
         surfaces: &mut SurfaceMaterials,
+        clips: &mut Assets<Clip>,
     ) {
-        let baked = bake_doc(name, doc, meshes, materials, surfaces);
+        let previous = self.get(name).map(|baked| &baked.clips);
+        let clips = publish_clips(&doc.animations, previous, clips);
+        let baked = bake_doc(name, doc, meshes, materials, surfaces, clips);
         self.baked.insert(name.to_owned(), Some(baked));
         self.generation += 1;
     }
@@ -112,6 +124,7 @@ fn bake(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     surfaces: &mut SurfaceMaterials,
+    clips: &mut Assets<Clip>,
 ) -> Option<BakedProp> {
     // Highest priority last, so an overriding pack wins.
     let mut found = None;
@@ -124,7 +137,33 @@ fn bake(
     }
 
     let doc = found?;
-    Some(bake_doc(name, &doc, meshes, materials, surfaces))
+    let clips = publish_clips(&doc.animations, None, clips);
+    Some(bake_doc(name, &doc, meshes, materials, surfaces, clips))
+}
+
+/// Put a prop's clips into `Assets<Clip>`, reusing the handle of any clip the
+/// previous bake had under the same name.
+///
+/// Inserted only when the clip actually differs, so re-adopting an unchanged
+/// model is not a `Modified` event for every clip in it.
+fn publish_clips(
+    set: &ClipSet,
+    previous: Option<&BTreeMap<String, Handle<Clip>>>,
+    clips: &mut Assets<Clip>,
+) -> BTreeMap<String, Handle<Clip>> {
+    set.clips
+        .iter()
+        .map(|(name, clip)| {
+            let handle = match previous.and_then(|previous| previous.get(name)) {
+                Some(handle) => {
+                    crate::common::skeleton::play::refill(clips, handle, clip);
+                    handle.clone()
+                }
+                None => clips.add(clip.clone()),
+            };
+            (name.clone(), handle)
+        })
+        .collect()
 }
 
 fn bake_doc(
@@ -133,6 +172,7 @@ fn bake_doc(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     surfaces: &mut SurfaceMaterials,
+    clips: BTreeMap<String, Handle<Clip>>,
 ) -> BakedProp {
     let built = doc.evaluate();
     for problem in &built.problems {
@@ -148,6 +188,6 @@ fn bake_doc(
         parts,
         hold: doc.hold.clone(),
         viewmodel: doc.viewmodel,
-        clips: Arc::new(doc.animations.clone()),
+        clips,
     }
 }

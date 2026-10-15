@@ -23,7 +23,6 @@ use crate::common::skeleton::play::{key_the_channel, Playing};
 use crate::prop::document::PropEditor;
 use crate::prop::figure::FigurePerformance;
 use crate::prop::view::PropSceneSystems;
-use std::sync::Arc;
 
 use timeline::{
     grab_radius, grid_step, key_at, keys_within, lay_out_the_timeline, over_ruler,
@@ -93,6 +92,8 @@ impl Plugin for AnimPlugin {
             .init_resource::<StartInAnimEditor>()
             .init_resource::<body::BodyClips>()
             .init_resource::<crate::common::skeleton::state::ClipLibrary>()
+            .add_plugins(crate::common::skeleton::ClipAssetsPlugin)
+            .init_resource::<PreviewClips>()
             // Ungated: it has to run in whatever mode the process started in.
             .add_systems(Update, start_in_the_anim_editor)
             .add_plugins(ui::AnimUiPlugin)
@@ -155,7 +156,11 @@ pub fn edit_selected(
     match anim.source {
         ClipSource::Prop => {
             prop.begin_gesture();
-            if let Some(clip) = prop.doc_mut().animations.clips.get_mut(name) {
+            // Asked first, so a name that finds nothing writes nothing — the
+            // same rule `BodyClips::clip_mut` keeps.
+            if prop.doc().animations.clips.contains_key(name)
+                && let Some(clip) = prop.doc_mut().animations.clips.get_mut(name)
+            {
                 change(clip);
             }
         }
@@ -383,6 +388,7 @@ fn timeline_input(
                         grab.0 = Some(Grab::Keys {
                             from_x: at.x,
                             tracks: dragged_tracks(clip, &selection),
+                            last_by: None,
                         });
                     }
                 }
@@ -396,29 +402,51 @@ fn timeline_input(
         }
     }
 
+    // Read through a shared borrow, so a frame with nothing held does not
+    // mark the grab changed; only the arms that write to it take it mutably.
     match &grab.0 {
         Some(Grab::Scrub { from_x, from_time }) => {
             // A scrub fighting playback would not stay put.
             cursor.playing = false;
-            let moved = (at.x - from_x) / view.pixels_per_second;
-            cursor.time = (from_time + moved).clamp(0.0, length);
+            let moved = (at.x - *from_x) / view.pixels_per_second;
+            cursor.time = (*from_time + moved).clamp(0.0, length);
         }
         Some(Grab::Pan { from_x, from_start }) => {
-            view.start = from_start - (at.x - from_x) / view.pixels_per_second;
+            view.start = *from_start - (at.x - *from_x) / view.pixels_per_second;
         }
-        Some(Grab::Keys { from_x, tracks }) => {
-            let mut by = (at.x - from_x) / view.pixels_per_second;
+        Some(Grab::Keys { from_x, .. }) => {
+            let mut by = (at.x - *from_x) / view.pixels_per_second;
             // The offset is snapped rather than each key, so keys dragged together keep their spacing. Alt
             // disables snapping.
             if !free && !anim.free_drag {
                 let step = grid_step(view.pixels_per_second);
                 by = (by / step).round() * step;
             }
-            nudge_the_selection(&mut editor, &mut clips, &anim, tracks, by, length, &mut selection);
+            let Some(Grab::Keys { tracks, last_by, .. }) = &mut grab.0 else {
+                unreachable!("matched as a key drag just above");
+            };
+            // Handed over with change detection bypassed and marked only if
+            // the nudge wrote, so a pointer held still does not mark them.
+            let wrote = nudge_the_selection(
+                editor.bypass_change_detection(),
+                clips.bypass_change_detection(),
+                &anim,
+                tracks,
+                by,
+                length,
+                selection.bypass_change_detection(),
+                last_by,
+            );
+            if wrote {
+                editor.set_changed();
+                clips.set_changed();
+                selection.set_changed();
+            }
         }
-        Some(Grab::Band { from, .. }) => {
-            let from = *from;
-            grab.0 = Some(Grab::Band { from, to: at });
+        Some(Grab::Band { .. }) => {
+            if let Some(Grab::Band { to, .. }) = &mut grab.0 {
+                *to = at;
+            }
         }
         None => {}
     }
@@ -568,7 +596,9 @@ fn dragged_tracks(clip: &Clip, selection: &TimelineSelection) -> Vec<DraggedTrac
 }
 
 /// One `begin_gesture` per drag and one `doc_mut` per frame, so a drag is one undo step. The panels
-/// close the gesture; see `AnimPanels`.
+/// close the gesture; see `AnimPanels`. An offset equal to `last_by` writes nothing, and the return
+/// says whether it wrote, for a caller holding the resources with change detection bypassed.
+#[allow(clippy::too_many_arguments)]
 fn nudge_the_selection(
     editor: &mut PropEditor,
     clips: &mut body::BodyClips,
@@ -577,7 +607,13 @@ fn nudge_the_selection(
     by: f32,
     length: f32,
     selection: &mut TimelineSelection,
-) {
+    last_by: &mut Option<f32>,
+) -> bool {
+    if *last_by == Some(by) {
+        return false;
+    }
+    *last_by = Some(by);
+
     let mut landed = std::collections::BTreeSet::new();
 
     edit_selected(anim, editor, clips, |clip| {
@@ -598,6 +634,7 @@ fn nudge_the_selection(
     });
 
     selection.0 = landed;
+    true
 }
 
 /// Not while egui wants the keyboard: `Delete` in a text field deletes a character.
@@ -697,18 +734,66 @@ pub fn preview_inputs(
     }
 }
 
+/// The clips the figure previews, as handles kept and refilled rather than
+/// replaced: slot 0 for the strip's clip or a blend's first variant, slot 1
+/// for its second. A slot is refilled only when its [`PreviewSource`] moved.
+#[derive(Resource, Default)]
+pub struct PreviewClips([Option<(Handle<Clip>, PreviewSource)>; 2]);
+
+/// What a previewed clip is read from: the strip's clip, the body clips a
+/// blend comes out of, and the heading it is blended at.
+#[derive(Clone, Copy, PartialEq)]
+struct PreviewSource {
+    shown: bevy::ecs::change_detection::Tick,
+    body: bevy::ecs::change_detection::Tick,
+    heading: Option<u32>,
+}
+
+impl PreviewClips {
+    fn show(
+        &mut self,
+        slot: usize,
+        clip: &Clip,
+        from: PreviewSource,
+        assets: &mut ResMut<Assets<Clip>>,
+    ) -> Handle<Clip> {
+        match &mut self.0[slot] {
+            Some((handle, filled_from)) => {
+                if *filled_from != from {
+                    *filled_from = from;
+                    crate::common::skeleton::play::refill(assets, handle, clip);
+                }
+                handle.clone()
+            }
+            None => {
+                let handle = assets.add(clip.clone());
+                self.0[slot] = Some((handle.clone(), from));
+                handle
+            }
+        }
+    }
+}
+
 /// Through the same `apply` a body in a match uses, so the editor shows what the game performs.
+#[allow(clippy::too_many_arguments)]
 fn drive_the_preview(
     shown: Res<ShownClip>,
     cursor: Res<TimelineCursor>,
     anim: Res<AnimEditor>,
     clips: Res<body::BodyClips>,
+    mut previews: ResMut<PreviewClips>,
+    mut assets: ResMut<Assets<Clip>>,
     mut performance: ResMut<FigurePerformance>,
     mut corrections: ResMut<crate::prop::figure::FigureCorrections>,
 ) {
     performance.0 .0.clear();
     corrections.0 = None;
     let Some(clip) = shown.0.as_ref() else { return };
+    let from = PreviewSource {
+        shown: shown.last_changed(),
+        body: clips.last_changed(),
+        heading: anim.blend_preview.map(f32::to_bits),
+    };
 
     // A body clip is previewed through its state's corrections, as a match plays it, at the variant's
     // heading.
@@ -733,9 +818,11 @@ fn drive_the_preview(
             // `animation_pose` makes.
             if let (Some(heading), Some(animation)) = (anim.blend_preview, animation.filter(|_| blend.is_some())) {
                 if let Some((first, second)) = animation.at_heading(heading) {
-                    performance.0 .0.push(Playing { clip: Arc::new(first.clone()), time: cursor.time, weight: 1.0 });
+                    let first = previews.show(0, first, from, &mut assets);
+                    performance.0 .0.push(Playing { clip: first, time: cursor.time, weight: 1.0 });
                     if let Some((other, t)) = second {
-                        performance.0 .0.push(Playing { clip: Arc::new(other.clone()), time: cursor.time, weight: t });
+                        let other = previews.show(1, other, from, &mut assets);
+                        performance.0 .0.push(Playing { clip: other, time: cursor.time, weight: t });
                     }
                     return;
                 }
@@ -743,11 +830,8 @@ fn drive_the_preview(
         }
     }
 
-    performance.0 .0.push(Playing {
-        clip: Arc::new(clip.clone()),
-        time: cursor.time,
-        weight: 1.0,
-    });
+    let clip = previews.show(0, clip, from, &mut assets);
+    performance.0 .0.push(Playing { clip, time: cursor.time, weight: 1.0 });
 }
 
 #[cfg(test)]
@@ -935,6 +1019,7 @@ mod tests {
         selection.0.insert(KeyAt { track: 0, key: 0 });
         let tracks = holding(&editor, &[0]);
 
+        let mut last = None;
         for frame in 1..=40 {
             nudge_the_selection(
                 &mut editor,
@@ -944,6 +1029,7 @@ mod tests {
                 frame as f32 * 0.005,
                 1.0,
                 &mut selection,
+                &mut last,
             );
         }
         editor.end_gesture();
@@ -967,6 +1053,7 @@ mod tests {
         selection.0.insert(KeyAt { track: 0, key: 1 });
         let tracks = holding(&editor, &[1]);
 
+        let mut last = None;
         for by in [0.2_f32, 0.6, 2.0, -3.0, -0.4, 0.0] {
             nudge_the_selection(
                 &mut editor,
@@ -976,6 +1063,7 @@ mod tests {
                 by,
                 1.0,
                 &mut selection,
+                &mut last,
             );
         }
 
@@ -999,6 +1087,7 @@ mod tests {
             0.5,
             1.0,
             &mut selection,
+            &mut None,
         );
 
         assert_eq!(times(&editor), vec![0.4, 0.6, 0.9]);
@@ -1007,5 +1096,90 @@ mod tests {
             vec![KeyAt { track: 0, key: 1 }],
             "the selection did not follow the key it was holding",
         );
+    }
+
+    /// **A key held still writes nothing.**
+    ///
+    /// A drag is absolute — every frame recomputes from where the keys
+    /// started — so the same offset twice is the same keys twice. Writing them
+    /// anyway bumped the generation every frame the button was down, which is
+    /// everything keyed on it rebuilding for a pointer that had not moved.
+    #[test]
+    fn a_key_held_still_writes_nothing() {
+        let (mut editor, anim) = editor_with_a_clip(&[0.0, 0.5]);
+        let mut selection = TimelineSelection::default();
+        selection.0.insert(KeyAt { track: 0, key: 0 });
+        let tracks = holding(&editor, &[0]);
+        let mut clips = body::BodyClips::default();
+        let mut last = None;
+        let mut nudge = |editor: &mut PropEditor, by: f32| {
+            nudge_the_selection(
+                editor,
+                &mut clips,
+                &anim,
+                &tracks,
+                by,
+                1.0,
+                &mut selection,
+                &mut last,
+            );
+        };
+
+        let before = editor.generation();
+        nudge(&mut editor, 0.1);
+        let moved = editor.generation();
+        assert!(moved > before, "a moving drag did not write");
+
+        for _ in 0..10 {
+            nudge(&mut editor, 0.1);
+        }
+        assert_eq!(editor.generation(), moved, "a drag held still kept writing");
+
+        nudge(&mut editor, 0.2);
+        assert!(editor.generation() > moved, "moving again did not write");
+        assert!((times(&editor)[0] - 0.2).abs() < 1e-5);
+
+        editor.end_gesture();
+        editor.undo();
+        assert_eq!(times(&editor), vec![0.0, 0.5], "the drag was not one undo step");
+        assert!(!editor.can_undo());
+    }
+
+    /// The preview keeps one handle per slot and refills it only when what is
+    /// shown changes: scrubbing is a new time on the same clip, not a new clip
+    /// every frame.
+    #[test]
+    fn the_preview_keeps_one_handle_and_refills_it() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<Assets<Clip>>();
+        world.init_resource::<PreviewClips>();
+
+        let source = |at: u32| PreviewSource {
+            shown: bevy::ecs::change_detection::Tick::new(at),
+            body: bevy::ecs::change_detection::Tick::new(0),
+            heading: None,
+        };
+        let show = |world: &mut World, clip: Clip, from: PreviewSource| {
+            world
+                .run_system_once(move |mut previews: ResMut<PreviewClips>, mut assets: ResMut<Assets<Clip>>| {
+                    previews.show(0, &clip, from, &mut assets)
+                })
+                .unwrap()
+        };
+
+        let first = show(&mut world, Clip { length: 1.0, ..Clip::default() }, source(1));
+        let again = show(&mut world, Clip { length: 1.0, ..Clip::default() }, source(1));
+        assert_eq!(first, again, "an unchanged clip minted a new handle");
+        assert_eq!(world.resource::<Assets<Clip>>().len(), 1);
+
+        // Nothing it is read from has moved, so it is not even looked at.
+        show(&mut world, Clip { length: 9.0, ..Clip::default() }, source(1));
+        assert_eq!(world.resource::<Assets<Clip>>().get(&first).unwrap().length, 1.0);
+
+        let edited = show(&mut world, Clip { length: 2.0, ..Clip::default() }, source(2));
+        assert_eq!(first, edited, "an edit minted a new handle rather than refilling the old one");
+        assert_eq!(world.resource::<Assets<Clip>>().get(&first).unwrap().length, 2.0);
     }
 }

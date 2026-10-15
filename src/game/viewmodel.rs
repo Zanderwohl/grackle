@@ -14,6 +14,7 @@
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::camera::Hdr;
+use bevy::ecs::change_detection::Tick;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
@@ -80,6 +81,26 @@ pub struct Viewmodel {
     /// The body the arms were built for. A respawn, class change or a client
     /// being handed a body all show up as a different entity.
     armed_for: Option<Entity>,
+    /// What the arms were last solved from, so a frame that changed none of
+    /// it costs a comparison rather than a solve. Cleared whenever the arms are
+    /// rebuilt: they spawn hidden, and only placing them shows them.
+    arms_placed_for: Option<ArmsKey>,
+}
+
+/// Everything [`place_the_viewmodel_arms`] reads, and nothing else.
+///
+/// The rig and the held model are only ever *inserted* — a respawn, a class
+/// change, a weapon switch or a model arriving from the server — so when each
+/// last changed stands in for comparing either by value. The frustum is
+/// compared bit for bit: an epsilon would be a second opinion about when the
+/// weapon has moved.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct ArmsKey {
+    body: Entity,
+    skeleton: Tick,
+    held: Tick,
+    fov: u32,
+    aspect: u32,
 }
 
 pub struct ViewmodelPlugin;
@@ -203,7 +224,9 @@ fn place_the_viewmodel(
         let placed = spec.transform(perspective.fov, size.x / size.y);
         for child in children.iter() {
             let Ok(mut transform) = parts.get_mut(child) else { continue };
-            *transform = placed;
+            // Compared first: this runs every frame, and an unchanged
+            // transform marked changed is a propagation for nothing.
+            transform.set_if_neq(placed);
         }
     }
 }
@@ -231,6 +254,7 @@ fn dress_the_viewmodel_arms(
             continue;
         }
         viewmodel.armed_for = body.map(|(entity, ..)| entity);
+        viewmodel.arms_placed_for = None;
 
         for arm in viewmodel.arms.drain(..) {
             commands.entity(arm).despawn();
@@ -269,26 +293,44 @@ fn dress_the_viewmodel_arms(
     }
 }
 
-/// Solve the arms onto the viewmodel's weapon, every frame.
+/// Solve the arms onto the viewmodel's weapon, whenever what they are solved
+/// from has changed.
 ///
 /// An arm that did not reach is hidden: `grip_with` leaves it where it was,
 /// which in front of an eye is a forearm across the screen. Most weapons have
-/// no support grip, so usually only one arm is drawn.
+/// no support grip, so usually only one arm is drawn. Solved only when the rig,
+/// held model or frustum changes.
 fn place_the_viewmodel_arms(
-    bodies: Query<(&Skeleton, &HeldModel), With<LocalPlayer>>,
-    cameras: Query<(&Camera, &Projection, &Children), With<ViewmodelCamera>>,
+    bodies: Query<(Entity, Ref<Skeleton>, Ref<HeldModel>), With<LocalPlayer>>,
+    cameras: Query<(&Camera, &Projection, &Children, &ChildOf), With<ViewmodelCamera>>,
+    mut views: Query<&mut Viewmodel>,
     mut parts: Query<(&ViewmodelArm, &mut Transform, &mut Visibility)>,
 ) {
-    let Ok((skeleton, held)) = bodies.single() else { return };
+    let Ok((body, skeleton, held)) = bodies.single() else { return };
 
-    for (camera, projection, children) in &cameras {
+    for (camera, projection, children, view) in &cameras {
         let Projection::Perspective(perspective) = projection else { continue };
         let Some(size) = camera.logical_viewport_size().filter(|size| size.y > 0.0) else {
             continue;
         };
+        let aspect = size.x / size.y;
 
+        let key = ArmsKey {
+            body,
+            skeleton: skeleton.last_changed(),
+            held: held.last_changed(),
+            fov: perspective.fov.to_bits(),
+            aspect: aspect.to_bits(),
+        };
+        let Ok(mut viewmodel) = views.get_mut(view.parent()) else { continue };
+        if viewmodel.arms_placed_for == Some(key) {
+            continue;
+        }
+        viewmodel.arms_placed_for = Some(key);
+
+        let skeleton: &Skeleton = &skeleton;
         let root = eye_space(skeleton);
-        let weapon = held.viewmodel().transform(perspective.fov, size.x / size.y);
+        let weapon = held.viewmodel().transform(perspective.fov, aspect);
 
         // From rest: a camera that does not bob must not have arms that do.
         let mut pose = Pose::rest();
@@ -301,13 +343,15 @@ fn place_the_viewmodel_arms(
                 Reach::Reached => Visibility::Inherited,
                 _ => Visibility::Hidden,
             };
-            if *visibility != wanted {
-                *visibility = wanted;
-            }
+            visibility.set_if_neq(wanted);
 
             let bone = &posed[arm.bone];
             // The mesh is already bone-sized; a scale would skew its normals.
-            *transform = Transform { translation: bone.head, rotation: bone.rotation, ..default() };
+            transform.set_if_neq(Transform {
+                translation: bone.head,
+                rotation: bone.rotation,
+                ..default()
+            });
         }
     }
 }
@@ -515,6 +559,155 @@ mod tests {
             "the grip sits {:.3} m off the view axis where the frustum is {half_height:.3} m tall",
             placed.translation.y,
         );
+    }
+
+    /// A viewmodel camera with a play camera above it and the four arm bones
+    /// under it, and a body to hold them — what `dress_the_viewmodel_arms`
+    /// leaves, without the meshes it needs a renderer for.
+    fn a_viewmodel_with_arms(world: &mut World) -> (Entity, Entity, Vec<Entity>) {
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Soldier));
+        let arms: Vec<(usize, usize)> = ARM_BONES
+            .iter()
+            .map(|(name, hand)| (skeleton.index_of(name).expect("a rig has arms"), *hand))
+            .collect();
+        let body = world.spawn((LocalPlayer, skeleton, HeldModel::default())).id();
+
+        let mut camera = Camera::default();
+        camera.computed.target_info = Some(bevy::camera::RenderTargetInfo {
+            physical_size: UVec2::new(1600, 900),
+            scale_factor: 1.0,
+        });
+        let view = world.spawn(Viewmodel::default()).id();
+        let camera = world
+            .spawn((
+                ViewmodelCamera,
+                camera,
+                Projection::Perspective(PerspectiveProjection { fov: VIEWMODEL_FOV, ..default() }),
+                ChildOf(view),
+            ))
+            .id();
+        let arms = arms
+            .into_iter()
+            .map(|(bone, hand)| {
+                world
+                    .spawn((
+                        ViewmodelArm { bone, hand },
+                        Transform::IDENTITY,
+                        Visibility::Hidden,
+                        ChildOf(camera),
+                    ))
+                    .id()
+            })
+            .collect();
+        (body, camera, arms)
+    }
+
+    fn when_placed(world: &World, arms: &[Entity]) -> Vec<Tick> {
+        arms.iter()
+            .map(|arm| world.entity(*arm).get_ref::<Transform>().unwrap().last_changed())
+            .collect()
+    }
+
+    /// Fails if the arms are solved again when nothing they read changed, or
+    /// not solved again when something did.
+    #[test]
+    fn the_arms_are_solved_again_only_when_something_they_read_changes() {
+        let mut world = World::new();
+        let (body, camera, arms) = a_viewmodel_with_arms(&mut world);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(place_the_viewmodel_arms);
+
+        schedule.run(&mut world);
+        let first = when_placed(&world, &arms);
+        let trigger_arm = arms[0];
+        assert_eq!(
+            world.get::<Visibility>(trigger_arm),
+            Some(&Visibility::Inherited),
+            "the trigger hand was never placed on its grip",
+        );
+
+        schedule.run(&mut world);
+        assert_eq!(when_placed(&world, &arms), first, "the arms were re-placed with nothing changed");
+
+        // Prove the solve was skipped, not merely a no-op: a hand moved by hand stays moved.
+        let solved = *world.get::<Transform>(trigger_arm).unwrap();
+        world.get_mut::<Transform>(trigger_arm).unwrap().translation = Vec3::splat(9.0);
+        schedule.run(&mut world);
+        assert_eq!(
+            world.get::<Transform>(trigger_arm).unwrap().translation,
+            Vec3::splat(9.0),
+            "the arms were solved again with nothing they read changed",
+        );
+        *world.get_mut::<Transform>(trigger_arm).unwrap() = solved;
+
+        // A wider field of view moves the weapon, and the hands with it.
+        if let Projection::Perspective(perspective) =
+            &mut *world.get_mut::<Projection>(camera).unwrap()
+        {
+            perspective.fov = 90.0_f32.to_radians();
+        }
+        schedule.run(&mut world);
+        let at_ninety = *world.get::<Transform>(trigger_arm).unwrap();
+        assert_ne!(at_ninety, solved, "a new field of view left the arms where they were");
+
+        // So does a window of another shape.
+        world.get_mut::<Camera>(camera).unwrap().computed.target_info =
+            Some(bevy::camera::RenderTargetInfo {
+                physical_size: UVec2::new(900, 900),
+                scale_factor: 1.0,
+            });
+        schedule.run(&mut world);
+        assert_ne!(
+            *world.get::<Transform>(trigger_arm).unwrap(),
+            at_ninety,
+            "a resized window left the arms where they were",
+        );
+
+        // And a weapon switch, which is the held model being put back.
+        world.entity_mut(body).insert(HeldModel::default());
+        world.get_mut::<Transform>(trigger_arm).unwrap().translation = Vec3::splat(9.0);
+        schedule.run(&mut world);
+        assert_ne!(
+            world.get::<Transform>(trigger_arm).unwrap().translation,
+            Vec3::splat(9.0),
+            "a new held model did not put the hands back on it",
+        );
+    }
+
+    /// Fails if rebuilt arms for unchanged inputs are left hidden.
+    #[test]
+    fn rebuilt_arms_are_placed_even_when_nothing_else_changed() {
+        let mut world = World::new();
+        let (_, _, arms) = a_viewmodel_with_arms(&mut world);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(place_the_viewmodel_arms);
+        schedule.run(&mut world);
+
+        // What `dress_the_viewmodel_arms` does on a rebuild.
+        let mut views = world.query::<&mut Viewmodel>();
+        for mut viewmodel in views.iter_mut(&mut world) {
+            viewmodel.arms_placed_for = None;
+        }
+        world.entity_mut(arms[0]).insert((Transform::IDENTITY, Visibility::Hidden));
+
+        schedule.run(&mut world);
+        assert_eq!(world.get::<Visibility>(arms[0]), Some(&Visibility::Inherited));
+        assert_ne!(world.get::<Transform>(arms[0]), Some(&Transform::IDENTITY));
+    }
+
+    /// Fails if an unmoved weapon is marked moved by the every-frame placing.
+    #[test]
+    fn an_unmoved_viewmodel_is_not_marked_moved() {
+        let mut world = World::new();
+        let (_, camera, _) = a_viewmodel_with_arms(&mut world);
+        let part = world.spawn((ViewmodelPart, Transform::IDENTITY, ChildOf(camera))).id();
+        let mut schedule = Schedule::default();
+        schedule.add_systems(place_the_viewmodel);
+
+        schedule.run(&mut world);
+        let first = when_placed(&world, &[part]);
+        schedule.run(&mut world);
+        assert_eq!(when_placed(&world, &[part]), first, "an unchanged weapon was marked moved");
     }
 
     /// A fixed view-space offset drifts towards the middle as the view widens,

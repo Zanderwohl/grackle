@@ -82,9 +82,15 @@ impl Plugin for NetTransportPlugin {
                 (
                     open_link_for_role.run_if(resource_changed::<NetRole>),
                     report_status,
-                    crate::common::net_events::replicate_projectiles,
-                    crate::common::net_events::replicate_display_bodies,
-                    crate::common::net_events::replicate_corpses,
+                    // Keyed on lacking `Replicate` rather than on `Added`, and
+                    // gated rather than returning early, so whatever was
+                    // standing before somebody picked Host is sent too.
+                    (
+                        crate::common::net_events::replicate_projectiles,
+                        crate::common::net_events::replicate_display_bodies,
+                        crate::common::net_events::replicate_corpses,
+                    )
+                        .run_if(crate::common::net::is_hosting),
                 )
                     .chain(),
             );

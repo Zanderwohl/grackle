@@ -158,7 +158,9 @@ pub struct DraggedTrack {
 pub enum Grab {
     Scrub { from_x: f32, from_time: f32 },
     Pan { from_x: f32, from_start: f32 },
-    Keys { from_x: f32, tracks: Vec<DraggedTrack> },
+    /// `last_by` is the offset last applied. The drag is absolute, so the same
+    /// offset is the same keys, and a pointer held still writes nothing.
+    Keys { from_x: f32, tracks: Vec<DraggedTrack>, last_by: Option<f32> },
     /// Both corners, so the layout need not know where the pointer is.
     Band { from: Vec2, to: Vec2 },
 }
@@ -508,6 +510,18 @@ pub fn grid_step(pixels_per_second: f32) -> f32 {
     step
 }
 
+/// Write a pooled node through `write`, marking it changed only if it differs:
+/// a changed `Node` is a UI re-layout, and every pooled node is placed every
+/// frame. These carry no grid tracks, so the copy does not allocate.
+fn place(nodes: &mut Query<&mut Node>, entity: Entity, write: impl FnOnce(&mut Node)) {
+    let Ok(mut node) = nodes.get_mut(entity) else {
+        return;
+    };
+    let mut wanted = node.clone();
+    write(&mut wanted);
+    node.set_if_neq(wanted);
+}
+
 /// The only writer of `Node` on a pooled entity.
 #[allow(clippy::too_many_arguments)]
 pub fn lay_out_the_timeline(
@@ -523,6 +537,7 @@ pub fn lay_out_the_timeline(
     mut colours: Query<&mut BackgroundColor>,
     mut borders: Query<&mut BorderColor>,
     mut texts: Query<&mut Text>,
+    mut label_text: Local<String>,
 ) {
     let (Some(camera), Some(root)) = (pools.camera, pools.root) else {
         return;
@@ -536,13 +551,13 @@ pub fn lay_out_the_timeline(
     reserve(&mut commands, camera, root, &mut pools, tracks, keys);
 
     let rect = view.rect;
-    if let Ok(mut node) = nodes.get_mut(root) {
+    place(&mut nodes, root, |node| {
         node.left = Val::Px(rect.min.x);
         node.top = Val::Px(rect.min.y);
         node.width = Val::Px(rect.width());
         node.height = Val::Px(rect.height());
         node.display = Display::Flex;
-    }
+    });
 
     // Before egui measures the strip the rect is zero-sized, and the lanes-to-width clamp becomes
     // `clamp(150, 0)`, which panics.
@@ -555,7 +570,7 @@ pub fn lay_out_the_timeline(
     let inside = |x: f32| (x - rect.min.x).clamp(lanes, rect.width());
 
     if let Some(extent) = pools.extent {
-        if let Ok(mut node) = nodes.get_mut(extent) {
+        place(&mut nodes, extent, |node| {
             let from = inside(view.x_of(0.0));
             let to = inside(view.x_of(length));
             node.display = if to > from { Display::Flex } else { Display::None };
@@ -563,7 +578,7 @@ pub fn lay_out_the_timeline(
             node.top = Val::Px(RULER_HEIGHT);
             node.width = Val::Px((to - from).max(0.0));
             node.height = Val::Px((rect.height() - RULER_HEIGHT).max(0.0));
-        }
+        });
     }
 
     for (piece, top, height) in [
@@ -571,13 +586,13 @@ pub fn lay_out_the_timeline(
         (pools.ruler_edge, RULER_HEIGHT - 1.0, 1.0),
     ] {
         let Some(piece) = piece else { continue };
-        if let Ok(mut node) = nodes.get_mut(piece) {
+        place(&mut nodes, piece, |node| {
             node.display = Display::Flex;
             node.left = Val::Px(0.0);
             node.top = Val::Px(top);
             node.width = Val::Px(rect.width());
             node.height = Val::Px(height);
-        }
+        });
     }
 
     // Laid out from the view, so zooming allocates nothing. Drawn at minor divisions, labelled every
@@ -596,20 +611,20 @@ pub fn lay_out_the_timeline(
 
         if x > rect.max.x || x < view.lanes_left() {
             for entity in [line, tick, label] {
-                if let Ok(mut node) = nodes.get_mut(entity) {
+                place(&mut nodes, entity, |node| {
                     node.display = Display::None;
-                }
+                });
             }
             continue;
         }
 
-        if let Ok(mut node) = nodes.get_mut(line) {
+        place(&mut nodes, line, |node| {
             node.display = Display::Flex;
             node.left = Val::Px(x - rect.min.x);
             node.top = Val::Px(RULER_HEIGHT);
             node.width = Val::Px(1.0);
             node.height = Val::Px((rect.height() - RULER_HEIGHT).max(0.0));
-        }
+        });
         if let Ok(mut colour) = colours.get_mut(line) {
             let wanted = if major { paint::MAJOR } else { paint::MINOR };
             if colour.0 != wanted {
@@ -617,24 +632,25 @@ pub fn lay_out_the_timeline(
             }
         }
 
-        if let Ok(mut node) = nodes.get_mut(tick) {
+        place(&mut nodes, tick, |node| {
             node.display = if major { Display::Flex } else { Display::None };
             node.left = Val::Px(x - rect.min.x);
             node.top = Val::Px(RULER_HEIGHT - 6.0);
             node.width = Val::Px(1.0);
             node.height = Val::Px(5.0);
-        }
-        if let Ok(mut node) = nodes.get_mut(label) {
+        });
+        place(&mut nodes, label, |node| {
             node.display = if major { Display::Flex } else { Display::None };
             node.left = Val::Px(x - rect.min.x + 3.0);
             node.top = Val::Px(2.0);
-        }
+        });
         if major {
             if let Ok(mut text) = texts.get_mut(label) {
-                // Written only when it changes: a `Text` write re-lays out the node.
-                let wanted = format_time(time, step);
-                if text.0 != wanted {
-                    text.0 = wanted;
+                // Written only when it changes: a `Text` write re-lays out the
+                // node. Formatted into a kept buffer, so no allocation either.
+                write_time(&mut label_text, time, step);
+                if text.0 != *label_text {
+                    text.0.clone_from(&label_text);
                 }
             }
         }
@@ -645,7 +661,7 @@ pub fn lay_out_the_timeline(
         .and_then(|anim| anim.track)
         .filter(|track| *track < tracks);
     if let Some(header) = pools.picked_row {
-        if let Ok(mut node) = nodes.get_mut(header) {
+        place(&mut nodes, header, |node| {
             match picked_track {
                 Some(track) => {
                     node.display = Display::Flex;
@@ -656,15 +672,15 @@ pub fn lay_out_the_timeline(
                 }
                 None => node.display = Display::None,
             }
-        }
+        });
     }
     let mut key_slot = 0;
     for slot in 0..pools.rows.len() {
         let stripe = pools.rows[slot];
         let Some(track) = clip.and_then(|clip| clip.tracks.get(slot)) else {
-            if let Ok(mut node) = nodes.get_mut(stripe) {
+            place(&mut nodes, stripe, |node| {
                 node.display = Display::None;
-            }
+            });
             continue;
         };
 
@@ -679,7 +695,7 @@ pub fn lay_out_the_timeline(
                 colour.0 = wanted;
             }
         }
-        if let Ok(mut node) = nodes.get_mut(stripe) {
+        place(&mut nodes, stripe, |node| {
             // Every other row, and the picked one.
             node.display = if slot % 2 == 1 || picked { Display::Flex } else { Display::None };
             node.position_type = PositionType::Absolute;
@@ -687,8 +703,8 @@ pub fn lay_out_the_timeline(
             node.top = Val::Px(top);
             node.width = Val::Px(rect.width());
             node.height = Val::Px(ROW_HEIGHT);
-        }
-        for (index, at) in track.channel.key_times().into_iter().enumerate() {
+        });
+        for (index, at) in track.channel.keys().iter().map(|key| key.at).enumerate() {
             let Some(key) = pools.keys.get(key_slot).copied() else {
                 break;
             };
@@ -722,7 +738,7 @@ pub fn lay_out_the_timeline(
                 }
             }
 
-            if let Ok(mut node) = nodes.get_mut(key) {
+            place(&mut nodes, key, |node| {
                 // Hidden before the names column, which also keeps it out of the pointer's way.
                 let on = x >= view.lanes_left() && x <= rect.max.x;
                 node.display = if on { Display::Flex } else { Display::None };
@@ -733,14 +749,14 @@ pub fn lay_out_the_timeline(
                 node.height = Val::Px(KEY_SIZE);
                 node.border = UiRect::all(Val::Px(1.0));
                 node.border_radius = BorderRadius::all(Val::Percent(50.0));
-            }
+            });
         }
     }
 
     for slot in key_slot..pools.keys.len() {
-        if let Ok(mut node) = nodes.get_mut(pools.keys[slot]) {
+        place(&mut nodes, pools.keys[slot], |node| {
             node.display = Display::None;
-        }
+        });
     }
 
     if let Some(band) = pools.band {
@@ -748,7 +764,7 @@ pub fn lay_out_the_timeline(
             Some(Grab::Band { from, to }) => Some(Rect::from_corners(*from, *to)),
             _ => None,
         };
-        if let Ok(mut node) = nodes.get_mut(band) {
+        place(&mut nodes, band, |node| {
             match pulling {
                 Some(box_rect) => {
                     node.display = Display::Flex;
@@ -760,7 +776,7 @@ pub fn lay_out_the_timeline(
                 }
                 None => node.display = Display::None,
             }
-        }
+        });
     }
 
     // Last of the grounds, so anything scrolled left goes behind it.
@@ -769,40 +785,40 @@ pub fn lay_out_the_timeline(
         (pools.names_edge, lanes - 1.0, 1.0),
     ] {
         let Some(piece) = piece else { continue };
-        if let Ok(mut node) = nodes.get_mut(piece) {
+        place(&mut nodes, piece, |node| {
             node.display = Display::Flex;
             node.left = Val::Px(left);
             node.top = Val::Px(0.0);
             node.width = Val::Px(width.max(0.0));
             node.height = Val::Px(rect.height());
-        }
+        });
     }
 
     let x = view.x_of(cursor.time);
     let on = x >= view.lanes_left() && x <= rect.max.x;
     if let (Some(line), Some(head), Some(grab)) = (pools.playhead, pools.head, pools.grab) {
-        if let Ok(mut node) = nodes.get_mut(line) {
+        place(&mut nodes, line, |node| {
             node.display = if on { Display::Flex } else { Display::None };
             node.position_type = PositionType::Absolute;
             node.left = Val::Px(x - rect.min.x);
             node.top = Val::Px(0.0);
             node.width = Val::Px(PLAYHEAD_WIDTH);
             node.height = Val::Px(rect.height());
-        }
-        if let Ok(mut node) = nodes.get_mut(head) {
+        });
+        place(&mut nodes, head, |node| {
             node.display = if on { Display::Flex } else { Display::None };
             node.position_type = PositionType::Absolute;
             node.left = Val::Px(x - rect.min.x - HEAD_SIZE / 2.0);
             node.top = Val::Px(0.0);
-        }
-        if let Ok(mut node) = nodes.get_mut(grab) {
+        });
+        place(&mut nodes, grab, |node| {
             node.display = if on { Display::Flex } else { Display::None };
             node.position_type = PositionType::Absolute;
             node.left = Val::Px(x - rect.min.x - GRAB_WIDTH / 2.0);
             node.top = Val::Px(0.0);
             node.width = Val::Px(GRAB_WIDTH);
             node.height = Val::Px(rect.height());
-        }
+        });
     }
 }
 
@@ -824,6 +840,14 @@ pub fn track_name(track: &crate::common::skeleton::clip::Track) -> String {
 
 /// Decimals derived from the step, since the ruler is read at seconds and milliseconds.
 pub fn format_time(time: f32, step: f32) -> String {
+    let mut out = String::new();
+    write_time(&mut out, time, step);
+    out
+}
+
+/// [`format_time`] into a buffer that already exists, replacing what was in it.
+fn write_time(out: &mut String, time: f32, step: f32) {
+    use std::fmt::Write;
     let decimals = if step >= 1.0 {
         0
     } else if step >= 0.1 {
@@ -835,7 +859,9 @@ pub fn format_time(time: f32, step: f32) -> String {
     };
     // `-0.0` prints with a sign.
     let time = if time == 0.0 { 0.0 } else { time };
-    format!("{time:.decimals$}")
+    out.clear();
+    // Writing to a `String` cannot fail.
+    let _ = write!(out, "{time:.decimals$}");
 }
 
 #[cfg(test)]
@@ -1009,6 +1035,58 @@ mod tests {
         for key in &after {
             assert!(world.get_entity(*key).is_ok(), "a pooled node was despawned");
         }
+    }
+
+    /// A strip with nothing moving leaves every node it placed unchanged.
+    ///
+    /// A `Node` written is a `Node` changed even when the value is the same,
+    /// and a changed `Node` is the whole strip laid out again — every frame,
+    /// with the clip paused and nobody touching it. A persistent `Schedule`
+    /// rather than `run_system_once`, so the system is the same one each time
+    /// and its `Local`s and change ticks carry over the way they do in a frame.
+    #[test]
+    fn an_idle_strip_changes_no_node() {
+        let mut world = with_a_ui_camera();
+        world.insert_resource(view());
+        world.insert_resource(TimelineCursor { time: 0.25, playing: false });
+        world.insert_resource(ShownClip(Some(a_clip())));
+        world.init_resource::<TimelinePools>();
+        world.run_system_once(spawn_the_strip).unwrap();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(lay_out_the_timeline);
+        // Twice to settle: the first pass reserves the pools through
+        // `Commands`, the second places them.
+        schedule.run(&mut world);
+        schedule.run(&mut world);
+
+        let ticks = |world: &mut World| {
+            let nodes: Vec<_> = world
+                .query::<(Entity, Ref<Node>)>()
+                .iter(world)
+                .map(|(entity, node)| (entity, node.last_changed()))
+                .collect();
+            let texts: Vec<_> = world
+                .query::<(Entity, Ref<Text>)>()
+                .iter(world)
+                .map(|(entity, text)| (entity, text.last_changed()))
+                .collect();
+            (nodes, texts)
+        };
+        let before = ticks(&mut world);
+        assert!(before.0.len() > MAX_GRID, "the pools were never filled");
+
+        schedule.run(&mut world);
+        let after = ticks(&mut world);
+
+        let moved = before
+            .0
+            .iter()
+            .zip(&after.0)
+            .filter(|(was, now)| was != now)
+            .count();
+        assert_eq!(moved, 0, "{moved} nodes were marked changed with nothing moving");
+        assert_eq!(before.1, after.1, "a ruler label was rewritten with nothing moving");
     }
 
     fn view() -> TimelineView {

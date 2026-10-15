@@ -189,41 +189,90 @@ impl Skeleton {
     }
 
     /// Forward kinematics into world space. `root` places the feet, the same
-    /// end a `SpawnPoint` marks.
+    /// end a `SpawnPoint` marks. For one or two bones use
+    /// [`Skeleton::posed_bone`]; to visit them without a list,
+    /// [`Skeleton::each_posed_bone`].
     pub fn posed_bones(&self, pose: &Pose, root: &Transform) -> Vec<PosedBone> {
-        let root = {
-            let mut root = *root;
-            // Hip-heights, in the root's frame so it turns with the body.
-            root.translation += root.rotation * (pose.root_offset * self.proportions.hip_metres());
-            root
-        };
-
-        let mut globals: Vec<Transform> = Vec::with_capacity(self.bones.len());
-        let mut posed: Vec<PosedBone> = Vec::with_capacity(self.bones.len());
-
-        for bone in &self.bones {
-            let local = Transform {
-                translation: bone.head,
-                rotation: bone.rest * pose.joint(bone.name),
-                scale: Vec3::ONE,
-            };
-            let global = match bone.parent {
-                Some(parent) => globals[parent].mul_transform(local),
-                None => root.mul_transform(local),
-            };
-
-            posed.push(PosedBone {
-                name: bone.name,
-                head: global.translation,
-                tail: global.translation + global.rotation * (Vec3::Y * bone.length),
-                rotation: global.rotation,
-                length: bone.length,
-                thickness: bone.thickness,
-            });
-            globals.push(global);
-        }
-
+        let mut posed = Vec::with_capacity(self.bones.len());
+        self.each_posed_bone(pose, root, |bone| posed.push(bone));
         posed
+    }
+
+    /// Every bone placed, handed over one at a time, parents first — the same
+    /// values [`Skeleton::posed_bones`] collects, without the list.
+    ///
+    /// The parents' frames are kept on the stack for any rig that fits, which
+    /// every rig built here does. This is what `posed_bones` is written on,
+    /// so the two cannot disagree.
+    pub fn each_posed_bone(&self, pose: &Pose, root: &Transform, mut visit: impl FnMut(PosedBone)) {
+        let root = self.offset_root(pose, root);
+        let mut globals = Scratch::<Transform, BONES_ON_THE_STACK>::new(self.bones.len(), Transform::IDENTITY);
+
+        for (index, bone) in self.bones.iter().enumerate() {
+            let parent = match bone.parent {
+                Some(parent) => globals[parent],
+                None => root,
+            };
+            let global = parent.mul_transform(self.local(pose, bone));
+            visit(Self::place(bone, &global));
+            globals[index] = global;
+        }
+    }
+
+    /// One bone placed, exactly as it comes out of [`Skeleton::posed_bones`]
+    /// at the same index.
+    ///
+    /// Walks that bone's own ancestors and nothing else, so reading a hand or
+    /// a head costs four or five transforms rather than the whole rig. The
+    /// products are taken root-first, in the same order the full pass takes
+    /// them, which is what makes the answer identical rather than merely
+    /// close: floating-point multiplication does not reassociate.
+    ///
+    /// Panics on an index the rig does not have, as indexing the list would.
+    pub fn posed_bone(&self, pose: &Pose, root: &Transform, index: usize) -> PosedBone {
+        let root = self.offset_root(pose, root);
+        Self::place(&self.bones[index], &self.global(pose, &root, index))
+    }
+
+    /// A bone's world frame, recursing to the root first so the products are
+    /// taken in the order [`Skeleton::each_posed_bone`] takes them. Bounded
+    /// by the rig's depth, which is a handful.
+    fn global(&self, pose: &Pose, root: &Transform, index: usize) -> Transform {
+        let bone = &self.bones[index];
+        let parent = match bone.parent {
+            Some(parent) => self.global(pose, root, parent),
+            None => *root,
+        };
+        parent.mul_transform(self.local(pose, bone))
+    }
+
+    /// The root the bones hang from, moved by the pose's root offset.
+    fn offset_root(&self, pose: &Pose, root: &Transform) -> Transform {
+        let mut root = *root;
+        // The offset is in hip-heights, so a crouch authored on one body is
+        // the same crouch on a taller one. Applied in the root's own frame so
+        // it turns with the body.
+        root.translation += root.rotation * (pose.root_offset * self.proportions.hip_metres());
+        root
+    }
+
+    fn local(&self, pose: &Pose, bone: &Bone) -> Transform {
+        Transform {
+            translation: bone.head,
+            rotation: bone.rest * pose.joint(bone.name),
+            scale: Vec3::ONE,
+        }
+    }
+
+    fn place(bone: &Bone, global: &Transform) -> PosedBone {
+        PosedBone {
+            name: bone.name,
+            head: global.translation,
+            tail: global.translation + global.rotation * (Vec3::Y * bone.length),
+            rotation: global.rotation,
+            length: bone.length,
+            thickness: bone.thickness,
+        }
     }
 }
 
@@ -234,6 +283,50 @@ const ANKLE_HEIGHT: f32 = 0.04;
 pub fn default_humanoid() -> &'static Skeleton {
     static RIG: OnceLock<Skeleton> = OnceLock::new();
     RIG.get_or_init(|| humanoid(Proportions::DEFAULT))
+}
+
+/// Bones a per-body working list keeps on the stack. Every rig built here
+/// fits; one that does not spills to the heap rather than failing.
+pub(crate) const BONES_ON_THE_STACK: usize = 32;
+
+/// A working list as long as a rig, on the stack for any rig that fits and on
+/// the heap for one that does not.
+///
+/// Forward kinematics wants each parent's frame, and the ragdoll solver wants
+/// a few lists per tick — where each point started, which are touching a
+/// wall, each bone's frame. As `Vec`s those were allocations per body per
+/// frame, and a rocket into a crowd is dozens of bodies at once. One type for
+/// all of them, so the allowance and the fallback are said once.
+pub(crate) struct Scratch<T, const N: usize> {
+    inline: [T; N],
+    spilled: Vec<T>,
+    len: usize,
+}
+
+impl<T: Copy, const N: usize> Scratch<T, N> {
+    pub(crate) fn new(len: usize, fill: T) -> Self {
+        Scratch {
+            inline: [fill; N],
+            // `Vec::new` does not allocate, so a rig that fits pays nothing
+            // for the fallback.
+            spilled: if len > N { vec![fill; len] } else { Vec::new() },
+            len,
+        }
+    }
+}
+
+impl<T, const N: usize> std::ops::Deref for Scratch<T, N> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        if self.len <= N { &self.inline[..self.len] } else { &self.spilled }
+    }
+}
+
+impl<T, const N: usize> std::ops::DerefMut for Scratch<T, N> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        if self.len <= N { &mut self.inline[..self.len] } else { &mut self.spilled }
+    }
 }
 
 /// A bone after forward kinematics, in world space.
@@ -282,19 +375,32 @@ impl Pose {
         self.joints.insert(name, rotation);
     }
 
+    /// Back to [`Pose::rest`], keeping the joints' storage for reuse.
+    pub fn reset_to_rest(&mut self) {
+        self.root_offset = Vec3::ZERO;
+        self.joints.clear();
+    }
+
     /// A joint only one side names blends towards rest. Slerp takes the short
     /// way, since a long way round bends a knee backwards in transit.
     pub fn lerp(from: &Pose, to: &Pose, t: f32) -> Pose {
         let t = t.clamp(0.0, 1.0);
         let mut blended = Pose {
             root_offset: from.root_offset.lerp(to.root_offset, t),
-            joints: HashMap::default(),
+            joints: HashMap::with_capacity(from.joints.len().max(to.joints.len())),
         };
 
-        for name in from.joints.keys().chain(to.joints.keys()) {
+        // Each joint once: a joint both sides name is blended on the first
+        // pass and skipped on the second, rather than slerped twice.
+        for name in from.joints.keys() {
             blended
                 .joints
                 .insert(*name, from.joint(name).slerp(to.joint(name), t));
+        }
+        for name in to.joints.keys().filter(|name| !from.joints.contains_key(*name)) {
+            blended
+                .joints
+                .insert(*name, Quat::IDENTITY.slerp(to.joint(name), t));
         }
 
         blended
@@ -661,5 +767,54 @@ mod tests {
         let hand = placed[bone::HAND_R].tail - feet;
         let unturned = bones[bone::HAND_R].tail;
         assert!((hand - Quat::from_rotation_y(yaw) * unturned).length() < 1e-4);
+    }
+
+    /// Reading one bone is the full pass's answer for that bone, to the bit.
+    /// Hitboxes, IK and the hold all read single bones now, so "close" would
+    /// be a body whose head box or planted foot depends on which function
+    /// asked. Every bone, every build, through poses that bend every joint,
+    /// with roots that move, turn, scale and carry a root offset.
+    #[test]
+    fn one_bone_is_placed_exactly_as_the_whole_rig_places_it() {
+        let bent = |seed: f32| {
+            let mut pose = Pose::rest();
+            for (n, bone) in humanoid(Proportions::DEFAULT).bones().iter().enumerate() {
+                let k = seed + n as f32 * 0.37;
+                pose.set(bone.name, Quat::from_euler(EulerRot::YXZ, k.sin() * 0.6, (k * 1.3).cos() * 0.8, (k * 0.7).sin() * 0.4));
+            }
+            pose.root_offset = Vec3::new(0.05 * seed.sin(), -0.3 * seed.cos().abs(), 0.1);
+            pose
+        };
+        let poses = [Pose::rest(), bent(0.5), bent(1.9), bent(-3.2)];
+        let roots = [
+            Transform::IDENTITY,
+            Transform::from_xyz(3.0, -1.5, 7.25).with_rotation(Quat::from_rotation_y(2.1)),
+            Transform::from_xyz(-0.4, 0.2, 1.0)
+                .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.3, -1.2, 0.8))
+                .with_scale(Vec3::new(1.1, 0.9, 1.3)),
+        ];
+
+        for proportions in [Proportions::DEFAULT, Proportions::STOCKY, Proportions::LANKY] {
+            let skeleton = humanoid(proportions);
+            for pose in &poses {
+                for root in &roots {
+                    let all = skeleton.posed_bones(pose, root);
+                    let mut visited = 0;
+                    skeleton.each_posed_bone(pose, root, |posed| {
+                        assert_eq!(posed.tail, all[visited].tail);
+                        visited += 1;
+                    });
+                    assert_eq!(visited, all.len());
+
+                    for (index, whole) in all.iter().enumerate() {
+                        let one = skeleton.posed_bone(pose, root, index);
+                        assert_eq!(one.name, whole.name);
+                        assert_eq!(one.head, whole.head, "{} head", whole.name);
+                        assert_eq!(one.tail, whole.tail, "{} tail", whole.name);
+                        assert_eq!(one.rotation, whole.rotation, "{} rotation", whole.name);
+                    }
+                }
+            }
+        }
     }
 }

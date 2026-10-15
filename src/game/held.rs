@@ -10,10 +10,10 @@ use bevy::prelude::*;
 
 use crate::common::assets::Assets as PackAssets;
 use crate::common::class::Class;
-use std::sync::Arc;
+use std::collections::BTreeMap;
 
-use crate::common::skeleton::clip::ClipSet;
-use crate::common::skeleton::play::{apply_stack, ClipStack, Frames, Playing};
+use crate::common::skeleton::clip::Clip;
+use crate::common::skeleton::play::{apply_stack, ClipAssetsPlugin, ClipStack, Frames, Playing};
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::weapon::{Equipped, WeaponCatalogue, WeaponId};
 use crate::game::body_mesh::FirstPersonHidden;
@@ -54,7 +54,8 @@ pub struct HeldModel {
     /// Copied off the model so the pose layer never needs the prop cache.
     hold: HoldSpec,
     viewmodel: ViewmodelSpec,
-    clips: Arc<ClipSet>,
+    /// Handles off the bake, so a save refilled under them is what plays.
+    clips: BTreeMap<String, Handle<Clip>>,
 }
 
 /// What a body's weapon is in the middle of doing. A clip name rather than a
@@ -92,7 +93,8 @@ pub struct HeldWeaponPlugin;
 
 impl Plugin for HeldWeaponPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PropCache>()
+        app.add_plugins(ClipAssetsPlugin)
+            .init_resource::<PropCache>()
             .init_resource::<SurfaceMaterials>()
             .add_systems(Update, dress_held_weapons)
             // Before propagation, with the bone meshes, or a held part is drawn
@@ -138,6 +140,7 @@ fn dress_held_weapons(
     mut surfaces: ResMut<SurfaceMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut clip_assets: ResMut<Assets<Clip>>,
     view: Res<ViewMode>,
     bodies: Query<
         (Entity, &Equipped, Option<&Class>, Option<&LocalPlayer>, Option<&HeldModel>),
@@ -161,24 +164,24 @@ fn dress_held_weapons(
                 if drawn.is_none_or(|drawn| drawn.weapon != held) {
                     replace_parts(
                         &mut commands, body, drawn, vec![], held, false, HoldSpec::default(),
-                        ViewmodelSpec::default(), Arc::default(), cache.generation(),
+                        ViewmodelSpec::default(), BTreeMap::new(), cache.generation(),
                     );
                 }
             }
             Wanted::Nothing => {
                 replace_parts(
                     &mut commands, body, drawn, vec![], held, true, HoldSpec::default(),
-                    ViewmodelSpec::default(), Arc::default(), cache.generation(),
+                    ViewmodelSpec::default(), BTreeMap::new(), cache.generation(),
                 )
             }
             Wanted::Model(model) => {
                 let mut spawned = Vec::new();
                 let mut hold = HoldSpec::default();
                 let mut viewmodel = ViewmodelSpec::default();
-                let mut clips = Arc::<ClipSet>::default();
-                if let Some(baked) =
-                    cache.ensure(model, &packs, &mut meshes, &mut materials, &mut surfaces)
-                {
+                let mut clips = BTreeMap::new();
+                if let Some(baked) = cache.ensure(
+                    model, &packs, &mut meshes, &mut materials, &mut surfaces, &mut clip_assets,
+                ) {
                     let parts = baked.parts.clone();
                     hold = baked.hold.for_class(class.copied());
                     viewmodel = baked.viewmodel;
@@ -227,7 +230,7 @@ fn replace_parts(
     resolved: bool,
     hold: HoldSpec,
     viewmodel: ViewmodelSpec,
-    clips: Arc<ClipSet>,
+    clips: BTreeMap<String, Handle<Clip>>,
     cached_at: u64,
 ) {
     if let Some(drawn) = drawn {
@@ -284,6 +287,7 @@ pub(crate) fn place_the_weapon(
 /// Not simulation: nothing here is predicted, replicated or reconciled.
 pub(crate) fn perform_weapon_clips(
     time: Res<Time>,
+    clips: Res<Assets<Clip>>,
     mut bodies: Query<(&HeldModel, &mut Performance, &mut ClipStack)>,
 ) {
     let delta = time.delta_secs();
@@ -299,27 +303,45 @@ pub(crate) fn perform_weapon_clips(
                 .map(|_| (DEPLOY.to_string(), 0.0));
         }
 
-        stack.0.clear();
         let Some((name, elapsed)) = performance.playing.as_mut() else {
+            stop(&mut stack);
             continue;
         };
         *elapsed += delta;
 
-        // Looked up every frame, so a model saved mid-round plays a frame later.
-        let Some(clip) = held.clips.get(name) else {
+        // Name and handle resolved every frame: a save mid-round is refilled
+        // under the same handle, and a re-bake without this clip ends it.
+        let found = held
+            .clips
+            .get(name.as_str())
+            .and_then(|handle| Some((handle, clips.get(handle)?)));
+        let Some((handle, clip)) = found else {
             performance.playing = None;
+            stop(&mut stack);
             continue;
         };
         if !clip.looping && *elapsed > clip.length {
             performance.playing = None;
+            stop(&mut stack);
             continue;
         }
 
-        stack.0.push(Playing {
-            clip: Arc::new(clip.clone()),
-            time: *elapsed,
-            weight: 1.0,
-        });
+        let elapsed = *elapsed;
+        match stack.0.as_mut_slice() {
+            // The common case: the same clip, a little further on.
+            [playing] if playing.clip == *handle => playing.time = elapsed,
+            _ => {
+                stack.0.clear();
+                stack.0.push(Playing { clip: handle.clone(), time: elapsed, weight: 1.0 });
+            }
+        }
+    }
+}
+
+/// Take everything off a stack, without marking an empty one changed.
+fn stop(stack: &mut Mut<ClipStack>) {
+    if !stack.0.is_empty() {
+        stack.0.clear();
     }
 }
 
@@ -342,6 +364,7 @@ pub(crate) fn play_the_clips(
         &ClipStack,
         Option<&mut WeaponInHand>,
     )>,
+    clips: Res<Assets<Clip>>,
     world: Option<Res<CollisionWorld>>,
 ) {
     for (player, skeleton, mut pose, offset, stack, weapon) in &mut bodies {
@@ -380,7 +403,7 @@ pub(crate) fn play_the_clips(
         };
 
         let mut moving = placed.unwrap_or_default();
-        apply_stack(stack, skeleton, &mut pose, &frames, Some(&mut moving));
+        apply_stack(stack, &clips, skeleton, &mut pose, &frames, Some(&mut moving));
         if let Some(weapon) = weapon.as_deref_mut() {
             weapon.0 = moving;
         }
@@ -483,6 +506,7 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(Assets::<Mesh>::default());
         world.insert_resource(Assets::<StandardMaterial>::default());
+        world.insert_resource(Assets::<Clip>::default());
         world.init_resource::<PropCache>();
         world.init_resource::<SurfaceMaterials>();
         world.init_resource::<PackAssets>();
@@ -528,6 +552,7 @@ mod tests {
 
     fn body_holding(world: &mut World, class: Class, pitch: f32) -> Entity {
         let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
+        world.init_resource::<Assets<Clip>>();
         world
             .spawn((
                 skeleton,
@@ -539,7 +564,7 @@ mod tests {
                     parts: vec![],
                     hold: HoldSpec::default(),
                     viewmodel: ViewmodelSpec::default(),
-                    clips: Arc::default(),
+                    clips: BTreeMap::new(),
                     cached_at: 0,
                 },
                 WeaponInHand::default(),
@@ -578,16 +603,15 @@ mod tests {
     /// never ended leaves the weapon halfway up for the rest of the match.
     #[test]
     fn bringing_out_a_weapon_deploys_it_once() {
-        use crate::common::skeleton::clip::{Clip, ClipSet};
         use std::time::Duration;
 
-        let mut clips = ClipSet::default();
-        clips.clips.insert(
-            DEPLOY.into(),
-            Clip { length: 0.4, ..Clip::default() },
-        );
-
         let mut world = World::new();
+        let mut assets = Assets::<Clip>::default();
+        let clips = BTreeMap::from([(
+            DEPLOY.to_string(),
+            assets.add(Clip { length: 0.4, ..Clip::default() }),
+        )]);
+        world.insert_resource(assets);
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_secs_f32(0.1));
         world.insert_resource(time);
@@ -600,7 +624,7 @@ mod tests {
                     parts: vec![],
                     hold: HoldSpec::default(),
                     viewmodel: ViewmodelSpec::default(),
-                    clips: Arc::new(clips),
+                    clips,
                     cached_at: 0,
                 },
                 Performance::default(),
@@ -625,6 +649,70 @@ mod tests {
         );
     }
 
+    /// Fails if a save mid-deploy does not reach the deploy already playing,
+    /// through the handle the body already holds.
+    #[test]
+    fn a_mid_round_save_reaches_a_deploy_already_playing() {
+        use crate::prop::document::PropDoc;
+        use std::time::Duration;
+
+        let saved = |length: f32| {
+            let mut doc = PropDoc::new("prop.untitled");
+            doc.animations
+                .clips
+                .insert(DEPLOY.into(), Clip { length, ..Clip::default() });
+            doc
+        };
+
+        let mut cache = PropCache::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut surfaces = SurfaceMaterials::default();
+        let mut assets = Assets::<Clip>::default();
+        cache.adopt("launcher", &saved(0.5), &mut meshes, &mut materials, &mut surfaces, &mut assets);
+        let clips = cache.get("launcher").unwrap().clips.clone();
+
+        let mut world = World::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs_f32(0.1));
+        world.insert_resource(time);
+        world.insert_resource(assets);
+        let body = world
+            .spawn((
+                HeldModel {
+                    weapon: Some(WeaponId::of("launcher")),
+                    resolved: true,
+                    parts: vec![],
+                    hold: HoldSpec::default(),
+                    viewmodel: ViewmodelSpec::default(),
+                    clips,
+                    cached_at: 0,
+                },
+                Performance::default(),
+                ClipStack::default(),
+            ))
+            .id();
+
+        world.run_system_once(perform_weapon_clips).unwrap();
+        let playing = world.get::<ClipStack>(body).unwrap().0[0].clip.clone();
+
+        // Saved again, longer — and re-adopted under the same name.
+        {
+            let mut assets = world.resource_mut::<Assets<Clip>>();
+            cache.adopt("launcher", &saved(3.0), &mut meshes, &mut materials, &mut surfaces, &mut assets);
+        }
+        assert_eq!(cache.get("launcher").unwrap().clips[DEPLOY], playing, "the save minted a new handle");
+
+        // Past the old length and still running: the new clip, same handle.
+        for _ in 0..8 {
+            world.run_system_once(perform_weapon_clips).unwrap();
+        }
+        let stack = world.get::<ClipStack>(body).unwrap();
+        assert_eq!(stack.0.len(), 1, "the deploy ended at the length it was saved with first");
+        assert_eq!(stack.0[0].clip, playing);
+        assert_eq!(world.resource::<Assets<Clip>>().get(&playing).unwrap().length, 3.0);
+    }
+
     /// A clip moves the weapon between placing and gripping, and the hands
     /// follow without any hand keys.
     #[test]
@@ -632,7 +720,6 @@ mod tests {
         use crate::common::skeleton::clip::{Axis, Channel, Clip, Combine, Key, Space, Track, Unit};
         use crate::common::skeleton::play::{ClipStack, Playing};
         use crate::common::skeleton::Interpolation;
-        use std::sync::Arc;
 
         let wrist = |world: &World, body: Entity| {
             let skeleton = world.get::<Skeleton>(body).unwrap().clone();
@@ -669,8 +756,9 @@ mod tests {
             }],
             ..Clip::default()
         };
+        let clip = world.resource_mut::<Assets<Clip>>().add(clip);
         world.entity_mut(moved).insert(ClipStack(vec![Playing {
-            clip: Arc::new(clip),
+            clip,
             time: 0.0,
             weight: 1.0,
         }]));
@@ -734,7 +822,7 @@ mod tests {
             HeldModel {
                 weapon: None, resolved: true, parts: vec![part],
                 hold: HoldSpec::default(), viewmodel: ViewmodelSpec::default(),
-                clips: Arc::default(), cached_at: 0,
+                clips: BTreeMap::new(), cached_at: 0,
             },
             WeaponInHand(decided),
         ));

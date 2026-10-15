@@ -44,6 +44,12 @@ struct RotateDragRing {
     axis: u8,
 }
 
+/// A ring's mesh, carrying its axis so picking and highlighting are one lookup.
+#[derive(Component)]
+struct RotateDragRingPart {
+    axis: u8,
+}
+
 /// Frozen at the grab. Recomputing the plane from the current rotation would
 /// move it as the object turned, and the drag would run away from the cursor.
 struct RingGrab {
@@ -165,6 +171,7 @@ impl RotateDragState {
             )).id();
 
             let mesh_entity = commands.spawn((
+                RotateDragRingPart { axis },
                 Mesh3d(ring.clone()),
                 MeshMaterial3d(mat),
                 Transform::IDENTITY,
@@ -196,8 +203,7 @@ impl RotateDragState {
     }
 
     fn handle_ring_drag(
-        rings: Query<(Entity, &RotateDragRing, &Children)>,
-        child_meshes: Query<Entity, With<Mesh3d>>,
+        mut parts: Query<(&RotateDragRingPart, &mut MeshMaterial3d<StandardMaterial>)>,
         mut ray_cast: MeshRayCast,
         mouse_input: Res<CurrentMouseInput>,
         point_drag: Res<PointDragState>,
@@ -217,7 +223,7 @@ impl RotateDragState {
             if state.grab.is_some() {
                 state.grab = None;
             }
-            Self::restore_all_materials(&rings, &mut commands, &state);
+            Self::paint(&mut parts, None, &state);
             return;
         }
 
@@ -258,31 +264,21 @@ impl RotateDragState {
         // The rings are within reach of the arrows, so an arrow drag must not
         // grab a ring.
         if point_drag.is_dragging() {
-            Self::restore_all_materials(&rings, &mut commands, &state);
+            Self::paint(&mut parts, None, &state);
             return;
         }
 
-        let ring_meshes: Vec<Entity> = rings
-            .iter()
-            .flat_map(|(_, _, children)| children.iter())
-            .filter(|e| child_meshes.get(*e).is_ok())
-            .collect();
-        let filter = |entity: Entity| ring_meshes.contains(&entity);
-        let settings = MeshRayCastSettings::default().with_filter(&filter);
-
-        let hit_axis = ray_cast.cast_ray(ray, &settings).first().and_then(|(hit, _)| {
-            rings
-                .iter()
-                .find(|(_, _, children)| children.iter().any(|c| c == *hit))
-                .map(|(_, ring, _)| ring.axis)
-        });
-
-        let Some(axis) = hit_axis else {
-            Self::restore_all_materials(&rings, &mut commands, &state);
-            return;
+        let hit_axis = {
+            let filter = |entity: Entity| parts.contains(entity);
+            let settings = MeshRayCastSettings::default().with_filter(&filter);
+            ray_cast.cast_ray(ray, &settings).first()
+                .and_then(|(hit, _)| parts.get(*hit).ok())
+                .map(|(part, _)| part.axis)
         };
 
-        Self::highlight_axis(&rings, axis, &mut commands, &state);
+        Self::paint(&mut parts, hit_axis, &state);
+
+        let Some(axis) = hit_axis else { return; };
 
         if !mouse_just_pressed {
             return;
@@ -308,40 +304,24 @@ impl RotateDragState {
         });
     }
 
-    fn highlight_axis(
-        rings: &Query<(Entity, &RotateDragRing, &Children)>,
-        axis: u8,
-        commands: &mut Commands,
+    /// Lights the ring on `highlighted` and puts every other one back to its
+    /// own colour, writing a material only when it is not already the one
+    /// wanted — this runs every frame the pointer is over a viewport, and an
+    /// unconditional write re-extracts every ring for rendering for nothing.
+    fn paint(
+        parts: &mut Query<(&RotateDragRingPart, &mut MeshMaterial3d<StandardMaterial>)>,
+        highlighted: Option<u8>,
         state: &RotateDragState,
     ) {
-        for (_, ring, children) in rings.iter() {
-            let mat = if ring.axis == axis {
-                state.highlight_materials[ring.axis as usize].clone()
+        for (part, mut material) in parts.iter_mut() {
+            let set = if highlighted == Some(part.axis) {
+                &state.highlight_materials
             } else {
-                state.materials[ring.axis as usize].clone()
+                &state.materials
             };
-            if let Some(mat) = mat {
-                for child in children.iter() {
-                    commands.entity(child)
-                        .remove::<MeshMaterial3d<StandardMaterial>>()
-                        .insert(MeshMaterial3d(mat.clone()));
-                }
-            }
-        }
-    }
-
-    fn restore_all_materials(
-        rings: &Query<(Entity, &RotateDragRing, &Children)>,
-        commands: &mut Commands,
-        state: &RotateDragState,
-    ) {
-        for (_, ring, children) in rings.iter() {
-            if let Some(mat) = &state.materials[ring.axis as usize] {
-                for child in children.iter() {
-                    commands.entity(child)
-                        .remove::<MeshMaterial3d<StandardMaterial>>()
-                        .insert(MeshMaterial3d(mat.clone()));
-                }
+            let Some(wanted) = &set[part.axis as usize] else { continue; };
+            if material.0 != *wanted {
+                material.0 = wanted.clone();
             }
         }
     }
@@ -403,5 +383,45 @@ mod tests {
         assert!((delta - std::f32::consts::FRAC_PI_2).abs() < 1e-5, "delta was {delta}");
         assert!(quat_from_euler(Vec3::new(0.0, delta, 0.0))
             .abs_diff_eq(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), 1e-5));
+    }
+
+    /// Hovering a ring frame after frame must not keep rewriting the
+    /// materials: a written `MeshMaterial3d` is a changed one, and every
+    /// changed one is re-extracted for rendering.
+    #[test]
+    fn hovering_the_same_ring_again_writes_nothing() {
+        let mut world = World::new();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut state = RotateDragState::default();
+        for i in 0..3 {
+            state.materials[i] = Some(materials.add(StandardMaterial::default()));
+            state.highlight_materials[i] = Some(materials.add(StandardMaterial::default()));
+        }
+        let parts: Vec<Entity> = (0u8..3)
+            .map(|axis| world.spawn((
+                RotateDragRingPart { axis },
+                MeshMaterial3d(state.materials[axis as usize].clone().unwrap()),
+            )).id())
+            .collect();
+        world.insert_resource(state);
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(|
+            mut parts: Query<(&RotateDragRingPart, &mut MeshMaterial3d<StandardMaterial>)>,
+            state: Res<RotateDragState>,
+        | RotateDragState::paint(&mut parts, Some(2), &state));
+
+        schedule.run(&mut world);
+        let lit = world.resource::<RotateDragState>().highlight_materials[2].clone().unwrap();
+        assert_eq!(world.get::<MeshMaterial3d<StandardMaterial>>(parts[2]).unwrap().0, lit);
+
+        let archetypes: Vec<_> = parts.iter().map(|e| world.entity(*e).archetype().id()).collect();
+        world.clear_trackers();
+        schedule.run(&mut world);
+        for (part, archetype) in parts.iter().zip(archetypes) {
+            let entity = world.entity(*part);
+            assert_eq!(entity.archetype().id(), archetype);
+            assert!(!entity.get_ref::<MeshMaterial3d<StandardMaterial>>().unwrap().is_changed());
+        }
     }
 }

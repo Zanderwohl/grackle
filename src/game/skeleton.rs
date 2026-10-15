@@ -123,9 +123,13 @@ impl Plugin for GameTimePlugin {
             .init_resource::<AnimationClock>()
             // On the tick: every viewer of a body has to agree on the clock.
             .add_systems(FixedUpdate, (
-                advance_animation_clock,
-                // After the step, since it advances on the ground the step covered.
-                advance_gaits.after(step_player),
+                // Not on replayed ticks: nothing rolls the clock or a stride
+                // back, so a replay would advance them twice.
+                (
+                    advance_animation_clock,
+                    // After the step, since it advances on the ground the step covered.
+                    advance_gaits.after(step_player),
+                ).run_if(not(lightyear::prelude::is_in_rollback)),
                 follow_stance.after(step_player),
             ).run_if(in_state(AppMode::Play)))
         ;
@@ -236,16 +240,21 @@ fn describe_player_bodies(
     mut players: Query<(&Player, &Stance, &Inputs, &mut BodyRequests)>,
 ) {
     for (player, stance, input, mut requests) in &mut players {
-        requests.running_forward = input.movement.y > MOVING;
-        requests.running_backward = input.movement.y < -MOVING;
-        requests.strafing_left = input.movement.x < -MOVING;
-        requests.strafing_right = input.movement.x > MOVING;
-        requests.airborne = !player.on_ground;
-        // The stance, not the key: a body that cannot stand up under a vent is
-        // still crouched.
-        requests.crouching = *stance == Stance::Crouched;
+        let mut described = BodyRequests {
+            running_forward: input.movement.y > MOVING,
+            running_backward: input.movement.y < -MOVING,
+            strafing_left: input.movement.x < -MOVING,
+            strafing_right: input.movement.x > MOVING,
+            airborne: !player.on_ground,
+            // The stance, not the key: a body that cannot stand up under a
+            // vent is still crouched.
+            crouching: *stance == Stance::Crouched,
+            wall_ahead: false,
+        };
         // The step is the only thing that knows a wall was hit.
-        requests.wall_ahead = requests.moving() && (player.blocked.x || player.blocked.z);
+        described.wall_ahead = described.moving() && (player.blocked.x || player.blocked.z);
+        // Built whole and compared: `BodyRequests` is replicated.
+        requests.set_if_neq(described);
     }
 }
 
@@ -374,7 +383,11 @@ fn rebuild_rigs_for_new_builds(
 /// every viewer agrees; an `Entity` index or an RNG would not.
 fn phase_bodies_by_id(
     mut commands: Commands,
-    bodies: Query<(Entity, &PlayerId), (Added<PlayerId>, With<Skeleton>)>,
+    // Either arrival, because they arrive in either order: a replicated body's
+    // id comes in its own message, and its rig waits on its `Class`, which
+    // does too. Keyed on the id alone, an id that beat the rig was spent on a
+    // body with nothing to phase and never looked at again.
+    bodies: Query<(Entity, &PlayerId), (With<Skeleton>, Or<(Added<PlayerId>, Added<Skeleton>)>)>,
 ) {
     for (body, id) in &bodies {
         commands.entity(body).insert(AnimationPhase::from_id(id.0));
@@ -519,6 +532,30 @@ mod tests {
 
         let rig = world.get::<Skeleton>(body).expect("the class arrived and nothing dressed it");
         assert_eq!(rig.proportions(), ClassBuilds::shipped().of(Class::Sniper));
+    }
+
+    /// Fails if a body whose id arrived before its rig is never phased.
+    #[test]
+    fn a_body_whose_id_beat_its_rig_is_still_phased() {
+        let mut world = World::new();
+        world.insert_resource(ClassBuilds::default());
+        let mut schedule = Schedule::default();
+        schedule.add_systems((dress_new_players, phase_bodies_by_id).chain());
+
+        // An id whose phase is not the zero a fresh rig is dressed with.
+        let id = (0..).find(|&id| AnimationPhase::from_id(id).0 != 0.0).unwrap();
+        let body = world.spawn((Player::default(), PlayerId(id))).id();
+        schedule.run(&mut world);
+        assert!(world.get::<Skeleton>(body).is_none(), "a body with no class was dressed");
+
+        world.entity_mut(body).insert(Class::Mercenary);
+        schedule.run(&mut world);
+
+        assert_eq!(
+            world.get::<AnimationPhase>(body).copied(),
+            Some(AnimationPhase::from_id(id)),
+            "the id came before the rig and the body was never phased"
+        );
     }
 
     /// Fails if a body rigged before the server's builds arrived keeps the
@@ -798,5 +835,12 @@ mod tests {
         assert!(requests.running_forward, "input never reached the body");
         assert!(requests.wall_ahead, "the wall the step hit never reached the body");
         assert_eq!(AnimationState::from_requests(requests), AnimationState::PushingWall);
+
+        // Described again with nothing new to say, it says nothing:
+        // `BodyRequests` is replicated, and a write is a resend.
+        let described = app.world().entity(player).get_ref::<BodyRequests>().unwrap().last_changed();
+        app.world_mut().run_system_once(describe_player_bodies).unwrap();
+        let again = app.world().entity(player).get_ref::<BodyRequests>().unwrap().last_changed();
+        assert_eq!(again, described, "an unchanged description was written anyway");
     }
 }

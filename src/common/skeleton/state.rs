@@ -13,7 +13,6 @@
 //! the editor's Animation Display feature.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::clip::StateAnimation;
 
@@ -359,18 +358,19 @@ impl AnimationState {
 
 /// Body animations authored as data, per state. A state without a clip uses
 /// its built-in function, so states migrate one at a time. Empty by default.
+/// Owned here rather than behind handles: this resource is the single copy.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct ClipLibrary {
-    by_state: HashMap<AnimationState, Arc<StateAnimation>>,
+    by_state: HashMap<AnimationState, StateAnimation>,
 }
 
 impl ClipLibrary {
-    pub fn get(&self, state: AnimationState) -> Option<&Arc<StateAnimation>> {
+    pub fn get(&self, state: AnimationState) -> Option<&StateAnimation> {
         self.by_state.get(&state)
     }
 
     pub fn insert(&mut self, state: AnimationState, animation: impl Into<StateAnimation>) {
-        self.by_state.insert(state, Arc::new(animation.into()));
+        self.by_state.insert(state, animation.into());
     }
 
     /// Put a state back on its built-in pose, for a clip deleted, reverted, or

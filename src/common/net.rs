@@ -108,6 +108,12 @@ pub fn is_remote_client(role: Option<Res<NetRole>>) -> bool {
     !has_authority(role)
 }
 
+/// Run condition: there are clients to send things to. A run condition, not an
+/// early return, so `Added` filters still see what was added while solo.
+pub fn is_hosting(role: Option<Res<NetRole>>) -> bool {
+    role.is_some_and(|role| matches!(*role, NetRole::Listen { .. }))
+}
+
 /// Split `host`, `host:port` or `[::1]:port`. Hand-rolled because
 /// `ToSocketAddrs` resolves DNS, blocking, on a string still being typed.
 pub fn parse_endpoint(text: &str) -> Result<(String, u16), String> {

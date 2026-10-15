@@ -137,6 +137,9 @@ struct TabViewerAndResources<'a> {
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
     retarget_request: &'a mut Option<(FeatureId, String)>,
+    /// Whether the History panel changed the timeline, which it holds with
+    /// change detection bypassed.
+    timeline_touched: bool,
 }
 
 impl<'a> TabViewer for TabViewerAndResources<'a> {
@@ -182,7 +185,12 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 map_metadata_panel_ui(ui, self.map_metadata);
             }
             TabKinds::History => {
-                FeatureTimeline::ui(ui, self.editor_features, &mut self.pending_edits.events, self.retarget_request)
+                self.timeline_touched |= FeatureTimeline::ui(
+                    ui,
+                    self.editor_features,
+                    &mut self.pending_edits.events,
+                    self.retarget_request,
+                );
             }
         }
     }
@@ -313,13 +321,19 @@ impl EditorPanels {
         let mut viewer = TabViewerAndResources  {
             current_tool: & *current_tool,
             next_tool: &mut *next_tool,
-            editor_features: &mut *editor_features,
+            // Bypassed, and marked below only if the History panel said it
+            // changed something. Borrowed mutably for the whole frame, it
+            // read as changed every frame — so the undo checkpoint serialised
+            // the map on every idle frame and `map_sync`'s pre-filter never
+            // filtered anything.
+            editor_features: editor_features.bypass_change_detection(),
             map_metadata: &mut *map_metadata,
             multicam_state: &mut *multicam_state,
             bake_commands: &mut bake_commands,
             gizmo_visibility: &mut *gizmo_visibility,
             pending_edits: &mut pending_edits,
             retarget_request: &mut retarget_request,
+            timeline_touched: false,
         };
 
         panels.menu_bar_height = egui::Panel::top("menu_bar")
@@ -413,7 +427,11 @@ impl EditorPanels {
             .rect
             .height();
 
+        let timeline_touched = viewer.timeline_touched;
         drop(viewer);
+        if timeline_touched {
+            editor_features.set_changed();
+        }
 
         // `set`, not `set_if_neq`: `mode_menu` never offers the mode already in force.
         if let Some(mode) = wanted_mode {

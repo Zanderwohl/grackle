@@ -93,11 +93,9 @@ fn body_box(root: &Transform, stance: Stance) -> Box3 {
 
 /// Sized and placed from the rig, so each class is boxed around its own head.
 fn head_box(skeleton: &Skeleton, pose: &Pose, settled: &Pose, root: &Transform) -> Box3 {
+    let head = skeleton.index_of(bone::HEAD);
     let head_centre = |pose: &Pose| {
-        skeleton
-            .posed_bones(pose, root)
-            .into_iter()
-            .find(|posed| posed.name == bone::HEAD)
+        head.map(|index| skeleton.posed_bone(pose, root, index))
             .map(|posed| (posed.prism().translation, posed.length, posed.thickness))
     };
 

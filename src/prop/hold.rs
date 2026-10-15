@@ -248,7 +248,7 @@ pub fn weapon_transform(
 ) -> Option<Transform> {
     let chest = skeleton.index_of(bone::CHEST)?;
     // The chest's tail is the point between the shoulders.
-    let pivot = skeleton.posed_bones(pose, root)[chest].tail;
+    let pivot = skeleton.posed_bone(pose, root, chest).tail;
     let arm = skeleton.proportions().arm_metres();
 
     Some(
@@ -267,7 +267,7 @@ pub fn carry_frame(
     aim: Quat,
 ) -> Option<Transform> {
     let chest = skeleton.index_of(bone::CHEST)?;
-    let pivot = skeleton.posed_bones(pose, root)[chest].tail;
+    let pivot = skeleton.posed_bone(pose, root, chest).tail;
     Some(Transform::from_translation(pivot).with_rotation(aim))
 }
 

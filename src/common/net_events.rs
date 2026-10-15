@@ -10,7 +10,7 @@ use lightyear::prelude::*;
 
 use crate::common::damage::{DamageDealt, Died};
 use crate::common::effects::Effect;
-use crate::common::net::{has_authority, is_remote_client, NetRole};
+use crate::common::net::{has_authority, is_remote_client};
 use crate::game::ragdoll::RagdollShove;
 
 /// Unordered: two numbers drawn in the wrong order is imperceptible. Reliable:
@@ -159,12 +159,8 @@ fn receive_shoves(
 /// What crosses is the seed only; each machine's solver runs from it.
 pub fn replicate_corpses(
     mut commands: Commands,
-    role: Res<NetRole>,
-    raised: Query<Entity, (Added<crate::game::ragdoll::Ragdoll>, Without<Replicate>)>,
+    raised: Query<Entity, (With<crate::game::ragdoll::Ragdoll>, Without<Replicate>)>,
 ) {
-    if !matches!(*role, NetRole::Listen { .. }) {
-        return;
-    }
     for corpse in &raised {
         commands
             .entity(corpse)
@@ -177,12 +173,8 @@ pub fn replicate_corpses(
 /// there.
 pub fn replicate_projectiles(
     mut commands: Commands,
-    role: Res<NetRole>,
-    launched: Query<Entity, (Added<crate::game::projectile::Projectile>, Without<Replicate>)>,
+    launched: Query<Entity, (With<crate::game::projectile::Projectile>, Without<Replicate>)>,
 ) {
-    if !matches!(*role, NetRole::Listen { .. }) {
-        return;
-    }
     for projectile in &launched {
         commands
             .entity(projectile)
@@ -195,12 +187,8 @@ pub fn replicate_projectiles(
 /// animation.
 pub fn replicate_display_bodies(
     mut commands: Commands,
-    role: Res<NetRole>,
-    standing: Query<Entity, (Added<crate::tool::animation_grid::CarouselBody>, Without<Replicate>)>,
+    standing: Query<Entity, (With<crate::tool::animation_grid::CarouselBody>, Without<Replicate>)>,
 ) {
-    if !matches!(*role, NetRole::Listen { .. }) {
-        return;
-    }
     for body in &standing {
         commands
             .entity(body)

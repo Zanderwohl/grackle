@@ -196,7 +196,8 @@ pub struct PropEditor {
     rollback: Option<PropFeatureId>,
     pub path: Option<PathBuf>,
     pub dirty: bool,
-    /// Bumped on every change; the viewport rebuilds on it.
+    /// Bumped on every change, as a cue to look; the viewport compares the
+    /// features it built from before re-running the kernel.
     generation: u64,
     /// Bumped on every save; `publish_the_saved_prop` watches it.
     saves: u64,
