@@ -1598,6 +1598,11 @@ mod tests {
     /// [`RagdollPlugin`], which is what this is really testing.
     #[test]
     fn the_shot_that_kills_a_body_throws_the_corpse_it_makes() {
+        // `step_ragdolls` steps corpses in parallel, which needs the pool
+        // `TaskPoolPlugin` stands up in the game. A bare `World` has none, and
+        // the pool is global to the process — so without this the test passes
+        // or panics depending on whether some other test happened to make one.
+        bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
         let mut world = World::new();
         world.init_resource::<CollisionWorld>();
         world.init_resource::<Messages<RagdollShove>>();
@@ -1946,9 +1951,22 @@ mod tests {
     /// settles. The number was recorded from the solver before its working
     /// lists moved onto the stack. If a change *means* to alter the
     /// simulation, record it again; if it did not mean to, it has.
+    ///
+    /// **There are two numbers, one per build profile**, and that is a finding
+    /// rather than a convenience: an optimised build reaches different bits
+    /// from a debug build of the very same code, measured on the solver as it
+    /// stood before this test existed. So "every machine runs the same
+    /// solver" holds between two builds of the same profile and target, and
+    /// not beyond — a debug client watching a release server already sees a
+    /// corpse lie slightly differently.
     #[test]
     fn the_solver_reaches_the_same_bits_it_always_has() {
-        assert_eq!(fingerprint(), 0x801d_1968_7a9c_e32e);
+        let expected = if cfg!(debug_assertions) {
+            0x801d_1968_7a9c_e32e
+        } else {
+            0x93d1_f1d3_b313_e938
+        };
+        assert_eq!(fingerprint(), expected);
     }
 
     /// The tick writes over the pose the corpse already has, and what was
