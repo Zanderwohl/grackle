@@ -1,0 +1,257 @@
+name_key = "prop.untitled"
+next_id = 8
+
+[[features]]
+id = 0
+name = "Prism"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.02
+height = 0.676
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.0,
+    0.0,
+]
+rotation = [
+    1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.42,
+    0.43999997,
+    0.47,
+]
+
+[[features]]
+id = 2
+name = "Box"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.044051867,
+    0.07362704,
+    0.24810475,
+]
+
+[features.op.placement]
+origin = [
+    -0.000000024214387,
+    -0.048066936,
+    0.2496926,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "wood"
+tint = [
+    0.4096089,
+    0.22143967,
+    0.12663549,
+]
+
+[[features]]
+id = 3
+name = "Wedge"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "wedge"
+size = [
+    0.27770585,
+    0.103913076,
+    0.043446124,
+]
+
+[features.op.placement]
+origin = [
+    -0.0008837103,
+    -0.10984349,
+    0.4329894,
+]
+rotation = [
+    0.0,
+    -1.5707961,
+    -3.1415925,
+]
+
+[features.op.surface]
+style = "wood"
+tint = [
+    0.27634972,
+    0.14766784,
+    0.07369196,
+]
+
+[[features]]
+id = 4
+name = "Prism"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.04
+height = 0.39015692
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.07,
+    0.25,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.42,
+    0.43999997,
+    0.47,
+]
+
+[[features]]
+id = 5
+name = "Prism"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.038
+height = 0.402
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.07,
+    0.25,
+]
+rotation = [
+    1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.31200647,
+    0.56050867,
+    0.9332621,
+]
+
+[[features]]
+id = 7
+name = "Box"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.021,
+    0.047,
+    0.2138722,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.035,
+    0.2136177,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.42,
+    0.43999997,
+    0.47,
+]
+
+[hold]
+grip = [
+    0.0,
+    -0.11,
+    0.401,
+]
+grip_rotation = [
+    -1.6580628,
+    1.6755161,
+    -1.7976891,
+]
+support = [
+    -0.131,
+    -0.095,
+    0.18,
+]
+support_rotation = [
+    -3.281219,
+    0.08726646,
+    -1.4486233,
+]
+two_handed = true
+carry = [
+    0.21,
+    0.07,
+    -1.03,
+]
+carry_rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[viewmodel]
+across = [
+    0.58,
+    -0.58,
+]
+depth = 0.45
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
