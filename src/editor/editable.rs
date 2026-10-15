@@ -687,12 +687,15 @@ impl FeatureTimeline {
         self.forget_a_missing_bar();
     }
     
+    /// The History panel. Says whether it changed the timeline, because the
+    /// caller hands it one with change detection bypassed — see
+    /// `EditorPanels::ui`.
     pub fn ui(
         ui: &mut egui::Ui,
         features: &mut Self,
         edit_events: &mut Vec<EditEvent>,
         retarget_out: &mut Option<(FeatureId, String)>,
-    ) {
+    ) -> bool {
         // Editor for selected feature (bottom, takes as much as needed)
         // We render this into a bottom panel so it pins to the bottom,
         // then the scroll area fills whatever's left.
@@ -871,11 +874,15 @@ impl FeatureTimeline {
             features.select(next_selected);
         }
 
-        match pending.borrow_mut().take() {
+        let row_action = pending.borrow_mut().take();
+        let acted = row_action.is_some();
+        match row_action {
             Some(RowAction::Delete(id)) => features.delete_feature(id),
             Some(RowAction::RollBackTo(at)) => features.roll_back_to(at),
             None => {}
         }
+
+        was_edited || selection_changed || acted
     }
 
     fn undo_redo_shortcuts(
@@ -1397,6 +1404,38 @@ mod tests {
         timeline.redo();
         timeline.redo();
         assert_eq!(x_of(&timeline, a), Some(4.0));
+    }
+
+    /// The History panel drawn with nobody touching it says it changed
+    /// nothing — inspector open, selection and all.
+    ///
+    /// The panel is handed the timeline with change detection bypassed and
+    /// marks it only on this answer, so a panel that always said yes would put
+    /// the undo checkpoint back to serialising the map every idle frame.
+    #[test]
+    fn the_history_panel_left_alone_changes_nothing() {
+        let mut timeline = FeatureTimeline::default();
+        let a = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
+        timeline.apply_feature(Box::new(GlobalPoint::new(2.0, 0.0, 0.0)));
+        timeline.select(Some(a));
+
+        let ctx = egui::Context::default();
+        let mut events = Vec::new();
+        let mut retarget = None;
+        // More than one frame: egui lays out on the first and settles on the
+        // second, and a widget that misreported `changed` on either would show.
+        for frame in 0..3 {
+            let mut touched = false;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                touched = FeatureTimeline::ui(ui, &mut timeline, &mut events, &mut retarget);
+            });
+            // Nothing renders here, so the font atlas egui uploaded is
+            // discarded on purpose rather than dropped unapplied.
+            output.textures_delta.clear();
+            assert!(!touched, "frame {frame} of an idle History panel reported a change");
+        }
+        assert!(events.is_empty());
+        assert_eq!(timeline.selected_feature, Some(a));
     }
 
     /// Adding and deleting are edits like any other — there is nothing for a
