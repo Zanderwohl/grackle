@@ -247,8 +247,9 @@ pub struct PropEditor {
     pub path: Option<PathBuf>,
     /// Whether the document differs from what is on disk.
     pub dirty: bool,
-    /// Bumped on every change, so the viewport can tell without comparing two
-    /// feature lists.
+    /// Bumped on every change, so a reader can tell cheaply that it should
+    /// look again. Not every change is geometry — the viewport compares the
+    /// features it built from before re-running the kernel.
     generation: u64,
     /// Bumped on every successful save, which is what tells the *game* to pick
     /// the model up — see `publish_the_saved_prop`.

@@ -22,7 +22,11 @@
 //!
 //! The prop is rebuilt on [`PropEditor::generation`] rather than on anything
 //! being `Changed`: evaluating is a boolean kernel doing real work, and doing
-//! it again because egui reported a hover would be felt.
+//! it again because egui reported a hover would be felt. And the generation is
+//! only the cue to *look*: what decides is whether the features shown differ
+//! from the ones last built, because most of a document — the hold, the
+//! viewmodel, the clips — is not geometry, and dragging a grip must not re-run
+//! the kernel every frame.
 
 use core::time::Duration;
 
@@ -34,7 +38,7 @@ use crate::common::app_mode::AppMode;
 use crate::prop::baked::{parts, SurfaceMaterials};
 use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure, ScaleFigure};
 use crate::prop::document::PropEditor;
-use crate::prop::feature::Evaluated;
+use crate::prop::feature::{Evaluated, PropFeature};
 
 /// Standing the prop up. A set rather than named systems, for the reason
 /// `BakeSystems` is one: the camera frames itself on the prop's bounds from
@@ -70,13 +74,23 @@ struct HiddenForModelling(HashMap<Entity, Visibility>);
 #[derive(Resource, Default)]
 pub struct PropBuild {
     pub evaluated: Evaluated,
-    /// The generation this was built from, so the rebuild knows it is stale.
+    /// The generation last looked at, so an unchanged document costs nothing
+    /// to check.
     built: Option<u64>,
+    /// The features `evaluated` was built from — **the** key, not the
+    /// generation. Every write to the document bumps the generation, and most
+    /// of a document is not geometry: a counter bumped only for geometry
+    /// would go stale the day something forgot to bump it, whereas the
+    /// evaluator's own input cannot. A prop is a few kilobytes, so the
+    /// comparison is cheap beside the kernel it saves.
+    input: Option<Vec<PropFeature>>,
     /// How long the last evaluation took, which is what decides whether the
     /// next one waits.
     cost: Duration,
-    /// The generation a deferred rebuild is waiting on, and since when.
-    waiting: Option<(u64, Duration)>,
+    /// The features a deferred rebuild is waiting on, and since when. Keyed on
+    /// the features for the same reason: a hold dragged while an expensive
+    /// prop settles must not keep restarting the clock.
+    waiting: Option<(Vec<PropFeature>, Duration)>,
 }
 
 impl PropBuild {
@@ -268,6 +282,7 @@ fn clear_the_stage(
     }
     // The stage it would otherwise consider current has just been despawned.
     build.built = None;
+    build.input = None;
 }
 
 /// Evaluate the document and put the result in the world, if it has moved on.
@@ -286,6 +301,18 @@ fn rebuild_the_prop(
         build.waiting = None;
         return;
     }
+    // Down to the rollback bar, and everything downstream — the meshes, the
+    // picking, the framing, which bodies the toolbar offers — reads this, so
+    // rolled back is one consistent picture of the prop as it stood there.
+    let shown = editor.shown();
+
+    // The document moved and the geometry did not: a grip, a viewmodel, a
+    // clip, a name. The stage on screen is already right.
+    if !stage.is_empty() && build.input.as_deref() == Some(shown) {
+        build.built = Some(generation);
+        build.waiting = None;
+        return;
+    }
 
     // **An expensive prop settles; a cheap one keeps up**, decided by the last
     // evaluation's own cost so there is nothing to tune per prop. Waiting
@@ -296,18 +323,18 @@ fn rebuild_the_prop(
     // makes the wait read as settling rather than as lag.
     if build.cost > REBUILD_BUDGET && !stage.is_empty() {
         let now = time.elapsed();
-        match build.waiting {
-            // Still moving: start the clock again from this change.
-            Some((waiting_for, _)) if waiting_for != generation => {
-                build.waiting = Some((generation, now));
-                return;
-            }
-            Some((_, since)) if now.saturating_sub(since) < REBUILD_DEBOUNCE => return,
+        let since = match &build.waiting {
+            Some((waiting_for, since)) if waiting_for.as_slice() == shown => Some(*since),
+            _ => None,
+        };
+        match since {
+            Some(since) if now.saturating_sub(since) >= REBUILD_DEBOUNCE => {}
+            Some(_) => return,
+            // Still moving, or only now started: the clock runs from here.
             None => {
-                build.waiting = Some((generation, now));
+                build.waiting = Some((shown.to_vec(), now));
                 return;
             }
-            _ => {}
         }
     }
     build.waiting = None;
@@ -315,11 +342,9 @@ fn rebuild_the_prop(
     build.built = Some(generation);
     // Bevy's `Instant`, not the standard library's, which panics on wasm.
     let started = Instant::now();
-    // Down to the rollback bar, and everything downstream — the meshes, the
-    // picking, the framing, which bodies the toolbar offers — reads this, so
-    // rolled back is one consistent picture of the prop as it stood there.
-    build.evaluated = crate::prop::feature::evaluate(editor.shown());
+    build.evaluated = crate::prop::feature::evaluate(shown);
     build.cost = started.elapsed();
+    build.input = Some(shown.to_vec());
 
     for entity in &stage {
         commands.entity(entity).despawn();
@@ -371,10 +396,15 @@ fn draw_the_bench(mut gizmos: Gizmos, editor: Res<PropEditor>, build: Res<PropBu
     }
 }
 
-/// The ghost's edges, and the generation and selection they were drawn for.
+/// The ghost's edges, and what they were drawn for.
 #[derive(Default)]
 struct GhostCache {
+    /// The generation and selection last looked at — the cue to compare.
     key: Option<(u64, crate::prop::feature::PropFeatureId)>,
+    /// The selection and the features down to it that the edges came from,
+    /// which is what decides — the same rule as [`PropBuild`]'s, so dragging a
+    /// grip does not re-evaluate the list up to the selected boolean.
+    input: Option<(crate::prop::feature::PropFeatureId, Vec<PropFeature>)>,
     edges: Vec<(Vec3, Vec3)>,
 }
 
@@ -386,8 +416,9 @@ struct GhostCache {
 /// wrong size, or the wrong body. Showing it answers all three at once.
 ///
 /// Re-evaluates the list *up to* the feature, so it is cached on the
-/// generation and the selection and recomputed only when one of them moves —
-/// not every frame something is merely selected.
+/// selection and the features down to it, and recomputed only when one of
+/// them moves — not every frame something is merely selected, nor every frame
+/// of a drag that is not geometry.
 fn ghost_the_operands(
     mut gizmos: Gizmos,
     editor: Res<PropEditor>,
@@ -395,15 +426,25 @@ fn ghost_the_operands(
 ) {
     let Some(selected) = editor.selected else {
         cache.key = None;
+        cache.input = None;
         cache.edges.clear();
         return;
     };
     let key = (editor.generation(), selected);
     if cache.key != Some(key) {
         cache.key = Some(key);
-        cache.edges.clear();
         let features = editor.shown();
-        if let Some(at) = features.iter().position(|feature| feature.id == selected) {
+        let at = features.iter().position(|feature| feature.id == selected);
+        let upto = at.map_or(&[][..], |at| &features[..=at]);
+        let unchanged = cache
+            .input
+            .as_ref()
+            .is_some_and(|(was, built_from)| *was == selected && built_from.as_slice() == upto);
+        if !unchanged {
+            cache.input = Some((selected, upto.to_vec()));
+            cache.edges.clear();
+        }
+        if let Some(at) = at.filter(|_| !unchanged) {
             let operands = features[at].op.consumes();
             if !operands.is_empty() {
                 let before = crate::prop::feature::evaluate(&features[..at]);
@@ -477,6 +518,66 @@ mod tests {
             Visibility::Hidden,
             "something hidden before the mode opened was turned on by leaving it",
         );
+    }
+
+    /// Most of a document is not geometry. Dragging a grip writes the document
+    /// every frame, and re-running the kernel and re-uploading every mesh for
+    /// it is the cost the generation was meant to save — so a hold edit must
+    /// leave the stage alone while a feature edit, an undo and the rollback
+    /// bar still rebuild it.
+    #[test]
+    fn only_the_geometry_rebuilds_the_stage() {
+        use crate::prop::feature::FeatureOp;
+
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        world.init_resource::<PropBuild>();
+        world.init_resource::<SurfaceMaterials>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<Assets<Mesh>>();
+        let mut editor = PropEditor::default();
+        let first = editor.edit(|doc| doc.push(FeatureOp::default()));
+        world.insert_resource(editor);
+
+        let build = |world: &mut World| {
+            // Cheap by fiat, so the debounce is not what is being measured.
+            world.resource_mut::<PropBuild>().cost = Duration::ZERO;
+            world.run_system_once(rebuild_the_prop).unwrap();
+            let mut stage = world.query_filtered::<Entity, With<PropStage>>();
+            let stages: Vec<Entity> = stage.iter(world).collect();
+            assert_eq!(stages.len(), 1, "one stage, always");
+            stages[0]
+        };
+        let built = build(&mut world);
+        assert!(!world.resource::<PropBuild>().evaluated.bodies.is_empty());
+
+        let generation = world.resource::<PropEditor>().generation();
+        {
+            let mut editor = world.resource_mut::<PropEditor>();
+            editor.begin_gesture();
+            editor.doc_mut().hold.grip[0] += 0.1;
+            editor.doc_mut().viewmodel = Default::default();
+            editor.end_gesture();
+        }
+        assert_ne!(world.resource::<PropEditor>().generation(), generation);
+        assert_eq!(build(&mut world), built, "moving the grip rebuilt the prop");
+
+        world.resource_mut::<PropEditor>().edit(|doc| doc.push(FeatureOp::default()));
+        let after_edit = build(&mut world);
+        assert_ne!(after_edit, built, "a new feature did not rebuild the prop");
+
+        world.resource_mut::<PropEditor>().roll_back_to(Some(first));
+        let rolled_back = build(&mut world);
+        assert_ne!(rolled_back, after_edit, "moving the rollback bar did not rebuild");
+
+        world.resource_mut::<PropEditor>().roll_back_to(None);
+        let whole = build(&mut world);
+        assert_ne!(whole, rolled_back, "taking the bar away did not rebuild");
+
+        world.resource_mut::<PropEditor>().undo();
+        let undone = build(&mut world);
+        assert_ne!(undone, whole, "undo did not rebuild");
+        assert_eq!(world.resource::<PropBuild>().input.as_deref().map(<[_]>::len), Some(1));
     }
 
     /// Entities appear while somebody is modelling — a map edit lands, a
