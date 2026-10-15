@@ -69,8 +69,13 @@ impl BodyClips {
     }
 
     /// The same, to write — inside a gesture, as `doc_mut` is.
+    ///
+    /// Only a clip that exists marks the document changed: a name that finds
+    /// nothing is not an edit, and counting it would rebuild and dirty
+    /// everything keyed on the generation for a write that never happened.
     pub fn clip_mut(&mut self, name: &str) -> Option<&mut Clip> {
         let (state, variant) = address(name);
+        self.clips.get(state)?.clip(variant)?;
         self.changed();
         self.clips.get_mut(state)?.clip_mut(variant)
     }
@@ -465,6 +470,27 @@ mod tests {
         assert_eq!(clips.undo.len(), steps + 1, "a drag was not one step");
         clips.undo();
         assert_eq!(clips.get("idle").map(|clip| clip.length), Some(1.0));
+    }
+
+    /// Asking for a clip that is not there writes nothing: no generation bump
+    /// for everything keyed on it to rebuild over, and no dirty flag on a
+    /// document nobody edited.
+    #[test]
+    fn a_missing_clip_is_not_an_edit() {
+        let mut clips = BodyClips::default();
+        clips.edit(|clips| {
+            clips.insert("idle".into(), a_clip(1.0).into());
+        });
+        clips.dirty = false;
+        let generation = clips.generation();
+
+        assert!(clips.clip_mut("nothing").is_none());
+        assert!(clips.clip_mut("idle#3").is_none());
+        assert_eq!(clips.generation(), generation, "a miss bumped the generation");
+        assert!(!clips.dirty, "a miss dirtied the document");
+
+        assert!(clips.clip_mut("idle").is_some());
+        assert!(clips.generation() > generation, "a hit did not count as a write");
     }
 
     /// A variant is picked by `state#index`, and a plain clip by its state.

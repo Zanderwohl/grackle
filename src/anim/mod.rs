@@ -214,7 +214,11 @@ pub fn edit_selected(
     match anim.source {
         ClipSource::Prop => {
             prop.begin_gesture();
-            if let Some(clip) = prop.doc_mut().animations.clips.get_mut(name) {
+            // Asked first, so a name that finds nothing writes nothing — the
+            // same rule `BodyClips::clip_mut` keeps.
+            if prop.doc().animations.clips.contains_key(name)
+                && let Some(clip) = prop.doc_mut().animations.clips.get_mut(name)
+            {
                 change(clip);
             }
         }
@@ -500,6 +504,7 @@ fn timeline_input(
                         grab.0 = Some(Grab::Keys {
                             from_x: at.x,
                             tracks: dragged_tracks(clip, &selection),
+                            last_by: None,
                         });
                     }
                 }
@@ -513,19 +518,19 @@ fn timeline_input(
         }
     }
 
-    match &grab.0 {
+    match &mut grab.0 {
         Some(Grab::Scrub { from_x, from_time }) => {
             // Taking hold of the playhead takes it from the transport too: a
             // scrub fighting playback is a playhead that will not stay put.
             cursor.playing = false;
-            let moved = (at.x - from_x) / view.pixels_per_second;
-            cursor.time = (from_time + moved).clamp(0.0, length);
+            let moved = (at.x - *from_x) / view.pixels_per_second;
+            cursor.time = (*from_time + moved).clamp(0.0, length);
         }
         Some(Grab::Pan { from_x, from_start }) => {
-            view.start = from_start - (at.x - from_x) / view.pixels_per_second;
+            view.start = *from_start - (at.x - *from_x) / view.pixels_per_second;
         }
-        Some(Grab::Keys { from_x, tracks }) => {
-            let mut by = (at.x - from_x) / view.pixels_per_second;
+        Some(Grab::Keys { from_x, tracks, last_by }) => {
+            let mut by = (at.x - *from_x) / view.pixels_per_second;
             // Snapped by default, and **the offset is snapped rather than each
             // key** — so several keys dragged together keep the spacing they
             // were authored with instead of collapsing onto the grid. Alt is
@@ -534,13 +539,25 @@ fn timeline_input(
                 let step = grid_step(view.pixels_per_second);
                 by = (by / step).round() * step;
             }
-            nudge_the_selection(&mut editor, &mut clips, &anim, tracks, by, length, &mut selection);
+            // Asked before the editors are touched, so a pointer held still
+            // does not even mark them changed.
+            if *last_by != Some(by) {
+                nudge_the_selection(
+                    &mut editor,
+                    &mut clips,
+                    &anim,
+                    tracks,
+                    by,
+                    length,
+                    &mut selection,
+                    last_by,
+                );
+            }
         }
         // The band follows the pointer here rather than in the layout, which
         // has no idea where the pointer is and is better off not learning.
-        Some(Grab::Band { from, .. }) => {
-            let from = *from;
-            grab.0 = Some(Grab::Band { from, to: at });
+        Some(Grab::Band { to, .. }) => {
+            *to = at;
         }
         None => {}
     }
@@ -720,6 +737,12 @@ fn dragged_tracks(clip: &Clip, selection: &TimelineSelection) -> Vec<DraggedTrac
 /// is what makes a pull on a key **one** press of Ctrl+Z rather than forty.
 /// The gesture is closed by the panels, which is also why they have to know a
 /// drag is running — see `AnimPanels`.
+///
+/// Nothing is written when `by` is the offset already applied (`last_by`):
+/// the drag is absolute, so the same offset is the same keys, and writing them
+/// again would bump the generation and dirty the document every frame the
+/// button is held still.
+#[allow(clippy::too_many_arguments)]
 fn nudge_the_selection(
     editor: &mut PropEditor,
     clips: &mut body::BodyClips,
@@ -728,7 +751,13 @@ fn nudge_the_selection(
     by: f32,
     length: f32,
     selection: &mut TimelineSelection,
+    last_by: &mut Option<f32>,
 ) {
+    if *last_by == Some(by) {
+        return;
+    }
+    *last_by = Some(by);
+
     let mut landed = std::collections::BTreeSet::new();
 
     edit_selected(anim, editor, clips, |clip| {
@@ -1133,6 +1162,7 @@ mod tests {
         let tracks = holding(&editor, &[0]);
 
         // Forty frames of a drag, as one gesture.
+        let mut last = None;
         for frame in 1..=40 {
             nudge_the_selection(
                 &mut editor,
@@ -1142,6 +1172,7 @@ mod tests {
                 frame as f32 * 0.005,
                 1.0,
                 &mut selection,
+                &mut last,
             );
         }
         editor.end_gesture();
@@ -1170,6 +1201,7 @@ mod tests {
         let tracks = holding(&editor, &[1]);
 
         // Out past both neighbours, hard into the end, and back to nothing.
+        let mut last = None;
         for by in [0.2_f32, 0.6, 2.0, -3.0, -0.4, 0.0] {
             nudge_the_selection(
                 &mut editor,
@@ -1179,6 +1211,7 @@ mod tests {
                 by,
                 1.0,
                 &mut selection,
+                &mut last,
             );
         }
 
@@ -1206,6 +1239,7 @@ mod tests {
             0.5,
             1.0,
             &mut selection,
+            &mut None,
         );
 
         assert_eq!(times(&editor), vec![0.4, 0.6, 0.9]);
@@ -1214,5 +1248,52 @@ mod tests {
             vec![KeyAt { track: 0, key: 1 }],
             "the selection did not follow the key it was holding",
         );
+    }
+
+    /// **A key held still writes nothing.**
+    ///
+    /// A drag is absolute — every frame recomputes from where the keys
+    /// started — so the same offset twice is the same keys twice. Writing them
+    /// anyway bumped the generation every frame the button was down, which is
+    /// everything keyed on it rebuilding for a pointer that had not moved.
+    #[test]
+    fn a_key_held_still_writes_nothing() {
+        let (mut editor, anim) = editor_with_a_clip(&[0.0, 0.5]);
+        let mut selection = TimelineSelection::default();
+        selection.0.insert(KeyAt { track: 0, key: 0 });
+        let tracks = holding(&editor, &[0]);
+        let mut clips = body::BodyClips::default();
+        let mut last = None;
+        let mut nudge = |editor: &mut PropEditor, by: f32| {
+            nudge_the_selection(
+                editor,
+                &mut clips,
+                &anim,
+                &tracks,
+                by,
+                1.0,
+                &mut selection,
+                &mut last,
+            );
+        };
+
+        let before = editor.generation();
+        nudge(&mut editor, 0.1);
+        let moved = editor.generation();
+        assert!(moved > before, "a moving drag did not write");
+
+        for _ in 0..10 {
+            nudge(&mut editor, 0.1);
+        }
+        assert_eq!(editor.generation(), moved, "a drag held still kept writing");
+
+        nudge(&mut editor, 0.2);
+        assert!(editor.generation() > moved, "moving again did not write");
+        assert!((times(&editor)[0] - 0.2).abs() < 1e-5);
+
+        editor.end_gesture();
+        editor.undo();
+        assert_eq!(times(&editor), vec![0.0, 0.5], "the drag was not one undo step");
+        assert!(!editor.can_undo());
     }
 }

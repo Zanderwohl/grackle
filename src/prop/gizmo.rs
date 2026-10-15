@@ -109,9 +109,15 @@ const GRIP_LENGTH: f32 = GRIP_SIZE * 3.0;
 /// `offset` is the gap between where the pointer landed on the axis and where
 /// the handle was, held for the drag so the handle moves *with* the pointer
 /// rather than snapping its centre under it.
+///
+/// `answered` is the pointer ray the drag last wrote from. A drag re-solves
+/// against the document it has already moved, so the same ray does not give
+/// bit-for-bit the same answer twice — a pointer held still would go on
+/// writing rounding noise every frame. Nothing has moved until the ray has.
 #[derive(Resource, Default)]
 pub struct GizmoGrab {
     held: Option<(Handle, f32)>,
+    answered: Option<Ray3d>,
 }
 
 pub struct PropGizmoPlugin;
@@ -295,27 +301,37 @@ fn drag_the_selected(
                 _ => local[axis],
             };
             grab.held = Some((handle, on_axis - anchor));
+            grab.answered = None;
             editor.begin_gesture();
         }
     }
 
-    if let Some((handle, offset)) = grab.held {
+    if let Some((handle, offset)) = grab.held
+        && grab.answered != Some(ray)
+    {
+        grab.answered = Some(ray);
         let axis = handle.axis();
         if let Some(on_axis) = closest_param_on_axis(ray, origin, axis_direction(axis)) {
             let local_t = on_axis - offset;
             match handle {
                 Handle::Move(axis) => {
-                    let moved = origin + axis_direction(axis) * local_t;
-                    editor.doc_mut().feature_mut(selected).map(|feature| {
-                        feature.op.placement_mut().map(|placement| {
-                            placement.origin = moved.to_array();
-                        })
-                    });
+                    let moved = (origin + axis_direction(axis) * local_t).to_array();
+                    // Only on a real move: a button held still is not an edit,
+                    // and writing one anyway bumps the generation and dirties
+                    // the document every frame somebody pauses mid-drag.
+                    if placement.origin != moved {
+                        editor.doc_mut().feature_mut(selected).map(|feature| {
+                            feature.op.placement_mut().map(|placement| {
+                                placement.origin = moved;
+                            })
+                        });
+                    }
                 }
                 Handle::Face { axis, max } => {
                     if let Some(shape) = shape.as_ref() {
                         let (resized, moved) = drag_face(shape, &placement, axis, max, local_t);
-                        if let Some(feature) = editor.doc_mut().feature_mut(selected)
+                        if (&resized, &moved) != (shape, &placement)
+                            && let Some(feature) = editor.doc_mut().feature_mut(selected)
                             && let FeatureOp::Primitive { shape, placement, .. } = &mut feature.op
                         {
                             *shape = resized;
@@ -376,8 +392,11 @@ fn pick_in_the_viewport(
 /// Shares the picking and the axis drag with the feature handles above rather
 /// than growing a second copy — what differs is which points exist and what a
 /// drag writes, and both of those are a few lines.
+///
+/// Takes the `ResMut` rather than the editor, so a frame that only reads it
+/// does not mark it changed.
 fn drag_the_hold(
-    editor: &mut PropEditor,
+    editor: &mut ResMut<PropEditor>,
     mouse: &CurrentMouseInput,
     grab: &mut GizmoGrab,
     choice: ScaleFigure,
@@ -450,11 +469,15 @@ fn drag_the_hold(
         unit[axis] = 1.0;
         if let Some(on_axis) = closest_param_on_axis(ray, Vec3::ZERO, unit) {
             grab.held = Some((handle, on_axis - at[axis]));
+            grab.answered = None;
             editor.begin_gesture();
         }
     }
 
-    if let Some((handle, offset)) = grab.held {
+    if let Some((handle, offset)) = grab.held
+        && grab.answered != Some(ray)
+    {
+        grab.answered = Some(ray);
         let axis = handle.axis();
         let mut unit = Vec3::ZERO;
         unit[axis] = 1.0;
@@ -478,7 +501,10 @@ fn drag_the_hold(
                 Handle::Move(_) | Handle::Face { .. } => {}
             }
             let applied = base.applied(choice.0, &edited);
-            editor.doc_mut().hold = applied;
+            // A held button with the pointer still is not an edit.
+            if applied != base {
+                editor.doc_mut().hold = applied;
+            }
         }
     }
 
@@ -760,5 +786,178 @@ mod tests {
         assert!(gizmo_scale(Some(Vec3::splat(MIN_EXTENT))) >= MIN_GIZMO_SCALE);
         assert!(gizmo_scale(None) >= MIN_GIZMO_SCALE);
         assert!(gizmo_scale(Some(Vec3::splat(1.0))) > gizmo_scale(Some(Vec3::splat(0.1))));
+    }
+
+    use crate::prop::document::PropDoc;
+    use crate::prop::surface::Surface;
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::gizmos::config::DefaultGizmoConfigGroup;
+    use bevy::gizmos::AppGizmoBuilder;
+
+    /// A world `drag_the_selected` can run in, holding an editor open on one
+    /// rotated box — rotated so a re-solved drag would round differently from
+    /// frame to frame, which is the noise a pointer held still must not write.
+    fn a_world_holding_a_box(hold_handles: bool) -> (World, Placement) {
+        let placement = Placement { origin: [0.1, 0.2, 0.3], rotation: [0.3, 0.7, 0.1] };
+        let mut doc = PropDoc::new("prop.test");
+        let id = doc.push(FeatureOp::Primitive {
+            shape: box_shape(),
+            placement,
+            surface: Surface::default(),
+        });
+        let mut editor = PropEditor::default();
+        editor.open(doc, None);
+        editor.select(id);
+
+        // `Gizmos` needs its group registered, which only an `App` can do.
+        let mut app = App::new();
+        app.init_gizmo_group::<DefaultGizmoConfigGroup>();
+        let mut world = std::mem::take(app.world_mut());
+        world.insert_resource(editor);
+        world.init_resource::<CurrentMouseInput>();
+        world.init_resource::<GizmoGrab>();
+        world.insert_resource(HoldHandles(hold_handles));
+        world.insert_resource(ScaleFigure(None));
+        (world, placement)
+    }
+
+    /// One frame with the left button down and the pointer along `ray`.
+    fn frame(world: &mut World, ray: Ray3d, just_pressed: bool) -> u64 {
+        {
+            let mut mouse = world.resource_mut::<CurrentMouseInput>();
+            mouse.world_pos = Some(ray);
+            mouse.pressed = Some(MouseButton::Left);
+            mouse.just_pressed = just_pressed;
+            mouse.released = None;
+        }
+        world.run_system_once(drag_the_selected).unwrap();
+        world.resource::<PropEditor>().generation()
+    }
+
+    fn release(world: &mut World, ray: Ray3d) {
+        {
+            let mut mouse = world.resource_mut::<CurrentMouseInput>();
+            mouse.world_pos = Some(ray);
+            mouse.pressed = None;
+            mouse.just_pressed = false;
+            mouse.released = Some(MouseButton::Left);
+        }
+        world.run_system_once(drag_the_selected).unwrap();
+    }
+
+    /// A ray straight down onto `at` from across the given axis.
+    fn ray_onto(at: Vec3, across: Vec3) -> Ray3d {
+        Ray3d::new(at + across * 5.0, Dir3::new(-across).unwrap())
+    }
+
+    /// **A move arrow held still writes nothing**, and one that moves does.
+    ///
+    /// Every frame of a held drag used to write the placement back, so a
+    /// mapper pausing mid-drag bumped the generation — and dirtied the
+    /// document — sixty times a second for nothing. The press itself is not a
+    /// write either, and the whole drag is still one undo step.
+    #[test]
+    fn a_move_arrow_held_still_writes_nothing() {
+        let (mut world, placement) = a_world_holding_a_box(false);
+        let rotation = placement.rotation();
+        let scale = gizmo_scale(Some(box_shape().half_extents()));
+        let tip = handles(Some(&box_shape()), scale)
+            .into_iter()
+            .find(|(handle, _)| *handle == Handle::Move(0))
+            .map(|(_, local)| placement.origin() + rotation * local)
+            .unwrap();
+        let along = rotation * Vec3::X;
+        let across = rotation * Vec3::Z;
+
+        let before = world.resource::<PropEditor>().generation();
+        let pressed = frame(&mut world, ray_onto(tip, across), true);
+        assert_eq!(pressed, before, "pressing a handle wrote the document");
+        for _ in 0..10 {
+            frame(&mut world, ray_onto(tip, across), false);
+        }
+        assert_eq!(
+            world.resource::<PropEditor>().generation(),
+            before,
+            "a drag held still kept writing",
+        );
+
+        let pulled = ray_onto(tip + along * 0.1, across);
+        let moved = frame(&mut world, pulled, false);
+        assert!(moved > before, "a moving drag did not write");
+        for _ in 0..10 {
+            frame(&mut world, pulled, false);
+        }
+        assert_eq!(
+            world.resource::<PropEditor>().generation(),
+            moved,
+            "a drag held still after moving kept writing",
+        );
+
+        release(&mut world, pulled);
+        let mut editor = world.resource_mut::<PropEditor>();
+        let selected = editor.selected.unwrap();
+        let landed = editor.doc().feature(selected).unwrap().op.clone();
+        let FeatureOp::Primitive { placement: landed, .. } = landed else { unreachable!() };
+        assert!(
+            (landed.origin() - (placement.origin() + along * 0.1)).length() < 1e-4,
+            "the drag did not land: {:?}",
+            landed.origin,
+        );
+        assert!(editor.can_undo(), "the drag left nothing to undo");
+        editor.undo();
+        assert!(!editor.can_undo(), "the drag was more than one undo step");
+    }
+
+    /// A press on a handle that is let go without moving records nothing.
+    #[test]
+    fn a_handle_pressed_and_let_go_is_not_an_edit() {
+        let (mut world, placement) = a_world_holding_a_box(false);
+        let rotation = placement.rotation();
+        let scale = gizmo_scale(Some(box_shape().half_extents()));
+        let face = handles(Some(&box_shape()), scale)
+            .into_iter()
+            .find(|(handle, _)| *handle == Handle::Face { axis: 0, max: true })
+            .map(|(_, local)| placement.origin() + rotation * local)
+            .unwrap();
+        let ray = ray_onto(face, rotation * Vec3::Z);
+
+        let before = world.resource::<PropEditor>().generation();
+        for frame_number in 0..10 {
+            frame(&mut world, ray, frame_number == 0);
+        }
+        release(&mut world, ray);
+
+        let editor = world.resource::<PropEditor>();
+        assert_eq!(editor.generation(), before, "a still press wrote the document");
+        assert!(!editor.can_undo(), "a still press left an undo step");
+    }
+
+    /// The hold's handles keep the same rule: a grip held still is not an edit.
+    #[test]
+    fn a_grip_held_still_writes_nothing() {
+        let (mut world, _) = a_world_holding_a_box(true);
+        let hold = world.resource::<PropEditor>().doc().hold.for_class(None);
+        let tip = arrow_tip(hold.grip(), 0, GRIP_LENGTH);
+
+        let before = world.resource::<PropEditor>().generation();
+        for frame_number in 0..10 {
+            frame(&mut world, ray_onto(tip, Vec3::Z), frame_number == 0);
+        }
+        assert_eq!(
+            world.resource::<PropEditor>().generation(),
+            before,
+            "a grip held still wrote the document",
+        );
+
+        let pulled = ray_onto(tip + Vec3::X * 0.05, Vec3::Z);
+        let moved = frame(&mut world, pulled, false);
+        assert!(moved > before, "a moving grip did not write");
+        for _ in 0..10 {
+            frame(&mut world, pulled, false);
+        }
+        assert_eq!(world.resource::<PropEditor>().generation(), moved);
+
+        release(&mut world, pulled);
+        assert!(world.resource::<PropEditor>().can_undo());
     }
 }

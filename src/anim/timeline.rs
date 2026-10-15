@@ -234,7 +234,11 @@ pub struct DraggedTrack {
 pub enum Grab {
     Scrub { from_x: f32, from_time: f32 },
     Pan { from_x: f32, from_start: f32 },
-    Keys { from_x: f32, tracks: Vec<DraggedTrack> },
+    /// `last_by` is the offset the keys were last put at, so a pointer held
+    /// still does not write the same keys back every frame. The drag is
+    /// absolute — every frame recomputes from `original` — so an offset equal
+    /// to the last one is a result equal to the last one.
+    Keys { from_x: f32, tracks: Vec<DraggedTrack>, last_by: Option<f32> },
     /// Both corners, because the layout has no idea where the pointer is and
     /// should not have to: the gesture is the thing that knows, so it carries
     /// what it has swept.
