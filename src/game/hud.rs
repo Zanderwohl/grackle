@@ -1,7 +1,7 @@
 //! The crosshair, and what you are holding. Plain Bevy UI, not egui, so it
 //! exists in a build with no editor.
 //!
-//! Ids are resolved through the catalogue every frame rather than cached:
+//! Ids are resolved through the catalogue whenever either changes, never cached:
 //! `Equipped` and the catalogue arrive on different channels, and an id that
 //! does not resolve yet draws blank.
 
@@ -139,12 +139,25 @@ fn weapon_readout() -> impl Bundle {
 /// re-laid-out every frame.
 fn name_the_held_weapon(
     catalogue: Res<WeaponCatalogue>,
-    body: Option<Single<(&Equipped, &Ammo), With<LocalPlayer>>>,
+    body: Option<Single<(Ref<Equipped>, Ref<Ammo>, Ref<LocalPlayer>)>>,
+    fresh: Query<(), Or<(Added<HeldWeaponText>, Added<AmmoText>)>>,
     mut named: Query<&mut Text, (With<HeldWeaponText>, Without<AmmoText>)>,
     mut counted: Query<&mut Text, (With<AmmoText>, Without<HeldWeaponText>)>,
 ) {
     let (name, count) = match body.as_deref() {
-        Some((equipped, ammo)) => readout(&catalogue, equipped, ammo),
+        Some((equipped, ammo, ours)) => {
+            // Formatting is the cost; skip it when nothing it reads has moved.
+            // `ours`, because a client is handed a body whose loadout arrived
+            // before it was marked.
+            let stale = catalogue.is_changed()
+                || equipped.is_changed()
+                || ammo.is_changed()
+                || ours.is_changed();
+            if !stale && fresh.is_empty() {
+                return;
+            }
+            readout(&catalogue, equipped, ammo)
+        }
         None => (String::new(), String::new()),
     };
 

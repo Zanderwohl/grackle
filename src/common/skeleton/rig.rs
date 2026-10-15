@@ -171,6 +171,8 @@ pub struct Bone {
 pub struct Skeleton {
     bones: Vec<Bone>,
     proportions: Proportions,
+    /// Built with the rig: `index_of` is asked per body per frame.
+    by_name: HashMap<&'static str, usize>,
 }
 
 impl Skeleton {
@@ -181,7 +183,7 @@ impl Skeleton {
 
     /// Also the index into [`Skeleton::posed_bones`].
     pub fn index_of(&self, name: &str) -> Option<usize> {
-        self.bones.iter().position(|bone| bone.name == name)
+        self.by_name.get(name).copied()
     }
 
     pub fn proportions(&self) -> Proportions {
@@ -486,7 +488,8 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
         builder.bone(names.foot, Some(names.shin), ankle, toe, Vec2::new(0.09, 0.06) * girth * h);
     }
 
-    Skeleton { bones: builder.bones, proportions }
+    let by_name = builder.bones.iter().enumerate().map(|(index, bone)| (bone.name, index)).collect();
+    Skeleton { bones: builder.bones, proportions, by_name }
 }
 
 /// A limb's bone names per side. Names are `&'static str`, so they cannot be

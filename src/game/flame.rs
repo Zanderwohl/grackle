@@ -16,7 +16,8 @@ use crate::common::hitbox::Hitboxes;
 use crate::common::team::Allegiances;
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
-use crate::game::hitscan::{aim, eye, trace_past};
+use crate::common::hitscan::trace;
+use crate::game::hitscan::{aim, eye};
 use crate::game::player::{Player, PhysicsBody};
 use crate::common::weapon::{Equipped, WeaponAction, WeaponCatalogue};
 use crate::game::weapon::WeaponActionFired;
@@ -56,14 +57,26 @@ pub fn fire_flame(
         // agrees.
         let origin = eye(body.current, *stance);
 
+        let axis = aim(player);
+        // In query order, so a tie between two bodies breaks as it would
+        // without the cull.
+        let nearby: Vec<(Entity, Hitboxes)> = targets
+            .iter()
+            .filter(|(entity, boxes)| *entity != shot.shooter && may_reach(origin, axis, &spec, boxes))
+            .map(|(entity, boxes)| (entity, *boxes))
+            .collect();
+        if nearby.is_empty() {
+            continue;
+        }
+
         // One body, one puff, however many rays found it.
         let mut caught: Vec<Entity> = Vec::new();
 
-        for direction in cone_directions(aim(player), spec.spread, spec.rays) {
+        for direction in cone_directions(axis, spec.spread, spec.rays) {
             let ray = Ray3d::new(origin, direction);
             let reach = world.ray_distance(&ray, spec.range_m).unwrap_or(spec.range_m);
 
-            let Some(hit) = trace_past(&ray, reach, shot.shooter, &targets) else { continue };
+            let Some(hit) = trace(&ray, reach, nearby.iter().copied()) else { continue };
             if caught.contains(&hit.target) {
                 continue;
             }
@@ -91,6 +104,29 @@ pub fn fire_flame(
             }
         }
     }
+}
+
+/// Whether any ray of a puff could reach `boxes`, by their bounding sphere: a
+/// ray that enters a box enters the sphere, so this never drops a body a ray
+/// would have hit.
+fn may_reach(origin: Vec3, axis: Dir3, spec: &FlameSpec, boxes: &Hitboxes) -> bool {
+    let min = boxes.body.min().min(boxes.head.min());
+    let max = boxes.body.max().max(boxes.head.max());
+    let centre = (min + max) * 0.5;
+    let radius = (max - centre).length();
+
+    let to = centre - origin;
+    let distance = to.length();
+    if distance <= radius {
+        return true;
+    }
+    if distance - radius > spec.range_m {
+        return false;
+    }
+    // Slack for `cone_directions`' rounding.
+    const SLACK: f32 = 1e-3;
+    let off_axis = to.angle_between(*axis);
+    off_axis <= spec.spread + (radius / distance).asin() + SLACK
 }
 
 /// `Time<Fixed>`, so a match burns for the same number of ticks every run.
@@ -361,6 +397,31 @@ mod tests {
 
         puff(&mut world, shooter);
         assert!(asked_for(&mut world).is_empty(), "the cone reached round the side");
+    }
+
+    /// Breaks if the cull judges a body by its centre rather than its extent.
+    #[test]
+    fn a_body_reaching_into_the_cone_from_outside_it_is_caught() {
+        let mut world = a_world();
+        let shooter = a_shooter(&mut world);
+        let eye = crate::common::class::TALLEST_CLASS_EYE_HEIGHT;
+        // Centred 37 degrees off the axis, wide enough to cover it.
+        let centre = Vec3::new(3.0, eye, -4.0);
+        let target = world
+            .spawn((
+                Hitboxes {
+                    body: Box3 { centre, half_extents: Vec3::new(3.5, 0.9, 0.4) },
+                    head: Box3 { centre: centre + Vec3::Y * 0.8, half_extents: Vec3::splat(0.15) },
+                },
+                Damageable::default(),
+            ))
+            .id();
+
+        puff(&mut world, shooter);
+
+        let asked = asked_for(&mut world);
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert_eq!(asked[0].target, target);
     }
 
     #[test]
