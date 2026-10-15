@@ -192,7 +192,7 @@ pub fn step_projectiles(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
     world: Res<CollisionWorld>,
-    mut projectiles: Query<(Entity, &mut Projectile, &mut PhysicsBody, &mut Transform)>,
+    mut projectiles: Query<(Entity, &mut Projectile, &mut PhysicsBody)>,
     bodies: Query<(Entity, &Hitboxes)>,
     mut blasts: MessageWriter<Explosion>,
 ) {
@@ -201,7 +201,7 @@ pub fn step_projectiles(
         return;
     }
 
-    for (entity, mut projectile, mut body, _transform) in &mut projectiles {
+    for (entity, mut projectile, mut body) in &mut projectiles {
         projectile.age += dt;
         projectile.spin += projectile.spec.spin_rate * dt;
 

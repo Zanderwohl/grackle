@@ -184,7 +184,14 @@ impl Plugin for MulticamPlugin {
                 Update,
                 Self::set_camera_viewports.run_if(crate::common::app_mode::authoring),
             )
-            .add_systems(Update, Self::debug_boxes.run_if(in_state(AppMode::Editor)))
+            .add_systems(
+                Update,
+                Self::debug_boxes
+                    .run_if(in_state(AppMode::Editor))
+                    .run_if(|state: Res<MulticamState>| {
+                        state.debug_viewport_box || state.debug_mouseover_boxes || state.debug_mouse_circle
+                    }),
+            )
             // After transform propagation, so gizmos use this frame's global transforms.
             .add_systems(PostUpdate, Self::draw_camera_gizmos.after(TransformSystems::Propagate).run_if(in_state(AppMode::Editor)))
             .add_systems(EguiPrimaryContextPass, Self::debug_window.run_if(in_state(AppMode::Editor)))
@@ -332,11 +339,11 @@ impl MulticamPlugin {
 
     pub fn draw_camera_gizmos(
         state: Res<MulticamState>,
-        cameras: Query<(&Camera, &Multicam, &GlobalTransform, &Projection)>,
+        cameras: Query<(&Camera, &GlobalTransform, &Projection), With<Multicam>>,
         mut gizmos: Gizmos,
     ) {
         let color = Color::srgb_u8(255, 0 ,0);
-        for (camera, _, camera_tfm, projection) in cameras {
+        for (camera, camera_tfm, projection) in cameras {
             match projection {
                 Projection::Perspective(_) => if !state.draw_perspective_cameras { continue; }
                 Projection::Orthographic(_) => if !state.draw_ortho_cameras { continue; }
@@ -531,10 +538,10 @@ impl MulticamPlugin {
     }
 
     fn debug_boxes(
-        state: ResMut<MulticamState>,
+        state: Res<MulticamState>,
         mouse_buttons: Res<ButtonInput<MouseButton>>,
         windows: Query<&Window, With<PrimaryWindow>>,
-        cameras_q: Query<(Entity, &Camera, &GlobalTransform, &Multicam)>,
+        cameras_q: Query<&Camera, With<Multicam>>,
         ui_cam: Query<(&Camera, &Camera2d), Without<Multicam>>,
         mut painter: ShapePainter,
         mut contexts: EguiContexts,
@@ -565,7 +572,7 @@ impl MulticamPlugin {
         Self::debug_ui_boxes(&state, &mut painter, window, &ui_cam);
 
         if let Some(cursor_pos_window) = window.cursor_position() {
-            for (_camera_entity, camera, _camera_tfm, _camera_multicam) in &cameras_q {
+            for camera in &cameras_q {
                 if let Ok((ui_cam, _)) = ui_cam {
                     if let Some(viewport) = &camera.viewport {
                         let vp_min = viewport.physical_position.as_vec2();
@@ -605,7 +612,7 @@ impl MulticamPlugin {
         }
     }
 
-    fn debug_ui_boxes(state: &ResMut<MulticamState>, mut painter: &mut ShapePainter, window: &Window, ui_cam: &Result<(&Camera, &Camera2d), QuerySingleError>) {
+    fn debug_ui_boxes(state: &MulticamState, mut painter: &mut ShapePainter, window: &Window, ui_cam: &Result<(&Camera, &Camera2d), QuerySingleError>) {
         if let Ok((ui_cam, _)) = ui_cam {
             if state.debug_viewport_box {
                 painter.reset();

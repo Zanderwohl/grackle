@@ -153,7 +153,7 @@ impl EditorInputPlugin {
         window: Single<&Window, With<PrimaryWindow>>,
         mouse_buttons: Res<ButtonInput<MouseButton>>,
         mut current_input: ResMut<CurrentMouseInput>,
-        cameras: Query<(Entity, &Camera, &RenderTarget, &GlobalTransform, &Multicam)>,
+        cameras: Query<(Entity, &Camera, &RenderTarget, &GlobalTransform), With<Multicam>>,
         pointers: Query<(&PointerId, &PointerLocation)>,
         mut evr_motion: MessageReader<MouseMotion>,
     ) {
@@ -185,41 +185,38 @@ impl EditorInputPlugin {
             return;
         }
 
-        let mut locations = Vec::new();
-        for (_, pointer) in pointers {
-            for (camera_entity, camera, render_target, camera_transform, _cam_multicam) in &cameras {
-                if let Some(pointer_loc) = pointer.location() {
-                    if pointer_loc.is_in_viewport(camera, render_target, &primary_window_entity) {
-                        if pressed.is_some() {
-                            if just_pressed {
-                                current_input.started_in_camera = Some(camera_entity);
-                            }
-                        } else {
-                            current_input.started_in_camera = None;
-                        }
-                        let (position, normalized, ray) = match &camera.viewport {
-                            Some(viewport) => {
-                                let pos = pointer_loc.position - viewport.physical_position.as_vec2();
-                                let normalized = pos / viewport.physical_size.as_vec2();
-                                let ray = make_ray(&primary_window_entity, camera, render_target, camera_transform, &pointer);
-                                (pos, normalized, Some(ray))
-                            },
-                            None => {
-                                let normalized = pointer_loc.position / window.physical_size().as_vec2();
-                                (pointer_loc.position, normalized, None)
-                            }
-                        };
-                        locations.push((camera_entity, position, normalized, pointer_loc.position, camera.viewport_to_world(camera_transform, pointer_loc.position).ok(), ray));
-                    }
+        let hovered = pointers
+            .iter()
+            .filter_map(|(_, pointer)| pointer.location())
+            .find_map(|pointer_loc| {
+                cameras
+                    .iter()
+                    .find(|(_, camera, render_target, _)| {
+                        pointer_loc.is_in_viewport(camera, render_target, &primary_window_entity)
+                    })
+                    .map(|camera| (pointer_loc, camera))
+            });
+
+        if let Some((pointer_loc, (camera_entity, camera, _, camera_transform))) = hovered {
+            if pressed.is_some() {
+                if just_pressed {
+                    current_input.started_in_camera = Some(camera_entity);
                 }
+            } else {
+                current_input.started_in_camera = None;
             }
-        }
-        if let Some(location) = locations.first() {
-            current_input.in_camera = Some(location.0);
-            current_input.local_pos = Some(location.1);
-            current_input.normalized_pos = Some(location.2);
-            current_input.global_pos = Some(location.3);
-            current_input.world_pos = location.4;
+            let (position, normalized) = match &camera.viewport {
+                Some(viewport) => {
+                    let pos = pointer_loc.position - viewport.physical_position.as_vec2();
+                    (pos, pos / viewport.physical_size.as_vec2())
+                }
+                None => (pointer_loc.position, pointer_loc.position / window.physical_size().as_vec2()),
+            };
+            current_input.in_camera = Some(camera_entity);
+            current_input.local_pos = Some(position);
+            current_input.normalized_pos = Some(normalized);
+            current_input.global_pos = Some(pointer_loc.position);
+            current_input.world_pos = camera.viewport_to_world(camera_transform, pointer_loc.position).ok();
         } else {
             current_input.in_camera = None;
             current_input.local_pos = None;
@@ -244,20 +241,6 @@ impl EditorInputPlugin {
         current_input.confirm = keys.just_released(KeyCode::Enter) || keys.just_released(KeyCode::NumpadEnter);
         current_input.cancel = keys.just_released(KeyCode::Escape);
     }
-}
-
-fn make_ray(
-    primary_window_entity: &Query<Entity, With<PrimaryWindow>>,
-    camera: &Camera,
-    render_target: &RenderTarget,
-    camera_tfm: &GlobalTransform,
-    pointer_loc: &PointerLocation,
-) -> Option<Ray3d> {
-    let pointer_loc = pointer_loc.location()?;
-    if !pointer_loc.is_in_viewport(camera, render_target, primary_window_entity) {
-        return None;
-    }
-    camera.viewport_to_world(camera_tfm, pointer_loc.position).ok()
 }
 
 fn mouse_precedence(mouse_buttons: Res<ButtonInput<MouseButton>>) -> (bool, Option<MouseButton>, Option<MouseButton>) {

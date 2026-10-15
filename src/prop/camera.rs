@@ -273,7 +273,7 @@ fn navigate(
     keyboard: Res<CurrentKeyboardInput>,
     mut pivot: ResMut<OrbitPivot>,
     mut scrolls: MessageReader<MouseWheel>,
-    mut cameras: Query<(Entity, &mut Transform, &mut Projection, &Multicam)>,
+    mut cameras: Query<(Entity, &mut Transform, &mut Projection), With<Multicam>>,
 ) {
     let dragging = mouse.started_in_camera.filter(|_| mouse.pressed == Some(MouseButton::Right));
 
@@ -297,7 +297,7 @@ fn navigate(
         })
         .sum();
 
-    for (entity, mut transform, mut projection, multicam) in &mut cameras {
+    for (entity, mut transform, mut projection) in &mut cameras {
         let drag = (dragging == Some(entity)).then_some(mouse.delta_pos).unwrap_or(Vec2::ZERO);
         let zoom = if mouse.in_camera == Some(entity) { notches } else { 0.0 };
         if drag == Vec2::ZERO && zoom == 0.0 {
@@ -306,7 +306,6 @@ fn navigate(
 
         match &mut *projection {
             Projection::Perspective(_) => {
-                let _ = multicam;
                 if keyboard.modify {
                     pan_perspective(&mut transform, &mut pivot, drag);
                 } else {
