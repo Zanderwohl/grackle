@@ -28,6 +28,14 @@ struct PointDragArrow {
     axis: u8,
 }
 
+/// A mesh that is part of an arrow, carrying the arrow's axis itself so that
+/// picking and highlighting are one lookup rather than a walk of every
+/// arrow's children each frame.
+#[derive(Component)]
+struct PointDragArrowPart {
+    axis: u8,
+}
+
 #[derive(Resource, Default)]
 pub struct PointDragState {
     tracked_feature: Option<FeatureId>,
@@ -153,12 +161,14 @@ impl PointDragState {
             )).id();
 
             let shaft_entity = commands.spawn((
+                PointDragArrowPart { axis },
                 Mesh3d(shaft.clone()),
                 MeshMaterial3d(mat.clone()),
                 Transform::from_translation(Vec3::new(0.0, 0.375, 0.0)),
             )).id();
 
             let head_entity = commands.spawn((
+                PointDragArrowPart { axis },
                 Mesh3d(head.clone()),
                 MeshMaterial3d(mat.clone()),
                 Transform::from_translation(Vec3::new(0.0, 0.875, 0.0)),
@@ -184,8 +194,7 @@ impl PointDragState {
     }
 
     fn handle_arrow_drag(
-        arrows: Query<(Entity, &PointDragArrow, &Children)>,
-        child_meshes: Query<Entity, With<Mesh3d>>,
+        mut parts: Query<(&PointDragArrowPart, &mut MeshMaterial3d<StandardMaterial>)>,
         mut ray_cast: MeshRayCast,
         mouse_input: Res<CurrentMouseInput>,
         rotate_drag: Res<RotateDragState>,
@@ -203,14 +212,6 @@ impl PointDragState {
             return;
         }
 
-        let all_arrow_children: Vec<Entity> = arrows.iter()
-            .flat_map(|(_, _, children)| children.iter())
-            .filter(|e| child_meshes.get(*e).is_ok())
-            .collect();
-
-        let filter = |entity: Entity| all_arrow_children.contains(&entity);
-        let settings = MeshRayCastSettings::default().with_filter(&filter);
-
         let ray = mouse_input.world_pos;
         let mouse_released = mouse_input.released == Some(MouseButton::Left);
         let mouse_just_pressed = mouse_input.just_pressed && mouse_input.pressed == Some(MouseButton::Left);
@@ -220,10 +221,10 @@ impl PointDragState {
             if state.grabbed_axis.is_some() {
                 state.grabbed_axis = None;
                 state.grab_offset = None;
-                Self::restore_all_materials(&arrows, &mut commands, &state);
+                Self::paint(&mut parts, None, &state);
             }
             if !mouse_held {
-                Self::restore_all_materials(&arrows, &mut commands, &state);
+                Self::paint(&mut parts, None, &state);
             }
             if state.grabbed_axis.is_none() {
                 return;
@@ -274,62 +275,44 @@ impl PointDragState {
                 features.features_mut().insert(feature_id, feature);
             }
         } else {
-            let hits = ray_cast.cast_ray(ray, &settings);
-            if let Some((hit_entity, _hit_data)) = hits.first() {
-                let hit_axis = arrows.iter().find(|(_, _, children)| {
-                    children.iter().any(|c| c == *hit_entity)
-                }).map(|(_, arrow, _)| arrow.axis);
-
-                if let Some(axis) = hit_axis {
-                    Self::highlight_axis(&arrows, axis, &mut commands, &state);
-
-                    if mouse_just_pressed {
-                        state.grabbed_axis = Some(axis);
-                        state.grab_offset = None;
-                    }
-                } else {
-                    Self::restore_all_materials(&arrows, &mut commands, &state);
-                }
-            } else {
-                Self::restore_all_materials(&arrows, &mut commands, &state);
-            }
-        }
-    }
-
-    fn highlight_axis(
-        arrows: &Query<(Entity, &PointDragArrow, &Children)>,
-        axis: u8,
-        commands: &mut Commands,
-        state: &PointDragState,
-    ) {
-        for (_, arrow, children) in arrows.iter() {
-            let mat = if arrow.axis == axis {
-                state.highlight_materials[arrow.axis as usize].clone()
-            } else {
-                state.materials[arrow.axis as usize].clone()
+            let hit_axis = {
+                let filter = |entity: Entity| parts.contains(entity);
+                let settings = MeshRayCastSettings::default().with_filter(&filter);
+                ray_cast.cast_ray(ray, &settings).first()
+                    .and_then(|(hit, _)| parts.get(*hit).ok())
+                    .map(|(part, _)| part.axis)
             };
-            if let Some(mat) = mat {
-                for child in children.iter() {
-                    commands.entity(child)
-                        .remove::<MeshMaterial3d<StandardMaterial>>()
-                        .insert(MeshMaterial3d(mat.clone()));
+
+            Self::paint(&mut parts, hit_axis, &state);
+
+            if let Some(axis) = hit_axis {
+                if mouse_just_pressed {
+                    state.grabbed_axis = Some(axis);
+                    state.grab_offset = None;
                 }
             }
         }
     }
 
-    fn restore_all_materials(
-        arrows: &Query<(Entity, &PointDragArrow, &Children)>,
-        commands: &mut Commands,
+    /// Lights the arrow on `highlighted` and puts every other one back to
+    /// its own colour. A material is only written when it is not already the
+    /// one wanted: this runs every frame the pointer is over a viewport, and
+    /// an unconditional write is a changed component on every arrow mesh, so
+    /// every one of them re-extracted for rendering for nothing.
+    fn paint(
+        parts: &mut Query<(&PointDragArrowPart, &mut MeshMaterial3d<StandardMaterial>)>,
+        highlighted: Option<u8>,
         state: &PointDragState,
     ) {
-        for (_, arrow, children) in arrows.iter() {
-            if let Some(mat) = &state.materials[arrow.axis as usize] {
-                for child in children.iter() {
-                    commands.entity(child)
-                        .remove::<MeshMaterial3d<StandardMaterial>>()
-                        .insert(MeshMaterial3d(mat.clone()));
-                }
+        for (part, mut material) in parts.iter_mut() {
+            let set = if highlighted == Some(part.axis) {
+                &state.highlight_materials
+            } else {
+                &state.materials
+            };
+            let Some(wanted) = &set[part.axis as usize] else { continue; };
+            if material.0 != *wanted {
+                material.0 = wanted.clone();
             }
         }
     }
@@ -345,5 +328,53 @@ impl PointDragState {
         state.tracked_feature = None;
         state.grabbed_axis = None;
         state.grab_offset = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Hovering an arrow frame after frame must not keep rewriting the
+    /// materials: a written `MeshMaterial3d` is a changed one, and every
+    /// changed one is re-extracted for rendering.
+    #[test]
+    fn hovering_the_same_arrow_again_writes_nothing() {
+        let mut world = World::new();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut state = PointDragState::default();
+        for i in 0..3 {
+            state.materials[i] = Some(materials.add(StandardMaterial::default()));
+            state.highlight_materials[i] = Some(materials.add(StandardMaterial::default()));
+        }
+        let parts: Vec<Entity> = (0u8..3)
+            .map(|axis| world.spawn((
+                PointDragArrowPart { axis },
+                MeshMaterial3d(state.materials[axis as usize].clone().unwrap()),
+            )).id())
+            .collect();
+        world.insert_resource(state);
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(|
+            mut parts: Query<(&PointDragArrowPart, &mut MeshMaterial3d<StandardMaterial>)>,
+            state: Res<PointDragState>,
+        | PointDragState::paint(&mut parts, Some(1), &state));
+
+        schedule.run(&mut world);
+        let state = world.resource::<PointDragState>();
+        let lit = state.highlight_materials[1].clone().unwrap();
+        let idle = state.materials[0].clone().unwrap();
+        assert_eq!(world.get::<MeshMaterial3d<StandardMaterial>>(parts[1]).unwrap().0, lit);
+        assert_eq!(world.get::<MeshMaterial3d<StandardMaterial>>(parts[0]).unwrap().0, idle);
+
+        let archetypes: Vec<_> = parts.iter().map(|e| world.entity(*e).archetype().id()).collect();
+        world.clear_trackers();
+        schedule.run(&mut world);
+        for (part, archetype) in parts.iter().zip(archetypes) {
+            let entity = world.entity(*part);
+            assert_eq!(entity.archetype().id(), archetype);
+            assert!(!entity.get_ref::<MeshMaterial3d<StandardMaterial>>().unwrap().is_changed());
+        }
     }
 }
