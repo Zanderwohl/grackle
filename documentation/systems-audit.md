@@ -99,11 +99,11 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
   O(n²) room clones per frame. Pass a slice and skip an index. Done for
   picking; `CollisionWorld::rebuild` and the room bake still clone the other
   rooms, but run on rebuild rather than per frame.
-- [ ] `src/tool/movement.rs` writes `CursorOptions` every frame (winit re-grabs).
+- [x] `src/tool/movement.rs` writes `CursorOptions` every frame (winit re-grabs).
   Compare first; `cameras.get_mut(cam_id)`.
 - [ ] `place_the_viewmodel_arms` (`src/game/viewmodel.rs`) re-solves IK every
   frame on inputs that change only on respawn/weapon/FOV/aspect. Key it.
-- [ ] `pose_body_meshes` (`src/game/body_mesh.rs`) re-poses sleeping corpses and
+- [x] `pose_body_meshes` (`src/game/body_mesh.rs`) re-poses sleeping corpses and
   static previews. Filter `Or<(Changed<Pose>, Changed<BodyMesh>,
   Changed<SkeletonRoot>)>`, `set_if_neq`.
 - [x] `draw_debug_laser` (`src/game/hitscan.rs`) traces every body for every
