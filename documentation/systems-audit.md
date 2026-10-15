@@ -75,10 +75,10 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
 
 ## MEDIUM
 
-- [ ] Drags held still write every frame: `drag_the_selected`, `drag_the_hold`
+- [x] Drags held still write every frame: `drag_the_selected`, `drag_the_hold`
   (`src/prop/gizmo.rs`), the timeline key nudge (`src/anim/mod.rs`);
   `BodyClips::clip_mut` calls `changed()` before finding the clip.
-- [ ] Per-frame `Arc::new(clip.clone())`: `perform_weapon_clips`
+- [x] Per-frame `Arc::new(clip.clone())`: `perform_weapon_clips`
   (`src/game/held.rs`), `drive_the_preview` (`src/anim/mod.rs`). **Not** by
   spreading `Arc<Clip>` further — the `Arc`s already there are the cause.
   Clips become an asset: `Clip: Asset`, `Playing.clip: Handle<Clip>`,
@@ -88,13 +88,17 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
   (`baked.rs`, `held.rs`). A save or an edit re-inserts under the same handle
   (`AssetEvent::Modified`) instead of every frame re-cloning to catch one.
   Derived clips (`at_heading` blend previews) are added once per change, not
-  per frame. Touches `play.rs`/`state.rs`, so after H2 lands.
-- [ ] Gizmo material churn: `point_drag`, `rotate_drag`, `room` remove +
+  per frame. Done: weapon and preview clips are `Handle<Clip>`; `ClipLibrary`
+  holds its animations by value (one resource is the single owner);
+  `ClipAssetsPlugin` requires `AssetPlugin` rather than falling back.
+- [x] Gizmo material churn: `point_drag`, `rotate_drag`, `room` remove +
   re-insert `MeshMaterial3d` on every handle every frame. Add a
   `GizmoPart { axis }` marker, assign only when different; drop the child
   `Vec` and linear scan.
-- [ ] `src/tool/tool_helpers.rs` `find_nearest_feature_hit` / `rooms_but` —
-  O(n²) room clones per frame. Pass a slice and skip an index.
+- [x] `src/tool/tool_helpers.rs` `find_nearest_feature_hit` / `rooms_but` —
+  O(n²) room clones per frame. Pass a slice and skip an index. Done for
+  picking; `CollisionWorld::rebuild` and the room bake still clone the other
+  rooms, but run on rebuild rather than per frame.
 - [ ] `src/tool/movement.rs` writes `CursorOptions` every frame (winit re-grabs).
   Compare first; `cameras.get_mut(cam_id)`.
 - [ ] `place_the_viewmodel_arms` (`src/game/viewmodel.rs`) re-solves IK every
