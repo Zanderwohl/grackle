@@ -45,13 +45,18 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
     ticks today: `map_metadata` (also `sync_authors_ui_buffer_from_authors`
     every frame), `multicam_state`, `gizmo_visibility`, `next_tool`,
     `current_file.requested_op.take()`.
-- [ ] **H2** `src/common/skeleton/rig.rs` `Skeleton::posed_bones` — full FK +
+- [x] **H2** `src/common/skeleton/rig.rs` `Skeleton::posed_bones` — full FK +
   two `Vec`s, called to read one or two bones by `head_box`, `chain_tip`,
   `set_world_rotation`, `ik::solve`, `plant_feet` (which also re-FKs the rest
   pose every call). ~12–30 FKs per body per frame across `advance_animators`
   and `update_hitboxes`. Fix: cache rest tails on `Skeleton`; add
   `posed_bone(pose, root, index)` walking only the ancestor chain; a
-  non-allocating variant for `duck_under`.
+  non-allocating variant for `duck_under`. Done: `posed_bone` and
+  `each_posed_bone`, identical to the bit (root-first products); pose plus
+  hitboxes for 60 bodies went 0.225 → 0.100 ms/frame in release. Rest tails
+  were not cached — rig-local tails reassociate the products, so only close.
+  Callers that want every bone (`body_mesh`, ragdoll, viewmodel, drawing)
+  still collect, now with one allocation rather than two.
 - [x] **H3** `src/game/player.rs` `interpolate_bodies` — writes `Transform` on
   every `PhysicsBody` every frame even when still; re-propagates every bone
   mesh. Fix: compare first.

@@ -144,11 +144,9 @@ fn body_box(root: &Transform, stance: Stance) -> Box3 {
 /// class with a bigger head or a shorter body is boxed around its own head
 /// rather than around the average of everybody's.
 fn head_box(skeleton: &Skeleton, pose: &Pose, settled: &Pose, root: &Transform) -> Box3 {
+    let head = skeleton.index_of(bone::HEAD);
     let head_centre = |pose: &Pose| {
-        skeleton
-            .posed_bones(pose, root)
-            .into_iter()
-            .find(|posed| posed.name == bone::HEAD)
+        head.map(|index| skeleton.posed_bone(pose, root, index))
             .map(|posed| (posed.prism().translation, posed.length, posed.thickness))
     };
 

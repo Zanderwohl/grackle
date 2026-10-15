@@ -337,7 +337,7 @@ fn chain_tip(skeleton: &Skeleton, pose: &Pose, root: &Transform, chain: &Chain) 
     // The `lower` bone's tail: the wrist or the ankle, which is the point
     // `solve` puts on its target.
     let lower = skeleton.index_of(chain.lower)?;
-    Some(skeleton.posed_bones(pose, root)[lower].tail)
+    Some(skeleton.posed_bone(pose, root, lower).tail)
 }
 
 /// Resolve a sampled target to a world point.

@@ -111,13 +111,18 @@ pub fn solve(
 
     // The chain as it stands, which is what the solve is relative to: the
     // shoulder or hip may itself have been moved by the pose this is fixing up.
-    let posed = skeleton.posed_bones(pose, root);
-    let joint = posed[upper].head;
+    // Only the bones this reads are placed, and the tip is read now, before
+    // the joints above it are rewritten.
+    let joint = skeleton.posed_bone(pose, root, upper).head;
     let (first, second) = (bones[upper].length, bones[lower].length);
     let parent = match bones[upper].parent {
-        Some(parent) => posed[parent].rotation,
+        Some(parent) => skeleton.posed_bone(pose, root, parent).rotation,
         None => root.rotation,
     };
+    let tip = chain.tip.and_then(|tip| {
+        let index = skeleton.index_of(tip)?;
+        Some((tip, index, skeleton.posed_bone(pose, root, index).rotation))
+    });
 
     let to_target = target - joint;
     let distance = to_target.length();
@@ -174,11 +179,8 @@ pub fn solve(
     pose.set(chain.upper, (parent * bones[upper].rest).inverse() * upper_rotation);
     pose.set(chain.lower, (upper_rotation * bones[lower].rest).inverse() * lower_rotation);
 
-    if let Some(tip) = chain.tip {
-        if let Some(index) = skeleton.index_of(tip) {
-            let was = posed[index].rotation;
-            pose.set(tip, (lower_rotation * bones[index].rest).inverse() * was);
-        }
+    if let Some((tip, index, was)) = tip {
+        pose.set(tip, (lower_rotation * bones[index].rest).inverse() * was);
     }
 
     if distance <= reach + STRAIGHT_MARGIN {
@@ -209,7 +211,7 @@ pub fn plant_feet(
     offsets: [FootOffset; 2],
 ) -> [Reach; 2] {
     let mut reached = [Reach::Impossible; 2];
-    let standing = skeleton.posed_bones(&Pose::rest(), root);
+    let standing = Pose::rest();
     // Knees bend forwards. The one thing the solver cannot work out for
     // itself, and the one thing a body is never in two minds about — a
     // sidestep still has its knees pointing the way its toes do.
@@ -217,10 +219,9 @@ pub fn plant_feet(
     let across = root.rotation * Vec3::X;
 
     for (index, (chain, offset)) in [LEFT_LEG, RIGHT_LEG].iter().zip(offsets).enumerate() {
-        let Some(resting) = standing
-            .iter()
-            .find(|posed| posed.name == chain.lower)
-            .map(|posed| posed.tail)
+        let Some(resting) = skeleton
+            .index_of(chain.lower)
+            .map(|lower| skeleton.posed_bone(&standing, root, lower).tail)
         else {
             continue;
         };
@@ -288,7 +289,7 @@ pub fn set_world_rotation(
     wanted: Quat,
 ) {
     let Some(index) = skeleton.index_of(name) else { return };
-    let posed = skeleton.posed_bones(pose, root)[index].rotation;
+    let posed = skeleton.posed_bone(pose, root, index).rotation;
     let base = posed * pose.joint(name).inverse();
     pose.set(name, base.inverse() * wanted);
 }
@@ -346,11 +347,10 @@ pub fn leg_length(skeleton: &Skeleton) -> f32 {
 /// Exact in one pass, because the root offset translates the whole body
 /// rigidly. The knees are put back underneath afterwards by [`plant_feet`].
 pub fn duck_under(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, ceiling: f32) {
-    let highest = skeleton
-        .posed_bones(pose, root)
-        .iter()
-        .map(|posed| posed.head.y.max(posed.tail.y))
-        .fold(f32::MIN, f32::max);
+    let mut highest = f32::MIN;
+    skeleton.each_posed_bone(pose, root, |posed| {
+        highest = f32::max(highest, posed.head.y.max(posed.tail.y));
+    });
 
     let slack = (highest - root.translation.y) - ceiling;
     if slack.abs() < 1e-5 {
