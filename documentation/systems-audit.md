@@ -109,8 +109,18 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
 - [x] `draw_debug_laser` (`src/game/hitscan.rs`) traces every body for every
   player every frame, not tied to F4. Done: gated on `ShowHitboxes` (F4),
   now off by default.
-- [ ] `Ragdoll::step` ~12 allocations per corpse per tick; scratch buffers,
-  `par_iter_mut`.
+- [x] `Ragdoll::step` ~12 allocations per corpse per tick; scratch buffers,
+  `par_iter_mut`. Done, bit-identical; ~10% faster single-threaded.
+
+## Found along the way
+
+- [ ] **Corpses are not deterministic across build profiles.** The ragdoll
+  solver reaches different bits in a release build than a debug one, on the
+  same code (`the_solver_reaches_the_same_bits_it_always_has` pins both).
+  CLAUDE.md's "every machine runs the same solver from the seed" holds only
+  between builds of one profile and target; wasm vs native is unmeasured.
+  Cosmetic today (corpses are props), but it is the same question prediction
+  will ask of `step_player`.
 - [ ] `advance_animators` recomputes identical poses in the editor (clock
   frozen); `par_iter_mut` or skip when inputs unchanged.
 
