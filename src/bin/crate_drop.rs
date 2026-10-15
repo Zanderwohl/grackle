@@ -82,7 +82,6 @@ fn ui(
 
         let half_height = ui.available_height() / 2.0;
 
-        // Top half
         ui.vertical(|ui| {
             ui.set_min_width(ui.available_width());
             ui.set_min_height(half_height);
@@ -107,9 +106,7 @@ fn ui(
 
         ui.separator();
 
-        // Bottom half
         ScrollArea::vertical().show(ui, |ui| {
-            // This should be the vertical halfway point.
             ui.heading(get!("crate_drop.details.title"));
             match state.selected_item {
                 None => {
@@ -119,7 +116,6 @@ fn ui(
                     let item = &state.items[selected_idx];
 
                     ui.label(item.display_name());
-                    // get!("item.trade_restriction")
 
                     if item.trade_restriction || item.crafting_restriction {
                         ui.add_space(16.0);

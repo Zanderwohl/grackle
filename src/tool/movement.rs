@@ -42,7 +42,6 @@ impl MovementPlugin {
             return;
         }
 
-        // grab and hold mouse
         Self::set_cursor(&mut *cursor_options, CursorGrabMode::Locked, false);
 
         let Ok((mut transform, mut projection)) = cameras.get_mut(cam_id) else {
@@ -50,8 +49,8 @@ impl MovementPlugin {
         };
         let delta = mouse_input.delta_pos;
         let forward = transform.forward();
-        // Matched through a shared borrow, so only a zoom that actually moves
-        // the scale marks `Projection` changed — a perspective drag never does.
+        // Matched through a shared borrow, so only a real zoom marks
+        // `Projection` changed.
         match &*projection {
             Projection::Perspective(_) => {
                 Self::perspective_move(&mut transform, delta, &settings, &keyboard_input);

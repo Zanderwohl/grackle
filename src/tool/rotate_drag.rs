@@ -1,25 +1,14 @@
-//! Rotation rings for the selected feature.
+//! Rotation rings for the selected feature, built like
+//! [`crate::tool::point_drag`].
 //!
-//! The translation counterpart is [`crate::tool::point_drag`], and this is
-//! deliberately built to the same shape: real meshes picked with
-//! [`MeshRayCast`], a grab that lives in a resource, and every change routed
-//! through the feature rather than the entity.
+//! Hand-rolled rather than Bevy's `TransformGizmoPlugin`, which writes the
+//! entity's `Transform`: a feature's entity is output, overwritten by
+//! `apply_to_entity` on the next edit. It also assumes one camera, and the
+//! editor has four viewports whose rays come from [`CurrentMouseInput`].
 //!
-//! That last part is why this is hand-rolled rather than Bevy 0.19's
-//! `TransformGizmoPlugin`. Bevy's gizmo writes `Transform` on the entity it is
-//! focused on, and in Grackle a feature's entity is *output*: `apply_to_entity`
-//! overwrites it from the resolved feature on the next edit, so a rotation
-//! written there would last until the next frame that touched the feature and
-//! then vanish. It also reads `Window::cursor_position` against a single
-//! resolved camera, and the editor draws four viewports inside `egui_dock`
-//! whose rays come from [`CurrentMouseInput`] instead. Going through
-//! `set_euler_angle` also means a drag lands in the undo history as one step:
-//! the map is checkpointed when the button comes back up, not per frame.
-//!
-//! A drag turns about *one* Euler component, and the ring for that component
-//! is drawn on the axis that component actually turns about — see
-//! [`crate::common::rotation`]. So the ring the mouse is on is always the ring
-//! the object moves along, whatever the other two angles are.
+//! Each ring is drawn on the axis its Euler component actually turns about
+//! (see [`crate::common::rotation`]), so the ring under the mouse is the one
+//! the object moves along.
 
 use bevy::prelude::*;
 
@@ -31,8 +20,7 @@ use crate::tool::point_drag::PointDragState;
 use crate::tool::tool_helpers::angle_on_plane;
 use crate::tool::Tools;
 
-/// Outside the translation arrows, which reach about 1.0, so the two gizmos
-/// do not sit on top of each other and fight over the same click.
+/// Outside the translation arrows, which reach about 1.0.
 const RING_RADIUS: f32 = 1.3;
 const RING_THICKNESS: f32 = 0.035;
 
@@ -56,19 +44,14 @@ struct RotateDragRing {
     axis: u8,
 }
 
-/// The mesh of a ring, carrying the ring's axis itself so that picking and
-/// highlighting are one lookup rather than a walk of every ring's children
-/// each frame.
+/// A ring's mesh, carrying its axis so picking and highlighting are one lookup.
 #[derive(Component)]
 struct RotateDragRingPart {
     axis: u8,
 }
 
-/// What a grab froze at the moment the mouse went down.
-///
-/// The plane has to stay put for the duration: recomputing it from the
-/// object's current rotation would move the plane as the object turned on it,
-/// and the drag would run away from the cursor.
+/// Frozen at the grab. Recomputing the plane from the current rotation would
+/// move it as the object turned, and the drag would run away from the cursor.
 struct RingGrab {
     axis: u8,
     axis_world: Vec3,
@@ -106,8 +89,7 @@ impl RotateDragState {
             RING_RADIUS + RING_THICKNESS,
         )));
 
-        // The same axis colours the arrows use, so a red ring and a red arrow
-        // are obviously the same axis seen two ways.
+        // The arrows' axis colours.
         let colors = [
             Color::srgb(1.0, 0.0, 0.0),
             Color::srgb(0.0, 1.0, 0.0),
@@ -143,8 +125,6 @@ impl RotateDragState {
         }
     }
 
-    /// A feature with no `rotation_axes` gets no rings at all, so a plain point
-    /// is not cluttered with a gizmo that would do nothing.
     fn axes_for(features: &FeatureTimeline, id: Option<FeatureId>) -> Vec<u8> {
         id.and_then(|id| features.get_feature(&id))
             .map(|f| f.object().rotation_axes())
@@ -201,8 +181,7 @@ impl RotateDragState {
         }
     }
 
-    /// Follows the feature while it is dragged around by the arrows, and
-    /// re-aims each ring as the other angles change — except the ring being
+    /// Re-aims each ring as the other angles change, except the one being
     /// dragged, whose plane was frozen at the grab.
     fn update_ring_transforms(
         features: Res<FeatureTimeline>,
@@ -282,9 +261,8 @@ impl RotateDragState {
             return;
         }
 
-        // Not dragging: hover, and possibly grab. An arrow drag in progress
-        // owns the mouse — the rings are within reach of the arrows and would
-        // otherwise steal a translation halfway through.
+        // The rings are within reach of the arrows, so an arrow drag must not
+        // grab a ring.
         if point_drag.is_dragging() {
             Self::paint(&mut parts, None, &state);
             return;
@@ -313,8 +291,7 @@ impl RotateDragState {
         let (cos_dir, sin_dir) = axis_world.any_orthonormal_pair();
 
         let plane = InfinitePlane3d::new(axis_world);
-        // Looking straight down the ring's edge there is no angle to read, so
-        // there is nothing to grab either.
+        // Edge-on, there is no angle to read.
         let Some(hit) = ray.plane_intersection_point(center, plane) else { return; };
 
         state.grab = Some(RingGrab {
@@ -363,8 +340,8 @@ impl RotateDragState {
     }
 }
 
-/// A [`Torus`] is built lying in XZ with its axis up, so aiming a ring is a
-/// matter of turning `Y` onto the axis that ring's component turns about.
+/// A [`Torus`] lies in XZ with its axis up, so `Y` is turned onto the ring's
+/// axis.
 fn ring_transform(center: Vec3, angles: Vec3, axis: u8) -> Transform {
     let axis_world = euler_axis_world(angles, axis);
     Transform::from_translation(center)
@@ -376,8 +353,8 @@ mod tests {
     use super::*;
     use crate::common::rotation::quat_from_euler;
 
-    /// Every ring has to lie in the plane its drag reads angles on, or the
-    /// mouse would be picking one circle and turning the object on another.
+    /// Breaks if a ring is drawn in a different plane from the one its drag
+    /// reads angles on.
     #[test]
     fn a_ring_faces_the_axis_its_component_turns_about() {
         let angles = Vec3::new(0.3, 1.4, -0.8);
@@ -390,9 +367,6 @@ mod tests {
         }
     }
 
-    /// The drag's arithmetic in miniature: the cursor moves a quarter turn
-    /// around the ring, so the object does too — and lands with its front
-    /// pointing where the cursor is, not where the cursor started.
     #[test]
     fn a_quarter_turn_of_the_cursor_is_a_quarter_turn_of_the_object() {
         let axis_world = Vec3::Y;

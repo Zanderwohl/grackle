@@ -5,41 +5,23 @@ use crate::get;
 
 /// Which end of the wire this process is.
 ///
-/// One binary is all three, and the default is the one with no wire at all:
-/// opening Grackle and pressing F5 must not need a socket, a port, or a second
-/// process. `Solo` is a real role rather than "the server we did not start" —
-/// a closed game is the common case for someone laying out a room, and making
-/// it a degenerate server would put a loopback connection in the way of the
-/// thing this editor exists to make fast.
+/// `Solo` is a real role with no socket, not a degenerate server: laying out a
+/// room must not need a loopback connection. `Listen` is `Solo` that also
+/// accepts connections; the host is still a player.
 ///
-/// `Listen` is `Solo` that also accepts company. The host is a player: same
-/// window, same editor, same F5. That is what makes between-round editing
-/// testable with somebody else standing in the map.
-///
-/// **Ask [`NetRole::is_authority`], not which variant this is.** Solo and
-/// Listen both simulate and are believed; a client predicts and is corrected.
-/// Almost nothing downstream cares about the difference between playing alone
-/// and hosting, and a system that matches on the variant is a system that has
-/// to be found again the first time a fourth role appears.
+/// Ask [`NetRole::is_authority`] rather than matching the variant, so a fourth
+/// role does not have to be found again in every match.
 #[derive(Resource, Debug, Clone, PartialEq, Eq, Default)]
 pub enum NetRole {
-    /// Closed game. No socket is opened and none is expected.
     #[default]
     Solo,
-    /// Simulating for others as well as for ourselves, on `port`.
     Listen { port: u16 },
-    /// Somebody else is simulating; we predict and are corrected.
     Client { host: String, port: u16 },
 }
 
 impl NetRole {
-    /// Whether this process decides what actually happened.
-    ///
-    /// The seam prediction will need: an authority steps the world and its
-    /// answer is final, a client steps the same world from the same inputs and
-    /// throws the result away whenever the server disagrees. Systems that
-    /// resolve anything — damage, death, who picked up what — belong behind
-    /// this rather than behind `AppMode::Play` alone.
+    /// Whether this process decides what happened. Anything that resolves damage,
+    /// death or pickups belongs behind this, not behind `AppMode::Play` alone.
     pub fn is_authority(&self) -> bool {
         match self {
             NetRole::Solo | NetRole::Listen { .. } => true,
@@ -47,13 +29,11 @@ impl NetRole {
         }
     }
 
-    /// Whether a socket is meant to be open. False only for `Solo`.
     pub fn is_online(&self) -> bool {
         !matches!(self, NetRole::Solo)
     }
 
-    /// A line for the menu bar and the log. Localised, so it is display text
-    /// and not something to parse or compare.
+    /// Localised display text; not for parsing or comparing.
     pub fn describe(&self) -> String {
         match self {
             NetRole::Solo => get!("net.role.solo"),
@@ -65,27 +45,18 @@ impl NetRole {
     }
 }
 
-/// Asking to change [`NetRole`], from the command line or the menu.
-///
-/// A message rather than a direct write so that the one place which knows how
-/// to tear a connection down is the only place that changes the role. Today
-/// there is nothing to tear down; the moment there is, every caller here
-/// already routes through it.
+/// A request to change [`NetRole`]. A message so that [`apply_net_requests`] is
+/// the only writer of the role.
 #[derive(Message, Debug, Clone)]
 pub enum NetRequest {
-    /// Go closed. Also how a client leaves a server.
+    /// Also how a client leaves a server.
     GoSolo,
-    /// Start accepting connections on `port`, still playing locally.
     Host { port: u16 },
-    /// Leave whatever we were doing and join somebody else's game.
     Join { host: String, port: u16 },
 }
 
-/// Owns [`NetRole`] and is the only thing that writes it.
-///
-/// Deliberately not gated on `AppMode`: which end of the wire we are does not
-/// stop being true because somebody pressed F5 into the editor, and a listen
-/// server that dropped its role on every swap would drop its players with it.
+/// Not gated on `AppMode`: a listen server that dropped its role on F5 would
+/// drop its players with it.
 pub struct NetPlugin;
 
 impl Plugin for NetPlugin {
@@ -97,21 +68,14 @@ impl Plugin for NetPlugin {
     }
 }
 
-/// Say once, at startup, which end of the wire the command line asked for.
-///
-/// The CLI inserts [`NetRole`] directly rather than going through a request —
-/// there is nothing to tear down before the app has run — so without this a
-/// mistyped `--serve` would start a listen server that says nothing at all.
+/// The CLI inserts [`NetRole`] directly, so without this a mistyped `--serve`
+/// would host silently.
 fn announce_role(role: Res<NetRole>) {
     info!("{}", role.describe());
 }
 
-/// The only writer of [`NetRole`].
-///
-/// Deliberately knows nothing about sockets: `NetTransportPlugin` watches
-/// `Changed<NetRole>` and is the thing that binds, dials and tears down. That
-/// split is what lets the role be decided by a menu click, a command-line flag
-/// or a test without any of them having to know what a link entity is.
+/// The only writer of [`NetRole`]. Knows nothing about sockets;
+/// `NetTransportPlugin` reacts to `Changed<NetRole>`.
 fn apply_net_requests(mut requests: MessageReader<NetRequest>, mut role: ResMut<NetRole>) {
     for request in requests.read() {
         let wanted = match request {
@@ -123,9 +87,8 @@ fn apply_net_requests(mut requests: MessageReader<NetRequest>, mut role: ResMut<
             },
         };
 
-        // Bevy's change detection fires on any write, not on a differing one,
-        // and the transport will be watching for changes. Re-hosting the port
-        // we are already hosting must not read as a reason to rebind it.
+        // Change detection fires on any write; re-hosting the same port must
+        // not read as a reason to rebind.
         if *role == wanted {
             continue;
         }
@@ -135,35 +98,24 @@ fn apply_net_requests(mut requests: MessageReader<NetRequest>, mut role: ResMut<
     }
 }
 
-/// Run condition: this process decides what actually happened.
-///
-/// `Option`, so the game layer does not require the network layer: a build or
-/// a test with no `NetPlugin` in it is a closed game, and a closed game is its
-/// own authority.
+/// Run condition. `Option` so a build or test without `NetPlugin` counts as a
+/// closed game, which is its own authority.
 pub fn has_authority(role: Option<Res<NetRole>>) -> bool {
     role.is_none_or(|role| role.is_authority())
 }
 
-/// Run condition: somebody else does, and we are being told.
 pub fn is_remote_client(role: Option<Res<NetRole>>) -> bool {
     !has_authority(role)
 }
 
-/// Run condition: there are clients to send things to.
-///
-/// A run condition rather than an early return in the system, for anything
-/// keyed on `Added`: a system that runs and returns still moves its change
-/// ticks on, so whatever was added while playing alone is never seen again.
+/// Run condition: there are clients to send things to. A run condition, not an
+/// early return, so `Added` filters still see what was added while solo.
 pub fn is_hosting(role: Option<Res<NetRole>>) -> bool {
     role.is_some_and(|role| matches!(*role, NetRole::Listen { .. }))
 }
 
-/// Split `host`, `host:port` or `[::1]:port` into its two halves.
-///
-/// Hand-rolled rather than going through `ToSocketAddrs` because that resolves
-/// DNS — a blocking call, on the main thread, for a string somebody is still
-/// halfway through typing. Resolution is the transport's problem; this is a
-/// syntax check on what the user typed.
+/// Split `host`, `host:port` or `[::1]:port`. Hand-rolled because
+/// `ToSocketAddrs` resolves DNS, blocking, on a string still being typed.
 pub fn parse_endpoint(text: &str) -> Result<(String, u16), String> {
     let text = text.trim();
     if text.is_empty() {
@@ -187,8 +139,7 @@ pub fn parse_endpoint(text: &str) -> Result<(String, u16), String> {
     }
 
     match text.rsplit_once(':') {
-        // More than one colon and no brackets is a bare IPv6 literal, which
-        // has no room left for a port. Take the whole thing as the host.
+        // Several colons without brackets is a bare IPv6 literal with no port.
         Some(_) if text.matches(':').count() > 1 => Ok((text.to_owned(), DEFAULT_PORT)),
         Some((host, port)) if !host.is_empty() => Ok((host.to_owned(), parse_port(port)?)),
         Some(_) => Err(get!("net.error.no_host")),
@@ -198,8 +149,7 @@ pub fn parse_endpoint(text: &str) -> Result<(String, u16), String> {
 
 fn parse_port(text: &str) -> Result<u16, String> {
     match text.parse::<u16>() {
-        // Port 0 means "any free port" to the OS, which is never what somebody
-        // typing a port into a box meant.
+        // Port 0 means "any free port" to the OS, never what a user typed it for.
         Ok(0) | Err(_) => Err(get!("net.error.port", "port", text)),
         Ok(port) => Ok(port),
     }
@@ -215,8 +165,7 @@ mod tests {
         assert!(!NetRole::default().is_online());
     }
 
-    /// Hosting is playing plus company, so the host is still believed. Getting
-    /// this backwards would make a listen server ask itself for permission.
+    /// A listen server that gave up authority would ask itself for permission.
     #[test]
     fn only_a_client_gives_up_authority() {
         assert!(NetRole::Solo.is_authority());
@@ -253,9 +202,8 @@ mod tests {
         assert_eq!(*app.world().resource::<NetRole>(), NetRole::Solo);
     }
 
-    /// The transport will rebind on `Changed<NetRole>`, so asking for the role
-    /// we already have must not look like a change. Otherwise re-picking
-    /// "Host" from the menu drops everybody who is already connected.
+    /// The transport rebinds on `Changed<NetRole>`, so re-picking "Host" would
+    /// drop everybody connected.
     #[test]
     fn asking_for_the_role_we_already_have_changes_nothing() {
         let mut app = app();
@@ -283,8 +231,6 @@ mod tests {
         assert_eq!(parse_endpoint("localhost:27016"), Ok(("localhost".into(), 27016)));
     }
 
-    /// An IPv6 literal is mostly colons, so the last one is not a port
-    /// separator unless brackets said it was.
     #[test]
     fn ipv6_needs_brackets_to_carry_a_port() {
         assert_eq!(parse_endpoint("::1"), Ok(("::1".into(), DEFAULT_PORT)));

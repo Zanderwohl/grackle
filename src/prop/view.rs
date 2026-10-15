@@ -1,32 +1,15 @@
-//! Showing a prop in the same viewports the map is edited in.
+//! Showing a prop in the editor's four viewports. On the way in, everything
+//! that is not [`PropScene`] is hidden (not unloaded), the cameras are framed
+//! (see [`super::camera`]) and the prop gets its own lights; all of it is
+//! undone on the way out. See "Modelling a prop" in `CLAUDE.md`.
 //!
-//! Reusing the editor's four cameras is the whole reason this can be a mode
-//! rather than a second program. Three things happen at the boundary, all
-//! reversible:
+//! The hiding rule names what to keep rather than what to hide, because
+//! loose entities (grid bodies, corpses, projectiles) are not feature
+//! entities.
 //!
-//! - **Everything that is not the prop is hidden, not unloaded.** A prop is
-//!   centimetres across and a map is tens of metres, so leaving the map in
-//!   puts the prop inside a wall. Hiding is a `Visibility`, so the open
-//!   blueprint is untouched.
-//!
-//!   **The rule asks what is *not* the prop scene** rather than naming the
-//!   kinds of thing that might be in the way. Naming them was the first
-//!   attempt and was wrong within one map: the animation grid's bodies stand
-//!   loose in the world (`OfGrid` replaced `ChildOf` so they could be
-//!   replicated), so hiding feature entities left sixty people standing around
-//!   the weapon. Corpses, projectiles and tracers are loose the same way.
-//! - **The cameras are framed on the prop and put back afterwards** — see
-//!   [`super::camera`].
-//! - **The prop gets its own light.** The map's lights are feature entities
-//!   and went out with everything else.
-//!
-//! The prop is rebuilt on [`PropEditor::generation`] rather than on anything
-//! being `Changed`: evaluating is a boolean kernel doing real work, and doing
-//! it again because egui reported a hover would be felt. And the generation is
-//! only the cue to *look*: what decides is whether the features shown differ
-//! from the ones last built, because most of a document — the hold, the
-//! viewmodel, the clips — is not geometry, and dragging a grip must not re-run
-//! the kernel every frame.
+//! Rebuilt on [`PropEditor::generation`] rather than `Changed`, since
+//! evaluation is expensive and egui marks changes on hover. The generation is
+//! only the cue to look: it rebuilds only if the shown features differ.
 
 use core::time::Duration;
 
@@ -40,77 +23,54 @@ use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure,
 use crate::prop::document::PropEditor;
 use crate::prop::feature::{Evaluated, PropFeature};
 
-/// Standing the prop up. A set rather than named systems, for the reason
-/// `BakeSystems` is one: the camera frames itself on the prop's bounds from
-/// another module, and must not have to name what builds them.
+/// A set so the camera can order after the build without naming its systems.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PropSceneSystems {
     Build,
 }
 
-/// The root the prop's meshes hang off. One entity, cleared and refilled.
 #[derive(Component)]
 pub struct PropStage;
 
-/// On every root entity the prop editor owns, and the whole of what keeps it
-/// visible. Forgetting one is obvious: it is invisible immediately.
+/// On every root entity the prop editor owns; anything without it is hidden.
 #[derive(Component)]
 pub struct PropScene;
 
-/// The prop editor's own light, so it can be taken away again on the way out.
 #[derive(Component)]
 struct PropStageLight;
 
-/// What was hidden on the way in, and what it was before.
-///
-/// Put back rather than blanket-set to `Inherited`: plenty here is hidden on
-/// purpose — a spawn point's preview during a round, the body you are looking
-/// out of — and an exit that made everything visible would break them.
+/// What was hidden and its previous value, restored exactly rather than set
+/// to `Inherited`, since some things are hidden on purpose.
 #[derive(Resource, Default)]
 struct HiddenForModelling(HashMap<Entity, Visibility>);
 
-/// The last evaluation, kept so the panels can show the problem list and the
-/// triangle count without running the kernel a second time.
+/// The last evaluation, reused by the panels.
 #[derive(Resource, Default)]
 pub struct PropBuild {
     pub evaluated: Evaluated,
-    /// The generation last looked at, so an unchanged document costs nothing
-    /// to check.
     built: Option<u64>,
-    /// The features `evaluated` was built from — **the** key, not the
-    /// generation. Every write to the document bumps the generation, and most
-    /// of a document is not geometry: a counter bumped only for geometry
-    /// would go stale the day something forgot to bump it, whereas the
-    /// evaluator's own input cannot. A prop is a few kilobytes, so the
-    /// comparison is cheap beside the kernel it saves.
+    /// The features `evaluated` was built from: the real key, since most of a
+    /// document is not geometry and a geometry-only counter could go stale.
     input: Option<Vec<PropFeature>>,
-    /// How long the last evaluation took, which is what decides whether the
-    /// next one waits.
+    /// Decides whether the next rebuild is debounced.
     cost: Duration,
-    /// The features a deferred rebuild is waiting on, and since when. Keyed on
-    /// the features for the same reason: a hold dragged while an expensive
-    /// prop settles must not keep restarting the clock.
+    /// The features a deferred rebuild waits on, and since when, so a hold
+    /// dragged while a prop settles does not restart the clock.
     waiting: Option<(Vec<PropFeature>, Duration)>,
 }
 
 impl PropBuild {
-    /// Whether the geometry on screen is behind the document. The panel says
-    /// so: a viewport that has stopped following a drag looks exactly like one
-    /// that has stopped working.
+    /// Whether the geometry on screen is behind the document.
     pub fn settling(&self) -> bool {
         self.waiting.is_some()
     }
 }
 
-/// How long an evaluation may take before the next one is made to wait. Half a
-/// frame at 60 Hz; under it, rebuilding per frame costs nothing anybody sees.
+/// Half a frame at 60 Hz. A cheaper evaluation rebuilds every frame.
 const REBUILD_BUDGET: Duration = Duration::from_millis(8);
 
-/// How quiet the document has to go before an expensive prop is rebuilt.
-///
-/// Short enough to feel like a pause at the end of a drag rather than a delay,
-/// long enough that a drag does not sneak a rebuild in between two frames of
-/// mouse movement.
+/// How long the document must be unchanged before an expensive prop is
+/// rebuilt.
 const REBUILD_DEBOUNCE: Duration = Duration::from_millis(120);
 
 pub struct PropViewPlugin;
@@ -122,17 +82,10 @@ impl Plugin for PropViewPlugin {
             .init_resource::<HiddenForModelling>()
             .init_resource::<ScaleFigure>()
             .init_resource::<crate::prop::figure::FigureStage>()
-            // Chained, and the order is the point: framing reads the bounds
-            // of the prop, so the prop has to have been built first. On the
-            // way in the last build belongs to a previous visit or to no
-            // visit at all, and framing on stale bounds puts the cameras
-            // somewhere plausible and wrong.
-            // Registered for **both** prop modes rather than for `Prop` alone.
-            // They are one scene asked two questions, so swapping between them
-            // runs an exit and an entry — both in the same `StateTransition`,
-            // before anything is drawn, so there is no flicker and the world
-            // is set aside again before a frame of it could be seen. A rebuild
-            // per swap is real work, but a mode swap is not a frame.
+            // Chained: framing reads the prop's bounds, which are stale from
+            // a previous visit until the rebuild. Registered for both prop
+            // modes; swapping runs exit and entry in one `StateTransition`, so
+            // nothing flickers.
             .add_systems(
                 OnEnter(AppMode::Prop),
                 (light_the_stage, refresh_the_figure, pose_the_figure, set_the_world_aside, rebuild_the_prop)
@@ -157,19 +110,12 @@ impl Plugin for PropViewPlugin {
                 Update,
                 (
                     refresh_the_figure,
-                    // After the rig exists and before anything draws it: the
-                    // figure's whole pose comes from the document's hold.
                     pose_the_figure,
-                    // Every frame rather than only on the way in: a map edit
-                    // can land mid-session — `sync_entities` is deliberately
-                    // ungated — and a room that appeared while somebody was
-                    // modelling would appear around them. So would a corpse
-                    // replicated from a server that is still playing.
+                    // Every frame: map edits and replication land mid-session.
                     set_the_world_aside,
                     rebuild_the_prop,
                     // After the rebuild, which respawns the stage at the
-                    // origin: a weapon mid-deploy must not snap home for one
-                    // frame every time the geometry changes.
+                    // origin, so an animated prop does not snap home a frame.
                     carry_the_prop,
                     draw_the_bench,
                     ghost_the_operands,
@@ -181,18 +127,9 @@ impl Plugin for PropViewPlugin {
     }
 }
 
-/// Put the prop where a performance says it is being held.
-///
-/// Identity on the modelling surface — the prop is pinned to its own origin,
-/// which is where its feature gizmos are drawn — and moved only while
-/// something is animating it. Its own system rather than part of the rebuild,
-/// because the mesh is rebuilt on `PropEditor::generation` and a weapon that
-/// only moved when somebody edited the geometry would be a weapon that does
-/// not move.
-///
-/// And hidden when the figure is staged holding nothing: a prop floating at
-/// the origin beside a body with empty hands would be a prop nobody is
-/// holding, which is not a thing the game ever draws.
+/// Moves the prop where an animation holds it (identity while modelling), and
+/// hides it when the staged figure is holding nothing. Separate from the
+/// rebuild, which only runs on edits.
 pub fn carry_the_prop(
     held: Res<crate::prop::figure::FigureWeapon>,
     figure: Option<Res<crate::prop::figure::FigureStage>>,
@@ -214,14 +151,8 @@ pub fn carry_the_prop(
     }
 }
 
-/// Hide every root entity that is not part of the prop scene.
-///
-/// **Roots only**, because `Visibility` inherits: hiding a body hides its bone
-/// meshes. Walking children too would fight the systems that legitimately hide
-/// one part of a visible thing.
-///
-/// **`Without<Node>`**, because Bevy UI carries `Visibility` too and the
-/// viewport labels are UI — chrome rather than scene.
+/// Roots only, because `Visibility` inherits and other systems hide
+/// individual children. `Without<Node>` keeps the viewport labels (UI).
 fn set_the_world_aside(
     mut hidden: ResMut<HiddenForModelling>,
     mut entities: Query<
@@ -230,8 +161,7 @@ fn set_the_world_aside(
     >,
 ) {
     for (entity, mut visibility) in &mut entities {
-        // Already invisible, and not by us: leave it, and do not record it, so
-        // the way out does not turn it on.
+        // Hidden by someone else: not recorded, so leaving keeps it hidden.
         if *visibility == Visibility::Hidden {
             continue;
         }
@@ -240,14 +170,12 @@ fn set_the_world_aside(
     }
 }
 
-/// Put back exactly what was there, for everything that still exists.
 fn put_the_world_back(
     mut hidden: ResMut<HiddenForModelling>,
     mut entities: Query<&mut Visibility>,
 ) {
     for (entity, was) in hidden.0.drain() {
-        // A despawn while somebody was modelling is ordinary: a round can be
-        // running on a server the whole time.
+        // May have been despawned meanwhile.
         if let Ok(mut visibility) = entities.get_mut(entity) {
             *visibility = was;
         }
@@ -255,8 +183,7 @@ fn put_the_world_back(
 }
 
 fn light_the_stage(mut commands: Commands) {
-    // Two, because a key light alone leaves the underside of a receiver as a
-    // silhouette — exactly the part somebody is trying to look at.
+    // A fill light too, or the underside is a silhouette.
     commands.spawn((
         PropStageLight,
         PropScene,
@@ -280,12 +207,10 @@ fn clear_the_stage(
     for entity in stage.iter().chain(lights.iter()) {
         commands.entity(entity).despawn();
     }
-    // The stage it would otherwise consider current has just been despawned.
     build.built = None;
     build.input = None;
 }
 
-/// Evaluate the document and put the result in the world, if it has moved on.
 fn rebuild_the_prop(
     mut commands: Commands,
     editor: Res<PropEditor>,
@@ -301,26 +226,18 @@ fn rebuild_the_prop(
         build.waiting = None;
         return;
     }
-    // Down to the rollback bar, and everything downstream — the meshes, the
-    // picking, the framing, which bodies the toolbar offers — reads this, so
-    // rolled back is one consistent picture of the prop as it stood there.
+    // Down to the rollback bar; everything downstream reads this.
     let shown = editor.shown();
 
-    // The document moved and the geometry did not: a grip, a viewmodel, a
-    // clip, a name. The stage on screen is already right.
+    // The document moved and the geometry did not: the stage is already right.
     if !stage.is_empty() && build.input.as_deref() == Some(shown) {
         build.built = Some(generation);
         build.waiting = None;
         return;
     }
 
-    // **An expensive prop settles; a cheap one keeps up**, decided by the last
-    // evaluation's own cost so there is nothing to tune per prop. Waiting
-    // unconditionally would make a three-box prop feel sticky for no reason.
-    //
-    // The gizmos draw from the *document*, not from this, so a handle keeps
-    // following the pointer while the geometry catches up — which is what
-    // makes the wait read as settling rather than as lag.
+    // Debounce only props whose last evaluation was expensive. Gizmos draw
+    // from the document, so handles keep following the pointer meanwhile.
     if build.cost > REBUILD_BUDGET && !stage.is_empty() {
         let now = time.elapsed();
         let since = match &build.waiting {
@@ -365,9 +282,7 @@ fn rebuild_the_prop(
     });
 }
 
-/// The origin, the axes and a ruled floor. Ten-centimetre cells over a metre:
-/// a prop has no room around it to judge size against, so the grid is the
-/// ruler.
+/// Origin, axes, and a 1 m floor grid of 10 cm cells for judging size.
 fn draw_the_bench(mut gizmos: Gizmos, editor: Res<PropEditor>, build: Res<PropBuild>) {
     gizmos.grid(
         Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
@@ -379,10 +294,7 @@ fn draw_the_bench(mut gizmos: Gizmos, editor: Res<PropEditor>, build: Res<PropBu
     gizmos.line(Vec3::ZERO, Vec3::Y * 0.25, Color::srgb(0.3, 0.9, 0.3));
     gizmos.line(Vec3::ZERO, Vec3::Z * 0.25, Color::srgb(0.3, 0.5, 0.9));
 
-    // A feature eaten by a later boolean has no body to outline, and drawing
-    // its ingredients would show geometry that is not in the prop.
-    // The primary bright and the rest of the selection dimmer, matching the
-    // tree's two highlights.
+    // An eaten feature has no body and is not outlined.
     for picked in editor.selection() {
         let Some((_, solid)) = build.evaluated.bodies.iter().find(|(id, _)| *id == picked) else {
             continue;
@@ -396,29 +308,18 @@ fn draw_the_bench(mut gizmos: Gizmos, editor: Res<PropEditor>, build: Res<PropBu
     }
 }
 
-/// The ghost's edges, and what they were drawn for.
 #[derive(Default)]
 struct GhostCache {
-    /// The generation and selection last looked at — the cue to compare.
+    /// The generation and selection last looked at: the cue to compare.
     key: Option<(u64, crate::prop::feature::PropFeatureId)>,
-    /// The selection and the features down to it that the edges came from,
-    /// which is what decides — the same rule as [`PropBuild`]'s, so dragging a
-    /// grip does not re-evaluate the list up to the selected boolean.
+    /// What the edges were drawn from, which decides, as in [`PropBuild`].
     input: Option<(crate::prop::feature::PropFeatureId, Vec<PropFeature>)>,
     edges: Vec<(Vec3, Vec3)>,
 }
 
-/// What a selected boolean, mirror or repaint was given to work on, drawn as
-/// faint wireframe where it stood before the feature ate it.
-///
-/// A subtract that removes nothing visible is the hardest thing in the editor
-/// to debug from the result alone: the tool might be in the wrong place, the
-/// wrong size, or the wrong body. Showing it answers all three at once.
-///
-/// Re-evaluates the list *up to* the feature, so it is cached on the
-/// selection and the features down to it, and recomputed only when one of
-/// them moves — not every frame something is merely selected, nor every frame
-/// of a drag that is not geometry.
+/// Wireframe of the selected feature's operands as they stood before it ran.
+/// Cached on the selection and the features up to it, since it re-evaluates
+/// the list up to that feature.
 fn ghost_the_operands(
     mut gizmos: Gizmos,
     editor: Res<PropEditor>,
@@ -470,16 +371,8 @@ mod tests {
 
     use super::*;
 
-    /// The rule in one picture. Each of these five entities is a case that got
-    /// this wrong at some point, or would have:
-    ///
-    /// - a **loose body**, like the animation grid's — not a feature entity,
-    ///   which is what the first version of this missed
-    /// - a **child**, which inherits and must not be touched separately
-    /// - the **prop scene** itself, which is the entire point of the mode
-    /// - a **UI node**, because Bevy UI carries `Visibility` too and the
-    ///   viewport labels are UI
-    /// - something **already hidden**, which must still be hidden afterwards
+    /// Covers a loose root, a child, the prop scene, a UI node and something
+    /// already hidden; fails if any is hidden or restored wrongly.
     #[test]
     fn everything_but_the_prop_is_hidden_and_then_put_back_as_it_was() {
         let mut world = World::new();
@@ -507,10 +400,6 @@ mod tests {
 
         world.run_system_once(put_the_world_back).unwrap();
 
-        // Back to what each *was*, not blanket-visible: `parent` was
-        // explicitly `Visible` and `already_hidden` was hidden by somebody
-        // else, and an exit that levelled both would be an exit that broke
-        // whatever set them.
         assert_eq!(seen(&world, loose), Visibility::Inherited);
         assert_eq!(seen(&world, parent), Visibility::Visible);
         assert_eq!(
@@ -520,11 +409,8 @@ mod tests {
         );
     }
 
-    /// Most of a document is not geometry. Dragging a grip writes the document
-    /// every frame, and re-running the kernel and re-uploading every mesh for
-    /// it is the cost the generation was meant to save — so a hold edit must
-    /// leave the stage alone while a feature edit, an undo and the rollback
-    /// bar still rebuild it.
+    /// Fails if a hold edit rebuilds the stage, or if a feature edit, undo or
+    /// the rollback bar does not.
     #[test]
     fn only_the_geometry_rebuilds_the_stage() {
         use crate::prop::feature::FeatureOp;
@@ -580,9 +466,7 @@ mod tests {
         assert_eq!(world.resource::<PropBuild>().input.as_deref().map(<[_]>::len), Some(1));
     }
 
-    /// Entities appear while somebody is modelling — a map edit lands, a
-    /// server replicates a corpse — so the sweep runs every frame, and running
-    /// it twice must not lose what the first pass recorded.
+    /// Fails if a second sweep overwrites what the first recorded.
     #[test]
     fn a_second_pass_does_not_forget_what_the_first_one_saved() {
         let mut world = World::new();

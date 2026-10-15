@@ -1,17 +1,9 @@
-//! A skeleton stood on the map holding one animation state.
+//! A skeleton stood on the map holding one animation state, for judging an animation at the size
+//! and distance a player sees it.
 //!
-//! For looking at animations while building them: place one, pick a state, and
-//! it stands there doing that state forever, in the editor and in play. It is
-//! a mapper-facing feature rather than a debug overlay because the thing it is
-//! useful for — is this animation readable at the size and distance a player
-//! will see it — is a question about a room, and can only be answered in one.
-//!
-//! Deliberately thin. The feature stores a point, a facing and a state; the
-//! body itself is an ECS entity like any other, animated by the same systems
-//! that animate a player. That is why picking a state here is
-//! [`ForcedAnimation`] and not a second animation path: a display that had its
-//! own way of posing a skeleton would be a display that agreed with the game
-//! right up until it mattered.
+//! The body is an ordinary entity animated by the same systems as a player; the state is applied
+//! through [`ForcedAnimation`] rather than a second animation path, so the display cannot disagree
+//! with the game.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -28,29 +20,17 @@ use crate::common::damage::Damageable;
 use crate::common::hitbox::Hitboxes;
 use crate::get;
 
-/// Marks the entity an [`AnimationDisplay`] drives, so the body can be found
-/// without reading the timeline — the same arrangement `SpawnPoint` has with
-/// `SpawnPointMarker`.
-///
-/// Requires [`Hitboxes`] and [`Damageable`]: a display exists to be looked at
-/// closely, and where a body can be hit while it holds a state is one of the
-/// things worth looking at. Health comes with them because a body you can hit
-/// and cannot hurt is a harness that only tests half the answer.
+/// Marks the entity an [`AnimationDisplay`] drives. Hitboxes and health are required so hits can be
+/// tested against a held state.
 #[derive(Component, Debug)]
 #[require(Hitboxes, Damageable)]
 pub struct AnimationDisplayMarker;
 
-/// A body on the map, holding one state.
 #[derive(Serialize, Deserialize)]
 pub struct AnimationDisplay {
-    /// The **feet**, as with a spawn point: the end that is lined up against a
-    /// floor, and the end a skeleton is placed by.
+    /// The feet, as with a spawn point.
     location: PointRef,
-    /// Which way it faces, in radians about world Y.
-    ///
-    /// Only yaw, for the same reason a spawn point has only yaw: a body
-    /// standing on its side is not a thing to want, and an animation is judged
-    /// from the front or the side, which is a heading.
+    /// Radians about world Y.
     yaw: f32,
     state: AnimationState,
     #[serde(skip)]
@@ -73,7 +53,6 @@ impl FeatureTrait for AnimationDisplay {
         let label = get!("editor.features.animation_display.feet");
         changed |= self.location.editor_ui(ui, &label, features, prior_feature_order, retarget_request);
 
-        // Degrees in the box, radians in the field, as everywhere else.
         let mut degrees = self.yaw.to_degrees();
         if ui
             .add(
@@ -88,9 +67,7 @@ impl FeatureTrait for AnimationDisplay {
             changed = true;
         }
 
-        // Every state, listed from the state machine itself rather than
-        // written out here: a state that existed but could not be selected
-        // would be one nobody could look at.
+        // Listed from the state machine, so no state is unselectable.
         egui::ComboBox::from_label(get!("editor.features.animation_display.state"))
             .selected_text(self.state.name())
             .show_ui(ui, |ui| {
@@ -118,12 +95,7 @@ impl FeatureTrait for AnimationDisplay {
 
     fn type_key(&self) -> &'static str { "animation_display" }
 
-    /// The point and the facing only.
-    ///
-    /// The body itself is drawn by the skeleton systems, off the entity this
-    /// feature drives — the same way a prop's box is a mesh rather than a
-    /// gizmo. So this draws what the *feature* is, which is a placed point,
-    /// and stays visible against the body standing on it.
+    /// The point and facing only; the body is drawn by the skeleton systems.
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let feet = self.resolved_location;
         let violet = Color::srgb_u8(190, 140, 255);
@@ -143,11 +115,7 @@ impl FeatureTrait for AnimationDisplay {
         self.entity = entity;
     }
 
-    /// A body, exactly like the game's: a rig, a pose, and the state machine.
-    ///
-    /// [`ForcedAnimation`] is the only difference between this and a player —
-    /// it is pinned to the chosen state instead of being told what is
-    /// happening to it.
+    /// A body like the game's; [`ForcedAnimation`] pins it to the chosen state.
     fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
         commands
             .entity(entity)
@@ -155,13 +123,10 @@ impl FeatureTrait for AnimationDisplay {
                 Transform::from_translation(self.resolved_location)
                     .with_rotation(Quat::from_rotation_y(self.yaw)),
                 AnimationDisplayMarker,
-                // The state is the one thing here an edit is allowed to
-                // change, and the reason this runs again at all.
                 ForcedAnimation(self.state),
             ))
-            // The body once, not once per edit: this runs on every change to
-            // the feature, a re-inserted rig reads as a changed rig, and the
-            // mesh would be rebuilt on every frame of a drag.
+            // `insert_if_new`: this runs on every edit, and a re-inserted rig rebuilds the mesh every frame
+            // of a drag.
             .insert_if_new((
                 default_humanoid().clone(),
                 Pose::rest(),
@@ -286,9 +251,7 @@ mod tests {
 
     use super::*;
 
-    /// The display is a body like any other, and the chosen state has to reach
-    /// it as [`ForcedAnimation`]. Break the link and the display silently
-    /// stands there idle whatever a mapper picked.
+    /// Without the link the display stands idle whatever state was picked.
     #[test]
     fn applying_a_display_makes_a_body_pinned_to_its_state() {
         let mut world = World::new();

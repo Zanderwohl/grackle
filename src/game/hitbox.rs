@@ -1,16 +1,8 @@
 //! Keeping every body's hitboxes up to date, and drawing them.
 //!
-//! The work runs in `FixedUpdate`, with the pose sampled at the tick rather
-//! than read off the body. That is the rule from
-//! [`crate::common::hitbox`] made real: the pose on screen is written at frame
-//! rate from the same shared clock, so reading it here would make where a
-//! player can be hit depend on how fast the machine asking is drawing.
-//!
-//! Boxes go to bodies that ask for them — a player, an animation display, the
-//! sixty bodies in an animation grid — rather than to every rig on the map;
-//! see `equip_new_bodies` in [`crate::game::skeleton`]. The grid is the
-//! harness: stand in front of it and watch heads bob inside head boxes that
-//! hardly move.
+//! The pose is sampled on the tick rather than read off the body: the drawn
+//! pose is written at frame rate, so reading it here would make where a body
+//! can be hit depend on the viewer's frame rate. See [`crate::common::hitbox`].
 
 use bevy::prelude::*;
 
@@ -29,11 +21,7 @@ use crate::game::skeleton::{
 };
 
 /// Whether hitboxes, and the debug laser aimed at them, are drawn. `F4`
-/// toggles both.
-///
-/// Off by default, like the bones: they are a debug view of where a shot
-/// would land, not part of what a player sees, and the laser costs a trace per
-/// player against every body each frame while it is up.
+/// toggles both. Off by default: a debug view, and the laser traces every body.
 #[derive(Resource, Debug, Default)]
 pub struct ShowHitboxes(pub bool);
 
@@ -44,20 +32,13 @@ impl Plugin for HitboxPlugin {
         app
             .init_resource::<ShowHitboxes>()
             .add_systems(Update, toggle_hitboxes)
-            // On the tick, with the physics that hit registration will one day
-            // have to agree with.
             .add_systems(FixedUpdate, update_hitboxes
                 .after(advance_animation_clock)
                 .after(advance_gaits)
-                // After the step, so a body is boxed where this tick left it
-                // rather than where the last one did.
+                // So a body is boxed where this tick's step left it.
                 .after(step_player))
-            // Gated on being a view of the map: a gizmo is not an entity, so
-            // the prop editor's hiding cannot reach it, and the animation
-            // grid's bodies are still standing there — their boxes were being
-            // drawn around somebody's weapon. `update_hitboxes` deliberately
-            // keeps running: the boxes are a fact about a body, and stopping
-            // computing them would leave stale ones the moment anybody left.
+            // A gizmo is not an entity, so the prop editor's hiding cannot
+            // reach it. `update_hitboxes` keeps running regardless.
             .add_systems(
                 PostUpdate,
                 draw_hitboxes
@@ -77,10 +58,7 @@ fn toggle_hitboxes(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowHitboxe
 /// Recompute every body's boxes from a pose sampled on this tick.
 pub fn update_hitboxes(
     clock: Res<AnimationClock>,
-    // **Hitboxes are worked out from the same pose the body is drawn in**, so
-    // a state played from a clip has to reach here too. Absent means every
-    // state is still a function, which is what a build with no clips loaded
-    // does and what every test relies on.
+    // Absent with no clips loaded and in tests; every state is then a function.
     library: Option<Res<ClipLibrary>>,
     mut bodies: Query<(
         &Skeleton,
@@ -97,9 +75,8 @@ pub fn update_hitboxes(
     for (skeleton, animator, phase, gait, stance, global, offset, physics, mut boxes) in
         &mut bodies
     {
-        // A moving body's drawn transform is interpolated between ticks, which
-        // is exactly the frame-rate-dependent quantity this must not use. The
-        // fixed step's own position is the one two machines can agree on.
+        // The step's position, not the interpolated transform, which depends
+        // on frame rate.
         let mut placed = *global;
         if let Some(physics) = physics {
             placed = GlobalTransform::from(
@@ -108,9 +85,6 @@ pub fn update_hitboxes(
         }
         let root = skeleton_root(&placed, offset);
 
-        // The same pipeline the drawing goes through, corrections and all: a
-        // hitbox worked out from an uncorrected pose would sit where the body
-        // visibly is not.
         let clips = library.as_deref();
         let gait = gait.copied().unwrap_or_default();
         let inputs = PoseInputs {
@@ -120,9 +94,8 @@ pub fn update_hitboxes(
             travel: gait.travel(),
         };
         let pose = animator_pose(skeleton, animator, &inputs, &root, clips);
-        // The same body in the same state with the cycle stood still: where
-        // its head settles, rather than where this instant of a stride has
-        // taken it. Ducking moves this; a step bob does not.
+        // The pose with the cycle stopped: ducking moves the head box, a step
+        // bob does not.
         let settled = animator_pose(
             skeleton,
             animator,
@@ -130,10 +103,8 @@ pub fn update_hitboxes(
             &root,
             clips,
         );
-        // A simulated body's stance is a fact its step owns, and it wins. A
-        // body being shown rather than played has no step and no stance — all
-        // there is to go on is what it is visibly doing, and a full-height box
-        // round a ducked body is a lie about where it can be hit.
+        // A body shown rather than simulated has no stance; infer it from the
+        // animation.
         let stance = stance.copied().unwrap_or_else(|| {
             if animator.state().ducks() {
                 Stance::Crouched
@@ -156,17 +127,11 @@ fn draw_hitboxes(
         return;
     }
 
-    // Red, and two shades of it: the head is the one worth aiming at, so it is
-    // the one that has to be legible against the bones inside it.
     let body_colour = Color::srgb(0.55, 0.16, 0.16);
     let head_colour = Color::srgb(1.0, 0.25, 0.25);
 
     for (boxes, own_body) in &bodies {
-        // Hidden along with the body it belongs to: in first person the camera
-        // stands in the middle of its own body box, and a wireframe seen from
-        // the inside is just lines across the view. `LocalPlayer` rather than
-        // `Player`, because a replicated body carries `Player` too and asking
-        // that question hides everybody's boxes at once.
+        // `LocalPlayer`, not `Player`: replicated bodies carry `Player` too.
         if own_body.is_some() && !view.shows_own_body() {
             continue;
         }
@@ -186,8 +151,7 @@ mod tests {
     use super::*;
     use crate::common::skeleton::{humanoid, Pose, Proportions};
 
-    /// The boxes follow the body around the map, and the body box stands on
-    /// its feet rather than being centred on them.
+    /// The boxes follow the body, and the body box stands on its feet.
     #[test]
     fn the_boxes_are_placed_where_the_body_is() {
         let mut world = World::new();
@@ -212,8 +176,7 @@ mod tests {
         assert!(boxes.head.centre.y > boxes.body.centre.y, "the head is not above the middle of the body");
     }
 
-    /// And a player's own stance still wins over its animation, since that is
-    /// the box it actually collides with.
+    /// A simulated body's stance wins over its animation.
     #[test]
     fn a_simulated_bodys_stance_beats_its_animation() {
         use crate::common::class::TALLEST_CLASS_HEIGHT;
@@ -244,11 +207,8 @@ mod tests {
         );
     }
 
-    /// A body being shown rather than simulated has no stance of its own, and
-    /// its box still has to match what it is visibly doing. Every body on an
-    /// animation grid is one of these: it ducks because its animation says so,
-    /// and a full-height box round a ducked body is a lie about where it can
-    /// be hit.
+    /// A body with no stance is boxed as its animation stands. Every animation
+    /// grid body relies on this.
     #[test]
     fn a_body_with_no_stance_is_boxed_as_its_animation_stands() {
         use crate::common::class::CROUCH_HEIGHT;
@@ -284,9 +244,7 @@ mod tests {
         );
     }
 
-    /// A body that physics has moved is boxed where the *step* left it, not
-    /// where the interpolated transform is drawing it. Feeding a deliberately
-    /// mismatched pair is the only way to see which one was used.
+    /// Boxed at the stepped position, not the interpolated one.
     #[test]
     fn a_physics_body_is_boxed_at_its_stepped_position() {
         let mut world = World::new();

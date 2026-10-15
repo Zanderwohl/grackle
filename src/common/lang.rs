@@ -5,82 +5,56 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::{error, warn};
 use regex::{Captures, Regex};
 
-/// The default pack's lang directory — the reference the parity tests measure
-/// against, and the seed loaded before anyone has scanned for packs.
+/// The default pack's lang directory: the reference for the parity tests and
+/// the seed before packs are scanned.
 pub const LANG_DIR: &str = "assets/default/lang";
 
-/// The language every other one is measured against, and the one to fall back
-/// to when a configured language turns out not to exist.
 pub const FALLBACK_LANG: &str = "en-US";
 
-/// The pack list until Grackle grows a real one: the default pack alone.
-///
-/// The merge machinery below takes a list rather than a single root because
-/// the map format is meant to carry a game's own content, and a game that
-/// ships its own tools will want to name them. Until that exists, every
-/// caller passes this.
+/// The pack list until Grackle has a real one.
 pub fn default_packs() -> Vec<PathBuf> {
     vec![PathBuf::from("assets/default")]
 }
 
 static LANG: LazyLock<RwLock<toml::Value>> = LazyLock::new(|| RwLock::new(
     load_lang(FALLBACK_LANG).unwrap_or_else(|e| {
-        // `eprintln!` rather than `error!`: this can be forced before the
-        // tracing subscriber is installed, and a broken install is exactly
-        // when the message must not vanish. Every lookup then renders as
-        // `<some.key>`, which is diagnosable — a panic in a `LazyLock` also
-        // poisons it, so every later read panics too.
+        // `eprintln!` because this can run before the tracing subscriber is
+        // installed. Not a panic: that would poison the `LazyLock` and every
+        // later read would panic too.
         eprintln!("{}; every string will render as its key", e);
         toml::Value::Table(toml::Table::new())
     })
 ));
 
-/// The slots [`fill_template`] substitutes: `{ name }`, with optional spaces.
 static TEMPLATE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{\s*([A-Za-z_]+)\s*\}").unwrap());
 
-/// Resolved strings: filled templates keyed by [`template_pair_path`], plain
-/// lookups keyed by the dotted key itself. The two key shapes cannot collide —
-/// a template key carries a `|`.
+/// Filled templates keyed by [`template_pair_path`] (which contains a `|`),
+/// plain lookups by the dotted key.
 ///
-/// Only ever written to while holding the `LANG` read lock, and emptied by
-/// [`change_lang`] while it holds the write lock, so a fill that began before
-/// a language switch cannot land its now-stale result after it.
+/// Only written while holding the `LANG` read lock, and cleared by
+/// [`change_lang`] under the write lock, so a fill that began before a
+/// language switch cannot store a stale result after it.
 static CACHE: LazyLock<RwLock<HashMap<String, String>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
-/// How many filled templates to keep before starting over.
-///
-/// The key space is unbounded — arguments are feature ids, counts and error
-/// strings — so an editor left open would otherwise hold one entry per
-/// distinct message it has ever shown. Clearing wholesale rather than evicting
-/// the least recently used costs two lines instead of a data structure, and
-/// what the panels draw every frame is back inside a frame.
+/// The key space is unbounded (arguments are ids, counts, error strings), so
+/// the cache is cleared wholesale when it reaches this size.
 const CACHE_LIMIT: usize = 1024;
 
-/// The language code the table currently holds, so a pack reload can re-merge
-/// the same language over the new pack list without asking anyone.
+/// So [`remerge`] can reload the same language over a new pack list.
 static CURRENT_LANG: LazyLock<RwLock<String>> =
     LazyLock::new(|| RwLock::new(FALLBACK_LANG.to_string()));
 
-/// Switch languages, leaving the current one in place if the new one will not
-/// load.
+/// `packs` is in priority order, highest first, default pack last.
 ///
-/// `packs` is every pack root in priority order — highest first, default
-/// pinned last — so a pack can name its own features and even retranslate the
-/// base editor.
-///
-/// Loading before taking the lock is deliberate: a language picked from a
-/// dropdown can still fail — a deleted file, a bad hand edit — and
-/// half-applying it would leave every string reading `<some.key>` with no way
-/// back. Failing here changes nothing at all.
+/// Loads before taking the lock, so a language that fails to load changes
+/// nothing.
 pub fn change_lang(lang: &str, packs: &[PathBuf]) -> Result<(), String> {
     let loaded = load_merged(lang, packs)?;
     let mut lang_lock = LANG.write()
         .map_err(|_| "Could not change language; could not acquire lock.")?;
     *lang_lock = loaded;
-    // Emptied under the write lock, which excludes the fills that write to it:
-    // every string in there was filled from the table just replaced.
     if let Ok(mut cache) = CACHE.write() {
         cache.clear();
     }
@@ -91,9 +65,6 @@ pub fn change_lang(lang: &str, packs: &[PathBuf]) -> Result<(), String> {
     Ok(())
 }
 
-/// Re-merge the current language over a changed pack list — what a pack
-/// reload calls, since adding or removing a pack changes which strings exist
-/// without changing which language the user wants.
 pub fn remerge(packs: &[PathBuf]) {
     let current = CURRENT_LANG
         .read()
@@ -104,22 +75,14 @@ pub fn remerge(packs: &[PathBuf]) {
     }
 }
 
-/// Load `lang` at start-up, falling back to [`FALLBACK_LANG`] if it will not.
-///
-/// Returns the language actually in effect. Callers should store *that* rather
-/// than what they asked for: a settings file naming a language which is not
-/// installed should not go on claiming it is active.
-///
-/// Shared by every binary so their behaviour cannot drift.
+/// Returns the language actually in effect; callers should store that rather
+/// than what they asked for.
 pub fn change_lang_or_fallback(lang: &str, packs: &[PathBuf]) -> String {
     match change_lang(lang, packs) {
         Ok(()) => lang.to_string(),
         Err(e) => {
             error!("{}; falling back to `{}`", e, FALLBACK_LANG);
             if let Err(e) = change_lang(FALLBACK_LANG, packs) {
-                // Nothing left to fall back to. Every lookup renders as its
-                // own key from here, which is ugly but readable and points
-                // straight at the missing pack.
                 error!("{}", e);
             }
             FALLBACK_LANG.to_string()
@@ -127,19 +90,11 @@ pub fn change_lang_or_fallback(lang: &str, packs: &[PathBuf]) -> String {
     }
 }
 
-/// The merged view of one language across every pack.
+/// Every pack's `en-US` as a base, then the chosen language on top, each
+/// walking packs lowest priority first.
 ///
-/// Two layers, each walking packs lowest-priority-first so a later (higher)
-/// pack overrides leaf keys:
-///
-/// 1. every pack's `en-US` file — the base, so a key no translation covers
-///    shows English rather than `<editor.foo>`;
-/// 2. the chosen language's files on top.
-///
-/// A pack with no such file is silent. A file that will not parse is warned
-/// and skipped — one pack's typo must not cost another pack its names. But a
-/// language *no* pack provides is an error, so asking for `zz-ZZ` fails
-/// instead of quietly serving English under the wrong name.
+/// A file that will not parse is skipped with a warning. A language no pack
+/// provides is an error, rather than English served under the wrong name.
 fn load_merged(lang: &str, packs: &[PathBuf]) -> Result<toml::Value, String> {
     let mut merged = toml::Table::new();
     if lang != FALLBACK_LANG {
@@ -151,8 +106,7 @@ fn load_merged(lang: &str, packs: &[PathBuf]) -> Result<toml::Value, String> {
     Ok(toml::Value::Table(merged))
 }
 
-/// Merges one language code from every pack into `merged`, lowest priority
-/// first. Returns how many files actually contributed.
+/// Returns how many files contributed.
 fn merge_layer(merged: &mut toml::Table, lang: &str, packs: &[PathBuf]) -> usize {
     let mut contributed = 0;
     for pack in packs.iter().rev() {
@@ -180,8 +134,8 @@ fn merge_layer(merged: &mut toml::Table, lang: &str, packs: &[PathBuf]) -> usize
     contributed
 }
 
-/// Later tables win on leaves; tables merge recursively, so a pack adding
-/// `[tools] foo` does not wipe out the base editor's whole `[tools]` section.
+/// Tables merge recursively, so a pack adding `[tools] foo` keeps the rest of
+/// `[tools]`.
 fn deep_merge(base: &mut toml::Table, over: toml::Table) {
     for (key, value) in over {
         match value {
@@ -198,10 +152,7 @@ fn deep_merge(base: &mut toml::Table, over: toml::Table) {
     }
 }
 
-/// Read one language file from the default pack alone — the seed for the
-/// process-global table before packs are scanned, and the reference the
-/// parity tests measure against. Runtime switching goes through
-/// [`load_merged`] instead.
+/// The default pack alone; runtime switching goes through [`load_merged`].
 fn load_lang(lang: &str) -> Result<toml::Value, String> {
     let lang_path = lang_path(lang);
     let toml_str = fs::read_to_string(&lang_path)
@@ -215,29 +166,19 @@ fn lang_path(lang: &str) -> String {
     format!("{}/{}.toml", LANG_DIR, lang)
 }
 
-/// A language the user can choose.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Language {
-    /// The file stem — `de-DE`. What gets stored in settings.
+    /// The file stem, e.g. `de-DE`. What settings store.
     pub code: String,
-    /// What the language calls itself, from its own `language.name`.
+    /// From the file's own `language.name`.
     pub name: String,
 }
 
-/// Every language any pack ships a file for, sorted by code — a pack may add
-/// a whole language, not just retranslate keys.
-///
-/// Read from disk rather than listed in code so that adding a translation is
-/// dropping in a file.
-///
-/// A file whose `language.name` is missing or unreadable still appears, under
-/// its code: a language that is awkward to identify is far better than one the
-/// user cannot select at all. When several packs name the same language, the
-/// highest-priority pack's name wins, matching how its strings would.
+/// Sorted by code. A file with no readable `language.name` still appears,
+/// under its code. When packs disagree on a name, the highest priority wins.
 pub fn available_languages(packs: &[PathBuf]) -> Vec<Language> {
     let mut languages: Vec<Language> = Vec::new();
 
-    // Lowest priority first, like the merge, so later packs override names.
     for pack in packs.iter().rev() {
         let lang_dir = pack.join("lang");
         let Ok(entries) = fs::read_dir(&lang_dir) else { continue };
@@ -267,16 +208,12 @@ pub fn available_languages(packs: &[PathBuf]) -> Vec<Language> {
         }
     }
 
-    // Stable order, so the dropdown does not reshuffle between runs on the
-    // whim of the directory listing.
     languages.sort_by(|a, b| a.code.cmp(&b.code));
     languages
 }
 
-/// Walk `keys` down an already-borrowed table. Split out of [`get_maybe`] so
-/// that [`fill_template`] can read the table and write the cache under one
-/// `LANG` read lock — `RwLock` is not reentrant, so it cannot simply call
-/// `get_maybe` while holding it.
+/// Takes an already-borrowed table so [`fill_template`] can read and store
+/// under one `LANG` read lock; `RwLock` is not reentrant.
 fn lookup<'a>(table: &'a toml::Value, keys: &[&str]) -> Option<&'a str> {
     let mut current = table;
     for key in keys {
@@ -293,22 +230,15 @@ pub fn get_infallible(keys: &[&str]) -> String {
     get_maybe(keys).unwrap_or(format!("<{}>", full_path(keys)))
 }
 
-/// The plain lookup behind `get!`, answering from [`CACHE`] when this key has
-/// been read since the last language change.
-///
-/// Cached for the same reason a filled template is: the panels ask for their
-/// labels on every frame they draw, and a miss splits the key, takes the
-/// `LANG` lock and allocates.
+/// Cached because the panels ask for every label on every frame.
 pub fn get_parsed(keys: &str) -> String {
-    // Dropped before the `LANG` lock is taken, for the ordering reason
-    // `fill_template` gives.
+    // Lock ordering: see `fill_template`.
     if let Some(cached) = CACHE.read().ok().and_then(|cache| cache.get(keys).cloned()) {
         return cached;
     }
 
     let path = keys.split('.').collect::<Vec<&str>>();
-    // Held across the read *and* the store, so a language switch landing in
-    // between cannot leave a string from the old table behind in the cache.
+    // Held across the read and the store; see `CACHE`.
     let lang = LANG.read().unwrap();
     let product = lookup(&lang, &path)
         .map(str::to_string)
@@ -369,8 +299,7 @@ macro_rules! get {
     };
 }
 
-/// As `get!`, but formats arguments with `{:?}` — for keys whose slots are
-/// filled with types that have no `Display`.
+/// As `get!`, formatting arguments with `{:?}`.
 #[macro_export]
 macro_rules! get_with_debug {
     ($key:expr) => {
@@ -383,37 +312,23 @@ macro_rules! get_with_debug {
     };
 }
 
-/// Substitute `pairs` into the string at `keys`, answering from [`CACHE`] when
-/// this exact key and arguments have been filled since the last language
-/// change.
 fn fill_template(keys: &[&str], pairs: &[(&str, &str)]) -> Result<String, String> {
     let cache_key = template_pair_path(keys, pairs);
-    // Dropped before the `LANG` lock is taken: every other path takes `LANG`
-    // first, and holding this across that would be the one ordering that can
-    // deadlock against `change_lang`.
+    // Dropped before taking `LANG`: every other path takes `LANG` first, and
+    // the reverse order can deadlock against `change_lang`.
     if let Some(cached) = CACHE.read().ok().and_then(|cache| cache.get(&cache_key).cloned()) {
         return Ok(cached);
     }
 
-    // Held across the fill *and* the store, so that a language switch landing
-    // in between cannot leave a string from the old table behind in the cache.
+    // Held across the fill and the store; see `CACHE`.
     let lang = LANG.read().unwrap();
     let template = lookup(&lang, keys)
         .ok_or(format!("Failed to find value for key {:?}", keys))?;
 
-    // One pass over the slots the template actually has, rather than one
-    // freshly compiled regex per argument over the whole string. Two things
-    // fall out of that beyond the compiles it saves:
-    //
-    // - arguments land verbatim. Handing `replace_all` a `&str` makes the
-    //   regex crate read `$name` in it as a capture-group reference, so a
-    //   path or error string containing one used to vanish from the sentence
-    //   reporting it. A closure's return value is never expanded.
-    // - a replacement whose text contains another slot is not itself
-    //   rescanned, so the result no longer depends on argument order.
-    //
-    // A slot no argument names is returned as it was found, which is what
-    // `every_language_keeps_its_placeholders` exists to catch in the files.
+    // A closure rather than a `&str` replacement: the regex crate expands `$name`
+    // in a `&str`, which would eat a `$` in a path or error string. One pass
+    // also means a replacement containing a slot is not rescanned. A slot no
+    // argument names is left as found.
     let product = TEMPLATE_REGEX.replace_all(template, |found: &Captures| {
         pairs.iter()
             .find(|(key, _)| *key == &found[1])
@@ -430,20 +345,13 @@ fn fill_template(keys: &[&str], pairs: &[(&str, &str)]) -> Result<String, String
     Ok(product)
 }
 
-/// The loaded language is process-global and cargo runs tests on parallel
-/// threads, so anything that *switches* it has to exclude anything that
-/// *reads* it. Tests calling only [`load_lang`] are pure and need no lock.
-///
-/// Outside the test module so that other modules' tests — anything driving
-/// [`change_lang`] through a system — can take the same lock.
+/// The language is process-global and tests run in parallel, so tests that
+/// switch it take this. Outside `tests` so other modules' tests can too.
 #[cfg(test)]
 static LANG_SWITCHING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Take the lock and start from a known language.
-///
-/// Poisoning is ignored on purpose: a panic in one test leaves the global
-/// language wherever it was, and every user of this sets what it needs first,
-/// so there is no broken invariant for the poison flag to protect.
+/// Poisoning is ignored: every user sets the language it needs first, so there
+/// is no invariant for it to protect.
 #[cfg(test)]
 pub(crate) fn switching_language() -> std::sync::MutexGuard<'static, ()> {
     let guard = LANG_SWITCHING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -463,9 +371,6 @@ mod tests {
         assert_eq!(title, "Grackle Grackle Level Editor");
     }
 
-    /// The old filler compiled `\{\s*$key\s*\}` per argument, but the statics
-    /// it drove were written for a `${name}` syntax the lang files never used.
-    /// This is the syntax they do use.
     #[test]
     fn a_brace_slot_is_what_actually_gets_filled() {
         let _guard = switching_language();
@@ -475,11 +380,8 @@ mod tests {
         );
     }
 
-    /// Arguments are feature ids, paths and formatted errors — all free to
-    /// contain a `$`, which the regex crate reads as a capture-group reference
-    /// when the replacement is a `&str`. `$dollar_bill` named no group, so the
-    /// whole substitution expanded to nothing and the argument vanished from
-    /// the sentence reporting it.
+    /// Fails if a `&str` replacement lets the regex crate expand `$...` and
+    /// drop the argument.
     #[test]
     fn a_dollar_sign_in_an_argument_survives() {
         let _guard = switching_language();
@@ -492,8 +394,6 @@ mod tests {
         }
     }
 
-    /// A replacement is not itself rescanned, so text that happens to look
-    /// like a slot survives whatever the other arguments are called.
     #[test]
     fn an_argument_containing_a_slot_is_not_substituted_into() {
         let _guard = switching_language();
@@ -503,9 +403,7 @@ mod tests {
         );
     }
 
-    /// The cache was a plain `HashMap` nothing could write to, so it missed
-    /// every time and cost a fresh regex compile per argument on every frame
-    /// the panels drew a templated string.
+    /// Fails if the cache is never written, or written but never read.
     #[test]
     fn a_filled_template_is_remembered() {
         let _guard = switching_language();
@@ -518,8 +416,6 @@ mod tests {
             Some("Grackle Grackle Level Editor")
         );
 
-        // And the stored string is what the next caller gets, rather than the
-        // cache being written but never read.
         CACHE.write().unwrap().insert(key, "from the cache".to_string());
         assert_eq!(
             get_template(&["editor", "title_special"], &[("game", "Grackle")]),
@@ -527,9 +423,6 @@ mod tests {
         );
     }
 
-    /// A cache that survived a language switch would be worse than no cache:
-    /// every string already drawn would keep its old language until something
-    /// happened to evict it.
     #[test]
     fn switching_language_forgets_what_was_filled() {
         let _guard = switching_language();
@@ -539,8 +432,6 @@ mod tests {
         assert_eq!(get_parsed("viewport.free"), "Freie Kamera");
     }
 
-    /// Arguments are counts, ids and error strings, so an editor left open
-    /// would otherwise keep one entry per distinct message it had ever shown.
     #[test]
     fn the_cache_does_not_grow_without_bound() {
         let _guard = switching_language();
@@ -551,7 +442,6 @@ mod tests {
             "cache grew to {}", CACHE.read().unwrap().len());
     }
 
-    /// Every leaf key in a lang file, as dotted paths.
     fn keys(value: &toml::Value, prefix: &str, into: &mut BTreeSet<String>) {
         let Some(table) = value.as_table() else { return };
         for (key, child) in table {
@@ -574,7 +464,6 @@ mod tests {
         path.split('.').try_fold(value, |current, key| current.get(key))
     }
 
-    /// The `{ name }` slots a string expects filled in.
     fn placeholders(value: &toml::Value) -> HashSet<String> {
         let text = match value {
             toml::Value::String(text) => text.clone(),
@@ -587,15 +476,8 @@ mod tests {
             .collect()
     }
 
-    /// A translation that drops `{ me }` loses information with no error
-    /// anywhere — the sentence still reads fine, just about nothing in
-    /// particular. Renaming one is worse: `get!` leaves an unfilled `{ ich }`
-    /// sitting in the output.
-    ///
-    /// Only keys a translation actually covers are checked. Grackle's `de-DE`
-    /// is behind `en-US`, and the English base layer in [`load_merged`] means
-    /// a key it has not reached yet renders as English rather than as
-    /// `<editor.foo>`. See the coverage note in CLAUDE.md.
+    /// Fails if a translation drops or renames a `{ slot }`. Only keys the
+    /// translation covers are checked; see the coverage note in CLAUDE.md.
     #[test]
     fn every_language_keeps_its_placeholders() {
         let reference = load_lang(FALLBACK_LANG).unwrap();
@@ -621,14 +503,11 @@ mod tests {
         assert!(languages.len() >= 2, "expected several languages, found {:?}", languages);
 
         for language in &languages {
-            // Falling back to the code is what happens when the key is absent,
-            // so this catches a file that forgot to introduce itself.
             assert_ne!(language.name, language.code,
                 "{} has no `language.name`, so the dropdown would show its code", language.code);
         }
 
         assert!(languages.iter().any(|l| l.code == FALLBACK_LANG));
-        // Sorted, so the dropdown does not reorder itself between runs.
         let mut sorted = languages.clone();
         sorted.sort_by(|a, b| a.code.cmp(&b.code));
         assert_eq!(languages, sorted);
@@ -637,11 +516,8 @@ mod tests {
     #[test]
     fn a_missing_language_is_an_error_and_not_a_panic() {
         let _guard = switching_language();
-        // Reachable from a menu click once there is one, not only from start-up.
         assert!(load_lang("zz-ZZ").is_err());
 
-        // And a failed switch must leave the working language alone rather
-        // than emptying it.
         assert!(change_lang("zz-ZZ", &default_packs()).is_err());
         assert_eq!(get_parsed("viewport.free"), "Freecam", "a failed switch cleared the language");
     }
@@ -659,8 +535,6 @@ mod tests {
         let _guard = switching_language();
         change_lang("de-DE", &default_packs()).unwrap();
 
-        // Every binary picks a language before it can render anything, so one
-        // that will not load has to degrade rather than abort.
         let effective = change_lang_or_fallback("zz-ZZ", &default_packs());
 
         assert_eq!(effective, FALLBACK_LANG);
@@ -668,8 +542,7 @@ mod tests {
             "reported a fallback it had not actually loaded");
     }
 
-    /// The reason the English base layer exists: a translation that is behind
-    /// shows readable English for what it has not reached, not `<editor.foo>`.
+    /// Fails if a key `de-DE` lacks renders as `<key>` rather than English.
     #[test]
     fn an_incomplete_translation_falls_back_key_by_key() {
         let _guard = switching_language();
@@ -685,7 +558,6 @@ mod tests {
         }
     }
 
-    /// A throwaway pack directory holding only lang files.
     fn lang_fixture(name: &str, files: &[(&str, &str)]) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("grackle-lang-{name}"));
         let _ = fs::remove_dir_all(&dir);
@@ -696,13 +568,10 @@ mod tests {
         dir
     }
 
-    /// UI order: the fixture pack above the default pack.
     fn with_default(pack: PathBuf) -> Vec<PathBuf> {
         vec![pack, PathBuf::from("assets/default")]
     }
 
-    /// The reason merging exists: a game's own tools get real names instead of
-    /// `<tools.foo>` on screen.
     #[test]
     fn a_pack_can_name_its_own_strings() {
         let _guard = switching_language();
@@ -713,7 +582,6 @@ mod tests {
         assert_eq!(get_parsed("tools.select"), "Select", "adding a pack must not lose the base strings");
     }
 
-    /// Higher in the pack list wins.
     #[test]
     fn a_higher_priority_pack_overrides_a_name() {
         let _guard = switching_language();
@@ -724,8 +592,6 @@ mod tests {
         assert_eq!(get_parsed("tools.point"), "Point", "keys the pack does not name are untouched");
     }
 
-    /// A pack that only ships English must still show *something* readable
-    /// under another language — English, not `<tools.foo>`.
     #[test]
     fn a_pack_without_the_chosen_language_still_shows_its_english_names() {
         let _guard = switching_language();
@@ -736,19 +602,14 @@ mod tests {
         assert_eq!(get_parsed("tools.foo"), "Foo Tool");
     }
 
-    /// Every lang file the repo ships has to be TOML.
-    ///
-    /// The loader is deliberately forgiving — a pack with a broken file falls
-    /// back to the others rather than taking the process down — which is right
-    /// at runtime and means a mistake here surfaces as some unrelated test
-    /// failing with a message about something else. Twice now that mistake has
-    /// been the same one: a key used both as a string and as a table, which
-    /// TOML refuses. Named here so it says so.
+    /// The loader skips broken files, so without this a bad shipped file
+    /// surfaces as some unrelated test failing. The usual cause is a key used
+    /// both as a string and as a table.
     #[test]
     fn every_shipped_lang_file_parses() {
         let mut checked = 0;
         let Ok(entries) = std::fs::read_dir(std::path::Path::new("assets")) else {
-            // Run from somewhere other than the repo root.
+            // Not run from the repo root.
             return;
         };
 
@@ -771,7 +632,6 @@ mod tests {
         assert!(checked > 0, "no lang files were found to check");
     }
 
-    /// One pack's typo must cost that pack its strings, never another pack's.
     #[test]
     fn a_broken_lang_file_in_one_pack_does_not_break_the_others() {
         let _guard = switching_language();
@@ -781,8 +641,6 @@ mod tests {
         assert_eq!(get_parsed("tools.select"), "Select");
     }
 
-    /// Asking for a language nobody ships must fail — quietly serving the
-    /// English base layer under the wrong name would hide the problem.
     #[test]
     fn a_language_no_pack_provides_is_still_an_error() {
         let _guard = switching_language();
@@ -792,7 +650,6 @@ mod tests {
         assert_eq!(get_parsed("tools.select"), "Select", "the failed switch must change nothing");
     }
 
-    /// A pack can ship a language the base editor does not have at all.
     #[test]
     fn a_pack_can_add_a_whole_language() {
         let _guard = switching_language();

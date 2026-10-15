@@ -17,12 +17,7 @@ pub struct MulticamPlugin {
     pub test_scene: bool,
 }
 
-/// How much of each edge of the window something else has taken, in logical
-/// pixels.
-///
-/// A struct rather than four arguments because every caller computes all four
-/// and the ordering of four `f32`s is exactly the kind of thing that is wrong
-/// once and then wrong forever.
+/// How much of each window edge something else has taken, in logical pixels.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Insets {
     pub left: f32,
@@ -64,22 +59,15 @@ pub enum CameraAxis {
 pub struct MulticamTestScene;
 
 impl MulticamState {
-    /// Give the viewports what is left of the window after the panels.
-    ///
-    /// One function because there are three surfaces that reserve space — the
-    /// map editor, the prop editor and the animation editor — and three copies
-    /// of a division by a window size is three places for a zero-width window
-    /// to produce an infinity. What that costs is in `calculate_resize`.
+    /// The one place a window size is divided by, so a zero-width window is handled once (see
+    /// `calculate_resize`).
     pub fn reserve(&mut self, insets: Insets, window: &Window) {
         self.reserve_from(insets, window.width(), window.height());
     }
 
-    /// The arithmetic half, without a `Window` to stand up in a test.
     pub fn reserve_from(&mut self, insets: Insets, width: f32, height: f32) {
-        // A window under a pixel across is a window mid-move, not a layout.
-        // Said out loud because dividing by it is how a panel inset a few
-        // hundred pixels wide becomes a *fraction* in the thousands, and the
-        // crash that follows names a bloom texture and nothing else.
+        // A window under a pixel across is mid-move. Dividing by it turns an inset into a fraction in the
+        // thousands, and the crash that follows names only a bloom texture.
         if (0.0..1.0).contains(&width) || (0.0..1.0).contains(&height) {
             warn_once!(
                 "window reported an implausible logical size of {width}x{height}; \
@@ -87,9 +75,7 @@ impl MulticamState {
             );
         }
         if width < 1.0 || height < 1.0 {
-            // Nothing sensible to say this frame, so the last good rect
-            // stands. A window with no area is a window mid-move, not a
-            // layout anybody asked for.
+            // Keep the last good rect.
             return;
         }
 
@@ -104,72 +90,44 @@ impl MulticamState {
     }
 }
 
-/// Whether a camera this size can actually be rendered.
+/// Whether a camera this size can be rendered: big enough to be worth it, and not so flat that
+/// bloom asks wgpu for a texture past `max_texture_dimension_2d`.
 ///
-/// Not a matter of taste. Bloom sizes its mip chain by **height**:
-///
-/// ```text
-/// ratio = max_mip_dimension / viewport.y
-/// size  = viewport * ratio
-/// ```
-///
-/// so a viewport one pixel tall asks for a texture `viewport.x * 512` wide,
-/// and wgpu refuses anything past `max_texture_dimension_2d`. That is the
-/// whole of the crash: dragging the window between two monitors, or simply
-/// opening it somewhere the panels do not fit, collapses the strip left for
-/// the cameras, and a 1760-pixel-wide viewport one pixel tall asks for 901120
-/// — which is exactly the number the error reports.
-///
-/// Rearranged, the condition is `height >= width * max_mip / max_texture`,
-/// and the minimum side is there because a viewport a few pixels across shows
-/// nothing worth the pass anyway.
-///
-/// Switched off rather than clamped to something renderable: the panels have
-/// said there is no room, and inventing a viewport they did not leave would
-/// draw the scene over them. The next frame brings a real layout.
+/// Switched off rather than clamped: inventing a viewport the panels did not leave would draw over
+/// them.
 fn renderable(camera: UVec2) -> bool {
     if camera.x < MIN_CAMERA_SIDE || camera.y < MIN_CAMERA_SIDE {
         return false;
     }
-    // The bloom chain's widest mip must still be a texture wgpu will make.
-    let widest = camera.x as u64 * BLOOM_MAX_MIP as u64 / camera.y.max(1) as u64;
-    widest <= MAX_TEXTURE_SIDE as u64
+    bloom_texture_width(camera) <= MAX_TEXTURE_SIDE as u64
+}
+
+/// Bloom sizes its mip chain by height (`size = viewport * max_mip / viewport.y`), so a viewport
+/// one pixel tall asks for a texture `viewport.x * 512` wide. Measured: a viewport 1760 wide and
+/// one pixel tall asked for 901120.
+fn bloom_texture_width(camera: UVec2) -> u64 {
+    camera.x as u64 * BLOOM_MAX_MIP as u64 / camera.y.max(1) as u64
 }
 
 /// Below this a viewport shows nothing worth a render pass.
 const MIN_CAMERA_SIDE: u32 = 16;
 
-/// `Bloom::max_mip_dimension`'s default, which is what scales the bloom
-/// texture against a viewport's height. Written down because the arithmetic
-/// that crashes depends on it and the number lives upstream.
+/// `Bloom::max_mip_dimension`'s default; the crash arithmetic depends on it and it lives upstream.
 const BLOOM_MAX_MIP: u32 = 512;
 
-/// The largest a render texture may be, which is what bounds a viewport.
-///
-/// wgpu's `max_texture_dimension_2d` is 8192 at its lowest tier and 16384 on
-/// anything this runs on — and 16384 is the number the validation error names
-/// when it refuses. Written down rather than read off the adapter because this
-/// is a sanity bound on a transitional window size, not a capability query: a
-/// viewport anywhere near it is already nonsense.
+/// wgpu's `max_texture_dimension_2d`: 8192 at its lowest tier, 16384 on anything this runs on and
+/// the number the validation error names. A sanity bound, not a capability query.
 const MAX_TEXTURE_SIDE: u32 = 16384;
 
-/// The viewport a pair of fractions describes, or `None` if they describe
-/// nothing a texture could be made from.
-///
-/// Out of the system so it can be tested without a window, a device or a
-/// render world — which is the only way to check a crash that only happens
-/// while a window is being dragged between two monitors.
+/// `None` if the fractions describe nothing a texture could be made from. Out of the system so the
+/// mid-drag crash is testable without a window.
 fn clamped_viewport(start: Vec2, end: Vec2, window: UVec2) -> Option<(UVec2, UVec2)> {
     if window.x == 0 || window.y == 0 || !start.is_finite() || !end.is_finite() {
         return None;
     }
 
-    // **A window this size is not a window; it is a measurement taken
-    // mid-move.** Refused outright rather than clamped down to the limit,
-    // because clamping invents an answer: a viewport 16384 across on a target
-    // that is really 2560 is its own validation error, one frame later. The
-    // last good viewport is the better answer, and the next frame brings a
-    // real size.
+    // A window this size is a measurement taken mid-move. Refused rather than clamped: a viewport 16384
+    // across on a 2560 target is a validation error one frame later.
     if window.x > MAX_TEXTURE_SIDE || window.y > MAX_TEXTURE_SIDE {
         return None;
     }
@@ -177,12 +135,10 @@ fn clamped_viewport(start: Vec2, end: Vec2, window: UVec2) -> Option<(UVec2, UVe
     let window_f = window.as_vec2();
     let first = start.clamp(Vec2::ZERO, Vec2::ONE);
     let second = end.clamp(Vec2::ZERO, Vec2::ONE);
-    // Ordered rather than assumed: `end` before `start` is a rectangle inside
-    // out, which is a negative size and then, cast, a very large one.
+    // `end` before `start` would be a negative size, and cast, a huge one.
     let (low, high) = (first.min(second), first.max(second));
 
-    // Two pixels at least, since each camera gets half of it and a zero-sized
-    // viewport is as invalid as an enormous one.
+    // At least two pixels, since each camera gets half and zero size is invalid.
     let size = ((high - low) * window_f)
         .max(Vec2::splat(2.0))
         .min(window_f)
@@ -222,23 +178,14 @@ impl Plugin for MulticamPlugin {
                 Self::setup_first_camera,
                 Self::setup.after(Self::setup_first_camera),
             ))
-            // **Applying the rects runs in every authoring mode**, not just
-            // the map editor. `MulticamState` is written by whichever panel
-            // module is up — each measures its own docks and turns the insets
-            // into normalised rects — but nothing was reading it outside the
-            // map editor, so the four cameras simply kept whatever viewport
-            // the editor had last set. The prop editor gets away with it
-            // because its panels happen to be about the same size; a mode that
-            // reserves a strip along the bottom does not, and the symptom is
-            // viewports drawn straight over it.
-            //
-            // The debug boxes stay in the map editor, being a map editor tool.
+            // Applying the rects runs in every authoring mode, since each mode's panels write `MulticamState`.
+            // The debug boxes stay in the map editor.
             .add_systems(
                 Update,
                 Self::set_camera_viewports.run_if(crate::common::app_mode::authoring),
             )
             .add_systems(Update, Self::debug_boxes.run_if(in_state(AppMode::Editor)))
-            // Global transforms are propagated from transforms during PostUpdate, so we need to draw the camera after that.
+            // After transform propagation, so gizmos use this frame's global transforms.
             .add_systems(PostUpdate, Self::draw_camera_gizmos.after(TransformSystems::Propagate).run_if(in_state(AppMode::Editor)))
             .add_systems(EguiPrimaryContextPass, Self::debug_window.run_if(in_state(AppMode::Editor)))
         ;
@@ -336,14 +283,12 @@ impl MulticamPlugin {
             RenderLayers::layer(31)
         ));
 
-        // Only spawn the test cube if test_scene is true
         if state.test_scene {
             Self::spawn_test_scene(&mut commands, meshes, materials);
         }
     }
 
     fn spawn_test_scene(commands: &mut Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
-        // circular base
         commands.spawn((
             Mesh3d(meshes.add(Circle::new(4.0))),
             MeshMaterial3d(materials.add(Color::WHITE)),
@@ -354,7 +299,6 @@ impl MulticamPlugin {
                 bounding_box: Cuboid::new(8.0, 8.0, 0.2),
             },
         ));
-        // cube
         commands.spawn((
             Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
             MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255))),
@@ -365,7 +309,6 @@ impl MulticamPlugin {
                 bounding_box: Cuboid::new(1.0, 1.0, 1.0),
             },
         ));
-        // cube
         commands.spawn((
             Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
             MeshMaterial3d(materials.add(Color::srgb_u8(255, 144, 124))),
@@ -377,7 +320,6 @@ impl MulticamPlugin {
             },
         ));
         
-        // light
         commands.spawn((
             PointLight {
                 shadow_maps_enabled: true,
@@ -443,27 +385,10 @@ impl MulticamPlugin {
         }
     }
 
-    /// Keep the four viewports on the part of the window the panels left.
-    ///
-    /// **Nothing is rendered on the frame the window changes size.** Dragging
-    /// between monitors of different scale takes the window from 1280x720 to
-    /// 2560x1440 in one step, and for that frame the `Window` already reports
-    /// the new size while the surface is still the old one. A viewport sized
-    /// and positioned for the new window then lands outside the old surface,
-    /// gets clamped down to a sliver — and bloom scales its mip chain by
-    /// `max_mip_dimension / viewport.height`, so a viewport one pixel tall
-    /// asks for a texture `viewport.width * 512` across. That is the crash:
-    /// 1760 wide against one pixel tall is 901120, which is exactly what wgpu
-    /// reported refusing.
-    ///
-    /// Switching the cameras off for that one frame is the whole fix. It costs
-    /// a single frame with no 3D in it, during a gesture that is already
-    /// visibly rearranging the window, and nothing asks the device for a
-    /// texture while the two sizes disagree.
-    ///
-    /// Note that the viewport *arithmetic* was never wrong here: the log that
-    /// found this showed a camera of 880x548, which is entirely sane. It was
-    /// sane for a surface that no longer existed.
+    /// Nothing is rendered on the frame the window changes size. Moving between monitors of different
+    /// scale, `Window` reports the new size for a frame while the surface is still the old one; a
+    /// viewport for the new size gets clamped to a sliver of the old surface and bloom asks for a texture
+    /// wgpu refuses. Switching the cameras off for that frame avoids it.
     fn set_camera_viewports(
         window: Single<&Window, With<PrimaryWindow>>,
         mut resize_events: MessageReader<WindowResized>,
@@ -481,42 +406,24 @@ impl MulticamPlugin {
                     camera.is_active = false;
                 }
             }
-            // The events are spent here: the rects are applied next frame,
-            // when the window and the surface agree about how big they are.
+            // Spent here: the rects are applied next frame, when window and surface agree.
             resize_events.clear();
             return;
         }
 
-        // Unconditional now, rather than gated on a change or a frame count.
-        // `calculate_resize` compares before it writes, so an idle frame costs
-        // four comparisons — and the cameras have to be switched back *on*
-        // after a settling frame, which a gate on `state.is_changed()` would
-        // not do when the panels happen not to have moved.
+        // Unconditional: the cameras must be switched back on after a settling frame even when the panels
+        // did not move. `calculate_resize` compares before writing, so idle frames are cheap.
         Self::calculate_resize(&mut cameras, &state, &window);
     }
     
     fn calculate_resize(cameras: &mut Query<(&mut Camera, &Multicam)>, state: &Res<MulticamState>, window: &Window) {
         let window_size = window.physical_size();
 
-        // **A viewport is never allowed to be bigger than the window it is
-        // in.** The fractions are arithmetic on sizes somebody else measured,
-        // and while a window is being dragged between monitors those
-        // measurements go through a frame or two of nonsense: a zero-width
-        // window divides to infinity, and egui can hand back an inverted panel
-        // rect whose width is negative, which turns `1.0 - right - left` into
-        // a number far greater than one.
-        //
-        // What that costs is not a wrong-looking frame. The viewport sizes the
-        // camera's render textures, so a fraction of a thousand asks for a
-        // bloom texture a couple of million pixels across, wgpu refuses it,
-        // and Bevy takes the process down — a crash on the way from one screen
-        // to another, with nothing in the message about viewports.
-        //
-        // Clamped here rather than at the three places that write the
-        // fractions, because this is the one place they become a texture.
-        // Named once if it ever happens again, because the crash this guards
-        // reports a bloom texture and a number, and nothing about where the
-        // number came from.
+        // A viewport may never exceed the window. While a window is dragged between monitors the
+        // measurements go through frames of nonsense (a zero-width window, an inverted egui rect whose
+        // negative width makes `1.0 - right - left` far greater than one), and the viewport sizes the
+        // render textures, so wgpu refuses and Bevy exits. Clamped here because this is where the fractions
+        // become a texture.
         if window_size.x > MAX_TEXTURE_SIDE || window_size.y > MAX_TEXTURE_SIDE {
             warn_once!(
                 "window reported an implausible physical size of {window_size:?}; \
@@ -530,14 +437,12 @@ impl MulticamPlugin {
             return;
         };
 
-        // Calculate the size of each camera's viewport (2x2 grid)
         let camera_size = UVec2::new(
             (viewport_size.x / 2).max(1),
             (viewport_size.y / 2).max(1),
         );
 
-        // **A viewport too small or too wide to render is switched off, not
-        // made anyway.** See `renderable`.
+        // See `renderable`.
         let showing = renderable(camera_size);
 
         for (mut camera, multicam) in cameras {
@@ -547,7 +452,6 @@ impl MulticamPlugin {
             if !showing {
                 continue;
             }
-            // Calculate this camera's position within the viewport
             let camera_pos = viewport_start + UVec2::new(
                 multicam.screen_pos.x * camera_size.x,
                 multicam.screen_pos.y * camera_size.y,
@@ -558,9 +462,7 @@ impl MulticamPlugin {
                 physical_size: camera_size,
                 ..Default::default()
             };
-            // Compared before writing, so this can run every frame without
-            // marking every camera changed every frame — which is what lets
-            // the settling check below be unconditional.
+            // Compared before writing, so running every frame does not mark every camera changed.
             let same = camera.viewport.as_ref().is_some_and(|had| {
                 had.physical_position == wanted.physical_position
                     && had.physical_size == wanted.physical_size
@@ -586,7 +488,6 @@ impl MulticamPlugin {
         egui::Window::new(get!("debug.viewport.title")).show(ctx, |ui| {
             ui.heading(get!("debug.viewport.controls"));
             
-            // Start coordinates
             ui.heading("X");
             ui.horizontal(|ui| {
                 ui.label(get!("debug.viewport.start"));
@@ -605,7 +506,6 @@ impl MulticamPlugin {
 
             ui.separator();
 
-            // End coordinates
             ui.heading("Y");
             ui.horizontal(|ui| {
                 ui.label(get!("debug.viewport.start"));
@@ -656,7 +556,6 @@ impl MulticamPlugin {
         let mut button: Option<MouseButton> = None;
 
         if left_pressed && right_pressed {
-            // If both were just pressed, discard for this interaction
         } else if left_pressed {
             button = Some(MouseButton::Left);
         } else if right_pressed {
@@ -675,7 +574,6 @@ impl MulticamPlugin {
                         let physical_cursor_x = cursor_pos_window.x * window.scale_factor();
                         let physical_cursor_y = cursor_pos_window.y * window.scale_factor();
 
-                        // Check if cursor is within this viewport's bounds
                         if physical_cursor_x >= vp_min.x && physical_cursor_x < vp_max.x &&
                             physical_cursor_y >= vp_min.y && physical_cursor_y < vp_max.y
                         {
@@ -765,21 +663,13 @@ fn draw_rect(
 mod tests {
     use super::*;
 
-    /// A viewport fraction is arithmetic on sizes somebody else measured, and
-    /// while a window is dragged between monitors those measurements go
-    /// through a frame or two of nonsense. None of it may reach a texture.
-    ///
-    /// The failure this guards is not a wrong-looking frame: the viewport
-    /// sizes the camera's render textures, so a fraction of a thousand asks
-    /// wgpu for a bloom texture a couple of million pixels across, wgpu
-    /// refuses, and Bevy quits the application. The message says `bloom_texture`
-    /// and nothing about viewports, which is why it is worth pinning here.
+    /// A fraction from mid-drag nonsense must never reach a texture; wgpu refuses and Bevy exits with an
+    /// error naming only `bloom_texture`.
     #[test]
     fn no_measurement_can_ask_for_a_viewport_bigger_than_the_window() {
         let window = Vec2::new(1280.0, 720.0);
 
-        // An inverted panel rect reads as a negative width, which turns
-        // `1.0 - right - left` into a number far greater than one.
+        // An inverted panel rect reads as a negative width.
         let nonsense = [
             (Vec2::new(-1000.0, -1000.0), Vec2::new(1024.0, 1024.0)),
             (Vec2::new(0.0, 0.0), Vec2::new(f32::INFINITY, 1.0)),
@@ -792,7 +682,6 @@ mod tests {
 
         for (start, end) in nonsense {
             let Some((position, size)) = clamped_viewport(start, end, window.as_uvec2()) else {
-                // Refusing outright is a fine answer; the last good rect stands.
                 continue;
             };
             assert!(
@@ -811,20 +700,8 @@ mod tests {
         }
     }
 
-    /// **The window's own size is not to be trusted either**, which is what
-    /// the first version of this guard got wrong: it clamped the viewport to
-    /// the window, and a window reporting a few million pixels across while
-    /// being dragged between two monitors let the viewport be half of that.
-    /// The crash survived the fix.
-    ///
-    /// The number in that crash — 2211840 against a limit of 16384 — is half
-    /// a viewport, so the viewport was about four and a half million across,
-    /// which no fraction of a real window produces.
-    ///
-    /// Refused rather than clamped, because clamping down to the limit
-    /// invents an answer: a viewport 16384 across on a target that is really
-    /// 2560 is the next frame's validation error. Keeping the last good one
-    /// costs a frame of a stale rect and nothing else.
+    /// A window reporting millions of pixels mid-drag must be refused, not clamped to. Measured: 2211840
+    /// against a limit of 16384, half a viewport about 4.4 million across.
     #[test]
     fn a_window_reporting_nonsense_is_refused_rather_than_clamped() {
         for absurd in [
@@ -838,30 +715,19 @@ mod tests {
             );
         }
 
-        // And the largest plausible window is still served.
         assert!(clamped_viewport(Vec2::ZERO, Vec2::ONE, UVec2::splat(MAX_TEXTURE_SIDE)).is_some());
     }
 
-    /// The bloom texture a camera of this size would ask wgpu for.
-    ///
-    /// Bevy's own arithmetic, copied here deliberately: the crash is a
-    /// property of *that* formula meeting our viewport, so a test that made up
-    /// its own would pass while the program still died.
+    /// Bevy's own arithmetic, copied on purpose: a test with its own formula would pass while the
+    /// program still crashed.
     fn bloom_texture_width(camera: UVec2) -> u64 {
         let ratio = BLOOM_MAX_MIP as f64 / camera.y as f64;
         (camera.x as f64 * ratio).round() as u64
     }
 
-    /// **No layout may ask for a bloom texture wgpu will refuse.**
-    ///
-    /// The crash, stated as the thing that actually went wrong. Bloom scales
-    /// its mip chain by height, so a viewport one pixel tall asks for one
-    /// `viewport.x * 512` wide — 901120 and 2211840 in the two reports, which
-    /// is 1760 and 4320 pixels wide against a single pixel of height.
-    ///
-    /// Swept across window sizes and panel insets, including the ones that
-    /// leave nothing: panels taller than the window, wider than the window,
-    /// and both at once.
+    /// No layout may ask for a bloom texture wgpu refuses. The reports were 901120 and 2211840: 1760 and
+    /// 4320 wide against one pixel of height. Sweeps window sizes and insets, including ones that leave
+    /// nothing.
     #[test]
     fn no_layout_asks_for_a_bloom_texture_the_device_refuses() {
         let windows = [
@@ -871,8 +737,7 @@ mod tests {
             UVec2::new(1760, 100),
             UVec2::new(400, 300),
         ];
-        // Insets as fractions of the window, including several that take more
-        // than all of it.
+        // Fractions of the window, several taking more than all of it.
         let insets = [
             (0.0, 0.0, 0.0, 0.0),
             (0.2, 0.25, 0.05, 0.3),
@@ -903,7 +768,6 @@ mod tests {
                 let camera = UVec2::new((viewport.x / 2).max(1), (viewport.y / 2).max(1));
 
                 if !renderable(camera) {
-                    // Switched off, so nothing is asked of the device at all.
                     continue;
                 }
 
@@ -931,7 +795,6 @@ mod tests {
         }
     }
 
-    /// And an ordinary four-up layout still renders.
     #[test]
     fn an_ordinary_layout_still_renders() {
         for camera in [UVec2::new(640, 360), UVec2::new(1280, 720), UVec2::splat(16)] {
@@ -939,7 +802,6 @@ mod tests {
         }
     }
 
-    /// And an ordinary reservation still lands where it used to.
     #[test]
     fn an_ordinary_reservation_is_untouched() {
         let window = UVec2::new(1000, 1000);
@@ -949,8 +811,7 @@ mod tests {
         assert_eq!(size, UVec2::new(700, 700));
     }
 
-    /// A window with no area is a window mid-move; the last good rect stands
-    /// rather than being replaced with a division by zero.
+    /// A window with no area keeps the last good rect rather than dividing by zero.
     #[test]
     fn a_window_with_no_area_changes_nothing() {
         let mut state = MulticamState::default();

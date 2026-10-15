@@ -1,26 +1,16 @@
 use bevy::prelude::*;
 
-/// How far along the ray it first enters the box, and which face it came in
-/// through, or `None` if it misses.
+/// Distance along the ray to where it first enters the box, and the face it
+/// came in through, or `None` on a miss. Slab method.
 ///
-/// The slab method. A ray starting *inside* the box returns `0.0` rather than
-/// the negative distance back to the entry plane it never crossed: the answer
-/// wanted everywhere is "where does this ray first touch the volume", and for
-/// an origin already in it that is the origin.
-///
-/// The normal points *back along* the ray — out of the face that was hit — so
-/// it is the vector a bounce reflects about. It is the axis of the last slab
-/// the ray entered, which is the face it actually crossed; for an origin
-/// inside the box that axis is whichever slab it is furthest into, and the
-/// answer is arbitrary rather than wrong. Nothing bounces off a wall it is
-/// already inside.
+/// An origin inside the box returns `0.0`. The normal points back along the
+/// ray (what a bounce reflects about); for an origin inside, its axis is
+/// arbitrary.
 pub fn ray_aabb_entry(ray: &Ray3d, min: Vec3, max: Vec3) -> Option<(f32, Vec3)> {
     let inv_dir = Vec3::new(1.0 / ray.direction.x, 1.0 / ray.direction.y, 1.0 / ray.direction.z);
 
-    // Per axis, the pair of plane crossings, nearest first. `f32::min` and
-    // `f32::max` are used rather than comparisons because an axis the ray does
-    // not move along divides by zero, and the infinities that produces have to
-    // fall out of the test rather than through it.
+    // `min`/`max` rather than comparisons so the infinities from an axis the
+    // ray does not move along fall out of the test rather than through it.
     let mut entry = f32::NEG_INFINITY;
     let mut exit = f32::INFINITY;
     let mut axis = 0;
@@ -44,16 +34,12 @@ pub fn ray_aabb_entry(ray: &Ray3d, min: Vec3, max: Vec3) -> Option<(f32, Vec3)> 
     Some((entry.max(0.0), normal))
 }
 
-/// How far along the ray it first enters the box, or `None` if it misses.
-///
-/// [`ray_aabb_entry`] without the face, for the callers — hit registration,
-/// shortening a shot against a wall — that only want to know how far.
+/// [`ray_aabb_entry`] without the face.
 pub fn ray_aabb_distance(ray: &Ray3d, min: Vec3, max: Vec3) -> Option<f32> {
     ray_aabb_entry(ray, min, max).map(|(distance, _)| distance)
 }
 
-/// A box turned in the world — what a feature with a body offers to be picked
-/// by, in place of a point somebody has to click within a few centimetres of.
+/// A box turned in the world, for picking a feature by its body.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PickBox {
     pub centre: Vec3,
@@ -62,10 +48,9 @@ pub struct PickBox {
 }
 
 impl PickBox {
-    /// The movement hull of a body standing with its feet at `feet` — the
-    /// same box a spawn point is checked for, from the same constants, so a
-    /// body is picked by the space it is known to take up rather than by a
-    /// pose that changes every frame.
+    /// The movement hull of a body with its feet at `feet`, from the same
+    /// constants spawn points are checked with, rather than a pose that changes
+    /// every frame.
     pub fn standing_body(feet: Vec3, rotation: Quat) -> Self {
         Self {
             centre: crate::common::class::body_centre_from_feet(feet),
@@ -74,9 +59,8 @@ impl PickBox {
         }
     }
 
-    /// How far along the ray it first enters the box: the ray is taken into
-    /// the box's own frame, where the box is axis-aligned. A rotation keeps a
-    /// direction unit length, so distances come back unchanged.
+    /// Takes the ray into the box's frame; a rotation keeps the direction unit
+    /// length, so distances are unchanged.
     pub fn ray_distance(&self, ray: &Ray3d) -> Option<f32> {
         let inverse = self.rotation.inverse();
         let local = Ray3d::new(
@@ -86,8 +70,7 @@ impl PickBox {
         ray_aabb_distance(&local, -self.half_extents, self.half_extents)
     }
 
-    /// The box as a transform on a unit cube, which is what `Gizmos::cube`
-    /// draws.
+    /// As a transform on a unit cube, for `Gizmos::cube`.
     pub fn transform(&self) -> Transform {
         Transform::from_translation(self.centre)
             .with_rotation(self.rotation)
@@ -113,8 +96,6 @@ mod tests {
         assert!((hit.unwrap() - 4.0).abs() < 1e-5, "{hit:?}");
     }
 
-    /// The one case the bool version could not express: a ray that starts in
-    /// the box has not travelled to reach it.
     #[test]
     fn a_ray_starting_inside_hits_at_zero() {
         let hit = ray_aabb_distance(&ray(Vec3::ZERO, Vec3::X), Vec3::splat(-1.0), Vec3::splat(1.0));
@@ -126,9 +107,7 @@ mod tests {
         assert_eq!(ray_aabb_distance(&ray(Vec3::new(5.0, 0.0, 0.0), Vec3::X), Vec3::splat(-1.0), Vec3::splat(1.0)), None);
     }
 
-    /// The face, not just the distance: a bounce reflects about this, and a
-    /// normal taken off the wrong axis sends a pipe bomb through the floor
-    /// rather than off it.
+    /// A normal off the wrong axis sends a pipe bomb through the floor.
     #[test]
     fn the_normal_is_the_face_the_ray_came_in_through() {
         let box_min = Vec3::splat(-1.0);
@@ -141,8 +120,7 @@ mod tests {
         assert_eq!(top, Vec3::Y, "came in through the +Y face");
     }
 
-    /// And it faces the ray rather than away from it, whichever way the ray is
-    /// going — the sign is the one thing here that can be silently backwards.
+    /// The sign is the part that can be silently backwards.
     #[test]
     fn the_normal_always_faces_back_along_the_ray() {
         for direction in [Vec3::X, Vec3::NEG_X, Vec3::Y, Vec3::NEG_Y, Vec3::Z, Vec3::NEG_Z] {
@@ -153,8 +131,6 @@ mod tests {
         }
     }
 
-    /// Turned a quarter about Y, a long thin box's length runs along X rather
-    /// than Z, and a ray has to find it there.
     #[test]
     fn a_turned_box_is_hit_where_it_is_turned_to() {
         let long_along_z = PickBox {
@@ -167,8 +143,7 @@ mod tests {
         assert_eq!(long_along_z.ray_distance(&ray(Vec3::new(-5.0, 0.0, 1.5), Vec3::X)), None);
     }
 
-    /// An axis the ray does not move along divides by zero, and the slab test
-    /// has to survive the infinities that produces.
+    /// A zero direction component divides by zero; the test must survive it.
     #[test]
     fn an_axis_aligned_ray_misses_a_box_it_is_beside() {
         assert_eq!(ray_aabb_distance(&ray(Vec3::new(-5.0, 3.0, 0.0), Vec3::X), Vec3::splat(-1.0), Vec3::splat(1.0)), None);

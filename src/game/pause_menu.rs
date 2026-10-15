@@ -1,16 +1,5 @@
-//! The pause menu: `Escape` while playing, and the mouse comes back.
-//!
-//! Deliberately plain Bevy UI rather than an `egui` window. The editor's
-//! panels are egui because they are tools; this is part of the game, has to
-//! exist in a build with no editor in it, and has to work on a browser tab
-//! where the egui layer is one more thing to have gone wrong.
-//!
-//! **Releasing the mouse is the point of it.** A grabbed cursor is not
-//! something a player can get out of by clicking somewhere else, so a window
-//! with no way to hand the pointer back is a window you have to kill. That is
-//! also why pausing switches off aim and movement gathering rather than only
-//! showing something: a released cursor that still spun the view would be
-//! worse than a captured one.
+//! The pause menu: `Escape` while playing releases the mouse. Plain Bevy UI,
+//! not egui, so it exists in a build with no editor.
 
 use bevy::prelude::*;
 
@@ -18,24 +7,16 @@ use crate::common::app_mode::AppMode;
 use crate::get;
 
 /// Whether the pause menu is showing.
-///
-/// A resource rather than a `SubState` because nothing hangs off it but a few
-/// run conditions, and a state would pull `OnEnter`/`OnExit` transitions into
-/// something that is one boolean.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PauseMenu {
     pub open: bool,
 }
 
-/// Marks the menu's root node, so closing it is a despawn of one entity.
 #[derive(Component)]
 struct PauseMenuRoot;
 
-/// Run condition: the player is playing rather than looking at the menu.
-///
-/// What everything that reads the mouse or the keyboard for the body is gated
-/// on. Note it answers `true` when the resource is missing, so the game layer
-/// still runs in a test app that has not added this plugin.
+/// Run condition. `true` when the resource is missing, so the game layer runs
+/// in test apps without this plugin.
 pub fn not_paused(menu: Option<Res<PauseMenu>>) -> bool {
     menu.is_none_or(|menu| !menu.open)
 }
@@ -49,14 +30,8 @@ impl Plugin for PauseMenuPlugin {
                 Update,
                 (
                     toggle_pause.run_if(in_state(AppMode::Play)),
-                    // Chained, so a press and what it does to the screen land
-                    // on the same frame. Unordered, this runs first as often
-                    // as not and the menu appears a frame late — which is
-                    // exactly long enough to look like a dropped keypress.
-                    //
-                    // Not itself gated on `AppMode`: it has to run on the
-                    // frame the menu is closed by *leaving* Play, and by then
-                    // the gate is already false.
+                    // Chained so the menu appears the same frame. Ungated so
+                    // it runs on the frame leaving Play closes the menu.
                     show_or_hide.run_if(resource_changed::<PauseMenu>),
                 )
                     .chain(),
@@ -65,25 +40,20 @@ impl Plugin for PauseMenuPlugin {
     }
 }
 
-/// `Escape` both ways.
 fn toggle_pause(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<PauseMenu>) {
     if keys.just_pressed(KeyCode::Escape) {
         menu.open = !menu.open;
     }
 }
 
-/// Put the menu up or take it down, and hand the mouse over or take it back.
-///
-/// One system for both halves so the cursor and the menu cannot disagree —
-/// split across an `OnEnter`/`OnExit` pair they eventually would, and a menu
-/// showing with the cursor still grabbed is a menu nobody can click.
+/// Put the menu up or down and release or capture the mouse, in one system
+/// so the cursor and the menu cannot disagree.
 fn show_or_hide(
     mut commands: Commands,
     menu: Res<PauseMenu>,
     existing: Query<Entity, With<PauseMenuRoot>>,
     window: Query<Entity, With<bevy::window::PrimaryWindow>>,
     mode: Res<State<AppMode>>,
-    // Optional so the menu can be tested without the rest of the game layer.
     latch: Option<ResMut<crate::game::player::InputLatch>>,
 ) {
     for root in &existing {
@@ -91,11 +61,8 @@ fn show_or_hide(
     }
 
     if menu.open {
-        // A key held as the menu goes up would otherwise stay held in the
-        // latch, and the body would walk into a wall for as long as the menu
-        // was open — `gather_input` is not running to correct it. Aim is
-        // deliberately kept: it is where the player put the view, not
-        // something a key is holding down.
+        // `gather_input` stops while paused, so held keys would stay held.
+        // Aim is kept.
         if let Some(mut latch) = latch {
             latch.0.release_controls();
         }
@@ -110,9 +77,7 @@ fn show_or_hide(
                 justify_content: JustifyContent::Center,
                 ..default()
             },
-            // Dimmed rather than opaque: the match is still running behind it,
-            // and a player who cannot see what is happening to them while the
-            // menu is up will not open it.
+            // Dimmed, not opaque: the match keeps running behind it.
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
             children![(
                 Text::new(get!("pause.title")),
@@ -122,22 +87,15 @@ fn show_or_hide(
         ));
     }
 
-    // Captured exactly when the menu is not showing. Stated as a fact about
-    // the menu rather than toggled, so the two cannot drift apart.
-    //
-    // Only while playing, and this is not a tidiness guard: change detection
-    // counts a resource's insertion as a change, so without it the first frame
-    // of the process would grab the cursor inside the editor.
+    // Only in Play: the resource's insertion counts as a change, and would
+    // grab the cursor in the editor on the first frame.
     if *mode.get() == AppMode::Play {
         crate::game::set_cursor_captured(&mut commands, &window, !menu.open);
     }
 }
 
-/// The round ended, or somebody went back to the editor.
-///
-/// The menu belongs to a match. Left open it would be a black overlay across
-/// the editor with no key bound to close it, since `toggle_pause` only runs
-/// while playing.
+/// Left open, the overlay would cover the editor with nothing to close it,
+/// since `toggle_pause` only runs in Play.
 fn close_on_leaving_play(mut menu: ResMut<PauseMenu>) {
     menu.open = false;
 }
@@ -159,11 +117,8 @@ mod tests {
         app
     }
 
-    /// A tap, driven through `Update` rather than through `app.update()`.
-    ///
-    /// `InputPlugin` clears `just_pressed` in `PreUpdate`, so a press made and
-    /// then handed to a full frame is a press that was already forgotten by
-    /// the time `toggle_pause` runs.
+    /// Runs `Update` directly, since `InputPlugin` clears `just_pressed` in
+    /// `PreUpdate` of a full `app.update()`.
     fn press_escape(app: &mut App) {
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -195,11 +150,7 @@ mod tests {
         assert!(!showing(&mut app), "escape did not close the menu again");
     }
 
-    /// Opening the menu lets go of the controls and keeps the view.
-    ///
-    /// The bug this pins was reported as "I press escape and lose my
-    /// orientation": clearing the whole latch took `yaw` and `pitch` with the
-    /// held keys, and the body snapped round to face north.
+    /// Breaks if pausing clears aim along with the held keys.
     #[test]
     fn pausing_releases_the_controls_but_not_the_view() {
         use crate::game::player::{InputLatch, PlayerInput};
@@ -223,9 +174,6 @@ mod tests {
         assert!(!latch.jump && !latch.sprint, "a held key survived the pause");
     }
 
-    /// The menu belongs to a match. Left up it would be a black overlay across
-    /// the editor with no key bound to take it down, because `toggle_pause`
-    /// only runs while playing.
     #[test]
     fn leaving_play_takes_the_menu_with_it() {
         let mut app = app();
@@ -241,8 +189,6 @@ mod tests {
         assert!(!showing(&mut app), "the menu outlived the match");
     }
 
-    /// Escape while editing belongs to the tools, not to a menu that has no
-    /// match to pause.
     #[test]
     fn escape_in_the_editor_does_nothing() {
         let mut app = app();
@@ -255,8 +201,7 @@ mod tests {
         assert!(!showing(&mut app), "the editor grew a pause menu");
     }
 
-    /// The run condition has to answer sensibly for an app that never added
-    /// this plugin, or the game layer stops stepping in every headless test.
+    /// Breaks headless tests' game layer if this returns false.
     #[test]
     fn a_game_with_no_menu_is_not_paused() {
         let mut world = World::new();

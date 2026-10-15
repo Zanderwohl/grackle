@@ -1,17 +1,11 @@
-//! A prop as a document: the feature list, what is selected, and how to get
-//! back to what it looked like a moment ago.
+//! A prop as a document: the feature list, the selection, and undo.
 //!
-//! **Undo is whole-document snapshots**, the model the map's undo was later
-//! moved onto too. A prop is a few dozen features and a couple of kilobytes,
-//! so cloning per edit is free and correct by construction: no before-and-after
-//! pair to get the wrong way round, and no operation that can forget to record
-//! itself. The price is that history does not survive closing the file.
+//! Undo is whole-document snapshots; a prop is a couple of kilobytes, so
+//! cloning per edit is cheap. History does not survive closing the file.
 //!
-//! **The file is flat text, not SQLite.** A blueprint is an authoring format
-//! the runtime never reads; a prop is read by the *game* and has to reach a
-//! browser tab, where bundled C does not go. So it comes through
-//! [`AssetSource`](crate::common::assets::AssetSource) like `weapons.toml`,
-//! and nothing here reaches for a filesystem on the reading side.
+//! The game reads props, so reading goes through
+//! [`AssetSource`](crate::common::assets::AssetSource) and never `std::fs`,
+//! which a browser tab does not have.
 
 use std::path::{Path, PathBuf};
 
@@ -23,52 +17,37 @@ use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Evaluated, FeatureOp, PropFeature, PropFeatureId};
 use crate::prop::hold::{HoldSpec, ViewmodelSpec};
 
-/// Grackle Prop. Flat text, one prop per file.
+/// Grackle Prop: TOML, one prop per file.
 pub const PROP_EXTENSION: &str = "gpp";
 
-/// Where props live inside a pack, so the weapon loader and the prop editor
-/// cannot disagree about it.
+/// Where props live inside a pack.
 pub const PROPS_DIR: &str = "props";
 
-/// How many edits back you can go. Bounded because the stack is whole
-/// documents; deep enough that nobody reaches the end in practice.
+/// Bounded because each step is a whole document.
 const UNDO_DEPTH: usize = 256;
 
-/// One prop: an ordered list of modelling features and a name.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PropDoc {
-    /// A lang key, the way a weapon's is — free text would be display text
-    /// outside the lang layer.
+    /// A lang key, not display text.
     #[serde(default)]
     pub name_key: String,
     #[serde(default)]
     pub features: Vec<PropFeature>,
-    /// How this prop is held, if anything holds it. Every prop has one and
-    /// almost every prop will keep the default — see [`HoldSpec`].
     #[serde(default)]
     pub hold: HoldSpec,
-    /// Where it hangs in first person, which is a different question from how
-    /// a body holds it — see [`ViewmodelSpec`].
+    /// First-person framing; not the same as [`HoldSpec`]'s carry.
     #[serde(default)]
     pub viewmodel: ViewmodelSpec,
-    /// The next id to hand out. Stored rather than derived from the highest in
-    /// use, so deleting the last feature cannot make the next reuse its number.
+    /// Stored rather than derived from the highest id in use, so deleting the
+    /// last feature cannot make the next one reuse its id.
     #[serde(default)]
     next_id: u32,
-    /// What this prop does over time — a fire, a reload, a deploy.
+    /// Fire, reload, deploy. Here rather than in `weapons.toml` because a clip
+    /// is stated relative to the hold.
     ///
-    /// Here rather than in `weapons.toml` because an animation is stated as a
-    /// *deviation from the hold*, and a deviation wants to live beside the
-    /// thing it deviates from. It also reaches clients free: a `.gpp` already
-    /// crosses the wire as the text the file holds, which is the only way an
-    /// internally tagged enum can cross at all.
-    ///
-    /// **Declared last, and it has to stay last.** A TOML array-of-tables
-    /// header captures every key after it, so a field written out below
-    /// `[[features]]` or `[[...tracks]]` would be swallowed by it — the rule
-    /// `weapons.toml` already documents, and it applies to
-    /// `toml::to_string_pretty`'s output exactly as it does to a hand-written
-    /// file.
+    /// Must stay the last field: a TOML array-of-tables header captures every
+    /// key after it, so a field serialised below `[[features]]` would be read
+    /// back into the last feature.
     #[serde(default, skip_serializing_if = "ClipSet::is_empty")]
     pub animations: ClipSet,
 }
@@ -91,8 +70,7 @@ impl PropDoc {
         id
     }
 
-    /// Add a feature at `at` in the list and return its id. Clamped to the
-    /// end.
+    /// `at` is clamped to the end.
     pub fn insert_at(&mut self, at: usize, op: FeatureOp) -> PropFeatureId {
         let id = self.take_id();
         let at = at.min(self.features.len());
@@ -100,20 +78,14 @@ impl PropDoc {
         id
     }
 
-    /// Add a feature at the end and return its id.
     pub fn push(&mut self, op: FeatureOp) -> PropFeatureId {
         let id = self.take_id();
         self.features.push(PropFeature::new(id, op));
         id
     }
 
-    /// Copy a feature in directly after itself and return the copy's id.
-    ///
-    /// Only something that consumes nothing can be copied: a boolean's copy
-    /// would find its operands already eaten by the original and arrive
-    /// broken. `None` for those, and for an id that is not here. `name` is
-    /// what to call the copy — the caller's, since what "copy" is called is
-    /// the lang layer's business, not the document's.
+    /// Copy a feature in directly after itself. `None` for a feature that
+    /// consumes anything: its copy would find its operands already eaten.
     pub fn duplicate(&mut self, id: PropFeatureId, name: String) -> Option<PropFeatureId> {
         let at = self.index_of(id)?;
         let original = &self.features[at];
@@ -144,8 +116,7 @@ impl PropDoc {
         self.features.retain(|feature| feature.id != id);
     }
 
-    /// Everything that names `id` as an operand — what deleting it breaks, so
-    /// the panel can say so beforehand.
+    /// Everything that names `id` as an operand.
     pub fn dependants(&self, id: PropFeatureId) -> Vec<PropFeatureId> {
         self.features
             .iter()
@@ -154,22 +125,16 @@ impl PropDoc {
             .collect()
     }
 
-    /// Where a feature may be moved to, as indices in the finished list.
+    /// Where a feature may be moved to. Always contiguous, since moving one
+    /// item leaves the others' order alone. Direct relations are enough: an
+    /// indirect operand is already above a direct one.
     ///
-    /// **Always a contiguous interval**, which is what makes dragging tractable.
-    /// Moving *one* item leaves every other item's relative order alone, so
-    /// "after everything I consume" and "before everything that consumes me"
-    /// collapse into one window — no scattered set of slots to describe, so the
-    /// panel clamps into the range rather than needing to refuse a drop.
-    ///
-    /// **Direct relations are enough**: an indirect operand is already above a
-    /// direct one. Indices count the list **with this feature taken out**,
-    /// which is the index it will end up at.
+    /// Indices count the list with this feature taken out, which is the index
+    /// it will end up at.
     pub fn legal_range(&self, id: PropFeatureId) -> Option<std::ops::RangeInclusive<usize>> {
         let at = self.index_of(id)?;
         let feature = self.feature(id)?;
 
-        // Where an item at `i` sits once this feature is lifted out.
         let without = |i: usize| if i < at { i } else { i - 1 };
 
         let mut low = 0;
@@ -186,16 +151,13 @@ impl PropDoc {
             }
         }
 
-        // An already-out-of-order document would give an inverted range, which
-        // is a panic waiting in whatever clamps with it.
+        // An out-of-order document would give an inverted range, and `clamp`
+        // panics on one.
         Some(low..=high.max(low))
     }
 
-    /// Move a feature to `target`, or as close as the dependencies allow.
-    ///
-    /// **Clamped rather than refused**, so a drag stops at the last legal place
-    /// instead of snapping back or landing somewhere broken. That is the whole
-    /// of how an illegal order is prevented.
+    /// Clamped into [`Self::legal_range`] rather than refused, so a drag stops
+    /// at the last legal place. Returns whether anything moved.
     pub fn move_to(&mut self, id: PropFeatureId, target: usize) -> bool {
         let Some(at) = self.index_of(id) else { return false };
         let Some(legal) = self.legal_range(id) else { return false };
@@ -215,44 +177,29 @@ impl PropDoc {
     }
 }
 
-/// The document, the undo stacks, and what file it came from.
 #[derive(Resource, Debug)]
 pub struct PropEditor {
     doc: PropDoc,
     undo: Vec<PropDoc>,
     redo: Vec<PropDoc>,
-    /// What the document looked like when a gesture began, pushed onto the
-    /// undo stack only if it changed anything. egui reports a drag as an edit
-    /// per frame, so without this one drag would be forty undo steps.
+    /// The document as a gesture began. egui reports a drag as an edit per
+    /// frame, so this makes one drag one undo step.
     pending: Option<PropDoc>,
-    /// The **primary** selection: what the inspector shows and the gizmos
-    /// drag. The last thing picked.
+    /// The primary selection: the last pick, shown in the inspector.
     pub selected: Option<PropFeatureId>,
-    /// Everything picked before the primary with Ctrl/Cmd held, oldest first.
-    ///
-    /// **Selection is ordered** because the verbs that take two operands care
-    /// which is which: pick the barrel, then the bore, and *Subtract* cuts the
-    /// bore out of the barrel — the order it is said in. Kept apart from
-    /// `selected` rather than folded into one list so the many readers that
-    /// only want "the thing being edited" go on reading one field.
+    /// Earlier Ctrl/Cmd picks, oldest first. Ordered because a boolean's
+    /// first pick is its target and its second the tool.
     pub also_selected: Vec<PropFeatureId>,
-    /// The **rollback bar**: the last feature evaluated, when the view is
-    /// showing the prop as it stood partway down the list. `None` is the whole
-    /// prop.
-    ///
-    /// An id rather than a count, so inserting, deleting or reordering above
-    /// the bar cannot quietly move it to a different feature. View state, not
-    /// document: it is not saved, not undone, and does not dirty the file.
+    /// The rollback bar: the last feature evaluated, `None` for all. An id
+    /// rather than a count so edits above it cannot move it. View state: not
+    /// saved, undone or dirtying.
     rollback: Option<PropFeatureId>,
     pub path: Option<PathBuf>,
-    /// Whether the document differs from what is on disk.
     pub dirty: bool,
-    /// Bumped on every change, so a reader can tell cheaply that it should
-    /// look again. Not every change is geometry — the viewport compares the
+    /// Bumped on every change, as a cue to look; the viewport compares the
     /// features it built from before re-running the kernel.
     generation: u64,
-    /// Bumped on every successful save, which is what tells the *game* to pick
-    /// the model up — see `publish_the_saved_prop`.
+    /// Bumped on every save; `publish_the_saved_prop` watches it.
     saves: u64,
 }
 
@@ -283,23 +230,16 @@ impl PropEditor {
         self.generation
     }
 
-    /// How many times this document has been written out.
     pub fn saves(&self) -> u64 {
         self.saves
     }
 
-    /// The name a weapon would know this prop by, which is its file's stem —
-    /// the same name [`load`] turns back into a path. A document that has
-    /// never been saved has none, and so is nothing the game could be holding.
+    /// The file stem, which is the name [`load`] takes.
     pub fn saved_name(&self) -> Option<&str> {
         self.path.as_ref()?.file_stem()?.to_str()
     }
 
-    /// Edit the document, recording an undo step if anything changed.
-    ///
-    /// Everything that writes goes through here, which makes "can this be
-    /// undone" a property of the type rather than of what each call site
-    /// remembered.
+    /// Records an undo step if anything changed.
     pub fn edit<T>(&mut self, change: impl FnOnce(&mut PropDoc) -> T) -> T {
         let before = self.doc.clone();
         let result = change(&mut self.doc);
@@ -309,22 +249,20 @@ impl PropEditor {
         result
     }
 
-    /// Begin an edit spanning several frames, such as a drag. Between this and
-    /// [`PropEditor::end_gesture`] the document may be written to freely and
-    /// only one undo step comes of it.
+    /// Until [`PropEditor::end_gesture`], writes through [`Self::doc_mut`]
+    /// make one undo step.
     pub fn begin_gesture(&mut self) {
         if self.pending.is_none() {
             self.pending = Some(self.doc.clone());
         }
     }
 
-    /// Write to the document as part of a gesture already begun.
+    /// Only inside a gesture. Marks the document changed even if nothing is.
     pub fn doc_mut(&mut self) -> &mut PropDoc {
         self.doc_changed();
         &mut self.doc
     }
 
-    /// Close a gesture, recording one undo step for the whole of it.
     pub fn end_gesture(&mut self) {
         let Some(before) = self.pending.take() else { return };
         if before != self.doc {
@@ -337,7 +275,6 @@ impl PropEditor {
         if self.undo.len() > UNDO_DEPTH {
             self.undo.remove(0);
         }
-        // A fresh edit ends the redo branch.
         self.redo.clear();
         self.doc_changed();
     }
@@ -368,22 +305,16 @@ impl PropEditor {
     }
 
     fn after_history_move(&mut self) {
-        // Undo can take the feature the selection names away.
         self.forget_missing();
         self.doc_changed();
     }
 
-    /// Where the rollback bar is, if the view is rolled back.
     pub fn rollback(&self) -> Option<PropFeatureId> {
         self.rollback
     }
 
-    /// Move the rollback bar to just after `at`, or take it away with `None`.
-    /// A bar after the last feature is no bar, and is stored as none so there
-    /// is one way to say "everything".
-    ///
-    /// Bumps the generation — the viewport has to rebuild — but not the dirty
-    /// flag, since the document has not changed.
+    /// A bar at the last feature is stored as `None`, so "everything" has one
+    /// representation. Does not dirty the document.
     pub fn roll_back_to(&mut self, at: Option<PropFeatureId>) {
         let at = at.filter(|id| {
             self.doc.features.last().is_some_and(|last| last.id != *id) && self.doc.feature(*id).is_some()
@@ -394,8 +325,7 @@ impl PropEditor {
         }
     }
 
-    /// The features the view evaluates: everything, or everything down to the
-    /// rollback bar.
+    /// The features down to the rollback bar.
     pub fn shown(&self) -> &[PropFeature] {
         match self.rollback.and_then(|id| self.doc.index_of(id)) {
             Some(at) => &self.doc.features[..=at],
@@ -403,9 +333,8 @@ impl PropEditor {
         }
     }
 
-    /// Add a feature **at the rollback bar** and move the bar past it, or at
-    /// the end with no bar. Adding while rolled back is building on the prop
-    /// as it stood there, which is the reason to roll back at all.
+    /// Inserts at the rollback bar and moves the bar onto the new feature, or
+    /// appends with no bar.
     pub fn add(&mut self, op: FeatureOp) -> PropFeatureId {
         let anchor = self.rollback;
         let id = self.edit(|doc| match anchor.and_then(|anchor| doc.index_of(anchor)) {
@@ -418,12 +347,11 @@ impl PropEditor {
         id
     }
 
-    /// Everything selected, in the order it was picked; the primary last.
+    /// In pick order; the primary last.
     pub fn selection(&self) -> Vec<PropFeatureId> {
         self.also_selected.iter().copied().chain(self.selected).collect()
     }
 
-    /// Select one thing and nothing else.
     pub fn select(&mut self, id: PropFeatureId) {
         self.also_selected.clear();
         self.selected = Some(id);
@@ -434,9 +362,7 @@ impl PropEditor {
         self.selected = None;
     }
 
-    /// Ctrl/Cmd-click: add `id` as the new primary, or take it out if it was
-    /// already picked. Taking out the primary promotes the most recent pick
-    /// before it, so the inspector lands on something that is still selected.
+    /// Ctrl/Cmd-click. Unpicking the primary promotes the pick before it.
     pub fn toggle_selected(&mut self, id: PropFeatureId) {
         if self.selected == Some(id) {
             self.selected = self.also_selected.pop();
@@ -448,8 +374,7 @@ impl PropEditor {
         }
     }
 
-    /// Drop anything selected that the document no longer has — and the
-    /// rollback bar, if the feature it sat after has gone.
+    /// Drop selections and the rollback bar that name features no longer here.
     pub fn forget_missing(&mut self) {
         if self.rollback.is_some_and(|id| self.doc.feature(id).is_none()) {
             self.rollback = None;
@@ -462,11 +387,8 @@ impl PropEditor {
         }
     }
 
-    /// The two bodies a boolean would take from the selection, as
-    /// `(target, tool)`: exactly two picked, both standing at the end of the
-    /// list. A boolean is appended, so a body already eaten is not something
-    /// it could take — offering it would add a feature that is broken on
-    /// arrival.
+    /// `(target, tool)` when exactly two bodies are picked and both are in
+    /// `live`; an eaten body would make a boolean broken on arrival.
     pub fn pair_to_combine(&self, live: &[PropFeatureId]) -> Option<(PropFeatureId, PropFeatureId)> {
         match self.selection()[..] {
             [target, tool] if live.contains(&target) && live.contains(&tool) => Some((target, tool)),
@@ -474,30 +396,22 @@ impl PropEditor {
         }
     }
 
-    /// The one body a mirror or a repaint would take: the primary, if it is
-    /// still standing. Single-operand verbs read the primary alone, so a
-    /// selection of three still mirrors the one in the inspector.
+    /// Single-operand verbs take the primary alone, if it is in `live`.
     pub fn body_to_act_on(&self, live: &[PropFeatureId]) -> Option<PropFeatureId> {
         self.selected.filter(|id| live.contains(id))
     }
 
-    /// Go back to `saved` — what is on disk — as **one undo step**, so a
-    /// revert clicked by mistake is a `Ctrl+Z` away. Unlike [`Self::open`],
-    /// which clears the history because undoing back through opening a
-    /// different file is not what anybody means.
-    ///
-    /// Clean afterwards, since the document now matches its file; undoing the
-    /// revert marks it dirty again, through the ordinary history path.
+    /// Go back to `saved`, the file's contents, as one undo step. Unlike
+    /// [`Self::open`], which clears history.
     pub fn revert_to(&mut self, saved: PropDoc) {
-        // A gesture left open would fold the revert into whatever drag it was.
+        // An open gesture would fold the revert into it.
         self.end_gesture();
         self.edit(|doc| *doc = saved);
         self.forget_missing();
         self.dirty = false;
     }
 
-    /// Replace the document wholesale, clearing the history: undoing back
-    /// *through* a file open is not what anybody means by Ctrl+Z.
+    /// Replace the document and clear the history.
     pub fn open(&mut self, doc: PropDoc, path: Option<PathBuf>) {
         self.doc = doc;
         self.undo.clear();
@@ -517,7 +431,6 @@ impl PropEditor {
     }
 }
 
-/// Why a prop could not be read or written.
 #[derive(Debug)]
 pub enum PropFileError {
     Asset(AssetError),
@@ -540,8 +453,8 @@ pub fn prop_path(pack: &Path, name: &str) -> PathBuf {
     pack.join(PROPS_DIR).join(format!("{name}.{PROP_EXTENSION}"))
 }
 
-/// Read a prop out of a pack, through [`Assets`] rather than `std::fs` because
-/// the *game* does this. The editor's file dialog goes through [`parse`].
+/// Through [`Assets`] rather than `std::fs` because the game reads props.
+/// The editor's file dialog goes through [`parse`].
 pub fn load(assets: &Assets, pack: &Path, name: &str) -> Result<PropDoc, PropFileError> {
     let relative = format!("{PROPS_DIR}/{name}.{PROP_EXTENSION}");
     let bytes = assets.0.read(pack, &relative).map_err(PropFileError::Asset)?;
@@ -558,8 +471,7 @@ pub fn to_text(doc: &PropDoc) -> Result<String, toml::ser::Error> {
     toml::to_string_pretty(doc)
 }
 
-/// Write a prop to disk — the one `std::fs` here, and on the *authoring* side.
-/// Nothing the game does at runtime comes through it.
+/// Authoring side only; the one `std::fs` in this file.
 pub fn save(path: &Path, doc: &PropDoc) -> Result<(), PropFileError> {
     let text = to_text(doc).map_err(|e| PropFileError::Unwritable(e.to_string()))?;
     if let Some(parent) = path.parent() {
@@ -606,8 +518,7 @@ mod tests {
         doc
     }
 
-    /// Whether a prop survives being closed. A field that silently defaults is
-    /// a prop that changes shape on load.
+    /// A field that silently defaults changes the prop's shape on load.
     #[test]
     fn a_document_round_trips_through_its_file_format() {
         let doc = sample();
@@ -616,10 +527,7 @@ mod tests {
         assert_eq!(doc, back);
     }
 
-    /// A format that rounded would move a bore off-centre by too little to see
-    /// and enough to leave a sliver of metal inside the barrel.
-    /// Both layouts of a pattern come back as written — the nested tag is
-    /// the kind of thing TOML gets wrong quietly.
+    /// The nested tag is the kind of thing TOML gets wrong quietly.
     #[test]
     fn a_pattern_round_trips() {
         let mut doc = PropDoc::new("x");
@@ -650,16 +558,8 @@ mod tests {
         }
     }
 
-    /// A clip lives in the same file as the geometry, below an
-    /// `[[features]]` array of tables — and a TOML array-of-tables header
-    /// captures **every key after it**, so a field written out in the wrong
-    /// place is silently swallowed into the last feature.
-    ///
-    /// That failure does not error and does not even lose the file: it loads,
-    /// the geometry is fine, and the animations are simply gone. Worth a test
-    /// of its own rather than trusting the field order in the struct, because
-    /// the thing that decides it is `toml::to_string_pretty`'s own idea of
-    /// what to emit when.
+    /// Fails if the animations are serialised under `[[features]]` and
+    /// swallowed by the last feature; the load still succeeds.
     #[test]
     fn animations_survive_the_round_trip_beside_the_features() {
         use crate::common::skeleton::clip::{
@@ -712,7 +612,6 @@ mod tests {
         assert_eq!(doc.features.len(), back.features.len(), "the features changed");
     }
 
-    /// A reused id would make a reference mean a different shape.
     #[test]
     fn deleting_the_last_feature_does_not_free_its_id() {
         let mut doc = PropDoc::new("x");
@@ -722,7 +621,7 @@ mod tests {
         assert_ne!(first, second);
     }
 
-    /// Counted by **who names it**, not by who comes after it.
+    /// Counted by who names it, not by who comes after it.
     #[test]
     fn a_feature_knows_what_is_built_on_it() {
         let mut doc = PropDoc::new("x");
@@ -747,7 +646,6 @@ mod tests {
         );
     }
 
-    /// The claim the drag interaction rests on: one unbroken span.
     #[test]
     fn what_a_feature_may_be_moved_to_is_one_unbroken_range() {
         let mut doc = PropDoc::new("x");
@@ -756,19 +654,12 @@ mod tests {
         let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
         let spare = doc.push(FeatureOp::default());
 
-        // The boolean eats the first two, so it can go anywhere after them:
-        // with itself lifted out that is index 2 (the end) and nowhere else,
-        // since `spare` is the only thing left to sit before.
+        // Indices count the list with the moved feature lifted out.
         assert_eq!(doc.legal_range(cut), Some(2..=3));
-        // `a` is consumed by the boolean at index 2, so with `a` lifted out the
-        // boolean is at 1 and `a` must land before it.
         assert_eq!(doc.legal_range(a), Some(0..=1));
-        // Nothing depends on `spare` and it depends on nothing.
         assert_eq!(doc.legal_range(spare), Some(0..=3));
     }
 
-    /// A drag past a dependency stops at the last legal place rather than
-    /// snapping back — you get the nearest thing you asked for.
     #[test]
     fn a_drag_past_a_dependency_stops_against_it() {
         let mut doc = PropDoc::new("x");
@@ -777,19 +668,16 @@ mod tests {
         let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
         doc.push(FeatureOp::default());
 
-        // Dragged to the very top, it lands directly under its own operands.
         doc.move_to(cut, 0);
         assert_eq!(doc.index_of(cut), Some(2), "the boolean got above its operands");
         assert_eq!(doc.index_of(a), Some(0));
         assert_eq!(doc.index_of(b), Some(1));
 
-        // And a tool dragged to the bottom stops above the boolean that eats it.
         doc.move_to(b, 3);
         assert_eq!(doc.index_of(b), Some(1));
         assert_eq!(doc.index_of(cut), Some(2));
     }
 
-    /// A legal move has to happen, or the clamp never moves anything.
     #[test]
     fn an_unconstrained_feature_goes_where_it_is_put() {
         let mut doc = PropDoc::new("x");
@@ -804,14 +692,11 @@ mod tests {
         assert!(!doc.move_to(first, 2), "moving to where it already is counted as a move");
     }
 
-    /// Checked by re-evaluating, because "legal" means exactly "the evaluator
-    /// finds everything it needs".
+    /// "Legal" means the evaluator finds everything it needs, so re-evaluate.
     #[test]
     fn no_sequence_of_drags_can_break_a_prop() {
-        // Offset from each other on purpose: `FeatureOp::default()` is the
-        // same box at the same place every time, so subtracting one from
-        // another leaves nothing — a real problem, and not the kind this test
-        // is looking for.
+        // Offset, because subtracting identical boxes leaves nothing, which
+        // is a problem this test is not looking for.
         let solid = |x: f32| FeatureOp::Primitive {
             shape: Shape::Box { size: [0.2, 0.2, 0.2] },
             placement: Placement::at(x, 0.0, 0.0),
@@ -832,7 +717,6 @@ mod tests {
         });
 
         let ids: Vec<PropFeatureId> = doc.features.iter().map(|feature| feature.id).collect();
-        // Every feature to every slot, including the ones nobody would try.
         for _ in 0..3 {
             for id in &ids {
                 for target in 0..ids.len() {
@@ -847,8 +731,6 @@ mod tests {
         }
     }
 
-    /// One gesture is one undo step, or Ctrl+Z becomes a way to watch a slider
-    /// move backwards.
     #[test]
     fn a_gesture_is_one_undo_step_however_many_frames_it_took() {
         let mut editor = PropEditor::default();
@@ -867,7 +749,6 @@ mod tests {
         assert_eq!(*editor.doc(), after_push, "one drag took more than one undo");
     }
 
-    /// An edit that changed nothing must not push a step.
     #[test]
     fn an_edit_that_changes_nothing_records_nothing() {
         let mut editor = PropEditor::default();
@@ -881,23 +762,14 @@ mod tests {
         assert!(!editor.can_undo(), "a no-op edit left a step behind");
     }
 
-    /// Every prop the default pack ships has to load and build cleanly.
-    ///
-    /// The format has no schema version and no migration chain — the trade for
-    /// being text a mapper can read — so this is what keeps a shipped prop
-    /// honest: open it, replay it, insist it comes out as geometry. A field
-    /// renamed without the files brought along fails here rather than as a
-    /// weapon invisible in somebody's hands.
-    ///
-    /// `read_dir` rather than a list of names, which would be a second
-    /// description of the directory. The no-enumeration rule is about the
-    /// *runtime*, which has to work behind a `fetch`.
+    /// There is no schema version, so a field renamed without updating the
+    /// shipped files fails here instead of as an invisible weapon. `read_dir`
+    /// is fine in a test; the no-enumeration rule is for the runtime.
     #[test]
     fn every_prop_the_default_pack_ships_loads_and_builds() {
         let directory = std::path::Path::new("assets/default").join(PROPS_DIR);
         let Ok(entries) = std::fs::read_dir(&directory) else {
-            // Running from somewhere other than the repo root is not a prop
-            // being broken.
+            // Not run from the repo root.
             return;
         };
 
@@ -936,17 +808,9 @@ mod tests {
         assert!(checked > 0, "{} has no props in it", directory.display());
     }
 
-    /// The same guard, one layer up: every clip every shipped prop carries has
-    /// to sample cleanly, on every build, all the way through.
-    ///
-    /// Here for exactly the reason the geometry guard is here. There is no
-    /// schema version and no migration chain, so replaying the shipped files
-    /// *is* the check — and a clip fails in a way nobody notices. A bone
-    /// dropped for being misspelled is one hand that does not move; a unit
-    /// renamed is a weapon somewhere it has never been. Neither errors.
-    ///
-    /// Sampled across the whole length rather than at the keys, because the
-    /// keys are the part somebody looked at.
+    /// Fails on a misspelled bone or a renamed unit in a shipped clip, neither
+    /// of which errors at runtime. Sampled across the whole length, not just
+    /// at the keys.
     #[test]
     fn every_clip_the_default_pack_ships_samples_on_every_class() {
         use crate::common::class::Class;
@@ -954,6 +818,10 @@ mod tests {
         use crate::common::skeleton::rig::humanoid;
         use crate::common::skeleton::Pose;
         use strum::IntoEnumIterator;
+
+        // Past the end, because a one-shot holds there.
+        const OVERSHOOT: f32 = 1.2;
+        const STEPS: u32 = 120;
 
         let directory = std::path::Path::new("assets/default").join(PROPS_DIR);
         let Ok(entries) = std::fs::read_dir(&directory) else {
@@ -971,7 +839,7 @@ mod tests {
 
             for (name, clip) in &doc.animations.clips {
                 for class in Class::iter() {
-                    let rig = humanoid(class.proportions());
+                    let rig = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
                     let problems = clip.problems(|bone| rig.index_of(bone).is_some());
                     assert!(
                         problems.is_empty(),
@@ -988,11 +856,8 @@ mod tests {
                         footfalls: None,
                     };
 
-                    // Past the end as well as through the middle: a one-shot
-                    // holds there, and holding is where a clip that runs off
-                    // the end of its own keys shows up.
-                    for step in 0..=120 {
-                        let time = clip.length * step as f32 / 100.0;
+                    for step in 0..=STEPS {
+                        let time = clip.length * OVERSHOOT * step as f32 / STEPS as f32;
                         let mut pose = Pose::rest();
                         let mut weapon = Transform::IDENTITY;
                         apply(clip, time, &rig, &mut pose, &frames, Some(&mut weapon));
@@ -1015,21 +880,16 @@ mod tests {
             }
         }
 
-        // Zero is a pass here rather than a failure: not every prop has to
-        // move. It is the geometry guard above that insists the pack is not
-        // empty.
+        // Zero is a pass: not every prop has clips.
         let _ = checked;
     }
 
-    /// The generation is what the rebuild is keyed on, so a reader that bumped
-    /// it would re-run the kernel every frame. An inspector drawn against
-    /// `doc_mut` did exactly that, and it showed as the unsaved-work marker
-    /// appearing from merely selecting something.
+    /// A read that bumps the generation re-runs the kernel every frame and
+    /// marks the document unsaved.
     #[test]
     fn looking_at_the_document_does_not_change_it() {
         let mut editor = PropEditor::default();
         editor.edit(|doc| doc.push(FeatureOp::default()));
-        // Saved first, so "dirty" below means reading made it so.
         editor.mark_saved(PathBuf::from("somewhere.gpp"));
         let generation = editor.generation();
 
@@ -1044,7 +904,6 @@ mod tests {
         assert!(!editor.dirty, "reading marked the document unsaved");
     }
 
-    /// Undo can take away the feature the panel is showing.
     #[test]
     fn undoing_past_the_selected_feature_clears_the_selection() {
         let mut editor = PropEditor::default();
@@ -1054,8 +913,7 @@ mod tests {
         assert_eq!(editor.selected, None);
     }
 
-    /// Picking the barrel then the bore subtracts the bore from the barrel —
-    /// the order it was said in, whichever way round they sit in the list.
+    /// Pick order decides target and tool, not list order.
     #[test]
     fn a_pair_is_taken_in_the_order_it_was_picked() {
         let mut editor = PropEditor::default();
@@ -1073,8 +931,6 @@ mod tests {
         assert_eq!(editor.selected, Some(bore), "the last pick is the one the inspector shows");
     }
 
-    /// Only two standing bodies make a pair: one is not a boolean, three is a
-    /// question about which two, and an eaten body cannot be taken again.
     #[test]
     fn a_pair_needs_exactly_two_standing_bodies() {
         let mut editor = PropEditor::default();
@@ -1090,8 +946,6 @@ mod tests {
         assert_eq!(editor.pair_to_combine(&[a, b, c]), None);
     }
 
-    /// Ctrl-clicking the primary again takes it out and hands the inspector
-    /// to the pick before it, rather than to nothing.
     #[test]
     fn unpicking_the_primary_promotes_the_one_before() {
         let mut editor = PropEditor::default();
@@ -1105,8 +959,6 @@ mod tests {
         assert_eq!(editor.selected, Some(a));
     }
 
-    /// A copy lands right after the original, under a new id; a boolean
-    /// cannot be copied, because its copy would have nothing left to eat.
     #[test]
     fn duplicating_copies_in_place_and_refuses_what_consumes() {
         let mut doc = PropDoc::new("test");
@@ -1123,8 +975,6 @@ mod tests {
         assert_eq!(doc.evaluate().problems.len(), problems_before, "the copy broke nothing");
     }
 
-    /// Rolled back, a new feature lands at the bar and the bar follows it;
-    /// the view evaluates down to the bar and no further.
     #[test]
     fn adding_while_rolled_back_builds_at_the_bar() {
         let mut editor = PropEditor::default();
@@ -1142,8 +992,6 @@ mod tests {
         assert_eq!(editor.shown().len(), 2);
     }
 
-    /// A bar after the last feature is no bar, and a bar whose feature is
-    /// deleted goes with it rather than pointing at nothing.
     #[test]
     fn the_bar_never_points_at_nothing() {
         let mut editor = PropEditor::default();
@@ -1159,8 +1007,6 @@ mod tests {
         assert_eq!(editor.shown().len(), 1);
     }
 
-    /// Revert is one step back to the file and one `Ctrl+Z` forward again,
-    /// and the file is clean in between.
     #[test]
     fn reverting_is_one_undoable_step() {
         let mut editor = PropEditor::default();
@@ -1181,7 +1027,6 @@ mod tests {
         assert!(editor.dirty);
     }
 
-    /// Undo can take away a secondary pick as well as the primary.
     #[test]
     fn undo_drops_every_pick_it_takes_away() {
         let mut editor = PropEditor::default();

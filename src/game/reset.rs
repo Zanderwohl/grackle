@@ -1,24 +1,9 @@
-//! Putting the world back to the start of a match.
+//! Putting the world back to the start of a match. State a match owns is reset
+//! here, in one list.
 //!
-//! **One list, in one place, on purpose.** Entering Play resets several things
-//! that live in several modules, and the failure mode of spreading that across
-//! them is not a compile error — it is a body that comes back into a new match
-//! still carrying the last one's damage, and nobody noticing for a month. If
-//! you add state that a match owns, add it here.
-//!
-//! What is reset is *match* state. What is deliberately left alone:
-//!
-//! - **[`NextPlayerId`](crate::common::damage::NextPlayerId).** The one thing
-//!   here that must never be reset. Ids are unique for the life of the
-//!   process; handing the same id to the body after this one is what makes a
-//!   kill feed credit the wrong player.
-//! - **View and debug toggles** — `ViewMode`, `ShowHitboxes`, `ShowBones`, the
-//!   perf overlay. They are how you are looking at the game, not part of it,
-//!   and a reset that put you back in first person every time you pressed F5
-//!   would be a reset nobody wanted.
-//! - **The map.** Rooms, lights and features belong to the document, not to
-//!   the match. Resetting the map on play would undo the edit you pressed F5
-//!   to go and look at, which is the whole feature.
+//! Left alone on purpose: [`NextPlayerId`](crate::common::damage::NextPlayerId)
+//! (ids are unique for the process, or the kill feed credits the wrong
+//! player), view and debug toggles, and the map.
 
 use bevy::prelude::*;
 
@@ -30,12 +15,8 @@ use crate::game::player::InputLatch;
 use crate::game::projectile::{Projectile, ProjectileEmitter};
 use crate::game::ragdoll::Ragdoll;
 
-/// Everything a new match starts from scratch.
-///
-/// Runs on entering Play, before the body is spawned. Ordering against the
-/// spawn barely matters — a body created afterwards is created fresh — but
-/// "clear the table, then set it" is the order that stays correct when
-/// something is added to either half.
+/// Everything a new match starts from scratch. Runs on entering Play, before
+/// any body is spawned.
 pub fn reset_for_play(
     mut commands: Commands,
     mut clock: ResMut<AnimationClock>,
@@ -48,70 +29,42 @@ pub fn reset_for_play(
     in_flight: Query<Entity, Or<(With<Projectile>, With<ProjectileEmitter>)>>,
     alight: Query<Entity, With<Burning>>,
 ) {
-    // Back to zero, so two runs of the same map put every body at the same
-    // point in its cycle. A match that started at whatever second the editor
-    // happened to be left at could not be compared with the one before it.
+    // So two runs of a map put every body at the same point in its cycle.
     *clock = AnimationClock::default();
 
-    // A click or a held key made while editing is not an order to shoot on
-    // spawn. The bodies are new and carry nothing, but the latch is a fact
-    // about the keyboard rather than about a body, so it outlives them both.
-    // Aim is not released with them: `aim_the_view_at_our_body` sets it from
-    // whatever body this round gives us, and zeroing it here would be a spawn
-    // point's facing thrown away a frame before it was read.
+    // A click made while editing must not fire on spawn. Aim is kept:
+    // `aim_the_view_at_our_body` seeds it from the new body.
     latch.0.release_controls();
 
     for (mut gait, mut animator) in &mut bodies {
-        // Standing still at the start of a stride, in a state rather than part
-        // way between two.
         gait.reset();
         *animator = SkeletonAnimator::default();
     }
 
-    // Health is authoritative state and is replicated, so only the process
-    // that owns it puts it back. A client restoring it locally would show
-    // every body at full for the round-trip it takes to be told otherwise —
-    // and if the server never says otherwise, would keep showing it.
+    // Health is replicated, so only the authority restores it.
     let authority = role.is_none_or(|role| role.is_authority());
     if authority {
         for (mut body, mut log) in &mut health {
             body.restore();
-            // Who hurt it last match is not who hurt it this match. A stale
-            // log would credit the first kill of a new round to whoever was
-            // shooting when the last one ended.
             log.clear();
         }
     }
 
-    // Feedback from the last match, hanging in the air over bodies that are
-    // now at full health.
     for number in &numbers {
         commands.entity(number).despawn();
     }
 
-    // And the bodies themselves. Everything that died last match is alive
-    // again by the line above, so a corpse of it would be a second copy of
-    // somebody standing a few feet away.
-    //
-    // The authority only: a corpse is replicated, so a client's copies are not
-    // its to remove — the despawn arrives with everything else the server
-    // takes away.
+    // Corpses are replicated; a client's copies go with the server's despawn.
     if authority {
         for corpse in &corpses {
             commands.entity(corpse).despawn();
         }
     }
 
-    // And anything the last match left in the air, along with the emitters
-    // that were putting it there. A rocket fired a moment before F5 would
-    // otherwise arrive in the new match, from a shooter that no longer exists.
     for entity in &in_flight {
         commands.entity(entity).despawn();
     }
 
-    // And put out anything still burning. The health is back by the loop
-    // above, so a fire carried over would be a body at full health taking
-    // damage for something that happened last match.
     for body in &alight {
         commands.entity(body).remove::<Burning>();
     }
@@ -123,8 +76,6 @@ mod tests {
 
     use super::*;
 
-    /// The whole list at once: a world left in the state a match leaves it in,
-    /// put back.
     #[test]
     fn entering_play_clears_the_last_match() {
         let mut world = World::new();

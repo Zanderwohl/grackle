@@ -10,10 +10,8 @@ use crate::tool::show::GizmoVisibility;
 pub const PICK_RADIUS: f32 = 0.1;
 const SELECT_POINT_RADIUS: f32 = 0.3;
 
-/// Given a camera ray and an infinite line through `axis_origin` in direction
-/// `axis_dir`, returns the parameter `s` such that `axis_origin + s * axis_dir`
-/// is the closest point on that line to the ray.
-/// Returns `None` when the ray is nearly parallel to the axis.
+/// The `s` for which `axis_origin + s * axis_dir` is the point on that line
+/// closest to the ray. `None` when the ray is nearly parallel to the axis.
 pub fn closest_param_on_axis(ray: Ray3d, axis_origin: Vec3, axis_dir: Vec3) -> Option<f32> {
     let d1 = *ray.direction;
     let d2 = axis_dir;
@@ -33,12 +31,6 @@ pub fn closest_param_on_axis(ray: Ray3d, axis_origin: Vec3, axis_dir: Vec3) -> O
 /// The signed angle of `point` about `center` on the plane spanned by
 /// `cos_dir` and `sin_dir` (unit, mutually perpendicular), right-handed about
 /// the normal those two imply.
-///
-/// This is the whole of how a rotation ring reads the mouse: the cursor is
-/// projected onto the ring's plane and asked what angle it sits at, and a drag
-/// is the difference between that angle now and at the moment of the grab.
-/// Taking the difference is what makes the object turn *with* the cursor
-/// instead of snapping its front to it.
 pub fn angle_on_plane(point: Vec3, center: Vec3, cos_dir: Vec3, sin_dir: Vec3) -> f32 {
     let v = point - center;
     v.dot(sin_dir).atan2(v.dot(cos_dir))
@@ -57,12 +49,11 @@ pub fn snap_vec3(v: Vec3, granularity: f32) -> Vec3 {
     )
 }
 
-/// Compute a world-space cursor position from the current mouse input.
+/// A world-space cursor position from the current mouse input.
 ///
-/// For orthographic cameras, projects the ray origin onto the plane defined by the
-/// camera axis, using `last_position` for the constrained component.
-/// For the perspective camera (`CameraAxis::None`), returns where the ray first
-/// meets solid wall from inside a room ([`Room::ray_hit_from_inside`]).
+/// Orthographic views take the constrained component from `last_position`.
+/// The perspective view uses where the ray first meets solid wall from inside
+/// a room.
 pub fn compute_cursor(
     mouse_input: &CurrentMouseInput,
     cameras: &Query<(Entity, &Multicam)>,
@@ -87,8 +78,8 @@ pub fn compute_cursor(
     Some(if snap { snap_vec3(cursor, snap_granularity) } else { cursor })
 }
 
-/// Where the ray first meets solid wall from inside any room, snapped — so a
-/// cursor goes through a doorway rather than stopping in it.
+/// Where the ray first meets solid wall from inside any room, snapped, so a
+/// cursor goes through a doorway.
 fn cursor_from_room_faces(
     ray: &Ray3d,
     rooms: &Query<&Room>,
@@ -110,8 +101,8 @@ fn nearest_wall<R: Borrow<Room>>(rooms: &[R], ray: &Ray3d) -> Option<(f32, Vec3)
         .min_by(|(a, _), (b, _)| a.total_cmp(b))
 }
 
-/// Every room except the one at `index` — what carves openings into it.
-/// Borrowed rather than collected: this is asked once per room per frame.
+/// Every room except the one at `index`: what carves openings into it.
+/// Borrowed, not collected, since it is asked once per room per frame.
 fn rooms_but<R: Borrow<Room>>(rooms: &[R], index: usize) -> impl Iterator<Item = &Room> + Clone {
     rooms
         .iter()
@@ -143,7 +134,6 @@ pub fn find_hovered_point(
     best
 }
 
-/// Draw dim gray spheres for all reference point candidates, with the hovered one highlighted green.
 pub fn draw_picking_gizmos(
     gizmos: &mut Gizmos,
     ray: &Ray3d,
@@ -270,12 +260,10 @@ pub fn bounds_gizmo(gizmos: &mut Gizmos, min: Vec3, max: Vec3, color: Color) {
     gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, max.y, max.z), color);
 }
 
-/// Find the nearest visible editor feature hit by a ray.
-/// For rooms, tests against solid wall seen from inside
-/// ([`Room::ray_hit_from_inside`]), so a room never hides what stands in it.
-/// For everything else, its pick boxes (`FeatureTrait::pick_boxes`) and ray
-/// proximity to its point within SELECT_POINT_RADIUS.
-/// Returns the feature ID and hit position of the closest hit across all types.
+/// The nearest visible feature hit by a ray, as its id and the hit position.
+/// Rooms are tested against solid wall seen from inside, so a room never hides
+/// what stands in it; everything else by pick boxes and by proximity to its
+/// point.
 pub fn find_nearest_feature_hit(
     ray: &Ray3d,
     features: &FeatureTimeline,
@@ -285,11 +273,8 @@ pub fn find_nearest_feature_hit(
     let mut best_t = f32::MAX;
     let mut best: Option<(FeatureId, Vec3)> = None;
 
-    // Every room, hidden or not: a hidden room still carves its openings into
-    // the rooms around it, and the holes picked through are the baked ones.
-    // Rooms come out in the order `active_features` yields them, so the loop
-    // below meets them in this order too and can walk `next_room` forwards
-    // rather than searching for each one.
+    // Hidden rooms too: they still carve openings into their neighbours. In
+    // `active_features` order, so the loop below walks `next_room` forwards.
     let (room_ids, rooms): (Vec<FeatureId>, Vec<Room>) = features
         .active_features()
         .filter(|(_, feature)| feature.object().type_key() == "editor_room")
@@ -332,8 +317,7 @@ pub fn find_nearest_feature_hit(
                 }
             }
             "global_point" | "grackle_point_light" | "spawn_point" | "prop" | "animation_display" | "animation_grid" => {
-                // The boxes and the point both: a grid's point is between
-                // its two middle bodies, inside none of them.
+                // Both: a grid's point is between bodies, inside none.
                 for pick_box in feature.object().pick_boxes() {
                     if let Some(t) = pick_box.ray_distance(ray) {
                         if t < best_t {

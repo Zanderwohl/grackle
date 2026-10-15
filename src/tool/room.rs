@@ -124,7 +124,7 @@ impl RoomTool {
             return;
         }
 
-        // Extract the corner mode (cloned to avoid holding a borrow on tool.mode)
+        // Cloned to avoid holding a borrow on tool.mode.
         let is_placing_min = matches!(tool.mode, RoomToolMode::PlacingMin(_));
         let corner_mode = match &tool.mode {
             RoomToolMode::PlacingMin(cm) | RoomToolMode::PlacingMax(cm) => cm.clone(),
@@ -246,7 +246,6 @@ impl RoomTool {
         };
         let is_relative = matches!(corner_mode, RoomCornerMode::RelativeSelected { .. });
 
-        // Preview sphere at cursor
         if let Some(cursor) = tool.cursor {
             let color = if is_relative {
                 Color::srgb_u8(80, 140, 255)
@@ -285,8 +284,6 @@ impl RoomTool {
         }
     }
 }
-
-// --- Drag Handles ---
 
 #[derive(Component)]
 pub struct RoomDragHandle {
@@ -618,13 +615,8 @@ impl Room {
         Self { min, max }
     }
 
-    /// Walk the solid parts of this room's six faces — the wall that is left
-    /// after every opening another room carves has been subtracted.
-    ///
-    /// Rendering and collision both go through here so they cannot disagree.
-    /// An opening between two overlapping rooms is a hole you can see through
-    /// and a hole you can walk through, and a bug where those two answers
-    /// differ is a miserable one to chase.
+    /// Walk the solid parts of this room's six faces, after every opening
+    /// other rooms carve. Rendering and collision both use this so they agree.
     fn for_each_solid_rect(
         &self,
         others: &[Room],
@@ -646,13 +638,8 @@ impl Room {
         }
     }
 
-    /// The same solid wall rectangles [`Room::bake_faces`] renders, as
-    /// world-space boxes a body can be pushed out of.
-    ///
-    /// `thickness` extends each slab *away* from the room's interior, so a
-    /// wall never eats space the player could otherwise stand in. It wants to
-    /// be comfortably larger than one frame of movement: a slab thinner than
-    /// the distance travelled in a tick can be stepped straight through.
+    /// The solid wall rectangles [`Room::bake_faces`] renders, as world-space
+    /// boxes. `thickness` extends each slab away from the interior.
     pub fn collision_slabs(&self, others: &[Room], thickness: f32) -> Vec<WallSlab> {
         let mut slabs = Vec::new();
         self.for_each_solid_rect(others, |face, rect| {
@@ -661,25 +648,14 @@ impl Room {
         slabs
     }
 
-    /// How far along `ray` it first meets this room's solid wall **from the
-    /// inside**, and where.
+    /// How far along `ray` it first meets this room's solid wall from the
+    /// inside, and where.
     ///
-    /// The outside of a wall is not there to be hit: from outside a room a ray
-    /// passes in through the near wall and stops at the far one, so whatever
-    /// stands inside is nearer than the room and wins the pick. That is the
-    /// same face the renderer draws from that side, since a wall's outside is
-    /// culled.
-    ///
-    /// Openings are tested against the same holes [`Room::bake_faces`] cuts —
-    /// a hit is on the face's rectangle and in none of the holes, which is the
-    /// subtraction asked one point at a time. Testing the whole box instead
-    /// puts an invisible wall across every doorway, and the room beyond it and
-    /// everything in it cannot be picked through it.
-    ///
-    /// `others` is anything that walks the other rooms rather than a slice of
-    /// them, because a picker asks this of every room in the map every frame
-    /// and building each one a `Vec` of everybody else is quadratic copying
-    /// for nothing.
+    /// Outsides are culled by the renderer and ignored here too, so whatever
+    /// stands inside a room is nearer than the room. Openings use the same
+    /// holes [`Room::bake_faces`] cuts, so a pick goes through a doorway.
+    /// `others` is an iterator, not a slice, so a picker asking this of every
+    /// room needs no `Vec` of everybody else.
     pub fn ray_hit_from_inside<'a>(
         &self,
         others: impl IntoIterator<Item = &'a Room, IntoIter: Clone>,
@@ -772,9 +748,6 @@ impl Room {
 }
 
 /// One solid piece of wall, as a world-space axis-aligned box.
-///
-/// Produced by [`Room::collision_slabs`] from the same face subtraction that
-/// produces the rendered mesh.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WallSlab {
     pub min: Vec3,
@@ -860,19 +833,10 @@ impl RoomFace {
                 _ => unreachable!(),
             };
 
-        // The other room must cross through this face from the exterior side.
-        //
-        // For a max face (e.g., +X at F, interior toward opposite_value < F):
-        //   Shared wall:  other starts at the face and extends outward (other_min == F, other_max > F)
-        //   Penetration:  other straddles the face (other_min < F < other_max)
-        //   Reject if:    other fully contains the room on this axis
-        //                 (other_min <= opposite_value AND other_max >= F)
-        //                 because that means the room is engulfed, not connected.
-        //
-        // For a min face (e.g., -X at F, interior toward opposite_value > F):
-        //   Shared wall:  other_max == F, other_min < F
-        //   Penetration:  other_min < F < other_max
-        //   Same engulfment rejection.
+        // The other room must cross this face from outside: a shared wall
+        // (it starts at the face plane F and extends outward) or penetration
+        // (other_min < F < other_max). Engulfing the room on this axis does
+        // not count as connecting to it.
 
         let straddles = if self.is_max {
             other_min_fixed <= self.fixed_value && other_max_fixed > self.fixed_value
@@ -884,7 +848,6 @@ impl RoomFace {
             return None;
         }
 
-        // Reject engulfment: other room fully contains this room on the fixed axis
         let engulfs = if self.is_max {
             other_min_fixed <= self.opposite_value && other_max_fixed >= self.fixed_value
         } else {
@@ -914,12 +877,9 @@ impl RoomFace {
         }
     }
 
-    /// Convert a 2D sub-rectangle into a solid box standing behind this face.
-    ///
-    /// The interior lies toward `opposite_value`, so the box is grown from the
-    /// face plane in the other direction and the room keeps all of its usable
-    /// volume. Mirrors [`RoomFace::rect_to_3d`]'s axis mapping — a max face on
-    /// axis 0 has u along z and v along y.
+    /// Convert a 2D sub-rectangle into a solid box behind this face, grown
+    /// away from `opposite_value`. Mirrors [`RoomFace::rect_to_3d`]'s axis
+    /// mapping.
     fn rect_to_slab(&self, r: &crate::common::rect_subtract::Rect2D, thickness: f32) -> WallSlab {
         let (near, far) = if self.is_max {
             (self.fixed_value, self.fixed_value + thickness)
@@ -1014,15 +974,10 @@ mod tests {
 
         let mesh_a = a.bake_faces(&[b.clone()]);
 
-        // A's +X face had a 6x6 hole carved in a 10x10 face.
-        // The remaining area produces multiple quads, so more than 12 tris total.
-        // 5 unmodified faces = 10 tris. The carved face should have at least 2 tris (1 quad).
+        // A 6x6 hole in A's 10x10 +X face. 5 unmodified faces = 10 tris.
         let tris = triangle_count(&mesh_a);
         assert!(tris > 12, "expected more than 12 tris due to carving, got {}", tris);
-        // But should have fewer tris than 12 + 8 (4 border quads from the frame)
-        // since the greedy merge keeps it efficient.
-        // The carved face has a frame: up to 4 rectangles = 8 tris.
-        // Total: 10 + 8 = 18 max for optimal merge.
+        // The carved face's frame is at most 4 rectangles = 8 tris: 10 + 8.
         assert!(tris <= 18, "expected at most 18 tris, got {}", tris);
     }
 
@@ -1034,10 +989,7 @@ mod tests {
 
         let mesh_a = a.bake_faces(&[b.clone()]);
 
-        // A's +X face has a 4x4 hole, producing a frame.
-        // A's -X face is not touched (b doesn't reach x=0).
-        // A's +Y, -Y, +Z, -Z faces: b penetrates into their planes at various points.
-        // Total tris should be more than the isolated 12.
+        // A's +X face has a 4x4 hole; -X is untouched.
         let tris = triangle_count(&mesh_a);
         assert!(tris > 12, "overlap should produce more tris, got {}", tris);
     }
@@ -1060,8 +1012,6 @@ mod tests {
         Ray3d::new(origin, Dir3::new(direction).unwrap())
     }
 
-    /// From outside, the near wall is not there: the ray goes in and stops at
-    /// the far one, so anything standing in the room is nearer than the room.
     #[test]
     fn a_pick_from_outside_passes_the_near_wall_and_lands_on_the_far_one() {
         let room = Room::new(Vec3::ZERO, Vec3::splat(10.0));
@@ -1077,9 +1027,7 @@ mod tests {
         assert!((t - 5.0).abs() < 1e-4, "{t}");
     }
 
-    /// The wall across a doorway is the one the bake cut away, so a pick goes
-    /// through it to the room beyond — and the wall beside the doorway is
-    /// still wall.
+    /// Breaks if picking tests the whole box instead of the baked holes.
     #[test]
     fn a_pick_goes_through_an_opening_and_not_through_the_wall_beside_it() {
         let a = Room::new(Vec3::ZERO, Vec3::splat(10.0));

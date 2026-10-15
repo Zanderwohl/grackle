@@ -1,55 +1,34 @@
 //! The one definition of what a feature's three stored angles mean.
 //!
-//! Features store orientation as three Euler angles rather than a quaternion,
-//! because that is what a mapper types into a box and what a diff of a
-//! blueprint has to stay readable as. A quaternion round-trips badly through
-//! that: the same orientation has several representations, and typing 90 into
-//! one box would move the numbers in the other two.
-//!
-//! Everything that turns those three numbers into an orientation goes through
-//! here — the entity the game moves, the gizmo the editor draws, and the ring
-//! a drag rotates around. Let the convention drift between them and a prop
-//! sits one way in the editor and another in the map.
+//! Euler angles rather than a quaternion because that is what a mapper types
+//! and what a blueprint diff stays readable as. The entity, the gizmo and the
+//! drag ring all convert through here, so a prop cannot sit one way in the
+//! editor and another in the map.
 
 use bevy::prelude::*;
 
-/// Yaw first, then pitch, then roll.
-///
-/// Yaw around world Y is the axis a mapper reaches for constantly — it is the
-/// only one a spawn point even has — so it goes first, where it stays a plain
-/// heading no matter what the other two are doing.
+/// Yaw first, so it stays a plain heading about world Y whatever the other two
+/// are; it is the only angle a spawn point has.
 pub const EULER_ORDER: EulerRot = EulerRot::YXZ;
 
-/// The angles in *axis* order: `x` is pitch (about X), `y` is yaw (about Y),
-/// `z` is roll (about Z). Indexing them by `0/1/2` the way the drag handles
-/// index position is the point; the application order is [`EULER_ORDER`] and
-/// is not the same thing.
+/// `angles` is in axis order (`x` pitch, `y` yaw, `z` roll), not application
+/// order ([`EULER_ORDER`]).
 pub fn quat_from_euler(angles: Vec3) -> Quat {
     Quat::from_euler(EULER_ORDER, angles.y, angles.x, angles.z)
 }
 
-/// The three angles, in axis order, that [`quat_from_euler`] would turn back
-/// into `turn`.
-///
-/// The exact inverse, and here rather than written out at each call site
-/// because the *order* is the trap: `Quat::to_euler` hands them back in
-/// application order — yaw, pitch, roll — and these are indexed by axis. One
-/// transposition and a body leans when it meant to turn.
+/// The inverse of [`quat_from_euler`], in axis order. `Quat::to_euler` returns
+/// application order; transposing them makes a body lean when it meant to turn.
 pub fn euler_from_quat(turn: Quat) -> Vec3 {
     let (y, x, z) = turn.to_euler(EULER_ORDER);
     Vec3::new(x, y, z)
 }
 
-/// The world-space axis that a change to Euler component `axis` actually
-/// rotates the object around, given the other two angles.
+/// The world axis a change to Euler component `axis` rotates about, given the
+/// other two. Pitch turns about an X that yaw has swung, roll about a Z both
+/// have; a ring drawn on the world axis would drift from under the cursor.
 ///
-/// This is what makes a rotation ring honest. Because the angles are applied
-/// yaw-pitch-roll, yaw always turns about world Y, but pitch turns about an X
-/// that yaw has already swung, and roll about a Z that both have. Draw a ring
-/// on the world axis instead and dragging it would move the object somewhere
-/// other than under the cursor as soon as another angle was non-zero.
-///
-/// Returns [`Vec3::Y`] for an axis index that is not 0, 1 or 2.
+/// Returns [`Vec3::Y`] for an index that is not 0, 1 or 2.
 pub fn euler_axis_world(angles: Vec3, axis: u8) -> Vec3 {
     match axis {
         0 => Quat::from_rotation_y(angles.y) * Vec3::X,
@@ -58,27 +37,21 @@ pub fn euler_axis_world(angles: Vec3, axis: u8) -> Vec3 {
     }
 }
 
-/// An orientation split into **where an axis points** and **how far it is
-/// spun about itself** — the two questions somebody lining up a barrel is
-/// actually asking, where three Euler angles are an answer to neither.
-///
-/// `axis` is the object's own axis (a prism's length, say). The aim is where
-/// `turn` sends it; the spin is what is left once the shortest swing onto that
-/// aim is taken out, measured about `axis` in the object's own frame. Exact:
-/// [`from_aim_and_spin`] puts back the rotation this took apart.
+/// An orientation split into where `axis` points and how far it is spun about
+/// itself. The spin is what remains after the shortest swing onto the aim,
+/// measured about `axis` in the object's frame. Exact inverse of
+/// [`from_aim_and_spin`].
 pub fn aim_and_spin(turn: Quat, axis: Vec3) -> (Vec3, f32) {
     let axis = axis.normalize();
     let aim = (turn * axis).normalize();
     let swing = Quat::from_rotation_arc(axis, aim);
     let twist = swing.inverse() * turn;
-    // A rotation that leaves `axis` where it was is a rotation about it, so the
-    // twist's vector part is parallel to `axis` and its sign says which way.
+    // The twist leaves `axis` fixed, so its vector part is parallel to `axis`.
     let spin = 2.0 * twist.xyz().dot(axis).atan2(twist.w);
     (aim, wrap_angle(spin))
 }
 
-/// The orientation that points `axis` along `aim`, spun `spin` radians about
-/// itself. The inverse of [`aim_and_spin`].
+/// Inverse of [`aim_and_spin`].
 pub fn from_aim_and_spin(axis: Vec3, aim: Vec3, spin: f32) -> Quat {
     let axis = axis.normalize();
     Quat::from_rotation_arc(axis, aim.normalize()) * Quat::from_axis_angle(axis, spin)
@@ -94,9 +67,8 @@ fn wrap_angle(angle: f32) -> f32 {
 mod tests {
     use super::*;
 
-    /// Taking an orientation apart into aim and spin and putting it back is
-    /// the identity — whatever the axis, including turns that point it
-    /// straight backwards, where the shortest swing is a choice.
+    /// Includes turns that point the axis straight backwards, where the
+    /// shortest swing is a choice.
     #[test]
     fn aim_and_spin_round_trip() {
         let turns = [
@@ -118,7 +90,6 @@ mod tests {
         }
     }
 
-    /// Spinning a thing about its own length does not move where it points.
     #[test]
     fn spin_leaves_the_aim_alone() {
         let aim = Vec3::new(0.3, -0.2, 1.0).normalize();
@@ -130,9 +101,8 @@ mod tests {
         }
     }
 
-    /// The claim [`euler_axis_world`] makes: adding `d` to one component is
-    /// the same as turning by `d` about the axis it names. Break it and a
-    /// rotation ring drifts out from under the cursor.
+    /// Adding `d` to one component must equal turning by `d` about the axis it
+    /// names, or a rotation ring drifts from under the cursor.
     #[test]
     fn each_ring_axis_is_the_axis_its_component_turns_about() {
         let base = Vec3::new(0.4, -1.1, 0.7);
@@ -144,8 +114,7 @@ mod tests {
 
             let expected =
                 Quat::from_axis_angle(euler_axis_world(base, axis), d) * quat_from_euler(base);
-            // `abs_diff_eq` rather than `angle_between`, which goes NaN on
-            // two quaternions that agree to the last bit.
+            // `angle_between` goes NaN on quaternions that agree exactly.
             assert!(
                 quat_from_euler(moved).abs_diff_eq(expected, 1e-4),
                 "axis {axis} does not turn about the axis the ring is drawn on"
@@ -153,8 +122,6 @@ mod tests {
         }
     }
 
-    /// Yaw has to stay a plain heading about world Y whatever else is set,
-    /// because that is the only angle a spawn point has.
     #[test]
     fn yaw_is_always_about_world_y() {
         let angles = Vec3::new(0.9, 0.0, -0.6);
@@ -168,14 +135,8 @@ mod tests {
 mod euler_tests {
     use super::*;
 
-    /// The two conversions are each other's inverse.
-    ///
-    /// Worth pinning because the failure is quiet and asymmetric: `to_euler`
-    /// returns yaw-pitch-roll and these are indexed by axis, so a transposed
-    /// pair round-trips *some* rotations perfectly — anything with only one
-    /// non-zero angle — and silently swaps two axes on everything else. A
-    /// migration that wrote poses out through this would put a lean where a
-    /// turn belongs, on a subset of bones.
+    /// A transposed pair round-trips any single-axis rotation and silently
+    /// swaps two axes on everything else.
     #[test]
     fn a_rotation_survives_being_written_as_three_angles() {
         for angles in [

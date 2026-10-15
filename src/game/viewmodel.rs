@@ -1,53 +1,15 @@
-//! What you see of your own weapon from inside your own head.
+//! What you see of your own weapon in first person: drawn by its own camera,
+//! a child of the play camera, so its near plane and field of view keep the
+//! weapon from clipping into walls. Every camera query filters on a marker;
+//! see CLAUDE.md, "Editor and game in one process".
 //!
-//! A viewmodel is not the third-person weapon seen from closer up. It is drawn
-//! by **its own camera**, and that is the whole reason this module exists: a
-//! weapon a metre from the eye is a weapon that clips through every wall it is
-//! pushed against unless something else draws it, with its own near plane and
-//! its own field of view.
+//! The weapon is placed by the prop's [`ViewmodelSpec`], not the body's carry:
+//! the carry put the grip 0.39 m under the eye where the frustum is 0.16 m
+//! tall, off the bottom of the screen.
 //!
-//! ## Cameras are told apart by markers, never by shape
-//!
-//! The window has six cameras in it now — four editor viewports, the play
-//! camera, this one — and a query that says `&Camera` gets whichever ones
-//! happen to match. Every camera here carries a zero-sized marker
-//! ([`Multicam`](crate::editor::multicam::Multicam),
-//! [`PlayerCamera`](crate::game::player::PlayerCamera), [`ViewmodelCamera`])
-//! and **every query filters on one**. The failure mode is not a compile
-//! error: it is `place_camera` moving two cameras, or damage numbers
-//! projected through the wrong one.
-//!
-//! This camera is a **child of the play camera**, which is what keeps the two
-//! from ever disagreeing about where you are looking — and means
-//! `despawn_the_view` takes it down without knowing it exists.
-//!
-//! ## What it draws
-//!
-//! Its own copy of the held weapon's meshes, on [`VIEWMODEL_LAYER`], placed by
-//! the prop's [`ViewmodelSpec`] — **not** by the carry the body uses. A carry
-//! is anatomical, stated in arm lengths and putting the weapon where a body
-//! would really hold it, which is well below the eye; a viewmodel is a framing
-//! decision on a screen. Reusing the carry put the grip 0.39 m under an eye
-//! whose frustum is 0.16 m tall at that distance, so the weapon rendered
-//! perfectly, off the bottom of the screen.
-//!
-//! The aim needs no term of its own: the camera is already pointed where the
-//! player is looking, so in its frame the weapon is simply held still.
-//!
-//! ## The arms
-//!
-//! **The weapon is placed and the hands follow it**, which is the same rule
-//! `hold_the_weapon` runs on the body and the same code:
-//! [`grip_with`](crate::prop::hold::grip_with) solves both arms onto the grip
-//! frames the prop already carries. So a hold authored in the prop editor is
-//! the hold in first person too, and there is no second set of numbers to
-//! author or to let drift.
-//!
-//! What differs is the frame it is solved in. A body's arms are solved where
-//! the body is; these are solved in **eye space** — the rig stood so its own
-//! eye is at the camera — from the **rest pose**, never the animated one. The
-//! arms are welded to the view: they must not bob with the walk cycle or drop
-//! half a metre when you crouch, because the camera does neither.
+//! The arms are solved onto it with the same
+//! [`grip_with`](crate::prop::hold::grip_with) a body uses, in eye space from
+//! the rest pose, so they neither bob nor crouch with the body.
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::tonemapping::Tonemapping;
@@ -64,55 +26,40 @@ use crate::common::team::Team;
 use crate::common::weapon::WeaponId;
 use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
 use crate::game::held::{HeldModel, HeldPart};
-use crate::game::player::{LocalPlayer, PlayerCamera, ViewMode};
+use crate::game::player::{LocalPlayer, PlayerCamera, ViewMode, PLAY_CAMERA_ORDER};
 use crate::prop::hold::grip_with;
 
-/// The layer only the viewmodel camera draws.
-///
-/// Layer 0 is everything else and 31 is the editor's shape painter, so this is
-/// a free one rather than an arbitrary one.
+/// The layer only the viewmodel camera draws. 0 is everything else and 31 is
+/// the editor's shape painter.
 pub const VIEWMODEL_LAYER: usize = 1;
 
 /// Drawn over the play camera, under the 2D UI camera at `isize::MAX`.
-const VIEWMODEL_CAMERA_ORDER: isize = 101;
+const VIEWMODEL_CAMERA_ORDER: isize = PLAY_CAMERA_ORDER + 1;
 
-/// Close enough that a weapon held at arm's length never crosses it.
-///
-/// `pub` because the prop editor borrows it to preview a viewmodel: a preview
-/// at the editor's own near plane and field of view would be showing the right
-/// place at the wrong size.
+/// Close enough that a weapon at arm's length never crosses it. `pub` so the
+/// prop editor's viewmodel preview matches it.
 pub const VIEWMODEL_NEAR: f32 = 0.005;
 
-/// Narrower than the play camera's, which is deliberately wide. A weapon drawn
-/// at 90° across the eye is a weapon bent round the edges of the screen.
+/// Narrower than the play camera's: at 90° a weapon across the eye bends round
+/// the screen edges.
 pub const VIEWMODEL_FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
 
-/// The second camera, and the reason a query for `&Camera` is never enough.
 #[derive(Component)]
 pub struct ViewmodelCamera;
 
-/// One drawn part of the weapon in your own hands.
 #[derive(Component)]
 pub struct ViewmodelPart;
 
-/// One drawn bone of the arms holding it.
 #[derive(Component, Clone, Copy)]
 pub struct ViewmodelArm {
-    /// An index into the list [`Skeleton::posed_bones`] returns, as
-    /// [`BoneMesh`](crate::game::body_mesh::BoneMesh) is for a body.
+    /// Index into [`Skeleton::posed_bones`].
     bone: usize,
-    /// Which hand this bone belongs to, indexing [`grip_with`]'s answer: the
-    /// trigger hand first, then the support.
+    /// Index into [`grip_with`]'s answer: 0 trigger hand, 1 support.
     hand: usize,
 }
 
-/// Which bones the viewmodel draws, and which hand each belongs to.
-///
-/// **Forearms and hands, not whole arms.** An upper arm runs back to a
-/// shoulder that is beside the camera rather than in front of it, and at a
-/// near plane of five millimetres it reads as a slab of shoulder hanging in
-/// the corner of the screen rather than as an arm. A sleeve entering frame at
-/// the elbow is what a person actually sees down their own sights.
+/// Forearms and hands only: an upper arm runs back to a shoulder beside the
+/// camera and at a 5 mm near plane reads as a slab in the screen corner.
 const ARM_BONES: [(&str, usize); 4] = [
     (bone::FOREARM_R, 0),
     (bone::HAND_R, 0),
@@ -120,25 +67,19 @@ const ARM_BONES: [(&str, usize); 4] = [
     (bone::HAND_L, 1),
 ];
 
-/// Where up the head bone an eye sits.
-///
-/// The rig has no eye in it, and the movement hull's is no use here: it is a
-/// flat 1.8 m for every class, so a Scout's arms would hang from a Heavy's
-/// shoulders. Taken off the rig instead, so the arms in front of you are the
-/// arms of the body you are playing.
+/// Fraction of the way up the head bone the eye sits. Taken off the rig rather
+/// than the movement hull, whose 1.8 m is the same for every class.
 const EYE_UP_THE_HEAD: f32 = 0.55;
 
-/// What the viewmodel is currently showing, so it can tell when to rebuild.
+/// What the viewmodel is showing, so it can tell when to rebuild.
 #[derive(Component, Default)]
 pub struct Viewmodel {
     parts: Vec<Entity>,
-    /// The weapon the parts were built for, and the cache generation they came
-    /// from — the same two questions `HeldModel` asks, for the same reason.
+    /// Weapon and cache generation, as [`HeldModel::showing`].
     showing: Option<(Option<WeaponId>, u64)>,
     arms: Vec<Entity>,
-    /// Which body the arms were built for. A respawn, a class change and a
-    /// client being handed a body are all a *different entity*, which is one
-    /// question rather than three.
+    /// The body the arms were built for. A respawn, class change or a client
+    /// being handed a body all show up as a different entity.
     armed_for: Option<Entity>,
     /// What the arms were last solved from, so a frame that changed none of
     /// it costs a comparison rather than a solve. Cleared whenever the arms are
@@ -182,7 +123,6 @@ impl Plugin for ViewmodelPlugin {
     }
 }
 
-/// Hang a second camera off the play camera, once.
 fn give_the_view_its_own_camera(
     mut commands: Commands,
     views: Query<Entity, (With<PlayerCamera>, Without<Viewmodel>)>,
@@ -194,15 +134,13 @@ fn give_the_view_its_own_camera(
                 Camera3d::default(),
                 Camera {
                     order: VIEWMODEL_CAMERA_ORDER,
-                    // Nothing, or it would paint over the world it is drawn on
-                    // top of.
+                    // Or it would paint over the world under it.
                     clear_color: ClearColorConfig::None,
                     ..default()
                 },
-                // **Matched to the play camera's, not chosen.** Two cameras
-                // stacked on one window target with different HDR settings
-                // render to different textures, and the one on top composites
-                // as nothing — no error, no warning, an empty overlay.
+                // Must match the play camera's: stacked cameras with different
+                // HDR settings render to different textures, and the top one
+                // composites as nothing, with no error.
                 Hdr,
                 Tonemapping::TonyMcMapface,
                 Projection::Perspective(PerspectiveProjection {
@@ -211,8 +149,6 @@ fn give_the_view_its_own_camera(
                     ..default()
                 }),
                 RenderLayers::layer(VIEWMODEL_LAYER),
-                // At the play camera exactly, so the two can never disagree
-                // about where the player is looking.
                 Transform::IDENTITY,
                 Name::new("Viewmodel view"),
             ));
@@ -220,18 +156,14 @@ fn give_the_view_its_own_camera(
     }
 }
 
-/// Give the viewmodel its own copy of whatever the body is holding.
-///
-/// A second copy rather than the body's, because the two are in different
-/// places: the body's weapon is in the body's hand and this one is in front of
-/// the eye. Keyed on what is showing against what is held, the same way
-/// [`HeldModel`] is keyed — the model may still be in flight.
+/// A second copy of the held weapon, in front of the eye rather than in the
+/// body's hand. Compared against `HeldModel::showing`, since the model may
+/// still be in flight.
 fn dress_the_viewmodel(
     mut commands: Commands,
     held: Query<&HeldModel, With<LocalPlayer>>,
-    // Copied off the body's own parts rather than looked up in the cache
-    // again: whatever the body is drawing is by definition the right meshes,
-    // and a second lookup is a second chance to disagree.
+    // Copied off the body's own parts rather than a second cache lookup that
+    // could disagree.
     drawn: Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>), With<HeldPart>>,
     mut views: Query<(Entity, &mut Viewmodel)>,
     cameras: Query<Entity, With<ViewmodelCamera>>,
@@ -261,9 +193,8 @@ fn dress_the_viewmodel(
                             mesh.clone(),
                             material.clone(),
                             RenderLayers::layer(VIEWMODEL_LAYER),
-                            // Written by `place_the_viewmodel` before anything
-                            // is drawn: where it goes depends on the shape of
-                            // the camera, which this does not have.
+                            // Written by `place_the_viewmodel`, which needs the
+                            // camera's shape.
                             Transform::IDENTITY,
                         ))
                         .id(),
@@ -274,12 +205,8 @@ fn dress_the_viewmodel(
     }
 }
 
-/// Put the weapon where the viewmodel says, for the camera it is drawn by.
-///
-/// **Every frame, not once when it is dressed.** The placement is a fraction
-/// of the frustum, so it depends on the camera's aspect — and a window the
-/// player drags wider would otherwise leave the weapon where the old shape put
-/// it, drifting in from the edge it was meant to hang off.
+/// Every frame: the placement is a fraction of the frustum, so it changes with
+/// the window's aspect.
 fn place_the_viewmodel(
     held: Query<&HeldModel, With<LocalPlayer>>,
     cameras: Query<(&Camera, &Projection, &Children), With<ViewmodelCamera>>,
@@ -304,13 +231,8 @@ fn place_the_viewmodel(
     }
 }
 
-/// Give the viewmodel a pair of arms, from the body's own build.
-///
-/// **The same meshes and the same material the body is drawn with.** A
-/// first-person forearm is that forearm seen from closer up, so a second set
-/// of handles would be a second silhouette to keep in step — and taking the
-/// material too means your own hands are your own team's colour, and alight
-/// when you are.
+/// The body's own meshes and material, so your hands are your team's colour
+/// and alight when you are.
 fn dress_the_viewmodel_arms(
     mut commands: Commands,
     mut cache: ResMut<BodyMeshCache>,
@@ -338,8 +260,7 @@ fn dress_the_viewmodel_arms(
             commands.entity(arm).despawn();
         }
 
-        // Nobody's body to take a build from: no arms, rather than somebody
-        // else's.
+        // No body: no arms, rather than somebody else's.
         let Some((_, skeleton, team, tint, burning)) = body else { continue };
 
         let material = palette.get(body_look(team, tint, burning), &mut materials);
@@ -357,13 +278,11 @@ fn dress_the_viewmodel_arms(
                             Mesh3d(handle.clone()),
                             MeshMaterial3d(material.clone()),
                             RenderLayers::layer(VIEWMODEL_LAYER),
-                            // Written by `place_the_viewmodel_arms` before
-                            // anything is drawn; where a bone goes depends on
-                            // the shape of the camera, which this does not
-                            // have.
+                            // Written by `place_the_viewmodel_arms`, which needs
+                            // the camera's shape.
                             Transform::IDENTITY,
-                            // Hidden until something says it reached, so a
-                            // rest-posed arm is never drawn for a frame.
+                            // Hidden until it reaches, so a rest-posed arm is
+                            // never drawn for a frame.
                             Visibility::Hidden,
                         ))
                         .id(),
@@ -377,21 +296,10 @@ fn dress_the_viewmodel_arms(
 /// Solve the arms onto the viewmodel's weapon, whenever what they are solved
 /// from has changed.
 ///
-/// The whole of the work is [`grip_with`]'s, which is what puts a body's hands
-/// on a weapon — so the grip frames authored in the prop editor are the ones
-/// used here, and first person cannot show a hold the third-person body does
-/// not perform.
-///
-/// **An arm that did not reach is not drawn.** `grip_with` leaves a hand that
-/// cannot get to its grip exactly where it was, which on a body still swinging
-/// with the walk cycle reads as not holding — and in front of an eye reads as
-/// a forearm lying across the screen at the camera's own depth. A weapon with
-/// no support grip, which is most of them, has no left arm at all until there
-/// is an idle pose for one to be in. That is stage 6.
-///
-/// Its inputs are the rig, the held model and the shape of the frustum, which
-/// between them change on a respawn, a weapon switch or a resized window —
-/// so the solve is keyed on them rather than repeated every frame.
+/// An arm that did not reach is hidden: `grip_with` leaves it where it was,
+/// which in front of an eye is a forearm across the screen. Most weapons have
+/// no support grip, so usually only one arm is drawn. Solved only when the rig,
+/// held model or frustum changes.
 fn place_the_viewmodel_arms(
     bodies: Query<(Entity, Ref<Skeleton>, Ref<HeldModel>), With<LocalPlayer>>,
     cameras: Query<(&Camera, &Projection, &Children, &ChildOf), With<ViewmodelCamera>>,
@@ -424,8 +332,7 @@ fn place_the_viewmodel_arms(
         let root = eye_space(skeleton);
         let weapon = held.viewmodel().transform(perspective.fov, aspect);
 
-        // From rest rather than from the body's pose: these arms are welded to
-        // the view, and a camera that does not bob must not have arms that do.
+        // From rest: a camera that does not bob must not have arms that do.
         let mut pose = Pose::rest();
         let reached = grip_with(skeleton, &mut pose, &root, held.hold(), &weapon);
         let posed = skeleton.posed_bones(&pose, &root);
@@ -439,8 +346,7 @@ fn place_the_viewmodel_arms(
             visibility.set_if_neq(wanted);
 
             let bone = &posed[arm.bone];
-            // The mesh is already the bone's size; a scale here would be a
-            // second opinion about that and would skew its normals.
+            // The mesh is already bone-sized; a scale would skew its normals.
             transform.set_if_neq(Transform {
                 translation: bone.head,
                 rotation: bone.rotation,
@@ -450,10 +356,8 @@ fn place_the_viewmodel_arms(
     }
 }
 
-/// Where the rig's root goes for its own eye to sit at the camera.
-///
-/// No rotation: the rig faces `-Z` and so does a camera, so standing the body
-/// at the eye is the whole of it.
+/// Where the rig's root goes for its eye to sit at the camera. No rotation:
+/// the rig and a camera both face `-Z`.
 fn eye_space(skeleton: &Skeleton) -> Transform {
     let bones = skeleton.posed_bones(&Pose::rest(), &Transform::IDENTITY);
     let eye = skeleton
@@ -463,15 +367,13 @@ fn eye_space(skeleton: &Skeleton) -> Transform {
     Transform::from_translation(-eye)
 }
 
-/// A viewmodel is what you see *instead of* your own body.
 fn show_it_only_in_first_person(
     view: Res<ViewMode>,
     mut cameras: Query<&mut Camera, With<ViewmodelCamera>>,
 ) {
     let wanted = !view.shows_own_body();
     for mut camera in &mut cameras {
-        // Assigned only on a change, so this does not dirty the camera every
-        // frame.
+        // Assigned only on change, so the camera is not dirtied every frame.
         if camera.is_active != wanted {
             camera.is_active = wanted;
         }
@@ -482,6 +384,7 @@ fn show_it_only_in_first_person(
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
+    use strum::IntoEnumIterator;
     use crate::common::class::Class;
     use crate::common::skeleton::humanoid;
     use crate::common::skeleton::ik::Reach;
@@ -490,24 +393,17 @@ mod tests {
 
     use super::*;
 
-    const EVERY_CLASS: [Class; 11] = [
-        Class::Scout, Class::Soldier, Class::Pyro, Class::Demoman,
-        Class::Heavy, Class::Engineer, Class::Medic, Class::Sniper,
-        Class::Spy, Class::Civilian, Class::Mercenary,
-    ];
 
-    /// **The arms have to get to the weapon they are drawn holding**, on every
-    /// build — and a viewmodel is not a hold, so the body reaching a grip
-    /// proves nothing about this. An arm that comes up short is put back where
-    /// it was by `reach_for`, so the failure is a weapon floating in front of
-    /// two hands that are somewhere else entirely.
+    /// An arm that comes up short is left where it was, so a weapon floats in
+    /// front of hands elsewhere. A viewmodel is not a hold, so the body tests
+    /// do not cover this.
     #[test]
     fn every_class_can_reach_the_viewmodel() {
         let hold = HoldSpec::default();
         let weapon = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
 
-        for class in EVERY_CLASS {
-            let skeleton = humanoid(class.proportions());
+        for class in Class::iter() {
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let mut pose = Pose::rest();
             let reached = grip_with(&skeleton, &mut pose, &eye_space(&skeleton), &hold, &weapon);
             assert_eq!(
@@ -518,12 +414,11 @@ mod tests {
         }
     }
 
-    /// The rig's own eye, not the movement hull's — that one is a flat 1.8 m
-    /// for every class, so a Scout's arms would hang off a Heavy's shoulders.
+    /// The eye is the rig's own, with the shoulders below it.
     #[test]
     fn the_eye_is_the_rigs_own_and_the_shoulders_hang_below_it() {
-        for class in EVERY_CLASS {
-            let skeleton = humanoid(class.proportions());
+        for class in Class::iter() {
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let root = eye_space(&skeleton);
             let bones = skeleton.posed_bones(&Pose::rest(), &root);
 
@@ -534,20 +429,16 @@ mod tests {
             let shoulder = skeleton.index_of(bone::UPPER_ARM_R).expect("a rig has an arm");
             let at = bones[shoulder].head;
             assert!(at.y < 0.0, "{class:?}'s shoulder is above its own eye");
-            // The rig faces `-Z` with `+Y` up, so its right hand is `+X`.
+            // The rig faces `-Z` with `+Y` up, so its right is `+X`.
             assert!(at.x > 0.0, "{class:?}'s right shoulder is not on its right");
         }
     }
 
-    /// **A hand that is not on the weapon is not drawn.** `grip_with` leaves
-    /// an arm it could not solve exactly where it was, which is right on a
-    /// body — it swings with the walk cycle and reads as not holding — and in
-    /// front of an eye is a forearm lying across the screen at the camera's
-    /// own depth. Most weapons state no support grip, so this is the ordinary
-    /// case rather than the edge one.
+    /// A support hand with no grip must report not reaching, or its forearm is
+    /// drawn across the screen.
     #[test]
     fn a_hand_with_no_grip_to_hold_does_not_reach() {
-        let skeleton = humanoid(Class::Soldier.proportions());
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Soldier));
         let weapon = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
         let mut pose = Pose::rest();
 
@@ -566,13 +457,8 @@ mod tests {
         );
     }
 
-    /// The shipped prop, with the hold and the viewmodel somebody actually
-    /// tuned rather than the defaults — which is the combination a player
-    /// sees, and the one nothing else in this file exercises.
-    ///
-    /// The launcher is `two_handed = false`, so it is held by one hand and one
-    /// arm is drawn. That is the file's decision and this asserts it is
-    /// *carried out*, not that it is right.
+    /// The shipped launcher's tuned hold and viewmodel, which nothing else here
+    /// exercises. Asserts the support hand matches what the file states.
     #[test]
     fn the_shipped_launcher_is_held_in_first_person() {
         let doc = document::parse(
@@ -582,8 +468,8 @@ mod tests {
         .expect("the shipped launcher parses");
 
         let weapon = doc.viewmodel.transform(VIEWMODEL_FOV, 16.0 / 9.0);
-        for class in EVERY_CLASS {
-            let skeleton = humanoid(class.proportions());
+        for class in Class::iter() {
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let hold = doc.hold.for_class(Some(class));
             let mut pose = Pose::rest();
             let reached = grip_with(&skeleton, &mut pose, &eye_space(&skeleton), &hold, &weapon);
@@ -600,12 +486,11 @@ mod tests {
         }
     }
 
-    /// A build that differs gives shoulders that differ, which is the whole
-    /// reason the eye comes off the rig.
+    /// Different builds have different shoulders in view.
     #[test]
     fn a_bigger_build_has_its_own_arms() {
         let reach = |class: Class| {
-            let skeleton = humanoid(class.proportions());
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let bones = skeleton.posed_bones(&Pose::rest(), &eye_space(&skeleton));
             bones[skeleton.index_of(bone::UPPER_ARM_R).unwrap()].head
         };
@@ -615,14 +500,8 @@ mod tests {
         );
     }
 
-    /// **The two cameras are told apart by markers, and nothing else.**
-    ///
-    /// The failure this guards is not a compile error. `place_camera` writes
-    /// `Query<&mut Transform, With<PlayerCamera>>` and damage numbers project
-    /// through `Query<(&Camera, &GlobalTransform), With<PlayerCamera>>` — a
-    /// viewmodel camera that also answered to `PlayerCamera` would be moved
-    /// twice and projected through once by mistake, and both read as the view
-    /// being subtly wrong rather than as anything being broken.
+    /// A viewmodel camera that also answered to `PlayerCamera` would be moved
+    /// by `place_camera` and projected through by damage numbers.
     #[test]
     fn the_viewmodel_camera_is_not_the_players() {
         let mut world = World::new();
@@ -639,13 +518,11 @@ mod tests {
             world.get::<PlayerCamera>(viewmodel).is_none(),
             "the viewmodel camera answers to `PlayerCamera` and will be driven as the view",
         );
-        // A child, so it cannot drift from the view and `despawn_the_view`
-        // takes it down without knowing it exists.
+        // A child, so it follows the view and `despawn_the_view` removes it.
         assert_eq!(world.get::<ChildOf>(viewmodel).map(|of| of.parent()), Some(view));
     }
 
-    /// Once, not once per frame — the play camera keeps its `Viewmodel` as the
-    /// record that it already has one.
+    /// The `Viewmodel` component on the view records that it already has one.
     #[test]
     fn a_view_is_only_given_one_camera() {
         let mut world = World::new();
@@ -662,17 +539,14 @@ mod tests {
     /// Drawn over the world and under the UI, on a layer nothing else uses.
     #[test]
     fn it_sits_between_the_world_and_the_interface() {
-        assert!(VIEWMODEL_CAMERA_ORDER > 100, "the viewmodel draws under the world");
+        assert!(VIEWMODEL_CAMERA_ORDER > PLAY_CAMERA_ORDER, "the viewmodel draws under the world");
         assert!(VIEWMODEL_CAMERA_ORDER < isize::MAX, "the viewmodel draws over the interface");
-        // 0 is everything else and 31 is the editor's shape painter.
         assert_ne!(VIEWMODEL_LAYER, 0);
         assert_ne!(VIEWMODEL_LAYER, 31);
     }
 
-    /// **A viewmodel has to be inside the frustum it is drawn by**, which the
-    /// body's carry is not: it is anatomical, and puts the grip well below the
-    /// eye. Reusing it rendered the weapon perfectly, off the bottom of the
-    /// screen — visible in the ECS, `ViewVisibility` true, and nowhere on it.
+    /// The body's carry put the grip off the bottom of the screen; the default
+    /// viewmodel must be inside the frustum.
     #[test]
     fn the_default_viewmodel_is_somewhere_the_camera_can_see() {
         let placed = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
@@ -691,7 +565,7 @@ mod tests {
     /// under it, and a body to hold them — what `dress_the_viewmodel_arms`
     /// leaves, without the meshes it needs a renderer for.
     fn a_viewmodel_with_arms(world: &mut World) -> (Entity, Entity, Vec<Entity>) {
-        let skeleton = humanoid(Class::Soldier.proportions());
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Soldier));
         let arms: Vec<(usize, usize)> = ARM_BONES
             .iter()
             .map(|(name, hand)| (skeleton.index_of(name).expect("a rig has arms"), *hand))
@@ -734,10 +608,8 @@ mod tests {
             .collect()
     }
 
-    /// **A frame that changed nothing the arms are solved from leaves them
-    /// alone** — and one that changed any of it solves them again. Run on a
-    /// schedule that persists, because what is being tested is the system
-    /// remembering what it last did.
+    /// Fails if the arms are solved again when nothing they read changed, or
+    /// not solved again when something did.
     #[test]
     fn the_arms_are_solved_again_only_when_something_they_read_changes() {
         let mut world = World::new();
@@ -757,8 +629,7 @@ mod tests {
         schedule.run(&mut world);
         assert_eq!(when_placed(&world, &arms), first, "the arms were re-placed with nothing changed");
 
-        // Unchanged values alone would also leave the ticks alone, so prove
-        // the solve itself was skipped: a hand moved by hand stays moved.
+        // Prove the solve was skipped, not merely a no-op: a hand moved by hand stays moved.
         let solved = *world.get::<Transform>(trigger_arm).unwrap();
         world.get_mut::<Transform>(trigger_arm).unwrap().translation = Vec3::splat(9.0);
         schedule.run(&mut world);
@@ -803,8 +674,7 @@ mod tests {
         );
     }
 
-    /// The arms spawn hidden and only placing them shows them, so new arms
-    /// for the same inputs still have to be placed.
+    /// Fails if rebuilt arms for unchanged inputs are left hidden.
     #[test]
     fn rebuilt_arms_are_placed_even_when_nothing_else_changed() {
         let mut world = World::new();
@@ -825,8 +695,7 @@ mod tests {
         assert_ne!(world.get::<Transform>(arms[0]), Some(&Transform::IDENTITY));
     }
 
-    /// The weapon is placed every frame, because the window may have changed
-    /// shape — but a frame where it did not leaves the transform unchanged.
+    /// Fails if an unmoved weapon is marked moved by the every-frame placing.
     #[test]
     fn an_unmoved_viewmodel_is_not_marked_moved() {
         let mut world = World::new();
@@ -841,10 +710,8 @@ mod tests {
         assert_eq!(when_placed(&world, &[part]), first, "an unchanged weapon was marked moved");
     }
 
-    /// **The same numbers mean the same place on screen at any field of view
-    /// and any window shape.** A weapon pinned at a fixed offset in view space
-    /// drifts towards the middle as the view widens, and a weapon that drifts
-    /// inwards shows the cut end it is meant to be hanging off the edge of.
+    /// A fixed view-space offset drifts towards the middle as the view widens,
+    /// showing the weapon's cut end. Placement must be a fraction of the frustum.
     #[test]
     fn a_viewmodel_stays_where_it_was_put_however_the_view_changes() {
         let spec = ViewmodelSpec::default();
@@ -852,8 +719,6 @@ mod tests {
         let screen_place = |fov: f32, aspect: f32| {
             let placed = spec.transform(fov, aspect);
             let half_height = spec.depth * (fov / 2.0).tan();
-            // Where it lands as a fraction of the screen, which is what a
-            // player actually sees.
             Vec2::new(
                 placed.translation.x / (half_height * aspect),
                 placed.translation.y / half_height,

@@ -1,21 +1,12 @@
-//! The feature list a prop is, and what evaluating one means.
+//! The feature list a prop is, and how it evaluates. Like the map's
+//! [`FeatureTimeline`], but a feature is an enum rather than a `typetag` trait
+//! object, because a boolean has to know what it is subtracting. See CLAUDE.md,
+//! "Modelling a prop".
 //!
-//! The same idea as the map's [`FeatureTimeline`] — an ordered list replayed
-//! from the top — with one deliberate difference: **a modelling feature is an
-//! enum, not a `typetag` trait object.** A boolean has to know what it is
-//! subtracting, so there is no writing "cut B out of A" against a trait object
-//! without the kernel answering for every shape anyway; the openness would be a
-//! costume. Closing the set buys exhaustive matching and plain serde.
-//!
-//! **One rule runs the evaluator**: a feature that consumes bodies produces one
-//! under its own id. What is left at the end is what gets drawn. Without the
-//! consuming half, subtracting a bore from a barrel would draw the barrel, the
-//! bore *and* the result.
-//!
-//! Nothing panics or refuses. A feature naming a body that is not there —
-//! deleted, disabled, or already eaten — is **skipped with a note** that
-//! reaches the panel; stopping at the first dangling reference would blank the
-//! viewport every time somebody deleted a feature.
+//! A feature that consumes bodies produces one under its own id; what is left
+//! at the end is drawn. A feature naming a body that is not there is skipped
+//! with a note rather than stopping evaluation, which would blank the viewport
+//! whenever a feature was deleted.
 //!
 //! [`FeatureTimeline`]: crate::editor::editable::FeatureTimeline
 
@@ -24,14 +15,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::get;
 use crate::prop::profile::{Placement, Profile};
-use crate::prop::solid::{Shape, Solid};
+use crate::prop::solid::{is_full_turn, Shape, Solid};
 use crate::prop::surface::Surface;
 
-/// What a feature is called on disk and by the features that refer to it.
-///
-/// Handed out by the document and never reused: features get reordered and
-/// deleted, and a reference meaning "the third one" would come to mean
-/// something else.
+/// Never reused, so a reference survives reordering and deletion.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
@@ -43,7 +30,6 @@ impl std::fmt::Display for PropFeatureId {
     }
 }
 
-/// Which way round a boolean goes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BooleanOp {
@@ -65,7 +51,6 @@ impl BooleanOp {
     }
 }
 
-/// One of the three world axes, as the normal of a plane.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Axis {
@@ -95,24 +80,20 @@ impl Axis {
     }
 }
 
-/// What a feature does.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "feature", rename_all = "snake_case")]
 pub enum FeatureOp {
-    /// A ready-made shape, placed.
     Primitive { shape: Shape, placement: Placement, surface: Surface },
-    /// A profile pushed along its sketch's normal.
     Extrude {
         profile: Profile,
         placement: Placement,
         #[serde(with = "crate::prop::nice_f32::scalar")]
         depth: f32,
-        /// Half each way rather than all of it forwards.
+        /// Half each way.
         #[serde(default)]
         midplane: bool,
         surface: Surface,
     },
-    /// A profile spun about its sketch's vertical.
     Revolve {
         profile: Profile,
         placement: Placement,
@@ -121,27 +102,22 @@ pub enum FeatureOp {
         segments: u32,
         surface: Surface,
     },
-    /// Two bodies in, one out.
     Boolean { op: BooleanOp, target: PropFeatureId, tool: PropFeatureId },
-    /// A body reflected in an axis-aligned plane. An axis and an offset rather
-    /// than a full [`Placement`]: every mirror on a weapon is across the
-    /// centreline, and a dropdown is a thing you get right without thinking
-    /// about Euler order.
+    /// Axis-aligned rather than a full [`Placement`], so it is picked from a
+    /// dropdown without reasoning about Euler order.
     Mirror {
         target: PropFeatureId,
         axis: Axis,
         #[serde(default, with = "crate::prop::nice_f32::scalar")]
         offset: f32,
-        /// Keep the original too, which makes this symmetry rather than a flip.
+        /// Union with the original rather than replacing it.
         #[serde(default)]
         keep_original: bool,
     },
-    /// Repaint a body. Its own feature because what gets repainted is usually
-    /// the *result* of a boolean, which no earlier feature named.
+    /// Its own feature because what gets repainted is usually a boolean's
+    /// result, which no earlier feature has a surface for.
     Paint { target: PropFeatureId, surface: Surface },
-    /// Copies of a body, in a row or around an axis, joined into one — vents
-    /// along a shroud, flutes round a cylinder, rungs on a rail. The original
-    /// is the first copy, so a count of one changes nothing.
+    /// Copies of a body joined into one. The original is the first copy.
     Pattern {
         target: PropFeatureId,
         count: u32,
@@ -149,7 +125,6 @@ pub enum FeatureOp {
     },
 }
 
-/// How a pattern's copies are laid out.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PatternKind {
@@ -158,9 +133,8 @@ pub enum PatternKind {
         #[serde(with = "crate::prop::nice_f32::array")]
         step: [f32; 3],
     },
-    /// Turned about a line through `centre` parallel to `axis`, spread across
-    /// `degrees`. A whole turn spaces them evenly round it; anything less puts
-    /// the first copy at one end and the last at the other.
+    /// About a line through `centre` parallel to `axis`. A whole turn spaces
+    /// copies evenly; less puts the first and last at the ends of `degrees`.
     Radial {
         axis: Axis,
         #[serde(default, with = "crate::prop::nice_f32::array")]
@@ -171,7 +145,6 @@ pub enum PatternKind {
 }
 
 impl PatternKind {
-    /// Where copy `index` of `count` goes, as a transform of the original.
     pub fn copy(&self, index: u32, count: u32) -> Transform {
         match *self {
             PatternKind::Linear { step } => {
@@ -179,7 +152,7 @@ impl PatternKind {
             }
             PatternKind::Radial { axis, centre, degrees } => {
                 // A whole turn would put the last copy on top of the first.
-                let gaps = match degrees.abs() >= 360.0 - 1e-3 {
+                let gaps = match is_full_turn(degrees) {
                     true => count,
                     false => count.saturating_sub(1).max(1),
                 };
@@ -203,7 +176,6 @@ impl Default for FeatureOp {
 }
 
 impl FeatureOp {
-    /// What this kind of feature is called, for the tree.
     pub fn type_name(&self) -> String {
         match self {
             FeatureOp::Primitive { shape, .. } => shape.name(),
@@ -216,8 +188,8 @@ impl FeatureOp {
         }
     }
 
-    /// The bodies this feature eats. One place answers it, so the evaluator,
-    /// the delete check and the panel's dropdowns cannot disagree.
+    /// The single answer the evaluator, the delete check and the panel's
+    /// dropdowns all use.
     pub fn consumes(&self) -> Vec<PropFeatureId> {
         match self {
             FeatureOp::Primitive { .. }
@@ -230,7 +202,6 @@ impl FeatureOp {
         }
     }
 
-    /// Where this feature's sketch or shape sits, if it has one.
     pub fn placement_mut(&mut self) -> Option<&mut Placement> {
         match self {
             FeatureOp::Primitive { placement, .. }
@@ -243,13 +214,9 @@ impl FeatureOp {
         }
     }
 
-    /// The local axis this feature's solid runs *along*, which is what
-    /// "point it along +Z" turns.
-    ///
-    /// Read off how each solid is built rather than chosen: a prism and a cone
-    /// stand on `+Y`, an extrude runs down `+Z`, a revolve spins about `+Y`. A
-    /// box, wedge or sphere has no length of its own, so it takes `+Z`, which
-    /// is where a new box's longest side already is.
+    /// The local axis "points along" turns. Must match how each solid is
+    /// built: prism, cone and revolve on `+Y`, extrude on `+Z`. Shapes with no
+    /// length of their own take `+Z`.
     pub fn main_axis(&self) -> Vec3 {
         match self {
             FeatureOp::Primitive { shape: Shape::Prism { .. } | Shape::Cone { .. }, .. } => Vec3::Y,
@@ -259,20 +226,15 @@ impl FeatureOp {
     }
 }
 
-/// One entry in the list.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PropFeature {
     pub id: PropFeatureId,
-    /// Free text and **not** a lang key: content somebody typed, like a map's
-    /// name, rather than interface text.
+    /// User-typed content, not a lang key.
     pub name: String,
     #[serde(default = "enabled_by_default")]
     pub enabled: bool,
-    /// A named field rather than a `#[serde(flatten)]`, which would read
-    /// better and does not survive TOML: flattening emits a struct's fields
-    /// through a map, and TOML wants every scalar in a table before any
-    /// sub-table, which a flattened enum carrying nested tables cannot
-    /// promise.
+    /// Not `#[serde(flatten)]`: TOML needs every scalar before any sub-table,
+    /// which a flattened enum with nested tables cannot promise.
     pub op: FeatureOp,
 }
 
@@ -286,24 +248,25 @@ impl PropFeature {
     }
 }
 
-/// Something the evaluator could not do, said in a way a mapper can act on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Problem {
     pub feature: PropFeatureId,
     pub message: String,
 }
 
-/// What a feature list came out as.
+impl Problem {
+    fn missing_body(feature: PropFeatureId) -> Self {
+        Self { feature, message: get!("prop.problems.missing_body") }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Evaluated {
     /// The bodies left standing, in the order they were made.
     pub bodies: Vec<(PropFeatureId, Solid)>,
     pub problems: Vec<Problem>,
-    /// Which bodies were live just before each feature ran.
-    ///
-    /// Recorded here rather than worked out again by the panel: "what can this
-    /// boolean point at" is the consuming rule read backwards, and two copies
-    /// of it drift.
+    /// Which bodies were live just before each feature ran. Recorded so the
+    /// panel does not reimplement the consuming rule.
     pub live_before: Vec<Vec<PropFeatureId>>,
 }
 
@@ -312,13 +275,11 @@ impl Evaluated {
         self.bodies.iter().map(|(_, solid)| solid.triangle_count()).sum()
     }
 
-    /// The box everything sits in.
     pub fn bounds(&self) -> Option<(Vec3, Vec3)> {
         self.bounds_of(|_| true)
     }
 
-    /// The box the standing bodies among `ids` sit in. A feature already eaten
-    /// has no body of its own, so it contributes nothing.
+    /// A feature already eaten has no body, so contributes nothing.
     pub fn bounds_of_bodies(&self, ids: &[PropFeatureId]) -> Option<(Vec3, Vec3)> {
         self.bounds_of(|id| ids.contains(&id))
     }
@@ -331,12 +292,8 @@ impl Evaluated {
             .reduce(|(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)))
     }
 
-    /// The standing body a ray meets first, if any.
-    ///
-    /// Against the faces rather than the bounding boxes: a bore runs through a
-    /// barrel, and a click down it should reach whatever is behind rather than
-    /// select the barrel for having a box around the hole. Faces are convex,
-    /// so a fan is an exact triangulation of each.
+    /// Tested against faces, not boxes, so a click down a bore reaches what is
+    /// behind. Faces are convex, so a fan triangulates them exactly.
     pub fn body_under(&self, origin: Vec3, direction: Vec3) -> Option<PropFeatureId> {
         self.bodies
             .iter()
@@ -357,9 +314,8 @@ impl Evaluated {
     }
 }
 
-/// How far along a ray it meets a triangle, from either side — Möller–Trumbore.
-/// Both sides, because an inside-out face is still something somebody can see
-/// and click.
+/// Möller–Trumbore, from either side: an inside-out face can still be seen
+/// and clicked.
 fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
     let ab = b - a;
     let ac = c - a;
@@ -383,9 +339,7 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
     (t > 0.0).then_some(t)
 }
 
-/// Replay a feature list into the bodies it describes. A pure function of the
-/// list, so it can be tested without a `World` and later run on a client that
-/// was handed a prop rather than shown one.
+/// A pure function of the list, so it runs without a `World`.
 pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     let mut live: Vec<(PropFeatureId, Solid)> = Vec::new();
     let mut problems = Vec::new();
@@ -398,9 +352,8 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
             continue;
         }
 
-        // Finding an operand and taking it are two steps on purpose: one that
-        // took its first and then failed to find its second would delete a body
-        // it never used, and the half that vanishes is not the broken feature.
+        // Find before taking: a boolean that took one operand and failed to
+        // find the other would delete a body it never used.
         let find = |id: PropFeatureId, live: &[(PropFeatureId, Solid)]| {
             live.iter().position(|(candidate, _)| *candidate == id)
         };
@@ -435,8 +388,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 live.push((feature.id, solid));
             }
             FeatureOp::Boolean { op, target, tool } => {
-                // Refused explicitly: taking the same body twice would read as
-                // a missing one, which is a confusing way to say this.
+                // Otherwise reported as a missing body.
                 if target == tool {
                     problems.push(Problem {
                         feature: feature.id,
@@ -446,10 +398,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 }
                 let (Some(at_target), Some(at_tool)) = (find(*target, &live), find(*tool, &live))
                 else {
-                    problems.push(Problem {
-                        feature: feature.id,
-                        message: get!("prop.problems.missing_body"),
-                    });
+                    problems.push(Problem::missing_body(feature.id));
                     continue;
                 };
                 // Higher index first, or removing one shifts the other.
@@ -479,10 +428,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
             }
             FeatureOp::Mirror { target, axis, offset, keep_original } => {
                 let Some(solid) = find(*target, &live).map(|at| live.remove(at).1) else {
-                    problems.push(Problem {
-                        feature: feature.id,
-                        message: get!("prop.problems.missing_body"),
-                    });
+                    problems.push(Problem::missing_body(feature.id));
                     continue;
                 };
                 let origin = axis.normal() * *offset;
@@ -492,26 +438,19 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
             }
             FeatureOp::Paint { target, surface } => {
                 let Some(solid) = find(*target, &live).map(|at| live.remove(at).1) else {
-                    problems.push(Problem {
-                        feature: feature.id,
-                        message: get!("prop.problems.missing_body"),
-                    });
+                    problems.push(Problem::missing_body(feature.id));
                     continue;
                 };
                 live.push((feature.id, solid.painted(*surface)));
             }
             FeatureOp::Pattern { target, count, along } => {
                 let Some(solid) = find(*target, &live).map(|at| live.remove(at).1) else {
-                    problems.push(Problem {
-                        feature: feature.id,
-                        message: get!("prop.problems.missing_body"),
-                    });
+                    problems.push(Problem::missing_body(feature.id));
                     continue;
                 };
                 let count = (*count).max(1);
-                // Unioned rather than concatenated: copies close enough to
-                // touch have to become one closed surface, or the inside of
-                // the overlap is drawn and a later boolean keeps the wrong half.
+                // Unioned, not concatenated: overlapping copies must become one
+                // closed surface or a later boolean keeps the wrong half.
                 let result = (1..count).fold(solid.clone(), |joined, index| {
                     joined.union(&solid.clone().transformed(along.copy(index, count)))
                 });
@@ -527,9 +466,8 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
 mod tests {
     use super::*;
 
-    /// A row of three ten-centimetre cubes twenty centimetres apart is three
-    /// times the volume of one; four round a whole turn are four, none on top
-    /// of another — and a count of one is the body untouched.
+    /// Fails if copies land on top of each other, including the last of a
+    /// whole radial turn.
     #[test]
     fn a_pattern_makes_that_many_separate_copies() {
         let cube = primitive(0, Shape::Box { size: [0.1, 0.1, 0.1] }, Vec3::new(0.3, 0.0, 0.0));
@@ -552,8 +490,7 @@ mod tests {
         assert!((alone - one).abs() < 1e-9);
     }
 
-    /// A click lands on the nearer of two bodies in a line, and passes
-    /// straight down a hole drilled through the first to reach the second.
+    /// Fails if picking uses boxes: the ray must pass down the bore.
     #[test]
     fn a_ray_picks_the_nearest_face_not_the_nearest_box() {
         let cube = |id: u32, z: f32| primitive(id, Shape::Box { size: [0.1, 0.1, 0.1] }, Vec3::new(0.0, 0.0, z));
@@ -565,7 +502,6 @@ mod tests {
         let beside = evaluated.body_under(Vec3::new(1.0, 0.0, 1.0), Vec3::NEG_Z);
         assert_eq!(beside, None);
 
-        // A bore down the middle of the near cube, subtracted.
         let bore = primitive(2, Shape::Box { size: [0.04, 0.04, 0.3] }, Vec3::ZERO);
         let drilled = PropFeature::new(
             PropFeatureId(3),
@@ -599,9 +535,7 @@ mod tests {
         primitive(id, Shape::Box { size: [1.0, 1.0, 1.0] }, at)
     }
 
-    /// The rule the evaluator is built on: what is left to draw is the result,
-    /// not the ingredients. The failure is a barrel with its own bore drawn
-    /// inside it, visible only where the two disagree.
+    /// Fails as a barrel drawn with its own bore inside it.
     #[test]
     fn a_boolean_consumes_both_of_its_operands() {
         let features = vec![
@@ -623,8 +557,7 @@ mod tests {
         assert!((result.bodies[0].1.volume() - 0.5).abs() < 1e-3);
     }
 
-    /// Deleting something another feature pointed at must not blank the
-    /// viewport: everything that still makes sense is still built.
+    /// Fails if a dangling reference blanks the viewport or eats its target.
     #[test]
     fn a_dangling_reference_is_a_note_rather_than_a_blank_prop() {
         let features = vec![
@@ -634,7 +567,6 @@ mod tests {
                 FeatureOp::Boolean {
                     op: BooleanOp::Subtract,
                     target: PropFeatureId(0),
-                    // Never existed: the tool was deleted.
                     tool: PropFeatureId(9),
                 },
             ),
@@ -666,8 +598,6 @@ mod tests {
         assert_eq!(result.bodies[0].0, PropFeatureId(0));
     }
 
-    /// Turning a feature off takes its body with it; dependants then read as
-    /// problems, which is honest — turning it back on fixes them.
     #[test]
     fn disabling_a_feature_removes_its_body() {
         let mut features = vec![unit_box(0, Vec3::ZERO), unit_box(1, Vec3::new(3.0, 0.0, 0.0))];
@@ -677,7 +607,6 @@ mod tests {
         assert_eq!(result.bodies[0].0, PropFeatureId(1));
     }
 
-    /// One body out, twice the volume, and no seam down the middle.
     #[test]
     fn a_kept_mirror_doubles_the_body() {
         let features = vec![
@@ -698,9 +627,7 @@ mod tests {
         assert!((result.bodies[0].1.volume() - 2.0).abs() < 1e-3);
     }
 
-    /// What the panel offers has to be what the evaluator will find, which is
-    /// why the evaluator records it: a second implementation of the consuming
-    /// rule would offer bodies that are already eaten.
+    /// Fails as the panel offering bodies that are already eaten.
     #[test]
     fn the_live_set_is_recorded_as_each_feature_sees_it() {
         let features = vec![

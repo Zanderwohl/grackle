@@ -1,35 +1,16 @@
 //! The timeline strip, in Bevy UI.
 //!
-//! # Everything is a function of two numbers
+//! [`TimelineView::start`] and [`TimelineView::pixels_per_second`] place every mark. Zoom and pan
+//! change only those; the layout pass moves existing nodes. `x_of`, `time_at` and `zoom_about` are
+//! pure and tested without an App.
 //!
-//! [`TimelineView::start`] and [`TimelineView::pixels_per_second`] decide where
-//! every mark on the strip goes. Zoom and pan change those two and **rebuild
-//! nothing**: the layout pass writes new `left`s onto nodes that were already
-//! there. `x_of`, `time_at` and `zoom_about` are pure and tested with no App,
-//! the same move `AppMode::selectable_from` makes.
+//! Three pools (gridlines, rows, keys) grow to fit and never shrink; surplus nodes get
+//! `Display::None`. A ten-second clip with eight tracks and sixty keys is about 120 entities,
+//! allocated once.
 //!
-//! # Nothing is ever despawned
-//!
-//! Three pools — gridlines, rows, keys — grow to fit and never shrink, and
-//! surplus nodes are switched off with `Display::None` rather than removed.
-//! A realistic reload (ten seconds, eight tracks, sixty keys) is about a
-//! hundred and twenty entities, allocated once.
-//!
-//! This is deliberately the opposite of the reference implementation that
-//! prompted it, which spawned one UI entity per *time cell* plus one per
-//! marker — some four hundred and fifty for ten seconds — despawned them
-//! wholesale on any change, and used "the markers are missing" as its dirty
-//! flag. Keyframes are sparse; none of that is necessary, and the version that
-//! rebuilds cannot be zoomed without allocating.
-//!
-//! # It has its own camera, and that is not tidiness
-//!
-//! In an authoring mode there is **no `IsDefaultUiCamera` anywhere** — it is on
-//! the play camera, which does not exist here. A UI node with no explicit
-//! [`UiTargetCamera`] therefore renders *nowhere*, with no error and no
-//! warning: the strip is simply blank. So every node carries one, and the
-//! camera sits one below the egui context camera so an egui popup straying
-//! over the strip draws on top of it, which is the right way round.
+//! In an authoring mode there is no `IsDefaultUiCamera` (it is on the play camera), and a UI node
+//! with no [`UiTargetCamera`] renders nowhere without an error. So every node targets the multicam's
+//! egui context camera explicitly.
 
 #[cfg(test)]
 use bevy::ecs::system::RunSystemOnce;
@@ -41,65 +22,43 @@ pub const RULER_HEIGHT: f32 = 20.0;
 pub const ROW_HEIGHT: f32 = 22.0;
 pub const NAMES_WIDTH: f32 = 150.0;
 
-/// A key is drawn this wide, and picked in a box this wide.
-///
-/// Round, like the reference implementation's, rather than square. A keyframe
-/// marker is read at a glance in a field of gridlines, and a circle is the one
-/// shape nothing else on the strip has — every line here is axis-aligned.
+/// Drawn and picked this wide. Round, since every other mark on the strip is axis-aligned.
 const KEY_SIZE: f32 = 11.0;
 
-/// How tall the playhead's grabbable head is.
 const HEAD_SIZE: f32 = 9.0;
 
-/// How many unlabelled divisions between labelled gridlines.
-///
-/// The thing that makes a ruler read as a ruler rather than as a few stray
-/// lines: the eye counts subdivisions to judge a distance, and a grid with
-/// only labelled lines gives it nothing to count.
+/// Unlabelled divisions between labelled gridlines; the eye judges distance by counting them.
 const MINOR_PER_MAJOR: usize = 5;
 
-/// The playhead is one pixel and its grab zone is thirteen.
-///
-/// A hit target the width of the thing it grabs is a hit target nobody can
-/// hit. The zone is invisible and centred on the line.
+/// The grab zone is invisible, centred on the line, and wider so it can be hit.
 const PLAYHEAD_WIDTH: f32 = 1.0;
 const GRAB_WIDTH: f32 = 13.0;
 
-/// How many gridlines to keep around. Bounded by how many fit on a strip at a
-/// readable spacing rather than by how long a clip is, which is why zooming
-/// out does not allocate.
+/// Bounded by how many fit at a readable spacing, not by clip length, so zooming out does not
+/// allocate.
 const MAX_GRID: usize = 200;
 
-/// The narrowest a labelled gridline may be before the spacing steps up.
+/// In logical pixels.
 const MIN_GRID_GAP: f32 = 55.0;
 
-/// The strip's colours, in one place.
-///
-/// Dark to sit beside the egui panels without arguing with them, and stated
-/// here rather than inline so the contrast steps between the bands are
-/// visible as numbers — every one of them is a decision about what should read
-/// as in front of what.
 mod paint {
     use bevy::prelude::Color;
 
     pub const STRIP: Color = Color::srgb(0.075, 0.075, 0.085);
     pub const NAMES: Color = Color::srgb(0.105, 0.105, 0.118);
     pub const RULER: Color = Color::srgb(0.125, 0.125, 0.140);
-    /// The band the clip actually occupies. Outside it is the same strip,
-    /// darker — which is what stops a clip looking as though it runs forever.
+    /// The band the clip occupies; darker outside it, so the clip's end is visible.
     pub const EXTENT: Color = Color::srgb(0.098, 0.098, 0.110);
     pub const ROW_ODD: Color = Color::srgb(0.118, 0.118, 0.132);
     pub const EDGE: Color = Color::srgb(0.215, 0.215, 0.235);
     pub const MINOR: Color = Color::srgb(0.140, 0.140, 0.155);
     pub const MAJOR: Color = Color::srgb(0.190, 0.190, 0.210);
     pub const LABEL: Color = Color::srgb(0.560, 0.560, 0.600);
-    /// A switched-off track's keys. Dimmed rather than hidden: the track is
-    /// still there to switch back on, and its keys can still be edited.
+    /// A switched-off track's keys: dimmed rather than hidden, since they can still be edited.
     pub const KEY_OFF: Color = Color::srgb(0.420, 0.380, 0.280);
-    /// The picked track's header, in the names column — the one place the
-    /// strip says which track the Inspector is describing.
+    /// The picked track's header: the one place the strip says which track the Inspector describes.
     pub const ROW_PICKED: Color = Color::srgb(0.200, 0.255, 0.350);
-    /// And its lane, quieter, so keys on it still read against it.
+    /// Its lane, quieter, so keys still read against it.
     pub const ROW_PICKED_LANE: Color = Color::srgb(0.135, 0.150, 0.185);
     pub const KEY: Color = Color::srgb(0.855, 0.720, 0.350);
     pub const KEY_EDGE: Color = Color::srgb(0.420, 0.340, 0.140);
@@ -109,14 +68,11 @@ mod paint {
     pub const BAND: Color = Color::srgba(0.55, 0.70, 0.95, 0.18);
 }
 
-/// What part of the clip is on screen, and how big a second is.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct TimelineView {
-    /// The time at the left edge of the lanes.
     pub start: f32,
     pub pixels_per_second: f32,
-    /// Where the strip is in the window, in Bevy's logical pixels — written
-    /// from the rect egui reserved for it.
+    /// Logical pixels, from the rect egui reserved.
     pub rect: Rect,
 }
 
@@ -131,7 +87,6 @@ impl Default for TimelineView {
 }
 
 impl TimelineView {
-    /// Where the lanes begin — past the column of track names.
     pub fn lanes_left(&self) -> f32 {
         self.rect.min.x + NAMES_WIDTH
     }
@@ -144,13 +99,8 @@ impl TimelineView {
         self.start + (x - self.lanes_left()) / self.pixels_per_second
     }
 
-    /// Zoom about a fixed point on screen, so the time under the pointer stays
-    /// under the pointer.
-    ///
-    /// Multiplicative, for the reason `prop::camera`'s zoom already gives: a
-    /// step tuned at one scale is imperceptible or catastrophic at the other,
-    /// and a clip is looked at both a whole second and a single frame at a
-    /// time.
+    /// Zoom about a screen x, so the time under the pointer stays there. Multiplicative, since a clip is
+    /// viewed at both whole seconds and single frames.
     pub fn zoom_about(&mut self, x: f32, notches: f32) {
         let before = self.time_at(x);
         self.pixels_per_second =
@@ -158,7 +108,6 @@ impl TimelineView {
         self.start += before - self.time_at(x);
     }
 
-    /// Fit `length` across the lanes, with a little air either side.
     pub fn frame(&mut self, length: f32) {
         let lanes = (self.rect.width() - NAMES_WIDTH).max(1.0);
         let length = length.max(0.01);
@@ -166,82 +115,53 @@ impl TimelineView {
         self.start = -(lanes * 0.04) / self.pixels_per_second;
     }
 
-    /// Whether the strip has been measured and has room to draw in.
-    ///
-    /// The rect is zero-sized until egui has laid the panel out, and every
-    /// piece of arithmetic here — framing, the lanes' width, the clamp on the
-    /// clip's extent — is nonsense before then.
+    /// The rect is zero-sized until egui lays the panel out, and the arithmetic is nonsense before then.
     pub fn has_room(&self) -> bool {
         self.rect.width() > NAMES_WIDTH && self.rect.height() > RULER_HEIGHT
     }
 
-    /// Whether a window point is over the lanes rather than the names column
-    /// or off the strip entirely.
     pub fn over_lanes(&self, at: Vec2) -> bool {
         self.rect.contains(at) && at.x >= self.lanes_left()
     }
 }
 
-/// Where the playhead is, and whether it is moving on its own.
 #[derive(Resource, Debug, Default, Clone, Copy)]
 pub struct TimelineCursor {
     pub time: f32,
     pub playing: bool,
 }
 
-/// One key, addressed by where it sits.
-///
-/// An address rather than an identity, and the consequence is faced rather
-/// than avoided: a drag reorders a track, so the address of a key you are
-/// holding changes underneath you. [`Channel::nudge`] reports the new indices
-/// for exactly that reason, and the selection is remapped from what it says.
-/// The alternative is an id per key on disk, existing only so a pointer can
-/// hold something for a few hundred milliseconds.
+/// Addressed by position, not identity: a drag reorders a track, so [`Channel::nudge`] reports new
+/// indices and the selection is remapped. The alternative was a per-key id on disk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct KeyAt {
     pub track: usize,
     pub key: usize,
 }
 
-/// Which keys are picked.
 #[derive(Resource, Debug, Default)]
 pub struct TimelineSelection(pub std::collections::BTreeSet<KeyAt>);
 
-/// One track caught up in a drag.
 #[derive(Debug, Clone)]
 pub struct DraggedTrack {
     pub track: usize,
-    /// The channel exactly as it was when the drag began.
-    ///
-    /// **Every frame recomputes from this rather than accumulating.** A drag
-    /// that added this frame's delta to last frame's result drifts on every
-    /// clamp and every re-sort, and dragging out to the edge and back would
-    /// not come home — which is the difference between a nudge you can undo by
-    /// eye and one you have to undo with Ctrl+Z.
+    /// The channel as the drag began. Every frame recomputes from this; accumulating drifts on every
+    /// clamp and re-sort.
     pub original: crate::common::skeleton::clip::Channel,
-    /// Which keys, by index **in `original`**, are moving.
+    /// Indices into `original`.
     pub held: Vec<usize>,
 }
 
-/// A gesture in progress, anchored to where it began.
-///
-/// **Delta, not mapping.** Setting the time to `time_at(cursor)` makes the
-/// playhead teleport to the pointer the moment a grab starts, which is wrong
-/// twice over: the grab zone is deliberately wider than the line, so a
-/// legitimate grab is usually a few pixels off it, and a scrub that jumps on
-/// mouse-down cannot be used to nudge.
+/// Anchored to where it began, and applied as a delta. Mapping to `time_at(cursor)` would jump the
+/// playhead on press, since the grab zone is wider than the line, and a jumping scrub cannot nudge.
 #[derive(Debug, Clone)]
 pub enum Grab {
     Scrub { from_x: f32, from_time: f32 },
     Pan { from_x: f32, from_start: f32 },
-    /// `last_by` is the offset the keys were last put at, so a pointer held
-    /// still does not write the same keys back every frame. The drag is
-    /// absolute — every frame recomputes from `original` — so an offset equal
-    /// to the last one is a result equal to the last one.
+    /// `last_by` is the offset last applied. The drag is absolute, so the same
+    /// offset is the same keys, and a pointer held still writes nothing.
     Keys { from_x: f32, tracks: Vec<DraggedTrack>, last_by: Option<f32> },
-    /// Both corners, because the layout has no idea where the pointer is and
-    /// should not have to: the gesture is the thing that knows, so it carries
-    /// what it has swept.
+    /// Both corners, so the layout need not know where the pointer is.
     Band { from: Vec2, to: Vec2 },
 }
 
@@ -273,28 +193,22 @@ struct KeyMark;
 #[derive(Component)]
 struct BandBox;
 
-/// The pooled nodes, held by index so the layout pass can address them without
-/// a query sort.
+/// Held by index so the layout pass can address them without a query sort.
 #[derive(Resource, Default)]
 pub struct TimelinePools {
     camera: Option<Entity>,
     root: Option<Entity>,
-    /// The band the clip occupies, so its end is visible.
     extent: Option<Entity>,
-    /// The ruler's own ground, and the hairline under it.
     ruler: Option<Entity>,
     ruler_edge: Option<Entity>,
-    /// The names column's ground, and the hairline down its right side.
     names: Option<Entity>,
     names_edge: Option<Entity>,
-    /// The picked track's header in the names column.
     picked_row: Option<Entity>,
     playhead: Option<Entity>,
     head: Option<Entity>,
     grab: Option<Entity>,
     band: Option<Entity>,
-    /// Per division: the line down the lanes, the tick in the ruler, and the
-    /// label — the last two shown only on labelled divisions.
+    /// Per division: lane line, ruler tick, label. The last two show only on labelled divisions.
     grid: Vec<(Entity, Entity, Entity)>,
     rows: Vec<Entity>,
     keys: Vec<Entity>,
@@ -307,36 +221,19 @@ fn off() -> Node {
     }
 }
 
-/// Stand the strip up: a camera, a root, and the two nodes that are always
-/// there.
 pub fn spawn_the_strip(
     mut commands: Commands,
     mut pools: ResMut<TimelinePools>,
     egui_camera: Query<Entity, With<bevy_egui::PrimaryEguiContext>>,
 ) {
-    // **The editor's own UI camera, not one of ours.**
-    //
-    // A second `Camera2d` over this window was the obvious thing and it never
-    // drew a pixel: active, correctly ordered, viewport set, nodes laid out
-    // with the right computed sizes — and nothing on screen, not even a clear
-    // colour, which is how it was finally pinned down. A camera that renders
-    // nothing is not an error, so there was no diagnostic anywhere.
-    //
-    // There is no reason to have a second one. `UiTargetCamera` already ties
-    // these nodes to a camera, the multicam's egui context camera is a
-    // `Camera2d` that demonstrably renders over the whole window, and
-    // targeting it means no viewport arithmetic, no clear-colour config, and
-    // no ordering question. Bevy's UI pass runs before egui's own node, so an
-    // egui popup over the strip still draws on top — the z-order the second
-    // camera was supposed to buy.
+    // The multicam's egui context camera rather than a second `Camera2d`, which rendered nothing with
+    // no diagnostic. Bevy's UI pass runs before egui's node, so an egui popup still draws on top.
     let Ok(camera) = egui_camera.single() else {
         warn!("no egui camera to hang the timeline on; the strip will not be drawn");
         return;
     };
 
-    // A plain absolutely-positioned node per piece of chrome. Bevy UI has no
-    // painter, so every band, hairline and tick is a node — which is fine
-    // because there is a fixed number of them and they are never respawned.
+    // Bevy UI has no painter, so every band, hairline and tick is a node.
     let bare = |commands: &mut Commands, colour: Color, z: i32| {
         commands
             .spawn((
@@ -363,24 +260,18 @@ pub fn spawn_the_strip(
         ))
         .id();
 
-    // Under everything: the span the clip actually occupies. Without it a clip
-    // that ends two thirds of the way across looks like one that runs off the
-    // edge, and there is nothing on the strip to say otherwise.
     let extent = bare(&mut commands, paint::EXTENT, 0);
     let ruler = bare(&mut commands, paint::RULER, 1);
     let ruler_edge = bare(&mut commands, paint::EDGE, 2);
 
-    // Above the lanes, so a key scrolled off the left goes *behind* the names
-    // rather than being drawn over them.
+    // Above the lanes, so a key scrolled left goes behind the names.
     let names = bare(&mut commands, paint::NAMES, 4);
     let names_edge = bare(&mut commands, paint::EDGE, 5);
-    // Over the names column's ground and under the row labels, which share its
-    // z and are spawned after it.
+    // Over the names ground, under the row labels, which share its z and spawn after it.
     let picked_row = bare(&mut commands, paint::ROW_PICKED, 5);
 
     let playhead = bare(&mut commands, paint::PLAYHEAD, 3);
-    // A head, so it reads as something you can take hold of. A bare line is
-    // indistinguishable from a gridline until you happen to drag it.
+    // A head, so it is not mistaken for a gridline.
     let head = commands
         .spawn((
             UiTargetCamera(camera),
@@ -388,8 +279,6 @@ pub fn spawn_the_strip(
                 position_type: PositionType::Absolute,
                 width: Val::Px(HEAD_SIZE),
                 height: Val::Px(HEAD_SIZE),
-                // Square-topped and round-bottomed: a pointer shape, and the
-                // nearest thing to a triangle a flexbox node can be.
                 border_radius: BorderRadius {
                     top_left: Val::Px(1.0),
                     top_right: Val::Px(1.0),
@@ -403,7 +292,6 @@ pub fn spawn_the_strip(
         ))
         .id();
 
-    // Invisible, and wider than what it grabs.
     let grab = commands
         .spawn((
             PlayheadGrab,
@@ -463,23 +351,17 @@ pub fn take_the_strip_down(mut commands: Commands, mut pools: ResMut<TimelinePoo
     everything.extend(pools.root.take());
     everything.extend(pools.playhead.take());
     everything.extend(pools.grab.take());
-    // Deliberately **not** `pools.camera`: it belongs to the multicam and
-    // taking it down would take the whole editor's UI with it.
+    // Not `pools.camera`'s entity: it belongs to the multicam.
     pools.camera = None;
 
     for entity in everything {
-        // The root's children go with it, but the pools are addressed by
-        // index and a stale entity in one is worse than a double despawn —
-        // hence draining rather than relying on the hierarchy.
+        // The pools are addressed by index, and a stale entity is worse than a double despawn, so drain
+        // rather than relying on the hierarchy.
         commands.entity(entity).try_despawn();
     }
 }
 
-/// Grow the pools to fit what is about to be drawn.
-///
-/// Grows and never shrinks. A clip briefly opened with four hundred keys
-/// leaves four hundred switched-off nodes behind, which costs a pointer each
-/// and saves the allocation when the next one is opened.
+/// Grows and never shrinks; a leftover node costs a pointer and saves the next allocation.
 fn reserve(
     commands: &mut Commands,
     camera: Entity,
@@ -499,9 +381,8 @@ fn reserve(
                 GlobalZIndex(1),
             ))
             .id();
-        // A longer mark in the ruler, shown only where there is a label. The
-        // lanes' own lines stop at the ruler so the two do not run together
-        // into one full-height bar.
+        // Shown only where there is a label. Lane lines stop at the ruler so the two do not merge into one
+        // bar.
         let tick = commands
             .spawn((
                 GridLine,
@@ -530,9 +411,7 @@ fn reserve(
         pools.grid.push((line, tick, label));
     }
 
-    // Rows are a stripe each and nothing else: the track's header is egui,
-    // drawn over the names column by the panels, because it is a row of
-    // controls and Bevy UI has none.
+    // A stripe only: the header is egui, drawn by the panels, since Bevy UI has no controls.
     while pools.rows.len() < rows {
         let stripe = commands
             .spawn((
@@ -546,8 +425,7 @@ fn reserve(
         pools.rows.push(stripe);
     }
 
-    // In chunks, so a clip gaining one key at a time does not spawn one entity
-    // per keystroke.
+    // In chunks, so adding keys one at a time does not spawn per keystroke.
     while pools.keys.len() < keys {
         for _ in 0..64 {
             let key = commands
@@ -566,40 +444,26 @@ fn reserve(
     }
 }
 
-/// How close to the playhead counts as grabbing it.
-///
-/// Half the grab zone, which is deliberately much wider than the line it
-/// grabs: a hit target the width of one pixel is a hit target nobody can hit.
 pub fn grab_radius() -> f32 {
     GRAB_WIDTH / 2.0
 }
 
-/// Where a track's row starts, measured down from the top of the strip.
+/// Measured down from the top of the strip.
 pub fn row_top(slot: usize) -> f32 {
     RULER_HEIGHT + slot as f32 * ROW_HEIGHT
 }
 
-/// Which track row a window point is over, if any.
 pub fn row_at(view: &TimelineView, y: f32) -> Option<usize> {
     let local = y - view.rect.min.y - RULER_HEIGHT;
     (local >= 0.0).then(|| (local / ROW_HEIGHT) as usize)
 }
 
-/// Whether a window point is in the ruler band along the top.
-///
-/// The ruler scrubs and the lanes select, which is why they are told apart
-/// here rather than by whatever happens to be under the pointer: a click on an
-/// empty lane is the start of a band, not a jump of the playhead.
+/// The ruler scrubs and the lanes select; a click on an empty lane starts a band.
 pub fn over_ruler(view: &TimelineView, at: Vec2) -> bool {
     view.rect.contains(at) && at.y < view.rect.min.y + RULER_HEIGHT && at.x >= view.lanes_left()
 }
 
-/// Which key a window point is on, if any.
-///
-/// Geometric rather than picked off the node, and derived from the **same**
-/// `x_of` the layout uses — so it is one function read two ways rather than
-/// two copies of where a key is. It is also then testable without standing up
-/// a renderer, which is what most of the strip's tests rely on.
+/// Geometric, from the same `x_of` the layout uses, and testable without a renderer.
 pub fn key_at(view: &TimelineView, clip: &Clip, at: Vec2) -> Option<KeyAt> {
     let track = row_at(view, at.y)?;
     let channel = &clip.tracks.get(track)?.channel;
@@ -612,7 +476,6 @@ pub fn key_at(view: &TimelineView, clip: &Clip, at: Vec2) -> Option<KeyAt> {
         .map(|(key, _)| KeyAt { track, key })
 }
 
-/// Every key inside a rectangle dragged across the lanes.
 pub fn keys_within(view: &TimelineView, clip: &Clip, band: Rect) -> Vec<KeyAt> {
     let mut found = Vec::new();
     for (track, spec) in clip.tracks.iter().enumerate() {
@@ -630,10 +493,7 @@ pub fn keys_within(view: &TimelineView, clip: &Clip, band: Rect) -> Vec<KeyAt> {
     found
 }
 
-/// How far apart to put labelled gridlines so they stay readable at this zoom.
-///
-/// A 1-2-5 ladder, which is what every ruler uses: the steps are all round
-/// numbers in decimal, so a label never reads `0.3333`.
+/// A 1-2-5 ladder, so a label is always a round number.
 pub fn grid_step(pixels_per_second: f32) -> f32 {
     let mut step = 0.001_f32;
     while step * pixels_per_second < MIN_GRID_GAP {
@@ -650,15 +510,9 @@ pub fn grid_step(pixels_per_second: f32) -> f32 {
     step
 }
 
-/// Write a pooled node through `write`, marking it changed only if it now differs.
-///
-/// A `Node` mutably dereferenced is a `Node` changed, whether or not anything
-/// was written that differs, and a changed `Node` is Bevy UI re-syncing its
-/// style and laying the strip out again. Every pooled node — eight hundred-odd,
-/// most of them hidden — is placed every frame, so writing through `get_mut`
-/// directly re-laid out the whole strip every frame with the clip paused and
-/// nothing moving. A `Node` here carries no grid tracks, so the copy is a
-/// memcpy rather than an allocation.
+/// Write a pooled node through `write`, marking it changed only if it differs:
+/// a changed `Node` is a UI re-layout, and every pooled node is placed every
+/// frame. These carry no grid tracks, so the copy does not allocate.
 fn place(nodes: &mut Query<&mut Node>, entity: Entity, write: impl FnOnce(&mut Node)) {
     let Ok(mut node) = nodes.get_mut(entity) else {
         return;
@@ -668,10 +522,7 @@ fn place(nodes: &mut Query<&mut Node>, entity: Entity, write: impl FnOnce(&mut N
     node.set_if_neq(wanted);
 }
 
-/// Put every pooled node where the view says it goes.
-///
-/// The only writer of `Node` on a pooled entity, which is what keeps "where is
-/// this drawn" a single question with a single answer.
+/// The only writer of `Node` on a pooled entity.
 #[allow(clippy::too_many_arguments)]
 pub fn lay_out_the_timeline(
     mut commands: Commands,
@@ -708,12 +559,8 @@ pub fn lay_out_the_timeline(
         node.display = Display::Flex;
     });
 
-    // **Nothing is laid out until there is somewhere to lay it out.** On the
-    // first frame of the mode egui has not measured the strip yet, so the rect
-    // is zero-sized — and a lanes-to-width clamp on that is `clamp(150, 0)`,
-    // which panics rather than producing a silly number. Hiding the root is
-    // already the right answer for a strip dragged shut, so this is the same
-    // answer one frame earlier.
+    // Before egui measures the strip the rect is zero-sized, and the lanes-to-width clamp becomes
+    // `clamp(150, 0)`, which panics.
     if !view.has_room() {
         return;
     }
@@ -722,7 +569,6 @@ pub fn lay_out_the_timeline(
     let lanes = view.lanes_left() - rect.min.x;
     let inside = |x: f32| (x - rect.min.x).clamp(lanes, rect.width());
 
-    // The band the clip occupies, so its end is somewhere rather than nowhere.
     if let Some(extent) = pools.extent {
         place(&mut nodes, extent, |node| {
             let from = inside(view.x_of(0.0));
@@ -735,7 +581,6 @@ pub fn lay_out_the_timeline(
         });
     }
 
-    // The ruler's ground and the hairline under it.
     for (piece, top, height) in [
         (pools.ruler, 0.0, RULER_HEIGHT),
         (pools.ruler_edge, RULER_HEIGHT - 1.0, 1.0),
@@ -750,14 +595,12 @@ pub fn lay_out_the_timeline(
         });
     }
 
-    // Gridlines, laid out from the *view*, so zooming moves them and allocates
-    // nothing. Drawn at the minor division and labelled every fifth, because
-    // the eye judges a distance by counting subdivisions and a grid with only
-    // labelled lines gives it nothing to count.
+    // Laid out from the view, so zooming allocates nothing. Drawn at minor divisions, labelled every
+    // fifth.
     let step = grid_step(view.pixels_per_second);
     let minor = step / MINOR_PER_MAJOR as f32;
-    // Counted from zero rather than from the left edge, so a labelled line
-    // always lands on a round number however far the strip has been panned.
+    // Counted from zero rather than the left edge, so labels land on round numbers however far it is
+    // panned.
     let first = (view.start / minor).ceil() as i64;
     for slot in 0..pools.grid.len() {
         let division = first + slot as i64;
@@ -789,8 +632,6 @@ pub fn lay_out_the_timeline(
             }
         }
 
-        // The ruler carries marks only where there is a number, so the two
-        // bands do not merge into one full-height bar.
         place(&mut nodes, tick, |node| {
             node.display = if major { Display::Flex } else { Display::None };
             node.left = Val::Px(x - rect.min.x);
@@ -806,10 +647,7 @@ pub fn lay_out_the_timeline(
         if major {
             if let Ok(mut text) = texts.get_mut(label) {
                 // Written only when it changes: a `Text` write re-lays out the
-                // node, and a ruler that rewrote every label every frame would
-                // be the most expensive thing on the strip.
-                // Into a buffer kept between frames, so an unchanged label
-                // costs a comparison rather than an allocation.
+                // node. Formatted into a kept buffer, so no allocation either.
                 write_time(&mut label_text, time, step);
                 if text.0 != *label_text {
                     text.0.clone_from(&label_text);
@@ -818,7 +656,6 @@ pub fn lay_out_the_timeline(
         }
     }
 
-    // Rows, and the keys on them.
     let picked_track = anim
         .as_deref()
         .and_then(|anim| anim.track)
@@ -859,8 +696,7 @@ pub fn lay_out_the_timeline(
             }
         }
         place(&mut nodes, stripe, |node| {
-            // Every other row, so a long list of tracks can be read across —
-            // and the picked one whichever it is.
+            // Every other row, and the picked one.
             node.display = if slot % 2 == 1 || picked { Display::Flex } else { Display::None };
             node.position_type = PositionType::Absolute;
             node.left = Val::Px(0.0);
@@ -875,8 +711,7 @@ pub fn lay_out_the_timeline(
             key_slot += 1;
             let x = view.x_of(at);
 
-            // Picked keys are lit rather than outlined: an outline on a nine
-            // pixel diamond is two pixels of fill and reads as a smudge.
+            // Lit rather than outlined: an outline on a nine-pixel mark reads as a smudge.
             let picked = selection.as_deref().is_some_and(|picked| {
                 picked.0.contains(&KeyAt {
                     track: slot,
@@ -904,10 +739,7 @@ pub fn lay_out_the_timeline(
             }
 
             place(&mut nodes, key, |node| {
-                // Hidden before it reaches the names column rather than
-                // clipped by it — the column is opaque and above, so a key
-                // sliding under it disappears cleanly either way, but this
-                // keeps it out of the pointer's way too.
+                // Hidden before the names column, which also keeps it out of the pointer's way.
                 let on = x >= view.lanes_left() && x <= rect.max.x;
                 node.display = if on { Display::Flex } else { Display::None };
                 node.position_type = PositionType::Absolute;
@@ -916,21 +748,17 @@ pub fn lay_out_the_timeline(
                 node.width = Val::Px(KEY_SIZE);
                 node.height = Val::Px(KEY_SIZE);
                 node.border = UiRect::all(Val::Px(1.0));
-                // Round. Every other mark on the strip is axis-aligned, so a
-                // circle is the one shape that cannot be mistaken for chrome.
                 node.border_radius = BorderRadius::all(Val::Percent(50.0));
             });
         }
     }
 
-    // Whatever is left over is switched off rather than removed.
     for slot in key_slot..pools.keys.len() {
         place(&mut nodes, pools.keys[slot], |node| {
             node.display = Display::None;
         });
     }
 
-    // The rubber band, while one is being pulled.
     if let Some(band) = pools.band {
         let pulling = match grab.as_deref().and_then(|grab| grab.0.as_ref()) {
             Some(Grab::Band { from, to }) => Some(Rect::from_corners(*from, *to)),
@@ -951,8 +779,7 @@ pub fn lay_out_the_timeline(
         });
     }
 
-    // The names column last of the grounds, so anything that scrolled off the
-    // left goes behind it rather than over it.
+    // Last of the grounds, so anything scrolled left goes behind it.
     for (piece, left, width) in [
         (pools.names, 0.0, lanes),
         (pools.names_edge, lanes - 1.0, 1.0),
@@ -967,8 +794,6 @@ pub fn lay_out_the_timeline(
         });
     }
 
-    // The playhead: a line, a head to take hold of, and a zone wider than
-    // either to catch the pointer.
     let x = view.x_of(cursor.time);
     let on = x >= view.lanes_left() && x <= rect.max.x;
     if let (Some(line), Some(head), Some(grab)) = (pools.playhead, pools.head, pools.grab) {
@@ -997,20 +822,13 @@ pub fn lay_out_the_timeline(
     }
 }
 
-/// The clip the strip is showing, cloned out of the document once per change.
-///
-/// A copy rather than a borrow because the layout pass wants the document
-/// immutably while the panels want it mutably, and a clip is a couple of
-/// kilobytes. Refreshed on the editor's generation counter — the same one the
-/// mesh is rebuilt on, and the honest version of a dirty flag.
+/// A copy rather than a borrow: the layout wants the document immutably while the panels want it
+/// mutably. Refreshed on the editor's generation counter.
 #[derive(Resource, Default)]
 pub struct ShownClip(pub Option<Clip>);
 
-/// What a track's row is labelled, which is also what the Inspector calls it.
-///
-/// A bone is named by its own name — that is an identifier the rig owns and
-/// the file stores, not display text — and everything else through the lang
-/// layer.
+/// Also the Inspector's name for it. A bone is named by its rig name, an identifier rather than
+/// display text; everything else goes through the lang layer.
 pub fn track_name(track: &crate::common::skeleton::clip::Track) -> String {
     use crate::common::skeleton::clip::Channel;
     match &track.channel {
@@ -1020,11 +838,7 @@ pub fn track_name(track: &crate::common::skeleton::clip::Track) -> String {
     }
 }
 
-/// A ruler label, with only as many decimals as the spacing needs.
-///
-/// Derived from the step rather than fixed, because the same ruler is read at
-/// whole seconds and at milliseconds and neither `0` nor `0.250` is right for
-/// both.
+/// Decimals derived from the step, since the ruler is read at seconds and milliseconds.
 pub fn format_time(time: f32, step: f32) -> String {
     let mut out = String::new();
     write_time(&mut out, time, step);
@@ -1043,7 +857,7 @@ fn write_time(out: &mut String, time: f32, step: f32) {
     } else {
         3
     };
-    // `-0.0` prints with a sign and reads as a bug on a ruler.
+    // `-0.0` prints with a sign.
     let time = if time == 0.0 { 0.0 } else { time };
     out.clear();
     // Writing to a `String` cannot fail.
@@ -1059,8 +873,6 @@ mod tests {
     };
     use crate::common::skeleton::Interpolation;
 
-    /// A clip with keys at known times, so a layout can be checked against
-    /// arithmetic rather than against a screenshot.
     fn a_clip() -> Clip {
         Clip {
             length: 1.0,
@@ -1085,16 +897,13 @@ mod tests {
         }
     }
 
-    /// The camera the strip hangs on. In a real window it is the multicam's
-    /// egui context camera; here it only has to exist, because `spawn_the_strip`
-    /// declines to build anything without one.
+    /// `spawn_the_strip` builds nothing without a UI camera; here it only has to exist.
     fn with_a_ui_camera() -> World {
         let mut world = World::new();
         world.spawn(bevy_egui::PrimaryEguiContext);
         world
     }
 
-    /// Stand the strip up and lay it out, for real, in a `World`.
     fn laid_out(view: TimelineView, clip: Option<Clip>) -> (World, TimelinePools) {
         let mut world = with_a_ui_camera();
         world.insert_resource(view);
@@ -1104,27 +913,20 @@ mod tests {
 
         world.run_system_once(spawn_the_strip).unwrap();
         world.run_system_once(lay_out_the_timeline).unwrap();
-        // The pools grow through `Commands`, so the second pass is the one
-        // that can actually place what the first pass reserved.
+        // The pools grow through `Commands`, so the second pass places what the first reserved.
         world.run_system_once(lay_out_the_timeline).unwrap();
 
         let pools = world.remove_resource::<TimelinePools>().unwrap();
         (world, pools)
     }
 
-    /// A strip with no room in it draws nothing, and in particular does not
-    /// panic.
-    ///
-    /// On the first frame of the mode egui has not measured the panel yet, so
-    /// the rect really is zero-sized — this is the ordinary case, not an edge
-    /// one, and it took the whole editor down the first time.
+    /// On the first frame egui has not measured the panel, so a zero-sized rect is the ordinary case and
+    /// must not panic.
     #[test]
     fn a_strip_with_no_room_lays_nothing_out() {
         for rect in [
             Rect::from_corners(Vec2::ZERO, Vec2::ZERO),
-            // Wide enough for the names column and not a pixel more.
             Rect::from_corners(Vec2::ZERO, Vec2::new(NAMES_WIDTH, 400.0)),
-            // Tall enough for the ruler and no lanes at all.
             Rect::from_corners(Vec2::ZERO, Vec2::new(900.0, RULER_HEIGHT)),
         ] {
             let view = TimelineView { rect, ..TimelineView::default() };
@@ -1133,9 +935,7 @@ mod tests {
         }
     }
 
-    /// With no UI camera to hang on, the strip builds nothing rather than
-    /// half of something. The warning is the useful part: a blank strip with
-    /// no explanation is what this whole area cost an afternoon to.
+    /// Without a UI camera nothing is built, and the warning explains the blank strip.
     #[test]
     fn without_a_camera_the_strip_is_not_built() {
         let mut world = World::new();
@@ -1151,12 +951,8 @@ mod tests {
         assert!(pools.keys.is_empty());
     }
 
-    /// Keys land where the arithmetic says, in the strip's own coordinates.
-    ///
-    /// The closest thing to looking at it that a test can do, and it catches
-    /// the whole class of off-by-a-column mistakes — the root being placed at
-    /// the window's origin rather than the viewport's, a key measured from the
-    /// wrong edge, the names column counted twice.
+    /// Catches off-by-a-column mistakes: root placed at the window origin, a key measured from the wrong
+    /// edge, the names column counted twice.
     #[test]
     fn a_key_is_drawn_where_its_time_says() {
         let view = view();
@@ -1175,9 +971,7 @@ mod tests {
 
         assert_eq!(shown.len(), 3, "expected three keys on the strip: {shown:?}");
         for (at, left) in [0.0_f32, 0.5, 1.0].into_iter().zip(&shown) {
-            // Relative to the strip, because the camera's viewport starts
-            // there — and drawn from its own left edge, so the mark is centred
-            // on the time rather than starting at it.
+            // Relative to the strip, and centred on the time.
             let wanted = view.x_of(at) - view.rect.min.x - KEY_SIZE / 2.0;
             assert!(
                 (left - wanted).abs() < 1e-3,
@@ -1186,10 +980,7 @@ mod tests {
         }
     }
 
-    /// A clip with nothing in it draws nothing, rather than one stale row left
-    /// over from the last one — which is what a pool that is reused rather
-    /// than rebuilt has to get right, and the failure newseum's despawn-based
-    /// version cannot have.
+    /// A reused pool must not leave a stale row behind when switching to an empty clip.
     #[test]
     fn switching_to_an_empty_clip_leaves_nothing_behind() {
         let view = view();
@@ -1217,10 +1008,7 @@ mod tests {
         assert_eq!(drawn, 0, "{drawn} nodes were left over from the old clip");
     }
 
-    /// The pool grows and never shrinks, and nothing is despawned while the
-    /// strip is up. This is the whole design — the version that despawns
-    /// cannot be zoomed without allocating — so it is worth a test that would
-    /// fail if somebody "tidied" it into a rebuild.
+    /// Fails if the pool is turned into a rebuild, which could not zoom without allocating.
     #[test]
     fn the_pool_grows_and_never_despawns() {
         let view = view();
@@ -1237,7 +1025,6 @@ mod tests {
         let before: Vec<Entity> = world.resource::<TimelinePools>().keys.clone();
         assert!(!before.is_empty(), "no keys were pooled at all");
 
-        // Zoom hard, twice, and change what is shown.
         world.resource_mut::<TimelineView>().zoom_about(500.0, 6.0);
         world.run_system_once(lay_out_the_timeline).unwrap();
         world.resource_mut::<ShownClip>().0 = None;
@@ -1310,9 +1097,6 @@ mod tests {
         }
     }
 
-    /// Zooming about the pointer has to keep the time under it *under it*.
-    /// Anything else is a strip that slides away from what you were looking
-    /// at, which makes zooming in on a key impossible.
     #[test]
     fn zooming_keeps_the_time_under_the_pointer() {
         for x in [200.0_f32, 640.0, 999.0] {
@@ -1329,9 +1113,7 @@ mod tests {
         }
     }
 
-    /// Zoom is clamped at both ends. Unclamped, a few notches reach a scale
-    /// where a whole clip is one pixel wide or a single frame fills the
-    /// window, and neither can be zoomed back out of by eye.
+    /// Unclamped, a few notches reach a scale that cannot be zoomed back from by eye.
     #[test]
     fn zoom_stops_at_both_ends() {
         let mut view = view();
@@ -1345,9 +1127,7 @@ mod tests {
         assert!(view.pixels_per_second >= 8.0);
     }
 
-    /// `x_of` and `time_at` are each other's inverse. They are used in
-    /// opposite directions a few lines apart — placing a key and picking one
-    /// — and a mismatch is a key that does not sit where you dropped it.
+    /// A mismatch is a key that does not sit where it was dropped.
     #[test]
     fn a_time_and_its_pixel_are_the_same_fact() {
         let view = view();
@@ -1356,8 +1136,7 @@ mod tests {
         }
     }
 
-    /// The names column is not part of the lanes: a drag starting on a track
-    /// name is not a scrub to somewhere before the clip begins.
+    /// A drag starting on a track name is not a scrub.
     #[test]
     fn the_names_column_is_not_the_lanes() {
         let view = view();
@@ -1366,9 +1145,6 @@ mod tests {
         assert!(!view.over_lanes(Vec2::new(view.lanes_left() + 4.0, 100.0)));
     }
 
-    /// Framing puts the whole clip on the strip with a little air, whatever
-    /// its length — which is what the button and the first sight of a clip
-    /// both want.
     #[test]
     fn framing_fits_the_whole_clip() {
         for length in [0.05_f32, 0.45, 12.0] {
@@ -1382,8 +1158,6 @@ mod tests {
         }
     }
 
-    /// Gridline spacing walks a 1-2-5 ladder so a label is always a round
-    /// number, and is never so tight that the labels overlap.
     #[test]
     fn the_ruler_stays_readable_at_every_zoom() {
         let mut scale = 8.0_f32;
@@ -1404,8 +1178,6 @@ mod tests {
         }
     }
 
-    /// A ruler that printed `-0.0`, or `0.250` where it means a quarter of a
-    /// second at whole-second spacing, reads as broken.
     #[test]
     fn a_ruler_label_says_what_the_spacing_can_show() {
         assert_eq!(format_time(0.0, 1.0), "0");

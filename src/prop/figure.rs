@@ -1,23 +1,14 @@
 //! The body standing behind the prop, for scale.
 //!
-//! Off by default: it is a ruler, not part of the prop. The question a
-//! modeller is asking is never "how long is this" but "does this look right in
-//! somebody's hands".
+//! Off by default. It holds the prop through [`crate::prop::hold`], the same
+//! code the game uses.
 //!
-//! **It holds the prop by the same code the game does.** It used to have an
-//! authored pose of its own and the runtime read its grip orientation back out
-//! of that, so the editor showed a hold the game did not perform. Both now go
-//! through [`crate::prop::hold`], which is what makes authoring one mean
-//! anything.
+//! The prop stays at its own origin, where its feature gizmos are drawn; the
+//! body is placed by inverting where the hold says the weapon would be, so its
+//! feet end up well below the grid.
 //!
-//! **The prop does not move; the figure does.** A prop is authored around its
-//! own origin and its feature gizmos are drawn there, so the body is placed by
-//! inverting where the hold says the weapon would be. Its feet end up well
-//! below the grid, which is correct: the grid is a ruler around the prop, not
-//! a floor.
-//!
-//! A rig with a [`Pose`] and deliberately **no `SkeletonAnimator`** — the pose
-//! is written here and nothing else may touch it, the rule a corpse follows.
+//! A rig with a [`Pose`] and no `SkeletonAnimator`: the pose is written here
+//! and nothing else may touch it.
 
 use bevy::prelude::*;
 
@@ -30,33 +21,20 @@ use crate::prop::document::PropEditor;
 use crate::common::skeleton::play::{apply_stack, ClipStack, Frames};
 use crate::prop::hold::{carry_frame, grip_with, weapon_transform};
 
-/// Which class is standing there, if any.
-///
-/// A resource rather than a field on the document: it is a fact about how
-/// somebody is *looking* at a prop, not about the prop.
+/// Which class is standing there, if any. View state, not part of the document.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ScaleFigure(pub Option<Class>);
 
 #[derive(Component)]
 pub struct ScaleFigureMarker;
 
-/// Whether each hand made it onto the weapon, trigger hand first.
-///
-/// Written where the arms are solved and read where the handles are drawn, so
-/// a grip nobody can reach says so on screen. Without it an unreachable grip
-/// is a figure standing slightly beside its weapon for a reason you have to
-/// guess at — and the class dropdown is right there, so it is a reason you
-/// would have to guess at eleven times.
+/// Whether each hand made it onto the weapon, trigger hand first. Read where
+/// the handles are drawn, so an unreachable grip shows on screen.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct FigureReach(pub [Reach; 2]);
 
-/// What the reference figure is performing, if anything.
-///
-/// A resource rather than a component on the figure because the figure is
-/// respawned whenever the class on show changes, and a performance that went
-/// away with it would stop every time somebody compared two builds. Absent
-/// entirely — the animation editor is not open — means the figure stands in
-/// its hold, which is what the modelling surface wants.
+/// What the reference figure is performing. A resource because the figure is
+/// respawned when the class changes. Absent outside the animation editor.
 #[derive(Resource, Default)]
 pub struct FigurePerformance(pub ClipStack);
 
@@ -68,18 +46,12 @@ pub struct FigureCorrections(
     pub Option<(crate::common::skeleton::state::AnimationState, crate::common::skeleton::state::PoseInputs)>,
 );
 
-/// Where the prop is being held, once a performance has moved it.
+/// Where the prop is being held, once a performance has moved it. Identity
+/// when nothing is performing.
 ///
-/// **In the animation editor the weapon moves and the body stands still**,
-/// which is the opposite of the modelling surface and deliberately so. There,
-/// a prop is pinned to its own origin because that is where its feature gizmos
-/// are drawn and a carry is authored by dragging the body around it. Here
-/// nothing is being dragged, and a clip that lowers a weapon would tilt the
-/// *body* through the same inversion — so you would watch a figure lie down
-/// rather than watch a launcher come up, which is the one thing the mode
-/// exists to show.
-///
-/// Identity when nothing is performing, so the modelling surface is unchanged.
+/// In the animation editor the weapon moves and the body stands still: through
+/// the modelling surface's inversion, a clip that lowers the weapon would tip
+/// the body over instead.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct FigureWeapon(pub Transform);
 
@@ -89,19 +61,10 @@ impl Default for FigureWeapon {
     }
 }
 
-/// How the animation editor stages the figure: whether it holds the prop, and
-/// what stays still while a clip plays.
-///
-/// **Animation-editor only.** The modelling surface always stands the figure
-/// holding the prop at the prop's own origin — its feature gizmos are drawn
-/// there and a carry is authored by dragging the body around it — so outside
-/// that mode this is read as its default whatever it holds. Kept across
-/// visits rather than reset, because it is a way of looking that somebody
-/// chose.
+/// How the animation editor stages the figure. Outside that mode it reads as
+/// its default (see [`stage_in_force`]).
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FigureStage {
-    /// Off to see a body's own poses with nothing in its hands — what the
-    /// game draws for a body holding no weapon.
     pub holding: bool,
     pub anchor: Anchor,
 }
@@ -112,17 +75,14 @@ impl Default for FigureStage {
     }
 }
 
-/// What stays put while the figure performs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Anchor {
-    /// The weapon's grip sits at the origin and the body hangs off it, as on
-    /// the modelling surface. Right for a weapon clip, read against the hold;
-    /// wrong for a body clip, whose bob then shows up as feet bobbing.
+    /// The grip sits at the origin, as on the modelling surface. A body clip's
+    /// bob then shows up as the feet bobbing.
     #[default]
     Weapon,
-    /// The feet stand at the origin, on the grid, and the weapon goes where
-    /// the game would put it — off the *animated* chest. What a body clip
-    /// looks like in a match.
+    /// The feet stand at the origin and the weapon is placed off the animated
+    /// chest, as in a match.
     Floor,
 }
 
@@ -137,8 +97,6 @@ impl Anchor {
     }
 }
 
-/// The staging in force: the chosen one in the animation editor, the default
-/// everywhere else.
 pub fn stage_in_force(
     stage: Option<&FigureStage>,
     mode: Option<&State<crate::common::app_mode::AppMode>>,
@@ -150,22 +108,19 @@ pub fn stage_in_force(
     }
 }
 
-/// Grey-green and unmistakably not the prop. A team colour would be a lie —
-/// the figure has no side.
+/// Not a team colour: the figure has no side.
 const FIGURE_TINT: Color = Color::srgb(0.34, 0.40, 0.36);
 
-/// Put the chosen figure up and take the old one down.
-///
-/// Keyed on the choice having changed: re-inserting a `Skeleton` reads as a
-/// changed one and throws the body's meshes away — the same trap a feature
-/// standing up a body falls into.
+/// Keyed on the choice or the builds changing: re-inserting a `Skeleton`
+/// reads as changed and rebuilds the body's meshes.
 pub fn refresh_the_figure(
     mut commands: Commands,
     choice: Res<ScaleFigure>,
+    builds: Res<crate::common::class::ClassBuilds>,
     existing: Query<Entity, With<ScaleFigureMarker>>,
     mut last: Local<Option<ScaleFigure>>,
 ) {
-    if *last == Some(*choice) && !existing.is_empty() {
+    if *last == Some(*choice) && !existing.is_empty() && !builds.is_changed() {
         return;
     }
     *last = Some(*choice);
@@ -179,32 +134,19 @@ pub fn refresh_the_figure(
     commands.spawn((
         ScaleFigureMarker,
         crate::prop::view::PropScene,
-        // Both written by `pose_the_figure` on the next pass, from the hold the
-        // document is carrying.
+        // Both written by `pose_the_figure`.
         Transform::IDENTITY,
         Pose::rest(),
         Visibility::Inherited,
         BodyTint(FIGURE_TINT),
         Name::new("Scale figure"),
         FigureReach([Reach::Impossible; 2]),
-        humanoid(class.proportions()),
+        humanoid(builds.of(class)),
     ));
 }
 
-/// Stand the figure so it is holding the prop, by **the same code the game
-/// uses**.
-///
-/// This is the whole point of the figure now. It used to have an authored pose
-/// of its own — a handful of `aim` calls and a torso twist — and the runtime
-/// read its grip orientation back out of that, so the editor was showing a
-/// hold the game did not perform. Now both go through
-/// [`grip_with`](crate::prop::hold::grip_with) and what you drag is what
-/// ships.
-///
-/// **The prop does not move; the figure does.** A prop is authored around its
-/// own origin and its feature gizmos are drawn there, so the body is placed by
-/// inverting where the hold says the weapon would be — which is also what
-/// makes dragging the figure the natural way to author a carry.
+/// Stand the figure holding the prop, through the same
+/// [`grip_with`](crate::prop::hold::grip_with) the game uses.
 pub fn pose_the_figure(
     editor: Res<PropEditor>,
     choice: Res<ScaleFigure>,
@@ -220,13 +162,10 @@ pub fn pose_the_figure(
         With<ScaleFigureMarker>,
     >,
 ) {
-    // As the class on show performs it, so an override is authored against the
-    // body that will actually hold the thing.
     let hold = editor.doc().hold.for_class(choice.0);
     let stage = stage_in_force(stage.as_deref(), mode.as_deref());
     for (skeleton, mut pose, mut transform, mut reach, mut visibility) in &mut figures {
-        // Out of the way while the perspective view is standing in for an eye,
-        // because that eye is inside this body's head.
+        // Hidden during the viewmodel preview: the eye is inside this head.
         let wanted = match preview.0 {
             true => Visibility::Hidden,
             false => Visibility::Inherited,
@@ -237,29 +176,20 @@ pub fn pose_the_figure(
 
         let mut standing = Pose::rest();
 
-        // Where the weapon would be if the body stood at the origin; the
-        // figure goes wherever puts that at the prop's own origin instead.
         let Some(local) =
             weapon_transform(skeleton, &standing, &Transform::IDENTITY, &hold, Quat::IDENTITY)
         else {
             continue;
         };
-        // **The body is placed from the hold alone**, before any clip runs.
-        // That is what keeps it standing still while a performance moves the
-        // weapon: place it from the *animated* weapon instead and the same
-        // inversion tips the body over, so a deploy reads as a figure lying
-        // down rather than as a launcher coming up.
+        // Placed from the hold before any clip runs; placed from the animated
+        // weapon, the inversion tips the body over.
         let rotation = local.rotation.inverse();
         let root = match stage.anchor {
             Anchor::Weapon => Transform::from_translation(rotation * -local.translation)
                 .with_rotation(rotation),
-            // Feet at the origin, facing the way a body faces.
             Anchor::Floor => Transform::IDENTITY,
         };
 
-        // With no performance the weapon sits at the prop's own origin, which
-        // is where its geometry is — the modelling surface, unchanged. On the
-        // floor it is wherever the hold puts it on a body standing there.
         let mut placed = match stage.anchor {
             Anchor::Weapon => Transform::IDENTITY,
             Anchor::Floor => local,
@@ -271,14 +201,10 @@ pub fn pose_the_figure(
                 body: root,
                 carry: carry_frame(skeleton, &standing, &root, Quat::IDENTITY)
                     .unwrap_or(root),
-                // Nothing in the hands is nothing to measure from, and a
-                // weapon track with nothing to move moves nothing.
                 weapon: stage.holding.then_some(placed),
                 eye: None,
                 ground: &ground,
-                // Where the feet are in a gait at the preview's inputs, so a
-                // foot-timed track is seen at the speed it is being previewed
-                // at — the same answer `ik::animation_pose` gives in a match.
+                // Same answer `ik::animation_pose` gives in a match.
                 footfalls: corrections.as_deref().and_then(|c| c.0).and_then(|(state, inputs)| {
                     state
                         .stance(&inputs)
@@ -288,9 +214,8 @@ pub fn pose_the_figure(
             let weapon = stage.holding.then_some(&mut placed);
             apply_stack(&performance.0, clips, skeleton, &mut standing, &frames, weapon);
         }
-        // Then what the game does to a body clip before anything else sees
-        // it: duck, plant the feet. In that order and at this point, because
-        // the weapon is placed from the pose these leave.
+        // The game's body-clip corrections, before the weapon is placed from
+        // the pose they leave.
         if let Some((state, inputs)) = corrections.as_deref().and_then(|c| c.0) {
             crate::common::skeleton::ik::correct_for_state(
                 skeleton,
@@ -301,12 +226,8 @@ pub fn pose_the_figure(
             );
         }
 
-        // **On the floor the weapon follows the animated chest**, the order
-        // the game runs in: the body animates, the weapon is placed from the
-        // pose it left, then a weapon clip moves it. Whatever the clip did to
-        // the weapon is carried across as a change from where it started, so
-        // a body clip's bob lifts the weapon and a weapon clip's recoil still
-        // lands.
+        // On the floor the weapon follows the animated chest, as in the game,
+        // with the weapon clip's change from rest carried on top.
         if stage.anchor == Anchor::Floor && stage.holding {
             if let Some(animated) =
                 weapon_transform(skeleton, &standing, &root, &hold, Quat::IDENTITY)
@@ -322,10 +243,7 @@ pub fn pose_the_figure(
             }
         }
 
-        // Onto wherever the clip left it, which is the same order the game
-        // runs in: place the weapon, then put the hands on it. Empty hands are
-        // left where the pose put them, which is what a body holding nothing
-        // looks like in a match.
+        // Hands go on after the weapon is placed, as in the game.
         if stage.holding {
             reach.0 = grip_with(skeleton, &mut standing, &root, &hold, &placed);
         }
@@ -335,7 +253,6 @@ pub fn pose_the_figure(
     }
 }
 
-/// Take the figure down on the way out, so it is not left standing in a map.
 pub fn clear_the_figure(
     mut commands: Commands,
     existing: Query<Entity, With<ScaleFigureMarker>>,
@@ -344,7 +261,6 @@ pub fn clear_the_figure(
     for entity in &existing {
         commands.entity(entity).despawn();
     }
-    // Forgotten, so re-entering rebuilds rather than deciding nothing changed.
     *last = None;
 }
 
@@ -371,15 +287,13 @@ mod tests {
                 Pose::rest(),
                 Visibility::Inherited,
                 FigureReach([Reach::Impossible; 2]),
-                humanoid(Class::Mercenary.proportions()),
+                humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Mercenary)),
             ))
             .id();
         world.run_system_once(pose_the_figure).unwrap();
         (world, figure)
     }
 
-    /// On the floor the feet are at the origin and the weapon is wherever the
-    /// hold puts it — at chest height, not at the origin.
     #[test]
     fn a_floor_anchored_figure_stands_on_the_origin() {
         use crate::common::app_mode::AppMode;
@@ -392,8 +306,6 @@ mod tests {
         assert!(weapon.translation.y > 0.9, "the weapon is at {}", weapon.translation);
     }
 
-    /// Holding nothing leaves the hands to the pose — they are not solved onto
-    /// a grip that is not there.
     #[test]
     fn empty_hands_are_not_put_on_a_grip() {
         use crate::common::app_mode::AppMode;
@@ -404,7 +316,6 @@ mod tests {
         assert!(hand_to_grip(&world, figure) > 0.05, "an empty hand went to the grip");
     }
 
-    /// How far the trigger hand is from the grip, with the weapon at the origin.
     fn hand_to_grip(world: &World, figure: Entity) -> f32 {
         let skeleton = world.get::<Skeleton>(figure).unwrap();
         let pose = world.get::<Pose>(figure).unwrap();
@@ -414,7 +325,6 @@ mod tests {
         (hand - HoldSpec::default().grip()).length()
     }
 
-    /// The modelling surface ignores the animation editor's staging.
     #[test]
     fn the_prop_editor_always_stands_holding_at_the_origin() {
         use crate::common::app_mode::AppMode;
@@ -426,10 +336,8 @@ mod tests {
         assert!(hand_to_grip(&world, figure) < 0.02, "the hands were not solved");
     }
 
-    /// **A body clip is previewed with the game's corrections.** The idle's
-    /// settle lowers the hips; in a match the knees take it and the feet stay
-    /// on the floor. Previewed without them the whole body sank and rose, feet
-    /// and all — which read as the feet floating.
+    /// Fails if a body clip is previewed without the game's corrections: the
+    /// idle's settle then lifts the feet off the floor.
     #[test]
     fn a_previewed_idle_keeps_its_feet_on_the_floor() {
         use crate::common::app_mode::AppMode;
@@ -468,7 +376,7 @@ mod tests {
             skeleton.posed_bones(pose, root)[index].head.y
         };
 
-        let skeleton = humanoid(Class::Mercenary.proportions());
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Mercenary));
         let index = skeleton.index_of(bone::FOOT_L).unwrap();
         let resting = skeleton.posed_bones(&Pose::rest(), &Transform::IDENTITY)[index].head.y;
 
@@ -483,13 +391,8 @@ mod tests {
         );
     }
 
-    /// The figure stands holding the prop at the prop's own origin, on every
-    /// build — which is the whole contract, since a prop's geometry is
-    /// authored there and the figure is what moves.
-    ///
-    /// Measured through the same two calls `pose_the_figure` makes, so a
-    /// change to either shows up here rather than as a body standing beside
-    /// its weapon.
+    /// Fails if any class's hand misses the grip at the prop's origin, through
+    /// the two calls `pose_the_figure` makes.
     #[test]
     fn every_class_stands_holding_the_prop_where_it_is() {
         let hold = HoldSpec::default();
@@ -498,7 +401,7 @@ mod tests {
             Class::Heavy, Class::Engineer, Class::Medic, Class::Sniper,
             Class::Spy, Class::Civilian, Class::Mercenary,
         ] {
-            let skeleton = humanoid(class.proportions());
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let mut pose = Pose::rest();
 
             let local = weapon_transform(
@@ -519,8 +422,6 @@ mod tests {
                 hold.grip(),
             );
 
-            // And below the weapon, because a prop sits at chest height on a
-            // body whose feet are on the floor.
             assert!(
                 root.translation.y < -0.9,
                 "{class:?} stands {} below its own hand",

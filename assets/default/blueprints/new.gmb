@@ -16,7 +16,7 @@ Blueprint(
                     location: PointRef(
                         reference: None,
                         point_key: "",
-                        x: Absolute(-15.761424),
+                        x: Absolute(-15.815),
                         y: Absolute(0.0),
                         z: Absolute(-6.4506116),
                     ),
@@ -33,7 +33,7 @@ Blueprint(
                     location: PointRef(
                         reference: None,
                         point_key: "",
-                        x: Absolute(15.761424),
+                        x: Absolute(15.815),
                         y: Absolute(6.0),
                         z: Absolute(6.4506116),
                     ),
@@ -93,7 +93,7 @@ Blueprint(
                     ),
                     intensity: 250000.0,
                     radius: 3.1,
-                    range: 34.585133,
+                    range: 34.682823,
                 ),
             },
             parents: [

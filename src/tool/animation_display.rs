@@ -1,12 +1,5 @@
-//! Places [`AnimationDisplay`] features.
-//!
-//! The point tool with a different feature at the end of it, the same way the
-//! spawn point and prop tools are: placing a display *is* placing a point, so
-//! relative placement and shift-picking work here without a mapper learning
-//! anything new. Which state it holds is chosen afterwards, in the feature
-//! panel, and which way it faces from the rotation rings in
-//! [`crate::tool::rotate_drag`]. The shared half lives in
-//! [`crate::tool::point_placement`].
+//! Places [`AnimationDisplay`] features. The point tool with a different
+//! feature at the end; the shared half is [`crate::tool::point_placement`].
 
 use bevy::prelude::*;
 
@@ -43,9 +36,6 @@ impl PlaceablePoint for AnimationDisplay {
         Color::srgb_u8(220, 190, 255)
     }
 
-    /// The body that would land here, at the size it would land at. A display
-    /// is placed to be looked at from somewhere, so its footprint and its
-    /// height matter before it is committed rather than after.
     fn draw_preview(gizmos: &mut Gizmos, cursor: Vec3, color: Color) {
         draw_skeleton(
             gizmos,

@@ -1,28 +1,13 @@
 //! Skeletons built in code, not imported.
 //!
-//! Nothing here loads a file. A rig is a list of bones with rest positions
-//! derived from a handful of [`Proportions`] numbers, and a [`Pose`] is a set
-//! of joint rotations *relative to that rest pose*. The split is the point:
+//! A rig is bones with rest positions derived from [`Proportions`]; a [`Pose`]
+//! is joint rotations relative to rest. Motion is stored as rotations only, so
+//! one animation or IK result is valid on every build; a stored position would
+//! put one class's hand through another's knee.
 //!
-//! - **Proportions live in the skeleton.** Bone lengths, widths and the width
-//!   of the shoulders are all read from one struct, so a heavy and a scout are
-//!   the same call with different numbers rather than two authored models.
-//! - **Motion lives in the pose, as rotations only.** A rotation says "the
-//!   elbow is bent this far", which is true whatever the forearm's length is.
-//!   Store a *position* instead and the same animation puts one class's hand
-//!   at its hip and another's through its own knee.
+//! A pose names only the joints it moves, so layering is composition.
 //!
-//! So an animation authored once applies to every silhouette, which is what
-//! TF2-style classes need, and it is also what makes procedural motion and IK
-//! tractable: a solver only ever writes joint rotations, and the same solver
-//! output is valid for every body it is run on.
-//!
-//! A pose names the joints it moves and says nothing about the rest, so
-//! layering (a walk cycle underneath, a look-at on the neck, an IK pass on one
-//! leg) is composition rather than a merge of two full skeletons.
-//!
-//! Everything in here is plain maths over `bevy_math` types: no assets, no
-//! file system, no threads. It builds for wasm as-is.
+//! Plain maths over `bevy_math`: builds for wasm as-is.
 
 use std::sync::OnceLock;
 
@@ -32,11 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::class::TALLEST_CLASS_HEIGHT;
 
-/// The bone names a humanoid rig publishes.
-///
-/// Constants rather than string literals at each call site, because a
-/// misspelled name in a [`Pose`] is silently a joint that never moves — there
-/// is nothing to fail, the bone just stays at rest.
+/// The bone names a humanoid rig publishes. A misspelled name in a [`Pose`]
+/// silently never moves.
 pub mod bone {
     pub const PELVIS: &str = "pelvis";
     pub const CHEST: &str = "chest";
@@ -61,9 +43,6 @@ pub mod bone {
 }
 
 /// Which side of the body a bone is on, read off its name.
-///
-/// Only used to colour the gizmos so far, but a mirror for animation — play a
-/// one-sided clip on the other arm — wants the same question answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
     Left,
@@ -83,20 +62,11 @@ impl Side {
     }
 }
 
-/// The numbers a body's shape is built from, all as fractions of its height.
-///
-/// Fractions rather than metres so that changing `height` alone gives a
-/// proportional body, and changing one fraction changes exactly one thing:
-/// a class with stubby legs is `hip_height` down and `torso_length` up, not a
-/// re-authored skeleton.
-///
-/// The rig is derived from these, so anything not listed — where the knee
-/// sits, how long the neck is — is computed rather than stored, and cannot
-/// contradict them.
+/// The numbers a body's shape is built from, as fractions of `height` so that
+/// changing `height` alone scales the body.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Proportions {
-    /// Ground to the crown of the head, in metres. Everything else is a
-    /// fraction of this.
+    /// Ground to crown, in metres.
     pub height: f32,
     /// Ground to the hip joint.
     pub hip_height: f32,
@@ -104,37 +74,24 @@ pub struct Proportions {
     pub torso_length: f32,
     /// Shoulder joint to wrist. Split between upper arm, forearm and hand.
     pub arm_length: f32,
-    /// The head bone itself — jaw to crown.
+    /// Jaw to crown.
     pub head_length: f32,
-    /// Half the distance between the two shoulder joints, on a build narrow
-    /// enough for it.
-    ///
-    /// A floor rather than the last word: a chest widens with `girth` and
-    /// `belly` and this does not, so on a wide build the shoulders are pushed
-    /// out to the side of the ribcage instead. See [`humanoid`].
+    /// Half the distance between the shoulder joints. A floor: a wide chest
+    /// pushes them further out; see [`humanoid`].
     pub shoulder_half_width: f32,
     /// Half the distance between the two hip joints.
     pub hip_half_width: f32,
-    /// Multiplier on every limb and torso cross-section. Girth is most of the
-    /// difference between two silhouettes that stand the same height.
+    /// Multiplier on every limb and torso cross-section.
     pub girth: f32,
-    /// Extra width and depth around the middle, on top of `girth`.
-    ///
-    /// Its own number because girth alone cannot tell fat from burly: scaling
-    /// a body uniformly gives a bigger body, where what makes somebody rotund
-    /// is that the belly is the widest part of them. This applies in full at
-    /// the hips and a quarter at the chest, so the shape tapers upwards
-    /// instead of being a barrel with a head on it.
+    /// Extra width and depth around the middle, on top of `girth`: in full at
+    /// the hips and a quarter at the chest, so girth alone need not tell fat
+    /// from burly.
     pub belly: f32,
 }
 
 impl Proportions {
-    /// The body the game currently moves: [`TALLEST_CLASS_HEIGHT`] tall, and
-    /// average in every other respect.
-    ///
-    /// Height comes from the class metrics rather than a number typed here, so
-    /// the drawn body and the box that collides stay the same size. See
-    /// [`crate::common::class`] for why that has one home.
+    /// Height comes from the class metrics so the drawn body and the collision
+    /// box agree; see [`crate::common::class`].
     pub const DEFAULT: Proportions = Proportions {
         height: TALLEST_CLASS_HEIGHT,
         hip_height: 0.53,
@@ -147,8 +104,7 @@ impl Proportions {
         belly: 1.0,
     };
 
-    /// Short legs, long arms, twice the girth — the silhouette test. Not a
-    /// class; classes do not exist yet.
+    /// Short legs, long arms, heavy girth. A test build, not a class.
     pub const STOCKY: Proportions = Proportions {
         height: TALLEST_CLASS_HEIGHT,
         hip_height: 0.46,
@@ -161,7 +117,7 @@ impl Proportions {
         belly: 1.0,
     };
 
-    /// The other end of it: small, long-legged, thin.
+    /// Small, long-legged, thin. A test build, not a class.
     pub const LANKY: Proportions = Proportions {
         height: TALLEST_CLASS_HEIGHT * 0.85,
         hip_height: 0.57,
@@ -174,10 +130,15 @@ impl Proportions {
         belly: 1.0,
     };
 
-    /// The hip joint's height in metres — the length a pose's root offset is
-    /// measured in. See [`Pose::root_offset`].
+    /// The hip joint's height in metres: the unit of [`Pose::root_offset`].
     pub fn hip_metres(&self) -> f32 {
         self.height * self.hip_height
+    }
+
+    /// `arm_length` in metres: the unit of `HoldSpec::carry` and
+    /// `Unit::ArmLengths`.
+    pub fn arm_metres(&self) -> f32 {
+        self.height * self.arm_length
     }
 }
 
@@ -187,25 +148,21 @@ impl Default for Proportions {
     }
 }
 
-/// One bone, stored relative to its parent.
-///
-/// **Local `+Y` runs down the bone**, from `head` to tail, which is why a
-/// rotation applied to a bone is about a joint and not about some arbitrary
-/// origin. The tail is at local `(0, length, 0)` and is where children attach
-/// unless they say otherwise.
+/// One bone, stored relative to its parent. Local `+Y` runs from `head` to
+/// tail, which is at local `(0, length, 0)`.
 #[derive(Clone, Debug)]
 pub struct Bone {
     pub name: &'static str,
-    /// Index into [`Skeleton::bones`]. Always less than this bone's own index:
-    /// the list is in dependency order so forward kinematics is one pass.
+    /// Index into [`Skeleton::bones`], always less than this bone's own, so
+    /// forward kinematics is one pass.
     pub parent: Option<usize>,
-    /// Where this bone's head sits in the parent's frame.
+    /// In the parent's frame.
     pub head: Vec3,
-    /// Rest orientation in the parent's frame. A pose's rotation for this bone
-    /// is applied *after* this, so an empty pose is the rest pose.
+    /// Rest orientation in the parent's frame. A pose's rotation is applied
+    /// after this, so an empty pose is rest.
     pub rest: Quat,
     pub length: f32,
-    /// Full width of the drawn prism on the bone's local X and Z.
+    /// Full width on the bone's local X and Z.
     pub thickness: Vec2,
 }
 
@@ -217,34 +174,24 @@ pub struct Skeleton {
 }
 
 impl Skeleton {
-    /// The bones, parents first.
+    /// Parents first.
     pub fn bones(&self) -> &[Bone] {
         &self.bones
     }
 
-    /// Where a named bone sits in [`Skeleton::bones`], and so in the list
-    /// [`Skeleton::posed_bones`] returns.
+    /// Also the index into [`Skeleton::posed_bones`].
     pub fn index_of(&self, name: &str) -> Option<usize> {
         self.bones.iter().position(|bone| bone.name == name)
     }
 
-    /// The numbers this rig was built from. Anything that needs a body's
-    /// height — how tall a display stands, where its head is — asks the rig
-    /// rather than reaching for a constant of its own.
     pub fn proportions(&self) -> Proportions {
         self.proportions
     }
 
-    /// Forward kinematics: every bone placed in world space.
-    ///
-    /// `root` is where the skeleton's origin sits, and the origin is **the
-    /// feet**, standing on the ground plane — the same end a `SpawnPoint`
-    /// marks, so a body can be put on a spawn without converting anything.
-    ///
-    /// One pass, because bones are stored parents-first. A caller after one
-    /// or two bones wants [`Skeleton::posed_bone`], and one after a single
-    /// fact about all of them wants [`Skeleton::each_posed_bone`]; this is
-    /// for keeping the list.
+    /// Forward kinematics into world space. `root` places the feet, the same
+    /// end a `SpawnPoint` marks. For one or two bones use
+    /// [`Skeleton::posed_bone`]; to visit them without a list,
+    /// [`Skeleton::each_posed_bone`].
     pub fn posed_bones(&self, pose: &Pose, root: &Transform) -> Vec<PosedBone> {
         let mut posed = Vec::with_capacity(self.bones.len());
         self.each_posed_bone(pose, root, |bone| posed.push(bone));
@@ -329,17 +276,10 @@ impl Skeleton {
     }
 }
 
-/// How high the ankle sits, as a fraction of height.
-///
-/// Not a [`Proportions`] field because it is the same on every build: an ankle
-/// is at the bottom of a leg wherever that leg starts.
+/// Ankle height as a fraction of height, the same on every build.
 const ANKLE_HEIGHT: f32 = 0.04;
 
-/// The one humanoid rig, built once.
-///
-/// Classes do not exist yet, so every body on the map is the same shape and
-/// rebuilding it per frame per gizmo would be pure waste. When classes arrive
-/// this becomes a lookup rather than a constant.
+/// [`Proportions::DEFAULT`]'s rig, built once.
 pub fn default_humanoid() -> &'static Skeleton {
     static RIG: OnceLock<Skeleton> = OnceLock::new();
     RIG.get_or_init(|| humanoid(Proportions::DEFAULT))
@@ -395,16 +335,13 @@ pub struct PosedBone {
     pub name: &'static str,
     pub head: Vec3,
     pub tail: Vec3,
-    /// The bone's orientation, with `+Y` running head to tail. Kept as well as
-    /// the two endpoints because the roll about the bone is real information —
-    /// a forearm can twist without either end moving.
+    /// `+Y` head to tail. Carries the roll the endpoints cannot.
     pub rotation: Quat,
     pub length: f32,
     pub thickness: Vec2,
 }
 
 impl PosedBone {
-    /// Where the middle of the drawn prism goes, and how it is turned.
     pub fn prism(&self) -> Transform {
         Transform {
             translation: self.head + self.rotation * (Vec3::Y * self.length * 0.5),
@@ -414,35 +351,22 @@ impl PosedBone {
     }
 }
 
-/// What the joints are doing, as rotations away from rest.
-///
-/// Sparse on purpose: a pose names only the joints it has an opinion about.
-/// That is what lets a walk cycle, a look-at and an IK pass be three separate
-/// things applied to the same body rather than one monolithic pose that has to
-/// state a value for every bone. It is also why a pose carries no lengths and
-/// no positions, and so is valid on any skeleton that has the bones it names —
-/// retargeting between two builds is not a conversion step, it is just
-/// applying the same pose to the other rig.
+/// Joint rotations away from rest. Sparse: a pose names only the joints it
+/// moves, and is valid on any skeleton with those bones.
 #[derive(Component, Clone, Debug, Default)]
 pub struct Pose {
-    /// Where the whole body sits relative to its normal standing position,
-    /// **in hip-heights** rather than metres.
-    ///
-    /// The one thing a pose says that is not a rotation, and it has to be
-    /// there: a crouch or a jump-tuck lowers the root. Measured in hip-heights
-    /// so "drop by a third of a leg" means the same thing on every build,
-    /// which is exactly what it would not mean in metres.
+    /// The body's offset from standing, in hip-heights so it means the same on
+    /// every build.
     pub root_offset: Vec3,
     joints: HashMap<&'static str, Quat>,
 }
 
 impl Pose {
-    /// The rest pose — every joint at whatever the skeleton says.
     pub fn rest() -> Pose {
         Pose::default()
     }
 
-    /// The rotation for a bone, or identity if this pose says nothing about it.
+    /// Identity for a bone this pose does not name.
     pub fn joint(&self, name: &str) -> Quat {
         self.joints.get(name).copied().unwrap_or(Quat::IDENTITY)
     }
@@ -451,22 +375,14 @@ impl Pose {
         self.joints.insert(name, rotation);
     }
 
-    /// Back to [`Pose::rest`] without giving up the room the joints were
-    /// stored in, for a caller that rewrites a whole pose every tick.
+    /// Back to [`Pose::rest`], keeping the joints' storage for reuse.
     pub fn reset_to_rest(&mut self) {
         self.root_offset = Vec3::ZERO;
         self.joints.clear();
     }
 
-    /// Part way from one pose to another.
-    ///
-    /// Well defined precisely because a pose is sparse and named: a joint one
-    /// side has an opinion about and the other does not blends towards rest,
-    /// which is the right answer — rest is what that side is saying.
-    ///
-    /// Rotations are taken the short way round. Two poses of the same body are
-    /// never more than a half-turn apart at a joint, and a knee that took the
-    /// long way would bend backwards on the way there.
+    /// A joint only one side names blends towards rest. Slerp takes the short
+    /// way, since a long way round bends a knee backwards in transit.
     pub fn lerp(from: &Pose, to: &Pose, t: f32) -> Pose {
         let t = t.clamp(0.0, 1.0);
         let mut blended = Pose {
@@ -495,69 +411,42 @@ impl Pose {
         self
     }
 
-    /// The bones this pose has an opinion about.
     pub fn posed_joints(&self) -> impl Iterator<Item = (&'static str, Quat)> + '_ {
         self.joints.iter().map(|(name, rotation)| (*name, *rotation))
     }
 }
 
-/// Build a humanoid in an A-pose from a set of proportions.
+/// Build a humanoid in an A-pose (arms 45° down), which is nearer the middle
+/// of a shoulder's range than a T.
 ///
-/// The A-pose — arms out and down at about 45° — rather than a T-pose, because
-/// it is closer to the middle of a shoulder's range: every arm animation is
-/// then a smaller rotation away from rest, and the shoulder deformation a T
-/// bakes in never has to be undone.
-///
-/// The body stands with its feet on `y = 0` at the origin, facing `-Z`, which
-/// is the direction [`crate::game::player`] treats as forward. `+X` is the
-/// character's own right.
+/// Feet on `y = 0` at the origin, facing `-Z` (forward for
+/// [`crate::game::player`]); `+X` is the character's right.
 pub fn humanoid(proportions: Proportions) -> Skeleton {
     let p = proportions;
     let h = p.height;
     let girth = p.girth;
-    // In full at the hips, a quarter of it at the chest: a belly is widest at
-    // the middle and tapers into the ribs, rather than being a straight-sided
-    // barrel.
     let belly = girth * p.belly;
     let chest_belly = girth * (1.0 + (p.belly - 1.0) * 0.25);
 
-    // Every landmark in rest-space metres, so the layout below reads as a
-    // description of a body rather than a chain of offsets.
+    // Landmarks in rest-space metres.
     let hip_y = h * p.hip_height;
     let shoulder_y = hip_y + h * p.torso_length;
     let head_base_y = h - h * p.head_length;
-    // The spine is two bones so the chest can lean without the hips going with
-    // it. The break is low, where a real spine actually bends.
     let spine_mid_y = hip_y + (shoulder_y - hip_y) * 0.45;
 
-    // Hoisted so the number the shoulder clears and the number the chest is
-    // drawn at are the same number.
     let chest_thickness = Vec2::new(0.24, 0.15) * chest_belly * h;
 
-    // The shoulder joint sits on the side of the ribcage, never inside it.
-    //
-    // `shoulder_half_width` says where the shoulder goes on a build slim
-    // enough to put it there, and for most of the roster that is what happens.
-    // On a wide one it cannot be the whole answer: a chest is `girth` and
-    // `belly` across while the shoulders are a fraction of height alone, so a
-    // rotund body ends up with its arms hanging out of the middle of its own
-    // torso — which is not an arm clipping into a chest so much as an arm that
-    // starts inside one. Putting the joint on the edge instead lets the arm
-    // straddle it, half in and half out, which is where a shoulder is.
-    //
-    // The clavicle absorbs it: it runs from the base of the neck out to
-    // wherever this lands, which is exactly the bone's job, so nothing
-    // downstream has to know the shoulders moved.
+    // The chest scales with girth and belly but `shoulder_half_width` does not,
+    // so on a wide build the shoulder is pushed to the edge of the ribcage
+    // rather than starting inside it. The clavicle absorbs the difference.
     let shoulder_x = (h * p.shoulder_half_width).max(chest_thickness.x * 0.5);
     let hip_x = h * p.hip_half_width;
 
-    // Down and out at 45°, both arms.
     let arm_dir = Vec3::new(std::f32::consts::FRAC_1_SQRT_2, -std::f32::consts::FRAC_1_SQRT_2, 0.0);
     let arm = h * p.arm_length;
     let (upper_arm, forearm, hand) = (arm * 0.45, arm * 0.40, arm * 0.28);
 
-    // Legs stand very slightly apart, so the knee has a bend direction that is
-    // not exactly degenerate when an IK solver goes looking for one.
+    // Slightly splayed so IK's knee bend direction is not degenerate.
     let leg_dir = Vec3::new(0.03, -1.0, 0.0).normalize();
     let leg = (hip_y - h * ANKLE_HEIGHT) / -leg_dir.y;
     let (thigh, shin) = (leg * 0.5, leg * 0.5);
@@ -565,25 +454,19 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
 
     let mut builder = Builder::default();
 
-    // Spine, bottom up. The pelvis is the root: it is the bone the whole body
-    // hangs off, and the one a root offset moves.
     builder.bone(bone::PELVIS, None, Vec3::new(0.0, hip_y, 0.0), Vec3::new(0.0, spine_mid_y, 0.0), Vec2::new(0.20, 0.14) * belly * h);
     builder.bone(bone::CHEST, Some(bone::PELVIS), Vec3::new(0.0, spine_mid_y, 0.0), Vec3::new(0.0, shoulder_y, 0.0), chest_thickness);
     builder.bone(bone::NECK, Some(bone::CHEST), Vec3::new(0.0, shoulder_y, 0.0), Vec3::new(0.0, head_base_y, 0.0), Vec2::new(0.07, 0.07) * girth * h);
-    // The head keeps its own size: a heavier build is not a bigger skull, and
-    // a head that grew with girth would read as a different character rather
-    // than the same one heavier.
+    // The head does not scale with girth.
     builder.bone(bone::HEAD, Some(bone::NECK), Vec3::new(0.0, head_base_y, 0.0), Vec3::new(0.0, h, 0.0), Vec2::new(0.13, 0.15) * h);
 
-    // Both limbs, mirrored. `sign` is +1 on the character's right.
+    // `sign` is +1 on the character's right.
     for (sign, names) in [
         (-1.0, LimbNames::LEFT),
         (1.0, LimbNames::RIGHT),
     ] {
         let mirror = Vec3::new(sign, 1.0, 1.0);
 
-        // The clavicle runs from the base of the neck out to the shoulder
-        // joint, so a shrug is a rotation rather than a moved arm.
         let shoulder = Vec3::new(shoulder_x, shoulder_y - h * 0.01, 0.0) * mirror;
         builder.bone(names.clavicle, Some(bone::CHEST), Vec3::new(0.0, shoulder_y, 0.0), shoulder, Vec2::new(0.05, 0.05) * girth * h);
 
@@ -598,9 +481,6 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
         let knee = hip + leg_dir * mirror * thigh;
         let ankle = knee + leg_dir * mirror * shin;
         let toe = ankle + Vec3::new(0.0, 0.0, -foot_length);
-        // Straight off the pelvis rather than through a stub: the hip joint is
-        // an offset from the pelvis, not a bone of its own, and the builder
-        // takes a head position rather than assuming the parent's tail.
         builder.bone(names.thigh, Some(bone::PELVIS), hip, knee, Vec2::new(0.11, 0.11) * girth * h);
         builder.bone(names.shin, Some(names.thigh), knee, ankle, Vec2::new(0.09, 0.09) * girth * h);
         builder.bone(names.foot, Some(names.shin), ankle, toe, Vec2::new(0.09, 0.06) * girth * h);
@@ -609,10 +489,8 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
     Skeleton { bones: builder.bones, proportions }
 }
 
-/// The one place a limb's four bone names are listed per side.
-///
-/// Names are `&'static str`, so they cannot be built by appending `.l` at
-/// runtime; a table beats writing the limb out twice.
+/// A limb's bone names per side. Names are `&'static str`, so they cannot be
+/// built by appending `.l` at runtime.
 struct LimbNames {
     clavicle: &'static str,
     upper_arm: &'static str,
@@ -645,17 +523,11 @@ impl LimbNames {
     };
 }
 
-/// Turns a body described in world-space landmarks into parent-relative bones.
-///
-/// Authoring a rig as "the elbow is here, the wrist is there" is the readable
-/// way to write one down; storing it that way would be the wrong thing
-/// entirely, because a chain of absolute positions does not bend. This does
-/// the conversion once, at build time.
+/// Turns world-space landmarks into parent-relative bones.
 #[derive(Default)]
 struct Builder {
     bones: Vec<Bone>,
-    /// Each bone's rest orientation and head position in world rest space —
-    /// what the next bone needs to express itself relative to its parent.
+    /// Each bone's rest orientation and head position in world rest space.
     rest: Vec<(Quat, Vec3)>,
 }
 
@@ -686,20 +558,16 @@ impl Builder {
     }
 }
 
-/// The orientation that points a bone's local `+Y` down its own length.
-///
-/// Written out rather than using `Quat::from_rotation_arc`, which picks an
-/// arbitrary axis when the bone points straight down — every leg — and so
-/// would roll the left and right legs differently for no reason. Here the
-/// bone's local `+Z` is world forward wherever that is meaningful, so two
-/// mirrored bones come out mirrored.
+/// The orientation that points a bone's local `+Y` down its own length, with
+/// local `+Z` at world forward where meaningful so mirrored bones come out
+/// mirrored. `Quat::from_rotation_arc` picks an arbitrary roll for a bone
+/// pointing straight down, which every leg does.
 fn bone_rotation(along: Vec3) -> Quat {
     let y = along.normalize_or_zero();
     if y == Vec3::ZERO {
         return Quat::IDENTITY;
     }
-    // A bone lying along the reference axis has no forward to speak of; feet
-    // are the case that matters, and up is the right answer for them.
+    // Feet lie along forward, so they take up as reference instead.
     let reference = if y.z.abs() > 0.9 { Vec3::Y } else { Vec3::NEG_Z };
     let z = (reference - y * reference.dot(y)).normalize();
     let x = y.cross(z);
@@ -723,9 +591,7 @@ mod tests {
         posed(&skeleton, &Pose::rest())
     }
 
-    /// The rig has to stand on the floor and be as tall as it says it is: the
-    /// spawn-point clearance check and the drawn body are both measured from
-    /// the feet, and a skeleton that floats or sinks makes them disagree.
+    /// A floating or sunken rig disagrees with the spawn clearance check.
     #[test]
     fn a_rest_pose_stands_on_the_ground_at_its_stated_height() {
         for proportions in [Proportions::DEFAULT, Proportions::STOCKY, Proportions::LANKY] {
@@ -743,17 +609,15 @@ mod tests {
         }
     }
 
-    /// An arm hangs off the side of a body, not out of the middle of it.
-    ///
-    /// Checked across the roster: it is the wide classes the rule exists for
-    /// and the slim ones it must not disturb.
+    /// Wide classes must not start their arms inside the chest, and slim ones
+    /// must keep their stated shoulders.
     #[test]
     fn no_build_starts_its_arms_inside_its_own_chest() {
         use crate::common::class::Class;
         use strum::IntoEnumIterator;
 
         for class in Class::iter() {
-            let proportions = class.proportions();
+            let proportions = crate::common::class::ClassBuilds::shipped().of(class);
             let skeleton = humanoid(proportions);
             let bones = posed(&skeleton, &Pose::rest());
             let chest_half = bones[bone::CHEST].thickness.x * 0.5;
@@ -764,7 +628,6 @@ mod tests {
                 "the {:?}'s shoulder is {shoulder:.3} m out and its chest {chest_half:.3} m",
                 class,
             );
-            // A floor, not an override.
             assert!(
                 shoulder >= proportions.height * proportions.shoulder_half_width - 1e-4,
                 "the {:?}'s shoulders were pulled in",
@@ -773,9 +636,7 @@ mod tests {
         }
     }
 
-    /// An A-pose, not a T-pose: the hands are outside the shoulders *and*
-    /// below them. A rig that came out in a T would silently change what every
-    /// arm animation means, since a pose is measured from rest.
+    /// A T-pose rest would silently change every arm animation.
     #[test]
     fn the_rest_pose_is_an_a_pose() {
         let bones = rest(Proportions::DEFAULT);
@@ -784,14 +645,12 @@ mod tests {
 
         assert!(hand.x > shoulder.x, "the arm is not out: {} vs {}", hand.x, shoulder.x);
         assert!(hand.y < shoulder.y, "the arm is not down: {} vs {}", hand.y, shoulder.y);
-        // Roughly 45°, which is what makes it an A rather than a shrug or a T.
         let drop = shoulder.y - hand.y;
         let out = hand.x - shoulder.x;
         assert!((drop / out - 1.0).abs() < 0.2, "the arm is at the wrong angle: out {out}, down {drop}");
     }
 
-    /// Left and right have to be mirror images, or every animation is subtly
-    /// one-sided and mirroring a clip stops being possible.
+    /// Otherwise every animation is subtly one-sided.
     #[test]
     fn the_two_sides_mirror() {
         let bones = rest(Proportions::DEFAULT);
@@ -809,9 +668,7 @@ mod tests {
         }
     }
 
-    /// Bones are stored parent-relative, so a chain has to actually join up
-    /// after forward kinematics. If it does not, the rig comes apart the first
-    /// time anything is rotated.
+    /// Otherwise the rig comes apart when rotated.
     #[test]
     fn a_chain_joins_up_when_posed() {
         let skeleton = humanoid(Proportions::STOCKY);
@@ -833,12 +690,8 @@ mod tests {
         }
     }
 
-    /// The whole reason poses are rotations: one clip, several silhouettes.
-    ///
-    /// The same pose on two very different builds has to give the same *joint
-    /// angles* — the elbow is bent the same amount — while the hand naturally
-    /// lands somewhere else, because the arm is a different length. Store
-    /// positions instead and this is the test that breaks.
+    /// One pose must give the same joint angles on different builds; storing
+    /// positions breaks this.
     #[test]
     fn one_pose_reads_the_same_on_bodies_of_different_proportions() {
         let pose = Pose::rest()
@@ -857,8 +710,7 @@ mod tests {
         let (a, b) = (angle_between(&stocky), angle_between(&lanky));
         assert!((a - b).abs() < 1e-4, "the same pose bent the elbow differently: {a} vs {b}");
 
-        // And the two bodies are genuinely different, so the agreement above
-        // is not just two identical skeletons.
+        // The builds must actually differ.
         let stocky_hand = stocky[bone::HAND_R].tail;
         let lanky_hand = lanky[bone::HAND_R].tail;
         assert!(
@@ -867,9 +719,7 @@ mod tests {
         );
     }
 
-    /// A root offset is in hip-heights, so the same crouch takes proportionally
-    /// as much off every build rather than dropping a short one through the
-    /// floor.
+    /// In metres a crouch would drop a short build through the floor.
     #[test]
     fn a_root_offset_scales_with_the_body() {
         let mut pose = Pose::rest();
@@ -885,9 +735,7 @@ mod tests {
         }
     }
 
-    /// A pose says nothing about the bones it does not name, which is what
-    /// makes layering possible — an IK pass on one leg must not straighten the
-    /// other one.
+    /// An IK pass on one leg must not straighten the other.
     #[test]
     fn a_pose_leaves_unnamed_joints_alone() {
         let skeleton = humanoid(Proportions::DEFAULT);
@@ -898,8 +746,7 @@ mod tests {
         assert!((before[bone::FOOT_R].tail - after[bone::FOOT_R].tail).length() > 0.05);
     }
 
-    /// The skeleton is placed by its root transform, feet first — the same end
-    /// a spawn point marks, so standing a body on one is not a conversion.
+    /// The root transform places the feet, as a spawn point marks them.
     #[test]
     fn the_root_transform_places_the_feet() {
         let skeleton = humanoid(Proportions::DEFAULT);
@@ -917,8 +764,6 @@ mod tests {
         let crown = placed[bone::HEAD].tail;
         assert!((crown - (feet + Vec3::Y * Proportions::DEFAULT.height)).length() < 1e-4, "crown at {crown}");
 
-        // Turned a quarter turn: what was on the character's right is now
-        // where -Z was.
         let hand = placed[bone::HAND_R].tail - feet;
         let unturned = bones[bone::HAND_R].tail;
         assert!((hand - Quat::from_rotation_y(yaw) * unturned).length() < 1e-4);

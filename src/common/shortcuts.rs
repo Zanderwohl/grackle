@@ -1,35 +1,20 @@
-//! The keyboard chords both editors answer to.
+//! The keyboard chords both editors answer to, defined once.
 //!
-//! One definition, because the map editor and the prop editor are two surfaces
-//! for one habit: `Ctrl+S` has to mean the same thing in both, and a second
-//! copy of "is Shift down" is a second copy that drifts.
+//! Nothing fires while egui wants the keyboard: `Ctrl+Z` in a text field means
+//! undo the text, and stealing it loses work. `typing` is passed in so this is
+//! testable without an egui context.
 //!
-//! **Nothing fires while egui wants the keyboard.** A feature being renamed, a
-//! map's author list being typed into — `Ctrl+Z` there means undo the *text*,
-//! and stealing it to undo the document is the kind of thing that loses work
-//! rather than the kind that looks wrong.
-//!
-//! `typing` is passed in rather than read from `EguiWantsInput` here, so the
-//! chords can be tested without an egui context and this module does not have
-//! to know there is one.
-//!
-//! **Both `Super` and `Control` count as the modifier.** On a Mac that is the
-//! command key, which is where the habit lives; `Alt`/`Option` deliberately is
-//! not one, because it is what composes characters and is nobody's save key.
+//! `Super` and `Control` both count as the modifier. `Alt` does not; it
+//! composes characters.
 
 use bevy::prelude::*;
 
-/// What the keyboard asked for this frame.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct EditorChords {
-    /// `Ctrl+N`. **Throws the open document away without asking**, exactly as
-    /// the File menu's *New* does — neither editor has anywhere to ask the
-    /// question yet, and a chord that did something different from the menu
-    /// item it is the shortcut for would be worse than one that did nothing.
+    /// `Ctrl+N`. Discards the open document without asking, as the menu's New
+    /// does; there is nowhere to ask yet.
     pub new: bool,
-    /// `Ctrl+S`. **Means save-as on a document that has never been saved** —
-    /// see each editor's handler; a save with nowhere to save to is a question,
-    /// not an error and not a silent nothing.
+    /// `Ctrl+S`. Means save-as on a document that has never been saved.
     pub save: bool,
     /// `Ctrl+Shift+S`.
     pub save_as: bool,
@@ -39,11 +24,38 @@ pub struct EditorChords {
     pub redo: bool,
 }
 
-/// Read the chords, or nothing at all if egui is taking the keystrokes.
-///
-/// Both `Super` and `Control` count as the modifier, so the same binding works
-/// for somebody who learnt it on either platform. `Ctrl+Y` is redo as well,
-/// which is the Windows habit and costs nothing to keep.
+/// A letter with the modifier held, and Shift or not. The menus' hint text is
+/// generated from the same value the keyboard is read by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Chord {
+    pub shift: bool,
+    pub key: KeyCode,
+}
+
+impl Chord {
+    pub const NEW: Chord = Chord { shift: false, key: KeyCode::KeyN };
+    pub const SAVE: Chord = Chord { shift: false, key: KeyCode::KeyS };
+    pub const SAVE_AS: Chord = Chord { shift: true, key: KeyCode::KeyS };
+    pub const UNDO: Chord = Chord { shift: false, key: KeyCode::KeyZ };
+    pub const REDO: Chord = Chord { shift: true, key: KeyCode::KeyZ };
+
+    fn pressed(self, keys: &ButtonInput<KeyCode>, modifier: bool, shift: bool) -> bool {
+        modifier && shift == self.shift && keys.just_pressed(self.key)
+    }
+
+    /// Menu hint text, e.g. `Ctrl+Shift+S`. Says `Ctrl` on macOS too, where
+    /// `Super` also counts.
+    pub fn hint(self) -> String {
+        let name = format!("{:?}", self.key);
+        let letter = name.strip_prefix("Key").unwrap_or(&name);
+        match self.shift {
+            true => format!("Ctrl+Shift+{letter}"),
+            false => format!("Ctrl+{letter}"),
+        }
+    }
+}
+
+/// All false while `typing`. `Ctrl+Y` is also redo, the Windows habit.
 pub fn chords(keys: &ButtonInput<KeyCode>, typing: bool) -> EditorChords {
     if typing {
         return EditorChords::default();
@@ -56,14 +68,26 @@ pub fn chords(keys: &ButtonInput<KeyCode>, typing: bool) -> EditorChords {
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
 
+    let pressed = |chord: Chord| chord.pressed(keys, modifier, shift);
     EditorChords {
-        new: modifier && !shift && keys.just_pressed(KeyCode::KeyN),
-        save: modifier && !shift && keys.just_pressed(KeyCode::KeyS),
-        save_as: modifier && shift && keys.just_pressed(KeyCode::KeyS),
-        undo: modifier && !shift && keys.just_pressed(KeyCode::KeyZ),
-        redo: (modifier && shift && keys.just_pressed(KeyCode::KeyZ))
-            || (ctrl && keys.just_pressed(KeyCode::KeyY)),
+        new: pressed(Chord::NEW),
+        save: pressed(Chord::SAVE),
+        save_as: pressed(Chord::SAVE_AS),
+        undo: pressed(Chord::UNDO),
+        redo: pressed(Chord::REDO) || (ctrl && keys.just_pressed(KeyCode::KeyY)),
     }
+}
+
+/// What `chord` reads as with Control held. For the menus' tests.
+#[cfg(test)]
+pub fn press(chord: Chord) -> EditorChords {
+    let mut keys = ButtonInput::<KeyCode>::default();
+    keys.press(KeyCode::ControlLeft);
+    if chord.shift {
+        keys.press(KeyCode::ShiftLeft);
+    }
+    keys.press(chord.key);
+    chords(&keys, false)
 }
 
 #[cfg(test)]
@@ -97,7 +121,7 @@ mod tests {
         assert!(!pressed(&[KeyCode::SuperLeft, KeyCode::ShiftLeft], KeyCode::KeyZ, false).undo);
     }
 
-    /// The modifier is not optional. Typing `s` into a viewport must not save.
+    /// Typing `s` into a viewport must not save.
     #[test]
     fn a_bare_letter_is_not_a_chord() {
         let bare = pressed(&[], KeyCode::KeyS, false);
@@ -106,9 +130,8 @@ mod tests {
         assert_eq!(pressed(&[], KeyCode::KeyN, false), EditorChords::default());
     }
 
-    /// `Ctrl+N` is a new document, on either modifier, and `Ctrl+Shift+N` is
-    /// not it. Nothing uses the shifted pair, and a chord that fired on both
-    /// would make a *New* out of somebody reaching for something else.
+    /// `Ctrl+Shift+N` must not make a New out of somebody reaching for
+    /// something else.
     #[test]
     fn new_is_the_unshifted_n() {
         assert!(pressed(&[KeyCode::ControlLeft], KeyCode::KeyN, false).new);
@@ -116,8 +139,13 @@ mod tests {
         assert!(!pressed(&[KeyCode::ControlLeft, KeyCode::ShiftLeft], KeyCode::KeyN, false).new);
     }
 
-    /// The one that loses work if it is wrong: `Ctrl+Z` while renaming a
-    /// feature means undo the *text*, not throw away the document's last edit.
+    #[test]
+    fn a_hint_names_the_modifier_shift_and_letter() {
+        assert_eq!(Chord::SAVE.hint(), "Ctrl+S");
+        assert_eq!(Chord::SAVE_AS.hint(), "Ctrl+Shift+S");
+    }
+
+    /// `Ctrl+Z` while renaming a feature means undo the text.
     #[test]
     fn nothing_fires_while_egui_has_the_keyboard() {
         for key in [KeyCode::KeyS, KeyCode::KeyZ, KeyCode::KeyY, KeyCode::KeyN] {
