@@ -59,12 +59,12 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
   (`ForcedAnimation`, `DisplaySpeed`), `describe_player_bodies`
   (`BodyRequests`), `step_player` (`Stance` via `change_stance`, also wakes
   `follow_stance`; `Player`/`PhysicsBody` on idle bodies). Fix: `set_if_neq`.
-- [ ] **H5** `src/prop/document.rs` `doc_mut` bumps the one `generation` for any
+- [x] **H5** `src/prop/document.rs` `doc_mut` bumps the one `generation` for any
   write, so dragging a grip/carry/viewmodel/animation key re-runs CSG and
   re-uploads meshes every frame (`src/prop/view.rs` `rebuild_the_prop`,
   `ghost_the_operands`). Fix: a geometry generation, or compare `shown()` to
   the features last built.
-- [ ] **H6** `src/anim/timeline.rs` `lay_out_the_timeline` — writes ~700 pooled
+- [x] **H6** `src/anim/timeline.rs` `lay_out_the_timeline` — writes ~700 pooled
   `Node`s every frame, hidden ones too; full UI re-layout while paused. Fix:
   compare before writing.
 
