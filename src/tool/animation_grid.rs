@@ -161,7 +161,7 @@ pub fn sync_animation_grids(
 /// Keep every standing body on the side its grid says it is on.
 ///
 /// Compares before writing. `RosterTeam` reads as changed on every frame of a
-/// drag, and a written `Team` makes `build_body_meshes` rebuild the body.
+/// drag, and a written `Team` makes `recolour_bodies` repaint every part.
 pub fn team_carousels(
     grids: Query<&RosterTeam, With<AnimationGridMarker>>,
     mut bodies: Query<(&OfGrid, &mut Team), With<CarouselBody>>,

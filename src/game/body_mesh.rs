@@ -162,8 +162,9 @@ impl Plugin for BodyMeshPlugin {
     }
 }
 
-/// Give every body a part per bone, and rebuild them if it changes shape or
-/// colour. Change detection covers insertion, so this also dresses new bodies.
+/// Give every body a part per bone, and rebuild them if it changes shape.
+/// Change detection covers insertion, so this also dresses new bodies. A
+/// change of colour is [`recolour_bodies`]'s.
 fn build_body_meshes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -179,7 +180,7 @@ fn build_body_meshes(
             Option<&Burning>,
             Option<&BodyMesh>,
         ),
-        Or<(Changed<Skeleton>, Changed<Team>, Changed<BodyTint>)>,
+        Changed<Skeleton>,
     >,
 ) {
     for (body, skeleton, team, tint, burning, existing) in &bodies {
@@ -221,26 +222,29 @@ fn build_body_meshes(
     }
 }
 
-/// Swap the material when a body catches fire or goes out, rather than letting
-/// `build_body_meshes` respawn every part, which a flamethrower would trigger
+/// Swap the material when a body changes side or tint, or catches fire or goes
+/// out, rather than respawning every part, which a flamethrower would trigger
 /// ten times a second.
 fn recolour_bodies(
     mut palette: ResMut<BodyMaterials>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut extinguished: RemovedComponents<Burning>,
     lit: Query<Entity, Added<Burning>>,
+    repainted: Query<Entity, (With<BodyMesh>, Or<(Changed<Team>, Changed<BodyTint>)>)>,
     bodies: Query<(&BodyMesh, Option<&Team>, Option<&BodyTint>, Option<&Burning>)>,
     mut parts: Query<&mut MeshMaterial3d<StandardMaterial>>,
 ) {
-    // Both edges, or a body stays scorched after the fire is out.
-    for body in lit.iter().chain(extinguished.read()) {
+    // Both edges of a fire, or a body stays scorched after it is out.
+    for body in lit.iter().chain(extinguished.read()).chain(&repainted) {
         // Undressed, or killed by the burn that lit it.
         let Ok((mesh, team, tint, burning)) = bodies.get(body) else { continue };
 
         let material = palette.get(body_look(team, tint, burning), &mut materials);
         for part in &mesh.parts {
             let Ok(mut slot) = parts.get_mut(*part) else { continue };
-            slot.0 = material.clone();
+            if slot.0 != material {
+                slot.0 = material.clone();
+            }
         }
     }
 }
@@ -528,6 +532,32 @@ mod tests {
         for part in before {
             assert!(app.world().get_entity(part).is_err(), "an old part is still around");
         }
+    }
+
+    /// Changing side repaints the parts it has rather than building new ones.
+    #[test]
+    fn changing_team_repaints_the_parts_it_has() {
+        let mut app = app();
+        let body = app
+            .world_mut()
+            .spawn((humanoid(Proportions::DEFAULT), Pose::rest(), Transform::IDENTITY, Team::Red))
+            .id();
+        app.update();
+
+        let material = |app: &App, part: Entity| {
+            app.world().get::<MeshMaterial3d<StandardMaterial>>(part).unwrap().0.clone()
+        };
+        let before = app.world().get::<BodyMesh>(body).unwrap().parts.clone();
+        let red = material(&app, before[0]);
+
+        app.world_mut().entity_mut(body).insert(Team::Blue);
+        app.update();
+
+        let after = app.world().get::<BodyMesh>(body).unwrap().parts.clone();
+        assert_eq!(before, after, "the parts were rebuilt");
+        let blue = material(&app, after[0]);
+        assert_ne!(red, blue, "the parts kept their old side's colour");
+        assert!(after.iter().all(|part| material(&app, *part) == blue));
     }
 
     /// When each of a body's parts last had its `Transform` written.

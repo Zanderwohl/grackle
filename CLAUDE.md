@@ -1027,9 +1027,9 @@ bodies and asks each which grid it is on rather than walking a grid's children,
 because these bodies stand in the world so they can be replicated — `OfGrid` is
 what replaced the parenting. And it **compares before it writes**. `apply_to_entity` runs on every edit, so the
 grid's `RosterTeam` reads as changed on every frame of a drag — and a written
-`Team` is a changed one, which is `build_body_meshes` throwing sixty bodies
-away and rebuilding them for as long as the point is moving. Same trap as
-re-inserting a `Skeleton`, one component along.
+`Team` is a changed one, which is `recolour_bodies` repainting every part of
+sixty bodies for as long as the point is moving. Same trap as re-inserting a
+`Skeleton`, one component along.
 
 ## Coming back
 
