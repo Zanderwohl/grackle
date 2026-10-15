@@ -675,7 +675,17 @@ impl Room {
     /// subtraction asked one point at a time. Testing the whole box instead
     /// puts an invisible wall across every doorway, and the room beyond it and
     /// everything in it cannot be picked through it.
-    pub fn ray_hit_from_inside(&self, others: &[Room], ray: &Ray3d) -> Option<(f32, Vec3)> {
+    ///
+    /// `others` is anything that walks the other rooms rather than a slice of
+    /// them, because a picker asks this of every room in the map every frame
+    /// and building each one a `Vec` of everybody else is quadratic copying
+    /// for nothing.
+    pub fn ray_hit_from_inside<'a>(
+        &self,
+        others: impl IntoIterator<Item = &'a Room, IntoIter: Clone>,
+        ray: &Ray3d,
+    ) -> Option<(f32, Vec3)> {
+        let others = others.into_iter();
         let dir = Vec3::from(ray.direction);
         let mut best: Option<(f32, Vec3)> = None;
 
@@ -697,7 +707,7 @@ impl Room {
             let on_face = u >= face.rect.min_u && u <= face.rect.max_u
                 && v >= face.rect.min_v && v <= face.rect.max_v;
             // Strictly inside: a hit on a hole's edge is still on wall.
-            let in_a_hole = others.iter().filter_map(|other| face.clip_rect(other)).any(|hole| {
+            let in_a_hole = others.clone().filter_map(|other| face.clip_rect(other)).any(|hole| {
                 u > hole.min_u && u < hole.max_u && v > hole.min_v && v < hole.max_v
             });
 
