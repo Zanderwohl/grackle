@@ -105,9 +105,12 @@ pub fn drive_carousels(
     }
 
     let showing = showing(clock.seconds());
+    // `set_if_neq`: both are replicated, and the roster only moves on once a
+    // shuffle, so assigning every frame would put sixty bodies' worth of
+    // identical values on the wire every tick.
     for (mut forced, mut speed) in &mut bodies {
-        forced.0 = showing.row.state;
-        speed.0 = showing.row.speed;
+        forced.set_if_neq(ForcedAnimation(showing.row.state));
+        speed.set_if_neq(DisplaySpeed(showing.row.speed));
     }
 
     // Once per shuffle, since the order is the one thing you cannot read off
@@ -551,6 +554,28 @@ mod tests {
             shown.iter().all(|(state, speed)| *state == expected.state && *speed == expected.speed),
             "the line is not in step: {shown:?}"
         );
+    }
+
+    /// Both components are replicated, and the roster only moves on once a
+    /// shuffle: telling the bodies what they are already showing would put
+    /// sixty of them on the wire every tick for nothing.
+    #[test]
+    fn a_carousel_showing_the_same_row_is_not_rewritten() {
+        use crate::common::skeleton::{AnimationClock, DisplaySpeed};
+
+        let mut world = grid_world();
+        world.insert_resource(AnimationClock::default());
+        world.run_system_once(drive_carousels).unwrap();
+        let stamps = |world: &mut World| -> Vec<_> {
+            let mut query = world.query::<(Ref<ForcedAnimation>, Ref<DisplaySpeed>)>();
+            query
+                .iter(world)
+                .map(|(forced, speed)| (forced.last_changed(), speed.last_changed()))
+                .collect()
+        };
+        let before = stamps(&mut world);
+        world.run_system_once(drive_carousels).unwrap();
+        assert_eq!(stamps(&mut world), before);
     }
 
     /// The marker is re-inserted on every edit of the feature, so the system

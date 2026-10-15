@@ -52,10 +52,10 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
   and `update_hitboxes`. Fix: cache rest tails on `Skeleton`; add
   `posed_bone(pose, root, index)` walking only the ancestor chain; a
   non-allocating variant for `duck_under`.
-- [ ] **H3** `src/game/player.rs` `interpolate_bodies` — writes `Transform` on
+- [x] **H3** `src/game/player.rs` `interpolate_bodies` — writes `Transform` on
   every `PhysicsBody` every frame even when still; re-propagates every bone
   mesh. Fix: compare first.
-- [ ] **H4** identical writes to replicated components: `drive_carousels`
+- [x] **H4** identical writes to replicated components: `drive_carousels`
   (`ForcedAnimation`, `DisplaySpeed`), `describe_player_bodies`
   (`BodyRequests`), `step_player` (`Stance` via `change_stance`, also wakes
   `follow_stance`; `Player`/`PhysicsBody` on idle bodies). Fix: `set_if_neq`.
@@ -74,8 +74,16 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
   (`src/prop/gizmo.rs`), the timeline key nudge (`src/anim/mod.rs`);
   `BodyClips::clip_mut` calls `changed()` before finding the clip.
 - [ ] Per-frame `Arc::new(clip.clone())`: `perform_weapon_clips`
-  (`src/game/held.rs`), `drive_the_preview` (`src/anim/mod.rs`). Store
-  `Arc<Clip>`.
+  (`src/game/held.rs`), `drive_the_preview` (`src/anim/mod.rs`). **Not** by
+  spreading `Arc<Clip>` further — the `Arc`s already there are the cause.
+  Clips become an asset: `Clip: Asset`, `Playing.clip: Handle<Clip>`,
+  sampling reads `Res<Assets<Clip>>`, the way `BakedProp.parts` already holds
+  `Handle<Mesh>`. Replace `Arc<Clip>` (`play.rs` `Playing`),
+  `Arc<StateAnimation>` (`state.rs` `ClipLibrary`) and `Arc<ClipSet>`
+  (`baked.rs`, `held.rs`). A save or an edit re-inserts under the same handle
+  (`AssetEvent::Modified`) instead of every frame re-cloning to catch one.
+  Derived clips (`at_heading` blend previews) are added once per change, not
+  per frame. Touches `play.rs`/`state.rs`, so after H2 lands.
 - [ ] Gizmo material churn: `point_drag`, `rotate_drag`, `room` remove +
   re-insert `MeshMaterial3d` on every handle every frame. Add a
   `GizmoPart { axis }` marker, assign only when different; drop the child

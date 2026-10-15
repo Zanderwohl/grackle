@@ -320,17 +320,24 @@ fn describe_player_bodies(
     for (player, stance, input, mut requests) in &mut players {
         // Each body's own input, so a second local player or one being driven
         // from the wire is described from what it was actually asked to do.
-        requests.running_forward = input.movement.y > 0.5;
-        requests.running_backward = input.movement.y < -0.5;
-        requests.strafing_left = input.movement.x < -0.5;
-        requests.strafing_right = input.movement.x > 0.5;
-        requests.airborne = !player.on_ground;
-        // What the body *is*, not what the key says: a body that cannot stand
-        // up under a vent is still crouched, and should still look it.
-        requests.crouching = *stance == Stance::Crouched;
+        let mut described = BodyRequests {
+            running_forward: input.movement.y > 0.5,
+            running_backward: input.movement.y < -0.5,
+            strafing_left: input.movement.x < -0.5,
+            strafing_right: input.movement.x > 0.5,
+            airborne: !player.on_ground,
+            // What the body *is*, not what the key says: a body that cannot
+            // stand up under a vent is still crouched, and should still look
+            // it.
+            crouching: *stance == Stance::Crouched,
+            wall_ahead: false,
+        };
         // Asked to move and stopped on a ground axis. The step is the only
         // thing that knows a wall was hit, so it records it and this reads it.
-        requests.wall_ahead = requests.moving() && (player.blocked.x || player.blocked.z);
+        described.wall_ahead = described.moving() && (player.blocked.x || player.blocked.z);
+        // Built whole and then compared: `BodyRequests` is replicated, and a
+        // body doing the same thing as last frame is not news to anybody.
+        requests.set_if_neq(described);
     }
 }
 
@@ -1005,5 +1012,12 @@ mod tests {
         assert!(requests.running_forward, "input never reached the body");
         assert!(requests.wall_ahead, "the wall the step hit never reached the body");
         assert_eq!(AnimationState::from_requests(requests), AnimationState::PushingWall);
+
+        // Described again with nothing new to say, it says nothing:
+        // `BodyRequests` is replicated, and a write is a resend.
+        let described = app.world().entity(player).get_ref::<BodyRequests>().unwrap().last_changed();
+        app.world_mut().run_system_once(describe_player_bodies).unwrap();
+        let again = app.world().entity(player).get_ref::<BodyRequests>().unwrap().last_changed();
+        assert_eq!(again, described, "an unchanged description was written anyway");
     }
 }

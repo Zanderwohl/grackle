@@ -689,6 +689,55 @@ mod tests {
         assert!((drawn.y - midpoint.y).abs() < 0.001, "drew {} not {}", drawn.y, midpoint.y);
     }
 
+    /// A body standing still reaches the same values every tick, and writing
+    /// them anyway marks them changed: a resend of three replicated components
+    /// to every client, a `follow_stance` rewrite, and a transform propagated
+    /// through every bone mesh. Settled, nothing about it should read as new.
+    #[test]
+    fn a_body_standing_still_is_not_marked_changed() {
+        let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 20.0, 5.0))]);
+        enter(&mut app);
+        tick(&mut app, 60);
+        let body = app
+            .world_mut()
+            .query_filtered::<Entity, With<LocalPlayer>>()
+            .single(app.world())
+            .unwrap();
+
+        // One full frame through the real loop, so the drawn position has
+        // settled onto the resting one as well.
+        let frame = |app: &mut App| {
+            app.world_mut().resource_mut::<Time<Virtual>>().advance_by(STEP);
+            app.world_mut().run_schedule(RunFixedMainLoop);
+            app.world_mut().run_schedule(Update);
+        };
+        frame(&mut app);
+
+        fn stamps(app: &App, body: Entity) -> Vec<(&'static str, bevy::ecs::change_detection::Tick)> {
+            let entity = app.world().entity(body);
+            let mut stamps = vec![
+                ("PhysicsBody", entity.get_ref::<PhysicsBody>().unwrap().last_changed()),
+                ("Player", entity.get_ref::<Player>().unwrap().last_changed()),
+                ("Stance", entity.get_ref::<Stance>().unwrap().last_changed()),
+                ("Transform", entity.get_ref::<Transform>().unwrap().last_changed()),
+            ];
+            if let Some(requests) = entity.get_ref::<crate::common::skeleton::BodyRequests>() {
+                stamps.push(("BodyRequests", requests.last_changed()));
+            }
+            stamps
+        }
+        let before = stamps(&app, body);
+        tick(&mut app, 5);
+        frame(&mut app);
+        assert_eq!(stamps(&app, body), before, "an idle body was written with what it already held");
+
+        // And the comparison is not hiding real motion: walking still lands.
+        latch(&mut app).0.movement = Vec2::Y;
+        tick(&mut app, 1);
+        let after = stamps(&app, body);
+        assert_ne!(after[0], before[0], "a moving body's position was not written");
+    }
+
     /// Spawn the app with some spawn points placed, as the editor's feature
     /// sync would have left them.
     fn with_spawns(rooms: &[Room], feet: &[Vec3]) -> App {

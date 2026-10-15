@@ -737,7 +737,17 @@ pub fn step_player(
         return;
     }
 
-    for (mut player, mut body, mut stance, input) in &mut players {
+    for (mut player_slot, mut body_slot, mut stance_slot, input) in &mut players {
+        // The step works on copies and writes each back only if it came out
+        // different. All three are replicated and predicted, so a write is a
+        // resend to every client and a `Changed<Stance>` for `follow_stance`;
+        // a body standing still reaches the same values every tick, and
+        // telling everybody so sixty-four times a second is pure cost. The
+        // values themselves are exactly what assigning them would have left.
+        let mut player = player_slot.clone();
+        let mut body = *body_slot;
+        let mut stance = *stance_slot;
+
         // Read, never taken. The edge was already consumed by
         // `write_client_inputs` when it filled this tick's input; a step that
         // took it would empty the buffer the input layer sends from.
@@ -757,7 +767,7 @@ pub fn step_player(
         // The animation is never told which of these it was: it measures the
         // ground covered and works out for itself whether that is a walk.
         let speed = if input.sprint { SPRINT_SPEED } else { WALK_SPEED };
-        let speed = if *stance == Stance::Crouched { CROUCH_SPEED } else { speed };
+        let speed = if stance == Stance::Crouched { CROUCH_SPEED } else { speed };
         player.velocity.x = wish.x * speed;
         player.velocity.z = wish.z * speed;
 
@@ -788,6 +798,10 @@ pub fn step_player(
         if blocked.y {
             player.velocity.y = 0.0;
         }
+
+        player_slot.set_if_neq(player);
+        body_slot.set_if_neq(body);
+        stance_slot.set_if_neq(stance);
     }
 }
 
@@ -846,7 +860,13 @@ pub fn interpolate_bodies(
 ) {
     let alpha = fixed.overstep_fraction();
     for (body, mut transform) in &mut bodies {
-        transform.translation = body.previous.lerp(body.current, alpha);
+        let drawn = body.previous.lerp(body.current, alpha);
+        // Assigned only when it differs, as in `face_bodies`: a body standing
+        // still lerps between two equal points to the same place every frame,
+        // and a written transform re-propagates every bone mesh hanging off it.
+        if transform.translation != drawn {
+            transform.translation = drawn;
+        }
     }
 }
 
