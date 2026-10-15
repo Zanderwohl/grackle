@@ -210,6 +210,7 @@ pub fn pose_the_figure(
     choice: Res<ScaleFigure>,
     preview: Res<ViewmodelPreview>,
     performance: Option<Res<FigurePerformance>>,
+    clips: Option<Res<Assets<crate::common::skeleton::clip::Clip>>>,
     mut held: Option<ResMut<FigureWeapon>>,
     stage: Option<Res<FigureStage>>,
     corrections: Option<Res<FigureCorrections>>,
@@ -264,7 +265,7 @@ pub fn pose_the_figure(
             Anchor::Floor => local,
         };
         let at_rest = placed;
-        if let Some(performance) = performance.as_deref() {
+        if let (Some(performance), Some(clips)) = (performance.as_deref(), clips.as_deref()) {
             let ground = move |_: Vec3| root.translation.y;
             let frames = Frames {
                 body: root,
@@ -285,7 +286,7 @@ pub fn pose_the_figure(
                 }),
             };
             let weapon = stage.holding.then_some(&mut placed);
-            apply_stack(&performance.0, skeleton, &mut standing, &frames, weapon);
+            apply_stack(&performance.0, clips, skeleton, &mut standing, &frames, weapon);
         }
         // Then what the game does to a body clip before anything else sees
         // it: duck, plant the feet. In that order and at this point, because
@@ -362,6 +363,7 @@ mod tests {
         world.insert_resource(FigureWeapon::default());
         world.insert_resource(stage);
         world.insert_resource(State::new(mode));
+        world.init_resource::<Assets<crate::common::skeleton::clip::Clip>>();
         let figure = world
             .spawn((
                 ScaleFigureMarker,
@@ -446,8 +448,11 @@ mod tests {
                 FigureStage { holding: false, anchor: Anchor::Floor },
                 AppMode::Animation,
             );
+            let clip = world
+                .resource_mut::<Assets<crate::common::skeleton::clip::Clip>>()
+                .add(clip.clone());
             world.insert_resource(FigurePerformance(ClipStack(vec![Playing {
-                clip: std::sync::Arc::new(clip.clone()),
+                clip,
                 time,
                 weight: 1.0,
             }])));

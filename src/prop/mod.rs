@@ -68,6 +68,7 @@ impl Plugin for PropEditorPlugin {
             // somebody's hands — see `prop::baked`.
             .init_resource::<baked::PropCache>()
             .init_resource::<baked::SurfaceMaterials>()
+            .add_plugins(crate::common::skeleton::ClipAssetsPlugin)
             .init_resource::<document::PropEditor>()
             .init_resource::<StartInPropEditor>()
             .add_plugins((
@@ -127,6 +128,7 @@ fn publish_the_saved_prop(
     mut surfaces: ResMut<baked::SurfaceMaterials>,
     mut meshes: ResMut<bevy::asset::Assets<Mesh>>,
     mut materials: ResMut<bevy::asset::Assets<StandardMaterial>>,
+    mut clips: ResMut<bevy::asset::Assets<crate::common::skeleton::clip::Clip>>,
     mut seen: Local<u64>,
 ) {
     if editor.saves() == *seen {
@@ -136,7 +138,7 @@ fn publish_the_saved_prop(
 
     let Some(name) = editor.saved_name() else { return };
     info!("Saved {name}; handing it to anything holding one");
-    cache.adopt(name, editor.doc(), &mut meshes, &mut materials, &mut surfaces);
+    cache.adopt(name, editor.doc(), &mut meshes, &mut materials, &mut surfaces, &mut clips);
 }
 
 /// Whether `--prop` was given.
@@ -172,6 +174,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((bevy::asset::AssetPlugin::default(), bevy::render::mesh::MeshPlugin));
         app.init_asset::<StandardMaterial>();
+        app.add_plugins(crate::common::skeleton::ClipAssetsPlugin);
         app.init_resource::<baked::PropCache>()
             .init_resource::<baked::SurfaceMaterials>()
             .init_resource::<PropEditor>()

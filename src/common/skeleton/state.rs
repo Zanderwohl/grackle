@@ -30,7 +30,6 @@
 //! anything to look at.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::clip::StateAnimation;
 
@@ -544,18 +543,22 @@ impl AnimationState {
 /// exactly as it did before there were clips. That is what every test that
 /// passes `None` relies on, including the one that compares a migrated clip
 /// against the function it replaced.
+///
+/// **Owned here, not shared.** One animation per state, read by every body
+/// through this one resource, so there is nothing for a handle to share: the
+/// resource *is* the single copy, and an edit replaces it in place.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct ClipLibrary {
-    by_state: HashMap<AnimationState, Arc<StateAnimation>>,
+    by_state: HashMap<AnimationState, StateAnimation>,
 }
 
 impl ClipLibrary {
-    pub fn get(&self, state: AnimationState) -> Option<&Arc<StateAnimation>> {
+    pub fn get(&self, state: AnimationState) -> Option<&StateAnimation> {
         self.by_state.get(&state)
     }
 
     pub fn insert(&mut self, state: AnimationState, animation: impl Into<StateAnimation>) {
-        self.by_state.insert(state, Arc::new(animation.into()));
+        self.by_state.insert(state, animation.into());
     }
 
     /// Put a state back on its built-in pose.

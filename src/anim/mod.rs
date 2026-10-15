@@ -37,7 +37,6 @@ use crate::common::skeleton::play::{key_the_channel, Playing};
 use crate::prop::document::PropEditor;
 use crate::prop::figure::FigurePerformance;
 use crate::prop::view::PropSceneSystems;
-use std::sync::Arc;
 
 use timeline::{
     grab_radius, grid_step, key_at, keys_within, lay_out_the_timeline, over_ruler,
@@ -136,6 +135,8 @@ impl Plugin for AnimPlugin {
             .init_resource::<StartInAnimEditor>()
             .init_resource::<body::BodyClips>()
             .init_resource::<crate::common::skeleton::state::ClipLibrary>()
+            .add_plugins(crate::common::skeleton::ClipAssetsPlugin)
+            .init_resource::<PreviewClips>()
             // Ungated, like the prop editor's own: it has to run in whatever
             // mode the process started in.
             .add_systems(Update, start_in_the_anim_editor)
@@ -892,17 +893,52 @@ pub fn preview_inputs(
     }
 }
 
+/// The clips the figure is previewing, as assets its performance can point at.
+///
+/// Two slots — the clip on the strip, or the two variants either side of a
+/// blend preview — each a handle that is kept and refilled rather than
+/// replaced. What is previewed is a copy of what is being edited, so a slot is
+/// refilled only when what it should show differs from what it holds:
+/// scrubbing moves a time, and only an edit moves a clip.
+#[derive(Resource, Default)]
+pub struct PreviewClips([Option<Handle<Clip>>; 2]);
+
+impl PreviewClips {
+    ///
+    /// Takes the `ResMut` rather than the storage so a frame that changes
+    /// nothing does not mark the storage changed.
+    fn show(&mut self, slot: usize, clip: &Clip, assets: &mut ResMut<Assets<Clip>>) -> Handle<Clip> {
+        match &self.0[slot] {
+            Some(handle) => {
+                if assets.get(handle) != Some(clip) {
+                    // Held strongly here, so the id cannot have been freed.
+                    let _ = assets.insert(handle.id(), clip.clone());
+                }
+                handle.clone()
+            }
+            None => {
+                let handle = assets.add(clip.clone());
+                self.0[slot] = Some(handle.clone());
+                handle
+            }
+        }
+    }
+}
+
 /// Put the clip on the reference figure at the playhead.
 ///
 /// Through the **same** `apply` a body in a match goes through, which is the
 /// whole argument `documentation/weapons-in-hand.md` makes about holds one
 /// layer down: an editor that showed something the game does not perform is
 /// worth less than no editor at all.
+#[allow(clippy::too_many_arguments)]
 fn drive_the_preview(
     shown: Res<ShownClip>,
     cursor: Res<TimelineCursor>,
     anim: Res<AnimEditor>,
     clips: Res<body::BodyClips>,
+    mut previews: ResMut<PreviewClips>,
+    mut assets: ResMut<Assets<Clip>>,
     mut performance: ResMut<FigurePerformance>,
     mut corrections: ResMut<crate::prop::figure::FigureCorrections>,
 ) {
@@ -935,9 +971,11 @@ fn drive_the_preview(
             // partial layer, which is the same lerp `animation_pose` makes.
             if let (Some(heading), Some(animation)) = (anim.blend_preview, animation.filter(|_| blend.is_some())) {
                 if let Some((first, second)) = animation.at_heading(heading) {
-                    performance.0 .0.push(Playing { clip: Arc::new(first.clone()), time: cursor.time, weight: 1.0 });
+                    let first = previews.show(0, first, &mut assets);
+                    performance.0 .0.push(Playing { clip: first, time: cursor.time, weight: 1.0 });
                     if let Some((other, t)) = second {
-                        performance.0 .0.push(Playing { clip: Arc::new(other.clone()), time: cursor.time, weight: t });
+                        let other = previews.show(1, other, &mut assets);
+                        performance.0 .0.push(Playing { clip: other, time: cursor.time, weight: t });
                     }
                     return;
                 }
@@ -945,13 +983,8 @@ fn drive_the_preview(
         }
     }
 
-    performance.0 .0.push(Playing {
-        // Cloned per change rather than held: `ShownClip` is already a copy
-        // taken off the document, and a clip is a couple of kilobytes.
-        clip: Arc::new(clip.clone()),
-        time: cursor.time,
-        weight: 1.0,
-    });
+    let clip = previews.show(0, clip, &mut assets);
+    performance.0 .0.push(Playing { clip, time: cursor.time, weight: 1.0 });
 }
 
 #[cfg(test)]
@@ -1295,5 +1328,34 @@ mod tests {
         editor.undo();
         assert_eq!(times(&editor), vec![0.0, 0.5], "the drag was not one undo step");
         assert!(!editor.can_undo());
+    }
+
+    /// The preview keeps one handle per slot and refills it only when what is
+    /// shown changes: scrubbing is a new time on the same clip, not a new clip
+    /// every frame.
+    #[test]
+    fn the_preview_keeps_one_handle_and_refills_it() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<Assets<Clip>>();
+        world.init_resource::<PreviewClips>();
+
+        let show = |world: &mut World, clip: Clip| {
+            world
+                .run_system_once(move |mut previews: ResMut<PreviewClips>, mut assets: ResMut<Assets<Clip>>| {
+                    previews.show(0, &clip, &mut assets)
+                })
+                .unwrap()
+        };
+
+        let first = show(&mut world, Clip { length: 1.0, ..Clip::default() });
+        let again = show(&mut world, Clip { length: 1.0, ..Clip::default() });
+        assert_eq!(first, again, "an unchanged clip minted a new handle");
+        assert_eq!(world.resource::<Assets<Clip>>().len(), 1);
+
+        let edited = show(&mut world, Clip { length: 2.0, ..Clip::default() });
+        assert_eq!(first, edited, "an edit minted a new handle rather than refilling the old one");
+        assert_eq!(world.resource::<Assets<Clip>>().get(&first).unwrap().length, 2.0);
     }
 }

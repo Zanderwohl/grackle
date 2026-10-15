@@ -23,8 +23,6 @@
 //! [`Axis::Free`] is the same idea one axis down: a track that only cares
 //! about height leaves the other two where the layer beneath put them.
 
-use std::sync::Arc;
-
 use bevy::prelude::*;
 
 use super::clip::{Axis, ChainRef, Channel, Clip, Combine, Key, Space, Unit};
@@ -317,11 +315,13 @@ impl Frames<'_> {
 
 /// One clip playing on one body.
 ///
-/// The clip is shared rather than cloned: a clip is a few kilobytes and sixty
-/// bodies in an animation grid play the same one.
+/// The clip is a handle rather than a copy: sixty bodies in an animation grid
+/// play the same one, and whoever owns it updates it in `Assets<Clip>` under
+/// the same handle rather than handing every body a new one. A handle whose
+/// clip is not there plays nothing — the layer is skipped, not an error.
 #[derive(Clone, Debug)]
 pub struct Playing {
-    pub clip: Arc<Clip>,
+    pub clip: Handle<Clip>,
     /// Where this performance has got to, on the clip's own clock.
     pub time: f32,
     /// How much of it is showing, `0..=1`.
@@ -331,6 +331,32 @@ pub struct Playing {
 /// Everything playing on this body, bottom layer first.
 #[derive(Component, Clone, Debug, Default)]
 pub struct ClipStack(pub Vec<Playing>);
+
+/// Makes sure `Assets<Clip>` exists, whoever asks first.
+///
+/// Every plugin that plays a clip adds this, so no binary or test has to
+/// remember to. Safe to add more than once — it does nothing if the storage is
+/// already there — and it works without an `AssetServer`, because nothing
+/// loads a clip through one: a headless test gets the storage alone, which is
+/// all a clip needs.
+pub struct ClipAssetsPlugin;
+
+impl Plugin for ClipAssetsPlugin {
+    fn build(&self, app: &mut App) {
+        if app.world().contains_resource::<Assets<Clip>>() {
+            return;
+        }
+        if app.world().contains_resource::<AssetServer>() {
+            app.init_asset::<Clip>();
+        } else {
+            app.init_resource::<Assets<Clip>>();
+        }
+    }
+
+    fn is_unique(&self) -> bool {
+        false
+    }
+}
 
 /// Where the end of a chain currently is, in world space.
 fn chain_tip(skeleton: &Skeleton, pose: &Pose, root: &Transform, chain: &Chain) -> Option<Vec3> {
@@ -608,8 +634,13 @@ fn default_pole(chain: ChainRef, root: &Transform) -> Vec3 {
 ///
 /// Full weight skips the clone, which is the common case and the one that runs
 /// sixty times in an animation grid.
+///
+/// Each layer's clip is looked up in `clips` as it is sampled, so a clip
+/// re-inserted under the same handle is what plays next — and one that is not
+/// there plays nothing.
 pub fn apply_stack(
     stack: &ClipStack,
+    clips: &Assets<Clip>,
     skeleton: &Skeleton,
     pose: &mut Pose,
     frames: &Frames,
@@ -619,10 +650,13 @@ pub fn apply_stack(
         if playing.weight <= 0.0 {
             continue;
         }
+        let Some(clip) = clips.get(&playing.clip) else {
+            continue;
+        };
 
         if playing.weight >= 1.0 {
             apply(
-                &playing.clip,
+                clip,
                 playing.time,
                 skeleton,
                 pose,
@@ -638,7 +672,7 @@ pub fn apply_stack(
         // half the arms.
         let was = weapon.as_deref().copied();
         apply(
-            &playing.clip,
+            clip,
             playing.time,
             skeleton,
             pose,
@@ -1201,13 +1235,14 @@ mod tests {
         let mut clip = Clip { length: 1.0, tracks: vec![Track::rotation(bone::CHEST)], ..Clip::default() };
         let Channel::Rotation { keys, .. } = &mut clip.tracks[0].channel else { unreachable!() };
         keys.push(Key::all(0.0, [0.6, 0.0, 0.0], Interpolation::Linear));
-        let clip = Arc::new(clip);
+        let mut clips = Assets::<Clip>::default();
+        let clip = clips.add(clip);
 
         let full = {
             let mut pose = Pose::rest();
             apply_stack(
                 &ClipStack(vec![Playing { clip: clip.clone(), time: 0.0, weight: 1.0 }]),
-                &rig, &mut pose, &frames, None,
+                &clips, &rig, &mut pose, &frames, None,
             );
             pose.joint(bone::CHEST)
         };
@@ -1216,7 +1251,7 @@ mod tests {
             let mut pose = Pose::rest();
             apply_stack(
                 &ClipStack(vec![Playing { clip: clip.clone(), time: 0.0, weight: 0.5 }]),
-                &rig, &mut pose, &frames, None,
+                &clips, &rig, &mut pose, &frames, None,
             );
             pose.joint(bone::CHEST)
         };
@@ -1225,7 +1260,7 @@ mod tests {
             let mut pose = Pose::rest();
             apply_stack(
                 &ClipStack(vec![Playing { clip, time: 0.0, weight: 0.0 }]),
-                &rig, &mut pose, &frames, None,
+                &clips, &rig, &mut pose, &frames, None,
             );
             pose.joint(bone::CHEST)
         };
@@ -1233,5 +1268,62 @@ mod tests {
         assert_eq!(none, Quat::IDENTITY, "a weightless layer showed");
         assert!(half.angle_between(Quat::IDENTITY) < full.angle_between(Quat::IDENTITY));
         assert!(half.angle_between(Quat::IDENTITY) > 1e-3, "a half-weight layer did not show at all");
+    }
+
+    fn chest_turned_by(angle: f32) -> Clip {
+        let mut clip = Clip { length: 1.0, tracks: vec![Track::rotation(bone::CHEST)], ..Clip::default() };
+        let Channel::Rotation { keys, .. } = &mut clip.tracks[0].channel else { unreachable!() };
+        keys.push(Key::all(0.0, [angle, 0.0, 0.0], Interpolation::Linear));
+        clip
+    }
+
+    /// **Updating a clip is inserting it under the handle it already has.** A
+    /// stack built once goes on playing whatever that handle now holds, so a
+    /// saved or re-sent clip reaches every body playing it without anybody
+    /// rebuilding a stack or copying a clip onto it each frame.
+    #[test]
+    fn a_clip_reinserted_under_its_handle_is_what_plays_next() {
+        let rig = default_humanoid().clone();
+        let ground = |_: Vec3| 0.0;
+        let frames = Frames::standing(Transform::IDENTITY, Transform::IDENTITY, &ground);
+
+        let mut clips = Assets::<Clip>::default();
+        let handle = clips.add(chest_turned_by(0.2));
+        let stack = ClipStack(vec![Playing { clip: handle.clone(), time: 0.0, weight: 1.0 }]);
+
+        let chest = |clips: &Assets<Clip>| {
+            let mut pose = Pose::rest();
+            apply_stack(&stack, clips, &rig, &mut pose, &frames, None);
+            pose.joint(bone::CHEST)
+        };
+
+        let before = chest(&clips);
+        clips.insert(handle.id(), chest_turned_by(0.6)).unwrap();
+        let after = chest(&clips);
+
+        assert!(
+            after.angle_between(Quat::IDENTITY) > before.angle_between(Quat::IDENTITY) + 0.3,
+            "the stack went on playing the clip it was built with: {before} then {after}",
+        );
+    }
+
+    /// A handle with nothing behind it plays nothing, rather than panicking —
+    /// the same "key on absence" every other lookup on a body follows.
+    #[test]
+    fn a_handle_whose_clip_is_gone_plays_nothing() {
+        let rig = default_humanoid().clone();
+        let ground = |_: Vec3| 0.0;
+        let frames = Frames::standing(Transform::IDENTITY, Transform::IDENTITY, &ground);
+
+        let mut clips = Assets::<Clip>::default();
+        let handle = clips.add(chest_turned_by(0.6));
+        clips.remove(&handle);
+
+        let mut pose = Pose::rest();
+        apply_stack(
+            &ClipStack(vec![Playing { clip: handle, time: 0.0, weight: 1.0 }]),
+            &clips, &rig, &mut pose, &frames, None,
+        );
+        assert_eq!(pose.joint(bone::CHEST), Quat::IDENTITY);
     }
 }

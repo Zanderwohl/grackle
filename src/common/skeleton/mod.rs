@@ -45,7 +45,7 @@ pub use clip::{
 };
 pub use draw::{draw_skeleton, SkeletonPalette};
 pub use interpolation::Interpolation;
-pub use play::{apply, apply_stack, ClipStack, Frames, Playing};
+pub use play::{apply, apply_stack, ClipAssetsPlugin, ClipStack, Frames, Playing};
 pub use mesh::{body_meshes, bone_mesh, Profile, Ring};
 pub use joints::{limit_of, Hinge, JointLimit};
 pub use gait::{direction_of, DisplaySpeed, FootOffset, Gait, GaitShape};

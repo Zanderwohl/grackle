@@ -49,6 +49,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use bevy::asset::Asset;
+use bevy::reflect::TypePath;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -676,7 +678,15 @@ impl Track {
 }
 
 /// One authored motion.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+///
+/// **An asset**, so a body playing one holds a `Handle<Clip>` the way a held
+/// part holds a `Handle<Mesh>`: sixty bodies playing one deploy share it, and
+/// whoever owns the clip — a baked prop, the animation editor's preview —
+/// updates it by inserting under the same handle, which every body playing it
+/// sees on the next sample. Nothing is loaded through the `AssetServer`; a
+/// clip is read through `AssetSource` with everything else in a pack, and
+/// only stored here.
+#[derive(Asset, TypePath, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Clip {
     /// The lang key this clip's name is under. Empty for one nobody has named.
     #[serde(default, skip_serializing_if = "String::is_empty")]

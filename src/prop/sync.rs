@@ -72,6 +72,7 @@ impl Plugin for PropSyncPlugin {
         app.register_message::<ModelSnapshot>()
             .add_direction(NetworkDirection::ServerToClient);
 
+        app.add_plugins(crate::common::skeleton::ClipAssetsPlugin);
         app.init_resource::<LastModelsSent>().add_systems(
             Update,
             (
@@ -190,6 +191,7 @@ fn adopt_the_servers_models(
     mut surfaces: ResMut<SurfaceMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut clips: ResMut<Assets<crate::common::skeleton::clip::Clip>>,
 ) {
     if role.is_authority() {
         return;
@@ -201,7 +203,7 @@ fn adopt_the_servers_models(
             for (name, text) in &message.0 {
                 match document::parse(text) {
                     Ok(doc) => {
-                        cache.adopt(name, &doc, &mut meshes, &mut materials, &mut surfaces)
+                        cache.adopt(name, &doc, &mut meshes, &mut materials, &mut surfaces, &mut clips)
                     }
                     // Logged rather than fatal: one model nobody can read is a
                     // weapon drawn with empty hands, not a client that falls
