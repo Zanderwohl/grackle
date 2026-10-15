@@ -352,9 +352,11 @@ fn pose_body_meshes(
         let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
 
         // `parts` is built in bone order, so the bone being visited and the
-        // part it places share an index.
+        // part it places share an index. A part that says otherwise is placed
+        // by its own bone instead — debug builds call it out, but a release
+        // build should not quietly hang a shin where a forearm goes.
         let mut index = 0;
-        skeleton.each_posed_bone(pose, &root, |bone| {
+        skeleton.each_posed_bone(pose, &root, |visited| {
             let part = mesh.parts.get(index);
             index += 1;
             let Some(Ok((BoneMesh(bone_index), mut transform))) = part.map(|part| parts.get_mut(*part))
@@ -362,6 +364,10 @@ fn pose_body_meshes(
                 return;
             };
             debug_assert_eq!(*bone_index, index - 1, "a part is out of bone order");
+            let bone = match *bone_index == index - 1 {
+                true => visited,
+                false => skeleton.posed_bone(pose, &root, *bone_index),
+            };
             // The mesh is already the bone's size; a non-uniform scale here
             // would be a second opinion about that and would skew its normals.
             // Compared before writing, so a pose that moved an arm leaves the
