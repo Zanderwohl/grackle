@@ -12,8 +12,9 @@ use crate::anim::body::{BodyClipDialog, BodyClips};
 use crate::anim::{edit_selected, selected_clip, AnimEditor, ClipSource};
 use crate::common::skeleton::clip::{
     Axis, ChainRef, Channel, Clip, Clock, Combine, Key, Space, StateAnimation, Timing, Track,
-    Unit, Variant,
+    Unit,
 };
+use std::collections::BTreeMap;
 use crate::common::skeleton::state::AnimationState;
 use crate::common::skeleton::{default_humanoid, Interpolation};
 use strum::IntoEnumIterator;
@@ -196,8 +197,22 @@ impl AnimTabs<'_> {
             .default_open(true)
             .show(ui, |ui| {
                 // Every state, with or without a clip, since a state with none still plays its built-in pose.
-                // Cloned because the rows edit the document they are drawn from.
-                let animations = self.body.animations().clone();
+                // Only the shape is copied, not the clips, because the rows edit the document they are
+                // drawn from. `None` is a single clip, `Some` a blend's variant headings.
+                let animations: BTreeMap<String, Option<Vec<f32>>> = self
+                    .body
+                    .animations()
+                    .iter()
+                    .map(|(name, animation)| {
+                        let headings = match animation {
+                            StateAnimation::Single(_) => None,
+                            StateAnimation::Blend(variants) => {
+                                Some(variants.iter().map(|variant| variant.heading).collect())
+                            }
+                        };
+                        (name.clone(), headings)
+                    })
+                    .collect();
                 for state in AnimationState::iter() {
                     let name = state.clip_name();
                     match animations.get(name) {
@@ -207,12 +222,8 @@ impl AnimTabs<'_> {
                             name,
                             format!("animation.states.{name}"),
                         ),
-                        Some(StateAnimation::Single(_)) => {
-                            self.library_row(ui, ClipSource::Body, name, &body_names)
-                        }
-                        Some(StateAnimation::Blend(variants)) => {
-                            self.blend_rows(ui, state, variants)
-                        }
+                        Some(None) => self.library_row(ui, ClipSource::Body, name, &body_names),
+                        Some(Some(headings)) => self.blend_rows(ui, state, headings),
                     }
                 }
                 // A file under a name no state has.
@@ -293,7 +304,7 @@ impl AnimTabs<'_> {
         });
     }
 
-    fn blend_rows(&mut self, ui: &mut Ui, state: AnimationState, variants: &[Variant]) {
+    fn blend_rows(&mut self, ui: &mut Ui, state: AnimationState, headings: &[f32]) {
         let name = state.clip_name();
         let header = ui.add(egui::Label::new(state.name()).selectable(false).sense(egui::Sense::click()));
         header.context_menu(|ui| {
@@ -305,14 +316,14 @@ impl AnimTabs<'_> {
         });
 
         ui.indent(("anim_variants", name), |ui| {
-            for (index, variant) in variants.iter().enumerate() {
+            for (index, heading) in headings.iter().enumerate() {
                 let address = crate::anim::body::variant_name(name, index);
                 let picked = self.anim.source == ClipSource::Body
                     && self.anim.selected.as_deref() == Some(address.as_str());
                 let label = get!(
                     "anim.library.variant",
                     "heading",
-                    format!("{:+.0}°", variant.heading.to_degrees())
+                    format!("{:+.0}°", heading.to_degrees())
                 );
                 let row = ui.selectable_label(picked, label);
                 if row.clicked() && !picked {
@@ -333,7 +344,7 @@ impl AnimTabs<'_> {
                     }
                     // Removing the last variant is reverting the state, which the state's own menu offers.
                     if ui
-                        .add_enabled(variants.len() > 1, egui::Button::new(get!("anim.library.remove_variant")))
+                        .add_enabled(headings.len() > 1,egui::Button::new(get!("anim.library.remove_variant")))
                         .clicked()
                     {
                         self.body.edit(|clips| {

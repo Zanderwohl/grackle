@@ -154,18 +154,17 @@ pub fn draw_picking_gizmos(
     }
 }
 
-/// Like `find_hovered_point` but only considers features whose IDs are in `allowed`.
+/// Like `find_hovered_point` but only considers the first `before` active features.
 pub fn find_hovered_point_filtered(
     ray: &Ray3d,
     features: &FeatureTimeline,
     pick_radius: f32,
-    allowed: &[FeatureId],
+    before: usize,
 ) -> Option<(FeatureId, String, Vec3)> {
     let mut best_dist = pick_radius;
     let mut best: Option<(FeatureId, String, Vec3)> = None;
 
-    for (feature_id, feature) in features.active_features() {
-        if !allowed.contains(&feature_id) { continue; }
+    for (feature_id, feature) in features.active_features().take(before) {
         let points = feature.object().reference_points_for_ray(ray);
         for (key, pos) in points {
             let dist = ray_point_distance(ray, pos);
@@ -179,19 +178,18 @@ pub fn find_hovered_point_filtered(
     best
 }
 
-/// Like `draw_picking_gizmos` but only draws for features whose IDs are in `allowed`.
+/// Like `draw_picking_gizmos` but only draws for the first `before` active features.
 pub fn draw_picking_gizmos_filtered(
     gizmos: &mut Gizmos,
     ray: &Ray3d,
     features: &FeatureTimeline,
     hovered: &Option<(FeatureId, String, Vec3)>,
-    allowed: &[FeatureId],
+    before: usize,
 ) {
     let dim_color = Color::srgb_u8(200, 200, 200);
     let highlight_color = Color::srgb_u8(0, 230, 0);
 
-    for (feature_id, feature) in features.active_features() {
-        if !allowed.contains(&feature_id) { continue; }
+    for (feature_id, feature) in features.active_features().take(before) {
         let points = feature.object().reference_points_for_ray(ray);
         for (key, pos) in &points {
             let is_hovered = hovered.as_ref()

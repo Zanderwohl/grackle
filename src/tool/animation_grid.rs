@@ -3,6 +3,7 @@
 //! live here because a feature only has `Commands` and is re-applied on every
 //! edit.
 
+use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 
 use crate::common::damage::Damageable;
@@ -111,13 +112,26 @@ pub fn sync_animation_grids(
     grids: Query<(Entity, &Transform, Option<&RosterTeam>), With<AnimationGridMarker>>,
     bodies: Query<&OfGrid>,
     mut last_cycle: Local<Option<u64>>,
+    mut occupied: Local<EntityHashSet>,
 ) {
     // The same boundary `drive_carousels` uses, so a refill lands on a shuffle.
     let cycle = showing(clock.seconds()).cycle;
     let shuffled = last_cycle.replace(cycle) != Some(cycle);
 
+    // Between shuffles only an empty grid is filled, so one pass over the bodies settles most frames.
+    if !shuffled {
+        occupied.clear();
+        occupied.extend(bodies.iter().map(|body| body.grid));
+        if grids.iter().all(|(grid, ..)| occupied.contains(&grid)) {
+            return;
+        }
+    }
+
     let cells = cells();
     for (grid, placed_at, teams) in &grids {
+        if !shuffled && occupied.contains(&grid) {
+            continue;
+        }
         let mut standing = vec![false; cells.len()];
         for body in &bodies {
             if body.grid != grid {

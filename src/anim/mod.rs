@@ -130,10 +130,18 @@ pub fn selected_clip(
     prop: &PropEditor,
     body: &body::BodyClips,
 ) -> Option<Clip> {
+    selected_clip_ref(anim, prop, body).cloned()
+}
+
+fn selected_clip_ref<'a>(
+    anim: &AnimEditor,
+    prop: &'a PropEditor,
+    body: &'a body::BodyClips,
+) -> Option<&'a Clip> {
     let name = anim.selected.as_deref()?;
     match anim.source {
-        ClipSource::Prop => prop.doc().animations.get(name).cloned(),
-        ClipSource::Body => body.get(name).cloned(),
+        ClipSource::Prop => prop.doc().animations.get(name),
+        ClipSource::Body => body.get(name),
     }
 }
 
@@ -206,16 +214,12 @@ fn keep_a_clip_selected(
     body: Res<body::BodyClips>,
     mut anim: ResMut<AnimEditor>,
 ) {
-    let names = clip_names(&anim, &editor, &body);
-    let still_there = anim
-        .selected
-        .as_deref()
-        .is_some_and(|name| names.iter().any(|had| had == name));
-    if still_there {
+    // Looked up rather than listed, so the common frame allocates nothing.
+    if selected_clip_ref(&anim, &editor, &body).is_some() {
         return;
     }
 
-    let wanted = names.first().cloned();
+    let wanted = clip_names(&anim, &editor, &body).into_iter().next();
     // Written only when it differs: `AnimEditor` is watched, and writing every frame would re-frame the
     // strip continuously.
     if anim.selected != wanted {
