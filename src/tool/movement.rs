@@ -1,5 +1,5 @@
  use bevy::app::App;
- use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+ use bevy::input::mouse::MouseWheel;
  use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
@@ -29,6 +29,11 @@ impl MovementPlugin {
         mut cameras: Query<(Entity, &mut Transform, &GlobalTransform, &Multicam, &mut Projection, &Camera)>,
         mut evr_scroll: MessageReader<MouseWheel>,
     ) {
+        // Drained every frame, whether or not anything is dragging. A reader
+        // only read while dragging hands the first frame of a drag every notch
+        // turned since the last one ended.
+        let scroll: f32 = evr_scroll.read().map(|ev| ev.y).sum();
+
         if mouse_input.started_in_camera.is_none() {
             cursor_options.grab_mode = CursorGrabMode::None;
             cursor_options.visible = true;
@@ -49,35 +54,14 @@ impl MovementPlugin {
                                 Projection::Perspective(_projection) => {
                                     Self::perspective_move(&mut transform, global_transform, delta, &settings, &keyboard_input);
 
-                                    for ev in evr_scroll.read() {
-                                        match ev.unit {
-                                            MouseScrollUnit::Line => {
-                                                transform.translation += forward * settings.perspective_scroll * ev.y;
-                                            }
-                                            MouseScrollUnit::Pixel => {
-                                                transform.translation += forward * settings.perspective_scroll * ev.y;
-                                            }
-                                        }
-                                    }
+                                    transform.translation += forward * settings.perspective_scroll * scroll;
                                 }
                                 Projection::Orthographic(projection) => {
                                     Self::ortho_move(&mut transform, delta, &projection, &settings, &keyboard_input);
 
-                                    for ev in evr_scroll.read() {
-                                        match ev.unit {
-                                            MouseScrollUnit::Line => {
-                                                projection.scale -= settings.orthographic_scroll * ev.y;
-                                            }
-                                            MouseScrollUnit::Pixel => {
-                                                projection.scale -= settings.orthographic_scroll * ev.y;
-                                            }
-                                        }
-                                        if projection.scale < 0.001 {
-                                            projection.scale = 0.001;
-                                        }
-                                        if projection.scale > 0.1 {
-                                            projection.scale = 0.1;
-                                        }
+                                    if scroll != 0.0 {
+                                        projection.scale = (projection.scale - settings.orthographic_scroll * scroll)
+                                            .clamp(0.001, 0.1);
                                     }
                                 }
                                 Projection::Custom(_) => {}

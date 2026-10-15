@@ -114,6 +114,12 @@ impl Plugin for MapSyncPlugin {
 struct LastMapSent {
     blueprint: Vec<u8>,
     since: f32,
+    /// The timeline changed since the last look at the bytes. Latched rather
+    /// than read off `is_changed` at send time, because this system runs every
+    /// frame and a change made inside the resend window has aged out of
+    /// `is_changed` by the time the window closes — the last frame of a drag
+    /// would never be sent.
+    pending: bool,
 }
 
 /// Serialise the map as it stands, or say why not.
@@ -158,15 +164,17 @@ fn broadcast_map_changes(
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
 
+    last.pending |= timeline.is_changed();
     last.since += time.delta_secs();
     if last.since < RESEND_INTERVAL {
         return Ok(());
     }
     // Cheap pre-filter only. The answer that decides anything is the byte
     // comparison below, since a timeline is marked changed by more than edits.
-    if !timeline.is_changed() {
+    if !last.pending {
         return Ok(());
     }
+    last.pending = false;
 
     let Some(blueprint) = encode(&timeline) else { return Ok(()) };
     if blueprint == last.blueprint {

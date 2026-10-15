@@ -728,7 +728,9 @@ impl Plugin for RagdollPlugin {
                     .before(reap_the_dead)
                     .run_if(has_authority),
                 shove_ragdolls.after(DamageSystems::Deal),
-                step_ragdolls,
+                // Not on a rollback's replayed ticks: a corpse is not
+                // predicted, so a replay would step and age it again.
+                step_ragdolls.run_if(not(lightyear::prelude::is_in_rollback)),
                 // Only the authority takes one away, for the same reason.
                 retire_ragdolls.run_if(has_authority),
             ).chain().run_if(in_state(AppMode::Play)))

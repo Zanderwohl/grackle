@@ -177,10 +177,14 @@ impl Plugin for GameTimePlugin {
             // Before anything reads it, and on the tick: the clock is the one
             // quantity every viewer of a body has to agree on.
             .add_systems(FixedUpdate, (
-                advance_animation_clock,
-                // After the step, because it advances on the ground that step
-                // actually covered.
-                advance_gaits.after(step_player),
+                // Not on a rollback's replayed ticks: nothing rolls the clock
+                // or a stride back, so replaying would advance them again.
+                (
+                    advance_animation_clock,
+                    // After the step, because it advances on the ground that
+                    // step actually covered.
+                    advance_gaits.after(step_player),
+                ).run_if(not(lightyear::prelude::is_in_rollback)),
                 follow_stance.after(step_player),
             ).run_if(in_state(AppMode::Play)))
         ;
@@ -501,7 +505,11 @@ fn dress_bodies_from_elsewhere(
 /// every viewer a different answer.
 fn phase_bodies_by_id(
     mut commands: Commands,
-    bodies: Query<(Entity, &PlayerId), (Added<PlayerId>, With<Skeleton>)>,
+    // Either arrival, because they arrive in either order: a replicated body's
+    // id comes in its own message, and its rig waits on its `Class`, which
+    // does too. Keyed on the id alone, an id that beat the rig was spent on a
+    // body with nothing to phase and never looked at again.
+    bodies: Query<(Entity, &PlayerId), (With<Skeleton>, Or<(Added<PlayerId>, Added<Skeleton>)>)>,
 ) {
     for (body, id) in &bodies {
         commands.entity(body).insert(AnimationPhase::from_id(id.0));
@@ -676,6 +684,31 @@ mod tests {
 
         let rig = world.get::<Skeleton>(body).expect("the class arrived and nothing dressed it");
         assert_eq!(rig.proportions(), Class::Sniper.proportions());
+    }
+
+    /// A replicated body's id can arrive before it has a rig to phase, and it
+    /// is phased when the rig turns up rather than left in step with
+    /// everybody else.
+    #[test]
+    fn a_body_whose_id_beat_its_rig_is_still_phased() {
+        let mut world = World::new();
+        let mut schedule = Schedule::default();
+        schedule.add_systems((dress_new_players, phase_bodies_by_id).chain());
+
+        // An id whose phase is not the zero a fresh rig is dressed with.
+        let id = (0..).find(|&id| AnimationPhase::from_id(id).0 != 0.0).unwrap();
+        let body = world.spawn((Player::default(), PlayerId(id))).id();
+        schedule.run(&mut world);
+        assert!(world.get::<Skeleton>(body).is_none(), "a body with no class was dressed");
+
+        world.entity_mut(body).insert(Class::Mercenary);
+        schedule.run(&mut world);
+
+        assert_eq!(
+            world.get::<AnimationPhase>(body).copied(),
+            Some(AnimationPhase::from_id(id)),
+            "the id came before the rig and the body was never phased"
+        );
     }
 
     /// The two dressing systems are disjoint, and a player's is the one that

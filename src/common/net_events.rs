@@ -19,7 +19,7 @@ use lightyear::prelude::*;
 
 use crate::common::damage::{DamageDealt, Died};
 use crate::common::effects::Effect;
-use crate::common::net::{has_authority, is_remote_client, NetRole};
+use crate::common::net::{has_authority, is_remote_client};
 use crate::game::ragdoll::RagdollShove;
 
 /// What happened, as against what is.
@@ -201,12 +201,8 @@ fn receive_shoves(
 /// solver on each machine takes it from there.
 pub fn replicate_corpses(
     mut commands: Commands,
-    role: Res<NetRole>,
-    raised: Query<Entity, (Added<crate::game::ragdoll::Ragdoll>, Without<Replicate>)>,
+    raised: Query<Entity, (With<crate::game::ragdoll::Ragdoll>, Without<Replicate>)>,
 ) {
-    if !matches!(*role, NetRole::Listen { .. }) {
-        return;
-    }
     for corpse in &raised {
         commands
             .entity(corpse)
@@ -228,12 +224,8 @@ pub fn replicate_corpses(
 /// position and `interpolate_bodies` smooths it, exactly as for a body.
 pub fn replicate_projectiles(
     mut commands: Commands,
-    role: Res<NetRole>,
-    launched: Query<Entity, (Added<crate::game::projectile::Projectile>, Without<Replicate>)>,
+    launched: Query<Entity, (With<crate::game::projectile::Projectile>, Without<Replicate>)>,
 ) {
-    if !matches!(*role, NetRole::Listen { .. }) {
-        return;
-    }
     for projectile in &launched {
         commands
             .entity(projectile)
@@ -250,12 +242,8 @@ pub fn replicate_projectiles(
 /// not need to know it is part of a roster.
 pub fn replicate_display_bodies(
     mut commands: Commands,
-    role: Res<NetRole>,
-    standing: Query<Entity, (Added<crate::tool::animation_grid::CarouselBody>, Without<Replicate>)>,
+    standing: Query<Entity, (With<crate::tool::animation_grid::CarouselBody>, Without<Replicate>)>,
 ) {
-    if !matches!(*role, NetRole::Listen { .. }) {
-        return;
-    }
     for body in &standing {
         commands
             .entity(body)

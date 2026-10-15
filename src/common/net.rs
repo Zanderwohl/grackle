@@ -149,6 +149,15 @@ pub fn is_remote_client(role: Option<Res<NetRole>>) -> bool {
     !has_authority(role)
 }
 
+/// Run condition: there are clients to send things to.
+///
+/// A run condition rather than an early return in the system, for anything
+/// keyed on `Added`: a system that runs and returns still moves its change
+/// ticks on, so whatever was added while playing alone is never seen again.
+pub fn is_hosting(role: Option<Res<NetRole>>) -> bool {
+    role.is_some_and(|role| matches!(*role, NetRole::Listen { .. }))
+}
+
 /// Split `host`, `host:port` or `[::1]:port` into its two halves.
 ///
 /// Hand-rolled rather than going through `ToSocketAddrs` because that resolves
