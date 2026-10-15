@@ -31,15 +31,11 @@ use crate::game::skeleton::{
 /// Whether hitboxes, and the debug laser aimed at them, are drawn. `F4`
 /// toggles both.
 ///
-/// On by default: a hidden hitbox layer would be a layer nobody ever checked.
-#[derive(Resource, Debug)]
+/// Off by default, like the bones: they are a debug view of where a shot
+/// would land, not part of what a player sees, and the laser costs a trace per
+/// player against every body each frame while it is up.
+#[derive(Resource, Debug, Default)]
 pub struct ShowHitboxes(pub bool);
-
-impl Default for ShowHitboxes {
-    fn default() -> Self {
-        ShowHitboxes(true)
-    }
-}
 
 pub struct HitboxPlugin;
 

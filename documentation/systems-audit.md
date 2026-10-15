@@ -108,7 +108,7 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
   Changed<SkeletonRoot>)>`, `set_if_neq`.
 - [x] `draw_debug_laser` (`src/game/hitscan.rs`) traces every body for every
   player every frame, not tied to F4. Done: gated on `ShowHitboxes` (F4),
-  which is on by default.
+  now off by default.
 - [ ] `Ragdoll::step` ~12 allocations per corpse per tick; scratch buffers,
   `par_iter_mut`.
 - [ ] `advance_animators` recomputes identical poses in the editor (clock
