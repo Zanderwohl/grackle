@@ -104,7 +104,8 @@ impl Plugin for SkeletonPlugin {
                 PostUpdate,
                 draw_skeletons
                     .after(TransformSystems::Propagate)
-                    .run_if(showing_the_world),
+                    .run_if(showing_the_world)
+                    .run_if(|show: Res<ShowBones>| show.0),
             )
         ;
     }
@@ -449,18 +450,13 @@ fn advance_animators(
 
 /// Skips the body the camera is inside.
 pub fn draw_skeletons(
-    show: Res<ShowBones>,
     mut gizmos: Gizmos,
     view: Res<ViewMode>,
-    bodies: Query<(&Skeleton, &Pose, &GlobalTransform, Option<&SkeletonRoot>, Option<&LocalPlayer>)>,
+    bodies: Query<(&Skeleton, &Pose, &GlobalTransform, Option<&SkeletonRoot>, Has<LocalPlayer>)>,
 ) {
-    if !show.0 {
-        return;
-    }
-
     for (skeleton, pose, global, offset, own_body) in &bodies {
         // `LocalPlayer`, not `Player`: replicated bodies carry `Player` too.
-        if own_body.is_some() && !view.shows_own_body() {
+        if own_body &&!view.shows_own_body() {
             continue;
         }
         let root = skeleton_root(global, offset);

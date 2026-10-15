@@ -37,6 +37,10 @@ pub fn record_damage(
 pub struct Dying;
 
 /// Say who died, and mark the body for removal next tick.
+///
+/// `Changed` is enough because health only reaches zero by being written, and
+/// this runs in the same gated set as `apply_damage`, so it never misses a tick
+/// the write happened on. Spawning at zero counts as a change.
 pub fn announce_the_dead(
     mut commands: Commands,
     clock: Res<AnimationClock>,
@@ -50,7 +54,7 @@ pub fn announce_the_dead(
             Option<&PlayerId>,
             Option<&GlobalTransform>,
         ),
-        Without<Dying>,
+        (Changed<Damageable>, Without<Dying>),
     >,
 ) {
     let now = clock.seconds();
@@ -246,5 +250,25 @@ mod tests {
         resolve(&mut world);
 
         assert_eq!(deaths(&mut world).len(), 1);
+    }
+
+    /// One system kept across runs, as the schedule keeps it, so its change
+    /// ticks are real: `run_system_once` sees everything as changed.
+    #[test]
+    fn a_body_killed_after_it_was_last_looked_at_is_still_announced() {
+        let mut world = a_world();
+        let announce = world.register_system(announce_the_dead);
+        let body = world.spawn((Damageable::with_health(100), DamageLog::default())).id();
+
+        world.run_system(announce).unwrap();
+        world.run_system(announce).unwrap();
+        assert!(deaths(&mut world).is_empty());
+
+        world.get_mut::<Damageable>(body).unwrap().apply(100);
+        world.run_system(announce).unwrap();
+        world.flush();
+
+        assert_eq!(deaths(&mut world).len(), 1, "a death written between runs was missed");
+        assert!(world.get::<Dying>(body).is_some());
     }
 }

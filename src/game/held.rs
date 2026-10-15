@@ -143,7 +143,7 @@ fn dress_held_weapons(
     mut clip_assets: ResMut<Assets<Clip>>,
     view: Res<ViewMode>,
     bodies: Query<
-        (Entity, &Equipped, Option<&Class>, Option<&LocalPlayer>, Option<&HeldModel>),
+        (Entity, &Equipped, Option<&Class>, Has<LocalPlayer>, Option<&HeldModel>),
         With<Skeleton>,
     >,
 ) {
@@ -195,7 +195,7 @@ fn dress_held_weapons(
                                     // Spawned already hidden: `hide_own_body`
                                     // only catches it a frame later, which
                                     // flashes the weapon across your view.
-                                    match ours.is_some() && !view.shows_own_body() {
+                                    match ours && !view.shows_own_body() {
                                         true => Visibility::Hidden,
                                         false => Visibility::Inherited,
                                     },

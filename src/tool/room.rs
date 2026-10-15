@@ -276,10 +276,10 @@ impl RoomTool {
 
     fn draw_room_bounds(
         mut gizmos: Gizmos,
-        rooms: Query<(Entity, &Room)>,
+        rooms: Query<&Room>,
     ) {
         let color = Color::srgb_u8(100, 100, 100);
-        for (_, room) in rooms {
+        for room in rooms {
             bounds_gizmo(&mut gizmos, room.min, room.max, color);
         }
     }

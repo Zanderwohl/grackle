@@ -43,7 +43,8 @@ impl Plugin for HitboxPlugin {
                 PostUpdate,
                 draw_hitboxes
                     .after(TransformSystems::Propagate)
-                    .run_if(showing_the_world),
+                    .run_if(showing_the_world)
+                    .run_if(|show: Res<ShowHitboxes>| show.0),
             )
         ;
     }
@@ -118,21 +119,16 @@ pub fn update_hitboxes(
 }
 
 fn draw_hitboxes(
-    show: Res<ShowHitboxes>,
     view: Res<ViewMode>,
     mut gizmos: Gizmos,
-    bodies: Query<(&Hitboxes, Option<&LocalPlayer>)>,
+    bodies: Query<(&Hitboxes, Has<LocalPlayer>)>,
 ) {
-    if !show.0 {
-        return;
-    }
-
     let body_colour = Color::srgb(0.55, 0.16, 0.16);
     let head_colour = Color::srgb(1.0, 0.25, 0.25);
 
     for (boxes, own_body) in &bodies {
         // `LocalPlayer`, not `Player`: replicated bodies carry `Player` too.
-        if own_body.is_some() && !view.shows_own_body() {
+        if own_body && !view.shows_own_body() {
             continue;
         }
         for (hitbox, colour) in [(boxes.body, body_colour), (boxes.head, head_colour)] {
