@@ -158,6 +158,8 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(bevy::state::app::StatesPlugin);
         app.add_plugins(bevy::time::TimePlugin);
+        // A model's clips are assets, and `PropSyncPlugin` registers them.
+        app.add_plugins(bevy::asset::AssetPlugin::default());
         app.add_plugins(lightyear::prelude::client::ClientPlugins {
             tick_duration: std::time::Duration::from_secs_f64(1.0 / crate::constants::TICK_HZ),
         });

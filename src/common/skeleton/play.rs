@@ -332,13 +332,17 @@ pub struct Playing {
 #[derive(Component, Clone, Debug, Default)]
 pub struct ClipStack(pub Vec<Playing>);
 
-/// Makes sure `Assets<Clip>` exists, whoever asks first.
+/// Registers `Clip` as an asset, whoever asks first.
 ///
 /// Every plugin that plays a clip adds this, so no binary or test has to
-/// remember to. Safe to add more than once — it does nothing if the storage is
-/// already there — and it works without an `AssetServer`, because nothing
-/// loads a clip through one: a headless test gets the storage alone, which is
-/// all a clip needs.
+/// remember to. Safe to add more than once — a second `init_asset` would
+/// replace the storage and drop every clip in it, so it does nothing if the
+/// storage is already there.
+///
+/// It needs `AssetPlugin` first, and says so rather than quietly making do: a
+/// bare `Assets<Clip>` with no asset systems behind it sends no `AssetEvent`s
+/// and never frees a clip whose last handle has gone, and nothing about that
+/// would be loud. A headless test adds `AssetPlugin` like the game does.
 pub struct ClipAssetsPlugin;
 
 impl Plugin for ClipAssetsPlugin {
@@ -346,11 +350,11 @@ impl Plugin for ClipAssetsPlugin {
         if app.world().contains_resource::<Assets<Clip>>() {
             return;
         }
-        if app.world().contains_resource::<AssetServer>() {
-            app.init_asset::<Clip>();
-        } else {
-            app.init_resource::<Assets<Clip>>();
-        }
+        assert!(
+            app.world().contains_resource::<AssetServer>(),
+            "ClipAssetsPlugin needs AssetPlugin added before it",
+        );
+        app.init_asset::<Clip>();
     }
 
     fn is_unique(&self) -> bool {
