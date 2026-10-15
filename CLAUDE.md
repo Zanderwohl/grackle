@@ -278,7 +278,7 @@ so the two can never disagree about where you are looking and
 Three more keys while playing: **`F`** swaps between first and third person
 (`ViewMode` in [`src/game/player.rs`](src/game/player.rs) — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
-**`F4`** toggles the hitbox gizmos, and **`F6`** toggles the bone gizmos, which
+**`F4`** toggles the hitbox gizmos and the debug laser aimed at them, and **`F6`** toggles the bone gizmos, which
 are off by default now that bodies have geometry. `F3` is the perf overlay in
 both modes.
 

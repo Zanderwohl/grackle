@@ -28,10 +28,10 @@ use crate::game::skeleton::{
     advance_animation_clock, advance_gaits, skeleton_root, SkeletonRoot,
 };
 
-/// Whether hitboxes are drawn. `F4` toggles it.
+/// Whether hitboxes, and the debug laser aimed at them, are drawn. `F4`
+/// toggles both.
 ///
-/// On by default: they are the thing the debug laser is aimed at, and a
-/// hidden hitbox layer would be a layer nobody ever checked.
+/// On by default: a hidden hitbox layer would be a layer nobody ever checked.
 #[derive(Resource, Debug)]
 pub struct ShowHitboxes(pub bool);
 

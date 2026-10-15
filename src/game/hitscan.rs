@@ -97,7 +97,13 @@ impl Plugin for HitscanPlugin {
             .add_systems(Update, (mark_tracers, fade_tracers))
             .add_systems(
                 PostUpdate,
-                (draw_debug_laser, draw_tracers)
+                (
+                    // With the boxes it is aimed at, and off with them: it
+                    // traces every player's aim against every body, every
+                    // frame, which is a lot to pay for a line nobody asked for.
+                    draw_debug_laser.run_if(|show: Res<crate::game::hitbox::ShowHitboxes>| show.0),
+                    draw_tracers,
+                )
                     .after(TransformSystems::Propagate)
                     .run_if(in_state(AppMode::Play)),
             )
