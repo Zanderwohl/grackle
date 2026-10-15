@@ -373,11 +373,14 @@ impl Ragdoll {
 
         // Where every point started, which is what the velocity at the end of
         // this is measured against.
-        let started: Vec<Vec3> = self.points.iter().map(|point| point.at).collect();
-        let mut touching = vec![BVec3::FALSE; self.points.len()];
+        let mut started = Scratch::<Vec3, POINTS_ON_THE_STACK>::new(self.points.len(), Vec3::ZERO);
+        for (was, point) in started.iter_mut().zip(&self.points) {
+            *was = point.at;
+        }
+        let mut touching = Scratch::<BVec3, POINTS_ON_THE_STACK>::new(self.points.len(), BVec3::FALSE);
 
         let fall = Vec3::Y * GRAVITY * dt * dt;
-        for (point, contact) in self.points.iter_mut().zip(&mut touching) {
+        for (point, contact) in self.points.iter_mut().zip(touching.iter_mut()) {
             let carried = (point.at - point.previous) * (1.0 - DRAG);
             // The same swept move the player takes, for the same reason: a
             // point thrown by an explosion covers more ground in a tick than a
@@ -417,7 +420,7 @@ impl Ragdoll {
 
         self.settle(dt);
 
-        for ((point, was), contact) in self.points.iter_mut().zip(&started).zip(&touching) {
+        for ((point, was), contact) in self.points.iter_mut().zip(started.iter()).zip(touching.iter()) {
             let mut velocity = point.at - *was;
             for axis in 0..3 {
                 // Held against something on this axis, so whatever it looks
@@ -512,23 +515,35 @@ impl Ragdoll {
     /// draws as a body with a joint bent slightly too far, rather than as one
     /// with a gap in its arm.
     pub fn pose(&self, skeleton: &Skeleton) -> (Transform, Pose) {
-        let bones = skeleton.bones();
-        let mut frames: Vec<Quat> = Vec::with_capacity(bones.len());
         let mut pose = Pose::rest();
+        let placed = self.pose_into(skeleton, &mut pose);
+        (placed, pose)
+    }
+
+    /// [`Ragdoll::pose`], written over a pose that already exists.
+    ///
+    /// What the tick uses: a corpse's `Pose` is rewritten whole every tick it
+    /// is awake, and building a fresh one each time is a map grown from empty
+    /// per corpse per tick. Every bone is set, so the result is the same pose
+    /// whatever was there before.
+    pub fn pose_into(&self, skeleton: &Skeleton, pose: &mut Pose) -> Transform {
+        let bones = skeleton.bones();
+        let mut frames = Scratch::<Quat, BONES_ON_THE_STACK>::new(bones.len(), Quat::IDENTITY);
+        pose.reset_to_rest();
         let root = self.root_frame();
 
         for (index, bone) in bones.iter().enumerate() {
-            let (rest, world, _) = self.frame(index, bone, &frames, root);
+            let (rest, world, _) = self.frame(index, bone, &frames[..index], root);
             // A bone's global rotation is `parent * bone.rest * pose`, and
             // `rest` here is the first two of those.
             pose.set(bone.name, rest.inverse() * world);
-            frames.push(world);
+            frames[index] = world;
         }
 
         // Forward kinematics puts the root bone's head at
         // `root.translation + root.rotation * bone.head`, and the rotation is
         // the identity, so this is that read backwards.
-        (Transform::from_translation(self.points[0].at - bones[0].head), pose)
+        Transform::from_translation(self.points[0].at - bones[0].head)
     }
 
     /// Bone lengths, and the offsets that hold one bone onto the next.
@@ -564,10 +579,10 @@ impl Ragdoll {
     /// which shows up as a corpse that hums rather than one that lies still.
     fn hold_joints(&mut self, skeleton: &Skeleton, root: Quat) {
         let bones = skeleton.bones();
-        let mut frames: Vec<Quat> = Vec::with_capacity(bones.len());
+        let mut frames = Scratch::<Quat, BONES_ON_THE_STACK>::new(bones.len(), Quat::IDENTITY);
 
         for (index, bone) in bones.iter().enumerate() {
-            let (_, world, direction) = self.frame(index, bone, &frames, root);
+            let (_, world, direction) = self.frame(index, bone, &frames[..index], root);
             let head = self.points[index * 2].at;
 
             // Part of the way towards what the joint allows, not all of it.
@@ -575,7 +590,7 @@ impl Ragdoll {
             let eased = was.lerp(direction, LIMIT_RELAXATION).normalize_or(direction);
 
             self.points[index * 2 + 1].at = head + eased * bone.length;
-            frames.push(world);
+            frames[index] = world;
         }
     }
 
@@ -697,6 +712,53 @@ fn set_axis(flags: BVec3, axis: usize) -> BVec3 {
     let mut set = [flags.x, flags.y, flags.z];
     set[axis] = true;
     BVec3::from_array(set)
+}
+
+/// Bones whose frames a tick keeps on the stack — the allowance
+/// [`Skeleton::each_posed_bone`] makes, which every rig built here fits.
+const BONES_ON_THE_STACK: usize = 32;
+
+/// Solver points the same, at two per bone.
+const POINTS_ON_THE_STACK: usize = BONES_ON_THE_STACK * 2;
+
+/// A tick's working list, on the stack for any rig that fits and on the heap
+/// for one that does not.
+///
+/// The solver wants a few lists as long as the rig every tick — where each
+/// point started, which ones are touching a wall, each bone's frame — and as
+/// `Vec`s that was a dozen allocations per awake corpse per tick, and a rocket
+/// into a crowd raises dozens of corpses at once. Nothing about the arithmetic
+/// changes: it is the same values in the same order, kept somewhere cheaper.
+struct Scratch<T, const N: usize> {
+    inline: [T; N],
+    spilled: Vec<T>,
+    len: usize,
+}
+
+impl<T: Copy, const N: usize> Scratch<T, N> {
+    fn new(len: usize, fill: T) -> Self {
+        Scratch {
+            inline: [fill; N],
+            // `Vec::new` does not allocate, so a rig that fits pays nothing
+            // for the fallback.
+            spilled: if len > N { vec![fill; len] } else { Vec::new() },
+            len,
+        }
+    }
+}
+
+impl<T, const N: usize> std::ops::Deref for Scratch<T, N> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        if self.len <= N { &self.inline[..self.len] } else { &self.spilled }
+    }
+}
+
+impl<T, const N: usize> std::ops::DerefMut for Scratch<T, N> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        if self.len <= N { &mut self.inline[..self.len] } else { &mut self.spilled }
+    }
 }
 
 pub struct RagdollPlugin;
@@ -916,29 +978,35 @@ pub fn shove_ragdolls(
 /// `Time<Fixed>` rather than `Time`, so a corpse is simulated in the same
 /// steps everything else that decides where a body ends up is, and so it does
 /// not age while the game is paused in the editor.
+///
+/// In parallel, because every corpse is its own simulation: one reads only
+/// its own components and the walls, and nothing collides with a corpse —
+/// not even another corpse — so the order they are stepped in cannot change
+/// where any of them ends up. That is what keeps this bit-identical on every
+/// machine whatever its thread count, and a corpse that ever started reading
+/// another would have to come off `par_iter_mut` first.
 pub fn step_ragdolls(
     time: Res<Time<Fixed>>,
     world: Res<CollisionWorld>,
     mut corpses: Query<(&mut Ragdoll, &Skeleton, &mut Transform, &mut Pose)>,
 ) {
     let dt = time.delta_secs();
-    for (mut corpse, skeleton, mut transform, mut pose) in &mut corpses {
+    let world = &*world;
+    corpses.par_iter_mut().for_each(|(mut corpse, skeleton, mut transform, mut pose)| {
         if corpse.age() >= RAGDOLL_LIFETIME {
-            continue;
+            return;
         }
 
         let settled = corpse.is_asleep();
-        corpse.step(skeleton, &world, dt);
+        corpse.step(skeleton, world, dt);
         // A settled corpse is not moving, and writing its pose anyway would
         // dirty change detection for every part of it every tick.
         if settled && corpse.is_asleep() {
-            continue;
+            return;
         }
 
-        let (placed, shape) = corpse.pose(skeleton);
-        *transform = placed;
-        *pose = shape;
-    }
+        *transform = corpse.pose_into(skeleton, &mut pose);
+    });
 }
 
 /// Take away every corpse that has lain there long enough.
@@ -1824,6 +1892,86 @@ mod tests {
 
         // Gravity, and nothing sideways.
         assert!((corpse.bone_points(0).0.x - before.x).abs() < 1.0e-4);
+    }
+
+    /// A handful of corpses dropped, shoved and stepped, folded down to one
+    /// number over the bits of every point and every drawn joint.
+    fn fingerprint() -> u64 {
+        let skeleton = rig();
+        let world = a_room();
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut fold = |bits: u32| {
+            hash ^= u64::from(bits);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        };
+
+        for case in 0..6 {
+            let a = case as f32 * 1.3;
+            let pose = Pose::rest()
+                .with(bone::CHEST, Quat::from_rotation_x(a.sin() * 0.5))
+                .with(bone::THIGH_L, Quat::from_rotation_x(a.cos() * 0.5));
+            let root = Transform::from_translation(Vec3::new(a.cos(), 0.0, a.sin()))
+                .with_rotation(Quat::from_rotation_y(a));
+            let mut corpse =
+                Ragdoll::from_body(&skeleton, &pose, &root, Vec3::new(a.sin(), 0.0, a.cos()) * 0.1);
+
+            for tick in 0..160 {
+                if tick == 40 {
+                    let (head, _) = corpse.bone_points(skeleton.index_of(bone::HEAD).unwrap());
+                    corpse.shove(head, Push::Outward(7.0), 0.8, DT);
+                }
+                corpse.step(&skeleton, &world, DT);
+            }
+
+            for point in &corpse.points {
+                for value in point.at.to_array().into_iter().chain(point.previous.to_array()) {
+                    fold(value.to_bits());
+                }
+            }
+            let (placed, drawn) = corpse.pose(&skeleton);
+            placed.translation.to_array().into_iter().for_each(|value| fold(value.to_bits()));
+            for bone in skeleton.bones() {
+                drawn.joint(bone.name).to_array().into_iter().for_each(|value| fold(value.to_bits()));
+            }
+        }
+        hash
+    }
+
+    /// The solver's arithmetic is pinned, not merely its behaviour.
+    ///
+    /// A corpse is replicated as a seed and every machine runs this solver
+    /// from it, so a change that moved the result by one bit is a corpse that
+    /// lies differently on two screens — and none of the settling tests would
+    /// notice, since a corpse that settles a millimetre to the left still
+    /// settles. The number was recorded from the solver before its working
+    /// lists moved onto the stack. If a change *means* to alter the
+    /// simulation, record it again; if it did not mean to, it has.
+    #[test]
+    fn the_solver_reaches_the_same_bits_it_always_has() {
+        assert_eq!(fingerprint(), 0x801d_1968_7a9c_e32e);
+    }
+
+    /// The tick writes over the pose the corpse already has, and what was
+    /// there must not survive into the answer — a stale joint or root offset
+    /// would draw on top of the solver's.
+    #[test]
+    fn posing_over_an_old_pose_is_posing_from_rest() {
+        let skeleton = rig();
+        let world = a_room();
+        let mut corpse = stood_up(&skeleton, &Pose::rest());
+        run(&mut corpse, &skeleton, &world, 20);
+
+        let (placed, fresh) = corpse.pose(&skeleton);
+        let mut reused = Pose::rest().with(bone::HEAD, Quat::from_rotation_z(1.0));
+        reused.root_offset = Vec3::ONE;
+        reused.set("not a bone", Quat::from_rotation_x(0.5));
+        assert_eq!(corpse.pose_into(&skeleton, &mut reused), placed);
+
+        assert_eq!(reused.root_offset, Vec3::ZERO);
+        assert_eq!(reused.joint("not a bone"), Quat::IDENTITY);
+        for bone in skeleton.bones() {
+            assert_eq!(reused.joint(bone.name), fresh.joint(bone.name), "{}", bone.name);
+        }
     }
 }
 

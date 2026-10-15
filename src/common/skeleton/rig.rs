@@ -416,6 +416,13 @@ impl Pose {
         self.joints.insert(name, rotation);
     }
 
+    /// Back to [`Pose::rest`] without giving up the room the joints were
+    /// stored in, for a caller that rewrites a whole pose every tick.
+    pub fn reset_to_rest(&mut self) {
+        self.root_offset = Vec3::ZERO;
+        self.joints.clear();
+    }
+
     /// Part way from one pose to another.
     ///
     /// Well defined precisely because a pose is sparse and named: a joint one
