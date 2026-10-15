@@ -101,7 +101,7 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
   rooms, but run on rebuild rather than per frame.
 - [x] `src/tool/movement.rs` writes `CursorOptions` every frame (winit re-grabs).
   Compare first; `cameras.get_mut(cam_id)`.
-- [ ] `place_the_viewmodel_arms` (`src/game/viewmodel.rs`) re-solves IK every
+- [x] `place_the_viewmodel_arms` (`src/game/viewmodel.rs`) re-solves IK every
   frame on inputs that change only on respawn/weapon/FOV/aspect. Key it.
 - [x] `pose_body_meshes` (`src/game/body_mesh.rs`) re-poses sleeping corpses and
   static previews. Filter `Or<(Changed<Pose>, Changed<BodyMesh>,
