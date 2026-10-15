@@ -14,7 +14,7 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::common::assets::{default_packs, Assets as PackAssets};
-use crate::common::net::NetRole;
+use crate::common::net::{is_hosting, is_remote_client};
 use crate::common::weapon::WeaponCatalogue;
 use crate::prop::baked::{PropCache, SurfaceMaterials};
 use crate::prop::document;
@@ -52,9 +52,8 @@ impl Plugin for PropSyncPlugin {
         app.init_resource::<LastModelsSent>().add_systems(
             Update,
             (
-                send_models_to_new_clients,
-                broadcast_model_changes,
-                adopt_the_servers_models,
+                (send_models_to_new_clients, broadcast_model_changes).run_if(is_hosting),
+                adopt_the_servers_models.run_if(is_remote_client),
             ),
         );
     }
@@ -146,7 +145,6 @@ fn broadcast_model_changes(
 /// Guarded on authority rather than on holding a receiver, which a listen
 /// server also has.
 fn adopt_the_servers_models(
-    role: Res<NetRole>,
     mut receivers: Query<&mut MessageReceiver<ModelSnapshot>>,
     mut cache: ResMut<PropCache>,
     mut surfaces: ResMut<SurfaceMaterials>,
@@ -154,10 +152,6 @@ fn adopt_the_servers_models(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut clips: ResMut<Assets<crate::common::skeleton::clip::Clip>>,
 ) {
-    if role.is_authority() {
-        return;
-    }
-
     for mut receiver in &mut receivers {
         for message in receiver.receive() {
             info!("Adopting the server's weapon models: {} of them", message.0.len());

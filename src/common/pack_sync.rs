@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::common::class::ClassBuilds;
-use crate::common::net::NetRole;
+use crate::common::net::{is_hosting, is_remote_client};
 use crate::common::weapon::WeaponCatalogue;
 
 /// A resource the authority reads from its pack and every client adopts.
@@ -57,7 +57,7 @@ pub struct PackChannel;
 #[serde(bound = "")]
 pub struct Snapshot<T>(pub Vec<u8>, #[serde(skip)] PhantomData<T>);
 
-/// Compared against instead of `Res::is_changed`, which counts the startup
+/// Compared against as well as `Res::is_changed`, which counts the startup
 /// insertion as a change.
 #[derive(Resource, Default)]
 struct LastSent<T>(T);
@@ -83,7 +83,10 @@ fn sync<T: PackTable>(app: &mut App) {
 
     app.init_resource::<T>().init_resource::<LastSent<T>>().add_systems(
         Update,
-        (send_to_new_clients::<T>, broadcast_changes::<T>, adopt_the_servers::<T>),
+        (
+            (send_to_new_clients::<T>, broadcast_changes::<T>).run_if(is_hosting),
+            adopt_the_servers::<T>.run_if(is_remote_client),
+        ),
     );
 }
 
@@ -113,7 +116,8 @@ fn broadcast_changes<T: PackTable>(
     mut sender: ServerMultiMessageSender,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
-    if table.as_ref() == &last.0 {
+    // Pre-filter only, so the deep compare is not paid every frame.
+    if !table.is_changed() || table.as_ref() == &last.0 {
         return Ok(());
     }
 
@@ -137,14 +141,9 @@ fn encode<T: PackTable>(table: &T) -> Option<Snapshot<T>> {
 /// Gated on authority rather than on holding a receiver, which a listen
 /// server also has.
 fn adopt_the_servers<T: PackTable>(
-    role: Res<NetRole>,
     mut receivers: Query<&mut MessageReceiver<Snapshot<T>>>,
     mut table: ResMut<T>,
 ) {
-    if role.is_authority() {
-        return;
-    }
-
     for mut receiver in &mut receivers {
         for message in receiver.receive() {
             let sent: T = match serde_json::from_slice(&message.0) {

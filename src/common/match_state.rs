@@ -8,7 +8,7 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
-use crate::common::net::NetRole;
+use crate::common::net::is_hosting;
 
 /// Reliable and ordered: one mode change out of order would leave a client in
 /// the editor for the rest of the round.
@@ -54,7 +54,7 @@ impl Plugin for MatchStatePlugin {
         app.add_systems(
             Update,
             (
-                announce_mode_change.run_if(state_changed::<AppMode>),
+                announce_mode_change.run_if(state_changed::<AppMode>).run_if(is_hosting),
                 // A client connecting between mode changes still has to be
                 // told, and there may be no change coming.
                 tell_new_clients,
@@ -67,13 +67,9 @@ impl Plugin for MatchStatePlugin {
 /// Runs with or without clients; sending to an empty server is a no-op.
 fn announce_mode_change(
     mode: Res<State<AppMode>>,
-    role: Res<NetRole>,
     server: Option<Single<&Server>>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
-    if !role.is_authority() {
-        return Ok(());
-    }
     let Some(server) = server else { return Ok(()) };
     sender.send::<_, MatchChannel>(
         &MatchMode::from(*mode.get()),

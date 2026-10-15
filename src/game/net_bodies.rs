@@ -9,7 +9,7 @@ use lightyear::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::damage::NextPlayerId;
-use crate::common::net::NetRole;
+use crate::common::net::{has_authority, NetRole};
 use crate::common::weapon::WeaponCatalogue;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
@@ -25,7 +25,9 @@ impl Plugin for NetBodiesPlugin {
         app.add_systems(
             Update,
             (
-                give_bodies_to_whoever_needs_one.run_if(in_state(AppMode::Play)),
+                give_bodies_to_whoever_needs_one
+                    .run_if(in_state(AppMode::Play))
+                    .run_if(has_authority),
                 claim_our_own_body,
             ),
         );
@@ -74,7 +76,12 @@ fn give_bodies_to_whoever_needs_one(
     mut ids: ResMut<NextPlayerId>,
     catalogue: Res<WeaponCatalogue>,
 ) {
-    if !role.as_deref().is_none_or(NetRole::is_authority) {
+    let we_need_one = ours.is_empty();
+    let mut unbodied = links
+        .iter()
+        .filter(|(link, _)| !owners.iter().any(|owned| owned.owner == *link))
+        .peekable();
+    if !we_need_one && unbodied.peek().is_none() {
         return;
     }
     let hosting = matches!(role.as_deref(), Some(NetRole::Listen { .. }));
@@ -86,7 +93,7 @@ fn give_bodies_to_whoever_needs_one(
     // somebody leaving frees their side up.
     let mut here = identities.iter().count() + usize::from(us.is_some());
 
-    if ours.is_empty() {
+    if we_need_one {
         // The identity outlives the body, so a respawn is the same player on
         // the same team. `enter_play` drops it for a new match.
         let who = match us {
@@ -107,10 +114,7 @@ fn give_bodies_to_whoever_needs_one(
         }
     }
 
-    for (link, peer) in &links {
-        if owners.iter().any(|owned| owned.owner == link) {
-            continue;
-        }
+    for (link, peer) in unbodied {
         // On the link entity, which lives exactly as long as the connection.
         let who = match identities.get(link) {
             Ok(who) => *who,

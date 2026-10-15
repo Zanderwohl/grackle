@@ -11,7 +11,7 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::common::net::NetRole;
+use crate::common::net::{is_hosting, is_remote_client};
 use crate::editor::editable::{Feature, FeatureId, FeatureTimeline};
 use crate::tool::room::CalculateRoomGeometry;
 
@@ -70,7 +70,10 @@ impl Plugin for MapSyncPlugin {
         app.init_resource::<LastMapSent>()
             .add_systems(
                 Update,
-                (send_map_to_new_clients, broadcast_map_changes, adopt_the_servers_map),
+                (
+                    (send_map_to_new_clients, broadcast_map_changes).run_if(is_hosting),
+                    adopt_the_servers_map.run_if(is_remote_client),
+                ),
             );
     }
 }
@@ -165,17 +168,12 @@ fn send_map_to_new_clients(
 /// Gated on authority rather than on having a receiver: a listen server has
 /// one too, and adopting its own map would despawn what it is replicating.
 fn adopt_the_servers_map(
-    role: Res<NetRole>,
     mut receivers: Query<&mut MessageReceiver<MapSnapshot>>,
     mut timeline: ResMut<FeatureTimeline>,
     mut bake: MessageWriter<CalculateRoomGeometry>,
     // Adopting is a visible rebuild, so an identical map is skipped.
     mut last: Local<Vec<u8>>,
 ) {
-    if role.is_authority() {
-        return;
-    }
-
     for mut receiver in &mut receivers {
         for message in receiver.receive() {
             if message.blueprint == *last {

@@ -117,16 +117,13 @@ const GIVE_UP_AFTER: u32 = 8;
 
 /// Waits for rooms to exist: features become entities only after
 /// `sync_entities`, and entering Play earlier builds an empty collision world.
+/// Run it under [`starting_in_play`]; it clears the request once answered.
 pub fn start_in_play(
-    start: Res<StartInPlay>,
+    mut start: ResMut<StartInPlay>,
     mut next: ResMut<NextState<AppMode>>,
     mut waited: Local<u32>,
-    mut done: Local<bool>,
     rooms: Query<(), With<crate::tool::room::Room>>,
 ) {
-    if !start.0 || *done {
-        return;
-    }
     *waited += 1;
     if rooms.is_empty() && *waited < GIVE_UP_AFTER {
         return;
@@ -136,7 +133,11 @@ pub fn start_in_play(
     }
     info!("Starting in Play, as asked");
     next.set(AppMode::Play);
-    *done = true;
+    start.0 = false;
+}
+
+pub fn starting_in_play(start: Res<StartInPlay>) -> bool {
+    start.0
 }
 
 #[cfg(test)]

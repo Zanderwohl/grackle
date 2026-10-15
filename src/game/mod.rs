@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
-use crate::common::app_mode::{start_in_play, AppMode, StartInPlay};
+use crate::common::app_mode::{start_in_play, starting_in_play, AppMode, StartInPlay};
 use crate::common::damage::NextPlayerId;
 use crate::common::net::NetRole;
 use crate::common::skeleton::AnimationClock;
@@ -79,7 +79,7 @@ impl Plugin for GamePlugin {
             .init_resource::<AnimationClock>()
             .init_resource::<InputLatch>()
             .init_resource::<ViewMode>()
-            .add_systems(Update, (toggle_mode, start_in_play))
+            .add_systems(Update, (toggle_mode, start_in_play.run_if(starting_in_play)))
             .add_systems(Update, (
                 toggle_view,
                 // Ungated: on a client the body arrives from the server some
