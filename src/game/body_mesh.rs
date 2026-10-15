@@ -328,8 +328,21 @@ fn recolour_bodies(
 ///
 /// The hot loop: bones per body per frame. Forward kinematics runs once per
 /// body and is read out by index, which is why [`BoneMesh`] holds one.
+///
+/// **Only bodies whose inputs changed**, and only parts that moved. A part is
+/// a function of the rig, the pose, the root offset and the part list, so a
+/// body none of those changed on is already where this would put it — a
+/// settled corpse, a spawn point's preview, everything hidden behind the prop
+/// editor. Writing them anyway undid the care `step_ragdolls` takes not to
+/// touch a sleeping corpse's `Pose`, and handed propagation every part of
+/// every body every frame. `Changed<BodyMesh>` is what places a rebuilt body:
+/// `build_body_meshes` inserts it in the same command flush that spawns the
+/// parts, so they exist by the time the change is seen.
 fn pose_body_meshes(
-    bodies: Query<(&Skeleton, &Pose, Option<&SkeletonRoot>, &BodyMesh)>,
+    bodies: Query<
+        (&Skeleton, &Pose, Option<&SkeletonRoot>, &BodyMesh),
+        Or<(Changed<Pose>, Changed<BodyMesh>, Changed<SkeletonRoot>, Changed<Skeleton>)>,
+    >,
     mut parts: Query<(&BoneMesh, &mut Transform)>,
 ) {
     for (skeleton, pose, offset, mesh) in &bodies {
@@ -337,21 +350,28 @@ fn pose_body_meshes(
         // middle of a body whose transform is the centre of its collision box.
         // Local space has no rotation to undo, so this is the whole of it.
         let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
-        let posed = skeleton.posed_bones(pose, &root);
 
-        for part in &mesh.parts {
-            let Ok((BoneMesh(index), mut transform)) = parts.get_mut(*part) else {
-                continue;
+        // `parts` is built in bone order, so the bone being visited and the
+        // part it places share an index.
+        let mut index = 0;
+        skeleton.each_posed_bone(pose, &root, |bone| {
+            let part = mesh.parts.get(index);
+            index += 1;
+            let Some(Ok((BoneMesh(bone_index), mut transform))) = part.map(|part| parts.get_mut(*part))
+            else {
+                return;
             };
-            let bone = &posed[*index];
+            debug_assert_eq!(*bone_index, index - 1, "a part is out of bone order");
             // The mesh is already the bone's size; a non-uniform scale here
             // would be a second opinion about that and would skew its normals.
-            *transform = Transform {
+            // Compared before writing, so a pose that moved an arm leaves the
+            // legs unchanged as far as propagation is concerned.
+            transform.set_if_neq(Transform {
                 translation: bone.head,
                 rotation: bone.rotation,
                 scale: Vec3::ONE,
-            };
-        }
+            });
+        });
     }
 }
 
@@ -626,6 +646,106 @@ mod tests {
         assert!(before.iter().all(|part| !after.contains(part)), "old parts were kept");
         for part in before {
             assert!(app.world().get_entity(part).is_err(), "an old part is still around");
+        }
+    }
+
+    /// When each of a body's parts last had its `Transform` written.
+    fn part_ticks(app: &App, body: Entity) -> Vec<bevy::ecs::change_detection::Tick> {
+        app.world()
+            .get::<BodyMesh>(body)
+            .unwrap()
+            .parts
+            .iter()
+            .map(|part| {
+                app.world()
+                    .entity(*part)
+                    .get_change_ticks::<Transform>()
+                    .unwrap()
+                    .changed
+            })
+            .collect()
+    }
+
+    /// A body nothing moved leaves its parts alone, and a pose that moved one
+    /// arm writes that arm and not the legs.
+    ///
+    /// A settled corpse and a spawn point's preview are the case: rewriting
+    /// their parts every frame hands every one of them to propagation, and
+    /// undoes the ragdoll's own care not to touch a sleeping corpse's pose.
+    #[test]
+    fn a_body_that_did_not_move_leaves_its_parts_alone() {
+        let mut app = app();
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let forearm = skeleton.index_of(bone::FOREARM_R).unwrap();
+        let shin = skeleton.index_of(bone::SHIN_L).unwrap();
+        let body = app
+            .world_mut()
+            .spawn((skeleton, Pose::rest(), Transform::IDENTITY))
+            .id();
+        app.update();
+        let dressed = part_ticks(&app, body);
+
+        app.update();
+        assert_eq!(part_ticks(&app, body), dressed, "a still body's parts were rewritten");
+
+        let bent = Quat::from_rotation_x(1.0);
+        app.world_mut().get_mut::<Pose>(body).unwrap().set(bone::FOREARM_R, bent);
+        app.update();
+        let moved = part_ticks(&app, body);
+        assert_ne!(moved[forearm], dressed[forearm], "the bent forearm was not placed");
+        assert_eq!(moved[shin], dressed[shin], "a leg was rewritten for an arm moving");
+
+        let skeleton = app.world().get::<Skeleton>(body).unwrap();
+        let mut pose = Pose::rest();
+        pose.set(bone::FOREARM_R, bent);
+        let expected = skeleton.posed_bones(&pose, &Transform::IDENTITY).swap_remove(forearm);
+        let part = app.world().get::<BodyMesh>(body).unwrap().parts[forearm];
+        let placed = app.world().get::<Transform>(part).unwrap();
+        assert!((placed.translation - expected.head).length() < 1e-4);
+        assert!(placed.rotation.angle_between(expected.rotation) < 1e-3);
+    }
+
+    /// A body rebuilt as another build is placed on the frame its new parts
+    /// exist, root offset and all, though its pose did not change.
+    ///
+    /// The rebuild is the one input that is not the pose, and the parts are
+    /// spawned at their bones' rest heads — near enough to look right in a
+    /// test that only checks one bone, and off by the root offset everywhere.
+    #[test]
+    fn a_rebuilt_body_is_placed_on_the_frame_its_parts_exist() {
+        let mut app = app();
+        let offset = Vec3::new(0.0, -0.9, 0.0);
+        let body = app
+            .world_mut()
+            .spawn((
+                humanoid(Class::Scout.proportions()),
+                Pose::rest(),
+                SkeletonRoot(offset),
+                Transform::IDENTITY,
+            ))
+            .id();
+        app.update();
+        app.update();
+
+        app.world_mut()
+            .entity_mut(body)
+            .insert(humanoid(Class::Heavy.proportions()));
+        app.update();
+
+        let skeleton = app.world().get::<Skeleton>(body).unwrap();
+        let expected = skeleton.posed_bones(&Pose::rest(), &Transform::from_translation(offset));
+        let parts = &app.world().get::<BodyMesh>(body).unwrap().parts;
+        assert_eq!(parts.len(), expected.len());
+        for (part, bone) in parts.iter().zip(&expected) {
+            let placed = app.world().get::<Transform>(*part).unwrap();
+            assert!(
+                (placed.translation - bone.head).length() < 1e-4
+                    && placed.rotation.angle_between(bone.rotation) < 1e-3,
+                "{} is at {}, and its bone at {}",
+                bone.name,
+                placed.translation,
+                bone.head,
+            );
         }
     }
 }
