@@ -778,31 +778,25 @@ impl FeatureTimeline {
         }
 
         let shown = features.shown_len();
-        let order: Vec<(usize, FeatureId)> = features.feature_order.iter()
-            .enumerate()
-            .map(|(i, id)| (i, *id))
-            .collect();
+        let FeatureTimeline { features: map, feature_order, .. } = features;
 
-        for (i, id) in order {
-            let should_exist = i < shown;
-            let needs_spawn = should_exist
-                && features.features.get(&id).is_some_and(|a| a.object.entity().is_none());
-
-            if needs_spawn {
-                let mut feature = features.features.remove(&id).unwrap();
-                feature.object.resolve_references(&features.features);
+        for (i, &id) in feature_order.iter().enumerate() {
+            if i < shown {
+                if !map.get(&id).is_some_and(|a| a.object.entity().is_none()) {
+                    continue;
+                }
+                // Out of the map while it resolves, since resolving reads the map.
+                let mut feature = map.remove(&id).unwrap();
+                feature.object.resolve_references(map);
                 let entity = commands.spawn(FeatureTag { feature_id: id._id }).id();
                 feature.object.set_entity(Some(entity));
                 feature.object.apply_to_entity(&mut commands, entity);
-                features.features.insert(id, feature);
-            } else if !should_exist {
-                if let Some(mut feature) = features.features.remove(&id) {
-                    if let Some(entity) = feature.object.entity() {
-                        commands.entity(entity).despawn();
-                        feature.object.set_entity(None);
-                    }
-                    features.features.insert(id, feature);
-                }
+                map.insert(id, feature);
+            } else if let Some(feature) = map.get_mut(&id)
+                && let Some(entity) = feature.object.entity()
+            {
+                commands.entity(entity).despawn();
+                feature.object.set_entity(None);
             }
         }
     }

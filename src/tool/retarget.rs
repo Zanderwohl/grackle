@@ -27,12 +27,9 @@ pub struct RetargetState {
 }
 
 impl RetargetPlugin {
-    fn prior_features(features: &FeatureTimeline, target: FeatureId) -> Vec<FeatureId> {
-        let order = features.feature_order();
-        let cursor = features.active_features().count();
-        let target_idx = order.iter().position(|id| *id == target).unwrap_or(0);
-        let end = target_idx.min(cursor);
-        order[..end].to_vec()
+    /// How many features come before `target`: only those may be referenced.
+    fn prior_features(features: &FeatureTimeline, target: FeatureId) -> usize {
+        features.feature_order().iter().position(|id| *id == target).unwrap_or(0)
     }
 
     fn interface(
@@ -54,10 +51,10 @@ impl RetargetPlugin {
             return;
         }
 
-        let allowed = Self::prior_features(&features, target_feature_id);
+        let before = Self::prior_features(&features, target_feature_id);
 
         state.hovered_point = mouse_input.world_pos
-            .and_then(|ray| find_hovered_point_filtered(&ray, &features, PICK_RADIUS, &allowed));
+            .and_then(|ray| find_hovered_point_filtered(&ray, &features, PICK_RADIUS, before));
 
         if mouse_input.released == Some(MouseButton::Left) {
             if let Some((ref_feature_id, ref_key, ref_pos)) = state.hovered_point.clone() {
@@ -115,8 +112,8 @@ impl RetargetPlugin {
         let Some(target_feature_id) = state.target_feature else { return; };
         let Some(ray) = mouse_input.world_pos else { return; };
 
-        let allowed = Self::prior_features(&features, target_feature_id);
-        draw_picking_gizmos_filtered(&mut gizmos, &ray, &features, &state.hovered_point, &allowed);
+        let before = Self::prior_features(&features, target_feature_id);
+        draw_picking_gizmos_filtered(&mut gizmos, &ray, &features, &state.hovered_point, before);
     }
 
     fn on_exit(mut state: ResMut<RetargetState>) {
