@@ -362,6 +362,19 @@ impl Plugin for ClipAssetsPlugin {
     }
 }
 
+/// Put `clip` under `handle`, unless that is already what it holds.
+///
+/// How a clip that was edited or saved reaches whatever is playing it: the
+/// handle stays, the asset behind it changes. Compared first, so refilling
+/// with the same clip is not a `Modified` event for nothing.
+pub fn refill(assets: &mut Assets<Clip>, handle: &Handle<Clip>, clip: &Clip) {
+    if assets.get(handle) != Some(clip) {
+        // The caller holds `handle` strongly, so its id cannot have been
+        // freed and the insert cannot fail.
+        let _ = assets.insert(handle.id(), clip.clone());
+    }
+}
+
 /// Where the end of a chain currently is, in world space.
 fn chain_tip(skeleton: &Skeleton, pose: &Pose, root: &Transform, chain: &Chain) -> Option<Vec3> {
     // The `lower` bone's tail: the wrist or the ankle, which is the point

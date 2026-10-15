@@ -110,14 +110,17 @@ const GRIP_LENGTH: f32 = GRIP_SIZE * 3.0;
 /// the handle was, held for the drag so the handle moves *with* the pointer
 /// rather than snapping its centre under it.
 ///
-/// `answered` is the pointer ray the drag last wrote from. A drag re-solves
-/// against the document it has already moved, so the same ray does not give
-/// bit-for-bit the same answer twice — a pointer held still would go on
-/// writing rounding noise every frame. Nothing has moved until the ray has.
+/// `answered` is the pointer ray the drag last answered, and the document's
+/// generation once it had. A drag re-solves against the document it has
+/// already moved, so the same ray does not give bit-for-bit the same answer
+/// twice — a pointer held still would go on writing rounding noise every
+/// frame. So nothing is re-solved until the ray moves *or the document does*:
+/// an undo pressed mid-drag puts the feature back, and the drag has to put it
+/// under the handle again rather than wait for the mouse.
 #[derive(Resource, Default)]
 pub struct GizmoGrab {
     held: Option<(Handle, f32)>,
-    answered: Option<Ray3d>,
+    answered: Option<(Ray3d, u64)>,
 }
 
 pub struct PropGizmoPlugin;
@@ -307,9 +310,8 @@ fn drag_the_selected(
     }
 
     if let Some((handle, offset)) = grab.held
-        && grab.answered != Some(ray)
+        && grab.answered != Some((ray, editor.generation()))
     {
-        grab.answered = Some(ray);
         let axis = handle.axis();
         if let Some(on_axis) = closest_param_on_axis(ray, origin, axis_direction(axis)) {
             let local_t = on_axis - offset;
@@ -343,6 +345,9 @@ fn drag_the_selected(
                 Handle::Grip { .. } | Handle::Carry(_) => {}
             }
         }
+        // After the write, so the drag's own edit is not mistaken next frame
+        // for somebody else's.
+        grab.answered = Some((ray, editor.generation()));
     }
 
     draw(&mut gizmos, &points, &world, scale, grab.held.map(|(handle, _)| handle).or(nearest));
@@ -475,9 +480,8 @@ fn drag_the_hold(
     }
 
     if let Some((handle, offset)) = grab.held
-        && grab.answered != Some(ray)
+        && grab.answered != Some((ray, editor.generation()))
     {
-        grab.answered = Some(ray);
         let axis = handle.axis();
         let mut unit = Vec3::ZERO;
         unit[axis] = 1.0;
@@ -506,6 +510,7 @@ fn drag_the_hold(
                 editor.doc_mut().hold = applied;
             }
         }
+        grab.answered = Some((ray, editor.generation()));
     }
 
     draw_hold(gizmos, &points, &hold, figure, grab.held.map(|(handle, _)| handle).or(nearest));
@@ -856,6 +861,51 @@ mod tests {
     /// mapper pausing mid-drag bumped the generation — and dirtied the
     /// document — sixty times a second for nothing. The press itself is not a
     /// write either, and the whole drag is still one undo step.
+    /// **A drag held still answers a document that moved under it.** Undo
+    /// mid-drag puts the feature back; the handle is still in the hand, so the
+    /// next frame puts the feature under it again rather than waiting for the
+    /// mouse to move and then jumping.
+    #[test]
+    fn a_held_drag_answers_an_undo_under_a_still_pointer() {
+        let (mut world, placement) = a_world_holding_a_box(false);
+        let rotation = placement.rotation();
+        let scale = gizmo_scale(Some(box_shape().half_extents()));
+        let tip = handles(Some(&box_shape()), scale)
+            .into_iter()
+            .find(|(handle, _)| *handle == Handle::Move(0))
+            .map(|(_, local)| placement.origin() + rotation * local)
+            .unwrap();
+        let along = rotation * Vec3::X;
+        let across = rotation * Vec3::Z;
+        let origin_of = |world: &World| {
+            let editor = world.resource::<PropEditor>();
+            let op = editor.doc().feature(editor.selected.unwrap()).unwrap().op.clone();
+            let FeatureOp::Primitive { placement, .. } = op else { unreachable!() };
+            placement.origin()
+        };
+
+        frame(&mut world, ray_onto(tip, across), true);
+        let pulled = ray_onto(tip + along * 0.1, across);
+        frame(&mut world, pulled, false);
+        let dragged = origin_of(&world);
+
+        // Somebody else moves the document: the feature goes back.
+        {
+            let mut editor = world.resource_mut::<PropEditor>();
+            let selected = editor.selected.unwrap();
+            editor.doc_mut().feature_mut(selected).unwrap().op.placement_mut().unwrap().origin =
+                placement.origin;
+        }
+        assert!((origin_of(&world) - placement.origin()).length() < 1e-6);
+
+        frame(&mut world, pulled, false);
+        assert!(
+            (origin_of(&world) - dragged).length() < 1e-4,
+            "the drag waited for the mouse: {} rather than {dragged}",
+            origin_of(&world),
+        );
+    }
+
     #[test]
     fn a_move_arrow_held_still_writes_nothing() {
         let (mut world, placement) = a_world_holding_a_box(false);

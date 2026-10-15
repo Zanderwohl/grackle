@@ -78,7 +78,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
-use crate::common::skeleton::rig::{humanoid, Proportions};
+use crate::common::skeleton::rig::{humanoid, Proportions, Scratch, BONES_ON_THE_STACK};
 use crate::common::damage::falloff;
 use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
@@ -714,52 +714,8 @@ fn set_axis(flags: BVec3, axis: usize) -> BVec3 {
     BVec3::from_array(set)
 }
 
-/// Bones whose frames a tick keeps on the stack — the allowance
-/// [`Skeleton::each_posed_bone`] makes, which every rig built here fits.
-const BONES_ON_THE_STACK: usize = 32;
-
-/// Solver points the same, at two per bone.
+/// Solver points kept on the stack: two per bone.
 const POINTS_ON_THE_STACK: usize = BONES_ON_THE_STACK * 2;
-
-/// A tick's working list, on the stack for any rig that fits and on the heap
-/// for one that does not.
-///
-/// The solver wants a few lists as long as the rig every tick — where each
-/// point started, which ones are touching a wall, each bone's frame — and as
-/// `Vec`s that was a dozen allocations per awake corpse per tick, and a rocket
-/// into a crowd raises dozens of corpses at once. Nothing about the arithmetic
-/// changes: it is the same values in the same order, kept somewhere cheaper.
-struct Scratch<T, const N: usize> {
-    inline: [T; N],
-    spilled: Vec<T>,
-    len: usize,
-}
-
-impl<T: Copy, const N: usize> Scratch<T, N> {
-    fn new(len: usize, fill: T) -> Self {
-        Scratch {
-            inline: [fill; N],
-            // `Vec::new` does not allocate, so a rig that fits pays nothing
-            // for the fallback.
-            spilled: if len > N { vec![fill; len] } else { Vec::new() },
-            len,
-        }
-    }
-}
-
-impl<T, const N: usize> std::ops::Deref for Scratch<T, N> {
-    type Target = [T];
-
-    fn deref(&self) -> &[T] {
-        if self.len <= N { &self.inline[..self.len] } else { &self.spilled }
-    }
-}
-
-impl<T, const N: usize> std::ops::DerefMut for Scratch<T, N> {
-    fn deref_mut(&mut self) -> &mut [T] {
-        if self.len <= N { &mut self.inline[..self.len] } else { &mut self.spilled }
-    }
-}
 
 pub struct RagdollPlugin;
 
@@ -1959,14 +1915,24 @@ mod tests {
     /// solver" holds between two builds of the same profile and target, and
     /// not beyond — a debug client watching a release server already sees a
     /// corpse lie slightly differently.
+    ///
+    /// Both were measured on aarch64 macOS, and the bits depend on the target
+    /// too (`acos` is the platform's), so they are only checked there.
+    /// Everywhere, the same seed has to reach the same bits twice in one
+    /// build, which is the property a replicated corpse actually leans on.
     #[test]
     fn the_solver_reaches_the_same_bits_it_always_has() {
-        let expected = if cfg!(debug_assertions) {
-            0x801d_1968_7a9c_e32e
-        } else {
-            0x93d1_f1d3_b313_e938
-        };
-        assert_eq!(fingerprint(), expected);
+        let reached = fingerprint();
+        assert_eq!(reached, fingerprint(), "one seed reached two answers in one build");
+
+        if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+            let expected = if cfg!(debug_assertions) {
+                0x801d_1968_7a9c_e32e
+            } else {
+                0x93d1_f1d3_b313_e938
+            };
+            assert_eq!(reached, expected);
+        }
     }
 
     /// The tick writes over the pose the corpse already has, and what was

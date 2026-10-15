@@ -258,17 +258,8 @@ impl Skeleton {
     /// every rig built here does. This is what `posed_bones` is written on,
     /// so the two cannot disagree.
     pub fn each_posed_bone(&self, pose: &Pose, root: &Transform, mut visit: impl FnMut(PosedBone)) {
-        const ON_THE_STACK: usize = 32;
         let root = self.offset_root(pose, root);
-
-        let mut inline = [Transform::IDENTITY; ON_THE_STACK];
-        let mut spilled = Vec::new();
-        let globals: &mut [Transform] = if self.bones.len() <= ON_THE_STACK {
-            &mut inline[..self.bones.len()]
-        } else {
-            spilled.resize(self.bones.len(), Transform::IDENTITY);
-            &mut spilled
-        };
+        let mut globals = Scratch::<Transform, BONES_ON_THE_STACK>::new(self.bones.len(), Transform::IDENTITY);
 
         for (index, bone) in self.bones.iter().enumerate() {
             let parent = match bone.parent {
@@ -352,6 +343,50 @@ const ANKLE_HEIGHT: f32 = 0.04;
 pub fn default_humanoid() -> &'static Skeleton {
     static RIG: OnceLock<Skeleton> = OnceLock::new();
     RIG.get_or_init(|| humanoid(Proportions::DEFAULT))
+}
+
+/// Bones a per-body working list keeps on the stack. Every rig built here
+/// fits; one that does not spills to the heap rather than failing.
+pub(crate) const BONES_ON_THE_STACK: usize = 32;
+
+/// A working list as long as a rig, on the stack for any rig that fits and on
+/// the heap for one that does not.
+///
+/// Forward kinematics wants each parent's frame, and the ragdoll solver wants
+/// a few lists per tick — where each point started, which are touching a
+/// wall, each bone's frame. As `Vec`s those were allocations per body per
+/// frame, and a rocket into a crowd is dozens of bodies at once. One type for
+/// all of them, so the allowance and the fallback are said once.
+pub(crate) struct Scratch<T, const N: usize> {
+    inline: [T; N],
+    spilled: Vec<T>,
+    len: usize,
+}
+
+impl<T: Copy, const N: usize> Scratch<T, N> {
+    pub(crate) fn new(len: usize, fill: T) -> Self {
+        Scratch {
+            inline: [fill; N],
+            // `Vec::new` does not allocate, so a rig that fits pays nothing
+            // for the fallback.
+            spilled: if len > N { vec![fill; len] } else { Vec::new() },
+            len,
+        }
+    }
+}
+
+impl<T, const N: usize> std::ops::Deref for Scratch<T, N> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        if self.len <= N { &self.inline[..self.len] } else { &self.spilled }
+    }
+}
+
+impl<T, const N: usize> std::ops::DerefMut for Scratch<T, N> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        if self.len <= N { &mut self.inline[..self.len] } else { &mut self.spilled }
+    }
 }
 
 /// A bone after forward kinematics, in world space.

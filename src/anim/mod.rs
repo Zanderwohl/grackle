@@ -519,7 +519,9 @@ fn timeline_input(
         }
     }
 
-    match &mut grab.0 {
+    // Read through a shared borrow, so a frame with nothing held does not
+    // mark the grab changed; only the arms that write to it take it mutably.
+    match &grab.0 {
         Some(Grab::Scrub { from_x, from_time }) => {
             // Taking hold of the playhead takes it from the transport too: a
             // scrub fighting playback is a playhead that will not stay put.
@@ -530,7 +532,7 @@ fn timeline_input(
         Some(Grab::Pan { from_x, from_start }) => {
             view.start = *from_start - (at.x - *from_x) / view.pixels_per_second;
         }
-        Some(Grab::Keys { from_x, tracks, last_by }) => {
+        Some(Grab::Keys { from_x, .. }) => {
             let mut by = (at.x - *from_x) / view.pixels_per_second;
             // Snapped by default, and **the offset is snapped rather than each
             // key** — so several keys dragged together keep the spacing they
@@ -540,25 +542,33 @@ fn timeline_input(
                 let step = grid_step(view.pixels_per_second);
                 by = (by / step).round() * step;
             }
-            // Asked before the editors are touched, so a pointer held still
-            // does not even mark them changed.
-            if *last_by != Some(by) {
-                nudge_the_selection(
-                    &mut editor,
-                    &mut clips,
-                    &anim,
-                    tracks,
-                    by,
-                    length,
-                    &mut selection,
-                    last_by,
-                );
+            let Some(Grab::Keys { tracks, last_by, .. }) = &mut grab.0 else {
+                unreachable!("matched as a key drag just above");
+            };
+            // Handed over with change detection bypassed and marked only if
+            // the nudge wrote, so a pointer held still does not mark them.
+            let wrote = nudge_the_selection(
+                editor.bypass_change_detection(),
+                clips.bypass_change_detection(),
+                &anim,
+                tracks,
+                by,
+                length,
+                selection.bypass_change_detection(),
+                last_by,
+            );
+            if wrote {
+                editor.set_changed();
+                clips.set_changed();
+                selection.set_changed();
             }
         }
         // The band follows the pointer here rather than in the layout, which
         // has no idea where the pointer is and is better off not learning.
-        Some(Grab::Band { to, .. }) => {
-            *to = at;
+        Some(Grab::Band { .. }) => {
+            if let Some(Grab::Band { to, .. }) = &mut grab.0 {
+                *to = at;
+            }
         }
         None => {}
     }
@@ -742,7 +752,8 @@ fn dragged_tracks(clip: &Clip, selection: &TimelineSelection) -> Vec<DraggedTrac
 /// Nothing is written when `by` is the offset already applied (`last_by`):
 /// the drag is absolute, so the same offset is the same keys, and writing them
 /// again would bump the generation and dirty the document every frame the
-/// button is held still.
+/// button is held still. Says whether it wrote, so a caller holding the
+/// resources with change detection bypassed knows whether to mark them.
 #[allow(clippy::too_many_arguments)]
 fn nudge_the_selection(
     editor: &mut PropEditor,
@@ -753,9 +764,9 @@ fn nudge_the_selection(
     length: f32,
     selection: &mut TimelineSelection,
     last_by: &mut Option<f32>,
-) {
+) -> bool {
     if *last_by == Some(by) {
-        return;
+        return false;
     }
     *last_by = Some(by);
 
@@ -780,6 +791,7 @@ fn nudge_the_selection(
     });
 
     selection.0 = landed;
+    true
 }
 
 /// Add a key at the playhead, or take the selected ones away.
@@ -900,25 +912,41 @@ pub fn preview_inputs(
 /// replaced. What is previewed is a copy of what is being edited, so a slot is
 /// refilled only when what it should show differs from what it holds:
 /// scrubbing moves a time, and only an edit moves a clip.
+///
+/// Each slot also remembers what it was last filled *from* — the
+/// [`PreviewSource`] — so a frame where none of that has moved does not even
+/// compare the clips, which is a walk over every key of every track.
 #[derive(Resource, Default)]
-pub struct PreviewClips([Option<Handle<Clip>>; 2]);
+pub struct PreviewClips([Option<(Handle<Clip>, PreviewSource)>; 2]);
+
+/// Everything a previewed clip is read from: the clip on the strip, the body
+/// clips a blend's variants come out of, and the heading it is blended at.
+#[derive(Clone, Copy, PartialEq)]
+struct PreviewSource {
+    shown: bevy::ecs::change_detection::Tick,
+    body: bevy::ecs::change_detection::Tick,
+    heading: Option<u32>,
+}
 
 impl PreviewClips {
-    ///
-    /// Takes the `ResMut` rather than the storage so a frame that changes
-    /// nothing does not mark the storage changed.
-    fn show(&mut self, slot: usize, clip: &Clip, assets: &mut ResMut<Assets<Clip>>) -> Handle<Clip> {
-        match &self.0[slot] {
-            Some(handle) => {
-                if assets.get(handle) != Some(clip) {
-                    // Held strongly here, so the id cannot have been freed.
-                    let _ = assets.insert(handle.id(), clip.clone());
+    fn show(
+        &mut self,
+        slot: usize,
+        clip: &Clip,
+        from: PreviewSource,
+        assets: &mut ResMut<Assets<Clip>>,
+    ) -> Handle<Clip> {
+        match &mut self.0[slot] {
+            Some((handle, filled_from)) => {
+                if *filled_from != from {
+                    *filled_from = from;
+                    crate::common::skeleton::play::refill(assets, handle, clip);
                 }
                 handle.clone()
             }
             None => {
                 let handle = assets.add(clip.clone());
-                self.0[slot] = Some(handle.clone());
+                self.0[slot] = Some((handle.clone(), from));
                 handle
             }
         }
@@ -945,6 +973,11 @@ fn drive_the_preview(
     performance.0 .0.clear();
     corrections.0 = None;
     let Some(clip) = shown.0.as_ref() else { return };
+    let from = PreviewSource {
+        shown: shown.last_changed(),
+        body: clips.last_changed(),
+        heading: anim.blend_preview.map(f32::to_bits),
+    };
 
     // A body clip is played through its state's corrections in a match, so it
     // is previewed through them too — at the heading it is for, so a
@@ -971,10 +1004,10 @@ fn drive_the_preview(
             // partial layer, which is the same lerp `animation_pose` makes.
             if let (Some(heading), Some(animation)) = (anim.blend_preview, animation.filter(|_| blend.is_some())) {
                 if let Some((first, second)) = animation.at_heading(heading) {
-                    let first = previews.show(0, first, &mut assets);
+                    let first = previews.show(0, first, from, &mut assets);
                     performance.0 .0.push(Playing { clip: first, time: cursor.time, weight: 1.0 });
                     if let Some((other, t)) = second {
-                        let other = previews.show(1, other, &mut assets);
+                        let other = previews.show(1, other, from, &mut assets);
                         performance.0 .0.push(Playing { clip: other, time: cursor.time, weight: t });
                     }
                     return;
@@ -983,7 +1016,7 @@ fn drive_the_preview(
         }
     }
 
-    let clip = previews.show(0, clip, &mut assets);
+    let clip = previews.show(0, clip, from, &mut assets);
     performance.0 .0.push(Playing { clip, time: cursor.time, weight: 1.0 });
 }
 
@@ -1341,20 +1374,29 @@ mod tests {
         world.init_resource::<Assets<Clip>>();
         world.init_resource::<PreviewClips>();
 
-        let show = |world: &mut World, clip: Clip| {
+        let source = |at: u32| PreviewSource {
+            shown: bevy::ecs::change_detection::Tick::new(at),
+            body: bevy::ecs::change_detection::Tick::new(0),
+            heading: None,
+        };
+        let show = |world: &mut World, clip: Clip, from: PreviewSource| {
             world
                 .run_system_once(move |mut previews: ResMut<PreviewClips>, mut assets: ResMut<Assets<Clip>>| {
-                    previews.show(0, &clip, &mut assets)
+                    previews.show(0, &clip, from, &mut assets)
                 })
                 .unwrap()
         };
 
-        let first = show(&mut world, Clip { length: 1.0, ..Clip::default() });
-        let again = show(&mut world, Clip { length: 1.0, ..Clip::default() });
+        let first = show(&mut world, Clip { length: 1.0, ..Clip::default() }, source(1));
+        let again = show(&mut world, Clip { length: 1.0, ..Clip::default() }, source(1));
         assert_eq!(first, again, "an unchanged clip minted a new handle");
         assert_eq!(world.resource::<Assets<Clip>>().len(), 1);
 
-        let edited = show(&mut world, Clip { length: 2.0, ..Clip::default() });
+        // Nothing it is read from has moved, so it is not even looked at.
+        show(&mut world, Clip { length: 9.0, ..Clip::default() }, source(1));
+        assert_eq!(world.resource::<Assets<Clip>>().get(&first).unwrap().length, 1.0);
+
+        let edited = show(&mut world, Clip { length: 2.0, ..Clip::default() }, source(2));
         assert_eq!(first, edited, "an edit minted a new handle rather than refilling the old one");
         assert_eq!(world.resource::<Assets<Clip>>().get(&first).unwrap().length, 2.0);
     }

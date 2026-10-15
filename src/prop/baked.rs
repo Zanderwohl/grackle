@@ -187,11 +187,7 @@ fn publish_clips(
         .map(|(name, clip)| {
             let handle = match previous.and_then(|previous| previous.get(name)) {
                 Some(handle) => {
-                    if clips.get(handle) != Some(clip) {
-                        // A handle this cache holds strongly cannot have been
-                        // freed, so the id is still good.
-                        let _ = clips.insert(handle.id(), clip.clone());
-                    }
+                    crate::common::skeleton::play::refill(clips, handle, clip);
                     handle.clone()
                 }
                 None => clips.add(clip.clone()),
