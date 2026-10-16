@@ -8,7 +8,8 @@
 //! | [`csg`] | The kernel: a BSP tree and three booleans over convex polygon soup. |
 //! | [`profile`] | 2D loops, the planes they are drawn on, and ear clipping. |
 //! | [`reference`] | Naming corners and edges by the generator that made them. |
-//! | [`plane`] | The plane a selection of corners and edges describes. |
+//! | [`plane`] | Origin planes, and the plane a selection describes. |
+//! | [`sketch`] | 2D drawings on a plane: shared points and lines. |
 //! | [`solid`] | Sweeps, primitives, transforms, and the bake to a `Mesh`. |
 //! | [`nice_f32`] | Writing numbers to the file the way somebody typed them. |
 //! | [`surface`] | Style and tint. |
@@ -48,6 +49,7 @@ pub mod nice_f32;
 pub mod plane;
 pub mod profile;
 pub mod reference;
+pub mod sketch;
 pub mod solid;
 pub mod sync;
 pub mod surface;

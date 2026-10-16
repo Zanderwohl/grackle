@@ -17,6 +17,7 @@ use crate::get;
 use crate::prop::profile::{Placement, Profile};
 use crate::prop::csg::Polygon;
 use crate::prop::plane::{Datum, OriginPlane, PlaneRef};
+use crate::prop::sketch::{PlacedSketch, Sketch};
 use crate::prop::reference::{face_at, pickables, GeomRef, Located, Outline, Pickable, Wire};
 use crate::prop::solid::{is_full_turn, Shape, Solid};
 use crate::prop::surface::Surface;
@@ -129,6 +130,8 @@ pub enum FeatureOp {
     /// Not geometry: something to sketch on and measure from. Through what
     /// [`crate::prop::plane`] accepts, as it stood when this runs.
     Plane { through: Vec<GeomRef> },
+    /// A drawing on a plane, which makes no body; see [`crate::prop::sketch`].
+    Sketch { on: PlaneRef, sketch: Sketch },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -192,6 +195,7 @@ impl FeatureOp {
             FeatureOp::Paint { .. } => get!("prop.features.paint"),
             FeatureOp::Pattern { .. } => get!("prop.features.pattern"),
             FeatureOp::Plane { .. } => get!("prop.features.plane"),
+            FeatureOp::Sketch { .. } => get!("prop.features.sketch"),
         }
     }
 
@@ -202,7 +206,8 @@ impl FeatureOp {
             FeatureOp::Primitive { .. }
             | FeatureOp::Extrude { .. }
             | FeatureOp::Revolve { .. }
-            | FeatureOp::Plane { .. } => vec![],
+            | FeatureOp::Plane { .. }
+            | FeatureOp::Sketch { .. } => vec![],
             FeatureOp::Boolean { target, tool, .. } => vec![*target, *tool],
             FeatureOp::Mirror { target, .. }
             | FeatureOp::Paint { target, .. }
@@ -215,6 +220,7 @@ impl FeatureOp {
     pub fn references(&self) -> Vec<PropFeatureId> {
         let mut named: Vec<PropFeatureId> = match self {
             FeatureOp::Plane { through } => through.iter().flat_map(|r| r.source.features()).collect(),
+            FeatureOp::Sketch { on, .. } => on.feature().into_iter().collect(),
             _ => vec![],
         };
         named.sort();
@@ -240,7 +246,8 @@ impl FeatureOp {
             | FeatureOp::Mirror { .. }
             | FeatureOp::Paint { .. }
             | FeatureOp::Pattern { .. }
-            | FeatureOp::Plane { .. } => None,
+            | FeatureOp::Plane { .. }
+            | FeatureOp::Sketch { .. } => None,
         }
     }
 
@@ -302,8 +309,10 @@ pub struct Evaluated {
     pub wires: Vec<(PropFeatureId, Vec<Wire>)>,
     /// The named corners and edges that can be seen; see [`pickables`].
     pub pickables: Vec<Pickable>,
-    /// Plane features, in list order.
+    /// The origin planes, then plane features in list order.
     pub planes: Vec<Datum>,
+    /// Sketches, in list order, placed where their planes were.
+    pub sketches: Vec<PlacedSketch>,
 }
 
 impl Evaluated {
@@ -420,6 +429,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     let mut live: Vec<Live> = Vec::new();
     let mut problems = Vec::new();
     let mut planes = Vec::new();
+    let mut sketches = Vec::new();
     let mut live_before = Vec::with_capacity(features.len());
 
     for feature in features {
@@ -549,6 +559,19 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     None => problems.push(Problem { feature: feature.id, message: get!("prop.problems.no_plane") }),
                 }
             }
+            FeatureOp::Sketch { on, sketch } => {
+                let plane = match *on {
+                    PlaneRef::Origin(which) => Some(which.plane()),
+                    PlaneRef::Feature(_) => planes.iter().find(|datum| datum.id == *on).map(|datum| datum.plane),
+                };
+                match plane {
+                    Some(plane) => sketches.push(PlacedSketch { id: feature.id, plane, sketch: sketch.clone() }),
+                    None => problems.push(Problem {
+                        feature: feature.id,
+                        message: get!("prop.problems.no_sketch_plane"),
+                    }),
+                }
+            }
             FeatureOp::Pattern { target, count, along } => {
                 let Some(body) = find(*target, &live).map(|at| live.remove(at)) else {
                     problems.push(Problem::missing_body(feature.id));
@@ -585,7 +608,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     let origins = OriginPlane::ALL.map(|which| Datum::origin(which, reach * 1.25));
     planes.splice(0..0, origins);
     let (bodies, wires) = live.into_iter().map(|body| ((body.id, body.solid), (body.id, body.wires))).unzip();
-    Evaluated { bodies, wires, pickables, problems, live_before, planes }
+    Evaluated { bodies, wires, pickables, problems, live_before, planes, sketches }
 }
 
 #[cfg(test)]

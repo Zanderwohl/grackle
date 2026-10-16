@@ -31,6 +31,7 @@ use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind};
 use crate::prop::document::{self, Pick, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::prop::plane::{OriginPlane, PickedPlane, Plane, PlaneRef};
 use crate::prop::reference::{Element, GeomRef, Located};
+use crate::prop::sketch::Sketch;
 use crate::common::class::Class;
 use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
 use crate::common::shortcuts::chords;
@@ -932,6 +933,14 @@ fn toolbar(
         if let (true, Some(through)) = (plane_tool.clicked(), through) {
             created_plane = Some(through);
         }
+        let on = match editor.picks() {
+            [Pick::Plane(on)] => Some(*on),
+            _ => None,
+        };
+        let sketch_tool = ui.add_enabled(on.is_some(), egui::Button::new(get!("prop.features.sketch")));
+        if let (true, Some(on)) = (sketch_tool.clicked(), on) {
+            added = Some(FeatureOp::Sketch { on, sketch: Sketch::default() });
+        }
 
         ui.separator();
 
@@ -1199,6 +1208,11 @@ fn feature_inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, se
         _ => vec![],
     };
     let datum = build.evaluated.datum(PlaneRef::Feature(selected));
+    let plane_name = |on: PlaneRef| pick_label(editor, build, &Pick::Plane(on));
+    let sketch_plane = match &edited.op {
+        FeatureOp::Sketch { on, .. } => Some(plane_name(*on)),
+        _ => None,
+    };
     let feature = &mut edited;
 
     let mut changed = false;
@@ -1305,6 +1319,21 @@ fn feature_inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, se
                 });
                 section(ui, "pattern", get!("prop.inspector.sections.pattern"), |ui| {
                     changed |= pattern_ui(ui, count, along);
+                });
+            }
+            FeatureOp::Sketch { sketch, .. } => {
+                section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.on_plane"));
+                        ui.label(sketch_plane.clone().unwrap_or_default());
+                    });
+                    ui.label(get!(
+                        "prop.inspector.drawing",
+                        "points",
+                        sketch.points.len(),
+                        "lines",
+                        sketch.entities.len()
+                    ));
                 });
             }
             FeatureOp::Plane { .. } => {

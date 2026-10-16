@@ -119,8 +119,9 @@ tested.
 - [x] Origin planes — XY, YZ, XZ through the prop's origin — always present,
       not deletable, pickable like plane features. A `PlaneRef` that names
       either kind.
-- [ ] `FeatureOp::Sketch` with points and lines, saved to the file, with a
-      round-trip test. No body; drawn on its plane in the viewport.
+- [x] `FeatureOp::Sketch` with points and lines, saved to the file, with a
+      round-trip test. No body; drawn on its plane in the viewport. Created
+      empty from the toolbar's **Sketch** with one plane picked.
 - [ ] The region toolkit, as above, with tests: a square, two overlapping
       squares (three regions), a figure-eight (two), a square with a square
       hole, an open chain (none), and naming that survives moving a point.

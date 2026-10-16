@@ -26,6 +26,7 @@ use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure,
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::gizmo::HoveredPick;
 use crate::prop::plane::draw_square;
+use crate::tool::tool_helpers::dashed_line;
 use crate::prop::reference::Located;
 use crate::prop::feature::{Evaluated, PropFeature};
 
@@ -344,6 +345,21 @@ fn draw_the_bench(
             draw_located(&mut gizmos, at, marker * 0.8, HOVERED);
         }
     }
+    let picked_features = editor.picked_features(&build.evaluated);
+    for placed in &build.evaluated.sketches {
+        let colour = match picked_features.contains(&placed.id) {
+            true => PICKED,
+            false => SKETCH,
+        };
+        for (a, b, construction) in placed.world_lines() {
+            match construction {
+                true => dashed_line(&mut gizmos, a, b, colour, marker * 2.0, marker),
+                false => {
+                    gizmos.line(a, b, colour);
+                }
+            }
+        }
+    }
     for datum in &build.evaluated.planes {
         let pick = Pick::Plane(datum.id);
         let colour = if editor.picks().contains(&pick) {
@@ -363,6 +379,7 @@ fn draw_the_bench(
 const PICKED: Color = Color::srgb(1.0, 0.8, 0.2);
 const HOVERED: Color = Color::srgb(0.5, 0.9, 1.0);
 const PLANE: Color = Color::srgb(0.55, 0.55, 0.55);
+const SKETCH: Color = Color::srgb(0.92, 0.92, 0.98);
 
 /// A corner's marker as a fraction of the prop's size. Not camera-relative,
 /// for the same reason a feature's handles are not: four viewports.

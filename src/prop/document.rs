@@ -445,8 +445,18 @@ impl PropEditor {
         self.picks.iter().filter_map(|pick| pick.body(evaluated)).collect()
     }
 
+    /// A feature picked as a whole — from the feature list, or just made.
     pub fn select(&mut self, id: PropFeatureId) {
-        self.picks = vec![Pick::Body(id)];
+        self.picks = vec![self.pick_for(id)];
+    }
+
+    /// What picking feature `id` as a whole means: a plane feature is picked
+    /// as a plane, so it offers what a plane picked in the viewport does.
+    fn pick_for(&self, id: PropFeatureId) -> Pick {
+        match self.doc.feature(id).map(|feature| &feature.op) {
+            Some(FeatureOp::Plane { .. }) => Pick::Plane(PlaneRef::Feature(id)),
+            _ => Pick::Body(id),
+        }
     }
 
     pub fn select_pick(&mut self, pick: Pick) {
@@ -468,7 +478,7 @@ impl PropEditor {
     }
 
     pub fn toggle_selected(&mut self, id: PropFeatureId) {
-        self.toggle(Pick::Body(id));
+        self.toggle(self.pick_for(id));
     }
 
     pub fn unpick(&mut self, pick: &Pick) {
@@ -1248,6 +1258,16 @@ mod tests {
         editor.toggle(corner(vec![CopyOf { by: mirror, index: 1 }]));
         editor.undo();
         assert_eq!(editor.picks(), &[corner(vec![])]);
+    }
+
+    /// Fails if a plane picked in the feature list is a body pick, which
+    /// offers nothing a plane does.
+    #[test]
+    fn a_plane_feature_is_picked_as_a_plane() {
+        let mut editor = PropEditor::default();
+        let plane = editor.edit(|doc| doc.push(FeatureOp::Plane { through: vec![] }));
+        editor.select(plane);
+        assert_eq!(editor.picks(), &[Pick::Plane(PlaneRef::Feature(plane))]);
     }
 
     #[test]
