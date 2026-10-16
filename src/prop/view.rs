@@ -350,6 +350,9 @@ fn draw_the_bench(
             picked_colour(&pick)
         } else if hovered.0.as_ref() == Some(&pick) {
             HOVERED
+        } else if datum.id.feature().is_none() {
+            // Always there, so quieter than planes somebody made.
+            PLANE.with_alpha(0.35)
         } else {
             PLANE
         };

@@ -18,6 +18,7 @@ use crate::prop::feature::{evaluate, Evaluated, FeatureOp, PropFeature, PropFeat
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
 use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
 use crate::prop::reference::{GeomRef, Element};
+use crate::prop::plane::PlaneRef;
 
 /// Grackle Prop: TOML, one prop per file.
 pub const PROP_EXTENSION: &str = "gpp";
@@ -31,7 +32,7 @@ pub const PROPS_DIR: &str = "props";
 pub enum Pick {
     Body(PropFeatureId),
     Geom(GeomRef),
-    Plane(PropFeatureId),
+    Plane(PlaneRef),
 }
 
 impl Pick {
@@ -50,7 +51,8 @@ impl Pick {
     /// See [`PropEditor::primary_feature`].
     pub fn feature(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
         match self {
-            Pick::Body(id) | Pick::Plane(id) => Some(*id),
+            Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => Some(*id),
+            Pick::Plane(PlaneRef::Origin(_)) => None,
             Pick::Geom(_) => self.body(evaluated),
         }
     }
@@ -58,7 +60,8 @@ impl Pick {
     /// Every feature the pick names; if any goes, so does the pick.
     pub fn features(&self) -> Box<dyn Iterator<Item = PropFeatureId> + '_> {
         match self {
-            Pick::Body(id) | Pick::Plane(id) => Box::new(std::iter::once(*id)),
+            Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => Box::new(std::iter::once(*id)),
+            Pick::Plane(PlaneRef::Origin(_)) => Box::new(std::iter::empty()),
             Pick::Geom(reference) => Box::new(reference.source.features()),
         }
     }

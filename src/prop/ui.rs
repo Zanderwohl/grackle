@@ -29,7 +29,7 @@ use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
 use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind};
 use crate::prop::document::{self, Pick, PropDoc, PropEditor, PROP_EXTENSION};
-use crate::prop::plane::{PickedPlane, Plane};
+use crate::prop::plane::{OriginPlane, PickedPlane, Plane, PlaneRef};
 use crate::prop::reference::{Element, GeomRef, Located};
 use crate::common::class::Class;
 use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
@@ -974,7 +974,7 @@ fn plane_through_picks(editor: &PropEditor, plane: Option<Plane>) -> Option<Vec<
 
 fn add_plane(editor: &mut PropEditor, through: Vec<GeomRef>) {
     let id = editor.add(FeatureOp::Plane { through });
-    editor.select_pick(Pick::Plane(id));
+    editor.select_pick(Pick::Plane(PlaneRef::Feature(id)));
 }
 
 pub(crate) fn edit_availability(editor: &PropEditor) -> EditAvailability {
@@ -1039,7 +1039,8 @@ fn inspector(
     }
     match editor.primary().cloned() {
         None => prop_overview(ui, editor, build),
-        Some(Pick::Body(id) | Pick::Plane(id)) => feature_inspector(ui, editor, build, id),
+        Some(Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id))) => feature_inspector(ui, editor, build, id),
+        Some(Pick::Plane(PlaneRef::Origin(which))) => origin_plane_inspector(ui, which),
         Some(Pick::Geom(reference)) => {
             element_inspector(ui, editor, build, &reference);
             // A face stands for its body, so the body's numbers follow.
@@ -1087,7 +1088,8 @@ fn pick_label(editor: &PropEditor, build: &PropBuild, pick: &Pick) -> String {
             .unwrap_or_else(|| get!("prop.inspector.missing", "id", id))
     };
     let reference = match pick {
-        Pick::Body(id) | Pick::Plane(id) => return name(*id),
+        Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => return name(*id),
+        Pick::Plane(PlaneRef::Origin(which)) => return which.name(),
         Pick::Geom(reference) => reference,
     };
     let source = reference.source.copies.iter().fold(name(reference.source.feature), |base, copy| {
@@ -1148,6 +1150,19 @@ fn element_inspector(ui: &mut Ui, editor: &PropEditor, build: &PropBuild, refere
     });
 }
 
+/// An origin plane is not a feature: nothing about it can be edited.
+fn origin_plane_inspector(ui: &mut Ui, which: OriginPlane) {
+    let plane = which.plane();
+    let triple = |v: Vec3| format!("{:.4}, {:.4}, {:.4}", v.x, v.y, v.z);
+    section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
+        ui.label(egui::RichText::new(which.name()).strong());
+        ui.horizontal(|ui| {
+            ui.label(get!("prop.inspector.normal"));
+            ui.label(triple(*plane.normal));
+        });
+    });
+}
+
 /// The selected feature's numbers.
 ///
 /// Sections come in a fixed order so a number is in the same place on every
@@ -1183,7 +1198,7 @@ fn feature_inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, se
         }
         _ => vec![],
     };
-    let datum = build.evaluated.datum(selected);
+    let datum = build.evaluated.datum(PlaneRef::Feature(selected));
     let feature = &mut edited;
 
     let mut changed = false;

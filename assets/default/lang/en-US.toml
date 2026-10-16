@@ -695,6 +695,11 @@ operands = "Operands"
 mirror = "Mirror plane"
 pattern = "Pattern"
 
+[prop.planes]
+xy = "XY plane"
+yz = "YZ plane"
+xz = "XZ plane"
+
 [prop.picks]
 point = "{ source } · point { index }"
 edge = "{ source } · edge { index }"

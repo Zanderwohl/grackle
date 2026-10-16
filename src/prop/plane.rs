@@ -9,10 +9,15 @@
 //! right-hand rule. An edge, when there is one, supplies the first two points,
 //! so `x` runs along it. A face's normal is the way out of its body, so
 //! something sketched on it extrudes outwards.
+//!
+//! Three origin planes are always present, so an empty prop has somewhere to
+//! draw.
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
+use crate::get;
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::feature::{Evaluated, PropFeatureId};
 use crate::prop::reference::{Located, Pointer, EDGE_PICK_PX};
@@ -52,21 +57,86 @@ impl Plane {
     }
 }
 
-/// A plane feature as evaluated: the plane, and the square it is drawn and
-/// picked as.
+/// One of the three planes through the prop's origin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OriginPlane {
+    Xy,
+    Yz,
+    Xz,
+}
+
+impl OriginPlane {
+    pub const ALL: [OriginPlane; 3] = [OriginPlane::Xy, OriginPlane::Yz, OriginPlane::Xz];
+
+    /// Each frame reads the right way up when looked at down its normal from
+    /// the front, the side and above, so a sketch's `x` is screen-right in
+    /// the view it is drawn in. The `XZ` normal is `+Y` so a sketch on the
+    /// floor extrudes up.
+    pub fn plane(self) -> Plane {
+        let (x, normal) = match self {
+            OriginPlane::Xy => (Dir3::X, Dir3::Z),
+            OriginPlane::Yz => (Dir3::NEG_Z, Dir3::X),
+            OriginPlane::Xz => (Dir3::X, Dir3::Y),
+        };
+        Plane { origin: Vec3::ZERO, x, normal }
+    }
+
+    pub fn name(self) -> String {
+        match self {
+            OriginPlane::Xy => get!("prop.planes.xy"),
+            OriginPlane::Yz => get!("prop.planes.yz"),
+            OriginPlane::Xz => get!("prop.planes.xz"),
+        }
+    }
+}
+
+/// A plane something can be drawn on: an origin plane, or a plane feature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaneRef {
+    Origin(OriginPlane),
+    Feature(PropFeatureId),
+}
+
+impl PlaneRef {
+    pub fn feature(self) -> Option<PropFeatureId> {
+        match self {
+            PlaneRef::Origin(_) => None,
+            PlaneRef::Feature(id) => Some(id),
+        }
+    }
+}
+
+/// Metres. An origin plane's half-width on an empty prop.
+const MIN_ORIGIN_HALF: f32 = 0.05;
+
+/// A plane as evaluated: the plane, and the square it is drawn and picked as.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Datum {
-    pub id: PropFeatureId,
+    pub id: PlaneRef,
     pub plane: Plane,
     pub corners: [Vec3; 4],
 }
 
 impl Datum {
-    /// From what the feature names, already located; `None` if it is no plane.
+    /// From what a plane feature names, already located; `None` if it is no
+    /// plane.
     pub fn through(id: PropFeatureId, located: &[Located]) -> Option<Datum> {
         let plane = plane_through_located(located)?;
         let corners = preview_corners(&plane, &all_points(located));
-        Some(Datum { id, plane, corners })
+        Some(Datum { id: PlaneRef::Feature(id), plane, corners })
+    }
+
+    /// An origin plane, drawn as a square `half` each way of the origin:
+    /// sized to the prop rather than fixed, since a prop may be a pistol
+    /// grip or a cannon.
+    pub fn origin(which: OriginPlane, half: f32) -> Datum {
+        let plane = which.plane();
+        let half = half.max(MIN_ORIGIN_HALF);
+        let corner = |u: f32, v: f32| *plane.x * u * half + *plane.y() * v * half;
+        let corners = [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)];
+        Datum { id: PlaneRef::Origin(which), plane, corners }
     }
 }
 
@@ -233,7 +303,7 @@ fn preview_the_picked_plane(picked: Res<PickedPlane>, mut gizmos: Gizmos) {
 /// The plane feature whose drawn square has an edge within
 /// [`EDGE_PICK_PX`] of the pointer. By its border rather than its inside, so a
 /// plane through a body does not stop clicks reaching the body.
-pub fn plane_under<P: Fn(Vec3) -> Option<Vec2>>(planes: &[Datum], pointer: &Pointer<P>) -> Option<PropFeatureId> {
+pub fn plane_under<P: Fn(Vec3) -> Option<Vec2>>(planes: &[Datum], pointer: &Pointer<P>) -> Option<PlaneRef> {
     planes
         .iter()
         .filter_map(|datum| {
@@ -384,14 +454,14 @@ mod tests {
         );
         let evaluated = evaluate(&[cube_feature(), plane.clone(), mirror]);
         assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
-        let datum = evaluated.datum(PropFeatureId(1)).expect("a plane");
+        let datum = evaluated.datum(PlaneRef::Feature(PropFeatureId(1))).expect("a plane");
         assert!(datum.plane.normal.distance(Vec3::Z) < 1e-6);
         assert!((datum.plane.distance(Vec3::ZERO) + 0.1).abs() < 1e-6);
-        assert_eq!(plane_through(&[Pick::Plane(PropFeatureId(1))], &evaluated), Some(datum.plane));
+        assert_eq!(plane_through(&[Pick::Plane(PlaneRef::Feature(PropFeatureId(1)))], &evaluated), Some(datum.plane));
         assert!(evaluated.bodies.len() == 1, "a plane is no body");
 
         let before_its_cube = evaluate(&[plane, cube_feature()]);
-        assert!(before_its_cube.planes.is_empty());
+        assert!(before_its_cube.datum(PlaneRef::Feature(PropFeatureId(1))).is_none());
         assert_eq!(before_its_cube.problems.len(), 1);
     }
 
@@ -423,6 +493,39 @@ mod tests {
         });
         let text = to_text(&doc).unwrap();
         assert_eq!(parse(&text).unwrap(), doc, "{text}");
+    }
+
+    #[test]
+    fn origin_planes_are_right_handed_and_always_there() {
+        for which in OriginPlane::ALL {
+            let plane = which.plane();
+            assert!(plane.x.dot(*plane.normal).abs() < 1e-6);
+            assert!(plane.x.cross(*plane.y()).distance(*plane.normal) < 1e-6, "{which:?}");
+        }
+        assert_eq!(OriginPlane::Xz.plane().normal, Dir3::Y, "a floor sketch extrudes up");
+
+        let empty = evaluate(&[]);
+        for which in OriginPlane::ALL {
+            let datum = empty.datum(PlaneRef::Origin(which)).expect("an origin plane");
+            assert!(datum.corners.iter().all(|c| datum.plane.distance(*c).abs() < 1e-6));
+            assert_eq!(plane_through(&[Pick::Plane(PlaneRef::Origin(which))], &empty), Some(datum.plane));
+        }
+    }
+
+    /// Fails if an origin plane is a fixed size: it should frame the prop.
+    #[test]
+    fn origin_planes_grow_with_the_prop() {
+        let small = evaluate(&[]).datum(PlaneRef::Origin(OriginPlane::Xy)).unwrap().corners[2];
+        let big = PropFeature::new(
+            PropFeatureId(0),
+            FeatureOp::Primitive {
+                shape: Shape::Box { size: [2.0, 0.2, 0.2] },
+                placement: Placement::default(),
+                surface: Surface::default(),
+            },
+        );
+        let large = evaluate(&[big]).datum(PlaneRef::Origin(OriginPlane::Xy)).unwrap().corners[2];
+        assert!(large.x > 1.0 && large.x > small.x * 10.0, "{small} vs {large}");
     }
 
     fn cube_feature() -> PropFeature {

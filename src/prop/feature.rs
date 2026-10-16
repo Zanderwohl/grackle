@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::get;
 use crate::prop::profile::{Placement, Profile};
 use crate::prop::csg::Polygon;
-use crate::prop::plane::Datum;
+use crate::prop::plane::{Datum, OriginPlane, PlaneRef};
 use crate::prop::reference::{face_at, pickables, GeomRef, Located, Outline, Pickable, Wire};
 use crate::prop::solid::{is_full_turn, Shape, Solid};
 use crate::prop::surface::Surface;
@@ -361,7 +361,7 @@ impl Evaluated {
         Some((body, face_at(wires, ray.get_point(distance), polygon.plane.normal)))
     }
 
-    pub fn datum(&self, id: PropFeatureId) -> Option<&Datum> {
+    pub fn datum(&self, id: PlaneRef) -> Option<&Datum> {
         self.planes.iter().find(|datum| datum.id == id)
     }
 
@@ -575,6 +575,15 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     }
 
     let pickables = live.iter().flat_map(|body| pickables(body.id, &body.solid, &body.wires)).collect();
+    // Framing whatever is standing: the furthest any body reaches from the
+    // origin, plus the same margin a plane feature's square has.
+    let reach = live
+        .iter()
+        .filter_map(|body| body.solid.bounds())
+        .map(|(min, max)| min.abs().max(max.abs()).max_element())
+        .fold(0.0, f32::max);
+    let origins = OriginPlane::ALL.map(|which| Datum::origin(which, reach * 1.25));
+    planes.splice(0..0, origins);
     let (bodies, wires) = live.into_iter().map(|body| ((body.id, body.solid), (body.id, body.wires))).unzip();
     Evaluated { bodies, wires, pickables, problems, live_before, planes }
 }

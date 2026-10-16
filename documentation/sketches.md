@@ -116,7 +116,7 @@ tested.
 
 ### Foundations
 
-- [ ] Origin planes — XY, YZ, XZ through the prop's origin — always present,
+- [x] Origin planes — XY, YZ, XZ through the prop's origin — always present,
       not deletable, pickable like plane features. A `PlaneRef` that names
       either kind.
 - [ ] `FeatureOp::Sketch` with points and lines, saved to the file, with a
