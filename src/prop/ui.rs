@@ -28,7 +28,9 @@ use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
 use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind};
-use crate::prop::document::{self, PropDoc, PropEditor, PROP_EXTENSION};
+use crate::prop::document::{self, Pick, PropDoc, PropEditor, PROP_EXTENSION};
+use crate::prop::plane::{PickedPlane, Plane};
+use crate::prop::reference::{Element, GeomRef, Located};
 use crate::common::class::Class;
 use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
 use crate::common::shortcuts::chords;
@@ -151,11 +153,14 @@ struct PropRequests {
     mode: Option<AppMode>,
     workspace: Option<Workspace>,
     edit: Option<EditAction>,
+    /// Something that would use the picked plane is hovered.
+    preview_plane: bool,
 }
 
 struct PropTabs<'a> {
     editor: &'a mut PropEditor,
     build: &'a PropBuild,
+    plane: Option<Plane>,
     figure: &'a mut ScaleFigure,
     preview: &'a mut ViewmodelPreview,
     requests: &'a mut PropRequests,
@@ -192,7 +197,9 @@ impl<'a> TabViewer for PropTabs<'a> {
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
         match tab {
             PropTab::Features => feature_tree(ui, self.editor, self.build),
-            PropTab::Inspector => inspector(ui, self.editor, self.build),
+            PropTab::Inspector => {
+                inspector(ui, self.editor, self.build, self.plane, &mut self.requests.preview_plane)
+            }
             PropTab::Hold => match self.editor.doc().archetype {
                 Archetype::Held => {
                     let front = self.build.evaluated.bounds().map(front_of);
@@ -234,6 +241,7 @@ fn panels(
     mut layout: ResMut<PropPanels>,
     mut editor: ResMut<PropEditor>,
     build: Res<PropBuild>,
+    mut plane: ResMut<PickedPlane>,
     mut figure: ResMut<ScaleFigure>,
     mut handles: ResMut<HoldHandles>,
     mut preview: ResMut<ViewmodelPreview>,
@@ -265,6 +273,7 @@ fn panels(
     let mut tabs = PropTabs {
         editor: &mut editor,
         build: &build,
+        plane: plane.plane,
         // Not cloned and written back: a write every frame would rebuild the
         // figure's rig every frame.
         figure: &mut figure,
@@ -311,7 +320,9 @@ fn panels(
                 }
                 ui.separator();
                 match workspace {
-                    Workspace::Model => toolbar(ui, tabs.editor, tabs.build, &mut tabs.requests.frame),
+                    Workspace::Model => {
+                        toolbar(ui, tabs.editor, tabs.build, tabs.plane, tabs.requests)
+                    }
                     Workspace::Fit => fit_toolbar(ui, tabs.figure, &mut tabs.requests.frame),
                 }
             });
@@ -392,6 +403,10 @@ fn panels(
     }
 
     handle_edit(requests.edit, &mut editor);
+
+    if plane.previewed != requests.preview_plane {
+        plane.previewed = requests.preview_plane;
+    }
 
     if let Some(to) = requests.workspace {
         layout.switch_to(to, &mut figure);
@@ -481,9 +496,10 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
 
     // Copied out, and changes deferred to after the closures, so `editor` is
     // not borrowed across them.
-    let selected = editor.selected;
-    let also_selected = editor.also_selected.clone();
-    let mut select: Option<(PropFeatureId, Pick)> = None;
+    let selected = editor.selected();
+    let also_selected: Vec<PropFeatureId> =
+        editor.selected_bodies().into_iter().filter(|id| Some(*id) != selected).collect();
+    let mut select: Option<(PropFeatureId, RowClick)> = None;
     let mut pending: Option<Box<dyn FnOnce(&mut PropEditor)>> = None;
 
     // Rebuilt every frame rather than kept, so there is no drag state to get
@@ -562,7 +578,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             }
             if response.clicked() {
                 let extending = ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
-                select = Some((id, if extending { Pick::Toggle } else { Pick::Only }));
+                select = Some((id, if extending { RowClick::Toggle } else { RowClick::Only }));
             }
 
             // Selection outranks hover, or a chosen row dims when pointed at.
@@ -593,7 +609,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 // Right-click selects, unless already in the selection, so a
                 // Ctrl-clicked pair is not thrown away.
                 if selected != Some(id) && !also_selected.contains(&id) {
-                    select = Some((id, Pick::Only));
+                    select = Some((id, RowClick::Only));
                 }
 
                 // Names the action, not the state: a state label reads as a
@@ -696,7 +712,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     let text = egui::RichText::new(format!("· {operand_name}")).weak().small();
                     let line = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
                     if line.clicked() {
-                        select = Some((*operand, Pick::Only));
+                        select = Some((*operand, RowClick::Only));
                     }
                 });
             }
@@ -745,8 +761,8 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     });
 
     match select {
-        Some((id, Pick::Only)) => editor.select(id),
-        Some((id, Pick::Toggle)) => editor.toggle_selected(id),
+        Some((id, RowClick::Only)) => editor.select(id),
+        Some((id, RowClick::Toggle)) => editor.toggle_selected(id),
         None => {}
     }
     if let Some(action) = pending {
@@ -755,7 +771,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
 }
 
 #[derive(Clone, Copy)]
-enum Pick {
+enum RowClick {
     Only,
     /// Ctrl/Cmd held.
     Toggle,
@@ -818,7 +834,13 @@ fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row
 ///
 /// Framing is here rather than in a menu so it is one click away after losing
 /// the prop.
-fn toolbar(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, frame: &mut Option<bool>) {
+fn toolbar(
+    ui: &mut Ui,
+    editor: &mut PropEditor,
+    build: &PropBuild,
+    plane: Option<Plane>,
+    requests: &mut PropRequests,
+) {
     let live: Vec<PropFeatureId> = build.evaluated.bodies.iter().map(|(id, _)| *id).collect();
     let pair = editor.pair_to_combine(&live);
     let single = editor.body_to_act_on(&live);
@@ -904,15 +926,20 @@ fn toolbar(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, frame: &mut 
 
         ui.separator();
 
+        let plane_tool = ui.add_enabled(plane.is_some(), egui::Button::new(get!("prop.features.plane")));
+        requests.preview_plane |= plane_tool.hovered();
+
+        ui.separator();
+
         if ui.button(get!("prop.menu.frame")).clicked() {
-            *frame = Some(false);
+            requests.frame = Some(false);
         }
-        let framable = build.evaluated.bounds_of_bodies(&editor.selection()).is_some();
+        let framable = build.evaluated.bounds_of_bodies(&editor.selected_bodies()).is_some();
         if ui
             .add_enabled(framable, egui::Button::new(get!("prop.menu.frame_selected")))
             .clicked()
         {
-            *frame = Some(true);
+            requests.frame = Some(true);
         }
     });
 
@@ -956,16 +983,126 @@ fn revert_from_disk(editor: &mut PropEditor) {
     }
 }
 
-/// The selected feature's numbers, or the prop's own when nothing is picked.
+/// The selection as a list when there is more than one pick, then the
+/// primary's details: a feature's numbers, a corner's or edge's whereabouts,
+/// or the prop's own numbers when nothing is picked.
+fn inspector(
+    ui: &mut Ui,
+    editor: &mut PropEditor,
+    build: &PropBuild,
+    plane: Option<Plane>,
+    preview_plane: &mut bool,
+) {
+    if editor.picks().len() > 1 {
+        selection_list(ui, editor, build);
+        if plane.is_some() {
+            *preview_plane |= ui.button(get!("prop.picks.use_plane")).hovered();
+        }
+        ui.separator();
+    }
+    match editor.primary().cloned() {
+        None => prop_overview(ui, editor, build),
+        Some(Pick::Body(id)) => feature_inspector(ui, editor, build, id),
+        Some(Pick::Geom(reference)) => element_inspector(ui, editor, build, &reference),
+    }
+}
+
+/// Every pick, oldest first, each with a button that drops it.
+fn selection_list(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
+    ui.label(egui::RichText::new(get!("prop.inspector.picked", "count", editor.picks().len())).weak());
+    let primary = editor.primary().cloned();
+    let mut dropped = None;
+    egui::ScrollArea::vertical().id_salt("prop_picks").max_height(160.0).show(ui, |ui| {
+        for pick in editor.picks() {
+            ui.horizontal(|ui| {
+                let text = egui::RichText::new(pick_label(editor, build, pick));
+                ui.label(match Some(pick) == primary.as_ref() {
+                    true => text.strong(),
+                    false => text,
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button(get!("prop.picks.remove")).clicked() {
+                        dropped = Some(pick.clone());
+                    }
+                });
+            });
+        }
+    });
+    if let Some(pick) = dropped {
+        editor.unpick(&pick);
+    }
+}
+
+/// A feature's name, or a corner or edge as the feature it came from and the
+/// copies it went through. Counted from one, as a person counts corners.
+fn pick_label(editor: &PropEditor, build: &PropBuild, pick: &Pick) -> String {
+    let name = |id: PropFeatureId| {
+        editor
+            .doc()
+            .feature(id)
+            .map(|feature| feature.name.clone())
+            .unwrap_or_else(|| get!("prop.inspector.missing", "id", id))
+    };
+    let reference = match pick {
+        Pick::Body(id) => return name(*id),
+        Pick::Geom(reference) => reference,
+    };
+    let source = reference.source.copies.iter().fold(name(reference.source.feature), |base, copy| {
+        get!("prop.picks.copy", "base", base, "by", name(copy.by), "index", copy.index)
+    });
+    let label = match reference.element {
+        Element::Point(index) => get!("prop.picks.point", "source", source, "index", index + 1),
+        Element::Edge(index) => get!("prop.picks.edge", "source", source, "index", index + 1),
+    };
+    match build.evaluated.locate(reference) {
+        Some(_) => label,
+        None => get!("prop.picks.absent", "pick", label),
+    }
+}
+
+/// Where a corner or edge is. Read-only: it is wherever its feature put it.
+fn element_inspector(ui: &mut Ui, editor: &PropEditor, build: &PropBuild, reference: &GeomRef) {
+    let triple = |v: Vec3| format!("{:.4}, {:.4}, {:.4} m", v.x, v.y, v.z);
+    section(ui, "element", get!("prop.inspector.sections.element"), |ui| {
+        ui.label(egui::RichText::new(pick_label(editor, build, &Pick::Geom(reference.clone()))).strong());
+        if let Some(body) = build.evaluated.body_of(reference) {
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.inspector.on_body"));
+                ui.label(pick_label(editor, build, &Pick::Body(body)));
+            });
+        }
+        match build.evaluated.locate(reference) {
+            Some(Located::Point(p)) => {
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.inspector.position"));
+                    ui.label(triple(p));
+                });
+            }
+            Some(Located::Edge(a, b)) => {
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.inspector.from"));
+                    ui.label(triple(a));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.inspector.to"));
+                    ui.label(triple(b));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.inspector.length"));
+                    ui.label(format!("{:.4} m", a.distance(b)));
+                });
+            }
+            None => {}
+        }
+    });
+}
+
+/// The selected feature's numbers.
 ///
 /// Sections come in a fixed order so a number is in the same place on every
 /// kind of feature. Section ids are per section, not per feature, so folding
 /// one folds it everywhere.
-fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
-    let Some(selected) = editor.selected else {
-        prop_overview(ui, editor, build);
-        return;
-    };
+fn feature_inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, selected: PropFeatureId) {
     let Some(index) = editor.doc().index_of(selected) else {
         prop_overview(ui, editor, build);
         return;
@@ -985,7 +1122,6 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             (*id, editor.doc().feature(*id).map(|f| f.name.clone()).unwrap_or_else(|| id.to_string()))
         })
         .collect();
-    let picked = editor.selection().len();
 
     // Drawn against a copy: calling `PropEditor::doc_mut` marks the document
     // changed, which would rebuild the viewport and mark it dirty every frame.
@@ -994,11 +1130,6 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
 
     let mut changed = false;
     egui::ScrollArea::vertical().show(ui, |ui| {
-        // The numbers below are only the primary's.
-        if picked > 1 {
-            ui.label(egui::RichText::new(get!("prop.inspector.picked", "count", picked)).weak());
-        }
-
         section(ui, "feature", get!("prop.inspector.sections.feature"), |ui| {
             ui.horizontal(|ui| {
                 ui.label(get!("prop.inspector.kind"));
@@ -1530,11 +1661,7 @@ fn degrees_ui(ui: &mut Ui, label: String, radians: &mut [f32; 3]) -> bool {
 
 fn status_line(ui: &mut Ui, editor: &PropEditor, build: &PropBuild) {
     ui.horizontal(|ui| {
-        let names: Vec<String> = editor
-            .selection()
-            .iter()
-            .filter_map(|id| editor.doc().feature(*id).map(|feature| feature.name.clone()))
-            .collect();
+        let names: Vec<String> = editor.picks().iter().map(|pick| pick_label(editor, build, pick)).collect();
         ui.label(match names.is_empty() {
             true => get!("prop.inspector.nothing"),
             false => get!("prop.stats.selected", "names", names.join(", ")),
@@ -1577,7 +1704,7 @@ fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 .unwrap_or_else(|| problem.feature.to_string());
             if ui
                 .selectable_label(
-                    editor.selected == Some(problem.feature),
+                    editor.selected() == Some(problem.feature),
                     egui::RichText::new(format!(
                         "{} {name}: {}",
                         get!("prop.problems.marker"),

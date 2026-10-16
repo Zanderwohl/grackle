@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::prop::csg::{self, Polygon};
 use crate::prop::profile::{sides, triangulate, Profile};
+use crate::prop::reference::Outline;
 use crate::prop::surface::Surface;
 
 /// Convex polygons meant to form a closed surface; see [`super::csg`].
@@ -452,25 +453,48 @@ impl Shape {
 
     /// Centred on the origin.
     pub fn solid(&self, surface: Surface) -> Solid {
+        let (sweep, transform) = self.sweep();
+        match sweep {
+            Sweep::Extrude { profile, depth } => Solid::extrude(&profile, depth, true, surface),
+            Sweep::Revolve { profile, segments } => Solid::revolve(&profile, 360.0, segments, surface),
+        }
+        .transformed(transform)
+    }
+
+    /// The corners and edges of [`Self::solid`], from the same sweep.
+    pub fn outline(&self) -> Outline {
+        let (sweep, transform) = self.sweep();
+        match sweep {
+            Sweep::Extrude { profile, depth } => Outline::extrude(&profile, depth, true),
+            Sweep::Revolve { profile, segments } => Outline::revolve(&profile, 360.0, segments),
+        }
+        .transformed(transform)
+    }
+
+    /// The one description both [`Self::solid`] and [`Self::outline`] build
+    /// from, so the two cannot drift.
+    fn sweep(&self) -> (Sweep, Transform) {
         match *self {
-            Shape::Box { size } => Solid::cuboid(Vec3::from_array(size), surface),
-            Shape::Prism { sides, radius, height } => {
-                Solid::extrude(&Profile::Ngon { sides, radius }, height, true, surface)
-                    .transformed(Transform::from_rotation(Quat::from_rotation_x(
-                        -std::f32::consts::FRAC_PI_2,
-                    )))
-            }
-            Shape::Cone { sides, radius, height } => Solid::revolve(
-                &Profile::Points {
-                    points: vec![
-                        [0.0, -height / 2.0],
-                        [radius, -height / 2.0],
-                        [0.0, height / 2.0],
-                    ],
+            Shape::Box { size } => (
+                Sweep::Extrude { profile: Profile::Rect { half: [size[0] / 2.0, size[1] / 2.0] }, depth: size[2] },
+                Transform::IDENTITY,
+            ),
+            Shape::Prism { sides, radius, height } => (
+                Sweep::Extrude { profile: Profile::Ngon { sides, radius }, depth: height },
+                Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+            ),
+            Shape::Cone { sides, radius, height } => (
+                Sweep::Revolve {
+                    profile: Profile::Points {
+                        points: vec![
+                            [0.0, -height / 2.0],
+                            [radius, -height / 2.0],
+                            [0.0, height / 2.0],
+                        ],
+                    },
+                    segments: sides,
                 },
-                360.0,
-                sides,
-                surface,
+                Transform::IDENTITY,
             ),
             Shape::Sphere { sides, rings, radius } => {
                 // Half a disc, spun.
@@ -482,22 +506,29 @@ impl Shape {
                         [radius * angle.cos(), radius * angle.sin()]
                     })
                     .collect();
-                Solid::revolve(&Profile::Points { points }, 360.0, sides, surface)
+                (Sweep::Revolve { profile: Profile::Points { points }, segments: sides }, Transform::IDENTITY)
             }
-            Shape::Wedge { size } => Solid::extrude(
-                &Profile::Points {
-                    points: vec![
-                        [-size[0] / 2.0, -size[1] / 2.0],
-                        [size[0] / 2.0, -size[1] / 2.0],
-                        [-size[0] / 2.0, size[1] / 2.0],
-                    ],
+            Shape::Wedge { size } => (
+                Sweep::Extrude {
+                    profile: Profile::Points {
+                        points: vec![
+                            [-size[0] / 2.0, -size[1] / 2.0],
+                            [size[0] / 2.0, -size[1] / 2.0],
+                            [-size[0] / 2.0, size[1] / 2.0],
+                        ],
+                    },
+                    depth: size[2],
                 },
-                size[2],
-                true,
-                surface,
+                Transform::IDENTITY,
             ),
         }
     }
+}
+
+/// A primitive as a sweep: extrusions are midplane, revolutions whole turns.
+enum Sweep {
+    Extrude { profile: Profile, depth: f32 },
+    Revolve { profile: Profile, segments: u32 },
 }
 
 #[cfg(test)]

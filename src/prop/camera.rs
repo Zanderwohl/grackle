@@ -235,7 +235,7 @@ fn frame_on_request(
     };
     let selected = request
         .selected
-        .then(|| build.evaluated.bounds_of_bodies(&editor.selection()))
+        .then(|| build.evaluated.bounds_of_bodies(&editor.selected_bodies()))
         .flatten();
     let bounds = selected.or_else(|| framing_bounds(&build, &figure));
     frame_all(&mut cameras, &mut saved, &mut pivot, bounds);

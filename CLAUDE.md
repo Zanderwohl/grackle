@@ -541,12 +541,37 @@ one per letter.
 
 **The verbs act on the selection**, not on whatever was added last: they sit in
 a toolbar under the menu bar, Combine takes the two bodies picked (first as
-target, Ctrl/Cmd-clicked second as tool — the order it is said in), Mirror the
-primary, and each greys out when the selection does not fit. A body is picked
-by clicking it in a viewport too — against its faces, not its box, so a click
-down a bore reaches what is behind — in `pick_in_the_viewport`, which runs
-after the handle drag so a press that grabbed a handle does not also
-re-select. Undo and redo are on an **Edit** menu.
+target, second as tool — the order it is said in), Mirror the primary, and
+each greys out when the selection does not fit. Undo and redo are on an
+**Edit** menu.
+
+**The selection is an ordered list of `Pick`s** — bodies, and named corners
+and edges — and in the viewport **every click toggles**: a click adds what is
+under the pointer, the same click again removes it, a click on nothing clears.
+Building a plane is always several picks, so a held modifier would be a key
+held for every one of them. The last pick is the primary. With more than one,
+the Inspector lists them, each with a button that drops it, above the
+primary's details. `pick_in_the_viewport` takes a corner within a few pixels
+over an edge, an edge over a body's face — faces tested as faces, not boxes,
+so a click down a bore reaches what is behind — and runs after the handle
+drag so a press that grabbed a handle does not also pick.
+
+**A corner or edge is named by the generator that made it, never by the
+kernel's output** ([`reference.rs`](src/prop/reference.rs)). BSP polygons are
+split anew by every boolean, so nothing in a `Solid` survives an evaluation;
+a `GeomRef` is instead a feature, an index into that feature's `Outline`, and
+every mirror or pattern copy it went through (`CopyOf` — an original is never
+named, so inserting a pattern does not rename what it copies). The evaluator
+carries each body's `Wire`s through the list beside its solid, so lengthening
+a bore does not rename the barrel's corners, and a corner a boolean cut away
+still *resolves*. It is not *offered*: only elements on their body's surface
+are pickable. Two things to keep: an `Outline` is numbered from the profile
+**as authored**, not as wound for the kernel, so dragging a point across the
+loop does not renumber everything; and a primitive's solid and outline both
+come from `Shape::sweep`, so the two cannot drift —
+`every_primitives_outline_lies_on_its_surface` is what notices if they do.
+The cost is that an edge a boolean *made*, where a bore leaves a face, has no
+name and cannot be picked.
 
 A placement's orientation is edited as **"points along" and "spin"** about the
 feature's own length axis (`FeatureOp::main_axis`), via

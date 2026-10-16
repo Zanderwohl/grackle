@@ -619,6 +619,7 @@ subtract = "Subtract"
 intersect = "Intersect"
 
 [prop.features]
+plane = "Plane"
 extrude = "Extrude"
 revolve = "Revolve"
 mirror = "Mirror"
@@ -628,6 +629,11 @@ pattern = "Pattern"
 [prop.inspector]
 nothing = "Nothing selected."
 picked = "{ count } selected"
+on_body = "On"
+position = "Position"
+from = "From"
+to = "To"
+length = "Length"
 kind = "Kind"
 name = "Name"
 name_key = "Name key"
@@ -671,6 +677,7 @@ remove_point_hint = "Remove point"
 missing = "missing { id }"
 
 [prop.inspector.sections]
+element = "Reference"
 prop = "Prop"
 archetype = "Archetype"
 breakable = "Breakable"
@@ -685,6 +692,15 @@ material = "Material"
 operands = "Operands"
 mirror = "Mirror plane"
 pattern = "Pattern"
+
+[prop.picks]
+point = "{ source } · point { index }"
+edge = "{ source } · edge { index }"
+copy = "{ base }, { by } copy { index }"
+absent = "{ pick } (not present)"
+use_plane = "Use plane"
+# Latin-1 rather than an emoji, so it sits on the text baseline.
+remove = "×"
 
 [prop.stats]
 features = "{ count } features"

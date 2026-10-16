@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::get;
 use crate::prop::profile::{Placement, Profile};
+use crate::prop::reference::{pickables, GeomRef, Located, Outline, Pickable, Wire};
 use crate::prop::solid::{is_full_turn, Shape, Solid};
 use crate::prop::surface::Surface;
 
@@ -268,6 +269,10 @@ pub struct Evaluated {
     /// Which bodies were live just before each feature ran. Recorded so the
     /// panel does not reimplement the consuming rule.
     pub live_before: Vec<Vec<PropFeatureId>>,
+    /// Beside `bodies`, in the same order: the outlines each was made from.
+    pub wires: Vec<(PropFeatureId, Vec<Wire>)>,
+    /// The named corners and edges that can be seen; see [`pickables`].
+    pub pickables: Vec<Pickable>,
 }
 
 impl Evaluated {
@@ -295,6 +300,15 @@ impl Evaluated {
     /// Tested against faces, not boxes, so a click down a bore reaches what is
     /// behind. Faces are convex, so a fan triangulates them exactly.
     pub fn body_under(&self, origin: Vec3, direction: Vec3) -> Option<PropFeatureId> {
+        self.face_under(origin, direction).map(|(id, _)| id)
+    }
+
+    /// How far down the ray the nearest face is.
+    pub fn face_distance(&self, ray: Ray3d) -> Option<f32> {
+        self.face_under(ray.origin, *ray.direction).map(|(_, distance)| distance)
+    }
+
+    fn face_under(&self, origin: Vec3, direction: Vec3) -> Option<(PropFeatureId, f32)> {
         self.bodies
             .iter()
             .filter_map(|(id, solid)| {
@@ -310,7 +324,23 @@ impl Evaluated {
                     .map(|distance| (*id, distance))
             })
             .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(id, _)| id)
+    }
+
+    /// Where a reference is now, whether or not it can be seen.
+    pub fn locate(&self, reference: &GeomRef) -> Option<Located> {
+        self.wires
+            .iter()
+            .flat_map(|(_, wires)| wires)
+            .find(|wire| wire.source == reference.source)
+            .and_then(|wire| wire.outline.locate(reference.element))
+    }
+
+    /// The body a reference is part of.
+    pub fn body_of(&self, reference: &GeomRef) -> Option<PropFeatureId> {
+        self.wires
+            .iter()
+            .find(|(_, wires)| wires.iter().any(|wire| wire.source == reference.source))
+            .map(|(id, _)| *id)
     }
 }
 
@@ -339,14 +369,21 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
     (t > 0.0).then_some(t)
 }
 
+/// A body mid-evaluation, with the outlines of everything that went into it.
+struct Live {
+    id: PropFeatureId,
+    solid: Solid,
+    wires: Vec<Wire>,
+}
+
 /// A pure function of the list, so it runs without a `World`.
 pub fn evaluate(features: &[PropFeature]) -> Evaluated {
-    let mut live: Vec<(PropFeatureId, Solid)> = Vec::new();
+    let mut live: Vec<Live> = Vec::new();
     let mut problems = Vec::new();
     let mut live_before = Vec::with_capacity(features.len());
 
     for feature in features {
-        live_before.push(live.iter().map(|(id, _)| *id).collect());
+        live_before.push(live.iter().map(|body| body.id).collect());
 
         if !feature.enabled {
             continue;
@@ -354,14 +391,17 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
 
         // Find before taking: a boolean that took one operand and failed to
         // find the other would delete a body it never used.
-        let find = |id: PropFeatureId, live: &[(PropFeatureId, Solid)]| {
-            live.iter().position(|(candidate, _)| *candidate == id)
+        let find = |id: PropFeatureId, live: &[Live]| live.iter().position(|body| body.id == id);
+        let made = |solid: Solid, outline: Outline| Live {
+            id: feature.id,
+            solid,
+            wires: vec![Wire::new(feature.id, outline)],
         };
 
         match &feature.op {
             FeatureOp::Primitive { shape, placement, surface } => {
                 let solid = shape.solid(*surface).transformed(placement.transform());
-                live.push((feature.id, solid));
+                live.push(made(solid, shape.outline().transformed(placement.transform())));
             }
             FeatureOp::Extrude { profile, placement, depth, midplane, surface } => {
                 let solid = Solid::extrude(profile, *depth, *midplane, *surface)
@@ -373,7 +413,8 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     });
                     continue;
                 }
-                live.push((feature.id, solid));
+                let outline = Outline::extrude(profile, *depth, *midplane).transformed(placement.transform());
+                live.push(made(solid, outline));
             }
             FeatureOp::Revolve { profile, placement, degrees, segments, surface } => {
                 let solid = Solid::revolve(profile, *degrees, *segments, *surface)
@@ -385,7 +426,8 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     });
                     continue;
                 }
-                live.push((feature.id, solid));
+                let outline = Outline::revolve(profile, *degrees, *segments).transformed(placement.transform());
+                live.push(made(solid, outline));
             }
             FeatureOp::Boolean { op, target, tool } => {
                 // Otherwise reported as a missing body.
@@ -404,18 +446,18 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 // Higher index first, or removing one shifts the other.
                 let (first, second) = (at_target.max(at_tool), at_target.min(at_tool));
                 let (a, b) = if at_target < at_tool {
-                    let b = live.remove(first).1;
-                    let a = live.remove(second).1;
+                    let b = live.remove(first);
+                    let a = live.remove(second);
                     (a, b)
                 } else {
-                    let a = live.remove(first).1;
-                    let b = live.remove(second).1;
+                    let a = live.remove(first);
+                    let b = live.remove(second);
                     (a, b)
                 };
                 let result = match op {
-                    BooleanOp::Union => a.union(&b),
-                    BooleanOp::Subtract => a.subtract(&b),
-                    BooleanOp::Intersect => a.intersect(&b),
+                    BooleanOp::Union => a.solid.union(&b.solid),
+                    BooleanOp::Subtract => a.solid.subtract(&b.solid),
+                    BooleanOp::Intersect => a.solid.intersect(&b.solid),
                 };
                 if result.is_empty() {
                     problems.push(Problem {
@@ -424,42 +466,62 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     });
                     continue;
                 }
-                live.push((feature.id, result));
+                let wires = a.wires.into_iter().chain(b.wires).collect();
+                live.push(Live { id: feature.id, solid: result, wires });
             }
             FeatureOp::Mirror { target, axis, offset, keep_original } => {
-                let Some(solid) = find(*target, &live).map(|at| live.remove(at).1) else {
+                let Some(body) = find(*target, &live).map(|at| live.remove(at)) else {
                     problems.push(Problem::missing_body(feature.id));
                     continue;
                 };
                 let origin = axis.normal() * *offset;
-                let reflected = solid.clone().mirrored(origin, axis.normal());
-                let result = if *keep_original { solid.union(&reflected) } else { reflected };
-                live.push((feature.id, result));
+                let reflected = body.solid.clone().mirrored(origin, axis.normal());
+                let reflections = body
+                    .wires
+                    .iter()
+                    .map(|wire| wire.copied(feature.id, 1, wire.outline.clone().mirrored(origin, axis.normal())));
+                let (solid, wires) = if *keep_original {
+                    (body.solid.union(&reflected), body.wires.iter().cloned().chain(reflections).collect())
+                } else {
+                    (reflected, reflections.collect())
+                };
+                live.push(Live { id: feature.id, solid, wires });
             }
             FeatureOp::Paint { target, surface } => {
-                let Some(solid) = find(*target, &live).map(|at| live.remove(at).1) else {
+                let Some(body) = find(*target, &live).map(|at| live.remove(at)) else {
                     problems.push(Problem::missing_body(feature.id));
                     continue;
                 };
-                live.push((feature.id, solid.painted(*surface)));
+                live.push(Live { id: feature.id, solid: body.solid.painted(*surface), wires: body.wires });
             }
             FeatureOp::Pattern { target, count, along } => {
-                let Some(solid) = find(*target, &live).map(|at| live.remove(at).1) else {
+                let Some(body) = find(*target, &live).map(|at| live.remove(at)) else {
                     problems.push(Problem::missing_body(feature.id));
                     continue;
                 };
                 let count = (*count).max(1);
                 // Unioned, not concatenated: overlapping copies must become one
                 // closed surface or a later boolean keeps the wrong half.
-                let result = (1..count).fold(solid.clone(), |joined, index| {
-                    joined.union(&solid.clone().transformed(along.copy(index, count)))
+                let solid = (1..count).fold(body.solid.clone(), |joined, index| {
+                    joined.union(&body.solid.clone().transformed(along.copy(index, count)))
                 });
-                live.push((feature.id, result));
+                let mut wires = body.wires.clone();
+                for index in 1..count {
+                    let moved = along.copy(index, count);
+                    wires.extend(
+                        body.wires
+                            .iter()
+                            .map(|wire| wire.copied(feature.id, index, wire.outline.clone().transformed(moved))),
+                    );
+                }
+                live.push(Live { id: feature.id, solid, wires });
             }
         }
     }
 
-    Evaluated { bodies: live, problems, live_before }
+    let pickables = live.iter().flat_map(|body| pickables(body.id, &body.solid, &body.wires)).collect();
+    let (bodies, wires) = live.into_iter().map(|body| ((body.id, body.solid), (body.id, body.wires))).unzip();
+    Evaluated { bodies, wires, pickables, problems, live_before }
 }
 
 #[cfg(test)]

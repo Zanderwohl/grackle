@@ -23,7 +23,9 @@ use crate::common::app_mode::AppMode;
 use crate::editor::multicam::viewport_layers;
 use crate::prop::baked::{parts, SurfaceMaterials};
 use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure, ScaleFigure};
-use crate::prop::document::PropEditor;
+use crate::prop::document::{Pick, PropEditor};
+use crate::prop::gizmo::HoveredPick;
+use crate::prop::reference::Located;
 use crate::prop::feature::{Evaluated, PropFeature};
 
 /// A set so the camera can order after the build without naming its systems.
@@ -66,6 +68,11 @@ impl PropBuild {
     /// Whether the geometry on screen is behind the document.
     pub fn settling(&self) -> bool {
         self.waiting.is_some()
+    }
+
+    /// The editor generation `evaluated` stands for; a cue that it changed.
+    pub fn built(&self) -> Option<u64> {
+        self.built
     }
 }
 
@@ -290,7 +297,12 @@ fn rebuild_the_prop(
 }
 
 /// Origin, axes, and a 1 m floor grid of 10 cm cells for judging size.
-fn draw_the_bench(mut gizmos: Gizmos, editor: Res<PropEditor>, build: Res<PropBuild>) {
+fn draw_the_bench(
+    mut gizmos: Gizmos,
+    editor: Res<PropEditor>,
+    build: Res<PropBuild>,
+    hovered: Res<HoveredPick>,
+) {
     gizmos.grid(
         Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
         UVec2::splat(10),
@@ -301,17 +313,51 @@ fn draw_the_bench(mut gizmos: Gizmos, editor: Res<PropEditor>, build: Res<PropBu
     gizmos.line(Vec3::ZERO, Vec3::Y * 0.25, Color::srgb(0.3, 0.9, 0.3));
     gizmos.line(Vec3::ZERO, Vec3::Z * 0.25, Color::srgb(0.3, 0.5, 0.9));
 
-    // An eaten feature has no body and is not outlined.
-    for picked in editor.selection() {
-        let Some((_, solid)) = build.evaluated.bodies.iter().find(|(id, _)| *id == picked) else {
-            continue;
-        };
-        let Some((min, max)) = solid.bounds() else { continue };
-        let colour = match editor.selected == Some(picked) {
+    let primary = editor.primary();
+    let marker = build.evaluated.bounds().map_or(MIN_MARKER, |(min, max)| (max - min).length() * MARKER_SIZE).max(MIN_MARKER);
+    for pick in editor.picks() {
+        let colour = match Some(pick) == primary {
             true => Color::srgb(1.0, 0.8, 0.2),
-            false => Color::srgba(1.0, 0.8, 0.2, 0.35),
+            false => Color::srgba(1.0, 0.8, 0.2, 0.5),
         };
-        gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), colour);
+        match pick {
+            // An eaten feature has no body and is not outlined.
+            Pick::Body(picked) => {
+                let Some((_, solid)) = build.evaluated.bodies.iter().find(|(id, _)| id == picked) else {
+                    continue;
+                };
+                let Some((min, max)) = solid.bounds() else { continue };
+                gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), colour);
+            }
+            Pick::Geom(reference) => {
+                if let Some(at) = build.evaluated.locate(reference) {
+                    draw_located(&mut gizmos, at, marker, colour);
+                }
+            }
+        }
+    }
+    if let Some(Pick::Geom(reference)) = &hovered.0 {
+        if let Some(at) = build.evaluated.locate(reference) {
+            draw_located(&mut gizmos, at, marker * 0.8, Color::srgb(0.5, 0.9, 1.0));
+        }
+    }
+}
+
+/// A corner's marker as a fraction of the prop's size. Not camera-relative,
+/// for the same reason a feature's handles are not: four viewports.
+const MARKER_SIZE: f32 = 0.012;
+/// Metres.
+const MIN_MARKER: f32 = 0.002;
+
+fn draw_located(gizmos: &mut Gizmos, at: Located, size: f32, colour: Color) {
+    match at {
+        Located::Point(p) => {
+            gizmos.sphere(Isometry3d::from_translation(p), size, colour);
+        }
+        Located::Edge(a, b) => {
+            gizmos.line(a, b, colour);
+            gizmos.sphere(Isometry3d::from_translation((a + b) / 2.0), size * 0.5, colour);
+        }
     }
 }
 
@@ -332,7 +378,7 @@ fn ghost_the_operands(
     editor: Res<PropEditor>,
     mut cache: Local<GhostCache>,
 ) {
-    let Some(selected) = editor.selected else {
+    let Some(selected) = editor.selected() else {
         cache.key = None;
         cache.input = None;
         cache.edges.clear();
