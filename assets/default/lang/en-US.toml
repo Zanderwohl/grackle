@@ -704,6 +704,17 @@ xy = "XY plane"
 yz = "YZ plane"
 xz = "XZ plane"
 
+[prop.sketch]
+edit = "Edit sketch"
+finish = "Finish sketch"
+select = "Select"
+line = "Line"
+construction = "Construction"
+delete = "Delete"
+point = "Point { id }"
+line_label = "Line { id }"
+regions = "{ count } closed regions"
+
 [prop.picks]
 point = "{ source } · point { index }"
 edge = "{ source } · edge { index }"

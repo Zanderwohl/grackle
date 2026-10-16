@@ -26,6 +26,7 @@ use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure,
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::gizmo::HoveredPick;
 use crate::prop::plane::draw_square;
+use crate::prop::sketch_edit::SketchSession;
 use crate::tool::tool_helpers::dashed_line;
 use crate::prop::reference::Located;
 use crate::prop::feature::{Evaluated, PropFeature};
@@ -304,6 +305,7 @@ fn draw_the_bench(
     editor: Res<PropEditor>,
     build: Res<PropBuild>,
     hovered: Res<HoveredPick>,
+    session: Res<SketchSession>,
 ) {
     gizmos.grid(
         Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
@@ -346,7 +348,8 @@ fn draw_the_bench(
         }
     }
     let picked_features = editor.picked_features(&build.evaluated);
-    for placed in &build.evaluated.sketches {
+    // The sketch being edited is drawn by the session, from the document.
+    for placed in build.evaluated.sketches.iter().filter(|placed| Some(placed.id) != session.editing()) {
         let colour = match picked_features.contains(&placed.id) {
             true => PICKED,
             false => SKETCH,

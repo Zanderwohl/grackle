@@ -55,6 +55,29 @@ impl Plane {
     pub fn distance(&self, point: Vec3) -> f32 {
         (point - self.origin).dot(*self.normal)
     }
+
+    /// From the plane's own `x`/`y` to the prop's space.
+    pub fn lift(&self, at: Vec2) -> Vec3 {
+        self.origin + *self.x * at.x + *self.y() * at.y
+    }
+
+    /// Where `point` lands on the plane, seen straight down its normal, in the
+    /// plane's own `x`/`y`.
+    pub fn flatten(&self, point: Vec3) -> Vec2 {
+        let offset = point - self.origin;
+        Vec2::new(offset.dot(*self.x), offset.dot(*self.y()))
+    }
+
+    /// Where a ray meets the plane, from either side; `None` if it runs along
+    /// it or the plane is behind it.
+    pub fn hit(&self, ray: Ray3d) -> Option<Vec3> {
+        let facing = ray.direction.dot(*self.normal);
+        if facing.abs() < 1e-6 {
+            return None;
+        }
+        let t = (self.origin - ray.origin).dot(*self.normal) / facing;
+        (t > 0.0).then(|| ray.get_point(t))
+    }
 }
 
 /// One of the three planes through the prop's origin.

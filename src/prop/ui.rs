@@ -31,7 +31,9 @@ use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind};
 use crate::prop::document::{self, Pick, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::prop::plane::{OriginPlane, PickedPlane, Plane, PlaneRef};
 use crate::prop::reference::{Element, GeomRef, Located};
-use crate::prop::sketch::Sketch;
+use crate::prop::region::arrange;
+use crate::prop::sketch::{Sketch, SketchId};
+use crate::prop::sketch_edit::{sketch_of, sketch_of_mut, SketchPick, SketchSession, SketchTool};
 use crate::common::class::Class;
 use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
 use crate::common::shortcuts::chords;
@@ -165,6 +167,7 @@ struct PropTabs<'a> {
     figure: &'a mut ScaleFigure,
     preview: &'a mut ViewmodelPreview,
     requests: &'a mut PropRequests,
+    session: &'a mut SketchSession,
 }
 
 impl<'a> TabViewer for PropTabs<'a> {
@@ -197,10 +200,11 @@ impl<'a> TabViewer for PropTabs<'a> {
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
         match tab {
-            PropTab::Features => feature_tree(ui, self.editor, self.build),
-            PropTab::Inspector => {
-                inspector(ui, self.editor, self.build, self.plane, &mut self.requests.preview_plane)
-            }
+            PropTab::Features => feature_tree(ui, self.editor, self.build, self.session),
+            PropTab::Inspector => match self.session.editing() {
+                Some(sketch) => sketch_inspector(ui, self.editor, self.session, sketch),
+                None => inspector(ui, self.editor, self.build, self.plane, &mut self.requests.preview_plane),
+            },
             PropTab::Hold => match self.editor.doc().archetype {
                 Archetype::Held => {
                     let front = self.build.evaluated.bounds().map(front_of);
@@ -254,6 +258,7 @@ fn panels(
     // Optional: a build with no `NetPlugin` is a closed game, its own authority.
     role: Option<Res<NetRole>>,
     mut exit: MessageWriter<AppExit>,
+    mut session: ResMut<SketchSession>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let ctx = ctx.clone();
@@ -280,6 +285,7 @@ fn panels(
         figure: &mut figure,
         preview: &mut preview,
         requests: &mut requests,
+        session: &mut session,
     };
     let workspace = layout.workspace;
 
@@ -311,20 +317,24 @@ fn panels(
             });
             ui.separator();
             ui.horizontal_wrapped(|ui| {
-                // First and identical in both workspaces, so it does not move.
+                // First and identical in every workspace, so it does not move.
+                // A sketch being edited is neither, and picking either leaves it.
+                let sketching = tabs.session.editing().is_some();
                 for (candidate, key) in
                     [(Workspace::Model, "prop.workspace.model"), (Workspace::Fit, "prop.workspace.fit")]
                 {
-                    if ui.selectable_label(workspace == candidate, get!(key)).clicked() {
+                    if ui.selectable_label(!sketching && workspace == candidate, get!(key)).clicked() {
+                        tabs.session.leave();
                         tabs.requests.workspace = Some(candidate);
                     }
                 }
                 ui.separator();
-                match workspace {
-                    Workspace::Model => {
-                        toolbar(ui, tabs.editor, tabs.build, tabs.plane, tabs.requests)
+                match (sketching, workspace) {
+                    (true, _) => sketch_toolbar(ui, tabs.editor, tabs.session, &mut tabs.requests.frame),
+                    (false, Workspace::Model) => {
+                        toolbar(ui, tabs.editor, tabs.build, tabs.plane, tabs.requests, tabs.session)
                     }
-                    Workspace::Fit => fit_toolbar(ui, tabs.figure, &mut tabs.requests.frame),
+                    (false, Workspace::Fit) => fit_toolbar(ui, tabs.figure, &mut tabs.requests.frame),
                 }
             });
         })
@@ -450,6 +460,7 @@ fn panels(
 /// need not borrow the editor.
 struct Row {
     id: PropFeatureId,
+    sketch: bool,
     name: String,
     enabled: bool,
     /// How many features name this one as an operand.
@@ -462,7 +473,7 @@ struct Row {
 }
 
 /// The ordered feature list.
-fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
+fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session: &mut SketchSession) {
     let entries: Vec<Row> = editor
         .doc()
         .features
@@ -471,6 +482,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             let dependants = editor.doc().dependants(feature.id);
             Row {
                 id: feature.id,
+                sketch: matches!(feature.op, FeatureOp::Sketch { .. }),
                 name: feature.name.clone(),
                 enabled: feature.enabled,
                 dependants: dependants.len(),
@@ -508,6 +520,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let mut rects: Vec<(PropFeatureId, egui::Rect)> = Vec::new();
     let mut dragging: Option<usize> = None;
     let mut dropped = false;
+    let mut edit_sketch: Option<PropFeatureId> = None;
 
     // The rollback bar sits after this row; with no rollback, after the last.
     let rollback = editor.rollback();
@@ -518,7 +531,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         for (at, row) in entries.iter().enumerate() {
-            let Row { id, enabled, dependants, .. } = *row;
+            let Row { id, enabled, dependants, sketch, .. } = *row;
             let name = &row.name;
 
             // Reserved before the row and filled after: the fill depends on a
@@ -581,6 +594,9 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 let extending = ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
                 select = Some((id, if extending { RowClick::Toggle } else { RowClick::Only }));
             }
+            if sketch && response.double_clicked() {
+                edit_sketch = Some(id);
+            }
 
             // Selection outranks hover, or a chosen row dims when pointed at.
             let fill = if response.dragged() {
@@ -611,6 +627,11 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 // Ctrl-clicked pair is not thrown away.
                 if selected != Some(id) && !also_selected.contains(&id) {
                     select = Some((id, RowClick::Only));
+                }
+
+                if sketch && ui.button(get!("prop.sketch.edit")).clicked() {
+                    ui.close_kind(UiKind::Menu);
+                    edit_sketch = Some(id);
                 }
 
                 // Names the action, not the state: a state label reads as a
@@ -766,6 +787,10 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
         Some((id, RowClick::Toggle)) => editor.toggle_selected(id),
         None => {}
     }
+    if let Some(id) = edit_sketch {
+        editor.select(id);
+        session.enter(id);
+    }
     if let Some(action) = pending {
         action(editor);
     }
@@ -841,11 +866,13 @@ fn toolbar(
     build: &PropBuild,
     plane: Option<Plane>,
     requests: &mut PropRequests,
+    session: &mut SketchSession,
 ) {
     let pair = editor.pair_to_combine(&build.evaluated);
     let single = editor.body_to_act_on(&build.evaluated);
     let mut added: Option<FeatureOp> = None;
     let mut created_plane: Option<Vec<GeomRef>> = None;
+    let mut created_sketch: Option<PlaneRef> = None;
 
     ui.horizontal_wrapped(|ui| {
         ui.menu_button(get!("prop.add.solid"), |ui| {
@@ -939,7 +966,7 @@ fn toolbar(
         };
         let sketch_tool = ui.add_enabled(on.is_some(), egui::Button::new(get!("prop.features.sketch")));
         if let (true, Some(on)) = (sketch_tool.clicked(), on) {
-            added = Some(FeatureOp::Sketch { on, sketch: Sketch::default() });
+            created_sketch = Some(on);
         }
 
         ui.separator();
@@ -962,6 +989,117 @@ fn toolbar(
     }
     if let Some(through) = created_plane {
         add_plane(editor, through);
+    }
+    // Straight into it: an empty sketch is only ever made to be drawn in.
+    if let Some(on) = created_sketch {
+        let id = editor.add(FeatureOp::Sketch { on, sketch: Sketch::default() });
+        editor.select(id);
+        session.enter(id);
+    }
+}
+
+/// The sketch workspace's verbs: finish, the tools, and what acts on the
+/// sketch's own picks.
+fn sketch_toolbar(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSession, frame: &mut Option<bool>) {
+    let Some(id) = session.editing() else { return };
+    if ui.button(get!("prop.sketch.finish")).clicked() {
+        session.leave();
+        return;
+    }
+    ui.separator();
+    for (tool, key) in [(SketchTool::Select, "prop.sketch.select"), (SketchTool::Line, "prop.sketch.line")] {
+        if ui.selectable_label(session.tool() == tool, get!(key)).clicked() {
+            session.set_tool(tool);
+        }
+    }
+    ui.separator();
+
+    let lines: Vec<SketchId> = session
+        .picks
+        .iter()
+        .filter_map(|pick| match pick {
+            SketchPick::Line(id) => Some(*id),
+            SketchPick::Point(_) => None,
+        })
+        .collect();
+    let all_construction = sketch_of(editor.doc(), id).is_some_and(|sketch| {
+        sketch.entities.iter().filter(|entity| lines.contains(&entity.id())).all(|entity| entity.construction())
+    });
+    if ui.add_enabled(!lines.is_empty(), egui::Button::new(get!("prop.sketch.construction"))).clicked() {
+        editor.edit(|doc| {
+            if let Some(sketch) = sketch_of_mut(doc, id) {
+                for line in &lines {
+                    sketch.set_construction(*line, !all_construction);
+                }
+            }
+        });
+    }
+    if ui.add_enabled(!session.picks.is_empty(), egui::Button::new(get!("prop.sketch.delete"))).clicked() {
+        let ids: Vec<SketchId> = session.picks.iter().map(|pick| pick.id()).collect();
+        editor.edit(|doc| sketch_of_mut(doc, id).map(|sketch| sketch.remove(&ids)));
+        session.picks.clear();
+    }
+    ui.separator();
+    if ui.button(get!("prop.menu.frame")).clicked() {
+        *frame = Some(false);
+    }
+}
+
+/// While a sketch is edited: its picks, each with its numbers. A point's are
+/// editable, which is how a corner is put somewhere exact.
+fn sketch_inspector(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSession, id: PropFeatureId) {
+    let Some(sketch) = sketch_of(editor.doc(), id).cloned() else { return };
+    section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
+        ui.label(get!("prop.inspector.drawing", "points", sketch.points.len(), "lines", sketch.entities.len()));
+        ui.label(get!("prop.sketch.regions", "count", arrange(&sketch).regions.len()));
+    });
+    if session.picks.is_empty() {
+        return;
+    }
+    let mut moved: Option<(SketchId, Vec2)> = None;
+    let mut dropped = None;
+    section(ui, "sketch_picks", get!("prop.inspector.picked", "count", session.picks.len()), |ui| {
+        for pick in &session.picks {
+            ui.horizontal(|ui| {
+                match *pick {
+                    SketchPick::Point(point) => {
+                        ui.label(get!("prop.sketch.point", "id", point));
+                        if let Some(at) = sketch.point(point) {
+                            let mut edited = at;
+                            ui.add(egui::DragValue::new(&mut edited.x).speed(0.001).suffix(" m"));
+                            ui.add(egui::DragValue::new(&mut edited.y).speed(0.001).suffix(" m"));
+                            if edited != at {
+                                moved = Some((point, edited));
+                            }
+                        }
+                    }
+                    SketchPick::Line(line) => {
+                        ui.label(get!("prop.sketch.line_label", "id", line));
+                        let length = sketch
+                            .lines()
+                            .find(|(candidate, ..)| *candidate == line)
+                            .and_then(|(_, a, b, _)| Some(sketch.point(a)?.distance(sketch.point(b)?)));
+                        if let Some(length) = length {
+                            ui.label(format!("{length:.4} m"));
+                        }
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button(get!("prop.picks.remove")).clicked() {
+                        dropped = Some(*pick);
+                    }
+                });
+            });
+        }
+    });
+    if let Some((point, at)) = moved {
+        editor.begin_gesture();
+        if let Some(sketch) = sketch_of_mut(editor.doc_mut(), id) {
+            sketch.move_point(point, at);
+        }
+    }
+    if let Some(pick) = dropped {
+        session.toggle(pick);
     }
 }
 

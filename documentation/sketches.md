@@ -142,15 +142,23 @@ tested.
 
 ### The sketch workspace
 
-- [ ] Enter from a selected sketch (double-click, or the right-click menu);
-      leave back to Model.
-- [ ] One viewport straight down the plane; the others stay as they were.
-- [ ] Line tool: click to place, chaining from the last point; landing on an
-      existing point uses it.
-- [ ] Drag points; delete points and lines; toggle construction.
-- [ ] Snap to a grid, to sketch points, and to model corners seen from the
-      plane (copied positions, not references).
-- [ ] Regions shaded as they form, so a closed shape is visibly closed.
+- [x] Enter from a selected sketch (double-click, or the right-click menu);
+      leave back to Model. A sketch made from the toolbar is entered at once.
+      `SketchSession::editing` is the one answer to "is a sketch open".
+- [x] One viewport straight down the plane; the others stay as they were.
+      The perspective view turns, and is put back on finishing.
+- [x] Line tool: click to place, chaining from the last point; landing on an
+      existing point uses it — and ends the chain, since that closes a shape.
+      `Escape` or clicking the chain's own end stops it.
+- [x] Drag points; delete points and lines; toggle construction. A click
+      toggles a pick, as in Model; a point's position is editable in the
+      Inspector.
+- [x] Snap to a grid (5 mm), to sketch points, and to model corners seen from
+      the plane (copied positions, not references).
+- [x] Regions hatched as they form, so a closed shape is visibly closed.
+- [ ] Pick a sketch in the Model viewport by its lines (today: from the
+      feature list only).
+- [ ] Grid spacing as a setting rather than a constant.
 
 ### Later
 

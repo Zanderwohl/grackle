@@ -608,7 +608,22 @@ be dragged above the cube it was made on.
 
 Sketches — a 2D drawing on a plane that Extrude and Revolve sweep — are
 planned in [documentation/sketches.md](documentation/sketches.md), with the
-decisions behind them and a checklist.
+decisions behind them and a checklist. Three things about what is built:
+
+- **A sketch is a flat set, not a feature list** ([`sketch.rs`](src/prop/sketch.rs)):
+  lines name their ends by id, so a shared corner is one point and "is this
+  closed" is about ids, not coordinates. It has no undo of its own; it is part
+  of `PropDoc`.
+- **Regions are derived** ([`region.rs`](src/prop/region.rs)) by cutting every
+  line at its crossings and walking the faces of the planar graph, so crossing
+  lines split rather than fail. A region is named by the lines round its
+  outside and which side of each, never by index.
+- **Editing one is a third workspace** ([`sketch_edit.rs`](src/prop/sketch_edit.rs)),
+  and `SketchSession::editing` is the only answer to whether it is up: the
+  toolbar, the Inspector, the view and the model's picking and handles
+  (`not_sketching`) all ask it. While it is set a left click belongs to the
+  sketch. The sketch being edited is drawn from the document, not the
+  debounced build, so a dragged point does not lag.
 
 A placement's orientation is edited as **"points along" and "spin"** about the
 feature's own length axis (`FeatureOp::main_axis`), via

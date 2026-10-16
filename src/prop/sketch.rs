@@ -99,6 +99,31 @@ impl Sketch {
         self.points.iter().find(|point| point.id == id).map(|point| Vec2::from_array(point.at))
     }
 
+    pub fn move_point(&mut self, id: SketchId, at: Vec2) {
+        if let Some(point) = self.points.iter_mut().find(|point| point.id == id) {
+            point.at = at.to_array();
+        }
+    }
+
+    pub fn set_construction(&mut self, line: SketchId, to: bool) {
+        for entity in &mut self.entities {
+            match entity {
+                SketchEntity::Line { id, construction, .. } if *id == line => *construction = to,
+                SketchEntity::Line { .. } => {}
+            }
+        }
+    }
+
+    /// Takes the points and entities named, and every entity that ends on a
+    /// point taken — a line with one end is no line.
+    pub fn remove(&mut self, ids: &[SketchId]) {
+        self.points.retain(|point| !ids.contains(&point.id));
+        let points = &self.points;
+        self.entities.retain(|entity| {
+            !ids.contains(&entity.id()) && entity.points().iter().all(|end| points.iter().any(|p| p.id == *end))
+        });
+    }
+
     pub fn lines(&self) -> impl Iterator<Item = (SketchId, SketchId, SketchId, bool)> + '_ {
         self.entities.iter().map(|entity| match *entity {
             SketchEntity::Line { id, a, b, construction } => (id, a, b, construction),
@@ -116,7 +141,7 @@ pub struct PlacedSketch {
 
 impl PlacedSketch {
     pub fn world(&self, at: Vec2) -> Vec3 {
-        self.plane.origin + *self.plane.x * at.x + *self.plane.y() * at.y
+        self.plane.lift(at)
     }
 
     /// Each line's ends in the prop's space, and whether it is construction.

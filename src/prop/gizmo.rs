@@ -119,7 +119,11 @@ impl Plugin for PropGizmoPlugin {
             // also re-select.
             .add_systems(
                 Update,
-                (drag_the_selected, pick_in_the_viewport).chain().run_if(in_state(AppMode::Prop)),
+                // Not while sketching: a click then belongs to the sketch.
+                (drag_the_selected, pick_in_the_viewport)
+                    .chain()
+                    .run_if(in_state(AppMode::Prop))
+                    .run_if(crate::prop::sketch_edit::not_sketching),
             )
             .add_systems(Update, draw_colliders.run_if(in_state(AppMode::Prop)))
             .add_systems(OnExit(AppMode::Prop), |mut grab: ResMut<GizmoGrab>, mut hovered: ResMut<HoveredPick>| {
