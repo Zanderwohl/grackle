@@ -25,6 +25,7 @@ use crate::prop::baked::{parts, SurfaceMaterials};
 use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure, ScaleFigure};
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::gizmo::HoveredPick;
+use crate::prop::plane::draw_square;
 use crate::prop::reference::Located;
 use crate::prop::feature::{Evaluated, PropFeature};
 
@@ -315,11 +316,11 @@ fn draw_the_bench(
 
     let primary = editor.primary();
     let marker = build.evaluated.bounds().map_or(MIN_MARKER, |(min, max)| (max - min).length() * MARKER_SIZE).max(MIN_MARKER);
+    let picked_colour = |pick: &Pick| match Some(pick) == primary {
+        true => PICKED,
+        false => PICKED.with_alpha(0.5),
+    };
     for pick in editor.picks() {
-        let colour = match Some(pick) == primary {
-            true => Color::srgb(1.0, 0.8, 0.2),
-            false => Color::srgba(1.0, 0.8, 0.2, 0.5),
-        };
         match pick {
             // An eaten feature has no body and is not outlined.
             Pick::Body(picked) => {
@@ -327,21 +328,38 @@ fn draw_the_bench(
                     continue;
                 };
                 let Some((min, max)) = solid.bounds() else { continue };
-                gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), colour);
+                gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), picked_colour(pick));
             }
             Pick::Geom(reference) => {
                 if let Some(at) = build.evaluated.locate(reference) {
-                    draw_located(&mut gizmos, at, marker, colour);
+                    draw_located(&mut gizmos, at, marker, picked_colour(pick));
                 }
             }
+            // Drawn with every other plane, below.
+            Pick::Plane(_) => {}
         }
     }
     if let Some(Pick::Geom(reference)) = &hovered.0 {
         if let Some(at) = build.evaluated.locate(reference) {
-            draw_located(&mut gizmos, at, marker * 0.8, Color::srgb(0.5, 0.9, 1.0));
+            draw_located(&mut gizmos, at, marker * 0.8, HOVERED);
         }
     }
+    for datum in &build.evaluated.planes {
+        let pick = Pick::Plane(datum.id);
+        let colour = if editor.picks().contains(&pick) {
+            picked_colour(&pick)
+        } else if hovered.0.as_ref() == Some(&pick) {
+            HOVERED
+        } else {
+            PLANE
+        };
+        draw_square(&mut gizmos, &datum.corners, colour);
+    }
 }
+
+const PICKED: Color = Color::srgb(1.0, 0.8, 0.2);
+const HOVERED: Color = Color::srgb(0.5, 0.9, 1.0);
+const PLANE: Color = Color::srgb(0.55, 0.55, 0.55);
 
 /// A corner's marker as a fraction of the prop's size. Not camera-relative,
 /// for the same reason a feature's handles are not: four viewports.
@@ -351,6 +369,13 @@ const MIN_MARKER: f32 = 0.002;
 
 fn draw_located(gizmos: &mut Gizmos, at: Located, size: f32, colour: Color) {
     match at {
+        Located::Face { points, .. } => {
+            for i in 0..points.len() {
+                gizmos.line(points[i], points[(i + 1) % points.len()], colour);
+            }
+            let centre = points.iter().sum::<Vec3>() / points.len() as f32;
+            gizmos.sphere(Isometry3d::from_translation(centre), size * 0.5, colour);
+        }
         Located::Point(p) => {
             gizmos.sphere(Isometry3d::from_translation(p), size, colour);
         }
@@ -376,9 +401,10 @@ struct GhostCache {
 fn ghost_the_operands(
     mut gizmos: Gizmos,
     editor: Res<PropEditor>,
+    build: Res<PropBuild>,
     mut cache: Local<GhostCache>,
 ) {
-    let Some(selected) = editor.selected() else {
+    let Some(selected) = editor.primary_feature(&build.evaluated) else {
         cache.key = None;
         cache.input = None;
         cache.edges.clear();

@@ -1,18 +1,21 @@
-//! The plane a selection describes, if it describes one.
+//! The plane a selection describes, if it describes one, and the plane
+//! features made from them.
 //!
-//! Accepted selections are three corners, an edge and a corner, or two edges.
-//! The frame is decided by pick order alone — never by bounds or the longest
-//! edge — so nudging one corner cannot spin everything drawn on the plane
-//! through a right angle: the origin is the first point, `x` runs towards the
-//! second, and the normal follows the right-hand rule. An edge, when there is
-//! one, supplies the first two points, so `x` runs along it.
+//! Accepted selections are three corners, an edge and a corner, two edges, one
+//! flat face, or one plane feature. The frame is decided by pick order alone —
+//! never by bounds or the longest edge — so nudging one corner cannot spin
+//! everything drawn on the plane through a right angle: the origin is the
+//! first point, `x` runs towards the second, and the normal follows the
+//! right-hand rule. An edge, when there is one, supplies the first two points,
+//! so `x` runs along it. A face's normal is the way out of its body, so
+//! something sketched on it extrudes outwards.
 
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::prop::document::{Pick, PropEditor};
-use crate::prop::feature::Evaluated;
-use crate::prop::reference::Located;
+use crate::prop::feature::{Evaluated, PropFeatureId};
+use crate::prop::reference::{Located, Pointer, EDGE_PICK_PX};
 use crate::prop::view::PropBuild;
 use crate::tool::tool_helpers::dashed_line;
 
@@ -26,7 +29,8 @@ const ON_PLANE: f32 = 1e-4;
 /// moves a fraction of a millimetre, and anything drawn on it would too.
 const MIN_SPREAD: f32 = 0.01;
 
-/// The preview's margin past the selection, as a fraction of its extent.
+/// The drawn square's margin past what it was made from, as a fraction of its
+/// extent.
 const PREVIEW_MARGIN: f32 = 0.25;
 
 /// A frame, not the kernel's `normal · p = w`: something drawn on a plane
@@ -48,43 +52,80 @@ impl Plane {
     }
 }
 
-/// The plane through what is picked, or `None` if the picks do not make one:
-/// the wrong kinds or counts, a body among them, something that does not
-/// resolve, or geometry that is coincident, collinear or skew.
-pub fn plane_through(picks: &[Pick], evaluated: &Evaluated) -> Option<Plane> {
-    plane_through_located(&locate_all(picks, evaluated)?)
+/// A plane feature as evaluated: the plane, and the square it is drawn and
+/// picked as.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Datum {
+    pub id: PropFeatureId,
+    pub plane: Plane,
+    pub corners: [Vec3; 4],
 }
 
-/// Every pick's position, or `None` if any is a body or does not resolve.
+impl Datum {
+    /// From what the feature names, already located; `None` if it is no plane.
+    pub fn through(id: PropFeatureId, located: &[Located]) -> Option<Datum> {
+        let plane = plane_through_located(located)?;
+        let corners = preview_corners(&plane, &all_points(located));
+        Some(Datum { id, plane, corners })
+    }
+}
+
+/// The plane through what is picked, or `None` if the picks do not make one:
+/// the wrong kinds or counts, a body among them, something that does not
+/// resolve, a face that is not flat, or geometry that is coincident, collinear
+/// or skew.
+pub fn plane_through(picks: &[Pick], evaluated: &Evaluated) -> Option<Plane> {
+    picked_plane(picks, evaluated).map(|(plane, _)| plane)
+}
+
+/// [`plane_through`], with the square to draw it as.
+fn picked_plane(picks: &[Pick], evaluated: &Evaluated) -> Option<(Plane, [Vec3; 4])> {
+    if let [Pick::Plane(id)] = picks {
+        return evaluated.datum(*id).map(|datum| (datum.plane, datum.corners));
+    }
+    let located = locate_all(picks, evaluated)?;
+    let plane = plane_through_located(&located)?;
+    Some((plane, preview_corners(&plane, &all_points(&located))))
+}
+
+/// Every pick's position, or `None` if any is not geometry or does not
+/// resolve.
 fn locate_all(picks: &[Pick], evaluated: &Evaluated) -> Option<Vec<Located>> {
     picks
         .iter()
         .map(|pick| match pick {
-            Pick::Body(_) => None,
+            Pick::Body(_) | Pick::Plane(_) => None,
             Pick::Geom(reference) => evaluated.locate(reference),
         })
         .collect()
 }
 
+fn all_points(located: &[Located]) -> Vec<Vec3> {
+    located.iter().flat_map(Located::points).collect()
+}
+
 /// [`plane_through`] once the picks are positions.
 pub fn plane_through_located(located: &[Located]) -> Option<Plane> {
-    frame(&framing_points(located)?)
+    match located {
+        [face @ Located::Face { points, normal }] => face.is_flat().then(|| face_frame(points, *normal)).flatten(),
+        _ => frame(&framing_points(located)?),
+    }
 }
 
 /// The points that frame a plane, edges' ends first, if the picks are one of
 /// the accepted shapes.
 fn framing_points(located: &[Located]) -> Option<Vec<Vec3>> {
-    let edges = located.iter().filter_map(|at| match *at {
-        Located::Edge(a, b) => Some([a, b]),
-        Located::Point(_) => None,
-    });
-    let corners = located.iter().filter_map(|at| match *at {
-        Located::Point(p) => Some(p),
-        Located::Edge(..) => None,
-    });
-    let points: Vec<Vec3> = edges.clone().flatten().chain(corners.clone()).collect();
-    let shape = (edges.count(), corners.count());
-    matches!(shape, (0, 3) | (1, 1) | (2, 0)).then_some(points)
+    let mut edges = vec![];
+    let mut corners = vec![];
+    for at in located {
+        match *at {
+            Located::Edge(a, b) => edges.extend([a, b]),
+            Located::Point(p) => corners.push(p),
+            Located::Face { .. } => return None,
+        }
+    }
+    let shape = (edges.len() / 2, corners.len());
+    matches!(shape, (0, 3) | (1, 1) | (2, 0)).then(|| [edges, corners].concat())
 }
 
 /// Origin at `points[0]`, `x` towards `points[1]`, normal from the point
@@ -111,6 +152,18 @@ fn frame(points: &[Vec3]) -> Option<Plane> {
     }
     let plane = Plane { origin, x, normal: Dir3::new(off_line).ok()? };
     points.iter().all(|p| plane.distance(*p).abs() < ON_PLANE).then_some(plane)
+}
+
+/// Origin at the face's first corner and `x` along its first edge that has
+/// any length — a revolve's side can begin with two corners on the axis.
+fn face_frame(points: &[Vec3], normal: Vec3) -> Option<Plane> {
+    let normal = Dir3::new(normal).ok()?;
+    let origin = points[0];
+    let x = points[1..].iter().find_map(|p| {
+        let along = (*p - origin).reject_from_normalized(*normal);
+        (along.length() >= ON_PLANE).then(|| Dir3::new(along).ok()).flatten()
+    })?;
+    Some(Plane { origin, x, normal })
 }
 
 /// A square on `plane` around `points`, in its own `x` and `y`, the selection's
@@ -164,9 +217,9 @@ fn find_the_picked_plane(editor: Res<PropEditor>, build: Res<PropBuild>, mut pic
     if unchanged {
         return;
     }
-    let points = locate_all(editor.picks(), &build.evaluated).and_then(|located| framing_points(&located));
-    picked.plane = points.as_deref().and_then(frame);
-    picked.corners = picked.plane.zip(points).map(|(plane, points)| preview_corners(&plane, &points));
+    let found = picked_plane(editor.picks(), &build.evaluated);
+    picked.plane = found.map(|(plane, _)| plane);
+    picked.corners = found.map(|(_, corners)| corners);
     picked.from = Some((editor.picks().to_vec(), build.built()));
 }
 
@@ -174,10 +227,31 @@ const PREVIEW_COLOUR: Color = Color::srgb(0.55, 0.8, 0.95);
 
 fn preview_the_picked_plane(picked: Res<PickedPlane>, mut gizmos: Gizmos) {
     let (true, Some(corners)) = (picked.previewed, picked.corners) else { return };
-    // Dashes scale with the square, so a small prop is not drawn solid.
+    draw_square(&mut gizmos, &corners, PREVIEW_COLOUR);
+}
+
+/// The plane feature whose drawn square has an edge within
+/// [`EDGE_PICK_PX`] of the pointer. By its border rather than its inside, so a
+/// plane through a body does not stop clicks reaching the body.
+pub fn plane_under<P: Fn(Vec3) -> Option<Vec2>>(planes: &[Datum], pointer: &Pointer<P>) -> Option<PropFeatureId> {
+    planes
+        .iter()
+        .filter_map(|datum| {
+            (0..4)
+                .filter_map(|i| pointer.to_segment(datum.corners[i], datum.corners[(i + 1) % 4]))
+                .min_by(f32::total_cmp)
+                .map(|pixels| (datum.id, pixels))
+        })
+        .filter(|(_, pixels)| *pixels <= EDGE_PICK_PX)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(id, _)| id)
+}
+
+/// Dashes scale with the square, so a small prop is not drawn solid.
+pub fn draw_square(gizmos: &mut Gizmos, corners: &[Vec3; 4], colour: Color) {
     let side = corners[0].distance(corners[1]);
     for i in 0..4 {
-        dashed_line(&mut gizmos, corners[i], corners[(i + 1) % 4], PREVIEW_COLOUR, side / 24.0, side / 48.0);
+        dashed_line(gizmos, corners[i], corners[(i + 1) % 4], colour, side / 24.0, side / 48.0);
     }
 }
 
@@ -210,7 +284,7 @@ mod tests {
         let picked = [point(0.0, 0.0, 0.0), point(2.0, 0.0, 0.0), point(0.0, 3.0, 0.0)];
         assert_frame(plane_through_located(&picked), Vec3::ZERO, Vec3::X, Vec3::Z);
 
-        let reversed = [picked[0], picked[2], picked[1]];
+        let reversed = [picked[0].clone(), picked[2].clone(), picked[1].clone()];
         assert_frame(plane_through_located(&reversed), Vec3::ZERO, Vec3::Y, Vec3::NEG_Z);
     }
 
@@ -227,27 +301,27 @@ mod tests {
     fn an_edge_and_a_corner_off_it_make_a_plane_along_the_edge() {
         let along_x = edge([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
         let above = point(0.5, 0.0, 2.0);
-        assert_frame(plane_through_located(&[along_x, above]), Vec3::ZERO, Vec3::X, Vec3::NEG_Y);
-        assert_frame(plane_through_located(&[above, along_x]), Vec3::ZERO, Vec3::X, Vec3::NEG_Y);
+        assert_frame(plane_through_located(&[along_x.clone(), above.clone()]), Vec3::ZERO, Vec3::X, Vec3::NEG_Y);
+        assert_frame(plane_through_located(&[above.clone(), along_x.clone()]), Vec3::ZERO, Vec3::X, Vec3::NEG_Y);
 
         let on_its_line = point(3.0, 0.0, 0.0);
-        assert_eq!(plane_through_located(&[along_x, on_its_line]), None);
+        assert_eq!(plane_through_located(&[along_x.clone(), on_its_line.clone()]), None);
     }
 
     #[test]
     fn crossing_and_parallel_edges_make_a_plane_and_skew_ones_do_not() {
         let base = edge([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
         let crossing = edge([0.5, -1.0, 0.0], [0.5, 1.0, 0.0]);
-        assert_frame(plane_through_located(&[base, crossing]), Vec3::ZERO, Vec3::X, Vec3::Z);
+        assert_frame(plane_through_located(&[base.clone(), crossing.clone()]), Vec3::ZERO, Vec3::X, Vec3::Z);
 
         let parallel = edge([0.0, 2.0, 0.0], [1.0, 2.0, 0.0]);
-        assert_frame(plane_through_located(&[base, parallel]), Vec3::ZERO, Vec3::X, Vec3::Z);
+        assert_frame(plane_through_located(&[base.clone(), parallel.clone()]), Vec3::ZERO, Vec3::X, Vec3::Z);
 
         let skew = edge([0.5, -1.0, 1.0], [0.5, 1.0, 1.0]);
-        assert_eq!(plane_through_located(&[base, skew]), None);
+        assert_eq!(plane_through_located(&[base.clone(), skew.clone()]), None);
 
         let collinear = edge([2.0, 0.0, 0.0], [3.0, 0.0, 0.0]);
-        assert_eq!(plane_through_located(&[base, collinear]), None);
+        assert_eq!(plane_through_located(&[base.clone(), collinear.clone()]), None);
     }
 
     /// Fails if the threshold is a distance alone: 0.2 mm off a 30 cm line is
@@ -255,14 +329,14 @@ mod tests {
     #[test]
     fn corners_nearly_in_a_line_make_none() {
         let barrel = [point(0.0, 0.0, 0.0), point(0.3, 0.0, 0.0)];
-        let barely = [barrel[0], barrel[1], point(0.15, 0.0002, 0.0)];
+        let barely = [barrel[0].clone(), barrel[1].clone(), point(0.15, 0.0002, 0.0)];
         assert_eq!(plane_through_located(&barely), None);
-        let clearly = [barrel[0], barrel[1], point(0.15, 0.01, 0.0)];
+        let clearly = [barrel[0].clone(), barrel[1].clone(), point(0.15, 0.01, 0.0)];
         assert!(plane_through_located(&clearly).is_some());
 
         let long = edge([0.0, 0.0, 0.0], [0.3, 0.0, 0.0]);
         let hairline = edge([0.0, 0.001, 0.0], [0.3, 0.001, 0.0]);
-        assert_eq!(plane_through_located(&[long, hairline]), None);
+        assert_eq!(plane_through_located(&[long.clone(), hairline.clone()]), None);
     }
 
     #[test]
@@ -285,16 +359,102 @@ mod tests {
     }
 
     #[test]
+    fn a_flat_face_alone_makes_a_plane_facing_out() {
+        let evaluated = evaluate(&[cube_feature()]);
+        // Face 1 of an extrude is its far cap: the cube's +Z side.
+        let plane = plane_through(&[face(1)], &evaluated).expect("a plane");
+        assert!(plane.normal.distance(Vec3::Z) < 1e-6, "{plane:?}");
+        assert!((plane.distance(Vec3::ZERO) + 0.1).abs() < 1e-6);
+        assert_eq!(plane_through(&[face(1), face(0)], &evaluated), None, "one face, not two");
+    }
+
+    /// Fails if a plane feature is resolved against the end of the list: a
+    /// mirror below it that takes the original away must not move it.
+    #[test]
+    fn a_plane_feature_stands_where_its_references_were_when_it_ran() {
+        let plane = PropFeature::new(PropFeatureId(1), FeatureOp::Plane { through: vec![geom_ref(Element::Face(1))] });
+        let mirror = PropFeature::new(
+            PropFeatureId(2),
+            FeatureOp::Mirror {
+                target: PropFeatureId(0),
+                axis: crate::prop::feature::Axis::Z,
+                offset: 1.0,
+                keep_original: false,
+            },
+        );
+        let evaluated = evaluate(&[cube_feature(), plane.clone(), mirror]);
+        assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+        let datum = evaluated.datum(PropFeatureId(1)).expect("a plane");
+        assert!(datum.plane.normal.distance(Vec3::Z) < 1e-6);
+        assert!((datum.plane.distance(Vec3::ZERO) + 0.1).abs() < 1e-6);
+        assert_eq!(plane_through(&[Pick::Plane(PropFeatureId(1))], &evaluated), Some(datum.plane));
+        assert!(evaluated.bodies.len() == 1, "a plane is no body");
+
+        let before_its_cube = evaluate(&[plane, cube_feature()]);
+        assert!(before_its_cube.planes.is_empty());
+        assert_eq!(before_its_cube.problems.len(), 1);
+    }
+
+    /// Fails if a plane can be dragged above what it was made through, or the
+    /// generator deleted without being told about it.
+    #[test]
+    fn a_plane_is_pinned_below_what_it_names() {
+        use crate::prop::document::PropDoc;
+        let mut doc = PropDoc::new("test");
+        let cube = doc.push(cube_feature().op);
+        let plane = doc.push(FeatureOp::Plane {
+            through: vec![GeomRef { element: Element::Face(1), source: Source { feature: cube, copies: vec![] } }],
+        });
+        assert_eq!(doc.dependants(cube), vec![plane]);
+        assert!(!doc.move_to(plane, 0));
+        assert_eq!(doc.index_of(plane), Some(1));
+    }
+
+    #[test]
+    fn a_plane_feature_survives_the_file() {
+        use crate::prop::document::{parse, to_text, PropDoc};
+        let mut doc = PropDoc::new("test");
+        let cube = doc.push(cube_feature().op);
+        doc.push(FeatureOp::Plane {
+            through: vec![
+                GeomRef { element: Element::Edge(4), source: Source { feature: cube, copies: vec![] } },
+                GeomRef { element: Element::Point(2), source: Source { feature: cube, copies: vec![] } },
+            ],
+        });
+        let text = to_text(&doc).unwrap();
+        assert_eq!(parse(&text).unwrap(), doc, "{text}");
+    }
+
+    fn cube_feature() -> PropFeature {
+        PropFeature::new(
+            PropFeatureId(0),
+            FeatureOp::Primitive {
+                shape: Shape::Box { size: [0.2; 3] },
+                placement: Placement::default(),
+                surface: Surface::default(),
+            },
+        )
+    }
+
+    fn geom_ref(element: Element) -> GeomRef {
+        GeomRef { element, source: Source { feature: PropFeatureId(0), copies: vec![] } }
+    }
+
+    fn face(index: u32) -> Pick {
+        Pick::Geom(geom_ref(Element::Face(index)))
+    }
+
+    #[test]
     fn other_combinations_make_none() {
         let corner = point(0.0, 0.0, 0.0);
         let along_x = edge([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
         assert_eq!(plane_through_located(&[]), None);
-        assert_eq!(plane_through_located(&[along_x]), None);
-        assert_eq!(plane_through_located(&[corner, point(1.0, 0.0, 0.0)]), None);
+        assert_eq!(plane_through_located(&[along_x.clone()]), None);
+        assert_eq!(plane_through_located(&[corner.clone(), point(1.0, 0.0, 0.0).clone()]), None);
         let four = [corner, point(1.0, 0.0, 0.0), point(0.0, 1.0, 0.0), point(1.0, 1.0, 0.0)];
         assert_eq!(plane_through_located(&four), None, "three corners, not any number");
         let crossing = edge([0.5, -1.0, 0.0], [0.5, 1.0, 0.0]);
-        assert_eq!(plane_through_located(&[along_x, crossing, point(0.0, 1.0, 0.0)]), None);
+        assert_eq!(plane_through_located(&[along_x.clone(), crossing.clone(), point(0.0, 1.0, 0.0).clone()]), None);
     }
 
     #[test]

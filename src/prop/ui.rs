@@ -473,7 +473,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 name: feature.name.clone(),
                 enabled: feature.enabled,
                 dependants: dependants.len(),
-                pins: feature.op.consumes().into_iter().chain(dependants).collect(),
+                pins: feature.op.depends_on().into_iter().chain(dependants).collect(),
                 legal: editor
                     .doc()
                     .legal_range(feature.id)
@@ -496,9 +496,9 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
 
     // Copied out, and changes deferred to after the closures, so `editor` is
     // not borrowed across them.
-    let selected = editor.selected();
+    let selected = editor.primary_feature(&build.evaluated);
     let also_selected: Vec<PropFeatureId> =
-        editor.selected_bodies().into_iter().filter(|id| Some(*id) != selected).collect();
+        editor.picked_features(&build.evaluated).into_iter().filter(|id| Some(*id) != selected).collect();
     let mut select: Option<(PropFeatureId, RowClick)> = None;
     let mut pending: Option<Box<dyn FnOnce(&mut PropEditor)>> = None;
 
@@ -841,10 +841,10 @@ fn toolbar(
     plane: Option<Plane>,
     requests: &mut PropRequests,
 ) {
-    let live: Vec<PropFeatureId> = build.evaluated.bodies.iter().map(|(id, _)| *id).collect();
-    let pair = editor.pair_to_combine(&live);
-    let single = editor.body_to_act_on(&live);
+    let pair = editor.pair_to_combine(&build.evaluated);
+    let single = editor.body_to_act_on(&build.evaluated);
     let mut added: Option<FeatureOp> = None;
+    let mut created_plane: Option<Vec<GeomRef>> = None;
 
     ui.horizontal_wrapped(|ui| {
         ui.menu_button(get!("prop.add.solid"), |ui| {
@@ -926,15 +926,19 @@ fn toolbar(
 
         ui.separator();
 
-        let plane_tool = ui.add_enabled(plane.is_some(), egui::Button::new(get!("prop.features.plane")));
+        let through = plane_through_picks(editor, plane);
+        let plane_tool = ui.add_enabled(through.is_some(), egui::Button::new(get!("prop.features.plane")));
         requests.preview_plane |= plane_tool.hovered();
+        if let (true, Some(through)) = (plane_tool.clicked(), through) {
+            created_plane = Some(through);
+        }
 
         ui.separator();
 
         if ui.button(get!("prop.menu.frame")).clicked() {
             requests.frame = Some(false);
         }
-        let framable = build.evaluated.bounds_of_bodies(&editor.selected_bodies()).is_some();
+        let framable = build.evaluated.bounds_of_bodies(&editor.picked_bodies(&build.evaluated)).is_some();
         if ui
             .add_enabled(framable, egui::Button::new(get!("prop.menu.frame_selected")))
             .clicked()
@@ -947,6 +951,30 @@ fn toolbar(
         let id = editor.add(op);
         editor.select(id);
     }
+    if let Some(through) = created_plane {
+        add_plane(editor, through);
+    }
+}
+
+/// What a new plane would be made through: the picks, when they make a plane
+/// and are all geometry. A lone plane pick is a plane but makes no new one —
+/// it would be the same plane again. The toolbar's Plane and the Inspector's
+/// Use plane both ask this, so they are offered together.
+fn plane_through_picks(editor: &PropEditor, plane: Option<Plane>) -> Option<Vec<GeomRef>> {
+    plane?;
+    editor
+        .picks()
+        .iter()
+        .map(|pick| match pick {
+            Pick::Geom(reference) => Some(reference.clone()),
+            Pick::Body(_) | Pick::Plane(_) => None,
+        })
+        .collect()
+}
+
+fn add_plane(editor: &mut PropEditor, through: Vec<GeomRef>) {
+    let id = editor.add(FeatureOp::Plane { through });
+    editor.select_pick(Pick::Plane(id));
 }
 
 pub(crate) fn edit_availability(editor: &PropEditor) -> EditAvailability {
@@ -993,17 +1021,32 @@ fn inspector(
     plane: Option<Plane>,
     preview_plane: &mut bool,
 ) {
-    if editor.picks().len() > 1 {
+    let listed = editor.picks().len() > 1;
+    if listed {
         selection_list(ui, editor, build);
-        if plane.is_some() {
-            *preview_plane |= ui.button(get!("prop.picks.use_plane")).hovered();
+    }
+    let through = plane_through_picks(editor, plane);
+    let offered = through.is_some();
+    if let Some(through) = through {
+        let use_plane = ui.button(get!("prop.picks.use_plane"));
+        *preview_plane |= use_plane.hovered();
+        if use_plane.clicked() {
+            add_plane(editor, through);
         }
+    }
+    if listed || offered {
         ui.separator();
     }
     match editor.primary().cloned() {
         None => prop_overview(ui, editor, build),
-        Some(Pick::Body(id)) => feature_inspector(ui, editor, build, id),
-        Some(Pick::Geom(reference)) => element_inspector(ui, editor, build, &reference),
+        Some(Pick::Body(id) | Pick::Plane(id)) => feature_inspector(ui, editor, build, id),
+        Some(Pick::Geom(reference)) => {
+            element_inspector(ui, editor, build, &reference);
+            // A face stands for its body, so the body's numbers follow.
+            if let Some(body) = Pick::Geom(reference).body(&build.evaluated) {
+                feature_inspector(ui, editor, build, body);
+            }
+        }
     }
 }
 
@@ -1044,7 +1087,7 @@ fn pick_label(editor: &PropEditor, build: &PropBuild, pick: &Pick) -> String {
             .unwrap_or_else(|| get!("prop.inspector.missing", "id", id))
     };
     let reference = match pick {
-        Pick::Body(id) => return name(*id),
+        Pick::Body(id) | Pick::Plane(id) => return name(*id),
         Pick::Geom(reference) => reference,
     };
     let source = reference.source.copies.iter().fold(name(reference.source.feature), |base, copy| {
@@ -1053,6 +1096,7 @@ fn pick_label(editor: &PropEditor, build: &PropBuild, pick: &Pick) -> String {
     let label = match reference.element {
         Element::Point(index) => get!("prop.picks.point", "source", source, "index", index + 1),
         Element::Edge(index) => get!("prop.picks.edge", "source", source, "index", index + 1),
+        Element::Face(index) => get!("prop.picks.face", "source", source, "index", index + 1),
     };
     match build.evaluated.locate(reference) {
         Some(_) => label,
@@ -1060,7 +1104,8 @@ fn pick_label(editor: &PropEditor, build: &PropBuild, pick: &Pick) -> String {
     }
 }
 
-/// Where a corner or edge is. Read-only: it is wherever its feature put it.
+/// Where a corner, edge or face is. Read-only: it is wherever its feature put
+/// it.
 fn element_inspector(ui: &mut Ui, editor: &PropEditor, build: &PropBuild, reference: &GeomRef) {
     let triple = |v: Vec3| format!("{:.4}, {:.4}, {:.4} m", v.x, v.y, v.z);
     section(ui, "element", get!("prop.inspector.sections.element"), |ui| {
@@ -1090,6 +1135,12 @@ fn element_inspector(ui: &mut Ui, editor: &PropEditor, build: &PropBuild, refere
                 ui.horizontal(|ui| {
                     ui.label(get!("prop.inspector.length"));
                     ui.label(format!("{:.4} m", a.distance(b)));
+                });
+            }
+            Some(Located::Face { normal, .. }) => {
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.inspector.normal"));
+                    ui.label(format!("{:.4}, {:.4}, {:.4}", normal.x, normal.y, normal.z));
                 });
             }
             None => {}
@@ -1126,6 +1177,13 @@ fn feature_inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, se
     // Drawn against a copy: calling `PropEditor::doc_mut` marks the document
     // changed, which would rebuild the viewport and mark it dirty every frame.
     let Some(mut edited) = editor.doc().feature(selected).cloned() else { return };
+    let through: Vec<String> = match &edited.op {
+        FeatureOp::Plane { through } => {
+            through.iter().map(|reference| pick_label(editor, build, &Pick::Geom(reference.clone()))).collect()
+        }
+        _ => vec![],
+    };
+    let datum = build.evaluated.datum(selected);
     let feature = &mut edited;
 
     let mut changed = false;
@@ -1233,6 +1291,26 @@ fn feature_inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, se
                 section(ui, "pattern", get!("prop.inspector.sections.pattern"), |ui| {
                     changed |= pattern_ui(ui, count, along);
                 });
+            }
+            FeatureOp::Plane { .. } => {
+                section(ui, "through", get!("prop.inspector.sections.through"), |ui| {
+                    for label in &through {
+                        ui.label(label);
+                    }
+                });
+                if let Some(datum) = datum {
+                    let triple = |v: Vec3| format!("{:.4}, {:.4}, {:.4}", v.x, v.y, v.z);
+                    section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(get!("prop.inspector.origin"));
+                            ui.label(triple(datum.plane.origin));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(get!("prop.inspector.normal"));
+                            ui.label(triple(*datum.plane.normal));
+                        });
+                    });
+                }
             }
         }
     });
@@ -1704,7 +1782,7 @@ fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 .unwrap_or_else(|| problem.feature.to_string());
             if ui
                 .selectable_label(
-                    editor.selected() == Some(problem.feature),
+                    editor.primary_feature(&build.evaluated) == Some(problem.feature),
                     egui::RichText::new(format!(
                         "{} {name}: {}",
                         get!("prop.problems.marker"),

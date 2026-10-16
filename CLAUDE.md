@@ -545,16 +545,26 @@ target, second as tool — the order it is said in), Mirror the primary, and
 each greys out when the selection does not fit. Undo and redo are on an
 **Edit** menu.
 
-**The selection is an ordered list of `Pick`s** — bodies, and named corners
-and edges — and in the viewport **every click toggles**: a click adds what is
-under the pointer, the same click again removes it, a click on nothing clears.
-Building a plane is always several picks, so a held modifier would be a key
-held for every one of them. The last pick is the primary. With more than one,
-the Inspector lists them, each with a button that drops it, above the
-primary's details. `pick_in_the_viewport` takes a corner within a few pixels
-over an edge, an edge over a body's face — faces tested as faces, not boxes,
-so a click down a bore reaches what is behind — and runs after the handle
-drag so a press that grabbed a handle does not also pick.
+**The selection is an ordered list of `Pick`s** — bodies, named corners,
+edges and faces, and plane features — and in the viewport **every click
+toggles**: a click adds what is under the pointer, the same click again
+removes it, a click on nothing clears. Building a plane is always several
+picks, so a held modifier would be a key held for every one of them. The last
+pick is the primary. With more than one, the Inspector lists them, each with a
+button that drops it, above the primary's details. `pick_in_the_viewport`
+takes a corner within a few pixels over an edge, an edge over a plane's
+border, a border over the flat face under the pointer, and a face over its
+body — faces tested as faces, not boxes, so a click down a bore reaches what
+is behind — and runs after the handle drag so a press that grabbed a handle
+does not also pick.
+
+**A face stands in for its body** (`Pick::body`): clicking a surface picks the
+face, and Combine, Mirror, Pattern, framing and the Inspector treat it as the
+body it is on — so a face on the barrel and one on the bore still offer
+Combine, and two faces of one body are not a pair. A corner or an edge does
+not stand in, and a plane is not a body. `Pick::feature` is the looser
+question the feature list, handles and Inspector ask: a body *or plane*,
+eaten or not.
 
 **A corner or edge is named by the generator that made it, never by the
 kernel's output** ([`reference.rs`](src/prop/reference.rs)). BSP polygons are
@@ -572,6 +582,29 @@ come from `Shape::sweep`, so the two cannot drift —
 `every_primitives_outline_lies_on_its_surface` is what notices if they do.
 The cost is that an edge a boolean *made*, where a bore leaves a face, has no
 name and cannot be picked.
+
+**A face is matched to its generator on the click, not carried through the
+kernel.** `Evaluated::surface_under` finds the polygon hit and `face_at` asks
+which named face lies in that polygon's plane and contains the hit point —
+either facing, because a hole's wall faces the opposite way from the tool face
+that cut it. Each `OutlineFace` stores an `outward` direction rather than
+trusting its winding, which nothing promises before
+`Solid::oriented_outward` measures it; `every_flat_face_points_out_of_its_body`
+is what fails if that is ever derived instead. A revolve's side is flat — its
+two sweep edges are parallel chords — so a sphere's facets are faces too.
+
+**A plane is a feature that makes no body** (`FeatureOp::Plane { through }`,
+[`plane.rs`](src/prop/plane.rs)). Accepted: three corners, an edge and a
+corner, two coplanar edges, or one flat face; the frame comes from pick order,
+or from a face's own outward normal, so something sketched on it extrudes
+out of the body. **Its references are resolved as the prop stood when it
+runs**, against the bodies live at that point in the list, so a mirror below
+it that takes the original away does not move it. It is drawn as a grey dashed
+square and picked by its border, so one through a body does not stop clicks
+reaching the body. `FeatureOp::references` is what it names without consuming,
+and `depends_on` — operands and references together — is what the feature
+list's reordering and delete warnings use; `consumes` alone would let a plane
+be dragged above the cube it was made on.
 
 A placement's orientation is edited as **"points along" and "spin"** about the
 feature's own length axis (`FeatureOp::main_axis`), via

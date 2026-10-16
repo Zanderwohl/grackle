@@ -23,7 +23,8 @@ use crate::prop::feature::FeatureOp;
 use crate::prop::figure::{FigureReach, ScaleFigure, ScaleFigureMarker};
 use crate::prop::hold::HoldSpec;
 use crate::prop::profile::Placement;
-use crate::prop::reference::element_under;
+use crate::prop::plane::plane_under;
+use crate::prop::reference::{element_under, Pointer};
 use crate::prop::solid::{Shape, MIN_EXTENT};
 use crate::tool::tool_helpers::{closest_param_on_axis, ray_point_distance};
 
@@ -224,6 +225,7 @@ fn drag_the_selected(
     hold_handles: Res<HoldHandles>,
     choice: Res<ScaleFigure>,
     figures: Query<(&Skeleton, &Pose, &Transform, &FigureReach), With<ScaleFigureMarker>>,
+    build: Res<crate::prop::view::PropBuild>,
     mut gizmos: Gizmos,
 ) {
     if hold_handles.0 {
@@ -231,7 +233,7 @@ fn drag_the_selected(
         return;
     }
 
-    let Some(selected) = editor.selected() else {
+    let Some(selected) = editor.primary_feature(&build.evaluated) else {
         grab.held = None;
         return;
     };
@@ -352,10 +354,11 @@ fn drag_the_selected(
 #[derive(Resource, Default)]
 pub struct HoveredPick(pub Option<Pick>);
 
-/// A click toggles what is under the pointer — a corner, else an edge, else a
-/// body — and a click on nothing clears. On the press, so its gizmos are up by
-/// release. Off while the hold's handles are up, so a near-miss on a grip does
-/// not change the modelling selection.
+/// A click toggles what is under the pointer — a corner, else an edge, else
+/// a plane's border, else a flat face, else a body — and a click on nothing
+/// clears. On the press, so its gizmos are up by release. Off while the hold's
+/// handles are up, so a near-miss on a grip does not change the modelling
+/// selection.
 fn pick_in_the_viewport(
     mut editor: ResMut<PropEditor>,
     mut hovered: ResMut<HoveredPick>,
@@ -369,12 +372,21 @@ fn pick_in_the_viewport(
         .then(|| {
             let ray = mouse.world_pos?;
             let (camera, at) = cameras.get(mouse.in_camera?).ok()?;
-            let face = build.evaluated.face_distance(ray);
-            let project = |p: Vec3| camera.world_to_viewport(at, p).ok();
-            match element_under(&build.evaluated.pickables, ray, face, project) {
-                Some(pickable) => Some(Some(Pick::Geom(pickable.reference.clone()))),
-                None => Some(build.evaluated.body_under(ray.origin, *ray.direction).map(Pick::Body)),
-            }
+            let evaluated = &build.evaluated;
+            let pointer = Pointer {
+                ray,
+                face: evaluated.face_distance(ray),
+                project: |p: Vec3| camera.world_to_viewport(at, p).ok(),
+            };
+            let pick = element_under(&evaluated.pickables, &pointer)
+                .map(|pickable| Pick::Geom(pickable.reference.clone()))
+                .or_else(|| plane_under(&evaluated.planes, &pointer).map(Pick::Plane))
+                .or_else(|| {
+                    evaluated
+                        .surface_under(ray)
+                        .map(|(body, face)| face.map_or(Pick::Body(body), Pick::Geom))
+                });
+            Some(pick)
         })
         .flatten();
     let pointing = under.is_some();
@@ -784,6 +796,7 @@ mod tests {
         app.init_gizmo_group::<DefaultGizmoConfigGroup>();
         let mut world = std::mem::take(app.world_mut());
         world.insert_resource(editor);
+        world.init_resource::<crate::prop::view::PropBuild>();
         world.init_resource::<CurrentMouseInput>();
         world.init_resource::<GizmoGrab>();
         world.insert_resource(HoldHandles(hold_handles));
@@ -844,7 +857,7 @@ mod tests {
         let across = rotation * Vec3::Z;
         let origin_of = |world: &World| {
             let editor = world.resource::<PropEditor>();
-            let op = editor.doc().feature(editor.selected().unwrap()).unwrap().op.clone();
+            let op = editor.doc().feature(editor.primary_feature(&Default::default()).unwrap()).unwrap().op.clone();
             let FeatureOp::Primitive { placement, .. } = op else { unreachable!() };
             placement.origin()
         };
@@ -857,7 +870,7 @@ mod tests {
         // Somebody else moves the document: the feature goes back.
         {
             let mut editor = world.resource_mut::<PropEditor>();
-            let selected = editor.selected().unwrap();
+            let selected = editor.primary_feature(&Default::default()).unwrap();
             editor.doc_mut().feature_mut(selected).unwrap().op.placement_mut().unwrap().origin =
                 placement.origin;
         }
@@ -910,7 +923,7 @@ mod tests {
 
         release(&mut world, pulled);
         let mut editor = world.resource_mut::<PropEditor>();
-        let selected = editor.selected().unwrap();
+        let selected = editor.primary_feature(&Default::default()).unwrap();
         let landed = editor.doc().feature(selected).unwrap().op.clone();
         let FeatureOp::Primitive { placement: landed, .. } = landed else { unreachable!() };
         assert!(

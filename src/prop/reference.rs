@@ -49,6 +49,7 @@ impl Source {
 pub enum Element {
     Point(u32),
     Edge(u32),
+    Face(u32),
 }
 
 /// `element` first: TOML needs every scalar before any sub-table.
@@ -59,13 +60,38 @@ pub struct GeomRef {
 }
 
 /// Where a reference is, in the prop's own space.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Located {
     Point(Vec3),
     Edge(Vec3, Vec3),
+    /// The loop as generated, and which way is out of the body. Every
+    /// generator face is flat by construction — a revolve's side has two
+    /// parallel sweep edges — but [`Self::is_flat`] checks rather than trusts.
+    Face { points: Vec<Vec3>, normal: Vec3 },
 }
 
-/// A generator's corners and the edges between them.
+impl Located {
+    /// Every point that describes it.
+    pub fn points(&self) -> Vec<Vec3> {
+        match self {
+            Located::Point(p) => vec![*p],
+            Located::Edge(a, b) => vec![*a, *b],
+            Located::Face { points, .. } => points.clone(),
+        }
+    }
+}
+
+/// One face of a generator: indices into [`Outline::points`] round its loop,
+/// and a direction known to be out of the body. Stored rather than derived from
+/// the winding, because the kernel's winding is measured afterwards
+/// ([`Solid::oriented_outward`]) and nothing here is promised it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutlineFace {
+    pub points: Vec<u32>,
+    pub outward: Vec3,
+}
+
+/// A generator's corners, the edges between them, and its faces.
 ///
 /// Numbered by formula from the profile *as authored*, not as wound for the
 /// kernel, so dragging a point across the loop does not renumber everything.
@@ -76,11 +102,13 @@ pub enum Located {
 pub struct Outline {
     pub points: Vec<Vec3>,
     pub edges: Vec<[u32; 2]>,
+    pub faces: Vec<OutlineFace>,
 }
 
 impl Outline {
     /// Matches [`Solid::extrude`]: points `0..n` on the near cap, `n..2n` on
-    /// the far; edges round the near cap, round the far, then the sides.
+    /// the far; edges round the near cap, round the far, then the sides; faces
+    /// the near cap, the far cap, then side `i` from point `i`.
     pub fn extrude(profile: &Profile, depth: f32, midplane: bool) -> Outline {
         let loop_ = profile.points();
         if loop_.len() < 3 || depth.abs() < f32::EPSILON {
@@ -101,12 +129,25 @@ impl Outline {
         for i in 0..n {
             edges.push([i, n + i]);
         }
-        Outline { points, edges }
+
+        let along = Vec3::Z * depth.signum();
+        let mut faces = vec![
+            OutlineFace { points: (0..n).collect(), outward: -along },
+            OutlineFace { points: (n..2 * n).collect(), outward: along },
+        ];
+        let out = outward_of_profile(&loop_);
+        for i in 0..n {
+            let j = (i + 1) % n;
+            faces.push(OutlineFace { points: vec![i, j, n + j, n + i], outward: out(i as usize).extend(0.0) });
+        }
+        Outline { points, edges, faces }
     }
 
     /// Matches [`Solid::revolve`]: ring `k` holds points `k*n..(k+1)*n`.
     /// Edges round every ring first, then along the sweep. A side face's
     /// diagonal is a triangulation detail rather than an edge, so is left out.
+    /// Faces are the sides between rings, `k*n + i`, then the two caps of a
+    /// part turn.
     pub fn revolve(profile: &Profile, degrees: f32, segments: u32) -> Outline {
         let loop_ = profile.points();
         if loop_.len() < 3 {
@@ -136,12 +177,43 @@ impl Outline {
                 edges.push([k * n + i, next * n + i]);
             }
         }
-        Outline { points, edges }
+
+        // The profile's outward direction turned to the side's middle angle,
+        // which is the swept surface's outward direction whichever side of
+        // the axis the profile is on.
+        let out = outward_of_profile(&loop_);
+        let mut faces = Vec::with_capacity((steps * n + 2) as usize);
+        for k in 0..steps {
+            let next = (k + 1) % rings;
+            let (sin, cos) = (sweep * (k as f32 + 0.5) / steps as f32).sin_cos();
+            for i in 0..n {
+                let j = (i + 1) % n;
+                let flat = out(i as usize);
+                faces.push(OutlineFace {
+                    points: vec![k * n + i, k * n + j, next * n + j, next * n + i],
+                    outward: Vec3::new(flat.x * cos, flat.y, -flat.x * sin),
+                });
+            }
+        }
+        if !full {
+            // A cap faces back along the way its ring was swept.
+            let side = sweep.signum() * loop_.iter().map(|p| p.x).sum::<f32>().signum();
+            let (sin, cos) = sweep.sin_cos();
+            faces.push(OutlineFace { points: (0..n).collect(), outward: Vec3::Z * side });
+            faces.push(OutlineFace {
+                points: (steps * n..(steps + 1) * n).collect(),
+                outward: Vec3::new(-sin, 0.0, -cos) * side,
+            });
+        }
+        Outline { points, edges, faces }
     }
 
     pub fn transformed(mut self, transform: Transform) -> Outline {
         for point in &mut self.points {
             *point = transform.transform_point(*point);
+        }
+        for face in &mut self.faces {
+            face.outward = transform.rotation * face.outward;
         }
         self
     }
@@ -154,6 +226,10 @@ impl Outline {
             let offset = *point - origin;
             *point = origin + offset - 2.0 * offset.dot(normal) * normal;
         }
+        // A reflection keeps out as out.
+        for face in &mut self.faces {
+            face.outward -= 2.0 * face.outward.dot(normal) * normal;
+        }
         self
     }
 
@@ -164,8 +240,92 @@ impl Outline {
                 let [a, b] = *self.edges.get(i as usize)?;
                 Some(Located::Edge(self.points[a as usize], self.points[b as usize]))
             }
+            Element::Face(i) => {
+                let face = self.faces.get(i as usize)?;
+                let points: Vec<Vec3> = face.points.iter().map(|&p| self.points[p as usize]).collect();
+                let normal = match newell(&points).try_normalize() {
+                    Some(normal) if normal.dot(face.outward) < 0.0 => -normal,
+                    Some(normal) => normal,
+                    None => face.outward.normalize_or_zero(),
+                };
+                Some(Located::Face { points, normal })
+            }
         }
     }
+}
+
+/// For each edge `i` of a loop, the in-plane direction away from its inside,
+/// whichever way the loop was authored.
+fn outward_of_profile(loop_: &[Vec2]) -> impl Fn(usize) -> Vec2 + '_ {
+    let area_x2: f32 = (0..loop_.len())
+        .map(|i| loop_[i].perp_dot(loop_[(i + 1) % loop_.len()]))
+        .sum();
+    let ccw = area_x2.signum();
+    move |i| {
+        let along = loop_[(i + 1) % loop_.len()] - loop_[i];
+        Vec2::new(along.y, -along.x) * ccw
+    }
+}
+
+/// A loop's area-weighted normal: exact for a flat loop, the best fit for one
+/// that is nearly flat, and zero for one with no area. Twice the area long.
+pub fn newell(points: &[Vec3]) -> Vec3 {
+    (0..points.len()).fold(Vec3::ZERO, |sum, i| {
+        let (a, b) = (points[i], points[(i + 1) % points.len()]);
+        sum + Vec3::new(
+            (a.y - b.y) * (a.z + b.z),
+            (a.z - b.z) * (a.x + b.x),
+            (a.x - b.x) * (a.y + b.y),
+        )
+    })
+}
+
+impl Located {
+    /// A face that lies in one plane, to within the kernel's tolerance.
+    pub fn is_flat(&self) -> bool {
+        match self {
+            Located::Face { points, normal } => {
+                points.iter().all(|p| (*p - points[0]).dot(*normal).abs() < ON_SURFACE)
+            }
+            Located::Point(_) | Located::Edge(..) => true,
+        }
+    }
+
+    /// Whether `point` is inside a face, in its own plane. Even-odd rather than
+    /// a convex test, since a cap can be any loop a profile can.
+    fn face_contains(&self, point: Vec3) -> bool {
+        let Located::Face { points, normal } = self else { return false };
+        if (point - points[0]).dot(*normal).abs() > ON_SURFACE {
+            return false;
+        }
+        let (u, v) = normal.any_orthonormal_pair();
+        let flat = |p: Vec3| Vec2::new(p.dot(u), p.dot(v));
+        let at = flat(point);
+        let mut inside = false;
+        for i in 0..points.len() {
+            let (a, b) = (flat(points[i]), flat(points[(i + 1) % points.len()]));
+            if (a.y > at.y) != (b.y > at.y) && at.x < a.x + (at.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                inside = !inside;
+            }
+        }
+        inside
+    }
+}
+
+/// The named flat face of `wires` that a click at `hit`, on a polygon facing
+/// `facing`, landed on. Matched by plane and by containment rather than carried
+/// through the kernel: a hole's wall faces the other way from the tool that
+/// cut it, so either facing matches.
+pub fn face_at(wires: &[Wire], hit: Vec3, facing: Vec3) -> Option<GeomRef> {
+    wires.iter().find_map(|wire| {
+        (0..wire.outline.faces.len() as u32).find_map(|i| {
+            let face = wire.outline.locate(Element::Face(i))?;
+            let Located::Face { normal, .. } = &face else { return None };
+            let square_on = normal.dot(facing).abs() > 1.0 - 1e-3;
+            (square_on && face.is_flat() && face.face_contains(hit))
+                .then(|| GeomRef { element: Element::Face(i), source: wire.source.clone() })
+        })
+    })
 }
 
 /// One generator's outline, in the prop's space, under its name.
@@ -257,61 +417,67 @@ pub const POINT_PICK_PX: f32 = 10.0;
 /// Pixels. Tighter than a point's, so a click near a corner takes the corner.
 pub const EDGE_PICK_PX: f32 = 6.0;
 
+/// Distances on screen from the pointer, for picking things too thin to hit
+/// with a ray. Engine-free so picking can be tested without a camera.
+pub struct Pointer<P> {
+    pub ray: Ray3d,
+    /// How far down the ray the nearest face is, so nothing round the back of
+    /// a body is picked through it.
+    pub face: Option<f32>,
+    /// World to viewport pixels.
+    pub project: P,
+}
+
+impl<P: Fn(Vec3) -> Option<Vec2>> Pointer<P> {
+    fn depth(&self, p: Vec3) -> f32 {
+        (p - self.ray.origin).dot(*self.ray.direction)
+    }
+
+    /// Pixels from the pointer to `p`, if it is in front and not hidden.
+    /// Measured at `p`'s own depth: any point down the ray lands on the
+    /// pointer, perspective or orthographic.
+    pub fn to_point(&self, p: Vec3) -> Option<f32> {
+        let depth = self.depth(p);
+        // Something on the face that was hit is at the same depth, give or
+        // take the kernel's rounding and the slant of the face across a few
+        // pixels.
+        let hidden = self.face.is_some_and(|face| depth > face + 0.002 + face * 0.01);
+        if depth <= 0.0 || hidden {
+            return None;
+        }
+        let on_screen = (self.project)(p)?;
+        let pointer = (self.project)(self.ray.origin + *self.ray.direction * depth)?;
+        Some(on_screen.distance(pointer))
+    }
+
+    pub fn to_segment(&self, a: Vec3, b: Vec3) -> Option<f32> {
+        self.to_point(closest_on_segment(self.ray.origin, *self.ray.direction, a, b))
+    }
+}
+
 /// The element under the pointer: the nearest corner within
 /// [`POINT_PICK_PX`], or failing that the nearest edge within
-/// [`EDGE_PICK_PX`]. `project` is world to viewport pixels; `face` is how far
-/// down the ray the nearest face is, so a corner round the back of a body is
-/// not picked through it.
-///
-/// Engine-free so it can be tested without a camera.
-pub fn element_under<'a>(
+/// [`EDGE_PICK_PX`].
+pub fn element_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
     pickables: &'a [Pickable],
-    ray: Ray3d,
-    face: Option<f32>,
-    project: impl Fn(Vec3) -> Option<Vec2>,
+    pointer: &Pointer<P>,
 ) -> Option<&'a Pickable> {
-    let origin = ray.origin;
-    let direction = *ray.direction;
-    let depth = |p: Vec3| (p - origin).dot(direction);
-    // Something on the face that was hit is at the same depth, give or take
-    // the kernel's rounding and the slant of the face across a few pixels.
-    let visible = |p: Vec3| face.is_none_or(|face| depth(p) <= face + 0.002 + face * 0.01);
-    // In pixels, at the candidate's own depth: any point down the ray lands
-    // on the pointer, perspective or orthographic.
-    let pixels = |p: Vec3| {
-        let on_screen = project(p)?;
-        let pointer = project(origin + direction * depth(p))?;
-        Some(on_screen.distance(pointer))
-    };
-
-    let nearest = |within: f32, wanted: fn(&Located) -> Option<Vec3>, at: &dyn Fn(Vec3, &Located) -> Vec3| {
+    let nearest = |within: f32, distance: &dyn Fn(&Located) -> Option<f32>| {
         pickables
             .iter()
-            .filter_map(|pickable| {
-                let anchor = wanted(&pickable.at)?;
-                let p = at(anchor, &pickable.at);
-                if depth(p) <= 0.0 || !visible(p) {
-                    return None;
-                }
-                let distance = pixels(p)?;
-                (distance <= within).then_some((pickable, distance))
-            })
+            .filter_map(|pickable| Some((pickable, distance(&pickable.at)?)))
+            .filter(|(_, pixels)| *pixels <= within)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(pickable, _)| pickable)
     };
-
-    let point = |located: &Located| match located {
-        Located::Point(p) => Some(*p),
-        Located::Edge(..) => None,
-    };
-    let edge = |located: &Located| match located {
-        Located::Edge(a, _) => Some(*a),
-        Located::Point(_) => None,
-    };
-    nearest(POINT_PICK_PX, point, &|p, _| p).or_else(|| {
-        nearest(EDGE_PICK_PX, edge, &|_, located| match *located {
-            Located::Edge(a, b) => closest_on_segment(origin, direction, a, b),
-            Located::Point(p) => p,
+    nearest(POINT_PICK_PX, &|at| match at {
+        Located::Point(p) => pointer.to_point(*p),
+        Located::Edge(..) | Located::Face { .. } => None,
+    })
+    .or_else(|| {
+        nearest(EDGE_PICK_PX, &|at| match at {
+            Located::Edge(a, b) => pointer.to_segment(*a, *b),
+            Located::Point(_) | Located::Face { .. } => None,
         })
     })
 }
@@ -450,8 +616,8 @@ mod tests {
     fn a_corner_beats_the_edges_that_meet_at_it() {
         let evaluated = evaluate(&[cube(0, 0.2, Vec3::ZERO)]);
         let ray = Ray3d::new(Vec3::new(0.097, 0.098, 1.0), Dir3::NEG_Z);
-        let face = evaluated.face_distance(ray);
-        let picked = element_under(&evaluated.pickables, ray, face, looking_down_z).unwrap();
+        let pointer = Pointer { ray, face: evaluated.face_distance(ray), project: looking_down_z };
+        let picked = element_under(&evaluated.pickables, &pointer).unwrap();
         assert_eq!(picked.at, Located::Point(Vec3::splat(0.1)));
     }
 
@@ -459,8 +625,8 @@ mod tests {
     fn away_from_a_corner_an_edge_is_picked() {
         let evaluated = evaluate(&[cube(0, 0.2, Vec3::ZERO)]);
         let ray = Ray3d::new(Vec3::new(0.0, 0.097, 1.0), Dir3::NEG_Z);
-        let face = evaluated.face_distance(ray);
-        let picked = element_under(&evaluated.pickables, ray, face, looking_down_z).unwrap();
+        let pointer = Pointer { ray, face: evaluated.face_distance(ray), project: looking_down_z };
+        let picked = element_under(&evaluated.pickables, &pointer).unwrap();
         let Located::Edge(a, b) = picked.at else { panic!("{picked:?}") };
         assert_eq!((a.y, b.y, a.z, b.z), (0.1, 0.1, 0.1, 0.1), "the near top edge, not the far one");
     }
@@ -469,8 +635,82 @@ mod tests {
     fn nothing_is_picked_in_the_middle_of_a_face() {
         let evaluated = evaluate(&[cube(0, 0.2, Vec3::ZERO)]);
         let ray = Ray3d::new(Vec3::new(0.0, 0.0, 1.0), Dir3::NEG_Z);
-        let face = evaluated.face_distance(ray);
-        assert!(element_under(&evaluated.pickables, ray, face, looking_down_z).is_none());
+        let pointer = Pointer { ray, face: evaluated.face_distance(ray), project: looking_down_z };
+        assert!(element_under(&evaluated.pickables, &pointer).is_none());
+    }
+
+    /// Fails if a face's normal is derived from a winding nothing promises:
+    /// every flat face must point away from the middle of its own (convex)
+    /// body, however the profile was wound and whichever way it was swept.
+    #[test]
+    fn every_flat_face_points_out_of_its_body() {
+        let clockwise = Profile::Points { points: vec![[0.0, 0.0], [0.0, 0.1], [0.1, 0.1], [0.1, 0.0]] };
+        let outlines = [
+            Shape::Box { size: [0.3, 0.4, 0.5] }.outline(),
+            Shape::Prism { sides: 6, radius: 0.2, height: 0.6 }.outline(),
+            Shape::Wedge { size: [0.3, 0.3, 0.2] }.outline(),
+            Outline::extrude(&clockwise, -0.2, false),
+            // Sectors of a cylinder, which are convex up to half a turn.
+            Outline::revolve(&Profile::Points { points: vec![[0.0, -0.1], [0.1, -0.1], [0.1, 0.1], [0.0, 0.1]] }, 90.0, 6),
+            Outline::revolve(&Profile::Points { points: vec![[0.0, -0.1], [0.0, 0.1], [-0.1, 0.1], [-0.1, -0.1]] }, -120.0, 6),
+            Shape::Box { size: [0.3, 0.4, 0.5] }.outline().mirrored(Vec3::new(0.1, 0.0, 0.0), Vec3::X),
+        ];
+        for (n, outline) in outlines.iter().enumerate() {
+            let middle = outline.points.iter().sum::<Vec3>() / outline.points.len() as f32;
+            let mut flat = 0;
+            for i in 0..outline.faces.len() as u32 {
+                let face = outline.locate(Element::Face(i)).unwrap();
+                let Located::Face { points, normal } = &face else { unreachable!() };
+                // A revolve's side on its own axis has no area to face anywhere.
+                if newell(points).length() < 1e-9 {
+                    continue;
+                }
+                assert!(face.is_flat(), "outline {n}, face {i} is not flat");
+                flat += 1;
+                let centre = points.iter().sum::<Vec3>() / points.len() as f32;
+                assert!(normal.dot(centre - middle) > 0.0, "outline {n}, face {i} points inwards");
+            }
+            assert!(flat >= 4, "outline {n} has only {flat} faces with area");
+        }
+    }
+
+    #[test]
+    fn a_click_on_a_box_lands_on_the_face_it_hit() {
+        let evaluated = evaluate(&[cube(0, 0.2, Vec3::ZERO)]);
+        let (body, face) = evaluated.surface_under(Ray3d::new(Vec3::new(0.03, 0.02, 1.0), Dir3::NEG_Z)).unwrap();
+        assert_eq!(body, PropFeatureId(0));
+        let Some(Located::Face { normal, .. }) = evaluated.locate(&face.expect("a face")) else { panic!() };
+        assert!(normal.distance(Vec3::Z) < 1e-6, "{normal}");
+    }
+
+    /// A revolve's side between two rings is flat — its two sweep edges are
+    /// parallel chords — so a sphere's facet is a face like any other, though
+    /// the kernel splits it into triangles.
+    #[test]
+    fn a_spheres_facet_is_a_face() {
+        let ball = primitive(0, Shape::Sphere { sides: 8, rings: 5, radius: 0.2 }, Vec3::ZERO);
+        let evaluated = evaluate(&[ball]);
+        let (body, face) = evaluated.surface_under(Ray3d::new(Vec3::new(0.05, 0.07, 1.0), Dir3::NEG_Z)).unwrap();
+        assert_eq!(body, PropFeatureId(0));
+        let located = evaluated.locate(&face.expect("a face")).unwrap();
+        assert!(located.is_flat() && located.points().len() == 4);
+    }
+
+    /// Fails if a hole's wall cannot be picked: it faces the opposite way
+    /// from the tool face that made it.
+    #[test]
+    fn a_holes_wall_is_the_tools_face() {
+        let drilled = PropFeature::new(
+            PropFeatureId(2),
+            FeatureOp::Boolean { op: BooleanOp::Subtract, target: PropFeatureId(0), tool: PropFeatureId(1) },
+        );
+        let bore = primitive(1, Shape::Box { size: [0.1, 0.1, 0.4] }, Vec3::ZERO);
+        let evaluated = evaluate(&[cube(0, 0.2, Vec3::ZERO), bore, drilled]);
+        // Along the bore, just inside its -X wall, aimed at it.
+        let ray = Ray3d::new(Vec3::new(0.0, 0.0, 0.0), Dir3::NEG_X);
+        let (body, face) = evaluated.surface_under(ray).unwrap();
+        assert_eq!(body, PropFeatureId(2));
+        assert_eq!(face.expect("a face").source.feature, PropFeatureId(1));
     }
 
     /// Fails if `element` stops coming first, which TOML refuses.

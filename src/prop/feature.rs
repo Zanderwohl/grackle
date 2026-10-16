@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::get;
 use crate::prop::profile::{Placement, Profile};
-use crate::prop::reference::{pickables, GeomRef, Located, Outline, Pickable, Wire};
+use crate::prop::csg::Polygon;
+use crate::prop::plane::Datum;
+use crate::prop::reference::{face_at, pickables, GeomRef, Located, Outline, Pickable, Wire};
 use crate::prop::solid::{is_full_turn, Shape, Solid};
 use crate::prop::surface::Surface;
 
@@ -124,6 +126,9 @@ pub enum FeatureOp {
         count: u32,
         along: PatternKind,
     },
+    /// Not geometry: something to sketch on and measure from. Through what
+    /// [`crate::prop::plane`] accepts, as it stood when this runs.
+    Plane { through: Vec<GeomRef> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -186,6 +191,7 @@ impl FeatureOp {
             FeatureOp::Mirror { .. } => get!("prop.features.mirror"),
             FeatureOp::Paint { .. } => get!("prop.features.paint"),
             FeatureOp::Pattern { .. } => get!("prop.features.pattern"),
+            FeatureOp::Plane { .. } => get!("prop.features.plane"),
         }
     }
 
@@ -195,12 +201,34 @@ impl FeatureOp {
         match self {
             FeatureOp::Primitive { .. }
             | FeatureOp::Extrude { .. }
-            | FeatureOp::Revolve { .. } => vec![],
+            | FeatureOp::Revolve { .. }
+            | FeatureOp::Plane { .. } => vec![],
             FeatureOp::Boolean { target, tool, .. } => vec![*target, *tool],
             FeatureOp::Mirror { target, .. }
             | FeatureOp::Paint { target, .. }
             | FeatureOp::Pattern { target, .. } => vec![*target],
         }
+    }
+
+    /// Features this one names without consuming: what a plane was made
+    /// through, and every copy that geometry went through.
+    pub fn references(&self) -> Vec<PropFeatureId> {
+        let mut named: Vec<PropFeatureId> = match self {
+            FeatureOp::Plane { through } => through.iter().flat_map(|r| r.source.features()).collect(),
+            _ => vec![],
+        };
+        named.sort();
+        named.dedup();
+        named
+    }
+
+    /// Everything that has to come before this: operands and references.
+    pub fn depends_on(&self) -> Vec<PropFeatureId> {
+        let mut all = self.consumes();
+        all.extend(self.references());
+        all.sort();
+        all.dedup();
+        all
     }
 
     pub fn placement_mut(&mut self) -> Option<&mut Placement> {
@@ -211,7 +239,8 @@ impl FeatureOp {
             FeatureOp::Boolean { .. }
             | FeatureOp::Mirror { .. }
             | FeatureOp::Paint { .. }
-            | FeatureOp::Pattern { .. } => None,
+            | FeatureOp::Pattern { .. }
+            | FeatureOp::Plane { .. } => None,
         }
     }
 
@@ -273,6 +302,8 @@ pub struct Evaluated {
     pub wires: Vec<(PropFeatureId, Vec<Wire>)>,
     /// The named corners and edges that can be seen; see [`pickables`].
     pub pickables: Vec<Pickable>,
+    /// Plane features, in list order.
+    pub planes: Vec<Datum>,
 }
 
 impl Evaluated {
@@ -300,30 +331,38 @@ impl Evaluated {
     /// Tested against faces, not boxes, so a click down a bore reaches what is
     /// behind. Faces are convex, so a fan triangulates them exactly.
     pub fn body_under(&self, origin: Vec3, direction: Vec3) -> Option<PropFeatureId> {
-        self.face_under(origin, direction).map(|(id, _)| id)
+        self.face_under(origin, direction).map(|(id, _, _)| id)
     }
 
     /// How far down the ray the nearest face is.
     pub fn face_distance(&self, ray: Ray3d) -> Option<f32> {
-        self.face_under(ray.origin, *ray.direction).map(|(_, distance)| distance)
+        self.face_under(ray.origin, *ray.direction).map(|(_, _, distance)| distance)
     }
 
-    fn face_under(&self, origin: Vec3, direction: Vec3) -> Option<(PropFeatureId, f32)> {
+    fn face_under(&self, origin: Vec3, direction: Vec3) -> Option<(PropFeatureId, &Polygon, f32)> {
         self.bodies
             .iter()
-            .filter_map(|(id, solid)| {
-                solid
-                    .polygons()
-                    .iter()
-                    .flat_map(|polygon| {
-                        let v = &polygon.vertices;
-                        (1..v.len().saturating_sub(1))
-                            .filter_map(move |i| ray_triangle(origin, direction, v[0], v[i], v[i + 1]))
-                    })
+            .flat_map(|(id, solid)| solid.polygons().iter().map(move |polygon| (*id, polygon)))
+            .filter_map(|(id, polygon)| {
+                let v = &polygon.vertices;
+                (1..v.len().saturating_sub(1))
+                    .filter_map(|i| ray_triangle(origin, direction, v[0], v[i], v[i + 1]))
                     .min_by(f32::total_cmp)
-                    .map(|distance| (*id, distance))
+                    .map(|distance| (id, polygon, distance))
             })
-            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+    }
+
+    /// What a click on a body's surface lands on: the body, and the named flat
+    /// face there if one matches. One that a boolean made has none.
+    pub fn surface_under(&self, ray: Ray3d) -> Option<(PropFeatureId, Option<GeomRef>)> {
+        let (body, polygon, distance) = self.face_under(ray.origin, *ray.direction)?;
+        let wires = self.wires.iter().find(|(id, _)| *id == body).map(|(_, wires)| wires.as_slice())?;
+        Some((body, face_at(wires, ray.get_point(distance), polygon.plane.normal)))
+    }
+
+    pub fn datum(&self, id: PropFeatureId) -> Option<&Datum> {
+        self.planes.iter().find(|datum| datum.id == id)
     }
 
     /// Where a reference is now, whether or not it can be seen.
@@ -380,6 +419,7 @@ struct Live {
 pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     let mut live: Vec<Live> = Vec::new();
     let mut problems = Vec::new();
+    let mut planes = Vec::new();
     let mut live_before = Vec::with_capacity(features.len());
 
     for feature in features {
@@ -494,6 +534,21 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 };
                 live.push(Live { id: feature.id, solid: body.solid.painted(*surface), wires: body.wires });
             }
+            FeatureOp::Plane { through } => {
+                let located: Option<Vec<Located>> = through
+                    .iter()
+                    .map(|reference| {
+                        live.iter()
+                            .flat_map(|body| &body.wires)
+                            .find(|wire| wire.source == reference.source)
+                            .and_then(|wire| wire.outline.locate(reference.element))
+                    })
+                    .collect();
+                match located.and_then(|located| Datum::through(feature.id, &located)) {
+                    Some(datum) => planes.push(datum),
+                    None => problems.push(Problem { feature: feature.id, message: get!("prop.problems.no_plane") }),
+                }
+            }
             FeatureOp::Pattern { target, count, along } => {
                 let Some(body) = find(*target, &live).map(|at| live.remove(at)) else {
                     problems.push(Problem::missing_body(feature.id));
@@ -521,7 +576,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
 
     let pickables = live.iter().flat_map(|body| pickables(body.id, &body.solid, &body.wires)).collect();
     let (bodies, wires) = live.into_iter().map(|body| ((body.id, body.solid), (body.id, body.wires))).unzip();
-    Evaluated { bodies, wires, pickables, problems, live_before }
+    Evaluated { bodies, wires, pickables, problems, live_before, planes }
 }
 
 #[cfg(test)]

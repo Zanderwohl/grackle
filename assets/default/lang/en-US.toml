@@ -338,6 +338,7 @@ mixed_keys = "{ count } other picked key(s) measure something else and are left 
 # will not have a key be both a string and a table.
 [anim.label]
 length = "Length"
+normal = "Normal"
 clock = "Clock"
 looping = "Loops"
 enabled = "On"
@@ -678,6 +679,7 @@ missing = "missing { id }"
 
 [prop.inspector.sections]
 element = "Reference"
+through = "Through"
 prop = "Prop"
 archetype = "Archetype"
 breakable = "Breakable"
@@ -696,6 +698,7 @@ pattern = "Pattern"
 [prop.picks]
 point = "{ source } · point { index }"
 edge = "{ source } · edge { index }"
+face = "{ source } · face { index }"
 copy = "{ base }, { by } copy { index }"
 absent = "{ pick } (not present)"
 use_plane = "Use plane"
@@ -721,3 +724,4 @@ missing_body = "points at a body that is not there"
 self_boolean = "points at itself"
 empty_sweep = "sweeps out nothing"
 nothing_left = "leaves nothing behind"
+no_plane = "is not through a plane"

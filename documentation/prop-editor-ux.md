@@ -100,8 +100,12 @@ a toolbar under the menu bar.
 - [x] `plane::plane_through`: three corners, an edge and a corner, or two
       coplanar edges make a plane, framed by pick order. Cached in
       `PickedPlane`, recomputed when the picks or the build change.
-- [ ] Plane feature behind the toolbar's **Plane** and the Inspector's
-      **Use plane** (both present, both inert). Then face picks.
+- [x] Face picks, standing in for their body. A lone flat face makes a plane.
+- [x] Plane feature (`FeatureOp::Plane`) from the toolbar's **Plane**: drawn
+      grey and dashed, picked by its border, resolved where it sits in the
+      list. A lone plane pick is a valid plane too.
+- [x] **Use plane** in the Inspector: the same tool as the toolbar's Plane,
+      offered under the same condition (`plane_through_picks`).
 - [x] Status line at the bottom: selection, counts, size, settling.
 - [x] Problems: count in the tab title.
 

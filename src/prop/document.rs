@@ -17,7 +17,7 @@ use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Evaluated, FeatureOp, PropFeature, PropFeatureId};
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
 use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
-use crate::prop::reference::GeomRef;
+use crate::prop::reference::{GeomRef, Element};
 
 /// Grackle Prop: TOML, one prop per file.
 pub const PROP_EXTENSION: &str = "gpp";
@@ -25,25 +25,40 @@ pub const PROP_EXTENSION: &str = "gpp";
 /// Where props live inside a pack.
 pub const PROPS_DIR: &str = "props";
 
-/// Something picked: a whole body, or a named corner or edge of one.
+/// Something picked: a whole body, a named corner, edge or face of one, or a
+/// plane feature.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pick {
     Body(PropFeatureId),
     Geom(GeomRef),
+    Plane(PropFeatureId),
 }
 
 impl Pick {
-    pub fn as_body(&self) -> Option<PropFeatureId> {
+    /// The standing body this pick stands for, if any. A face stands for the
+    /// body it is on, so picking a face on the barrel and one on the bore still
+    /// offers Combine; a corner or an edge does not, since one on a seam
+    /// belongs to two bodies' worth of meaning.
+    pub fn body(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
         match self {
-            Pick::Body(id) => Some(*id),
-            Pick::Geom(_) => None,
+            Pick::Body(id) => evaluated.bodies.iter().any(|(body, _)| body == id).then_some(*id),
+            Pick::Geom(reference @ GeomRef { element: Element::Face(_), .. }) => evaluated.body_of(reference),
+            Pick::Geom(_) | Pick::Plane(_) => None,
+        }
+    }
+
+    /// See [`PropEditor::primary_feature`].
+    pub fn feature(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
+        match self {
+            Pick::Body(id) | Pick::Plane(id) => Some(*id),
+            Pick::Geom(_) => self.body(evaluated),
         }
     }
 
     /// Every feature the pick names; if any goes, so does the pick.
     pub fn features(&self) -> Box<dyn Iterator<Item = PropFeatureId> + '_> {
         match self {
-            Pick::Body(id) => Box::new(std::iter::once(*id)),
+            Pick::Body(id) | Pick::Plane(id) => Box::new(std::iter::once(*id)),
             Pick::Geom(reference) => Box::new(reference.source.features()),
         }
     }
@@ -163,11 +178,11 @@ impl PropDoc {
         self.features.retain(|feature| feature.id != id);
     }
 
-    /// Everything that names `id` as an operand.
+    /// Everything that names `id`, as an operand or a reference.
     pub fn dependants(&self, id: PropFeatureId) -> Vec<PropFeatureId> {
         self.features
             .iter()
-            .filter(|feature| feature.op.consumes().contains(&id))
+            .filter(|feature| feature.op.depends_on().contains(&id))
             .map(|feature| feature.id)
             .collect()
     }
@@ -185,7 +200,7 @@ impl PropDoc {
         let without = |i: usize| if i < at { i } else { i - 1 };
 
         let mut low = 0;
-        for operand in feature.op.consumes() {
+        for operand in feature.op.depends_on() {
             if let Some(index) = self.index_of(operand) {
                 low = low.max(without(index) + 1);
             }
@@ -405,18 +420,34 @@ impl PropEditor {
         self.picks.last()
     }
 
-    /// The primary, when it is a body.
-    pub fn selected(&self) -> Option<PropFeatureId> {
-        self.primary().and_then(Pick::as_body)
+    /// The feature the primary is about, for the inspector, the handles and
+    /// the feature list: a body or plane itself, eaten or not, or the body a
+    /// face is on.
+    pub fn primary_feature(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
+        self.primary().and_then(|pick| pick.feature(evaluated))
     }
 
-    /// The picked bodies, in pick order.
-    pub fn selected_bodies(&self) -> Vec<PropFeatureId> {
-        self.picks.iter().filter_map(Pick::as_body).collect()
+    /// [`Self::primary_feature`] for every pick, in pick order.
+    pub fn picked_features(&self, evaluated: &Evaluated) -> Vec<PropFeatureId> {
+        self.picks.iter().filter_map(|pick| pick.feature(evaluated)).collect()
+    }
+
+    /// The body the primary stands for; see [`Pick::body`].
+    pub fn primary_body(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
+        self.primary()?.body(evaluated)
+    }
+
+    /// The bodies the picks stand for, in pick order, repeats kept.
+    pub fn picked_bodies(&self, evaluated: &Evaluated) -> Vec<PropFeatureId> {
+        self.picks.iter().filter_map(|pick| pick.body(evaluated)).collect()
     }
 
     pub fn select(&mut self, id: PropFeatureId) {
         self.picks = vec![Pick::Body(id)];
+    }
+
+    pub fn select_pick(&mut self, pick: Pick) {
+        self.picks = vec![pick];
     }
 
     pub fn clear_selection(&mut self) {
@@ -453,21 +484,21 @@ impl PropEditor {
         self.picks.retain(|pick| pick.features().all(|id| doc.feature(id).is_some()));
     }
 
-    /// `(target, tool)` when exactly two bodies, and nothing else, are picked
-    /// and both are in `live`; an eaten body would make a boolean broken on
-    /// arrival.
-    pub fn pair_to_combine(&self, live: &[PropFeatureId]) -> Option<(PropFeatureId, PropFeatureId)> {
+    /// `(target, tool)` when exactly two picks stand for two different
+    /// standing bodies; an eaten body would make a boolean broken on arrival.
+    pub fn pair_to_combine(&self, evaluated: &Evaluated) -> Option<(PropFeatureId, PropFeatureId)> {
         match self.picks[..] {
-            [Pick::Body(target), Pick::Body(tool)] if live.contains(&target) && live.contains(&tool) => {
-                Some((target, tool))
+            [ref target, ref tool] => {
+                let (target, tool) = (target.body(evaluated)?, tool.body(evaluated)?);
+                (target != tool).then_some((target, tool))
             }
             _ => None,
         }
     }
 
-    /// Single-operand verbs take the primary alone, if it is a body in `live`.
-    pub fn body_to_act_on(&self, live: &[PropFeatureId]) -> Option<PropFeatureId> {
-        self.selected().filter(|id| live.contains(id))
+    /// Single-operand verbs take the body the primary stands for.
+    pub fn body_to_act_on(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
+        self.primary_body(evaluated)
     }
 
     /// Go back to `saved`, the file's contents, as one undo step. Unlike
@@ -1040,7 +1071,7 @@ mod tests {
         let id = editor.edit(|doc| doc.push(FeatureOp::default()));
         editor.select(id);
         editor.undo();
-        assert_eq!(editor.selected(), None);
+        assert_eq!(editor.primary(), None);
     }
 
     /// Pick order decides target and tool, not list order.
@@ -1049,16 +1080,16 @@ mod tests {
         let mut editor = PropEditor::default();
         let barrel = editor.edit(|doc| doc.push(FeatureOp::default()));
         let bore = editor.edit(|doc| doc.push(FeatureOp::default()));
-        let live = [barrel, bore];
+        let evaluated = editor.doc().evaluate();
 
         editor.select(bore);
         editor.toggle_selected(barrel);
-        assert_eq!(editor.pair_to_combine(&live), Some((bore, barrel)));
+        assert_eq!(editor.pair_to_combine(&evaluated), Some((bore, barrel)));
 
         editor.select(barrel);
         editor.toggle_selected(bore);
-        assert_eq!(editor.pair_to_combine(&live), Some((barrel, bore)));
-        assert_eq!(editor.selected(), Some(bore), "the last pick is the one the inspector shows");
+        assert_eq!(editor.pair_to_combine(&evaluated), Some((barrel, bore)));
+        assert_eq!(editor.primary_body(&evaluated), Some(bore), "the last pick is the one the inspector shows");
     }
 
     #[test]
@@ -1067,13 +1098,46 @@ mod tests {
         let a = editor.edit(|doc| doc.push(FeatureOp::default()));
         let b = editor.edit(|doc| doc.push(FeatureOp::default()));
         let c = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let standing = editor.doc().evaluate();
+        let eats_b = editor.edit(|doc| doc.push(FeatureOp::Mirror {
+            target: b,
+            axis: crate::prop::feature::Axis::X,
+            offset: 0.0,
+            keep_original: false,
+        }));
+        let b_eaten = editor.doc().evaluate();
+        assert!(standing.bodies.iter().any(|(id, _)| *id == b) && eats_b != b);
 
         editor.select(a);
-        assert_eq!(editor.pair_to_combine(&[a, b, c]), None);
+        assert_eq!(editor.pair_to_combine(&standing), None);
         editor.toggle_selected(b);
-        assert_eq!(editor.pair_to_combine(&[a, c]), None, "b has been eaten");
+        assert_eq!(editor.pair_to_combine(&b_eaten), None, "b has been eaten");
+        assert!(editor.pair_to_combine(&standing).is_some());
         editor.toggle_selected(c);
-        assert_eq!(editor.pair_to_combine(&[a, b, c]), None);
+        assert_eq!(editor.pair_to_combine(&standing), None);
+    }
+
+    /// A face stands for the body it is on; a pair of faces on one body is
+    /// no pair.
+    #[test]
+    fn a_face_stands_for_its_body() {
+        use crate::prop::reference::Source;
+        let mut editor = PropEditor::default();
+        let barrel = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let bore = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let evaluated = editor.doc().evaluate();
+        let face = |feature, index| {
+            Pick::Geom(GeomRef { element: Element::Face(index), source: Source { feature, copies: vec![] } })
+        };
+
+        editor.toggle(face(barrel, 0));
+        editor.toggle(face(bore, 2));
+        assert_eq!(editor.pair_to_combine(&evaluated), Some((barrel, bore)));
+
+        editor.select_pick(face(barrel, 0));
+        editor.toggle(face(barrel, 1));
+        assert_eq!(editor.pair_to_combine(&evaluated), None);
+        assert_eq!(editor.body_to_act_on(&evaluated), Some(barrel));
     }
 
     #[test]
@@ -1085,8 +1149,7 @@ mod tests {
         editor.select(a);
         editor.toggle_selected(b);
         editor.toggle_selected(b);
-        assert_eq!(editor.selected_bodies(), vec![a]);
-        assert_eq!(editor.selected(), Some(a));
+        assert_eq!(editor.picks(), &[Pick::Body(a)]);
     }
 
     #[test]
@@ -1165,7 +1228,7 @@ mod tests {
         editor.select(b);
         editor.toggle_selected(a);
         editor.undo();
-        assert_eq!(editor.selected_bodies(), vec![a]);
+        assert_eq!(editor.picks(), &[Pick::Body(a)]);
     }
 
     /// Fails if a reference outlives a feature it is named through.
@@ -1193,8 +1256,8 @@ mod tests {
         editor.toggle(Pick::Body(a));
         editor.toggle(edge.clone());
         assert_eq!(editor.primary(), Some(&edge));
-        assert_eq!(editor.selected(), None, "the primary is not a body");
+        assert_eq!(editor.primary_body(&editor.doc().evaluate()), None, "an edge does not stand for its body");
         editor.toggle(edge);
-        assert_eq!(editor.selected(), Some(a));
+        assert_eq!(editor.primary(), Some(&Pick::Body(a)));
     }
 }
