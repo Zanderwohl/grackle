@@ -606,6 +606,10 @@ and `depends_on` — operands and references together — is what the feature
 list's reordering and delete warnings use; `consumes` alone would let a plane
 be dragged above the cube it was made on.
 
+Sketches — a 2D drawing on a plane that Extrude and Revolve sweep — are
+planned in [documentation/sketches.md](documentation/sketches.md), with the
+decisions behind them and a checklist.
+
 A placement's orientation is edited as **"points along" and "spin"** about the
 feature's own length axis (`FeatureOp::main_axis`), via
 `rotation::aim_and_spin` and its exact inverse; the Euler angles are still

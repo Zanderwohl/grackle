@@ -133,4 +133,5 @@ a toolbar under the menu bar.
 
 ### Deferred
 
-- [ ] 2D sketch overlay for `Profile::Points`.
+- [ ] 2D sketch overlay for `Profile::Points` — superseded by sketches as their
+      own feature; see [sketches.md](sketches.md).
