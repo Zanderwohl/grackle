@@ -248,7 +248,7 @@ fn drag_the_selected(
 
     let (shape, placement) = match &feature.op {
         FeatureOp::Primitive { shape, placement, .. } => (Some(shape.clone()), *placement),
-        FeatureOp::Extrude { placement, .. } | FeatureOp::Revolve { placement, .. } => {
+        FeatureOp::Revolve { placement, .. } => {
             (None, *placement)
         }
         _ => {
@@ -359,7 +359,7 @@ fn drag_the_selected(
 pub struct HoveredPick(pub Option<Pick>);
 
 /// A click toggles what is under the pointer — a corner, else an edge, else
-/// a plane's border, else a flat face, else a body — and a click on nothing
+/// a plane's border, else a sketch's region, else a flat face, else a body — and a click on nothing
 /// clears. On the press, so its gizmos are up by release. Off while the hold's
 /// handles are up, so a near-miss on a grip does not change the modelling
 /// selection.
@@ -385,6 +385,11 @@ fn pick_in_the_viewport(
             let pick = element_under(&evaluated.pickables, &pointer)
                 .map(|pickable| Pick::Geom(pickable.reference.clone()))
                 .or_else(|| plane_under(&evaluated.planes, &pointer).map(Pick::Plane))
+                .or_else(|| {
+                    evaluated
+                        .region_under(ray)
+                        .map(|(sketch, region)| Pick::Region { sketch, region: region.name.clone() })
+                })
                 .or_else(|| {
                     evaluated
                         .surface_under(ray)

@@ -362,6 +362,14 @@ fn faces(vertices: &[Vec2], edges: &[Edge]) -> Vec<Region> {
     bounded.into_iter().map(|(region, _)| region).collect()
 }
 
+/// The longest way across a loop's bounds.
+pub fn reach_of(points: &[Vec2]) -> f32 {
+    let (min, max) = points
+        .iter()
+        .fold((Vec2::INFINITY, Vec2::NEG_INFINITY), |(min, max), p| (min.min(*p), max.max(*p)));
+    if min.x > max.x { 0.0 } else { (max - min).length() }
+}
+
 /// Positive when counter-clockwise.
 fn signed_area(points: &[Vec2]) -> f32 {
     (0..points.len()).map(|i| points[i].perp_dot(points[(i + 1) % points.len()])).sum::<f32>() / 2.0

@@ -208,6 +208,34 @@ impl Outline {
         Outline { points, edges, faces }
     }
 
+    /// Matches [`Solid::extrude_region`]: the outer loop as [`Self::extrude`]
+    /// numbers it, then each hole's walls — no caps, since a hole's are not
+    /// there — facing into the hole, which is out of the body.
+    pub fn extrude_region(outer: &[Vec2], holes: &[Vec<Vec2>], depth: f32, midplane: bool) -> Outline {
+        let mut outline = Outline::extrude(&Profile::loop_of(outer), depth, midplane);
+        for hole in holes {
+            let mut walls = Outline::extrude(&Profile::loop_of(hole), depth, midplane);
+            walls.faces.drain(..2.min(walls.faces.len()));
+            for face in &mut walls.faces {
+                face.outward = -face.outward;
+            }
+            outline.append(walls);
+        }
+        outline
+    }
+
+    /// `other`'s elements after this one's, renumbered to point at their own
+    /// corners.
+    pub fn append(&mut self, other: Outline) {
+        let offset = self.points.len() as u32;
+        self.points.extend(other.points);
+        self.edges.extend(other.edges.into_iter().map(|[a, b]| [a + offset, b + offset]));
+        self.faces.extend(other.faces.into_iter().map(|face| OutlineFace {
+            points: face.points.into_iter().map(|p| p + offset).collect(),
+            outward: face.outward,
+        }));
+    }
+
     pub fn transformed(mut self, transform: Transform) -> Outline {
         for point in &mut self.points {
             *point = transform.transform_point(*point);

@@ -17,6 +17,7 @@ use crate::get;
 use crate::prop::profile::{Placement, Profile};
 use crate::prop::csg::Polygon;
 use crate::prop::plane::{Datum, OriginPlane, PlaneRef};
+use crate::prop::region::{arrange, Region, RegionRef};
 use crate::prop::sketch::{PlacedSketch, Sketch};
 use crate::prop::reference::{face_at, pickables, GeomRef, Located, Outline, Pickable, Wire};
 use crate::prop::solid::{is_full_turn, Shape, Solid};
@@ -88,15 +89,16 @@ impl Axis {
 #[serde(tag = "feature", rename_all = "snake_case")]
 pub enum FeatureOp {
     Primitive { shape: Shape, placement: Placement, surface: Surface },
+    /// Regions of a sketch pushed along its plane's normal, joined into one
+    /// body. Scalars first: TOML needs every scalar before any sub-table.
     Extrude {
-        profile: Profile,
-        placement: Placement,
-        #[serde(with = "crate::prop::nice_f32::scalar")]
-        depth: f32,
+        sketch: PropFeatureId,
         /// Half each way.
         #[serde(default)]
-        midplane: bool,
+        symmetric: bool,
+        end: End,
         surface: Surface,
+        regions: Vec<RegionRef>,
     },
     Revolve {
         profile: Profile,
@@ -132,6 +134,26 @@ pub enum FeatureOp {
     Plane { through: Vec<GeomRef> },
     /// A drawing on a plane, which makes no body; see [`crate::prop::sketch`].
     Sketch { on: PlaneRef, sketch: Sketch },
+}
+
+/// How far an extrusion goes. An enum from the first, so going up to a face
+/// or through everything joins without changing the file.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum End {
+    /// Metres along the plane's normal; negative goes the other way.
+    Distance {
+        #[serde(with = "crate::prop::nice_f32::scalar")]
+        distance: f32,
+    },
+}
+
+impl End {
+    pub fn distance(&self) -> f32 {
+        match *self {
+            End::Distance { distance } => distance,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -221,6 +243,7 @@ impl FeatureOp {
         let mut named: Vec<PropFeatureId> = match self {
             FeatureOp::Plane { through } => through.iter().flat_map(|r| r.source.features()).collect(),
             FeatureOp::Sketch { on, .. } => on.feature().into_iter().collect(),
+            FeatureOp::Extrude { sketch, .. } => vec![*sketch],
             _ => vec![],
         };
         named.sort();
@@ -239,10 +262,9 @@ impl FeatureOp {
 
     pub fn placement_mut(&mut self) -> Option<&mut Placement> {
         match self {
-            FeatureOp::Primitive { placement, .. }
-            | FeatureOp::Extrude { placement, .. }
-            | FeatureOp::Revolve { placement, .. } => Some(placement),
-            FeatureOp::Boolean { .. }
+            FeatureOp::Primitive { placement, .. } | FeatureOp::Revolve { placement, .. } => Some(placement),
+            FeatureOp::Extrude { .. }
+            | FeatureOp::Boolean { .. }
             | FeatureOp::Mirror { .. }
             | FeatureOp::Paint { .. }
             | FeatureOp::Pattern { .. }
@@ -370,6 +392,30 @@ impl Evaluated {
         Some((body, face_at(wires, ray.get_point(distance), polygon.plane.normal)))
     }
 
+    /// The sketch region under the pointer, nearest first, unless a face is
+    /// in front of it. A region on a face wins over that face: picking it is
+    /// the reason it was drawn there.
+    pub fn region_under(&self, ray: Ray3d) -> Option<(PropFeatureId, &Region)> {
+        let face = self.face_distance(ray);
+        self.sketches
+            .iter()
+            .filter_map(|placed| {
+                let hit = placed.plane.hit(ray)?;
+                let distance = hit.distance(ray.origin);
+                if face.is_some_and(|face| distance > face + 0.002 + face * 0.01) {
+                    return None;
+                }
+                let region = placed.arrangement.region_at(placed.plane.flatten(hit))?;
+                Some((distance, placed.id, region))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, id, region)| (id, region))
+    }
+
+    pub fn sketch(&self, id: PropFeatureId) -> Option<&PlacedSketch> {
+        self.sketches.iter().find(|placed| placed.id == id)
+    }
+
     pub fn datum(&self, id: PlaneRef) -> Option<&Datum> {
         self.planes.iter().find(|datum| datum.id == id)
     }
@@ -453,18 +499,37 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 let solid = shape.solid(*surface).transformed(placement.transform());
                 live.push(made(solid, shape.outline().transformed(placement.transform())));
             }
-            FeatureOp::Extrude { profile, placement, depth, midplane, surface } => {
-                let solid = Solid::extrude(profile, *depth, *midplane, *surface)
-                    .transformed(placement.transform());
-                if solid.is_empty() {
-                    problems.push(Problem {
-                        feature: feature.id,
-                        message: get!("prop.problems.empty_sweep"),
+            FeatureOp::Extrude { sketch, symmetric, end, surface, regions } => {
+                let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == *sketch) else {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
+                    continue;
+                };
+                let found: Option<Vec<&Region>> =
+                    regions.iter().map(|region| placed.arrangement.find(region)).collect();
+                let Some(found) = found.filter(|found| !found.is_empty()) else {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_region") });
+                    continue;
+                };
+                let (frame, depth) = (placed.plane.transform(), end.distance());
+                let mut outline = Outline::default();
+                let mut solid: Option<Solid> = None;
+                for region in found {
+                    let piece = Solid::extrude_region(&region.outer, &region.holes, depth, *symmetric, *surface)
+                        .transformed(frame);
+                    // Unioned rather than gathered: regions sharing a line
+                    // must become one closed surface.
+                    solid = Some(match solid {
+                        Some(joined) => joined.union(&piece),
+                        None => piece,
                     });
+                    outline.append(Outline::extrude_region(&region.outer, &region.holes, depth, *symmetric));
+                }
+                let solid = solid.unwrap_or_default();
+                if solid.is_empty() {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.empty_sweep") });
                     continue;
                 }
-                let outline = Outline::extrude(profile, *depth, *midplane).transformed(placement.transform());
-                live.push(made(solid, outline));
+                live.push(made(solid, outline.transformed(frame)));
             }
             FeatureOp::Revolve { profile, placement, degrees, segments, surface } => {
                 let solid = Solid::revolve(profile, *degrees, *segments, *surface)
@@ -565,7 +630,12 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     PlaneRef::Feature(_) => planes.iter().find(|datum| datum.id == *on).map(|datum| datum.plane),
                 };
                 match plane {
-                    Some(plane) => sketches.push(PlacedSketch { id: feature.id, plane, sketch: sketch.clone() }),
+                    Some(plane) => sketches.push(PlacedSketch {
+                        id: feature.id,
+                        plane,
+                        sketch: sketch.clone(),
+                        arrangement: arrange(sketch),
+                    }),
                     None => problems.push(Problem {
                         feature: feature.id,
                         message: get!("prop.problems.no_sketch_plane"),
@@ -797,5 +867,157 @@ mod tests {
         assert_eq!(result.live_before[1], vec![PropFeatureId(0)]);
         assert_eq!(result.live_before[2], vec![PropFeatureId(0), PropFeatureId(1)]);
         assert_eq!(result.live_before[3], vec![PropFeatureId(2)]);
+    }
+
+    mod extrude {
+        use super::super::*;
+        use crate::prop::document::{parse, to_text, PropDoc};
+        use crate::prop::plane::OriginPlane;
+        use crate::prop::region::Region;
+        use crate::prop::sketch::{Sketch, SketchId};
+
+        fn polygon(sketch: &mut Sketch, corners: &[[f32; 2]]) -> Vec<SketchId> {
+            let points: Vec<SketchId> = corners.iter().map(|c| sketch.add_point(Vec2::from_array(*c))).collect();
+            (0..points.len()).map(|i| sketch.add_line(points[i], points[(i + 1) % points.len()])).collect()
+        }
+
+        fn square(sketch: &mut Sketch, min: f32, max: f32) -> Vec<SketchId> {
+            polygon(sketch, &[[min, min], [max, min], [max, max], [min, max]])
+        }
+
+        /// A sketch on `on`, then an extrude of the regions `pick` chooses.
+        fn swept(
+            on: OriginPlane,
+            sketch: Sketch,
+            distance: f32,
+            symmetric: bool,
+            pick: impl Fn(&[Region]) -> Vec<RegionRef>,
+        ) -> (Vec<PropFeature>, Evaluated) {
+            let regions = pick(&arrange(&sketch).regions);
+            let features = vec![
+                PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(on), sketch }),
+                PropFeature::new(
+                    PropFeatureId(1),
+                    FeatureOp::Extrude {
+                        sketch: PropFeatureId(0),
+                        symmetric,
+                        end: End::Distance { distance },
+                        surface: Surface::default(),
+                        regions,
+                    },
+                ),
+            ];
+            let evaluated = evaluate(&features);
+            (features, evaluated)
+        }
+
+        fn every(regions: &[Region]) -> Vec<RegionRef> {
+            regions.iter().map(|region| region.name.clone()).collect()
+        }
+
+        #[test]
+        fn a_square_extrudes_to_a_box_along_the_planes_normal() {
+            let mut sketch = Sketch::default();
+            square(&mut sketch, 0.0, 0.04);
+            let (_, evaluated) = swept(OriginPlane::Xy, sketch.clone(), 0.1, false, every);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let (_, solid) = &evaluated.bodies[0];
+            assert!((solid.volume() - 0.04 * 0.04 * 0.1).abs() < 1e-8, "{}", solid.volume());
+            let (min, max) = solid.bounds().unwrap();
+            assert!(min.z.abs() < 1e-6 && (max.z - 0.1).abs() < 1e-6, "{min} {max}");
+
+            let (_, symmetric) = swept(OriginPlane::Xy, sketch.clone(), 0.1, true, every);
+            let (min, max) = symmetric.bodies[0].1.bounds().unwrap();
+            assert!((min.z + 0.05).abs() < 1e-6 && (max.z - 0.05).abs() < 1e-6, "{min} {max}");
+
+            let (_, up) = swept(OriginPlane::Xz, sketch, 0.1, false, every);
+            let (min, max) = up.bodies[0].1.bounds().unwrap();
+            assert!(min.y.abs() < 1e-6 && (max.y - 0.1).abs() < 1e-6, "a floor sketch goes up: {min} {max}");
+        }
+
+        #[test]
+        fn a_hole_is_left_out() {
+            let mut sketch = Sketch::default();
+            square(&mut sketch, 0.0, 0.04);
+            square(&mut sketch, 0.01, 0.02);
+            let biggest = |regions: &[Region]| {
+                let ring = regions.iter().max_by(|a, b| a.area().total_cmp(&b.area())).unwrap();
+                vec![ring.name.clone()]
+            };
+            let (_, evaluated) = swept(OriginPlane::Xy, sketch, 0.1, false, biggest);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let volume = evaluated.bodies[0].1.volume();
+            let expected = (0.04 * 0.04 - 0.01 * 0.01) * 0.1;
+            assert!((volume - expected).abs() < 1e-8, "{volume} vs {expected}");
+        }
+
+        /// Fails if regions sharing a line are gathered rather than joined.
+        #[test]
+        fn regions_side_by_side_become_one_body() {
+            let mut sketch = Sketch::default();
+            square(&mut sketch, 0.0, 0.02);
+            square(&mut sketch, 0.01, 0.03);
+            let (_, evaluated) = swept(OriginPlane::Xy, sketch, 0.05, false, every);
+            assert_eq!(evaluated.bodies.len(), 1);
+            let area = 2.0 * 0.02 * 0.02 - 0.01 * 0.01;
+            assert!((evaluated.bodies[0].1.volume() - area * 0.05).abs() < 1e-8);
+        }
+
+        #[test]
+        fn a_region_cut_in_two_is_a_problem() {
+            let mut sketch = Sketch::default();
+            square(&mut sketch, 0.0, 0.04);
+            let (mut features, _) = swept(OriginPlane::Xy, sketch, 0.1, false, every);
+            let FeatureOp::Sketch { sketch, .. } = &mut features[0].op else { unreachable!() };
+            let (a, b) = (sketch.add_point(Vec2::new(0.02, 0.0)), sketch.add_point(Vec2::new(0.02, 0.04)));
+            sketch.add_line(a, b);
+            let evaluated = evaluate(&features);
+            assert!(evaluated.bodies.is_empty());
+            assert_eq!(evaluated.problems.len(), 1);
+        }
+
+        /// The extruded body is named like any other: its corners can be
+        /// picked, and its far cap faces out along the plane's normal.
+        #[test]
+        fn an_extruded_body_has_named_corners_and_faces() {
+            let mut sketch = Sketch::default();
+            square(&mut sketch, 0.0, 0.04);
+            let (_, evaluated) = swept(OriginPlane::Xy, sketch, 0.1, false, every);
+            let corners = evaluated.pickables.iter().filter(|p| matches!(p.at, Located::Point(_))).count();
+            assert_eq!(corners, 8);
+            let far_cap = GeomRef {
+                element: crate::prop::reference::Element::Face(1),
+                source: crate::prop::reference::Source { feature: PropFeatureId(1), copies: vec![] },
+            };
+            let Some(Located::Face { normal, points }) = evaluated.locate(&far_cap) else { panic!() };
+            assert!(normal.distance(Vec3::Z) < 1e-6);
+            assert!(points.iter().all(|p| (p.z - 0.1).abs() < 1e-6));
+        }
+
+        #[test]
+        fn a_region_is_picked_where_it_is_drawn() {
+            let mut sketch = Sketch::default();
+            square(&mut sketch, 0.0, 0.04);
+            let (_, evaluated) = swept(OriginPlane::Xy, sketch, -0.1, false, every);
+            // Down onto the sketch, which sits on the extrusion's top cap.
+            let (id, region) = evaluated.region_under(Ray3d::new(Vec3::new(0.02, 0.02, 1.0), Dir3::NEG_Z)).unwrap();
+            assert_eq!(id, PropFeatureId(0));
+            assert!((region.area() - 0.0016).abs() < 1e-8);
+            // From underneath, the body is in the way.
+            assert!(evaluated.region_under(Ray3d::new(Vec3::new(0.02, 0.02, -1.0), Dir3::Z)).is_none());
+        }
+
+        #[test]
+        fn an_extrude_survives_the_file() {
+            let mut sketch = Sketch::default();
+            square(&mut sketch, 0.0, 0.04);
+            let (features, _) = swept(OriginPlane::Xy, sketch, 0.1, true, every);
+            let mut doc = PropDoc::new("test");
+            for feature in features {
+                doc.push(feature.op);
+            }
+            let text = to_text(&doc).unwrap();
+            assert_eq!(parse(&text).unwrap(), doc, "{text}");
+        }
     }
 }

@@ -213,6 +213,28 @@ impl Solid {
         Solid::from_polygons(polygons)
     }
 
+    /// A sketch region along local `+Z`: its outer loop extruded, then each
+    /// hole cut out by a prism a little longer than the body each way, so no
+    /// cap of the cutter is coplanar with one of the body's — coplanar faces
+    /// are where a BSP boolean is least sure which side it is on.
+    pub fn extrude_region(
+        outer: &[Vec2],
+        holes: &[Vec<Vec2>],
+        depth: f32,
+        midplane: bool,
+        surface: Surface,
+    ) -> Solid {
+        let body = Solid::extrude(&Profile::loop_of(outer), depth, midplane, surface);
+        let (near, far) = if midplane { (-depth / 2.0, depth / 2.0) } else { (0.0, depth) };
+        let over = depth.abs() * 0.01 + 1e-4;
+        let (low, high) = (near.min(far) - over, near.max(far) + over);
+        holes.iter().fold(body, |body, hole| {
+            let cutter = Solid::extrude(&Profile::loop_of(hole), high - low, false, surface)
+                .translated(Vec3::Z * low);
+            body.subtract(&cutter)
+        })
+    }
+
     /// Spin a profile about the sketch's local `+Y`. Less than a full turn is
     /// capped at each end.
     ///

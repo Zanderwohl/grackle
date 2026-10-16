@@ -19,6 +19,8 @@ use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, Pickup
 use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
 use crate::prop::reference::{GeomRef, Element};
 use crate::prop::plane::PlaneRef;
+use crate::prop::region::RegionRef;
+use crate::prop::reference::{Element, GeomRef};
 
 /// Grackle Prop: TOML, one prop per file.
 pub const PROP_EXTENSION: &str = "gpp";
@@ -33,6 +35,8 @@ pub enum Pick {
     Body(PropFeatureId),
     Geom(GeomRef),
     Plane(PlaneRef),
+    /// A closed region of a sketch, which is what a sweep takes.
+    Region { sketch: PropFeatureId, region: RegionRef },
 }
 
 impl Pick {
@@ -44,7 +48,7 @@ impl Pick {
         match self {
             Pick::Body(id) => evaluated.bodies.iter().any(|(body, _)| body == id).then_some(*id),
             Pick::Geom(reference @ GeomRef { element: Element::Face(_), .. }) => evaluated.body_of(reference),
-            Pick::Geom(_) | Pick::Plane(_) => None,
+            Pick::Geom(_) | Pick::Plane(_) | Pick::Region { .. } => None,
         }
     }
 
@@ -53,6 +57,7 @@ impl Pick {
         match self {
             Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => Some(*id),
             Pick::Plane(PlaneRef::Origin(_)) => None,
+            Pick::Region { sketch, .. } => Some(*sketch),
             Pick::Geom(_) => self.body(evaluated),
         }
     }
@@ -62,6 +67,7 @@ impl Pick {
         match self {
             Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => Box::new(std::iter::once(*id)),
             Pick::Plane(PlaneRef::Origin(_)) => Box::new(std::iter::empty()),
+            Pick::Region { sketch, .. } => Box::new(std::iter::once(*sketch)),
             Pick::Geom(reference) => Box::new(reference.source.features()),
         }
     }
@@ -599,7 +605,7 @@ pub fn save(path: &Path, doc: &PropDoc) -> Result<(), PropFileError> {
 mod tests {
     use super::*;
     use crate::prop::feature::{Axis, BooleanOp, PatternKind};
-    use crate::prop::profile::{Placement, Profile};
+    use crate::prop::profile::Placement;
     use crate::prop::solid::Shape;
     use crate::prop::surface::{Style, Surface, Tint};
 
@@ -610,11 +616,9 @@ mod tests {
             placement: Placement { origin: [0.0, 0.0, 0.0], rotation: [1.5708, 0.0, 0.0] },
             surface: Surface::new(Style::Metal, Tint([0.3, 0.32, 0.34])),
         });
-        let bore = doc.push(FeatureOp::Extrude {
-            profile: Profile::Ngon { sides: 12, radius: 0.038 },
-            placement: Placement::at(0.0, 0.0, -0.5),
-            depth: 1.0,
-            midplane: false,
+        let bore = doc.push(FeatureOp::Primitive {
+            shape: Shape::Prism { sides: 12, radius: 0.038, height: 1.0 },
+            placement: Placement { origin: [0.0, 0.0, 0.0], rotation: [1.5708, 0.0, 0.0] },
             surface: Surface::default(),
         });
         let drilled = doc.push(FeatureOp::Boolean {

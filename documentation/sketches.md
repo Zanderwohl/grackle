@@ -131,14 +131,22 @@ tested.
 
 ### Sweeping
 
-- [ ] Extrude on regions, `end: Distance`, `symmetric`. Holes subtracted.
+- [x] Extrude on regions, `end: Distance`, `symmetric`. Holes subtracted.
+      Several regions are unioned into one body.
 - [ ] Revolve on regions about a sketch line, with the one-side check.
-- [ ] Region picks in the Model workspace, so a sweep is select-then-act like
-      every other verb.
-- [ ] Outlines and faces of swept regions feed `reference.rs`, so corners,
-      edges and faces of a swept body are named and pickable as they are now.
+- [x] Region picks in the Model workspace, so a sweep is select-then-act like
+      every other verb. A region wins over the face it is drawn on, so a sketch
+      on a face — or on the cap of what it extruded — picks as the region.
+- [x] Outlines and faces of swept regions feed `reference.rs`, so corners,
+      edges and faces of a swept body are named and pickable as they are now
+      (Extrude). Numbered by the regions in pick order and each region's
+      outline as the arrangement walks it: stable while the sketch's lines
+      stay as they are, renumbered if they are redrawn.
 - [ ] Retire `Profile` from Extrude and Revolve; rebuild the shipped props by
-      hand.
+      hand. Extrude is done; the shipped launcher's one extrude, the Bore, is
+      now the equivalent prism.
+- [ ] Hide a sketch once something sweeps it, as CAD tools do, so its regions
+      stop sitting on top of the body it made.
 
 ### The sketch workspace
 

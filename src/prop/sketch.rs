@@ -137,6 +137,8 @@ pub struct PlacedSketch {
     pub id: crate::prop::feature::PropFeatureId,
     pub plane: Plane,
     pub sketch: Sketch,
+    /// Its regions, found once per evaluation.
+    pub arrangement: crate::prop::region::Arrangement,
 }
 
 impl PlacedSketch {

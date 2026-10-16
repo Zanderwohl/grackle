@@ -551,7 +551,7 @@ fn draw_the_session(
 /// Diagonal lines across a region with holes, `spacing` apart: what the
 /// region looks like filled, drawn with lines. Even-odd along each line, so
 /// holes come out by themselves.
-fn hatch(outer: &[Vec2], holes: &[Vec<Vec2>], spacing: f32) -> Vec<(Vec2, Vec2)> {
+pub fn hatch(outer: &[Vec2], holes: &[Vec<Vec2>], spacing: f32) -> Vec<(Vec2, Vec2)> {
     // In coordinates turned an eighth, where the hatching runs along `t`.
     let turn = |p: Vec2| Vec2::new(p.x + p.y, p.x - p.y) / std::f32::consts::SQRT_2;
     let back = |s: f32, t: f32| Vec2::new(s + t, s - t) / std::f32::consts::SQRT_2;

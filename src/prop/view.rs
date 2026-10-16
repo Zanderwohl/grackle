@@ -26,6 +26,8 @@ use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure,
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::gizmo::HoveredPick;
 use crate::prop::plane::draw_square;
+use crate::prop::feature::PropFeatureId;
+use crate::prop::region::RegionRef;
 use crate::prop::sketch_edit::SketchSession;
 use crate::tool::tool_helpers::dashed_line;
 use crate::prop::reference::Located;
@@ -340,12 +342,17 @@ fn draw_the_bench(
             }
             // Drawn with every other plane, below.
             Pick::Plane(_) => {}
+            Pick::Region { sketch, region } => draw_region(&mut gizmos, &build, *sketch, region, picked_colour(pick)),
         }
     }
-    if let Some(Pick::Geom(reference)) = &hovered.0 {
-        if let Some(at) = build.evaluated.locate(reference) {
-            draw_located(&mut gizmos, at, marker * 0.8, HOVERED);
+    match &hovered.0 {
+        Some(Pick::Geom(reference)) => {
+            if let Some(at) = build.evaluated.locate(reference) {
+                draw_located(&mut gizmos, at, marker * 0.8, HOVERED);
+            }
         }
+        Some(Pick::Region { sketch, region }) => draw_region(&mut gizmos, &build, *sketch, region, HOVERED),
+        _ => {}
     }
     let picked_features = editor.picked_features(&build.evaluated);
     // The sketch being edited is drawn by the session, from the document.
@@ -383,6 +390,17 @@ const PICKED: Color = Color::srgb(1.0, 0.8, 0.2);
 const HOVERED: Color = Color::srgb(0.5, 0.9, 1.0);
 const PLANE: Color = Color::srgb(0.55, 0.55, 0.55);
 const SKETCH: Color = Color::srgb(0.92, 0.92, 0.98);
+
+/// A sketch region filled with hatching, which is what it is as a pick.
+fn draw_region(gizmos: &mut Gizmos, build: &PropBuild, sketch: PropFeatureId, region: &RegionRef, colour: Color) {
+    let Some(placed) = build.evaluated.sketch(sketch) else { return };
+    let Some(found) = placed.arrangement.find(region) else { return };
+    // Metres; a floor so a speck of a region is not hatched a thousand times.
+    let spacing = (crate::prop::region::reach_of(&found.outer) / 10.0).max(1e-4);
+    for (a, b) in crate::prop::sketch_edit::hatch(&found.outer, &found.holes, spacing) {
+        gizmos.line(placed.world(a), placed.world(b), colour);
+    }
+}
 
 /// A corner's marker as a fraction of the prop's size. Not camera-relative,
 /// for the same reason a feature's handles are not: four viewports.

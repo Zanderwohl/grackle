@@ -77,6 +77,10 @@ impl Default for Profile {
 }
 
 impl Profile {
+    pub fn loop_of(points: &[Vec2]) -> Profile {
+        Profile::Points { points: points.iter().map(|p| p.to_array()).collect() }
+    }
+
     /// The loop, counter-clockwise, with no repeated last point.
     pub fn points(&self) -> Vec<Vec2> {
         match self {

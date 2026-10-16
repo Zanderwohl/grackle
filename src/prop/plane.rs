@@ -56,6 +56,13 @@ impl Plane {
         (point - self.origin).dot(*self.normal)
     }
 
+    /// Takes the plane's own `x`, `y` and normal to the prop's `X`, `Y`, `Z`:
+    /// what puts something built flat in `XY` onto the plane.
+    pub fn transform(&self) -> Transform {
+        let basis = Mat3::from_cols(*self.x, *self.y(), *self.normal);
+        Transform::from_translation(self.origin).with_rotation(Quat::from_mat3(&basis))
+    }
+
     /// From the plane's own `x`/`y` to the prop's space.
     pub fn lift(&self, at: Vec2) -> Vec3 {
         self.origin + *self.x * at.x + *self.y() * at.y
@@ -187,7 +194,7 @@ fn locate_all(picks: &[Pick], evaluated: &Evaluated) -> Option<Vec<Located>> {
     picks
         .iter()
         .map(|pick| match pick {
-            Pick::Body(_) | Pick::Plane(_) => None,
+            Pick::Body(_) | Pick::Plane(_) | Pick::Region { .. } => None,
             Pick::Geom(reference) => evaluated.locate(reference),
         })
         .collect()
