@@ -122,9 +122,12 @@ tested.
 - [x] `FeatureOp::Sketch` with points and lines, saved to the file, with a
       round-trip test. No body; drawn on its plane in the viewport. Created
       empty from the toolbar's **Sketch** with one plane picked.
-- [ ] The region toolkit, as above, with tests: a square, two overlapping
+- [x] The region toolkit, as above, with tests: a square, two overlapping
       squares (three regions), a figure-eight (two), a square with a square
-      hole, an open chain (none), and naming that survives moving a point.
+      hole, an open chain (none), and naming that survives moving a point
+      (`src/prop/region.rs`). Also T-junctions, spurs, coincident points,
+      three lines through one point, and an island bridged to its surround.
+      Not yet: a note for regions too thin to sweep.
 
 ### Sweeping
 
