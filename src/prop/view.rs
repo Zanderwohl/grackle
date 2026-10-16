@@ -26,7 +26,7 @@ use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure,
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::gizmo::HoveredPick;
 use crate::prop::plane::draw_square;
-use crate::prop::feature::PropFeatureId;
+use crate::prop::feature::{FeatureOp, PropFeatureId};
 use crate::prop::region::RegionRef;
 use crate::prop::sketch_edit::SketchSession;
 use crate::tool::tool_helpers::dashed_line;
@@ -355,6 +355,23 @@ fn draw_the_bench(
         _ => {}
     }
     let picked_features = editor.picked_features(&build.evaluated);
+    // A revolve's axis is a line among many in its sketch; drawn long and
+    // dashed, it says which.
+    let revolving = editor
+        .primary_feature(&build.evaluated)
+        .and_then(|id| editor.doc().feature(id))
+        .and_then(|feature| match &feature.op {
+            FeatureOp::Revolve { sketch, axis, .. } => Some((*sketch, *axis)),
+            _ => None,
+        });
+    if let Some((sketch, axis)) = revolving
+        && let Some(placed) = build.evaluated.sketch(sketch)
+        && let Some((a, b)) = placed.sketch.line(axis)
+    {
+        let middle = (a + b) / 2.0;
+        let reach = (b - a).normalize_or_zero() * placed.arrangement.regions.iter().map(|r| crate::prop::region::reach_of(&r.outer)).fold(a.distance(b), f32::max);
+        dashed_line(&mut gizmos, placed.world(middle - reach), placed.world(middle + reach), HOVERED, marker * 2.0, marker);
+    }
     // The sketch being edited is drawn by the session, from the document.
     for placed in build.evaluated.sketches.iter().filter(|placed| Some(placed.id) != session.editing()) {
         let colour = match picked_features.contains(&placed.id) {

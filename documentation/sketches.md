@@ -133,7 +133,11 @@ tested.
 
 - [x] Extrude on regions, `end: Distance`, `symmetric`. Holes subtracted.
       Several regions are unioned into one body.
-- [ ] Revolve on regions about a sketch line, with the one-side check.
+- [x] Revolve on regions about a sketch line, with the one-side check. Steps
+      are clamped to 3–24 (`revolve_steps`); the axis defaults to the first
+      line clearing every region, construction lines first, and is drawn
+      dashed while the revolve is selected. Holes are cut by a revolve one
+      step longer each way, so its facets line up and its caps are clear.
 - [x] Region picks in the Model workspace, so a sweep is select-then-act like
       every other verb. A region wins over the face it is drawn on, so a sketch
       on a face — or on the cap of what it extruded — picks as the region.
@@ -142,8 +146,9 @@ tested.
       (Extrude). Numbered by the regions in pick order and each region's
       outline as the arrangement walks it: stable while the sketch's lines
       stay as they are, renumbered if they are redrawn.
-- [ ] Retire `Profile` from Extrude and Revolve; rebuild the shipped props by
-      hand. Extrude is done; the shipped launcher's one extrude, the Bore, is
+- [x] Retire `Profile` from Extrude and Revolve; rebuild the shipped props by
+      hand. Done: neither sweep has a profile or placement now, and the
+      profile editor is gone. The shipped launcher's one extrude, the Bore, is
       now the equivalent prism.
 - [ ] Hide a sketch once something sweeps it, as CAD tools do, so its regions
       stop sitting on top of the body it made.

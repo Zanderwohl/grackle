@@ -14,10 +14,13 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::get;
-use crate::prop::profile::{Placement, Profile};
+use crate::prop::profile::Placement;
 use crate::prop::csg::Polygon;
 use crate::prop::plane::{Datum, OriginPlane, PlaneRef};
-use crate::prop::region::{arrange, Region, RegionRef};
+use crate::prop::plane::Plane;
+use crate::prop::profile::revolve_steps;
+use crate::prop::region::{arrange, axis_clear, Region, RegionRef};
+use crate::prop::sketch::SketchId;
 use crate::prop::sketch::{PlacedSketch, Sketch};
 use crate::prop::reference::{face_at, pickables, GeomRef, Located, Outline, Pickable, Wire};
 use crate::prop::solid::{is_full_turn, Shape, Solid};
@@ -100,13 +103,20 @@ pub enum FeatureOp {
         surface: Surface,
         regions: Vec<RegionRef>,
     },
+    /// Regions of a sketch turned about a line in the same sketch, in
+    /// straight steps. Scalars first, as for [`FeatureOp::Extrude`].
     Revolve {
-        profile: Profile,
-        placement: Placement,
+        sketch: PropFeatureId,
+        axis: SketchId,
         #[serde(with = "crate::prop::nice_f32::scalar")]
         degrees: f32,
-        segments: u32,
+        /// Clamped by [`revolve_steps`].
+        steps: u32,
+        /// Half each way of the sketch's plane.
+        #[serde(default)]
+        symmetric: bool,
         surface: Surface,
+        regions: Vec<RegionRef>,
     },
     Boolean { op: BooleanOp, target: PropFeatureId, tool: PropFeatureId },
     /// Axis-aligned rather than a full [`Placement`], so it is picked from a
@@ -243,7 +253,7 @@ impl FeatureOp {
         let mut named: Vec<PropFeatureId> = match self {
             FeatureOp::Plane { through } => through.iter().flat_map(|r| r.source.features()).collect(),
             FeatureOp::Sketch { on, .. } => on.feature().into_iter().collect(),
-            FeatureOp::Extrude { sketch, .. } => vec![*sketch],
+            FeatureOp::Extrude { sketch, .. } | FeatureOp::Revolve { sketch, .. } => vec![*sketch],
             _ => vec![],
         };
         named.sort();
@@ -262,8 +272,9 @@ impl FeatureOp {
 
     pub fn placement_mut(&mut self) -> Option<&mut Placement> {
         match self {
-            FeatureOp::Primitive { placement, .. } | FeatureOp::Revolve { placement, .. } => Some(placement),
+            FeatureOp::Primitive { placement, .. } => Some(placement),
             FeatureOp::Extrude { .. }
+            | FeatureOp::Revolve { .. }
             | FeatureOp::Boolean { .. }
             | FeatureOp::Mirror { .. }
             | FeatureOp::Paint { .. }
@@ -273,13 +284,12 @@ impl FeatureOp {
         }
     }
 
-    /// The local axis "points along" turns. Must match how each solid is
-    /// built: prism, cone and revolve on `+Y`, extrude on `+Z`. Shapes with no
-    /// length of their own take `+Z`.
+    /// The local axis "points along" turns. Must match how each primitive is
+    /// built: prism and cone on `+Y`. Shapes with no length of their own take
+    /// `+Z`.
     pub fn main_axis(&self) -> Vec3 {
         match self {
             FeatureOp::Primitive { shape: Shape::Prism { .. } | Shape::Cone { .. }, .. } => Vec3::Y,
-            FeatureOp::Revolve { .. } => Vec3::Y,
             _ => Vec3::Z,
         }
     }
@@ -463,6 +473,45 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
     (t > 0.0).then_some(t)
 }
 
+/// Where a revolve turns its regions: local `+Y` along the axis from its first
+/// point, local `+X` across it towards the regions — so every radius
+/// [`Solid::revolve`] sees is positive — and local `Z` completing the frame.
+struct AxisFrame {
+    transform: Transform,
+    origin: Vec2,
+    along: Vec2,
+    across: Vec2,
+}
+
+impl AxisFrame {
+    /// `None` if the axis has no length or crosses any of the regions.
+    fn new(plane: &Plane, a: Vec2, b: Vec2, regions: &[&Region]) -> Option<AxisFrame> {
+        if !regions.iter().all(|region| axis_clear(region, a, b)) {
+            return None;
+        }
+        let along = (b - a).try_normalize()?;
+        // Either perpendicular in the plane; the one the regions are on.
+        let mut across = Vec2::new(along.y, -along.x);
+        let lean: f32 = regions.iter().flat_map(|region| &region.outer).map(|p| (*p - a).dot(across)).sum();
+        if lean < 0.0 {
+            across = -across;
+        }
+        let lift = |v: Vec2| *plane.x * v.x + *plane.y() * v.y;
+        let (x, y) = (lift(across), lift(along));
+        let basis = Mat3::from_cols(x, y, x.cross(y));
+        let transform = Transform::from_translation(plane.lift(a)).with_rotation(Quat::from_mat3(&basis));
+        Some(AxisFrame { transform, origin: a, along, across })
+    }
+
+    /// Sketch-plane points as (radius, height) about the axis.
+    fn local(&self, points: &[Vec2]) -> Vec<Vec2> {
+        points
+            .iter()
+            .map(|p| Vec2::new((*p - self.origin).dot(self.across), (*p - self.origin).dot(self.along)))
+            .collect()
+    }
+}
+
 /// A body mid-evaluation, with the outlines of everything that went into it.
 struct Live {
     id: PropFeatureId,
@@ -531,18 +580,50 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 }
                 live.push(made(solid, outline.transformed(frame)));
             }
-            FeatureOp::Revolve { profile, placement, degrees, segments, surface } => {
-                let solid = Solid::revolve(profile, *degrees, *segments, *surface)
-                    .transformed(placement.transform());
-                if solid.is_empty() {
-                    problems.push(Problem {
-                        feature: feature.id,
-                        message: get!("prop.problems.empty_sweep"),
+            FeatureOp::Revolve { sketch, axis, degrees, steps, symmetric, surface, regions } => {
+                let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == *sketch) else {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
+                    continue;
+                };
+                let found: Option<Vec<&Region>> =
+                    regions.iter().map(|region| placed.arrangement.find(region)).collect();
+                let Some(found) = found.filter(|found| !found.is_empty()) else {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_region") });
+                    continue;
+                };
+                let Some((a, b)) = placed.sketch.line(*axis) else {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_axis") });
+                    continue;
+                };
+                let Some(frame) = AxisFrame::new(&placed.plane, a, b, &found) else {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.axis_crosses") });
+                    continue;
+                };
+                let steps = revolve_steps(*steps);
+                let spin = match *symmetric {
+                    true => Transform::from_rotation(Quat::from_rotation_y(-degrees.to_radians() / 2.0)),
+                    false => Transform::IDENTITY,
+                };
+                let mut outline = Outline::default();
+                let mut solid: Option<Solid> = None;
+                for region in found {
+                    let outer = frame.local(&region.outer);
+                    let holes: Vec<Vec<Vec2>> = region.holes.iter().map(|hole| frame.local(hole)).collect();
+                    let piece = Solid::revolve_region(&outer, &holes, *degrees, steps, *surface)
+                        .transformed(spin)
+                        .transformed(frame.transform);
+                    solid = Some(match solid {
+                        Some(joined) => joined.union(&piece),
+                        None => piece,
                     });
+                    outline.append(Outline::revolve_region(&outer, &holes, *degrees, steps).transformed(spin));
+                }
+                let solid = solid.unwrap_or_default();
+                if solid.is_empty() {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.empty_sweep") });
                     continue;
                 }
-                let outline = Outline::revolve(profile, *degrees, *segments).transformed(placement.transform());
-                live.push(made(solid, outline));
+                live.push(made(solid, outline.transformed(frame.transform)));
             }
             FeatureOp::Boolean { op, target, tool } => {
                 // Otherwise reported as a missing body.
@@ -1016,6 +1097,166 @@ mod tests {
             for feature in features {
                 doc.push(feature.op);
             }
+            let text = to_text(&doc).unwrap();
+            assert_eq!(parse(&text).unwrap(), doc, "{text}");
+        }
+    }
+
+    mod revolve {
+        use super::super::*;
+        use crate::prop::document::{parse, to_text, PropDoc};
+        use crate::prop::plane::OriginPlane;
+        use crate::prop::sketch::{Sketch, SketchId};
+
+        /// A rectangle `r0..r1` across and `0..h` up, and a construction axis
+        /// along the plane's `y` at `axis_x`.
+        fn ring(r0: f32, r1: f32, h: f32, axis_x: f32) -> (Sketch, SketchId) {
+            let mut sketch = Sketch::default();
+            let corners = [[r0, 0.0], [r1, 0.0], [r1, h], [r0, h]];
+            let points: Vec<SketchId> = corners.iter().map(|c| sketch.add_point(Vec2::from_array(*c))).collect();
+            for i in 0..4 {
+                sketch.add_line(points[i], points[(i + 1) % 4]);
+            }
+            let (a, b) = (sketch.add_point(Vec2::new(axis_x, -0.1)), sketch.add_point(Vec2::new(axis_x, 0.1)));
+            let axis = sketch.add_line(a, b);
+            sketch.set_construction(axis, true);
+            (sketch, axis)
+        }
+
+        fn turned(on: OriginPlane, sketch: Sketch, axis: SketchId, degrees: f32, steps: u32, symmetric: bool) -> Evaluated {
+            let regions: Vec<RegionRef> = arrange(&sketch).regions.iter().map(|r| r.name.clone()).collect();
+            evaluate(&[
+                PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(on), sketch }),
+                PropFeature::new(
+                    PropFeatureId(1),
+                    FeatureOp::Revolve {
+                        sketch: PropFeatureId(0),
+                        axis,
+                        degrees,
+                        steps,
+                        symmetric,
+                        surface: Surface::default(),
+                        regions,
+                    },
+                ),
+            ])
+        }
+
+        /// The area of a regular `n`-gon with corners `r` from its middle.
+        fn ngon(n: u32, r: f32) -> f32 {
+            n as f32 / 2.0 * r * r * (std::f32::consts::TAU / n as f32).sin()
+        }
+
+        #[test]
+        fn a_rectangle_off_the_axis_turns_into_a_faceted_ring() {
+            let (sketch, axis) = ring(0.02, 0.05, 0.1, 0.0);
+            let evaluated = turned(OriginPlane::Xy, sketch, axis, 360.0, 12, false);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let volume = evaluated.bodies[0].1.volume();
+            let expected = 0.1 * (ngon(12, 0.05) - ngon(12, 0.02));
+            assert!((volume - expected).abs() < 1e-7, "{volume} vs {expected}");
+            // Turned about the plane's y, which on XY is world Y.
+            let (min, max) = evaluated.bodies[0].1.bounds().unwrap();
+            assert!(min.y.abs() < 1e-6 && (max.y - 0.1).abs() < 1e-6, "{min} {max}");
+        }
+
+        /// Fails if the step count is not clamped to the low-poly range.
+        #[test]
+        fn steps_are_kept_between_three_and_twenty_four() {
+            let volume = |steps| {
+                let (sketch, axis) = ring(0.0, 0.05, 0.1, 0.0);
+                turned(OriginPlane::Xy, sketch, axis, 360.0, steps, false).bodies[0].1.volume()
+            };
+            assert!((volume(100) - volume(24)).abs() < 1e-9);
+            assert!((volume(1) - volume(3)).abs() < 1e-9);
+            assert!((volume(24) - 0.1 * ngon(24, 0.05)).abs() < 1e-7);
+        }
+
+        #[test]
+        fn a_part_turn_is_that_part_and_symmetric_straddles_the_plane() {
+            let (sketch, axis) = ring(0.02, 0.05, 0.1, 0.0);
+            let full = turned(OriginPlane::Xy, sketch.clone(), axis, 360.0, 12, false).bodies[0].1.volume();
+            let quarter = turned(OriginPlane::Xy, sketch.clone(), axis, 90.0, 3, false);
+            assert!((quarter.bodies[0].1.volume() * 4.0 - full).abs() < 1e-7);
+
+            let both_ways = turned(OriginPlane::Xy, sketch, axis, 90.0, 3, true);
+            let (min, max) = both_ways.bodies[0].1.bounds().unwrap();
+            assert!((min.z + max.z).abs() < 1e-6, "even about the sketch's plane: {min} {max}");
+        }
+
+        /// Fails if the frame is fixed to one side: a region left of its axis
+        /// turns as well as one to the right.
+        #[test]
+        fn a_region_either_side_of_its_axis_turns() {
+            let (sketch, axis) = ring(-0.05, -0.02, 0.1, 0.0);
+            let evaluated = turned(OriginPlane::Xy, sketch, axis, 360.0, 12, false);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let expected = 0.1 * (ngon(12, 0.05) - ngon(12, 0.02));
+            assert!((evaluated.bodies[0].1.volume() - expected).abs() < 1e-7);
+        }
+
+        #[test]
+        fn an_axis_through_the_region_or_missing_is_a_problem() {
+            let (sketch, axis) = ring(0.02, 0.05, 0.1, 0.03);
+            let crossed = turned(OriginPlane::Xy, sketch.clone(), axis, 360.0, 12, false);
+            assert!(crossed.bodies.is_empty());
+            assert_eq!(crossed.problems.len(), 1);
+
+            let missing = turned(OriginPlane::Xy, sketch, SketchId(999), 360.0, 12, false);
+            assert!(missing.bodies.is_empty());
+            assert_eq!(missing.problems.len(), 1);
+        }
+
+        /// A part turn of a region with a hole: the cutter's caps are a step
+        /// beyond the body's, and the volume still comes out exact.
+        #[test]
+        fn a_hole_is_left_out_of_a_part_turn() {
+            let (mut sketch, axis) = ring(0.02, 0.06, 0.1, 0.0);
+            let corners = [[0.03, 0.03], [0.05, 0.03], [0.05, 0.07], [0.03, 0.07]];
+            let points: Vec<SketchId> = corners.iter().map(|c| sketch.add_point(Vec2::from_array(*c))).collect();
+            for i in 0..4 {
+                sketch.add_line(points[i], points[(i + 1) % 4]);
+            }
+            let outer = arrange(&sketch).regions.into_iter().max_by(|a, b| a.area().total_cmp(&b.area())).unwrap();
+            let evaluated = evaluate(&[
+                PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
+                PropFeature::new(
+                    PropFeatureId(1),
+                    FeatureOp::Revolve {
+                        sketch: PropFeatureId(0),
+                        axis,
+                        degrees: 120.0,
+                        steps: 4,
+                        symmetric: false,
+                        surface: Surface::default(),
+                        regions: vec![outer.name],
+                    },
+                ),
+            ]);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            // A wedge of a 12-gon ring is a third of the whole ring; 4 steps
+            // over 120 degrees is 12 per turn.
+            let ring = |r0: f32, r1: f32, h: f32| h * (ngon(12, r1) - ngon(12, r0)) / 3.0;
+            let expected = ring(0.02, 0.06, 0.1) - ring(0.03, 0.05, 0.04);
+            let volume = evaluated.bodies[0].1.volume();
+            assert!((volume - expected).abs() < 1e-7, "{volume} vs {expected}");
+        }
+
+        #[test]
+        fn a_revolve_survives_the_file() {
+            let (sketch, axis) = ring(0.02, 0.05, 0.1, 0.0);
+            let regions: Vec<RegionRef> = arrange(&sketch).regions.iter().map(|r| r.name.clone()).collect();
+            let mut doc = PropDoc::new("test");
+            let on = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch });
+            doc.push(FeatureOp::Revolve {
+                sketch: on,
+                axis,
+                degrees: 270.0,
+                steps: 9,
+                symmetric: true,
+                surface: Surface::default(),
+                regions,
+            });
             let text = to_text(&doc).unwrap();
             assert_eq!(parse(&text).unwrap(), doc, "{text}");
         }

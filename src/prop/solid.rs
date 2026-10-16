@@ -235,11 +235,30 @@ impl Solid {
         })
     }
 
+    /// A sketch region turned about local `+Y`, the region on the `+X` side:
+    /// the outer loop revolved, then each hole cut out by its own revolve. In
+    /// a part turn the cutter goes one step further each way, so its caps are
+    /// not coplanar with the body's, and by whole steps, so its facets still
+    /// line up with the body's.
+    pub fn revolve_region(outer: &[Vec2], holes: &[Vec<Vec2>], degrees: f32, steps: u32, surface: Surface) -> Solid {
+        let body = Solid::revolve(&Profile::loop_of(outer), degrees, steps, surface);
+        let full = is_full_turn(degrees);
+        let step = degrees / sides(steps) as f32;
+        holes.iter().fold(body, |body, hole| {
+            let cutter = match full {
+                true => Solid::revolve(&Profile::loop_of(hole), degrees, steps, surface),
+                false => Solid::revolve(&Profile::loop_of(hole), degrees + 2.0 * step, sides(steps) + 2, surface)
+                    .transformed(Transform::from_rotation(Quat::from_rotation_y(-step.to_radians()))),
+            };
+            body.subtract(&cutter)
+        })
+    }
+
     /// Spin a profile about the sketch's local `+Y`. Less than a full turn is
     /// capped at each end.
     ///
-    /// Side faces are triangles: a quad between two steps is only planar when
-    /// the profile edge is parallel or square to the axis.
+    /// Side faces are triangles: the quad between two steps is flat, but one
+    /// with a corner on the axis has two corners in one place.
     pub fn revolve(
         profile: &Profile,
         degrees: f32,
@@ -282,12 +301,15 @@ impl Solid {
             }
         }
 
+        // Each cap is wound against the side faces it shares edges with. The
+        // volume cannot see a cap the wrong way round — both caps lie in planes
+        // through the axis and add nothing to it — but a boolean can.
         if !full {
             for [a, b, c] in triangulate(&points) {
                 let first = &rings[0];
                 let last = &rings[steps];
-                polygons.extend(Polygon::new(vec![first[a], first[b], first[c]], surface));
-                polygons.extend(Polygon::new(vec![last[c], last[b], last[a]], surface));
+                polygons.extend(Polygon::new(vec![first[c], first[b], first[a]], surface));
+                polygons.extend(Polygon::new(vec![last[a], last[b], last[c]], surface));
             }
         }
 
@@ -556,6 +578,48 @@ enum Sweep {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fails if any face of a sweep is wound against its neighbours: every
+    /// edge must be walked once each way. Volume cannot catch this for a part
+    /// turn's caps, which lie in planes through the axis.
+    #[test]
+    fn every_sweep_is_wound_consistently() {
+        let key = |v: Vec3| (v * 1e5).round().as_ivec3();
+        let notched = Profile::Points { points: vec![[0.02, 0.0], [0.06, 0.0], [0.06, 0.1], [0.04, 0.05], [0.02, 0.1]] };
+        let solids = [
+            ("box", Shape::Box { size: [0.3, 0.4, 0.5] }.solid(Surface::default())),
+            ("cone", Shape::Cone { sides: 6, radius: 0.2, height: 0.5 }.solid(Surface::default())),
+            ("extrude", Solid::extrude(&notched, 0.1, false, Surface::default())),
+            ("full turn", Solid::revolve(&notched, 360.0, 8, Surface::default())),
+            ("part turn", Solid::revolve(&notched, 120.0, 4, Surface::default())),
+            ("backwards part turn", Solid::revolve(&notched, -90.0, 3, Surface::default())),
+        ];
+        for (name, solid) in solids {
+            let mut edges = std::collections::HashMap::new();
+            for polygon in solid.polygons() {
+                let v = &polygon.vertices;
+                for i in 0..v.len() {
+                    *edges.entry((key(v[i]), key(v[(i + 1) % v.len()]))).or_insert(0) += 1;
+                }
+            }
+            for ((a, b), count) in &edges {
+                assert_eq!(edges.get(&(*b, *a)), Some(count), "{name}: edge {a} -> {b} has no twin");
+            }
+        }
+    }
+
+    /// A part turn cut by a slab of itself keeps exactly the slab, which a
+    /// cap wound inwards gets wrong by most of the body.
+    #[test]
+    fn a_part_turn_survives_a_boolean() {
+        let ring = Profile::Points { points: vec![[0.02, 0.0], [0.06, 0.0], [0.06, 0.1], [0.02, 0.1]] };
+        let body = Solid::revolve(&ring, 120.0, 4, Surface::default());
+        let slab = Solid::extrude(&Profile::Rect { half: [0.1, 0.1] }, 0.04, false, Surface::default())
+            .transformed(Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)))
+            .translated(Vec3::Y * 0.03);
+        let cut = body.intersect(&slab);
+        assert!((cut.volume() - body.volume() * 0.4).abs() < 1e-8, "{} vs {}", cut.volume(), body.volume() * 0.4);
+    }
 
     /// A sweep wound the wrong way measures negative.
     #[test]

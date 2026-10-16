@@ -95,6 +95,12 @@ impl Sketch {
         id
     }
 
+    /// A line's two ends, if `id` is a line whose points are both there.
+    pub fn line(&self, id: SketchId) -> Option<(Vec2, Vec2)> {
+        let (_, a, b, _) = self.lines().find(|(line, ..)| *line == id)?;
+        Some((self.point(a)?, self.point(b)?))
+    }
+
     pub fn point(&self, id: SketchId) -> Option<Vec2> {
         self.points.iter().find(|point| point.id == id).map(|point| Vec2::from_array(point.at))
     }

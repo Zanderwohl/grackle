@@ -381,12 +381,18 @@ to be closed**. Nothing checks either property and both matter: a plane cuts a
 convex polygon into exactly two pieces, which is the assumption the splitter
 is written on, and "inside" only means anything for a surface with no gaps.
 That is why every sweep in [`solid.rs`](src/prop/solid.rs) emits triangles or
-planar convex faces, why a revolve's side faces are triangles (a quad between
-two steps is only planar in special cases), and why a cap is **ear-clipped
+planar convex faces, why a revolve's side faces are triangles (the quad
+between two steps is flat, but one with a corner on the axis has two corners
+in one place), and why a cap is **ear-clipped
 rather than fanned** — a fan is right for a rectangle and silently wrong for
 anything with a notch in it.
 
 **A solid's faces point outwards, and that is measured rather than derived.**
+What measuring cannot catch is one face wound against its neighbours: a part
+turn's caps lie in planes through the axis and add nothing to the volume, so
+inward caps measured right and broke every boolean against them.
+`every_sweep_is_wound_consistently` checks that each edge is walked once each
+way, which is the property the kernel actually relies on.
 `Solid::oriented_outward` computes the enclosed volume and flips the whole
 thing if it came out negative, so no sweep has to get its winding right by
 reasoning and no mirror has to remember that a negative scale inverts a

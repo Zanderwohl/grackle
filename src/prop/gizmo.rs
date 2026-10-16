@@ -248,9 +248,6 @@ fn drag_the_selected(
 
     let (shape, placement) = match &feature.op {
         FeatureOp::Primitive { shape, placement, .. } => (Some(shape.clone()), *placement),
-        FeatureOp::Revolve { placement, .. } => {
-            (None, *placement)
-        }
         _ => {
             grab.held = None;
             return;

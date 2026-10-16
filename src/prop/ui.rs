@@ -41,8 +41,8 @@ use crate::prop::feature::{Axis, BooleanOp, End, FeatureOp, PatternKind, PropFea
 use crate::prop::figure::ScaleFigure;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::gizmo::HoldHandles;
-use crate::prop::hold::MuzzleSpec;
-use crate::prop::profile::{Placement, Profile, MIN_SIDES};
+use crate::prop::hold::{MuzzleSpec, HoldOverride};
+use crate::prop::profile::{Placement, Profile, MIN_SIDES, MAX_REVOLVE_STEPS};
 use crate::prop::solid::Shape;
 use crate::prop::surface::{Style, Surface};
 use crate::prop::camera::FrameTheProp;
@@ -919,14 +919,20 @@ fn toolbar(
                     regions,
                 });
             }
-            if ui.button(get!("prop.features.revolve")).clicked() {
+            let turnable = sweepable
+                .clone()
+                .and_then(|(sketch, regions)| Some((sketch, default_axis(build, sketch, &regions)?, regions)));
+            let revolve = ui.add_enabled(turnable.is_some(), egui::Button::new(get!("prop.features.revolve")));
+            if let (true, Some((sketch, axis, regions))) = (revolve.clicked(), turnable) {
                 ui.close_kind(UiKind::Menu);
                 added = Some(FeatureOp::Revolve {
-                    profile: Profile::Rect { half: [0.03, 0.05] },
-                    placement: Placement::at(0.06, 0.0, 0.0),
+                    sketch,
+                    axis,
                     degrees: 360.0,
-                    segments: 12,
+                    steps: 12,
+                    symmetric: false,
                     surface: Surface::default(),
+                    regions,
                 });
             }
         });
@@ -1114,6 +1120,20 @@ fn sketch_inspector(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSe
     if let Some(pick) = dropped {
         session.toggle(pick);
     }
+}
+
+/// The line a new revolve turns about: the first line of the sketch that
+/// clears every region, construction lines first, since drawing one is how
+/// somebody says "this is an axis".
+fn default_axis(build: &PropBuild, sketch: PropFeatureId, regions: &[RegionRef]) -> Option<SketchId> {
+    let placed = build.evaluated.sketch(sketch)?;
+    let found: Vec<_> = regions.iter().filter_map(|region| placed.arrangement.find(region)).collect();
+    let mut lines: Vec<_> = placed.sketch.lines().collect();
+    lines.sort_by_key(|(_, _, _, construction)| !construction);
+    lines.into_iter().find_map(|(id, ..)| {
+        let (a, b) = placed.sketch.line(id)?;
+        found.iter().all(|region| crate::prop::region::axis_clear(region, a, b)).then_some(id)
+    })
 }
 
 /// What a new plane would be made through: the picks, when they make a plane
@@ -1375,8 +1395,16 @@ fn feature_inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, se
     let datum = build.evaluated.datum(PlaneRef::Feature(selected));
     let plane_name = |on: PlaneRef| pick_label(editor, build, &Pick::Plane(on));
     let sketch_name = match &edited.op {
-        FeatureOp::Extrude { sketch, .. } => Some(pick_label(editor, build, &Pick::Body(*sketch))),
+        FeatureOp::Extrude { sketch, .. } | FeatureOp::Revolve { sketch, .. } => {
+            Some(pick_label(editor, build, &Pick::Body(*sketch)))
+        }
         _ => None,
+    };
+    let axis_choices: Vec<(SketchId, String)> = match &edited.op {
+        FeatureOp::Revolve { sketch, .. } => sketch_of(editor.doc(), *sketch)
+            .map(|drawn| drawn.lines().map(|(id, ..)| (id, get!("prop.sketch.line_label", "id", id))).collect())
+            .unwrap_or_default(),
+        _ => vec![],
     };
     let sketch_plane = match &edited.op {
         FeatureOp::Sketch { on, .. } => Some(plane_name(*on)),
@@ -1433,15 +1461,34 @@ fn feature_inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, se
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Revolve { profile, placement, degrees, segments, surface } => {
-                section(ui, "profile", get!("prop.inspector.sections.profile"), |ui| {
-                    changed |= profile_ui(ui, profile);
-                    ui.separator();
-                    changed |= drag(ui, get!("prop.inspector.degrees"), degrees, 1.0, "°");
-                    changed |= count(ui, get!("prop.inspector.segments"), segments);
+            FeatureOp::Revolve { axis, degrees, steps, symmetric, surface, regions, .. } => {
+                section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.sketch"));
+                        ui.label(sketch_name.clone().unwrap_or_default());
+                    });
+                    ui.label(get!("prop.inspector.regions", "count", regions.len()));
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.axis"));
+                        let shown = axis_choices
+                            .iter()
+                            .find(|(id, _)| id == axis)
+                            .map(|(_, label)| label.clone())
+                            .unwrap_or_else(|| get!("prop.sketch.line_label", "id", *axis));
+                        egui::ComboBox::from_id_salt("prop_revolve_axis").selected_text(shown).show_ui(ui, |ui| {
+                            for (id, label) in &axis_choices {
+                                changed |= ui.selectable_value(axis, *id, label).changed();
+                            }
+                        });
+                    });
                 });
-                section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
-                    changed |= placement_ui(ui, placement, main);
+                section(ui, "extent", get!("prop.inspector.sections.extent"), |ui| {
+                    changed |= drag(ui, get!("prop.inspector.degrees"), degrees, 1.0, "°");
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.steps"));
+                        changed |= ui.add(egui::Slider::new(steps, MIN_SIDES..=MAX_REVOLVE_STEPS)).changed();
+                    });
+                    changed |= ui.checkbox(symmetric, get!("prop.inspector.symmetric")).changed();
                 });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);
@@ -2196,82 +2243,10 @@ fn shape_ui(ui: &mut Ui, shape: &mut Shape) -> bool {
     changed
 }
 
-fn profile_ui(ui: &mut Ui, profile: &mut Profile) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label(get!("prop.inspector.profile"));
-        // Switching kind replaces rather than converts; there is nothing to
-        // carry across.
-        if ui.selectable_label(matches!(profile, Profile::Rect { .. }), Profile::Rect { half: [0.0; 2] }.name()).clicked()
-            && !matches!(profile, Profile::Rect { .. })
-        {
-            *profile = Profile::Rect { half: [0.05, 0.05] };
-            changed = true;
-        }
-        if ui.selectable_label(matches!(profile, Profile::Ngon { .. }), Profile::Ngon { sides: 0, radius: 0.0 }.name()).clicked()
-            && !matches!(profile, Profile::Ngon { .. })
-        {
-            *profile = Profile::Ngon { sides: 8, radius: 0.05 };
-            changed = true;
-        }
-        if ui.selectable_label(matches!(profile, Profile::Points { .. }), Profile::Points { points: vec![] }.name()).clicked()
-            && !matches!(profile, Profile::Points { .. })
-        {
-            *profile = Profile::Points {
-                points: vec![[-0.05, -0.05], [0.05, -0.05], [0.05, 0.05], [-0.05, 0.05]],
-            };
-            changed = true;
-        }
-    });
-
-    match profile {
-        Profile::Rect { half } => {
-            ui.horizontal(|ui| {
-                ui.label(get!("prop.inspector.half"));
-                for (component, axis) in half.iter_mut().zip(["x", "y"]) {
-                    changed |= ui
-                        .add(egui::DragValue::new(component).speed(0.001).prefix(format!("{axis} ")).suffix("m"))
-                        .changed();
-                }
-            });
-        }
-        Profile::Ngon { sides, radius } => {
-            changed |= count(ui, get!("prop.inspector.sides"), sides);
-            changed |= drag(ui, get!("prop.inspector.radius"), radius, 0.001, "m");
-        }
-        Profile::Points { points } => {
-            let mut remove = None;
-            for (at, point) in points.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    for component in point.iter_mut() {
-                        changed |= ui.add(egui::DragValue::new(component).speed(0.001)).changed();
-                    }
-                    if ui
-                        .small_button(get!("prop.inspector.remove_point"))
-                        .on_hover_text(get!("prop.inspector.remove_point_hint"))
-                        .clicked()
-                    {
-                        remove = Some(at);
-                    }
-                });
-            }
-            if let Some(at) = remove {
-                points.remove(at);
-                changed = true;
-            }
-            if ui.button(get!("prop.inspector.add_point")).clicked() {
-                points.push(points.last().copied().unwrap_or([0.0, 0.0]));
-                changed = true;
-            }
-        }
-    }
-    changed
-}
-
 /// Every copy is a boolean union, so this is a cost cap.
 const MAX_PATTERN_COPIES: u32 = 64;
 
-/// Switching between linear and radial replaces the layout, as with profiles.
+/// Switching between linear and radial replaces the layout.
 fn pattern_ui(ui: &mut Ui, count: &mut u32, along: &mut PatternKind) -> bool {
     let mut changed = ui
         .horizontal(|ui| {

@@ -224,6 +224,24 @@ impl Outline {
         outline
     }
 
+    /// Matches [`Solid::revolve_region`]: the outer loop as [`Self::revolve`]
+    /// numbers it, then each hole's walls facing into the hole.
+    pub fn revolve_region(outer: &[Vec2], holes: &[Vec<Vec2>], degrees: f32, steps: u32) -> Outline {
+        let mut outline = Outline::revolve(&Profile::loop_of(outer), degrees, steps);
+        for hole in holes {
+            let mut walls = Outline::revolve(&Profile::loop_of(hole), degrees, steps);
+            // A part turn's two caps come last; a hole has none.
+            if !is_full_turn(degrees) {
+                walls.faces.truncate(walls.faces.len().saturating_sub(2));
+            }
+            for face in &mut walls.faces {
+                face.outward = -face.outward;
+            }
+            outline.append(walls);
+        }
+        outline
+    }
+
     /// `other`'s elements after this one's, renumbered to point at their own
     /// corners.
     pub fn append(&mut self, other: Outline) {

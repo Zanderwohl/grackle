@@ -11,6 +11,15 @@ use crate::common::rotation::quat_from_euler;
 
 pub const MIN_SIDES: u32 = 3;
 
+/// The most steps a revolve may take: a low-poly game's ceiling, and the
+/// triangle budget a turned part can cost.
+pub const MAX_REVOLVE_STEPS: u32 = 24;
+
+/// How many steps a revolve asked for `requested` takes.
+pub fn revolve_steps(requested: u32) -> u32 {
+    requested.clamp(MIN_SIDES, MAX_REVOLVE_STEPS)
+}
+
 /// How many sides a request for `requested` gets: raised to [`MIN_SIDES`]
 /// rather than refused, so a file asking for fewer still builds.
 pub fn sides(requested: u32) -> u32 {
@@ -126,14 +135,6 @@ impl Profile {
             points.reverse();
         }
         points
-    }
-
-    pub fn name(&self) -> String {
-        match self {
-            Profile::Rect { .. } => crate::get!("prop.profiles.rect"),
-            Profile::Ngon { .. } => crate::get!("prop.profiles.ngon"),
-            Profile::Points { .. } => crate::get!("prop.profiles.points"),
-        }
     }
 }
 
