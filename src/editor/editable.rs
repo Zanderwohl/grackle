@@ -1010,7 +1010,9 @@ impl PointRef {
 
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(label).strong());
-            if ui.small_button("⊕").on_hover_text("Retarget").clicked() {
+            // In egui's emoji-icon-font, which proportional text falls back to; `⊕` is only in the
+            // monospace font and drew as a missing glyph.
+            if ui.small_button("⌖").on_hover_text(get!("tools.retarget")).clicked() {
                 *retarget_request = Some(label.to_string());
             }
         });

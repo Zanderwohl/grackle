@@ -57,6 +57,7 @@ animation_display = "Animation Display"
 animation_grid = "Animation Grid"
 move = "Move"
 room = "Room"
+retarget = "Retarget"
 
 [bakes]
 title = "Bake Operations"
