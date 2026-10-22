@@ -172,4 +172,55 @@ mod tests {
         let bare = app.world().get::<WornHat>(bare).unwrap();
         assert!(bare.parts.is_empty(), "a class with no hat wore one");
     }
+
+    fn worn_parts(app: &App, body: Entity) -> Vec<Visibility> {
+        let worn = app.world().get::<WornHat>(body).expect("no hat was put on");
+        assert!(!worn.parts.is_empty(), "the hat has no parts");
+        worn.parts.iter().map(|part| *app.world().get::<Visibility>(*part).unwrap()).collect()
+    }
+
+    /// Your own hat is hidden from inside your head, where its brim would cut
+    /// across the view, and drawn in third person. Fails if the hat loses the
+    /// marker `hide_own_body` goes by, or is hung somewhere it does not look.
+    #[test]
+    fn your_own_hat_shows_in_third_person_and_not_in_first() {
+        if std::fs::metadata("assets/default/props/top_hat.gpp").is_err() {
+            return;
+        }
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            bevy::render::mesh::MeshPlugin,
+        ));
+        app.init_asset::<StandardMaterial>();
+        app.add_plugins(crate::common::skeleton::ClipAssetsPlugin);
+        let mut catalogue = WeaponCatalogue::default();
+        catalogue.set_loadout(Class::Mercenary, Loadout { hat: Some("top_hat".into()), ..default() });
+        app.insert_resource(catalogue)
+            .init_resource::<PackAssets>()
+            .insert_resource(ViewMode::FirstPerson)
+            .add_plugins(HatPlugin)
+            .add_systems(Update, crate::game::body_mesh::hide_own_body.after(dress_hats));
+
+        let ours = app
+            .world_mut()
+            .spawn((default_humanoid().clone(), Pose::rest(), Class::Mercenary, LocalPlayer))
+            .id();
+        let theirs =
+            app.world_mut().spawn((default_humanoid().clone(), Pose::rest(), Class::Mercenary)).id();
+        app.update();
+        app.update();
+
+        assert!(worn_parts(&app, ours).iter().all(|v| *v == Visibility::Hidden), "our hat is in our eyes");
+        assert!(worn_parts(&app, theirs).iter().all(|v| *v != Visibility::Hidden), "their hat vanished");
+
+        *app.world_mut().resource_mut::<ViewMode>() = ViewMode::ThirdPerson;
+        app.update();
+        assert!(worn_parts(&app, ours).iter().all(|v| *v != Visibility::Hidden), "our hat is missing in third person");
+
+        *app.world_mut().resource_mut::<ViewMode>() = ViewMode::FirstPerson;
+        app.update();
+        assert!(worn_parts(&app, ours).iter().all(|v| *v == Visibility::Hidden), "our hat came back into view");
+    }
 }

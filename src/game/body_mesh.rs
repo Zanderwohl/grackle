@@ -291,7 +291,7 @@ fn pose_body_meshes(
 /// Hide the body the camera is inside, and nobody else's. `LocalPlayer`, not
 /// `Player`: replicated bodies carry `Player` too, and hiding them all reads
 /// as the other players never having arrived.
-fn hide_own_body(
+pub(crate) fn hide_own_body(
     view: Res<ViewMode>,
     players: Query<&Children, With<LocalPlayer>>,
     mut parts: Query<&mut Visibility, With<FirstPersonHidden>>,
