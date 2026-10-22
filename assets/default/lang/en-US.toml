@@ -136,6 +136,7 @@ clearance = "Needs { height } m of clear headroom."
 
 [editor.features.prop]
 title = "Prop"
+model = "Model"
 centre = "Centre"
 rotation = "Rotation"
 yaw = "Yaw"
@@ -506,6 +507,7 @@ features = "Features"
 inspector = "Inspector"
 scene = "Scene"
 hold = "Hold"
+hat = "Hat"
 problems = "Problems"
 problems_count = "Problems ({ count })"
 
@@ -524,6 +526,42 @@ depth = "Depth"
 [prop.scene]
 figure = "Reference figure"
 no_figure = "None"
+
+[prop.names]
+top_hat = "Top Hat"
+crate = "Crate"
+health_pack = "Health Pack"
+ammo_pack = "Ammo Pack"
+
+[prop.archetype]
+held = "Held"
+hat = "Hat"
+obstacle = "Obstacle"
+breakable = "Breakable"
+pickup = "Pickup"
+
+[prop.collider]
+box = "Box"
+sphere = "Sphere"
+capsule = "Capsule"
+add = "Add collider"
+remove = "Remove collider"
+
+[prop.breakable]
+health = "Health"
+
+[prop.pickup]
+health = "Health"
+ammo = "Ammo"
+armor = "Armour"
+flag = "Flag"
+amount = "Amount"
+respawn = "Back after"
+unbuilt = "Not built yet: gives nothing."
+
+[prop.hat]
+on_the_head = "On the head"
+scale = "Scale"
 
 [prop.tree]
 # Icons, not prose — but still here rather than in the source, because egui
@@ -624,6 +662,10 @@ missing = "missing { id }"
 
 [prop.inspector.sections]
 prop = "Prop"
+archetype = "Archetype"
+breakable = "Breakable"
+pickup = "Pickup"
+colliders = "Colliders"
 size = "Size"
 feature = "Feature"
 shape = "Shape"

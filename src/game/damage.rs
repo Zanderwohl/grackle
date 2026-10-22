@@ -345,7 +345,7 @@ mod tests {
                 DamageLog::default(),
                 Hitboxes {
                     body: Box3 { centre, half_extents: Vec3::splat(0.5) },
-                    head: Box3 { centre, half_extents: Vec3::splat(0.15) },
+                    head: Some(Box3 { centre, half_extents: Vec3::splat(0.15) }),
                 },
                 Name::new("Bystander"),
             ))

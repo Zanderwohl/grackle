@@ -214,7 +214,7 @@ mod tests {
             .spawn((
                 Hitboxes {
                     body: Box3 { centre, half_extents: Vec3::new(0.4, 0.9, 0.4) },
-                    head: Box3 { centre: centre + Vec3::Y * 0.8, half_extents: Vec3::splat(0.15) },
+                    head: Some(Box3 { centre: centre + Vec3::Y * 0.8, half_extents: Vec3::splat(0.15) }),
                 },
                 Damageable::default(),
             ))
@@ -342,7 +342,7 @@ mod tests {
         world.spawn((
             Hitboxes {
                 body: Box3 { centre, half_extents: Vec3::new(3.0, 3.0, 0.4) },
-                head: Box3 { centre, half_extents: Vec3::splat(0.05) },
+                head: Some(Box3 { centre, half_extents: Vec3::splat(0.05) }),
             },
             Damageable::default(),
         ));
@@ -395,7 +395,7 @@ mod tests {
         let centre = body_centre_from_feet(Vec3::ZERO);
         world.entity_mut(shooter).insert(Hitboxes {
             body: Box3 { centre, half_extents: Vec3::new(0.4, 0.9, 0.4) },
-            head: Box3 { centre: centre + Vec3::Y * 0.7, half_extents: Vec3::splat(0.15) },
+            head: Some(Box3 { centre: centre + Vec3::Y * 0.7, half_extents: Vec3::splat(0.15) }),
         });
 
         puff(&mut world, shooter);

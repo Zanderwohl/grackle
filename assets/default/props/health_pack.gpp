@@ -1,0 +1,97 @@
+name_key = "prop.names.health_pack"
+archetype = "pickup"
+next_id = 5
+
+[[features]]
+id = 0
+name = "Case"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [0.4, 0.22, 0.3]
+
+[features.op.placement]
+origin = [0.0, 0.11, 0.0]
+rotation = [0.0, 0.0, 0.0]
+
+[features.op.surface]
+style = "plastic"
+tint = [0.92, 0.92, 0.9]
+
+[[features]]
+id = 1
+name = "Cross long"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [0.2, 0.02, 0.06]
+
+[features.op.placement]
+origin = [0.0, 0.23, 0.0]
+rotation = [0.0, 0.0, 0.0]
+
+[features.op.surface]
+style = "plastic"
+tint = [0.62, 0.08, 0.08]
+
+[[features]]
+id = 2
+name = "Cross short"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [0.06, 0.02, 0.2]
+
+[features.op.placement]
+origin = [0.0, 0.23, 0.0]
+rotation = [0.0, 0.0, 0.0]
+
+[features.op.surface]
+style = "plastic"
+tint = [0.62, 0.08, 0.08]
+
+[[features]]
+id = 3
+name = "Cross"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "union"
+target = 1
+tool = 2
+
+[[features]]
+id = 4
+name = "Pack"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "union"
+target = 0
+tool = 3
+
+[[colliders]]
+origin = [0.0, 0.2, 0.0]
+
+[colliders.shape]
+kind = "box"
+size = [0.5, 0.4, 0.4]
+
+[pickup]
+kind = "health"
+amount = 0.5
+respawn = 10.0

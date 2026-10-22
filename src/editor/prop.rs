@@ -16,6 +16,11 @@ pub const PROP_SIZE: f32 = 0.5;
 #[derive(Component, Debug)]
 pub struct PropMarker;
 
+/// The model a [`Prop`] names, empty for the stand-in cube. On the feature's
+/// entity, where `crate::game::world_prop` reads it.
+#[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
+pub struct PropModel(pub String);
+
 /// A placed piece of map furniture. Its point is the centre of the box, so rotating does not slide
 /// it across the floor.
 #[derive(Serialize, Deserialize)]
@@ -23,6 +28,10 @@ pub struct Prop {
     location: PointRef,
     /// Pitch, yaw and roll in radians, in axis order. See [`crate::common::rotation`].
     rotation: Vec3,
+    /// A prop under a pack's `props/`, by file stem. Empty draws the stand-in
+    /// cube. Not checked here: a bad name draws nothing, as a weapon's does.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    model: String,
     #[serde(skip)]
     resolved_location: Vec3,
     #[serde(skip)]
@@ -37,6 +46,10 @@ impl FeatureTrait for Prop {
 
     fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool {
         let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label(get!("editor.features.prop.model"));
+            changed |= ui.text_edit_singleline(&mut self.model).changed();
+        });
         let label = get!("editor.features.prop.centre");
         changed |= self.location.editor_ui(ui, &label, features, prior_feature_order, retarget_request);
 
@@ -113,6 +126,7 @@ impl FeatureTrait for Prop {
             Transform::from_translation(self.resolved_location)
                 .with_rotation(quat_from_euler(self.rotation)),
             PropMarker,
+            PropModel(self.model.clone()),
         ));
     }
 
@@ -191,6 +205,7 @@ impl Prop {
         Self {
             location: PointRef::absolute(x, y, z),
             rotation: Vec3::ZERO,
+            model: String::new(),
             resolved_location: Vec3::new(x, y, z),
             entity: None,
         }
@@ -200,6 +215,7 @@ impl Prop {
         Self {
             location,
             rotation: Vec3::ZERO,
+            model: String::new(),
             resolved_location: Vec3::ZERO,
             entity: None,
         }
@@ -207,6 +223,11 @@ impl Prop {
 
     pub fn with_rotation(mut self, rotation: Vec3) -> Self {
         self.rotation = rotation;
+        self
+    }
+
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = model.into();
         self
     }
 

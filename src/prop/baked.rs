@@ -13,6 +13,7 @@ use crate::prop::feature::Evaluated;
 use std::collections::BTreeMap;
 
 use crate::common::skeleton::clip::{Clip, ClipSet};
+use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
 use crate::prop::hold::{HoldSpec, ViewmodelSpec};
 use crate::prop::surface::Surface;
 
@@ -55,6 +56,11 @@ pub struct BakedProp {
     /// Handles, as `parts` are: a re-bake of the same name refills the same
     /// handle, so a body mid-deploy plays the saved clip on its next frame.
     pub clips: BTreeMap<String, Handle<Clip>>,
+    pub archetype: Archetype,
+    pub colliders: Vec<Collider>,
+    pub breakable: BreakableSpec,
+    pub pickup: PickupSpec,
+    pub hat: HatSpec,
 }
 
 #[derive(Resource, Default)]
@@ -189,5 +195,10 @@ fn bake_doc(
         hold: doc.hold.clone(),
         viewmodel: doc.viewmodel,
         clips,
+        archetype: doc.archetype,
+        colliders: doc.colliders.clone(),
+        breakable: doc.breakable,
+        pickup: doc.pickup,
+        hat: doc.hat.clone(),
     }
 }

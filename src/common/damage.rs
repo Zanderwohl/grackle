@@ -100,6 +100,17 @@ impl Damageable {
         self.health = self.max;
     }
 
+    /// Returns what actually went on, capped at the maximum.
+    pub fn heal(&mut self, amount: u32) -> u32 {
+        let healed = amount.min(self.max - self.health);
+        self.health += healed;
+        healed
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.health >= self.max
+    }
+
     /// Returns what actually came off, clamped to what was left, so scores add
     /// up to no more health than existed. Reaching zero does nothing here;
     /// death is decided elsewhere.

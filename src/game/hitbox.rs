@@ -135,7 +135,8 @@ fn draw_hitboxes(
         if own_body.is_some() && !view.shows_own_body() {
             continue;
         }
-        for (hitbox, colour) in [(boxes.body, body_colour), (boxes.head, head_colour)] {
+        let head = boxes.head.map(|head| (head, head_colour));
+        for (hitbox, colour) in [(boxes.body, body_colour)].into_iter().chain(head) {
             gizmos.cube(
                 Transform::from_translation(hitbox.centre).with_scale(hitbox.half_extents * 2.0),
                 colour,
@@ -173,7 +174,7 @@ mod tests {
         let boxes = world.get::<Hitboxes>(body).unwrap();
         assert!((boxes.body.min().y - feet.y).abs() < 1e-4, "the body box is not standing on the floor");
         assert!((boxes.body.centre.xz() - feet.xz()).length() < 1e-4);
-        assert!(boxes.head.centre.y > boxes.body.centre.y, "the head is not above the middle of the body");
+        assert!(boxes.head.unwrap().centre.y > boxes.body.centre.y, "the head is not above the middle of the body");
     }
 
     /// A simulated body's stance wins over its animation.

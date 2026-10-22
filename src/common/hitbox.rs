@@ -60,7 +60,8 @@ impl Box3 {
 pub struct Hitboxes {
     /// The movement hull's box; not animated.
     pub body: Box3,
-    pub head: Box3,
+    /// `None` for something with no head to aim at: a crate.
+    pub head: Option<Box3>,
 }
 
 /// `root` is the skeleton's transform, at the feet. `pose` must be sampled on
@@ -78,7 +79,7 @@ pub fn hitboxes(
 ) -> Hitboxes {
     Hitboxes {
         body: body_box(root, stance),
-        head: head_box(skeleton, pose, settled, root),
+        head: Some(head_box(skeleton, pose, settled, root)),
     }
 }
 
@@ -140,10 +141,10 @@ mod tests {
             .find(|bone| bone.name == bone::HEAD)
             .unwrap();
 
-        assert!(boxes.head.contains(head.head), "the base of the skull is outside the box");
-        assert!(boxes.head.contains(head.tail), "the crown is outside the box");
-        assert!(boxes.head.half_extents.y > head.length * 0.5);
-        assert!(boxes.head.half_extents.x > head.thickness.x * 0.5);
+        assert!(boxes.head.unwrap().contains(head.head), "the base of the skull is outside the box");
+        assert!(boxes.head.unwrap().contains(head.tail), "the crown is outside the box");
+        assert!(boxes.head.unwrap().half_extents.y > head.length * 0.5);
+        assert!(boxes.head.unwrap().half_extents.x > head.thickness.x * 0.5);
     }
 
     #[test]
@@ -161,13 +162,13 @@ mod tests {
                 .translation
         };
 
-        let rest = hitboxes(&skeleton, &Pose::rest(), &Pose::rest(), &root, Stance::Standing).head.centre;
+        let rest = hitboxes(&skeleton, &Pose::rest(), &Pose::rest(), &root, Stance::Standing).head.unwrap().centre;
         let mut most_head = 0.0_f32;
         let mut most_box = 0.0_f32;
         for step in 0..64 {
             let pose = AnimationState::Idle.pose(&PoseInputs { seconds: step as f32 * 0.05, ..default() });
             most_head = most_head.max((head_of(&pose) - head_of(&Pose::rest())).length());
-            most_box = most_box.max((hitboxes(&skeleton, &pose, &Pose::rest(), &root, Stance::Standing).head.centre - rest).length());
+            most_box = most_box.max((hitboxes(&skeleton, &pose, &Pose::rest(), &root, Stance::Standing).head.unwrap().centre - rest).length());
         }
 
         assert!(most_head > 0.015, "the idle barely moves the head at all: {most_head} m");
@@ -187,8 +188,8 @@ mod tests {
             .with(bone::CHEST, Quat::from_rotation_x(-1.4))
             .with(bone::NECK, Quat::from_rotation_x(-1.0));
 
-        let rest = hitboxes(&skeleton, &Pose::rest(), &Pose::rest(), &root, Stance::Standing).head.centre;
-        let moved = hitboxes(&skeleton, &thrown, &Pose::rest(), &root, Stance::Standing).head.centre;
+        let rest = hitboxes(&skeleton, &Pose::rest(), &Pose::rest(), &root, Stance::Standing).head.unwrap().centre;
+        let moved = hitboxes(&skeleton, &thrown, &Pose::rest(), &root, Stance::Standing).head.unwrap().centre;
 
         assert!(
             (moved - rest).length() <= HEAD_MAX_OFFSET + 1e-5,
@@ -210,8 +211,8 @@ mod tests {
         let ducked = finish_pose(&skeleton, AnimationState::Crouch, &inputs, &root, None);
         let standing = finish_pose(&skeleton, AnimationState::Idle, &inputs, &root, None);
 
-        let up = hitboxes(&skeleton, &standing, &standing, &root, Stance::Standing).head;
-        let down = hitboxes(&skeleton, &ducked, &ducked, &root, Stance::Crouched).head;
+        let up = hitboxes(&skeleton, &standing, &standing, &root, Stance::Standing).head.unwrap();
+        let down = hitboxes(&skeleton, &ducked, &ducked, &root, Stance::Crouched).head.unwrap();
 
         assert!(
             up.centre.y - down.centre.y > 0.5,
@@ -245,10 +246,10 @@ mod tests {
                 .find(|posed| posed.name == bone::HEAD)
                 .unwrap();
             assert!(
-                boxes.head.contains(head.head) && boxes.head.contains(head.tail),
+                boxes.head.unwrap().contains(head.head) && boxes.head.unwrap().contains(head.tail),
                 "{class:?} is not boxed around its own head"
             );
-            heights.push(boxes.head.centre.y);
+            heights.push(boxes.head.unwrap().centre.y);
         }
 
         // Otherwise the check above could pass on one generous box.

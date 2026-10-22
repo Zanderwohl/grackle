@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::common::ray::{ray_aabb_distance, ray_aabb_entry};
+use crate::prop::archetype::RoundedBox;
 use crate::tool::room::{Room, WallSlab};
 
 /// How far each wall slab extends behind its face, in metres. Only the face
@@ -22,6 +23,10 @@ pub struct CollisionWorld {
     /// Room interiors as (min, max). [`CollisionWorld::depenetrate`] needs
     /// them to tell which way out of a wall is into the level.
     interiors: Vec<(Vec3, Vec3)>,
+    /// Placed props that block movement. Kept apart from `slabs` because they
+    /// are rebuilt on a different trigger: rooms change with the map, props
+    /// with what the authority has standing.
+    pub props: Vec<RoundedBox>,
 }
 
 impl CollisionWorld {
@@ -59,24 +64,27 @@ impl CollisionWorld {
 
             let mut target = centre[axis] + step;
 
-            for slab in &self.slabs {
-                // `centre` already holds the resolved value for earlier axes.
-                if !overlaps_other_axes(centre, half, slab, axis) {
-                    continue;
-                }
+            // `centre` already holds the resolved value for earlier axes.
+            let walls = self
+                .slabs
+                .iter()
+                .filter(|slab| overlaps_other_axes(centre, half, slab, axis))
+                .map(|slab| (slab.min[axis], slab.max[axis]));
+            // A rounded shape is a slab whose width depends on where the body
+            // passes it, which is what lets a body slide round a pillar.
+            let props = self.props.iter().filter_map(|prop| prop.slab_along(axis, centre, half));
 
+            for (min, max) in walls.chain(props) {
                 if step > 0.0 {
-                    let plane = slab.min[axis];
                     let leading = centre[axis] + half[axis];
-                    if leading <= plane && target + half[axis] > plane {
-                        target = target.min(plane - half[axis] - SKIN);
+                    if leading <= min && target + half[axis] > min {
+                        target = target.min(min - half[axis] - SKIN);
                         blocked = set_axis(blocked, axis, true);
                     }
                 } else {
-                    let plane = slab.max[axis];
                     let trailing = centre[axis] - half[axis];
-                    if trailing >= plane && target - half[axis] < plane {
-                        target = target.max(plane + half[axis] + SKIN);
+                    if trailing >= max && target - half[axis] < max {
+                        target = target.max(max + half[axis] + SKIN);
                         blocked = set_axis(blocked, axis, true);
                     }
                 }
@@ -97,7 +105,9 @@ impl CollisionWorld {
     /// Whether a body stands clear: in the map and touching no wall. A low
     /// ceiling is a slab the body overlaps, so this covers headroom too.
     pub fn fits(&self, centre: Vec3, half: Vec3) -> bool {
-        self.inside_map(centre) && !self.slabs.iter().any(|slab| overlaps(centre, half, slab))
+        self.inside_map(centre)
+            && !self.slabs.iter().any(|slab| overlaps(centre, half, slab))
+            && !self.props.iter().any(|prop| prop.overlaps(centre, half))
     }
 
     /// How far along the ray the first wall is, or `None` if nothing solid is
@@ -220,6 +230,31 @@ mod tests {
         assert_eq!(world.ray_distance(&ray, 2.0), None);
     }
 
+
+    #[test]
+    fn a_crate_stops_a_body_walking_into_it() {
+        let mut world = one_room();
+        world.props.push(RoundedBox { centre: Vec3::new(2.0, 0.5, 0.0), core: Vec3::splat(0.5), radius: 0.0 });
+
+        let start = Vec3::new(0.0, HALF.y + 0.01, 0.0);
+        let (end, blocked) = world.move_and_slide(start, HALF, Vec3::new(3.0, 0.0, 0.0));
+        assert!(blocked.x, "walked straight through the crate");
+        assert!((end.x - (1.5 - HALF.x)).abs() < 0.01, "stopped at {}", end.x);
+        assert!(!world.fits(Vec3::new(2.0, HALF.y, 0.0), HALF));
+    }
+
+    /// Off-centre, a pillar's round side lets a body further in than its
+    /// bounding box would.
+    #[test]
+    fn a_round_pillar_is_round() {
+        let mut world = one_room();
+        world.props.push(RoundedBox { centre: Vec3::new(2.0, 2.0, 0.0), core: Vec3::new(0.0, 2.0, 0.0), radius: 0.5 });
+
+        let head_on = world.move_and_slide(Vec3::new(0.0, HALF.y + 0.01, 0.0), HALF, Vec3::X * 3.0).0;
+        let glancing = world.move_and_slide(Vec3::new(0.0, HALF.y + 0.01, 0.8), HALF, Vec3::X * 3.0).0;
+        assert!(glancing.x > head_on.x + 0.1, "head on {} glancing {}", head_on.x, glancing.x);
+        assert!(glancing.x < 2.0, "glancing passed through the pillar");
+    }
 
     #[test]
     fn a_lone_room_is_walled_on_all_six_sides() {

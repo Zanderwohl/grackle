@@ -19,6 +19,7 @@ use crate::game::body_mesh::BodyTint;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::document::PropEditor;
 use crate::common::skeleton::play::{apply_stack, ClipStack, Frames};
+use crate::prop::archetype::{hat_transform, Archetype};
 use crate::prop::hold::{carry_frame, grip_with, weapon_transform};
 
 /// Which class is standing there, if any. View state, not part of the document.
@@ -108,6 +109,9 @@ pub fn stage_in_force(
     }
 }
 
+/// Metres to the side of a placed prop the figure stands, clear of a crate.
+const PLACED_PROP_CLEARANCE: f32 = 1.0;
+
 /// Not a team colour: the figure has no side.
 const FIGURE_TINT: Color = Color::srgb(0.34, 0.40, 0.36);
 
@@ -172,6 +176,28 @@ pub fn pose_the_figure(
         };
         if *visibility != wanted {
             *visibility = wanted;
+        }
+
+        // A hat stays at the origin and the figure stands under it, the way a
+        // weapon's does. Inverted with the hat's scale, so a class's larger
+        // hat shows as a smaller figure under the same hat.
+        if editor.doc().archetype == Archetype::Hat {
+            let fit = editor.doc().hat.for_class(choice.0);
+            let Some(hat) = hat_transform(skeleton, &Pose::rest(), &Transform::IDENTITY, &fit)
+            else {
+                continue;
+            };
+            *pose = Pose::rest();
+            *transform = Transform::from_matrix(hat.to_matrix().inverse());
+            continue;
+        }
+
+        // A placed prop stands on the floor at its origin, so the figure stands
+        // on the same floor beside it.
+        if editor.doc().archetype.is_placed() {
+            *pose = Pose::rest();
+            *transform = Transform::from_translation(Vec3::X * PLACED_PROP_CLEARANCE);
+            continue;
         }
 
         let mut standing = Pose::rest();

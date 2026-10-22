@@ -49,7 +49,7 @@ fn hit_body<T>(ray: &Ray3d, range: f32, target: T, boxes: Hitboxes) -> Option<Hi
         ray_aabb_distance(ray, hitbox.min(), hitbox.max()).filter(|distance| *distance <= range)
     };
 
-    let head = reach(boxes.head);
+    let head = boxes.head.and_then(reach);
     let body = reach(boxes.body);
 
     let (zone, entry) = match (head, body) {
@@ -88,11 +88,11 @@ mod tests {
     #[test]
     fn a_shot_through_the_head_is_a_head_shot() {
         let boxes = body(Vec3::ZERO);
-        let ray = shoot_at(Vec3::new(0.0, boxes.head.centre.y, -5.0), boxes.head.centre);
+        let ray = shoot_at(Vec3::new(0.0, boxes.head.unwrap().centre.y, -5.0), boxes.head.unwrap().centre);
 
         let hit = trace(&ray, 100.0, [((), boxes)]).expect("missed a head it was aimed at");
         assert_eq!(hit.zone, HitZone::Head);
-        assert!(boxes.head.contains(hit.point + *ray.direction * 1e-3), "{:?}", hit.point);
+        assert!(boxes.head.unwrap().contains(hit.point + *ray.direction * 1e-3), "{:?}", hit.point);
     }
 
     #[test]

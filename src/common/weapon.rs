@@ -318,6 +318,10 @@ pub struct SlotChoices {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Loadout {
     pub slots: Vec<(Slot, SlotChoices)>,
+    /// A prop under a pack's `props/`, worn on the head. A class's rather than
+    /// a player's until there are items to own one by.
+    #[serde(default)]
+    pub hat: Option<String>,
 }
 
 impl Loadout {

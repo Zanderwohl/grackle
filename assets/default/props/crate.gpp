@@ -1,0 +1,64 @@
+name_key = "prop.names.crate"
+archetype = "breakable"
+next_id = 3
+
+[[features]]
+id = 0
+name = "Box"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [0.6, 0.6, 0.6]
+
+[features.op.placement]
+origin = [0.0, 0.3, 0.0]
+rotation = [0.0, 0.0, 0.0]
+
+[features.op.surface]
+style = "wood"
+tint = [0.55, 0.38, 0.2]
+
+[[features]]
+id = 1
+name = "Band"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [0.62, 0.08, 0.62]
+
+[features.op.placement]
+origin = [0.0, 0.3, 0.0]
+rotation = [0.0, 0.0, 0.0]
+
+[features.op.surface]
+style = "wood"
+tint = [0.36, 0.24, 0.12]
+
+[[features]]
+id = 2
+name = "Crate"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "union"
+target = 0
+tool = 1
+
+[[colliders]]
+origin = [0.0, 0.3, 0.0]
+
+[colliders.shape]
+kind = "box"
+size = [0.6, 0.6, 0.6]
+
+[breakable]
+health = 75
