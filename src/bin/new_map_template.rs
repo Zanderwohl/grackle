@@ -52,7 +52,9 @@ fn main() {
     ];
     let half = corners
         .iter()
-        .fold(Vec3::ZERO, |half, corner| half.max(corner.abs()));
+        .fold(Vec3::ZERO, |half, corner| half.max(corner.abs()))
+        // Whole metres, so the corners read as typed; rounding up only adds margin.
+        .ceil();
     let room_min = Vec3::new(-half.x, 0.0, -half.z);
     let room_max = Vec3::new(half.x, ROOM_HEIGHT_M, half.z);
 

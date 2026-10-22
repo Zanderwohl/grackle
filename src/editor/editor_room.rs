@@ -196,7 +196,14 @@ impl FeatureTrait for EditorRoom {
         }
     }
 
+    /// `is_max` names a face of the sorted bounds, not a corner: a room drawn right to left has
+    /// Point 0 on its max side, so the corner written is whichever lies on that face.
     fn drag_handle(&mut self, is_max: bool, axis: u8, new_world_value: f32) -> bool {
+        if axis > 2 {
+            return false;
+        }
+        let corners_swapped = self.resolved_min[axis as usize] > self.resolved_max[axis as usize];
+        let is_max = is_max != corners_swapped;
         let point_ref = if is_max { &mut self.max } else { &mut self.min };
         let axis_ref = match axis {
             0 => &mut point_ref.x,
@@ -235,5 +242,35 @@ impl FeatureTrait for EditorRoom {
         self.available_point_keys().into_iter().filter_map(|(key, _)| {
             self.get_point(&key).ok().map(|v| (key, v))
         }).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn room(min: Vec3, max: Vec3) -> EditorRoom {
+        let mut room = EditorRoom::from_point_refs(
+            PointRef::absolute(min.x, min.y, min.z),
+            PointRef::absolute(max.x, max.y, max.z),
+        );
+        room.resolved_min = min;
+        room.resolved_max = max;
+        room
+    }
+
+    #[test]
+    fn a_handle_moves_its_own_face_whichever_corner_is_point_zero() {
+        for (p0, p1) in [
+            (Vec3::new(-2.0, 0.0, -3.0), Vec3::new(2.0, 4.0, 3.0)),
+            (Vec3::new(2.0, 4.0, 3.0), Vec3::new(-2.0, 0.0, -3.0)),
+        ] {
+            let mut room = room(p0, p1);
+            assert!(room.drag_handle(false, 2, -5.0));
+            assert!(room.drag_handle(true, 0, 6.0));
+            let (min, max) = room.drag_handle_bounds().unwrap();
+            assert_eq!(min, Vec3::new(-2.0, 0.0, -5.0), "from {p0} to {p1}");
+            assert_eq!(max, Vec3::new(6.0, 4.0, 3.0), "from {p0} to {p1}");
+        }
     }
 }
