@@ -5,8 +5,8 @@
 //! would mean two copies of the swept move and the splash.
 //!
 //! No `World` here: the step is a function of `(state, spec, dt)`, so client
-//! and server reach the same position. Gravity is passed in so the number
-//! lives only in [`crate::game::player::GRAVITY`].
+//! and server reach the same position. Gravity is passed in because it is a
+//! map's setting, [`crate::common::movement_rules::MovementRules`].
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};

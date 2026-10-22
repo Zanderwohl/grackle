@@ -1,9 +1,14 @@
 Blueprint(
     metadata: Metadata(
+        display_name: None,
         authors: [
             "anonymous",
         ],
         game_mode: "arena",
+        movement: Movement(
+            sprint: Always,
+            gravity: 20.0,
+        ),
     ),
     next_id: 6,
     features: [

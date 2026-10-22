@@ -45,6 +45,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::skeleton::rig::{humanoid, Proportions, Scratch, BONES_ON_THE_STACK};
 use crate::common::damage::falloff;
+use crate::common::movement_rules::MovementRules;
 use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
 use crate::common::team::Team;
@@ -52,7 +53,7 @@ use crate::game::body_mesh::BodyTint;
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::death::{announce_the_dead, reap_the_dead, Dying};
-use crate::game::player::{PhysicsBody, GRAVITY};
+use crate::game::player::PhysicsBody;
 use crate::game::skeleton::{skeleton_root, SkeletonRoot};
 
 /// How long a corpse lies there, in seconds of game time, so corpses do not
@@ -236,7 +237,8 @@ impl Ragdoll {
     /// Velocity is read back off where the body ended up, not written during
     /// the move. Otherwise a foot lifted out of the floor picks up an upward
     /// velocity for having been lifted.
-    pub fn step(&mut self, skeleton: &Skeleton, world: &CollisionWorld, dt: f32) {
+    /// `fall` is the vertical acceleration, negative down.
+    pub fn step(&mut self, skeleton: &Skeleton, world: &CollisionWorld, fall: f32, dt: f32) {
         self.age += dt;
         if self.asleep {
             return;
@@ -248,7 +250,7 @@ impl Ragdoll {
         }
         let mut touching = Scratch::<BVec3, POINTS_ON_THE_STACK>::new(self.points.len(), BVec3::FALSE);
 
-        let fall = Vec3::Y * GRAVITY * dt * dt;
+        let fall = Vec3::Y * fall * dt * dt;
         for (point, contact) in self.points.iter_mut().zip(touching.iter_mut()) {
             let carried = (point.at - point.previous) * (1.0 - DRAG);
             // Swept: a point thrown by an explosion can cover more than a wall's
@@ -691,9 +693,11 @@ pub fn shove_ragdolls(
 pub fn step_ragdolls(
     time: Res<Time<Fixed>>,
     world: Res<CollisionWorld>,
+    rules: Res<MovementRules>,
     mut corpses: Query<(&mut Ragdoll, &Skeleton, &mut Transform, &mut Pose)>,
 ) {
     let dt = time.delta_secs();
+    let fall = rules.fall();
     let world = &*world;
     corpses.par_iter_mut().for_each(|(mut corpse, skeleton, mut transform, mut pose)| {
         if corpse.age() >= RAGDOLL_LIFETIME {
@@ -701,7 +705,7 @@ pub fn step_ragdolls(
         }
 
         let settled = corpse.is_asleep();
-        corpse.step(skeleton, world, dt);
+        corpse.step(skeleton, world, fall, dt);
         // Writing a settled pose would dirty change detection every tick.
         if settled && corpse.is_asleep() {
             return;
@@ -747,6 +751,7 @@ mod tests {
 
     /// One fixed step at 64 Hz, in seconds.
     const DT: f32 = 1.0 / 64.0;
+    const FALL: f32 = -crate::common::movement_rules::DEFAULT_GRAVITY;
 
     fn rig() -> Skeleton {
         humanoid(Proportions::DEFAULT)
@@ -768,7 +773,7 @@ mod tests {
 
     fn run(corpse: &mut Ragdoll, skeleton: &Skeleton, world: &CollisionWorld, steps: usize) {
         for _ in 0..steps {
-            corpse.step(skeleton, world, DT);
+            corpse.step(skeleton, world, FALL, DT);
         }
     }
 
@@ -944,7 +949,7 @@ mod tests {
         corpse.shove(knee, Push::Along(Vec3::new(0.0, 4.0, -35.0)), 0.35, DT);
 
         for _ in 0..64 * 4 {
-            corpse.step(&skeleton, &world, DT);
+            corpse.step(&skeleton, &world, FALL, DT);
 
             let (_, pose) = corpse.pose(&skeleton);
             // The joint's own rotation, so this reads the bend itself.
@@ -1237,6 +1242,7 @@ mod tests {
         bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
         let mut world = World::new();
         world.init_resource::<CollisionWorld>();
+        world.init_resource::<MovementRules>();
         world.init_resource::<Messages<RagdollShove>>();
         // An unticked fixed clock would step zero time and move nothing.
         world.init_resource::<Time<Fixed>>();
@@ -1516,7 +1522,7 @@ mod tests {
                     let (head, _) = corpse.bone_points(skeleton.index_of(bone::HEAD).unwrap());
                     corpse.shove(head, Push::Outward(7.0), 0.8, DT);
                 }
-                corpse.step(&skeleton, &world, DT);
+                corpse.step(&skeleton, &world, FALL, DT);
             }
 
             for point in &corpse.points {

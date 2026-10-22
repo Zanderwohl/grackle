@@ -12,6 +12,7 @@ use bevy::prelude::info;
 use serde::{Deserialize, Serialize};
 
 use crate::common::mode::GameMode;
+use crate::common::movement_rules::MovementRules;
 use crate::constants::{MAP_BACKUP_EXTENSION, MAP_BLUEPRINT_EXTENSION};
 use crate::editor::editable::{Feature, FeatureId, FeatureTimeline};
 use crate::editor::map_metadata::MapMetadata;
@@ -25,20 +26,50 @@ pub fn map_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{}.{}", name, MAP_BLUEPRINT_EXTENSION))
 }
 
-/// Not `MapMetadata` itself, which carries the panel's text buffers.
-#[derive(Serialize, Deserialize)]
+/// The metadata as written to a blueprint and sent to clients. Not `MapMetadata` itself, which
+/// carries the panel's text buffers.
+///
+/// Fields added after the first are `default`, so a map saved before them still opens.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(rename = "Metadata")]
-struct MetadataOnDisk {
+pub struct SavedMetadata {
+    #[serde(default)]
+    display_name: Option<String>,
     authors: Vec<String>,
     /// [`GameMode::prefix`], the same short name a map file is prefixed with.
     game_mode: String,
+    #[serde(default)]
+    movement: MovementRules,
+}
+
+impl SavedMetadata {
+    pub fn of(metadata: &MapMetadata) -> Self {
+        Self {
+            display_name: metadata.display_name.clone(),
+            authors: metadata.authors.clone(),
+            game_mode: metadata.game_mode.prefix().to_owned(),
+            movement: metadata.movement,
+        }
+    }
+
+    pub fn into_metadata(self) -> MapMetadata {
+        let mut metadata = MapMetadata::default();
+        metadata.display_name = self.display_name.filter(|name| !name.trim().is_empty());
+        if !self.authors.is_empty() {
+            metadata.authors = self.authors;
+        }
+        metadata.game_mode = GameMode::try_from(self.game_mode.as_str()).unwrap_or(GameMode::Arena);
+        metadata.movement = self.movement;
+        metadata.normalize_authors_ui_text();
+        metadata
+    }
 }
 
 /// Named `Blueprint` in both directions, since RON writes struct names.
 #[derive(Serialize)]
 #[serde(rename = "Blueprint")]
 struct BlueprintOut<'a> {
-    metadata: MetadataOnDisk,
+    metadata: SavedMetadata,
     next_id: u64,
     features: Vec<&'a Feature>,
 }
@@ -46,17 +77,14 @@ struct BlueprintOut<'a> {
 #[derive(Deserialize)]
 #[serde(rename = "Blueprint")]
 struct BlueprintIn {
-    metadata: MetadataOnDisk,
+    metadata: SavedMetadata,
     next_id: u64,
     features: Vec<Feature>,
 }
 
 pub fn to_text(features: &FeatureTimeline, metadata: &MapMetadata) -> Result<String, String> {
     let blueprint = BlueprintOut {
-        metadata: MetadataOnDisk {
-            authors: metadata.authors.clone(),
-            game_mode: metadata.game_mode.prefix().to_owned(),
-        },
+        metadata: SavedMetadata::of(metadata),
         next_id: features.id_counter(),
         features: features
             .feature_order()
@@ -85,15 +113,7 @@ pub fn parse(text: &str) -> Result<LoadedBlueprint, String> {
         }
     }
 
-    let mut metadata = MapMetadata::default();
-    if !blueprint.metadata.authors.is_empty() {
-        metadata.authors = blueprint.metadata.authors;
-    }
-    metadata.game_mode =
-        GameMode::try_from(blueprint.metadata.game_mode.as_str()).unwrap_or(GameMode::Arena);
-    metadata.normalize_authors_ui_text();
-
-    Ok(LoadedBlueprint { timeline, metadata })
+    Ok(LoadedBlueprint { timeline, metadata: blueprint.metadata.into_metadata() })
 }
 
 pub fn save(path: &Path, features: &FeatureTimeline, metadata: &MapMetadata) -> Result<(), String> {
@@ -128,6 +148,7 @@ mod tests {
     use super::*;
     use bevy::prelude::Vec3;
 
+    use crate::common::movement_rules::SprintPolicy;
     use crate::common::skeleton::AnimationState;
     use crate::common::team::Team;
     use crate::editor::animation_display::AnimationDisplay;
@@ -172,22 +193,36 @@ mod tests {
         ));
 
         let mut metadata = MapMetadata::default();
+        metadata.display_name = Some("2 Fort".into());
         metadata.authors = vec!["somebody".into(), "somebody, else".into()];
         metadata.game_mode = GameMode::CTF;
+        metadata.movement = MovementRules { sprint: SprintPolicy::Enabled, gravity: 9.81 };
 
         let text = to_text(&timeline, &metadata).unwrap();
         let loaded = parse(&text).unwrap();
 
         assert_eq!(as_values(&loaded.timeline), as_values(&timeline), "{text}");
         assert_eq!(loaded.timeline.id_counter(), timeline.id_counter());
-        assert_eq!(loaded.metadata.authors, metadata.authors);
-        assert_eq!(loaded.metadata.game_mode, GameMode::CTF);
+        assert_eq!(SavedMetadata::of(&loaded.metadata), SavedMetadata::of(&metadata), "{text}");
 
         let dir = std::env::temp_dir().join("grackle-save-tests");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("round-trip.{MAP_BLUEPRINT_EXTENSION}"));
         save(&path, &timeline, &metadata).unwrap();
         assert_eq!(as_values(&load(&path).unwrap().timeline), as_values(&timeline));
+    }
+
+    #[test]
+    fn a_map_saved_before_the_newer_settings_opens_with_their_defaults() {
+        let text = r#"Blueprint(
+            metadata: Metadata(authors: ["somebody"], game_mode: "koth"),
+            next_id: 0,
+            features: [],
+        )"#;
+        let metadata = parse(text).unwrap().metadata;
+        assert_eq!(metadata.display_name, None);
+        assert_eq!(metadata.game_mode, GameMode::KOTH);
+        assert_eq!(metadata.movement, MovementRules::default());
     }
 
     #[test]

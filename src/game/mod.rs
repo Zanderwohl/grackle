@@ -3,6 +3,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::common::app_mode::{start_in_play, AppMode, StartInPlay};
 use crate::common::damage::NextPlayerId;
+use crate::common::movement_rules::MovementRules;
 use crate::common::net::NetRole;
 use crate::common::skeleton::AnimationClock;
 use crate::editor::multicam::Multicam;
@@ -73,6 +74,7 @@ impl Plugin for GamePlugin {
             )
 
             .init_resource::<CollisionWorld>()
+            .init_resource::<MovementRules>()
             .init_resource::<NextPlayerId>()
             // Owned by `SkeletonPlugin`, initialised here too because the
             // reset writes it: without that plugin the first F5 would fail.

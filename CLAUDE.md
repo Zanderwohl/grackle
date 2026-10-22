@@ -1864,6 +1864,18 @@ its shortest decimal, has `None`/`Some`, and reads as the Rust it came from.
 format is read, deliberately, and a field added to a feature is simply a field.
 Saves write through a `.bak` and restore it on failure.
 
+**Map settings** are the metadata header (`MapMetadata`, saved as
+`SavedMetadata`): a display name (`None` falls back to the file name),
+authors, game mode, and a movement section — the sprint policy (Always by
+default, which makes Shift do nothing, as does Disabled) and gravity in
+m/s². A setting added later is `#[serde(default)]`, so older maps open with
+its default. The game never reads `MapMetadata`: `publish_movement_rules` is
+the one writer of the `MovementRules` resource that `step_player`, projectiles
+and ragdolls read. Settings go to clients as their own `MetadataSnapshot` on
+`MapChannel`, not inside the map snapshot, so changing gravity does not
+rebuild everybody's map — and a predicting client stepping under different
+gravity from the server's is the rubber-banding `map_sync` exists to prevent.
+
 ## Strings
 
 Every user-visible string goes through the lang layer in

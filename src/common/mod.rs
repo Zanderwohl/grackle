@@ -34,6 +34,7 @@ pub mod cuboid;
 pub mod rect_subtract;
 pub mod rotation;
 pub mod mode;
+pub mod movement_rules;
 pub mod shortcuts;
 
 #[derive(Debug)]

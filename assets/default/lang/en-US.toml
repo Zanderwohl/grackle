@@ -111,8 +111,12 @@ title = "History"
 
 [editor.metadata]
 title = "Metadata"
+display_name = "Display name"
 game_mode = "Game mode"
 authors = "Authors"
+movement = "Movement"
+sprint = "Sprint"
+gravity = "Gravity"
 
 [editor.features.global_point]
 title = "Global Point"
@@ -274,6 +278,11 @@ plr = "Payload Race"
 koth = "King of the Hill"
 cp = "Capture Points"
 sd = "Special Delivery"
+
+[movement.sprint]
+always = "Sprint Always"
+enabled = "Sprint Enabled"
+disabled = "Sprint Disabled"
 
 [net.menu]
 title = "Multiplayer"
