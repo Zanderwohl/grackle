@@ -134,7 +134,8 @@ pub fn sync_world_props(
     mut instances: Query<(Entity, &mut WorldProp, &OfPropFeature)>,
 ) {
     for (feature, model, placed, stands) in &features {
-        let wanted = WorldProp {
+        // Built only when spawning or changing, not to compare every frame.
+        let wanted = || WorldProp {
             model: model.0.clone(),
             at: placed.translation,
             rotation: placed.rotation,
@@ -148,20 +149,21 @@ pub fn sync_world_props(
             }
             (true, None, _) => {}
             (false, None, _) => {
-                let instance = commands.spawn((wanted, OfPropFeature(feature))).id();
+                let instance = commands.spawn((wanted(), OfPropFeature(feature))).id();
                 commands.entity(feature).insert(StandsFor(instance));
             }
             // Broken this round.
             (false, Some(_), None) => {}
             (false, Some(_), Some((instance, mut prop, _))) => {
-                if prop.model != wanted.model {
+                if prop.model != model.0 {
                     // A different model is a different set of components, so
                     // a fresh instance rather than a patched one.
                     commands.entity(instance).despawn();
-                    let instance = commands.spawn((wanted, OfPropFeature(feature))).id();
+                    let instance = commands.spawn((wanted(), OfPropFeature(feature))).id();
                     commands.entity(feature).insert(StandsFor(instance));
-                } else if *prop != wanted {
-                    *prop = wanted;
+                } else if prop.at != placed.translation || prop.rotation != placed.rotation {
+                    prop.at = placed.translation;
+                    prop.rotation = placed.rotation;
                 }
             }
         }
@@ -315,13 +317,20 @@ fn triggers(baked: &BakedProp, at: &Transform) -> Vec<RoundedBox> {
 }
 
 /// A breakable is shot as the box around its colliders, and has no head.
-/// Every machine works this out, since a client draws hitboxes too.
+/// Every machine works this out, since a client draws hitboxes too. A prop
+/// that stops being breakable loses them, or shots would go on stopping at it.
 fn box_breakables(
     mut commands: Commands,
     cache: Res<PropCache>,
-    instances: Query<(Entity, &WorldProp, Option<&Hitboxes>), With<Damageable>>,
+    instances: Query<(Entity, &WorldProp, Option<&Hitboxes>, Has<Damageable>)>,
 ) {
-    for (entity, prop, boxes) in &instances {
+    for (entity, prop, boxes, breakable) in &instances {
+        if !breakable {
+            if boxes.is_some() {
+                commands.entity(entity).remove::<Hitboxes>();
+            }
+            continue;
+        }
         let Some(baked) = cache.get(&prop.model) else { continue };
         let Some(body) = bounding(placed_colliders(baked, &prop.transform())) else { continue };
         let wanted = Hitboxes { body, head: None };
@@ -452,18 +461,27 @@ fn give(
     }
 }
 
-/// Despawn every instance and forget which broke, so the next frame stands
-/// each one back up fresh.
+/// Mend what is standing in place and forget which broke, so the next frame
+/// stands those back up. Mended rather than respawned, so the props a body is
+/// spawned against are never all missing at once.
 fn stand_everything_back_up(
     mut commands: Commands,
-    features: Query<Entity, With<StandsFor>>,
-    instances: Query<Entity, With<WorldProp>>,
+    features: Query<(Entity, &StandsFor)>,
+    mut instances: Query<(Entity, Option<&mut Damageable>, Option<&mut Pickup>), With<WorldProp>>,
 ) {
-    for feature in &features {
-        commands.entity(feature).remove::<StandsFor>();
+    for (feature, stands) in &features {
+        if instances.get(stands.0).is_err() {
+            commands.entity(feature).remove::<StandsFor>();
+        }
     }
-    for instance in &instances {
-        commands.entity(instance).despawn();
+    for (instance, health, pickup) in &mut instances {
+        if let Some(mut health) = health {
+            health.restore();
+        }
+        if let Some(mut pickup) = pickup {
+            pickup.taken = false;
+            commands.entity(instance).remove::<Restock>();
+        }
     }
 }
 
@@ -528,6 +546,25 @@ mod tests {
         world.run_system_once(stand_everything_back_up).unwrap();
         world.run_system_once(sync_world_props).unwrap();
         assert_eq!(instances(&mut world).len(), 1, "a new round did not bring it back");
+    }
+
+    /// Fails if a new round respawns what is still standing, which leaves a
+    /// frame with no props for a body to be spawned against.
+    #[test]
+    fn a_new_round_mends_what_is_standing_in_place() {
+        let mut world = World::new();
+        feature(&mut world, "crate", Vec3::X);
+        world.run_system_once(sync_world_props).unwrap();
+        let instance = world.query_filtered::<Entity, With<WorldProp>>().single(&world).unwrap();
+        let mut health = Damageable::with_health(50);
+        health.apply(30);
+        world.entity_mut(instance).insert(health);
+
+        world.run_system_once(stand_everything_back_up).unwrap();
+        world.run_system_once(sync_world_props).unwrap();
+        let standing = world.query_filtered::<Entity, With<WorldProp>>().single(&world).unwrap();
+        assert_eq!(standing, instance, "a standing crate was respawned");
+        assert!(world.get::<Damageable>(instance).unwrap().is_full(), "the crate was not mended");
     }
 
     fn app_with_assets() -> App {

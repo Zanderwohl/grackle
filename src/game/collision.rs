@@ -131,8 +131,9 @@ impl CollisionWorld {
             .min_by(|a, b| a.0.total_cmp(&b.0))
     }
 
-    /// Shove a body that is already inside a wall back out of it, for when
-    /// the world moves instead (a floor raised mid-match).
+    /// Shove a body that is already inside a wall or a solid prop back out of
+    /// it, for when the world moves instead (a floor raised mid-match, a crate
+    /// dragged or stood back up onto somebody).
     ///
     /// Escapes that land inside a room beat shorter ones that do not; least
     /// depth alone pushes a body under a raised floor down through the map.
@@ -145,16 +146,12 @@ impl CollisionWorld {
         // Clearing one wall can bury the body in another. Bounded, for a body
         // wedged with nowhere to go.
         for _ in 0..4 {
-            let Some(slab) = self.slabs.iter().find(|slab| overlaps(centre, half, slab)) else {
-                break;
-            };
+            let Some(extent) = self.first_overlap(centre, half) else { break };
 
             let mut best: Option<(f32, Vec3)> = None;
             for axis in 0..3 {
-                let candidates = [
-                    slab.max[axis] + half[axis] + SKIN,
-                    slab.min[axis] - half[axis] - SKIN,
-                ];
+                let (min, max) = extent[axis];
+                let candidates = [max + half[axis] + SKIN, min - half[axis] - SKIN];
                 for value in candidates {
                     let mut moved = centre;
                     moved[axis] = value;
@@ -176,6 +173,18 @@ impl CollisionWorld {
         }
 
         centre
+    }
+
+    /// The first wall or solid prop the box is inside, as its `(min, max)` on
+    /// each axis. A rounded prop's extent on an axis is the one the body would
+    /// meet moving along it from where it is.
+    fn first_overlap(&self, centre: Vec3, half: Vec3) -> Option<[(f32, f32); 3]> {
+        if let Some(slab) = self.slabs.iter().find(|slab| overlaps(centre, half, slab)) {
+            return Some([0, 1, 2].map(|axis| (slab.min[axis], slab.max[axis])));
+        }
+        let prop = self.props.iter().find(|prop| prop.overlaps(centre, half))?;
+        let along = |axis: usize| prop.slab_along(axis, centre, half);
+        Some([along(0)?, along(1)?, along(2)?])
     }
 }
 
@@ -241,6 +250,18 @@ mod tests {
         assert!(blocked.x, "walked straight through the crate");
         assert!((end.x - (1.5 - HALF.x)).abs() < 0.01, "stopped at {}", end.x);
         assert!(!world.fits(Vec3::new(2.0, HALF.y, 0.0), HALF));
+    }
+
+    /// Fails if a crate that lands on a body leaves it inside, where
+    /// `move_and_slide` lets it walk out through the far side.
+    #[test]
+    fn a_body_inside_a_crate_is_pushed_out_of_it() {
+        let mut world = one_room();
+        world.props.push(RoundedBox { centre: Vec3::new(0.2, 0.5, 0.0), core: Vec3::splat(0.5), radius: 0.0 });
+
+        let inside = Vec3::new(0.0, HALF.y + 0.01, 0.0);
+        let out = world.depenetrate(inside, HALF);
+        assert!(world.fits(out, HALF), "still inside the crate at {out}");
     }
 
     /// Off-centre, a pillar's round side lets a body further in than its

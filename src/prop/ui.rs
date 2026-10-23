@@ -10,6 +10,7 @@
 //! as a change every frame. The gesture closes when the pointer and the
 //! keyboard are both idle, so typing a name is one undo step.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -26,7 +27,7 @@ use crate::common::file_menu::{file_menu, FileAction};
 use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
-use crate::prop::archetype::{Archetype, Collider, ColliderShape, HatOverride, PickupKind};
+use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind};
 use crate::prop::document::{self, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::common::class::Class;
 use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
@@ -35,7 +36,6 @@ use crate::prop::feature::{Axis, BooleanOp, FeatureOp, PatternKind, PropFeatureI
 use crate::prop::figure::ScaleFigure;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::gizmo::HoldHandles;
-use crate::prop::hold::HoldOverride;
 use crate::prop::profile::{Placement, Profile, MIN_SIDES};
 use crate::prop::solid::Shape;
 use crate::prop::surface::{Style, Surface};
@@ -1193,7 +1193,7 @@ fn archetype_sections(ui: &mut Ui, editor: &mut PropEditor) {
     if archetype == Archetype::Pickup {
         section(ui, "pickup", get!("prop.inspector.sections.pickup"), |ui| pickup_ui(ui, editor));
     }
-    if archetype.uses_colliders() {
+    if archetype.is_placed() {
         section(ui, "colliders", get!("prop.inspector.sections.colliders"), |ui| {
             colliders_ui(ui, editor)
         });
@@ -1214,14 +1214,19 @@ fn pickup_ui(ui: &mut Ui, editor: &mut PropEditor) {
             });
     });
     let mut percent = pickup.amount * 100.0;
-    changed |= ui
+    // Written back only when dragged: through `* 100 / 100` an `f32` need not
+    // come back as itself, and the file would gain digits nobody typed.
+    if ui
         .horizontal(|ui| {
             ui.label(get!("prop.pickup.amount"));
             ui.add(egui::DragValue::new(&mut percent).speed(1.0).range(0.0..=100.0).suffix("%"))
                 .changed()
         })
-        .inner;
-    pickup.amount = percent / 100.0;
+        .inner
+    {
+        pickup.amount = percent / 100.0;
+        changed = true;
+    }
     changed |= ui
         .horizontal(|ui| {
             ui.label(get!("prop.pickup.respawn"));
@@ -1312,25 +1317,10 @@ fn hat_fit(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure) {
     let mut changed = false;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
-        if let (Some(key), Some(class)) = (&key, figure.0) {
-            section(ui, "hat_class", class.name(), |ui| {
-                let mut on = overriding;
-                if ui
-                    .checkbox(&mut on, get!("prop.hold.override_for", "class", class.name()))
-                    .changed()
-                {
-                    let mut hat = base.clone();
-                    match on {
-                        true => {
-                            hat.per_class.insert(key.clone(), HatOverride::default());
-                        }
-                        false => {
-                            hat.per_class.remove(key);
-                        }
-                    }
-                    editor.edit(|doc| doc.hat = hat);
-                }
-            });
+        if let Some(class) = figure.0
+            && let Some(per_class) = override_toggle(ui, "hat_class", class, &base.per_class)
+        {
+            editor.edit(|doc| doc.hat.per_class = per_class);
         }
         section(ui, "hat_fit", get!("prop.hat.on_the_head"), |ui| {
             changed |= vec3_ui(ui, get!("prop.inspector.offset"), &mut edited.offset, 0.001, "m");
@@ -1387,8 +1377,6 @@ fn hold(
     preview: &mut ViewmodelPreview,
 ) {
     let base = editor.doc().hold.clone();
-    let key = figure.0.map(Class::key);
-    let overriding = key.as_ref().is_some_and(|key| base.per_class.contains_key(key));
 
     let mut changed = false;
     let mut edited = base.for_class(figure.0);
@@ -1397,25 +1385,10 @@ fn hold(
     let mut view_changed = false;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
-        if let (Some(key), Some(class)) = (&key, figure.0) {
-            section(ui, "hold_class", class.name(), |ui| {
-                let mut on = overriding;
-                if ui
-                    .checkbox(&mut on, get!("prop.hold.override_for", "class", class.name()))
-                    .changed()
-                {
-                    let mut doc_hold = base.clone();
-                    match on {
-                        true => {
-                            doc_hold.per_class.insert(key.clone(), HoldOverride::default());
-                        }
-                        false => {
-                            doc_hold.per_class.remove(key);
-                        }
-                    }
-                    editor.edit(|doc| doc.hold = doc_hold);
-                }
-            });
+        if let Some(class) = figure.0
+            && let Some(per_class) = override_toggle(ui, "hold_class", class, &base.per_class)
+        {
+            editor.edit(|doc| doc.hold.per_class = per_class);
         }
 
         section(ui, "hold_grip", get!("prop.hold.grip"), |ui| {
@@ -1489,6 +1462,34 @@ fn hold(
     editor.begin_gesture();
     let applied = base.applied(figure.0, &edited);
     editor.doc_mut().hold = applied;
+}
+
+/// The "override for this class" checkbox the Hold and Hat panels share. The
+/// per-class map to write back, when it was ticked or unticked.
+fn override_toggle<T: Default + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    class: Class,
+    per_class: &BTreeMap<String, T>,
+) -> Option<BTreeMap<String, T>> {
+    let key = Class::key(class);
+    let mut toggled = None;
+    section(ui, id, class.name(), |ui| {
+        let mut on = per_class.contains_key(&key);
+        if ui.checkbox(&mut on, get!("prop.hold.override_for", "class", class.name())).changed() {
+            let mut per_class = per_class.clone();
+            match on {
+                true => {
+                    per_class.insert(key.clone(), T::default());
+                }
+                false => {
+                    per_class.remove(&key);
+                }
+            }
+            toggled = Some(per_class);
+        }
+    });
+    toggled
 }
 
 fn degrees_ui(ui: &mut Ui, label: String, radians: &mut [f32; 3]) -> bool {

@@ -121,7 +121,7 @@ impl Plugin for PropGizmoPlugin {
 /// authored apart from the geometry.
 fn draw_colliders(editor: Res<PropEditor>, mut gizmos: Gizmos) {
     let doc = editor.doc();
-    if !doc.archetype.uses_colliders() {
+    if !doc.archetype.is_placed() {
         return;
     }
     let colour = match doc.archetype.blocks() {

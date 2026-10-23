@@ -25,6 +25,8 @@ pub struct HatPart;
 #[derive(Component)]
 pub struct WornHat {
     model: Option<String>,
+    /// The fit is per class, so a body re-rigged as another is re-fitted.
+    class: Class,
     cached_at: u64,
     parts: Vec<Entity>,
     fit: HatFit,
@@ -60,6 +62,7 @@ fn dress_hats(
         let wanted = catalogue.loadout(*class).and_then(|loadout| loadout.hat.clone());
         if let Some(worn) = worn
             && worn.model == wanted
+            && worn.class == *class
             && worn.cached_at == cache.generation()
         {
             continue;
@@ -102,6 +105,7 @@ fn dress_hats(
         }
         commands.entity(body).insert(WornHat {
             model: wanted,
+            class: *class,
             cached_at: cache.generation(),
             parts,
             fit,

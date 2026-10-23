@@ -45,7 +45,7 @@ impl Archetype {
         }
     }
 
-    /// Placed in a map, as against carried by a body.
+    /// Placed in a map, as against carried by a body. What has colliders.
     pub fn is_placed(self) -> bool {
         matches!(self, Archetype::Obstacle | Archetype::Breakable | Archetype::Pickup)
     }
@@ -53,10 +53,6 @@ impl Archetype {
     /// Whether its colliders block movement. A pickup's are only a trigger.
     pub fn blocks(self) -> bool {
         matches!(self, Archetype::Obstacle | Archetype::Breakable)
-    }
-
-    pub fn uses_colliders(self) -> bool {
-        self.is_placed()
     }
 }
 

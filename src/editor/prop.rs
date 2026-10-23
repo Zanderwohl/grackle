@@ -96,19 +96,16 @@ impl FeatureTrait for Prop {
         let rotation = quat_from_euler(self.rotation);
         let teal = Color::srgb_u8(90, 220, 200);
 
+        let centre = self.box_centre();
         gizmos.cube(
-            Transform::from_translation(self.resolved_location)
+            Transform::from_translation(centre)
                 .with_rotation(rotation)
                 .with_scale(Vec3::splat(PROP_SIZE)),
             teal,
         );
 
         let front = rotation * Vec3::NEG_Z;
-        gizmos.arrow(
-            self.resolved_location,
-            self.resolved_location + front * PROP_SIZE,
-            teal,
-        );
+        gizmos.arrow(centre, centre + front * PROP_SIZE, teal);
 
         self.location.debug_gizmos(self.resolved_location, gizmos);
     }
@@ -148,10 +145,11 @@ impl FeatureTrait for Prop {
         vec![("".into(), self.resolved_location)]
     }
 
-    /// The placeholder cube [`crate::tool::prop`] puts on the entity.
+    /// The placeholder cube [`crate::tool::prop`] puts on the entity, or one
+    /// the same size standing where a model does.
     fn pick_boxes(&self) -> Vec<crate::common::ray::PickBox> {
         vec![crate::common::ray::PickBox {
-            centre: self.resolved_location,
+            centre: self.box_centre(),
             rotation: quat_from_euler(self.rotation),
             half_extents: Vec3::splat(PROP_SIZE * 0.5),
         }]
@@ -224,6 +222,18 @@ impl Prop {
     pub fn with_rotation(mut self, rotation: Vec3) -> Self {
         self.rotation = rotation;
         self
+    }
+
+    /// The stand-in cube is centred on the point; a model stands on it, so its
+    /// box is lifted to sit on the floor the model does.
+    fn box_centre(&self) -> Vec3 {
+        match self.model.is_empty() {
+            true => self.resolved_location,
+            false => {
+                self.resolved_location
+                    + quat_from_euler(self.rotation) * Vec3::Y * (PROP_SIZE * 0.5)
+            }
+        }
     }
 
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
