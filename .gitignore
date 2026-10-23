@@ -1,4 +1,6 @@
 /target
 /.idea
+# Somebody's own unsorted work; see `USER_PACK`.
+/assets/user/
 
 .DS_Store

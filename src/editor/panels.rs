@@ -197,6 +197,7 @@ impl Plugin for EditorPanelPlugin {
             .init_resource::<EditorPanels>()
             .init_resource::<CurrentFilePath>()
             .add_systems(Startup, EditorPanels::set_multicam_size)
+            .add_systems(Startup, crate::common::assets::create_the_user_pack)
             .add_systems(EguiPrimaryContextPass, EditorPanels::ui.run_if(in_state(AppMode::Editor)))
             // Before the panel, so a chord is answered this frame.
             .add_systems(Update, file_shortcuts.run_if(in_state(AppMode::Editor)))

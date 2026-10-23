@@ -93,14 +93,21 @@ pub fn file_menu(ui: &mut egui::Ui, request: &mut Option<FileAction>) {
     });
 }
 
-/// Where a file dialog opens: beside the file being edited, or else the
-/// highest-priority pack's `subdir`, so a fresh document is saved into the pack
-/// rather than wherever the OS last looked. Absolute, because a native dialog
-/// handed a relative path can ignore it. `None` when neither exists.
+/// Where a file dialog opens: beside the file being edited, or else the user
+/// pack's `subdir`, so new work lands in the user pack rather than wherever
+/// the OS last looked. Absolute, because a native dialog handed a relative path
+/// can ignore it. `None` when neither can be found or made.
 pub fn dialog_directory(current: Option<&Path>, subdir: &str) -> Option<PathBuf> {
     let beside = current.and_then(Path::parent).filter(|dir| !dir.as_os_str().is_empty());
-    let pack = || crate::common::assets::default_packs().pop().map(|pack| pack.join(subdir));
-    let directory = beside.map(Path::to_path_buf).or_else(pack)?;
+    let directory = match beside {
+        Some(beside) => beside.to_path_buf(),
+        None => {
+            let fresh = Path::new(crate::common::assets::USER_PACK).join(subdir);
+            // Made at startup too; again here in case it was deleted since.
+            std::fs::create_dir_all(&fresh).ok()?;
+            fresh
+        }
+    };
     std::path::absolute(&directory).ok().filter(|dir| dir.is_dir())
 }
 
@@ -155,19 +162,17 @@ mod tests {
     }
 
     #[test]
-    fn a_dialog_opens_in_the_pack_until_there_is_a_file() {
+    fn a_dialog_opens_in_the_user_pack_until_there_is_a_file() {
         // Not run from the repo root.
-        if !Path::new("assets/default/props").is_dir() {
+        if !Path::new("assets/default").is_dir() {
             return;
         }
-        let fresh = dialog_directory(None, "props").expect("the pack has a props folder");
+        let fresh = dialog_directory(None, "props").expect("the user pack's props folder");
         assert!(fresh.is_absolute(), "{fresh:?}");
-        assert!(fresh.ends_with("assets/default/props"), "{fresh:?}");
+        assert!(fresh.ends_with("assets/user/props"), "{fresh:?}");
 
         let beside = dialog_directory(Some(Path::new("assets/default/blueprints/new.gmb")), "props");
         assert!(beside.unwrap().ends_with("assets/default/blueprints"), "did not open beside the file");
-
-        assert_eq!(dialog_directory(None, "no-such-folder"), None);
     }
 
     /// A `Some` here would be a save every frame.
