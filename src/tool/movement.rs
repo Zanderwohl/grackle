@@ -38,9 +38,12 @@ impl MovementPlugin {
             Self::set_cursor(&mut *cursor_options, CursorGrabMode::None, true);
             return;
         };
-        if mouse_input.pressed != Some(MouseButton::Right) {
-            return;
-        }
+        // Middle always pans; right turns, or pans with the modifier held.
+        let pan = match mouse_input.pressed {
+            Some(MouseButton::Right) => keyboard_input.modify,
+            Some(MouseButton::Middle) => true,
+            _ => return,
+        };
 
         Self::set_cursor(&mut *cursor_options, CursorGrabMode::Locked, false);
 
@@ -53,7 +56,7 @@ impl MovementPlugin {
         // `Projection` changed.
         match &*projection {
             Projection::Perspective(_) => {
-                Self::perspective_move(&mut transform, delta, &settings, &keyboard_input);
+                Self::perspective_move(&mut transform, delta, pan, &settings, &keyboard_input);
 
                 transform.translation += forward * settings.perspective_scroll * scroll;
             }
@@ -84,8 +87,8 @@ impl MovementPlugin {
         }
     }
 
-    fn perspective_move(transform: &mut Mut<Transform>, delta: Vec2, movement_settings: &Res<MovementSettings>, keyboard_input: &Res<CurrentKeyboardInput>) {
-        if keyboard_input.modify {
+    fn perspective_move(transform: &mut Mut<Transform>, delta: Vec2, pan: bool, movement_settings: &Res<MovementSettings>, keyboard_input: &Res<CurrentKeyboardInput>) {
+        if pan {
             let pan_scaled_x = delta.x * movement_settings.perspective_pan;
             let pan_scaled_y = delta.y * movement_settings.perspective_pan;
 
@@ -269,6 +272,29 @@ mod tests {
         // Holding the drag is not a second grab.
         schedule.run(&mut world);
         assert!(!world.resource::<CursorChanged>().0);
+    }
+
+    fn drag_with(button: MouseButton) -> Transform {
+        let (mut world, mut schedule, camera) = setup();
+        {
+            let mut mouse = world.resource_mut::<CurrentMouseInput>();
+            mouse.started_in_camera = Some(camera);
+            mouse.pressed = Some(button);
+            mouse.delta_pos = Vec2::new(3.0, 2.0);
+        }
+        schedule.run(&mut world);
+        *world.get::<Transform>(camera).unwrap()
+    }
+
+    /// Fails if a middle drag turns the free camera instead of panning it.
+    #[test]
+    fn a_middle_drag_pans_the_perspective_view() {
+        let moved = drag_with(MouseButton::Middle);
+        assert_eq!(moved.rotation, Quat::IDENTITY);
+        assert_ne!(moved.translation, Vec3::ZERO);
+
+        let turned = drag_with(MouseButton::Right);
+        assert_ne!(turned.rotation, Quat::IDENTITY);
     }
 
     #[test]

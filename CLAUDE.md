@@ -465,7 +465,8 @@ ones the moment anybody left the mode.
 
 **Getting around** ([`camera.rs`](src/prop/camera.rs)) reuses the four
 viewports and deliberately *not* the map editor's movement. The gesture is the
-same — **right button drags, the modifier key turns a rotate into a pan** — so
+same — **right button drags, the modifier key turns a rotate into a pan, and
+the middle button always pans** (in an ortho view both buttons pan) — so
 a mapper who has learnt one has learnt the other, but three things differ
 because a prop is not a map:
 
