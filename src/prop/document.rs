@@ -16,7 +16,7 @@ use crate::common::skeleton::clip::ClipSet;
 use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Evaluated, FeatureOp, PropFeature, PropFeatureId};
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
-use crate::prop::hold::{HoldSpec, ViewmodelSpec};
+use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
 
 /// Grackle Prop: TOML, one prop per file.
 pub const PROP_EXTENSION: &str = "gpp";
@@ -39,6 +39,9 @@ pub struct PropDoc {
     /// First-person framing; not the same as [`HoldSpec`]'s carry.
     #[serde(default)]
     pub viewmodel: ViewmodelSpec,
+    /// Absent: shots are drawn from where they really leave, the eye.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muzzle: Option<MuzzleSpec>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub archetype: Archetype,
     /// What a placed prop collides as, or is picked up by. Authored apart from
@@ -72,6 +75,7 @@ impl PropDoc {
             features: vec![],
             hold: HoldSpec::default(),
             viewmodel: ViewmodelSpec::default(),
+            muzzle: None,
             archetype: Archetype::default(),
             colliders: vec![],
             breakable: BreakableSpec::default(),

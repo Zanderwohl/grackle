@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use crate::common::skeleton::clip::{Clip, ClipSet};
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
-use crate::prop::hold::{HoldSpec, ViewmodelSpec};
+use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
 use crate::prop::surface::Surface;
 
 /// Materials cached per surface for the life of the process, since a drag
@@ -53,6 +53,7 @@ pub struct BakedProp {
     pub parts: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     pub hold: HoldSpec,
     pub viewmodel: ViewmodelSpec,
+    pub muzzle: Option<MuzzleSpec>,
     /// Handles, as `parts` are: a re-bake of the same name refills the same
     /// handle, so a body mid-deploy plays the saved clip on its next frame.
     pub clips: BTreeMap<String, Handle<Clip>>,
@@ -215,6 +216,7 @@ fn bake_doc(
         parts,
         hold: doc.hold.clone(),
         viewmodel: doc.viewmodel,
+        muzzle: doc.muzzle,
         clips,
         archetype: doc.archetype,
         colliders: doc.colliders.clone(),

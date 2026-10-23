@@ -26,13 +26,13 @@ use crate::common::team::Team;
 use crate::common::weapon::WeaponId;
 use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
 use crate::game::held::{HeldModel, HeldPart};
-use crate::game::player::{LocalPlayer, PlayerCamera, ViewMode, PLAY_CAMERA_ORDER};
-use crate::prop::hold::grip_with;
+use crate::game::player::{place_camera, LocalPlayer, PlayerCamera, ViewMode, PLAY_CAMERA_ORDER};
+use crate::prop::hold::{grip_with, ViewmodelSpec};
 
 pub const VIEWMODEL_LAYER: usize = crate::common::render_layers::VIEWMODEL;
 
-/// Drawn over the play camera, under the 2D UI camera at `isize::MAX`.
-const VIEWMODEL_CAMERA_ORDER: isize = PLAY_CAMERA_ORDER + 1;
+/// Drawn over the play camera, under the HUD camera.
+pub const VIEWMODEL_CAMERA_ORDER: isize = PLAY_CAMERA_ORDER + 1;
 
 /// Close enough that a weapon at arm's length never crosses it. `pub` so the
 /// prop editor's viewmodel preview matches it.
@@ -101,11 +101,31 @@ struct ArmsKey {
     aspect: u32,
 }
 
+/// Where this machine's shots appear to leave, in world space: the held
+/// model's muzzle where the viewmodel draws it. `None` in third person, or
+/// holding something with no muzzle. Display only; every shot really leaves
+/// the eye.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq)]
+pub struct ApparentMuzzle(pub Option<Vec3>);
+
 pub struct ViewmodelPlugin;
 
 impl Plugin for ViewmodelPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.init_resource::<ApparentMuzzle>()
+            // Straight after the view is aimed, so a shot dressed this frame
+            // starts from where the barrel is drawn this frame.
+            .add_systems(
+                RunFixedMainLoop,
+                find_the_apparent_muzzle
+                    .after(place_camera)
+                    .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
+                    .run_if(in_state(AppMode::Play)),
+            )
+            .add_systems(OnExit(AppMode::Play), |mut muzzle: ResMut<ApparentMuzzle>| {
+                muzzle.0 = None;
+            })
+            .add_systems(
             Update,
             (
                 give_the_view_its_own_camera,
@@ -227,6 +247,46 @@ fn place_the_viewmodel(
             transform.set_if_neq(placed);
         }
     }
+}
+
+/// `muzzle` in the play camera's frame. The two cameras share a frame but not a
+/// field of view, so the point the viewmodel draws is moved to where the play
+/// camera sees the same pixel, at the same depth.
+pub fn muzzle_in_view(
+    spec: &ViewmodelSpec,
+    muzzle: Vec3,
+    viewmodel_fov: f32,
+    play_fov: f32,
+    aspect: f32,
+) -> Vec3 {
+    let drawn = spec.transform(viewmodel_fov, aspect).transform_point(muzzle);
+    let widen = (play_fov / 2.0).tan() / (viewmodel_fov / 2.0).tan();
+    Vec3::new(drawn.x * widen, drawn.y * widen, drawn.z)
+}
+
+pub fn find_the_apparent_muzzle(
+    view: Res<ViewMode>,
+    held: Query<&HeldModel, With<LocalPlayer>>,
+    viewmodels: Query<(&Camera, &Projection), With<ViewmodelCamera>>,
+    plays: Query<(&Transform, &Projection), With<PlayerCamera>>,
+    mut apparent: ResMut<ApparentMuzzle>,
+) {
+    let found = || {
+        if view.shows_own_body() {
+            return None;
+        }
+        let held = held.single().ok()?;
+        let muzzle = held.muzzle()?;
+        let (camera, Projection::Perspective(viewmodel)) = viewmodels.single().ok()? else {
+            return None;
+        };
+        let (eye, Projection::Perspective(play)) = plays.single().ok()? else { return None };
+        let size = camera.logical_viewport_size().filter(|size| size.y > 0.0)?;
+        let seen =
+            muzzle_in_view(&held.viewmodel(), muzzle, viewmodel.fov, play.fov, size.x / size.y);
+        Some(eye.transform_point(seen))
+    };
+    apparent.set_if_neq(ApparentMuzzle(found()));
 }
 
 /// The body's own meshes and material, so your hands are your team's colour
@@ -534,11 +594,40 @@ mod tests {
         assert_eq!(cameras.iter(&world).count(), 1, "a camera per frame");
     }
 
+    /// Breaks if a shot's apparent start drifts off the barrel as the
+    /// play camera's field of view differs from the viewmodel's.
+    #[test]
+    fn the_apparent_muzzle_is_on_the_pixel_the_barrel_is_drawn_at() {
+        let spec = crate::prop::hold::ViewmodelSpec {
+            across: [0.6, -0.5],
+            depth: 0.4,
+            rotation: [0.1, 0.3, 0.0],
+        };
+        let muzzle = Vec3::new(0.0, 0.05, -0.5);
+        let play_fov = std::f32::consts::FRAC_PI_2;
+
+        for aspect in [4.0 / 3.0, 16.0 / 9.0, 32.0 / 9.0] {
+            let on_screen = |point: Vec3, fov: f32| {
+                let half = (fov / 2.0).tan();
+                Vec2::new(point.x / (-point.z * half * aspect), point.y / (-point.z * half))
+            };
+            let drawn = spec.transform(VIEWMODEL_FOV, aspect).transform_point(muzzle);
+            let seen = muzzle_in_view(&spec, muzzle, VIEWMODEL_FOV, play_fov, aspect);
+
+            let (want, got) = (on_screen(drawn, VIEWMODEL_FOV), on_screen(seen, play_fov));
+            assert!(want.abs_diff_eq(got, 1e-5), "drawn at {want}, seen at {got}");
+            assert_eq!(seen.z, drawn.z, "the depth moved");
+        }
+    }
+
     /// Drawn over the world and under the UI.
     #[test]
     fn it_sits_between_the_world_and_the_interface() {
         assert!(VIEWMODEL_CAMERA_ORDER > PLAY_CAMERA_ORDER, "the viewmodel draws under the world");
-        assert!(VIEWMODEL_CAMERA_ORDER < isize::MAX, "the viewmodel draws over the interface");
+        assert!(
+            VIEWMODEL_CAMERA_ORDER < crate::game::hud::HUD_CAMERA_ORDER,
+            "the viewmodel draws over the HUD",
+        );
     }
 
     /// The body's carry put the grip off the bottom of the screen; the default

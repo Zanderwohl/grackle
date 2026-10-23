@@ -7,6 +7,8 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::common::damage::PlayerId;
+
 /// Pure geometry, no entities: nothing to map across the wire, and still
 /// drawable after its target is despawned.
 #[derive(Message, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -14,8 +16,10 @@ pub enum Effect {
     Tracer {
         from: Vec3,
         to: Vec3,
-            /// Stopped on a body rather than the world.
+        /// Stopped on a body rather than the world.
         hit: bool,
+        /// So the shooter's own machine can draw it from the barrel.
+        by: Option<PlayerId>,
     },
     Blast { at: Vec3, radius: f32 },
 }

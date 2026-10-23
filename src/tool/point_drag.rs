@@ -164,6 +164,7 @@ impl PointDragState {
                 PointDragArrowPart { axis },
                 Mesh3d(shaft.clone()),
                 MeshMaterial3d(mat.clone()),
+                crate::editor::multicam::editor_only(),
                 Transform::from_translation(Vec3::new(0.0, 0.375, 0.0)),
             )).id();
 
@@ -171,6 +172,7 @@ impl PointDragState {
                 PointDragArrowPart { axis },
                 Mesh3d(head.clone()),
                 MeshMaterial3d(mat.clone()),
+                crate::editor::multicam::editor_only(),
                 Transform::from_translation(Vec3::new(0.0, 0.875, 0.0)),
             )).id();
 

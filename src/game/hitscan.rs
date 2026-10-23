@@ -19,7 +19,8 @@ use crate::common::hitscan::{trace, Hit, HitZone};
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::hitbox::update_hitboxes;
-use crate::game::player::{step_player, PhysicsBody, Player};
+use crate::game::player::{step_player, LocalPlayer, PhysicsBody, Player};
+use crate::game::viewmodel::ApparentMuzzle;
 use crate::game::ragdoll::{Push, RagdollShove};
 use crate::common::weapon::{HitscanSpec, WeaponAction};
 use crate::game::weapon::WeaponActionFired;
@@ -129,6 +130,7 @@ pub fn fire_hitscan(
             from: ray.origin,
             to: hit.map_or(ray.origin + *ray.direction * range, |hit| hit.point),
             hit: hit.is_some(),
+            by: id.copied(),
         });
 
         let Some(hit) = hit else { continue };
@@ -163,9 +165,23 @@ pub struct Tracer {
     remaining: f32,
 }
 
-fn mark_tracers(mut commands: Commands, mut effects: MessageReader<Effect>) {
+/// Our own shot starts at the barrel in first person rather than at the eye,
+/// where it is a dot on the crosshair. For its whole life, unlike a
+/// projectile's: it is gone before an ease would show.
+fn mark_tracers(
+    mut commands: Commands,
+    mut effects: MessageReader<Effect>,
+    muzzle: Option<Res<ApparentMuzzle>>,
+    us: Query<&PlayerId, With<LocalPlayer>>,
+) {
+    let barrel = muzzle.and_then(|muzzle| muzzle.0);
+    let us = us.single().ok().copied();
     for effect in effects.read() {
-        let Effect::Tracer { from, to, hit } = *effect else { continue };
+        let Effect::Tracer { from, to, hit, by } = *effect else { continue };
+        let from = match barrel {
+            Some(barrel) if by.is_some() && by == us => barrel,
+            _ => from,
+        };
         commands.spawn((
             Tracer { from, to, hit, remaining: TRACER_LIFETIME },
             Name::new("Tracer"),
@@ -336,13 +352,34 @@ mod tests {
         assert!(matches!(effects[0], Effect::Tracer { .. }));
     }
 
+    /// Breaks if our tracer starts at the eye (a dot on the crosshair in first
+    /// person) or if somebody else's is moved to our barrel.
+    #[test]
+    fn our_tracer_leaves_the_barrel_and_nobody_elses_does() {
+        let barrel = Vec3::new(0.3, -0.2, -0.6);
+        let mut world = World::new();
+        world.init_resource::<Messages<Effect>>();
+        world.insert_resource(crate::game::viewmodel::ApparentMuzzle(Some(barrel)));
+        world.spawn((LocalPlayer, PlayerId(1)));
+        for by in [Some(PlayerId(1)), Some(PlayerId(2)), None] {
+            world.write_message(Effect::Tracer { from: Vec3::ZERO, to: Vec3::NEG_Z, hit: false, by });
+        }
+
+        world.run_system_once(mark_tracers).unwrap();
+
+        let mut starts: Vec<Vec3> =
+            world.query::<&Tracer>().iter(&world).map(|tracer| tracer.from).collect();
+        starts.sort_by(|a, b| a.x.total_cmp(&b.x));
+        assert_eq!(starts, vec![Vec3::ZERO, Vec3::ZERO, barrel]);
+    }
+
     #[test]
     fn a_tracer_stops_where_the_shot_did() {
         let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(5.0));
         fire(&mut world, shooter);
 
         let effects = effects_of(&mut world);
-        let Some(Effect::Tracer { from, to, hit }) = effects.first().copied() else {
+        let Some(Effect::Tracer { from, to, hit, .. }) = effects.first().copied() else {
             panic!("no tracer: {effects:?}");
         };
         assert!(hit, "the shot landed but the tracer says it did not");
