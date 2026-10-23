@@ -33,6 +33,7 @@
 
 [weapons.laser_rifle]
 name_key = "weapon.names.laser_rifle"
+model = "sniper_rifle"
 magazine = { clip = 12, reserve = 60, reload = 1.0 }
 primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 200.0, damage = 30, headshot_multiplier = 3, shove_per_damage = 0.15, shove_radius = 0.4 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "scope", zoom = 2.5 } }
