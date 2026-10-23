@@ -26,7 +26,8 @@ use crate::common::movement_rules::MovementRules;
 use crate::common::projectile::{bounce, fly, Ending, ProjectileSpec};
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
-use crate::game::player::{PhysicsBody, Player};
+use crate::game::player::{interpolate_bodies, LocalPlayer, PhysicsBody, Player};
+use crate::game::viewmodel::ApparentMuzzle;
 use crate::common::weapon::{Equipped, WeaponAction, WeaponCatalogue};
 use crate::game::weapon::WeaponActionFired;
 
@@ -42,6 +43,10 @@ const SKIN: f32 = 0.002;
 /// Metres in front of the eye a projectile is born: outside the shooter's
 /// body, and not inside a wall when firing with your face against one.
 const MUZZLE_OFFSET: f32 = 0.5;
+
+/// Seconds one of our own shots takes to ease from the drawn barrel onto the
+/// path it is really on.
+pub const MUZZLE_EASE: f32 = 0.5;
 
 /// Something in flight. The spec is copied on so that switching weapons
 /// cannot change a shot already in the air.
@@ -72,6 +77,26 @@ impl Projectile {
             None => DamageSource::World,
         }
     }
+}
+
+/// One of our own shots, drawn from the barrel rather than the eye it left,
+/// easing onto its real path over [`MUZZLE_EASE`]. Display only, and only on
+/// the shooter's machine: everybody else sees it leave the shooter's eye,
+/// which is where it is.
+#[derive(Component, Debug)]
+pub struct FromTheMuzzle {
+    /// Metres, world space, from the real position to the barrel.
+    offset: Vec3,
+    /// Seconds.
+    elapsed: f32,
+}
+
+/// How much of the offset is still drawn: all of it at the start, none at
+/// [`MUZZLE_EASE`], smoothly at both ends so it neither jumps off the barrel
+/// nor snaps onto the path.
+fn muzzle_weight(elapsed: f32) -> f32 {
+    let t = (elapsed / MUZZLE_EASE).clamp(0.0, 1.0);
+    1.0 - t * t * (3.0 - 2.0 * t)
 }
 
 /// Fires a projectile every `interval` at nobody in particular. A test
@@ -107,6 +132,17 @@ impl Plugin for ProjectilePlugin {
             .add_systems(Update, plant_emitters.run_if(in_state(AppMode::Play)))
             // Drawing, so ungated: a client flies none of these and draws all.
             .add_systems(Update, (dress_projectiles, spin_projectiles))
+            // After the interpolation it offsets, and in the same frame the
+            // shot appears, or it is drawn once at the eye. Chained so the
+            // mark is in place for the drawing.
+            .add_systems(
+                RunFixedMainLoop,
+                (start_our_shots_at_the_muzzle, draw_our_shots_from_the_muzzle)
+                    .chain()
+                    .after(interpolate_bodies)
+                    .after(crate::game::viewmodel::find_the_apparent_muzzle)
+                    .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop),
+            )
             .init_resource::<ProjectileAssets>()
             .add_systems(OnExit(AppMode::Play), clear_projectiles)
         ;
@@ -314,7 +350,10 @@ fn dress_projectiles(
     mut assets: ResMut<ProjectileAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    undressed: Query<(Entity, &Projectile), Without<Mesh3d>>,
+    mut undressed: Query<
+        (Entity, &Projectile, Option<&PhysicsBody>, Option<&mut Transform>),
+        Without<Mesh3d>,
+    >,
 ) {
     if undressed.is_empty() {
         return;
@@ -335,14 +374,64 @@ fn dress_projectiles(
         })
         .clone();
 
-    for (entity, projectile) in &undressed {
+    for (entity, projectile, body, transform) in &mut undressed {
         // From the spec: a replicated projectile never went through `launch`,
-        // so its transform starts at unit scale.
-        commands.entity(entity).insert((
-            Mesh3d(mesh.clone()),
-            MeshMaterial3d(material.clone()),
-            Transform::from_scale(Vec3::splat(projectile.spec.radius)),
-        ));
+        // so its transform starts at unit scale. Only the scale: a whole new
+        // transform draws it at the origin for a frame.
+        let scale = Vec3::splat(projectile.spec.radius);
+        match transform {
+            Some(mut transform) => transform.scale = scale,
+            None => {
+                let at = body.map_or(Vec3::ZERO, |body| body.current);
+                commands.entity(entity).insert(Transform::from_translation(at).with_scale(scale));
+            }
+        }
+        commands
+            .entity(entity)
+            .insert((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone())));
+    }
+}
+
+/// Keyed on either component arriving: replication does not promise them in
+/// one packet. A shot already past its ease, as one reaching a client late can
+/// be, is drawn where it is.
+fn start_our_shots_at_the_muzzle(
+    mut commands: Commands,
+    muzzle: Option<Res<ApparentMuzzle>>,
+    us: Query<&PlayerId, With<LocalPlayer>>,
+    shots: Query<
+        (Entity, &Projectile, &PhysicsBody),
+        (Or<(Added<Projectile>, Added<PhysicsBody>)>, Without<FromTheMuzzle>),
+    >,
+) {
+    let Some(barrel) = muzzle.and_then(|muzzle| muzzle.0) else { return };
+    let Ok(us) = us.single() else { return };
+    for (entity, projectile, body) in &shots {
+        if projectile.owner != Some(*us) || projectile.age >= MUZZLE_EASE {
+            continue;
+        }
+        commands.entity(entity).insert(FromTheMuzzle {
+            offset: barrel - body.current,
+            elapsed: projectile.age,
+        });
+    }
+}
+
+/// Composes onto what `interpolate_bodies` wrote this frame, which it rewrites
+/// every frame the two differ.
+fn draw_our_shots_from_the_muzzle(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut shots: Query<(Entity, &mut FromTheMuzzle, &mut Transform)>,
+) {
+    for (entity, mut shot, mut transform) in &mut shots {
+        let weight = muzzle_weight(shot.elapsed);
+        if weight <= 0.0 {
+            commands.entity(entity).remove::<FromTheMuzzle>();
+            continue;
+        }
+        transform.translation += shot.offset * weight;
+        shot.elapsed += time.delta_secs();
     }
 }
 
@@ -502,6 +591,66 @@ mod tests {
     use super::*;
     use crate::common::hitbox::Box3;
     use crate::tool::room::Room;
+
+    fn shot_by(world: &mut World, owner: u64, at: Vec3) -> Entity {
+        world
+            .spawn((
+                Projectile {
+                    spec: ProjectileSpec::ROCKET,
+                    owner: Some(PlayerId(owner)),
+                    shooter: None,
+                    velocity: Vec3::NEG_Z,
+                    spin: 0.0,
+                    age: 0.0,
+                    bounces: 0,
+                },
+                PhysicsBody::at(at),
+                Transform::from_translation(at),
+            ))
+            .id()
+    }
+
+    /// Breaks if our own shot is drawn at the eye on its first frame, or if
+    /// somebody else's is pulled over to our barrel.
+    #[test]
+    fn our_shot_is_drawn_from_the_barrel_and_nobody_elses_is() {
+        let barrel = Vec3::new(0.3, -0.2, -0.6);
+        let eye = Vec3::new(0.0, 0.0, -0.5);
+
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        world.insert_resource(ApparentMuzzle(Some(barrel)));
+        world.spawn((LocalPlayer, PlayerId(1)));
+        let ours = shot_by(&mut world, 1, eye);
+        let theirs = shot_by(&mut world, 2, eye);
+
+        world.run_system_once(start_our_shots_at_the_muzzle).unwrap();
+        world.run_system_once(draw_our_shots_from_the_muzzle).unwrap();
+
+        let drawn = |world: &World, shot| world.get::<Transform>(shot).unwrap().translation;
+        assert!(drawn(&world, ours).abs_diff_eq(barrel, 1e-6), "ours drawn at {}", drawn(&world, ours));
+        assert_eq!(drawn(&world, theirs), eye, "somebody else's shot left our barrel");
+    }
+
+    #[test]
+    fn a_shot_is_back_on_its_real_path_once_the_ease_is_over() {
+        assert_eq!(muzzle_weight(0.0), 1.0);
+        assert_eq!(muzzle_weight(MUZZLE_EASE), 0.0);
+        let samples: Vec<f32> = (0..=10).map(|i| muzzle_weight(MUZZLE_EASE * i as f32 / 10.0)).collect();
+        assert!(samples.windows(2).all(|pair| pair[1] <= pair[0]), "{samples:?}");
+    }
+
+    /// Third person, or a weapon with no muzzle: nothing is offset.
+    #[test]
+    fn with_no_barrel_on_screen_a_shot_is_drawn_where_it_is() {
+        let mut world = World::new();
+        world.insert_resource(ApparentMuzzle(None));
+        world.spawn((LocalPlayer, PlayerId(1)));
+        let ours = shot_by(&mut world, 1, Vec3::ZERO);
+
+        world.run_system_once(start_our_shots_at_the_muzzle).unwrap();
+        assert!(world.get::<FromTheMuzzle>(ours).is_none());
+    }
 
     /// Bevy's default 64 Hz.
 

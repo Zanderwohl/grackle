@@ -36,6 +36,7 @@ use crate::prop::feature::{Axis, BooleanOp, FeatureOp, PatternKind, PropFeatureI
 use crate::prop::figure::ScaleFigure;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::gizmo::HoldHandles;
+use crate::prop::hold::MuzzleSpec;
 use crate::prop::profile::{Placement, Profile, MIN_SIDES};
 use crate::prop::solid::Shape;
 use crate::prop::surface::{Style, Surface};
@@ -1398,6 +1399,22 @@ fn hold(
                 changed |=
                     degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.support_rotation);
             });
+        });
+
+        section(ui, "hold_muzzle", get!("prop.hold.muzzle"), |ui| {
+            let mut muzzle = editor.doc().muzzle;
+            let mut has = muzzle.is_some();
+            if ui.checkbox(&mut has, get!("prop.hold.has_muzzle")).changed() {
+                // Starts at the grip, where its handle is easy to find.
+                muzzle = has.then_some(MuzzleSpec { at: edited.grip });
+            }
+            if let Some(muzzle) = muzzle.as_mut() {
+                vec3_ui(ui, get!("prop.hold.at"), &mut muzzle.at, 0.001, "m");
+            }
+            if muzzle != editor.doc().muzzle {
+                editor.begin_gesture();
+                editor.doc_mut().muzzle = muzzle;
+            }
         });
 
         section(ui, "hold_carry", get!("prop.hold.carry"), |ui| {

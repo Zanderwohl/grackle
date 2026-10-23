@@ -54,6 +54,8 @@ pub struct HeldModel {
     /// Copied off the model so the pose layer never needs the prop cache.
     hold: HoldSpec,
     viewmodel: ViewmodelSpec,
+    /// In the model's own space.
+    muzzle: Option<Vec3>,
     /// Handles off the bake, so a save refilled under them is what plays.
     clips: BTreeMap<String, Handle<Clip>>,
 }
@@ -86,6 +88,10 @@ impl HeldModel {
 
     pub fn viewmodel(&self) -> ViewmodelSpec {
         self.viewmodel
+    }
+
+    pub fn muzzle(&self) -> Option<Vec3> {
+        self.muzzle
     }
 }
 
@@ -164,20 +170,21 @@ fn dress_held_weapons(
                 if drawn.is_none_or(|drawn| drawn.weapon != held) {
                     replace_parts(
                         &mut commands, body, drawn, vec![], held, false, HoldSpec::default(),
-                        ViewmodelSpec::default(), BTreeMap::new(), cache.generation(),
+                        ViewmodelSpec::default(), None, BTreeMap::new(), cache.generation(),
                     );
                 }
             }
             Wanted::Nothing => {
                 replace_parts(
                     &mut commands, body, drawn, vec![], held, true, HoldSpec::default(),
-                    ViewmodelSpec::default(), BTreeMap::new(), cache.generation(),
+                    ViewmodelSpec::default(), None, BTreeMap::new(), cache.generation(),
                 )
             }
             Wanted::Model(model) => {
                 let mut spawned = Vec::new();
                 let mut hold = HoldSpec::default();
                 let mut viewmodel = ViewmodelSpec::default();
+                let mut muzzle = None;
                 let mut clips = BTreeMap::new();
                 if let Some(baked) = cache.ensure(
                     model, &packs, &mut meshes, &mut materials, &mut surfaces, &mut clip_assets,
@@ -185,6 +192,7 @@ fn dress_held_weapons(
                     let parts = baked.parts.clone();
                     hold = baked.hold.for_class(class.copied());
                     viewmodel = baked.viewmodel;
+                    muzzle = baked.muzzle.map(|muzzle| muzzle.point());
                     clips = baked.clips.clone();
                     commands.entity(body).with_children(|body| {
                         for (mesh, material) in parts {
@@ -212,8 +220,8 @@ fn dress_held_weapons(
                 }
                 let cached_at = cache.generation();
                 replace_parts(
-                    &mut commands, body, drawn, spawned, held, true, hold, viewmodel, clips,
-                    cached_at,
+                    &mut commands, body, drawn, spawned, held, true, hold, viewmodel, muzzle,
+                    clips, cached_at,
                 );
             }
         }
@@ -230,6 +238,7 @@ fn replace_parts(
     resolved: bool,
     hold: HoldSpec,
     viewmodel: ViewmodelSpec,
+    muzzle: Option<Vec3>,
     clips: BTreeMap<String, Handle<Clip>>,
     cached_at: u64,
 ) {
@@ -241,7 +250,7 @@ fn replace_parts(
     commands
         .entity(body)
         .insert((
-            HeldModel { weapon, resolved, parts, hold, viewmodel, clips, cached_at },
+            HeldModel { weapon, resolved, parts, hold, viewmodel, muzzle, clips, cached_at },
             WeaponInHand::default(),
         ));
 }
@@ -564,6 +573,7 @@ mod tests {
                     parts: vec![],
                     hold: HoldSpec::default(),
                     viewmodel: ViewmodelSpec::default(),
+                    muzzle: None,
                     clips: BTreeMap::new(),
                     cached_at: 0,
                 },
@@ -624,6 +634,7 @@ mod tests {
                     parts: vec![],
                     hold: HoldSpec::default(),
                     viewmodel: ViewmodelSpec::default(),
+                    muzzle: None,
                     clips,
                     cached_at: 0,
                 },
@@ -685,6 +696,7 @@ mod tests {
                     parts: vec![],
                     hold: HoldSpec::default(),
                     viewmodel: ViewmodelSpec::default(),
+                    muzzle: None,
                     clips,
                     cached_at: 0,
                 },
@@ -821,7 +833,7 @@ mod tests {
         world.spawn((
             HeldModel {
                 weapon: None, resolved: true, parts: vec![part],
-                hold: HoldSpec::default(), viewmodel: ViewmodelSpec::default(),
+                hold: HoldSpec::default(), viewmodel: ViewmodelSpec::default(), muzzle: None,
                 clips: BTreeMap::new(), cached_at: 0,
             },
             WeaponInHand(decided),

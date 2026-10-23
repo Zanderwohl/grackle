@@ -528,6 +528,8 @@ carry = "Carry"
 offset = "Offset (arm lengths)"
 override_for = "Override for the { class }"
 viewmodel = "Viewmodel"
+muzzle = "Muzzle"
+has_muzzle = "Has a muzzle"
 across = "Across"
 depth = "Depth"
 

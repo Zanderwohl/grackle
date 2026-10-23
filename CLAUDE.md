@@ -284,6 +284,19 @@ whatever shape the window is, which is why `place_the_viewmodel` runs every
 frame and reads the camera's aspect rather than placing it once. Depth stays in
 metres, because that is the one part of the framing that is about size.
 
+**Shots are drawn from the barrel in first person, and fired from the eye
+always.** A prop may mark a `[muzzle]` (the Fit workspace's Hold panel, and
+a handle there); `ApparentMuzzle` is where that point is drawn — the
+viewmodel's muzzle carried across to the play camera's field of view, at the
+same pixel and depth — and is `None` in third person or with no muzzle.
+Only the shooter's own machine uses it, and only to draw: an own projectile
+gets a `FromTheMuzzle` offset that eases onto its real path over
+`MUZZLE_EASE`, and an own tracer simply starts there, since it is gone
+before an ease would show. Knowing whose shot is whose is why
+`Effect::Tracer` carries a `PlayerId`. The offset composes onto
+`interpolate_bodies` in the same frame the shot appears; a frame later and it
+is drawn once at the eye.
+
 **Every camera carries a zero-sized marker and every query filters on one** —
 `Multicam` for the four editor viewports, `PlayerCamera` for the view,
 `ViewmodelCamera` for the one drawn over it, `HudCamera` for the UI over both. A query that asks for `&Camera`

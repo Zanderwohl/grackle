@@ -265,6 +265,13 @@ rotation = [
     0.0,
 ]
 
+[muzzle]
+at = [
+    0.0,
+    0.21,
+    -0.57,
+]
+
 [animations.clips.deploy]
 name_key = "anim.clips.deploy"
 length = 0.45
