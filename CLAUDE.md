@@ -1961,6 +1961,11 @@ key that has slots — fill those in by hand.
 - Each tool is a `Plugin` in `src/tool/`, added in `ToolPlugin::build`, gated on
   the `Tools` state. Follow that shape rather than adding systems to the editor
   directly.
+- A mesh a tool stands in the world — a drag handle, an arrow, a ring — takes
+  `multicam::editor_only()`, a render layer only the editor viewports draw. It
+  is hidden from the play camera by layer rather than despawned on leaving the
+  editor, so no tool's teardown can forget one. `RenderLayers` is not
+  inherited: every mesh entity needs it, not just the root.
 - Panels are `egui_dock` tabs — add a `TabKinds` variant in
   [`src/editor/panels.rs`](src/editor/panels.rs), not a floating `egui::Window`.
 - Asset paths are relative to the working directory (`assets/default/...`), so

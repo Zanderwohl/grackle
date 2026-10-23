@@ -17,6 +17,17 @@ pub struct MulticamPlugin {
     pub test_scene: bool,
 }
 
+/// The layer only the editor viewports draw, for the handles a tool stands in
+/// the world. Hidden by layer rather than despawned on leaving the editor, so
+/// a handle cannot be forgotten by some tool's teardown. 0 is the world, 1 the
+/// viewmodel and 31 the shape painter.
+pub const EDITOR_ONLY_LAYER: usize = 2;
+
+/// Not inherited, so every mesh entity of a handle needs its own.
+pub fn editor_only() -> RenderLayers {
+    RenderLayers::layer(EDITOR_ONLY_LAYER)
+}
+
 /// How much of each window edge something else has taken, in logical pixels.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Insets {
@@ -239,6 +250,7 @@ impl MulticamPlugin {
                     camera_pos,
                     Bloom::NATURAL,
                     Tonemapping::TonyMcMapface,
+                    RenderLayers::from_layers(&[0, EDITOR_ONLY_LAYER]),
                     Multicam {
                         name: camera_name.to_string(),
                         screen_pos: UVec2::new((idx % 2) as u32, (idx / 2) as u32),
@@ -662,6 +674,16 @@ fn draw_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Breaks if the play camera, which has the default layers, can see an
+    /// editor handle, or if the layer is shared with something else's.
+    #[test]
+    fn handles_are_seen_by_the_editor_viewports_and_nothing_else() {
+        assert!(!RenderLayers::default().intersects(&editor_only()), "the play camera sees handles");
+        assert!(RenderLayers::from_layers(&[0, EDITOR_ONLY_LAYER]).intersects(&editor_only()));
+        assert_ne!(EDITOR_ONLY_LAYER, crate::game::viewmodel::VIEWMODEL_LAYER);
+        assert_ne!(EDITOR_ONLY_LAYER, 31);
+    }
 
     /// A fraction from mid-drag nonsense must never reach a texture; wgpu refuses and Bevy exits with an
     /// error naming only `bloom_texture`.
