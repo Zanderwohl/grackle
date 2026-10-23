@@ -29,9 +29,7 @@ use crate::game::held::{HeldModel, HeldPart};
 use crate::game::player::{LocalPlayer, PlayerCamera, ViewMode, PLAY_CAMERA_ORDER};
 use crate::prop::hold::grip_with;
 
-/// The layer only the viewmodel camera draws. 0 is everything else and 31 is
-/// the editor's shape painter.
-pub const VIEWMODEL_LAYER: usize = 1;
+pub const VIEWMODEL_LAYER: usize = crate::common::render_layers::VIEWMODEL;
 
 /// Drawn over the play camera, under the 2D UI camera at `isize::MAX`.
 const VIEWMODEL_CAMERA_ORDER: isize = PLAY_CAMERA_ORDER + 1;
@@ -536,13 +534,11 @@ mod tests {
         assert_eq!(cameras.iter(&world).count(), 1, "a camera per frame");
     }
 
-    /// Drawn over the world and under the UI, on a layer nothing else uses.
+    /// Drawn over the world and under the UI.
     #[test]
     fn it_sits_between_the_world_and_the_interface() {
         assert!(VIEWMODEL_CAMERA_ORDER > PLAY_CAMERA_ORDER, "the viewmodel draws under the world");
         assert!(VIEWMODEL_CAMERA_ORDER < isize::MAX, "the viewmodel draws over the interface");
-        assert_ne!(VIEWMODEL_LAYER, 0);
-        assert_ne!(VIEWMODEL_LAYER, 31);
     }
 
     /// The body's carry put the grip off the bottom of the screen; the default

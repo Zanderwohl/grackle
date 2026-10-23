@@ -35,6 +35,7 @@ pub mod rect_subtract;
 pub mod rotation;
 pub mod mode;
 pub mod movement_rules;
+pub mod render_layers;
 pub mod shortcuts;
 
 #[derive(Debug)]

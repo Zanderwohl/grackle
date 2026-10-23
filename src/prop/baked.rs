@@ -61,6 +61,9 @@ pub struct BakedProp {
     pub breakable: BreakableSpec,
     pub pickup: PickupSpec,
     pub hat: HatSpec,
+    /// [`PropCache::bakes`] as it stood after this bake, so a replaced entry
+    /// can be told from the one it replaced.
+    pub bake: u64,
 }
 
 #[derive(Resource, Default)]
@@ -71,6 +74,9 @@ pub struct PropCache {
     /// looks again — including a client that cached a failure before the
     /// server's model arrived.
     generation: u64,
+    /// Bumped on every bake, first or replacing, so something that wants to
+    /// know a prop arrived need not walk the cache every frame.
+    bakes: u64,
 }
 
 impl PropCache {
@@ -85,7 +91,11 @@ impl PropCache {
         clips: &mut Assets<Clip>,
     ) -> Option<&BakedProp> {
         if !self.baked.contains_key(name) {
-            let baked = bake(name, packs, meshes, materials, surfaces, clips);
+            let mut baked = bake(name, packs, meshes, materials, surfaces, clips);
+            self.bakes += 1;
+            if let Some(baked) = &mut baked {
+                baked.bake = self.bakes;
+            }
             self.baked.insert(name.to_owned(), baked);
         }
         self.baked.get(name).and_then(Option::as_ref)
@@ -104,6 +114,15 @@ impl PropCache {
         self.generation
     }
 
+    pub fn bakes(&self) -> u64 {
+        self.bakes
+    }
+
+    /// Everything that baked into something, leaving out the failures.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &BakedProp)> {
+        self.baked.iter().filter_map(|(name, baked)| Some((name.as_str(), baked.as_ref()?)))
+    }
+
     /// Replaces whatever was cached, which is often a failure from looking in
     /// the local pack before the server's document arrived. A clip the previous
     /// bake also had keeps its handle, so a mid-round save reaches its players.
@@ -118,9 +137,11 @@ impl PropCache {
     ) {
         let previous = self.get(name).map(|baked| &baked.clips);
         let clips = publish_clips(&doc.animations, previous, clips);
-        let baked = bake_doc(name, doc, meshes, materials, surfaces, clips);
-        self.baked.insert(name.to_owned(), Some(baked));
+        let mut baked = bake_doc(name, doc, meshes, materials, surfaces, clips);
         self.generation += 1;
+        self.bakes += 1;
+        baked.bake = self.bakes;
+        self.baked.insert(name.to_owned(), Some(baked));
     }
 }
 
@@ -200,5 +221,6 @@ fn bake_doc(
         breakable: doc.breakable,
         pickup: doc.pickup,
         hat: doc.hat.clone(),
+        bake: 0,
     }
 }

@@ -78,6 +78,7 @@ looks like.
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`. |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
+| `cache/` | Gitignored, derived from the packs: `thumbnail/props/{name}.png`. Safe to delete. |
 
 ## Spawn points and class metrics
 
@@ -712,6 +713,40 @@ so the head bone's own odd rest rotation never reaches a hat's numbers. Which
 hat is a class's is `hat` on its entry in `loadouts.toml`. In Fit a hat stays
 at the origin and the figure stands under it, inverted through the same
 `hat_transform` the game uses.
+
+## Thumbnails
+
+[`src/prop/thumbnail.rs`](src/prop/thumbnail.rs) photographs a prop whenever
+`PropCache` bakes one: a studio of a camera, a key, a fill and a back light,
+and the prop's own meshes, all on `render_layers::THUMBNAIL`, rendered to a
+256 px image with a transparent background. Nothing else draws that layer and
+the map's lights are not on it, so a picture does not depend on what map is
+open.
+
+**Framing is solved, not estimated.** For a fixed viewing direction, keeping
+a point inside the frame is two linear bounds on where the camera stands, so
+`frame` finds the closest position that keeps every vertex inside a fixed
+padding — a bounding sphere would leave a long weapon small in a square
+picture.
+
+Pictures are cached at `cache/thumbnail/props/{name}.png` and reused while
+the picture is **no older than the prop's file** (the highest-priority pack's,
+as the bake reads). Saving in the prop editor re-bakes, so it re-photographs.
+A model the server sent has no file to date against and is photographed into
+memory only. Lighting or framing changes do not invalidate the cache: delete
+`cache/` after touching either.
+
+Three things there fail silently:
+
+- **One sitting at a time.** Every studio is on the same layer, so two up at
+  once photograph each other's props.
+- **The studio carries `PropScene`**, or the prop editor's hiding rule hides
+  it with the rest of the world and every picture taken in that mode is empty.
+- **A picture that is all one colour is retaken**, because pipelines compile
+  in the background and the first frames of a new material draw nothing.
+
+`Thumbnails::prop` is the handle; it is kept across a retake, so whatever
+shows it updates in place. Nothing shows one yet.
 
 ## Baking before a round
 
@@ -1952,6 +1987,10 @@ key that has slots — fill those in by hand.
 - Each tool is a `Plugin` in `src/tool/`, added in `ToolPlugin::build`, gated on
   the `Tools` state. Follow that shape rather than adding systems to the editor
   directly.
+- Every render layer is named in
+  [`src/common/render_layers.rs`](src/common/render_layers.rs), with what draws
+  it. Claim a new one there rather than writing a number at the call site;
+  `RenderLayers` is not inherited, and a light only lights its own layers.
 - Panels are `egui_dock` tabs — add a `TabKinds` variant in
   [`src/editor/panels.rs`](src/editor/panels.rs), not a floating `egui::Window`.
 - Asset paths are relative to the working directory (`assets/default/...`), so

@@ -4,3 +4,5 @@
 /assets/user/
 
 .DS_Store
+# Derived from the packs, and rebuilt whenever it is older than them.
+/cache/

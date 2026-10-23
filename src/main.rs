@@ -22,6 +22,7 @@ use grackle::game::skeleton::SkeletonPlugin;
 use grackle::game::GamePlugin;
 use grackle::game::world_prop::WorldPropPlugin;
 use grackle::anim::{AnimPlugin, StartInAnimEditor};
+use grackle::prop::thumbnail::ThumbnailPlugin;
 use grackle::prop::{PropEditorPlugin, StartInPropEditor};
 use grackle::tool::ToolPlugin;
 
@@ -80,7 +81,7 @@ fn main() {
             PropEditorPlugin,
             AnimPlugin,
             GamePlugin,
-            WorldPropPlugin,
+            (WorldPropPlugin, ThumbnailPlugin),
             SkeletonPlugin,
             PerfPlugin,
             ))

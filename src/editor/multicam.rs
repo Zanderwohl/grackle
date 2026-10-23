@@ -10,6 +10,7 @@ use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts, EguiGlobalSettings, 
 use bevy_vector_shapes::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::painter;
+use crate::common::render_layers;
 use crate::tool::selection::EditorSelectable;
 use crate::get;
 
@@ -280,7 +281,7 @@ impl MulticamPlugin {
                 ..Default::default()
             },
             Hdr,
-            RenderLayers::layer(31)
+            RenderLayers::layer(render_layers::PAINTER)
         ));
 
         if state.test_scene {
@@ -583,7 +584,7 @@ impl MulticamPlugin {
                                 }
                             } else {
                                 painter.reset(); // Reset painter properties for this specific drawing
-                                painter.render_layers = Some(RenderLayers::layer(31));
+                                painter.render_layers = Some(RenderLayers::layer(render_layers::PAINTER));
                                 painter.color = Color::srgb_u8(200, 200, 200);
                                 painter.thickness = 1.0; // Define border thickness
 
@@ -609,7 +610,7 @@ impl MulticamPlugin {
         if let Ok((ui_cam, _)) = ui_cam {
             if state.debug_viewport_box {
                 painter.reset();
-                painter.render_layers = Some(RenderLayers::layer(31));
+                painter.render_layers = Some(RenderLayers::layer(render_layers::PAINTER));
                 let viewport_start = painter::window_to_painter_frac(&ui_cam, state.start).extend(1.0);
                 let viewport_end = painter::window_to_painter_frac(&ui_cam, state.end).extend(1.0);
                 painter.color = Color::srgb_u8(0, 0, 255);
@@ -619,7 +620,7 @@ impl MulticamPlugin {
             if state.debug_mouse_circle {
                 if let Some(cursor_window_pos) = window.cursor_position() {
                     painter.reset();
-                    painter.render_layers = Some(RenderLayers::layer(31));
+                    painter.render_layers = Some(RenderLayers::layer(render_layers::PAINTER));
                     painter.set_translation(painter::window_to_painter(&ui_cam, cursor_window_pos).extend(1.0));
                     painter.circle(10.0);
                 }
@@ -635,7 +636,7 @@ impl MulticamPlugin {
         };
 
         painter.reset(); // Reset painter properties for this specific drawing
-        painter.render_layers = Some(RenderLayers::layer(31));
+        painter.render_layers = Some(RenderLayers::layer(render_layers::PAINTER));
         painter.color = color;
         painter.thickness = 2.0; // Define border thickness
 
