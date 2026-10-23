@@ -23,7 +23,7 @@ impl Plugin for PropPlugin {
         add_point_placement_tool::<Prop>(app);
         app
             .init_resource::<PropAssets>()
-            // Ungated: props are map content and must show in Play.
+            // Ungated: a model chosen mid-match still has to take the cube away.
             .add_systems(Update, attach_prop_meshes)
         ;
     }
@@ -31,8 +31,9 @@ impl Plugin for PropPlugin {
 
 /// The placeholder cube on every [`PropMarker`] entity that names no model,
 /// and off one that has come to name one; a named model is drawn by
-/// [`crate::game::world_prop`]. Separate because `apply_to_entity` only has
-/// `Commands` and cannot reach `Assets`.
+/// [`crate::game::world_prop`]. Editor viewports only: it marks where a model
+/// will go, which is nothing to show a player. Separate because
+/// `apply_to_entity` only has `Commands` and cannot reach `Assets`.
 fn attach_prop_meshes(
     props: Query<(Entity, &PropModel, Has<Mesh3d>), (With<PropMarker>, Changed<PropModel>)>,
     mut assets: ResMut<PropAssets>,
@@ -56,10 +57,18 @@ fn attach_prop_meshes(
                         })
                     })
                     .clone();
-                commands.entity(entity).insert((Mesh3d(mesh), MeshMaterial3d(material)));
+                commands.entity(entity).insert((
+                    Mesh3d(mesh),
+                    MeshMaterial3d(material),
+                    crate::editor::multicam::editor_only(),
+                ));
             }
             (false, true) => {
-                commands.entity(entity).remove::<(Mesh3d, MeshMaterial3d<StandardMaterial>)>();
+                commands.entity(entity).remove::<(
+                    Mesh3d,
+                    MeshMaterial3d<StandardMaterial>,
+                    bevy::camera::visibility::RenderLayers,
+                )>();
             }
             _ => {}
         }

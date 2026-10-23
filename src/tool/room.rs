@@ -391,6 +391,7 @@ impl RoomDragState {
                         RoomDragHandle { axis },
                         Mesh3d(mesh.clone()),
                         MeshMaterial3d(mat.clone()),
+                        crate::editor::multicam::editor_only(),
                         Transform::from_translation(center),
                     ));
                 }

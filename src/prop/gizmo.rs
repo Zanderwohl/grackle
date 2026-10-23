@@ -54,6 +54,7 @@ pub enum Handle {
     Grip { support: bool, axis: usize },
     /// Move the figure, which is how a carry is authored.
     Carry(usize),
+    Muzzle(usize),
 }
 
 impl Handle {
@@ -62,10 +63,16 @@ impl Handle {
             Handle::Move(axis)
             | Handle::Face { axis, .. }
             | Handle::Grip { axis, .. }
-            | Handle::Carry(axis) => axis,
+            | Handle::Carry(axis)
+            | Handle::Muzzle(axis) => axis,
         }
     }
 }
+
+/// The tracer's colour, since that is what will come out of it.
+const MUZZLE_COLOUR: Color = Color::srgb(1.0, 0.85, 0.4);
+/// Metres.
+const MUZZLE_MARK_RADIUS: f32 = 0.012;
 
 /// Whether the hold's handles are up instead of the selected feature's. Never
 /// both: a grip sits at the prop's origin, where a feature's move arrows are.
@@ -326,7 +333,7 @@ fn drag_the_selected(
                         }
                     }
                 }
-                Handle::Grip { .. } | Handle::Carry(_) => {}
+                Handle::Grip { .. } | Handle::Carry(_) | Handle::Muzzle(_) => {}
             }
         }
         // After the write, so the drag's own edit is not mistaken next frame
@@ -396,6 +403,12 @@ fn drag_the_hold(
             points.push((Handle::Grip { support: true, axis }, support));
         }
     }
+    let muzzle = editor.doc().muzzle;
+    if let Some(muzzle) = muzzle {
+        for axis in 0..3 {
+            points.push((Handle::Muzzle(axis), muzzle.point()));
+        }
+    }
     // The carry handle needs a figure standing there.
     let arm = figure.map(|(skeleton, ..)| skeleton.proportions().arm_metres());
     let carry_rotation = quat_from_euler(Vec3::from_array(hold.carry_rotation));
@@ -453,6 +466,7 @@ fn drag_the_hold(
         if let Some(on_axis) = closest_param_on_axis(ray, Vec3::ZERO, Vec3::AXES[axis]) {
             let at = on_axis - offset;
             let mut edited = hold.clone();
+            let mut moved_muzzle = muzzle;
             match handle {
                 Handle::Grip { support: false, axis } => edited.grip[axis] = at,
                 Handle::Grip { support: true, axis } => edited.support[axis] = at,
@@ -464,12 +478,21 @@ fn drag_the_hold(
                         edited.carry = ((carry_rotation * -chest) / arm).to_array();
                     }
                 }
+                Handle::Muzzle(axis) => {
+                    if let Some(muzzle) = moved_muzzle.as_mut() {
+                        muzzle.at[axis] = at;
+                    }
+                }
                 Handle::Move(_) | Handle::Face { .. } => {}
             }
             let applied = base.applied(choice.0, &edited);
             // A held button with the pointer still is not an edit.
             if applied != base {
                 editor.doc_mut().hold = applied;
+            }
+            // Not through `applied`: a muzzle belongs to the model, not a class.
+            if moved_muzzle != muzzle {
+                editor.doc_mut().muzzle = moved_muzzle;
             }
         }
         grab.answered = Some((ray, editor.generation()));
@@ -508,6 +531,15 @@ fn draw_hold(
             _ => AXIS_COLOURS[axis],
         };
         gizmos.arrow(*at, arrow_tip(*at, axis, GRIP_LENGTH), colour);
+    }
+
+    // Arrows alone would read as a third grip.
+    if let Some((_, at)) = points.iter().find(|(handle, _)| matches!(handle, Handle::Muzzle(_))) {
+        let colour = match lit {
+            Some(Handle::Muzzle(_)) => HIGHLIGHT,
+            _ => MUZZLE_COLOUR,
+        };
+        gizmos.sphere(Isometry3d::from_translation(*at), MUZZLE_MARK_RADIUS, colour);
     }
 
     if let Some((skeleton, pose, root, reach)) = figure {
@@ -550,7 +582,7 @@ fn draw(
                     colour,
                 );
             }
-            Handle::Grip { .. } | Handle::Carry(_) => {}
+            Handle::Grip { .. } | Handle::Carry(_) | Handle::Muzzle(_) => {}
         }
     }
 }

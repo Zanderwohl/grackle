@@ -95,6 +95,21 @@ impl ViewmodelSpec {
     }
 }
 
+/// Where shots appear to leave the weapon, in its own space. A fact about the
+/// model rather than the hold, so no class overrides it. Only first person
+/// draws from it today; the shot itself always leaves the eye.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MuzzleSpec {
+    #[serde(with = "crate::prop::nice_f32::array")]
+    pub at: [f32; 3],
+}
+
+impl MuzzleSpec {
+    pub fn point(&self) -> Vec3 {
+        Vec3::from_array(self.at)
+    }
+}
+
 /// What one class does differently. Absence means "not overridden" here, but
 /// "use the default" in [`HoldSpec`], hence `two_handed` is an `Option` here.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

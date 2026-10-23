@@ -321,8 +321,6 @@ pub fn spawn_the_view(
     }
     commands.spawn((
         PlayerCamera,
-        // Bevy UI otherwise picks a camera by ambiguity rules.
-        bevy::ui::IsDefaultUiCamera,
         Camera3d::default(),
         Camera { order: PLAY_CAMERA_ORDER, ..default() },
         Hdr,
@@ -333,6 +331,7 @@ pub fn spawn_the_view(
         }),
         Transform::default(),
         Name::new("View"),
+        children![crate::game::hud::hud_camera()],
     ));
 }
 

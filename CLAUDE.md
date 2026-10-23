@@ -239,8 +239,18 @@ Three things there are easy to get wrong and none of them errors:
   the cursor unconditionally grabs it inside the editor on the first frame of
   the process.
 
-The play camera carries `IsDefaultUiCamera`: the window has six cameras in it
-and Bevy UI otherwise picks one by ambiguity rules rather than by being told.
+The **HUD camera** carries `IsDefaultUiCamera`: the window has eight cameras
+in it and Bevy UI otherwise picks one by ambiguity rules rather than by being
+told. It is a UI-only `Camera2d`, a child of the play camera, ordered above the
+viewmodel's — on the play camera the arms painted over the HUD, and the
+viewmodel camera is off in third person. It is `Hdr` like the cameras under it
+and `Tonemapping::None`, since it draws no scene to grade.
+
+The HUD's readouts sit in a **safe zone**
+([`src/game/hud.rs`](src/game/hud.rs)): a 4:3 box the height of the window,
+centred, so on an ultrawide the numbers stay near the crosshair. `F9`
+outlines it. Its width is in viewport heights, not `aspect_ratio`, which
+shrank it to the top of a portrait window.
 
 **The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
 calls the same `grip_with` that puts a body's hands on a weapon, so a grip
@@ -275,9 +285,24 @@ whatever shape the window is, which is why `place_the_viewmodel` runs every
 frame and reads the camera's aspect rather than placing it once. Depth stays in
 metres, because that is the one part of the framing that is about size.
 
+**Shots are drawn from the barrel in first person, and fired from the eye
+always.** A prop may mark a `[muzzle]` (the Fit workspace's Hold panel, and
+a handle there); `ApparentMuzzle` is where that point is drawn — the
+viewmodel's muzzle carried across to the play camera's field of view, at the
+same pixel and depth — and is `None` in third person or with no muzzle.
+Only the shooter's own machine uses it, and only to draw: an own projectile
+gets a `FromTheMuzzle` offset that eases onto its real path over half a
+second's flight — measured in distance, and cut short by the first wall or
+body in its way, so a rocket fired at a near wall is on its path when it goes
+off — and an own tracer simply starts there, since it is gone
+before an ease would show. Knowing whose shot is whose is why
+`Effect::Tracer` carries a `PlayerId`. The offset composes onto
+`interpolate_bodies` in the same frame the shot appears; a frame later and it
+is drawn once at the eye.
+
 **Every camera carries a zero-sized marker and every query filters on one** —
 `Multicam` for the four editor viewports, `PlayerCamera` for the view,
-`ViewmodelCamera` for the one drawn over it. A query that asks for `&Camera`
+`ViewmodelCamera` for the one drawn over it, `HudCamera` for the UI over both. A query that asks for `&Camera`
 alone gets whichever ones happen to match, and the failure is not a compile
 error: it is `place_camera` moving two cameras, or damage numbers projected
 through the wrong one. The viewmodel camera is a **child** of the play camera,
@@ -1952,6 +1977,12 @@ key that has slots — fill those in by hand.
 - Each tool is a `Plugin` in `src/tool/`, added in `ToolPlugin::build`, gated on
   the `Tools` state. Follow that shape rather than adding systems to the editor
   directly.
+- A mesh a tool stands in the world — a drag handle, an arrow, a ring — takes
+  `multicam::editor_only()`, a render layer only the editor viewports draw. It
+  is hidden from the play camera by layer rather than despawned on leaving the
+  editor, so no tool's teardown can forget one. `RenderLayers` is not
+  inherited: every mesh entity needs it, not just the root. A model-less
+  `Prop` feature's placeholder cube is on it too.
 - Panels are `egui_dock` tabs — add a `TabKinds` variant in
   [`src/editor/panels.rs`](src/editor/panels.rs), not a floating `egui::Window`.
 - Asset paths are relative to the working directory (`assets/default/...`), so

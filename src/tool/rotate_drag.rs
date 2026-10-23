@@ -174,6 +174,7 @@ impl RotateDragState {
                 RotateDragRingPart { axis },
                 Mesh3d(ring.clone()),
                 MeshMaterial3d(mat),
+                crate::editor::multicam::editor_only(),
                 Transform::IDENTITY,
             )).id();
 
