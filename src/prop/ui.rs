@@ -194,7 +194,10 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Features => feature_tree(ui, self.editor, self.build),
             PropTab::Inspector => inspector(ui, self.editor, self.build),
             PropTab::Hold => match self.editor.doc().archetype {
-                Archetype::Held => hold(ui, self.editor, *self.figure, self.preview),
+                Archetype::Held => {
+                    let front = self.build.evaluated.bounds().map(front_of);
+                    hold(ui, self.editor, *self.figure, self.preview, front)
+                }
                 Archetype::Hat => hat_fit(ui, self.editor, *self.figure),
                 // Nothing holds or wears a placed prop; the figure is there
                 // for scale.
@@ -1364,6 +1367,15 @@ fn fit_toolbar(ui: &mut Ui, figure: &mut ScaleFigure, frame: &mut Option<bool>) 
     }
 }
 
+/// Metres ahead of the grip a muzzle starts on a prop with no geometry.
+const EMPTY_MUZZLE_REACH: f32 = 0.3;
+
+/// The middle of the bounds' `-Z` face: forward is `-Z`, so a barrel ends there.
+fn front_of((min, max): (Vec3, Vec3)) -> Vec3 {
+    let middle = (min + max) / 2.0;
+    Vec3::new(middle.x, middle.y, min.z)
+}
+
 /// How this prop is held. The override checkbox edits the entry for the class
 /// standing in the viewport.
 fn hold(
@@ -1371,6 +1383,7 @@ fn hold(
     editor: &mut PropEditor,
     figure: ScaleFigure,
     preview: &mut ViewmodelPreview,
+    front: Option<Vec3>,
 ) {
     let base = editor.doc().hold.clone();
 
@@ -1405,8 +1418,10 @@ fn hold(
             let mut muzzle = editor.doc().muzzle;
             let mut has = muzzle.is_some();
             if ui.checkbox(&mut has, get!("prop.hold.has_muzzle")).changed() {
-                // Starts at the grip, where its handle is easy to find.
-                muzzle = has.then_some(MuzzleSpec { at: edited.grip });
+                // Not on the grip, whose handles would sit on top of its own
+                // and win every tie.
+                let at = front.unwrap_or(edited.grip() + Vec3::NEG_Z * EMPTY_MUZZLE_REACH);
+                muzzle = has.then_some(MuzzleSpec { at: at.to_array() });
             }
             if let Some(muzzle) = muzzle.as_mut() {
                 vec3_ui(ui, get!("prop.hold.at"), &mut muzzle.at, 0.001, "m");

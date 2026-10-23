@@ -137,15 +137,16 @@ fn spawn_the_hud(
     ));
 }
 
-/// Height fixed, width from the aspect ratio. `max_width` clamps it on a
-/// window narrower than 4:3 without shortening it, so there it is simply the
-/// window.
+/// Full height, and a width stated in viewport heights rather than through
+/// `aspect_ratio`: with that, Taffy re-derived the height from a clamped width,
+/// and on a portrait window the readouts floated halfway up the screen.
+/// Narrower than 4:3, `max_width` makes it the window.
 fn safe_zone() -> impl Bundle {
     (
         SafeZone,
         Node {
             height: Val::Percent(100.0),
-            aspect_ratio: Some(SAFE_ZONE_ASPECT),
+            width: Val::Vh(100.0 * SAFE_ZONE_ASPECT),
             max_width: Val::Percent(100.0),
             ..default()
         },
@@ -337,8 +338,13 @@ fn fill_in_the_readouts(
 
     for (&kind, mut text, mut node) in &mut texts {
         if kind == HudText::Reloading {
-            if text.0.is_empty() {
-                text.0 = get!("hud.reloading");
+            // Looked up while showing rather than once, so a change of
+            // language reaches it.
+            if readout.reloading {
+                let label = get!("hud.reloading");
+                if text.0 != label {
+                    text.0 = label;
+                }
             }
             let display = if readout.reloading { Display::Flex } else { Display::None };
             if node.display != display {
