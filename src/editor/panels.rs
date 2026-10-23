@@ -12,6 +12,7 @@ use egui_dock::{DockArea, DockState, TabViewer};
 use strum::IntoEnumIterator;
 use strum_macros::Display;
 use crate::common::mode::GameMode;
+use crate::common::movement_rules::SprintPolicy;
 use crate::common::shortcuts::chords;
 use crate::common::net::{NetRequest, NetRole};
 use crate::common::net_transport::NetStatus;
@@ -599,6 +600,21 @@ fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata) {
             .spacing([10.0, 6.0])
             .striped(true)
             .show(ui, |ui| {
+                ui.label(get!("editor.metadata.display_name"));
+                let mut name = meta.display_name.clone().unwrap_or_default();
+                let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY));
+                // Trimmed only once the field is left, or typing "2 Fort" would eat the space.
+                if r.lost_focus() {
+                    name = name.trim().to_owned();
+                }
+                if r.changed() || r.lost_focus() {
+                    let name = (!name.trim().is_empty()).then_some(name);
+                    if meta.display_name != name {
+                        meta.display_name = name;
+                    }
+                }
+                ui.end_row();
+
                 ui.label(get!("editor.metadata.game_mode"));
                 ui.vertical(|ui| {
                     egui::ComboBox::from_id_salt("editor_map_game_mode")
@@ -627,6 +643,34 @@ fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata) {
                         meta.normalize_authors_ui_text();
                     }
                 });
+                ui.end_row();
+            });
+
+        ui.add_space(8.0);
+        ui.heading(get!("editor.metadata.movement"));
+        egui::Grid::new("editor_map_movement_grid")
+            .num_columns(2)
+            .spacing([10.0, 6.0])
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label(get!("editor.metadata.sprint"));
+                egui::ComboBox::from_id_salt("editor_map_sprint")
+                    .selected_text(format!("{}", meta.movement.sprint))
+                    .width(ui.available_width())
+                    .show_ui(ui, |ui| {
+                        for policy in SprintPolicy::iter() {
+                            ui.selectable_value(&mut meta.movement.sprint, policy, format!("{}", policy));
+                        }
+                    });
+                ui.end_row();
+
+                ui.label(get!("editor.metadata.gravity"));
+                ui.add(
+                    egui::DragValue::new(&mut meta.movement.gravity)
+                        .range(0.0..=100.0)
+                        .speed(0.1)
+                        .suffix(" m/s²"),
+                );
                 ui.end_row();
             });
     });

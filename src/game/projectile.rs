@@ -22,10 +22,11 @@ use crate::common::class::Stance;
 use crate::common::damage::{DamageSource, Explosion, PlayerId};
 use crate::common::hitbox::Hitboxes;
 use crate::common::hitscan::trace;
+use crate::common::movement_rules::MovementRules;
 use crate::common::projectile::{bounce, fly, Ending, ProjectileSpec};
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
-use crate::game::player::{PhysicsBody, Player, GRAVITY};
+use crate::game::player::{PhysicsBody, Player};
 use crate::common::weapon::{Equipped, WeaponAction, WeaponCatalogue};
 use crate::game::weapon::WeaponActionFired;
 
@@ -192,6 +193,7 @@ pub fn step_projectiles(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
     world: Res<CollisionWorld>,
+    rules: Res<MovementRules>,
     mut projectiles: Query<(Entity, &mut Projectile, &mut PhysicsBody, &mut Transform)>,
     bodies: Query<(Entity, &Hitboxes)>,
     mut blasts: MessageWriter<Explosion>,
@@ -206,7 +208,7 @@ pub fn step_projectiles(
         projectile.spin += projectile.spec.spin_rate * dt;
 
         let spec = projectile.spec;
-        let (velocity, step) = fly(projectile.velocity, &spec, GRAVITY, dt);
+        let (velocity, step) = fly(projectile.velocity, &spec, rules.fall(), dt);
         projectile.velocity = velocity;
 
         let mut position = body.current;
@@ -508,6 +510,7 @@ mod tests {
         let mut collision = CollisionWorld::default();
         collision.rebuild(rooms);
         world.insert_resource(collision);
+        world.init_resource::<MovementRules>();
         world.init_resource::<Messages<Explosion>>();
 
         let mut fixed = Time::<Fixed>::default();

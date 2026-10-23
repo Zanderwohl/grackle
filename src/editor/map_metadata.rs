@@ -1,12 +1,16 @@
-use bevy::prelude::Resource;
+use bevy::prelude::*;
 
 use crate::common::mode::GameMode;
+use crate::common::movement_rules::MovementRules;
 
 /// Strongly typed map metadata, written at the top of a blueprint.
 #[derive(Resource, Debug, Clone)]
 pub struct MapMetadata {
+    /// What the map is called to a player; `None` falls back to the file name.
+    pub display_name: Option<String>,
     pub authors: Vec<String>,
     pub game_mode: GameMode,
+    pub movement: MovementRules,
     /// The panel's comma-separated authors text, refreshed when `authors` is replaced from disk.
     authors_ui_text: String,
     authors_ui_synced_from: Vec<String>,
@@ -17,8 +21,10 @@ impl Default for MapMetadata {
         let authors = vec!["anonymous".to_string()];
         let authors_ui_text = format_authors_for_ui(&authors);
         Self {
+            display_name: None,
             authors,
             game_mode: GameMode::Arena,
+            movement: MovementRules::default(),
             authors_ui_text,
             authors_ui_synced_from: vec!["anonymous".to_string()],
         }
@@ -54,6 +60,14 @@ impl MapMetadata {
     }
 
 }
+/// The only writer of [`MovementRules`]. Ungated, since a map's settings can change between
+/// rounds and a client is handed them at any time.
+pub fn publish_movement_rules(metadata: Res<MapMetadata>, mut rules: ResMut<MovementRules>) {
+    if metadata.is_changed() {
+        rules.set_if_neq(metadata.movement);
+    }
+}
+
 fn finalize_authors(out: Vec<String>) -> Vec<String> {
     if out.is_empty() {
         vec!["anonymous".to_string()]

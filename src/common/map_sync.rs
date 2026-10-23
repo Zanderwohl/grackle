@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::net::NetRole;
 use crate::editor::editable::{Feature, FeatureId, FeatureTimeline};
+use crate::editor::map_metadata::MapMetadata;
+use crate::editor::save::SavedMetadata;
 use crate::tool::room::CalculateRoomGeometry;
 
 /// Ordered and reliable, so an older snapshot cannot replace a newer one and
@@ -32,6 +34,14 @@ const RESEND_INTERVAL: f32 = 0.25;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MapSnapshot {
     pub blueprint: Vec<u8>,
+}
+
+/// The map's settings, apart from its features so that changing one does not
+/// rebuild every client's map. Typed rather than bytes: nothing in it is
+/// internally tagged, so postcard carries it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct MetadataSnapshot {
+    pub metadata: SavedMetadata,
 }
 
 /// Not the whole `FeatureTimeline`: selection, pending despawns and undo
@@ -66,11 +76,19 @@ impl Plugin for MapSyncPlugin {
 
         app.register_message::<MapSnapshot>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<MetadataSnapshot>()
+            .add_direction(NetworkDirection::ServerToClient);
 
         app.init_resource::<LastMapSent>()
             .add_systems(
                 Update,
-                (send_map_to_new_clients, broadcast_map_changes, adopt_the_servers_map),
+                (
+                    send_map_to_new_clients,
+                    broadcast_map_changes,
+                    broadcast_metadata_changes,
+                    adopt_the_servers_map,
+                    adopt_the_servers_metadata,
+                ),
             );
     }
 }
@@ -145,6 +163,7 @@ fn broadcast_map_changes(
 /// between rounds too.
 fn send_map_to_new_clients(
     timeline: Res<FeatureTimeline>,
+    metadata: Res<MapMetadata>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
@@ -154,12 +173,53 @@ fn send_map_to_new_clients(
 
     let Some(blueprint) = encode(&timeline) else { return Ok(()) };
     let message = MapSnapshot { blueprint };
+    let settings = MetadataSnapshot { metadata: SavedMetadata::of(&metadata) };
 
     for client in &joined {
         info!("Sending the map ({} bytes) to a new client", message.blueprint.len());
         sender.send_to_entities::<_, MapChannel>(&message, core::iter::once(client))?;
+        sender.send_to_entities::<_, MapChannel>(&settings, core::iter::once(client))?;
     }
     Ok(())
+}
+
+/// Small enough to send on every change, so no resend interval; compared by
+/// value because the panel marks the metadata changed every frame it is open.
+fn broadcast_metadata_changes(
+    metadata: Res<MapMetadata>,
+    server: Option<Single<&Server>>,
+    mut last: Local<Option<SavedMetadata>>,
+    mut sender: ServerMultiMessageSender,
+) -> Result {
+    let Some(server) = server else { return Ok(()) };
+    if !metadata.is_changed() {
+        return Ok(());
+    }
+    let current = SavedMetadata::of(&metadata);
+    if last.as_ref() == Some(&current) {
+        return Ok(());
+    }
+    *last = Some(current.clone());
+    sender.send::<_, MapChannel>(&MetadataSnapshot { metadata: current }, &server, &NetworkTarget::All)?;
+    Ok(())
+}
+
+/// Gated on authority for the same reason as [`adopt_the_servers_map`].
+fn adopt_the_servers_metadata(
+    role: Res<NetRole>,
+    mut receivers: Query<&mut MessageReceiver<MetadataSnapshot>>,
+    mut metadata: ResMut<MapMetadata>,
+) {
+    if role.is_authority() {
+        return;
+    }
+    for mut receiver in &mut receivers {
+        for message in receiver.receive() {
+            if SavedMetadata::of(&metadata) != message.metadata {
+                *metadata = message.metadata.into_metadata();
+            }
+        }
+    }
 }
 
 /// Gated on authority rather than on having a receiver: a listen server has
@@ -216,6 +276,20 @@ mod tests {
     use super::*;
     use crate::editor::editable::PointRef;
     use crate::editor::editor_room::EditorRoom;
+
+    /// Fails if the settings cannot cross the wire. Lightyear encodes with
+    /// postcard, which refuses what JSON would accept.
+    #[test]
+    fn the_settings_survive_the_wire_encoding() {
+        let mut metadata = MapMetadata::default();
+        metadata.display_name = Some("Harvest".into());
+        metadata.movement.gravity = 9.81;
+        let sent = MetadataSnapshot { metadata: SavedMetadata::of(&metadata) };
+        let bytes = postcard::to_allocvec(&sent).expect("the settings would not encode");
+        let received: MetadataSnapshot =
+            postcard::from_bytes(&bytes).expect("the settings would not decode");
+        assert_eq!(received, sent);
+    }
 
     /// Fails if selecting a feature changes the encoded bytes, which would
     /// broadcast the map on every click.

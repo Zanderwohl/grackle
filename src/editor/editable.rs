@@ -10,7 +10,8 @@ use crate::common::app_mode::AppMode;
 use crate::common::shortcuts::chords;
 use crate::common::PointResolutionError;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
-use crate::editor::map_metadata::MapMetadata;
+use crate::common::movement_rules::MovementRules;
+use crate::editor::map_metadata::{publish_movement_rules, MapMetadata};
 use crate::editor::save;
 use crate::get;
 
@@ -25,8 +26,10 @@ impl Plugin for EditorStepsPlugin {
         app
             .init_resource::<FeatureTimeline>()
             .init_resource::<MapMetadata>()
+            .init_resource::<MovementRules>()
             .add_message::<EditEvent>()
             .add_systems(Startup, load_startup_blueprint)
+            .add_systems(Update, publish_movement_rules)
             // A round is played on the whole map. On the transition rather than `OnEnter(Play)`, so the
             // features past the bar have entities before the bake and collision rebuild run there.
             .add_systems(
@@ -1007,7 +1010,9 @@ impl PointRef {
 
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(label).strong());
-            if ui.small_button("⊕").on_hover_text("Retarget").clicked() {
+            // In egui's emoji-icon-font, which proportional text falls back to; `⊕` is only in the
+            // monospace font and drew as a missing glyph.
+            if ui.small_button("⌖").on_hover_text(get!("tools.retarget")).clicked() {
                 *retarget_request = Some(label.to_string());
             }
         });

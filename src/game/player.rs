@@ -8,6 +8,7 @@ use lightyear::prelude::input::native::ActionState;
 
 use crate::common::damage::{Damageable, PlayerId};
 use crate::common::hitbox::Hitboxes;
+use crate::common::movement_rules::MovementRules;
 use crate::common::team::Team;
 use crate::common::class::{
     body_centre_from_feet, Stance, CLASS_HALF_EXTENTS,
@@ -30,7 +31,6 @@ const SPRINT_SPEED: f32 = 7.0;
 
 /// Metres per second. Wins over sprint.
 const CROUCH_SPEED: f32 = 1.2;
-pub const GRAVITY: f32 = -20.0;
 const JUMP_SPEED: f32 = 7.0;
 const MOUSE_SENSITIVITY: f32 = 0.0022;
 /// Vertical field of view. Bevy measures FOV vertically, where Source's 90 is
@@ -526,6 +526,7 @@ pub fn third_person_camera(pivot: Vec3, aim: Quat, world: &CollisionWorld) -> Ve
 pub fn step_player(
     time: Res<Time>,
     world: Res<CollisionWorld>,
+    rules: Res<MovementRules>,
     mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance, &Inputs), With<Simulated>>,
 ) {
     let dt = time.delta_secs();
@@ -552,7 +553,7 @@ pub fn step_player(
         let wish = Quat::from_rotation_y(player.yaw) * wish;
 
         // The animation measures ground covered; it is never told which speed.
-        let speed = if input.sprint { SPRINT_SPEED } else { WALK_SPEED };
+        let speed = if rules.sprint.sprints(input.sprint) { SPRINT_SPEED } else { WALK_SPEED };
         let speed = if stance == Stance::Crouched { CROUCH_SPEED } else { speed };
         player.velocity.x = wish.x * speed;
         player.velocity.z = wish.z * speed;
@@ -562,7 +563,7 @@ pub fn step_player(
         if player.on_ground && jump {
             player.velocity.y = JUMP_SPEED;
         } else {
-            player.velocity.y += GRAVITY * dt;
+            player.velocity.y += rules.fall() * dt;
         }
 
         // A room edited mid-match can enclose a body that crossed nothing,
