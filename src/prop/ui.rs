@@ -23,7 +23,7 @@ use strum::IntoEnumIterator;
 
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
-use crate::common::file_menu::{file_menu, FileAction};
+use crate::common::file_menu::{dialog_directory, file_menu, FileAction};
 use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
@@ -1905,7 +1905,7 @@ pub fn ask_where_to_save(editor: &PropEditor, dialog: &PropFileDialog) {
         let mut chooser = rfd::AsyncFileDialog::new()
             .add_filter("Grackle Prop", &[PROP_EXTENSION])
             .set_file_name(format!("untitled.{PROP_EXTENSION}"));
-        if let Some(directory) = existing.as_ref().and_then(|path| path.parent()) {
+        if let Some(directory) = dialog_directory(existing.as_deref(), document::PROPS_DIR) {
             chooser = chooser.set_directory(directory);
         }
         if let Some(handle) = pollster::block_on(chooser.save_file()) {
@@ -1984,8 +1984,12 @@ pub(crate) fn handle_files(
 
     if action == Some(FileAction::Open) {
         let slot = dialog.result.clone();
+        let from = dialog_directory(editor.path.as_deref(), document::PROPS_DIR);
         std::thread::spawn(move || {
-            let chooser = rfd::AsyncFileDialog::new().add_filter("Grackle Prop", &[PROP_EXTENSION]);
+            let mut chooser = rfd::AsyncFileDialog::new().add_filter("Grackle Prop", &[PROP_EXTENSION]);
+            if let Some(from) = from {
+                chooser = chooser.set_directory(from);
+            }
             if let Some(handle) = pollster::block_on(chooser.pick_file()) {
                 *slot.lock().unwrap() = Some(DialogResult::Open(handle.path().to_path_buf()));
             }

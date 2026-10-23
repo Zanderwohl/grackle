@@ -6,6 +6,8 @@
 //!
 //! [`mode_menu`]: crate::common::app_mode::mode_menu
 
+use std::path::{Path, PathBuf};
+
 use bevy_egui::egui;
 use bevy_egui::egui::UiKind;
 
@@ -91,6 +93,17 @@ pub fn file_menu(ui: &mut egui::Ui, request: &mut Option<FileAction>) {
     });
 }
 
+/// Where a file dialog opens: beside the file being edited, or else the
+/// highest-priority pack's `subdir`, so a fresh document is saved into the pack
+/// rather than wherever the OS last looked. Absolute, because a native dialog
+/// handed a relative path can ignore it. `None` when neither exists.
+pub fn dialog_directory(current: Option<&Path>, subdir: &str) -> Option<PathBuf> {
+    let beside = current.and_then(Path::parent).filter(|dir| !dir.as_os_str().is_empty());
+    let pack = || crate::common::assets::default_packs().pop().map(|pack| pack.join(subdir));
+    let directory = beside.map(Path::to_path_buf).or_else(pack)?;
+    std::path::absolute(&directory).ok().filter(|dir| dir.is_dir())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +152,22 @@ mod tests {
             let Some(chord) = action.chord() else { continue };
             assert_eq!(FileAction::from_chords(press(chord)), Some(*action), "{action:?}");
         }
+    }
+
+    #[test]
+    fn a_dialog_opens_in_the_pack_until_there_is_a_file() {
+        // Not run from the repo root.
+        if !Path::new("assets/default/props").is_dir() {
+            return;
+        }
+        let fresh = dialog_directory(None, "props").expect("the pack has a props folder");
+        assert!(fresh.is_absolute(), "{fresh:?}");
+        assert!(fresh.ends_with("assets/default/props"), "{fresh:?}");
+
+        let beside = dialog_directory(Some(Path::new("assets/default/blueprints/new.gmb")), "props");
+        assert!(beside.unwrap().ends_with("assets/default/blueprints"), "did not open beside the file");
+
+        assert_eq!(dialog_directory(None, "no-such-folder"), None);
     }
 
     /// A `Some` here would be a save every frame.
