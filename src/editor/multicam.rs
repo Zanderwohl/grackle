@@ -535,7 +535,7 @@ impl MulticamPlugin {
         mouse_buttons: Res<ButtonInput<MouseButton>>,
         windows: Query<&Window, With<PrimaryWindow>>,
         cameras_q: Query<(Entity, &Camera, &GlobalTransform, &Multicam)>,
-        ui_cam: Query<(&Camera, &Camera2d), Without<Multicam>>,
+        ui_cam: Query<(&Camera, &Camera2d), (With<PrimaryEguiContext>, Without<Multicam>)>,
         mut painter: ShapePainter,
         mut contexts: EguiContexts,
     ) {

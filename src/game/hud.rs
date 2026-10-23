@@ -7,16 +7,25 @@
 //! edges where reading them means looking away from the fight. Narrower than
 //! 4:3 it is clamped to the window. `F9` outlines it.
 //!
+//! The HUD has a camera of its own, drawing nothing but UI, a child of the
+//! play camera and ordered above the viewmodel's. On the play camera it was
+//! painted over by the arms; the viewmodel camera cannot carry it either,
+//! being switched off in third person.
+//!
 //! Ids are resolved through the catalogue every frame rather than cached:
 //! `Equipped` and the catalogue arrive on different channels, and an id that
 //! does not resolve yet draws blank.
 
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::Hdr;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::damage::Damageable;
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalogue};
 use crate::game::player::LocalPlayer;
+use crate::game::viewmodel::VIEWMODEL_CAMERA_ORDER;
 use crate::get;
 
 /// Half the gap in the middle of the crosshair, in logical pixels.
@@ -25,6 +34,8 @@ const CROSSHAIR_GAP: f32 = 4.0;
 const CROSSHAIR_ARM: f32 = 7.0;
 /// Logical pixels. Even, so an arm straddles the centre line cleanly.
 const CROSSHAIR_THICKNESS: f32 = 2.0;
+
+pub const HUD_CAMERA_ORDER: isize = VIEWMODEL_CAMERA_ORDER + 1;
 
 const SAFE_ZONE_ASPECT: f32 = 4.0 / 3.0;
 /// Logical pixels in from the safe zone's edges.
@@ -38,6 +49,9 @@ const SMALL: f32 = 22.0;
 /// and somebody laying out the HUD wants it to stay on.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SafeZoneOutline(pub bool);
+
+#[derive(Component)]
+pub struct HudCamera;
 
 #[derive(Component)]
 struct HudRoot;
@@ -75,9 +89,30 @@ impl Plugin for HudPlugin {
     }
 }
 
+/// For the play camera's children. Every in-game UI node lands here, the
+/// pause menu included, because it carries `IsDefaultUiCamera`.
+pub fn hud_camera() -> impl Bundle {
+    (
+        HudCamera,
+        bevy::ui::IsDefaultUiCamera,
+        Camera2d,
+        Camera {
+            order: HUD_CAMERA_ORDER,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        // Must match the cameras under it, or it composites as nothing.
+        Hdr,
+        // It draws no scene; tonemapping again would grade the world twice.
+        Tonemapping::None,
+        RenderLayers::none(),
+        Name::new("HUD view"),
+    )
+}
+
 /// Put the HUD up once there is a body for it to describe. Keyed on
 /// `Added<LocalPlayer>` because a client's body arrives from the server.
-/// No camera target: the play camera is `IsDefaultUiCamera`.
+/// No camera target: the HUD camera is `IsDefaultUiCamera`.
 fn spawn_the_hud(
     mut commands: Commands,
     bodies: Query<Entity, Added<LocalPlayer>>,

@@ -239,8 +239,17 @@ Three things there are easy to get wrong and none of them errors:
   the cursor unconditionally grabs it inside the editor on the first frame of
   the process.
 
-The play camera carries `IsDefaultUiCamera`: the window has six cameras in it
-and Bevy UI otherwise picks one by ambiguity rules rather than by being told.
+The **HUD camera** carries `IsDefaultUiCamera`: the window has seven cameras
+in it and Bevy UI otherwise picks one by ambiguity rules rather than by being
+told. It is a UI-only `Camera2d`, a child of the play camera, ordered above the
+viewmodel's — on the play camera the arms painted over the HUD, and the
+viewmodel camera is off in third person. It is `Hdr` like the cameras under it
+and `Tonemapping::None`, since it draws no scene to grade.
+
+The HUD's readouts sit in a **safe zone**
+([`src/game/hud.rs`](src/game/hud.rs)): a 4:3 box the height of the window,
+centred, so on an ultrawide the numbers stay near the crosshair. `F9`
+outlines it.
 
 **The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
 calls the same `grip_with` that puts a body's hands on a weapon, so a grip
@@ -277,7 +286,7 @@ metres, because that is the one part of the framing that is about size.
 
 **Every camera carries a zero-sized marker and every query filters on one** —
 `Multicam` for the four editor viewports, `PlayerCamera` for the view,
-`ViewmodelCamera` for the one drawn over it. A query that asks for `&Camera`
+`ViewmodelCamera` for the one drawn over it, `HudCamera` for the UI over both. A query that asks for `&Camera`
 alone gets whichever ones happen to match, and the failure is not a compile
 error: it is `place_camera` moving two cameras, or damage numbers projected
 through the wrong one. The viewmodel camera is a **child** of the play camera,
