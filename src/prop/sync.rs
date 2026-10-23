@@ -187,7 +187,7 @@ fn adopt_the_servers_models(
             for (name, text) in &message.0 {
                 match document::parse(text) {
                     Ok(doc) => {
-                        cache.adopt(name, &doc, &mut meshes, &mut materials, &mut surfaces, &mut clips)
+                        cache.adopt(name, &doc, &mut meshes, &mut materials, &mut surfaces, &mut clips, None)
                     }
                     Err(e) => error!("the server's prop {name} will not parse: {e}"),
                 }

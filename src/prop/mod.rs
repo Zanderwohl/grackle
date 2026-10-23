@@ -18,6 +18,7 @@
 //! | [`camera`] | Orbiting, panning and zooming in those viewports. |
 //! | [`gizmo`] | Moving and sizing the selected feature by dragging it. |
 //! | [`sync`] | Handing every weapon's model to whoever connects. |
+//! | [`thumbnail`] | Photographing a prop, and keeping the picture on disk. |
 //! | [`ui`] | The panels. |
 //!
 //! - Nothing above [`view`] touches a `World`, so the kernel is testable
@@ -46,6 +47,7 @@ pub mod profile;
 pub mod solid;
 pub mod sync;
 pub mod surface;
+pub mod thumbnail;
 pub mod ui;
 pub mod view;
 
@@ -119,7 +121,15 @@ fn publish_the_saved_prop(
 
     let Some(name) = editor.saved_name() else { return };
     info!("Saved {name}; handing it to anything holding one");
-    cache.adopt(name, editor.doc(), &mut meshes, &mut materials, &mut surfaces, &mut clips);
+    cache.adopt(
+        name,
+        editor.doc(),
+        &mut meshes,
+        &mut materials,
+        &mut surfaces,
+        &mut clips,
+        editor.path.as_deref(),
+    );
 }
 
 /// Whether `--prop` was given. A resource rather than an initial state so

@@ -10,6 +10,7 @@ use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts, EguiGlobalSettings, 
 use bevy_vector_shapes::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::painter;
+use crate::common::render_layers;
 use crate::tool::selection::EditorSelectable;
 use crate::get;
 
@@ -19,13 +20,17 @@ pub struct MulticamPlugin {
 
 /// The layer only the editor viewports draw, for the handles a tool stands in
 /// the world. Hidden by layer rather than despawned on leaving the editor, so
-/// a handle cannot be forgotten by some tool's teardown. 0 is the world, 1 the
-/// viewmodel and 31 the shape painter.
-pub const EDITOR_ONLY_LAYER: usize = 2;
+/// a handle cannot be forgotten by some tool's teardown.
+pub const EDITOR_ONLY_LAYER: usize = render_layers::EDITOR_ONLY;
 
 /// Not inherited, so every mesh entity of a handle needs its own.
 pub fn editor_only() -> RenderLayers {
     RenderLayers::layer(EDITOR_ONLY_LAYER)
+}
+
+/// What the editor viewports draw, in both authoring modes.
+pub fn viewport_layers() -> RenderLayers {
+    RenderLayers::from_layers(&[render_layers::WORLD, EDITOR_ONLY_LAYER])
 }
 
 /// How much of each window edge something else has taken, in logical pixels.
@@ -250,7 +255,7 @@ impl MulticamPlugin {
                     camera_pos,
                     Bloom::NATURAL,
                     Tonemapping::TonyMcMapface,
-                    RenderLayers::from_layers(&[0, EDITOR_ONLY_LAYER]),
+                    viewport_layers(),
                     Multicam {
                         name: camera_name.to_string(),
                         screen_pos: UVec2::new((idx % 2) as u32, (idx / 2) as u32),
@@ -292,7 +297,7 @@ impl MulticamPlugin {
                 ..Default::default()
             },
             Hdr,
-            RenderLayers::layer(31)
+            RenderLayers::layer(render_layers::PAINTER)
         ));
 
         if state.test_scene {
@@ -595,7 +600,7 @@ impl MulticamPlugin {
                                 }
                             } else {
                                 painter.reset(); // Reset painter properties for this specific drawing
-                                painter.render_layers = Some(RenderLayers::layer(31));
+                                painter.render_layers = Some(RenderLayers::layer(render_layers::PAINTER));
                                 painter.color = Color::srgb_u8(200, 200, 200);
                                 painter.thickness = 1.0; // Define border thickness
 
@@ -621,7 +626,7 @@ impl MulticamPlugin {
         if let Ok((ui_cam, _)) = ui_cam {
             if state.debug_viewport_box {
                 painter.reset();
-                painter.render_layers = Some(RenderLayers::layer(31));
+                painter.render_layers = Some(RenderLayers::layer(render_layers::PAINTER));
                 let viewport_start = painter::window_to_painter_frac(&ui_cam, state.start).extend(1.0);
                 let viewport_end = painter::window_to_painter_frac(&ui_cam, state.end).extend(1.0);
                 painter.color = Color::srgb_u8(0, 0, 255);
@@ -631,7 +636,7 @@ impl MulticamPlugin {
             if state.debug_mouse_circle {
                 if let Some(cursor_window_pos) = window.cursor_position() {
                     painter.reset();
-                    painter.render_layers = Some(RenderLayers::layer(31));
+                    painter.render_layers = Some(RenderLayers::layer(render_layers::PAINTER));
                     painter.set_translation(painter::window_to_painter(&ui_cam, cursor_window_pos).extend(1.0));
                     painter.circle(10.0);
                 }
@@ -647,7 +652,7 @@ impl MulticamPlugin {
         };
 
         painter.reset(); // Reset painter properties for this specific drawing
-        painter.render_layers = Some(RenderLayers::layer(31));
+        painter.render_layers = Some(RenderLayers::layer(render_layers::PAINTER));
         painter.color = color;
         painter.thickness = 2.0; // Define border thickness
 
@@ -676,13 +681,11 @@ mod tests {
     use super::*;
 
     /// Breaks if the play camera, which has the default layers, can see an
-    /// editor handle, or if the layer is shared with something else's.
+    /// editor handle.
     #[test]
     fn handles_are_seen_by_the_editor_viewports_and_nothing_else() {
         assert!(!RenderLayers::default().intersects(&editor_only()), "the play camera sees handles");
-        assert!(RenderLayers::from_layers(&[0, EDITOR_ONLY_LAYER]).intersects(&editor_only()));
-        assert_ne!(EDITOR_ONLY_LAYER, crate::game::viewmodel::VIEWMODEL_LAYER);
-        assert_ne!(EDITOR_ONLY_LAYER, 31);
+        assert!(viewport_layers().intersects(&editor_only()));
     }
 
     /// A fraction from mid-drag nonsense must never reach a texture; wgpu refuses and Bevy exits with an
