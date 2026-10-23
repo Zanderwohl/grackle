@@ -394,8 +394,8 @@ fn panels(
     }
     // Derived from the workspace rather than ticked: in Fit the viewport's
     // handles are the hold's, in Model the selected feature's.
-    let fitting =
-        layout.workspace == Workspace::Fit && editor.doc().archetype == Archetype::Held;
+    let fitting = layout.workspace == Workspace::Fit
+        && matches!(editor.doc().archetype, Archetype::Held | Archetype::Hat);
     if handles.0 != fitting {
         handles.0 = fitting;
     }
@@ -1311,8 +1311,6 @@ fn colliders_ui(ui: &mut Ui, editor: &mut PropEditor) {
 /// checkbox edits that class's entry, as the Hold panel's does.
 fn hat_fit(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure) {
     let base = editor.doc().hat.clone();
-    let key = figure.0.map(Class::key);
-    let overriding = key.as_ref().is_some_and(|key| base.per_class.contains_key(key));
     let mut edited = base.for_class(figure.0);
     let mut changed = false;
 
@@ -1325,10 +1323,7 @@ fn hat_fit(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure) {
         section(ui, "hat_fit", get!("prop.hat.on_the_head"), |ui| {
             changed |= vec3_ui(ui, get!("prop.inspector.offset"), &mut edited.offset, 0.001, "m");
             changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.rotation);
-            // Per class only: the base is the hat as modelled.
-            ui.add_enabled_ui(overriding, |ui| {
-                changed |= drag(ui, get!("prop.hat.scale"), &mut edited.scale, 0.005, "×");
-            });
+            changed |= drag(ui, get!("prop.hat.scale"), &mut edited.scale, 0.005, "×");
         });
     });
 
