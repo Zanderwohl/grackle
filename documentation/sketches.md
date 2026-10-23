@@ -44,11 +44,26 @@ what is done.
   it uses. So **self-intersection is not an error**: crossing lines make more
   regions, not an invalid sketch.
 - **Regions are derived, and named by their boundary.** A sweep cannot store
-  "region 3": the numbering is an accident of the arrangement. It stores the
+  "region 3": the numbering is an accident of the arrangement. The name is the
   set of (entity id, side) pairs enclosing the region. Moving points keeps the
-  name; deleting a bounding line breaks it, which is a Problem like a missing
-  body. Naming a region by a point inside it is the tempting alternative and is
+  name. Naming a region by a point inside it is the tempting alternative and is
   wrong the moment the region moves away from the point.
+- **A sweep names an entry in the sketch's region list**, not the boundary
+  itself. The entry holds the boundary, an optional label and a hint point.
+  Two sweeps of one region share the entry, so re-picking it once re-points
+  both, and a Problem can say "needs *Grip*" rather than list line ids.
+  Unlabelled entries nothing uses are dropped when a feature is removed.
+- **A split keeps the region; a merge loses it.** Lines drawn across a named
+  region cut it into pieces whose outline is still exactly its name, so the
+  pieces are joined back up and the sweep does not change — picking one piece
+  is a deliberate re-pick. Only pieces touching the outline join, so something
+  drawn inside stays a hole. A region whose bounding line is deleted, or which
+  merged with a neighbour, is a Problem; the region now at its hint is offered
+  as a fix and never taken silently, because it is bigger than what was meant.
+- **The hint only breaks ties.** Once curves arrive two regions can share a
+  name (an ellipse crossing a circle four times leaves two identical
+  crescents); the one nearest the hint wins. It is never what a region is
+  found by.
 - **Nothing refuses**, as everywhere else in the evaluator. An open chain, a
   zero-length line or a revolve axis through its region is a note in Problems,
   not a blocked edit.
@@ -83,8 +98,11 @@ Sketch {
 
 SketchEntity::kind = Line { a: PointId, b: PointId }   // Arc, Circle, Bezier later
 
-Extrude { sketch, regions: Vec<RegionRef>, end: End, symmetric, surface }
-Revolve { sketch, regions: Vec<RegionRef>, axis: EntityId, degrees, symmetric, surface }
+Extrude { sketch, regions, end: End, symmetric, surface }
+Revolve { sketch, regions, axis: EntityId, degrees, symmetric, surface }
+
+Sketch.regions: Vec<SketchRegion { id, label, hint, bounds: RegionRef }>
+Extrude/Revolve.regions: Vec<SketchId>     // entries in that list
 
 RegionRef = the set of (EntityId, Side) round the region's outer loop
 ```
@@ -150,6 +168,9 @@ tested.
       hand. Done: neither sweep has a profile or placement now, and the
       profile editor is gone. The shipped launcher's one extrude, the Bore, is
       now the equivalent prism.
+- [x] Named regions: sweeps name entries on the sketch, labelled in the
+      Inspector, re-pointed from a pick or from the region at the old spot.
+      Split regions are joined back up; merged ones are a Problem.
 - [ ] Hide a sketch once something sweeps it, as CAD tools do, so its regions
       stop sitting on top of the body it made.
 

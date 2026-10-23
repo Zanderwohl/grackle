@@ -20,6 +20,7 @@ use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
 use crate::prop::reference::{GeomRef, Element};
 use crate::prop::plane::PlaneRef;
 use crate::prop::region::RegionRef;
+use crate::prop::sketch::SketchId;
 use crate::prop::reference::{Element, GeomRef};
 
 /// Grackle Prop: TOML, one prop per file.
@@ -185,6 +186,28 @@ impl PropDoc {
 
     pub fn remove(&mut self, id: PropFeatureId) {
         self.features.retain(|feature| feature.id != id);
+        self.prune_sketch_regions();
+    }
+
+    /// Drops sketch region entries no sweep names, unless they were labelled.
+    pub fn prune_sketch_regions(&mut self) {
+        let used: Vec<(PropFeatureId, SketchId)> = self
+            .features
+            .iter()
+            .flat_map(|feature| match &feature.op {
+                FeatureOp::Extrude { sketch, regions, .. } | FeatureOp::Revolve { sketch, regions, .. } => {
+                    regions.iter().map(|region| (*sketch, *region)).collect()
+                }
+                _ => vec![],
+            })
+            .collect();
+        for feature in &mut self.features {
+            let id = feature.id;
+            if let FeatureOp::Sketch { sketch, .. } = &mut feature.op {
+                let mine: Vec<SketchId> = used.iter().filter(|(on, _)| *on == id).map(|(_, region)| *region).collect();
+                sketch.prune_regions(&mine);
+            }
+        }
     }
 
     /// Everything that names `id`, as an operand or a reference.
@@ -409,10 +432,19 @@ impl PropEditor {
     /// Inserts at the rollback bar and moves the bar onto the new feature, or
     /// appends with no bar.
     pub fn add(&mut self, op: FeatureOp) -> PropFeatureId {
+        self.add_built(|_| op)
+    }
+
+    /// [`Self::add`], with whatever the feature needs written into the
+    /// document first, as one undo step.
+    pub fn add_built(&mut self, build: impl FnOnce(&mut PropDoc) -> FeatureOp) -> PropFeatureId {
         let anchor = self.rollback;
-        let id = self.edit(|doc| match anchor.and_then(|anchor| doc.index_of(anchor)) {
-            Some(at) => doc.insert_at(at + 1, op),
-            None => doc.push(op),
+        let id = self.edit(|doc| {
+            let op = build(doc);
+            match anchor.and_then(|anchor| doc.index_of(anchor)) {
+                Some(at) => doc.insert_at(at + 1, op),
+                None => doc.push(op),
+            }
         });
         if anchor.is_some() {
             self.roll_back_to(Some(id));

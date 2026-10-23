@@ -691,6 +691,7 @@ material = "Material"
 operands = "Operands"
 mirror = "Mirror plane"
 pattern = "Pattern"
+swept_regions = "Regions"
 
 [prop.planes]
 xy = "XY plane"
@@ -707,6 +708,12 @@ delete = "Delete"
 point = "Point { id }"
 line_label = "Line { id }"
 regions = "{ count } closed regions"
+region_label = "Region { id }"
+
+[prop.region]
+missing = "not enclosed"
+use_picked = "Use picked"
+use_here = "Use region at its old spot"
 
 [prop.picks]
 point = "{ source } · point { index }"
@@ -741,6 +748,7 @@ nothing_left = "leaves nothing behind"
 no_plane = "is not through a plane"
 no_sketch_plane = "is on a plane that is not there"
 missing_sketch = "names a sketch that is not there"
-missing_region = "names a region its sketch no longer has"
+missing_region = "needs { region }, which its sketch no longer encloses"
+no_regions = "sweeps no regions"
 missing_axis = "names an axis its sketch does not have"
 axis_crosses = "turns a region about an axis that crosses it"

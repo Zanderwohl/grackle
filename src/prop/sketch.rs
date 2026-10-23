@@ -11,6 +11,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::prop::plane::Plane;
+use crate::prop::region::{centroid, Arrangement, Bound, Region, RegionRef};
 
 /// Points and entities share one counter, and an id is never reused, so a
 /// region or a later constraint naming one cannot be handed another.
@@ -66,6 +67,28 @@ impl SketchEntity {
     }
 }
 
+/// A region a sweep takes, kept on the sketch so that every sweep using it
+/// names this rather than the lines round it — re-picking it here re-points
+/// them all. See [`Arrangement::resolve`] for what it finds once the drawing
+/// has changed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SketchRegion {
+    pub id: SketchId,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    /// Where its middle was when picked, in the plane. Only chooses between
+    /// regions answering to the same name.
+    #[serde(with = "crate::prop::nice_f32::array")]
+    pub hint: [f32; 2],
+    pub bounds: Vec<Bound>,
+}
+
+impl SketchRegion {
+    pub fn name(&self) -> RegionRef {
+        RegionRef { bounds: self.bounds.clone() }
+    }
+}
+
 /// `next_id` first: TOML needs every scalar before any sub-table.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Sketch {
@@ -74,6 +97,8 @@ pub struct Sketch {
     pub points: Vec<SketchPoint>,
     #[serde(default)]
     pub entities: Vec<SketchEntity>,
+    #[serde(default)]
+    pub regions: Vec<SketchRegion>,
 }
 
 impl Sketch {
@@ -130,6 +155,39 @@ impl Sketch {
         });
     }
 
+    pub fn region(&self, id: SketchId) -> Option<&SketchRegion> {
+        self.regions.iter().find(|region| region.id == id)
+    }
+
+    /// The entry for `region`: the one already naming it, so two sweeps of
+    /// one region share it, or a new one.
+    pub fn adopt_region(&mut self, region: &Region) -> SketchId {
+        if let Some(existing) = self.regions.iter().find(|entry| entry.bounds == region.name.bounds) {
+            return existing.id;
+        }
+        let id = self.take_id();
+        self.regions.push(SketchRegion {
+            id,
+            label: String::new(),
+            hint: centroid(&region.outer).to_array(),
+            bounds: region.name.bounds.clone(),
+        });
+        id
+    }
+
+    /// Points entry `id` at `region` instead, for every sweep using it.
+    pub fn repoint_region(&mut self, id: SketchId, region: &Region) {
+        if let Some(entry) = self.regions.iter_mut().find(|entry| entry.id == id) {
+            entry.bounds = region.name.bounds.clone();
+            entry.hint = centroid(&region.outer).to_array();
+        }
+    }
+
+    /// Drops entries nothing uses, unless somebody named them.
+    pub fn prune_regions(&mut self, used: &[SketchId]) {
+        self.regions.retain(|region| !region.label.is_empty() || used.contains(&region.id));
+    }
+
     pub fn lines(&self) -> impl Iterator<Item = (SketchId, SketchId, SketchId, bool)> + '_ {
         self.entities.iter().map(|entity| match *entity {
             SketchEntity::Line { id, a, b, construction } => (id, a, b, construction),
@@ -144,12 +202,23 @@ pub struct PlacedSketch {
     pub plane: Plane,
     pub sketch: Sketch,
     /// Its regions, found once per evaluation.
-    pub arrangement: crate::prop::region::Arrangement,
+    pub arrangement: Arrangement,
 }
 
 impl PlacedSketch {
     pub fn world(&self, at: Vec2) -> Vec3 {
         self.plane.lift(at)
+    }
+
+    /// What region entry `id` means in the drawing as it now stands.
+    pub fn resolve(&self, id: SketchId) -> Option<Region> {
+        let entry = self.sketch.region(id)?;
+        self.arrangement.resolve(&entry.name(), Vec2::from_array(entry.hint))
+    }
+
+    /// How a region entry is shown: its label, or its id.
+    pub fn region_label(&self, id: SketchId) -> String {
+        region_label(&self.sketch, id)
     }
 
     /// Each line's ends in the prop's space, and whether it is construction.
@@ -161,6 +230,13 @@ impl PlacedSketch {
                 Some((self.world(self.sketch.point(a)?), self.world(self.sketch.point(b)?), construction))
             })
             .collect()
+    }
+}
+
+pub fn region_label(sketch: &Sketch, id: SketchId) -> String {
+    match sketch.region(id) {
+        Some(region) if !region.label.is_empty() => region.label.clone(),
+        _ => crate::get!("prop.sketch.region_label", "id", id),
     }
 }
 

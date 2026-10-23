@@ -19,7 +19,7 @@ use crate::prop::csg::Polygon;
 use crate::prop::plane::{Datum, OriginPlane, PlaneRef};
 use crate::prop::plane::Plane;
 use crate::prop::profile::revolve_steps;
-use crate::prop::region::{arrange, axis_clear, Region, RegionRef};
+use crate::prop::region::{arrange, axis_clear, Region};
 use crate::prop::sketch::SketchId;
 use crate::prop::sketch::{PlacedSketch, Sketch};
 use crate::prop::reference::{face_at, pickables, GeomRef, Located, Outline, Pickable, Wire};
@@ -96,17 +96,20 @@ pub enum FeatureOp {
     /// body. Scalars first: TOML needs every scalar before any sub-table.
     Extrude {
         sketch: PropFeatureId,
+        /// Entries in the sketch's own region list.
+        regions: Vec<SketchId>,
         /// Half each way.
         #[serde(default)]
         symmetric: bool,
         end: End,
         surface: Surface,
-        regions: Vec<RegionRef>,
     },
     /// Regions of a sketch turned about a line in the same sketch, in
     /// straight steps. Scalars first, as for [`FeatureOp::Extrude`].
     Revolve {
         sketch: PropFeatureId,
+        /// As for [`FeatureOp::Extrude`].
+        regions: Vec<SketchId>,
         axis: SketchId,
         #[serde(with = "crate::prop::nice_f32::scalar")]
         degrees: f32,
@@ -116,7 +119,6 @@ pub enum FeatureOp {
         #[serde(default)]
         symmetric: bool,
         surface: Surface,
-        regions: Vec<RegionRef>,
     },
     Boolean { op: BooleanOp, target: PropFeatureId, tool: PropFeatureId },
     /// Axis-aligned rather than a full [`Placement`], so it is picked from a
@@ -519,6 +521,32 @@ struct Live {
     wires: Vec<Wire>,
 }
 
+/// Every region a sweep names, as the sketch now stands, or a Problem naming
+/// the first that is not there.
+fn resolve_regions(
+    feature: PropFeatureId,
+    placed: &PlacedSketch,
+    regions: &[SketchId],
+    problems: &mut Vec<Problem>,
+) -> Option<Vec<Region>> {
+    if regions.is_empty() {
+        problems.push(Problem { feature, message: get!("prop.problems.no_regions") });
+        return None;
+    }
+    let mut found = Vec::with_capacity(regions.len());
+    for &id in regions {
+        match placed.resolve(id) {
+            Some(region) => found.push(region),
+            None => {
+                let region = placed.region_label(id);
+                problems.push(Problem { feature, message: get!("prop.problems.missing_region", "region", region) });
+                return None;
+            }
+        }
+    }
+    Some(found)
+}
+
 /// A pure function of the list, so it runs without a `World`.
 pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     let mut live: Vec<Live> = Vec::new();
@@ -553,16 +581,11 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
                     continue;
                 };
-                let found: Option<Vec<&Region>> =
-                    regions.iter().map(|region| placed.arrangement.find(region)).collect();
-                let Some(found) = found.filter(|found| !found.is_empty()) else {
-                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_region") });
-                    continue;
-                };
+                let Some(found) = resolve_regions(feature.id, placed, regions, &mut problems) else { continue };
                 let (frame, depth) = (placed.plane.transform(), end.distance());
                 let mut outline = Outline::default();
                 let mut solid: Option<Solid> = None;
-                for region in found {
+                for region in &found {
                     let piece = Solid::extrude_region(&region.outer, &region.holes, depth, *symmetric, *surface)
                         .transformed(frame);
                     // Unioned rather than gathered: regions sharing a line
@@ -585,17 +608,12 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
                     continue;
                 };
-                let found: Option<Vec<&Region>> =
-                    regions.iter().map(|region| placed.arrangement.find(region)).collect();
-                let Some(found) = found.filter(|found| !found.is_empty()) else {
-                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_region") });
-                    continue;
-                };
+                let Some(found) = resolve_regions(feature.id, placed, regions, &mut problems) else { continue };
                 let Some((a, b)) = placed.sketch.line(*axis) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_axis") });
                     continue;
                 };
-                let Some(frame) = AxisFrame::new(&placed.plane, a, b, &found) else {
+                let Some(frame) = AxisFrame::new(&placed.plane, a, b, &found.iter().collect::<Vec<_>>()) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.axis_crosses") });
                     continue;
                 };
@@ -606,7 +624,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 };
                 let mut outline = Outline::default();
                 let mut solid: Option<Solid> = None;
-                for region in found {
+                for region in &found {
                     let outer = frame.local(&region.outer);
                     let holes: Vec<Vec<Vec2>> = region.holes.iter().map(|hole| frame.local(hole)).collect();
                     let piece = Solid::revolve_region(&outer, &holes, *degrees, steps, *surface)
@@ -954,7 +972,7 @@ mod tests {
         use super::super::*;
         use crate::prop::document::{parse, to_text, PropDoc};
         use crate::prop::plane::OriginPlane;
-        use crate::prop::region::Region;
+        use crate::prop::region::{arrange, Region, RegionRef};
         use crate::prop::sketch::{Sketch, SketchId};
 
         fn polygon(sketch: &mut Sketch, corners: &[[f32; 2]]) -> Vec<SketchId> {
@@ -974,7 +992,9 @@ mod tests {
             symmetric: bool,
             pick: impl Fn(&[Region]) -> Vec<RegionRef>,
         ) -> (Vec<PropFeature>, Evaluated) {
-            let regions = pick(&arrange(&sketch).regions);
+            let mut sketch = sketch;
+            let picked = pick(&arrange(&sketch).regions);
+            let regions = adopt(&mut sketch, picked);
             let features = vec![
                 PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(on), sketch }),
                 PropFeature::new(
@@ -992,7 +1012,12 @@ mod tests {
             (features, evaluated)
         }
 
-        fn every(regions: &[Region]) -> Vec<RegionRef> {
+        pub(super) fn adopt(sketch: &mut Sketch, names: Vec<RegionRef>) -> Vec<SketchId> {
+            let arrangement = arrange(sketch);
+            names.iter().map(|name| sketch.adopt_region(arrangement.find(name).unwrap())).collect()
+        }
+
+        pub(super) fn every(regions: &[Region]) -> Vec<RegionRef> {
             regions.iter().map(|region| region.name.clone()).collect()
         }
 
@@ -1014,6 +1039,90 @@ mod tests {
             let (_, up) = swept(OriginPlane::Xz, sketch, 0.1, false, every);
             let (min, max) = up.bodies[0].1.bounds().unwrap();
             assert!(min.y.abs() < 1e-6 && (max.y - 0.1).abs() < 1e-6, "a floor sketch goes up: {min} {max}");
+        }
+
+        fn sketch_in(features: &mut [PropFeature]) -> &mut Sketch {
+            match &mut features[0].op {
+                FeatureOp::Sketch { sketch, .. } => sketch,
+                _ => unreachable!(),
+            }
+        }
+
+        /// Fails if drawing across a swept region changes, or loses, the body.
+        #[test]
+        fn a_line_drawn_across_a_swept_region_leaves_the_body_alone() {
+            let mut sketch = Sketch::default();
+            square(&mut sketch, 0.0, 0.04);
+            let (mut features, before) = swept(OriginPlane::Xy, sketch, 0.1, false, every);
+            let drawn = sketch_in(&mut features);
+            let (a, b) = (drawn.add_point(Vec2::new(0.02, -0.01)), drawn.add_point(Vec2::new(0.02, 0.05)));
+            drawn.add_line(a, b);
+
+            let after = evaluate(&features);
+            assert!(after.problems.is_empty(), "{:?}", after.problems);
+            let (was, is) = (before.bodies[0].1.volume(), after.bodies[0].1.volume());
+            assert!((was - is).abs() < 1e-9, "{was} vs {is}");
+        }
+
+        /// Fails if a merge is guessed at rather than reported by name.
+        #[test]
+        fn a_region_merged_away_is_a_problem_naming_its_label() {
+            let mut sketch = Sketch::default();
+            square(&mut sketch, 0.0, 0.04);
+            let (a, b) = (sketch.add_point(Vec2::new(0.02, 0.0)), sketch.add_point(Vec2::new(0.02, 0.04)));
+            let divider = sketch.add_line(a, b);
+            let left = |regions: &[Region]| {
+                vec![regions.iter().find(|r| r.contains(Vec2::new(0.01, 0.02))).unwrap().name.clone()]
+            };
+            let (mut features, _) = swept(OriginPlane::Xy, sketch, 0.1, false, left);
+            let drawn = sketch_in(&mut features);
+            drawn.regions[0].label = "Grip".into();
+            drawn.remove(&[divider]);
+
+            let after = evaluate(&features);
+            assert!(after.bodies.is_empty());
+            assert_eq!(after.problems.len(), 1);
+            assert!(after.problems[0].message.contains("Grip"), "{}", after.problems[0].message);
+        }
+
+        /// Fails if two sweeps of one region get an entry each, so that
+        /// re-picking it for one leaves the other behind.
+        #[test]
+        fn sweeps_of_one_region_share_its_entry() {
+            let mut sketch = Sketch::default();
+            square(&mut sketch, 0.0, 0.04);
+            let region = arrange(&sketch).regions[0].clone();
+            let first = sketch.adopt_region(&region);
+            assert_eq!(sketch.adopt_region(&region), first);
+            assert_eq!(sketch.regions.len(), 1);
+        }
+
+        #[test]
+        fn removing_a_sweep_forgets_its_region_unless_it_was_labelled() {
+            let mut sketch = Sketch::default();
+            square(&mut sketch, 0.0, 0.04);
+            square(&mut sketch, 0.1, 0.14);
+            let regions = arrange(&sketch).regions;
+            let mut doc = PropDoc::new("test");
+            let named = sketch.adopt_region(&regions[0]);
+            sketch.adopt_region(&regions[1]);
+            sketch.regions[0].label = "Kept".into();
+            let on = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch });
+            let ids = match &doc.features[0].op {
+                FeatureOp::Sketch { sketch, .. } => sketch.regions.iter().map(|r| r.id).collect(),
+                _ => unreachable!(),
+            };
+            let sweep = doc.push(FeatureOp::Extrude {
+                sketch: on,
+                regions: ids,
+                symmetric: false,
+                end: End::Distance { distance: 0.1 },
+                surface: Surface::default(),
+            });
+
+            doc.remove(sweep);
+            let FeatureOp::Sketch { sketch, .. } = &doc.features[0].op else { unreachable!() };
+            assert_eq!(sketch.regions.iter().map(|r| r.id).collect::<Vec<_>>(), vec![named]);
         }
 
         #[test]
@@ -1042,19 +1151,6 @@ mod tests {
             assert_eq!(evaluated.bodies.len(), 1);
             let area = 2.0 * 0.02 * 0.02 - 0.01 * 0.01;
             assert!((evaluated.bodies[0].1.volume() - area * 0.05).abs() < 1e-8);
-        }
-
-        #[test]
-        fn a_region_cut_in_two_is_a_problem() {
-            let mut sketch = Sketch::default();
-            square(&mut sketch, 0.0, 0.04);
-            let (mut features, _) = swept(OriginPlane::Xy, sketch, 0.1, false, every);
-            let FeatureOp::Sketch { sketch, .. } = &mut features[0].op else { unreachable!() };
-            let (a, b) = (sketch.add_point(Vec2::new(0.02, 0.0)), sketch.add_point(Vec2::new(0.02, 0.04)));
-            sketch.add_line(a, b);
-            let evaluated = evaluate(&features);
-            assert!(evaluated.bodies.is_empty());
-            assert_eq!(evaluated.problems.len(), 1);
         }
 
         /// The extruded body is named like any other: its corners can be
@@ -1104,8 +1200,10 @@ mod tests {
 
     mod revolve {
         use super::super::*;
+        use super::extrude::{adopt, every};
         use crate::prop::document::{parse, to_text, PropDoc};
         use crate::prop::plane::OriginPlane;
+        use crate::prop::region::arrange;
         use crate::prop::sketch::{Sketch, SketchId};
 
         /// A rectangle `r0..r1` across and `0..h` up, and a construction axis
@@ -1123,8 +1221,9 @@ mod tests {
             (sketch, axis)
         }
 
-        fn turned(on: OriginPlane, sketch: Sketch, axis: SketchId, degrees: f32, steps: u32, symmetric: bool) -> Evaluated {
-            let regions: Vec<RegionRef> = arrange(&sketch).regions.iter().map(|r| r.name.clone()).collect();
+        fn turned(on: OriginPlane, mut sketch: Sketch, axis: SketchId, degrees: f32, steps: u32, symmetric: bool) -> Evaluated {
+            let names = every(&arrange(&sketch).regions);
+            let regions = adopt(&mut sketch, names);
             evaluate(&[
                 PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(on), sketch }),
                 PropFeature::new(
@@ -1218,6 +1317,7 @@ mod tests {
                 sketch.add_line(points[i], points[(i + 1) % 4]);
             }
             let outer = arrange(&sketch).regions.into_iter().max_by(|a, b| a.area().total_cmp(&b.area())).unwrap();
+            let outer = sketch.adopt_region(&outer);
             let evaluated = evaluate(&[
                 PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
                 PropFeature::new(
@@ -1229,7 +1329,7 @@ mod tests {
                         steps: 4,
                         symmetric: false,
                         surface: Surface::default(),
-                        regions: vec![outer.name],
+                        regions: vec![outer],
                     },
                 ),
             ]);
@@ -1244,8 +1344,9 @@ mod tests {
 
         #[test]
         fn a_revolve_survives_the_file() {
-            let (sketch, axis) = ring(0.02, 0.05, 0.1, 0.0);
-            let regions: Vec<RegionRef> = arrange(&sketch).regions.iter().map(|r| r.name.clone()).collect();
+            let (mut sketch, axis) = ring(0.02, 0.05, 0.1, 0.0);
+            let names = every(&arrange(&sketch).regions);
+            let regions = adopt(&mut sketch, names);
             let mut doc = PropDoc::new("test");
             let on = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch });
             doc.push(FeatureOp::Revolve {

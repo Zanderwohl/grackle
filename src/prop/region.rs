@@ -5,8 +5,9 @@
 //! overlapping squares are three regions and a bow tie is two. Construction
 //! lines take no part. A region is named by the lines round its outside and
 //! which side of each it is on — never by its index, which is an accident of
-//! the arrangement — so moving a point keeps the name and cutting the region
-//! in two does not.
+//! the arrangement — so moving a point keeps the name. Cutting a named region
+//! in two does not lose it: [`Arrangement::resolve`] puts the pieces back
+//! together.
 //!
 //! Pure: no `World`, nothing but 2D in the sketch's own plane.
 
@@ -81,11 +82,141 @@ pub enum Note {
 pub struct Arrangement {
     pub regions: Vec<Region>,
     pub notes: Vec<Note>,
+    graph: Graph,
+}
+
+/// The planar graph the regions were walked from. Half-edge `2e` runs along
+/// edge `e`, `2e + 1` against it.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Graph {
+    vertices: Vec<Vec2>,
+    edges: Vec<Edge>,
+    /// The half-edge after each, walking its face with the face on the left.
+    next: Vec<usize>,
+    /// The region each half-edge bounds; `None` for the outside of a piece.
+    face_of: Vec<Option<usize>>,
+}
+
+impl Graph {
+    fn start(&self, h: usize) -> Vec2 {
+        let edge = self.edges[h / 2];
+        self.vertices[if h % 2 == 0 { edge.from } else { edge.to }]
+    }
+
+    fn bound(&self, h: usize) -> Bound {
+        Bound {
+            entity: self.edges[h / 2].entity,
+            side: if h % 2 == 0 { Side::Left } else { Side::Right },
+        }
+    }
 }
 
 impl Arrangement {
+    /// Exactly the region called `name`, as it was picked.
     pub fn find(&self, name: &RegionRef) -> Option<&Region> {
         self.regions.iter().find(|region| region.name == *name)
+    }
+
+    /// The region `name` means now, which [`Self::find`] is when it is still
+    /// one face. When lines drawn across it have cut it into pieces, it is
+    /// the pieces joined back up — the outline it was named by still encloses
+    /// the same ground, so a sweep of it does not change because somebody
+    /// drew on it. A piece that touches none of the outline is something drawn
+    /// inside, and stays a hole as it would have before the cut.
+    ///
+    /// `hint` only chooses between candidates that answer to the same name,
+    /// nearest first; it is never what a region is found by.
+    ///
+    /// `None` when no region is bounded by exactly those lines, which is what
+    /// deleting one of them, or two regions merging, leaves.
+    pub fn resolve(&self, name: &RegionRef, hint: Vec2) -> Option<Region> {
+        let nearest = |candidates: Vec<Region>| {
+            candidates
+                .into_iter()
+                .min_by(|a, b| centroid(&a.outer).distance(hint).total_cmp(&centroid(&b.outer).distance(hint)))
+        };
+        let exact: Vec<Region> = self.regions.iter().filter(|region| region.name == *name).cloned().collect();
+        if !exact.is_empty() {
+            return nearest(exact);
+        }
+
+        let named: BTreeSet<SketchId> = name.bounds.iter().map(|bound| bound.entity).collect();
+        let touches = |region: &Region| region.name.bounds.iter().any(|bound| named.contains(&bound.entity));
+        let graph = &self.graph;
+        let mut piece_of: Vec<Option<usize>> = vec![None; self.regions.len()];
+        let mut pieces: Vec<Vec<usize>> = Vec::new();
+        for seed in 0..self.regions.len() {
+            if piece_of[seed].is_some() || !touches(&self.regions[seed]) {
+                continue;
+            }
+            let piece = pieces.len();
+            let mut members = vec![seed];
+            piece_of[seed] = Some(piece);
+            let mut at = 0;
+            while at < members.len() {
+                let face = members[at];
+                at += 1;
+                for h in (0..graph.face_of.len()).filter(|&h| graph.face_of[h] == Some(face)) {
+                    let Some(other) = graph.face_of[h ^ 1] else { continue };
+                    let divider = !named.contains(&graph.edges[h / 2].entity);
+                    if divider && piece_of[other].is_none() && touches(&self.regions[other]) {
+                        piece_of[other] = Some(piece);
+                        members.push(other);
+                    }
+                }
+            }
+            pieces.push(members);
+        }
+
+        let joined: Vec<Region> = pieces
+            .iter()
+            .filter(|members| members.len() > 1)
+            .filter_map(|members| self.join(members, &piece_of))
+            .filter(|region| region.name == *name)
+            .collect();
+        nearest(joined)
+    }
+
+    /// One region covering `members`, which are connected faces: its outline
+    /// is every half-edge of theirs whose other side is not one of them.
+    fn join(&self, members: &[usize], piece_of: &[Option<usize>]) -> Option<Region> {
+        let graph = &self.graph;
+        let piece = piece_of[members[0]];
+        let inside = |h: usize| graph.face_of[h].is_some_and(|face| piece_of[face] == piece);
+        let edge_of_union = |h: usize| inside(h) && !inside(h ^ 1);
+
+        let mut seen = vec![false; graph.next.len()];
+        let mut outer: Option<(Vec<Vec2>, Vec<Bound>)> = None;
+        let mut holes: Vec<Vec<Vec2>> = members.iter().flat_map(|&m| self.regions[m].holes.clone()).collect();
+        for start in (0..graph.next.len()).filter(|&h| edge_of_union(h)) {
+            if seen[start] {
+                continue;
+            }
+            let (mut points, mut bounds) = (vec![], vec![]);
+            let mut h = start;
+            while !seen[h] {
+                seen[h] = true;
+                points.push(graph.start(h));
+                bounds.push(graph.bound(h));
+                // Round the far vertex until the walk is back on the outline.
+                let mut n = graph.next[h];
+                while !edge_of_union(n) {
+                    n = graph.next[n ^ 1];
+                }
+                h = n;
+            }
+            if signed_area(&points) > TOLERANCE * TOLERANCE {
+                // A connected union has one outside.
+                if outer.replace((points, bounds)).is_some() {
+                    return None;
+                }
+            } else {
+                holes.push(points);
+            }
+        }
+        let (outer, bounds) = outer?;
+        let bounds: BTreeSet<Bound> = bounds.into_iter().collect();
+        Some(Region { name: RegionRef { bounds: bounds.into_iter().collect() }, outer, holes })
     }
 
     /// The region a click at `point` lands in. Faces of one arrangement do
@@ -212,11 +343,11 @@ pub fn arrange(sketch: &Sketch) -> Arrangement {
         }
     }
 
-    let regions = faces(&vertices, &edges);
-    Arrangement { regions, notes }
+    let (regions, graph) = faces(vertices, edges);
+    Arrangement { regions, notes, graph }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Edge {
     from: usize,
     to: usize,
@@ -266,7 +397,7 @@ fn vertex_near(vertices: &mut Vec<Vec2>, at: Vec2) -> usize {
 /// so a bounded face comes out counter-clockwise (positive area) and the
 /// outside of each connected piece clockwise. Each clockwise outside is a hole
 /// in the smallest face of another piece that contains it.
-fn faces(vertices: &[Vec2], edges: &[Edge]) -> Vec<Region> {
+fn faces(vertices: Vec<Vec2>, edges: Vec<Edge>) -> (Vec<Region>, Graph) {
     // Half-edge `2e` runs along edge `e`, `2e + 1` against it.
     let half = |h: usize| {
         let edge = edges[h / 2];
@@ -321,7 +452,7 @@ fn faces(vertices: &[Vec2], edges: &[Edge]) -> Vec<Region> {
         piece[v] = r;
         r
     }
-    for edge in edges {
+    for edge in &edges {
         let (a, b) = (root(&mut piece, edge.from), root(&mut piece, edge.to));
         piece[a] = b;
     }
@@ -329,10 +460,14 @@ fn faces(vertices: &[Vec2], edges: &[Edge]) -> Vec<Region> {
     let points_of = |cycle: &[usize]| cycle.iter().map(|&h| vertices[half(h).0]).collect::<Vec<Vec2>>();
     let mut bounded: Vec<(Region, usize)> = Vec::new();
     let mut outsides: Vec<(Vec<Vec2>, usize)> = Vec::new();
+    let mut face_of: Vec<Option<usize>> = vec![None; edges.len() * 2];
     for cycle in &cycles {
         let points = points_of(cycle);
         let owner = root(&mut piece, half(cycle[0]).0);
         if signed_area(&points) > TOLERANCE * TOLERANCE {
+            for &h in cycle {
+                face_of[h] = Some(bounded.len());
+            }
             let bounds: BTreeSet<Bound> = cycle
                 .iter()
                 .map(|&h| Bound {
@@ -359,7 +494,13 @@ fn faces(vertices: &[Vec2], edges: &[Edge]) -> Vec<Region> {
             bounded[at].0.holes.push(outside);
         }
     }
-    bounded.into_iter().map(|(region, _)| region).collect()
+    let next = (0..edges.len() * 2).map(next).collect();
+    let regions = bounded.into_iter().map(|(region, _)| region).collect();
+    (regions, Graph { vertices, edges, next, face_of })
+}
+
+pub fn centroid(points: &[Vec2]) -> Vec2 {
+    points.iter().copied().sum::<Vec2>() / points.len().max(1) as f32
 }
 
 /// The longest way across a loop's bounds.
@@ -598,4 +739,78 @@ mod tests {
         let arrangement = arrange(&sketch);
         assert_eq!(arrangement.notes, vec![Note::ZeroLength(zero), Note::MissingPoint(missing)]);
     }
+
+    fn line(sketch: &mut Sketch, a: [f32; 2], b: [f32; 2]) -> SketchId {
+        let (a, b) = (sketch.add_point(Vec2::from_array(a)), sketch.add_point(Vec2::from_array(b)));
+        sketch.add_line(a, b)
+    }
+
+    /// Fails if a line drawn across a region loses it.
+    #[test]
+    fn a_region_cut_in_two_is_still_found_whole() {
+        let mut sketch = Sketch::default();
+        square(&mut sketch, 0.0, 2.0);
+        let name = arrange(&sketch).regions[0].name.clone();
+
+        line(&mut sketch, [1.0, 0.0], [1.0, 2.0]);
+        let after = arrange(&sketch);
+        assert_eq!(after.regions.len(), 2);
+        assert!(after.find(&name).is_none());
+        let found = after.resolve(&name, Vec2::ONE).expect("the halves join back up");
+        assert_eq!(found.name, name);
+        assert!((found.area() - 4.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_cut_running_past_the_outline_still_joins() {
+        let mut sketch = Sketch::default();
+        square(&mut sketch, 0.0, 2.0);
+        let name = arrange(&sketch).regions[0].name.clone();
+
+        line(&mut sketch, [1.0, -1.0], [1.0, 3.0]);
+        line(&mut sketch, [-1.0, 1.0], [3.0, 1.0]);
+        let found = arrange(&sketch).resolve(&name, Vec2::ONE).expect("four quarters join back up");
+        assert!((found.area() - 4.0).abs() < 1e-5);
+    }
+
+    /// Fails if joining the pieces fills in a hole that was drawn inside.
+    #[test]
+    fn an_island_stays_a_hole_when_its_region_is_cut() {
+        let mut sketch = Sketch::default();
+        square(&mut sketch, 0.0, 4.0);
+        square(&mut sketch, 0.5, 1.5);
+        let name = arrange(&sketch).region_at(Vec2::new(3.0, 3.0)).unwrap().name.clone();
+
+        line(&mut sketch, [3.0, 0.0], [3.0, 4.0]);
+        let found = arrange(&sketch).resolve(&name, Vec2::splat(2.0)).unwrap();
+        assert!((found.area() - 15.0).abs() < 1e-5, "{}", found.area());
+    }
+
+    /// A merge is not guessed at: the line the name was partly made of is gone.
+    #[test]
+    fn a_region_merged_with_its_neighbour_is_lost() {
+        let mut sketch = Sketch::default();
+        square(&mut sketch, 0.0, 2.0);
+        let divider = line(&mut sketch, [1.0, 0.0], [1.0, 2.0]);
+        let before = arrange(&sketch);
+        let left = before.region_at(Vec2::new(0.5, 1.0)).unwrap().name.clone();
+
+        sketch.remove(&[divider]);
+        let after = arrange(&sketch);
+        assert!(after.resolve(&left, Vec2::new(0.5, 1.0)).is_none());
+        assert!(after.region_at(Vec2::new(0.5, 1.0)).is_some(), "the merged region is there to re-pick");
+    }
+
+    /// One half of a cut region is its own region, not the whole.
+    #[test]
+    fn a_half_is_found_as_a_half() {
+        let mut sketch = Sketch::default();
+        square(&mut sketch, 0.0, 2.0);
+        line(&mut sketch, [1.0, 0.0], [1.0, 2.0]);
+        let arrangement = arrange(&sketch);
+        let half = arrangement.region_at(Vec2::new(0.5, 1.0)).unwrap();
+        let found = arrangement.resolve(&half.name, Vec2::ZERO).unwrap();
+        assert!((found.area() - 2.0).abs() < 1e-5);
+    }
+
 }

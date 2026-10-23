@@ -614,7 +614,7 @@ be dragged above the cube it was made on.
 
 Sketches — a 2D drawing on a plane that Extrude and Revolve sweep — are
 planned in [documentation/sketches.md](documentation/sketches.md), with the
-decisions behind them and a checklist. Three things about what is built:
+decisions behind them and a checklist. Four things about what is built:
 
 - **A sketch is a flat set, not a feature list** ([`sketch.rs`](src/prop/sketch.rs)):
   lines name their ends by id, so a shared corner is one point and "is this
@@ -624,6 +624,15 @@ decisions behind them and a checklist. Three things about what is built:
   line at its crossings and walking the faces of the planar graph, so crossing
   lines split rather than fail. A region is named by the lines round its
   outside and which side of each, never by index.
+- **A sweep names an entry on its sketch, not a region**
+  (`Sketch::regions`, `SketchRegion`): one place to label it, and one
+  re-pick re-points every sweep using it. `Arrangement::resolve` is what an
+  entry means now. It is **split-tolerant and merge-strict**: lines drawn
+  across a region join its pieces back up, since the outline still encloses
+  the same ground, but a region whose bounding line is gone is a Problem,
+  with the region at its old spot *offered* in the Inspector and never
+  adopted — after a merge that region is bigger than the one meant. The
+  stored `hint` only breaks ties between candidates with the same name.
 - **Editing one is a third workspace** ([`sketch_edit.rs`](src/prop/sketch_edit.rs)),
   and `SketchSession::editing` is the only answer to whether it is up: the
   toolbar, the Inspector, the view and the model's picking and handles
