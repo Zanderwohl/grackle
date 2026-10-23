@@ -10,7 +10,7 @@ Blueprint(
             gravity: 20.0,
         ),
     ),
-    next_id: 6,
+    next_id: 8,
     features: [
         Feature(
             id: FeatureId(
@@ -148,6 +148,56 @@ Blueprint(
                     ),
                     yaw: 0.0,
                     teams: Striped,
+                ),
+            },
+            parents: [
+                FeatureId(
+                    _id: 2,
+                ),
+            ],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 6,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 2,
+                        )),
+                        point_key: "back_bottom_left_corner",
+                        x: Relative(-1.5),
+                        y: Relative(0.0),
+                        z: Relative(-1.5),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "health_pack",
+                ),
+            },
+            parents: [
+                FeatureId(
+                    _id: 2,
+                ),
+            ],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 7,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 2,
+                        )),
+                        point_key: "front_bottom_left_corner",
+                        x: Relative(1.5),
+                        y: Relative(0.0),
+                        z: Relative(-1.5),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "ammo_pack",
                 ),
             },
             parents: [

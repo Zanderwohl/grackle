@@ -20,6 +20,7 @@ use grackle::editor::editor_room::EditorRoom;
 use grackle::editor::global_point::GlobalPoint;
 use grackle::editor::grackle_point_light::GracklePointLight;
 use grackle::editor::map_metadata::MapMetadata;
+use grackle::editor::prop::Prop;
 use grackle::editor::save;
 use grackle::editor::spawn_point::SpawnPoint;
 
@@ -32,6 +33,9 @@ const ROOM_HEIGHT_M: f32 = 6.0;
 const SPAWN_DISTANCE_M: f32 = 2.5;
 
 const LIGHT_HEIGHT_M: f32 = 4.5;
+
+/// How far each pack sits from both walls of its corner.
+const PACK_FROM_WALLS_M: f32 = 1.5;
 
 fn main() {
     let mut timeline = FeatureTimeline::default();
@@ -83,6 +87,22 @@ fn main() {
         room,
         grid_offset,
     ))));
+
+    // The far corners as the spawn faces them, each anchored to its own floor
+    // corner so resizing the room keeps it in the corner. The spawn looks along
+    // +Z, so its left is +X. The corner names are `CuboidPoint`'s, which do not
+    // read as left and right from here: the values are what matter.
+    let packs = [
+        // (+X, floor, +Z)
+        ("health_pack", "back_bottom_left_corner", Vec3::new(-PACK_FROM_WALLS_M, 0.0, -PACK_FROM_WALLS_M)),
+        // (-X, floor, +Z)
+        ("ammo_pack", "front_bottom_left_corner", Vec3::new(PACK_FROM_WALLS_M, 0.0, -PACK_FROM_WALLS_M)),
+    ];
+    for (model, corner, offset) in packs {
+        let mut at = PointRef::reference_with_offset(room, offset.x, offset.y, offset.z);
+        at.point_key = corner.to_owned();
+        timeline.apply_feature(Box::new(Prop::from_point_ref(at).with_model(model)));
+    }
 
     let path = PathBuf::from(format!(
         "assets/default/blueprints/new.{MAP_BLUEPRINT_EXTENSION}"
