@@ -13,7 +13,10 @@ pub const FALLBACK_LANG: &str = "en-US";
 
 /// The pack list until Grackle has a real one.
 pub fn default_packs() -> Vec<PathBuf> {
-    vec![PathBuf::from("assets/default")]
+    vec![
+        PathBuf::from("assets/default"),
+        PathBuf::from(crate::common::assets::USER_PACK),
+    ]
 }
 
 static LANG: LazyLock<RwLock<toml::Value>> = LazyLock::new(|| RwLock::new(

@@ -1,4 +1,6 @@
 pub const MAP_BLUEPRINT_EXTENSION: &str = "gmb";
+/// Where maps live inside a pack.
+pub const BLUEPRINTS_DIR: &str = "blueprints";
 pub const MAP_BACKUP_EXTENSION: &str = "bak";
 
 /// What `--serve` binds and a bare hostname connects to. Unregistered, and

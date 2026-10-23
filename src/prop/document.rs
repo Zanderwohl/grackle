@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::skeleton::clip::ClipSet;
 use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Evaluated, FeatureOp, PropFeature, PropFeatureId};
+use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
 use crate::prop::hold::{HoldSpec, ViewmodelSpec};
 
 /// Grackle Prop: TOML, one prop per file.
@@ -38,6 +39,18 @@ pub struct PropDoc {
     /// First-person framing; not the same as [`HoldSpec`]'s carry.
     #[serde(default)]
     pub viewmodel: ViewmodelSpec,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub archetype: Archetype,
+    /// What a placed prop collides as, or is picked up by. Authored apart from
+    /// the geometry: a crate with a handle cut in it is still a box to walk into.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub colliders: Vec<Collider>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub breakable: BreakableSpec,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub pickup: PickupSpec,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub hat: HatSpec,
     /// Stored rather than derived from the highest id in use, so deleting the
     /// last feature cannot make the next one reuse its id.
     #[serde(default)]
@@ -59,6 +72,11 @@ impl PropDoc {
             features: vec![],
             hold: HoldSpec::default(),
             viewmodel: ViewmodelSpec::default(),
+            archetype: Archetype::default(),
+            colliders: vec![],
+            breakable: BreakableSpec::default(),
+            pickup: PickupSpec::default(),
+            hat: HatSpec::default(),
             next_id: 0,
             animations: ClipSet::default(),
         }
@@ -175,6 +193,10 @@ impl PropDoc {
     pub fn evaluate(&self) -> Evaluated {
         evaluate(&self.features)
     }
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 #[derive(Resource, Debug)]
@@ -760,6 +782,67 @@ mod tests {
         editor.undo();
         assert!(before);
         assert!(!editor.can_undo(), "a no-op edit left a step behind");
+    }
+
+    /// Fails if a placed or worn prop's sections stop reading back: the
+    /// shipped examples are what the game is walked up to and checked with.
+    #[test]
+    fn the_shipped_examples_are_what_they_say_they_are() {
+        use crate::prop::archetype::{Archetype, PickupKind};
+        let read = |name: &str| {
+            let path = std::path::Path::new("assets/default").join(PROPS_DIR).join(format!("{name}.{PROP_EXTENSION}"));
+            std::fs::read_to_string(&path).ok().map(|text| parse(&text).unwrap())
+        };
+        // Not run from the repo root.
+        let Some(hat) = read("top_hat") else { return };
+        assert_eq!(hat.archetype, Archetype::Hat);
+        assert!(hat.hat.offset[1] < 0.0, "the hat floats above the head");
+
+        let crate_ = read("crate").unwrap();
+        assert_eq!(crate_.archetype, Archetype::Breakable);
+        assert_eq!(crate_.colliders.len(), 1);
+        assert_eq!(crate_.breakable.health, 75);
+
+        for (name, kind) in [("health_pack", PickupKind::Health), ("ammo_pack", PickupKind::Ammo)] {
+            let pack = read(name).unwrap();
+            assert_eq!(pack.archetype, Archetype::Pickup, "{name}");
+            assert_eq!(pack.pickup.kind, kind, "{name}");
+            assert!(!pack.colliders.is_empty(), "{name} has nothing to walk into");
+        }
+
+        let rifle = read("sniper_rifle").unwrap();
+        assert_eq!(rifle.archetype, Archetype::Held, "a weapon written before archetypes is not held");
+    }
+
+    /// The new sections round-trip, and a held prop's file gains none of them.
+    #[test]
+    fn archetype_sections_round_trip_and_a_held_prop_writes_none() {
+        use crate::prop::archetype::*;
+        let held = PropDoc::new("prop.untitled");
+        let text = to_text(&held).unwrap();
+        for section in ["archetype", "colliders", "breakable", "pickup", "hat"] {
+            assert!(!text.contains(section), "a held prop wrote {section}:\n{text}");
+        }
+
+        let mut doc = PropDoc::new("prop.untitled");
+        doc.push(FeatureOp::Primitive {
+            shape: crate::prop::solid::Shape::Box { size: [0.5; 3] },
+            placement: Default::default(),
+            surface: Default::default(),
+        });
+        doc.archetype = Archetype::Pickup;
+        doc.colliders = vec![
+            Collider { origin: [0.0, 0.1, 0.0], shape: ColliderShape::Capsule { radius: 0.2, height: 1.0 } },
+            Collider { origin: [0.0; 3], shape: ColliderShape::Sphere { radius: 0.05 } },
+        ];
+        doc.breakable.health = 30;
+        doc.pickup = PickupSpec { kind: PickupKind::Ammo, amount: 0.25, respawn: 15.0 };
+        doc.hat.offset = [0.0, -0.05, 0.01];
+        doc.hat.per_class.insert("heavy".into(), HatOverride { scale: Some(1.1), ..default() });
+
+        let text = to_text(&doc).unwrap();
+        assert_eq!(parse(&text).unwrap(), doc, "did not round-trip:\n{text}");
+        assert!(text.contains("0.05"), "numbers were not written as typed:\n{text}");
     }
 
     /// There is no schema version, so a field renamed without updating the

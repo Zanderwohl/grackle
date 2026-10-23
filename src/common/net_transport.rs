@@ -89,6 +89,7 @@ impl Plugin for NetTransportPlugin {
                         crate::common::net_events::replicate_projectiles,
                         crate::common::net_events::replicate_display_bodies,
                         crate::common::net_events::replicate_corpses,
+                        crate::common::net_events::replicate_world_props,
                     )
                         .run_if(crate::common::net::is_hosting),
                 )

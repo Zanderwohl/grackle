@@ -70,6 +70,24 @@ impl Assets {
     }
 }
 
+/// Where somebody's own unsorted work goes: a pack like any other, last so it
+/// overrides the shipped one, and gitignored.
+pub const USER_PACK: &str = "assets/user";
+
+/// Made up front so a save dialog for a new document has somewhere to open.
+const USER_PACK_FOLDERS: [&str; 2] =
+    [crate::constants::BLUEPRINTS_DIR, crate::prop::document::PROPS_DIR];
+
+/// Authoring side only: the runtime never writes a pack.
+pub fn create_the_user_pack() {
+    for folder in USER_PACK_FOLDERS {
+        let path = Path::new(USER_PACK).join(folder);
+        if let Err(e) = std::fs::create_dir_all(&path) {
+            warn!("Could not create {}: {e}", path.display());
+        }
+    }
+}
+
 /// The pack list until there is a real one; shared with
 /// [`crate::common::lang::default_packs`].
 pub fn default_packs() -> Vec<PathBuf> {

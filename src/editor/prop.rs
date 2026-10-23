@@ -16,6 +16,11 @@ pub const PROP_SIZE: f32 = 0.5;
 #[derive(Component, Debug)]
 pub struct PropMarker;
 
+/// The model a [`Prop`] names, empty for the stand-in cube. On the feature's
+/// entity, where `crate::game::world_prop` reads it.
+#[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
+pub struct PropModel(pub String);
+
 /// A placed piece of map furniture. Its point is the centre of the box, so rotating does not slide
 /// it across the floor.
 #[derive(Serialize, Deserialize)]
@@ -23,6 +28,10 @@ pub struct Prop {
     location: PointRef,
     /// Pitch, yaw and roll in radians, in axis order. See [`crate::common::rotation`].
     rotation: Vec3,
+    /// A prop under a pack's `props/`, by file stem. Empty draws the stand-in
+    /// cube. Not checked here: a bad name draws nothing, as a weapon's does.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    model: String,
     #[serde(skip)]
     resolved_location: Vec3,
     #[serde(skip)]
@@ -37,6 +46,10 @@ impl FeatureTrait for Prop {
 
     fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool {
         let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label(get!("editor.features.prop.model"));
+            changed |= ui.text_edit_singleline(&mut self.model).changed();
+        });
         let label = get!("editor.features.prop.centre");
         changed |= self.location.editor_ui(ui, &label, features, prior_feature_order, retarget_request);
 
@@ -83,19 +96,16 @@ impl FeatureTrait for Prop {
         let rotation = quat_from_euler(self.rotation);
         let teal = Color::srgb_u8(90, 220, 200);
 
+        let centre = self.box_centre();
         gizmos.cube(
-            Transform::from_translation(self.resolved_location)
+            Transform::from_translation(centre)
                 .with_rotation(rotation)
                 .with_scale(Vec3::splat(PROP_SIZE)),
             teal,
         );
 
         let front = rotation * Vec3::NEG_Z;
-        gizmos.arrow(
-            self.resolved_location,
-            self.resolved_location + front * PROP_SIZE,
-            teal,
-        );
+        gizmos.arrow(centre, centre + front * PROP_SIZE, teal);
 
         self.location.debug_gizmos(self.resolved_location, gizmos);
     }
@@ -113,6 +123,7 @@ impl FeatureTrait for Prop {
             Transform::from_translation(self.resolved_location)
                 .with_rotation(quat_from_euler(self.rotation)),
             PropMarker,
+            PropModel(self.model.clone()),
         ));
     }
 
@@ -134,10 +145,11 @@ impl FeatureTrait for Prop {
         vec![("".into(), self.resolved_location)]
     }
 
-    /// The placeholder cube [`crate::tool::prop`] puts on the entity.
+    /// The placeholder cube [`crate::tool::prop`] puts on the entity, or one
+    /// the same size standing where a model does.
     fn pick_boxes(&self) -> Vec<crate::common::ray::PickBox> {
         vec![crate::common::ray::PickBox {
-            centre: self.resolved_location,
+            centre: self.box_centre(),
             rotation: quat_from_euler(self.rotation),
             half_extents: Vec3::splat(PROP_SIZE * 0.5),
         }]
@@ -191,6 +203,7 @@ impl Prop {
         Self {
             location: PointRef::absolute(x, y, z),
             rotation: Vec3::ZERO,
+            model: String::new(),
             resolved_location: Vec3::new(x, y, z),
             entity: None,
         }
@@ -200,6 +213,7 @@ impl Prop {
         Self {
             location,
             rotation: Vec3::ZERO,
+            model: String::new(),
             resolved_location: Vec3::ZERO,
             entity: None,
         }
@@ -207,6 +221,23 @@ impl Prop {
 
     pub fn with_rotation(mut self, rotation: Vec3) -> Self {
         self.rotation = rotation;
+        self
+    }
+
+    /// The stand-in cube is centred on the point; a model stands on it, so its
+    /// box is lifted to sit on the floor the model does.
+    fn box_centre(&self) -> Vec3 {
+        match self.model.is_empty() {
+            true => self.resolved_location,
+            false => {
+                self.resolved_location
+                    + quat_from_euler(self.rotation) * Vec3::Y * (PROP_SIZE * 0.5)
+            }
+        }
+    }
+
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = model.into();
         self
     }
 

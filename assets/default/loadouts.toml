@@ -19,6 +19,11 @@
 # switches *within* a slot yet — `permitted` is for the loadout screen that
 # does not exist — so two weapons sharing a slot would mean one you cannot get
 # at.
+# `hat` names a prop under `props/`, worn on the head. A class's until there
+# are items to own one by.
+[loadouts.mercenary]
+hat = "top_hat"
+
 [loadouts.mercenary.primary]
 permitted = ["laser_rifle"]
 default = "laser_rifle"

@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 
 use crate::editor::editable::{FeatureTrait, PointRef};
-use crate::editor::prop::{Prop, PropMarker, PROP_SIZE};
+use crate::editor::prop::{Prop, PropMarker, PropModel, PROP_SIZE};
 use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
 use crate::tool::Tools;
 
@@ -29,37 +29,40 @@ impl Plugin for PropPlugin {
     }
 }
 
-/// Give every [`PropMarker`] entity the placeholder cube once. Separate
-/// because `apply_to_entity` only has `Commands` and cannot reach `Assets`.
+/// The placeholder cube on every [`PropMarker`] entity that names no model,
+/// and off one that has come to name one; a named model is drawn by
+/// [`crate::game::world_prop`]. Separate because `apply_to_entity` only has
+/// `Commands` and cannot reach `Assets`.
 fn attach_prop_meshes(
-    new_props: Query<Entity, (With<PropMarker>, Without<Mesh3d>)>,
+    props: Query<(Entity, &PropModel, Has<Mesh3d>), (With<PropMarker>, Changed<PropModel>)>,
     mut assets: ResMut<PropAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
-    if new_props.is_empty() {
-        return;
-    }
-
-    let mesh = assets
-        .mesh
-        .get_or_insert_with(|| meshes.add(Cuboid::from_length(PROP_SIZE)))
-        .clone();
-    let material = assets
-        .material
-        .get_or_insert_with(|| {
-            materials.add(StandardMaterial {
-                base_color: Color::srgb_u8(90, 220, 200),
-                ..default()
-            })
-        })
-        .clone();
-
-    for entity in &new_props {
-        commands
-            .entity(entity)
-            .insert((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone())));
+    for (entity, model, has_mesh) in &props {
+        match (model.0.is_empty(), has_mesh) {
+            (true, false) => {
+                let mesh = assets
+                    .mesh
+                    .get_or_insert_with(|| meshes.add(Cuboid::from_length(PROP_SIZE)))
+                    .clone();
+                let material = assets
+                    .material
+                    .get_or_insert_with(|| {
+                        materials.add(StandardMaterial {
+                            base_color: Color::srgb_u8(90, 220, 200),
+                            ..default()
+                        })
+                    })
+                    .clone();
+                commands.entity(entity).insert((Mesh3d(mesh), MeshMaterial3d(material)));
+            }
+            (false, true) => {
+                commands.entity(entity).remove::<(Mesh3d, MeshMaterial3d<StandardMaterial>)>();
+            }
+            _ => {}
+        }
     }
 }
 

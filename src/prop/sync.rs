@@ -1,8 +1,9 @@
-//! Handing every weapon's model to whoever connects, after
-//! [`crate::common::pack_sync`].
+//! Handing every model in use — weapons, hats, placed props — to whoever
+//! connects, after [`crate::common::pack_sync`].
 //!
 //! The document crosses, not meshes; each machine bakes its own. The
-//! catalogue says which models to send, so nothing enumerates a directory.
+//! catalogue and the placed props say which models to send, so nothing
+//! enumerates a directory.
 //!
 //! Arrival order relative to the catalogue does not matter: an early model
 //! waits in the cache, and a late one replaces a cached failure and bumps
@@ -17,6 +18,7 @@ use crate::common::assets::{default_packs, Assets as PackAssets};
 use crate::common::net::NetRole;
 use crate::common::weapon::WeaponCatalogue;
 use crate::prop::baked::{PropCache, SurfaceMaterials};
+use crate::game::world_prop::WorldProp;
 use crate::prop::document;
 
 /// Ordered and reliable: the last model sent is the true one.
@@ -32,8 +34,13 @@ pub struct PropChannel;
 pub struct ModelSnapshot(pub Vec<(String, String)>);
 
 /// Compared against rather than `Res::is_changed`, which counts insertion.
+/// The names are kept too, so a placed prop being dragged is a comparison
+/// rather than a re-read of every model off disk.
 #[derive(Resource, Default)]
-struct LastModelsSent(Vec<(String, String)>);
+struct LastModelsSent {
+    names: Vec<String>,
+    models: Vec<(String, String)>,
+}
 
 pub struct PropSyncPlugin;
 
@@ -60,19 +67,25 @@ impl Plugin for PropSyncPlugin {
     }
 }
 
-/// A model that will not load is left out rather than sent empty, so the
-/// client falls back to its own packs.
-fn models_named_by(catalogue: &WeaponCatalogue, packs: &PackAssets) -> Vec<(String, String)> {
-    let mut named: Vec<&str> = catalogue
-        .weapons
-        .iter()
-        .filter_map(|weapon| weapon.model.as_deref())
-        .collect();
+/// Every model something in play names: weapons, class hats and placed props.
+/// Sorted, so two calls over the same things compare equal.
+fn names_in_use<'a>(
+    catalogue: &'a WeaponCatalogue,
+    placed: impl Iterator<Item = &'a str>,
+) -> Vec<String> {
+    let weapons = catalogue.weapons.iter().filter_map(|weapon| weapon.model.as_deref());
+    let hats = catalogue.loadouts.iter().filter_map(|(_, loadout)| loadout.hat.as_deref());
+    let mut named: Vec<String> = weapons.chain(hats).chain(placed).map(str::to_owned).collect();
     named.sort_unstable();
     named.dedup();
-
     named
-        .into_iter()
+}
+
+/// A model that will not load is left out rather than sent empty, so the
+/// client falls back to its own packs.
+fn models_named_by(names: &[String], packs: &PackAssets) -> Vec<(String, String)> {
+    names
+        .iter()
         .filter_map(|name| {
             let mut found = None;
             for pack in default_packs().iter() {
@@ -95,6 +108,7 @@ fn models_named_by(catalogue: &WeaponCatalogue, packs: &PackAssets) -> Vec<(Stri
 fn send_models_to_new_clients(
     catalogue: Res<WeaponCatalogue>,
     packs: Res<PackAssets>,
+    placed: Query<&WorldProp>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
@@ -102,20 +116,24 @@ fn send_models_to_new_clients(
         return Ok(());
     }
 
-    let models = models_named_by(&catalogue, &packs);
-    let message = ModelSnapshot(models);
+    let names = names_in_use(&catalogue, placed.iter().map(|prop| prop.model.as_str()));
+    let message = ModelSnapshot(models_named_by(&names, &packs));
     for client in &joined {
-        info!("Sending {} weapon models to a new client", message.0.len());
+        info!("Sending {} models to a new client", message.0.len());
         sender.send_to_entities::<_, PropChannel>(&message, core::iter::once(client))?;
     }
     Ok(())
 }
 
-/// Resends when the catalogue changes or the host saves a prop. Gated
-/// because `models_named_by` re-reads every model off disk.
+/// Resends when the catalogue changes, the host saves a prop, or a placed prop
+/// comes to name a model nobody has been sent. Gated because
+/// `models_named_by` re-reads every model off disk.
+#[allow(clippy::too_many_arguments)]
 fn broadcast_model_changes(
     catalogue: Res<WeaponCatalogue>,
     packs: Res<PackAssets>,
+    placed: Query<&WorldProp>,
+    moved: Query<(), Changed<WorldProp>>,
     // Absent in a build with no prop editor.
     editor: Option<Res<crate::prop::document::PropEditor>>,
     server: Option<Single<&Server>>,
@@ -128,16 +146,21 @@ fn broadcast_model_changes(
     *saves = saved;
 
     let Some(server) = server else { return Ok(()) };
-    if !catalogue.is_changed() && !just_saved {
+    if !catalogue.is_changed() && !just_saved && moved.is_empty() {
         return Ok(());
     }
 
-    let models = models_named_by(&catalogue, &packs);
-    if models == last.0 {
+    let names = names_in_use(&catalogue, placed.iter().map(|prop| prop.model.as_str()));
+    if names == last.names && !just_saved && !catalogue.is_changed() {
+        return Ok(());
+    }
+    let models = models_named_by(&names, &packs);
+    last.names = names;
+    if models == last.models {
         return Ok(());
     }
 
-    last.0 = models.clone();
+    last.models = models.clone();
     info!("Models changed; sending {} of them to everyone", models.len());
     sender.send::<_, PropChannel>(&ModelSnapshot(models), &server, &NetworkTarget::All)?;
     Ok(())
@@ -160,7 +183,7 @@ fn adopt_the_servers_models(
 
     for mut receiver in &mut receivers {
         for message in receiver.receive() {
-            info!("Adopting the server's weapon models: {} of them", message.0.len());
+            info!("Adopting the server's models: {} of them", message.0.len());
             for (name, text) in &message.0 {
                 match document::parse(text) {
                     Ok(doc) => {
@@ -199,7 +222,7 @@ mod tests {
         catalogue.insert(weapon("bare", None));
         catalogue.insert(weapon("missing", Some("no_such_prop")));
 
-        let named = models_named_by(&catalogue, &PackAssets::default());
+        let named = models_named_by(&names_in_use(&catalogue, std::iter::empty()), &PackAssets::default());
         let names: Vec<&str> = named.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(
             names,
@@ -208,13 +231,31 @@ mod tests {
         );
     }
 
+    /// Fails if a hat or a placed prop's model stops being sent: a client
+    /// missing one draws nothing and, for a crate, walks through it while the
+    /// server stops it.
+    #[test]
+    fn hats_and_placed_props_are_sent_too() {
+        let mut catalogue = WeaponCatalogue::default();
+        catalogue.insert(weapon("launcher", Some("rocket_launcher")));
+        catalogue.set_loadout(
+            crate::common::class::Class::Mercenary,
+            crate::common::weapon::Loadout { hat: Some("top_hat".into()), ..default() },
+        );
+        let names = names_in_use(&catalogue, ["crate", "crate", "health_pack"].into_iter());
+        assert_eq!(names, ["crate", "health_pack", "rocket_launcher", "top_hat"]);
+    }
+
     /// Encodes with postcard as Lightyear does. Fails if the payload goes back
     /// to a typed `PropDoc`, which would decode-fail silently on the client.
     #[test]
     fn a_model_survives_the_wire_as_text_and_would_not_as_a_document() {
         let mut catalogue = WeaponCatalogue::default();
         catalogue.insert(weapon("launcher", Some("rocket_launcher")));
-        let sent = ModelSnapshot(models_named_by(&catalogue, &PackAssets::default()));
+        let sent = ModelSnapshot(models_named_by(
+            &names_in_use(&catalogue, std::iter::empty()),
+            &PackAssets::default(),
+        ));
         assert!(!sent.0.is_empty(), "the default pack ships a model to test with");
 
         let wire = postcard::to_allocvec(&sent).expect("text goes on the wire");

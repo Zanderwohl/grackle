@@ -372,6 +372,10 @@ mod tests {
             }
             let doc = crate::prop::document::parse(&std::fs::read_to_string(&path).unwrap())
                 .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            // A hat or a crate has a hold nobody uses.
+            if doc.archetype != crate::prop::archetype::Archetype::Held {
+                continue;
+            }
 
             for class in Class::iter() {
                 let hold = doc.hold.for_class(Some(class));

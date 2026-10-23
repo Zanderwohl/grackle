@@ -71,12 +71,13 @@ looks like.
 | `src/main.rs` | The `editor` binary — plugin wiring only. |
 | `src/editor/` | The document model: features, timeline, save/load, panels, cameras. |
 | `src/tool/` | One module per editor tool, each its own `Plugin` with its own `Tools` state. |
-| `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls. |
+| `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls, placed props, hats. |
 | `src/prop/` | The prop editor: a CSG kernel, the modelling feature list, and the mode around it. |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`. |
+| `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 
 ## Spawn points and class metrics
 
@@ -672,6 +673,45 @@ is an `Option<String>` naming a prop under a pack's `props/`; it crosses the
 wire with the rest of the catalogue, so each machine builds the model from its
 own pack — the same arrangement `Equipped` already has, one level down.
 Nothing draws it. That is the next piece, not a gap in this one.
+
+## What a prop can be
+
+A prop names an **archetype** — `held`, `hat`, `obstacle`, `breakable` or
+`pickup` ([`src/prop/archetype.rs`](src/prop/archetype.rs)) — and the archetype
+is a preset over components rather than a type: a breakable is a placed model
+with a `Damageable`, `Hitboxes` and colliders, a pickup one with a `Pickup`.
+The plan and what is left is
+[documentation/prop-archetypes.md](documentation/prop-archetypes.md). Every
+section of the file is kept whatever the archetype, so flipping it and back
+loses nothing, and a held prop writes none of them.
+
+**A collider is a rounded box** — a core plus a radius — so a box, a sphere and
+an upright capsule are one shape to the collision world. `RoundedBox::slab_along`
+turns one into the wall slab `move_and_slide` already sweeps against, for a body
+at that position on the other two axes, which is what makes a pillar round to
+walk past rather than square. Colliders are axis-aligned in the prop; a turned
+placement collides as the bounding box of its turned core.
+
+**Placed props follow the carousel rule.** The map `Prop` feature names a
+model; on the authority `sync_world_props`
+([`src/game/world_prop.rs`](src/game/world_prop.rs)) stands one replicated
+`WorldProp` up per feature that names one, and every machine draws and collides
+with those. A broken breakable is remembered as a feature whose `StandsFor`
+points at nothing, so the absence rule does not stand it straight back up;
+entering or leaving Play forgets. `WorldPropPlugin` is added in `main.rs`
+beside `GamePlugin` rather than inside it, because it bakes models and the
+game's tests run with no asset plugins.
+
+A placed prop's origin is where it stands on the floor. A pickup with no
+collider is taken through a small sphere, and is walked past by somebody it
+would give nothing to. Armour and the flag are kinds with no behaviour yet.
+
+**A hat sits at the crown** — the head bone's tail — in the *body's* frame
+(`-Z` forward), carried along by however far the head has turned from rest,
+so the head bone's own odd rest rotation never reaches a hat's numbers. Which
+hat is a class's is `hat` on its entry in `loadouts.toml`. In Fit a hat stays
+at the origin and the figure stands under it, inverted through the same
+`hat_transform` the game uses.
 
 ## Baking before a round
 

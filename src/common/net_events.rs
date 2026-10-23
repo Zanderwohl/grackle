@@ -195,3 +195,16 @@ pub fn replicate_display_bodies(
             .insert(Replicate::to_clients(NetworkTarget::All));
     }
 }
+
+/// Placed props have health or can be taken, so the authority's are the ones
+/// everybody sees. Which feature one stands for is not sent.
+pub fn replicate_world_props(
+    mut commands: Commands,
+    standing: Query<Entity, (With<crate::game::world_prop::WorldProp>, Without<Replicate>)>,
+) {
+    for prop in &standing {
+        commands
+            .entity(prop)
+            .insert(Replicate::to_clients(NetworkTarget::All));
+    }
+}

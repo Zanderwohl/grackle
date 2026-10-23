@@ -3,6 +3,7 @@
 //!
 //! | Module | What is in it |
 //! | --- | --- |
+//! | [`archetype`] | What a prop is to the game: held, a hat, or placed in a map. |
 //! | [`baked`] | Props baked into mesh handles, by name, for anything that draws one. |
 //! | [`csg`] | The kernel: a BSP tree and three booleans over convex polygon soup. |
 //! | [`profile`] | 2D loops, the planes they are drawn on, and ear clipping. |
@@ -31,6 +32,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::assets::{default_packs, Assets};
 use crate::prop::document::{prop_path, PropDoc, PropEditor};
 
+pub mod archetype;
 pub mod baked;
 pub mod camera;
 pub mod csg;

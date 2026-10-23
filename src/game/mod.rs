@@ -24,6 +24,7 @@ pub mod body_mesh;
 pub mod collision;
 pub mod damage;
 pub mod death;
+pub mod hat;
 pub mod held;
 pub mod hitbox;
 pub mod explosion;
@@ -40,6 +41,7 @@ pub mod hud;
 pub mod ragdoll;
 pub mod skeleton;
 pub mod viewmodel;
+pub mod world_prop;
 
 /// Playing the map that is currently open in the editor.
 pub struct GamePlugin;
@@ -234,7 +236,7 @@ pub(crate) fn set_cursor_captured(
 
 /// Removing a room is not detected; `RemovedComponents` will be needed once
 /// rooms can be deleted mid-match.
-fn rebuild_collision_when_rooms_change(
+pub(crate) fn rebuild_collision_when_rooms_change(
     mut collision: ResMut<CollisionWorld>,
     changed: Query<(), Changed<Room>>,
     rooms: Query<&Room>,

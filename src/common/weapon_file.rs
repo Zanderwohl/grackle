@@ -51,7 +51,16 @@ struct WeaponEntry {
 /// Keyed by [`Class::key`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LoadoutFile {
-    loadouts: BTreeMap<String, BTreeMap<Slot, SlotEntry>>,
+    loadouts: BTreeMap<String, LoadoutEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LoadoutEntry {
+    /// Not checked here, as a weapon's model is not: a bad name draws nothing.
+    #[serde(default)]
+    hat: Option<String>,
+    #[serde(flatten)]
+    slots: BTreeMap<Slot, SlotEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,14 +151,14 @@ fn load_loadouts(assets: &Assets, pack: &Path, catalogue: &mut WeaponCatalogue) 
         }
     };
 
-    for (key, slots) in file.loadouts {
+    for (key, entry) in file.loadouts {
         let Some(class) = Class::named(&key) else {
             error!("{}/{LOADOUTS_FILE}: no class called {key}", pack.display());
             continue;
         };
 
-        let mut loadout = Loadout::default();
-        for (slot, entry) in slots {
+        let mut loadout = Loadout { hat: entry.hat, ..default() };
+        for (slot, entry) in entry.slots {
             let Some(choices) = slot_choices(catalogue, &key, slot, &entry, pack) else {
                 continue;
             };

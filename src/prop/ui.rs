@@ -10,6 +10,7 @@
 //! as a change every frame. The gesture closes when the pointer and the
 //! keyboard are both idle, so typing a name is one undo step.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -22,10 +23,11 @@ use strum::IntoEnumIterator;
 
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
-use crate::common::file_menu::{file_menu, FileAction};
+use crate::common::file_menu::{dialog_directory, file_menu, FileAction};
 use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
+use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind};
 use crate::prop::document::{self, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::common::class::Class;
 use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
@@ -34,7 +36,6 @@ use crate::prop::feature::{Axis, BooleanOp, FeatureOp, PatternKind, PropFeatureI
 use crate::prop::figure::ScaleFigure;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::gizmo::HoldHandles;
-use crate::prop::hold::HoldOverride;
 use crate::prop::profile::{Placement, Profile, MIN_SIDES};
 use crate::prop::solid::Shape;
 use crate::prop::surface::{Style, Surface};
@@ -175,7 +176,10 @@ impl<'a> TabViewer for PropTabs<'a> {
         match tab {
             PropTab::Features => get!("prop.panels.features").into(),
             PropTab::Inspector => get!("prop.panels.inspector").into(),
-            PropTab::Hold => get!("prop.panels.hold").into(),
+            PropTab::Hold => match self.editor.doc().archetype {
+                Archetype::Hat => get!("prop.panels.hat").into(),
+                _ => get!("prop.panels.hold").into(),
+            },
             // The count in the title, so problems show while the tab is behind another.
             PropTab::Problems => match self.build.evaluated.problems.len() {
                 0 => get!("prop.panels.problems").into(),
@@ -188,7 +192,13 @@ impl<'a> TabViewer for PropTabs<'a> {
         match tab {
             PropTab::Features => feature_tree(ui, self.editor, self.build),
             PropTab::Inspector => inspector(ui, self.editor, self.build),
-            PropTab::Hold => hold(ui, self.editor, *self.figure, self.preview),
+            PropTab::Hold => match self.editor.doc().archetype {
+                Archetype::Held => hold(ui, self.editor, *self.figure, self.preview),
+                Archetype::Hat => hat_fit(ui, self.editor, *self.figure),
+                // Nothing holds or wears a placed prop; the figure is there
+                // for scale.
+                _ => {}
+            },
             PropTab::Problems => problems(ui, self.editor, self.build),
         }
     }
@@ -384,7 +394,8 @@ fn panels(
     }
     // Derived from the workspace rather than ticked: in Fit the viewport's
     // handles are the hold's, in Model the selected feature's.
-    let fitting = layout.workspace == Workspace::Fit;
+    let fitting = layout.workspace == Workspace::Fit
+        && matches!(editor.doc().archetype, Archetype::Held | Archetype::Hat);
     if handles.0 != fitting {
         handles.0 = fitting;
     }
@@ -1128,6 +1139,7 @@ fn prop_overview(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 ui.label(editor.saved_name().map(str::to_owned).unwrap_or_else(|| get!("prop.untitled")));
             });
         });
+        archetype_sections(ui, editor);
         section(ui, "size", get!("prop.inspector.sections.size"), |ui| {
             if let Some((min, max)) = build.evaluated.bounds() {
                 let size = max - min;
@@ -1142,6 +1154,182 @@ fn prop_overview(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     if changed {
         editor.begin_gesture();
         editor.doc_mut().name_key = name_key;
+    }
+}
+
+/// What the prop is to the game, and the sections that archetype reads. The
+/// others are kept in the file but not shown.
+fn archetype_sections(ui: &mut Ui, editor: &mut PropEditor) {
+    section(ui, "archetype", get!("prop.inspector.sections.archetype"), |ui| {
+        let mut archetype = editor.doc().archetype;
+        egui::ComboBox::from_id_salt("prop_archetype")
+            .selected_text(archetype.name())
+            .show_ui(ui, |ui| {
+                for candidate in Archetype::ALL {
+                    ui.selectable_value(&mut archetype, candidate, candidate.name());
+                }
+            });
+        if archetype != editor.doc().archetype {
+            editor.edit(|doc| doc.archetype = archetype);
+        }
+    });
+
+    let archetype = editor.doc().archetype;
+    if archetype == Archetype::Breakable {
+        section(ui, "breakable", get!("prop.inspector.sections.breakable"), |ui| {
+            let mut health = editor.doc().breakable.health;
+            let changed = ui
+                .horizontal(|ui| {
+                    ui.label(get!("prop.breakable.health"));
+                    ui.add(egui::DragValue::new(&mut health).speed(1.0).range(1..=100_000)).changed()
+                })
+                .inner;
+            if changed {
+                editor.begin_gesture();
+                editor.doc_mut().breakable.health = health;
+            }
+        });
+    }
+    if archetype == Archetype::Pickup {
+        section(ui, "pickup", get!("prop.inspector.sections.pickup"), |ui| pickup_ui(ui, editor));
+    }
+    if archetype.is_placed() {
+        section(ui, "colliders", get!("prop.inspector.sections.colliders"), |ui| {
+            colliders_ui(ui, editor)
+        });
+    }
+}
+
+fn pickup_ui(ui: &mut Ui, editor: &mut PropEditor) {
+    let mut pickup = editor.doc().pickup;
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(get!("prop.inspector.kind"));
+        egui::ComboBox::from_id_salt("prop_pickup_kind")
+            .selected_text(pickup.kind.name())
+            .show_ui(ui, |ui| {
+                for kind in PickupKind::ALL {
+                    changed |= ui.selectable_value(&mut pickup.kind, kind, kind.name()).changed();
+                }
+            });
+    });
+    let mut percent = pickup.amount * 100.0;
+    // Written back only when dragged: through `* 100 / 100` an `f32` need not
+    // come back as itself, and the file would gain digits nobody typed.
+    if ui
+        .horizontal(|ui| {
+            ui.label(get!("prop.pickup.amount"));
+            ui.add(egui::DragValue::new(&mut percent).speed(1.0).range(0.0..=100.0).suffix("%"))
+                .changed()
+        })
+        .inner
+    {
+        pickup.amount = percent / 100.0;
+        changed = true;
+    }
+    changed |= ui
+        .horizontal(|ui| {
+            ui.label(get!("prop.pickup.respawn"));
+            ui.add(egui::DragValue::new(&mut pickup.respawn).speed(0.1).range(0.0..=600.0).suffix("s"))
+                .changed()
+        })
+        .inner;
+    if matches!(pickup.kind, PickupKind::Armor | PickupKind::Flag) {
+        ui.label(egui::RichText::new(get!("prop.pickup.unbuilt")).weak());
+    }
+    if changed {
+        editor.begin_gesture();
+        editor.doc_mut().pickup = pickup;
+    }
+}
+
+/// Each collider's shape, where it is and how big. Adding and removing are
+/// whole steps; dragging a number is a gesture.
+fn colliders_ui(ui: &mut Ui, editor: &mut PropEditor) {
+    let mut colliders = editor.doc().colliders.clone();
+    let mut changed = false;
+    let mut remove = None;
+
+    for (index, collider) in colliders.iter_mut().enumerate() {
+        ui.push_id(("prop_collider", index), |ui| {
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("shape")
+                    .selected_text(collider.shape.name())
+                    .show_ui(ui, |ui| {
+                        for candidate in ColliderShape::defaults() {
+                            let same = std::mem::discriminant(&candidate)
+                                == std::mem::discriminant(&collider.shape);
+                            if ui.selectable_label(same, candidate.name()).clicked() && !same {
+                                collider.shape = candidate;
+                                changed = true;
+                            }
+                        }
+                    });
+                if ui.button(get!("prop.inspector.remove_point")).on_hover_text(get!("prop.collider.remove")).clicked() {
+                    remove = Some(index);
+                }
+            });
+            changed |= vec3_ui(ui, get!("prop.inspector.origin"), &mut collider.origin, 0.005, "m");
+            match &mut collider.shape {
+                ColliderShape::Box { size } => {
+                    changed |= vec3_ui(ui, get!("prop.inspector.size"), size, 0.005, "m");
+                }
+                ColliderShape::Sphere { radius } => {
+                    changed |= drag(ui, get!("prop.inspector.radius"), radius, 0.005, "m");
+                }
+                ColliderShape::Capsule { radius, height } => {
+                    changed |= drag(ui, get!("prop.inspector.radius"), radius, 0.005, "m");
+                    changed |= drag(ui, get!("prop.inspector.height"), height, 0.005, "m");
+                }
+            }
+            ui.separator();
+        });
+    }
+
+    if let Some(index) = remove {
+        editor.edit(|doc| {
+            doc.colliders.remove(index);
+        });
+        return;
+    }
+    if ui.button(get!("prop.collider.add")).clicked() {
+        editor.edit(|doc| {
+            doc.colliders.push(Collider {
+                origin: [0.0, 0.25, 0.0],
+                shape: ColliderShape::Box { size: [0.5; 3] },
+            })
+        });
+        return;
+    }
+    if changed {
+        editor.begin_gesture();
+        editor.doc_mut().colliders = colliders;
+    }
+}
+
+/// How a hat sits on the class standing in the viewport. The override
+/// checkbox edits that class's entry, as the Hold panel's does.
+fn hat_fit(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure) {
+    let base = editor.doc().hat.clone();
+    let mut edited = base.for_class(figure.0);
+    let mut changed = false;
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        if let Some(class) = figure.0
+            && let Some(per_class) = override_toggle(ui, "hat_class", class, &base.per_class)
+        {
+            editor.edit(|doc| doc.hat.per_class = per_class);
+        }
+        section(ui, "hat_fit", get!("prop.hat.on_the_head"), |ui| {
+            changed |= vec3_ui(ui, get!("prop.inspector.offset"), &mut edited.offset, 0.001, "m");
+            changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.rotation);
+            changed |= drag(ui, get!("prop.hat.scale"), &mut edited.scale, 0.005, "×");
+        });
+    });
+
+    if changed {
+        editor.begin_gesture();
+        editor.doc_mut().hat = base.applied(figure.0, &edited);
     }
 }
 
@@ -1184,8 +1372,6 @@ fn hold(
     preview: &mut ViewmodelPreview,
 ) {
     let base = editor.doc().hold.clone();
-    let key = figure.0.map(Class::key);
-    let overriding = key.as_ref().is_some_and(|key| base.per_class.contains_key(key));
 
     let mut changed = false;
     let mut edited = base.for_class(figure.0);
@@ -1194,25 +1380,10 @@ fn hold(
     let mut view_changed = false;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
-        if let (Some(key), Some(class)) = (&key, figure.0) {
-            section(ui, "hold_class", class.name(), |ui| {
-                let mut on = overriding;
-                if ui
-                    .checkbox(&mut on, get!("prop.hold.override_for", "class", class.name()))
-                    .changed()
-                {
-                    let mut doc_hold = base.clone();
-                    match on {
-                        true => {
-                            doc_hold.per_class.insert(key.clone(), HoldOverride::default());
-                        }
-                        false => {
-                            doc_hold.per_class.remove(key);
-                        }
-                    }
-                    editor.edit(|doc| doc.hold = doc_hold);
-                }
-            });
+        if let Some(class) = figure.0
+            && let Some(per_class) = override_toggle(ui, "hold_class", class, &base.per_class)
+        {
+            editor.edit(|doc| doc.hold.per_class = per_class);
         }
 
         section(ui, "hold_grip", get!("prop.hold.grip"), |ui| {
@@ -1286,6 +1457,34 @@ fn hold(
     editor.begin_gesture();
     let applied = base.applied(figure.0, &edited);
     editor.doc_mut().hold = applied;
+}
+
+/// The "override for this class" checkbox the Hold and Hat panels share. The
+/// per-class map to write back, when it was ticked or unticked.
+fn override_toggle<T: Default + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    class: Class,
+    per_class: &BTreeMap<String, T>,
+) -> Option<BTreeMap<String, T>> {
+    let key = Class::key(class);
+    let mut toggled = None;
+    section(ui, id, class.name(), |ui| {
+        let mut on = per_class.contains_key(&key);
+        if ui.checkbox(&mut on, get!("prop.hold.override_for", "class", class.name())).changed() {
+            let mut per_class = per_class.clone();
+            match on {
+                true => {
+                    per_class.insert(key.clone(), T::default());
+                }
+                false => {
+                    per_class.remove(&key);
+                }
+            }
+            toggled = Some(per_class);
+        }
+    });
+    toggled
 }
 
 fn degrees_ui(ui: &mut Ui, label: String, radians: &mut [f32; 3]) -> bool {
@@ -1701,7 +1900,7 @@ pub fn ask_where_to_save(editor: &PropEditor, dialog: &PropFileDialog) {
         let mut chooser = rfd::AsyncFileDialog::new()
             .add_filter("Grackle Prop", &[PROP_EXTENSION])
             .set_file_name(format!("untitled.{PROP_EXTENSION}"));
-        if let Some(directory) = existing.as_ref().and_then(|path| path.parent()) {
+        if let Some(directory) = dialog_directory(existing.as_deref(), document::PROPS_DIR) {
             chooser = chooser.set_directory(directory);
         }
         if let Some(handle) = pollster::block_on(chooser.save_file()) {
@@ -1780,8 +1979,12 @@ pub(crate) fn handle_files(
 
     if action == Some(FileAction::Open) {
         let slot = dialog.result.clone();
+        let from = dialog_directory(editor.path.as_deref(), document::PROPS_DIR);
         std::thread::spawn(move || {
-            let chooser = rfd::AsyncFileDialog::new().add_filter("Grackle Prop", &[PROP_EXTENSION]);
+            let mut chooser = rfd::AsyncFileDialog::new().add_filter("Grackle Prop", &[PROP_EXTENSION]);
+            if let Some(from) = from {
+                chooser = chooser.set_directory(from);
+            }
             if let Some(handle) = pollster::block_on(chooser.pick_file()) {
                 *slot.lock().unwrap() = Some(DialogResult::Open(handle.path().to_path_buf()));
             }

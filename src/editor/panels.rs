@@ -4,7 +4,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
-use crate::common::file_menu::{file_menu, FileAction};
+use crate::common::file_menu::{dialog_directory, file_menu, FileAction};
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use bevy_egui::egui::{Id, LayerId, Ui, UiBuilder, WidgetText};
@@ -16,7 +16,7 @@ use crate::common::movement_rules::SprintPolicy;
 use crate::common::shortcuts::chords;
 use crate::common::net::{NetRequest, NetRole};
 use crate::common::net_transport::NetStatus;
-use crate::constants::MAP_BLUEPRINT_EXTENSION;
+use crate::constants::{BLUEPRINTS_DIR, MAP_BLUEPRINT_EXTENSION};
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::map_metadata::MapMetadata;
 use crate::editor::multicam::MulticamState;
@@ -42,19 +42,13 @@ fn ask_where_to_save(current_file: &CurrentFilePath) {
     std::thread::spawn(move || {
         let mut dialog = rfd::AsyncFileDialog::new()
             .add_filter("Grackle Map Blueprint", &[MAP_BLUEPRINT_EXTENSION]);
-        match existing.as_ref() {
-            Some(existing) => {
-                if let Some(directory) = existing.parent() {
-                    dialog = dialog.set_directory(directory);
-                }
-                if let Some(name) = existing.file_name() {
-                    dialog = dialog.set_file_name(name.to_string_lossy().to_string());
-                }
-            }
-            None => {
-                dialog = dialog.set_file_name(format!("Untitled.{MAP_BLUEPRINT_EXTENSION}"));
-            }
+        if let Some(directory) = dialog_directory(existing.as_deref(), BLUEPRINTS_DIR) {
+            dialog = dialog.set_directory(directory);
         }
+        dialog = match existing.as_ref().and_then(|existing| existing.file_name()) {
+            Some(name) => dialog.set_file_name(name.to_string_lossy().to_string()),
+            None => dialog.set_file_name(format!("Untitled.{MAP_BLUEPRINT_EXTENSION}")),
+        };
         if let Some(handle) = pollster::block_on(dialog.save_file()) {
             *slot.lock().unwrap() = Some(DialogResult::SavePath(handle.path().to_path_buf()));
         }
@@ -204,6 +198,7 @@ impl Plugin for EditorPanelPlugin {
             .init_resource::<EditorPanels>()
             .init_resource::<CurrentFilePath>()
             .add_systems(Startup, EditorPanels::set_multicam_size)
+            .add_systems(Startup, crate::common::assets::create_the_user_pack)
             .add_systems(EguiPrimaryContextPass, EditorPanels::ui.run_if(in_state(AppMode::Editor)))
             // Before the panel, so a chord is answered this frame.
             .add_systems(Update, file_shortcuts.run_if(in_state(AppMode::Editor)))
@@ -501,12 +496,14 @@ impl EditorPanels {
                 }
                 FileAction::Open => {
                     let slot = current_file.dialog_result.clone();
+                    let from = dialog_directory(current_file.path.as_deref(), BLUEPRINTS_DIR);
                     std::thread::spawn(move || {
-                        let handle = pollster::block_on(
-                            rfd::AsyncFileDialog::new()
-                                .add_filter("Grackle Map Blueprint", &[MAP_BLUEPRINT_EXTENSION])
-                                .pick_file()
-                        );
+                        let mut dialog = rfd::AsyncFileDialog::new()
+                            .add_filter("Grackle Map Blueprint", &[MAP_BLUEPRINT_EXTENSION]);
+                        if let Some(from) = from {
+                            dialog = dialog.set_directory(from);
+                        }
+                        let handle = pollster::block_on(dialog.pick_file());
                         if let Some(h) = handle {
                             *slot.lock().unwrap() = Some(DialogResult::OpenPath(h.path().to_path_buf()));
                         }

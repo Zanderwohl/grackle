@@ -555,7 +555,7 @@ mod tests {
         world
             .spawn(Hitboxes {
                 body: Box3 { centre, half_extents: Vec3::new(0.4, 0.9, 0.4) },
-                head: Box3 { centre: centre + Vec3::Y * 0.8, half_extents: Vec3::splat(0.15) },
+                head: Some(Box3 { centre: centre + Vec3::Y * 0.8, half_extents: Vec3::splat(0.15) }),
             })
             .id()
     }

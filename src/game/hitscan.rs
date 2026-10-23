@@ -281,10 +281,10 @@ mod tests {
                 centre: Vec3::new(0.0, eye, -away),
                 half_extents: Vec3::new(0.4, 0.9, 0.4),
             },
-            head: Box3 {
+            head: Some(Box3 {
                 centre: Vec3::new(0.0, eye + 0.7, -away),
                 half_extents: Vec3::splat(0.15),
-            },
+            }),
         }
     }
 
@@ -366,7 +366,7 @@ mod tests {
     fn a_head_shot_is_worth_the_multiplier() {
         let mut boxes = target_boxes(5.0);
         // Aimed level, so only a head box at eye height is in the way.
-        boxes.head.centre.y = TALLEST_CLASS_EYE_HEIGHT;
+        boxes.head.as_mut().unwrap().centre.y = TALLEST_CLASS_EYE_HEIGHT;
         let (mut world, shooter, _) = a_shooter_and_a_target(boxes);
 
         fire(&mut world, shooter);
@@ -419,7 +419,7 @@ mod tests {
         let centre = body_centre_from_feet(Vec3::ZERO);
         world.entity_mut(shooter).insert(Hitboxes {
             body: Box3 { centre, half_extents: Vec3::new(0.4, 0.9, 0.4) },
-            head: Box3 { centre: centre + Vec3::Y * 0.7, half_extents: Vec3::splat(0.15) },
+            head: Some(Box3 { centre: centre + Vec3::Y * 0.7, half_extents: Vec3::splat(0.15) }),
         });
 
         fire(&mut world, shooter);

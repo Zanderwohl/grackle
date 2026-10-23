@@ -16,6 +16,7 @@ use crate::common::rotation::quat_from_euler;
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::editor::input::CurrentMouseInput;
+use crate::prop::archetype::ColliderShape;
 use crate::prop::document::PropEditor;
 use crate::prop::feature::FeatureOp;
 use crate::prop::figure::{FigureReach, ScaleFigure, ScaleFigureMarker};
@@ -109,9 +110,39 @@ impl Plugin for PropGizmoPlugin {
                 Update,
                 (drag_the_selected, pick_in_the_viewport).chain().run_if(in_state(AppMode::Prop)),
             )
+            .add_systems(Update, draw_colliders.run_if(in_state(AppMode::Prop)))
             .add_systems(OnExit(AppMode::Prop), |mut grab: ResMut<GizmoGrab>| {
                 grab.held = None;
             });
+    }
+}
+
+/// A placed prop's colliders, which nothing else in the viewport shows: they are
+/// authored apart from the geometry.
+fn draw_colliders(editor: Res<PropEditor>, mut gizmos: Gizmos) {
+    let doc = editor.doc();
+    if !doc.archetype.is_placed() {
+        return;
+    }
+    let colour = match doc.archetype.blocks() {
+        true => Color::srgb(1.0, 0.55, 0.1),
+        // A trigger, not a wall.
+        false => Color::srgb(0.3, 0.9, 0.5),
+    };
+    for collider in &doc.colliders {
+        let at = Vec3::from_array(collider.origin);
+        match collider.shape {
+            ColliderShape::Box { size } => {
+                gizmos.cube(Transform::from_translation(at).with_scale(Vec3::from_array(size)), colour);
+            }
+            ColliderShape::Sphere { radius } => {
+                gizmos.sphere(Isometry3d::from_translation(at), radius, colour);
+            }
+            ColliderShape::Capsule { radius, height } => {
+                let length = (height - 2.0 * radius).max(0.0);
+                gizmos.primitive_3d(&Capsule3d::new(radius, length), Isometry3d::from_translation(at), colour);
+            }
+        }
     }
 }
 
