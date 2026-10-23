@@ -11,6 +11,7 @@ use crate::prop::document::{self, PropDoc};
 use crate::prop::feature::Evaluated;
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use crate::common::skeleton::clip::{Clip, ClipSet};
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
@@ -65,6 +66,9 @@ pub struct BakedProp {
     /// [`PropCache::bakes`] as it stood after this bake, so a replaced entry
     /// can be told from the one it replaced.
     pub bake: u64,
+    /// The file it was read from; `None` for a model handed over in memory,
+    /// such as one the server sent.
+    pub file: Option<PathBuf>,
 }
 
 #[derive(Resource, Default)]
@@ -135,6 +139,7 @@ impl PropCache {
         materials: &mut Assets<StandardMaterial>,
         surfaces: &mut SurfaceMaterials,
         clips: &mut Assets<Clip>,
+        file: Option<&Path>,
     ) {
         let previous = self.get(name).map(|baked| &baked.clips);
         let clips = publish_clips(&doc.animations, previous, clips);
@@ -142,6 +147,7 @@ impl PropCache {
         self.generation += 1;
         self.bakes += 1;
         baked.bake = self.bakes;
+        baked.file = file.map(Path::to_path_buf);
         self.baked.insert(name.to_owned(), Some(baked));
     }
 }
@@ -158,15 +164,17 @@ fn bake(
     let mut found = None;
     for pack in default_packs().iter() {
         match document::load(packs, pack, name) {
-            Ok(doc) => found = Some(doc),
+            Ok(doc) => found = Some((doc, document::prop_path(pack, name))),
             Err(document::PropFileError::Asset(_)) => {}
             Err(e) => error!("{e}"),
         }
     }
 
-    let doc = found?;
+    let (doc, file) = found?;
     let clips = publish_clips(&doc.animations, None, clips);
-    Some(bake_doc(name, &doc, meshes, materials, surfaces, clips))
+    let mut baked = bake_doc(name, &doc, meshes, materials, surfaces, clips);
+    baked.file = Some(file);
+    Some(baked)
 }
 
 /// Put a prop's clips into `Assets<Clip>`, reusing the handle of any clip the
@@ -224,5 +232,6 @@ fn bake_doc(
         pickup: doc.pickup,
         hat: doc.hat.clone(),
         bake: 0,
+        file: None,
     }
 }

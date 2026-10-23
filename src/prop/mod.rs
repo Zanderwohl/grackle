@@ -121,7 +121,15 @@ fn publish_the_saved_prop(
 
     let Some(name) = editor.saved_name() else { return };
     info!("Saved {name}; handing it to anything holding one");
-    cache.adopt(name, editor.doc(), &mut meshes, &mut materials, &mut surfaces, &mut clips);
+    cache.adopt(
+        name,
+        editor.doc(),
+        &mut meshes,
+        &mut materials,
+        &mut surfaces,
+        &mut clips,
+        editor.path.as_deref(),
+    );
 }
 
 /// Whether `--prop` was given. A resource rather than an initial state so

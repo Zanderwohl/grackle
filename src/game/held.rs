@@ -680,7 +680,7 @@ mod tests {
         let mut materials = Assets::<StandardMaterial>::default();
         let mut surfaces = SurfaceMaterials::default();
         let mut assets = Assets::<Clip>::default();
-        cache.adopt("launcher", &saved(0.5), &mut meshes, &mut materials, &mut surfaces, &mut assets);
+        cache.adopt("launcher", &saved(0.5), &mut meshes, &mut materials, &mut surfaces, &mut assets, None);
         let clips = cache.get("launcher").unwrap().clips.clone();
 
         let mut world = World::new();
@@ -711,7 +711,7 @@ mod tests {
         // Saved again, longer — and re-adopted under the same name.
         {
             let mut assets = world.resource_mut::<Assets<Clip>>();
-            cache.adopt("launcher", &saved(3.0), &mut meshes, &mut materials, &mut surfaces, &mut assets);
+            cache.adopt("launcher", &saved(3.0), &mut meshes, &mut materials, &mut surfaces, &mut assets, None);
         }
         assert_eq!(cache.get("launcher").unwrap().clips[DEPLOY], playing, "the save minted a new handle");
 

@@ -2,39 +2,37 @@
 //! so the prop just fits, and a cache on disk so a prop is photographed once
 //! per edit rather than once per run.
 //!
-//! A prop is looked for here whenever [`PropCache`] bakes it. If its file is
-//! no newer than `cache/thumbnail/props/{name}.png`, the picture is read back;
-//! otherwise the prop sits for a new one, which is written there. A model
-//! with no file of its own — one the server sent — is photographed and kept in
-//! memory only, since there is no date to compare a picture against.
+//! A prop is looked for here whenever [`PropCache`] bakes it. If
+//! `cache/thumbnail/props/{name}.png` is a picture of the file it was baked
+//! from, taken since that file last changed, it is read back; otherwise the
+//! prop sits for a new one, which is written there. A model with no file of
+//! its own — one the server sent — is photographed and kept in memory only.
+//! Disk work runs on the IO pool, off the frame.
 //!
 //! Sittings are one at a time: every studio is on the same layer, so two up at
 //! once would photograph each other's props.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::RenderTarget;
-use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+use bevy::tasks::futures::check_ready;
+use bevy::tasks::{IoTaskPool, Task};
 
-use crate::common::assets::default_packs;
 use crate::common::render_layers;
 use crate::prop::baked::PropCache;
-use crate::prop::document::prop_path;
-use crate::prop::view::PropScene;
+use crate::prop::document::PROPS_DIR;
 
 /// Square, in pixels.
 pub const SIZE: u32 = 256;
 
 pub const CACHE_DIR: &str = "cache/thumbnail";
-pub const PROPS_DIR: &str = "props";
 
 /// Narrow, so a prop is not distorted by being close, and not orthographic,
 /// so it still has depth.
@@ -64,9 +62,14 @@ const AMBIENT: f32 = 150.0;
 const SETTLE_FRAMES: u32 = 3;
 
 /// Pipelines compile in the background, so the first pictures of a new
-/// material can come back empty. An empty picture is retried this many times
-/// before the prop is given up on.
-const ATTEMPTS: u32 = 10;
+/// material can come back empty: an empty one is retaken this many frames
+/// later, up to [`ATTEMPTS`] times — about ten seconds at 60 Hz.
+const RETRY_FRAMES: u32 = 15;
+const ATTEMPTS: u32 = 40;
+
+/// Frames to wait for a picture before taking it again. A capture can be
+/// dropped outright, e.g. while the window is minimised.
+const CAPTURE_TIMEOUT: u32 = 120;
 
 /// What a camera turned to some rotation needs to see a set of points.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -123,6 +126,8 @@ pub struct Thumbnails {
     /// The [`BakedProp::bake`](crate::prop::baked::BakedProp::bake) each
     /// name was last looked at for.
     looked_at: HashMap<String, u64>,
+    /// Cached pictures being read off the frame, with the bake they are for.
+    reading: Vec<(Request, u64, Task<Option<Image>>)>,
     queue: VecDeque<Request>,
     sitting: Option<Sitting>,
 }
@@ -130,10 +135,6 @@ pub struct Thumbnails {
 impl Thumbnails {
     pub fn prop(&self, name: &str) -> Option<&Handle<Image>> {
         self.props.get(name)
-    }
-
-    pub fn busy(&self) -> bool {
-        self.sitting.is_some() || !self.queue.is_empty()
     }
 
     fn keep(&mut self, name: &str, image: Image, images: &mut Assets<Image>) {
@@ -146,12 +147,26 @@ impl Thumbnails {
             }
         }
     }
+
+    fn sit_for(&mut self, request: Request) {
+        // A save while the old picture is still queued supersedes it.
+        self.queue.retain(|queued| queued.name != request.name);
+        self.queue.push_back(request);
+    }
 }
 
+#[derive(Clone)]
 struct Request {
     name: String,
     /// `None` for a model with no file to date the picture against.
-    save_to: Option<PathBuf>,
+    save_to: Option<CacheEntry>,
+}
+
+#[derive(Clone)]
+struct CacheEntry {
+    picture: PathBuf,
+    /// The prop's file, which the picture must be no older than.
+    source: PathBuf,
 }
 
 struct Sitting {
@@ -159,6 +174,11 @@ struct Sitting {
     studio: Entity,
     target: Handle<Image>,
     frames: u32,
+    /// The frame to take the next picture on.
+    shoot_at: u32,
+    /// The screenshot in flight, so a late answer to an abandoned one is not
+    /// taken for this.
+    shot: Option<Entity>,
     attempts: u32,
 }
 
@@ -173,7 +193,7 @@ impl Plugin for ThumbnailPlugin {
     fn build(&self, app: &mut App) {
         // Ungated: a prop baked mid-round is as much in need of a picture.
         app.init_resource::<Thumbnails>()
-            .add_systems(Update, (look_at_new_bakes, photograph).chain());
+            .add_systems(Update, (look_at_new_bakes, finish_reading, photograph).chain());
     }
 }
 
@@ -181,45 +201,76 @@ pub fn cache_path(folder: &str, name: &str) -> PathBuf {
     Path::new(CACHE_DIR).join(folder).join(format!("{name}.png"))
 }
 
-/// Of the file the cache would bake: the highest-priority pack that has one.
-fn source_modified(name: &str) -> Option<SystemTime> {
-    default_packs()
-        .iter()
-        .rev()
-        .find_map(|pack| std::fs::metadata(prop_path(pack, name)).ok())
-        .and_then(|metadata| metadata.modified().ok())
-}
+/// The cache is native-only: a browser tab has nowhere to keep it, so there
+/// every picture is taken fresh.
+#[cfg(not(target_arch = "wasm32"))]
+mod disk {
+    use super::*;
+    use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 
-/// A picture taken no earlier than the file it is of.
-fn read_cached(path: &Path, source: SystemTime) -> Option<Image> {
-    let taken = std::fs::metadata(path).and_then(|metadata| metadata.modified()).ok()?;
-    if taken < source {
-        return None;
+    /// Beside the picture: the file it is of, so a picture of an override that
+    /// has since been deleted is not taken for the file now winning.
+    fn source_note(picture: &Path) -> PathBuf {
+        picture.with_extension("source")
     }
-    let bytes = std::fs::read(path).ok()?;
-    match Image::from_buffer(
-        &bytes,
-        ImageType::Extension("png"),
-        CompressedImageFormats::NONE,
-        true,
-        ImageSampler::Default,
-        RenderAssetUsages::default(),
-    ) {
-        Ok(image) => Some(image),
-        // Half-written by a run that was killed: take it again.
-        Err(e) => {
-            warn!("Retaking thumbnail {}: {e}", path.display());
-            None
+
+    /// A picture of this very file, taken no earlier than its last change.
+    pub fn read(entry: &CacheEntry) -> Option<Image> {
+        let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        let of = std::fs::read_to_string(source_note(&entry.picture)).ok()?;
+        if Path::new(&of) != entry.source || modified(&entry.picture)? < modified(&entry.source)? {
+            return None;
+        }
+        let bytes = std::fs::read(&entry.picture).ok()?;
+        match Image::from_buffer(
+            &bytes,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::Default,
+            RenderAssetUsages::default(),
+        ) {
+            Ok(image) => Some(image),
+            // Half-written by a run that was killed: take it again.
+            Err(e) => {
+                warn!("Retaking thumbnail {}: {e}", entry.picture.display());
+                None
+            }
+        }
+    }
+
+    /// The note goes last, so a picture interrupted halfway is not vouched for.
+    pub fn write(entry: &CacheEntry, save: impl FnOnce(&Path) -> Result<(), String>) {
+        let _ = std::fs::remove_file(source_note(&entry.picture));
+        let saved = entry
+            .picture
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .map_err(|e| e.to_string())
+            .and_then(|()| save(&entry.picture))
+            .and_then(|()| {
+                std::fs::write(source_note(&entry.picture), entry.source.to_string_lossy().as_bytes())
+                    .map_err(|e| e.to_string())
+            });
+        match saved {
+            Ok(()) => info!("Thumbnail saved to {}", entry.picture.display()),
+            Err(e) => warn!("Could not save thumbnail {}: {e}", entry.picture.display()),
         }
     }
 }
 
-fn look_at_new_bakes(
-    cache: Res<PropCache>,
-    mut thumbnails: ResMut<Thumbnails>,
-    mut images: ResMut<Assets<Image>>,
-    mut seen: Local<u64>,
-) {
+#[cfg(target_arch = "wasm32")]
+mod disk {
+    use super::*;
+
+    pub fn read(_: &CacheEntry) -> Option<Image> {
+        None
+    }
+
+    pub fn write(_: &CacheEntry, _: impl FnOnce(&Path) -> Result<(), String>) {}
+}
+
+fn look_at_new_bakes(cache: Res<PropCache>, mut thumbnails: ResMut<Thumbnails>, mut seen: Local<u64>) {
     if cache.bakes() == *seen {
         return;
     }
@@ -231,18 +282,36 @@ fn look_at_new_bakes(
         }
         thumbnails.looked_at.insert(name.to_owned(), baked.bake);
 
-        let source = source_modified(name);
-        let save_to = source.map(|_| cache_path(PROPS_DIR, name));
-        if let (Some(source), Some(path)) = (source, &save_to)
-            && let Some(image) = read_cached(path, source)
-        {
-            thumbnails.keep(name, image, &mut images);
-            continue;
+        let save_to = baked.file.as_ref().map(|source| CacheEntry {
+            picture: cache_path(PROPS_DIR, name),
+            source: source.clone(),
+        });
+        let request = Request { name: name.to_owned(), save_to };
+        match &request.save_to {
+            Some(entry) => {
+                let entry = entry.clone();
+                let task = IoTaskPool::get().spawn(async move { disk::read(&entry) });
+                thumbnails.reading.push((request, baked.bake, task));
+            }
+            None => thumbnails.sit_for(request),
         }
-        // A save while the old picture is still queued supersedes it.
-        thumbnails.queue.retain(|request| request.name != name);
-        thumbnails.queue.push_back(Request { name: name.to_owned(), save_to });
     }
+}
+
+fn finish_reading(mut thumbnails: ResMut<Thumbnails>, mut images: ResMut<Assets<Image>>) {
+    let mut reading = std::mem::take(&mut thumbnails.reading);
+    reading.retain_mut(|(request, bake, task)| {
+        let Some(read) = check_ready(task) else { return true };
+        // Re-baked while it was being read: that bake has its own read.
+        if thumbnails.looked_at.get(&request.name) == Some(bake) {
+            match read {
+                Some(image) => thumbnails.keep(&request.name, image, &mut images),
+                None => thumbnails.sit_for(request.clone()),
+            }
+        }
+        false
+    });
+    thumbnails.reading.append(&mut reading);
 }
 
 fn photograph(
@@ -254,8 +323,16 @@ fn photograph(
 ) {
     if let Some(sitting) = &mut thumbnails.sitting {
         sitting.frames += 1;
-        if sitting.frames == SETTLE_FRAMES {
-            commands.spawn(Screenshot::image(sitting.target.clone())).observe(develop);
+        if sitting.frames == sitting.shoot_at {
+            let shot = commands.spawn(Screenshot::image(sitting.target.clone())).observe(develop).id();
+            sitting.shot = Some(shot);
+        } else if sitting.shot.is_some() && sitting.frames > sitting.shoot_at + CAPTURE_TIMEOUT {
+            sitting.shot = None;
+            if !retake(sitting) {
+                let sitting = thumbnails.sitting.take().unwrap();
+                warn!("Gave up on a thumbnail of {}: no picture came back", sitting.request.name);
+                give_up(&mut commands, &mut thumbnails, &mut images, sitting);
+            }
         }
         return;
     }
@@ -287,11 +364,11 @@ fn photograph(
         let studio = commands
             .spawn((
                 ThumbnailStudio,
-                // Or the prop editor hides it with the rest of the world, and
-                // every picture taken in that mode is empty.
-                PropScene,
                 Transform::IDENTITY,
                 Visibility::Inherited,
+                // On the root too, which is what tells the prop editor's
+                // hiding rule that no viewport draws it.
+                layer.clone(),
                 Name::new(format!("Thumbnail studio: {}", request.name)),
             ))
             .with_children(|studio| {
@@ -326,9 +403,24 @@ fn photograph(
             })
             .id();
 
-        thumbnails.sitting = Some(Sitting { request, studio, target, frames: 0, attempts: 0 });
+        thumbnails.sitting = Some(Sitting {
+            request,
+            studio,
+            target,
+            frames: 0,
+            shoot_at: SETTLE_FRAMES,
+            shot: None,
+            attempts: 0,
+        });
         return;
     }
+}
+
+/// Schedules another picture; `false` once out of attempts.
+fn retake(sitting: &mut Sitting) -> bool {
+    sitting.attempts += 1;
+    sitting.shoot_at = sitting.frames + RETRY_FRAMES;
+    sitting.attempts < ATTEMPTS
 }
 
 fn develop(
@@ -337,13 +429,18 @@ fn develop(
     mut thumbnails: ResMut<Thumbnails>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let Some(mut sitting) = thumbnails.sitting.take() else { return };
+    let Some(sitting) = &mut thumbnails.sitting else { return };
+    if sitting.shot != Some(captured.entity) {
+        return;
+    }
+    sitting.shot = None;
 
     let picture = match captured.image.clone().try_into_dynamic() {
         Ok(picture) => picture.to_rgba8(),
         Err(e) => {
+            let sitting = thumbnails.sitting.take().unwrap();
             error!("Thumbnail of {} came back unreadable: {e}", sitting.request.name);
-            finish(&mut commands, &mut images, sitting);
+            give_up(&mut commands, &mut thumbnails, &mut images, sitting);
             return;
         }
     };
@@ -351,32 +448,30 @@ fn develop(
     // Every pixel the clear colour: the pipelines were not ready yet.
     let first = picture.pixels().next().copied();
     if picture.pixels().all(|pixel| Some(*pixel) == first) {
-        sitting.attempts += 1;
-        if sitting.attempts < ATTEMPTS {
-            sitting.frames = 0;
-            thumbnails.sitting = Some(sitting);
-        } else {
+        if !retake(sitting) {
+            let sitting = thumbnails.sitting.take().unwrap();
             warn!("Gave up on a thumbnail of {}: every picture was empty", sitting.request.name);
-            finish(&mut commands, &mut images, sitting);
+            give_up(&mut commands, &mut thumbnails, &mut images, sitting);
         }
         return;
     }
 
-    if let Some(path) = &sitting.request.save_to {
-        let saved = path
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .map_err(|e| e.to_string())
-            .and_then(|()| picture.save(path).map_err(|e| e.to_string()));
-        match saved {
-            Ok(()) => info!("Thumbnail saved to {}", path.display()),
-            Err(e) => warn!("Could not save thumbnail {}: {e}", path.display()),
-        }
-    }
-
-    let image = Image::from_dynamic(picture.into(), true, RenderAssetUsages::default());
+    let sitting = thumbnails.sitting.take().unwrap();
+    let image = Image::from_dynamic(picture.clone().into(), true, RenderAssetUsages::default());
     thumbnails.keep(&sitting.request.name, image, &mut images);
+    if let Some(entry) = sitting.request.save_to.clone() {
+        IoTaskPool::get()
+            .spawn(async move { disk::write(&entry, |path| picture.save(path).map_err(|e| e.to_string())) })
+            .detach();
+    }
     finish(&mut commands, &mut images, sitting);
+}
+
+/// Forgets the bake too, so the next bake of anything tries this one again
+/// rather than it going without a picture for the rest of the process.
+fn give_up(commands: &mut Commands, thumbnails: &mut Thumbnails, images: &mut Assets<Image>, sitting: Sitting) {
+    thumbnails.looked_at.remove(&sitting.request.name);
+    finish(commands, images, sitting);
 }
 
 fn finish(commands: &mut Commands, images: &mut Assets<Image>, sitting: Sitting) {

@@ -754,21 +754,26 @@ a point inside the frame is two linear bounds on where the camera stands, so
 padding — a bounding sphere would leave a long weapon small in a square
 picture.
 
-Pictures are cached at `cache/thumbnail/props/{name}.png` and reused while
-the picture is **no older than the prop's file** (the highest-priority pack's,
-as the bake reads). Saving in the prop editor re-bakes, so it re-photographs.
-A model the server sent has no file to date against and is photographed into
-memory only. Lighting or framing changes do not invalidate the cache: delete
-`cache/` after touching either.
+Pictures are cached at `cache/thumbnail/props/{name}.png`, with a
+`{name}.source` beside each naming the file it was taken of. One is reused
+only while it is of **the file the prop was baked from** and no older than it,
+so a deleted override does not leave its picture behind. Saving in the prop
+editor re-bakes, so it re-photographs. A model the server sent has no file and
+is photographed into memory only. Reading and writing run on the IO pool, and
+the cache is native-only. Lighting or framing changes do not invalidate it:
+delete `cache/` after touching either.
 
 Three things there fail silently:
 
 - **One sitting at a time.** Every studio is on the same layer, so two up at
   once photograph each other's props.
-- **The studio carries `PropScene`**, or the prop editor's hiding rule hides
-  it with the rest of the world and every picture taken in that mode is empty.
-- **A picture that is all one colour is retaken**, because pipelines compile
-  in the background and the first frames of a new material draw nothing.
+- **The studio's root is on the thumbnail layer**, which is what the prop
+  editor's hiding rule reads: it leaves alone any root no viewport draws.
+  Without that, every picture taken in that mode is empty.
+- **A picture that is all one colour, or that never comes back, is
+  retaken**, because pipelines compile in the background and a capture can
+  be dropped. After about ten seconds the prop is given up on until the next
+  bake.
 
 `Thumbnails::prop` is the handle; it is kept across a retake, so whatever
 shows it updates in place. Nothing shows one yet.

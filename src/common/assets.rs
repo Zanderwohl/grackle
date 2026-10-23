@@ -4,9 +4,10 @@
 //! `fetch` can enumerate a directory, and a manifest would be a second
 //! description of the pack. A loader that needs several files names them.
 //!
-//! [`NativeFiles`] is the only `std::fs` in the runtime path; the browser
-//! build replaces it. [`crate::common::lang`] does not use this yet: it reads
-//! through a `LazyLock` before Bevy exists.
+//! [`NativeFiles`] is the only `std::fs` in the runtime path besides the
+//! native-only thumbnail cache; the browser build replaces it.
+//! [`crate::common::lang`] does not use this yet: it reads through a
+//! `LazyLock` before Bevy exists.
 
 use std::path::{Path, PathBuf};
 

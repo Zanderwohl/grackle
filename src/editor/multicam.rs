@@ -28,6 +28,11 @@ pub fn editor_only() -> RenderLayers {
     RenderLayers::layer(EDITOR_ONLY_LAYER)
 }
 
+/// What the editor viewports draw, in both authoring modes.
+pub fn viewport_layers() -> RenderLayers {
+    RenderLayers::from_layers(&[render_layers::WORLD, EDITOR_ONLY_LAYER])
+}
+
 /// How much of each window edge something else has taken, in logical pixels.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Insets {
@@ -250,7 +255,7 @@ impl MulticamPlugin {
                     camera_pos,
                     Bloom::NATURAL,
                     Tonemapping::TonyMcMapface,
-                    RenderLayers::from_layers(&[render_layers::WORLD, EDITOR_ONLY_LAYER]),
+                    viewport_layers(),
                     Multicam {
                         name: camera_name.to_string(),
                         screen_pos: UVec2::new((idx % 2) as u32, (idx / 2) as u32),
@@ -680,7 +685,7 @@ mod tests {
     #[test]
     fn handles_are_seen_by_the_editor_viewports_and_nothing_else() {
         assert!(!RenderLayers::default().intersects(&editor_only()), "the play camera sees handles");
-        assert!(RenderLayers::from_layers(&[render_layers::WORLD, EDITOR_ONLY_LAYER]).intersects(&editor_only()));
+        assert!(viewport_layers().intersects(&editor_only()));
     }
 
     /// A fraction from mid-drag nonsense must never reach a texture; wgpu refuses and Bevy exits with an

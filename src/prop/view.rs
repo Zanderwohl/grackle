@@ -5,7 +5,8 @@
 //!
 //! The hiding rule names what to keep rather than what to hide, because
 //! loose entities (grid bodies, corpses, projectiles) are not feature
-//! entities.
+//! entities. A root on no layer the viewports draw is kept too: it is not in
+//! the way, and hiding it would blank whatever camera does draw it.
 //!
 //! Rebuilt on [`PropEditor::generation`] rather than `Changed`, since
 //! evaluation is expensive and egui marks changes on hover. The generation is
@@ -13,11 +14,13 @@
 
 use core::time::Duration;
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::platform::collections::HashMap;
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
+use crate::editor::multicam::viewport_layers;
 use crate::prop::baked::{parts, SurfaceMaterials};
 use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure, ScaleFigure};
 use crate::prop::document::PropEditor;
@@ -156,11 +159,15 @@ pub fn carry_the_prop(
 fn set_the_world_aside(
     mut hidden: ResMut<HiddenForModelling>,
     mut entities: Query<
-        (Entity, &mut Visibility),
+        (Entity, &mut Visibility, Option<&RenderLayers>),
         (Without<ChildOf>, Without<Node>, Without<PropScene>),
     >,
 ) {
-    for (entity, mut visibility) in &mut entities {
+    let viewports = viewport_layers();
+    for (entity, mut visibility, layers) in &mut entities {
+        if layers.is_some_and(|layers| !layers.intersects(&viewports)) {
+            continue;
+        }
         // Hidden by someone else: not recorded, so leaving keeps it hidden.
         if *visibility == Visibility::Hidden {
             continue;
@@ -384,6 +391,9 @@ mod tests {
         let prop = world.spawn((Visibility::Inherited, PropScene)).id();
         let label = world.spawn((Visibility::Inherited, Node::default())).id();
         let already_hidden = world.spawn(Visibility::Hidden).id();
+        let elsewhere = world
+            .spawn((Visibility::Inherited, RenderLayers::layer(crate::common::render_layers::THUMBNAIL)))
+            .id();
 
         world.run_system_once(set_the_world_aside).unwrap();
 
@@ -397,6 +407,7 @@ mod tests {
         );
         assert_eq!(seen(&world, prop), Visibility::Inherited, "the prop hid itself");
         assert_eq!(seen(&world, label), Visibility::Inherited, "the viewport labels went out");
+        assert_eq!(seen(&world, elsewhere), Visibility::Inherited, "hid what no viewport draws");
 
         world.run_system_once(put_the_world_back).unwrap();
 
