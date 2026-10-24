@@ -31,7 +31,7 @@ use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind, Pic
 use crate::prop::document::{self, Pick, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::prop::plane::{OriginPlane, PickedPlane, Plane, PlaneRef};
 use crate::prop::reference::{Element, GeomRef, Located};
-use crate::prop::region::{arrange, Region, RegionRef};
+use crate::prop::region::{arrange, Arrangement, Region, RegionRef};
 use crate::prop::sketch::{Sketch, SketchId};
 use crate::prop::sketch_edit::{sketch_of, sketch_of_mut, SketchPick, SketchSession, SketchTool};
 use crate::common::class::Class;
@@ -202,7 +202,7 @@ impl<'a> TabViewer for PropTabs<'a> {
         match tab {
             PropTab::Features => feature_tree(ui, self.editor, self.build, self.session),
             PropTab::Inspector => match self.session.editing() {
-                Some(sketch) => sketch_inspector(ui, self.editor, self.build, self.session, sketch),
+                Some(sketch) => sketch_inspector(ui, self.editor, self.session, sketch),
                 None => inspector(ui, self.editor, self.build, self.plane, &mut self.requests.preview_plane),
             },
             PropTab::Hold => match self.editor.doc().archetype {
@@ -1087,23 +1087,18 @@ fn sketch_toolbar(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSess
 
 /// While a sketch is edited: its picks, each with its numbers. A point's are
 /// editable, which is how a corner is put somewhere exact.
-fn sketch_inspector(
-    ui: &mut Ui,
-    editor: &mut PropEditor,
-    build: &PropBuild,
-    session: &mut SketchSession,
-    id: PropFeatureId,
-) {
+fn sketch_inspector(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSession, id: PropFeatureId) {
     let Some(sketch) = sketch_of(editor.doc(), id).cloned() else { return };
+    let arrangement = arrange(&sketch);
     section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
         ui.label(get!("prop.inspector.drawing", "points", sketch.points.len(), "lines", sketch.entities.len()));
-        ui.label(get!("prop.sketch.regions", "count", arrange(&sketch).regions.len()));
+        ui.label(get!("prop.sketch.regions", "count", arrangement.regions.len()));
     });
     if !sketch.regions.is_empty() {
         let mut action = None;
         section(ui, "sketch_regions", get!("prop.inspector.sections.swept_regions"), |ui| {
             let ids: Vec<SketchId> = sketch.regions.iter().map(|region| region.id).collect();
-            action = region_rows(ui, build, id, &ids, None);
+            action = region_rows(ui, &sketch, &arrangement, id, &ids, None);
         });
         if let Some(action) = action {
             apply_region_action(editor, action);
@@ -1655,18 +1650,21 @@ fn apply_region_action(editor: &mut PropEditor, action: RegionAction) {
 
 /// One row per region entry: its label, and whether the drawing still
 /// encloses it. Re-pointing an entry moves every sweep that names it.
+/// `drawn` and `arrangement` are whichever the caller is showing: the build
+/// for a sweep, the document while the sketch is open, so the list agrees
+/// with the hatching drawn beside it.
 fn region_rows(
     ui: &mut Ui,
-    build: &PropBuild,
+    drawn: &Sketch,
+    arrangement: &Arrangement,
     sketch: PropFeatureId,
     regions: &[SketchId],
     picked: Option<&Region>,
 ) -> Option<RegionAction> {
-    let placed = build.evaluated.sketch(sketch)?;
     let mut action = None;
     for &id in regions {
-        let Some(entry) = placed.sketch.region(id) else { continue };
-        let found = placed.resolve(id);
+        let Some(entry) = drawn.region(id) else { continue };
+        let found = arrangement.resolve(&entry.name(), Vec2::from_array(entry.hint));
         ui.horizontal(|ui| {
             let mut label = entry.label.clone();
             let hint = get!("prop.sketch.region_label", "id", id);
@@ -1683,7 +1681,7 @@ fn region_rows(
             }
             // Offered, never taken: after a merge the region at the old spot
             // is bigger than the one that was meant.
-            let there = found.is_none().then(|| placed.arrangement.region_at(Vec2::from_array(entry.hint))).flatten();
+            let there = found.is_none().then(|| arrangement.region_at(Vec2::from_array(entry.hint))).flatten();
             if let Some(to) = there {
                 if ui.small_button(get!("prop.region.use_here")).clicked() {
                     action = Some(RegionAction::Repoint { sketch, region: id, to: to.clone() });
@@ -1714,7 +1712,8 @@ fn sweep_regions(
             _ => None,
         })
         .collect();
-    region_rows(ui, build, sketch, regions, match picked[..] {
+    let placed = build.evaluated.sketch(sketch)?;
+    region_rows(ui, &placed.sketch, &placed.arrangement, sketch, regions, match picked[..] {
         [one] => Some(one),
         _ => None,
     })
