@@ -546,11 +546,35 @@ radius into forty presses of Ctrl+Z. The gesture closes when the pointer *and*
 the keyboard are idle, which is what makes typing a name one step rather than
 one per letter.
 
-**The verbs act on the selection**, not on whatever was added last: they sit in
-a toolbar under the menu bar, Combine takes the two bodies picked (first as
-target, second as tool — the order it is said in), Mirror the primary, and
-each greys out when the selection does not fit. Undo and redo are on an
-**Edit** menu.
+**The verbs act on the selection**, not on whatever was added last, and **none
+is ever greyed out** ([`tool.rs`](src/prop/tool.rs)). Each tool states what it
+needs as a list of slots — Combine a body then a second body (target, then
+tool: the order it is said in), Mirror a body then a plane, Revolve regions
+then an axis — and clicking one fills the slots from the selection in pick
+order, drops whatever fits none, and asks for the rest in the toolbar ("Pick a
+plane or a flat face"). While it waits, the viewport hovers and takes only
+picks that fit: over a body's corner when a body is wanted, the body is what
+lights. It finishes the moment every slot is full; a last slot taking any
+number of regions waits for **Done** or `Enter`, and `Escape` puts it down.
+Undo and redo are on an **Edit** menu.
+
+The picks a tool is collecting **are the selection** rather than a list of its
+own, so "skip straight to the second pick" is just having picked the first,
+and there are never two lists of what is picked to disagree. Where a plane is
+wanted, a flat face is offered too, and finishing makes a plane feature through
+it in the same undo step (`PropEditor::add_pair`), so a sketch can go straight
+on a face.
+
+**Lines are picks** — an edge, a sketch's line (pickable from outside the
+sketch) or one of the three origin axes, which are drawn across the origin
+planes for that reason — and all three are one `LineRef`
+([`line.rs`](src/prop/line.rs)): what a revolve turns about and what a pattern
+runs along or turns about. A mirror is about a `PlaneRef`. Neither is a
+dropdown: the inspector shows what it names with a **Pick** button, which is
+the same machinery as a tool with one slot (`Task::Repick`). A re-pick offers
+only what stands before the feature, since that is all it could resolve
+against. A revolve's axis must lie in its sketch's plane, which the hover
+checks and the evaluator reports.
 
 **The selection is an ordered list of `Pick`s** — bodies, named corners,
 edges and faces, and plane features — and in the viewport **every click

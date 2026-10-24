@@ -24,7 +24,10 @@ use crate::prop::figure::{FigureReach, ScaleFigure, ScaleFigureMarker};
 use crate::prop::hold::HoldSpec;
 use crate::prop::profile::Placement;
 use crate::prop::plane::plane_under;
-use crate::prop::reference::{element_under, Pointer};
+use crate::prop::feature::{Axis, Evaluated};
+use crate::prop::line::LineRef;
+use crate::prop::reference::{corner_under, edge_under, segment_under, Pointer};
+use crate::prop::tool::{accepts, ActiveTool};
 use crate::prop::solid::{Shape, MIN_EXTENT};
 use crate::tool::tool_helpers::{closest_param_on_axis, ray_point_distance};
 
@@ -126,10 +129,14 @@ impl Plugin for PropGizmoPlugin {
                     .run_if(crate::prop::sketch_edit::not_sketching),
             )
             .add_systems(Update, draw_colliders.run_if(in_state(AppMode::Prop)))
-            .add_systems(OnExit(AppMode::Prop), |mut grab: ResMut<GizmoGrab>, mut hovered: ResMut<HoveredPick>| {
-                grab.held = None;
-                hovered.0 = None;
-            });
+            .add_systems(
+                OnExit(AppMode::Prop),
+                |mut grab: ResMut<GizmoGrab>, mut hovered: ResMut<HoveredPick>, mut tool: ResMut<ActiveTool>| {
+                    grab.held = None;
+                    hovered.0 = None;
+                    tool.0 = None;
+                },
+            );
     }
 }
 
@@ -356,13 +363,17 @@ fn drag_the_selected(
 pub struct HoveredPick(pub Option<Pick>);
 
 /// A click toggles what is under the pointer — a corner, else an edge, else
-/// a plane's border, else a sketch's region, else a flat face, else a body — and a click on nothing
-/// clears. On the press, so its gizmos are up by release. Off while the hold's
-/// handles are up, so a near-miss on a grip does not change the modelling
-/// selection.
+/// a sketch's line, else an origin axis, else a plane's border, else a
+/// sketch's region, else a flat face, else a body — and a click on nothing
+/// clears. While a tool is waiting on picks, the first of those it would take:
+/// hovering a corner of a body when a body is wanted offers the body. On the
+/// press, so its gizmos are up by release. Off while the hold's handles are
+/// up, so a near-miss on a grip does not change the modelling selection.
+#[allow(clippy::too_many_arguments)]
 fn pick_in_the_viewport(
     mut editor: ResMut<PropEditor>,
     mut hovered: ResMut<HoveredPick>,
+    tool: Res<ActiveTool>,
     mouse: Res<CurrentMouseInput>,
     grab: Res<GizmoGrab>,
     hold_handles: Res<HoldHandles>,
@@ -379,20 +390,13 @@ fn pick_in_the_viewport(
                 face: evaluated.face_distance(ray),
                 project: |p: Vec3| camera.world_to_viewport(at, p).ok(),
             };
-            let pick = element_under(&evaluated.pickables, &pointer)
-                .map(|pickable| Pick::Geom(pickable.reference.clone()))
-                .or_else(|| plane_under(&evaluated.planes, &pointer).map(Pick::Plane))
-                .or_else(|| {
-                    evaluated
-                        .region_under(ray)
-                        .map(|(sketch, region)| Pick::Region { sketch, region: region.name.clone() })
-                })
-                .or_else(|| {
-                    evaluated
-                        .surface_under(ray)
-                        .map(|(body, face)| face.map_or(Pick::Body(body), Pick::Geom))
-                });
-            Some(pick)
+            let candidates = candidates_under(evaluated, &pointer);
+            Some(match tool.0 {
+                None => candidates.into_iter().next(),
+                Some(task) => candidates
+                    .into_iter()
+                    .find(|pick| accepts(task, editor.picks(), pick, editor.doc(), evaluated)),
+            })
         })
         .flatten();
     let pointing = under.is_some();
@@ -406,8 +410,43 @@ fn pick_in_the_viewport(
     }
     match under {
         Some(pick) => editor.toggle(pick),
+        // A miss is not a cancel: a tool keeps what it has.
+        None if tool.0.is_some() => {}
         None => editor.clear_selection(),
     }
+}
+
+/// Everything under the pointer, in the order a click prefers it.
+fn candidates_under<P: Fn(Vec3) -> Option<Vec2>>(evaluated: &Evaluated, pointer: &Pointer<P>) -> Vec<Pick> {
+    let mut found = Vec::new();
+    let geom = |pickable: &crate::prop::reference::Pickable| Pick::Geom(pickable.reference.clone());
+    found.extend(corner_under(&evaluated.pickables, pointer).map(geom));
+    found.extend(edge_under(&evaluated.pickables, pointer).map(geom));
+    let sketch_lines = evaluated.sketches.iter().flat_map(|placed| {
+        placed.sketch.lines().filter_map(|(line, ..)| {
+            let (a, b) = placed.sketch.line(line)?;
+            Some((Pick::SketchLine { sketch: placed.id, line }, placed.world(a), placed.world(b)))
+        })
+    });
+    found.extend(segment_under(sketch_lines, pointer));
+    let axes = Axis::ALL.into_iter().filter_map(|axis| {
+        let (a, b) = evaluated.locate_line(&LineRef::Origin { axis })?;
+        Some((Pick::Axis(axis), a, b))
+    });
+    found.extend(segment_under(axes, pointer));
+    found.extend(plane_under(&evaluated.planes, pointer).map(Pick::Plane));
+    found.extend(
+        evaluated
+            .region_under(pointer.ray)
+            .map(|(sketch, region)| Pick::Region { sketch, region: region.name.clone() }),
+    );
+    // The face and its body both, so a tool wanting a body still finds one
+    // under a face a boolean made, which has no name.
+    if let Some((body, face)) = evaluated.surface_under(pointer.ray) {
+        found.extend(face.map(Pick::Geom));
+        found.push(Pick::Body(body));
+    }
+    found
 }
 
 /// Drag the hold's handles: a grip per hand, and the figure for the carry.

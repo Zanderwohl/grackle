@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::get;
 use crate::prop::profile::Placement;
 use crate::prop::csg::Polygon;
-use crate::prop::plane::{Datum, OriginPlane, PlaneRef};
+use crate::prop::line::LineRef;
+use crate::prop::plane::{Datum, OriginPlane, PlaneRef, MIN_ORIGIN_HALF};
 use crate::prop::plane::Plane;
 use crate::prop::profile::revolve_steps;
 use crate::prop::region::{arrange, axis_clear, Region};
@@ -59,7 +60,7 @@ impl BooleanOp {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Axis {
     #[default]
@@ -104,13 +105,12 @@ pub enum FeatureOp {
         end: End,
         surface: Surface,
     },
-    /// Regions of a sketch turned about a line in the same sketch, in
-    /// straight steps. Scalars first, as for [`FeatureOp::Extrude`].
+    /// Regions of a sketch turned about a line lying in the sketch's plane,
+    /// in straight steps. Scalars first, as for [`FeatureOp::Extrude`].
     Revolve {
         sketch: PropFeatureId,
         /// As for [`FeatureOp::Extrude`].
         regions: Vec<SketchId>,
-        axis: SketchId,
         #[serde(with = "crate::prop::nice_f32::scalar")]
         degrees: f32,
         /// Clamped by [`revolve_steps`].
@@ -118,19 +118,20 @@ pub enum FeatureOp {
         /// Half each way of the sketch's plane.
         #[serde(default)]
         symmetric: bool,
+        axis: LineRef,
         surface: Surface,
     },
     Boolean { op: BooleanOp, target: PropFeatureId, tool: PropFeatureId },
-    /// Axis-aligned rather than a full [`Placement`], so it is picked from a
-    /// dropdown without reasoning about Euler order.
+    /// About a plane, as it stood when this runs.
     Mirror {
         target: PropFeatureId,
-        axis: Axis,
+        /// Metres along the plane's normal.
         #[serde(default, with = "crate::prop::nice_f32::scalar")]
         offset: f32,
         /// Union with the original rather than replacing it.
         #[serde(default)]
         keep_original: bool,
+        about: PlaneRef,
     },
     /// Its own feature because what gets repainted is usually a boolean's
     /// result, which no earlier feature has a surface for.
@@ -168,41 +169,54 @@ impl End {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PatternKind {
-    /// Each copy `step` further on than the last.
+    /// Each copy `spacing` metres further along `direction` than the last;
+    /// negative goes back down it.
     Linear {
-        #[serde(with = "crate::prop::nice_f32::array")]
-        step: [f32; 3],
+        #[serde(with = "crate::prop::nice_f32::scalar")]
+        spacing: f32,
+        direction: LineRef,
     },
-    /// About a line through `centre` parallel to `axis`. A whole turn spaces
-    /// copies evenly; less puts the first and last at the ends of `degrees`.
+    /// About `axis`. A whole turn spaces copies evenly; less puts the first
+    /// and last at the ends of `degrees`.
     Radial {
-        axis: Axis,
-        #[serde(default, with = "crate::prop::nice_f32::array")]
-        centre: [f32; 3],
         #[serde(with = "crate::prop::nice_f32::scalar")]
         degrees: f32,
+        axis: LineRef,
     },
 }
 
 impl PatternKind {
-    pub fn copy(&self, index: u32, count: u32) -> Transform {
+    pub fn line(&self) -> &LineRef {
+        match self {
+            PatternKind::Linear { direction, .. } => direction,
+            PatternKind::Radial { axis, .. } => axis,
+        }
+    }
+
+    pub fn line_mut(&mut self) -> &mut LineRef {
+        match self {
+            PatternKind::Linear { direction, .. } => direction,
+            PatternKind::Radial { axis, .. } => axis,
+        }
+    }
+
+    /// Copy `index` of `count`, with [`Self::line`] resolved to `(a, b)`.
+    pub fn copy(&self, (a, b): (Vec3, Vec3), index: u32, count: u32) -> Transform {
+        let along = (b - a).normalize_or_zero();
         match *self {
-            PatternKind::Linear { step } => {
-                Transform::from_translation(Vec3::from_array(step) * index as f32)
-            }
-            PatternKind::Radial { axis, centre, degrees } => {
+            PatternKind::Linear { spacing, .. } => Transform::from_translation(along * spacing * index as f32),
+            PatternKind::Radial { degrees, .. } => {
                 // A whole turn would put the last copy on top of the first.
                 let gaps = match is_full_turn(degrees) {
                     true => count,
                     false => count.saturating_sub(1).max(1),
                 };
                 let angle = (degrees / gaps as f32).to_radians() * index as f32;
-                let centre = Vec3::from_array(centre);
-                let turn = Quat::from_axis_angle(axis.normal(), angle);
-                Transform::from_translation(centre - turn * centre).with_rotation(turn)
+                let turn = Quat::from_axis_angle(along, angle);
+                Transform::from_translation(a - turn * a).with_rotation(turn)
             }
         }
     }
@@ -250,12 +264,16 @@ impl FeatureOp {
     }
 
     /// Features this one names without consuming: what a plane was made
-    /// through, and every copy that geometry went through.
+    /// through, the plane or line something is about, and every copy that
+    /// geometry went through.
     pub fn references(&self) -> Vec<PropFeatureId> {
         let mut named: Vec<PropFeatureId> = match self {
             FeatureOp::Plane { through } => through.iter().flat_map(|r| r.source.features()).collect(),
             FeatureOp::Sketch { on, .. } => on.feature().into_iter().collect(),
-            FeatureOp::Extrude { sketch, .. } | FeatureOp::Revolve { sketch, .. } => vec![*sketch],
+            FeatureOp::Extrude { sketch, .. } => vec![*sketch],
+            FeatureOp::Revolve { sketch, axis, .. } => std::iter::once(*sketch).chain(axis.features()).collect(),
+            FeatureOp::Mirror { about, .. } => about.feature().into_iter().collect(),
+            FeatureOp::Pattern { along, .. } => along.line().features(),
             _ => vec![],
         };
         named.sort();
@@ -347,6 +365,8 @@ pub struct Evaluated {
     pub planes: Vec<Datum>,
     /// Sketches, in list order, placed where their planes were.
     pub sketches: Vec<PlacedSketch>,
+    /// Metres each way of the origin the origin planes and axes are drawn.
+    pub origin_half: f32,
 }
 
 impl Evaluated {
@@ -441,6 +461,21 @@ impl Evaluated {
             .and_then(|wire| wire.outline.locate(reference.element))
     }
 
+    /// A line as it is now, end to end as it is drawn: an origin axis runs
+    /// across the origin planes.
+    pub fn locate_line(&self, line: &LineRef) -> Option<(Vec3, Vec3)> {
+        match line {
+            LineRef::Origin { axis } => Some((-axis.normal() * self.origin_half, axis.normal() * self.origin_half)),
+            _ => line.resolve(
+                |edge| match self.locate(edge)? {
+                    Located::Edge(a, b) => Some((a, b)),
+                    Located::Point(_) | Located::Face { .. } => None,
+                },
+                &self.sketches,
+            ),
+        }
+    }
+
     /// The body a reference is part of.
     pub fn body_of(&self, reference: &GeomRef) -> Option<PropFeatureId> {
         self.wires
@@ -520,6 +555,33 @@ struct Live {
     solid: Solid,
     wires: Vec<Wire>,
 }
+
+/// Where a reference is among the bodies live at this point in the list.
+fn locate_in(live: &[Live], reference: &GeomRef) -> Option<Located> {
+    live.iter()
+        .flat_map(|body| &body.wires)
+        .find(|wire| wire.source == reference.source)
+        .and_then(|wire| wire.outline.locate(reference.element))
+}
+
+fn edge_of(live: &[Live], reference: &GeomRef) -> Option<(Vec3, Vec3)> {
+    match locate_in(live, reference)? {
+        Located::Edge(a, b) => Some((a, b)),
+        Located::Point(_) | Located::Face { .. } => None,
+    }
+}
+
+/// An origin plane, or a plane feature that has already run.
+fn plane_of(on: PlaneRef, planes: &[Datum]) -> Option<Plane> {
+    match on {
+        PlaneRef::Origin(which) => Some(which.plane()),
+        PlaneRef::Feature(_) => planes.iter().find(|datum| datum.id == on).map(|datum| datum.plane),
+    }
+}
+
+/// Metres a revolve's axis may sit off its sketch's plane: the kernel's
+/// rounding, not a modelling tolerance.
+const IN_PLANE: f32 = 1e-4;
 
 /// Every region a sweep names, as the sketch now stands, or a Problem naming
 /// the first that is not there.
@@ -609,10 +671,15 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     continue;
                 };
                 let Some(found) = resolve_regions(feature.id, placed, regions, &mut problems) else { continue };
-                let Some((a, b)) = placed.sketch.line(*axis) else {
+                let Some((a, b)) = axis.resolve(|edge| edge_of(&live, edge), &sketches) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_axis") });
                     continue;
                 };
+                if [a, b].iter().any(|p| placed.plane.distance(*p).abs() > IN_PLANE) {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.axis_off_plane") });
+                    continue;
+                }
+                let (a, b) = (placed.plane.flatten(a), placed.plane.flatten(b));
                 let Some(frame) = AxisFrame::new(&placed.plane, a, b, &found.iter().collect::<Vec<_>>()) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.axis_crosses") });
                     continue;
@@ -683,17 +750,22 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 let wires = a.wires.into_iter().chain(b.wires).collect();
                 live.push(Live { id: feature.id, solid: result, wires });
             }
-            FeatureOp::Mirror { target, axis, offset, keep_original } => {
+            FeatureOp::Mirror { target, about, offset, keep_original } => {
+                let Some(plane) = plane_of(*about, &planes) else {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.no_mirror_plane") });
+                    continue;
+                };
                 let Some(body) = find(*target, &live).map(|at| live.remove(at)) else {
                     problems.push(Problem::missing_body(feature.id));
                     continue;
                 };
-                let origin = axis.normal() * *offset;
-                let reflected = body.solid.clone().mirrored(origin, axis.normal());
+                let normal = *plane.normal;
+                let origin = plane.origin + normal * *offset;
+                let reflected = body.solid.clone().mirrored(origin, normal);
                 let reflections = body
                     .wires
                     .iter()
-                    .map(|wire| wire.copied(feature.id, 1, wire.outline.clone().mirrored(origin, axis.normal())));
+                    .map(|wire| wire.copied(feature.id, 1, wire.outline.clone().mirrored(origin, normal)));
                 let (solid, wires) = if *keep_original {
                     (body.solid.union(&reflected), body.wires.iter().cloned().chain(reflections).collect())
                 } else {
@@ -709,26 +781,14 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 live.push(Live { id: feature.id, solid: body.solid.painted(*surface), wires: body.wires });
             }
             FeatureOp::Plane { through } => {
-                let located: Option<Vec<Located>> = through
-                    .iter()
-                    .map(|reference| {
-                        live.iter()
-                            .flat_map(|body| &body.wires)
-                            .find(|wire| wire.source == reference.source)
-                            .and_then(|wire| wire.outline.locate(reference.element))
-                    })
-                    .collect();
+                let located: Option<Vec<Located>> = through.iter().map(|reference| locate_in(&live, reference)).collect();
                 match located.and_then(|located| Datum::through(feature.id, &located)) {
                     Some(datum) => planes.push(datum),
                     None => problems.push(Problem { feature: feature.id, message: get!("prop.problems.no_plane") }),
                 }
             }
             FeatureOp::Sketch { on, sketch } => {
-                let plane = match *on {
-                    PlaneRef::Origin(which) => Some(which.plane()),
-                    PlaneRef::Feature(_) => planes.iter().find(|datum| datum.id == *on).map(|datum| datum.plane),
-                };
-                match plane {
+                match plane_of(*on, &planes) {
                     Some(plane) => sketches.push(PlacedSketch {
                         id: feature.id,
                         plane,
@@ -742,6 +802,10 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 }
             }
             FeatureOp::Pattern { target, count, along } => {
+                let Some(line) = along.line().resolve(|edge| edge_of(&live, edge), &sketches) else {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_line") });
+                    continue;
+                };
                 let Some(body) = find(*target, &live).map(|at| live.remove(at)) else {
                     problems.push(Problem::missing_body(feature.id));
                     continue;
@@ -750,11 +814,11 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 // Unioned, not concatenated: overlapping copies must become one
                 // closed surface or a later boolean keeps the wrong half.
                 let solid = (1..count).fold(body.solid.clone(), |joined, index| {
-                    joined.union(&body.solid.clone().transformed(along.copy(index, count)))
+                    joined.union(&body.solid.clone().transformed(along.copy(line, index, count)))
                 });
                 let mut wires = body.wires.clone();
                 for index in 1..count {
-                    let moved = along.copy(index, count);
+                    let moved = along.copy(line, index, count);
                     wires.extend(
                         body.wires
                             .iter()
@@ -774,10 +838,10 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
         .filter_map(|body| body.solid.bounds())
         .map(|(min, max)| min.abs().max(max.abs()).max_element())
         .fold(0.0, f32::max);
-    let origins = OriginPlane::ALL.map(|which| Datum::origin(which, reach * 1.25));
-    planes.splice(0..0, origins);
+    let origin_half = (reach * 1.25).max(MIN_ORIGIN_HALF);
+    planes.splice(0..0, OriginPlane::ALL.map(|which| Datum::origin(which, origin_half)));
     let (bodies, wires) = live.into_iter().map(|body| ((body.id, body.solid), (body.id, body.wires))).unzip();
-    Evaluated { bodies, wires, pickables, problems, live_before, planes, sketches }
+    Evaluated { bodies, wires, pickables, problems, live_before, planes, sketches, origin_half }
 }
 
 #[cfg(test)]
@@ -800,11 +864,12 @@ mod tests {
             evaluated.bodies[0].1.volume()
         };
 
-        let row = pattern(3, PatternKind::Linear { step: [0.0, 0.0, 0.2] });
+        let z = LineRef::Origin { axis: Axis::Z };
+        let row = pattern(3, PatternKind::Linear { spacing: 0.2, direction: z.clone() });
         assert!((row - 3.0 * one).abs() < 1e-6, "{row} vs {}", 3.0 * one);
-        let round = pattern(4, PatternKind::Radial { axis: Axis::Y, centre: [0.0; 3], degrees: 360.0 });
+        let round = pattern(4, PatternKind::Radial { degrees: 360.0, axis: LineRef::Origin { axis: Axis::Y } });
         assert!((round - 4.0 * one).abs() < 1e-6, "{round} vs {}", 4.0 * one);
-        let alone = pattern(1, PatternKind::Linear { step: [0.0, 0.0, 0.2] });
+        let alone = pattern(1, PatternKind::Linear { spacing: 0.2, direction: z });
         assert!((alone - one).abs() < 1e-9);
     }
 
@@ -933,7 +998,7 @@ mod tests {
                 PropFeatureId(1),
                 FeatureOp::Mirror {
                     target: PropFeatureId(0),
-                    axis: Axis::X,
+                    about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz),
                     offset: 0.0,
                     keep_original: true,
                 },
@@ -1230,7 +1295,7 @@ mod tests {
                     PropFeatureId(1),
                     FeatureOp::Revolve {
                         sketch: PropFeatureId(0),
-                        axis,
+                        axis: LineRef::Sketch { sketch: PropFeatureId(0), line: axis },
                         degrees,
                         steps,
                         symmetric,
@@ -1306,6 +1371,40 @@ mod tests {
             assert_eq!(missing.problems.len(), 1);
         }
 
+        /// Fails if a line that is not the sketch's own cannot be turned
+        /// about, or one off the sketch's plane quietly turns something.
+        #[test]
+        fn any_line_in_the_sketchs_plane_is_an_axis() {
+            let (mut sketch, _) = ring(0.02, 0.05, 0.1, 0.0);
+            let names = every(&arrange(&sketch).regions);
+            let regions = adopt(&mut sketch, names);
+            let about = |axis: Axis| {
+                evaluate(&[
+                    PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch: sketch.clone() }),
+                    PropFeature::new(
+                        PropFeatureId(1),
+                        FeatureOp::Revolve {
+                            sketch: PropFeatureId(0),
+                            regions: regions.clone(),
+                            degrees: 360.0,
+                            steps: 12,
+                            symmetric: false,
+                            axis: LineRef::Origin { axis },
+                            surface: Surface::default(),
+                        },
+                    ),
+                ])
+            };
+            let turned = about(Axis::Y);
+            assert!(turned.problems.is_empty(), "{:?}", turned.problems);
+            let expected = 0.1 * (ngon(12, 0.05) - ngon(12, 0.02));
+            assert!((turned.bodies[0].1.volume() - expected).abs() < 1e-7);
+
+            let off = about(Axis::Z);
+            assert!(off.bodies.is_empty());
+            assert_eq!(off.problems[0].message, get!("prop.problems.axis_off_plane"));
+        }
+
         /// A part turn of a region with a hole: the cutter's caps are a step
         /// beyond the body's, and the volume still comes out exact.
         #[test]
@@ -1324,7 +1423,7 @@ mod tests {
                     PropFeatureId(1),
                     FeatureOp::Revolve {
                         sketch: PropFeatureId(0),
-                        axis,
+                        axis: LineRef::Sketch { sketch: PropFeatureId(0), line: axis },
                         degrees: 120.0,
                         steps: 4,
                         symmetric: false,
@@ -1351,7 +1450,7 @@ mod tests {
             let on = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch });
             doc.push(FeatureOp::Revolve {
                 sketch: on,
-                axis,
+                axis: LineRef::Sketch { sketch: on, line: axis },
                 degrees: 270.0,
                 steps: 9,
                 symmetric: true,

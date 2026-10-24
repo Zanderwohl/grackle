@@ -26,7 +26,9 @@ use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure,
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::gizmo::HoveredPick;
 use crate::prop::plane::draw_square;
-use crate::prop::feature::{FeatureOp, PropFeatureId};
+use crate::prop::feature::{Axis, FeatureOp, PropFeatureId};
+use crate::prop::line::LineRef;
+use crate::prop::tool::ActiveTool;
 use crate::prop::region::RegionRef;
 use crate::prop::sketch_edit::SketchSession;
 use crate::tool::tool_helpers::dashed_line;
@@ -308,6 +310,7 @@ fn draw_the_bench(
     build: Res<PropBuild>,
     hovered: Res<HoveredPick>,
     session: Res<SketchSession>,
+    tool: Res<ActiveTool>,
 ) {
     gizmos.grid(
         Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
@@ -315,16 +318,30 @@ fn draw_the_bench(
         Vec2::splat(0.1),
         Color::srgba(1.0, 1.0, 1.0, 0.08),
     );
-    gizmos.line(Vec3::ZERO, Vec3::X * 0.25, Color::srgb(0.9, 0.3, 0.3));
-    gizmos.line(Vec3::ZERO, Vec3::Y * 0.25, Color::srgb(0.3, 0.9, 0.3));
-    gizmos.line(Vec3::ZERO, Vec3::Z * 0.25, Color::srgb(0.3, 0.5, 0.9));
-
     let primary = editor.primary();
     let marker = build.evaluated.bounds().map_or(MIN_MARKER, |(min, max)| (max - min).length() * MARKER_SIZE).max(MIN_MARKER);
     let picked_colour = |pick: &Pick| match Some(pick) == primary {
         true => PICKED,
         false => PICKED.with_alpha(0.5),
     };
+    // Across the origin planes, which is also how far they can be picked.
+    for (axis, colour) in [
+        (Axis::X, Color::srgb(0.9, 0.3, 0.3)),
+        (Axis::Y, Color::srgb(0.3, 0.9, 0.3)),
+        (Axis::Z, Color::srgb(0.3, 0.5, 0.9)),
+    ] {
+        let pick = Pick::Axis(axis);
+        let Some((a, b)) = build.evaluated.locate_line(&LineRef::Origin { axis }) else { continue };
+        let (positive, negative) = if editor.picks().contains(&pick) {
+            (picked_colour(&pick), picked_colour(&pick))
+        } else if hovered.0.as_ref() == Some(&pick) {
+            (HOVERED, HOVERED)
+        } else {
+            (colour, colour.with_alpha(0.3))
+        };
+        gizmos.line(Vec3::ZERO, b, positive);
+        gizmos.line(a, Vec3::ZERO, negative);
+    }
     for pick in editor.picks() {
         match pick {
             // An eaten feature has no body and is not outlined.
@@ -340,8 +357,13 @@ fn draw_the_bench(
                     draw_located(&mut gizmos, at, marker, picked_colour(pick));
                 }
             }
-            // Drawn with every other plane, below.
-            Pick::Plane(_) => {}
+            // Drawn with every other plane and axis.
+            Pick::Plane(_) | Pick::Axis(_) => {}
+            Pick::SketchLine { .. } => {
+                if let Some((a, b)) = pick.line().and_then(|line| build.evaluated.locate_line(&line)) {
+                    draw_located(&mut gizmos, Located::Edge(a, b), marker, picked_colour(pick));
+                }
+            }
             Pick::Region { sketch, region } => draw_region(&mut gizmos, &build, *sketch, region, picked_colour(pick)),
         }
     }
@@ -352,25 +374,34 @@ fn draw_the_bench(
             }
         }
         Some(Pick::Region { sketch, region }) => draw_region(&mut gizmos, &build, *sketch, region, HOVERED),
+        Some(pick @ Pick::SketchLine { .. }) => {
+            if let Some((a, b)) = pick.line().and_then(|line| build.evaluated.locate_line(&line)) {
+                draw_located(&mut gizmos, Located::Edge(a, b), marker * 0.8, HOVERED);
+            }
+        }
+        // A body under a pending tool: outlined as a pick would be.
+        Some(Pick::Body(body)) if tool.0.is_some() => {
+            if let Some((min, max)) = build.evaluated.bodies.iter().find(|(id, _)| id == body).and_then(|(_, solid)| solid.bounds()) {
+                gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), HOVERED);
+            }
+        }
         _ => {}
     }
     let picked_features = editor.picked_features(&build.evaluated);
-    // A revolve's axis is a line among many in its sketch; drawn long and
-    // dashed, it says which.
-    let revolving = editor
+    // The line a revolve or pattern is about is one among many; drawn long
+    // and dashed, it says which.
+    let about = editor
         .primary_feature(&build.evaluated)
         .and_then(|id| editor.doc().feature(id))
         .and_then(|feature| match &feature.op {
-            FeatureOp::Revolve { sketch, axis, .. } => Some((*sketch, *axis)),
+            FeatureOp::Revolve { axis, .. } => Some(axis.clone()),
+            FeatureOp::Pattern { along, .. } => Some(along.line().clone()),
             _ => None,
         });
-    if let Some((sketch, axis)) = revolving
-        && let Some(placed) = build.evaluated.sketch(sketch)
-        && let Some((a, b)) = placed.sketch.line(axis)
-    {
+    if let Some((a, b)) = about.and_then(|line| build.evaluated.locate_line(&line)) {
         let middle = (a + b) / 2.0;
-        let reach = (b - a).normalize_or_zero() * placed.arrangement.regions.iter().map(|r| crate::prop::region::reach_of(&r.outer)).fold(a.distance(b), f32::max);
-        dashed_line(&mut gizmos, placed.world(middle - reach), placed.world(middle + reach), HOVERED, marker * 2.0, marker);
+        let reach = (b - a).normalize_or_zero() * build.evaluated.origin_half.max(a.distance(b));
+        dashed_line(&mut gizmos, middle - reach, middle + reach, HOVERED, marker * 2.0, marker);
     }
     // The sketch being edited is drawn by the session, from the document.
     for placed in build.evaluated.sketches.iter().filter(|placed| Some(placed.id) != session.editing()) {

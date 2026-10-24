@@ -80,8 +80,9 @@ what is done.
   day — `Distance` now, `UpTo(GeomRef)` and `ThroughAll` later — so adding them
   does not change the file again. `symmetric` replaces `midplane`. A guide
   line for a slanted extrude is a later optional field.
-- **Revolve turns about a line in the sketch**, construction or not, by an
-  angle, optionally symmetric. A model edge as the axis can come later.
+- **Revolve turns about a line in the sketch's plane** — a sketch line,
+  construction or not, a model edge or an origin axis (`LineRef`) — by an
+  angle, optionally symmetric.
 - **A region with holes is extruded as its outer loop minus its inner loops**,
   inside the evaluator, with the CSG that already exists, rather than teaching
   the ear-clipper about holes.
@@ -158,9 +159,8 @@ tested.
 - [x] Extrude on regions, `end: Distance`, `symmetric`. Holes subtracted.
       Several regions are unioned into one body.
 - [x] Revolve on regions about a sketch line, with the one-side check. Steps
-      are clamped to 3–24 (`revolve_steps`); the axis defaults to the first
-      line clearing every region, construction lines first, and is drawn
-      dashed while the revolve is selected. Holes are cut by a revolve one
+      are clamped to 3–24 (`revolve_steps`); the axis is picked (the tool asks
+      for it), and is drawn dashed while the revolve is selected. Holes are cut by a revolve one
       step longer each way, so its facets line up and its caps are clear.
 - [x] Region picks in the Model workspace, so a sweep is select-then-act like
       every other verb. A region wins over the face it is drawn on, so a sketch
@@ -216,7 +216,7 @@ tested.
 
 - [ ] `End::UpTo(GeomRef)` and `End::ThroughAll`.
 - [ ] A guide line for a slanted extrude.
-- [ ] A model edge as a revolve's axis.
+- [x] A model edge, or an origin axis, as a revolve's axis.
 - [ ] Arcs and circles, then Béziers, faceted before the arrangement.
 - [ ] Projected model geometry that follows the model, rather than copied
       positions.

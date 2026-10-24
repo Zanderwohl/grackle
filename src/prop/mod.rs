@@ -9,6 +9,7 @@
 //! | [`profile`] | 2D loops, the planes they are drawn on, and ear clipping. |
 //! | [`reference`] | Naming corners and edges by the generator that made them. |
 //! | [`plane`] | Origin planes, and the plane a selection describes. |
+//! | [`line`] | The line a feature turns about or runs along. |
 //! | [`sketch`] | 2D drawings on a plane: shared points and lines. |
 //! | [`region`] | The closed regions a sketch encloses, and their names. |
 //! | [`sketch_edit`] | The sketch workspace: drawing, snapping, picking in a sketch. |
@@ -22,6 +23,7 @@
 //! | [`view`] | Putting the result in the editor's viewports. |
 //! | [`camera`] | Orbiting, panning and zooming in those viewports. |
 //! | [`gizmo`] | Moving and sizing the selected feature by dragging it. |
+//! | [`tool`] | What each tool needs picked, and asking for whatever is missing. |
 //! | [`sync`] | Handing every weapon's model to whoever connects. |
 //! | [`thumbnail`] | Photographing a prop, and keeping the picture on disk. |
 //! | [`ui`] | The panels. |
@@ -47,6 +49,7 @@ pub mod feature;
 pub mod figure;
 pub mod gizmo;
 pub mod hold;
+pub mod line;
 pub mod nice_f32;
 pub mod plane;
 pub mod profile;
@@ -58,6 +61,7 @@ pub mod solid;
 pub mod sync;
 pub mod surface;
 pub mod thumbnail;
+pub mod tool;
 pub mod ui;
 pub mod view;
 
@@ -73,6 +77,7 @@ impl Plugin for PropEditorPlugin {
             .init_resource::<baked::SurfaceMaterials>()
             .add_plugins(crate::common::skeleton::ClipAssetsPlugin)
             .init_resource::<document::PropEditor>()
+            .init_resource::<tool::ActiveTool>()
             .init_resource::<StartInPropEditor>()
             .add_plugins((
                 view::PropViewPlugin,

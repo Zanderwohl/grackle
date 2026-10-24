@@ -131,6 +131,14 @@ a toolbar under the menu bar.
       undo step in the prop and animation editors; a plain reload in the map
       editor, whose history lives in the blueprint.
 
+- [x] Tools ask for what they need rather than greying out: each lists its
+      slots (`tool.rs`), takes what fits from the selection, and prompts
+      "Pick a …" for the rest, with the viewport offering only fitting picks.
+- [x] Line picks — edges, sketch lines, origin axes — as one `LineRef`.
+      Revolve axes and pattern lines are picked rather than chosen from a
+      list of axes; mirrors are about a picked plane or flat face. Re-picked
+      from the Inspector with the same machinery.
+
 ### Deferred
 
 - [ ] 2D sketch overlay for `Profile::Points` — superseded by sketches as their
