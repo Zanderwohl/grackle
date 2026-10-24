@@ -57,9 +57,15 @@ what is done.
   region cut it into pieces whose outline is still exactly its name, so the
   pieces are joined back up and the sweep does not change — picking one piece
   is a deliberate re-pick. Only pieces touching the outline join, so something
-  drawn inside stays a hole. A region whose bounding line is deleted, or which
-  merged with a neighbour, is a Problem; the region now at its hint is offered
-  as a fix and never taken silently, because it is bigger than what was meant.
+  drawn inside stays a hole.
+- **A rerouted outline keeps the region.** Erasing part of an outline and
+  drawing round it — a notch in or out — leaves one face that every named line
+  still bounds on its named side; that face is the region. The erase tool keeps
+  a trimmed line's id, which is what makes this work.
+- **A lost line loses the region.** A region whose bounding line is deleted,
+  as when a divider between two regions goes, is a Problem; the region now at
+  its hint is offered as a fix and never taken silently, because it is bigger
+  than what was meant.
 - **The hint only breaks ties.** Once curves arrive two regions can share a
   name (an ellipse crossing a circle four times leaves two identical
   crescents); the one nearest the hint wins. It is never what a region is

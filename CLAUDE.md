@@ -630,10 +630,12 @@ decisions behind them and a checklist. Four things about what is built:
   re-pick re-points every sweep using it. `Arrangement::resolve` is what an
   entry means now. It is **split-tolerant and merge-strict**: lines drawn
   across a region join its pieces back up, since the outline still encloses
-  the same ground, but a region whose bounding line is gone is a Problem,
-  with the region at its old spot *offered* in the Inspector and never
-  adopted — after a merge that region is bigger than the one meant. The
-  stored `hint` only breaks ties between candidates with the same name.
+  the same ground, and an outline partly erased and rerouted (a notch drawn
+  into or out of it) is the face all its named lines still bound. But a
+  region whose bounding line is gone is a Problem, with the region at its old
+  spot *offered* in the Inspector and never adopted — after a merge that
+  region is bigger than the one meant. The stored `hint` only breaks ties
+  between candidates with the same name.
 - **Editing one is a third workspace** ([`sketch_edit.rs`](src/prop/sketch_edit.rs)),
   and `SketchSession::editing` is the only answer to whether it is up: the
   toolbar, the Inspector, the view and the model's picking and handles

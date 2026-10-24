@@ -127,8 +127,12 @@ impl Arrangement {
     /// `hint` only chooses between candidates that answer to the same name,
     /// nearest first; it is never what a region is found by.
     ///
-    /// `None` when no region is bounded by exactly those lines, which is what
-    /// deleting one of them, or two regions merging, leaves.
+    /// Failing both, it is the face every one of those lines still bounds on
+    /// the same side: the outline was partly erased and rerouted, as drawing a
+    /// notch into or out of a shape does.
+    ///
+    /// `None` when a line it was named by is gone, which is what deleting a
+    /// divider between two regions leaves.
     pub fn resolve(&self, name: &RegionRef, hint: Vec2) -> Option<Region> {
         let nearest = |candidates: Vec<Region>| {
             candidates
@@ -174,7 +178,19 @@ impl Arrangement {
             .filter_map(|members| self.join(members, &piece_of))
             .filter(|region| region.name == *name)
             .collect();
-        nearest(joined)
+        if !joined.is_empty() {
+            return nearest(joined);
+        }
+
+        // An outline partly erased and rerouted: every line it was named by
+        // still bounds one face, on the same side, with more besides.
+        let rerouted: Vec<Region> = self
+            .regions
+            .iter()
+            .filter(|region| name.bounds.iter().all(|bound| region.name.bounds.contains(bound)))
+            .cloned()
+            .collect();
+        nearest(rerouted)
     }
 
     /// One region covering `members`, which are connected faces: its outline
@@ -811,6 +827,33 @@ mod tests {
         let half = arrangement.region_at(Vec2::new(0.5, 1.0)).unwrap();
         let found = arrangement.resolve(&half.name, Vec2::ZERO).unwrap();
         assert!((found.area() - 2.0).abs() < 1e-5);
+    }
+
+
+    /// The shape in `assets/user/not_enclosed_bug.gpp`: a rectangle whose right
+    /// side was partly erased and rerouted round a notch. Every line it was
+    /// named by still bounds it, on the same side, so it is the same region.
+    #[test]
+    fn a_rerouted_outline_keeps_its_region() {
+        let mut sketch = Sketch::default();
+        let rectangle = square(&mut sketch, 0.0, 2.0);
+        let name = arrange(&sketch).regions[0].name.clone();
+
+        let right = rectangle[1];
+        let (corner, on_right) = (Vec2::new(2.0, 0.0), Vec2::new(2.0, 1.0));
+        let corner_point = sketch.points.iter().find(|p| Vec2::from_array(p.at) == corner).unwrap().id;
+        let out = sketch.add_point(Vec2::new(3.0, 0.0));
+        let up = sketch.add_point(Vec2::new(3.0, 1.0));
+        let back = sketch.add_point(on_right);
+        sketch.add_line(corner_point, out);
+        sketch.add_line(out, up);
+        sketch.add_line(up, back);
+        assert!(sketch.erase_piece(right, Vec2::new(2.0, 0.5)));
+
+        let after = arrange(&sketch);
+        assert_eq!(after.regions.len(), 1);
+        let found = after.resolve(&name, Vec2::ONE).expect("the rerouted rectangle is still the region");
+        assert!((found.area() - 5.0).abs() < 1e-5, "{}", found.area());
     }
 
 }
