@@ -1264,6 +1264,33 @@ fn inspector(
                     });
                 }
             });
+            // Whichever was picked last, a sweep picked beside the region can
+            // be re-pointed at it from here.
+            let sweeps: Vec<(PropFeatureId, String, Vec<SketchId>)> = editor
+                .picks()
+                .iter()
+                .filter_map(|pick| pick.feature(&build.evaluated))
+                .filter_map(|id| {
+                    let feature = editor.doc().feature(id)?;
+                    match &feature.op {
+                        FeatureOp::Extrude { sketch: on, regions, .. } | FeatureOp::Revolve { sketch: on, regions, .. }
+                            if *on == sketch =>
+                        {
+                            Some((id, feature.name.clone(), regions.clone()))
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
+            let mut action = None;
+            for (id, name, regions) in sweeps {
+                section(ui, &format!("sweep_regions_{id}"), name, |ui| {
+                    action = action.take().or(sweep_regions(ui, editor, build, sketch, &regions));
+                });
+            }
+            if let Some(action) = action {
+                apply_region_action(editor, action);
+            }
         }
         Some(Pick::Geom(reference)) => {
             element_inspector(ui, editor, build, &reference);
