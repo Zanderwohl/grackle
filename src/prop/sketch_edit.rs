@@ -29,6 +29,9 @@ use crate::tool::tool_helpers::dashed_line;
 /// Metres between grid lines, and what an unsnapped point rounds to.
 pub const GRID: f32 = 0.005;
 
+/// Metres the grid is drawn behind the plane, away from the viewer.
+const GRID_BEHIND: f32 = 0.0001;
+
 /// Pixels within which the cursor lands on a point rather than the grid.
 const SNAP_PX: f32 = 10.0;
 
@@ -383,9 +386,7 @@ fn edit_the_sketch(
         SketchTool::Line => {
             if let (true, Some(target)) = (clicked, cursor) {
                 let chain = session.chain;
-                session.chain = editor
-                    .edit(|doc| sketch_of_mut(doc, id).map(|sketch| draw_to(sketch, chain, target)))
-                    .flatten();
+                session.chain = editor.edit(|doc| sketch_of_mut(doc, id).map(|sketch| draw_to(sketch, chain, target)));
             }
         }
         SketchTool::Erase => {
@@ -431,19 +432,17 @@ fn edit_the_sketch(
 }
 
 /// One click of the line tool: lands on `target`, drawing from `chain` if
-/// there is one, and returns where the next click draws from. Landing on a
-/// point that was already there closes what was being drawn, so the chain
-/// ends; clicking the chain's own end again just ends it.
-fn draw_to(sketch: &mut Sketch, chain: Option<SketchId>, target: Snapped) -> Option<SketchId> {
+/// there is one, and returns where the next click draws from — always where
+/// it landed, so lines chain until `Escape`. Clicking the chain's own end
+/// draws nothing.
+fn draw_to(sketch: &mut Sketch, chain: Option<SketchId>, target: Snapped) -> SketchId {
     let landed = target.point.unwrap_or_else(|| sketch.add_point(target.at));
-    match chain {
-        None => Some(landed),
-        Some(from) if from == landed => None,
-        Some(from) => {
-            sketch.add_line(from, landed);
-            target.point.is_none().then_some(landed)
-        }
+    if let Some(from) = chain
+        && from != landed
+    {
+        sketch.add_line(from, landed);
     }
+    landed
 }
 
 /// The nearest sketch point within [`SNAP_PX`], else the nearest model corner
@@ -559,12 +558,25 @@ fn draw_the_session(
     session: Res<SketchSession>,
     editor: Res<PropEditor>,
     build: Res<PropBuild>,
+    mouse: Res<CurrentMouseInput>,
+    cameras: Query<(Entity, &GlobalTransform, &Multicam)>,
     mut cache: Local<RegionCache>,
     mut gizmos: Gizmos,
 ) {
     let Some(placed) = live(&session, &editor, &build) else { return };
     let (centre, reach) = extent(&placed.sketch);
     let marker = reach * 0.02;
+
+    // Gizmos in one plane depth-fight, and a line drawn along a grid line
+    // loses about half the time. So the grid sits just behind the plane as
+    // seen from the view under the pointer, or the sketch's own view.
+    let viewer = cameras
+        .iter()
+        .find(|(entity, ..)| Some(*entity) == mouse.in_camera)
+        .or_else(|| cameras.iter().find(|(.., multicam)| multicam.axis == CameraAxis::None))
+        .map(|(_, at, _)| at.translation());
+    let facing = viewer.map_or(1.0, |eye| (eye - placed.world(centre)).dot(*placed.plane.normal).signum());
+    let behind = -*placed.plane.normal * facing * GRID_BEHIND;
 
     // Snapped to the grid's own lines, so the grid does not slide as the
     // sketch grows.
@@ -574,13 +586,13 @@ fn draw_the_session(
         let offset = i as f32 * GRID;
         let span = half as f32 * GRID;
         gizmos.line(
-            placed.world(middle + Vec2::new(offset, -span)),
-            placed.world(middle + Vec2::new(offset, span)),
+            placed.world(middle + Vec2::new(offset, -span)) + behind,
+            placed.world(middle + Vec2::new(offset, span)) + behind,
             GRID_COLOUR,
         );
         gizmos.line(
-            placed.world(middle + Vec2::new(-span, offset)),
-            placed.world(middle + Vec2::new(span, offset)),
+            placed.world(middle + Vec2::new(-span, offset)) + behind,
+            placed.world(middle + Vec2::new(span, offset)) + behind,
             GRID_COLOUR,
         );
     }
@@ -635,7 +647,7 @@ fn draw_the_session(
     }
 
     // Where the next click lands, and the line it would draw. Landing on a
-    // point that is there is ringed, since that click closes the shape.
+    // point that is there is ringed, since that click joins onto it.
     if session.tool == SketchTool::Line
         && let Some(cursor) = session.cursor
     {
@@ -693,27 +705,27 @@ mod tests {
         Snapped { at, point }
     }
 
-    /// Fails if the chain rule changes: a new point continues, an existing
-    /// one closes, the chain's own end stops.
+    /// Fails if the chain rule changes: every click continues from where it
+    /// landed, an existing point included, and only `Escape` stops it.
     #[test]
-    fn the_line_tool_chains_and_closes() {
+    fn the_line_tool_chains_until_escape() {
         let mut sketch = Sketch::default();
-        let mut chain = draw_to(&mut sketch, None, snapped(Vec2::ZERO, None));
-        let first = chain.unwrap();
-        chain = draw_to(&mut sketch, chain, snapped(Vec2::X, None));
-        chain = draw_to(&mut sketch, chain, snapped(Vec2::ONE, None));
+        let first = draw_to(&mut sketch, None, snapped(Vec2::ZERO, None));
+        let mut chain = draw_to(&mut sketch, Some(first), snapped(Vec2::X, None));
+        chain = draw_to(&mut sketch, Some(chain), snapped(Vec2::ONE, None));
         assert_eq!(sketch.entities.len(), 2);
-        assert!(chain.is_some());
 
-        chain = draw_to(&mut sketch, chain, snapped(Vec2::ZERO, Some(first)));
-        assert_eq!(chain, None, "landing on a point that was there closes the shape");
+        chain = draw_to(&mut sketch, Some(chain), snapped(Vec2::ZERO, Some(first)));
+        assert_eq!(chain, first, "landing on a point that was there carries on from it");
         assert_eq!(sketch.entities.len(), 3);
         assert_eq!(sketch.points.len(), 3, "closing reused the first point");
         assert_eq!(arrange(&sketch).regions.len(), 1);
 
-        let again = draw_to(&mut sketch, None, snapped(Vec2::new(2.0, 0.0), None));
-        assert_eq!(draw_to(&mut sketch, again, snapped(Vec2::new(2.0, 0.0), again)), None);
-        assert_eq!(sketch.entities.len(), 3, "clicking the chain's end draws nothing");
+        chain = draw_to(&mut sketch, Some(chain), snapped(Vec2::new(-1.0, 0.0), None));
+        assert_eq!(sketch.entities.len(), 4, "the chain went on past the closed shape");
+
+        assert_eq!(draw_to(&mut sketch, Some(chain), snapped(Vec2::new(-1.0, 0.0), Some(chain))), chain);
+        assert_eq!(sketch.entities.len(), 4, "clicking the chain's end draws nothing");
     }
 
     #[test]
