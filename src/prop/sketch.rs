@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::prop::plane::Plane;
-use crate::prop::region::{centroid, crossing, interior_param, Arrangement, Bound, Region, RegionRef, TOLERANCE};
+use crate::prop::region::{arrange, crossing, interior_param, Arrangement, Bound, Region, RegionRef, Side, TOLERANCE};
 
 /// Points and entities share one counter, and an id is never reused, so a
 /// region or a later constraint naming one cannot be handed another.
@@ -210,10 +210,40 @@ impl Sketch {
                 self.set_ends(line, from, cut);
             }
             (false, false) => {
+                // The far part becomes a line of its own, so a named region
+                // running along it has to be told its new id. Which ones do
+                // is asked before the erase, while it is still one line.
+                let arrangement = arrange(self);
+                let along: Vec<(SketchId, bool, bool)> = self
+                    .regions
+                    .iter()
+                    .filter(|entry| entry.bounds.iter().any(|bound| bound.entity == line))
+                    .filter_map(|entry| {
+                        let region = arrangement.resolve(&entry.name(), Vec2::from_array(entry.hint))?;
+                        Some((entry.id, runs_along(&region, a, at(t0)), runs_along(&region, at(t1), b)))
+                    })
+                    .collect();
+
                 let (near_cut, far_cut) = (self.point_at(at(t0)), self.point_at(at(t1)));
                 self.set_ends(line, from, near_cut);
                 let rest = self.add_line(far_cut, to);
                 self.set_construction(rest, construction);
+
+                for (id, on_near, on_far) in along {
+                    let Some(entry) = self.regions.iter_mut().find(|entry| entry.id == id) else { continue };
+                    let sides: Vec<Side> =
+                        entry.bounds.iter().filter(|bound| bound.entity == line).map(|bound| bound.side).collect();
+                    if on_far {
+                        entry.bounds.extend(sides.iter().map(|&side| Bound { entity: rest, side }));
+                    }
+                    if !on_near {
+                        entry.bounds.retain(|bound| bound.entity != line);
+                    }
+                    // Sorted as an arrangement names a region, or an exact
+                    // match compares two orders of one set.
+                    entry.bounds.sort();
+                    entry.bounds.dedup();
+                }
             }
         }
         self.drop_loose_points(&[from, to]);
@@ -282,7 +312,7 @@ impl Sketch {
         self.regions.push(SketchRegion {
             id,
             label: String::new(),
-            hint: centroid(&region.outer).to_array(),
+            hint: region.inside_point().to_array(),
             bounds: region.name.bounds.clone(),
         });
         id
@@ -292,7 +322,7 @@ impl Sketch {
     pub fn repoint_region(&mut self, id: SketchId, region: &Region) {
         if let Some(entry) = self.regions.iter_mut().find(|entry| entry.id == id) {
             entry.bounds = region.name.bounds.clone();
-            entry.hint = centroid(&region.outer).to_array();
+            entry.hint = region.inside_point().to_array();
         }
     }
 
@@ -344,6 +374,16 @@ impl PlacedSketch {
             })
             .collect()
     }
+}
+
+/// Whether part of `region`'s outline lies along the segment `a`–`b`.
+fn runs_along(region: &Region, a: Vec2, b: Vec2) -> bool {
+    let on = |p: Vec2| distance_to_segment(p, a, b) < TOLERANCE * 10.0;
+    let outer = &region.outer;
+    (0..outer.len()).any(|i| {
+        let (p, q) = (outer[i], outer[(i + 1) % outer.len()]);
+        p.distance(q) > TOLERANCE && on(p) && on(q)
+    })
 }
 
 fn distance_to_segment(p: Vec2, a: Vec2, b: Vec2) -> f32 {
@@ -522,6 +562,32 @@ mod tests {
         let erased = sketch.erase_along(&[Vec2::new(0.5, 0.5), Vec2::new(1.5, 0.5), Vec2::new(1.5, -0.5), Vec2::new(0.5, -0.5)]);
         assert_eq!(erased, 3);
         assert!(sketch.entities.is_empty() && sketch.points.is_empty());
+    }
+
+
+    /// Fails if a region along the far end of a line loses its name when the
+    /// middle of that line is erased, which gives the far end a new id.
+    #[test]
+    fn erasing_a_middle_piece_keeps_the_regions_along_either_end() {
+        let mut sketch = Sketch::default();
+        let corners = [[0.0, 0.0], [3.0, 0.0], [3.0, 1.0], [0.0, 1.0]].map(|c| sketch.add_point(Vec2::from_array(c)));
+        let bottom = sketch.add_line(corners[0], corners[1]);
+        for i in 1..4 {
+            sketch.add_line(corners[i], corners[(i + 1) % 4]);
+        }
+        line_between(&mut sketch, [1.0, 0.0], [1.0, 1.0]);
+        line_between(&mut sketch, [2.0, 0.0], [2.0, 1.0]);
+        let arrangement = arrange(&sketch);
+        let (left, right) = (Vec2::new(0.5, 0.5), Vec2::new(2.5, 0.5));
+        let ids = [left, right].map(|at| sketch.adopt_region(arrangement.region_at(at).unwrap()));
+
+        assert!(sketch.erase_piece(bottom, Vec2::new(1.5, 0.0)));
+        let after = arrange(&sketch);
+        for (id, at) in ids.into_iter().zip([left, right]) {
+            let entry = sketch.region(id).unwrap();
+            let found = after.resolve(&entry.name(), Vec2::from_array(entry.hint)).expect("the region is still named");
+            assert!(found.contains(at));
+        }
     }
 
 }

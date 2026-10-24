@@ -197,7 +197,9 @@ tested.
       would draw.
 - [x] Erase tool: a click takes the piece of a line between the junctions
       and crossings either side of it, a drag every piece it passes through.
-      What is left of the line keeps its id, so a region named by it holds.
+      What is left of the line keeps its id, so a region named by it holds;
+      erasing a middle piece gives the far end a new id, and the named
+      regions running along it are re-pointed at it.
 - [x] While a sketch is open the view stops at it (`PropEditor::peek`), so
       what was built on it is not in the way. Not the rollback bar.
 - [x] Drag points; delete points and lines; toggle construction. A click

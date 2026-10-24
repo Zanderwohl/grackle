@@ -63,6 +63,38 @@ impl Region {
     pub fn contains(&self, point: Vec2) -> bool {
         inside(&self.outer, point) && !self.holes.iter().any(|hole| inside(hole, point))
     }
+
+    /// A point well inside it: the middle of the widest span across it along
+    /// any horizontal between two corners' heights. Not the corners' average,
+    /// which for an L or a U lies outside.
+    pub fn inside_point(&self) -> Vec2 {
+        let loops: Vec<&Vec<Vec2>> = std::iter::once(&self.outer).chain(&self.holes).collect();
+        let mut heights: Vec<f32> = loops.iter().flat_map(|l| l.iter().map(|p| p.y)).collect();
+        heights.sort_by(f32::total_cmp);
+        heights.dedup_by(|a, b| (*a - *b).abs() < TOLERANCE);
+        let mut best: Option<(f32, Vec2)> = None;
+        for pair in heights.windows(2) {
+            let y = (pair[0] + pair[1]) / 2.0;
+            let mut xs: Vec<f32> = Vec::new();
+            for l in &loops {
+                for (i, p) in l.iter().enumerate() {
+                    let q = l[(i + 1) % l.len()];
+                    if (p.y > y) != (q.y > y) {
+                        xs.push(p.x + (y - p.y) * (q.x - p.x) / (q.y - p.y));
+                    }
+                }
+            }
+            xs.sort_by(f32::total_cmp);
+            // Even-odd: every other gap is inside, holes included.
+            for span in xs.chunks_exact(2) {
+                let width = span[1] - span[0];
+                if best.is_none_or(|(widest, _)| width > widest) {
+                    best = Some((width, Vec2::new((span[0] + span[1]) / 2.0, y)));
+                }
+            }
+        }
+        best.map_or_else(|| centroid(&self.outer), |(_, at)| at)
+    }
 }
 
 /// Something worth saying about a sketch that is not wrong enough to refuse.
@@ -95,6 +127,8 @@ struct Graph {
     next: Vec<usize>,
     /// The region each half-edge bounds; `None` for the outside of a piece.
     face_of: Vec<Option<usize>>,
+    /// Each region's own half-edges, round its outside.
+    cycle_of: Vec<Vec<usize>>,
 }
 
 impl Graph {
@@ -134,11 +168,12 @@ impl Arrangement {
     /// `None` when a line it was named by is gone, which is what deleting a
     /// divider between two regions leaves.
     pub fn resolve(&self, name: &RegionRef, hint: Vec2) -> Option<Region> {
-        let nearest = |candidates: Vec<Region>| {
-            candidates
-                .into_iter()
-                .min_by(|a, b| centroid(&a.outer).distance(hint).total_cmp(&centroid(&b.outer).distance(hint)))
+        // One the hint is in, else the one whose middle is nearest it.
+        let miss = |region: &Region| match region.contains(hint) {
+            true => 0.0,
+            false => region.inside_point().distance(hint),
         };
+        let nearest = |candidates: Vec<Region>| candidates.into_iter().min_by(|a, b| miss(a).total_cmp(&miss(b)));
         let exact: Vec<Region> = self.regions.iter().filter(|region| region.name == *name).cloned().collect();
         if !exact.is_empty() {
             return nearest(exact);
@@ -160,7 +195,7 @@ impl Arrangement {
             while at < members.len() {
                 let face = members[at];
                 at += 1;
-                for h in (0..graph.face_of.len()).filter(|&h| graph.face_of[h] == Some(face)) {
+                for &h in &graph.cycle_of[face] {
                     let Some(other) = graph.face_of[h ^ 1] else { continue };
                     let divider = !named.contains(&graph.edges[h / 2].entity);
                     if divider && piece_of[other].is_none() && touches(&self.regions[other]) {
@@ -208,19 +243,33 @@ impl Arrangement {
             if seen[start] {
                 continue;
             }
-            let (mut points, mut bounds) = (vec![], vec![]);
+            // A corner where a divider met one line of the outline was not a
+            // corner of the region before the cut, and keeping it would
+            // renumber everything named off the swept outline.
+            let mut cycle: Vec<usize> = Vec::new();
+            let mut divider_corners: Vec<usize> = Vec::new();
             let mut h = start;
-            while !seen[h] {
+            loop {
                 seen[h] = true;
-                points.push(graph.start(h));
-                bounds.push(graph.bound(h));
+                cycle.push(h);
                 // Round the far vertex until the walk is back on the outline.
                 let mut n = graph.next[h];
+                let mut crossed = false;
                 while !edge_of_union(n) {
+                    crossed = true;
                     n = graph.next[n ^ 1];
+                }
+                if crossed && graph.bound(n) == graph.bound(h) {
+                    divider_corners.push(n);
+                }
+                if seen[n] {
+                    break;
                 }
                 h = n;
             }
+            let points: Vec<Vec2> =
+                cycle.iter().filter(|h| !divider_corners.contains(h)).map(|&h| graph.start(h)).collect();
+            let bounds: Vec<Bound> = cycle.iter().map(|&h| graph.bound(h)).collect();
             if signed_area(&points) > TOLERANCE * TOLERANCE {
                 // A connected union has one outside.
                 if outer.replace((points, bounds)).is_some() {
@@ -477,6 +526,7 @@ fn faces(vertices: Vec<Vec2>, edges: Vec<Edge>) -> (Vec<Region>, Graph) {
     let mut bounded: Vec<(Region, usize)> = Vec::new();
     let mut outsides: Vec<(Vec<Vec2>, usize)> = Vec::new();
     let mut face_of: Vec<Option<usize>> = vec![None; edges.len() * 2];
+    let mut cycle_of: Vec<Vec<usize>> = Vec::new();
     for cycle in &cycles {
         let points = points_of(cycle);
         let owner = root(&mut piece, half(cycle[0]).0);
@@ -484,6 +534,7 @@ fn faces(vertices: Vec<Vec2>, edges: Vec<Edge>) -> (Vec<Region>, Graph) {
             for &h in cycle {
                 face_of[h] = Some(bounded.len());
             }
+            cycle_of.push(cycle.clone());
             let bounds: BTreeSet<Bound> = cycle
                 .iter()
                 .map(|&h| Bound {
@@ -512,7 +563,7 @@ fn faces(vertices: Vec<Vec2>, edges: Vec<Edge>) -> (Vec<Region>, Graph) {
     }
     let next = (0..edges.len() * 2).map(next).collect();
     let regions = bounded.into_iter().map(|(region, _)| region).collect();
-    (regions, Graph { vertices, edges, next, face_of })
+    (regions, Graph { vertices, edges, next, face_of, cycle_of })
 }
 
 pub fn centroid(points: &[Vec2]) -> Vec2 {
@@ -854,6 +905,32 @@ mod tests {
         assert_eq!(after.regions.len(), 1);
         let found = after.resolve(&name, Vec2::ONE).expect("the rerouted rectangle is still the region");
         assert!((found.area() - 5.0).abs() < 1e-5, "{}", found.area());
+    }
+
+
+    /// Fails if joining the pieces back up leaves corners where the cut met
+    /// the outline, which would renumber what is named off the swept body.
+    #[test]
+    fn a_rejoined_region_has_the_outline_it_had() {
+        let mut sketch = Sketch::default();
+        square(&mut sketch, 0.0, 2.0);
+        let before = arrange(&sketch).regions[0].clone();
+
+        line(&mut sketch, [1.0, -1.0], [1.0, 3.0]);
+        line(&mut sketch, [-1.0, 1.0], [3.0, 1.0]);
+        let after = arrange(&sketch).resolve(&before.name, Vec2::ONE).unwrap();
+        assert_eq!(after.outer, before.outer);
+    }
+
+    /// Fails if a region's inside point is the corners' average, which for a
+    /// U is in the gap between its arms.
+    #[test]
+    fn a_u_has_its_inside_point_inside_it() {
+        let mut sketch = Sketch::default();
+        polygon(&mut sketch, &[[0.0, 0.0], [3.0, 0.0], [3.0, 3.0], [2.0, 3.0], [2.0, 1.0], [1.0, 1.0], [1.0, 3.0], [0.0, 3.0]]);
+        let region = arrange(&sketch).regions[0].clone();
+        assert!(!region.contains(centroid(&region.outer)), "the test shape no longer shows the problem");
+        assert!(region.contains(region.inside_point()));
     }
 
 }

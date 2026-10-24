@@ -308,7 +308,9 @@ fn float_pickups(
     instances: Query<(&WorldProp, &DrawnProp)>,
     mut parts: Query<&mut Transform, With<WorldPropPart>>,
 ) {
-    let spin = Quat::from_rotation_y((time.elapsed_secs() * SPIN_DEGREES_PER_SECOND).to_radians());
+    // Wrapped, or an `f32` of seconds steps visibly after a day. The wrap
+    // period is a whole number of turns at this speed, so there is no jump.
+    let spin = Quat::from_rotation_y((time.elapsed_secs_wrapped() * SPIN_DEGREES_PER_SECOND).to_radians());
     for (prop, drawn) in &instances {
         let style = cache
             .get(&prop.model)

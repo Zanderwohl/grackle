@@ -31,7 +31,7 @@ use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind, Pic
 use crate::prop::document::{self, Pick, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::prop::plane::{OriginPlane, PickedPlane, Plane, PlaneRef};
 use crate::prop::reference::{Element, GeomRef, Located};
-use crate::prop::region::{arrange, Arrangement, Region, RegionRef};
+use crate::prop::region::{Arrangement, Region, RegionRef};
 use crate::prop::sketch::{Sketch, SketchId};
 use crate::prop::sketch_edit::{sketch_of, sketch_of_mut, SketchPick, SketchSession, SketchTool};
 use crate::common::class::Class;
@@ -528,6 +528,11 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session
         .and_then(|id| entries.iter().position(|row| row.id == id))
         .unwrap_or(entries.len().saturating_sub(1));
     let mut bar_dragged = false;
+    // An open sketch stops the view at itself without moving the bar, and what
+    // is past it is not evaluated: faded like rows past the bar, not drawn as
+    // eaten or as having no problems.
+    let peeked_after = editor.peek().and_then(|id| entries.iter().position(|row| row.id == id));
+    let shown_after = peeked_after.map_or(bar_after, |peek| peek.min(bar_after));
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         for (at, row) in entries.iter().enumerate() {
@@ -545,7 +550,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session
             // click). A `Ui`'s own response is `Sense::hover()`, which can
             // never report the `secondary_clicked()` a context menu opens on,
             // hence the `.interact`.
-            let past_the_bar = at > bar_after;
+            let past_the_bar = at > shown_after;
             let response = ui
                 .horizontal(|ui| {
                     // Faded, since struck and weak already mean suppressed
@@ -565,7 +570,9 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session
                     }
                     if broken.contains(&id) {
                         text = text.color(egui::Color32::from_rgb(230, 130, 80));
-                    } else if !live.contains(&id) {
+                    } else if !live.contains(&id) && !past_the_bar {
+                        // Past the bar nothing was evaluated, so not being
+                        // live says nothing about being eaten.
                         text = text.weak();
                     }
 
@@ -1089,7 +1096,7 @@ fn sketch_toolbar(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSess
 /// editable, which is how a corner is put somewhere exact.
 fn sketch_inspector(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSession, id: PropFeatureId) {
     let Some(sketch) = sketch_of(editor.doc(), id).cloned() else { return };
-    let arrangement = arrange(&sketch);
+    let arrangement = session.arrangement(&sketch).clone();
     section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
         ui.label(get!("prop.inspector.drawing", "points", sketch.points.len(), "lines", sketch.entities.len()));
         ui.label(get!("prop.sketch.regions", "count", arrangement.regions.len()));
@@ -1270,6 +1277,14 @@ fn inspector(
                 .picks()
                 .iter()
                 .filter_map(|pick| pick.feature(&build.evaluated))
+                .fold(Vec::new(), |mut ids: Vec<PropFeatureId>, id| {
+                    // A body and one of its faces are one sweep picked twice.
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                    ids
+                })
+                .into_iter()
                 .filter_map(|id| {
                     let feature = editor.doc().feature(id)?;
                     match &feature.op {

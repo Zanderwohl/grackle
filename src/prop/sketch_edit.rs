@@ -106,6 +106,14 @@ pub struct SketchSession {
     press: Option<Press>,
     /// The eraser's path since the press, in the plane.
     stroke: Vec<Vec2>,
+    /// The pieces the stroke has crossed so far, and how many of its steps
+    /// have been looked at: the drawing does not change during a stroke, so
+    /// only the newest step needs testing.
+    doomed: Vec<(Vec2, Vec2)>,
+    stroke_scanned: usize,
+    /// The open sketch's regions and the drawing they were found in, for the
+    /// panels, which ask every frame.
+    regions: Option<(Sketch, Arrangement)>,
     view: ViewChange,
     /// The perspective camera and pivot as they were before the view was
     /// turned onto the sketch.
@@ -115,6 +123,14 @@ pub struct SketchSession {
 impl SketchSession {
     pub fn editing(&self) -> Option<PropFeatureId> {
         self.editing
+    }
+
+    /// `sketch`'s regions, found again only when it has changed.
+    pub fn arrangement(&mut self, sketch: &Sketch) -> &Arrangement {
+        if self.regions.as_ref().is_none_or(|(from, _)| from != sketch) {
+            self.regions = Some((sketch.clone(), arrange(sketch)));
+        }
+        &self.regions.as_ref().expect("just filled").1
     }
 
     pub fn tool(&self) -> SketchTool {
@@ -309,6 +325,8 @@ fn edit_the_sketch(
     let held = mouse.pressed == Some(MouseButton::Left);
     if !held && let Some(press) = session.press.take() {
         let stroke = std::mem::take(&mut session.stroke);
+        session.doomed.clear();
+        session.stroke_scanned = 0;
         match (session.tool, press.dragging, press.on) {
             (SketchTool::Erase, true, _) => {
                 editor.edit(|doc| sketch_of_mut(doc, id).map(|sketch| sketch.erase_along(&stroke)));
@@ -406,6 +424,13 @@ fn edit_the_sketch(
                 && session.stroke.last() != Some(&at)
             {
                 session.stroke.push(at);
+            }
+            while session.stroke_scanned + 1 < session.stroke.len() {
+                let step = session.stroke_scanned;
+                let (from, to) = (session.stroke[step], session.stroke[step + 1]);
+                let crossed = crossed_pieces(&placed.sketch, from, to);
+                session.doomed.extend(crossed);
+                session.stroke_scanned += 1;
             }
         }
         SketchTool::Select => {
@@ -513,30 +538,33 @@ fn line_under<P: Fn(Vec3) -> Option<Vec2>>(placed: &PlacedSketch, pointer: &Poin
 /// The pieces the eraser would take: the one under a click, or every one a
 /// drag has crossed so far.
 fn doomed(session: &SketchSession, sketch: &Sketch) -> Vec<(Vec2, Vec2)> {
-    let piece = |line: SketchId, at: Vec2| {
-        let (a, b) = sketch.line(line)?;
-        let (t0, t1) = sketch.piece_of(line, at)?;
-        Some((a.lerp(b, t0), a.lerp(b, t1)))
+    if session.press.is_some_and(|press| press.dragging) {
+        return session.doomed.clone();
+    }
+    let line = match session.press.map(|press| press.on).unwrap_or(session.hovered) {
+        Some(SketchPick::Line(line)) => line,
+        _ => return vec![],
     };
-    let dragging = session.press.is_some_and(|press| press.dragging);
-    if !dragging {
-        let line = match session.press.map(|press| press.on).unwrap_or(session.hovered) {
-            Some(SketchPick::Line(line)) => line,
-            _ => return vec![],
-        };
-        let at = session.stroke.first().copied().or(session.on_plane);
-        return at.and_then(|at| piece(line, at)).into_iter().collect();
-    }
-    let mut pieces = Vec::new();
-    for step in session.stroke.windows(2) {
-        for (line, ..) in sketch.lines() {
-            let Some((a, b)) = sketch.line(line) else { continue };
-            if let Some((_, _, at)) = crossing(a, b, step[0], step[1]) {
-                pieces.extend(piece(line, at));
-            }
-        }
-    }
-    pieces
+    let at = session.stroke.first().copied().or(session.on_plane);
+    at.and_then(|at| piece_at(sketch, line, at)).into_iter().collect()
+}
+
+fn piece_at(sketch: &Sketch, line: SketchId, at: Vec2) -> Option<(Vec2, Vec2)> {
+    let (a, b) = sketch.line(line)?;
+    let (t0, t1) = sketch.piece_of(line, at)?;
+    Some((a.lerp(b, t0), a.lerp(b, t1)))
+}
+
+/// Every piece of every line the step from `from` to `to` crosses.
+fn crossed_pieces(sketch: &Sketch, from: Vec2, to: Vec2) -> Vec<(Vec2, Vec2)> {
+    sketch
+        .lines()
+        .filter_map(|(line, ..)| {
+            let (a, b) = sketch.line(line)?;
+            let (_, _, at) = crossing(a, b, from, to)?;
+            piece_at(sketch, line, at)
+        })
+        .collect()
 }
 
 const POINT: Color = Color::srgb(0.92, 0.92, 0.98);
