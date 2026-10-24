@@ -17,12 +17,61 @@ use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Evaluated, FeatureOp, PropFeature, PropFeatureId};
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
 use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
+use crate::prop::reference::{Element, GeomRef};
+use crate::prop::plane::PlaneRef;
+use crate::prop::region::RegionRef;
+use crate::prop::sketch::SketchId;
 
 /// Grackle Prop: TOML, one prop per file.
 pub const PROP_EXTENSION: &str = "gpp";
 
 /// Where props live inside a pack.
 pub const PROPS_DIR: &str = "props";
+
+/// Something picked: a whole body, a named corner, edge or face of one, or a
+/// plane feature.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Pick {
+    Body(PropFeatureId),
+    Geom(GeomRef),
+    Plane(PlaneRef),
+    /// A closed region of a sketch, which is what a sweep takes.
+    Region { sketch: PropFeatureId, region: RegionRef },
+}
+
+impl Pick {
+    /// The standing body this pick stands for, if any. A face stands for the
+    /// body it is on, so picking a face on the barrel and one on the bore still
+    /// offers Combine; a corner or an edge does not, since one on a seam
+    /// belongs to two bodies' worth of meaning.
+    pub fn body(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
+        match self {
+            Pick::Body(id) => evaluated.bodies.iter().any(|(body, _)| body == id).then_some(*id),
+            Pick::Geom(reference @ GeomRef { element: Element::Face(_), .. }) => evaluated.body_of(reference),
+            Pick::Geom(_) | Pick::Plane(_) | Pick::Region { .. } => None,
+        }
+    }
+
+    /// See [`PropEditor::primary_feature`].
+    pub fn feature(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
+        match self {
+            Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => Some(*id),
+            Pick::Plane(PlaneRef::Origin(_)) => None,
+            Pick::Region { sketch, .. } => Some(*sketch),
+            Pick::Geom(_) => self.body(evaluated),
+        }
+    }
+
+    /// Every feature the pick names; if any goes, so does the pick.
+    pub fn features(&self) -> Box<dyn Iterator<Item = PropFeatureId> + '_> {
+        match self {
+            Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => Box::new(std::iter::once(*id)),
+            Pick::Plane(PlaneRef::Origin(_)) => Box::new(std::iter::empty()),
+            Pick::Region { sketch, .. } => Box::new(std::iter::once(*sketch)),
+            Pick::Geom(reference) => Box::new(reference.source.features()),
+        }
+    }
+}
 
 /// Bounded because each step is a whole document.
 const UNDO_DEPTH: usize = 256;
@@ -136,13 +185,35 @@ impl PropDoc {
 
     pub fn remove(&mut self, id: PropFeatureId) {
         self.features.retain(|feature| feature.id != id);
+        self.prune_sketch_regions();
     }
 
-    /// Everything that names `id` as an operand.
+    /// Drops sketch region entries no sweep names, unless they were labelled.
+    pub fn prune_sketch_regions(&mut self) {
+        let used: Vec<(PropFeatureId, SketchId)> = self
+            .features
+            .iter()
+            .flat_map(|feature| match &feature.op {
+                FeatureOp::Extrude { sketch, regions, .. } | FeatureOp::Revolve { sketch, regions, .. } => {
+                    regions.iter().map(|region| (*sketch, *region)).collect()
+                }
+                _ => vec![],
+            })
+            .collect();
+        for feature in &mut self.features {
+            let id = feature.id;
+            if let FeatureOp::Sketch { sketch, .. } = &mut feature.op {
+                let mine: Vec<SketchId> = used.iter().filter(|(on, _)| *on == id).map(|(_, region)| *region).collect();
+                sketch.prune_regions(&mine);
+            }
+        }
+    }
+
+    /// Everything that names `id`, as an operand or a reference.
     pub fn dependants(&self, id: PropFeatureId) -> Vec<PropFeatureId> {
         self.features
             .iter()
-            .filter(|feature| feature.op.consumes().contains(&id))
+            .filter(|feature| feature.op.depends_on().contains(&id))
             .map(|feature| feature.id)
             .collect()
     }
@@ -160,7 +231,7 @@ impl PropDoc {
         let without = |i: usize| if i < at { i } else { i - 1 };
 
         let mut low = 0;
-        for operand in feature.op.consumes() {
+        for operand in feature.op.depends_on() {
             if let Some(index) = self.index_of(operand) {
                 low = low.max(without(index) + 1);
             }
@@ -211,15 +282,18 @@ pub struct PropEditor {
     /// The document as a gesture began. egui reports a drag as an edit per
     /// frame, so this makes one drag one undo step.
     pending: Option<PropDoc>,
-    /// The primary selection: the last pick, shown in the inspector.
-    pub selected: Option<PropFeatureId>,
-    /// Earlier Ctrl/Cmd picks, oldest first. Ordered because a boolean's
-    /// first pick is its target and its second the tool.
-    pub also_selected: Vec<PropFeatureId>,
+    /// Oldest first; the last is the primary, which the inspector and the
+    /// gizmos show. Ordered because a boolean's first pick is its target and
+    /// a plane's points are taken in the order they were picked.
+    picks: Vec<Pick>,
     /// The rollback bar: the last feature evaluated, `None` for all. An id
     /// rather than a count so edits above it cannot move it. View state: not
     /// saved, undone or dirtying.
     rollback: Option<PropFeatureId>,
+    /// Where the view stops while a sketch is open, so what was built after
+    /// it is not in the way. Not the rollback bar: nothing is inserted at it,
+    /// and it is never drawn in the list.
+    peek: Option<PropFeatureId>,
     pub path: Option<PathBuf>,
     pub dirty: bool,
     /// Bumped on every change, as a cue to look; the viewport compares the
@@ -236,9 +310,9 @@ impl Default for PropEditor {
             undo: vec![],
             redo: vec![],
             pending: None,
-            selected: None,
-            also_selected: vec![],
+            picks: vec![],
             rollback: None,
+            peek: None,
             path: None,
             dirty: false,
             generation: 0,
@@ -351,9 +425,23 @@ impl PropEditor {
         }
     }
 
-    /// The features down to the rollback bar.
+    pub fn peek(&self) -> Option<PropFeatureId> {
+        self.peek
+    }
+
+    /// Shows the prop as it stood at `at` without rolling back to it.
+    pub fn peek_at(&mut self, at: Option<PropFeatureId>) {
+        if at != self.peek {
+            self.peek = at;
+            self.generation += 1;
+        }
+    }
+
+    /// The features down to the rollback bar, or to the peek if that is
+    /// earlier.
     pub fn shown(&self) -> &[PropFeature] {
-        match self.rollback.and_then(|id| self.doc.index_of(id)) {
+        let stop = [self.rollback, self.peek].into_iter().flatten().filter_map(|id| self.doc.index_of(id)).min();
+        match stop {
             Some(at) => &self.doc.features[..=at],
             None => &self.doc.features,
         }
@@ -362,10 +450,19 @@ impl PropEditor {
     /// Inserts at the rollback bar and moves the bar onto the new feature, or
     /// appends with no bar.
     pub fn add(&mut self, op: FeatureOp) -> PropFeatureId {
+        self.add_built(|_| op)
+    }
+
+    /// [`Self::add`], with whatever the feature needs written into the
+    /// document first, as one undo step.
+    pub fn add_built(&mut self, build: impl FnOnce(&mut PropDoc) -> FeatureOp) -> PropFeatureId {
         let anchor = self.rollback;
-        let id = self.edit(|doc| match anchor.and_then(|anchor| doc.index_of(anchor)) {
-            Some(at) => doc.insert_at(at + 1, op),
-            None => doc.push(op),
+        let id = self.edit(|doc| {
+            let op = build(doc);
+            match anchor.and_then(|anchor| doc.index_of(anchor)) {
+                Some(at) => doc.insert_at(at + 1, op),
+                None => doc.push(op),
+            }
         });
         if anchor.is_some() {
             self.roll_back_to(Some(id));
@@ -374,57 +471,103 @@ impl PropEditor {
     }
 
     /// In pick order; the primary last.
-    pub fn selection(&self) -> Vec<PropFeatureId> {
-        self.also_selected.iter().copied().chain(self.selected).collect()
+    pub fn picks(&self) -> &[Pick] {
+        &self.picks
     }
 
+    pub fn primary(&self) -> Option<&Pick> {
+        self.picks.last()
+    }
+
+    /// The feature the primary is about, for the inspector, the handles and
+    /// the feature list: a body or plane itself, eaten or not, or the body a
+    /// face is on.
+    pub fn primary_feature(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
+        self.primary().and_then(|pick| pick.feature(evaluated))
+    }
+
+    /// [`Self::primary_feature`] for every pick, in pick order.
+    pub fn picked_features(&self, evaluated: &Evaluated) -> Vec<PropFeatureId> {
+        self.picks.iter().filter_map(|pick| pick.feature(evaluated)).collect()
+    }
+
+    /// The body the primary stands for; see [`Pick::body`].
+    pub fn primary_body(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
+        self.primary()?.body(evaluated)
+    }
+
+    /// The bodies the picks stand for, in pick order, repeats kept.
+    pub fn picked_bodies(&self, evaluated: &Evaluated) -> Vec<PropFeatureId> {
+        self.picks.iter().filter_map(|pick| pick.body(evaluated)).collect()
+    }
+
+    /// A feature picked as a whole — from the feature list, or just made.
     pub fn select(&mut self, id: PropFeatureId) {
-        self.also_selected.clear();
-        self.selected = Some(id);
+        self.picks = vec![self.pick_for(id)];
     }
 
-    pub fn clear_selection(&mut self) {
-        self.also_selected.clear();
-        self.selected = None;
-    }
-
-    /// Ctrl/Cmd-click. Unpicking the primary promotes the pick before it.
-    pub fn toggle_selected(&mut self, id: PropFeatureId) {
-        if self.selected == Some(id) {
-            self.selected = self.also_selected.pop();
-        } else if let Some(at) = self.also_selected.iter().position(|picked| *picked == id) {
-            self.also_selected.remove(at);
-        } else {
-            self.also_selected.extend(self.selected);
-            self.selected = Some(id);
+    /// What picking feature `id` as a whole means: a plane feature is picked
+    /// as a plane, so it offers what a plane picked in the viewport does.
+    fn pick_for(&self, id: PropFeatureId) -> Pick {
+        match self.doc.feature(id).map(|feature| &feature.op) {
+            Some(FeatureOp::Plane { .. }) => Pick::Plane(PlaneRef::Feature(id)),
+            _ => Pick::Body(id),
         }
     }
 
-    /// Drop selections and the rollback bar that name features no longer here.
+    pub fn select_pick(&mut self, pick: Pick) {
+        self.picks = vec![pick];
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.picks.clear();
+    }
+
+    /// Picked again, it is unpicked; the pick before it becomes the primary.
+    pub fn toggle(&mut self, pick: Pick) {
+        match self.picks.iter().position(|picked| *picked == pick) {
+            Some(at) => {
+                self.picks.remove(at);
+            }
+            None => self.picks.push(pick),
+        }
+    }
+
+    pub fn toggle_selected(&mut self, id: PropFeatureId) {
+        self.toggle(self.pick_for(id));
+    }
+
+    pub fn unpick(&mut self, pick: &Pick) {
+        self.picks.retain(|picked| picked != pick);
+    }
+
+    /// Drop picks and the rollback bar that name features no longer here. A
+    /// reference whose features are all here stays picked even if it does not
+    /// resolve, since rolling forward again may bring it back.
     pub fn forget_missing(&mut self) {
         if self.rollback.is_some_and(|id| self.doc.feature(id).is_none()) {
             self.rollback = None;
             self.generation += 1;
         }
         let doc = &self.doc;
-        self.also_selected.retain(|id| doc.feature(*id).is_some());
-        if self.selected.is_some_and(|id| doc.feature(id).is_none()) {
-            self.selected = self.also_selected.pop();
-        }
+        self.picks.retain(|pick| pick.features().all(|id| doc.feature(id).is_some()));
     }
 
-    /// `(target, tool)` when exactly two bodies are picked and both are in
-    /// `live`; an eaten body would make a boolean broken on arrival.
-    pub fn pair_to_combine(&self, live: &[PropFeatureId]) -> Option<(PropFeatureId, PropFeatureId)> {
-        match self.selection()[..] {
-            [target, tool] if live.contains(&target) && live.contains(&tool) => Some((target, tool)),
+    /// `(target, tool)` when exactly two picks stand for two different
+    /// standing bodies; an eaten body would make a boolean broken on arrival.
+    pub fn pair_to_combine(&self, evaluated: &Evaluated) -> Option<(PropFeatureId, PropFeatureId)> {
+        match self.picks[..] {
+            [ref target, ref tool] => {
+                let (target, tool) = (target.body(evaluated)?, tool.body(evaluated)?);
+                (target != tool).then_some((target, tool))
+            }
             _ => None,
         }
     }
 
-    /// Single-operand verbs take the primary alone, if it is in `live`.
-    pub fn body_to_act_on(&self, live: &[PropFeatureId]) -> Option<PropFeatureId> {
-        self.selected.filter(|id| live.contains(id))
+    /// Single-operand verbs take the body the primary stands for.
+    pub fn body_to_act_on(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
+        self.primary_body(evaluated)
     }
 
     /// Go back to `saved`, the file's contents, as one undo step. Unlike
@@ -512,7 +655,7 @@ pub fn save(path: &Path, doc: &PropDoc) -> Result<(), PropFileError> {
 mod tests {
     use super::*;
     use crate::prop::feature::{Axis, BooleanOp, PatternKind};
-    use crate::prop::profile::{Placement, Profile};
+    use crate::prop::profile::Placement;
     use crate::prop::solid::Shape;
     use crate::prop::surface::{Style, Surface, Tint};
 
@@ -523,11 +666,9 @@ mod tests {
             placement: Placement { origin: [0.0, 0.0, 0.0], rotation: [1.5708, 0.0, 0.0] },
             surface: Surface::new(Style::Metal, Tint([0.3, 0.32, 0.34])),
         });
-        let bore = doc.push(FeatureOp::Extrude {
-            profile: Profile::Ngon { sides: 12, radius: 0.038 },
-            placement: Placement::at(0.0, 0.0, -0.5),
-            depth: 1.0,
-            midplane: false,
+        let bore = doc.push(FeatureOp::Primitive {
+            shape: Shape::Prism { sides: 12, radius: 0.038, height: 1.0 },
+            placement: Placement { origin: [0.0, 0.0, 0.0], rotation: [1.5708, 0.0, 0.0] },
             surface: Surface::default(),
         });
         let drilled = doc.push(FeatureOp::Boolean {
@@ -840,7 +981,7 @@ mod tests {
             Collider { origin: [0.0; 3], shape: ColliderShape::Sphere { radius: 0.05 } },
         ];
         doc.breakable.health = 30;
-        doc.pickup = PickupSpec { kind: PickupKind::Ammo, amount: 0.25, respawn: 15.0 };
+        doc.pickup = PickupSpec { kind: PickupKind::Ammo, style: PickupStyle::Tf2, amount: 0.25, respawn: 15.0 };
         doc.hat.offset = [0.0, -0.05, 0.01];
         doc.hat.per_class.insert("heavy".into(), HatOverride { scale: Some(1.1), ..default() });
 
@@ -995,9 +1136,9 @@ mod tests {
     fn undoing_past_the_selected_feature_clears_the_selection() {
         let mut editor = PropEditor::default();
         let id = editor.edit(|doc| doc.push(FeatureOp::default()));
-        editor.selected = Some(id);
+        editor.select(id);
         editor.undo();
-        assert_eq!(editor.selected, None);
+        assert_eq!(editor.primary(), None);
     }
 
     /// Pick order decides target and tool, not list order.
@@ -1006,16 +1147,16 @@ mod tests {
         let mut editor = PropEditor::default();
         let barrel = editor.edit(|doc| doc.push(FeatureOp::default()));
         let bore = editor.edit(|doc| doc.push(FeatureOp::default()));
-        let live = [barrel, bore];
+        let evaluated = editor.doc().evaluate();
 
         editor.select(bore);
         editor.toggle_selected(barrel);
-        assert_eq!(editor.pair_to_combine(&live), Some((bore, barrel)));
+        assert_eq!(editor.pair_to_combine(&evaluated), Some((bore, barrel)));
 
         editor.select(barrel);
         editor.toggle_selected(bore);
-        assert_eq!(editor.pair_to_combine(&live), Some((barrel, bore)));
-        assert_eq!(editor.selected, Some(bore), "the last pick is the one the inspector shows");
+        assert_eq!(editor.pair_to_combine(&evaluated), Some((barrel, bore)));
+        assert_eq!(editor.primary_body(&evaluated), Some(bore), "the last pick is the one the inspector shows");
     }
 
     #[test]
@@ -1024,13 +1165,46 @@ mod tests {
         let a = editor.edit(|doc| doc.push(FeatureOp::default()));
         let b = editor.edit(|doc| doc.push(FeatureOp::default()));
         let c = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let standing = editor.doc().evaluate();
+        let eats_b = editor.edit(|doc| doc.push(FeatureOp::Mirror {
+            target: b,
+            axis: crate::prop::feature::Axis::X,
+            offset: 0.0,
+            keep_original: false,
+        }));
+        let b_eaten = editor.doc().evaluate();
+        assert!(standing.bodies.iter().any(|(id, _)| *id == b) && eats_b != b);
 
         editor.select(a);
-        assert_eq!(editor.pair_to_combine(&[a, b, c]), None);
+        assert_eq!(editor.pair_to_combine(&standing), None);
         editor.toggle_selected(b);
-        assert_eq!(editor.pair_to_combine(&[a, c]), None, "b has been eaten");
+        assert_eq!(editor.pair_to_combine(&b_eaten), None, "b has been eaten");
+        assert!(editor.pair_to_combine(&standing).is_some());
         editor.toggle_selected(c);
-        assert_eq!(editor.pair_to_combine(&[a, b, c]), None);
+        assert_eq!(editor.pair_to_combine(&standing), None);
+    }
+
+    /// A face stands for the body it is on; a pair of faces on one body is
+    /// no pair.
+    #[test]
+    fn a_face_stands_for_its_body() {
+        use crate::prop::reference::Source;
+        let mut editor = PropEditor::default();
+        let barrel = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let bore = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let evaluated = editor.doc().evaluate();
+        let face = |feature, index| {
+            Pick::Geom(GeomRef { element: Element::Face(index), source: Source { feature, copies: vec![] } })
+        };
+
+        editor.toggle(face(barrel, 0));
+        editor.toggle(face(bore, 2));
+        assert_eq!(editor.pair_to_combine(&evaluated), Some((barrel, bore)));
+
+        editor.select_pick(face(barrel, 0));
+        editor.toggle(face(barrel, 1));
+        assert_eq!(editor.pair_to_combine(&evaluated), None);
+        assert_eq!(editor.body_to_act_on(&evaluated), Some(barrel));
     }
 
     #[test]
@@ -1042,8 +1216,7 @@ mod tests {
         editor.select(a);
         editor.toggle_selected(b);
         editor.toggle_selected(b);
-        assert_eq!(editor.selection(), vec![a]);
-        assert_eq!(editor.selected, Some(a));
+        assert_eq!(editor.picks(), &[Pick::Body(a)]);
     }
 
     #[test]
@@ -1060,6 +1233,28 @@ mod tests {
         assert_eq!(doc.feature(copy).unwrap().op, doc.feature(a).unwrap().op);
         assert_eq!(doc.duplicate(cut, "no".into()), None);
         assert_eq!(doc.evaluate().problems.len(), problems_before, "the copy broke nothing");
+    }
+
+    /// Fails if opening a sketch moves the rollback bar, dirties the prop, or
+    /// leaves later features in the view.
+    #[test]
+    fn a_peek_shows_the_prop_at_a_feature_without_rolling_back() {
+        let mut editor = PropEditor::default();
+        let a = editor.add(FeatureOp::default());
+        let b = editor.add(FeatureOp::default());
+        editor.add(FeatureOp::default());
+        editor.dirty = false;
+
+        editor.peek_at(Some(a));
+        assert_eq!(editor.shown().len(), 1);
+        assert_eq!(editor.rollback(), None);
+        assert!(!editor.dirty);
+
+        // The earlier of the two wins.
+        editor.roll_back_to(Some(b));
+        assert_eq!(editor.shown().len(), 1);
+        editor.peek_at(None);
+        assert_eq!(editor.shown().len(), 2);
     }
 
     #[test]
@@ -1122,6 +1317,46 @@ mod tests {
         editor.select(b);
         editor.toggle_selected(a);
         editor.undo();
-        assert_eq!(editor.selection(), vec![a]);
+        assert_eq!(editor.picks(), &[Pick::Body(a)]);
+    }
+
+    /// Fails if a reference outlives a feature it is named through.
+    #[test]
+    fn undo_drops_a_reference_through_a_feature_it_takes_away() {
+        use crate::prop::reference::{CopyOf, Element, Source};
+        let mut editor = PropEditor::default();
+        let a = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let mirror = editor.edit(|doc| {
+            doc.push(FeatureOp::Mirror { target: a, axis: crate::prop::feature::Axis::X, offset: 0.0, keep_original: true })
+        });
+        let corner = |copies| Pick::Geom(GeomRef { element: Element::Point(0), source: Source { feature: a, copies } });
+        editor.toggle(corner(vec![]));
+        editor.toggle(corner(vec![CopyOf { by: mirror, index: 1 }]));
+        editor.undo();
+        assert_eq!(editor.picks(), &[corner(vec![])]);
+    }
+
+    /// Fails if a plane picked in the feature list is a body pick, which
+    /// offers nothing a plane does.
+    #[test]
+    fn a_plane_feature_is_picked_as_a_plane() {
+        let mut editor = PropEditor::default();
+        let plane = editor.edit(|doc| doc.push(FeatureOp::Plane { through: vec![] }));
+        editor.select(plane);
+        assert_eq!(editor.picks(), &[Pick::Plane(PlaneRef::Feature(plane))]);
+    }
+
+    #[test]
+    fn picking_something_again_unpicks_it() {
+        use crate::prop::reference::{Element, Source};
+        let mut editor = PropEditor::default();
+        let a = editor.edit(|doc| doc.push(FeatureOp::default()));
+        let edge = Pick::Geom(GeomRef { element: Element::Edge(3), source: Source { feature: a, copies: vec![] } });
+        editor.toggle(Pick::Body(a));
+        editor.toggle(edge.clone());
+        assert_eq!(editor.primary(), Some(&edge));
+        assert_eq!(editor.primary_body(&editor.doc().evaluate()), None, "an edge does not stand for its body");
+        editor.toggle(edge);
+        assert_eq!(editor.primary(), Some(&Pick::Body(a)));
     }
 }

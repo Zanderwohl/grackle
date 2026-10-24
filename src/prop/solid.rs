@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::prop::csg::{self, Polygon};
 use crate::prop::profile::{sides, triangulate, Profile};
+use crate::prop::reference::Outline;
 use crate::prop::surface::Surface;
 
 /// Convex polygons meant to form a closed surface; see [`super::csg`].
@@ -212,11 +213,52 @@ impl Solid {
         Solid::from_polygons(polygons)
     }
 
+    /// A sketch region along local `+Z`: its outer loop extruded, then each
+    /// hole cut out by a prism a little longer than the body each way, so no
+    /// cap of the cutter is coplanar with one of the body's — coplanar faces
+    /// are where a BSP boolean is least sure which side it is on.
+    pub fn extrude_region(
+        outer: &[Vec2],
+        holes: &[Vec<Vec2>],
+        depth: f32,
+        midplane: bool,
+        surface: Surface,
+    ) -> Solid {
+        let body = Solid::extrude(&Profile::loop_of(outer), depth, midplane, surface);
+        let (near, far) = if midplane { (-depth / 2.0, depth / 2.0) } else { (0.0, depth) };
+        let over = depth.abs() * 0.01 + 1e-4;
+        let (low, high) = (near.min(far) - over, near.max(far) + over);
+        holes.iter().fold(body, |body, hole| {
+            let cutter = Solid::extrude(&Profile::loop_of(hole), high - low, false, surface)
+                .translated(Vec3::Z * low);
+            body.subtract(&cutter)
+        })
+    }
+
+    /// A sketch region turned about local `+Y`, the region on the `+X` side:
+    /// the outer loop revolved, then each hole cut out by its own revolve. In
+    /// a part turn the cutter goes one step further each way, so its caps are
+    /// not coplanar with the body's, and by whole steps, so its facets still
+    /// line up with the body's.
+    pub fn revolve_region(outer: &[Vec2], holes: &[Vec<Vec2>], degrees: f32, steps: u32, surface: Surface) -> Solid {
+        let body = Solid::revolve(&Profile::loop_of(outer), degrees, steps, surface);
+        let full = is_full_turn(degrees);
+        let step = degrees / sides(steps) as f32;
+        holes.iter().fold(body, |body, hole| {
+            let cutter = match full {
+                true => Solid::revolve(&Profile::loop_of(hole), degrees, steps, surface),
+                false => Solid::revolve(&Profile::loop_of(hole), degrees + 2.0 * step, sides(steps) + 2, surface)
+                    .transformed(Transform::from_rotation(Quat::from_rotation_y(-step.to_radians()))),
+            };
+            body.subtract(&cutter)
+        })
+    }
+
     /// Spin a profile about the sketch's local `+Y`. Less than a full turn is
     /// capped at each end.
     ///
-    /// Side faces are triangles: a quad between two steps is only planar when
-    /// the profile edge is parallel or square to the axis.
+    /// Side faces are triangles: the quad between two steps is flat, but one
+    /// with a corner on the axis has two corners in one place.
     pub fn revolve(
         profile: &Profile,
         degrees: f32,
@@ -259,12 +301,15 @@ impl Solid {
             }
         }
 
+        // Each cap is wound against the side faces it shares edges with. The
+        // volume cannot see a cap the wrong way round — both caps lie in planes
+        // through the axis and add nothing to it — but a boolean can.
         if !full {
             for [a, b, c] in triangulate(&points) {
                 let first = &rings[0];
                 let last = &rings[steps];
-                polygons.extend(Polygon::new(vec![first[a], first[b], first[c]], surface));
-                polygons.extend(Polygon::new(vec![last[c], last[b], last[a]], surface));
+                polygons.extend(Polygon::new(vec![first[c], first[b], first[a]], surface));
+                polygons.extend(Polygon::new(vec![last[a], last[b], last[c]], surface));
             }
         }
 
@@ -452,25 +497,48 @@ impl Shape {
 
     /// Centred on the origin.
     pub fn solid(&self, surface: Surface) -> Solid {
+        let (sweep, transform) = self.sweep();
+        match sweep {
+            Sweep::Extrude { profile, depth } => Solid::extrude(&profile, depth, true, surface),
+            Sweep::Revolve { profile, segments } => Solid::revolve(&profile, 360.0, segments, surface),
+        }
+        .transformed(transform)
+    }
+
+    /// The corners and edges of [`Self::solid`], from the same sweep.
+    pub fn outline(&self) -> Outline {
+        let (sweep, transform) = self.sweep();
+        match sweep {
+            Sweep::Extrude { profile, depth } => Outline::extrude(&profile, depth, true),
+            Sweep::Revolve { profile, segments } => Outline::revolve(&profile, 360.0, segments),
+        }
+        .transformed(transform)
+    }
+
+    /// The one description both [`Self::solid`] and [`Self::outline`] build
+    /// from, so the two cannot drift.
+    fn sweep(&self) -> (Sweep, Transform) {
         match *self {
-            Shape::Box { size } => Solid::cuboid(Vec3::from_array(size), surface),
-            Shape::Prism { sides, radius, height } => {
-                Solid::extrude(&Profile::Ngon { sides, radius }, height, true, surface)
-                    .transformed(Transform::from_rotation(Quat::from_rotation_x(
-                        -std::f32::consts::FRAC_PI_2,
-                    )))
-            }
-            Shape::Cone { sides, radius, height } => Solid::revolve(
-                &Profile::Points {
-                    points: vec![
-                        [0.0, -height / 2.0],
-                        [radius, -height / 2.0],
-                        [0.0, height / 2.0],
-                    ],
+            Shape::Box { size } => (
+                Sweep::Extrude { profile: Profile::Rect { half: [size[0] / 2.0, size[1] / 2.0] }, depth: size[2] },
+                Transform::IDENTITY,
+            ),
+            Shape::Prism { sides, radius, height } => (
+                Sweep::Extrude { profile: Profile::Ngon { sides, radius }, depth: height },
+                Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+            ),
+            Shape::Cone { sides, radius, height } => (
+                Sweep::Revolve {
+                    profile: Profile::Points {
+                        points: vec![
+                            [0.0, -height / 2.0],
+                            [radius, -height / 2.0],
+                            [0.0, height / 2.0],
+                        ],
+                    },
+                    segments: sides,
                 },
-                360.0,
-                sides,
-                surface,
+                Transform::IDENTITY,
             ),
             Shape::Sphere { sides, rings, radius } => {
                 // Half a disc, spun.
@@ -482,27 +550,76 @@ impl Shape {
                         [radius * angle.cos(), radius * angle.sin()]
                     })
                     .collect();
-                Solid::revolve(&Profile::Points { points }, 360.0, sides, surface)
+                (Sweep::Revolve { profile: Profile::Points { points }, segments: sides }, Transform::IDENTITY)
             }
-            Shape::Wedge { size } => Solid::extrude(
-                &Profile::Points {
-                    points: vec![
-                        [-size[0] / 2.0, -size[1] / 2.0],
-                        [size[0] / 2.0, -size[1] / 2.0],
-                        [-size[0] / 2.0, size[1] / 2.0],
-                    ],
+            Shape::Wedge { size } => (
+                Sweep::Extrude {
+                    profile: Profile::Points {
+                        points: vec![
+                            [-size[0] / 2.0, -size[1] / 2.0],
+                            [size[0] / 2.0, -size[1] / 2.0],
+                            [-size[0] / 2.0, size[1] / 2.0],
+                        ],
+                    },
+                    depth: size[2],
                 },
-                size[2],
-                true,
-                surface,
+                Transform::IDENTITY,
             ),
         }
     }
 }
 
+/// A primitive as a sweep: extrusions are midplane, revolutions whole turns.
+enum Sweep {
+    Extrude { profile: Profile, depth: f32 },
+    Revolve { profile: Profile, segments: u32 },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fails if any face of a sweep is wound against its neighbours: every
+    /// edge must be walked once each way. Volume cannot catch this for a part
+    /// turn's caps, which lie in planes through the axis.
+    #[test]
+    fn every_sweep_is_wound_consistently() {
+        let key = |v: Vec3| (v * 1e5).round().as_ivec3();
+        let notched = Profile::Points { points: vec![[0.02, 0.0], [0.06, 0.0], [0.06, 0.1], [0.04, 0.05], [0.02, 0.1]] };
+        let solids = [
+            ("box", Shape::Box { size: [0.3, 0.4, 0.5] }.solid(Surface::default())),
+            ("cone", Shape::Cone { sides: 6, radius: 0.2, height: 0.5 }.solid(Surface::default())),
+            ("extrude", Solid::extrude(&notched, 0.1, false, Surface::default())),
+            ("full turn", Solid::revolve(&notched, 360.0, 8, Surface::default())),
+            ("part turn", Solid::revolve(&notched, 120.0, 4, Surface::default())),
+            ("backwards part turn", Solid::revolve(&notched, -90.0, 3, Surface::default())),
+        ];
+        for (name, solid) in solids {
+            let mut edges = std::collections::HashMap::new();
+            for polygon in solid.polygons() {
+                let v = &polygon.vertices;
+                for i in 0..v.len() {
+                    *edges.entry((key(v[i]), key(v[(i + 1) % v.len()]))).or_insert(0) += 1;
+                }
+            }
+            for ((a, b), count) in &edges {
+                assert_eq!(edges.get(&(*b, *a)), Some(count), "{name}: edge {a} -> {b} has no twin");
+            }
+        }
+    }
+
+    /// A part turn cut by a slab of itself keeps exactly the slab, which a
+    /// cap wound inwards gets wrong by most of the body.
+    #[test]
+    fn a_part_turn_survives_a_boolean() {
+        let ring = Profile::Points { points: vec![[0.02, 0.0], [0.06, 0.0], [0.06, 0.1], [0.02, 0.1]] };
+        let body = Solid::revolve(&ring, 120.0, 4, Surface::default());
+        let slab = Solid::extrude(&Profile::Rect { half: [0.1, 0.1] }, 0.04, false, Surface::default())
+            .transformed(Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)))
+            .translated(Vec3::Y * 0.03);
+        let cut = body.intersect(&slab);
+        assert!((cut.volume() - body.volume() * 0.4).abs() < 1e-8, "{} vs {}", cut.volume(), body.volume() * 0.4);
+    }
 
     /// A sweep wound the wrong way measures negative.
     #[test]

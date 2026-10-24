@@ -7,6 +7,11 @@
 //! | [`baked`] | Props baked into mesh handles, by name, for anything that draws one. |
 //! | [`csg`] | The kernel: a BSP tree and three booleans over convex polygon soup. |
 //! | [`profile`] | 2D loops, the planes they are drawn on, and ear clipping. |
+//! | [`reference`] | Naming corners and edges by the generator that made them. |
+//! | [`plane`] | Origin planes, and the plane a selection describes. |
+//! | [`sketch`] | 2D drawings on a plane: shared points and lines. |
+//! | [`region`] | The closed regions a sketch encloses, and their names. |
+//! | [`sketch_edit`] | The sketch workspace: drawing, snapping, picking in a sketch. |
 //! | [`solid`] | Sweeps, primitives, transforms, and the bake to a `Mesh`. |
 //! | [`nice_f32`] | Writing numbers to the file the way somebody typed them. |
 //! | [`surface`] | Style and tint. |
@@ -43,7 +48,12 @@ pub mod figure;
 pub mod gizmo;
 pub mod hold;
 pub mod nice_f32;
+pub mod plane;
 pub mod profile;
+pub mod reference;
+pub mod region;
+pub mod sketch;
+pub mod sketch_edit;
 pub mod solid;
 pub mod sync;
 pub mod surface;
@@ -68,6 +78,8 @@ impl Plugin for PropEditorPlugin {
                 view::PropViewPlugin,
                 camera::PropCameraPlugin,
                 gizmo::PropGizmoPlugin,
+                plane::PropPlanePlugin,
+                sketch_edit::SketchEditPlugin,
                 ui::PropUiPlugin,
             ))
             .add_systems(Startup, load_the_example_prop)

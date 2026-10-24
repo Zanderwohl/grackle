@@ -16,12 +16,15 @@ use crate::common::rotation::quat_from_euler;
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::editor::input::CurrentMouseInput;
+use crate::editor::multicam::Multicam;
 use crate::prop::archetype::ColliderShape;
-use crate::prop::document::PropEditor;
+use crate::prop::document::{Pick, PropEditor};
 use crate::prop::feature::FeatureOp;
 use crate::prop::figure::{FigureReach, ScaleFigure, ScaleFigureMarker};
 use crate::prop::hold::HoldSpec;
 use crate::prop::profile::Placement;
+use crate::prop::plane::plane_under;
+use crate::prop::reference::{element_under, Pointer};
 use crate::prop::solid::{Shape, MIN_EXTENT};
 use crate::tool::tool_helpers::{closest_param_on_axis, ray_point_distance};
 
@@ -111,15 +114,21 @@ impl Plugin for PropGizmoPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GizmoGrab>()
             .init_resource::<HoldHandles>()
+            .init_resource::<HoveredPick>()
             // Picking after dragging, so a press that grabbed a handle does not
             // also re-select.
             .add_systems(
                 Update,
-                (drag_the_selected, pick_in_the_viewport).chain().run_if(in_state(AppMode::Prop)),
+                // Not while sketching: a click then belongs to the sketch.
+                (drag_the_selected, pick_in_the_viewport)
+                    .chain()
+                    .run_if(in_state(AppMode::Prop))
+                    .run_if(crate::prop::sketch_edit::not_sketching),
             )
             .add_systems(Update, draw_colliders.run_if(in_state(AppMode::Prop)))
-            .add_systems(OnExit(AppMode::Prop), |mut grab: ResMut<GizmoGrab>| {
+            .add_systems(OnExit(AppMode::Prop), |mut grab: ResMut<GizmoGrab>, mut hovered: ResMut<HoveredPick>| {
                 grab.held = None;
+                hovered.0 = None;
             });
     }
 }
@@ -220,6 +229,7 @@ fn drag_the_selected(
     hold_handles: Res<HoldHandles>,
     choice: Res<ScaleFigure>,
     figures: Query<(&Skeleton, &Pose, &Transform, &FigureReach), With<ScaleFigureMarker>>,
+    build: Res<crate::prop::view::PropBuild>,
     mut gizmos: Gizmos,
 ) {
     if hold_handles.0 {
@@ -227,7 +237,7 @@ fn drag_the_selected(
         return;
     }
 
-    let Some(selected) = editor.selected else {
+    let Some(selected) = editor.primary_feature(&build.evaluated) else {
         grab.held = None;
         return;
     };
@@ -238,9 +248,6 @@ fn drag_the_selected(
 
     let (shape, placement) = match &feature.op {
         FeatureOp::Primitive { shape, placement, .. } => (Some(shape.clone()), *placement),
-        FeatureOp::Extrude { placement, .. } | FeatureOp::Revolve { placement, .. } => {
-            (None, *placement)
-        }
         _ => {
             grab.held = None;
             return;
@@ -344,36 +351,62 @@ fn drag_the_selected(
     draw(&mut gizmos, &points, &world, scale, grab.held.map(|(handle, _)| handle).or(nearest));
 }
 
-/// Click a body to select it; Ctrl/Cmd-click toggles it. On the press, so its
-/// gizmos are up by release. Off while the hold's handles are up, so a near-miss
-/// on a grip does not change the modelling selection.
+/// What a click in the viewport would pick right now; drawn by the view.
+#[derive(Resource, Default)]
+pub struct HoveredPick(pub Option<Pick>);
+
+/// A click toggles what is under the pointer — a corner, else an edge, else
+/// a plane's border, else a sketch's region, else a flat face, else a body — and a click on nothing
+/// clears. On the press, so its gizmos are up by release. Off while the hold's
+/// handles are up, so a near-miss on a grip does not change the modelling
+/// selection.
 fn pick_in_the_viewport(
     mut editor: ResMut<PropEditor>,
+    mut hovered: ResMut<HoveredPick>,
     mouse: Res<CurrentMouseInput>,
-    keys: Res<ButtonInput<KeyCode>>,
     grab: Res<GizmoGrab>,
     hold_handles: Res<HoldHandles>,
     build: Res<crate::prop::view::PropBuild>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Multicam>>,
 ) {
-    if hold_handles.0 || grab.held.is_some() {
-        return;
+    let under = (!hold_handles.0 && grab.held.is_none())
+        .then(|| {
+            let ray = mouse.world_pos?;
+            let (camera, at) = cameras.get(mouse.in_camera?).ok()?;
+            let evaluated = &build.evaluated;
+            let pointer = Pointer {
+                ray,
+                face: evaluated.face_distance(ray),
+                project: |p: Vec3| camera.world_to_viewport(at, p).ok(),
+            };
+            let pick = element_under(&evaluated.pickables, &pointer)
+                .map(|pickable| Pick::Geom(pickable.reference.clone()))
+                .or_else(|| plane_under(&evaluated.planes, &pointer).map(Pick::Plane))
+                .or_else(|| {
+                    evaluated
+                        .region_under(ray)
+                        .map(|(sketch, region)| Pick::Region { sketch, region: region.name.clone() })
+                })
+                .or_else(|| {
+                    evaluated
+                        .surface_under(ray)
+                        .map(|(body, face)| face.map_or(Pick::Body(body), Pick::Geom))
+                });
+            Some(pick)
+        })
+        .flatten();
+    let pointing = under.is_some();
+    let under = under.flatten();
+    if hovered.0 != under {
+        hovered.0 = under.clone();
     }
-    if !(mouse.just_pressed && mouse.pressed == Some(MouseButton::Left)) {
-        return;
-    }
-    let Some(ray) = mouse.world_pos else { return };
 
-    let extending = keys.any_pressed([
-        KeyCode::ControlLeft,
-        KeyCode::ControlRight,
-        KeyCode::SuperLeft,
-        KeyCode::SuperRight,
-    ]);
-    match (build.evaluated.body_under(ray.origin, *ray.direction), extending) {
-        (Some(id), true) => editor.toggle_selected(id),
-        (Some(id), false) => editor.select(id),
-        (None, true) => {}
-        (None, false) => editor.clear_selection(),
+    if !pointing || !(mouse.just_pressed && mouse.pressed == Some(MouseButton::Left)) {
+        return;
+    }
+    match under {
+        Some(pick) => editor.toggle(pick),
+        None => editor.clear_selection(),
     }
 }
 
@@ -769,6 +802,7 @@ mod tests {
         app.init_gizmo_group::<DefaultGizmoConfigGroup>();
         let mut world = std::mem::take(app.world_mut());
         world.insert_resource(editor);
+        world.init_resource::<crate::prop::view::PropBuild>();
         world.init_resource::<CurrentMouseInput>();
         world.init_resource::<GizmoGrab>();
         world.insert_resource(HoldHandles(hold_handles));
@@ -829,7 +863,7 @@ mod tests {
         let across = rotation * Vec3::Z;
         let origin_of = |world: &World| {
             let editor = world.resource::<PropEditor>();
-            let op = editor.doc().feature(editor.selected.unwrap()).unwrap().op.clone();
+            let op = editor.doc().feature(editor.primary_feature(&Default::default()).unwrap()).unwrap().op.clone();
             let FeatureOp::Primitive { placement, .. } = op else { unreachable!() };
             placement.origin()
         };
@@ -842,7 +876,7 @@ mod tests {
         // Somebody else moves the document: the feature goes back.
         {
             let mut editor = world.resource_mut::<PropEditor>();
-            let selected = editor.selected.unwrap();
+            let selected = editor.primary_feature(&Default::default()).unwrap();
             editor.doc_mut().feature_mut(selected).unwrap().op.placement_mut().unwrap().origin =
                 placement.origin;
         }
@@ -895,7 +929,7 @@ mod tests {
 
         release(&mut world, pulled);
         let mut editor = world.resource_mut::<PropEditor>();
-        let selected = editor.selected.unwrap();
+        let selected = editor.primary_feature(&Default::default()).unwrap();
         let landed = editor.doc().feature(selected).unwrap().op.clone();
         let FeatureOp::Primitive { placement: landed, .. } = landed else { unreachable!() };
         assert!(

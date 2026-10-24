@@ -235,7 +235,7 @@ fn frame_on_request(
     };
     let selected = request
         .selected
-        .then(|| build.evaluated.bounds_of_bodies(&editor.selection()))
+        .then(|| build.evaluated.bounds_of_bodies(&editor.picked_bodies(&build.evaluated)))
         .flatten();
     let bounds = selected.or_else(|| framing_bounds(&build, &figure));
     frame_all(&mut cameras, &mut saved, &mut pivot, bounds);
@@ -275,7 +275,11 @@ fn navigate(
     mut scrolls: MessageReader<MouseWheel>,
     mut cameras: Query<(Entity, &mut Transform, &mut Projection, &Multicam)>,
 ) {
-    let dragging = mouse.started_in_camera.filter(|_| mouse.pressed == Some(MouseButton::Right));
+    let dragging = mouse
+        .started_in_camera
+        .filter(|_| matches!(mouse.pressed, Some(MouseButton::Right | MouseButton::Middle)));
+    // Middle always pans; right orbits, or pans with the modifier held.
+    let pan = mouse.pressed == Some(MouseButton::Middle) || keyboard.modify;
 
     // Locked during a drag so a long orbit does not run off the screen.
     let (grab, visible) = match dragging {
@@ -307,7 +311,7 @@ fn navigate(
         match &mut *projection {
             Projection::Perspective(_) => {
                 let _ = multicam;
-                if keyboard.modify {
+                if pan {
                     pan_perspective(&mut transform, &mut pivot, drag);
                 } else {
                     orbit(&mut transform, pivot.0, drag);

@@ -23,7 +23,14 @@ use crate::common::app_mode::AppMode;
 use crate::editor::multicam::viewport_layers;
 use crate::prop::baked::{parts, SurfaceMaterials};
 use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure, ScaleFigure};
-use crate::prop::document::PropEditor;
+use crate::prop::document::{Pick, PropEditor};
+use crate::prop::gizmo::HoveredPick;
+use crate::prop::plane::draw_square;
+use crate::prop::feature::{FeatureOp, PropFeatureId};
+use crate::prop::region::RegionRef;
+use crate::prop::sketch_edit::SketchSession;
+use crate::tool::tool_helpers::dashed_line;
+use crate::prop::reference::Located;
 use crate::prop::feature::{Evaluated, PropFeature};
 
 /// A set so the camera can order after the build without naming its systems.
@@ -66,6 +73,11 @@ impl PropBuild {
     /// Whether the geometry on screen is behind the document.
     pub fn settling(&self) -> bool {
         self.waiting.is_some()
+    }
+
+    /// The editor generation `evaluated` stands for; a cue that it changed.
+    pub fn built(&self) -> Option<u64> {
+        self.built
     }
 }
 
@@ -290,7 +302,13 @@ fn rebuild_the_prop(
 }
 
 /// Origin, axes, and a 1 m floor grid of 10 cm cells for judging size.
-fn draw_the_bench(mut gizmos: Gizmos, editor: Res<PropEditor>, build: Res<PropBuild>) {
+fn draw_the_bench(
+    mut gizmos: Gizmos,
+    editor: Res<PropEditor>,
+    build: Res<PropBuild>,
+    hovered: Res<HoveredPick>,
+    session: Res<SketchSession>,
+) {
     gizmos.grid(
         Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
         UVec2::splat(10),
@@ -301,17 +319,128 @@ fn draw_the_bench(mut gizmos: Gizmos, editor: Res<PropEditor>, build: Res<PropBu
     gizmos.line(Vec3::ZERO, Vec3::Y * 0.25, Color::srgb(0.3, 0.9, 0.3));
     gizmos.line(Vec3::ZERO, Vec3::Z * 0.25, Color::srgb(0.3, 0.5, 0.9));
 
-    // An eaten feature has no body and is not outlined.
-    for picked in editor.selection() {
-        let Some((_, solid)) = build.evaluated.bodies.iter().find(|(id, _)| *id == picked) else {
-            continue;
+    let primary = editor.primary();
+    let marker = build.evaluated.bounds().map_or(MIN_MARKER, |(min, max)| (max - min).length() * MARKER_SIZE).max(MIN_MARKER);
+    let picked_colour = |pick: &Pick| match Some(pick) == primary {
+        true => PICKED,
+        false => PICKED.with_alpha(0.5),
+    };
+    for pick in editor.picks() {
+        match pick {
+            // An eaten feature has no body and is not outlined.
+            Pick::Body(picked) => {
+                let Some((_, solid)) = build.evaluated.bodies.iter().find(|(id, _)| id == picked) else {
+                    continue;
+                };
+                let Some((min, max)) = solid.bounds() else { continue };
+                gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), picked_colour(pick));
+            }
+            Pick::Geom(reference) => {
+                if let Some(at) = build.evaluated.locate(reference) {
+                    draw_located(&mut gizmos, at, marker, picked_colour(pick));
+                }
+            }
+            // Drawn with every other plane, below.
+            Pick::Plane(_) => {}
+            Pick::Region { sketch, region } => draw_region(&mut gizmos, &build, *sketch, region, picked_colour(pick)),
+        }
+    }
+    match &hovered.0 {
+        Some(Pick::Geom(reference)) => {
+            if let Some(at) = build.evaluated.locate(reference) {
+                draw_located(&mut gizmos, at, marker * 0.8, HOVERED);
+            }
+        }
+        Some(Pick::Region { sketch, region }) => draw_region(&mut gizmos, &build, *sketch, region, HOVERED),
+        _ => {}
+    }
+    let picked_features = editor.picked_features(&build.evaluated);
+    // A revolve's axis is a line among many in its sketch; drawn long and
+    // dashed, it says which.
+    let revolving = editor
+        .primary_feature(&build.evaluated)
+        .and_then(|id| editor.doc().feature(id))
+        .and_then(|feature| match &feature.op {
+            FeatureOp::Revolve { sketch, axis, .. } => Some((*sketch, *axis)),
+            _ => None,
+        });
+    if let Some((sketch, axis)) = revolving
+        && let Some(placed) = build.evaluated.sketch(sketch)
+        && let Some((a, b)) = placed.sketch.line(axis)
+    {
+        let middle = (a + b) / 2.0;
+        let reach = (b - a).normalize_or_zero() * placed.arrangement.regions.iter().map(|r| crate::prop::region::reach_of(&r.outer)).fold(a.distance(b), f32::max);
+        dashed_line(&mut gizmos, placed.world(middle - reach), placed.world(middle + reach), HOVERED, marker * 2.0, marker);
+    }
+    // The sketch being edited is drawn by the session, from the document.
+    for placed in build.evaluated.sketches.iter().filter(|placed| Some(placed.id) != session.editing()) {
+        let colour = match picked_features.contains(&placed.id) {
+            true => PICKED,
+            false => SKETCH,
         };
-        let Some((min, max)) = solid.bounds() else { continue };
-        let colour = match editor.selected == Some(picked) {
-            true => Color::srgb(1.0, 0.8, 0.2),
-            false => Color::srgba(1.0, 0.8, 0.2, 0.35),
+        for (a, b, construction) in placed.world_lines() {
+            match construction {
+                true => dashed_line(&mut gizmos, a, b, colour, marker * 2.0, marker),
+                false => {
+                    gizmos.line(a, b, colour);
+                }
+            }
+        }
+    }
+    for datum in &build.evaluated.planes {
+        let pick = Pick::Plane(datum.id);
+        let colour = if editor.picks().contains(&pick) {
+            picked_colour(&pick)
+        } else if hovered.0.as_ref() == Some(&pick) {
+            HOVERED
+        } else if datum.id.feature().is_none() {
+            // Always there, so quieter than planes somebody made.
+            PLANE.with_alpha(0.35)
+        } else {
+            PLANE
         };
-        gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), colour);
+        draw_square(&mut gizmos, &datum.corners, colour);
+    }
+}
+
+const PICKED: Color = Color::srgb(1.0, 0.8, 0.2);
+const HOVERED: Color = Color::srgb(0.5, 0.9, 1.0);
+const PLANE: Color = Color::srgb(0.55, 0.55, 0.55);
+const SKETCH: Color = Color::srgb(0.92, 0.92, 0.98);
+
+/// A sketch region filled with hatching, which is what it is as a pick.
+fn draw_region(gizmos: &mut Gizmos, build: &PropBuild, sketch: PropFeatureId, region: &RegionRef, colour: Color) {
+    let Some(placed) = build.evaluated.sketch(sketch) else { return };
+    let Some(found) = placed.arrangement.find(region) else { return };
+    // Metres; a floor so a speck of a region is not hatched a thousand times.
+    let spacing = (crate::prop::region::reach_of(&found.outer) / 10.0).max(1e-4);
+    for (a, b) in crate::prop::sketch_edit::hatch(&found.outer, &found.holes, spacing) {
+        gizmos.line(placed.world(a), placed.world(b), colour);
+    }
+}
+
+/// A corner's marker as a fraction of the prop's size. Not camera-relative,
+/// for the same reason a feature's handles are not: four viewports.
+const MARKER_SIZE: f32 = 0.012;
+/// Metres.
+const MIN_MARKER: f32 = 0.002;
+
+fn draw_located(gizmos: &mut Gizmos, at: Located, size: f32, colour: Color) {
+    match at {
+        Located::Face { points, .. } => {
+            for i in 0..points.len() {
+                gizmos.line(points[i], points[(i + 1) % points.len()], colour);
+            }
+            let centre = points.iter().sum::<Vec3>() / points.len() as f32;
+            gizmos.sphere(Isometry3d::from_translation(centre), size * 0.5, colour);
+        }
+        Located::Point(p) => {
+            gizmos.sphere(Isometry3d::from_translation(p), size, colour);
+        }
+        Located::Edge(a, b) => {
+            gizmos.line(a, b, colour);
+            gizmos.sphere(Isometry3d::from_translation((a + b) / 2.0), size * 0.5, colour);
+        }
     }
 }
 
@@ -330,9 +459,10 @@ struct GhostCache {
 fn ghost_the_operands(
     mut gizmos: Gizmos,
     editor: Res<PropEditor>,
+    build: Res<PropBuild>,
     mut cache: Local<GhostCache>,
 ) {
-    let Some(selected) = editor.selected else {
+    let Some(selected) = editor.primary_feature(&build.evaluated) else {
         cache.key = None;
         cache.input = None;
         cache.edges.clear();

@@ -27,17 +27,22 @@ use crate::common::file_menu::{dialog_directory, file_menu, FileAction};
 use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
-use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind};
-use crate::prop::document::{self, PropDoc, PropEditor, PROP_EXTENSION};
+use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind, PickupStyle};
+use crate::prop::document::{self, Pick, PropDoc, PropEditor, PROP_EXTENSION};
+use crate::prop::plane::{OriginPlane, PickedPlane, Plane, PlaneRef};
+use crate::prop::reference::{Element, GeomRef, Located};
+use crate::prop::region::{Arrangement, Region, RegionRef};
+use crate::prop::sketch::{Sketch, SketchId};
+use crate::prop::sketch_edit::{sketch_of, sketch_of_mut, SketchPick, SketchSession, SketchTool};
 use crate::common::class::Class;
 use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
 use crate::common::shortcuts::chords;
-use crate::prop::feature::{Axis, BooleanOp, FeatureOp, PatternKind, PropFeatureId};
+use crate::prop::feature::{Axis, BooleanOp, End, FeatureOp, PatternKind, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::gizmo::HoldHandles;
 use crate::prop::hold::MuzzleSpec;
-use crate::prop::profile::{Placement, Profile, MIN_SIDES};
+use crate::prop::profile::{Placement, MAX_REVOLVE_STEPS, MIN_SIDES};
 use crate::prop::solid::Shape;
 use crate::prop::surface::{Style, Surface};
 use crate::prop::camera::FrameTheProp;
@@ -151,14 +156,18 @@ struct PropRequests {
     mode: Option<AppMode>,
     workspace: Option<Workspace>,
     edit: Option<EditAction>,
+    /// Something that would use the picked plane is hovered.
+    preview_plane: bool,
 }
 
 struct PropTabs<'a> {
     editor: &'a mut PropEditor,
     build: &'a PropBuild,
+    plane: Option<Plane>,
     figure: &'a mut ScaleFigure,
     preview: &'a mut ViewmodelPreview,
     requests: &'a mut PropRequests,
+    session: &'a mut SketchSession,
 }
 
 impl<'a> TabViewer for PropTabs<'a> {
@@ -191,8 +200,11 @@ impl<'a> TabViewer for PropTabs<'a> {
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
         match tab {
-            PropTab::Features => feature_tree(ui, self.editor, self.build),
-            PropTab::Inspector => inspector(ui, self.editor, self.build),
+            PropTab::Features => feature_tree(ui, self.editor, self.build, self.session),
+            PropTab::Inspector => match self.session.editing() {
+                Some(sketch) => sketch_inspector(ui, self.editor, self.session, sketch),
+                None => inspector(ui, self.editor, self.build, self.plane, &mut self.requests.preview_plane),
+            },
             PropTab::Hold => match self.editor.doc().archetype {
                 Archetype::Held => {
                     let front = self.build.evaluated.bounds().map(front_of);
@@ -234,6 +246,7 @@ fn panels(
     mut layout: ResMut<PropPanels>,
     mut editor: ResMut<PropEditor>,
     build: Res<PropBuild>,
+    mut plane: ResMut<PickedPlane>,
     mut figure: ResMut<ScaleFigure>,
     mut handles: ResMut<HoldHandles>,
     mut preview: ResMut<ViewmodelPreview>,
@@ -245,6 +258,7 @@ fn panels(
     // Optional: a build with no `NetPlugin` is a closed game, its own authority.
     role: Option<Res<NetRole>>,
     mut exit: MessageWriter<AppExit>,
+    mut session: ResMut<SketchSession>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let ctx = ctx.clone();
@@ -265,11 +279,13 @@ fn panels(
     let mut tabs = PropTabs {
         editor: &mut editor,
         build: &build,
+        plane: plane.plane,
         // Not cloned and written back: a write every frame would rebuild the
         // figure's rig every frame.
         figure: &mut figure,
         preview: &mut preview,
         requests: &mut requests,
+        session: &mut session,
     };
     let workspace = layout.workspace;
 
@@ -301,18 +317,24 @@ fn panels(
             });
             ui.separator();
             ui.horizontal_wrapped(|ui| {
-                // First and identical in both workspaces, so it does not move.
+                // First and identical in every workspace, so it does not move.
+                // A sketch being edited is neither, and picking either leaves it.
+                let sketching = tabs.session.editing().is_some();
                 for (candidate, key) in
                     [(Workspace::Model, "prop.workspace.model"), (Workspace::Fit, "prop.workspace.fit")]
                 {
-                    if ui.selectable_label(workspace == candidate, get!(key)).clicked() {
+                    if ui.selectable_label(!sketching && workspace == candidate, get!(key)).clicked() {
+                        tabs.session.leave();
                         tabs.requests.workspace = Some(candidate);
                     }
                 }
                 ui.separator();
-                match workspace {
-                    Workspace::Model => toolbar(ui, tabs.editor, tabs.build, &mut tabs.requests.frame),
-                    Workspace::Fit => fit_toolbar(ui, tabs.figure, &mut tabs.requests.frame),
+                match (sketching, workspace) {
+                    (true, _) => sketch_toolbar(ui, tabs.editor, tabs.session, &mut tabs.requests.frame),
+                    (false, Workspace::Model) => {
+                        toolbar(ui, tabs.editor, tabs.build, tabs.plane, tabs.requests, tabs.session)
+                    }
+                    (false, Workspace::Fit) => fit_toolbar(ui, tabs.figure, &mut tabs.requests.frame),
                 }
             });
         })
@@ -393,6 +415,10 @@ fn panels(
 
     handle_edit(requests.edit, &mut editor);
 
+    if plane.previewed != requests.preview_plane {
+        plane.previewed = requests.preview_plane;
+    }
+
     if let Some(to) = requests.workspace {
         layout.switch_to(to, &mut figure);
     }
@@ -434,6 +460,7 @@ fn panels(
 /// need not borrow the editor.
 struct Row {
     id: PropFeatureId,
+    sketch: bool,
     name: String,
     enabled: bool,
     /// How many features name this one as an operand.
@@ -446,7 +473,7 @@ struct Row {
 }
 
 /// The ordered feature list.
-fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
+fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session: &mut SketchSession) {
     let entries: Vec<Row> = editor
         .doc()
         .features
@@ -455,10 +482,11 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             let dependants = editor.doc().dependants(feature.id);
             Row {
                 id: feature.id,
+                sketch: matches!(feature.op, FeatureOp::Sketch { .. }),
                 name: feature.name.clone(),
                 enabled: feature.enabled,
                 dependants: dependants.len(),
-                pins: feature.op.consumes().into_iter().chain(dependants).collect(),
+                pins: feature.op.depends_on().into_iter().chain(dependants).collect(),
                 legal: editor
                     .doc()
                     .legal_range(feature.id)
@@ -481,9 +509,10 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
 
     // Copied out, and changes deferred to after the closures, so `editor` is
     // not borrowed across them.
-    let selected = editor.selected;
-    let also_selected = editor.also_selected.clone();
-    let mut select: Option<(PropFeatureId, Pick)> = None;
+    let selected = editor.primary_feature(&build.evaluated);
+    let also_selected: Vec<PropFeatureId> =
+        editor.picked_features(&build.evaluated).into_iter().filter(|id| Some(*id) != selected).collect();
+    let mut select: Option<(PropFeatureId, RowClick)> = None;
     let mut pending: Option<Box<dyn FnOnce(&mut PropEditor)>> = None;
 
     // Rebuilt every frame rather than kept, so there is no drag state to get
@@ -491,6 +520,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let mut rects: Vec<(PropFeatureId, egui::Rect)> = Vec::new();
     let mut dragging: Option<usize> = None;
     let mut dropped = false;
+    let mut edit_sketch: Option<PropFeatureId> = None;
 
     // The rollback bar sits after this row; with no rollback, after the last.
     let rollback = editor.rollback();
@@ -498,10 +528,15 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
         .and_then(|id| entries.iter().position(|row| row.id == id))
         .unwrap_or(entries.len().saturating_sub(1));
     let mut bar_dragged = false;
+    // An open sketch stops the view at itself without moving the bar, and what
+    // is past it is not evaluated: faded like rows past the bar, not drawn as
+    // eaten or as having no problems.
+    let peeked_after = editor.peek().and_then(|id| entries.iter().position(|row| row.id == id));
+    let shown_after = peeked_after.map_or(bar_after, |peek| peek.min(bar_after));
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         for (at, row) in entries.iter().enumerate() {
-            let Row { id, enabled, dependants, .. } = *row;
+            let Row { id, enabled, dependants, sketch, .. } = *row;
             let name = &row.name;
 
             // Reserved before the row and filled after: the fill depends on a
@@ -515,7 +550,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             // click). A `Ui`'s own response is `Sense::hover()`, which can
             // never report the `secondary_clicked()` a context menu opens on,
             // hence the `.interact`.
-            let past_the_bar = at > bar_after;
+            let past_the_bar = at > shown_after;
             let response = ui
                 .horizontal(|ui| {
                     // Faded, since struck and weak already mean suppressed
@@ -535,7 +570,9 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     }
                     if broken.contains(&id) {
                         text = text.color(egui::Color32::from_rgb(230, 130, 80));
-                    } else if !live.contains(&id) {
+                    } else if !live.contains(&id) && !past_the_bar {
+                        // Past the bar nothing was evaluated, so not being
+                        // live says nothing about being eaten.
                         text = text.weak();
                     }
 
@@ -562,7 +599,10 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             }
             if response.clicked() {
                 let extending = ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
-                select = Some((id, if extending { Pick::Toggle } else { Pick::Only }));
+                select = Some((id, if extending { RowClick::Toggle } else { RowClick::Only }));
+            }
+            if sketch && response.double_clicked() {
+                edit_sketch = Some(id);
             }
 
             // Selection outranks hover, or a chosen row dims when pointed at.
@@ -593,7 +633,12 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 // Right-click selects, unless already in the selection, so a
                 // Ctrl-clicked pair is not thrown away.
                 if selected != Some(id) && !also_selected.contains(&id) {
-                    select = Some((id, Pick::Only));
+                    select = Some((id, RowClick::Only));
+                }
+
+                if sketch && ui.button(get!("prop.sketch.edit")).clicked() {
+                    ui.close_kind(UiKind::Menu);
+                    edit_sketch = Some(id);
                 }
 
                 // Names the action, not the state: a state label reads as a
@@ -696,7 +741,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     let text = egui::RichText::new(format!("· {operand_name}")).weak().small();
                     let line = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
                     if line.clicked() {
-                        select = Some((*operand, Pick::Only));
+                        select = Some((*operand, RowClick::Only));
                     }
                 });
             }
@@ -745,9 +790,13 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     });
 
     match select {
-        Some((id, Pick::Only)) => editor.select(id),
-        Some((id, Pick::Toggle)) => editor.toggle_selected(id),
+        Some((id, RowClick::Only)) => editor.select(id),
+        Some((id, RowClick::Toggle)) => editor.toggle_selected(id),
         None => {}
+    }
+    if let Some(id) = edit_sketch {
+        editor.select(id);
+        session.enter(id);
     }
     if let Some(action) = pending {
         action(editor);
@@ -755,7 +804,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
 }
 
 #[derive(Clone, Copy)]
-enum Pick {
+enum RowClick {
     Only,
     /// Ctrl/Cmd held.
     Toggle,
@@ -818,11 +867,20 @@ fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row
 ///
 /// Framing is here rather than in a menu so it is one click away after losing
 /// the prop.
-fn toolbar(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, frame: &mut Option<bool>) {
-    let live: Vec<PropFeatureId> = build.evaluated.bodies.iter().map(|(id, _)| *id).collect();
-    let pair = editor.pair_to_combine(&live);
-    let single = editor.body_to_act_on(&live);
+fn toolbar(
+    ui: &mut Ui,
+    editor: &mut PropEditor,
+    build: &PropBuild,
+    plane: Option<Plane>,
+    requests: &mut PropRequests,
+    session: &mut SketchSession,
+) {
+    let pair = editor.pair_to_combine(&build.evaluated);
+    let single = editor.body_to_act_on(&build.evaluated);
     let mut added: Option<FeatureOp> = None;
+    let mut swept: Option<(PropFeatureId, Vec<Region>, Box<dyn FnOnce(Vec<SketchId>) -> FeatureOp>)> = None;
+    let mut created_plane: Option<Vec<GeomRef>> = None;
+    let mut created_sketch: Option<PlaneRef> = None;
 
     ui.horizontal_wrapped(|ui| {
         ui.menu_button(get!("prop.add.solid"), |ui| {
@@ -845,26 +903,50 @@ fn toolbar(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, frame: &mut 
             }
         });
 
+        // Regions of one sketch, in the order picked.
+        let mut regions = editor.picks().iter().map(|pick| match pick {
+            Pick::Region { sketch, region } => Some((*sketch, region.clone())),
+            _ => None,
+        });
+        let first = regions.next().flatten();
+        let sweepable = first.clone().and_then(|(sketch, region)| {
+            let rest: Option<Vec<RegionRef>> = regions
+                .map(|pick| pick.filter(|(other, _)| *other == sketch).map(|(_, region)| region))
+                .collect();
+            let placed = build.evaluated.sketch(sketch)?;
+            let found: Option<Vec<Region>> = std::iter::once(region)
+                .chain(rest?)
+                .map(|name| placed.arrangement.find(&name).cloned())
+                .collect();
+            Some((sketch, found?))
+        });
         ui.menu_button(get!("prop.add.sweep"), |ui| {
-            if ui.button(get!("prop.features.extrude")).clicked() {
+            let extrude = ui.add_enabled(sweepable.is_some(), egui::Button::new(get!("prop.features.extrude")));
+            if let (true, Some((sketch, regions))) = (extrude.clicked(), sweepable.clone()) {
                 ui.close_kind(UiKind::Menu);
-                added = Some(FeatureOp::Extrude {
-                    profile: Profile::Ngon { sides: 8, radius: 0.05 },
-                    placement: Placement::default(),
-                    depth: 0.2,
-                    midplane: true,
+                swept = Some((sketch, regions, Box::new(move |regions| FeatureOp::Extrude {
+                    sketch,
+                    regions,
+                    symmetric: false,
+                    end: End::Distance { distance: 0.05 },
                     surface: Surface::default(),
-                });
+                })));
             }
-            if ui.button(get!("prop.features.revolve")).clicked() {
+            let turnable = sweepable
+                .clone()
+                .and_then(|(sketch, regions)| Some((sketch, default_axis(build, sketch, &regions)?, regions)));
+            let revolve = ui.add_enabled(turnable.is_some(), egui::Button::new(get!("prop.features.revolve")));
+            if let (true, Some((sketch, axis, regions))) = (revolve.clicked(), turnable) {
                 ui.close_kind(UiKind::Menu);
-                added = Some(FeatureOp::Revolve {
-                    profile: Profile::Rect { half: [0.03, 0.05] },
-                    placement: Placement::at(0.06, 0.0, 0.0),
+                swept = Some((sketch, regions, Box::new(move |regions| FeatureOp::Revolve {
+                    sketch,
+                    regions,
+                    axis,
                     degrees: 360.0,
-                    segments: 12,
+                    steps: 12,
+                    symmetric: false,
                     surface: Surface::default(),
-                });
+                })));
             }
         });
 
@@ -904,15 +986,32 @@ fn toolbar(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, frame: &mut 
 
         ui.separator();
 
-        if ui.button(get!("prop.menu.frame")).clicked() {
-            *frame = Some(false);
+        let through = plane_through_picks(editor, plane);
+        let plane_tool = ui.add_enabled(through.is_some(), egui::Button::new(get!("prop.features.plane")));
+        requests.preview_plane |= plane_tool.hovered();
+        if let (true, Some(through)) = (plane_tool.clicked(), through) {
+            created_plane = Some(through);
         }
-        let framable = build.evaluated.bounds_of_bodies(&editor.selection()).is_some();
+        let on = match editor.picks() {
+            [Pick::Plane(on)] => Some(*on),
+            _ => None,
+        };
+        let sketch_tool = ui.add_enabled(on.is_some(), egui::Button::new(get!("prop.features.sketch")));
+        if let (true, Some(on)) = (sketch_tool.clicked(), on) {
+            created_sketch = Some(on);
+        }
+
+        ui.separator();
+
+        if ui.button(get!("prop.menu.frame")).clicked() {
+            requests.frame = Some(false);
+        }
+        let framable = build.evaluated.bounds_of_bodies(&editor.picked_bodies(&build.evaluated)).is_some();
         if ui
             .add_enabled(framable, egui::Button::new(get!("prop.menu.frame_selected")))
             .clicked()
         {
-            *frame = Some(true);
+            requests.frame = Some(true);
         }
     });
 
@@ -920,6 +1019,180 @@ fn toolbar(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, frame: &mut 
         let id = editor.add(op);
         editor.select(id);
     }
+    // The regions go onto the sketch in the same step, so undoing the sweep
+    // takes them with it.
+    if let Some((sketch, regions, make)) = swept {
+        let id = editor.add_built(|doc| {
+            let ids = sketch_of_mut(doc, sketch)
+                .map(|sketch| regions.iter().map(|region| sketch.adopt_region(region)).collect())
+                .unwrap_or_default();
+            make(ids)
+        });
+        editor.select(id);
+    }
+    if let Some(through) = created_plane {
+        add_plane(editor, through);
+    }
+    // Straight into it: an empty sketch is only ever made to be drawn in.
+    if let Some(on) = created_sketch {
+        let id = editor.add(FeatureOp::Sketch { on, sketch: Sketch::default() });
+        editor.select(id);
+        session.enter(id);
+    }
+}
+
+/// The sketch workspace's verbs: finish, the tools, and what acts on the
+/// sketch's own picks.
+fn sketch_toolbar(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSession, frame: &mut Option<bool>) {
+    let Some(id) = session.editing() else { return };
+    if ui.button(get!("prop.sketch.finish")).clicked() {
+        session.leave();
+        return;
+    }
+    ui.separator();
+    for (tool, key) in [
+        (SketchTool::Select, "prop.sketch.select"),
+        (SketchTool::Line, "prop.sketch.line"),
+        (SketchTool::Erase, "prop.sketch.erase"),
+    ] {
+        if ui.selectable_label(session.tool() == tool, get!(key)).clicked() {
+            session.set_tool(tool);
+        }
+    }
+    ui.separator();
+
+    let lines: Vec<SketchId> = session
+        .picks
+        .iter()
+        .filter_map(|pick| match pick {
+            SketchPick::Line(id) => Some(*id),
+            SketchPick::Point(_) => None,
+        })
+        .collect();
+    let all_construction = sketch_of(editor.doc(), id).is_some_and(|sketch| {
+        sketch.entities.iter().filter(|entity| lines.contains(&entity.id())).all(|entity| entity.construction())
+    });
+    if ui.add_enabled(!lines.is_empty(), egui::Button::new(get!("prop.sketch.construction"))).clicked() {
+        editor.edit(|doc| {
+            if let Some(sketch) = sketch_of_mut(doc, id) {
+                for line in &lines {
+                    sketch.set_construction(*line, !all_construction);
+                }
+            }
+        });
+    }
+    if ui.add_enabled(!session.picks.is_empty(), egui::Button::new(get!("prop.sketch.delete"))).clicked() {
+        let ids: Vec<SketchId> = session.picks.iter().map(|pick| pick.id()).collect();
+        editor.edit(|doc| sketch_of_mut(doc, id).map(|sketch| sketch.remove(&ids)));
+        session.picks.clear();
+    }
+    ui.separator();
+    if ui.button(get!("prop.menu.frame")).clicked() {
+        *frame = Some(false);
+    }
+}
+
+/// While a sketch is edited: its picks, each with its numbers. A point's are
+/// editable, which is how a corner is put somewhere exact.
+fn sketch_inspector(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSession, id: PropFeatureId) {
+    let Some(sketch) = sketch_of(editor.doc(), id).cloned() else { return };
+    let arrangement = session.arrangement(&sketch).clone();
+    section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
+        ui.label(get!("prop.inspector.drawing", "points", sketch.points.len(), "lines", sketch.entities.len()));
+        ui.label(get!("prop.sketch.regions", "count", arrangement.regions.len()));
+    });
+    if !sketch.regions.is_empty() {
+        let mut action = None;
+        section(ui, "sketch_regions", get!("prop.inspector.sections.swept_regions"), |ui| {
+            let ids: Vec<SketchId> = sketch.regions.iter().map(|region| region.id).collect();
+            action = region_rows(ui, &sketch, &arrangement, id, &ids, None);
+        });
+        if let Some(action) = action {
+            apply_region_action(editor, action);
+        }
+    }
+    if session.picks.is_empty() {
+        return;
+    }
+    let mut moved: Option<(SketchId, Vec2)> = None;
+    let mut dropped = None;
+    section(ui, "sketch_picks", get!("prop.inspector.picked", "count", session.picks.len()), |ui| {
+        for pick in &session.picks {
+            ui.horizontal(|ui| {
+                match *pick {
+                    SketchPick::Point(point) => {
+                        ui.label(get!("prop.sketch.point", "id", point));
+                        if let Some(at) = sketch.point(point) {
+                            let mut edited = at;
+                            ui.add(egui::DragValue::new(&mut edited.x).speed(0.001).suffix(" m"));
+                            ui.add(egui::DragValue::new(&mut edited.y).speed(0.001).suffix(" m"));
+                            if edited != at {
+                                moved = Some((point, edited));
+                            }
+                        }
+                    }
+                    SketchPick::Line(line) => {
+                        ui.label(get!("prop.sketch.line_label", "id", line));
+                        let length = sketch
+                            .lines()
+                            .find(|(candidate, ..)| *candidate == line)
+                            .and_then(|(_, a, b, _)| Some(sketch.point(a)?.distance(sketch.point(b)?)));
+                        if let Some(length) = length {
+                            ui.label(format!("{length:.4} m"));
+                        }
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button(get!("prop.picks.remove")).clicked() {
+                        dropped = Some(*pick);
+                    }
+                });
+            });
+        }
+    });
+    if let Some((point, at)) = moved {
+        editor.begin_gesture();
+        if let Some(sketch) = sketch_of_mut(editor.doc_mut(), id) {
+            sketch.move_point(point, at);
+        }
+    }
+    if let Some(pick) = dropped {
+        session.toggle(pick);
+    }
+}
+
+/// The line a new revolve turns about: the first line of the sketch that
+/// clears every region, construction lines first, since drawing one is how
+/// somebody says "this is an axis".
+fn default_axis(build: &PropBuild, sketch: PropFeatureId, found: &[Region]) -> Option<SketchId> {
+    let placed = build.evaluated.sketch(sketch)?;
+    let mut lines: Vec<_> = placed.sketch.lines().collect();
+    lines.sort_by_key(|(_, _, _, construction)| !construction);
+    lines.into_iter().find_map(|(id, ..)| {
+        let (a, b) = placed.sketch.line(id)?;
+        found.iter().all(|region| crate::prop::region::axis_clear(region, a, b)).then_some(id)
+    })
+}
+
+/// What a new plane would be made through: the picks, when they make a plane
+/// and are all geometry. A lone plane pick is a plane but makes no new one —
+/// it would be the same plane again. The toolbar's Plane and the Inspector's
+/// Use plane both ask this, so they are offered together.
+fn plane_through_picks(editor: &PropEditor, plane: Option<Plane>) -> Option<Vec<GeomRef>> {
+    plane?;
+    editor
+        .picks()
+        .iter()
+        .map(|pick| match pick {
+            Pick::Geom(reference) => Some(reference.clone()),
+            Pick::Body(_) | Pick::Plane(_) | Pick::Region { .. } => None,
+        })
+        .collect()
+}
+
+fn add_plane(editor: &mut PropEditor, through: Vec<GeomRef>) {
+    let id = editor.add(FeatureOp::Plane { through });
+    editor.select_pick(Pick::Plane(PlaneRef::Feature(id)));
 }
 
 pub(crate) fn edit_availability(editor: &PropEditor) -> EditAvailability {
@@ -956,16 +1229,213 @@ fn revert_from_disk(editor: &mut PropEditor) {
     }
 }
 
-/// The selected feature's numbers, or the prop's own when nothing is picked.
+/// The selection as a list when there is more than one pick, then the
+/// primary's details: a feature's numbers, a corner's or edge's whereabouts,
+/// or the prop's own numbers when nothing is picked.
+fn inspector(
+    ui: &mut Ui,
+    editor: &mut PropEditor,
+    build: &PropBuild,
+    plane: Option<Plane>,
+    preview_plane: &mut bool,
+) {
+    let listed = editor.picks().len() > 1;
+    if listed {
+        selection_list(ui, editor, build);
+    }
+    let through = plane_through_picks(editor, plane);
+    let offered = through.is_some();
+    if let Some(through) = through {
+        let use_plane = ui.button(get!("prop.picks.use_plane"));
+        *preview_plane |= use_plane.hovered();
+        if use_plane.clicked() {
+            add_plane(editor, through);
+        }
+    }
+    if listed || offered {
+        ui.separator();
+    }
+    match editor.primary().cloned() {
+        None => prop_overview(ui, editor, build),
+        Some(Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id))) => feature_inspector(ui, editor, build, id),
+        Some(Pick::Plane(PlaneRef::Origin(which))) => origin_plane_inspector(ui, which),
+        Some(Pick::Region { sketch, region }) => {
+            section(ui, "element", get!("prop.inspector.sections.element"), |ui| {
+                let label = pick_label(editor, build, &Pick::Region { sketch, region: region.clone() });
+                ui.label(egui::RichText::new(label).strong());
+                let area = build.evaluated.sketch(sketch).and_then(|placed| placed.arrangement.find(&region));
+                if let Some(found) = area {
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.area"));
+                        ui.label(format!("{:.6} m²", found.area()));
+                    });
+                }
+            });
+            // Whichever was picked last, a sweep picked beside the region can
+            // be re-pointed at it from here.
+            let sweeps: Vec<(PropFeatureId, String, Vec<SketchId>)> = editor
+                .picks()
+                .iter()
+                .filter_map(|pick| pick.feature(&build.evaluated))
+                .fold(Vec::new(), |mut ids: Vec<PropFeatureId>, id| {
+                    // A body and one of its faces are one sweep picked twice.
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                    ids
+                })
+                .into_iter()
+                .filter_map(|id| {
+                    let feature = editor.doc().feature(id)?;
+                    match &feature.op {
+                        FeatureOp::Extrude { sketch: on, regions, .. } | FeatureOp::Revolve { sketch: on, regions, .. }
+                            if *on == sketch =>
+                        {
+                            Some((id, feature.name.clone(), regions.clone()))
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
+            let mut action = None;
+            for (id, name, regions) in sweeps {
+                section(ui, &format!("sweep_regions_{id}"), name, |ui| {
+                    action = action.take().or(sweep_regions(ui, editor, build, sketch, &regions));
+                });
+            }
+            if let Some(action) = action {
+                apply_region_action(editor, action);
+            }
+        }
+        Some(Pick::Geom(reference)) => {
+            element_inspector(ui, editor, build, &reference);
+            // A face stands for its body, so the body's numbers follow.
+            if let Some(body) = Pick::Geom(reference).body(&build.evaluated) {
+                feature_inspector(ui, editor, build, body);
+            }
+        }
+    }
+}
+
+/// Every pick, oldest first, each with a button that drops it.
+fn selection_list(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
+    ui.label(egui::RichText::new(get!("prop.inspector.picked", "count", editor.picks().len())).weak());
+    let primary = editor.primary().cloned();
+    let mut dropped = None;
+    egui::ScrollArea::vertical().id_salt("prop_picks").max_height(160.0).show(ui, |ui| {
+        for pick in editor.picks() {
+            ui.horizontal(|ui| {
+                let text = egui::RichText::new(pick_label(editor, build, pick));
+                ui.label(match Some(pick) == primary.as_ref() {
+                    true => text.strong(),
+                    false => text,
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button(get!("prop.picks.remove")).clicked() {
+                        dropped = Some(pick.clone());
+                    }
+                });
+            });
+        }
+    });
+    if let Some(pick) = dropped {
+        editor.unpick(&pick);
+    }
+}
+
+/// A feature's name, or a corner or edge as the feature it came from and the
+/// copies it went through. Counted from one, as a person counts corners.
+fn pick_label(editor: &PropEditor, build: &PropBuild, pick: &Pick) -> String {
+    let name = |id: PropFeatureId| {
+        editor
+            .doc()
+            .feature(id)
+            .map(|feature| feature.name.clone())
+            .unwrap_or_else(|| get!("prop.inspector.missing", "id", id))
+    };
+    let reference = match pick {
+        Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => return name(*id),
+        Pick::Plane(PlaneRef::Origin(which)) => return which.name(),
+        Pick::Region { sketch, .. } => return get!("prop.picks.region", "sketch", name(*sketch)),
+        Pick::Geom(reference) => reference,
+    };
+    let source = reference.source.copies.iter().fold(name(reference.source.feature), |base, copy| {
+        get!("prop.picks.copy", "base", base, "by", name(copy.by), "index", copy.index)
+    });
+    let label = match reference.element {
+        Element::Point(index) => get!("prop.picks.point", "source", source, "index", index + 1),
+        Element::Edge(index) => get!("prop.picks.edge", "source", source, "index", index + 1),
+        Element::Face(index) => get!("prop.picks.face", "source", source, "index", index + 1),
+    };
+    match build.evaluated.locate(reference) {
+        Some(_) => label,
+        None => get!("prop.picks.absent", "pick", label),
+    }
+}
+
+/// Where a corner, edge or face is. Read-only: it is wherever its feature put
+/// it.
+fn element_inspector(ui: &mut Ui, editor: &PropEditor, build: &PropBuild, reference: &GeomRef) {
+    let triple = |v: Vec3| format!("{:.4}, {:.4}, {:.4} m", v.x, v.y, v.z);
+    section(ui, "element", get!("prop.inspector.sections.element"), |ui| {
+        ui.label(egui::RichText::new(pick_label(editor, build, &Pick::Geom(reference.clone()))).strong());
+        if let Some(body) = build.evaluated.body_of(reference) {
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.inspector.on_body"));
+                ui.label(pick_label(editor, build, &Pick::Body(body)));
+            });
+        }
+        match build.evaluated.locate(reference) {
+            Some(Located::Point(p)) => {
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.inspector.position"));
+                    ui.label(triple(p));
+                });
+            }
+            Some(Located::Edge(a, b)) => {
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.inspector.from"));
+                    ui.label(triple(a));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.inspector.to"));
+                    ui.label(triple(b));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.inspector.length"));
+                    ui.label(format!("{:.4} m", a.distance(b)));
+                });
+            }
+            Some(Located::Face { normal, .. }) => {
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.inspector.normal"));
+                    ui.label(format!("{:.4}, {:.4}, {:.4}", normal.x, normal.y, normal.z));
+                });
+            }
+            None => {}
+        }
+    });
+}
+
+/// An origin plane is not a feature: nothing about it can be edited.
+fn origin_plane_inspector(ui: &mut Ui, which: OriginPlane) {
+    let plane = which.plane();
+    let triple = |v: Vec3| format!("{:.4}, {:.4}, {:.4}", v.x, v.y, v.z);
+    section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
+        ui.label(egui::RichText::new(which.name()).strong());
+        ui.horizontal(|ui| {
+            ui.label(get!("prop.inspector.normal"));
+            ui.label(triple(*plane.normal));
+        });
+    });
+}
+
+/// The selected feature's numbers.
 ///
 /// Sections come in a fixed order so a number is in the same place on every
 /// kind of feature. Section ids are per section, not per feature, so folding
 /// one folds it everywhere.
-fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
-    let Some(selected) = editor.selected else {
-        prop_overview(ui, editor, build);
-        return;
-    };
+fn feature_inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, selected: PropFeatureId) {
     let Some(index) = editor.doc().index_of(selected) else {
         prop_overview(ui, editor, build);
         return;
@@ -985,20 +1455,39 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             (*id, editor.doc().feature(*id).map(|f| f.name.clone()).unwrap_or_else(|| id.to_string()))
         })
         .collect();
-    let picked = editor.selection().len();
 
     // Drawn against a copy: calling `PropEditor::doc_mut` marks the document
     // changed, which would rebuild the viewport and mark it dirty every frame.
     let Some(mut edited) = editor.doc().feature(selected).cloned() else { return };
+    let through: Vec<String> = match &edited.op {
+        FeatureOp::Plane { through } => {
+            through.iter().map(|reference| pick_label(editor, build, &Pick::Geom(reference.clone()))).collect()
+        }
+        _ => vec![],
+    };
+    let datum = build.evaluated.datum(PlaneRef::Feature(selected));
+    let plane_name = |on: PlaneRef| pick_label(editor, build, &Pick::Plane(on));
+    let sketch_name = match &edited.op {
+        FeatureOp::Extrude { sketch, .. } | FeatureOp::Revolve { sketch, .. } => {
+            Some(pick_label(editor, build, &Pick::Body(*sketch)))
+        }
+        _ => None,
+    };
+    let axis_choices: Vec<(SketchId, String)> = match &edited.op {
+        FeatureOp::Revolve { sketch, .. } => sketch_of(editor.doc(), *sketch)
+            .map(|drawn| drawn.lines().map(|(id, ..)| (id, get!("prop.sketch.line_label", "id", id))).collect())
+            .unwrap_or_default(),
+        _ => vec![],
+    };
+    let sketch_plane = match &edited.op {
+        FeatureOp::Sketch { on, .. } => Some(plane_name(*on)),
+        _ => None,
+    };
     let feature = &mut edited;
+    let mut region_action: Option<RegionAction> = None;
 
     let mut changed = false;
     egui::ScrollArea::vertical().show(ui, |ui| {
-        // The numbers below are only the primary's.
-        if picked > 1 {
-            ui.label(egui::RichText::new(get!("prop.inspector.picked", "count", picked)).weak());
-        }
-
         section(ui, "feature", get!("prop.inspector.sections.feature"), |ui| {
             ui.horizontal(|ui| {
                 ui.label(get!("prop.inspector.kind"));
@@ -1026,29 +1515,54 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Extrude { profile, placement, depth, midplane, surface } => {
-                section(ui, "profile", get!("prop.inspector.sections.profile"), |ui| {
-                    changed |= profile_ui(ui, profile);
-                    ui.separator();
-                    changed |= drag(ui, get!("prop.inspector.depth"), depth, 0.001, "m");
-                    changed |= ui.checkbox(midplane, get!("prop.inspector.midplane")).changed();
+            FeatureOp::Extrude { sketch, symmetric, end, surface, regions } => {
+                section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.sketch"));
+                        ui.label(sketch_name.clone().unwrap_or_default());
+                    });
+                    region_action = sweep_regions(ui, editor, build, *sketch, regions);
                 });
-                section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
-                    changed |= placement_ui(ui, placement, main);
+                section(ui, "extent", get!("prop.inspector.sections.extent"), |ui| {
+                    match end {
+                        End::Distance { distance } => {
+                            changed |= drag(ui, get!("prop.inspector.distance"), distance, 0.001, "m");
+                        }
+                    }
+                    changed |= ui.checkbox(symmetric, get!("prop.inspector.symmetric")).changed();
                 });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Revolve { profile, placement, degrees, segments, surface } => {
-                section(ui, "profile", get!("prop.inspector.sections.profile"), |ui| {
-                    changed |= profile_ui(ui, profile);
-                    ui.separator();
-                    changed |= drag(ui, get!("prop.inspector.degrees"), degrees, 1.0, "°");
-                    changed |= count(ui, get!("prop.inspector.segments"), segments);
+            FeatureOp::Revolve { sketch, axis, degrees, steps, symmetric, surface, regions } => {
+                section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.sketch"));
+                        ui.label(sketch_name.clone().unwrap_or_default());
+                    });
+                    region_action = sweep_regions(ui, editor, build, *sketch, regions);
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.axis"));
+                        let shown = axis_choices
+                            .iter()
+                            .find(|(id, _)| id == axis)
+                            .map(|(_, label)| label.clone())
+                            .unwrap_or_else(|| get!("prop.sketch.line_label", "id", *axis));
+                        egui::ComboBox::from_id_salt("prop_revolve_axis").selected_text(shown).show_ui(ui, |ui| {
+                            for (id, label) in &axis_choices {
+                                changed |= ui.selectable_value(axis, *id, label).changed();
+                            }
+                        });
+                    });
                 });
-                section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
-                    changed |= placement_ui(ui, placement, main);
+                section(ui, "extent", get!("prop.inspector.sections.extent"), |ui| {
+                    changed |= drag(ui, get!("prop.inspector.degrees"), degrees, 1.0, "°");
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.steps"));
+                        changed |= ui.add(egui::Slider::new(steps, MIN_SIDES..=MAX_REVOLVE_STEPS)).changed();
+                    });
+                    changed |= ui.checkbox(symmetric, get!("prop.inspector.symmetric")).changed();
                 });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);
@@ -1103,6 +1617,41 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     changed |= pattern_ui(ui, count, along);
                 });
             }
+            FeatureOp::Sketch { sketch, .. } => {
+                section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.on_plane"));
+                        ui.label(sketch_plane.clone().unwrap_or_default());
+                    });
+                    ui.label(get!(
+                        "prop.inspector.drawing",
+                        "points",
+                        sketch.points.len(),
+                        "lines",
+                        sketch.entities.len()
+                    ));
+                });
+            }
+            FeatureOp::Plane { .. } => {
+                section(ui, "through", get!("prop.inspector.sections.through"), |ui| {
+                    for label in &through {
+                        ui.label(label);
+                    }
+                });
+                if let Some(datum) = datum {
+                    let triple = |v: Vec3| format!("{:.4}, {:.4}, {:.4}", v.x, v.y, v.z);
+                    section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(get!("prop.inspector.origin"));
+                            ui.label(triple(datum.plane.origin));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(get!("prop.inspector.normal"));
+                            ui.label(triple(*datum.plane.normal));
+                        });
+                    });
+                }
+            }
         }
     });
 
@@ -1112,6 +1661,104 @@ fn inspector(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             *slot = edited;
         }
     }
+    if let Some(action) = region_action {
+        apply_region_action(editor, action);
+    }
+}
+
+/// A change to one of a sketch's region entries, which every sweep naming it
+/// sees.
+enum RegionAction {
+    Repoint { sketch: PropFeatureId, region: SketchId, to: Region },
+    Relabel { sketch: PropFeatureId, region: SketchId, label: String },
+}
+
+fn apply_region_action(editor: &mut PropEditor, action: RegionAction) {
+    match action {
+        RegionAction::Repoint { sketch, region, to } => {
+            editor.edit(|doc| sketch_of_mut(doc, sketch).map(|drawn| drawn.repoint_region(region, &to)));
+        }
+        // Through a gesture, so typing a label is one undo step.
+        RegionAction::Relabel { sketch, region, label } => {
+            editor.begin_gesture();
+            if let Some(entry) = sketch_of_mut(editor.doc_mut(), sketch)
+                .and_then(|drawn| drawn.regions.iter_mut().find(|entry| entry.id == region))
+            {
+                entry.label = label;
+            }
+        }
+    }
+}
+
+/// One row per region entry: its label, and whether the drawing still
+/// encloses it. Re-pointing an entry moves every sweep that names it.
+/// `drawn` and `arrangement` are whichever the caller is showing: the build
+/// for a sweep, the document while the sketch is open, so the list agrees
+/// with the hatching drawn beside it.
+fn region_rows(
+    ui: &mut Ui,
+    drawn: &Sketch,
+    arrangement: &Arrangement,
+    sketch: PropFeatureId,
+    regions: &[SketchId],
+    picked: Option<&Region>,
+) -> Option<RegionAction> {
+    let mut action = None;
+    for &id in regions {
+        let Some(entry) = drawn.region(id) else { continue };
+        let found = arrangement.resolve(&entry.name(), Vec2::from_array(entry.hint));
+        ui.horizontal(|ui| {
+            let mut label = entry.label.clone();
+            let hint = get!("prop.sketch.region_label", "id", id);
+            if ui.add(egui::TextEdit::singleline(&mut label).hint_text(hint).desired_width(120.0)).changed() {
+                action = Some(RegionAction::Relabel { sketch, region: id, label });
+            }
+            if found.is_none() {
+                ui.colored_label(ui.visuals().warn_fg_color, get!("prop.region.missing"));
+            }
+            if let Some(to) = picked.filter(|to| to.name.bounds != entry.bounds) {
+                if ui.small_button(get!("prop.region.use_picked")).clicked() {
+                    action = Some(RegionAction::Repoint { sketch, region: id, to: to.clone() });
+                }
+            }
+            // Offered, never taken: after a merge the region at the old spot
+            // is bigger than the one that was meant.
+            let there = found.is_none().then(|| arrangement.region_at(Vec2::from_array(entry.hint))).flatten();
+            if let Some(to) = there {
+                if ui.small_button(get!("prop.region.use_here")).clicked() {
+                    action = Some(RegionAction::Repoint { sketch, region: id, to: to.clone() });
+                }
+            }
+        });
+    }
+    action
+}
+
+/// A sweep's regions. The pick a row can be re-pointed at is the one region
+/// picked on the same sketch.
+fn sweep_regions(
+    ui: &mut Ui,
+    editor: &PropEditor,
+    build: &PropBuild,
+    sketch: PropFeatureId,
+    regions: &[SketchId],
+) -> Option<RegionAction> {
+    ui.label(get!("prop.inspector.regions", "count", regions.len()));
+    let picked: Vec<&Region> = editor
+        .picks()
+        .iter()
+        .filter_map(|pick| match pick {
+            Pick::Region { sketch: on, region } if *on == sketch => {
+                build.evaluated.sketch(sketch)?.arrangement.find(region)
+            }
+            _ => None,
+        })
+        .collect();
+    let placed = build.evaluated.sketch(sketch)?;
+    region_rows(ui, &placed.sketch, &placed.arrangement, sketch, regions, match picked[..] {
+        [one] => Some(one),
+        _ => None,
+    })
 }
 
 fn section(ui: &mut Ui, id: &str, title: String, body: impl FnOnce(&mut Ui)) {
@@ -1214,6 +1861,16 @@ fn pickup_ui(ui: &mut Ui, editor: &mut PropEditor) {
             .show_ui(ui, |ui| {
                 for kind in PickupKind::ALL {
                     changed |= ui.selectable_value(&mut pickup.kind, kind, kind.name()).changed();
+                }
+            });
+    });
+    ui.horizontal(|ui| {
+        ui.label(get!("prop.pickup.style"));
+        egui::ComboBox::from_id_salt("prop_pickup_style")
+            .selected_text(pickup.style.name())
+            .show_ui(ui, |ui| {
+                for style in PickupStyle::ALL {
+                    changed |= ui.selectable_value(&mut pickup.style, style, style.name()).changed();
                 }
             });
     });
@@ -1530,11 +2187,7 @@ fn degrees_ui(ui: &mut Ui, label: String, radians: &mut [f32; 3]) -> bool {
 
 fn status_line(ui: &mut Ui, editor: &PropEditor, build: &PropBuild) {
     ui.horizontal(|ui| {
-        let names: Vec<String> = editor
-            .selection()
-            .iter()
-            .filter_map(|id| editor.doc().feature(*id).map(|feature| feature.name.clone()))
-            .collect();
+        let names: Vec<String> = editor.picks().iter().map(|pick| pick_label(editor, build, pick)).collect();
         ui.label(match names.is_empty() {
             true => get!("prop.inspector.nothing"),
             false => get!("prop.stats.selected", "names", names.join(", ")),
@@ -1577,7 +2230,7 @@ fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 .unwrap_or_else(|| problem.feature.to_string());
             if ui
                 .selectable_label(
-                    editor.selected == Some(problem.feature),
+                    editor.primary_feature(&build.evaluated) == Some(problem.feature),
                     egui::RichText::new(format!(
                         "{} {name}: {}",
                         get!("prop.problems.marker"),
@@ -1772,82 +2425,10 @@ fn shape_ui(ui: &mut Ui, shape: &mut Shape) -> bool {
     changed
 }
 
-fn profile_ui(ui: &mut Ui, profile: &mut Profile) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label(get!("prop.inspector.profile"));
-        // Switching kind replaces rather than converts; there is nothing to
-        // carry across.
-        if ui.selectable_label(matches!(profile, Profile::Rect { .. }), Profile::Rect { half: [0.0; 2] }.name()).clicked()
-            && !matches!(profile, Profile::Rect { .. })
-        {
-            *profile = Profile::Rect { half: [0.05, 0.05] };
-            changed = true;
-        }
-        if ui.selectable_label(matches!(profile, Profile::Ngon { .. }), Profile::Ngon { sides: 0, radius: 0.0 }.name()).clicked()
-            && !matches!(profile, Profile::Ngon { .. })
-        {
-            *profile = Profile::Ngon { sides: 8, radius: 0.05 };
-            changed = true;
-        }
-        if ui.selectable_label(matches!(profile, Profile::Points { .. }), Profile::Points { points: vec![] }.name()).clicked()
-            && !matches!(profile, Profile::Points { .. })
-        {
-            *profile = Profile::Points {
-                points: vec![[-0.05, -0.05], [0.05, -0.05], [0.05, 0.05], [-0.05, 0.05]],
-            };
-            changed = true;
-        }
-    });
-
-    match profile {
-        Profile::Rect { half } => {
-            ui.horizontal(|ui| {
-                ui.label(get!("prop.inspector.half"));
-                for (component, axis) in half.iter_mut().zip(["x", "y"]) {
-                    changed |= ui
-                        .add(egui::DragValue::new(component).speed(0.001).prefix(format!("{axis} ")).suffix("m"))
-                        .changed();
-                }
-            });
-        }
-        Profile::Ngon { sides, radius } => {
-            changed |= count(ui, get!("prop.inspector.sides"), sides);
-            changed |= drag(ui, get!("prop.inspector.radius"), radius, 0.001, "m");
-        }
-        Profile::Points { points } => {
-            let mut remove = None;
-            for (at, point) in points.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    for component in point.iter_mut() {
-                        changed |= ui.add(egui::DragValue::new(component).speed(0.001)).changed();
-                    }
-                    if ui
-                        .small_button(get!("prop.inspector.remove_point"))
-                        .on_hover_text(get!("prop.inspector.remove_point_hint"))
-                        .clicked()
-                    {
-                        remove = Some(at);
-                    }
-                });
-            }
-            if let Some(at) = remove {
-                points.remove(at);
-                changed = true;
-            }
-            if ui.button(get!("prop.inspector.add_point")).clicked() {
-                points.push(points.last().copied().unwrap_or([0.0, 0.0]));
-                changed = true;
-            }
-        }
-    }
-    changed
-}
-
 /// Every copy is a boolean union, so this is a cost cap.
 const MAX_PATTERN_COPIES: u32 = 64;
 
-/// Switching between linear and radial replaces the layout, as with profiles.
+/// Switching between linear and radial replaces the layout.
 fn pattern_ui(ui: &mut Ui, count: &mut u32, along: &mut PatternKind) -> bool {
     let mut changed = ui
         .horizontal(|ui| {

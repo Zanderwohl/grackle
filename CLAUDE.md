@@ -381,12 +381,18 @@ to be closed**. Nothing checks either property and both matter: a plane cuts a
 convex polygon into exactly two pieces, which is the assumption the splitter
 is written on, and "inside" only means anything for a surface with no gaps.
 That is why every sweep in [`solid.rs`](src/prop/solid.rs) emits triangles or
-planar convex faces, why a revolve's side faces are triangles (a quad between
-two steps is only planar in special cases), and why a cap is **ear-clipped
+planar convex faces, why a revolve's side faces are triangles (the quad
+between two steps is flat, but one with a corner on the axis has two corners
+in one place), and why a cap is **ear-clipped
 rather than fanned** — a fan is right for a rectangle and silently wrong for
 anything with a notch in it.
 
 **A solid's faces point outwards, and that is measured rather than derived.**
+What measuring cannot catch is one face wound against its neighbours: a part
+turn's caps lie in planes through the axis and add nothing to the volume, so
+inward caps measured right and broke every boolean against them.
+`every_sweep_is_wound_consistently` checks that each edge is walked once each
+way, which is the property the kernel actually relies on.
 `Solid::oriented_outward` computes the enclosed volume and flips the whole
 thing if it came out negative, so no sweep has to get its winding right by
 reasoning and no mirror has to remember that a negative scale inverts a
@@ -459,7 +465,8 @@ ones the moment anybody left the mode.
 
 **Getting around** ([`camera.rs`](src/prop/camera.rs)) reuses the four
 viewports and deliberately *not* the map editor's movement. The gesture is the
-same — **right button drags, the modifier key turns a rotate into a pan** — so
+same — **right button drags, the modifier key turns a rotate into a pan, and
+the middle button always pans** (in an ortho view both buttons pan) — so
 a mapper who has learnt one has learnt the other, but three things differ
 because a prop is not a map:
 
@@ -541,12 +548,103 @@ one per letter.
 
 **The verbs act on the selection**, not on whatever was added last: they sit in
 a toolbar under the menu bar, Combine takes the two bodies picked (first as
-target, Ctrl/Cmd-clicked second as tool — the order it is said in), Mirror the
-primary, and each greys out when the selection does not fit. A body is picked
-by clicking it in a viewport too — against its faces, not its box, so a click
-down a bore reaches what is behind — in `pick_in_the_viewport`, which runs
-after the handle drag so a press that grabbed a handle does not also
-re-select. Undo and redo are on an **Edit** menu.
+target, second as tool — the order it is said in), Mirror the primary, and
+each greys out when the selection does not fit. Undo and redo are on an
+**Edit** menu.
+
+**The selection is an ordered list of `Pick`s** — bodies, named corners,
+edges and faces, and plane features — and in the viewport **every click
+toggles**: a click adds what is under the pointer, the same click again
+removes it, a click on nothing clears. Building a plane is always several
+picks, so a held modifier would be a key held for every one of them. The last
+pick is the primary. With more than one, the Inspector lists them, each with a
+button that drops it, above the primary's details. `pick_in_the_viewport`
+takes a corner within a few pixels over an edge, an edge over a plane's
+border, a border over the flat face under the pointer, and a face over its
+body — faces tested as faces, not boxes, so a click down a bore reaches what
+is behind — and runs after the handle drag so a press that grabbed a handle
+does not also pick.
+
+**A face stands in for its body** (`Pick::body`): clicking a surface picks the
+face, and Combine, Mirror, Pattern, framing and the Inspector treat it as the
+body it is on — so a face on the barrel and one on the bore still offer
+Combine, and two faces of one body are not a pair. A corner or an edge does
+not stand in, and a plane is not a body. `Pick::feature` is the looser
+question the feature list, handles and Inspector ask: a body *or plane*,
+eaten or not.
+
+**A corner or edge is named by the generator that made it, never by the
+kernel's output** ([`reference.rs`](src/prop/reference.rs)). BSP polygons are
+split anew by every boolean, so nothing in a `Solid` survives an evaluation;
+a `GeomRef` is instead a feature, an index into that feature's `Outline`, and
+every mirror or pattern copy it went through (`CopyOf` — an original is never
+named, so inserting a pattern does not rename what it copies). The evaluator
+carries each body's `Wire`s through the list beside its solid, so lengthening
+a bore does not rename the barrel's corners, and a corner a boolean cut away
+still *resolves*. It is not *offered*: only elements on their body's surface
+are pickable. Two things to keep: an `Outline` is numbered from the profile
+**as authored**, not as wound for the kernel, so dragging a point across the
+loop does not renumber everything; and a primitive's solid and outline both
+come from `Shape::sweep`, so the two cannot drift —
+`every_primitives_outline_lies_on_its_surface` is what notices if they do.
+The cost is that an edge a boolean *made*, where a bore leaves a face, has no
+name and cannot be picked.
+
+**A face is matched to its generator on the click, not carried through the
+kernel.** `Evaluated::surface_under` finds the polygon hit and `face_at` asks
+which named face lies in that polygon's plane and contains the hit point —
+either facing, because a hole's wall faces the opposite way from the tool face
+that cut it. Each `OutlineFace` stores an `outward` direction rather than
+trusting its winding, which nothing promises before
+`Solid::oriented_outward` measures it; `every_flat_face_points_out_of_its_body`
+is what fails if that is ever derived instead. A revolve's side is flat — its
+two sweep edges are parallel chords — so a sphere's facets are faces too.
+
+**A plane is a feature that makes no body** (`FeatureOp::Plane { through }`,
+[`plane.rs`](src/prop/plane.rs)). Accepted: three corners, an edge and a
+corner, two coplanar edges, or one flat face; the frame comes from pick order,
+or from a face's own outward normal, so something sketched on it extrudes
+out of the body. **Its references are resolved as the prop stood when it
+runs**, against the bodies live at that point in the list, so a mirror below
+it that takes the original away does not move it. It is drawn as a grey dashed
+square and picked by its border, so one through a body does not stop clicks
+reaching the body. `FeatureOp::references` is what it names without consuming,
+and `depends_on` — operands and references together — is what the feature
+list's reordering and delete warnings use; `consumes` alone would let a plane
+be dragged above the cube it was made on.
+
+Sketches — a 2D drawing on a plane that Extrude and Revolve sweep — are
+planned in [documentation/sketches.md](documentation/sketches.md), with the
+decisions behind them and a checklist. Four things about what is built:
+
+- **A sketch is a flat set, not a feature list** ([`sketch.rs`](src/prop/sketch.rs)):
+  lines name their ends by id, so a shared corner is one point and "is this
+  closed" is about ids, not coordinates. It has no undo of its own; it is part
+  of `PropDoc`.
+- **Regions are derived** ([`region.rs`](src/prop/region.rs)) by cutting every
+  line at its crossings and walking the faces of the planar graph, so crossing
+  lines split rather than fail. A region is named by the lines round its
+  outside and which side of each, never by index.
+- **A sweep names an entry on its sketch, not a region**
+  (`Sketch::regions`, `SketchRegion`): one place to label it, and one
+  re-pick re-points every sweep using it. `Arrangement::resolve` is what an
+  entry means now. It is **split-tolerant and merge-strict**: lines drawn
+  across a region join its pieces back up, since the outline still encloses
+  the same ground, and an outline partly erased and rerouted (a notch drawn
+  into or out of it) is the face all its named lines still bound. But a
+  region whose bounding line is gone is a Problem, with the region at its old
+  spot *offered* in the Inspector and never adopted — after a merge that
+  region is bigger than the one meant. The stored `hint` only breaks ties
+  between candidates with the same name.
+- **Editing one is a third workspace** ([`sketch_edit.rs`](src/prop/sketch_edit.rs)),
+  and `SketchSession::editing` is the only answer to whether it is up: the
+  toolbar, the Inspector, the view and the model's picking and handles
+  (`not_sketching`) all ask it. While it is set a left click belongs to the
+  sketch. The sketch being edited is drawn from the document, not the
+  debounced build, so a dragged point does not lag. The view stops at the open
+  sketch through `PropEditor::peek`, which is not the rollback bar: nothing
+  is inserted at it, it is not drawn in the list, and the earlier of the two
+  wins.
 
 A placement's orientation is edited as **"points along" and "spin"** about the
 feature's own length axis (`FeatureOp::main_axis`), via
@@ -730,7 +828,9 @@ game's tests run with no asset plugins.
 
 A placed prop's origin is where it stands on the floor. A pickup with no
 collider is taken through a small sphere, and is walked past by somebody it
-would give nothing to. Armour and the flag are kinds with no behaviour yet.
+would give nothing to. A pickup's **style** is drawing only: `Tf2`
+lifts and turns its parts (`float_pickups`), never the instance, so the same
+placement and trigger serve both and the switch can be flipped freely. Armour and the flag are kinds with no behaviour yet.
 
 **A hat sits at the crown** — the head bone's tail — in the *body's* frame
 (`-Z` forward), carried along by however far the head has turned from rest,

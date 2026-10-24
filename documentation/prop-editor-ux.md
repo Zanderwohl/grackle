@@ -53,7 +53,7 @@ a toolbar under the menu bar.
 
 ## Decisions
 
-- **Selection is ordered.** Ctrl/Cmd-click adds to it; the last picked is the
+- **Selection is ordered.** Every viewport click toggles; the last picked is the
   primary (what the inspector and gizmos show). Combine takes the first picked
   as the target and the primary as the tool — "select the barrel, then the
   bore, Subtract" reads in the order it is said.
@@ -69,7 +69,7 @@ a toolbar under the menu bar.
 
 ### Easy
 
-- [x] Operations act on the selection (ordered multi-select with Ctrl/Cmd-click;
+- [x] Operations act on the selection (ordered multi-select;
       Combine, Mirror and Repaint disabled when the selection does not fit —
       no instructional hover text; the UI states what is, it is not a
       tutorial).
@@ -92,8 +92,20 @@ a toolbar under the menu bar.
 - [x] Duplicate on the right-click menu (not for features that consume —
       the copy would find its operands already eaten).
 - [x] Frame selected (toolbar + `F`), beside Frame all.
-- [x] Click a body in the viewport to select it; Ctrl/Cmd-click to extend;
-      a plain click on nothing clears.
+- [x] Click a body in the viewport to pick it; a click toggles, a click on
+      nothing clears.
+- [x] Corner and edge picks, named by the generator that made them
+      (`reference.rs`), with an Inspector list of every pick when there is more
+      than one.
+- [x] `plane::plane_through`: three corners, an edge and a corner, or two
+      coplanar edges make a plane, framed by pick order. Cached in
+      `PickedPlane`, recomputed when the picks or the build change.
+- [x] Face picks, standing in for their body. A lone flat face makes a plane.
+- [x] Plane feature (`FeatureOp::Plane`) from the toolbar's **Plane**: drawn
+      grey and dashed, picked by its border, resolved where it sits in the
+      list. A lone plane pick is a valid plane too.
+- [x] **Use plane** in the Inspector: the same tool as the toolbar's Plane,
+      offered under the same condition (`plane_through_picks`).
 - [x] Status line at the bottom: selection, counts, size, settling.
 - [x] Problems: count in the tab title.
 
@@ -121,4 +133,5 @@ a toolbar under the menu bar.
 
 ### Deferred
 
-- [ ] 2D sketch overlay for `Profile::Points`.
+- [ ] 2D sketch overlay for `Profile::Points` — superseded by sketches as their
+      own feature; see [sketches.md](sketches.md).

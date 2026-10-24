@@ -41,23 +41,22 @@ name = "Bore"
 enabled = true
 
 [features.op]
-feature = "extrude"
-depth = 1.0
-midplane = false
+feature = "primitive"
 
-[features.op.profile]
-shape = "ngon"
+[features.op.shape]
+kind = "prism"
 sides = 12
 radius = 0.038
+height = 1.0
 
 [features.op.placement]
 origin = [
     0.0,
     0.22,
-    -0.62,
+    -0.12,
 ]
 rotation = [
-    0.0,
+    -1.5707964,
     0.0,
     0.0,
 ]
