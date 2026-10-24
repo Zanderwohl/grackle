@@ -386,7 +386,9 @@ fn edit_the_sketch(
         SketchTool::Line => {
             if let (true, Some(target)) = (clicked, cursor) {
                 let chain = session.chain;
-                session.chain = editor.edit(|doc| sketch_of_mut(doc, id).map(|sketch| draw_to(sketch, chain, target)));
+                session.chain = editor
+                    .edit(|doc| sketch_of_mut(doc, id).map(|sketch| draw_to(sketch, chain, target)))
+                    .flatten();
             }
         }
         SketchTool::Erase => {
@@ -432,17 +434,16 @@ fn edit_the_sketch(
 }
 
 /// One click of the line tool: lands on `target`, drawing from `chain` if
-/// there is one, and returns where the next click draws from — always where
-/// it landed, so lines chain until `Escape`. Clicking the chain's own end
-/// draws nothing.
-fn draw_to(sketch: &mut Sketch, chain: Option<SketchId>, target: Snapped) -> SketchId {
+/// there is one, and returns where the next click draws from — where it
+/// landed, so lines chain until `Escape`, unless the line enclosed something
+/// new, which ends the shape being drawn. Clicking the chain's own end draws
+/// nothing.
+fn draw_to(sketch: &mut Sketch, chain: Option<SketchId>, target: Snapped) -> Option<SketchId> {
     let landed = target.point.unwrap_or_else(|| sketch.add_point(target.at));
-    if let Some(from) = chain
-        && from != landed
-    {
-        sketch.add_line(from, landed);
-    }
-    landed
+    let Some(from) = chain.filter(|from| *from != landed) else { return Some(landed) };
+    let before = arrange(sketch).regions.len();
+    sketch.add_line(from, landed);
+    (arrange(sketch).regions.len() <= before).then_some(landed)
 }
 
 /// The nearest sketch point within [`SNAP_PX`], else the nearest model corner
@@ -706,26 +707,27 @@ mod tests {
     }
 
     /// Fails if the chain rule changes: every click continues from where it
-    /// landed, an existing point included, and only `Escape` stops it.
+    /// landed, an existing point included, until a line encloses something.
     #[test]
-    fn the_line_tool_chains_until_escape() {
+    fn the_line_tool_chains_until_it_closes_a_shape() {
         let mut sketch = Sketch::default();
-        let first = draw_to(&mut sketch, None, snapped(Vec2::ZERO, None));
+        let first = draw_to(&mut sketch, None, snapped(Vec2::ZERO, None)).unwrap();
         let mut chain = draw_to(&mut sketch, Some(first), snapped(Vec2::X, None));
-        chain = draw_to(&mut sketch, Some(chain), snapped(Vec2::ONE, None));
+        chain = draw_to(&mut sketch, chain, snapped(Vec2::ONE, None));
+        assert_eq!(sketch.entities.len(), 2);
+        let corner = chain.unwrap();
+        assert_eq!(draw_to(&mut sketch, chain, snapped(Vec2::ONE, chain)), Some(corner), "clicking the end draws nothing");
         assert_eq!(sketch.entities.len(), 2);
 
-        chain = draw_to(&mut sketch, Some(chain), snapped(Vec2::ZERO, Some(first)));
-        assert_eq!(chain, first, "landing on a point that was there carries on from it");
-        assert_eq!(sketch.entities.len(), 3);
-        assert_eq!(sketch.points.len(), 3, "closing reused the first point");
+        // Onto a point that encloses nothing new: carry on from it.
+        let spur = draw_to(&mut sketch, chain, snapped(Vec2::new(2.0, 1.0), None));
+        let back = draw_to(&mut sketch, spur, snapped(Vec2::ONE, Some(corner)));
+        assert_eq!(back, Some(corner), "joining a point that closes nothing carries on");
+
+        chain = draw_to(&mut sketch, back, snapped(Vec2::ZERO, Some(first)));
+        assert_eq!(chain, None, "closing the triangle ends the chain");
+        assert_eq!(sketch.points.len(), 4, "closing reused the first point");
         assert_eq!(arrange(&sketch).regions.len(), 1);
-
-        chain = draw_to(&mut sketch, Some(chain), snapped(Vec2::new(-1.0, 0.0), None));
-        assert_eq!(sketch.entities.len(), 4, "the chain went on past the closed shape");
-
-        assert_eq!(draw_to(&mut sketch, Some(chain), snapped(Vec2::new(-1.0, 0.0), Some(chain))), chain);
-        assert_eq!(sketch.entities.len(), 4, "clicking the chain's end draws nothing");
     }
 
     #[test]
