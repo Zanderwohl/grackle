@@ -823,7 +823,9 @@ game's tests run with no asset plugins.
 
 A placed prop's origin is where it stands on the floor. A pickup with no
 collider is taken through a small sphere, and is walked past by somebody it
-would give nothing to. Armour and the flag are kinds with no behaviour yet.
+would give nothing to. A pickup's **style** is drawing only: `Tf2`
+lifts and turns its parts (`float_pickups`), never the instance, so the same
+placement and trigger serve both and the switch can be flipped freely. Armour and the flag are kinds with no behaviour yet.
 
 **A hat sits at the crown** — the head bone's tail — in the *body's* frame
 (`-Z` forward), carried along by however far the head has turned from rest,

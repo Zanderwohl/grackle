@@ -963,7 +963,7 @@ mod tests {
             Collider { origin: [0.0; 3], shape: ColliderShape::Sphere { radius: 0.05 } },
         ];
         doc.breakable.health = 30;
-        doc.pickup = PickupSpec { kind: PickupKind::Ammo, amount: 0.25, respawn: 15.0 };
+        doc.pickup = PickupSpec { kind: PickupKind::Ammo, style: PickupStyle::Tf2, amount: 0.25, respawn: 15.0 };
         doc.hat.offset = [0.0, -0.05, 0.01];
         doc.hat.per_class.insert("heavy".into(), HatOverride { scale: Some(1.1), ..default() });
 

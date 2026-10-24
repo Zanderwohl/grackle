@@ -62,6 +62,10 @@ drawing it too. Taking one is authority-only.
 A pickup is not taken by somebody who would get nothing from it — full health
 walks past a health pack.
 
+A pickup has a `style`: `quake` sits on the floor, still; `tf2` is drawn
+15 cm up, turning at 90°/s. Only the drawing moves, so the placement and the
+trigger are the same either way and flipping it needs nothing re-placed.
+
 ### Hats
 
 A hat sits on the head bone, at the **crown** (the head bone's tail), facing
@@ -84,6 +88,7 @@ hat stays at the origin and the figure is placed under it.
 - [x] Obstacle and breakable colliders block movement on every machine
 - [x] Breakables take damage, break, stay broken for the round
 - [x] Health and ammo pickups, respawning on a timer
+- [x] Pickup style: Quake (sits) or TF2 (hovers and turns)
 - [x] Hats on heads, from `loadouts.toml`, hidden in first person
 - [x] Prop editor: archetype, colliders (drawn), breakable, pickup, hat panels
 - [x] Example props: a hat, a crate, a health pack, an ammo pack

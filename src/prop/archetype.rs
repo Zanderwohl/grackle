@@ -240,9 +240,34 @@ impl PickupKind {
     }
 }
 
+/// How a pickup stands in the world. Only the drawing differs: where it is
+/// placed, and what it is taken through, are the same either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PickupStyle {
+    /// Sits on the floor, still.
+    #[default]
+    Quake,
+    /// Hovers a little above the floor, turning.
+    Tf2,
+}
+
+impl PickupStyle {
+    pub const ALL: [PickupStyle; 2] = [PickupStyle::Quake, PickupStyle::Tf2];
+
+    pub fn name(self) -> String {
+        match self {
+            PickupStyle::Quake => get!("prop.pickup.styles.quake"),
+            PickupStyle::Tf2 => get!("prop.pickup.styles.tf2"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PickupSpec {
     pub kind: PickupKind,
+    #[serde(default)]
+    pub style: PickupStyle,
     /// A fraction of the taker's maximum, so one pack means the same to every
     /// class. `1.0` is a full refill.
     #[serde(with = "crate::prop::nice_f32::scalar")]
@@ -254,7 +279,7 @@ pub struct PickupSpec {
 
 impl Default for PickupSpec {
     fn default() -> Self {
-        Self { kind: PickupKind::Health, amount: 0.5, respawn: 10.0 }
+        Self { kind: PickupKind::Health, style: PickupStyle::Quake, amount: 0.5, respawn: 10.0 }
     }
 }
 

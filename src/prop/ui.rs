@@ -27,7 +27,7 @@ use crate::common::file_menu::{dialog_directory, file_menu, FileAction};
 use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
-use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind};
+use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind, PickupStyle};
 use crate::prop::document::{self, Pick, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::prop::plane::{OriginPlane, PickedPlane, Plane, PlaneRef};
 use crate::prop::reference::{Element, GeomRef, Located};
@@ -1816,6 +1816,16 @@ fn pickup_ui(ui: &mut Ui, editor: &mut PropEditor) {
             .show_ui(ui, |ui| {
                 for kind in PickupKind::ALL {
                     changed |= ui.selectable_value(&mut pickup.kind, kind, kind.name()).changed();
+                }
+            });
+    });
+    ui.horizontal(|ui| {
+        ui.label(get!("prop.pickup.style"));
+        egui::ComboBox::from_id_salt("prop_pickup_style")
+            .selected_text(pickup.style.name())
+            .show_ui(ui, |ui| {
+                for style in PickupStyle::ALL {
+                    changed |= ui.selectable_value(&mut pickup.style, style, style.name()).changed();
                 }
             });
     });

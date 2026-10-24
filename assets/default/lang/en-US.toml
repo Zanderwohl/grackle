@@ -568,6 +568,11 @@ flag = "Flag"
 amount = "Amount"
 respawn = "Back after"
 unbuilt = "Not built yet: gives nothing."
+style = "Style"
+
+[prop.pickup.styles]
+quake = "Quake"
+tf2 = "TF2"
 
 [prop.hat]
 on_the_head = "On the head"

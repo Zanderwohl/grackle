@@ -19,7 +19,7 @@ use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalogue};
 use crate::editor::prop::{PropMarker, PropModel};
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{PhysicsBody, Player};
-use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind, PickupSpec, RoundedBox};
+use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind, PickupSpec, PickupStyle, RoundedBox};
 use crate::prop::baked::{BakedProp, PropCache, SurfaceMaterials};
 
 /// A placed prop, as every machine sees it. One component so a viewer is
@@ -80,6 +80,11 @@ struct WorldPropPart;
 /// The trigger a pickup with no colliders is taken through, in metres.
 const DEFAULT_PICKUP_RADIUS: f32 = 0.4;
 
+/// How far a [`PickupStyle::Tf2`] pickup is drawn above where it stands, in
+/// metres, and how fast it turns.
+const HOVER: f32 = 0.15;
+const SPIN_DEGREES_PER_SECOND: f32 = 90.0;
+
 /// Added beside the game rather than inside `GamePlugin`, because it bakes
 /// models and so needs the asset plugins the game's own tests run without.
 pub struct WorldPropPlugin;
@@ -106,7 +111,7 @@ impl Plugin for WorldPropPlugin {
                     .run_if(in_state(AppMode::Play)),
             )
             // Ungated: a client draws what it is sent.
-            .add_systems(Update, (place_world_props, dress_world_props, box_breakables).chain())
+            .add_systems(Update, (place_world_props, dress_world_props, float_pickups, box_breakables).chain())
             .add_systems(
                 Update,
                 take_pickups
@@ -291,6 +296,36 @@ fn dress_world_props(
             generation: cache.generation(),
             parts: spawned,
         });
+    }
+}
+
+/// Lift and turn the parts of a hovering pickup, leaving the instance where it
+/// stands so its trigger does not move with the drawing. Purely drawn: the
+/// angle is this machine's clock, and nobody needs to agree on it.
+fn float_pickups(
+    time: Res<Time>,
+    cache: Res<PropCache>,
+    instances: Query<(&WorldProp, &DrawnProp)>,
+    mut parts: Query<&mut Transform, With<WorldPropPart>>,
+) {
+    let spin = Quat::from_rotation_y((time.elapsed_secs() * SPIN_DEGREES_PER_SECOND).to_radians());
+    for (prop, drawn) in &instances {
+        let style = cache
+            .get(&prop.model)
+            .filter(|baked| baked.archetype == Archetype::Pickup)
+            .map(|baked| baked.pickup.style);
+        let wanted = match style {
+            Some(PickupStyle::Tf2) => Transform::from_xyz(0.0, HOVER, 0.0).with_rotation(spin),
+            _ => Transform::IDENTITY,
+        };
+        for part in &drawn.parts {
+            // Compared first, so a still pickup is not a changed one.
+            if let Ok(mut transform) = parts.get_mut(*part)
+                && *transform != wanted
+            {
+                *transform = wanted;
+            }
+        }
     }
 }
 
@@ -615,6 +650,53 @@ mod tests {
         assert_eq!(collision.props.len(), 1, "the crate is not solid");
     }
 
+    fn adopt_pickup(app: &mut App, style: PickupStyle) {
+        let mut doc = crate::prop::document::PropDoc::new("hovering");
+        doc.push(crate::prop::feature::FeatureOp::Primitive {
+            shape: crate::prop::solid::Shape::Box { size: [0.2; 3] },
+            placement: Default::default(),
+            surface: Default::default(),
+        });
+        doc.archetype = Archetype::Pickup;
+        doc.pickup.style = style;
+        let world = app.world_mut();
+        world.resource_scope(|world, mut cache: Mut<PropCache>| {
+            world.resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
+                world.resource_scope(|world, mut materials: Mut<Assets<StandardMaterial>>| {
+                    world.resource_scope(|world, mut surfaces: Mut<SurfaceMaterials>| {
+                        let mut clips = world.resource_mut::<Assets<Clip>>();
+                        cache.adopt("hovering", &doc, &mut meshes, &mut materials, &mut surfaces, &mut clips);
+                    });
+                });
+            });
+        });
+    }
+
+    /// Fails if flipping the style moves what the pickup is taken through, or
+    /// if flipping it back leaves the drawing in the air.
+    #[test]
+    fn a_tf2_pickup_hovers_where_a_quake_one_sits() {
+        let mut app = app_with_assets();
+        adopt_pickup(&mut app, PickupStyle::Tf2);
+        let at = Vec3::new(1.0, 2.0, 3.0);
+        app.world_mut().spawn((PropMarker, PropModel("hovering".into()), Transform::from_translation(at)));
+        app.update();
+        app.update();
+
+        let world = app.world_mut();
+        let (prop, drawn) = world.query::<(&WorldProp, &DrawnProp)>().single(world).unwrap();
+        assert_eq!(prop.at, at, "the instance moved with its drawing");
+        let part = drawn.parts[0];
+        assert_eq!(world.get::<Transform>(part).unwrap().translation, Vec3::Y * HOVER);
+
+        adopt_pickup(&mut app, PickupStyle::Quake);
+        app.update();
+        app.update();
+        let world = app.world_mut();
+        let drawn = world.query::<&DrawnProp>().single(world).unwrap();
+        assert_eq!(*world.get::<Transform>(drawn.parts[0]).unwrap(), Transform::IDENTITY);
+    }
+
     #[test]
     fn a_placed_pickup_is_not_solid() {
         if std::fs::metadata("assets/default/props/health_pack.gpp").is_err() {
@@ -660,7 +742,7 @@ mod tests {
     #[test]
     fn a_health_pack_heals_by_a_fraction_and_is_walked_past_at_full() {
         let (catalogue, equipped) = rifle();
-        let spec = PickupSpec { kind: PickupKind::Health, amount: 0.25, respawn: 1.0 };
+        let spec = PickupSpec { kind: PickupKind::Health, amount: 0.25, respawn: 1.0, ..default() };
         let mut ammo = Ammo::default();
 
         let mut health = Damageable::with_health(200);
@@ -674,7 +756,7 @@ mod tests {
     #[test]
     fn an_ammo_pack_tops_up_reserves_and_no_further() {
         let (catalogue, equipped) = rifle();
-        let spec = PickupSpec { kind: PickupKind::Ammo, amount: 0.5, respawn: 1.0 };
+        let spec = PickupSpec { kind: PickupKind::Ammo, amount: 0.5, respawn: 1.0, ..default() };
         let mut health = Damageable::with_health(100);
         let mut ammo = Ammo::default();
         ammo.at_mut(Slot::Primary).reserve = 30;
@@ -691,7 +773,7 @@ mod tests {
         health.apply(50);
         let mut ammo = Ammo::default();
         for kind in [PickupKind::Armor, PickupKind::Flag] {
-            let spec = PickupSpec { kind, amount: 1.0, respawn: 1.0 };
+            let spec = PickupSpec { kind, amount: 1.0, respawn: 1.0, ..default() };
             assert!(!give_to(spec, &mut health, &mut ammo, &equipped, &catalogue));
         }
     }
