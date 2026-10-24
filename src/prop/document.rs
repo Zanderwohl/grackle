@@ -290,6 +290,10 @@ pub struct PropEditor {
     /// rather than a count so edits above it cannot move it. View state: not
     /// saved, undone or dirtying.
     rollback: Option<PropFeatureId>,
+    /// Where the view stops while a sketch is open, so what was built after
+    /// it is not in the way. Not the rollback bar: nothing is inserted at it,
+    /// and it is never drawn in the list.
+    peek: Option<PropFeatureId>,
     pub path: Option<PathBuf>,
     pub dirty: bool,
     /// Bumped on every change, as a cue to look; the viewport compares the
@@ -308,6 +312,7 @@ impl Default for PropEditor {
             pending: None,
             picks: vec![],
             rollback: None,
+            peek: None,
             path: None,
             dirty: false,
             generation: 0,
@@ -420,9 +425,23 @@ impl PropEditor {
         }
     }
 
-    /// The features down to the rollback bar.
+    pub fn peek(&self) -> Option<PropFeatureId> {
+        self.peek
+    }
+
+    /// Shows the prop as it stood at `at` without rolling back to it.
+    pub fn peek_at(&mut self, at: Option<PropFeatureId>) {
+        if at != self.peek {
+            self.peek = at;
+            self.generation += 1;
+        }
+    }
+
+    /// The features down to the rollback bar, or to the peek if that is
+    /// earlier.
     pub fn shown(&self) -> &[PropFeature] {
-        match self.rollback.and_then(|id| self.doc.index_of(id)) {
+        let stop = [self.rollback, self.peek].into_iter().flatten().filter_map(|id| self.doc.index_of(id)).min();
+        match stop {
             Some(at) => &self.doc.features[..=at],
             None => &self.doc.features,
         }
@@ -1214,6 +1233,28 @@ mod tests {
         assert_eq!(doc.feature(copy).unwrap().op, doc.feature(a).unwrap().op);
         assert_eq!(doc.duplicate(cut, "no".into()), None);
         assert_eq!(doc.evaluate().problems.len(), problems_before, "the copy broke nothing");
+    }
+
+    /// Fails if opening a sketch moves the rollback bar, dirties the prop, or
+    /// leaves later features in the view.
+    #[test]
+    fn a_peek_shows_the_prop_at_a_feature_without_rolling_back() {
+        let mut editor = PropEditor::default();
+        let a = editor.add(FeatureOp::default());
+        let b = editor.add(FeatureOp::default());
+        editor.add(FeatureOp::default());
+        editor.dirty = false;
+
+        editor.peek_at(Some(a));
+        assert_eq!(editor.shown().len(), 1);
+        assert_eq!(editor.rollback(), None);
+        assert!(!editor.dirty);
+
+        // The earlier of the two wins.
+        editor.roll_back_to(Some(b));
+        assert_eq!(editor.shown().len(), 1);
+        editor.peek_at(None);
+        assert_eq!(editor.shown().len(), 2);
     }
 
     #[test]

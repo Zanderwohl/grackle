@@ -21,7 +21,7 @@ use crate::prop::sketch::{Sketch, SketchId};
 /// Metres. Points nearer than this are one point, and a point nearer than this
 /// to a line is on it. Well below anything drawn on a prop, well above `f32`
 /// rounding at its size.
-const TOLERANCE: f32 = 1e-6;
+pub(crate) const TOLERANCE: f32 = 1e-6;
 
 /// Which side of a line, looking from its first point to its second.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -357,7 +357,7 @@ struct Edge {
 /// Where two segments properly cross: the parameter along each and the
 /// point. Ends touching, and parallel overlaps, are left to
 /// [`interior_param`], which handles them by vertex.
-fn crossing(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<(f32, f32, Vec2)> {
+pub(crate) fn crossing(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<(f32, f32, Vec2)> {
     let (r, s) = (b - a, d - c);
     let denominator = r.perp_dot(s);
     if denominator.abs() < f32::EPSILON * r.length() * s.length() {
@@ -371,7 +371,7 @@ fn crossing(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<(f32, f32, Vec2)> {
 }
 
 /// How far along `a`–`b` the point `p` is, if it lies on its inside.
-fn interior_param(a: Vec2, b: Vec2, p: Vec2) -> Option<f32> {
+pub(crate) fn interior_param(a: Vec2, b: Vec2, p: Vec2) -> Option<f32> {
     let along = b - a;
     let length = along.length();
     let t = (p - a).dot(along) / (length * length);

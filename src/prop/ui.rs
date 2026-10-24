@@ -1043,7 +1043,11 @@ fn sketch_toolbar(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSess
         return;
     }
     ui.separator();
-    for (tool, key) in [(SketchTool::Select, "prop.sketch.select"), (SketchTool::Line, "prop.sketch.line")] {
+    for (tool, key) in [
+        (SketchTool::Select, "prop.sketch.select"),
+        (SketchTool::Line, "prop.sketch.line"),
+        (SketchTool::Erase, "prop.sketch.erase"),
+    ] {
         if ui.selectable_label(session.tool() == tool, get!(key)).clicked() {
             session.set_tool(tool);
         }

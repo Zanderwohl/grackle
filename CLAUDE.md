@@ -639,7 +639,10 @@ decisions behind them and a checklist. Four things about what is built:
   toolbar, the Inspector, the view and the model's picking and handles
   (`not_sketching`) all ask it. While it is set a left click belongs to the
   sketch. The sketch being edited is drawn from the document, not the
-  debounced build, so a dragged point does not lag.
+  debounced build, so a dragged point does not lag. The view stops at the open
+  sketch through `PropEditor::peek`, which is not the rollback bar: nothing
+  is inserted at it, it is not drawn in the list, and the earlier of the two
+  wins.
 
 A placement's orientation is edited as **"points along" and "spin"** about the
 feature's own length axis (`FeatureOp::main_axis`), via

@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::prop::plane::Plane;
-use crate::prop::region::{centroid, Arrangement, Bound, Region, RegionRef};
+use crate::prop::region::{centroid, crossing, interior_param, Arrangement, Bound, Region, RegionRef, TOLERANCE};
 
 /// Points and entities share one counter, and an id is never reused, so a
 /// region or a later constraint naming one cannot be handed another.
@@ -155,6 +155,119 @@ impl Sketch {
         });
     }
 
+    /// Where `line` is cut by everything else drawn — every other line
+    /// crossing it, construction or not, and every point lying on it — as
+    /// distances along it from 0 at its first point to 1 at its second,
+    /// sorted, ends included.
+    pub fn cuts(&self, line: SketchId) -> Vec<f32> {
+        let Some((a, b)) = self.line(line) else { return vec![] };
+        let mut cuts = vec![0.0, 1.0];
+        for (other, ..) in self.lines().filter(|(other, ..)| *other != line) {
+            let Some((c, d)) = self.line(other) else { continue };
+            cuts.extend(crossing(a, b, c, d).map(|(t, _, _)| t));
+        }
+        for point in &self.points {
+            cuts.extend(interior_param(a, b, Vec2::from_array(point.at)));
+        }
+        cuts.sort_by(f32::total_cmp);
+        let length = a.distance(b);
+        cuts.dedup_by(|x, y| (*x - *y) * length < TOLERANCE);
+        cuts
+    }
+
+    /// The piece of `line` between the two cuts either side of `near`, as
+    /// distances along it.
+    pub fn piece_of(&self, line: SketchId, near: Vec2) -> Option<(f32, f32)> {
+        let (a, b) = self.line(line)?;
+        let along = b - a;
+        let t = ((near - a).dot(along) / along.length_squared()).clamp(0.0, 1.0);
+        let cuts = self.cuts(line);
+        cuts.windows(2).find(|pair| t <= pair[1]).or(cuts.windows(2).last()).map(|pair| (pair[0], pair[1]))
+    }
+
+    /// Takes away the piece of `line` nearest `near`, leaving the rest of the
+    /// line where it was: the whole line if nothing cuts it, one end if the
+    /// piece is at an end, or two lines if it is between two cuts. A point
+    /// left on no line goes with it. False if there is no such line.
+    pub fn erase_piece(&mut self, line: SketchId, near: Vec2) -> bool {
+        let Some((t0, t1)) = self.piece_of(line, near) else { return false };
+        let Some((a, b)) = self.line(line) else { return false };
+        let Some(SketchEntity::Line { a: from, b: to, construction, .. }) =
+            self.entities.iter().find(|entity| entity.id() == line).cloned()
+        else {
+            return false;
+        };
+        let at = |t: f32| a.lerp(b, t);
+        let (start, end) = (t0 <= 0.0, t1 >= 1.0);
+        match (start, end) {
+            (true, true) => self.entities.retain(|entity| entity.id() != line),
+            (true, false) => {
+                let cut = self.point_at(at(t1));
+                self.set_ends(line, cut, to);
+            }
+            (false, true) => {
+                let cut = self.point_at(at(t0));
+                self.set_ends(line, from, cut);
+            }
+            (false, false) => {
+                let (near_cut, far_cut) = (self.point_at(at(t0)), self.point_at(at(t1)));
+                self.set_ends(line, from, near_cut);
+                let rest = self.add_line(far_cut, to);
+                self.set_construction(rest, construction);
+            }
+        }
+        self.drop_loose_points(&[from, to]);
+        true
+    }
+
+    /// Takes away every piece of every line the path crosses, as one sweep
+    /// of an eraser. Pieces are found by where the path crossed them, so a
+    /// line split by an earlier piece's erasing is still found.
+    pub fn erase_along(&mut self, path: &[Vec2]) -> usize {
+        let mut hits: Vec<Vec2> = Vec::new();
+        for step in path.windows(2) {
+            for (line, ..) in self.lines() {
+                let Some((a, b)) = self.line(line) else { continue };
+                hits.extend(crossing(a, b, step[0], step[1]).map(|(_, _, at)| at));
+            }
+        }
+        let mut erased = 0;
+        for at in hits {
+            let on = self.lines().map(|(line, ..)| line).find(|line| {
+                self.line(*line).is_some_and(|(a, b)| distance_to_segment(at, a, b) < TOLERANCE * 10.0)
+            });
+            if let Some(line) = on
+                && self.erase_piece(line, at)
+            {
+                erased += 1;
+            }
+        }
+        erased
+    }
+
+    /// The point already at `at`, or a new one there.
+    fn point_at(&mut self, at: Vec2) -> SketchId {
+        match self.points.iter().find(|point| Vec2::from_array(point.at).distance(at) < TOLERANCE) {
+            Some(point) => point.id,
+            None => self.add_point(at),
+        }
+    }
+
+    fn set_ends(&mut self, line: SketchId, to_a: SketchId, to_b: SketchId) {
+        for entity in &mut self.entities {
+            if let SketchEntity::Line { id, a, b, .. } = entity
+                && *id == line
+            {
+                (*a, *b) = (to_a, to_b);
+            }
+        }
+    }
+
+    fn drop_loose_points(&mut self, candidates: &[SketchId]) {
+        let used: Vec<SketchId> = self.entities.iter().flat_map(SketchEntity::points).collect();
+        self.points.retain(|point| !candidates.contains(&point.id) || used.contains(&point.id));
+    }
+
     pub fn region(&self, id: SketchId) -> Option<&SketchRegion> {
         self.regions.iter().find(|region| region.id == id)
     }
@@ -231,6 +344,12 @@ impl PlacedSketch {
             })
             .collect()
     }
+}
+
+fn distance_to_segment(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let along = b - a;
+    let t = ((p - a).dot(along) / along.length_squared().max(f32::MIN_POSITIVE)).clamp(0.0, 1.0);
+    a.lerp(b, t).distance(p)
 }
 
 pub fn region_label(sketch: &Sketch, id: SketchId) -> String {
@@ -334,4 +453,75 @@ mod tests {
         doc.move_to(on_top, 0);
         assert_eq!(doc.index_of(on_top), doc.index_of(top).map(|at| at + 1));
     }
+
+    fn line_between(sketch: &mut Sketch, a: [f32; 2], b: [f32; 2]) -> SketchId {
+        let (a, b) = (sketch.add_point(Vec2::from_array(a)), sketch.add_point(Vec2::from_array(b)));
+        sketch.add_line(a, b)
+    }
+
+    fn ends(sketch: &Sketch, line: SketchId) -> (Vec2, Vec2) {
+        sketch.line(line).expect("the line is still there")
+    }
+
+    /// Fails if erasing at a T-junction takes the whole line, or the wrong
+    /// side of it.
+    #[test]
+    fn erasing_beside_a_t_junction_takes_only_that_side() {
+        let mut sketch = Sketch::default();
+        let bar = line_between(&mut sketch, [0.0, 0.0], [2.0, 0.0]);
+        line_between(&mut sketch, [1.0, 0.0], [1.0, 1.0]);
+        assert!(sketch.erase_piece(bar, Vec2::new(0.4, 0.0)));
+        assert_eq!(ends(&sketch, bar), (Vec2::new(1.0, 0.0), Vec2::new(2.0, 0.0)));
+        assert_eq!(sketch.points.len(), 3, "the junction's point was reused and the loose end dropped");
+    }
+
+    #[test]
+    fn erasing_beside_a_crossing_takes_only_that_side() {
+        let mut sketch = Sketch::default();
+        let bar = line_between(&mut sketch, [0.0, 0.0], [2.0, 0.0]);
+        let post = line_between(&mut sketch, [1.0, -1.0], [1.0, 1.0]);
+        assert!(sketch.erase_piece(bar, Vec2::new(1.6, 0.0)));
+        assert_eq!(ends(&sketch, bar), (Vec2::ZERO, Vec2::new(1.0, 0.0)));
+        assert_eq!(ends(&sketch, post), (Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0)), "the other line moved");
+    }
+
+    #[test]
+    fn erasing_between_two_cuts_leaves_both_ends() {
+        let mut sketch = Sketch::default();
+        let bar = line_between(&mut sketch, [0.0, 0.0], [3.0, 0.0]);
+        line_between(&mut sketch, [1.0, -1.0], [1.0, 1.0]);
+        line_between(&mut sketch, [2.0, -1.0], [2.0, 1.0]);
+        assert!(sketch.erase_piece(bar, Vec2::new(1.5, 0.1)));
+        assert_eq!(sketch.entities.len(), 4);
+        let horizontal: Vec<(Vec2, Vec2)> =
+            sketch.lines().filter_map(|(id, ..)| sketch.line(id)).filter(|(a, b)| a.y == 0.0 && b.y == 0.0).collect();
+        assert_eq!(horizontal, vec![(Vec2::ZERO, Vec2::X), (Vec2::new(2.0, 0.0), Vec2::new(3.0, 0.0))]);
+    }
+
+    #[test]
+    fn erasing_a_line_nothing_cuts_takes_it_and_its_points() {
+        let mut sketch = Sketch::default();
+        let alone = line_between(&mut sketch, [0.0, 0.0], [1.0, 0.0]);
+        assert!(sketch.erase_piece(alone, Vec2::new(0.5, 0.0)));
+        assert!(sketch.entities.is_empty() && sketch.points.is_empty());
+    }
+
+    /// Fails if a drag erases the pieces it did not pass through.
+    #[test]
+    fn dragging_through_erases_only_what_it_crossed() {
+        let mut sketch = Sketch::default();
+        let bar = line_between(&mut sketch, [0.0, 0.0], [2.0, 0.0]);
+        let post = line_between(&mut sketch, [1.0, -1.0], [1.0, 1.0]);
+        let erased = sketch.erase_along(&[Vec2::new(0.5, -0.5), Vec2::new(0.5, 0.5), Vec2::new(0.6, 2.0)]);
+        assert_eq!(erased, 1);
+        assert_eq!(ends(&sketch, bar), (Vec2::new(1.0, 0.0), Vec2::new(2.0, 0.0)));
+        assert!(sketch.line(post).is_some());
+
+        // Round the junction: both halves of the post and what is left of the
+        // bar, in one stroke.
+        let erased = sketch.erase_along(&[Vec2::new(0.5, 0.5), Vec2::new(1.5, 0.5), Vec2::new(1.5, -0.5), Vec2::new(0.5, -0.5)]);
+        assert_eq!(erased, 3);
+        assert!(sketch.entities.is_empty() && sketch.points.is_empty());
+    }
+
 }

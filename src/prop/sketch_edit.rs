@@ -21,7 +21,7 @@ use crate::prop::document::{PropDoc, PropEditor};
 use crate::prop::feature::{FeatureOp, PropFeatureId};
 use crate::prop::gizmo::HoveredPick;
 use crate::prop::reference::{Located, Pickable, Pointer, EDGE_PICK_PX, POINT_PICK_PX};
-use crate::prop::region::{arrange, Arrangement};
+use crate::prop::region::{arrange, crossing, Arrangement};
 use crate::prop::sketch::{PlacedSketch, Sketch, SketchId};
 use crate::prop::view::PropBuild;
 use crate::tool::tool_helpers::dashed_line;
@@ -44,6 +44,9 @@ pub enum SketchTool {
     #[default]
     Select,
     Line,
+    /// Takes away the piece of a line between the junctions either side of a
+    /// click, or every piece a drag passes through.
+    Erase,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -94,7 +97,12 @@ pub struct SketchSession {
     pub picks: Vec<SketchPick>,
     hovered: Option<SketchPick>,
     cursor: Option<Snapped>,
+    /// Where the pointer is on the plane, unsnapped: an eraser takes the
+    /// piece the pointer is over, not the one nearest a grid point.
+    on_plane: Option<Vec2>,
     press: Option<Press>,
+    /// The eraser's path since the press, in the plane.
+    stroke: Vec<Vec2>,
     view: ViewChange,
     /// The perspective camera and pivot as they were before the view was
     /// turned onto the sketch.
@@ -185,19 +193,25 @@ impl Plugin for SketchEditPlugin {
             )
             // The camera's own restore puts the map's views back; the sketch's
             // saved view is of a mode that is ending.
-            .add_systems(OnExit(AppMode::Prop), |mut session: ResMut<SketchSession>| {
+            .add_systems(OnExit(AppMode::Prop), |mut session: ResMut<SketchSession>, mut editor: ResMut<PropEditor>| {
                 *session = SketchSession::default();
+                editor.peek_at(None);
             });
     }
 }
 
-/// Leave a sketch that has gone — deleted, or undone away — and forget picks
-/// and a chain naming points that have.
+/// Show the prop as it stood at the open sketch, leave a sketch that has gone
+/// — deleted, or undone away — and forget picks and a chain naming points
+/// that have.
 fn keep_the_session(
     mut session: ResMut<SketchSession>,
-    editor: Res<PropEditor>,
+    mut editor: ResMut<PropEditor>,
     mut hovered: ResMut<HoveredPick>,
 ) {
+    // Compared first: a `ResMut` written every frame reads as changed.
+    if editor.peek() != session.editing {
+        editor.peek_at(session.editing);
+    }
     let Some(id) = session.editing else { return };
     if hovered.0.is_some() {
         hovered.0 = None;
@@ -291,10 +305,20 @@ fn edit_the_sketch(
     // ends over a panel still ends.
     let held = mouse.pressed == Some(MouseButton::Left);
     if !held && let Some(press) = session.press.take() {
-        match (press.dragging, press.on) {
-            (true, _) => editor.end_gesture(),
-            (false, Some(pick)) => session.toggle(pick),
-            (false, None) => session.picks.clear(),
+        let stroke = std::mem::take(&mut session.stroke);
+        match (session.tool, press.dragging, press.on) {
+            (SketchTool::Erase, true, _) => {
+                editor.edit(|doc| sketch_of_mut(doc, id).map(|sketch| sketch.erase_along(&stroke)));
+            }
+            (SketchTool::Erase, false, Some(SketchPick::Line(line))) => {
+                if let Some(&at) = stroke.first() {
+                    editor.edit(|doc| sketch_of_mut(doc, id).map(|sketch| sketch.erase_piece(line, at)));
+                }
+            }
+            (SketchTool::Erase, false, _) => {}
+            (_, true, _) => editor.end_gesture(),
+            (_, false, Some(pick)) => session.toggle(pick),
+            (_, false, None) => session.picks.clear(),
         }
     }
 
@@ -311,6 +335,7 @@ fn edit_the_sketch(
 
     let Some(placed) = live(&session, &editor, &build) else {
         session.cursor = None;
+        session.on_plane = None;
         session.hovered = None;
         return;
     };
@@ -318,6 +343,7 @@ fn edit_the_sketch(
         (mouse.world_pos, mouse.in_camera.and_then(|camera| cameras.get(camera).ok()))
     else {
         session.cursor = None;
+        session.on_plane = None;
         session.hovered = None;
         return;
     };
@@ -332,8 +358,10 @@ fn edit_the_sketch(
         .hit(ray)
         .map(|hit| snap(placed.plane.flatten(hit), &placed, &pointer, &build.evaluated.pickables, dragged));
     session.cursor = cursor;
+    session.on_plane = placed.plane.hit(ray).map(|hit| placed.plane.flatten(hit));
     session.hovered = match (session.tool, session.press) {
         (SketchTool::Select, None) => under(&placed, &pointer),
+        (SketchTool::Erase, None) => line_under(&placed, &pointer).map(SketchPick::Line),
         _ => None,
     };
 
@@ -345,6 +373,23 @@ fn edit_the_sketch(
                 session.chain = editor
                     .edit(|doc| sketch_of_mut(doc, id).map(|sketch| draw_to(sketch, chain, target)))
                     .flatten();
+            }
+        }
+        SketchTool::Erase => {
+            if clicked && let (Some(from), Some(at)) = (mouse.global_pos, session.on_plane) {
+                session.press = Some(Press { on: session.hovered, from, dragging: false });
+                session.stroke = vec![at];
+            }
+            let Some(mut press) = session.press else { return };
+            if !press.dragging && mouse.global_pos.is_some_and(|now| now.distance(press.from) > DRAG_PX) {
+                press.dragging = true;
+                session.press = Some(press);
+            }
+            if press.dragging
+                && let Some(at) = session.on_plane
+                && session.stroke.last() != Some(&at)
+            {
+                session.stroke.push(at);
             }
         }
         SketchTool::Select => {
@@ -436,18 +481,49 @@ fn under<P: Fn(Vec3) -> Option<Vec2>>(placed: &PlacedSketch, pointer: &Pointer<P
         .filter(|(_, pixels)| *pixels <= POINT_PICK_PX)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, _)| SketchPick::Point(id));
-    point.or_else(|| {
-        placed
-            .sketch
-            .lines()
-            .filter_map(|(id, a, b, _)| {
-                let (a, b) = (placed.sketch.point(a)?, placed.sketch.point(b)?);
-                Some((id, pointer.to_segment(placed.world(a), placed.world(b))?))
-            })
-            .filter(|(_, pixels)| *pixels <= EDGE_PICK_PX)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(id, _)| SketchPick::Line(id))
-    })
+    point.or_else(|| line_under(placed, pointer).map(SketchPick::Line))
+}
+
+fn line_under<P: Fn(Vec3) -> Option<Vec2>>(placed: &PlacedSketch, pointer: &Pointer<P>) -> Option<SketchId> {
+    placed
+        .sketch
+        .lines()
+        .filter_map(|(id, a, b, _)| {
+            let (a, b) = (placed.sketch.point(a)?, placed.sketch.point(b)?);
+            Some((id, pointer.to_segment(placed.world(a), placed.world(b))?))
+        })
+        .filter(|(_, pixels)| *pixels <= EDGE_PICK_PX)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(id, _)| id)
+}
+
+/// The pieces the eraser would take: the one under a click, or every one a
+/// drag has crossed so far.
+fn doomed(session: &SketchSession, sketch: &Sketch) -> Vec<(Vec2, Vec2)> {
+    let piece = |line: SketchId, at: Vec2| {
+        let (a, b) = sketch.line(line)?;
+        let (t0, t1) = sketch.piece_of(line, at)?;
+        Some((a.lerp(b, t0), a.lerp(b, t1)))
+    };
+    let dragging = session.press.is_some_and(|press| press.dragging);
+    if !dragging {
+        let line = match session.press.map(|press| press.on).unwrap_or(session.hovered) {
+            Some(SketchPick::Line(line)) => line,
+            _ => return vec![],
+        };
+        let at = session.stroke.first().copied().or(session.on_plane);
+        return at.and_then(|at| piece(line, at)).into_iter().collect();
+    }
+    let mut pieces = Vec::new();
+    for step in session.stroke.windows(2) {
+        for (line, ..) in sketch.lines() {
+            let Some((a, b)) = sketch.line(line) else { continue };
+            if let Some((_, _, at)) = crossing(a, b, step[0], step[1]) {
+                pieces.extend(piece(line, at));
+            }
+        }
+    }
+    pieces
 }
 
 const POINT: Color = Color::srgb(0.92, 0.92, 0.98);
@@ -455,6 +531,7 @@ const PICKED: Color = Color::srgb(1.0, 0.8, 0.2);
 const HOVERED: Color = Color::srgb(0.5, 0.9, 1.0);
 const GRID_COLOUR: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
 const REGION: Color = Color::srgba(0.55, 0.8, 0.95, 0.35);
+const DOOMED: Color = Color::srgb(1.0, 0.35, 0.3);
 
 #[derive(Default)]
 struct RegionCache {
@@ -532,6 +609,15 @@ fn draw_the_session(
             false => {
                 gizmos.line(a, b, colour);
             }
+        }
+    }
+
+    if session.tool == SketchTool::Erase {
+        for (a, b) in doomed(&session, &placed.sketch) {
+            gizmos.line(placed.world(a), placed.world(b), DOOMED);
+        }
+        for step in session.stroke.windows(2) {
+            dashed_line(&mut gizmos, placed.world(step[0]), placed.world(step[1]), DOOMED, marker, marker);
         }
     }
 

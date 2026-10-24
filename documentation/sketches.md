@@ -184,6 +184,11 @@ tested.
 - [x] Line tool: click to place, chaining from the last point; landing on an
       existing point uses it — and ends the chain, since that closes a shape.
       `Escape` or clicking the chain's own end stops it.
+- [x] Erase tool: a click takes the piece of a line between the junctions
+      and crossings either side of it, a drag every piece it passes through.
+      What is left of the line keeps its id, so a region named by it holds.
+- [x] While a sketch is open the view stops at it (`PropEditor::peek`), so
+      what was built on it is not in the way. Not the rollback bar.
 - [x] Drag points; delete points and lines; toggle construction. A click
       toggles a pick, as in Model; a point's position is editable in the
       Inspector.
