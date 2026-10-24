@@ -665,7 +665,7 @@ mod tests {
                 world.resource_scope(|world, mut materials: Mut<Assets<StandardMaterial>>| {
                     world.resource_scope(|world, mut surfaces: Mut<SurfaceMaterials>| {
                         let mut clips = world.resource_mut::<Assets<Clip>>();
-                        cache.adopt("hovering", &doc, &mut meshes, &mut materials, &mut surfaces, &mut clips);
+                        cache.adopt("hovering", &doc, &mut meshes, &mut materials, &mut surfaces, &mut clips, None);
                     });
                 });
             });

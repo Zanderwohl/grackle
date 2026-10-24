@@ -17,11 +17,10 @@ use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Evaluated, FeatureOp, PropFeature, PropFeatureId};
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
 use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
-use crate::prop::reference::{GeomRef, Element};
+use crate::prop::reference::{Element, GeomRef};
 use crate::prop::plane::PlaneRef;
 use crate::prop::region::RegionRef;
 use crate::prop::sketch::SketchId;
-use crate::prop::reference::{Element, GeomRef};
 
 /// Grackle Prop: TOML, one prop per file.
 pub const PROP_EXTENSION: &str = "gpp";

@@ -41,8 +41,8 @@ use crate::prop::feature::{Axis, BooleanOp, End, FeatureOp, PatternKind, PropFea
 use crate::prop::figure::ScaleFigure;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::gizmo::HoldHandles;
-use crate::prop::hold::{MuzzleSpec, HoldOverride};
-use crate::prop::profile::{Placement, Profile, MIN_SIDES, MAX_REVOLVE_STEPS};
+use crate::prop::hold::MuzzleSpec;
+use crate::prop::profile::{Placement, MAX_REVOLVE_STEPS, MIN_SIDES};
 use crate::prop::solid::Shape;
 use crate::prop::surface::{Style, Surface};
 use crate::prop::camera::FrameTheProp;
