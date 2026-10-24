@@ -190,6 +190,9 @@ tested.
 - [x] Line tool: click to place, chaining from the last point; landing on an
       existing point uses it — and ends the chain, since that closes a shape.
       `Escape` or clicking the chain's own end stops it.
+- [x] `L` picks the line tool and `K` the eraser. The line tool shows where
+      the next click lands, ringed when it lands on a point, and the line it
+      would draw.
 - [x] Erase tool: a click takes the piece of a line between the junctions
       and crossings either side of it, a drag every piece it passes through.
       What is left of the line keeps its id, so a region named by it holds.

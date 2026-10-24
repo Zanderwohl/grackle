@@ -326,6 +326,19 @@ fn edit_the_sketch(
     if !typing && keys.just_pressed(KeyCode::Escape) {
         session.chain = None;
     }
+    // Not mid-press, which would strand an eraser stroke or a drag, and not
+    // onto the tool already up, since changing tool ends a line chain.
+    let chosen = [(KeyCode::KeyL, SketchTool::Line), (KeyCode::KeyK, SketchTool::Erase)]
+        .into_iter()
+        .find(|(key, _)| keys.just_pressed(*key))
+        .map(|(_, tool)| tool);
+    if let Some(tool) = chosen
+        && !typing
+        && session.press.is_none()
+        && session.tool != tool
+    {
+        session.set_tool(tool);
+    }
     if !typing && keys.any_just_pressed([KeyCode::Delete, KeyCode::Backspace]) && !session.picks.is_empty() {
         let ids: Vec<SketchId> = session.picks.iter().map(|pick| pick.id()).collect();
         editor.edit(|doc| sketch_of_mut(doc, id).map(|sketch| sketch.remove(&ids)));
@@ -621,15 +634,19 @@ fn draw_the_session(
         }
     }
 
+    // Where the next click lands, and the line it would draw. Landing on a
+    // point that is there is ringed, since that click closes the shape.
     if session.tool == SketchTool::Line
         && let Some(cursor) = session.cursor
     {
         let at = placed.world(cursor.at);
-        let size = marker * 1.5;
-        gizmos.line(at - *placed.plane.x * size, at + *placed.plane.x * size, HOVERED);
-        gizmos.line(at - *placed.plane.y() * size, at + *placed.plane.y() * size, HOVERED);
+        gizmos.sphere(Isometry3d::from_translation(at), marker * 1.3, HOVERED);
+        if cursor.point.is_some() {
+            let facing = Quat::from_rotation_arc(Vec3::Z, *placed.plane.normal);
+            gizmos.circle(Isometry3d::new(at, facing), marker * 3.0, HOVERED);
+        }
         if let Some(from) = session.chain.and_then(|chain| placed.sketch.point(chain)) {
-            dashed_line(&mut gizmos, placed.world(from), at, HOVERED, marker * 2.0, marker);
+            gizmos.line(placed.world(from), at, HOVERED);
         }
     }
 }
