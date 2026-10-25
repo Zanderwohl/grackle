@@ -157,6 +157,7 @@ mod tests {
     use crate::editor::editor_room::EditorRoom;
     use crate::editor::global_point::GlobalPoint;
     use crate::editor::grackle_point_light::GracklePointLight;
+    use crate::editor::mirror::{Mirror, Symmetry};
     use crate::editor::prop::Prop;
     use crate::editor::spawn_point::SpawnPoint;
     use crate::tool::room::Room;
@@ -179,7 +180,7 @@ mod tests {
         let mut timeline = FeatureTimeline::default();
         let min = timeline.apply_feature(Box::new(GlobalPoint::new(-2.0, 0.0, -2.0)));
         let max = timeline.apply_feature(Box::new(GlobalPoint::new(2.0, 3.0, 2.0)));
-        timeline.apply_feature(Box::new(EditorRoom::from_points(min, max)));
+        let room = timeline.apply_feature(Box::new(EditorRoom::from_points(min, max)));
         let mut light = GracklePointLight::from_point_ref(PointRef::reference_with_offset(min, 0.5, 1.0, 0.5));
         light.intensity = 1234.5;
         timeline.apply_feature(Box::new(light));
@@ -190,6 +191,12 @@ mod tests {
         ));
         timeline.apply_feature(Box::new(
             AnimationGrid::new(-3.0, 0.5, 7.0).with_yaw(-0.75).with_teams(RosterTeam::One(Team::Green)),
+        ));
+        timeline.apply_feature(Box::new(
+            Mirror::new(PointRef::reference_with_offset(room, 0.0, -1.5, 0.0))
+                .with_symmetry(Symmetry::Rotate180)
+                .with_sources(vec![room, min])
+                .with_teams(Team::Yellow, Team::Green),
         ));
 
         let mut metadata = MapMetadata::default();

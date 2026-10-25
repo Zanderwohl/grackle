@@ -12,6 +12,7 @@ use crate::common::PointResolutionError;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::common::movement_rules::MovementRules;
 use crate::editor::map_metadata::{publish_movement_rules, MapMetadata};
+use crate::editor::mirror::{assign_sides, Mirroring};
 use crate::editor::save;
 use crate::get;
 
@@ -40,11 +41,13 @@ impl Plugin for EditorStepsPlugin {
                 )
                     .chain(),
             )
-            // `sync_entities` and `handle_edits` are deliberately ungated so an edit lands mid-match.
+            // `sync_entities`, `handle_edits` and `assign_sides` are deliberately ungated so an edit lands
+            // mid-match.
             .add_systems(Update, (
                 FeatureTimeline::undo_redo_shortcuts.run_if(in_state(AppMode::Editor)),
                 FeatureTimeline::sync_entities,
                 FeatureTimeline::handle_edits,
+                assign_sides,
                 FeatureTimeline::draw_affected_gizmos.run_if(in_state(AppMode::Editor)),
                 checkpoint_when_idle.run_if(in_state(AppMode::Editor)),
             ).chain())
@@ -102,7 +105,7 @@ pub trait FeatureTrait: Send + Sync {
     fn debug_gizmos(&self, gizmos: &mut Gizmos);
     fn entity(&self) -> Option<Entity>;
     fn set_entity(&mut self, entity: Option<Entity>);
-    fn apply_to_entity(&self, commands: &mut Commands, entity: Entity);
+    fn apply_to_entity(&mut self, commands: &mut Commands, entity: Entity);
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>);
     fn parent_ids(&self) -> Vec<FeatureId>;
     fn available_point_keys(&self) -> Vec<(String, String)>;
@@ -135,6 +138,15 @@ pub trait FeatureTrait: Send + Sync {
 
     /// Radians. Returns false for an axis the feature does not expose.
     fn set_euler_angle(&mut self, _axis: u8, _radians: f32) -> bool { false }
+
+    /// Carry the resolved geometry across `mirroring`, on a copy a [`Mirror`] has just resolved. False
+    /// for a type with no mirror image yet, which the Mirror leaves out.
+    ///
+    /// [`Mirror`]: crate::editor::mirror::Mirror
+    fn mirror(&mut self, _mirroring: &Mirroring) -> bool { false }
+
+    /// What this feature stands in the world beyond itself, as features: a Mirror's copies.
+    fn standing_copies(&self) -> Vec<&dyn FeatureTrait> { Vec::new() }
 }
 
 enum RowAction {
@@ -567,6 +579,8 @@ impl FeatureTimeline {
     }
 
     fn remove_feature_internal(&mut self, feature_id: FeatureId) {
+        // Rebuilt rather than left standing on a parent that is gone: a Mirror would keep the copy.
+        self.queue_refresh_for_feature_and_descendants(feature_id);
         if let Some(order_index) = self.feature_order.iter().position(|id| *id == feature_id) {
             self.feature_order.remove(order_index);
         }
@@ -992,6 +1006,25 @@ impl PointRef {
             self.y.resolve_with_base(base.map(|b| b.y))?,
             self.z.resolve_with_base(base.map(|b| b.z))?,
         ))
+    }
+
+    /// Writes one axis so it resolves to `world`, however that axis is stored. False for an axis that
+    /// is not 0, 1 or 2.
+    pub fn drag_axis(&mut self, axis: u8, world: f32) -> bool {
+        let base = self.resolved_reference.map(|b| match axis {
+            0 => b.x, 1 => b.y, _ => b.z,
+        });
+        let axis_ref = match axis {
+            0 => &mut self.x,
+            1 => &mut self.y,
+            2 => &mut self.z,
+            _ => return false,
+        };
+        match axis_ref {
+            AxisRef::Absolute(v) => *v = world,
+            AxisRef::Relative(offset) => *offset = world - base.unwrap_or(0.0),
+        }
+        true
     }
 
     pub fn referenced_features(&self) -> Vec<FeatureId> {

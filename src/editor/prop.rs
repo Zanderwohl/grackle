@@ -3,9 +3,10 @@ use bevy::platform::collections::HashMap;
 use bevy_egui::egui;
 use serde::{Deserialize, Serialize};
 
-use crate::common::rotation::quat_from_euler;
+use crate::common::rotation::{euler_from_quat, quat_from_euler};
 use crate::common::PointResolutionError;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
+use crate::editor::mirror::Mirroring;
 use crate::get;
 
 /// Edge length of the stand-in box, in metres. Exactly half a metre so mappers can count them.
@@ -118,7 +119,7 @@ impl FeatureTrait for Prop {
         self.entity = entity;
     }
 
-    fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
+    fn apply_to_entity(&mut self, commands: &mut Commands, entity: Entity) {
         commands.entity(entity).insert((
             Transform::from_translation(self.resolved_location)
                 .with_rotation(quat_from_euler(self.rotation)),
@@ -194,6 +195,14 @@ impl FeatureTrait for Prop {
             1 => self.resolved_location.y = new_world_value,
             _ => self.resolved_location.z = new_world_value,
         }
+        true
+    }
+
+    /// Turned, never reflected: a mirrored rifle is the same rifle facing the other way.
+    fn mirror(&mut self, mirroring: &Mirroring) -> bool {
+        self.resolved_location = mirroring.point(self.resolved_location);
+        self.rotation = euler_from_quat(mirroring.rotation(quat_from_euler(self.rotation)));
+        self.location.resolved_reference = None;
         true
     }
 }

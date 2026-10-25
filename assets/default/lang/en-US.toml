@@ -57,6 +57,7 @@ animation_display = "Animation Display"
 animation_grid = "Animation Grid"
 move = "Move"
 room = "Room"
+mirror = "Mirror"
 retarget = "Retarget"
 
 [bakes]
@@ -76,6 +77,7 @@ gizmos_spawn_points = "Spawn Points"
 gizmos_props = "Props"
 gizmos_animation_displays = "Animation Displays"
 gizmos_animation_grids = "Animation Grids"
+gizmos_mirrors = "Mirrors"
 
 [room.messages]
 ghost = "Room { me } is fully inside { other } and will not appear!"
@@ -162,6 +164,22 @@ facing = "Facing"
 teams = "Teams"
 striped = "Striped"
 summary = "{ bodies } bodies, { width } m by { depth } m."
+
+[editor.features.mirror]
+title = "Mirror"
+centre = "Centre"
+symmetry = "Symmetry"
+mirror_x = "Mirror across X"
+mirror_z = "Mirror across Z"
+rotate_180 = "Rotate 180° about Y"
+originals_team = "Originals' team"
+copies_team = "Copies' team"
+sources = "Mirrored features"
+add = "Add…"
+add_all = "Add all above"
+missing = "missing"
+no_mirror_image = "cannot be mirrored"
+drop = "x"
 
 [weapon.names]
 laser_rifle = "Laser Rifle"

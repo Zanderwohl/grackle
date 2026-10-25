@@ -275,7 +275,7 @@ pub fn find_nearest_feature_hit(
 
     // Hidden rooms too: they still carve openings into their neighbours. In
     // `active_features` order, so the loop below walks `next_room` forwards.
-    let (room_ids, rooms): (Vec<FeatureId>, Vec<Room>) = features
+    let (room_ids, mut rooms): (Vec<FeatureId>, Vec<Room>) = features
         .active_features()
         .filter(|(_, feature)| feature.object().type_key() == "editor_room")
         .filter_map(|(id, feature)| {
@@ -283,6 +283,15 @@ pub fn find_nearest_feature_hit(
             Some((id, Room::new(min, max)))
         })
         .unzip();
+    // After the features' own, so `room_ids` still indexes the front. Unpickable, but they carve.
+    rooms.extend(
+        features
+            .active_features()
+            .flat_map(|(_, feature)| feature.object().standing_copies())
+            .filter(|copy| copy.type_key() == "editor_room")
+            .filter_map(|copy| copy.drag_handle_bounds())
+            .map(|(min, max)| Room::new(min, max)),
+    );
     let mut next_room = 0;
 
     for (feature_id, feature) in features.active_features() {
@@ -302,6 +311,7 @@ pub fn find_nearest_feature_hit(
             "prop" => visibility.props,
             "animation_display" => visibility.animation_displays,
             "animation_grid" => visibility.animation_grids,
+            "mirror" => visibility.mirrors,
             _ => false,
         };
         if !visible { continue; }
@@ -316,7 +326,7 @@ pub fn find_nearest_feature_hit(
                     }
                 }
             }
-            "global_point" | "grackle_point_light" | "spawn_point" | "prop" | "animation_display" | "animation_grid" => {
+            "global_point" | "grackle_point_light" | "spawn_point" | "prop" | "animation_display" | "animation_grid" | "mirror" => {
                 // Both: a grid's point is between bodies, inside none.
                 for pick_box in feature.object().pick_boxes() {
                     if let Some(t) = pick_box.ray_distance(ray) {

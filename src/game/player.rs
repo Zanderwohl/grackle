@@ -224,6 +224,8 @@ pub struct Spawn {
     pub feet: Vec3,
     /// Heading in radians about world Y.
     pub yaw: f32,
+    /// The team the map put it on, through a Mirror. `None` is anybody's.
+    pub side: Option<Team>,
 }
 
 /// The spawn points a body actually fits in, feet-first.
@@ -263,7 +265,7 @@ pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
             Vec3::ZERO
         }
     };
-    Spawn { feet, yaw: SPAWN_YAW }
+    Spawn { feet, yaw: SPAWN_YAW, side: None }
 }
 
 /// The spawn's `feet` is its own position; the body is centred above it.

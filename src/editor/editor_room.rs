@@ -6,6 +6,7 @@ use crate::common::PointResolutionError;
 use crate::common::cuboid::CuboidPoint;
 use crate::common::ray::ray_intersects_aabb;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
+use crate::editor::mirror::Mirroring;
 use crate::tool::room::Room;
 use crate::get;
 
@@ -116,7 +117,7 @@ impl FeatureTrait for EditorRoom {
         self.entity = entity;
     }
 
-    fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
+    fn apply_to_entity(&mut self, commands: &mut Commands, entity: Entity) {
         let min = self.resolved_min.min(self.resolved_max);
         let max = self.resolved_min.max(self.resolved_max);
         let center = (min + max) / 2.0;
@@ -242,6 +243,13 @@ impl FeatureTrait for EditorRoom {
         self.available_point_keys().into_iter().filter_map(|(key, _)| {
             self.get_point(&key).ok().map(|v| (key, v))
         }).collect()
+    }
+
+    fn mirror(&mut self, mirroring: &Mirroring) -> bool {
+        (self.resolved_min, self.resolved_max) = mirroring.bounds(self.resolved_min, self.resolved_max);
+        self.min.resolved_reference = None;
+        self.max.resolved_reference = None;
+        true
     }
 }
 

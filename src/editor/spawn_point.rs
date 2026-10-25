@@ -7,7 +7,8 @@ use crate::common::class::{TALLEST_CLASS_EYE_HEIGHT, TALLEST_CLASS_HEIGHT};
 use crate::common::skeleton::{default_humanoid, Pose};
 use crate::game::body_mesh::BodyTint;
 use crate::common::PointResolutionError;
-use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
+use crate::editor::editable::{Feature, FeatureId, FeatureTrait, PointRef};
+use crate::editor::mirror::Mirroring;
 use crate::get;
 
 /// Marks the entity a [`SpawnPoint`] feature drives, so the game finds spawns without reading the
@@ -104,7 +105,7 @@ impl FeatureTrait for SpawnPoint {
 
     /// The rest-pose rig the game spawns, so a mapper sees the space a body really takes. No animator,
     /// so it holds the pose; no hitboxes, so it cannot be shot.
-    fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
+    fn apply_to_entity(&mut self, commands: &mut Commands, entity: Entity) {
         commands
             .entity(entity)
             .insert((
@@ -171,24 +172,17 @@ impl FeatureTrait for SpawnPoint {
     }
 
     fn drag_handle(&mut self, _is_max: bool, axis: u8, new_world_value: f32) -> bool {
-        let axis_ref = match axis {
-            0 => &mut self.location.x,
-            1 => &mut self.location.y,
-            2 => &mut self.location.z,
-            _ => return false,
-        };
-        let base = self.location.resolved_reference.map(|b| match axis {
-            0 => b.x, 1 => b.y, _ => b.z,
-        });
-        match axis_ref {
-            AxisRef::Absolute(v) => *v = new_world_value,
-            AxisRef::Relative(offset) => *offset = new_world_value - base.unwrap_or(0.0),
+        if !self.location.drag_axis(axis, new_world_value) {
+            return false;
         }
-        match axis {
-            0 => self.resolved_location.x = new_world_value,
-            1 => self.resolved_location.y = new_world_value,
-            _ => self.resolved_location.z = new_world_value,
-        }
+        self.resolved_location[axis as usize] = new_world_value;
+        true
+    }
+
+    fn mirror(&mut self, mirroring: &Mirroring) -> bool {
+        self.resolved_location = mirroring.point(self.resolved_location);
+        self.yaw = mirroring.yaw(self.yaw);
+        self.location.resolved_reference = None;
         true
     }
 }

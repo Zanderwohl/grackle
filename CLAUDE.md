@@ -120,9 +120,12 @@ repo root, and that file is where its contents are reviewable. It currently
 also ships an animation grid, which is why the room is 24 m square: the grid is
 a testing convenience rather than something a new map owes you.
 
-Choice is uniform random, and facing is the fixed `SPAWN_YAW`. Per-team spawns
-and not dropping people on each other are gamemode questions, deliberately not
-answered at this layer yet.
+Choice is uniform random among the spawns on the body's own side — a spawn's
+`Side`, from a Mirror (see "Mirroring half a map") — falling back to spawns
+nobody claimed, then to anybody's, so a map with no spawn for a team still
+starts. Sides are chosen before headroom: a team whose own spawns are all
+blocked goes to the largest room, not into the enemy base. Facing comes from the spawn point. Not dropping people on each other
+is still a gamemode question.
 
 ## Editor and game in one process
 
@@ -1177,7 +1180,9 @@ They sleep once settled, and a shove wakes them.
 
 Four — Red, Blue, Yellow, Green — as `Team` in
 [`src/common/team.rs`](src/common/team.rs), a component on a body and nothing
-else. The whole rule is three cases:
+else. Map content that belongs to a team carries `Side` instead, which the
+friendly-fire rule never reads — see "Mirroring half a map". The whole rule is
+three cases:
 
 - Two teams that differ hurt each other.
 - **No team is hostile to everybody.** A crate, a training dummy and the map
@@ -1205,8 +1210,9 @@ re-derive the rule.
 
 A body's colour is its team (`body_look`), outranking `BodyTint` — a tint says
 "draw this specially", a team says which side you are on, and the second is
-what you read across a room in a fight. A spawn point's preview is still green
-because nothing on it has a side. Corpses keep their team, so a pile of them
+what you read across a room in a fight. A spawn point's preview stays green
+even with a `Side` — that is not a `Team` — and the editor draws a ring at its
+feet in the side's colour instead. Corpses keep their team, so a pile of them
 still says which way a fight went.
 
 The player does not choose: `next_team` in
@@ -1215,8 +1221,7 @@ turn up, because there is no lobby and nothing that could balance. Alternating
 rather than a constant so that **two people on one map are on different
 sides** — with everybody on one team the rule above is unreachable outside the
 animation grid, and a rule you cannot walk up to and check is a rule that
-quietly stops being true. Per-team spawns are still a gamemode question,
-deliberately unanswered.
+quietly stops being true.
 
 **The animation grid does choose.** `RosterTeam` on the feature is a panel
 combo — *Striped*, or one of the four — and striped deals them round the roster
@@ -1235,6 +1240,39 @@ grid's `RosterTeam` reads as changed on every frame of a drag — and a written
 `Team` is a changed one, which is `build_body_meshes` throwing sixty bodies
 away and rebuilding them for as long as the point is moving. Same trap as
 re-inserting a `Skeleton`, one component along.
+
+## Mirroring half a map
+
+A **Mirror** ([`src/editor/mirror.rs`](src/editor/mirror.rs)) is a feature
+holding a centre (a `PointRef`, so it can ride on a room), a `Symmetry` —
+mirror across X, mirror across Z, or rotate 180° about Y — a list of source
+features and two teams. The workflow it serves is a CTF map built as one half
+and finished by symmetry.
+
+- **The copies are live.** Every resolve clones each source through its own
+  serde, resolves it, and calls `FeatureTrait::mirror` to carry its resolved
+  geometry across; the copies stand as `MirrorCopy` children of the Mirror's
+  entity. An edit to a source is an edit to its copy — the sources are the
+  Mirror's parents. A copy is not a feature: nothing references it, and
+  clicking one selects the Mirror. A type joins by implementing `mirror`; one
+  that does not (the animation features, a Mirror) is listed in orange and
+  left out.
+- **Copies are re-applied, not respawned**, keyed by source in
+  `copy_entities`, which is why `apply_to_entity` takes `&mut self`. A
+  respawned spawn point rebuilds its body every frame of a drag.
+- **A mirror carries forward and up, and gives up handedness.** A rotation
+  cannot also be a reflection, so a mirrored prop is the same model turned
+  round, never scaled inside out; yaws are reflected (`Mirroring::yaw`), so a
+  spawn facing away from the plane faces away from it on the other side.
+  `Rotate180` keeps handedness and has no such caveat.
+- **`Side` has one writer, `assign_sides`**, which is ungated and asks every
+  frame what the standing Mirrors say: originals get the first team, copies
+  the second, and anything no Mirror claims has none. Deleting a Mirror,
+  rolling back past it or dropping a source therefore takes the side away with
+  nothing to remember. A feature has no team field of its own, deliberately —
+  that would be a second writer.
+- Deleting any feature now refreshes everything built on it, which is what
+  stops a deleted source's copy standing on.
 
 ## Coming back
 
@@ -2004,7 +2042,8 @@ machine, and things happen in it.
 The core abstraction is `FeatureTrait` in
 [`src/editor/editable.rs`](src/editor/editable.rs) — a `#[typetag::serde]`
 trait object. Implementors today: `GlobalPoint`, `GracklePointLight`,
-`EditorRoom`.
+`EditorRoom`, `SpawnPoint`, `Prop`, `AnimationDisplay`, `AnimationGrid` and
+`Mirror`.
 
 A feature does not store bare coordinates. It stores `PointRef`s, which are
 per-axis absolute-or-relative references to *another feature's named point*.

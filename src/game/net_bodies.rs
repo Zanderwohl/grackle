@@ -10,6 +10,7 @@ use lightyear::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::damage::NextPlayerId;
 use crate::common::net::NetRole;
+use crate::common::team::Side;
 use crate::common::weapon::WeaponCatalogue;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
@@ -69,7 +70,7 @@ fn give_bodies_to_whoever_needs_one(
     ours: Query<(), (With<Player>, With<LocalPlayer>)>,
     us: Option<Res<OurIdentity>>,
     collision: Res<CollisionWorld>,
-    spawns: Query<&Transform, With<SpawnPointMarker>>,
+    spawns: Query<(&Transform, Option<&Side>), With<SpawnPointMarker>>,
     rooms: Query<&Room>,
     mut ids: ResMut<NextPlayerId>,
     catalogue: Res<WeaponCatalogue>,
@@ -98,7 +99,7 @@ fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
-        let spawn = choose_spawn(&placed, &collision, &rooms);
+        let spawn = choose_spawn(&placed, who.team, &collision, &rooms);
         info!("Standing our own body up as {} on {}", who.id, who.team.name());
         let body = spawn_player(&mut commands, spawn, who.id, who.team, &catalogue);
         commands.entity(body).insert(LocalPlayer);
@@ -121,7 +122,7 @@ fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
-        let spawn = choose_spawn(&placed, &collision, &rooms);
+        let spawn = choose_spawn(&placed, who.team, &collision, &rooms);
         info!("Standing a client's body up as {} on {}", who.id, who.team.name());
         spawn_body_for(&mut commands, spawn, who, link, peer.0, &catalogue);
     }

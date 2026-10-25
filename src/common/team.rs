@@ -23,8 +23,8 @@ use crate::get;
 
 /// Whose side a body is on. How many are in play is a gamemode's choice.
 ///
-/// On disk, a feature stores a number of its own choosing, not this derive's
-/// names: see `RosterTeam::index`.
+/// On disk by this derive's names (`RosterTeam`, a Mirror's teams), so
+/// renaming a variant is a blueprint format change.
 #[derive(
     Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter,
 )]
@@ -60,6 +60,13 @@ impl Team {
         }
     }
 }
+
+/// Which team a piece of map content belongs to: a spawn point, a room, a light. Not [`Team`], which is
+/// what a *body* fights for and what the friendly-fire rule reads; a spawn point is not a combatant.
+///
+/// Written only by [`assign_sides`](crate::editor::mirror::assign_sides), from the Mirrors on the map.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Side(pub Team);
 
 /// `None` means no side, hostile to everything. The self exception needs
 /// identities and lives in [`Allegiances::may_hurt`].

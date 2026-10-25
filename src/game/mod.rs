@@ -960,7 +960,7 @@ mod tests {
 
     /// Another player's body, as a server holding one would have it.
     fn spawn_a_second_body(app: &mut App) {
-        let spawn = Spawn { feet: Vec3::new(5.0, 0.0, 0.0), yaw: 0.0 };
+        let spawn = Spawn { feet: Vec3::new(5.0, 0.0, 0.0), yaw: 0.0, side: None };
         let mut queue = bevy::ecs::world::CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, app.world());
