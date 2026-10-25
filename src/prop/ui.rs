@@ -48,7 +48,7 @@ use crate::prop::surface::{Style, Surface};
 use crate::prop::camera::FrameTheProp;
 use crate::prop::view::PropBuild;
 use crate::prop::line::{axis_name, LineRef};
-use crate::prop::tool::{advance, cancel, fill, is_ready, prompt, start, ActiveTool, Field, Task, Tool};
+use crate::prop::tool::{advance, cancel, fill, is_ready, prompt, put_down, start, ActiveTool, Field, Task, Tool};
 
 /// What a file dialog came back with. Uses a background thread like the map
 /// editor, so it has the same wasm problem; reading props does not come
@@ -162,8 +162,10 @@ struct PropRequests {
     preview_plane: bool,
     /// A tool to start.
     task: Option<Task>,
-    /// Put the waiting tool down.
+    /// Put the waiting tool down, as asked.
     cancel: bool,
+    /// Put the waiting tool down because something else was done.
+    put_down: bool,
     /// Finish the waiting tool with what it has.
     confirm: bool,
 }
@@ -438,11 +440,14 @@ fn panels(
 
     // After the panels, so a tool started this frame sees this frame's picks.
     let tool = &mut *picking.tool;
-    if requests.cancel || requests.workspace.is_some() || session.editing().is_some() {
+    if requests.cancel {
         cancel(tool, &mut editor);
     }
+    if requests.put_down || requests.workspace.is_some() || session.editing().is_some() {
+        put_down(tool);
+    }
     if let Some(task) = requests.task {
-        cancel(tool, &mut editor);
+        put_down(tool);
         start(task, tool, &mut editor, &build.evaluated, &mut session);
     }
     advance(tool, &mut editor, &build.evaluated, &mut session, requests.confirm);
@@ -978,7 +983,7 @@ fn toolbar(
     });
 
     if let Some(op) = added {
-        requests.cancel = true;
+        requests.put_down = true;
         let id = editor.add(op);
         editor.select(id);
     }

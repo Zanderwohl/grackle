@@ -12,10 +12,10 @@ use bevy::prelude::*;
 
 use crate::get;
 use crate::prop::document::{Pick, PropDoc, PropEditor};
-use crate::prop::feature::{BooleanOp, End, Evaluated, FeatureOp, PatternKind, PropFeatureId};
+use crate::prop::feature::{BooleanOp, End, Evaluated, FeatureOp, PatternKind, PropFeatureId, IN_PLANE};
 use crate::prop::line::LineRef;
-use crate::prop::plane::{plane_through_located, Plane, PlaneRef};
-use crate::prop::reference::{Element, GeomRef, Located};
+use crate::prop::plane::{plane_through, Plane, PlaneRef};
+use crate::prop::reference::{Element, GeomRef};
 use crate::prop::region::Region;
 use crate::prop::sketch::Sketch;
 use crate::prop::sketch_edit::{sketch_of_mut, SketchSession};
@@ -160,14 +160,7 @@ fn is_open(want: Want, has: &[Pick], evaluated: &Evaluated) -> bool {
 
 /// The plane picked geometry makes, if it makes one yet.
 fn through(has: &[Pick], evaluated: &Evaluated) -> Option<Plane> {
-    let located: Option<Vec<Located>> = has
-        .iter()
-        .map(|pick| match pick {
-            Pick::Geom(reference) => evaluated.locate(reference),
-            _ => None,
-        })
-        .collect();
-    plane_through_located(&located?)
+    plane_through(has, evaluated)
 }
 
 fn fits(task: Task, slot: usize, pick: &Pick, filled: &Filled, doc: &PropDoc, evaluated: &Evaluated) -> bool {
@@ -191,13 +184,14 @@ fn fits(task: Task, slot: usize, pick: &Pick, filled: &Filled, doc: &PropDoc, ev
             !taken
         }
         Want::Regions => {
-            let Pick::Region { sketch, .. } = pick else { return false };
+            let Pick::Region { sketch, region } = pick else { return false };
+            let encloses = evaluated.sketch(*sketch).is_some_and(|placed| placed.arrangement.find(region).is_some());
             let same_sketch = filled.0[slot].iter().all(|other| matches!(other, Pick::Region { sketch: s, .. } if s == sketch));
             let axis_lies_in_it = match (evaluated.sketch(*sketch), picked_line(task, filled, evaluated)) {
                 (Some(placed), Some(line)) => in_plane(&placed.plane, line),
                 _ => true,
             };
-            same_sketch && axis_lies_in_it
+            encloses && same_sketch && axis_lies_in_it
         }
         Want::Line => {
             let Some(line) = pick.line().and_then(|line| evaluated.locate_line(&line)) else { return false };
@@ -241,9 +235,6 @@ fn picked_line(task: Task, filled: &Filled, evaluated: &Evaluated) -> Option<(Ve
     let Task::Make(Tool::Revolve) = task else { return None };
     filled.0[1].first().and_then(Pick::line).and_then(|line| evaluated.locate_line(&line))
 }
-
-/// Metres; as the evaluator allows.
-const IN_PLANE: f32 = 1e-4;
 
 fn in_plane(plane: &Plane, (a, b): (Vec3, Vec3)) -> bool {
     plane.distance(a).abs() < IN_PLANE && plane.distance(b).abs() < IN_PLANE
@@ -340,7 +331,14 @@ pub fn advance(
     }
 }
 
-/// Puts the selection back as it was before a re-pick.
+/// Puts the tool down because something else was done: the selection is
+/// whatever that left.
+pub fn put_down(active: &mut ActiveTool) {
+    active.0 = None;
+}
+
+/// Puts the tool down because somebody asked to, putting the selection back
+/// as it was before a re-pick.
 pub fn cancel(active: &mut ActiveTool, editor: &mut PropEditor) {
     if let Some(Task::Repick { feature, .. }) = active.0.take()
         && editor.doc().feature(feature).is_some()
@@ -460,11 +458,11 @@ fn sweep(
     let placed = evaluated.sketch(sketch)?;
     let found: Vec<Region> = regions
         .iter()
-        .filter_map(|pick| match pick {
+        .map(|pick| match pick {
             Pick::Region { region, .. } => placed.arrangement.find(region).cloned(),
             _ => None,
         })
-        .collect();
+        .collect::<Option<_>>()?;
     Some(editor.add_built(|doc| {
         let ids = sketch_of_mut(doc, sketch)
             .map(|drawn| found.iter().map(|region| drawn.adopt_region(region)).collect())

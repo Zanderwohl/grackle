@@ -581,7 +581,7 @@ fn plane_of(on: PlaneRef, planes: &[Datum]) -> Option<Plane> {
 
 /// Metres a revolve's axis may sit off its sketch's plane: the kernel's
 /// rounding, not a modelling tolerance.
-const IN_PLANE: f32 = 1e-4;
+pub(crate) const IN_PLANE: f32 = 1e-4;
 
 /// Every region a sweep names, as the sketch now stands, or a Problem naming
 /// the first that is not there.

@@ -676,7 +676,8 @@ feature's own length axis (`FeatureOp::main_axis`), via
 what is stored, and are behind a fold. The plan this is part of, with what is left, is
 [documentation/prop-editor-ux.md](documentation/prop-editor-ux.md). **The UI
 states what is; it is not a tutorial** — no hover text or empty state telling
-somebody what to click.
+somebody what to click. The one exception is a waiting tool's prompt ("Pick a
+plane or a flat face"), which states what that tool is still missing.
 
 **The rollback bar** (`PropEditor::rollback`) shows the prop as it stood
 partway down the list: the view evaluates `PropEditor::shown()` rather than

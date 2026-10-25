@@ -390,12 +390,10 @@ fn pick_in_the_viewport(
                 face: evaluated.face_distance(ray),
                 project: |p: Vec3| camera.world_to_viewport(at, p).ok(),
             };
-            let candidates = candidates_under(evaluated, &pointer);
+            let mut candidates = candidates_under(evaluated, &pointer);
             Some(match tool.0 {
-                None => candidates.into_iter().next(),
-                Some(task) => candidates
-                    .into_iter()
-                    .find(|pick| accepts(task, editor.picks(), pick, editor.doc(), evaluated)),
+                None => candidates.next(),
+                Some(task) => candidates.find(|pick| accepts(task, editor.picks(), pick, editor.doc(), evaluated)),
             })
         })
         .flatten();
@@ -416,37 +414,45 @@ fn pick_in_the_viewport(
     }
 }
 
-/// Everything under the pointer, in the order a click prefers it.
-fn candidates_under<P: Fn(Vec3) -> Option<Vec2>>(evaluated: &Evaluated, pointer: &Pointer<P>) -> Vec<Pick> {
-    let mut found = Vec::new();
+/// Everything under the pointer, in the order a click prefers it, each found
+/// only when asked for: with no tool waiting only the first is wanted.
+fn candidates_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
+    evaluated: &'a Evaluated,
+    pointer: &'a Pointer<P>,
+) -> impl Iterator<Item = Pick> + 'a {
     let geom = |pickable: &crate::prop::reference::Pickable| Pick::Geom(pickable.reference.clone());
-    found.extend(corner_under(&evaluated.pickables, pointer).map(geom));
-    found.extend(edge_under(&evaluated.pickables, pointer).map(geom));
-    let sketch_lines = evaluated.sketches.iter().flat_map(|placed| {
-        placed.sketch.lines().filter_map(|(line, ..)| {
-            let (a, b) = placed.sketch.line(line)?;
-            Some((Pick::SketchLine { sketch: placed.id, line }, placed.world(a), placed.world(b)))
-        })
-    });
-    found.extend(segment_under(sketch_lines, pointer));
-    let axes = Axis::ALL.into_iter().filter_map(|axis| {
-        let (a, b) = evaluated.locate_line(&LineRef::Origin { axis })?;
-        Some((Pick::Axis(axis), a, b))
-    });
-    found.extend(segment_under(axes, pointer));
-    found.extend(plane_under(&evaluated.planes, pointer).map(Pick::Plane));
-    found.extend(
-        evaluated
-            .region_under(pointer.ray)
-            .map(|(sketch, region)| Pick::Region { sketch, region: region.name.clone() }),
-    );
-    // The face and its body both, so a tool wanting a body still finds one
-    // under a face a boolean made, which has no name.
-    if let Some((body, face)) = evaluated.surface_under(pointer.ray) {
-        found.extend(face.map(Pick::Geom));
-        found.push(Pick::Body(body));
-    }
-    found
+    let finders: [Box<dyn Fn() -> Option<Pick> + 'a>; 7] = [
+        Box::new(move || corner_under(&evaluated.pickables, pointer).map(geom)),
+        Box::new(move || edge_under(&evaluated.pickables, pointer).map(geom)),
+        Box::new(move || {
+            let lines = evaluated.sketches.iter().flat_map(|placed| {
+                placed.sketch.lines().filter_map(|(line, ..)| {
+                    let (a, b) = placed.sketch.line(line)?;
+                    Some((Pick::SketchLine { sketch: placed.id, line }, placed.world(a), placed.world(b)))
+                })
+            });
+            segment_under(lines, pointer)
+        }),
+        Box::new(move || {
+            let axes = Axis::ALL.into_iter().filter_map(|axis| {
+                let (a, b) = evaluated.locate_line(&LineRef::Origin { axis })?;
+                Some((Pick::Axis(axis), a, b))
+            });
+            segment_under(axes, pointer)
+        }),
+        Box::new(move || plane_under(&evaluated.planes, pointer).map(Pick::Plane)),
+        Box::new(move || {
+            evaluated
+                .region_under(pointer.ray)
+                .map(|(sketch, region)| Pick::Region { sketch, region: region.name.clone() })
+        }),
+        // A face a boolean made has no name, so is picked as its body; a named
+        // face already stands for its body.
+        Box::new(move || {
+            evaluated.surface_under(pointer.ray).map(|(body, face)| face.map_or(Pick::Body(body), Pick::Geom))
+        }),
+    ];
+    finders.into_iter().filter_map(|find| find())
 }
 
 /// Drag the hold's handles: a grip per hand, and the figure for the carry.

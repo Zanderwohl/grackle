@@ -344,14 +344,7 @@ fn draw_the_bench(
     }
     for pick in editor.picks() {
         match pick {
-            // An eaten feature has no body and is not outlined.
-            Pick::Body(picked) => {
-                let Some((_, solid)) = build.evaluated.bodies.iter().find(|(id, _)| id == picked) else {
-                    continue;
-                };
-                let Some((min, max)) = solid.bounds() else { continue };
-                gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), picked_colour(pick));
-            }
+            Pick::Body(picked) => draw_body_box(&mut gizmos, &build, *picked, picked_colour(pick)),
             Pick::Geom(reference) => {
                 if let Some(at) = build.evaluated.locate(reference) {
                     draw_located(&mut gizmos, at, marker, picked_colour(pick));
@@ -380,11 +373,7 @@ fn draw_the_bench(
             }
         }
         // A body under a pending tool: outlined as a pick would be.
-        Some(Pick::Body(body)) if tool.0.is_some() => {
-            if let Some((min, max)) = build.evaluated.bodies.iter().find(|(id, _)| id == body).and_then(|(_, solid)| solid.bounds()) {
-                gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), HOVERED);
-            }
-        }
+        Some(Pick::Body(body)) if tool.0.is_some() => draw_body_box(&mut gizmos, &build, *body, HOVERED),
         _ => {}
     }
     let picked_features = editor.picked_features(&build.evaluated);
@@ -438,6 +427,14 @@ const PICKED: Color = Color::srgb(1.0, 0.8, 0.2);
 const HOVERED: Color = Color::srgb(0.5, 0.9, 1.0);
 const PLANE: Color = Color::srgb(0.55, 0.55, 0.55);
 const SKETCH: Color = Color::srgb(0.92, 0.92, 0.98);
+
+/// A body's bounding box. An eaten feature has no body and is not outlined.
+fn draw_body_box(gizmos: &mut Gizmos, build: &PropBuild, body: PropFeatureId, colour: Color) {
+    let bounds = build.evaluated.bodies.iter().find(|(id, _)| *id == body).and_then(|(_, solid)| solid.bounds());
+    if let Some((min, max)) = bounds {
+        gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), colour);
+    }
+}
 
 /// A sketch region filled with hatching, which is what it is as a pick.
 fn draw_region(gizmos: &mut Gizmos, build: &PropBuild, sketch: PropFeatureId, region: &RegionRef, colour: Color) {
