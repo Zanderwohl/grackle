@@ -12,3 +12,4 @@ pub mod animation_display;
 pub mod animation_grid;
 pub mod prop;
 pub mod spawn_point;
+pub mod mirror;

@@ -4,6 +4,7 @@
 use bevy::app::App;
 use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
+use crate::common::team::Side;
 use crate::common::class::{TALLEST_CLASS_EYE_HEIGHT, TALLEST_CLASS_HEIGHT};
 use crate::editor::editable::{FeatureTrait, PointRef};
 use crate::editor::spawn_point::{SpawnPoint, SpawnPointMarker};
@@ -16,7 +17,21 @@ impl Plugin for SpawnPointPlugin {
     fn build(&self, app: &mut App) {
         add_point_placement_tool::<SpawnPoint>(app);
         // Ungated: it has to notice the mode changing.
-        app.add_systems(Update, hide_spawn_bodies_while_playing);
+        app.add_systems(Update, hide_spawn_bodies_while_playing)
+            .add_systems(Update, draw_spawn_sides.run_if(in_state(AppMode::Editor)));
+    }
+}
+
+/// A ring at the feet in the side's colour, drawn always rather than only when selected, so which half
+/// of a mirrored map is whose can be read at a glance. A ring and not a tint: the preview stays green,
+/// the one colour no player is.
+fn draw_spawn_sides(
+    spawns: Query<(&GlobalTransform, &Side), With<SpawnPointMarker>>,
+    mut gizmos: Gizmos,
+) {
+    for (placed, side) in &spawns {
+        let ground = Isometry3d::new(placed.translation(), Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
+        gizmos.circle(ground, 0.6, side.0.colour());
     }
 }
 

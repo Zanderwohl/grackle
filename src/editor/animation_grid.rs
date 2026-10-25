@@ -353,7 +353,7 @@ impl FeatureTrait for AnimationGrid {
 
     /// The bodies are spawned by [`crate::tool::animation_grid::sync_animation_grids`]; spawning them
     /// here would respawn them on every edit.
-    fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
+    fn apply_to_entity(&mut self, commands: &mut Commands, entity: Entity) {
         commands
             .entity(entity)
             .insert((

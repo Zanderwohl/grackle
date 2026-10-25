@@ -116,7 +116,7 @@ impl FeatureTrait for AnimationDisplay {
     }
 
     /// A body like the game's; [`ForcedAnimation`] pins it to the chosen state.
-    fn apply_to_entity(&self, commands: &mut Commands, entity: Entity) {
+    fn apply_to_entity(&mut self, commands: &mut Commands, entity: Entity) {
         commands
             .entity(entity)
             .insert((

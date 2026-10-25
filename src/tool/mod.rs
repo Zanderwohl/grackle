@@ -7,6 +7,7 @@ use crate::get;
 use crate::tool::animation_display::AnimationDisplayPlugin;
 use crate::tool::animation_grid::AnimationGridPlugin;
 use crate::tool::bakes::BakePlugin;
+use crate::tool::mirror::MirrorPlugin;
 use crate::tool::movement::MovementPlugin;
 use crate::tool::point::PointPlugin;
 use crate::tool::spawn_point::SpawnPointPlugin;
@@ -27,6 +28,7 @@ pub mod point_drag;
 pub mod animation_display;
 pub mod animation_grid;
 pub mod point_placement;
+pub mod mirror;
 pub mod prop;
 pub mod rotate_drag;
 pub mod retarget;
@@ -53,6 +55,7 @@ impl Plugin for ToolPlugin {
             .add_plugins(PointDragPlugin)
             .add_plugins(RotateDragPlugin)
             .add_plugins(PropPlugin)
+            .add_plugins(MirrorPlugin)
             .add_plugins(AnimationDisplayPlugin)
             .add_plugins(AnimationGridPlugin)
             .add_plugins(RetargetPlugin)
@@ -83,6 +86,7 @@ pub enum Tools {
     AnimationDisplay,
     AnimationGrid,
     Room,
+    Mirror,
     Retarget,
 }
 
@@ -97,6 +101,7 @@ impl Tools {
             Self::AnimationDisplay => get!("tools.animation_display"),
             Self::AnimationGrid => get!("tools.animation_grid"),
             Self::Room => get!("tools.room"),
+            Self::Mirror => get!("tools.mirror"),
             Self::Retarget => "Retarget".into(),
         }
     }

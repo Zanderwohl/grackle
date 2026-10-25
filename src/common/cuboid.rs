@@ -206,7 +206,7 @@ impl FeatureTrait for GrackleCuboid {
         self.entity = entity;
     }
 
-    fn apply_to_entity(&self, _commands: &mut Commands, _entity: Entity) {
+    fn apply_to_entity(&mut self, _commands: &mut Commands, _entity: Entity) {
         // TODO: apply cuboid geometry to entity
     }
 
