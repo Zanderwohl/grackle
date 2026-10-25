@@ -187,9 +187,9 @@ tested.
       `SketchSession::editing` is the one answer to "is a sketch open".
 - [x] One viewport straight down the plane; the others stay as they were.
       The perspective view turns, and is put back on finishing.
-- [x] Line tool: click to place, chaining from the last point; landing on an
-      existing point uses it and carries on from there. A line that encloses
-      a new region ends the chain; otherwise only `Escape` does.
+- [x] Line tool: click to place, chaining from the last point. A line that
+      ends on an existing point (reusing it) or encloses a new region ends the
+      chain; otherwise `Escape`, `L` or the Line button drops it.
 - [x] The grid is drawn 0.1 mm behind the plane, away from the view under the
       pointer, so a line along a grid line does not depth-fight it.
 - [x] `L` picks the line tool and `K` the eraser. The line tool shows where

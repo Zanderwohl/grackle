@@ -347,8 +347,8 @@ fn edit_the_sketch(
     if !typing && keys.just_pressed(KeyCode::Escape) {
         session.chain = None;
     }
-    // Not mid-press, which would strand an eraser stroke or a drag, and not
-    // onto the tool already up, since changing tool ends a line chain.
+    // Not mid-press, which would strand an eraser stroke or a drag. Onto the
+    // tool already up it drops the line in progress, as the button does.
     let chosen = [(KeyCode::KeyL, SketchTool::Line), (KeyCode::KeyK, SketchTool::Erase)]
         .into_iter()
         .find(|(key, _)| keys.just_pressed(*key))
@@ -356,7 +356,6 @@ fn edit_the_sketch(
     if let Some(tool) = chosen
         && !typing
         && session.press.is_none()
-        && session.tool != tool
     {
         session.set_tool(tool);
     }
@@ -460,15 +459,15 @@ fn edit_the_sketch(
 
 /// One click of the line tool: lands on `target`, drawing from `chain` if
 /// there is one, and returns where the next click draws from — where it
-/// landed, so lines chain until `Escape`, unless the line enclosed something
-/// new, which ends the shape being drawn. Clicking the chain's own end draws
-/// nothing.
+/// landed, so lines chain until `Escape`, unless the line ended on a point
+/// already there or enclosed something new, either of which ends the shape
+/// being drawn. Clicking the chain's own end draws nothing.
 fn draw_to(sketch: &mut Sketch, chain: Option<SketchId>, target: Snapped) -> Option<SketchId> {
     let landed = target.point.unwrap_or_else(|| sketch.add_point(target.at));
     let Some(from) = chain.filter(|from| *from != landed) else { return Some(landed) };
     let before = arrange(sketch).regions.len();
     sketch.add_line(from, landed);
-    (arrange(sketch).regions.len() <= before).then_some(landed)
+    (target.point.is_none() && arrange(sketch).regions.len() <= before).then_some(landed)
 }
 
 /// The nearest sketch point within [`SNAP_PX`], else the nearest model corner
@@ -735,7 +734,7 @@ mod tests {
     }
 
     /// Fails if the chain rule changes: every click continues from where it
-    /// landed, an existing point included, until a line encloses something.
+    /// landed until a line ends on an existing point or encloses something.
     #[test]
     fn the_line_tool_chains_until_it_closes_a_shape() {
         let mut sketch = Sketch::default();
@@ -747,12 +746,16 @@ mod tests {
         assert_eq!(draw_to(&mut sketch, chain, snapped(Vec2::ONE, chain)), Some(corner), "clicking the end draws nothing");
         assert_eq!(sketch.entities.len(), 2);
 
-        // Onto a point that encloses nothing new: carry on from it.
+        // Onto a point that encloses nothing new: the shape still ends there.
         let spur = draw_to(&mut sketch, chain, snapped(Vec2::new(2.0, 1.0), None));
         let back = draw_to(&mut sketch, spur, snapped(Vec2::ONE, Some(corner)));
-        assert_eq!(back, Some(corner), "joining a point that closes nothing carries on");
+        assert_eq!(back, None, "joining an existing point ends the chain");
+        assert_eq!(sketch.entities.len(), 4);
 
-        chain = draw_to(&mut sketch, back, snapped(Vec2::ZERO, Some(first)));
+        // Starting on an existing point is a start, not an end.
+        let restarted = draw_to(&mut sketch, None, snapped(Vec2::ONE, Some(corner)));
+        assert_eq!(restarted, Some(corner));
+        chain = draw_to(&mut sketch, restarted, snapped(Vec2::ZERO, Some(first)));
         assert_eq!(chain, None, "closing the triangle ends the chain");
         assert_eq!(sketch.points.len(), 4, "closing reused the first point");
         assert_eq!(arrange(&sketch).regions.len(), 1);
