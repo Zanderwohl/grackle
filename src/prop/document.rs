@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::skeleton::clip::ClipSet;
 use crate::common::assets::{AssetError, Assets};
-use crate::prop::feature::{evaluate, Evaluated, FeatureOp, PropFeature, PropFeatureId};
+use crate::prop::feature::{evaluate, Axis, Evaluated, FeatureOp, PropFeature, PropFeatureId};
+use crate::prop::line::LineRef;
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
 use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
 use crate::prop::reference::{Element, GeomRef};
@@ -37,6 +38,10 @@ pub enum Pick {
     Plane(PlaneRef),
     /// A closed region of a sketch, which is what a sweep takes.
     Region { sketch: PropFeatureId, region: RegionRef },
+    /// A line of a sketch, picked from outside it.
+    SketchLine { sketch: PropFeatureId, line: SketchId },
+    /// An axis through the origin.
+    Axis(Axis),
 }
 
 impl Pick {
@@ -48,7 +53,27 @@ impl Pick {
         match self {
             Pick::Body(id) => evaluated.bodies.iter().any(|(body, _)| body == id).then_some(*id),
             Pick::Geom(reference @ GeomRef { element: Element::Face(_), .. }) => evaluated.body_of(reference),
-            Pick::Geom(_) | Pick::Plane(_) | Pick::Region { .. } => None,
+            Pick::Geom(_) | Pick::Plane(_) | Pick::Region { .. } | Pick::SketchLine { .. } | Pick::Axis(_) => None,
+        }
+    }
+
+    /// The line this pick is, if it is one: an edge, a sketch's line or an
+    /// origin axis.
+    pub fn line(&self) -> Option<LineRef> {
+        match self {
+            Pick::Geom(edge @ GeomRef { element: Element::Edge(_), .. }) => Some(LineRef::Edge { edge: edge.clone() }),
+            Pick::SketchLine { sketch, line } => Some(LineRef::Sketch { sketch: *sketch, line: *line }),
+            Pick::Axis(axis) => Some(LineRef::Origin { axis: *axis }),
+            Pick::Body(_) | Pick::Geom(_) | Pick::Plane(_) | Pick::Region { .. } => None,
+        }
+    }
+
+    /// The pick a line is when picked.
+    pub fn of_line(line: &LineRef) -> Pick {
+        match line {
+            LineRef::Origin { axis } => Pick::Axis(*axis),
+            LineRef::Edge { edge } => Pick::Geom(edge.clone()),
+            LineRef::Sketch { sketch, line } => Pick::SketchLine { sketch: *sketch, line: *line },
         }
     }
 
@@ -56,8 +81,8 @@ impl Pick {
     pub fn feature(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
         match self {
             Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => Some(*id),
-            Pick::Plane(PlaneRef::Origin(_)) => None,
-            Pick::Region { sketch, .. } => Some(*sketch),
+            Pick::Region { sketch, .. } | Pick::SketchLine { sketch, .. } => Some(*sketch),
+            Pick::Plane(PlaneRef::Origin(_)) | Pick::Axis(_) => None,
             Pick::Geom(_) => self.body(evaluated),
         }
     }
@@ -66,8 +91,8 @@ impl Pick {
     pub fn features(&self) -> Box<dyn Iterator<Item = PropFeatureId> + '_> {
         match self {
             Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => Box::new(std::iter::once(*id)),
-            Pick::Plane(PlaneRef::Origin(_)) => Box::new(std::iter::empty()),
-            Pick::Region { sketch, .. } => Box::new(std::iter::once(*sketch)),
+            Pick::Plane(PlaneRef::Origin(_)) | Pick::Axis(_) => Box::new(std::iter::empty()),
+            Pick::Region { sketch, .. } | Pick::SketchLine { sketch, .. } => Box::new(std::iter::once(*sketch)),
             Pick::Geom(reference) => Box::new(reference.source.features()),
         }
     }
@@ -470,6 +495,27 @@ impl PropEditor {
         id
     }
 
+    /// `first`, then the feature `then` builds on it, at the bar as one undo
+    /// step; returns the second.
+    pub fn add_pair(&mut self, first: FeatureOp, then: impl FnOnce(PropFeatureId) -> FeatureOp) -> PropFeatureId {
+        let anchor = self.rollback;
+        let id = self.edit(|doc| {
+            let at = anchor.and_then(|anchor| doc.index_of(anchor)).map(|at| at + 1);
+            let first = match at {
+                Some(at) => doc.insert_at(at, first),
+                None => doc.push(first),
+            };
+            match at {
+                Some(at) => doc.insert_at(at + 1, then(first)),
+                None => doc.push(then(first)),
+            }
+        });
+        if anchor.is_some() {
+            self.roll_back_to(Some(id));
+        }
+        id
+    }
+
     /// In pick order; the primary last.
     pub fn picks(&self) -> &[Pick] {
         &self.picks
@@ -513,6 +559,10 @@ impl PropEditor {
             Some(FeatureOp::Plane { .. }) => Pick::Plane(PlaneRef::Feature(id)),
             _ => Pick::Body(id),
         }
+    }
+
+    pub fn set_picks(&mut self, picks: Vec<Pick>) {
+        self.picks = picks;
     }
 
     pub fn select_pick(&mut self, pick: Pick) {
@@ -678,7 +728,7 @@ mod tests {
         });
         doc.push(FeatureOp::Mirror {
             target: drilled,
-            axis: Axis::X,
+            about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz),
             offset: 0.0,
             keep_original: true,
         });
@@ -702,12 +752,13 @@ mod tests {
         let row = doc.push(FeatureOp::Pattern {
             target: a,
             count: 3,
-            along: PatternKind::Linear { step: [0.0, 0.0, 0.05] },
+            along: PatternKind::Linear { spacing: 0.05, direction: LineRef::Origin { axis: Axis::Z } },
         });
+        let edge = GeomRef { element: Element::Edge(4), source: crate::prop::reference::Source { feature: a, copies: vec![] } };
         doc.push(FeatureOp::Pattern {
             target: row,
             count: 6,
-            along: PatternKind::Radial { axis: Axis::Z, centre: [0.0, 0.1, 0.0], degrees: 360.0 },
+            along: PatternKind::Radial { degrees: 360.0, axis: LineRef::Edge { edge } },
         });
         let text = to_text(&doc).unwrap();
         assert_eq!(parse(&text).unwrap(), doc, "{text}");
@@ -797,7 +848,7 @@ mod tests {
         let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
         let mirrored = doc.push(FeatureOp::Mirror {
             target: cut,
-            axis: Axis::X,
+            about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz),
             offset: 0.0,
             keep_original: true,
         });
@@ -878,7 +929,7 @@ mod tests {
         let joined = doc.push(FeatureOp::Boolean { op: BooleanOp::Union, target: cut, tool: c });
         doc.push(FeatureOp::Mirror {
             target: joined,
-            axis: Axis::X,
+            about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz),
             offset: 0.0,
             keep_original: true,
         });
@@ -1168,7 +1219,7 @@ mod tests {
         let standing = editor.doc().evaluate();
         let eats_b = editor.edit(|doc| doc.push(FeatureOp::Mirror {
             target: b,
-            axis: crate::prop::feature::Axis::X,
+            about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz),
             offset: 0.0,
             keep_original: false,
         }));
@@ -1327,7 +1378,7 @@ mod tests {
         let mut editor = PropEditor::default();
         let a = editor.edit(|doc| doc.push(FeatureOp::default()));
         let mirror = editor.edit(|doc| {
-            doc.push(FeatureOp::Mirror { target: a, axis: crate::prop::feature::Axis::X, offset: 0.0, keep_original: true })
+            doc.push(FeatureOp::Mirror { target: a, about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz), offset: 0.0, keep_original: true })
         });
         let corner = |copies| Pick::Geom(GeomRef { element: Element::Point(0), source: Source { feature: a, copies } });
         editor.toggle(corner(vec![]));

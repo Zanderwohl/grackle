@@ -139,7 +139,7 @@ impl PlaneRef {
 }
 
 /// Metres. An origin plane's half-width on an empty prop.
-const MIN_ORIGIN_HALF: f32 = 0.05;
+pub(crate) const MIN_ORIGIN_HALF: f32 = 0.05;
 
 /// A plane as evaluated: the plane, and the square it is drawn and picked as.
 #[derive(Clone, Debug, PartialEq)]
@@ -163,7 +163,6 @@ impl Datum {
     /// grip or a cannon.
     pub fn origin(which: OriginPlane, half: f32) -> Datum {
         let plane = which.plane();
-        let half = half.max(MIN_ORIGIN_HALF);
         let corner = |u: f32, v: f32| *plane.x * u * half + *plane.y() * v * half;
         let corners = [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)];
         Datum { id: PlaneRef::Origin(which), plane, corners }
@@ -194,7 +193,7 @@ fn locate_all(picks: &[Pick], evaluated: &Evaluated) -> Option<Vec<Located>> {
     picks
         .iter()
         .map(|pick| match pick {
-            Pick::Body(_) | Pick::Plane(_) | Pick::Region { .. } => None,
+            Pick::Body(_) | Pick::Plane(_) | Pick::Region { .. } | Pick::SketchLine { .. } | Pick::Axis(_) => None,
             Pick::Geom(reference) => evaluated.locate(reference),
         })
         .collect()
@@ -477,7 +476,7 @@ mod tests {
             PropFeatureId(2),
             FeatureOp::Mirror {
                 target: PropFeatureId(0),
-                axis: crate::prop::feature::Axis::Z,
+                about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Xy),
                 offset: 1.0,
                 keep_original: false,
             },

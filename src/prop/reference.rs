@@ -508,24 +508,49 @@ pub fn element_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
     pickables: &'a [Pickable],
     pointer: &Pointer<P>,
 ) -> Option<&'a Pickable> {
-    let nearest = |within: f32, distance: &dyn Fn(&Located) -> Option<f32>| {
-        pickables
-            .iter()
-            .filter_map(|pickable| Some((pickable, distance(&pickable.at)?)))
-            .filter(|(_, pixels)| *pixels <= within)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(pickable, _)| pickable)
-    };
-    nearest(POINT_PICK_PX, &|at| match at {
+    corner_under(pickables, pointer).or_else(|| edge_under(pickables, pointer))
+}
+
+pub fn corner_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
+    pickables: &'a [Pickable],
+    pointer: &Pointer<P>,
+) -> Option<&'a Pickable> {
+    nearest(pickables, POINT_PICK_PX, |at| match at {
         Located::Point(p) => pointer.to_point(*p),
         Located::Edge(..) | Located::Face { .. } => None,
     })
-    .or_else(|| {
-        nearest(EDGE_PICK_PX, &|at| match at {
-            Located::Edge(a, b) => pointer.to_segment(*a, *b),
-            Located::Point(_) | Located::Face { .. } => None,
-        })
+}
+
+pub fn edge_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
+    pickables: &'a [Pickable],
+    pointer: &Pointer<P>,
+) -> Option<&'a Pickable> {
+    nearest(pickables, EDGE_PICK_PX, |at| match at {
+        Located::Edge(a, b) => pointer.to_segment(*a, *b),
+        Located::Point(_) | Located::Face { .. } => None,
     })
+}
+
+fn nearest(pickables: &[Pickable], within: f32, distance: impl Fn(&Located) -> Option<f32>) -> Option<&Pickable> {
+    pickables
+        .iter()
+        .filter_map(|pickable| Some((pickable, distance(&pickable.at)?)))
+        .filter(|(_, pixels)| *pixels <= within)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(pickable, _)| pickable)
+}
+
+/// The nearest of `segments` within [`EDGE_PICK_PX`].
+pub fn segment_under<T: Clone, P: Fn(Vec3) -> Option<Vec2>>(
+    segments: impl IntoIterator<Item = (T, Vec3, Vec3)>,
+    pointer: &Pointer<P>,
+) -> Option<T> {
+    segments
+        .into_iter()
+        .filter_map(|(what, a, b)| Some((what, pointer.to_segment(a, b)?)))
+        .filter(|(_, pixels)| *pixels <= EDGE_PICK_PX)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(what, _)| what)
 }
 
 /// The point of segment `a`–`b` nearest the line through `origin` along
@@ -632,7 +657,7 @@ mod tests {
                 PropFeatureId(1),
                 FeatureOp::Mirror {
                     target: PropFeatureId(0),
-                    axis: crate::prop::feature::Axis::X,
+                    about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz),
                     offset: 0.0,
                     keep_original,
                 },
