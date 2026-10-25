@@ -15,7 +15,6 @@ pub const MIN_SIDES: u32 = 3;
 /// triangle budget a turned part can cost.
 pub const MAX_REVOLVE_STEPS: u32 = 24;
 
-/// How many steps a revolve asked for `requested` takes.
 pub fn revolve_steps(requested: u32) -> u32 {
     requested.clamp(MIN_SIDES, MAX_REVOLVE_STEPS)
 }

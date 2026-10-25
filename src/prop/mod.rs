@@ -65,7 +65,6 @@ pub mod tool;
 pub mod ui;
 pub mod view;
 
-/// The prop editor: a mode, a viewport, and the panels around it.
 pub struct PropEditorPlugin;
 
 impl Plugin for PropEditorPlugin {
@@ -117,11 +116,9 @@ fn load_the_example_prop(assets: Res<Assets>, mut editor: ResMut<PropEditor>) {
     }
 }
 
-/// Saving is publishing: the cache bakes once per name, so without this a
-/// held weapon keeps its pre-save shape for the rest of the process.
-///
-/// Watches a save counter rather than `Res::is_changed`, which fires on
-/// every frame of a drag.
+/// The cache bakes once per name, so without this a held weapon keeps its
+/// pre-save shape for the rest of the process. Watches a save counter because
+/// `Res::is_changed` fires on every frame of a drag.
 fn publish_the_saved_prop(
     editor: Res<PropEditor>,
     mut cache: ResMut<baked::PropCache>,

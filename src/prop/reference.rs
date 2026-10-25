@@ -1,16 +1,11 @@
 //! Naming a prop's corners and edges so something later in the list can refer
 //! to them.
 //!
-//! The kernel's output is convex polygon soup, split wherever a boolean cut
-//! it, so nothing in a [`Solid`] is stable from one evaluation to the next. A
-//! reference instead names where the geometry *came from*: the generator that
-//! made it ([`Outline`], built from the same sweep the solid was), and every
-//! mirror or pattern copy it went through on the way. A boolean cannot break
-//! one, since a reference never looks at a boolean's result; a corner that a
-//! boolean cut away still resolves, to where it would have been.
-//!
-//! The price is that an edge a boolean *made*, where a bore leaves a face, has
-//! no name and cannot be picked.
+//! Booleans re-split the kernel's polygons, so nothing in a [`Solid`] is stable
+//! between evaluations. A reference names the generator instead ([`Outline`],
+//! from the same sweep as the solid) and every mirror or pattern copy it went
+//! through. A corner a boolean cut away still resolves; an edge a boolean made
+//! has no name and cannot be picked.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -37,7 +32,6 @@ pub struct Source {
 }
 
 impl Source {
-    /// Every feature the name depends on.
     pub fn features(&self) -> impl Iterator<Item = PropFeatureId> + '_ {
         std::iter::once(self.feature).chain(self.copies.iter().map(|copy| copy.by))
     }
@@ -64,14 +58,12 @@ pub struct GeomRef {
 pub enum Located {
     Point(Vec3),
     Edge(Vec3, Vec3),
-    /// The loop as generated, and which way is out of the body. Every
-    /// generator face is flat by construction — a revolve's side has two
-    /// parallel sweep edges — but [`Self::is_flat`] checks rather than trusts.
+    /// `normal` points out of the body. Generator faces should be flat, but
+    /// [`Self::is_flat`] checks rather than trusts.
     Face { points: Vec<Vec3>, normal: Vec3 },
 }
 
 impl Located {
-    /// Every point that describes it.
     pub fn points(&self) -> Vec<Vec3> {
         match self {
             Located::Point(p) => vec![*p],
@@ -81,10 +73,8 @@ impl Located {
     }
 }
 
-/// One face of a generator: indices into [`Outline::points`] round its loop,
-/// and a direction known to be out of the body. Stored rather than derived from
-/// the winding, because the kernel's winding is measured afterwards
-/// ([`Solid::oriented_outward`]) and nothing here is promised it.
+/// `outward` is stored rather than derived from the winding, because the
+/// winding is only fixed afterwards by [`Solid::oriented_outward`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutlineFace {
     pub points: Vec<u32>,
@@ -178,9 +168,7 @@ impl Outline {
             }
         }
 
-        // The profile's outward direction turned to the side's middle angle,
-        // which is the swept surface's outward direction whichever side of
-        // the axis the profile is on.
+        // The profile's outward direction turned to the side's middle angle.
         let out = outward_of_profile(&loop_);
         let mut faces = Vec::with_capacity((steps * n + 2) as usize);
         for k in 0..steps {
@@ -242,8 +230,7 @@ impl Outline {
         outline
     }
 
-    /// `other`'s elements after this one's, renumbered to point at their own
-    /// corners.
+    /// `other`'s elements after this one's, renumbered.
     pub fn append(&mut self, other: Outline) {
         let offset = self.points.len() as u32;
         self.points.extend(other.points);
@@ -264,8 +251,7 @@ impl Outline {
         self
     }
 
-    /// Reflected in the plane through `origin` with normal `normal`, as
-    /// [`Solid::mirrored`] does.
+    /// Must match [`Solid::mirrored`].
     pub fn mirrored(mut self, origin: Vec3, normal: Vec3) -> Outline {
         let normal = normal.normalize_or_zero();
         for point in &mut self.points {
@@ -327,7 +313,7 @@ pub fn newell(points: &[Vec3]) -> Vec3 {
 }
 
 impl Located {
-    /// A face that lies in one plane, to within the kernel's tolerance.
+    /// To within [`ON_SURFACE`].
     pub fn is_flat(&self) -> bool {
         match self {
             Located::Face { points, normal } => {
@@ -358,10 +344,9 @@ impl Located {
     }
 }
 
-/// The named flat face of `wires` that a click at `hit`, on a polygon facing
-/// `facing`, landed on. Matched by plane and by containment rather than carried
-/// through the kernel: a hole's wall faces the other way from the tool that
-/// cut it, so either facing matches.
+/// The named flat face a click at `hit`, on a polygon facing `facing`, landed
+/// on. Either facing matches, because a hole's wall faces the other way from
+/// the tool face that cut it.
 pub fn face_at(wires: &[Wire], hit: Vec3, facing: Vec3) -> Option<GeomRef> {
     wires.iter().find_map(|wire| {
         (0..wire.outline.faces.len() as u32).find_map(|i| {
@@ -374,7 +359,7 @@ pub fn face_at(wires: &[Wire], hit: Vec3, facing: Vec3) -> Option<GeomRef> {
     })
 }
 
-/// One generator's outline, in the prop's space, under its name.
+/// In the prop's space.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Wire {
     pub source: Source,
@@ -409,11 +394,9 @@ const ON_SURFACE: f32 = 1e-4;
 /// An edge shorter than this has collapsed onto a point; metres.
 const DEGENERATE_EDGE: f32 = 1e-5;
 
-/// Every named element of `wires` that lies on `solid`'s surface. A cut-away
-/// corner still resolves but is not offered: a dot floating in the air beside
-/// a bore reads as a bug. An edge is offered when both ends and its middle
-/// are on the surface, which keeps a long tool's sides from poking out of the
-/// hole it made.
+/// Every named element of `wires` on `solid`'s surface. A cut-away corner is
+/// not offered: a dot floating beside a bore reads as a bug. An edge needs its
+/// middle on the surface too, or a long tool's sides poke out of its hole.
 pub fn pickables(body: PropFeatureId, solid: &Solid, wires: &[Wire]) -> Vec<Pickable> {
     let mut found = Vec::new();
     for wire in wires {
@@ -501,9 +484,6 @@ impl<P: Fn(Vec3) -> Option<Vec2>> Pointer<P> {
     }
 }
 
-/// The element under the pointer: the nearest corner within
-/// [`POINT_PICK_PX`], or failing that the nearest edge within
-/// [`EDGE_PICK_PX`].
 pub fn element_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
     pickables: &'a [Pickable],
     pointer: &Pointer<P>,
@@ -540,7 +520,6 @@ fn nearest(pickables: &[Pickable], within: f32, distance: impl Fn(&Located) -> O
         .map(|(pickable, _)| pickable)
 }
 
-/// The nearest of `segments` within [`EDGE_PICK_PX`].
 pub fn segment_under<T: Clone, P: Fn(Vec3) -> Option<Vec2>>(
     segments: impl IntoIterator<Item = (T, Vec3, Vec3)>,
     pointer: &Pointer<P>,
@@ -710,9 +689,7 @@ mod tests {
         assert!(element_under(&evaluated.pickables, &pointer).is_none());
     }
 
-    /// Fails if a face's normal is derived from a winding nothing promises:
-    /// every flat face must point away from the middle of its own (convex)
-    /// body, however the profile was wound and whichever way it was swept.
+    /// Fails if a face's normal comes from a winding nothing promises.
     #[test]
     fn every_flat_face_points_out_of_its_body() {
         let clockwise = Profile::Points { points: vec![[0.0, 0.0], [0.0, 0.1], [0.1, 0.1], [0.1, 0.0]] };
@@ -754,9 +731,8 @@ mod tests {
         assert!(normal.distance(Vec3::Z) < 1e-6, "{normal}");
     }
 
-    /// A revolve's side between two rings is flat — its two sweep edges are
-    /// parallel chords — so a sphere's facet is a face like any other, though
-    /// the kernel splits it into triangles.
+    /// A revolve's side is flat (two parallel chords), so a sphere's facet is
+    /// a face even though the kernel splits it into triangles.
     #[test]
     fn a_spheres_facet_is_a_face() {
         let ball = primitive(0, Shape::Sphere { sides: 8, rings: 5, radius: 0.2 }, Vec3::ZERO);

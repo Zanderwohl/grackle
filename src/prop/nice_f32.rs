@@ -6,7 +6,6 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// The shortest decimal that reads back as this exact `f32`.
 pub(crate) fn widen(value: f32) -> f64 {
     // Infinities and NaN: leave the failure to serde rather than panic here.
     format!("{value}").parse().unwrap_or(value as f64)

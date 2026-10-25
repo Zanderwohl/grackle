@@ -45,7 +45,7 @@ impl Archetype {
         }
     }
 
-    /// Placed in a map, as against carried by a body. What has colliders.
+    /// Placed in a map rather than carried; these have colliders.
     pub fn is_placed(self) -> bool {
         matches!(self, Archetype::Obstacle | Archetype::Breakable | Archetype::Pickup)
     }
@@ -167,7 +167,6 @@ impl RoundedBox {
     pub fn overlaps(&self, centre: Vec3, half: Vec3) -> bool {
         let gaps = self.gaps(centre, half);
         if self.radius <= 0.0 {
-            // Strict on every axis, so a box resting on a crate is not inside it.
             return (0..3).all(|axis| {
                 (centre[axis] - self.centre[axis]).abs() < half[axis] + self.core[axis]
             });
@@ -293,7 +292,7 @@ pub struct HatSpec {
     /// Euler angles in axis order.
     #[serde(default, with = "crate::prop::nice_f32::array")]
     pub rotation: [f32; 3],
-    /// A hat sized for one head is not sized for another. Keyed by `Class::key`.
+    /// Keyed by `Class::key`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub per_class: BTreeMap<String, HatOverride>,
 }
@@ -344,7 +343,7 @@ impl HatSpec {
     }
 
     /// `edited` written back as `class` sees it; an override keeps only what
-    /// differs from the base, as a hold's does.
+    /// differs from the base.
     pub fn applied(&self, class: Option<Class>, edited: &HatFit) -> HatSpec {
         let key = class.map(Class::key).filter(|key| self.per_class.contains_key(key));
         let mut applied = self.clone();

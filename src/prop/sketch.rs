@@ -1,11 +1,9 @@
 //! A 2D drawing on a plane, which sweeps will turn into solids. See
 //! `documentation/sketches.md`.
 //!
-//! A flat set, not a feature list: nothing in a drawing depends on the order
-//! it was drawn in. Lines name their ends by id, so two lines sharing a corner
-//! share a point, and whether a loop is closed is a question about ids rather
-//! than about two coordinates agreeing. Undo is the prop's own; a sketch is
-//! part of the document.
+//! A flat set, not a feature list. Lines name their ends by id, so whether a
+//! loop is closed is about ids, not coordinates agreeing. Undo is the
+//! document's.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -67,17 +65,15 @@ impl SketchEntity {
     }
 }
 
-/// A region a sweep takes, kept on the sketch so that every sweep using it
-/// names this rather than the lines round it — re-picking it here re-points
-/// them all. See [`Arrangement::resolve`] for what it finds once the drawing
-/// has changed.
+/// Sweeps name this rather than the lines round it, so one re-pick re-points
+/// them all. See [`Arrangement::resolve`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SketchRegion {
     pub id: SketchId,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub label: String,
-    /// Where its middle was when picked, in the plane. Only chooses between
-    /// regions answering to the same name.
+    /// Plane coordinates when picked. Only breaks ties between regions with
+    /// the same name.
     #[serde(with = "crate::prop::nice_f32::array")]
     pub hint: [f32; 2],
     pub bounds: Vec<Bound>,
@@ -120,7 +116,6 @@ impl Sketch {
         id
     }
 
-    /// A line's two ends, if `id` is a line whose points are both there.
     pub fn line(&self, id: SketchId) -> Option<(Vec2, Vec2)> {
         let (_, a, b, _) = self.lines().find(|(line, ..)| *line == id)?;
         Some((self.point(a)?, self.point(b)?))
@@ -145,8 +140,7 @@ impl Sketch {
         }
     }
 
-    /// Takes the points and entities named, and every entity that ends on a
-    /// point taken — a line with one end is no line.
+    /// Also takes every entity that ends on a point taken.
     pub fn remove(&mut self, ids: &[SketchId]) {
         self.points.retain(|point| !ids.contains(&point.id));
         let points = &self.points;
@@ -155,10 +149,9 @@ impl Sketch {
         });
     }
 
-    /// Where `line` is cut by everything else drawn — every other line
-    /// crossing it, construction or not, and every point lying on it — as
-    /// distances along it from 0 at its first point to 1 at its second,
-    /// sorted, ends included.
+    /// Where every other line (construction too) and every point cuts `line`,
+    /// as sorted fractions from 0 at its first point to 1 at its second, ends
+    /// included.
     pub fn cuts(&self, line: SketchId) -> Vec<f32> {
         let Some((a, b)) = self.line(line) else { return vec![] };
         let mut cuts = vec![0.0, 1.0];
@@ -175,8 +168,7 @@ impl Sketch {
         cuts
     }
 
-    /// The piece of `line` between the two cuts either side of `near`, as
-    /// distances along it.
+    /// The cuts either side of `near`, as fractions along `line`.
     pub fn piece_of(&self, line: SketchId, near: Vec2) -> Option<(f32, f32)> {
         let (a, b) = self.line(line)?;
         let along = b - a;
@@ -185,10 +177,8 @@ impl Sketch {
         cuts.windows(2).find(|pair| t <= pair[1]).or(cuts.windows(2).last()).map(|pair| (pair[0], pair[1]))
     }
 
-    /// Takes away the piece of `line` nearest `near`, leaving the rest of the
-    /// line where it was: the whole line if nothing cuts it, one end if the
-    /// piece is at an end, or two lines if it is between two cuts. A point
-    /// left on no line goes with it. False if there is no such line.
+    /// Erases the piece of `line` nearest `near`, leaving the rest where it
+    /// was. A point left on no line goes too.
     pub fn erase_piece(&mut self, line: SketchId, near: Vec2) -> bool {
         let Some((t0, t1)) = self.piece_of(line, near) else { return false };
         let Some((a, b)) = self.line(line) else { return false };
@@ -210,9 +200,8 @@ impl Sketch {
                 self.set_ends(line, from, cut);
             }
             (false, false) => {
-                // The far part becomes a line of its own, so a named region
-                // running along it has to be told its new id. Which ones do
-                // is asked before the erase, while it is still one line.
+                // The far part gets a new id, so regions along it must be
+                // re-pointed; which ones is asked while it is still one line.
                 let arrangement = arrange(self);
                 let along: Vec<(SketchId, bool, bool)> = self
                     .regions
@@ -239,8 +228,7 @@ impl Sketch {
                     if !on_near {
                         entry.bounds.retain(|bound| bound.entity != line);
                     }
-                    // Sorted as an arrangement names a region, or an exact
-                    // match compares two orders of one set.
+                    // Sorted as an arrangement sorts, or an exact match fails.
                     entry.bounds.sort();
                     entry.bounds.dedup();
                 }
@@ -250,9 +238,8 @@ impl Sketch {
         true
     }
 
-    /// Takes away every piece of every line the path crosses, as one sweep
-    /// of an eraser. Pieces are found by where the path crossed them, so a
-    /// line split by an earlier piece's erasing is still found.
+    /// Pieces are found by where the path crossed them, so a line split by an
+    /// earlier erase in the same stroke is still found.
     pub fn erase_along(&mut self, path: &[Vec2]) -> usize {
         let mut hits: Vec<Vec2> = Vec::new();
         for step in path.windows(2) {
@@ -275,7 +262,6 @@ impl Sketch {
         erased
     }
 
-    /// The point already at `at`, or a new one there.
     fn point_at(&mut self, at: Vec2) -> SketchId {
         match self.points.iter().find(|point| Vec2::from_array(point.at).distance(at) < TOLERANCE) {
             Some(point) => point.id,
@@ -302,8 +288,7 @@ impl Sketch {
         self.regions.iter().find(|region| region.id == id)
     }
 
-    /// The entry for `region`: the one already naming it, so two sweeps of
-    /// one region share it, or a new one.
+    /// Reuses an entry already naming `region`, so two sweeps of it share one.
     pub fn adopt_region(&mut self, region: &Region) -> SketchId {
         if let Some(existing) = self.regions.iter().find(|entry| entry.bounds == region.name.bounds) {
             return existing.id;
@@ -318,7 +303,6 @@ impl Sketch {
         id
     }
 
-    /// Points entry `id` at `region` instead, for every sweep using it.
     pub fn repoint_region(&mut self, id: SketchId, region: &Region) {
         if let Some(entry) = self.regions.iter_mut().find(|entry| entry.id == id) {
             entry.bounds = region.name.bounds.clone();
@@ -338,13 +322,12 @@ impl Sketch {
     }
 }
 
-/// A sketch as evaluated: where its plane was when it ran.
+/// Where its plane was when it was evaluated.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlacedSketch {
     pub id: crate::prop::feature::PropFeatureId,
     pub plane: Plane,
     pub sketch: Sketch,
-    /// Its regions, found once per evaluation.
     pub arrangement: Arrangement,
 }
 
@@ -353,19 +336,16 @@ impl PlacedSketch {
         self.plane.lift(at)
     }
 
-    /// What region entry `id` means in the drawing as it now stands.
     pub fn resolve(&self, id: SketchId) -> Option<Region> {
         let entry = self.sketch.region(id)?;
         self.arrangement.resolve(&entry.name(), Vec2::from_array(entry.hint))
     }
 
-    /// How a region entry is shown: its label, or its id.
     pub fn region_label(&self, id: SketchId) -> String {
         region_label(&self.sketch, id)
     }
 
-    /// Each line's ends in the prop's space, and whether it is construction.
-    /// A line naming a point that is not there is left out.
+    /// In the prop's space. A line naming a missing point is left out.
     pub fn world_lines(&self) -> Vec<(Vec3, Vec3, bool)> {
         self.sketch
             .lines()
@@ -376,7 +356,6 @@ impl PlacedSketch {
     }
 }
 
-/// Whether part of `region`'s outline lies along the segment `a`–`b`.
 fn runs_along(region: &Region, a: Vec2, b: Vec2) -> bool {
     let on = |p: Vec2| distance_to_segment(p, a, b) < TOLERANCE * 10.0;
     let outer = &region.outer;
@@ -421,7 +400,6 @@ mod tests {
         sketch
     }
 
-    /// A doc with a sketch on an origin plane and one on a plane feature.
     fn doc() -> (PropDoc, PropFeatureId) {
         let mut doc = PropDoc::new("test");
         let cube = doc.push(FeatureOp::Primitive {
@@ -565,8 +543,8 @@ mod tests {
     }
 
 
-    /// Fails if a region along the far end of a line loses its name when the
-    /// middle of that line is erased, which gives the far end a new id.
+    /// Fails if erasing a line's middle, which gives the far end a new id,
+    /// loses the region along that end.
     #[test]
     fn erasing_a_middle_piece_keeps_the_regions_along_either_end() {
         let mut sketch = Sketch::default();

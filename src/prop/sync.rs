@@ -67,7 +67,6 @@ impl Plugin for PropSyncPlugin {
     }
 }
 
-/// Every model something in play names: weapons, class hats and placed props.
 /// Sorted, so two calls over the same things compare equal.
 fn names_in_use<'a>(
     catalogue: &'a WeaponCatalogue,

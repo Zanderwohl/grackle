@@ -1,14 +1,12 @@
 //! The plane a selection describes, if it describes one, and the plane
 //! features made from them.
 //!
-//! Accepted selections are three corners, an edge and a corner, two edges, one
-//! flat face, or one plane feature. The frame is decided by pick order alone —
-//! never by bounds or the longest edge — so nudging one corner cannot spin
-//! everything drawn on the plane through a right angle: the origin is the
-//! first point, `x` runs towards the second, and the normal follows the
-//! right-hand rule. An edge, when there is one, supplies the first two points,
-//! so `x` runs along it. A face's normal is the way out of its body, so
-//! something sketched on it extrudes outwards.
+//! Accepted: three corners, an edge and a corner, two edges, one flat face, or
+//! one plane feature. The frame comes from pick order alone, not bounds or the
+//! longest edge, so nudging one corner cannot turn the plane's `x` through a
+//! right angle: origin at the first point, `x` towards the second (along an
+//! edge if there is one), normal by the right-hand rule. A face's normal points
+//! out of its body, so a sketch on it extrudes outwards.
 //!
 //! Three origin planes are always present, so an empty prop has somewhere to
 //! draw.
@@ -28,10 +26,9 @@ use crate::tool::tool_helpers::dashed_line;
 /// against are on it; the same order as picking's surface tolerance.
 const ON_PLANE: f32 = 1e-4;
 
-/// How far off the line the furthest point must be, as a fraction of how far
-/// the selection reaches from its origin: roughly the sine of the smallest
-/// angle accepted. Below it a plane exists but tilts wildly when one corner
-/// moves a fraction of a millimetre, and anything drawn on it would too.
+/// How far off the line the furthest point must be, as a fraction of the
+/// selection's reach: roughly the sine of the smallest angle accepted. Below it
+/// the plane tilts wildly when one corner moves a fraction of a millimetre.
 const MIN_SPREAD: f32 = 0.01;
 
 /// The drawn square's margin past what it was made from, as a fraction of its
@@ -87,7 +84,6 @@ impl Plane {
     }
 }
 
-/// One of the three planes through the prop's origin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OriginPlane {
@@ -158,9 +154,7 @@ impl Datum {
         Some(Datum { id: PlaneRef::Feature(id), plane, corners })
     }
 
-    /// An origin plane, drawn as a square `half` each way of the origin:
-    /// sized to the prop rather than fixed, since a prop may be a pistol
-    /// grip or a cannon.
+    /// `half` is sized to the prop: a prop may be a pistol grip or a cannon.
     pub fn origin(which: OriginPlane, half: f32) -> Datum {
         let plane = which.plane();
         let corner = |u: f32, v: f32| *plane.x * u * half + *plane.y() * v * half;
@@ -169,10 +163,7 @@ impl Datum {
     }
 }
 
-/// The plane through what is picked, or `None` if the picks do not make one:
-/// the wrong kinds or counts, a body among them, something that does not
-/// resolve, a face that is not flat, or geometry that is coincident, collinear
-/// or skew.
+/// The plane through what is picked, if the picks make one.
 pub fn plane_through(picks: &[Pick], evaluated: &Evaluated) -> Option<Plane> {
     picked_plane(picks, evaluated).map(|(plane, _)| plane)
 }
@@ -187,8 +178,6 @@ fn picked_plane(picks: &[Pick], evaluated: &Evaluated) -> Option<(Plane, [Vec3; 
     Some((plane, preview_corners(&plane, &all_points(&located))))
 }
 
-/// Every pick's position, or `None` if any is not geometry or does not
-/// resolve.
 fn locate_all(picks: &[Pick], evaluated: &Evaluated) -> Option<Vec<Located>> {
     picks
         .iter()
@@ -284,12 +273,11 @@ pub fn preview_corners(plane: &Plane, points: &[Vec3]) -> [Vec3; 4] {
     [at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0)]
 }
 
-/// The plane the current selection describes. Recomputed only when the picks
-/// or the evaluated prop change, never because a frame went by.
+/// The plane the current selection describes, recomputed only when the picks
+/// or the build change.
 #[derive(Resource, Default)]
 pub struct PickedPlane {
     pub plane: Option<Plane>,
-    /// Where the preview is drawn, found alongside `plane`.
     corners: Option<[Vec3; 4]>,
     /// The picks and build generation `plane` was found from.
     from: Option<(Vec<Pick>, Option<u64>)>,

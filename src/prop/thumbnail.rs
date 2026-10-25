@@ -71,7 +71,6 @@ const ATTEMPTS: u32 = 40;
 /// dropped outright, e.g. while the window is minimised.
 const CAPTURE_TIMEOUT: u32 = 120;
 
-/// What a camera turned to some rotation needs to see a set of points.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Framing {
     pub translation: Vec3,
@@ -79,13 +78,11 @@ pub struct Framing {
     pub near: f32,
 }
 
-/// Where a camera turned to `rotation` must stand for every point to be inside
-/// a square frame of field of view `fov`, `padding` of the half-width in from
-/// each edge, as close as that allows. `None` with no points.
+/// The closest a camera at `rotation` can stand with every point `padding` of
+/// the half-width inside a square frame.
 ///
 /// Exact rather than a bounding sphere: for a fixed direction, keeping a point
-/// inside the frame is a pair of linear bounds on the camera's position, so
-/// the closest position that satisfies all of them has a closed form.
+/// in frame is a pair of linear bounds on the camera's position.
 pub fn frame(points: impl IntoIterator<Item = Vec3>, rotation: Quat, fov: f32, padding: f32) -> Option<Framing> {
     let slope = (fov / 2.0).tan() * (1.0 - padding);
     let to_view = rotation.inverse();
@@ -174,7 +171,6 @@ struct Sitting {
     studio: Entity,
     target: Handle<Image>,
     frames: u32,
-    /// The frame to take the next picture on.
     shoot_at: u32,
     /// The screenshot in flight, so a late answer to an abandoned one is not
     /// taken for this.
@@ -375,7 +371,6 @@ fn photograph(
                 studio.spawn((
                     Camera3d::default(),
                     Camera {
-                        // Before the window's cameras, though nothing depends on it.
                         order: -1,
                         clear_color: ClearColorConfig::Custom(Color::NONE),
                         ..default()

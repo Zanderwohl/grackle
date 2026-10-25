@@ -75,7 +75,6 @@ impl Solid {
         self.transformed(Transform::from_translation(offset))
     }
 
-    /// The solid reflected in a plane through `origin` with normal `normal`.
     pub fn mirrored(self, origin: Vec3, normal: Vec3) -> Solid {
         let normal = normal.normalize_or_zero();
         if normal == Vec3::ZERO {
@@ -316,7 +315,7 @@ impl Solid {
         Solid::from_polygons(polygons)
     }
 
-    /// A box centred on the origin.
+    /// Centred on the origin.
     pub fn cuboid(size: Vec3, surface: Surface) -> Solid {
         Solid::extrude(
             &Profile::Rect { half: [size.x / 2.0, size.y / 2.0] },
@@ -465,9 +464,8 @@ impl Shape {
         }
     }
 
-    /// A radial axis grows both ways, so a handle on it sets the radius and
-    /// the centre stays put. A box's faces move independently. Wrong, a
-    /// cylinder slides sideways on every resize.
+    /// A radial axis grows both ways, so its handle sets the radius and the
+    /// centre stays put; treated as free, a cylinder slides sideways on resize.
     pub fn axis_is_radial(&self, axis: usize) -> bool {
         match self {
             Shape::Box { .. } | Shape::Wedge { .. } => false,
@@ -541,7 +539,6 @@ impl Shape {
                 Transform::IDENTITY,
             ),
             Shape::Sphere { sides, rings, radius } => {
-                // Half a disc, spun.
                 let rings = rings.max(2);
                 let points: Vec<[f32; 2]> = (0..=rings)
                     .map(|i| {
@@ -773,7 +770,7 @@ mod tests {
         }
     }
 
-    /// Wrong, this costs an entity per face and looks fine.
+    /// Ungrouped costs an entity per face and looks fine.
     #[test]
     fn meshes_are_grouped_by_surface() {
         use crate::prop::surface::{Style, Tint};
