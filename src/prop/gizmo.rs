@@ -75,7 +75,7 @@ impl Handle {
     }
 }
 
-/// The tracer's colour, since that is what will come out of it.
+/// Matches the tracer that comes out of it.
 const MUZZLE_COLOUR: Color = Color::srgb(1.0, 0.85, 0.4);
 /// Metres.
 const MUZZLE_MARK_RADIUS: f32 = 0.012;
@@ -324,9 +324,8 @@ fn drag_the_selected(
             match handle {
                 Handle::Move(axis) => {
                     let moved = (origin + axis_direction(axis) * local_t).to_array();
-                    // Only on a real move: a button held still is not an edit,
-                    // and writing one anyway bumps the generation and dirties
-                    // the document every frame somebody pauses mid-drag.
+                    // Only on a real move, or a pointer held still dirties the
+                    // document every frame.
                     if placement.origin != moved {
                         editor.doc_mut().feature_mut(selected).map(|feature| {
                             feature.op.placement_mut().map(|placement| {
@@ -362,13 +361,9 @@ fn drag_the_selected(
 #[derive(Resource, Default)]
 pub struct HoveredPick(pub Option<Pick>);
 
-/// A click toggles what is under the pointer — a corner, else an edge, else
-/// a sketch's line, else an origin axis, else a plane's border, else a
-/// sketch's region, else a flat face, else a body — and a click on nothing
-/// clears. While a tool is waiting on picks, the first of those it would take:
-/// hovering a corner of a body when a body is wanted offers the body. On the
-/// press, so its gizmos are up by release. Off while the hold's handles are
-/// up, so a near-miss on a grip does not change the modelling selection.
+/// While a tool is waiting on picks, hover offers the first candidate it would
+/// take. On the press, so its gizmos are up by release. Off while the hold's
+/// handles are up, so a near-miss on a grip does not change the selection.
 #[allow(clippy::too_many_arguments)]
 fn pick_in_the_viewport(
     mut editor: ResMut<PropEditor>,
@@ -487,7 +482,6 @@ fn drag_the_hold(
             points.push((Handle::Muzzle(axis), muzzle.point()));
         }
     }
-    // The carry handle needs a figure standing there.
     let arm = figure.map(|(skeleton, ..)| skeleton.proportions().arm_metres());
     let carry_rotation = quat_from_euler(Vec3::from_array(hold.carry_rotation));
     if let Some(arm) = arm {
@@ -827,9 +821,8 @@ mod tests {
     use bevy::gizmos::config::DefaultGizmoConfigGroup;
     use bevy::gizmos::AppGizmoBuilder;
 
-    /// A world `drag_the_selected` can run in, holding an editor open on one
-    /// rotated box — rotated so a re-solved drag would round differently from
-    /// frame to frame, which is the noise a pointer held still must not write.
+    /// Rotated so a re-solved drag rounds differently each frame, which is the
+    /// noise a pointer held still must not write.
     fn a_world_holding_a_box(hold_handles: bool) -> (World, Placement) {
         let placement = Placement { origin: [0.1, 0.2, 0.3], rotation: [0.3, 0.7, 0.1] };
         let mut doc = PropDoc::new("prop.test");
@@ -884,16 +877,8 @@ mod tests {
         Ray3d::new(at + across * 5.0, Dir3::new(-across).unwrap())
     }
 
-    /// **A move arrow held still writes nothing**, and one that moves does.
-    ///
-    /// Every frame of a held drag used to write the placement back, so a
-    /// mapper pausing mid-drag bumped the generation — and dirtied the
-    /// document — sixty times a second for nothing. The press itself is not a
-    /// write either, and the whole drag is still one undo step.
-    /// **A drag held still answers a document that moved under it.** Undo
-    /// mid-drag puts the feature back; the handle is still in the hand, so the
-    /// next frame puts the feature under it again rather than waiting for the
-    /// mouse to move and then jumping.
+    /// After an undo mid-drag, the next frame puts the feature back under the
+    /// still pointer rather than waiting for the mouse to move and jumping.
     #[test]
     fn a_held_drag_answers_an_undo_under_a_still_pointer() {
         let (mut world, placement) = a_world_holding_a_box(false);
@@ -935,6 +920,7 @@ mod tests {
         );
     }
 
+    /// Neither the press nor a still pointer writes, and the drag is one undo step.
     #[test]
     fn a_move_arrow_held_still_writes_nothing() {
         let (mut world, placement) = a_world_holding_a_box(false);

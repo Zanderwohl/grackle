@@ -21,14 +21,13 @@ use crate::common::skeleton::{Pose, Skeleton};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HoldSpec {
-    /// Where the trigger hand grips, in the weapon's own space. Normally the origin.
+    /// In the weapon's own space.
     #[serde(default, with = "crate::prop::nice_f32::array")]
     pub grip: [f32; 3],
     /// How the trigger hand is turned on the grip, as Euler angles in axis
     /// order ([`crate::common::rotation`]).
     #[serde(default = "default_grip_rotation", with = "crate::prop::nice_f32::array")]
     pub grip_rotation: [f32; 3],
-    /// Where the support hand grips, when there is one.
     #[serde(default = "default_support", with = "crate::prop::nice_f32::array")]
     pub support: [f32; 3],
     #[serde(default = "default_support_rotation", with = "crate::prop::nice_f32::array")]
@@ -42,7 +41,7 @@ pub struct HoldSpec {
     /// in fractions of arm length, so it retargets across classes.
     #[serde(default = "default_carry", with = "crate::prop::nice_f32::array")]
     pub carry: [f32; 3],
-    /// How the weapon is turned as it is carried, before the aim is applied.
+    /// Applied before the aim.
     #[serde(default, with = "crate::prop::nice_f32::array")]
     pub carry_rotation: [f32; 3],
     /// Classes that hold this thing differently, keyed by `Class::key`.
@@ -95,9 +94,8 @@ impl ViewmodelSpec {
     }
 }
 
-/// Where shots appear to leave the weapon, in its own space. A fact about the
-/// model rather than the hold, so no class overrides it. Only first person
-/// draws from it today; the shot itself always leaves the eye.
+/// Where shots appear to leave the weapon, in its own space. Drawing only: the
+/// shot itself always leaves the eye.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MuzzleSpec {
     #[serde(with = "crate::prop::nice_f32::array")]
@@ -194,9 +192,8 @@ impl HoldSpec {
         }
     }
 
-    /// This hold with `edited` written into it as `class` sees it. The panel and
-    /// the viewport handles both go through here. An override keeps only what
-    /// differs, so the rest goes on tracking the base.
+    /// This hold with `edited` written into it as `class` sees it. An override
+    /// keeps only what differs, so the rest goes on tracking the base.
     pub fn applied(&self, class: Option<Class>, edited: &HoldSpec) -> HoldSpec {
         let key = class
             .map(Class::key)
@@ -286,8 +283,8 @@ pub fn carry_frame(
     Some(Transform::from_translation(pivot).with_rotation(aim))
 }
 
-/// Put the hands on a weapon that is already placed. The reference figure and
-/// a body in a match both use this. Returns how each hand did, trigger hand first.
+/// Put the hands on a weapon that is already placed. Returns how each hand
+/// did, trigger hand first.
 pub fn grip_with(
     skeleton: &Skeleton,
     pose: &mut Pose,

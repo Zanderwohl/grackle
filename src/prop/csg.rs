@@ -20,7 +20,7 @@ use crate::prop::surface::Surface;
 /// enough for a millimetre leaves a sliver of polygon at every cut.
 const EPSILON: f32 = 1e-5;
 
-/// An oriented plane, as a normal and a distance along it from the origin.
+/// `w` is the distance from the origin along `normal`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Plane {
     pub normal: Vec3,
@@ -34,8 +34,8 @@ const FRONT: u8 = 1;
 const BACK: u8 = 2;
 const SPANNING: u8 = 3;
 
-/// The four buckets one plane sorts a polygon into. A struct rather than four
-/// `&mut Vec` arguments, because callers want one vector in two buckets.
+/// A struct rather than four `&mut Vec` arguments, because callers merge two
+/// buckets into one.
 #[derive(Default)]
 struct Split {
     coplanar_front: Vec<Polygon>,
@@ -241,7 +241,7 @@ impl Node {
         all
     }
 
-    /// Add polygons to the tree, dividing space by the first one's plane.
+    /// Divides space by the first polygon's plane.
     fn build(&mut self, polygons: Vec<Polygon>) {
         if polygons.is_empty() {
             return;
@@ -269,7 +269,6 @@ impl Node {
     }
 }
 
-/// Everything in either solid.
 pub fn union(a: &[Polygon], b: &[Polygon]) -> Vec<Polygon> {
     let mut a = Node::new(a.to_vec());
     let mut b = Node::new(b.to_vec());
@@ -299,7 +298,6 @@ pub fn subtract(a: &[Polygon], b: &[Polygon]) -> Vec<Polygon> {
     a.all_polygons()
 }
 
-/// Only what is in both.
 pub fn intersect(a: &[Polygon], b: &[Polygon]) -> Vec<Polygon> {
     let mut a = Node::new(a.to_vec());
     let mut b = Node::new(b.to_vec());

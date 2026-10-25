@@ -1,15 +1,11 @@
 //! The closed regions a sketch's lines enclose, found by arranging them into a
 //! planar graph and walking its faces. See `documentation/sketches.md`.
 //!
-//! Crossing lines are not an error: they split what they cross, so two
-//! overlapping squares are three regions and a bow tie is two. Construction
+//! Crossing lines split what they cross rather than failing. Construction
 //! lines take no part. A region is named by the lines round its outside and
-//! which side of each it is on — never by its index, which is an accident of
-//! the arrangement — so moving a point keeps the name. Cutting a named region
-//! in two does not lose it: [`Arrangement::resolve`] puts the pieces back
-//! together.
+//! which side of each, never by index, so moving a point keeps the name.
 //!
-//! Pure: no `World`, nothing but 2D in the sketch's own plane.
+//! 2D, in the sketch's own plane.
 
 use std::collections::BTreeSet;
 
@@ -18,9 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::prop::sketch::{Sketch, SketchId};
 
-/// Metres. Points nearer than this are one point, and a point nearer than this
-/// to a line is on it. Well below anything drawn on a prop, well above `f32`
-/// rounding at its size.
+/// Metres. Points nearer than this are one point, or on a line. Well below
+/// anything drawn on a prop, well above `f32` rounding at its size.
 pub(crate) const TOLERANCE: f32 = 1e-6;
 
 /// Which side of a line, looking from its first point to its second.
@@ -37,9 +32,8 @@ pub struct Bound {
     pub side: Side,
 }
 
-/// A region's name: every line round its outside and which side the region is
-/// on, as a set. Holes are not part of it, so drawing an island inside a
-/// region does not rename the region.
+/// A set. Holes are not part of it, so drawing an island inside a region does
+/// not rename it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RegionRef {
     pub bounds: Vec<Bound>,
@@ -64,8 +58,7 @@ impl Region {
         inside(&self.outer, point) && !self.holes.iter().any(|hole| inside(hole, point))
     }
 
-    /// A point well inside it: the middle of the widest span across it along
-    /// any horizontal between two corners' heights. Not the corners' average,
+    /// The middle of the widest horizontal span. Not the corners' average,
     /// which for an L or a U lies outside.
     pub fn inside_point(&self) -> Vec2 {
         let loops: Vec<&Vec<Vec2>> = std::iter::once(&self.outer).chain(&self.holes).collect();
@@ -97,14 +90,13 @@ impl Region {
     }
 }
 
-/// Something worth saying about a sketch that is not wrong enough to refuse.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Note {
     /// A line that bounds nothing: part of an open chain, or a spur.
     Open(SketchId),
     /// A line whose two ends are one point.
     ZeroLength(SketchId),
-    /// Two points in the same place, treated as one.
+    /// Treated as one.
     Coincident(SketchId, SketchId),
     /// A line naming a point that is not there.
     MissingPoint(SketchId),
@@ -146,27 +138,17 @@ impl Graph {
 }
 
 impl Arrangement {
-    /// Exactly the region called `name`, as it was picked.
     pub fn find(&self, name: &RegionRef) -> Option<&Region> {
         self.regions.iter().find(|region| region.name == *name)
     }
 
-    /// The region `name` means now, which [`Self::find`] is when it is still
-    /// one face. When lines drawn across it have cut it into pieces, it is
-    /// the pieces joined back up — the outline it was named by still encloses
-    /// the same ground, so a sweep of it does not change because somebody
-    /// drew on it. A piece that touches none of the outline is something drawn
-    /// inside, and stays a hole as it would have before the cut.
+    /// The region `name` means now: [`Self::find`] if it is still one face;
+    /// else the pieces lines drawn across it cut it into, joined back up (a
+    /// piece touching none of the outline stays a hole); else the face every
+    /// named line still bounds on the same side, for an outline partly erased
+    /// and rerouted. `None` when a named line is gone — a merge is not guessed.
     ///
-    /// `hint` only chooses between candidates that answer to the same name,
-    /// nearest first; it is never what a region is found by.
-    ///
-    /// Failing both, it is the face every one of those lines still bounds on
-    /// the same side: the outline was partly erased and rerouted, as drawing a
-    /// notch into or out of a shape does.
-    ///
-    /// `None` when a line it was named by is gone, which is what deleting a
-    /// divider between two regions leaves.
+    /// `hint` only breaks ties between candidates with the same name.
     pub fn resolve(&self, name: &RegionRef, hint: Vec2) -> Option<Region> {
         // One the hint is in, else the one whose middle is nearest it.
         let miss = |region: &Region| match region.contains(hint) {
@@ -217,8 +199,6 @@ impl Arrangement {
             return nearest(joined);
         }
 
-        // An outline partly erased and rerouted: every line it was named by
-        // still bounds one face, on the same side, with more besides.
         let rerouted: Vec<Region> = self
             .regions
             .iter()
@@ -228,8 +208,7 @@ impl Arrangement {
         nearest(rerouted)
     }
 
-    /// One region covering `members`, which are connected faces: its outline
-    /// is every half-edge of theirs whose other side is not one of them.
+    /// `members` must be connected faces.
     fn join(&self, members: &[usize], piece_of: &[Option<usize>]) -> Option<Region> {
         let graph = &self.graph;
         let piece = piece_of[members[0]];
@@ -243,9 +222,8 @@ impl Arrangement {
             if seen[start] {
                 continue;
             }
-            // A corner where a divider met one line of the outline was not a
-            // corner of the region before the cut, and keeping it would
-            // renumber everything named off the swept outline.
+            // A corner where a divider met the outline was not there before the
+            // cut; keeping it would renumber everything named off the sweep.
             let mut cycle: Vec<usize> = Vec::new();
             let mut divider_corners: Vec<usize> = Vec::new();
             let mut h = start;
@@ -284,16 +262,13 @@ impl Arrangement {
         Some(Region { name: RegionRef { bounds: bounds.into_iter().collect() }, outer, holes })
     }
 
-    /// The region a click at `point` lands in. Faces of one arrangement do
-    /// not overlap, so at most one can.
     pub fn region_at(&self, point: Vec2) -> Option<&Region> {
         self.regions.iter().find(|region| region.contains(point))
     }
 }
 
-/// Whether a region can be turned about the line through `a` and `b`: it lies
-/// wholly on one side, touching allowed. One that straddles the axis would
-/// sweep through itself.
+/// Wholly on one side of the line through `a` and `b`, touching allowed. A
+/// region straddling a revolve axis would sweep through itself.
 pub fn axis_clear(region: &Region, a: Vec2, b: Vec2) -> bool {
     let along = b - a;
     if along.length() < TOLERANCE {
@@ -309,11 +284,9 @@ pub fn axis_clear(region: &Region, a: Vec2, b: Vec2) -> bool {
     !(left && right)
 }
 
-/// Every closed region `sketch`'s lines enclose.
 pub fn arrange(sketch: &Sketch) -> Arrangement {
     let mut notes = Vec::new();
 
-    // Vertices: sketch points, with any two in one place made one.
     let mut vertices: Vec<Vec2> = Vec::new();
     let mut vertex_of: Vec<(SketchId, usize)> = Vec::new();
     for point in &sketch.points {
@@ -332,7 +305,6 @@ pub fn arrange(sketch: &Sketch) -> Arrangement {
     }
     let vertex = |id: SketchId| vertex_of.iter().find(|(point, _)| *point == id).map(|(_, v)| *v);
 
-    // Segments: every line that can bound something.
     let mut segments: Vec<(SketchId, usize, usize)> = Vec::new();
     for (id, a, b, construction) in sketch.lines() {
         if construction {
@@ -349,8 +321,6 @@ pub fn arrange(sketch: &Sketch) -> Arrangement {
         segments.push((id, va, vb));
     }
 
-    // Where each segment is cut: its ends, every vertex lying on it, and
-    // every crossing with another.
     let mut cuts: Vec<Vec<(f32, usize)>> = segments.iter().map(|&(_, a, b)| vec![(0.0, a), (1.0, b)]).collect();
     for i in 0..segments.len() {
         for j in i + 1..segments.len() {
@@ -372,8 +342,7 @@ pub fn arrange(sketch: &Sketch) -> Arrangement {
         }
     }
 
-    // Edges between consecutive cuts. One drawn twice — an overlap — is kept
-    // once, under the line that came first.
+    // An overlap is kept once, under the line that came first.
     let mut edges: Vec<Edge> = Vec::new();
     for (i, segment_cuts) in cuts.iter_mut().enumerate() {
         segment_cuts.sort_by(|x, y| x.0.total_cmp(&y.0));
@@ -388,8 +357,7 @@ pub fn arrange(sketch: &Sketch) -> Arrangement {
         }
     }
 
-    // Spurs and open chains bound nothing; peel them off until every vertex
-    // left closes a loop.
+    // Peel off spurs and open chains.
     loop {
         let mut degree = vec![0usize; vertices.len()];
         for edge in &edges {
@@ -419,9 +387,8 @@ struct Edge {
     entity: SketchId,
 }
 
-/// Where two segments properly cross: the parameter along each and the
-/// point. Ends touching, and parallel overlaps, are left to
-/// [`interior_param`], which handles them by vertex.
+/// Proper crossings only: ends touching and parallel overlaps are left to
+/// [`interior_param`].
 pub(crate) fn crossing(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<(f32, f32, Vec2)> {
     let (r, s) = (b - a, d - c);
     let denominator = r.perp_dot(s);
@@ -430,12 +397,11 @@ pub(crate) fn crossing(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<(f32, f32, 
     }
     let t = (c - a).perp_dot(s) / denominator;
     let u = (c - a).perp_dot(r) / denominator;
-    // Strictly inside both, by more than the tolerance in metres.
     let clear = |param: f32, length: f32| param * length > TOLERANCE && (1.0 - param) * length > TOLERANCE;
     (clear(t, r.length()) && clear(u, s.length())).then(|| (t, u, a + r * t))
 }
 
-/// How far along `a`–`b` the point `p` is, if it lies on its inside.
+/// How far along `a`–`b` the point `p` is, if on it and not at an end.
 pub(crate) fn interior_param(a: Vec2, b: Vec2, p: Vec2) -> Option<f32> {
     let along = b - a;
     let length = along.length();
@@ -456,14 +422,11 @@ fn vertex_near(vertices: &mut Vec<Vec2>, at: Vec2) -> usize {
 
 /// The bounded faces of a planar graph with no spurs.
 ///
-/// Every edge is two half-edges, one each way. Leaving each vertex they are
-/// sorted by angle, and a walk arriving along `u → v` leaves along the
-/// half-edge just clockwise of `v → u`. That keeps the face on the walk's left,
-/// so a bounded face comes out counter-clockwise (positive area) and the
-/// outside of each connected piece clockwise. Each clockwise outside is a hole
-/// in the smallest face of another piece that contains it.
+/// A walk arriving along `u → v` leaves along the half-edge just clockwise of
+/// `v → u`, keeping the face on its left: bounded faces come out
+/// counter-clockwise and each piece's outside clockwise. Each outside is a
+/// hole in the smallest face of another piece that contains it.
 fn faces(vertices: Vec<Vec2>, edges: Vec<Edge>) -> (Vec<Region>, Graph) {
-    // Half-edge `2e` runs along edge `e`, `2e + 1` against it.
     let half = |h: usize| {
         let edge = edges[h / 2];
         match h % 2 {
@@ -506,8 +469,7 @@ fn faces(vertices: Vec<Vec2>, edges: Vec<Edge>) -> (Vec<Region>, Graph) {
         cycles.push(cycle);
     }
 
-    // Which connected piece each vertex is in, so a piece's own outside is
-    // never taken for a hole in one of its own faces.
+    // So a piece's own outside is never taken for a hole in its own faces.
     let mut piece: Vec<usize> = (0..vertices.len()).collect();
     fn root(piece: &mut [usize], v: usize) -> usize {
         let mut r = v;
@@ -570,7 +532,7 @@ pub fn centroid(points: &[Vec2]) -> Vec2 {
     points.iter().copied().sum::<Vec2>() / points.len().max(1) as f32
 }
 
-/// The longest way across a loop's bounds.
+/// The diagonal of a loop's bounding box.
 pub fn reach_of(points: &[Vec2]) -> f32 {
     let (min, max) = points
         .iter()
@@ -599,7 +561,6 @@ fn inside(polygon: &[Vec2], point: Vec2) -> bool {
 mod tests {
     use super::*;
 
-    /// A closed loop through `corners`, each corner a new point.
     fn polygon(sketch: &mut Sketch, corners: &[[f32; 2]]) -> Vec<SketchId> {
         let points: Vec<SketchId> = corners.iter().map(|c| sketch.add_point(Vec2::from_array(*c))).collect();
         (0..points.len()).map(|i| sketch.add_line(points[i], points[(i + 1) % points.len()])).collect()
@@ -648,7 +609,6 @@ mod tests {
         assert_areas(&arrange(&sketch), &[1.0, 3.0, 3.0]);
     }
 
-    /// Self-intersection is not an error: a bow tie is two triangles.
     #[test]
     fn a_bow_tie_is_two_regions() {
         let mut sketch = Sketch::default();
@@ -670,9 +630,8 @@ mod tests {
         assert!(arrangement.region_at(Vec2::splat(1.5)).is_some_and(|r| (r.area() - 1.0).abs() < 1e-5));
     }
 
-    /// A line joining an island to its surround makes them one piece: the
-    /// surround is walked round the island and back along the line, and comes
-    /// out the same shape as with a hole.
+    /// A line joining an island to its surround makes them one piece, which
+    /// must still come out as a hole.
     #[test]
     fn a_bridge_to_an_island_is_still_a_hole() {
         let mut sketch = Sketch::default();
@@ -729,7 +688,6 @@ mod tests {
         assert!(arrangement.regions[0].name.bounds.iter().all(|b| sides.contains(&b.entity)));
     }
 
-    /// Two points in one place close the loop, and are said to be one.
     #[test]
     fn coincident_points_close_a_loop() {
         let mut sketch = Sketch::default();
@@ -853,7 +811,6 @@ mod tests {
         assert!((found.area() - 15.0).abs() < 1e-5, "{}", found.area());
     }
 
-    /// A merge is not guessed at: the line the name was partly made of is gone.
     #[test]
     fn a_region_merged_with_its_neighbour_is_lost() {
         let mut sketch = Sketch::default();
@@ -868,7 +825,6 @@ mod tests {
         assert!(after.region_at(Vec2::new(0.5, 1.0)).is_some(), "the merged region is there to re-pick");
     }
 
-    /// One half of a cut region is its own region, not the whole.
     #[test]
     fn a_half_is_found_as_a_half() {
         let mut sketch = Sketch::default();
@@ -881,9 +837,8 @@ mod tests {
     }
 
 
-    /// The shape in `assets/user/not_enclosed_bug.gpp`: a rectangle whose right
-    /// side was partly erased and rerouted round a notch. Every line it was
-    /// named by still bounds it, on the same side, so it is the same region.
+    /// A rectangle whose right side was partly erased and rerouted round a
+    /// notch is still the same region.
     #[test]
     fn a_rerouted_outline_keeps_its_region() {
         let mut sketch = Sketch::default();

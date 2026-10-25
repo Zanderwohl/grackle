@@ -1,7 +1,6 @@
 //! A line a feature turns about or runs along: an edge of a body, a line in a
-//! sketch, or one of the three axes through the origin. One type, so wherever
-//! a feature wants a line any of the three can be picked, rather than a
-//! dropdown of axes or of one sketch's lines.
+//! sketch, or one of the three axes through the origin. One type, so any of
+//! the three can be picked wherever a line is wanted.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};

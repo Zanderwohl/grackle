@@ -111,8 +111,7 @@ pub struct SketchSession {
     /// only the newest step needs testing.
     doomed: Vec<(Vec2, Vec2)>,
     stroke_scanned: usize,
-    /// The open sketch's regions and the drawing they were found in, for the
-    /// panels, which ask every frame.
+    /// Cached for the panels, which ask every frame.
     regions: Option<(Sketch, Arrangement)>,
     view: ViewChange,
     /// The perspective camera and pivot as they were before the view was
@@ -125,7 +124,6 @@ impl SketchSession {
         self.editing
     }
 
-    /// `sketch`'s regions, found again only when it has changed.
     pub fn arrangement(&mut self, sketch: &Sketch) -> &Arrangement {
         if self.regions.as_ref().is_none_or(|(from, _)| from != sketch) {
             self.regions = Some((sketch.clone(), arrange(sketch)));
@@ -159,7 +157,6 @@ impl SketchSession {
         self.chain = None;
     }
 
-    /// Picked again, it is unpicked.
     pub fn toggle(&mut self, pick: SketchPick) {
         match self.picks.iter().position(|picked| *picked == pick) {
             Some(at) => {
@@ -174,7 +171,6 @@ pub fn not_sketching(session: Res<SketchSession>) -> bool {
     session.editing.is_none()
 }
 
-/// The sketch feature `id`'s drawing, if it is one.
 pub fn sketch_of(doc: &PropDoc, id: PropFeatureId) -> Option<&Sketch> {
     match &doc.feature(id)?.op {
         FeatureOp::Sketch { sketch, .. } => Some(sketch),
@@ -457,11 +453,9 @@ fn edit_the_sketch(
     }
 }
 
-/// One click of the line tool: lands on `target`, drawing from `chain` if
-/// there is one, and returns where the next click draws from — where it
-/// landed, so lines chain until `Escape`, unless the line ended on a point
-/// already there or enclosed something new, either of which ends the shape
-/// being drawn. Clicking the chain's own end draws nothing.
+/// Returns where the next click draws from: where this one landed, unless the
+/// line ended on an existing point or enclosed a new region, which ends the
+/// shape. Clicking the chain's own end draws nothing.
 fn draw_to(sketch: &mut Sketch, chain: Option<SketchId>, target: Snapped) -> Option<SketchId> {
     let landed = target.point.unwrap_or_else(|| sketch.add_point(target.at));
     let Some(from) = chain.filter(|from| *from != landed) else { return Some(landed) };
@@ -554,7 +548,6 @@ fn piece_at(sketch: &Sketch, line: SketchId, at: Vec2) -> Option<(Vec2, Vec2)> {
     Some((a.lerp(b, t0), a.lerp(b, t1)))
 }
 
-/// Every piece of every line the step from `from` to `to` crosses.
 fn crossed_pieces(sketch: &Sketch, from: Vec2, to: Vec2) -> Vec<(Vec2, Vec2)> {
     sketch
         .lines()
@@ -579,9 +572,8 @@ struct RegionCache {
     arrangement: Arrangement,
 }
 
-/// The grid, every point and line, what is picked and hovered, the line about
-/// to be drawn, and each closed region hatched — so a closed shape is visibly
-/// closed. From the document rather than the build, so nothing lags a drag.
+/// Regions are hatched so a closed shape is visibly closed. Drawn from the
+/// document rather than the build, so nothing lags a drag.
 fn draw_the_session(
     session: Res<SketchSession>,
     editor: Res<PropEditor>,
@@ -595,9 +587,8 @@ fn draw_the_session(
     let (centre, reach) = extent(&placed.sketch);
     let marker = reach * 0.02;
 
-    // Gizmos in one plane depth-fight, and a line drawn along a grid line
-    // loses about half the time. So the grid sits just behind the plane as
-    // seen from the view under the pointer, or the sketch's own view.
+    // Gizmos in one plane depth-fight, so the grid sits just behind the plane
+    // as seen from the view under the pointer, or else the perspective view.
     let viewer = cameras
         .iter()
         .find(|(entity, ..)| Some(*entity) == mouse.in_camera)
@@ -674,8 +665,7 @@ fn draw_the_session(
         }
     }
 
-    // Where the next click lands, and the line it would draw. Landing on a
-    // point that is there is ringed, since that click joins onto it.
+    // Ringed when the click would join an existing point.
     if session.tool == SketchTool::Line
         && let Some(cursor) = session.cursor
     {
@@ -691,9 +681,8 @@ fn draw_the_session(
     }
 }
 
-/// Diagonal lines across a region with holes, `spacing` apart: what the
-/// region looks like filled, drawn with lines. Even-odd along each line, so
-/// holes come out by themselves.
+/// Diagonal lines `spacing` apart. Even-odd along each line, so holes come
+/// out by themselves.
 pub fn hatch(outer: &[Vec2], holes: &[Vec<Vec2>], spacing: f32) -> Vec<(Vec2, Vec2)> {
     // In coordinates turned an eighth, where the hatching runs along `t`.
     let turn = |p: Vec2| Vec2::new(p.x + p.y, p.x - p.y) / std::f32::consts::SQRT_2;

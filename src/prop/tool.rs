@@ -4,9 +4,8 @@
 //! Every tool states what it needs as a list of [`Slot`]s. Starting one fills
 //! the slots from the selection in pick order; whatever is still missing is
 //! asked for ("Pick a plane"), and the viewport offers only picks that fit.
-//! The picks a tool is collecting *are* the selection, so there is one list of
-//! what is picked rather than two that can disagree, and a tool started with
-//! half of what it needs already picked goes straight to the other half.
+//! The picks a tool is collecting are the selection, so there is one list of
+//! what is picked rather than two that can disagree.
 
 use bevy::prelude::*;
 
@@ -33,7 +32,7 @@ pub enum Tool {
     Sketch,
 }
 
-/// A reference on an existing feature that is chosen by picking it.
+/// A reference on an existing feature, chosen by picking it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
     RevolveAxis,
@@ -119,11 +118,9 @@ impl Tool {
     }
 }
 
-/// The task waiting on picks, if any.
 #[derive(Resource, Default)]
 pub struct ActiveTool(pub Option<Task>);
 
-/// The picks a task has, slot by slot.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Filled(pub Vec<Vec<Pick>>);
 
@@ -133,9 +130,9 @@ impl Filled {
     }
 }
 
-/// Each pick, in order, into the first slot that is still open and that it
-/// fits. A pick that fits nowhere is left out rather than refusing the rest:
-/// a selection made for something else should not stop a tool starting.
+/// Each pick, in order, into the first open slot it fits. A pick that fits
+/// nowhere is dropped, so a selection made for something else does not stop a
+/// tool starting.
 pub fn fill(task: Task, picks: &[Pick], doc: &PropDoc, evaluated: &Evaluated) -> Filled {
     let slots = task.slots();
     let mut filled = Filled(vec![Vec::new(); slots.len()]);
@@ -158,7 +155,6 @@ fn is_open(want: Want, has: &[Pick], evaluated: &Evaluated) -> bool {
     }
 }
 
-/// The plane picked geometry makes, if it makes one yet.
 fn through(has: &[Pick], evaluated: &Evaluated) -> Option<Plane> {
     plane_through(has, evaluated)
 }
@@ -230,7 +226,6 @@ fn sweep_plane(task: Task, filled: &Filled, doc: &PropDoc, evaluated: &Evaluated
     evaluated.sketch(sketch).map(|placed| placed.plane)
 }
 
-/// A revolve's axis, if one is picked yet.
 fn picked_line(task: Task, filled: &Filled, evaluated: &Evaluated) -> Option<(Vec3, Vec3)> {
     let Task::Make(Tool::Revolve) = task else { return None };
     filled.0[1].first().and_then(Pick::line).and_then(|line| evaluated.locate_line(&line))
@@ -240,7 +235,6 @@ fn in_plane(plane: &Plane, (a, b): (Vec3, Vec3)) -> bool {
     plane.distance(a).abs() < IN_PLANE && plane.distance(b).abs() < IN_PLANE
 }
 
-/// Every slot has what it needs.
 pub fn is_ready(task: Task, filled: &Filled, evaluated: &Evaluated) -> bool {
     task.slots().iter().zip(&filled.0).all(|(slot, has)| match slot.want {
         Want::Through => through(has, evaluated).is_some(),
@@ -267,8 +261,7 @@ pub fn prompt(task: Task, filled: &Filled, evaluated: &Evaluated) -> String {
     }
 }
 
-/// Whether clicking `candidate` now would do anything: it is already picked,
-/// so the click unpicks it, or it would fill a slot.
+/// Whether clicking `candidate` would do anything: unpick it, or fill a slot.
 pub fn accepts(task: Task, picks: &[Pick], candidate: &Pick, doc: &PropDoc, evaluated: &Evaluated) -> bool {
     if picks.contains(candidate) {
         return true;
@@ -278,8 +271,8 @@ pub fn accepts(task: Task, picks: &[Pick], candidate: &Pick, doc: &PropDoc, eval
     fill(task, &with, doc, evaluated).picks().any(|pick| pick == candidate)
 }
 
-/// Starts `task`, keeping only what it can use of the selection. A tool that
-/// already has everything finishes there and then.
+/// Keeps only what `task` can use of the selection, and finishes at once if
+/// that is everything.
 pub fn start(
     task: Task,
     active: &mut ActiveTool,
@@ -331,14 +324,12 @@ pub fn advance(
     }
 }
 
-/// Puts the tool down because something else was done: the selection is
-/// whatever that left.
+/// Puts the tool down, leaving the selection as it is.
 pub fn put_down(active: &mut ActiveTool) {
     active.0 = None;
 }
 
-/// Puts the tool down because somebody asked to, putting the selection back
-/// as it was before a re-pick.
+/// Puts the tool down, restoring the selection from before a re-pick.
 pub fn cancel(active: &mut ActiveTool, editor: &mut PropEditor) {
     if let Some(Task::Repick { feature, .. }) = active.0.take()
         && editor.doc().feature(feature).is_some()

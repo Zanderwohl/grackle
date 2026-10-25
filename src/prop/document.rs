@@ -26,11 +26,8 @@ use crate::prop::sketch::SketchId;
 /// Grackle Prop: TOML, one prop per file.
 pub const PROP_EXTENSION: &str = "gpp";
 
-/// Where props live inside a pack.
 pub const PROPS_DIR: &str = "props";
 
-/// Something picked: a whole body, a named corner, edge or face of one, or a
-/// plane feature.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pick {
     Body(PropFeatureId),
@@ -45,10 +42,8 @@ pub enum Pick {
 }
 
 impl Pick {
-    /// The standing body this pick stands for, if any. A face stands for the
-    /// body it is on, so picking a face on the barrel and one on the bore still
-    /// offers Combine; a corner or an edge does not, since one on a seam
-    /// belongs to two bodies' worth of meaning.
+    /// The standing body this pick stands for. A face stands for the body it
+    /// is on; a corner or an edge does not, since one on a seam belongs to two.
     pub fn body(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
         match self {
             Pick::Body(id) => evaluated.bodies.iter().any(|(body, _)| body == id).then_some(*id),
@@ -57,8 +52,6 @@ impl Pick {
         }
     }
 
-    /// The line this pick is, if it is one: an edge, a sketch's line or an
-    /// origin axis.
     pub fn line(&self) -> Option<LineRef> {
         match self {
             Pick::Geom(edge @ GeomRef { element: Element::Edge(_), .. }) => Some(LineRef::Edge { edge: edge.clone() }),
@@ -68,7 +61,6 @@ impl Pick {
         }
     }
 
-    /// The pick a line is when picked.
     pub fn of_line(line: &LineRef) -> Pick {
         match line {
             LineRef::Origin { axis } => Pick::Axis(*axis),
@@ -667,13 +659,11 @@ impl std::fmt::Display for PropFileError {
     }
 }
 
-/// The path a prop named `name` has inside `pack`.
 pub fn prop_path(pack: &Path, name: &str) -> PathBuf {
     pack.join(PROPS_DIR).join(format!("{name}.{PROP_EXTENSION}"))
 }
 
-/// Through [`Assets`] rather than `std::fs` because the game reads props.
-/// The editor's file dialog goes through [`parse`].
+/// The editor's file dialog goes through [`parse`] instead.
 pub fn load(assets: &Assets, pack: &Path, name: &str) -> Result<PropDoc, PropFileError> {
     let relative = format!("{PROPS_DIR}/{name}.{PROP_EXTENSION}");
     let bytes = assets.0.read(pack, &relative).map_err(PropFileError::Asset)?;

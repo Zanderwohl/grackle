@@ -123,7 +123,6 @@ impl PropCache {
         self.bakes
     }
 
-    /// Everything that baked into something, leaving out the failures.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &BakedProp)> {
         self.baked.iter().filter_map(|(name, baked)| Some((name.as_str(), baked.as_ref()?)))
     }
@@ -177,10 +176,8 @@ fn bake(
     Some(baked)
 }
 
-/// Put a prop's clips into `Assets<Clip>`, reusing the handle of any clip the
-/// previous bake had under the same name.
-///
-/// Inserted only when the clip actually differs, so re-adopting an unchanged
+/// Reuses the handle of any clip the previous bake had under the same name,
+/// and refills it only when the clip differs, so re-adopting an unchanged
 /// model is not a `Modified` event for every clip in it.
 fn publish_clips(
     set: &ClipSet,

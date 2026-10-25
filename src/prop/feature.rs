@@ -149,8 +149,8 @@ pub enum FeatureOp {
     Sketch { on: PlaneRef, sketch: Sketch },
 }
 
-/// How far an extrusion goes. An enum from the first, so going up to a face
-/// or through everything joins without changing the file.
+/// An enum so that going up to a face or through everything can be added
+/// without changing the file.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum End {
@@ -281,7 +281,6 @@ impl FeatureOp {
         named
     }
 
-    /// Everything that has to come before this: operands and references.
     pub fn depends_on(&self) -> Vec<PropFeatureId> {
         let mut all = self.consumes();
         all.extend(self.references());
@@ -397,7 +396,6 @@ impl Evaluated {
         self.face_under(origin, direction).map(|(id, _, _)| id)
     }
 
-    /// How far down the ray the nearest face is.
     pub fn face_distance(&self, ray: Ray3d) -> Option<f32> {
         self.face_under(ray.origin, *ray.direction).map(|(_, _, distance)| distance)
     }
@@ -476,7 +474,6 @@ impl Evaluated {
         }
     }
 
-    /// The body a reference is part of.
     pub fn body_of(&self, reference: &GeomRef) -> Option<PropFeatureId> {
         self.wires
             .iter()

@@ -68,11 +68,9 @@ pub struct MapViewpoints(Vec<(Entity, Transform, Projection)>);
 #[derive(Resource, Default)]
 pub struct OrbitPivot(pub Vec3);
 
-/// Asked for by the panel's *Frame* button. A message because the panel system
-/// cannot also carry every camera.
-///
-/// `selected` frames the selection's standing bodies; if none are standing it
-/// falls back to the whole prop.
+/// A message because the panel system cannot also carry every camera.
+/// `selected` frames the selection's standing bodies, or the whole prop if none
+/// are standing.
 #[derive(Message, Default)]
 pub struct FrameTheProp {
     pub selected: bool,
@@ -88,7 +86,6 @@ impl Plugin for PropCameraPlugin {
             .init_resource::<PreviewViewpoint>()
             .add_message::<FrameTheProp>()
             // After the build, because framing reads the prop's bounds.
-            // Swapping between the two prop modes therefore re-frames.
             .add_systems(
                 OnEnter(AppMode::Prop),
                 frame_on_entering.after(PropSceneSystems::Build),
@@ -112,7 +109,6 @@ impl Plugin for PropCameraPlugin {
                 (
                     preview_the_viewmodel,
                     frame_on_request,
-                    // Skipped while the preview owns the camera.
                     navigate.run_if(|preview: Res<ViewmodelPreview>| !preview.0),
                     reset_the_hovered_view,
                 )
@@ -129,7 +125,6 @@ fn subject(bounds: Option<(Vec3, Vec3)>) -> (Vec3, f32) {
     }
 }
 
-/// Frame one camera. `Numpad0` and framing all four share it.
 fn frame_one(
     transform: &mut Transform,
     projection: &mut Projection,
@@ -241,7 +236,6 @@ fn frame_on_request(
     frame_all(&mut cameras, &mut saved, &mut pivot, bounds);
 }
 
-/// `Numpad0` resets the view under the cursor; over no viewport it does nothing.
 fn reset_the_hovered_view(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<CurrentMouseInput>,
@@ -278,7 +272,6 @@ fn navigate(
     let dragging = mouse
         .started_in_camera
         .filter(|_| matches!(mouse.pressed, Some(MouseButton::Right | MouseButton::Middle)));
-    // Middle always pans; right orbits, or pans with the modifier held.
     let pan = mouse.pressed == Some(MouseButton::Middle) || keyboard.modify;
 
     // Locked during a drag so a long orbit does not run off the screen.
@@ -386,9 +379,8 @@ fn dolly(transform: &mut Transform, pivot: Vec3, notches: f32) {
     transform.translation = pivot + offset / distance * wanted;
 }
 
-/// Stand the perspective view where the player's eye would be, with the
-/// viewmodel camera's FOV and near plane. The camera moves by the inverse of
-/// the viewmodel transform; the prop stays at its origin.
+/// Stands the perspective view at the player's eye by inverting the viewmodel
+/// transform, so the prop stays at its origin.
 fn preview_the_viewmodel(
     preview: Res<ViewmodelPreview>,
     editor: Res<PropEditor>,

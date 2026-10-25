@@ -1,7 +1,7 @@
 //! The body standing behind the prop, for scale.
 //!
-//! Off by default. It holds the prop through [`crate::prop::hold`], the same
-//! code the game uses.
+//! It holds the prop through [`crate::prop::hold`], the same code the game
+//! uses.
 //!
 //! The prop stays at its own origin, where its feature gizmos are drawn; the
 //! body is placed by inverting where the hold says the weapon would be, so its
@@ -47,8 +47,7 @@ pub struct FigureCorrections(
     pub Option<(crate::common::skeleton::state::AnimationState, crate::common::skeleton::state::PoseInputs)>,
 );
 
-/// Where the prop is being held, once a performance has moved it. Identity
-/// when nothing is performing.
+/// Where the prop is being held, once a performance has moved it.
 ///
 /// In the animation editor the weapon moves and the body stands still: through
 /// the modelling surface's inversion, a clip that lowers the weapon would tip
@@ -149,8 +148,6 @@ pub fn refresh_the_figure(
     ));
 }
 
-/// Stand the figure holding the prop, through the same
-/// [`grip_with`](crate::prop::hold::grip_with) the game uses.
 pub fn pose_the_figure(
     editor: Res<PropEditor>,
     choice: Res<ScaleFigure>,
@@ -178,9 +175,8 @@ pub fn pose_the_figure(
             *visibility = wanted;
         }
 
-        // A hat stays at the origin and the figure stands under it, the way a
-        // weapon's does. Inverted with the hat's scale, so a class's larger
-        // hat shows as a smaller figure under the same hat.
+        // A hat stays at the origin and the figure stands under it. Inverted
+        // with the hat's scale, so a larger hat shows as a smaller figure.
         if editor.doc().archetype == Archetype::Hat {
             let fit = editor.doc().hat.for_class(choice.0);
             let Some(hat) = hat_transform(skeleton, &Pose::rest(), &Transform::IDENTITY, &fit)
@@ -269,7 +265,6 @@ pub fn pose_the_figure(
             }
         }
 
-        // Hands go on after the weapon is placed, as in the game.
         if stage.holding {
             reach.0 = grip_with(skeleton, &mut standing, &root, &hold, &placed);
         }
