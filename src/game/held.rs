@@ -513,7 +513,7 @@ pub const DEPLOY: &str = "deploy";
 /// own floor with no collision built (editor, tests, animation grid).
 pub(crate) fn play_the_clips(
     mut bodies: Query<(
-        &Player,
+        Option<&Player>,
         &Skeleton,
         &mut Pose,
         Option<&SkeletonRoot>,
@@ -529,7 +529,8 @@ pub(crate) fn play_the_clips(
         }
 
         let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
-        let aim = Quat::from_rotation_x(player.pitch);
+        // A body nobody steers, an animation grid's, looks level.
+        let aim = Quat::from_rotation_x(player.map_or(0.0, |player| player.pitch));
 
         // Read before the closure borrows anything.
         let floor = root.translation.y;

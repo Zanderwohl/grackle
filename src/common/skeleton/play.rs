@@ -228,6 +228,10 @@ pub enum Layer {
     Humiliation,
     /// Above humiliation, as in TF2: a humiliated body may still taunt.
     Taunt,
+    /// Outside the order in all but name: it claims nothing, so it masks
+    /// nothing and owns nothing, and its tracks compose onto whatever won.
+    /// Last so it is applied last. A body shot mid-taunt still jolts.
+    Flinch,
 }
 
 impl Layer {
@@ -242,6 +246,7 @@ impl Layer {
                 .union(Regions::WEAPON),
             // Each taunt states its own; see `taunts.toml`.
             Layer::Taunt => Regions::ALL,
+            Layer::Flinch => Regions::NONE,
         }
     }
 
@@ -252,6 +257,7 @@ impl Layer {
             Layer::Weapon => "weapon",
             Layer::Humiliation => "humiliation",
             Layer::Taunt => "taunt",
+            Layer::Flinch => "flinch",
         }
     }
 
@@ -259,7 +265,8 @@ impl Layer {
         Layer::ALL.into_iter().find(|layer| layer.key() == key)
     }
 
-    pub const ALL: [Layer; 4] = [Layer::Locomotion, Layer::Weapon, Layer::Humiliation, Layer::Taunt];
+    pub const ALL: [Layer; 5] =
+        [Layer::Locomotion, Layer::Weapon, Layer::Humiliation, Layer::Taunt, Layer::Flinch];
 }
 
 /// Seconds a layer takes to fade in over what is beneath it, and back out.

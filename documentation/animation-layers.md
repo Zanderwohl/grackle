@@ -48,7 +48,7 @@ firing outranks locomotion only because it leaves the legs alone.
 | 9 | Hold (`place_the_weapon` + `grip_the_weapon`) | arms, weapon | yes | emergent from `Player.pitch` + `Equipped` |
 | 10 | Look (`look_with_the_head`) | head | — | emergent from `Player.pitch` |
 | 11 | Locomotion (+ `plant_feet`) | everything | — | emergent from `PhysicsBody` + `BodyRequests` |
-| + | Flinch, landing squash | additive | no | emergent from `DamageDealt`, landing |
+| + | Flinch (built), landing squash | additive | no | emergent from `DamageDealt`, landing |
 
 **Additive layers sit outside the order.** A flinch composes
 (`Combine::Compose`) onto whatever won, including a taunt. A body shot
@@ -320,6 +320,22 @@ either falls back to the shared `animations/reload.gpa`.
       takes the hand to a magazine or the tube's breech needs the hand keyed
       off the weapon, which a layer above the hold can do and this one does
       not yet.
+
+### A flinch composes; it does not rank
+
+A flinch is on `Layer::Flinch`, last in the order and claiming nothing: it
+masks nothing, owns nothing, stands nothing, and its tracks compose onto
+whatever won, so a body shot mid-taunt still jolts. It is started by every
+`DamageDealt` — local on the authority, relayed elsewhere — and restarted from
+the top by the next hit. Which of four clips (`flinch_back`, `_forward`,
+`_left`, `_right`) is picked by the way the hit travelled in the body's own
+frame: from the attacker's body where there is one, otherwise away from where
+it landed. Chest and neck only, so a flinch never lifts a planted foot.
+
+- [x] Flinch layer, four directional clips, restarted per hit.
+- [ ] Strength by damage: every hit flinches the same. A weight below one
+      would be faded back up by `ClipStack::fade`, so a scale needs to be its
+      own field on `Playing` rather than the weight.
 
 ## Open questions
 

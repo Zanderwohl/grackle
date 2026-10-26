@@ -451,6 +451,10 @@ recoil = "Recoil"
 fire = "Fire"
 reload = "Reload"
 body_reload = "Reload (third person)"
+flinch_back = "Flinch back"
+flinch_forward = "Flinch forward"
+flinch_left = "Flinch left"
+flinch_right = "Flinch right"
 
 [anim.channel]
 root = "Body"

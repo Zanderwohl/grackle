@@ -1572,6 +1572,14 @@ short ends it, and a body seen mid-reload starts it partway. The clip is
 is gameplay and differs per weapon; `body_reload` on the body and `reload` on
 the viewmodel, each falling back to the shared `animations/reload.gpa`.
 
+**A body flinches when it is hurt** ([`src/game/flinch.rs`](src/game/flinch.rs)),
+from the `DamageDealt` every machine already reads. The flinch layer claims
+nothing, so it composes onto whatever won — a taunt included — and one of four
+clips is picked by the way the hit travelled in the body's own frame. Every
+`SkeletonAnimator` brings a `ClipStack` and `play_the_clips` takes bodies with
+no `Player` (aiming level), so an animation grid's bodies flinch too; a
+corpse has no animator and does not.
+
 **`Magazine.clip: None` is the minigun**: no magazine, each shot straight out
 of the reserve, never reloads. Stated as an absent clip rather than as a clip
 the size of the reserve, because the second is a lie the reload system then has
