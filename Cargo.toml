@@ -48,9 +48,9 @@ lightyear = { version = "0.31", features = ["netcode", "udp", "input_native"] }
 # the ones bevy_egui and bevy use, or the editor's types do not meet ours, so
 # move it and bevy together. `default-features = false` keeps core's `std-fs`
 # off, which wasm needs.
-texture-graph-core = { git = "https://github.com/Zanderwohl/texture-graph", branch = "material-maps", default-features = false }
-texture-graph-gpu = { git = "https://github.com/Zanderwohl/texture-graph", branch = "material-maps" }
-texture-graph-editor = { git = "https://github.com/Zanderwohl/texture-graph", branch = "material-maps" }
+texture-graph-core = { git = "https://github.com/Zanderwohl/texture-graph", branch = "main", default-features = false }
+texture-graph-gpu = { git = "https://github.com/Zanderwohl/texture-graph", branch = "main" }
+texture-graph-editor = { git = "https://github.com/Zanderwohl/texture-graph", branch = "main" }
 # Bevy's own version, named so the material editor can hand texture-graph the
 # wgpu types it bakes with. Must match what `cargo tree -i wgpu` shows.
 wgpu = "30.0.1"
