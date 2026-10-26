@@ -496,6 +496,7 @@ smoother_step = "Smoother"
 editor = "Map Editor"
 prop = "Prop Editor"
 animation = "Animation Editor"
+material = "Material Editor"
 play = "Play"
 
 # Every authoring mode's File pulldown. The entries mean whatever the thing
@@ -521,6 +522,9 @@ server_decides = "The server decides when the match is played."
 
 [prop]
 untitled = "Untitled prop"
+
+[material]
+untitled = "Untitled material"
 
 [prop.menu]
 frame = "Frame"

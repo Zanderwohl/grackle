@@ -225,6 +225,9 @@ should not need to know it exists.
 
 ## Checklist
 
+- [x] texture-graph's panels split into `texture-graph-editor` (egui only), on Bevy 0.20's wgpu and egui
+- [x] A Material authoring mode hosting them: open, save, undo, revert, under `materials/`
+- [x] Material previews on Bevy's device: a `TextureRegistry` over bevy_egui
 - [ ] texture-graph: an evaluator version, separate from `CURRENT_FORMAT_VERSION`
 - [ ] Materials under a pack's `materials/`, loaded through `AssetSource`
 - [ ] Bake a material to a tileable set on Bevy's device, cached by hash and evaluator version
