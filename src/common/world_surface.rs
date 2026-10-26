@@ -18,7 +18,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
 use crate::common::csg::{self, Polygon};
-use crate::tool::room::Room;
+use crate::tool::room::{Room, RoomSlot, MATERIAL_TILE_METRES};
 
 /// A piece of the map's surface. Walls are made of nothing yet.
 pub type Face = Polygon<()>;
@@ -81,8 +81,11 @@ fn precedes(a: &Room, a_index: usize, b: &Room, b_index: usize) -> bool {
     by_box.then(a_index.cmp(&b_index)) == Ordering::Less
 }
 
-/// Flat-shaded triangles, normals into the room. UVs are metres across the
-/// face's two widest axes; nothing is textured yet.
+/// Flat-shaded triangles, normals into the room, with mikktspace tangents for a
+/// material's normal map. UVs are world-space in material tiles
+/// ([`MATERIAL_TILE_METRES`]) across the face's two widest axes, so a material
+/// runs on across neighbouring walls instead of stretching with the room, and
+/// `v` runs down a wall, as image rows do.
 pub fn mesh(faces: &[Face]) -> Mesh {
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
@@ -92,29 +95,52 @@ pub fn mesh(faces: &[Face]) -> Mesh {
     for face in faces {
         let normal = face.plane.normal;
         let flat = normal.abs();
-        let (u, v) = if flat.x >= flat.y && flat.x >= flat.z {
-            (2, 1)
-        } else if flat.y >= flat.z {
-            (0, 2)
-        } else {
-            (0, 1)
+        let uv = |p: Vec3| -> [f32; 2] {
+            let (u, v) = if flat.x >= flat.y && flat.x >= flat.z {
+                (p.z, -p.y)
+            } else if flat.y >= flat.z {
+                (p.x, p.z)
+            } else {
+                (p.x, -p.y)
+            };
+            [u / MATERIAL_TILE_METRES, v / MATERIAL_TILE_METRES]
         };
         let base = positions.len() as u32;
         for vertex in &face.vertices {
             positions.push(vertex.to_array());
             normals.push(normal.to_array());
-            uvs.push([vertex[u], vertex[v]]);
+            uvs.push(uv(*vertex));
         }
         for i in 1..face.vertices.len() as u32 - 1 {
             indices.extend_from_slice(&[base, base + i, base + i + 1]);
         }
     }
 
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+    let empty = indices.is_empty();
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-        .with_inserted_indices(Indices::U32(indices))
+        .with_inserted_indices(Indices::U32(indices));
+    if !empty {
+        // Planar convex faces with distinct UVs always have tangents.
+        mesh.generate_tangents().expect("a room's faces have tangents");
+    }
+    mesh
+}
+
+/// [`mesh`] once per [`RoomSlot`], each slot sorted by its faces' inward
+/// normals, so each can take its own material. A slot with no faces left —
+/// every one opened up by a neighbour — is left out.
+pub fn slot_meshes(faces: &[Face]) -> Vec<(RoomSlot, Mesh)> {
+    RoomSlot::ALL
+        .into_iter()
+        .filter_map(|slot| {
+            let mine: Vec<Face> =
+                faces.iter().filter(|face| RoomSlot::of(face.plane.normal) == slot).cloned().collect();
+            (!mine.is_empty()).then(|| (slot, mesh(&mine)))
+        })
+        .collect()
 }
 
 /// Where `ray` first meets a face from the side it faces — from inside, for a
@@ -169,6 +195,62 @@ fn area_facing(faces: &[Face], normal: Vec3) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn triangle_count(mesh: &Mesh) -> usize {
+        match mesh.indices() {
+            Some(Indices::U32(v)) => v.len() / 3,
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn a_rooms_slots_are_sorted_by_which_way_they_face() {
+        let rooms = [Room::new(Vec3::ZERO, Vec3::new(10.0, 3.0, 10.0))];
+        let slots = slot_meshes(&room_share(&rooms, 0));
+        let tris: Vec<(RoomSlot, usize)> = slots.iter().map(|(slot, mesh)| (*slot, triangle_count(mesh))).collect();
+        assert_eq!(tris, vec![(RoomSlot::Floor, 2), (RoomSlot::Walls, 8), (RoomSlot::Ceiling, 2)]);
+    }
+
+    /// A slot with nothing left in it is not baked: an empty mesh is an entity drawing nothing.
+    #[test]
+    fn a_slot_opened_up_entirely_is_left_out() {
+        let rooms = [
+            Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0)),
+            Room::new(Vec3::new(0.0, 3.0, 0.0), Vec3::new(4.0, 6.0, 4.0)),
+        ];
+        let slots: Vec<RoomSlot> = slot_meshes(&room_share(&rooms, 0)).into_iter().map(|(slot, _)| slot).collect();
+        assert_eq!(slots, vec![RoomSlot::Floor, RoomSlot::Walls]);
+    }
+
+    /// Breaks if texture coordinates go back to per-face fractions: a material then stretches
+    /// with the room and jumps where two rooms' walls meet.
+    #[test]
+    fn texture_coordinates_are_world_space_so_walls_line_up() {
+        let rooms = [
+            Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 6.0)),
+            Room::new(Vec3::new(4.0, 0.0, 0.0), Vec3::new(9.0, 3.0, 6.0)),
+        ];
+        let point = Vec3::new(4.0, 3.0, 6.0);
+        // On the back walls, which face -Z and so map x across and y down.
+        let uv_at = |index: usize| {
+            let (_, walls) = slot_meshes(&room_share(&rooms, index))
+                .into_iter()
+                .find(|(slot, _)| *slot == RoomSlot::Walls)
+                .unwrap();
+            let positions = walls.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap().to_vec();
+            let normals = walls.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap().as_float3().unwrap().to_vec();
+            let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) = walls.attribute(Mesh::ATTRIBUTE_UV_0)
+            else {
+                panic!("no texture coordinates")
+            };
+            let at = (0..positions.len())
+                .position(|i| Vec3::from(positions[i]).abs_diff_eq(point, 1e-4) && Vec3::from(normals[i]) == Vec3::NEG_Z)
+                .expect("the shared corner is a vertex of both rooms' back walls");
+            uvs[at]
+        };
+        assert_eq!(uv_at(0), uv_at(1));
+        assert_eq!(uv_at(0), [point.x / MATERIAL_TILE_METRES, -point.y / MATERIAL_TILE_METRES]);
+    }
 
     fn total_area(faces: &[Face]) -> f32 {
         [Vec3::X, Vec3::NEG_X, Vec3::Y, Vec3::NEG_Y, Vec3::Z, Vec3::NEG_Z]

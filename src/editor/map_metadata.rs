@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use crate::common::mode::GameMode;
 use crate::common::movement_rules::MovementRules;
+use crate::common::palette::Palette;
 
 /// Strongly typed map metadata, written at the top of a blueprint.
 #[derive(Resource, Debug, Clone)]
@@ -11,6 +12,7 @@ pub struct MapMetadata {
     pub authors: Vec<String>,
     pub game_mode: GameMode,
     pub movement: MovementRules,
+    pub palette: Palette,
     /// The panel's comma-separated authors text, refreshed when `authors` is replaced from disk.
     authors_ui_text: String,
     authors_ui_synced_from: Vec<String>,
@@ -25,6 +27,7 @@ impl Default for MapMetadata {
             authors,
             game_mode: GameMode::Arena,
             movement: MovementRules::default(),
+            palette: Palette::default(),
             authors_ui_text,
             authors_ui_synced_from: vec!["anonymous".to_string()],
         }

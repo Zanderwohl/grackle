@@ -226,14 +226,26 @@ faces for it, and the material side should not need to know it exists.
 
 ## Checklist
 
+- [x] texture-graph's panels split into `texture-graph-editor` (egui only), on Bevy 0.20's wgpu and egui
+- [x] A Material authoring mode hosting them: open, save, undo, revert, under `materials/`
+- [x] Material previews on Bevy's device: a `TextureRegistry` over bevy_egui
 - [ ] texture-graph: an evaluator version, separate from `CURRENT_FORMAT_VERSION`
-- [ ] Materials under a pack's `materials/`, loaded through `AssetSource`
-- [ ] Bake a material to a tileable set on Bevy's device, cached by hash and evaluator version
-- [ ] Room floor / wall / ceiling slots (classified by normal), triplanar world-space projection
+- [x] Materials under a pack's `materials/`, loaded through `AssetSource`
+- [x] Bake a material's colour to a repeating tile on Bevy's device, once per name
+- [x] The rest of a material: roughness, metallic, a normal map, mipmaps
+- [ ] texture-graph's GPU height-to-normal wraps at a tiling bake's edges (it clamps: a one-sided slope on the border row)
+- [ ] An environment map, so metal reflects something
+- [ ] A material's own tile size in metres, rather than `MATERIAL_TILE_METRES`
+- [ ] Cache bakes by hash and evaluator version
+- [x] Room floor / wall / ceiling slots, classified by normal, world-space coordinates
+- [ ] Triplanar projection, for surfaces that are not axis-aligned
+- [ ] Picking a slot's material from a list rather than typing its name
+- [ ] Materials sent to clients that lack them, as props are
 - [ ] Grain axis with a `PointRef` anchor
 - [ ] Geometry inputs as vertex attributes; clean/worn blend
 - [ ] `Paint` feature: a box and a material, timeline-ordered
-- [ ] Roles and the palette in `MapMetadata`; role paint resolved by `Side`
+- [x] Roles and the palette in `MapMetadata`; a room slot's role resolved by `Side`
+- [ ] Editing the palette in the Metadata panel (the template writes one; nothing edits it yet)
 - [ ] Decals anchored to features
 - [ ] Props: materials in object space, style and tint as fallback
 - [ ] Full bake to atlases, cached on disk / in IndexedDB

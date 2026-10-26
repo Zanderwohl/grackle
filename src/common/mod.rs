@@ -37,6 +37,7 @@ pub mod rotation;
 pub mod triangulate;
 pub mod mode;
 pub mod movement_rules;
+pub mod palette;
 pub mod render_layers;
 pub mod shortcuts;
 

@@ -130,6 +130,10 @@ title = "Global Point"
 [editor.features.room]
 title = "Room"
 own_min = "This room's Min"
+materials = "Materials"
+floor = "Floor"
+walls = "Walls"
+ceiling = "Ceiling"
 
 [editor.features.footprint_room]
 title = "Footprint Room"
@@ -513,6 +517,7 @@ smoother_step = "Smoother"
 editor = "Map Editor"
 prop = "Prop Editor"
 animation = "Animation Editor"
+material = "Material Editor"
 play = "Play"
 
 # Every authoring mode's File pulldown. The entries mean whatever the thing
@@ -538,6 +543,9 @@ server_decides = "The server decides when the match is played."
 
 [prop]
 untitled = "Untitled prop"
+
+[material]
+untitled = "Untitled material"
 
 [prop.menu]
 frame = "Frame"

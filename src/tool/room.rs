@@ -596,6 +596,83 @@ impl RoomDragState {
     }
 }
 
+/// Which of a room's materials a surface takes. Decided by its inward normal
+/// rather than by which side of the room it is, so a room of any shape sorts
+/// its surfaces the same way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RoomSlot {
+    Floor,
+    Walls,
+    Ceiling,
+}
+
+impl RoomSlot {
+    pub const ALL: [RoomSlot; 3] = [RoomSlot::Floor, RoomSlot::Walls, RoomSlot::Ceiling];
+
+    pub fn name_key(self) -> &'static str {
+        match self {
+            RoomSlot::Floor => "editor.features.room.floor",
+            RoomSlot::Walls => "editor.features.room.walls",
+            RoomSlot::Ceiling => "editor.features.room.ceiling",
+        }
+    }
+
+    pub fn of(inward: Vec3) -> Self {
+        if inward.y > 0.5 {
+            RoomSlot::Floor
+        } else if inward.y < -0.5 {
+            RoomSlot::Ceiling
+        } else {
+            RoomSlot::Walls
+        }
+    }
+}
+
+/// The material each of a room's slots takes, by name under a pack's
+/// `materials/`, or a role the map's palette resolves. `None` is the plain
+/// default, which is also what a name with no file behind it draws as. Copied
+/// onto the room's entity from its feature.
+#[derive(Component, serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoomSurfaces {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walls: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling: Option<String>,
+}
+
+impl RoomSurfaces {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn of(&self, slot: RoomSlot) -> Option<&str> {
+        self.slot(slot).as_deref()
+    }
+
+    pub fn slot(&self, slot: RoomSlot) -> &Option<String> {
+        match slot {
+            RoomSlot::Floor => &self.floor,
+            RoomSlot::Walls => &self.walls,
+            RoomSlot::Ceiling => &self.ceiling,
+        }
+    }
+
+    pub fn slot_mut(&mut self, slot: RoomSlot) -> &mut Option<String> {
+        match slot {
+            RoomSlot::Floor => &mut self.floor,
+            RoomSlot::Walls => &mut self.walls,
+            RoomSlot::Ceiling => &mut self.ceiling,
+        }
+    }
+}
+
+/// Metres one repeat of a material covers. A stand-in: the scale belongs to
+/// the material, which has nowhere to say it yet.
+pub const MATERIAL_TILE_METRES: f32 = 2.0;
+
+
 #[cfg(test)]
 mod drag_handle_tests {
     use super::*;

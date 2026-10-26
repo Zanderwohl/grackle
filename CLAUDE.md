@@ -80,9 +80,10 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/tool/` | One module per editor tool, each its own `Plugin` with its own `Tools` state. |
 | `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls, placed props, hats. |
 | `src/prop/` | The prop editor: a CSG kernel, the modelling feature list, and the mode around it. |
+| `src/material/` | The material editor: texture-graph's panels as an authoring mode. See "Editing a material". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`. |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 | `cache/` | Gitignored, derived from the packs: `thumbnail/props/{name}.png`. Safe to delete. |
@@ -125,7 +126,10 @@ from the editor — it is written by
 ([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the
 repo root, and that file is where its contents are reviewable. It currently
 also ships an animation grid, which is why the room is 24 m square: the grid is
-a testing convenience rather than something a new map owes you.
+a testing convenience rather than something a new map owes you. It also ships
+a spawn nook on each side wall, Red's authored and Blue's made by a Mirror,
+with walls naming the `spawn_walls` role — the smallest map that exercises
+sides, mirroring and the palette at once.
 
 Choice is uniform random among the spawns on the body's own side — a spawn's
 `Side`, from a Mirror (see "Mirroring half a map") — falling back to spawns
@@ -137,7 +141,8 @@ is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop` or `Play`. **`F5` swaps between the map editor and Play, and nothing
+`Prop`, `Animation`, `Material` or `Play`, iterable in that order, which is
+the Mode menu's order. **`F5` swaps between the map editor and Play, and nothing
 else** — the only way back to the editor, as `Escape` belongs to the pause
 menu. From the prop editor it is answered with a line in the log rather than
 starting a round: the key's whole meaning is that it toggles between *two*
@@ -880,6 +885,97 @@ so the head bone's own odd rest rotation never reaches a hat's numbers. Which
 hat is a class's is `hat` on its entry in `loadouts.toml`. In Fit a hat stays
 at the origin and the figure stands under it, inverted through the same
 `hat_transform` the game uses.
+
+## Editing a material
+
+`AppMode::Material` ([`src/material/`](src/material/)) is
+[texture-graph](https://github.com/Zanderwohl/texture-graph)'s editor —
+`texture-graph-editor`, egui panels and nothing else — under Grackle's File,
+Edit and Mode menus, editing one `.tgraph` under a pack's `materials/`. What
+a material is *for* is [documentation/surfaces.md](documentation/surfaces.md);
+rooms paint with them — see "Materials on rooms".
+
+- **The crates track texture-graph's `main`, and it moves with Bevy.**
+  Cargo.lock holds the commit; `cargo update -p texture-graph-core` moves
+  it. The editor's egui and wgpu must be the ones bevy_egui and Bevy use, or
+  its types are not ours, so update the two together.
+- **It takes the whole window**, so `AppMode::shows_the_viewports` is false
+  for it and the four editor cameras are switched off on entry. A mode that
+  shows them switches them back on.
+- **`MaterialEditor` is a non-`Send` resource**, because the editor holds its
+  host's texture registry as a trait object.
+- **Undo is whole-graph snapshots taken when idle**, as the map's is,
+  compared as RON text because `Graph` has no `PartialEq`. texture-graph
+  queues edits as commands and keeps no history.
+- **The panels add their canvas on first draw**, which is housekeeping, not an
+  edit. `MaterialEditor::show` adds it on open and restore so a fresh file
+  neither reads as changed nor offers an undo that removes the canvas.
+- **Previews bake on Bevy's own device**
+  ([`src/material/gpu.rs`](src/material/gpu.rs)). bevy_egui only draws
+  `Image` assets, so a baked texture is given an invented `AssetId` with no
+  `Image` behind it, registered as a weak handle, and a `GpuImage` wrapping
+  it is put into `RenderAssets<GpuImage>` after Bevy prepares its own. With
+  no asset, nothing in Bevy ever removes the entry; freeing it is ours.
+- **The registry is lent per frame**, not owned by the editor, because it
+  borrows `EguiContexts`, which also holds bevy_egui's user textures — ask
+  for `EguiUserTextures` beside it and Bevy refuses the system at startup.
+- **Previews are viewed as `Rgba8UnormSrgb`.** texture-graph stores
+  sRGB-encoded bytes in `Rgba8Unorm` (storage writes cannot be sRGB);
+  bevy_egui blends in linear space, so drawn as they are every preview is
+  washed out, with no error.
+
+## Materials on rooms
+
+A room names a material per **slot** — floor, walls, ceiling — as
+`RoomSurfaces` on its feature, copied onto its entity. `None` draws the plain
+default, as does a name with no file behind it. The material editor's own
+GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
+[`gpu.rs`](src/material/gpu.rs)).
+
+- **Slots are sorted by inward normal**, not by side of the box
+  (`RoomSlot::of`), so a room that is not a box sorts the same way. Each slot
+  is its own child mesh (`RoomSlotMesh`) under the room's
+  `BakedRoomGeometry`; a slot opened up entirely is not baked.
+- **Painting is not baking.** `paint_rooms` picks each slot's material every
+  frame, so changing a name repaints without rebuilding walls, and a material
+  that bakes late — no device yet — arrives on its own.
+- **Texture coordinates are world-space**, in tiles of
+  `MATERIAL_TILE_METRES`, so a material runs on across neighbouring walls and
+  does not stretch with the room. The tile size is a stand-in: it belongs to
+  the material, which has nowhere to say it yet.
+- **A material is baked once per name** into a `TILE_TEXELS` tile, as the
+  three maps `StandardMaterial` reads — colour, glTF-packed
+  metallic-roughness, normal — each with a full mip chain, by texture-graph's
+  `MaterialMapper`. Sampled trilinear and 16x anisotropic: a wall seen
+  edge-on is where tiling shimmers. Saving one in the material editor makes
+  the map bake it again.
+- **Colour is viewed as sRGB and the other two are not** (`Encoding`).
+  texture-graph stores display bytes; metallic-roughness and normals are
+  data, and decoding them as colour bends every value.
+- **Normal maps are flipped in Y** (`FLIP_NORMAL_MAP_Y`): texture-graph's are
+  +Y down the image, Bevy's bitangent points up it. Unflipped, every bump is
+  lit from the wrong side and nothing errors;
+  `texture_graph_normals_face_uphill_on_a_wall` rebuilds a world normal from
+  a room mesh's own tangents to decide it. Room meshes carry mikktspace
+  tangents for this.
+- **Metal reads dark** without an environment map to reflect: the map has
+  only its point lights.
+- **A material repeats, so it must tile.** Value noise with a lattice period
+  equal to its frequency; `every_shipped_material_tiles` checks each shipped
+  one's opposite edges on the CPU. The default pack's are written by
+  `cargo run --bin default_materials`, like the map template.
+- **A slot may name a role instead**, which the map's palette
+  ([`src/common/palette.rs`](src/common/palette.rs), in `MapMetadata`)
+  resolves by the room's `Side` — so a Mirror's copy comes out in the other
+  team's colours with nothing on the copy saying so. A role's name shadows a
+  material of the same name. `publish_palette` is the one writer of the
+  `Palette` resource; nothing reads `MapMetadata` for it.
+- **No palette field is skipped when empty.** It crosses the wire inside the
+  settings, with postcard, which cannot read a field left out: a skipped
+  field decodes as garbage after it, and `the_settings_survive_the_wire_encoding`
+  is what failed.
+- **Not sent to clients.** Materials are pack content like props, but nothing
+  syncs them yet; a client without the file draws that slot plain.
 
 ## Thumbnails
 
@@ -2214,6 +2310,9 @@ gravity from the server's is the rubber-banding `map_sync` exists to prevent.
 
 Every user-visible string goes through the lang layer in
 [`src/common/lang.rs`](src/common/lang.rs). Never hardcode display text.
+**The one exception is the material editor's panels**, which are
+texture-graph's and English; Grackle's menus around them still go through
+the layer.
 
 ```rust
 get!("tools.select")                          // plain lookup
@@ -2308,7 +2407,8 @@ C are gone. What is left is Grackle's own code:
   WebTransport — the reason Lightyear was chosen.
 - **`rfd` + `pollster::block_on` inside `std::thread::spawn`**
   ([`panels.rs:402`](src/editor/panels.rs:402), and the same pattern in
-  [`src/prop/ui.rs`](src/prop/ui.rs)) — no threads on wasm, and blocking the
+  [`src/prop/ui.rs`](src/prop/ui.rs) and
+  [`src/material/ui.rs`](src/material/ui.rs)) — no threads on wasm, and blocking the
   main thread deadlocks — and on wasm `FileHandle::path()` and `pick_folder`
   do not exist at all, which is what the compiler stops on. All of it is on
   the *authoring* side; `src/prop/`'s reading path deliberately is not.
@@ -2326,7 +2426,7 @@ over `FrameTimeDiagnosticsPlugin`, so there is no per-Bevy-release fork to
 chase.
 
 `cargo check --lib --target wasm32-unknown-unknown` is worth running as a
-probe: it now compiles every dependency and stops on seven errors in
+probe: it now compiles every dependency and stops on nine errors in
 Grackle's own code — the transport and the file dialogs above.
 
 When adding runtime code, keep it free of these rather than porting them later.
