@@ -1,19 +1,19 @@
 //! Materials by name for the map, baked on Bevy's device.
 //!
 //! A name is looked for under every pack's `materials/` the first time a room asks for it, the
-//! last pack holding it winning as for props, and its colour is baked once into a tile of
-//! [`TILE_TEXELS`] that repeats across the wall ([`crate::tool::room::MATERIAL_TILE_METRES`] per
-//! repeat). Only colour so far: roughness and metallic are constants, and a normal map needs
-//! tangents on the room meshes.
+//! last pack holding it winning as for props, and baked once into a tile of [`TILE_TEXELS`] that
+//! repeats across the wall ([`crate::tool::room::MATERIAL_TILE_METRES`] per repeat): colour,
+//! glTF-packed metallic-roughness and a normal map, each mipmapped by texture-graph's
+//! `MaterialMapper`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use bevy::prelude::*;
 use texture_graph_core::{EvalCtx, Graph};
-use texture_graph_gpu::Baker;
+use texture_graph_gpu::{Baker, MaterialMapper};
 
-use super::gpu::{BakedTextures, BevyDevice, Sampling};
+use super::gpu::{BakedTextures, BevyDevice, Encoding, Sampling};
 use super::{FILE_EXTENSION, MATERIALS_DIR};
 use crate::common::assets::{default_packs, Assets as PackAssets};
 use crate::tool::bakes::{RoomBake, RoomSlotMesh};
@@ -21,9 +21,14 @@ use crate::tool::room::RoomSurfaces;
 
 pub const TILE_TEXELS: u32 = 512;
 
+/// texture-graph's normals are +Y down the image (`n.y = -dh/drow`, DirectX's way) and Bevy's
+/// bitangent points up it, so they are flipped. Unflipped, every bump is lit from the wrong side;
+/// `texture_graph_normals_face_uphill_on_a_wall` is what decides this.
+const FLIP_NORMAL_MAP_Y: bool = true;
+
 pub struct LibraryEntry {
     pub material: Handle<StandardMaterial>,
-    colour: AssetId<Image>,
+    maps: [AssetId<Image>; 3],
     /// The file it was baked from, the last pack's.
     pub file: PathBuf,
 }
@@ -31,7 +36,7 @@ pub struct LibraryEntry {
 #[derive(Resource, Default)]
 pub struct MaterialLibrary {
     /// Made on first use: the render device does not exist while plugins build.
-    baker: Option<Baker>,
+    baker: Option<(Baker, MaterialMapper)>,
     /// `None`: looked for and not there, or would not bake.
     entries: HashMap<String, Option<LibraryEntry>>,
 }
@@ -53,22 +58,35 @@ impl MaterialLibrary {
     ) -> Option<&LibraryEntry> {
         if !self.entries.contains_key(name) {
             if self.baker.is_none() {
-                self.baker = device.baker();
+                self.baker = device.baker().map(|baker| {
+                    let mapper = MaterialMapper::new(&baker.ctx().device);
+                    (baker, mapper)
+                });
             }
-            let baker = self.baker.as_mut()?;
+            let (baker, mapper) = self.baker.as_mut()?;
             let entry = find(name, packs).and_then(|(graph, file)| {
                 let out = baker
                     .bake_output(&graph, (TILE_TEXELS, TILE_TEXELS), &EvalCtx::default(), false)
                     .map_err(|e| error!("Baking material {name}: {e}"))
                     .ok()?;
-                let colour = baked.insert(&out.color, Sampling::Repeat);
+                let maps = mapper.maps(baker.ctx(), &out);
+                let maps = [
+                    baked.insert(&maps.color, Sampling::Repeat, Encoding::Colour),
+                    baked.insert(&maps.metallic_roughness, Sampling::Repeat, Encoding::Data),
+                    baked.insert(&maps.normal, Sampling::Repeat, Encoding::Data),
+                ];
                 let material = standard.add(StandardMaterial {
-                    base_color_texture: Some(BakedTextures::handle(colour)),
-                    perceptual_roughness: 0.9,
+                    base_color_texture: Some(BakedTextures::handle(maps[0])),
+                    // Both multiply the texture's value, so 1 lets the map decide.
+                    perceptual_roughness: 1.0,
+                    metallic: 1.0,
+                    metallic_roughness_texture: Some(BakedTextures::handle(maps[1])),
+                    normal_map_texture: Some(BakedTextures::handle(maps[2])),
+                    flip_normal_map_y: FLIP_NORMAL_MAP_Y,
                     ..default()
                 });
                 info!("Baked material {name} from {}", file.display());
-                Some(LibraryEntry { material, colour, file })
+                Some(LibraryEntry { material, maps, file })
             });
             if entry.is_none() {
                 warn!("No material named {name}; drawing its surfaces plain");
@@ -81,7 +99,9 @@ impl MaterialLibrary {
     /// So the next room to ask bakes it again, as after a save.
     pub fn forget(&mut self, name: &str, baked: &mut BakedTextures, standard: &mut Assets<StandardMaterial>) {
         if let Some(Some(entry)) = self.entries.remove(name) {
-            baked.remove(entry.colour);
+            for map in entry.maps {
+                baked.remove(map);
+            }
             standard.remove(&entry.material);
         }
     }
@@ -139,6 +159,33 @@ mod tests {
 
     /// A material repeats across a wall, so its tile's opposite edges have to be the same colour.
     /// Checked on the CPU, which agrees with the GPU bake to within a step of sRGB.
+    /// Height rising toward the bottom of the image is, on a wall, height rising toward the floor
+    /// (`v` runs down the world), so the slope faces up. texture-graph writes that as `n.y < 0`.
+    /// Rebuilt the way Bevy's shader does, from this mesh's own tangents, the world normal has to
+    /// point up; if it points down, every bump on every wall is lit from the wrong side, and
+    /// `FLIP_NORMAL_MAP_Y` is wrong.
+    #[test]
+    fn texture_graph_normals_face_uphill_on_a_wall() {
+        use crate::tool::room::{Room, RoomSlot};
+        let room = Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0));
+        let (_, walls) = room.bake_slots(&[]).into_iter().find(|(slot, _)| *slot == RoomSlot::Walls).unwrap();
+        let normals = walls.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap().as_float3().unwrap();
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(tangents)) = walls.attribute(Mesh::ATTRIBUTE_TANGENT)
+        else {
+            panic!("room walls have no tangents")
+        };
+
+        let slope = Vec3::new(0.0, -0.5, 1.0).normalize();
+        let flip = if FLIP_NORMAL_MAP_Y { -1.0 } else { 1.0 };
+        for (normal, tangent) in normals.iter().zip(tangents) {
+            let n = Vec3::from(*normal);
+            let t = Vec3::new(tangent[0], tangent[1], tangent[2]);
+            let b = tangent[3] * n.cross(t);
+            let world = t * slope.x + b * slope.y * flip + n * slope.z;
+            assert!(world.y > 0.1, "a slope rising toward the floor faces {world} on the wall facing {n}");
+        }
+    }
+
     #[test]
     fn every_shipped_material_tiles() {
         let Ok(entries) = std::fs::read_dir(Path::new("assets/default").join(MATERIALS_DIR)) else {

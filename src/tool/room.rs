@@ -877,6 +877,8 @@ impl FaceMesh {
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs);
         mesh.insert_indices(bevy::mesh::Indices::U32(self.indices));
+        // A material's normal map is read against these. Quads with distinct UVs always succeed.
+        mesh.generate_tangents().expect("a room's quads have tangents");
         mesh
     }
 }

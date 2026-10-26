@@ -40,6 +40,16 @@ pub enum Sampling {
     Repeat,
 }
 
+/// What a baked texture's bytes mean, which decides how it is viewed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Encoding {
+    /// sRGB-encoded colour, as texture-graph stores anything meant for display: viewed as sRGB so
+    /// the GPU decodes it. Drawn as it is, Bevy, which blends in linear space, washes it out.
+    Colour,
+    /// Linear data — roughness, metallic, a normal — read as it is stored.
+    Data,
+}
+
 /// Every baked texture drawn through Bevy, by the invented id it is drawn under. Extracted to the
 /// render world each frame; cloning a wgpu handle is a reference count.
 #[derive(Resource, Clone, Default, ExtractResource)]
@@ -51,17 +61,20 @@ pub struct BakedTextures {
 }
 
 impl BakedTextures {
-    /// An `Rgba8Unorm` texture holds sRGB-encoded bytes (texture-graph's `SRGB_VIEW`), and
-    /// everything Bevy draws with blends in linear space, so it is viewed as sRGB for the GPU to
-    /// decode. Drawn as they are, the colours are washed out.
-    pub fn insert(&mut self, texture: &wgpu::Texture, sampling: Sampling) -> AssetId<Image> {
+    pub fn insert(&mut self, texture: &wgpu::Texture, sampling: Sampling, encoding: Encoding) -> AssetId<Image> {
         let asset = AssetId::Uuid { uuid: Uuid::from_u128(BAKED_ID_BASE + self.next) };
         self.next += 1;
-        let format = match texture.format() {
-            wgpu::TextureFormat::Rgba8Unorm => Some(texture_graph_gpu::SRGB_VIEW[0]),
+        let format = match (encoding, texture.format()) {
+            (Encoding::Colour, wgpu::TextureFormat::Rgba8Unorm) => Some(texture_graph_gpu::SRGB_VIEW[0]),
             _ => None,
         };
-        let view = texture.create_view(&wgpu::TextureViewDescriptor { format, ..default() });
+        // Narrowed to sampling: a bake's outputs are storage textures too, and an sRGB format
+        // cannot be a storage view.
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            format,
+            usage: Some(wgpu::TextureUsages::TEXTURE_BINDING),
+            ..default()
+        });
         self.textures.insert(asset, (texture.clone(), view, sampling));
         asset
     }
@@ -89,7 +102,7 @@ pub struct BevyEguiTextures<'a, 'w, 's> {
 
 impl TextureRegistry for BevyEguiTextures<'_, '_, '_> {
     fn register(&mut self, texture: &wgpu::Texture, _view: &wgpu::TextureView) -> egui::TextureId {
-        let asset = self.baked.insert(texture, Sampling::Clamp);
+        let asset = self.baked.insert(texture, Sampling::Clamp, Encoding::Colour);
         let id = self.egui.add_image(EguiTextureHandle::Weak(asset));
         self.baked.by_egui_id.insert(id, asset);
         id
@@ -149,10 +162,14 @@ fn swap_in_baked_textures(
             min_filter: wgpu::FilterMode::Linear,
             ..default()
         };
+        // Trilinear and anisotropic: a wall seen edge-on samples far down the mip chain along
+        // one axis only, and isotropic filtering blurs it into a smear.
         let repeat = wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
             address_mode_w: wgpu::AddressMode::Repeat,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            anisotropy_clamp: 16,
             ..linear.clone()
         };
         (device.create_sampler(&linear), device.create_sampler(&repeat))

@@ -73,6 +73,7 @@ Blueprint(
                     surfaces: RoomSurfaces(
                         floor: Some("concrete"),
                         walls: Some("concrete"),
+                        ceiling: Some("steel_plate"),
                     ),
                 ),
             },

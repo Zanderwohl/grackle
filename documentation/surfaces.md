@@ -231,7 +231,9 @@ should not need to know it exists.
 - [ ] texture-graph: an evaluator version, separate from `CURRENT_FORMAT_VERSION`
 - [x] Materials under a pack's `materials/`, loaded through `AssetSource`
 - [x] Bake a material's colour to a repeating tile on Bevy's device, once per name
-- [ ] The rest of a material: roughness, metallic, a normal map (needs mesh tangents), mipmaps
+- [x] The rest of a material: roughness, metallic, a normal map, mipmaps
+- [ ] texture-graph's GPU height-to-normal wraps at a tiling bake's edges (it clamps: a one-sided slope on the border row)
+- [ ] An environment map, so metal reflects something
 - [ ] A material's own tile size in metres, rather than `MATERIAL_TILE_METRES`
 - [ ] Cache bakes by hash and evaluator version
 - [x] Room floor / wall / ceiling slots, classified by normal, world-space coordinates

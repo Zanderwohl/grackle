@@ -940,9 +940,23 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   `MATERIAL_TILE_METRES`, so a material runs on across neighbouring walls and
   does not stretch with the room. The tile size is a stand-in: it belongs to
   the material, which has nowhere to say it yet.
-- **A material is baked once per name**, colour only, into a
-  `TILE_TEXELS` tile with a repeating sampler and no mipmaps (distant walls
-  shimmer). Saving one in the material editor makes the map bake it again.
+- **A material is baked once per name** into a `TILE_TEXELS` tile, as the
+  three maps `StandardMaterial` reads — colour, glTF-packed
+  metallic-roughness, normal — each with a full mip chain, by texture-graph's
+  `MaterialMapper`. Sampled trilinear and 16x anisotropic: a wall seen
+  edge-on is where tiling shimmers. Saving one in the material editor makes
+  the map bake it again.
+- **Colour is viewed as sRGB and the other two are not** (`Encoding`).
+  texture-graph stores display bytes; metallic-roughness and normals are
+  data, and decoding them as colour bends every value.
+- **Normal maps are flipped in Y** (`FLIP_NORMAL_MAP_Y`): texture-graph's are
+  +Y down the image, Bevy's bitangent points up it. Unflipped, every bump is
+  lit from the wrong side and nothing errors;
+  `texture_graph_normals_face_uphill_on_a_wall` rebuilds a world normal from
+  a room mesh's own tangents to decide it. Room meshes carry mikktspace
+  tangents for this.
+- **Metal reads dark** without an environment map to reflect: the map has
+  only its point lights.
 - **A material repeats, so it must tile.** Value noise with a lattice period
   equal to its frequency; `every_shipped_material_tiles` checks each shipped
   one's opposite edges on the CPU. The default pack's are written by
