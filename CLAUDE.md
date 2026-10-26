@@ -80,6 +80,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/tool/` | One module per editor tool, each its own `Plugin` with its own `Tools` state. |
 | `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls, placed props, hats. |
 | `src/prop/` | The prop editor: a CSG kernel, the modelling feature list, and the mode around it. |
+| `src/material/` | The material editor: texture-graph's panels as an authoring mode. See "Editing a material". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `crate_drop`. |
@@ -137,7 +138,8 @@ is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop` or `Play`. **`F5` swaps between the map editor and Play, and nothing
+`Prop`, `Animation`, `Material` or `Play`, iterable in that order, which is
+the Mode menu's order. **`F5` swaps between the map editor and Play, and nothing
 else** — the only way back to the editor, as `Escape` belongs to the pause
 menu. From the prop editor it is answered with a line in the log rather than
 starting a round: the key's whole meaning is that it toggles between *two*
@@ -880,6 +882,33 @@ so the head bone's own odd rest rotation never reaches a hat's numbers. Which
 hat is a class's is `hat` on its entry in `loadouts.toml`. In Fit a hat stays
 at the origin and the figure stands under it, inverted through the same
 `hat_transform` the game uses.
+
+## Editing a material
+
+`AppMode::Material` ([`src/material/`](src/material/)) is
+[texture-graph](https://github.com/Zanderwohl/texture-graph)'s editor —
+`texture-graph-editor`, egui panels and nothing else — under Grackle's File,
+Edit and Mode menus, editing one `.tgraph` under a pack's `materials/`. What
+a material is *for* is [documentation/surfaces.md](documentation/surfaces.md);
+nothing in a map reads one yet.
+
+- **The crates are pinned to a git rev, and the rev moves with Bevy.** The
+  editor's egui and wgpu must be the ones bevy_egui and Bevy use, or its
+  types are not ours. Bump them together.
+- **It takes the whole window**, so `AppMode::shows_the_viewports` is false
+  for it and the four editor cameras are switched off on entry. A mode that
+  shows them switches them back on.
+- **`MaterialEditor` is a non-`Send` resource**, because the editor holds its
+  host's texture registry as a trait object.
+- **Undo is whole-graph snapshots taken when idle**, as the map's is,
+  compared as RON text because `Graph` has no `PartialEq`. texture-graph
+  queues edits as commands and keeps no history.
+- **The panels add their canvas on first draw**, which is housekeeping, not an
+  edit. `MaterialEditor::show` adds it on open and restore so a fresh file
+  neither reads as changed nor offers an undo that removes the canvas.
+- **Previews take texture-graph's CPU path**, because sharing Bevy's device
+  needs a `TextureRegistry` that turns a baked wgpu texture into an egui id
+  through bevy_egui, which only takes `Handle<Image>`. That is the next piece.
 
 ## Thumbnails
 
@@ -2182,6 +2211,9 @@ gravity from the server's is the rubber-banding `map_sync` exists to prevent.
 
 Every user-visible string goes through the lang layer in
 [`src/common/lang.rs`](src/common/lang.rs). Never hardcode display text.
+**The one exception is the material editor's panels**, which are
+texture-graph's and English; Grackle's menus around them still go through
+the layer.
 
 ```rust
 get!("tools.select")                          // plain lookup
@@ -2276,7 +2308,8 @@ C are gone. What is left is Grackle's own code:
   WebTransport — the reason Lightyear was chosen.
 - **`rfd` + `pollster::block_on` inside `std::thread::spawn`**
   ([`panels.rs:402`](src/editor/panels.rs:402), and the same pattern in
-  [`src/prop/ui.rs`](src/prop/ui.rs)) — no threads on wasm, and blocking the
+  [`src/prop/ui.rs`](src/prop/ui.rs) and
+  [`src/material/ui.rs`](src/material/ui.rs)) — no threads on wasm, and blocking the
   main thread deadlocks — and on wasm `FileHandle::path()` and `pick_folder`
   do not exist at all, which is what the compiler stops on. All of it is on
   the *authoring* side; `src/prop/`'s reading path deliberately is not.
@@ -2294,7 +2327,7 @@ over `FrameTimeDiagnosticsPlugin`, so there is no per-Bevy-release fork to
 chase.
 
 `cargo check --lib --target wasm32-unknown-unknown` is worth running as a
-probe: it now compiles every dependency and stops on seven errors in
+probe: it now compiles every dependency and stops on nine errors in
 Grackle's own code — the transport and the file dialogs above.
 
 When adding runtime code, keep it free of these rather than porting them later.

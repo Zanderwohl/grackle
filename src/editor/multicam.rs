@@ -194,11 +194,11 @@ impl Plugin for MulticamPlugin {
                 Self::setup_first_camera,
                 Self::setup.after(Self::setup_first_camera),
             ))
-            // Applying the rects runs in every authoring mode, since each mode's panels write `MulticamState`.
-            // The debug boxes stay in the map editor.
+            // Applying the rects runs in every mode that shows the viewports, since each mode's panels
+            // write `MulticamState`. The debug boxes stay in the map editor.
             .add_systems(
                 Update,
-                Self::set_camera_viewports.run_if(crate::common::app_mode::authoring),
+                Self::set_camera_viewports.run_if(crate::common::app_mode::showing_the_viewports),
             )
             .add_systems(Update, Self::debug_boxes.run_if(in_state(AppMode::Editor)))
             // After transform propagation, so gizmos use this frame's global transforms.
