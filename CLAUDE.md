@@ -322,10 +322,8 @@ views, and now that bodies have geometry neither is what a player sees. `F3`
 is the perf overlay in both modes.
 
 Weapon slots are on **`1`–`6`**, the left mouse button fires the weapon's
-primary and the right its secondary — held, for anything automatic — **`R`**
-reloads, and **`G`** plants an emitter firing whatever projectile you are
-holding every two seconds with **`B`** to clear them. What each slot holds is a
-property of the class, which is read off disk; see "What a weapon is" below.
+primary and the right its secondary — held, for anything automatic — and
+**`R`** reloads. What each slot holds is a property of the class, which is read off disk; see "What a weapon is" below.
 
 ## Modelling a prop
 
@@ -761,6 +759,10 @@ Three things there are load-bearing:
   straightened limb and *then* reports `Short` — right for a foot pointed at a
   floor, wrong for an arm, which reads as broken rather than as not holding. So
   `reach_for` puts the joints back.
+
+Ranking what may drive which bones — taunts, humiliation, firing, reloads,
+the hold, locomotion — and which passes yield when outranked is planned in
+[documentation/animation-layers.md](documentation/animation-layers.md).
 
 `every_class_can_reach_every_shipped_props_grip` is what keeps a hold
 authorable: a build whose hand cannot get to the grip holds nothing while its
@@ -1567,11 +1569,9 @@ it needed no new machinery for that: `burn` sits in `Deal` and writes a
   reads the same on all four of them. A burning red pulling further towards
   red is a burning body you cannot see.
 
-Testing all of this by hand is what `ProjectileEmitter` is for: `G` plants one
-firing whatever you are holding every two seconds, `B` clears them. Plant one
-in front of the animation grid and the sixty standing bodies become a firing
-range. It reads the keyboard directly rather than going through `PlayerInput`,
-which is fine precisely because planting a prop is not part of the simulation.
+`ProjectileEmitter` fires a spec along its own forward on an interval.
+Nothing places one: the player's key for it is gone, and it is meant to come
+back as a map feature.
 
 ## Which end of the wire this is
 

@@ -28,7 +28,7 @@ use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::player::{interpolate_bodies, LocalPlayer, PhysicsBody, Player};
 use crate::game::viewmodel::ApparentMuzzle;
-use crate::common::weapon::{Equipped, WeaponAction, WeaponCatalogue};
+use crate::common::weapon::WeaponAction;
 use crate::game::weapon::WeaponActionFired;
 
 /// Walls one projectile may meet in a single tick. Past it the rest of the
@@ -109,8 +109,8 @@ fn muzzle_weight(flown: f32, span: f32) -> f32 {
     1.0 - EaseFunction::SmoothStep.sample_clamped(flown / span)
 }
 
-/// Fires a projectile every `interval` at nobody in particular. A test
-/// harness: `G` plants one, `B` clears them (see [`plant_emitters`]).
+/// Fires a projectile every `interval` along its own forward, at nobody in
+/// particular. Nothing places one yet; it is meant to become a map feature.
 #[derive(Component, Clone, Debug)]
 pub struct ProjectileEmitter {
     pub spec: ProjectileSpec,
@@ -139,7 +139,6 @@ impl Plugin for ProjectilePlugin {
                 (fire_projectiles, run_emitters, step_projectiles)
                     .in_set(DamageSystems::Deal),
             )
-            .add_systems(Update, plant_emitters.run_if(in_state(AppMode::Play)))
             // Drawing, so ungated: a client flies none of these and draws all.
             .add_systems(Update, (dress_projectiles, spin_projectiles))
             // After the interpolation it offsets, and in the same frame the
@@ -462,47 +461,6 @@ fn draw_our_shots_from_the_muzzle(
             continue;
         }
         transform.translation += shot.offset * weight;
-    }
-}
-
-/// `G` plants an emitter where you stand, `B` removes them all. Reads the
-/// keyboard directly: planting a prop is not part of the simulation, so it
-/// needs no latch.
-fn plant_emitters(
-    mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-    catalogue: Res<WeaponCatalogue>,
-    players: Query<(&Transform, &Player, &Equipped)>,
-    emitters: Query<Entity, With<ProjectileEmitter>>,
-) {
-    /// Seconds. Long enough to watch one flight end before the next.
-    const EMITTER_INTERVAL: f32 = 2.0;
-
-    if keys.just_pressed(KeyCode::KeyB) {
-        for emitter in &emitters {
-            commands.entity(emitter).despawn();
-        }
-    }
-
-    if !keys.just_pressed(KeyCode::KeyG) {
-        return;
-    }
-
-    for (transform, player, equipped) in &players {
-        // Whatever you hold, primary only: an emitter has no right button.
-        let held = catalogue.held_by(equipped).map(|weapon| weapon.primary.action);
-        let Some(WeaponAction::Projectile(spec)) = held else {
-            info!("Hold a projectile weapon to plant an emitter");
-            continue;
-        };
-        let facing = Quat::from_rotation_y(player.yaw) * Quat::from_rotation_x(player.pitch);
-        commands.spawn((
-            ProjectileEmitter::new(spec, EMITTER_INTERVAL),
-            Transform::from_translation(transform.translation).with_rotation(facing),
-            Visibility::default(),
-            Name::new("Projectile emitter"),
-        ));
-        info!("Planted an emitter firing every {EMITTER_INTERVAL} s; B clears them");
     }
 }
 
