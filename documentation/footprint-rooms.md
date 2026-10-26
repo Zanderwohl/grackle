@@ -136,12 +136,24 @@ every corner, so another feature can reference one.
 
 ### Stage 2 — drawing one
 
-- [ ] `Tools::Footprint`, a `Plugin` in `src/tool/footprint.rs`: clicks on the
-      floor plane chaining lines, snapping to grid and corners, Shift to pick
-      a point, closing on a corner, `Escape` and `Backspace`.
-- [ ] A loop closed while drawing names its region.
-- [ ] Lines drawn as placed; the regions that would be rooms hatched.
-- [ ] Lang strings in `en-US`.
+- [x] `Tools::Footprint`, a `Plugin` in `src/tool/footprint.rs`. The first
+      click lands where the Room tool's would and sets the floor; every
+      later one is where the pointer's ray meets that plane (a side view
+      keeps the axis it cannot see from the last corner), snapped to 0.1 m.
+      Shift-click on a feature's point adds a corner measured from it.
+      Clicking within 0.3 m of the first corner, with three or more down,
+      closes the loop; `Backspace` takes the last corner back and `Escape`
+      drops the drawing.
+- [x] Closing makes the feature with its region named, selects it and hands
+      back to Select, as the Room tool does. The drawing is a plain `Draft`,
+      so what a click does is tested without a mouse.
+- [x] Drawn as placed: the lines so far, a dashed line to the pointer and a
+      dashed closing edge, the first corner lit when a click would close,
+      and the loop it would make hatched (the prop sketch's `hatch`).
+- [x] `tools.footprint` in `en-US`.
+- [x] Tried by hand in the editor.
+- Only one loop per drawing: a pillar, or a second loop crossing the first,
+  is adding lines to an existing footprint, which is Stage 3.
 
 ### Stage 3 — editing one
 
