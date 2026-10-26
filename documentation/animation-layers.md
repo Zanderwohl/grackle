@@ -23,6 +23,14 @@ A **total order**, resolved **per region** rather than per body. Each layer
 claims some regions. Each region is driven by the highest active layer that
 claims it. A layer that wins nothing is not stopped, only unseen.
 
+**A claim above the weapon owns the region outright**, including what its
+clip leaves unkeyed: `stand_where_claimed` replaces the animator's pose there
+with the pose the body would hold standing still (crouched if it is
+crouched), by the layer's weight, before the stack plays. Without it a taunt
+claiming the legs and keying none of them would show the run cycle through
+itself. The weapon layer's claims stand nothing, since the grip owns the arms
+there.
+
 Per body would make a moving taunt impossible, and firing while running too:
 firing outranks locomotion only because it leaves the legs alone.
 
@@ -88,9 +96,17 @@ a menu that could pick a taunt. Both are **edges in `PlayerInput`**
 the authority, so a client's key has to reach the server as input; a key read
 straight off the keyboard would toggle the condition on the client alone.
 
-Toggled, not timed: `G` starts the wave and `G` again ends it, and the wave
-loops until then. A taunt with a length of its own is a field on the taunt,
-added when a taunt wants one.
+`G` starts the wave and it ends by itself after its `length` (1.2 s, two
+sweeps); `G` again ends it early. A taunt with no `length` lasts until `G`.
+The end is the authority's — `end_taunts` counts a `TauntClock` and clears
+`Condition::taunt` — and the length is a field on the taunt rather than read
+off the clip, since each machine has its own clip. A test pins the two
+together.
+
+**A raised hand has to be keyed.** The arm solver keeps the tip's world
+rotation, which is right for a planted foot and leaves a hand that has been
+lifted over the head pointing at the floor. Both the wave and the hands-up
+clip key the hand straight along the forearm after the arm is solved.
 
 ### One taunt: a wave above the head
 
@@ -103,17 +119,31 @@ arm loose. A taunt is pack content, a clip plus what it does to the body:
 clip = "taunt_wave"      # assets/default/animations/taunt_wave.gpa
 claims = ["arm.l", "arm.r", "torso", "head", "weapon"]
 movement = "stopped"     # "free" | "stopped" | { slowed = 0.5 }
+turning = "locked"       # "free" | "locked" | { at_most = 90 }, degrees a second
 weapon = "hidden"        # "hidden" | "shown"
+length = 1.2             # seconds; absent lasts until G again
 ```
 
 **Movement is configured per taunt.** `slowed` multiplies the speed
 `step_player` would have reached; `stopped` is zero horizontal input (a body
 still falls). A taunt that leaves the legs unclaimed and its movement free is
 a walking taunt; one that claims the legs and stops the body is a standing
-one. The two settings are independent on purpose: a taunt could claim the legs
+one, and its legs stand however hard the player presses forward. A body is
+also *described* from the movement its taunt allows rather than from the keys
+held (`describe_player_bodies`), so a stopped body is not told it is running
+and frozen mid-stride for want of ground covered. The two settings are independent on purpose: a taunt could claim the legs
 for a dance and still be shuffled across the floor slowly.
 
-Movement is part of the predicted step, so `Condition` is read by
+**So is turning.** `turning` is how far the *body* follows the aim: `locked`
+keeps the facing it started with, `at_most` turns it no faster than so many
+degrees a second, yaw and pitch alike, and the short way round. The view is
+aimed straight from the input and is never held back — the wave lets you look
+around at a body standing still, which is the point. Movement is measured from
+the body's yaw, so a conga (`at_most` turning, `slowed` movement) shuffles the
+way the body is facing and swings round after the camera. When a taunt ends
+the body snaps back to the aim.
+
+Movement and turning are part of the predicted step, so `Condition` is read by
 `step_player` on the client too. The tick the condition flips is a rollback,
 which is correct and rare.
 
@@ -166,10 +196,20 @@ first-person layer plays onto that rig (`Space::Eye`), not onto the body's.
 
 ### Forced third person does not overwrite the player's choice
 
-`ViewMode` stays the player's preference. What is drawn is the **effective**
-view: third person if a condition forces it, otherwise the preference. Writing
-`ViewMode` would need remembering what it was and putting it back, and
-forgetting leaves somebody in third person after a taunt.
+`ViewPreference` is the player's choice, toggled by `F`. What is drawn is the
+**effective** view: third person if a condition forces it, otherwise the
+preference. Writing the preference would need remembering what it was and
+putting it back, and forgetting leaves somebody in third person after a
+taunt.
+
+**The camera swings rather than cuts.** `CameraPull` runs 0 (the eye) to 1
+(where third person puts it) and is eased towards the wanted view over
+`CAMERA_PULL_SECONDS`; `place_camera` works out both positions every frame
+and blends them, so the view not in use is always current and a swing starts
+from where it really is. `ViewMode` — what everything that hides your own
+body reads — is third person whenever the pull is above zero, so the body is
+drawn for the whole swing back in rather than vanishing as it starts. `F`
+swings too, since it is the same transition.
 
 ### Your own recoil starts on your own machine
 
@@ -190,8 +230,8 @@ would kick twice.
 - **State, replicated:** `Condition`, what is carried, the reload in
   progress. The taunt table is sent like the weapon catalogue, since its
   movement is part of the predicted step. A taunt's start tick is not sent
-  yet: the wave loops, so where in it a late joiner starts does not show. A
-  taunt with a length of its own will need it.
+  yet, so a body seen mid-taunt plays it from the start; for a 1.2 s wave the
+  most that costs is a late wave.
 - **Input:** the `humiliate` and `taunt` toggles.
 - **Events, relayed:** firing, as an `Effect` carrying the shooter and the
   button, so every other machine starts the recoil; gestures.
@@ -223,7 +263,9 @@ outside its layer's claim is a problem `Clip::problems` reports.
 - [x] `Condition` component, replicated: humiliated. `pull_trigger` refuses;
       `show_held_weapons` hides the weapon per condition.
 - [x] Taunting as a condition: `Condition::taunt`, beside `humiliated`.
-- [ ] A taunt's start tick, once a taunt is not a loop.
+- [x] A taunt ends by itself after its `length`, on the authority.
+- [ ] A taunt's start tick on the wire, so a late joiner sees it partway
+      through rather than from the start.
 - [x] `humiliate` edge in `PlayerInput` on `H`; the authority toggles it.
 - [x] `taunt` edge on `G`; the authority toggles the first taunt.
 - [x] Humiliation: a hands-up clip (`animations/humiliated.gpa`) on the arms,

@@ -2,7 +2,7 @@ name_key = "anim.clips.humiliated"
 length = 1.2
 clock = "seconds"
 looping = true
-note = "Hands up beside the head, from the shoulders in arm lengths so every build reaches the same pose, and turned with the body so looking up does not tilt it. Elbows out and down. The legs are left to locomotion."
+note = "Hands up beside the head, from the shoulders in arm lengths so every build reaches the same pose, and turned with the body so looking up does not tilt it. Elbows out and down. The hands are keyed along the forearms after the arms are solved, since the solver keeps a tip's world rotation and would leave them pointing at the floor. The legs are left to locomotion."
 
 [[tracks]]
 combine = "replace"
@@ -79,3 +79,41 @@ to = [
     -0.15,
 ]
 ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "hand.r"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "hand.l"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"

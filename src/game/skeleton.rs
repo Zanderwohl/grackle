@@ -21,7 +21,9 @@ use crate::common::app_mode::{showing_the_world, AppMode};
 use crate::common::class::Stance;
 use crate::common::damage::PlayerId;
 use crate::common::class::{Class, ClassBuilds};
-use crate::common::skeleton::state::ClipLibrary;
+use crate::common::skeleton::ik::finish_pose;
+use crate::common::skeleton::play::{ClipStack, Layer, Regions};
+use crate::common::skeleton::state::{AnimationState, ClipLibrary};
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{
     draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
@@ -30,6 +32,7 @@ use crate::common::skeleton::{
     SkeletonPalette,
 };
 use crate::game::body_mesh::BodyMeshPlugin;
+use crate::game::condition::Condition;
 use crate::game::held::HeldWeaponPlugin;
 use crate::game::viewmodel::ViewmodelPlugin;
 use crate::game::hitbox::HitboxPlugin;
@@ -244,15 +247,24 @@ const MOVING: f32 = 0.5;
 ///
 /// Authority only: `BodyRequests` is replicated, and a client has no `Inputs`
 /// for remote bodies, so describing them would flatten them to standing.
+///
+/// What the body may do, not only what was pressed: a taunt that stops the
+/// body is not running, and described as running it freezes mid-stride, since
+/// no ground is covered for the stride to advance on.
 fn describe_player_bodies(
-    mut players: Query<(&Player, &Stance, &Inputs, &mut BodyRequests)>,
+    taunts: Option<Res<crate::common::taunt::Taunts>>,
+    mut players: Query<(&Player, &Stance, &Inputs, &Condition, &mut BodyRequests)>,
 ) {
-    for (player, stance, input, mut requests) in &mut players {
+    for (player, stance, input, condition, mut requests) in &mut players {
+        let movement = match condition.speed_factor(taunts.as_deref()) > 0.0 {
+            true => input.movement,
+            false => Vec2::ZERO,
+        };
         let mut described = BodyRequests {
-            running_forward: input.movement.y > MOVING,
-            running_backward: input.movement.y < -MOVING,
-            strafing_left: input.movement.x < -MOVING,
-            strafing_right: input.movement.x > MOVING,
+            running_forward: movement.y > MOVING,
+            running_backward: movement.y < -MOVING,
+            strafing_left: movement.x < -MOVING,
+            strafing_right: movement.x > MOVING,
             airborne: !player.on_ground,
             // The stance, not the key: a body that cannot stand up under a
             // vent is still crouched.
@@ -421,11 +433,12 @@ fn advance_animators(
         Option<&ForcedAnimation>,
         Option<&AnimationPhase>,
         Option<&Gait>,
+        Option<&ClipStack>,
     )>,
 ) {
     let dt = time.delta_secs();
     let clips = library.as_deref();
-    for (skeleton, mut animator, mut pose, global, offset, requests, forced, phase, gait) in
+    for (skeleton, mut animator, mut pose, global, offset, requests, forced, phase, gait, stack) in
         &mut bodies
     {
         match forced {
@@ -445,13 +458,53 @@ fn advance_animators(
             speed: gait.speed(),
             travel: gait.travel(),
         };
-        *pose = animator_pose(
-            skeleton,
-            &animator,
-            &inputs,
-            &skeleton_root(global, offset),
-            clips,
-        );
+        let root = skeleton_root(global, offset);
+        *pose = animator_pose(skeleton, &animator, &inputs, &root, clips);
+
+        if let Some(stack) = stack {
+            let still = AnimationState::from_requests(&BodyRequests {
+                crouching: requests.is_some_and(|requests| requests.crouching),
+                airborne: requests.is_some_and(|requests| requests.airborne),
+                ..default()
+            });
+            stand_where_claimed(skeleton, &mut pose, stack, || {
+                finish_pose(skeleton, still, &inputs, &root, clips)
+            });
+        }
+    }
+}
+
+/// What a layer above the weapon claims is its own, so the animator's motion
+/// there does not show through what the layer leaves unkeyed: a taunt that
+/// claims the legs and keys none of them stands, rather than walking on the
+/// spot beneath it. "Standing" is the state the body would be in with no
+/// movement asked for, so a crouched taunt stays crouched. Blended by how
+/// much the layer covers, so it fades with the layer.
+///
+/// Not the weapon layer's claims: the grip owns the arms there, and an arm
+/// under a deploy still swings when the weapon has no grip for it.
+fn stand_where_claimed(
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    stack: &ClipStack,
+    still: impl FnOnce() -> Pose,
+) {
+    let regions = [Regions::LEGS, Regions::TORSO, Regions::HEAD, Regions::ARM_L, Regions::ARM_R];
+    let cover = regions.map(|region| stack.cover(region, Layer::Weapon));
+    if cover.iter().all(|cover| *cover <= 0.0) {
+        return;
+    }
+    let still = still();
+    for bone in skeleton.bones() {
+        let region = Regions::of_bone(bone.name);
+        let Some(index) = regions.iter().position(|claimed| *claimed == region) else { continue };
+        if cover[index] > 0.0 {
+            pose.set(bone.name, pose.joint(bone.name).slerp(still.joint(bone.name), cover[index]));
+        }
+    }
+    let legs = cover[0];
+    if legs > 0.0 {
+        pose.root_offset = pose.root_offset.lerp(still.root_offset, legs);
     }
 }
 
@@ -485,7 +538,6 @@ mod tests {
     use super::*;
     use crate::common::hitbox::Hitboxes;
     use crate::common::skeleton::rig::{humanoid, Proportions};
-    use crate::common::skeleton::AnimationState;
     use bevy::ecs::system::RunSystemOnce;
 
     /// One frame of animation. An animator handed a `dt` of zero never leaves
@@ -850,5 +902,73 @@ mod tests {
         app.world_mut().run_system_once(describe_player_bodies).unwrap();
         let again = app.world().entity(player).get_ref::<BodyRequests>().unwrap().last_changed();
         assert_eq!(again, described, "an unchanged description was written anyway");
+    }
+
+    /// A taunt claiming the legs at full weight stands them; one fading in
+    /// stands them partway; the weapon layer's claim stands nothing.
+    #[test]
+    fn a_claim_above_the_weapon_stands_what_it_claims() {
+        use crate::common::skeleton::play::Playing;
+        use crate::common::skeleton::rig::bone;
+
+        let rig = crate::common::skeleton::default_humanoid().clone();
+        let striding = {
+            let mut pose = Pose::rest();
+            pose.set(bone::THIGH_L, Quat::from_rotation_x(0.8));
+            pose.set(bone::UPPER_ARM_R, Quat::from_rotation_x(0.5));
+            pose
+        };
+        let clip = Handle::<crate::common::skeleton::clip::Clip>::default();
+        let claiming = |layer, weight| {
+            ClipStack(vec![Playing {
+                weight,
+                claims: Regions::LEGS,
+                ..Playing::new(layer, clip.clone(), 0.0)
+            }])
+        };
+        let thigh_after = |stack: ClipStack| {
+            let mut pose = striding.clone();
+            stand_where_claimed(&rig, &mut pose, &stack, Pose::rest);
+            (pose.joint(bone::THIGH_L).angle_between(Quat::IDENTITY), pose.joint(bone::UPPER_ARM_R))
+        };
+
+        let (thigh, arm) = thigh_after(claiming(Layer::Taunt, 1.0));
+        assert!(thigh < 1e-5, "the claimed leg still strides: {thigh}");
+        assert_eq!(arm, striding.joint(bone::UPPER_ARM_R), "an unclaimed arm was stood");
+
+        let (thigh, _) = thigh_after(claiming(Layer::Taunt, 0.5));
+        assert!((thigh - 0.4).abs() < 1e-3, "half a fade should stand it halfway, not {thigh}");
+
+        let (thigh, _) = thigh_after(claiming(Layer::Weapon, 1.0));
+        assert!((thigh - 0.8).abs() < 1e-5, "the weapon layer stood a leg");
+    }
+
+    /// Pressing forward while a taunt holds you still is not running:
+    /// described as running, the legs freeze mid-stride, since no ground is
+    /// covered for the stride to advance on.
+    #[test]
+    fn a_body_a_taunt_holds_still_is_not_described_as_running() {
+        use crate::common::taunt::{TauntId, Taunts};
+
+        let mut world = World::new();
+        world.insert_resource(Taunts::shipped());
+        let pressing_forward =
+            ActionState(PlayerInput { movement: Vec2::Y, ..default() });
+        let free = world
+            .spawn((Player::default(), Stance::Standing, pressing_forward.clone(), BodyRequests::default()))
+            .id();
+        let waving = world
+            .spawn((
+                Player::default(),
+                Stance::Standing,
+                pressing_forward,
+                Condition { taunt: Some(TauntId::of("wave")), ..default() },
+                BodyRequests::default(),
+            ))
+            .id();
+
+        world.run_system_once(describe_player_bodies).unwrap();
+        assert!(world.get::<BodyRequests>(free).unwrap().running_forward);
+        assert!(!world.get::<BodyRequests>(waving).unwrap().moving(), "the waving body was described as running");
     }
 }

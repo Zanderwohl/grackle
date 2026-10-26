@@ -1,8 +1,8 @@
 name_key = "anim.clips.taunt_wave"
-length = 0.8
+length = 1.2
 clock = "seconds"
-looping = true
-note = "The right hand up over the head, swept from over the crown out past the shoulder. Every build's arm is 0.85 arm lengths from shoulder to wrist and its shoulder sits 0.3 to 0.67 out from the middle, which is what bounds these numbers. From the shoulders in arm lengths, turned with the body, as the humiliation pose is. Only the right arm is keyed: the taunt claims the left too, which lets it hang as locomotion has it rather than staying on the weapon or up in surrender."
+looping = false
+note = "The right hand up by the head, swept out past the shoulder and back twice. Every build's arm is 0.85 arm lengths from shoulder to wrist and its shoulder sits 0.3 to 0.67 out from the middle, which is what bounds these numbers. The hand is keyed straight along the forearm after the arm is solved: the solver keeps a tip's world rotation, which is right for a planted foot and leaves a raised hand pointing at the floor. Only the right arm is keyed; the taunt claims the left too, so it hangs as locomotion has it. As long as the taunt's `length` in taunts.toml."
 
 [[tracks]]
 combine = "replace"
@@ -25,7 +25,7 @@ to = [
 ease = "smoother_step"
 
 [[tracks.channel.keys]]
-at = 0.4
+at = 0.3
 to = [
     0.68,
     0.7,
@@ -34,10 +34,47 @@ to = [
 ease = "smoother_step"
 
 [[tracks.channel.keys]]
-at = 0.8
+at = 0.6
 to = [
     0.3,
     0.7,
     -0.1,
 ]
 ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.9
+to = [
+    0.68,
+    0.7,
+    -0.1,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.2
+to = [
+    0.5,
+    0.7,
+    -0.1,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "hand.r"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"

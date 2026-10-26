@@ -88,6 +88,7 @@ impl Plugin for GamePlugin {
             .init_resource::<InputLatch>()
             .init_resource::<ViewMode>()
             .init_resource::<ViewPreference>()
+            .init_resource::<crate::game::player::CameraPull>()
             .add_plugins(crate::game::condition::ConditionPlugin)
             .add_systems(Update, (toggle_mode, start_in_play))
             .add_systems(Update, (
@@ -536,7 +537,7 @@ mod tests {
     }
 
     /// `G` starts the shipped wave, which stops a walking body and its gun;
-    /// `G` again gives both back.
+    /// `G` again gives both back, and so does waiting it out.
     #[test]
     fn the_wave_stops_you_walking_and_g_again_lets_you_go() {
         use crate::game::condition::Condition;
@@ -570,9 +571,29 @@ mod tests {
         assert!(!taunting.may_fire());
         assert!(walked(&mut app) < 1e-4, "the wave did not stop the body");
 
+        // The aim turns and the body does not; the view follows the aim.
+        let body_yaw = |app: &mut App| {
+            app.world_mut()
+                .query_filtered::<&Player, With<LocalPlayer>>()
+                .single(app.world())
+                .unwrap()
+                .yaw
+        };
+        let facing = body_yaw(&mut app);
+        latch(&mut app).0.yaw += 1.0;
+        tick(&mut app, 4);
+        assert_eq!(body_yaw(&mut app), facing, "the wave let the body turn");
+
         toggle(&mut app);
         assert_eq!(condition(&mut app).taunt, None, "G again did not end the taunt");
+        assert_eq!(body_yaw(&mut app), latch(&mut app).0.yaw, "the body did not turn back to the aim");
         assert!(walked(&mut app) > 0.5, "the body stayed stopped after the taunt");
+
+        // Left alone, it ends by itself after its length.
+        toggle(&mut app);
+        assert!(condition(&mut app).taunt.is_some());
+        tick(&mut app, 2 * crate::constants::TICK_HZ as usize);
+        assert_eq!(condition(&mut app).taunt, None, "the wave never ended by itself");
     }
 
     /// Simulated at 64 Hz, drawn between the last two steps.

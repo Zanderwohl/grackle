@@ -13,13 +13,15 @@ use crate::common::assets::Assets as PackAssets;
 use crate::common::assets::default_packs;
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{ClipStack, Layer};
-use crate::common::taunt::{TauntId, TauntWeapon, Taunts};
-use crate::game::player::{Inputs, LocalPlayer, ViewMode, ViewPreference};
+use crate::common::taunt::{TauntId, TauntTurning, TauntWeapon, Taunts};
+use crate::game::player::{
+    CameraPull, Inputs, LocalPlayer, ViewMode, ViewPreference, CAMERA_PULL_SECONDS,
+};
 
 /// Not an enum: a humiliated body may still taunt, as in TF2, and the taunt
 /// outranks the humiliation while it lasts.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, Serialize, Deserialize)]
-#[require(ClipStack)]
+#[require(ClipStack, TauntClock)]
 pub struct Condition {
     /// Hands up, weapon gone, no shooting. `H` toggles it until there are
     /// rounds to lose.
@@ -28,6 +30,11 @@ pub struct Condition {
     /// choose one.
     pub taunt: Option<TauntId>,
 }
+
+/// Seconds into the current taunt, on the authority, which is the only end
+/// that reads it. Not replicated: the end is, as `Condition::taunt` going.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct TauntClock(pub f32);
 
 impl Condition {
     pub const HUMILIATED: Condition = Condition { humiliated: true, taunt: None };
@@ -51,6 +58,14 @@ impl Condition {
         self.humiliated || self.taunt.is_some()
     }
 
+    /// How far the body may follow the aim. Free with no taunt, or one whose
+    /// entry has not arrived.
+    pub fn turning(self, taunts: Option<&Taunts>) -> TauntTurning {
+        self.taunt
+            .and_then(|id| taunts?.get(id))
+            .map_or(TauntTurning::Free, |taunt| taunt.turning)
+    }
+
     /// What the body's own speed is multiplied by. A taunt whose entry has not
     /// arrived leaves it alone, and the server corrects the guess.
     pub fn speed_factor(self, taunts: Option<&Taunts>) -> f32 {
@@ -67,7 +82,8 @@ impl Plugin for ConditionPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             FixedUpdate,
-            toggle_conditions
+            (toggle_conditions, end_taunts)
+                .chain()
                 .before(crate::game::weapon::pull_trigger)
                 .run_if(in_state(AppMode::Play))
                 .run_if(crate::common::net::has_authority),
@@ -84,9 +100,9 @@ impl Plugin for ConditionPlugin {
 /// Reads the edges and never takes them: `write_client_inputs` already did.
 pub fn toggle_conditions(
     taunts: Option<Res<Taunts>>,
-    mut bodies: Query<(&Inputs, &mut Condition)>,
+    mut bodies: Query<(&Inputs, &mut Condition, &mut TauntClock)>,
 ) {
-    for (input, mut condition) in &mut bodies {
+    for (input, mut condition, mut clock) in &mut bodies {
         if input.humiliate {
             condition.humiliated = !condition.humiliated;
         }
@@ -95,24 +111,64 @@ pub fn toggle_conditions(
                 Some(_) => None,
                 None => taunts.as_deref().and_then(Taunts::first).map(|taunt| taunt.id),
             };
+            clock.0 = 0.0;
         }
     }
 }
 
-/// The one writer of [`ViewMode`]: the player's preference, unless our body's
-/// condition forces third person. The preference is never overwritten, so
-/// it is still there when the condition ends.
+/// End a taunt once it has lasted its `length`. A taunt whose entry is gone
+/// ends at once rather than lasting forever.
+pub fn end_taunts(
+    // Inside `FixedUpdate` this is the fixed clock, as `step_player` reads it.
+    time: Res<Time>,
+    taunts: Option<Res<Taunts>>,
+    mut bodies: Query<(&mut Condition, &mut TauntClock)>,
+) {
+    for (mut condition, mut clock) in &mut bodies {
+        let Some(id) = condition.taunt else { continue };
+        clock.0 += time.delta_secs();
+        let length = match taunts.as_deref().and_then(|taunts| taunts.get(id)) {
+            Some(taunt) => taunt.length,
+            None => Some(0.0),
+        };
+        if length.is_some_and(|length| clock.0 >= length) {
+            condition.taunt = None;
+        }
+    }
+}
+
+/// The one writer of [`ViewMode`] and [`CameraPull`]: the player's
+/// preference, unless our body's condition forces third person. The
+/// preference is never overwritten, so it is still there when the condition
+/// ends. The camera swings towards the wanted view rather than cutting, and
+/// the view reads as third person until it is all the way back in the head.
 pub fn decide_the_view(
+    time: Res<Time>,
     preference: Res<ViewPreference>,
     ours: Option<Single<&Condition, With<LocalPlayer>>>,
+    mut pull: ResMut<CameraPull>,
     mut view: ResMut<ViewMode>,
 ) {
     let wanted = match ours.is_some_and(|condition| condition.forces_third_person()) {
         true => ViewMode::ThirdPerson,
         false => preference.0,
     };
-    if *view != wanted {
-        *view = wanted;
+    let out = match wanted {
+        ViewMode::ThirdPerson => 1.0,
+        ViewMode::FirstPerson => 0.0,
+    };
+    let step = time.delta_secs() / CAMERA_PULL_SECONDS;
+    let pulled = pull.0 + (out - pull.0).clamp(-step, step);
+    if pull.0 != pulled {
+        pull.0 = pulled;
+    }
+
+    let drawn = match pull.0 > 0.0 {
+        true => ViewMode::ThirdPerson,
+        false => ViewMode::FirstPerson,
+    };
+    if *view != drawn {
+        *view = drawn;
     }
 }
 
@@ -221,34 +277,81 @@ mod tests {
         assert_eq!(press(&mut world, true), Condition::default());
     }
 
+    fn a_view_world(preference: ViewMode) -> World {
+        let mut world = World::new();
+        world.insert_resource(ViewPreference(preference));
+        world.init_resource::<ViewMode>();
+        world.init_resource::<CameraPull>();
+        world.init_resource::<Time>();
+        world
+    }
+
+    /// One frame of `seconds`, deciding the view.
+    fn decide_after(world: &mut World, seconds: f32) {
+        world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(seconds));
+        world.run_system_once(decide_the_view).unwrap();
+    }
+
     /// Forced, and the preference is still there afterwards.
     #[test]
     fn humiliation_forces_third_person_and_gives_the_view_back() {
-        let mut world = World::new();
-        world.insert_resource(ViewPreference(ViewMode::FirstPerson));
-        world.init_resource::<ViewMode>();
+        let mut world = a_view_world(ViewMode::FirstPerson);
         let body = world.spawn((LocalPlayer, Condition::HUMILIATED)).id();
 
-        world.run_system_once(decide_the_view).unwrap();
+        decide_after(&mut world, 1.0);
         assert_eq!(*world.resource::<ViewMode>(), ViewMode::ThirdPerson);
         assert_eq!(world.resource::<ViewPreference>().0, ViewMode::FirstPerson);
 
         *world.get_mut::<Condition>(body).unwrap() = Condition::default();
-        world.run_system_once(decide_the_view).unwrap();
+        decide_after(&mut world, 1.0);
         assert_eq!(*world.resource::<ViewMode>(), ViewMode::FirstPerson);
+    }
+
+    /// The camera swings out over the pull time and back in; the body is
+    /// drawn the whole time the camera is out of the head, including on the
+    /// way back in, or the view would slide through an empty world.
+    #[test]
+    fn the_camera_swings_out_and_the_body_shows_until_it_is_back() {
+        let mut world = a_view_world(ViewMode::FirstPerson);
+        let body = world.spawn((LocalPlayer, Condition::HUMILIATED)).id();
+        let pull = |world: &World| world.resource::<CameraPull>().0;
+
+        decide_after(&mut world, CAMERA_PULL_SECONDS / 2.0);
+        assert!((pull(&world) - 0.5).abs() < 1e-4, "{}", pull(&world));
+        assert_eq!(*world.resource::<ViewMode>(), ViewMode::ThirdPerson, "the body was not drawn as the camera left");
+        decide_after(&mut world, CAMERA_PULL_SECONDS);
+        assert_eq!(pull(&world), 1.0);
+
+        *world.get_mut::<Condition>(body).unwrap() = Condition::default();
+        decide_after(&mut world, CAMERA_PULL_SECONDS * 0.9);
+        assert!(pull(&world) > 0.0);
+        assert_eq!(*world.resource::<ViewMode>(), ViewMode::ThirdPerson, "the body vanished with the camera still out");
+        decide_after(&mut world, CAMERA_PULL_SECONDS);
+        assert_eq!(pull(&world), 0.0);
+        assert_eq!(*world.resource::<ViewMode>(), ViewMode::FirstPerson);
+    }
+
+    /// Halfway out is between the eye and the third-person spot, eased.
+    #[test]
+    fn a_half_pulled_camera_is_between_the_two_views() {
+        let first = Transform::from_xyz(0.0, 1.6, 0.0);
+        let third = Transform::from_xyz(0.0, 1.6, 3.5).with_rotation(Quat::from_rotation_y(0.4));
+        assert_eq!(CameraPull(0.0).place(first, third).translation, first.translation);
+        assert_eq!(CameraPull(1.0).place(first, third).translation, third.translation);
+        let half = CameraPull(0.5).place(first, third);
+        assert!((half.translation.z - 1.75).abs() < 1e-4, "{}", half.translation);
+        assert!(half.rotation.angle_between(Quat::from_rotation_y(0.2)) < 1e-4);
     }
 
     /// Only the local body forces anything: somebody else being humiliated
     /// is not a reason to move our camera.
     #[test]
     fn somebody_elses_humiliation_leaves_our_view_alone() {
-        let mut world = World::new();
-        world.insert_resource(ViewPreference(ViewMode::FirstPerson));
-        world.init_resource::<ViewMode>();
+        let mut world = a_view_world(ViewMode::FirstPerson);
         world.spawn(Condition::HUMILIATED);
         world.spawn((LocalPlayer, Condition::default()));
 
-        world.run_system_once(decide_the_view).unwrap();
+        decide_after(&mut world, 1.0);
         assert_eq!(*world.resource::<ViewMode>(), ViewMode::FirstPerson);
     }
 
@@ -347,6 +450,9 @@ mod tests {
                 for hand in [bone::HAND_R, bone::HAND_L] {
                     assert!(y(hand) > y(bone::NECK), "{class:?}'s {hand} is not up by its head");
                 }
+                for (forearm, hand) in [(bone::FOREARM_R, bone::HAND_R), (bone::FOREARM_L, bone::HAND_L)] {
+                    assert_points_on(&rig, &bones, forearm, hand, class);
+                }
             }
         }
     }
@@ -374,7 +480,7 @@ mod tests {
 
         for class in Class::iter() {
             let rig = humanoid(ClassBuilds::shipped().of(class));
-            for time in [0.0, 0.2, 0.4] {
+            for time in [0.0, 0.3, 0.6, 0.9, 1.2] {
                 let mut pose = Pose::rest();
                 let root = Transform::IDENTITY;
                 let carry = crate::prop::hold::carry_frame(&rig, &pose, &root, Quat::IDENTITY).unwrap();
@@ -388,7 +494,45 @@ mod tests {
                 // neck and shoulders make of exactly how far.
                 let eyes = (head.head.y + head.tail.y) / 2.0;
                 assert!(wrist.y > eyes, "{class:?}'s wrist is below its eyes at {time} s");
+                assert_points_on(&rig, &bones, bone::FOREARM_R, bone::HAND_R, class);
             }
+        }
+    }
+
+    /// A raised hand points up along its forearm. The solver keeps a tip's
+    /// world rotation, so an unkeyed hand stays pointing at the floor.
+    fn assert_points_on(
+        rig: &crate::common::skeleton::Skeleton,
+        bones: &[crate::common::skeleton::rig::PosedBone],
+        forearm: &str,
+        hand: &str,
+        class: crate::common::class::Class,
+    ) {
+        let along = |name| {
+            let bone = &bones[rig.index_of(name).unwrap()];
+            (bone.tail - bone.head).normalize()
+        };
+        assert!(along(hand).y > 0.3, "{class:?}'s {hand} points down: {}", along(hand));
+        assert!(
+            along(hand).dot(along(forearm)) > 0.9,
+            "{class:?}'s {hand} is bent off its forearm",
+        );
+    }
+
+    /// The taunt's length is the server's and the clip's is each machine's;
+    /// two numbers for one thing, so they are pinned together here.
+    #[test]
+    fn a_taunt_that_ends_lasts_as_long_as_its_clip() {
+        for taunt in &Taunts::shipped().0 {
+            let Some(length) = taunt.length else { continue };
+            let clip = crate::common::clip_file::load_named_clip(
+                &PackAssets::default(),
+                &[std::path::PathBuf::from("assets/default")],
+                &taunt.clip,
+            )
+            .unwrap();
+            assert!(!clip.looping, "`{}` ends, but its clip loops", taunt.key);
+            assert!((clip.length - length).abs() < 1e-4, "`{}` lasts {length} s and its clip {} s", taunt.key, clip.length);
         }
     }
 }

@@ -315,7 +315,8 @@ so the two can never disagree about where you are looking and
 
 Three more keys while playing: **`F`** swaps between first and third person
 (`ViewPreference` in [`src/game/player.rs`](src/game/player.rs), which a
-condition can override; `ViewMode` is what is drawn — your own body and
+condition can override; `ViewMode` is what is drawn, and the camera swings
+between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
 **`F4`** toggles the hitbox gizmos and the debug laser aimed at them, and
 **`F6`** toggles the bone gizmos. Both are off by default: they are debug
@@ -325,10 +326,11 @@ is the perf overlay in both modes.
 Weapon slots are on **`1`–`6`**, the left mouse button fires the weapon's
 primary and the right its secondary — held, for anything automatic — and
 **`R`** reloads. **`H`** toggles humiliation, a debug key until there are
-rounds to lose: hands up, no weapon, no firing, third person. **`G`** toggles
-the first taunt in `assets/default/taunts.toml` (a wave), which also works
-while humiliated, as in TF2; each taunt states what it claims, whether it
-shows the weapon, and whether it stops or slows you. What each slot
+rounds to lose: hands up, no weapon, no firing, third person. **`G`** starts
+the first taunt in `assets/default/taunts.toml` (a wave, which ends by itself;
+`G` again ends it early), and works while humiliated, as in TF2; each taunt states what it claims, whether it
+shows the weapon, how far you can move, and how far your body (never the
+camera) can turn. What each slot
 holds is a property of the class, which is read off disk; see "What a weapon is" below.
 
 ## Modelling a prop
@@ -776,7 +778,9 @@ by the authority and read by firing, the held weapon, the view and the
 stack; nothing in the animation decides whether a body may shoot. Clips fade
 in and out at their layer's blend from `assets/default/layers.toml`: an owner
 sends a clip out with `ClipStack::keep` rather than removing it, and
-`fade_the_layers` is the only thing that takes one off.
+`fade_the_layers` is the only thing that takes one off. A region claimed by a
+layer above the weapon stands still beneath it (`stand_where_claimed`), so a
+taunt that claims the legs owns them whether or not it keys them.
 
 `every_class_can_reach_every_shipped_props_grip` is what keeps a hold
 authorable: a build whose hand cannot get to the grip holds nothing while its
@@ -1044,7 +1048,9 @@ different set of inputs; a global input would walk them all the same way.
 Two consequences worth knowing:
 
 - **Aim travels in the input, and nowhere else.** `gather_aim` accumulates
-  `yaw`/`pitch` onto the latch and the step copies them onto the body. Facing
+  `yaw`/`pitch` onto the latch and the step copies them onto the body — or
+  follows them only as far as a taunt's `turning` allows, since the step is
+  the one writer of `Player.yaw` and the rate limit is state plus input. Facing
   decides which way "forward" is, so a server handed movement without aim walks
   the body the wrong way. Nothing writes a body's rotation from the mouse — the
   view is a separate entity aimed straight from the latch, which is what keeps

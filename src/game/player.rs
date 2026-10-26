@@ -208,6 +208,31 @@ pub enum ViewMode {
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ViewPreference(pub ViewMode);
 
+/// How far the camera has come out of the head: 0 at the eye, 1 where third
+/// person puts it. Eased towards the wanted view by `decide_the_view`, so a
+/// taunt or `F` swings the camera out and back rather than cutting.
+/// [`ViewMode`] is third person whenever this is above zero, so the body is
+/// drawn for as long as the camera is anywhere but inside it.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct CameraPull(pub f32);
+
+/// Seconds for the camera to come all the way out of the head, or back in.
+pub const CAMERA_PULL_SECONDS: f32 = 0.35;
+
+impl CameraPull {
+    /// Where the camera is, given where each view would put it. Both are
+    /// worked out every frame, so the one not in use is always current and a
+    /// swing starts from where it really is.
+    pub fn place(self, first: Transform, third: Transform) -> Transform {
+        let t = EaseFunction::SmoothStep.sample_clamped(self.0);
+        Transform {
+            translation: first.translation.lerp(third.translation, t),
+            rotation: first.rotation.slerp(third.rotation, t),
+            scale: Vec3::ONE,
+        }
+    }
+}
+
 impl ViewMode {
     /// Whether the player's own body is drawn. Other bodies always are.
     pub fn shows_own_body(&self) -> bool {
@@ -505,7 +530,7 @@ pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut preference: ResMut<ViewP
 ///
 /// Runs after `interpolate_bodies`; earlier, it sits a frame behind the body.
 pub fn place_camera(
-    mode: Res<ViewMode>,
+    pull: Res<CameraPull>,
     world: Res<CollisionWorld>,
     latch: Res<InputLatch>,
     body: Option<Single<(&Transform, &Stance), (With<LocalPlayer>, Without<PlayerCamera>)>>,
@@ -518,12 +543,12 @@ pub fn place_camera(
     let aim = Quat::from_rotation_y(latch.0.yaw) * Quat::from_rotation_x(latch.0.pitch);
     let pivot = body.translation + Vec3::Y * eye;
 
+    let first = Transform::from_translation(pivot).with_rotation(aim);
+    let third = Transform::from_translation(third_person_camera(pivot, aim, &world)).with_rotation(aim);
+    let placed = pull.place(first, third);
     for mut camera in &mut cameras {
-        camera.rotation = aim;
-        camera.translation = match *mode {
-            ViewMode::FirstPerson => pivot,
-            ViewMode::ThirdPerson => third_person_camera(pivot, aim, &world),
-        };
+        camera.translation = placed.translation;
+        camera.rotation = placed.rotation;
     }
 }
 
@@ -568,8 +593,12 @@ pub fn step_player(
         // and rollback replays this input.
         let jump = input.jump;
 
-        player.yaw = input.yaw;
-        player.pitch = input.pitch;
+        // A taunt may hold the body back from the aim; the view is aimed from
+        // the latch and never is. Movement below is measured from the body's
+        // yaw, so a held body walks the way it is facing, not the way you look.
+        (player.yaw, player.pitch) = condition
+            .turning(taunts.as_deref())
+            .follow((player.yaw, player.pitch), (input.yaw, input.pitch), dt);
         change_stance(&mut stance, &mut body, player.on_ground, input.crouch, &world);
         let half = stance.half_extents();
         let wish = Vec3::new(input.movement.x, 0.0, -input.movement.y).normalize_or_zero();
@@ -740,7 +769,7 @@ mod tests {
     #[test]
     fn first_person_puts_the_camera_at_the_eye() {
         let mut app = App::new();
-        app.init_resource::<ViewMode>();
+        app.init_resource::<CameraPull>();
         app.init_resource::<InputLatch>();
         app.insert_resource(open_room());
         let body = Vec3::new(0.0, 1.0, 0.0);
@@ -770,7 +799,7 @@ mod tests {
     #[test]
     fn the_view_is_aimed_by_the_latch_not_by_the_body() {
         let mut app = App::new();
-        app.init_resource::<ViewMode>();
+        app.init_resource::<CameraPull>();
         app.insert_resource(open_room());
         let yaw = 1.1;
         app.insert_resource(InputLatch(PlayerInput { yaw, ..default() }));

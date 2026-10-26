@@ -50,6 +50,36 @@ impl TauntMovement {
     }
 }
 
+/// How far the body may follow the aim while taunting. The view is aimed
+/// straight from the input and is never held back: this is the body, which
+/// is what everyone else sees and what "forward" is measured from.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TauntTurning {
+    Free,
+    /// The body keeps the facing it started the taunt with.
+    Locked,
+    /// Degrees per second, yaw and pitch alike.
+    AtMost(f32),
+}
+
+impl TauntTurning {
+    /// The body's `(yaw, pitch)` after `dt` of following `aim` from `body`.
+    /// Yaw goes the short way round, since both are unwrapped angles and the
+    /// aim may have spun whole turns while the body was held.
+    pub fn follow(self, body: (f32, f32), aim: (f32, f32), dt: f32) -> (f32, f32) {
+        let step = match self {
+            TauntTurning::Free => return aim,
+            TauntTurning::Locked => return body,
+            TauntTurning::AtMost(degrees) => degrees.to_radians() * dt,
+        };
+        let towards = |from: f32, by: f32| from + by.clamp(-step, step);
+        let yaw_by = (aim.0 - body.0 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        (towards(body.0, yaw_by), towards(body.1, aim.1 - body.1))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TauntWeapon {
@@ -65,7 +95,12 @@ pub struct Taunt {
     pub clip: String,
     pub claims: Regions,
     pub movement: TauntMovement,
+    pub turning: TauntTurning,
     pub weapon: TauntWeapon,
+    /// Seconds until the authority ends it. `None` lasts until `G` again.
+    /// Gameplay rather than read off the clip, since a clip is each
+    /// machine's own and the end of a taunt is the server's to decide.
+    pub length: Option<f32>,
 }
 
 /// Every taunt the packs define, in key order: `G` plays the first until
@@ -95,7 +130,10 @@ struct TauntEntry {
     clip: String,
     claims: Vec<String>,
     movement: TauntMovement,
+    turning: TauntTurning,
     weapon: TauntWeapon,
+    #[serde(default)]
+    length: Option<f32>,
 }
 
 /// Lowest priority first; a later pack replaces a taunt's whole entry.
@@ -146,13 +184,25 @@ fn check(key: &str, entry: TauntEntry) -> Result<Taunt, String> {
     {
         return Err(format!("a slowed taunt moves at 0 to 1 of normal speed, not {factor}"));
     }
+    if let TauntTurning::AtMost(degrees) = entry.turning
+        && !(degrees.is_finite() && degrees >= 0.0)
+    {
+        return Err(format!("a taunt turns at some degrees a second, not {degrees}"));
+    }
+    if let Some(length) = entry.length
+        && !(length.is_finite() && length > 0.0)
+    {
+        return Err(format!("a taunt lasts some seconds, not {length}"));
+    }
     Ok(Taunt {
         id: TauntId::of(key),
         key: key.to_string(),
         clip: entry.clip,
         claims,
         movement: entry.movement,
+        turning: entry.turning,
         weapon: entry.weapon,
+        length: entry.length,
     })
 }
 
@@ -178,27 +228,54 @@ mod tests {
         let wave = taunts.get(TauntId::of("wave")).expect("no wave in the default pack");
         assert_eq!(wave.movement, TauntMovement::Stopped);
         assert_eq!(wave.weapon, TauntWeapon::Hidden);
+        assert!(wave.length.is_some(), "the wave should end by itself");
         assert!(wave.claims.overlaps(Regions::ARM_R));
-        assert!(!wave.claims.overlaps(Regions::LEGS), "the wave took the legs from locomotion");
+        assert!(wave.claims.overlaps(Regions::LEGS), "the wave left its legs to locomotion");
     }
 
     #[test]
     fn every_movement_is_written_the_way_the_plan_says() {
         let taunts = parse(
-            "[a]\nclip = \"x\"\nclaims = []\nmovement = \"free\"\nweapon = \"shown\"\n\
-             [b]\nclip = \"x\"\nclaims = [\"legs\"]\nmovement = { slowed = 0.5 }\nweapon = \"hidden\"\n",
+            "[a]\nclip = \"x\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\n\
+             [b]\nclip = \"x\"\nclaims = [\"legs\"]\nmovement = { slowed = 0.5 }\nturning = { at_most = 90 }\nweapon = \"hidden\"\n",
         );
         assert_eq!(taunts.0[0].movement, TauntMovement::Free);
         assert_eq!(taunts.0[1].movement, TauntMovement::Slowed(0.5));
         assert_eq!(taunts.0[1].claims, Regions::LEGS);
+        assert_eq!(taunts.0[1].turning, TauntTurning::AtMost(90.0));
+    }
+
+    /// Locked holds, at-most steps by its rate, and the yaw goes the short way
+    /// round even when the aim has spun whole turns.
+    #[test]
+    fn a_body_follows_the_aim_only_as_far_as_its_taunt_lets_it() {
+        let body = (0.0, 0.0);
+        assert_eq!(TauntTurning::Free.follow(body, (1.0, 0.5), 0.1), (1.0, 0.5));
+        assert_eq!(TauntTurning::Locked.follow(body, (1.0, 0.5), 0.1), body);
+
+        let (yaw, pitch) = TauntTurning::AtMost(90.0).follow(body, (1.0, -0.5), 0.5);
+        let step = 45.0_f32.to_radians();
+        assert!((yaw - step).abs() < 1e-5, "{yaw}");
+        assert!((pitch + 0.5).abs() < 1e-5, "a turn within the rate was held back: {pitch}");
+
+        // Three whole turns and a little to the left: a little to the left.
+        let spun = -0.1 + 3.0 * std::f32::consts::TAU;
+        let (yaw, _) = TauntTurning::AtMost(90.0).follow(body, (spun, 0.0), 0.5);
+        assert!((yaw + 0.1).abs() < 1e-4, "the body went the long way round: {yaw}");
+    }
+
+    #[test]
+    fn the_wave_holds_the_body_still() {
+        let taunts = Taunts::shipped();
+        assert_eq!(taunts.get(TauntId::of("wave")).unwrap().turning, TauntTurning::Locked);
     }
 
     #[test]
     fn a_bad_entry_is_dropped_and_the_rest_kept() {
         let taunts = parse(
-            "[good]\nclip = \"x\"\nclaims = []\nmovement = \"free\"\nweapon = \"shown\"\n\
-             [elbow]\nclip = \"x\"\nclaims = [\"elbow\"]\nmovement = \"free\"\nweapon = \"shown\"\n\
-             [fast]\nclip = \"x\"\nclaims = []\nmovement = { slowed = 2.0 }\nweapon = \"shown\"\n",
+            "[good]\nclip = \"x\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\n\
+             [elbow]\nclip = \"x\"\nclaims = [\"elbow\"]\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\n\
+             [fast]\nclip = \"x\"\nclaims = []\nmovement = { slowed = 2.0 }\nturning = \"free\"\nweapon = \"shown\"\n",
         );
         let keys: Vec<&str> = taunts.0.iter().map(|taunt| taunt.key.as_str()).collect();
         assert_eq!(keys, ["good"]);
