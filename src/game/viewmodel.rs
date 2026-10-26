@@ -3,7 +3,8 @@
 //! weapon from clipping into walls. Every camera query filters on a marker;
 //! see CLAUDE.md, "Editor and game in one process".
 //!
-//! The weapon is placed by the prop's [`ViewmodelSpec`], not the body's carry:
+//! The weapon is placed by the prop's
+//! [`ViewmodelSpec`](crate::prop::hold::ViewmodelSpec), not the body's carry:
 //! the carry put the grip 0.39 m under the eye where the frustum is 0.16 m
 //! tall, off the bottom of the screen.
 //!
@@ -29,7 +30,7 @@ use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{apply_stack, ClipStack, Frames};
 use crate::game::held::{perform, HeldModel, HeldPart, Performance, SharedWeaponClips};
 use crate::game::player::{place_camera, LocalPlayer, PlayerCamera, ViewMode, PLAY_CAMERA_ORDER};
-use crate::prop::hold::{grip_with, ViewmodelSpec};
+use crate::prop::hold::grip_with;
 
 pub const VIEWMODEL_LAYER: usize = crate::common::render_layers::VIEWMODEL;
 
@@ -311,26 +312,25 @@ fn played(framed: Transform, stack: &ClipStack, skeleton: &Skeleton, clips: &Ass
     moving
 }
 
-/// `muzzle` in the play camera's frame. The two cameras share a frame but not a
-/// field of view, so the point the viewmodel draws is moved to where the play
-/// camera sees the same pixel, at the same depth.
-pub fn muzzle_in_view(
-    spec: &ViewmodelSpec,
-    muzzle: Vec3,
-    viewmodel_fov: f32,
-    play_fov: f32,
-    aspect: f32,
-) -> Vec3 {
-    let drawn = spec.transform(viewmodel_fov, aspect).transform_point(muzzle);
+/// `muzzle` in the play camera's frame, for a weapon drawn at `weapon` in the
+/// viewmodel camera's. The two cameras share a frame but not a field of view,
+/// so the point the viewmodel draws is moved to where the play camera sees the
+/// same pixel, at the same depth.
+pub fn muzzle_in_view(weapon: &Transform, muzzle: Vec3, viewmodel_fov: f32, play_fov: f32) -> Vec3 {
+    let drawn = weapon.transform_point(muzzle);
     let widen = (play_fov / 2.0).tan() / (viewmodel_fov / 2.0).tan();
     Vec3::new(drawn.x * widen, drawn.y * widen, drawn.z)
 }
 
+/// From where the weapon was drawn, kick and all, so an own tracer leaves the
+/// barrel rather than where the barrel rests. That is last frame's drawing:
+/// this runs before `Update` places this frame's, and a kick a frame old is
+/// well inside a muzzle flash.
 pub fn find_the_apparent_muzzle(
     view: Res<ViewMode>,
     held: Query<&HeldModel, With<LocalPlayer>>,
     viewmodels: Query<(&Camera, &Projection), With<ViewmodelCamera>>,
-    plays: Query<(&Transform, &Projection), With<PlayerCamera>>,
+    plays: Query<(&Transform, &Projection, Option<&Viewmodel>), With<PlayerCamera>>,
     mut apparent: ResMut<ApparentMuzzle>,
 ) {
     let found = || {
@@ -342,10 +342,12 @@ pub fn find_the_apparent_muzzle(
         let (camera, Projection::Perspective(viewmodel)) = viewmodels.single().ok()? else {
             return None;
         };
-        let (eye, Projection::Perspective(play)) = plays.single().ok()? else { return None };
+        let (eye, Projection::Perspective(play), drawn) = plays.single().ok()? else { return None };
         let size = camera.logical_viewport_size().filter(|size| size.y > 0.0)?;
-        let seen =
-            muzzle_in_view(&held.viewmodel(), muzzle, viewmodel.fov, play.fov, size.x / size.y);
+        let weapon = drawn
+            .and_then(|drawn| drawn.weapon)
+            .unwrap_or_else(|| held.viewmodel().transform(viewmodel.fov, size.x / size.y));
+        let seen = muzzle_in_view(&weapon, muzzle, viewmodel.fov, play.fov);
         Some(eye.transform_point(seen))
     };
     apparent.set_if_neq(ApparentMuzzle(found()));
@@ -676,13 +678,49 @@ mod tests {
                 let half = (fov / 2.0).tan();
                 Vec2::new(point.x / (-point.z * half * aspect), point.y / (-point.z * half))
             };
-            let drawn = spec.transform(VIEWMODEL_FOV, aspect).transform_point(muzzle);
-            let seen = muzzle_in_view(&spec, muzzle, VIEWMODEL_FOV, play_fov, aspect);
+            let weapon = spec.transform(VIEWMODEL_FOV, aspect);
+            let drawn = weapon.transform_point(muzzle);
+            let seen = muzzle_in_view(&weapon, muzzle, VIEWMODEL_FOV, play_fov);
 
             let (want, got) = (on_screen(drawn, VIEWMODEL_FOV), on_screen(seen, play_fov));
             assert!(want.abs_diff_eq(got, 1e-5), "drawn at {want}, seen at {got}");
             assert_eq!(seen.z, drawn.z, "the depth moved");
         }
+    }
+
+    /// A kick moves where an own tracer starts: the apparent muzzle follows
+    /// the weapon as drawn, not as framed.
+    #[test]
+    fn the_apparent_muzzle_follows_the_kick() {
+        let mut world = World::new();
+        world.insert_resource(ViewMode::FirstPerson);
+        world.init_resource::<ApparentMuzzle>();
+        world.spawn((LocalPlayer, HeldModel::with_muzzle(Vec3::new(0.0, 0.0, -0.5))));
+        let mut camera = Camera::default();
+        camera.computed.target_info = Some(bevy::camera::RenderTargetInfo {
+            physical_size: UVec2::new(1600, 900),
+            scale_factor: 1.0,
+        });
+        let projection = |fov| Projection::Perspective(PerspectiveProjection { fov, ..default() });
+        world.spawn((ViewmodelCamera, camera, projection(VIEWMODEL_FOV)));
+        let framed = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
+        let view = world
+            .spawn((PlayerCamera, Transform::IDENTITY, projection(VIEWMODEL_FOV), Viewmodel {
+                weapon: Some(framed),
+                ..default()
+            }))
+            .id();
+
+        let muzzle = |world: &mut World| {
+            world.run_system_once(find_the_apparent_muzzle).unwrap();
+            world.resource::<ApparentMuzzle>().0.expect("no muzzle found")
+        };
+        let resting = muzzle(&mut world);
+        let kick = Vec3::new(0.0, 0.02, 0.06);
+        world.get_mut::<Viewmodel>(view).unwrap().weapon =
+            Some(Transform { translation: framed.translation + kick, ..framed });
+        let kicked = muzzle(&mut world);
+        assert!((kicked - resting).abs_diff_eq(kick, 1e-5), "the muzzle moved {} for a kick of {kick}", kicked - resting);
     }
 
     /// Drawn over the world and under the UI.

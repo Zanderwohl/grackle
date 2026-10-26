@@ -11,9 +11,10 @@ use crate::anim::timeline::{KeyAt, TimelineCursor, TimelineSelection, TimelineVi
 use crate::anim::body::{BodyClipDialog, BodyClips};
 use crate::anim::{edit_selected, selected_clip, AnimEditor, ClipSource};
 use crate::common::skeleton::clip::{
-    Axis, ChainRef, Channel, Clip, Clock, Combine, Key, Space, StateAnimation, Timing, Track,
+    Axis, ChainRef, Channel, Clip, ClipProblem, Clock, Combine, Key, Space, StateAnimation, Timing, Track,
     Unit, Variant,
 };
+use crate::common::skeleton::play::Layer;
 use crate::common::skeleton::state::AnimationState;
 use crate::common::skeleton::{default_humanoid, Interpolation};
 use strum::IntoEnumIterator;
@@ -470,6 +471,19 @@ impl AnimTabs<'_> {
             }
         }
 
+        if self.layer() != Layer::Locomotion {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(get!("anim.label.claims"));
+                let names: Vec<String> = self
+                    .layer()
+                    .claims()
+                    .names()
+                    .map(|name| get!(&format!("anim.region.{}", name.replace('.', "_"))))
+                    .collect();
+                ui.label(names.join(", "));
+            });
+        }
+
         // Saved as data, since the file is rewritten on every save and a comment would not survive.
         ui.label(get!("anim.label.note"));
         let mut note = clip.note.clone();
@@ -617,7 +631,7 @@ impl AnimTabs<'_> {
         let rig = crate::common::skeleton::humanoid(
             self.builds.of(self.figure.0.unwrap_or(Class::Mercenary)),
         );
-        let problems = clip.problems(|bone| rig.index_of(bone).is_some());
+        let problems = self.problems_of(&clip, &rig);
 
         let points = |x: f32, y: f32| egui::pos2(x / zoom, y / zoom);
         let mut asked: Option<(usize, crate::anim::TrackOp)> = None;
@@ -1037,6 +1051,21 @@ impl AnimTabs<'_> {
         if self.figure.0.is_none() {
             return;
         }
+        if self.anim.source == ClipSource::Prop {
+            ui.label(get!("anim.label.underlay"));
+            egui::ComboBox::from_id_salt("anim_underlay")
+                .selected_text(match self.anim.underlay {
+                    Some(state) => get!(&format!("animation.states.{}", state.clip_name())),
+                    None => get!("anim.underlay.rest"),
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.anim.underlay, None, get!("anim.underlay.rest"));
+                    for state in <AnimationState as strum::IntoEnumIterator>::iter() {
+                        let name = get!(&format!("animation.states.{}", state.clip_name()));
+                        ui.selectable_value(&mut self.anim.underlay, Some(state), name);
+                    }
+                });
+        }
         ui.checkbox(&mut self.stage.holding, get!("anim.label.holding"));
         let before = self.stage.anchor;
         ui.label(get!("anim.label.anchor"));
@@ -1053,13 +1082,31 @@ impl AnimTabs<'_> {
         }
     }
 
+    /// The layer the selected clip plays on in a match. A weapon clip is the
+    /// only kind with a claim worth stating: a body clip claims everything.
+    fn layer(&self) -> Layer {
+        match self.anim.source {
+            ClipSource::Prop => Layer::Weapon,
+            ClipSource::Body => Layer::Locomotion,
+        }
+    }
+
+    /// The clip's own problems, and any track outside its layer's claim.
+    fn problems_of(&self, clip: &Clip, rig: &crate::common::skeleton::Skeleton) -> Vec<ClipProblem> {
+        let mut problems = clip.problems(|bone| rig.index_of(bone).is_some());
+        for track in self.layer().claims().uncovered_tracks(clip) {
+            problems.push(ClipProblem { track: Some(track), message: get!("anim.problem.unclaimed") });
+        }
+        problems
+    }
+
     fn problems(&mut self, ui: &mut Ui) {
         let Some(clip) = self.clip() else { return };
         // The rig on screen, so a bone missing on one build is reported against it.
         let rig = crate::common::skeleton::humanoid(
             self.builds.of(self.figure.0.unwrap_or(Class::Mercenary)),
         );
-        for problem in clip.problems(|bone| rig.index_of(bone).is_some()) {
+        for problem in self.problems_of(&clip, &rig) {
             // Named as the strip names the row.
             let text = match problem.track.and_then(|index| clip.tracks.get(index)) {
                 Some(track) => format!(

@@ -292,8 +292,8 @@ metres, because that is the one part of the framing that is about size.
 **Shots are drawn from the barrel in first person, and fired from the eye
 always.** A prop may mark a `[muzzle]` (the Fit workspace's Hold panel, and
 a handle there); `ApparentMuzzle` is where that point is drawn — the
-viewmodel's muzzle carried across to the play camera's field of view, at the
-same pixel and depth — and is `None` in third person or with no muzzle.
+viewmodel's muzzle, as kicked by whatever clip is playing on it, carried
+across to the play camera's field of view, at the same pixel and depth — and is `None` in third person or with no muzzle.
 Only the shooter's own machine uses it, and only to draw: an own projectile
 gets a `FromTheMuzzle` offset that eases onto its real path over half a
 second's flight — measured in distance, and cut short by the first wall or

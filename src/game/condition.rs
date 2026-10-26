@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use lightyear::prelude::{LocalTimeline, Tick};
+
 use crate::common::app_mode::AppMode;
 use crate::common::assets::Assets as PackAssets;
 use crate::common::assets::default_packs;
@@ -29,6 +31,11 @@ pub struct Condition {
     /// `G` toggles the first taunt in `taunts.toml` until there is a way to
     /// choose one.
     pub taunt: Option<TauntId>,
+    /// The authority's tick the taunt began on. A viewer starts the clip this
+    /// far in, so somebody who arrives mid-taunt sees it where it is rather
+    /// than from the top. Lightyear's timeline, since a client's is synced to
+    /// the server's; meaningless while `taunt` is `None`.
+    pub taunt_started: Tick,
 }
 
 /// Seconds into the current taunt, on the authority, which is the only end
@@ -37,7 +44,7 @@ pub struct Condition {
 pub struct TauntClock(pub f32);
 
 impl Condition {
-    pub const HUMILIATED: Condition = Condition { humiliated: true, taunt: None };
+    pub const HUMILIATED: Condition = Condition { humiliated: true, taunt: None, taunt_started: Tick(0) };
 
     pub fn may_fire(self) -> bool {
         !self.humiliated && self.taunt.is_none()
@@ -100,6 +107,7 @@ impl Plugin for ConditionPlugin {
 /// Reads the edges and never takes them: `write_client_inputs` already did.
 pub fn toggle_conditions(
     taunts: Option<Res<Taunts>>,
+    timeline: Option<Res<LocalTimeline>>,
     mut bodies: Query<(&Inputs, &mut Condition, &mut TauntClock)>,
 ) {
     for (input, mut condition, mut clock) in &mut bodies {
@@ -111,13 +119,16 @@ pub fn toggle_conditions(
                 Some(_) => None,
                 None => taunts.as_deref().and_then(Taunts::first).map(|taunt| taunt.id),
             };
+            condition.taunt_started = timeline.as_deref().map_or_else(Tick::default, LocalTimeline::tick);
             clock.0 = 0.0;
         }
     }
 }
 
 /// End a taunt once it has lasted its `length`. A taunt whose entry is gone
-/// ends at once rather than lasting forever.
+/// ends at once rather than lasting forever. Counted on the authority's own
+/// clock rather than off `taunt_started`, so ending a taunt is gameplay that
+/// does not depend on the network layer's timeline being there.
 pub fn end_taunts(
     // Inside `FixedUpdate` this is the fixed clock, as `step_player` reads it.
     time: Res<Time>,
@@ -223,9 +234,11 @@ pub(crate) fn perform_conditions(
     time: Res<Time>,
     clips: Option<Res<ConditionClips>>,
     taunts: Option<Res<Taunts>>,
+    timeline: Option<Res<LocalTimeline>>,
     mut bodies: Query<(&Condition, &mut ClipStack)>,
 ) {
     let delta = time.delta_secs();
+    let now = timeline.as_deref().map(LocalTimeline::tick);
     let clips = clips.as_deref();
     for (condition, mut stack) in &mut bodies {
         let humiliation = condition
@@ -240,17 +253,30 @@ pub(crate) fn perform_conditions(
 
         for (layer, wanted) in [(Layer::Humiliation, humiliation), (Layer::Taunt, taunt)] {
             let ours = |playing: Layer| playing == layer;
-            if wanted.is_none() && !stack.has_staying(ours) {
+            let arriving = !stack.has_staying(ours);
+            if wanted.is_none() && arriving {
                 continue;
             }
             if let Some(playing) = stack.keep(ours, wanted.map(|(clip, _)| (layer, clip))) {
-                playing.time += delta;
+                // Lined up with the authority once, as it arrives, then ticked
+                // by the frame: the timeline steps at the tick rate, which a
+                // clip read straight off it would show as a stutter.
+                playing.time = match (arriving, layer, now) {
+                    (true, Layer::Taunt, Some(now)) => since(condition.taunt_started, now),
+                    _ => playing.time + delta,
+                };
                 if let Some((_, claims)) = wanted {
                     playing.claims = claims;
                 }
             }
         }
     }
+}
+
+/// Seconds from `started` to `now`, never negative: a client's timeline runs
+/// a little ahead of the server's, never behind.
+fn since(started: Tick, now: Tick) -> f32 {
+    ((now - started).max(0) as f64 / crate::constants::TICK_HZ) as f32
 }
 
 #[cfg(test)]
@@ -401,7 +427,7 @@ mod tests {
             taunts: BTreeMap::from([(wave.clip.clone(), Some(waving))]),
         });
         world.insert_resource(taunts.clone());
-        let both = Condition { humiliated: true, taunt: Some(wave.id) };
+        let both = Condition { humiliated: true, taunt: Some(wave.id), ..default() };
         let body = world.spawn(both).id();
 
         world.run_system_once(perform_conditions).unwrap();
@@ -414,6 +440,38 @@ mod tests {
         assert!(both.forces_third_person());
         assert!(!both.shows_weapon(Some(&taunts)), "the wave says the weapon is hidden");
         assert_eq!(both.speed_factor(Some(&taunts)), 0.0);
+    }
+
+    /// Somebody seen mid-taunt is shown where they are in it: the clip starts
+    /// as far in as the authority's timeline says, then runs on the frame.
+    #[test]
+    fn a_taunt_seen_late_starts_partway_through() {
+        let taunts = Taunts::shipped();
+        let wave = taunts.first().unwrap().clone();
+        let mut world = World::new();
+        world.init_resource::<Time>();
+        let mut timeline = LocalTimeline::default();
+        timeline.apply_delta(96);
+        world.insert_resource(timeline);
+        let mut clips = Assets::<Clip>::default();
+        let waving = clips.add(Clip::default());
+        world.insert_resource(ConditionClips {
+            humiliated: None,
+            taunts: BTreeMap::from([(wave.clip.clone(), Some(waving))]),
+        });
+        world.insert_resource(taunts);
+        let body = world
+            .spawn(Condition { taunt: Some(wave.id), taunt_started: Tick(64), ..default() })
+            .id();
+
+        world.run_system_once(perform_conditions).unwrap();
+        let time = |world: &World| world.get::<ClipStack>(body).unwrap().0[0].time;
+        let half = (32.0 / crate::constants::TICK_HZ) as f32;
+        assert!((time(&world) - half).abs() < 1e-5, "started at {} rather than {half}", time(&world));
+
+        world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(0.1));
+        world.run_system_once(perform_conditions).unwrap();
+        assert!((time(&world) - half - 0.1).abs() < 1e-5, "it was lined up again rather than ticked");
     }
 
     /// Every build gets both hands up from the shipped clip, at both ends of

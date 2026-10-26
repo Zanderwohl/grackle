@@ -314,17 +314,37 @@ impl Regions {
         self.0 & other.0 != 0
     }
 
-    /// How a region is written in a pack file.
+    /// Each region on its own, as a pack file writes it.
+    pub const NAMED: [(Regions, &'static str); 6] = [
+        (Regions::LEGS, "legs"),
+        (Regions::TORSO, "torso"),
+        (Regions::HEAD, "head"),
+        (Regions::ARM_L, "arm.l"),
+        (Regions::ARM_R, "arm.r"),
+        (Regions::WEAPON, "weapon"),
+    ];
+
     pub fn named(name: &str) -> Option<Regions> {
-        match name {
-            "legs" => Some(Regions::LEGS),
-            "torso" => Some(Regions::TORSO),
-            "head" => Some(Regions::HEAD),
-            "arm.l" => Some(Regions::ARM_L),
-            "arm.r" => Some(Regions::ARM_R),
-            "weapon" => Some(Regions::WEAPON),
-            _ => None,
-        }
+        Regions::NAMED.into_iter().find(|(_, named)| *named == name).map(|(region, _)| region)
+    }
+
+    /// The names of the regions in this set, in [`Regions::NAMED`] order.
+    pub fn names(self) -> impl Iterator<Item = &'static str> {
+        Regions::NAMED.into_iter().filter(move |(region, _)| self.overlaps(*region)).map(|(_, name)| name)
+    }
+
+    /// Tracks of `clip` moving something outside this set. They still play,
+    /// but a layer above that claims what they move will cover them.
+    pub fn uncovered_tracks(self, clip: &Clip) -> Vec<usize> {
+        clip.tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, track)| {
+                let moved = Regions::of_track(&track.channel);
+                moved != Regions::NONE && !self.overlaps(moved)
+            })
+            .map(|(index, _)| index)
+            .collect()
     }
 
     /// `NONE` for a name the rig does not have, so it is never masked.
@@ -1413,6 +1433,22 @@ mod tests {
         apply_stack(&stack, &clips, &rig, &mut pose, &frames, None);
         let angle = pose.joint(bone::CHEST).angle_between(Quat::IDENTITY);
         assert!((angle - 0.4).abs() < 1e-3, "halfway from 0.6 to 0.2 should be 0.4, not {angle}");
+    }
+
+    /// A weapon clip keying a leg is outside its layer's claim and says so;
+    /// one keying an arm and the weapon is not.
+    #[test]
+    fn a_track_outside_the_claim_is_found_and_the_claim_is_named() {
+        let mut clip = chest_turned_by(0.1);
+        clip.tracks.push(Track::rotation(bone::THIGH_L));
+        clip.tracks.push(Track::rotation(bone::FOREARM_R));
+        clip.tracks.push(Track::rotation("not a bone"));
+        let claims = Layer::Weapon.claims();
+        assert_eq!(claims.uncovered_tracks(&clip), vec![0, 1], "the chest and the thigh are not the weapon's");
+        assert_eq!(claims.names().collect::<Vec<_>>(), ["arm.l", "arm.r", "weapon"]);
+        for (region, name) in Regions::NAMED {
+            assert_eq!(Regions::named(name), Some(region));
+        }
     }
 
     fn chest_turned_by(angle: f32) -> Clip {

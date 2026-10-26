@@ -149,6 +149,11 @@ impl HeldModel {
     /// Holding something whose prop ships clips of these names, for tests
     /// that only ask which clip is chosen.
     #[cfg(test)]
+    pub(crate) fn with_muzzle(muzzle: Vec3) -> HeldModel {
+        HeldModel { muzzle: Some(muzzle), ..default() }
+    }
+
+    #[cfg(test)]
     pub(crate) fn with_clips(names: &[&str]) -> HeldModel {
         let clips = names.iter().map(|name| (name.to_string(), Handle::default())).collect();
         HeldModel { clips, ..default() }

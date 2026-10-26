@@ -231,9 +231,10 @@ would kick twice.
 
 - **State, replicated:** `Condition`, what is carried, the reload in
   progress. The taunt table is sent like the weapon catalogue, since its
-  movement is part of the predicted step. A taunt's start tick is not sent
-  yet, so a body seen mid-taunt plays it from the start; for a 1.2 s wave the
-  most that costs is a late wave.
+  movement is part of the predicted step. `Condition::taunt_started` is the
+  tick the taunt began on, so a body seen mid-taunt plays it from where it is.
+  Only viewers read it: the authority ends a taunt on its own `TauntClock`, so
+  that gameplay does not hang off the network layer's timeline.
 - **Input:** the `humiliate` and `taunt` toggles.
 - **Events, relayed:** firing, as an `Effect` carrying the shooter and the
   button, so every other machine starts the recoil; gestures.
@@ -266,8 +267,10 @@ outside its layer's claim is a problem `Clip::problems` reports.
       `show_held_weapons` hides the weapon per condition.
 - [x] Taunting as a condition: `Condition::taunt`, beside `humiliated`.
 - [x] A taunt ends by itself after its `length`, on the authority.
-- [ ] A taunt's start tick on the wire, so a late joiner sees it partway
-      through rather than from the start.
+- [x] A taunt's start tick on the wire (`Condition::taunt_started`, from
+      Lightyear's `LocalTimeline`), so a late joiner sees it partway through.
+      The clip is lined up once as it arrives and then ticked by the frame,
+      since the timeline steps at the tick rate.
 - [x] `humiliate` edge in `PlayerInput` on `H`; the authority toggles it.
 - [x] `taunt` edge on `G`; the authority toggles the first taunt.
 - [x] Humiliation: a hands-up clip (`animations/humiliated.gpa`) on the arms,
@@ -293,10 +296,12 @@ outside its layer's claim is a problem `Clip::problems` reports.
       solved onto wherever the clips put the weapon. In the viewmodel
       `Space::Carry` is the framed weapon and `Space::Eye` the camera.
 - [x] A fire clip on the rocket launcher.
-- [ ] The apparent muzzle still reads the framed weapon, not the kicked one,
-      so an own tracer starts a few centimetres off during a kick.
-- [ ] Animation editor: preview a layer over a locomotion state, and show
-      which regions a clip claims.
+- [x] The apparent muzzle reads the weapon as drawn, kick and all (a frame
+      old, since it runs before `Update` places this frame's).
+- [x] Animation editor: a weapon clip previews on the weapon layer over a
+      body state picked under **Over** (with that state's corrections, as a
+      match layers it); the Inspector lists what the clip's layer claims, and
+      a track moving anything outside that claim is a Problem.
 
 ## Open questions
 

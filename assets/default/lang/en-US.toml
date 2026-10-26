@@ -370,6 +370,8 @@ holding = "Holding"
 heading = "Heading"
 timing = "Timed by"
 blend_preview = "Blend at"
+underlay = "Over"
+claims = "Claims"
 anchor = "Grid Frame"
 at = "At"
 snap = "Snap"
@@ -392,9 +394,21 @@ ground_angle = "Key at { at } grounds an angle, which has no floor under it."
 ground_sideways = "Key at { at } is grounded on a horizontal axis."
 ground_root = "Key at { at } grounds a root offset, which is already measured from where the body stands."
 outside = "Key at { at } is outside the clip."
+unclaimed = "Moves a part this clip's layer does not claim."
 foot_timing_off_stride = "Timed by a foot on a clip that is not on the stride clock."
 empty_blend = "A blend with no variants."
 unmatched_variants = "The variants at { from } and { to } drive different joints."
+
+[anim.underlay]
+rest = "Rest"
+
+[anim.region]
+legs = "Legs"
+torso = "Torso"
+head = "Head"
+arm_l = "Left arm"
+arm_r = "Right arm"
+weapon = "Weapon"
 
 [anim.library]
 weapon = "Weapon"
