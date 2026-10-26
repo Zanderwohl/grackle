@@ -1,0 +1,96 @@
+name_key = "anim.clips.reload"
+length = 1.0
+clock = "seconds"
+looping = false
+note = "The reload every weapon shares: the weapon drops and rolls away for the length of it and comes back up. Fitted to the weapon's reload time, so this length is only the shape. Composed on the carry, so it is the hold that moves and the hands follow."
+
+[[tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[tracks.channel]
+channel = "weapon"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.2
+to = [
+    "free",
+    -0.25,
+    0.05,
+]
+ease = "linear"
+
+[[tracks.channel.keys]]
+at = 0.8
+to = [
+    "free",
+    -0.25,
+    0.05,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[tracks]]
+combine = "compose"
+space = "carry"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "weapon_rotation"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    "free",
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.2
+to = [
+    -0.5,
+    "free",
+    0.3,
+]
+ease = "linear"
+
+[[tracks.channel.keys]]
+at = 0.8
+to = [
+    -0.5,
+    "free",
+    0.3,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.0
+to = [
+    0.0,
+    "free",
+    0.0,
+]
+ease = "linear"
+

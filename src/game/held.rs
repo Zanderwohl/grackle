@@ -43,7 +43,7 @@ pub struct WeaponInHand(pub Transform);
 
 /// What is currently drawn in a body's hand, and what it was drawn for.
 #[derive(Component, Default)]
-#[require(ClipStack, Performance)]
+#[require(ClipStack, Performance, crate::game::reloading::ReloadSeen)]
 pub struct HeldModel {
     weapon: Option<WeaponId>,
     /// The catalogue and prop cache have both answered, possibly with "no
@@ -68,21 +68,61 @@ pub struct HeldModel {
 /// cannot leave a stale clip playing.
 #[derive(Component, Default)]
 pub struct Performance {
-    /// The clip and seconds into it.
-    playing: Option<(WeaponClip, f32)>,
+    playing: Option<Playback>,
     /// A change of weapon restarts the clip; comparing needs no event.
     started_for: Option<WeaponId>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Playback {
+    clip: WeaponClip,
+    /// Real seconds since it started.
+    seconds: f32,
+    /// Stretched to a length that is the weapon's rather than the clip's: the
+    /// fraction of the clip it started at, and the seconds the whole clip
+    /// takes. `None` plays at the clip's own speed from its start.
+    fit: Option<(f32, f32)>,
+}
+
+impl Playback {
+    /// Where in the clip it is, on the clip's own clock.
+    fn time(&self, length: f32) -> f32 {
+        match self.fit {
+            None => self.seconds,
+            Some((from, whole)) if whole > 0.0 => (from + self.seconds / whole) * length,
+            Some(_) => length,
+        }
+    }
 }
 
 impl Performance {
     /// Play `clip` from the start, cutting whatever was playing: a shot during
     /// a deploy or another shot is the shot that matters now.
     pub fn start(&mut self, clip: WeaponClip) {
-        self.playing = Some((clip, 0.0));
+        self.playing = Some(Playback { clip, seconds: 0.0, fit: None });
+    }
+
+    /// Play `clip` stretched so the whole of it takes `whole` seconds, starting
+    /// `from` of the way in: a reload the clip is fitted to, joined partway.
+    pub fn start_fitted(&mut self, clip: WeaponClip, from: f32, whole: f32) {
+        self.playing = Some(Playback { clip, seconds: 0.0, fit: Some((from.clamp(0.0, 1.0), whole)) });
+    }
+
+    /// End `clip` early if it is what is playing, as a reload cut short is.
+    pub fn stop(&mut self, clip: &WeaponClip) {
+        if self.clip() == Some(clip) {
+            self.playing = None;
+        }
     }
 
     pub fn clip(&self) -> Option<&WeaponClip> {
-        self.playing.as_ref().map(|(clip, _)| clip)
+        self.playing.as_ref().map(|playing| &playing.clip)
+    }
+
+    /// Where the playing clip is, for a clip of `length`.
+    #[cfg(test)]
+    pub(crate) fn time_into(&self, length: f32) -> Option<f32> {
+        self.playing.as_ref().map(|playing| playing.time(length))
     }
 }
 
@@ -94,6 +134,8 @@ pub enum WeaponClip {
     /// The recoil every weapon shares where it has none of its own; see
     /// [`SharedWeaponClips`].
     Recoil,
+    /// The reload every weapon shares, likewise.
+    Reload,
 }
 
 /// Clips every weapon shares, read from the packs at startup. Third person
@@ -102,21 +144,24 @@ pub enum WeaponClip {
 #[derive(Resource, Default)]
 pub struct SharedWeaponClips {
     pub recoil: Option<Handle<Clip>>,
+    pub reload: Option<Handle<Clip>>,
 }
 
 const RECOIL_CLIP: &str = "recoil";
+const RELOAD_CLIP: &str = "reload";
 
 fn load_shared_weapon_clips(
     mut commands: Commands,
     packs: Res<PackAssets>,
     mut clips: ResMut<Assets<Clip>>,
 ) {
-    let recoil = crate::common::clip_file::load_named_clip(
-        &packs,
-        &crate::common::assets::default_packs(),
-        RECOIL_CLIP,
-    );
-    commands.insert_resource(SharedWeaponClips { recoil: recoil.map(|clip| clips.add(clip)) });
+    let mut load = |name| {
+        crate::common::clip_file::load_named_clip(&packs, &crate::common::assets::default_packs(), name)
+            .map(|clip| clips.add(clip))
+    };
+    let recoil = load(RECOIL_CLIP);
+    let reload = load(RELOAD_CLIP);
+    commands.insert_resource(SharedWeaponClips { recoil, reload });
 }
 
 impl HeldModel {
@@ -390,23 +435,25 @@ pub(crate) fn perform(
     // late catalogue) does not.
     if performance.started_for != held.weapon {
         performance.started_for = held.weapon;
-        performance.playing = held
-            .clips
-            .get(DEPLOY)
-            .map(|_| (WeaponClip::Prop(DEPLOY.to_string()), 0.0));
+        performance.playing = held.clips.get(DEPLOY).map(|_| Playback {
+            clip: WeaponClip::Prop(DEPLOY.to_string()),
+            seconds: 0.0,
+            fit: None,
+        });
     }
 
-    let Some((source, elapsed)) = performance.playing.as_mut() else {
+    let Some(playback) = performance.playing.as_mut() else {
         stop(stack);
         return;
     };
-    *elapsed += delta;
+    playback.seconds += delta;
 
     // Resolved every frame: a save mid-round is refilled under the same
     // handle, and a re-bake without this clip ends it.
-    let handle = match source {
+    let handle = match &playback.clip {
         WeaponClip::Prop(name) => held.clips.get(name.as_str()),
         WeaponClip::Recoil => shared.and_then(|shared| shared.recoil.as_ref()),
+        WeaponClip::Reload => shared.and_then(|shared| shared.reload.as_ref()),
     };
     let found = handle.and_then(|handle| Some((handle, clips.get(handle)?)));
     let Some((handle, clip)) = found else {
@@ -414,15 +461,15 @@ pub(crate) fn perform(
         stop(stack);
         return;
     };
-    if !clip.looping && *elapsed > clip.length {
+    let time = playback.time(clip.length);
+    if !clip.looping && time > clip.length {
         performance.playing = None;
         stop(stack);
         return;
     }
 
-    let elapsed = *elapsed;
     if let Some(playing) = stack.keep(is_the_weapons, Some((Layer::Weapon, handle))) {
-        playing.time = elapsed;
+        playing.time = time;
     }
 }
 

@@ -489,3 +489,118 @@ to = [
     "free",
 ]
 ease = "linear"
+
+[animations.clips.reload]
+name_key = "anim.clips.reload"
+length = 1.0
+clock = "seconds"
+looping = false
+note = "The rocket launcher's own reload in first person: the tube tips up and rolls to bring its back end round, jolts as the rocket seats, and comes back. Fitted to the reload time; the jolt sits at 65 % of it."
+
+[[animations.clips.reload.tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips.reload.tracks.channel]
+channel = "weapon"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.2
+to = [
+    "free",
+    -0.18,
+    0.02,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.6
+to = [
+    "free",
+    -0.18,
+    0.02,
+]
+ease = "cubic_out"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.65
+to = [
+    "free",
+    -0.16,
+    0.07,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.72
+to = [
+    "free",
+    -0.18,
+    0.02,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 1.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks]]
+combine = "compose"
+space = "carry"
+unit = "metres"
+enabled = true
+
+[animations.clips.reload.tracks.channel]
+channel = "weapon_rotation"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    "free",
+    0.0,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.2
+to = [
+    0.35,
+    "free",
+    -0.4,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.72
+to = [
+    0.35,
+    "free",
+    -0.4,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 1.0
+to = [
+    0.0,
+    "free",
+    0.0,
+]
+ease = "linear"

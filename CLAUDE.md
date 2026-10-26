@@ -1560,6 +1560,14 @@ the body, `fire`/`alt_fire` on the viewmodel, which has a stack of its own and
 whose arms are solved onto the kicked weapon — and the shared
 `animations/recoil.gpa` where it does not.
 
+**Reloads are drawn from the replicated `Ammo`**
+([`src/game/reloading.rs`](src/game/reloading.rs)), not from an event: a reload
+starting — or starting again, a shell at a time — starts the clip, one cut
+short ends it, and a body seen mid-reload starts it partway. The clip is
+*fitted* to the weapon's reload time (`Performance::start_fitted`), since that
+is gameplay and differs per weapon; `body_reload` on the body and `reload` on
+the viewmodel, each falling back to the shared `animations/reload.gpa`.
+
 **`Magazine.clip: None` is the minigun**: no magazine, each shot straight out
 of the reserve, never reloads. Stated as an absent clip rather than as a clip
 the size of the reserve, because the second is a lie the reload system then has

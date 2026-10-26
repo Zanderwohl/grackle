@@ -449,6 +449,8 @@ humiliated = "Humiliated"
 taunt_wave = "Wave"
 recoil = "Recoil"
 fire = "Fire"
+reload = "Reload"
+body_reload = "Reload (third person)"
 
 [anim.channel]
 root = "Body"

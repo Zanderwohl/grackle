@@ -303,6 +303,24 @@ outside its layer's claim is a problem `Clip::problems` reports.
       match layers it); the Inspector lists what the clip's layer claims, and
       a track moving anything outside that claim is a Problem.
 
+### Reloads are read off the ammo, not sent
+
+A reload already crosses the wire: `Ammo.reloading` counts down, replicated.
+So the clip is driven from that state on every machine — a rise starts it
+(again, for each shell of a one-at-a-time reload), a drop to zero before it
+finishes ends it, and a body first seen mid-reload starts it as far in as
+its remaining time says. The clip is fitted to the weapon's `reload` seconds,
+so one authored at any length plays across a quick pistol and a slow
+launcher alike. The body plays `body_reload`, the viewmodel `reload`, and
+either falls back to the shared `animations/reload.gpa`.
+
+- [x] Reload clips from `Ammo`, fitted, joined partway, cut short; the shared
+      reload and the rocket launcher's own first-person one.
+- [ ] The support hand still holds the weapon throughout; a reload that
+      takes the hand to a magazine or the tube's breech needs the hand keyed
+      off the weapon, which a layer above the hold can do and this one does
+      not yet.
+
 ## Open questions
 
 - **Gestures**: one arm, or the arm the weapon is not in? Which arm a weapon
