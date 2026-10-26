@@ -12,12 +12,15 @@ use crate::common::PointResolutionError;
 use crate::editor::editable::{Feature, FeatureId, FeatureTrait, PointRef};
 use crate::editor::mirror::Mirroring;
 use crate::get;
-use crate::prop::region::{arrange, Arrangement, Note};
+use crate::prop::region::{arrange, Arrangement, Note, Region};
 use crate::prop::sketch::{region_label, Sketch, SketchEntity, SketchId, SketchPoint, SketchRegion};
 use crate::tool::room::Room;
 
 /// A height a new footprint stands to before anybody sets one.
 pub const DEFAULT_HEIGHT: f32 = 3.0;
+
+/// The lowest a ceiling may be dragged to over its floor.
+pub const MIN_HEIGHT: f32 = 0.1;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Corner {
@@ -37,6 +40,24 @@ pub struct Line {
     /// Drawn and snapped to, never part of a region.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub construction: bool,
+}
+
+/// A corner of a chain being added: a new one, or one already on the
+/// footprint, which is how a chain joins what is there.
+#[derive(Clone)]
+pub enum ChainCorner {
+    New(PointRef),
+    Existing(SketchId),
+}
+
+/// A region of the footprint as it is arranged now, for the inspector.
+#[derive(Clone, Debug)]
+pub struct RegionNow {
+    pub region: Region,
+    /// World `x`/`z`.
+    pub inside: Vec2,
+    /// The entry standing it up, if one does.
+    pub room: Option<SketchId>,
 }
 
 /// Why part of a footprint stands nothing up.
@@ -133,6 +154,133 @@ impl FootprintRoom {
 
     pub fn problems(&self) -> &[Problem] {
         &self.problems
+    }
+
+    pub fn floor_height(&self) -> f32 {
+        self.resolved_floor
+    }
+
+    pub fn height(&self) -> f32 {
+        self.height
+    }
+
+    /// Every resolved corner, on the floor.
+    pub fn corner_points(&self) -> impl Iterator<Item = (SketchId, Vec3)> + '_ {
+        self.resolved_corners.iter().map(|(id, at)| (*id, Vec3::new(at.x, self.resolved_floor, at.y)))
+    }
+
+    pub fn lines(&self) -> &[Line] {
+        &self.lines
+    }
+
+    /// Lines through `chain` in order, corners added for the new ones, and
+    /// closed back to its first if `closed`. Then every region a new line
+    /// bounds that no room of this footprint already covers is stood up: a
+    /// loop drawn outside is a new room, one drawn inside is a pillar, and a
+    /// line drawn across a room divides nothing, since a named region cut in
+    /// two is still found whole. Needs the corners resolved, and resolves
+    /// them again after.
+    pub fn add_chain(&mut self, chain: &[ChainCorner], closed: bool, features: &HashMap<FeatureId, Feature>) {
+        let ids: Vec<SketchId> = chain
+            .iter()
+            .map(|corner| match corner {
+                ChainCorner::New(at) => self.add_corner(at.clone()),
+                ChainCorner::Existing(id) => *id,
+            })
+            .collect();
+        let mut new_lines = Vec::new();
+        let ends = if closed { ids.len() } else { ids.len().saturating_sub(1) };
+        for i in 0..ends {
+            let (a, b) = (ids[i], ids[(i + 1) % ids.len()]);
+            if a != b {
+                new_lines.push(self.add_line(a, b));
+            }
+        }
+        let covered = self.resolved.clone();
+        self.resolve_references(features);
+
+        let (mut sketch, origin) = self.local_sketch();
+        let arrangement = arrange(&sketch);
+        for region in &arrangement.regions {
+            let inside = region.inside_point() + origin;
+            let bounded_by_new = region.name.bounds.iter().any(|bound| new_lines.contains(&bound.entity));
+            let already = covered.iter().any(|room| room.contains(Vec3::new(inside.x, room.floor, inside.y)));
+            if bounded_by_new && !already {
+                let id = sketch.adopt_region(region);
+                if !self.rooms.contains(&id) {
+                    self.rooms.push(id);
+                }
+            }
+        }
+        self.absorb(sketch, origin);
+        self.resolve_rooms();
+    }
+
+    /// The regions the lines make now, and which of them are rooms.
+    pub fn regions_now(&self) -> Vec<RegionNow> {
+        let (sketch, origin) = self.local_sketch();
+        let arrangement = arrange(&sketch);
+        let named: Vec<(SketchId, Region)> = self
+            .rooms
+            .iter()
+            .filter_map(|id| {
+                let entry = sketch.region(*id)?;
+                Some((*id, arrangement.resolve(&entry.name(), Vec2::from_array(entry.hint))?))
+            })
+            .collect();
+        arrangement
+            .regions
+            .iter()
+            .map(|region| {
+                let inside = region.inside_point();
+                // A named region split by a line is both its pieces.
+                let room = named.iter().find(|(_, whole)| whole.contains(inside)).map(|(id, _)| *id);
+                RegionNow { region: region.clone(), inside: inside + origin, room }
+            })
+            .collect()
+    }
+
+    /// Stand the region at `inside` (world `x`/`z`) up as a room, or stop
+    /// standing up whichever room covers it.
+    pub fn set_room_at(&mut self, inside: Vec2, room: bool) {
+        if room {
+            self.name_region_at(inside);
+        } else if let Some(id) = self.regions_now().into_iter().find(|r| r.region.contains(inside - self.origin())).and_then(|r| r.room) {
+            self.forget_room(id);
+        }
+        self.resolve_rooms();
+    }
+
+    /// Stop standing up the entry `id`, and drop the entry if nothing else
+    /// names it.
+    pub fn forget_room(&mut self, id: SketchId) {
+        self.rooms.retain(|room| *room != id);
+        let rooms = self.rooms.clone();
+        self.regions.retain(|region| !region.label.is_empty() || rooms.contains(&region.id));
+        self.resolve_rooms();
+    }
+
+    /// Take a line away, and any corner no line uses any more. A room it
+    /// bounded is lost, and says so, rather than being guessed at.
+    pub fn remove_line(&mut self, id: SketchId) {
+        self.lines.retain(|line| line.id != id);
+        let used: Vec<SketchId> = self.lines.iter().flat_map(|line| [line.a, line.b]).collect();
+        self.corners.retain(|corner| used.contains(&corner.id));
+        self.resolved_corners.retain(|(corner, _)| used.contains(corner));
+        self.resolve_rooms();
+    }
+
+    /// Put corner `id` at `at` (world `x`/`z`), through its `PointRef`, so one
+    /// measured from another feature stays measured from it.
+    pub fn drag_corner(&mut self, id: SketchId, at: Vec2) -> bool {
+        let Some(corner) = self.corners.iter_mut().find(|corner| corner.id == id) else { return false };
+        let moved_x = corner.at.drag_axis(0, at.x);
+        let moved_z = corner.at.drag_axis(2, at.y);
+        moved_x || moved_z
+    }
+
+    fn origin(&self) -> Vec2 {
+        self.resolved_corners.first().map_or(Vec2::ZERO, |(_, at)| *at)
     }
 
     /// The resolved corners as a prop sketch, relative to the first corner.
@@ -264,8 +412,40 @@ impl FeatureTrait for FootprintRoom {
         }
         ui.horizontal(|ui| {
             ui.label(get!("editor.features.footprint_room.height"));
-            changed |= ui.add(egui::DragValue::new(&mut self.height).speed(0.05).range(0.1..=f32::MAX)).changed();
+            changed |= ui.add(egui::DragValue::new(&mut self.height).speed(0.05).range(MIN_HEIGHT..=f32::MAX)).changed();
         });
+
+        ui.separator();
+        ui.label(egui::RichText::new(get!("editor.features.footprint_room.regions")).strong());
+        let mut toggled = None;
+        for (n, now) in self.regions_now().iter().enumerate() {
+            let mut room = now.room.is_some();
+            let label = get!("editor.features.footprint_room.region", "n", n + 1, "area", format!("{:.2}", now.region.area()));
+            if ui.checkbox(&mut room, label).changed() {
+                toggled = Some((now.inside, room));
+            }
+        }
+        if let Some((inside, room)) = toggled {
+            self.set_room_at(inside, room);
+            changed = true;
+        }
+
+        ui.separator();
+        ui.label(egui::RichText::new(get!("editor.features.footprint_room.lines")).strong());
+        let mut removed = None;
+        for line in &self.lines {
+            ui.horizontal(|ui| {
+                if ui.small_button("✕").clicked() {
+                    removed = Some(line.id);
+                }
+                ui.label(get!("editor.features.footprint_room.line", "id", line.id, "a", Self::corner_label(line.a), "b", Self::corner_label(line.b)));
+            });
+        }
+        if let Some(line) = removed {
+            self.remove_line(line);
+            changed = true;
+        }
+
         ui.separator();
         changed |= self.floor.editor_ui(ui, &get!("editor.features.footprint_room.floor"), features, prior_feature_order, retarget_request);
         for corner in &mut self.corners {
@@ -399,6 +579,31 @@ impl FeatureTrait for FootprintRoom {
 
     fn rooms(&self) -> Vec<Room> {
         self.resolved.clone()
+    }
+
+    fn footprint(&self) -> Option<&FootprintRoom> {
+        Some(self)
+    }
+
+    fn footprint_mut(&mut self) -> Option<&mut FootprintRoom> {
+        Some(self)
+    }
+
+    /// The floor (`is_max` false) or the ceiling, on `y`; a footprint has no
+    /// other face to drag. The ceiling is a height above the floor, so moving
+    /// the floor carries it.
+    fn drag_handle(&mut self, is_max: bool, axis: u8, new_world_value: f32) -> bool {
+        if axis != 1 {
+            return false;
+        }
+        if is_max {
+            let height = (new_world_value - self.resolved_floor).max(MIN_HEIGHT);
+            let changed = height != self.height;
+            self.height = height;
+            changed
+        } else {
+            self.floor.drag_axis(1, new_world_value)
+        }
     }
 
     fn mirror(&mut self, mirroring: &Mirroring) -> bool {
@@ -626,5 +831,151 @@ mod tests {
         let (picked, hit) = find_nearest_feature_hit(&across, timeline, &GizmoVisibility::default()).expect("nothing picked");
         assert_eq!(picked, id);
         assert!((hit.z - 2.0).abs() < 1e-3, "picked through the notch at {hit}");
+    }
+
+    /// A 6 × 6 room, drawn and named, at floor height zero.
+    fn a_square_room() -> (FootprintRoom, Vec<SketchId>) {
+        let mut room = FootprintRoom::new(PointRef::absolute(0.0, 0.0, 0.0), 3.0);
+        let ids = draw_loop(&mut room, &[(0.0, 0.0), (6.0, 0.0), (6.0, 6.0), (0.0, 6.0)]);
+        let mut room = resolved(room);
+        room.name_region_at(Vec2::new(1.0, 1.0));
+        (resolved(room), ids)
+    }
+
+    fn new_corners(points: &[(f32, f32)]) -> Vec<ChainCorner> {
+        points.iter().map(|(x, z)| ChainCorner::New(corner(*x, *z))).collect()
+    }
+
+    #[test]
+    fn a_loop_drawn_inside_a_room_is_a_pillar() {
+        let (mut room, _) = a_square_room();
+        room.add_chain(&new_corners(&[(2.0, 2.0), (3.0, 2.0), (3.0, 3.0), (2.0, 3.0)]), true, &HashMap::new());
+        assert_eq!(room.rooms().len(), 1, "the pillar was stood up as a room of its own");
+        assert_eq!(room.rooms()[0].holes().len(), 1);
+        assert!((room.rooms()[0].volume() - 35.0 * 3.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_loop_drawn_outside_is_a_new_room() {
+        let (mut room, _) = a_square_room();
+        room.add_chain(&new_corners(&[(8.0, 0.0), (10.0, 0.0), (10.0, 2.0)]), true, &HashMap::new());
+        assert_eq!(room.rooms().len(), 2);
+    }
+
+    /// The overlap is the first room's already; only the part outside it is
+    /// new.
+    #[test]
+    fn a_loop_crossing_a_room_adds_only_what_is_outside_it() {
+        let (mut room, _) = a_square_room();
+        room.add_chain(&new_corners(&[(4.0, 4.0), (9.0, 4.0), (9.0, 9.0), (4.0, 9.0)]), true, &HashMap::new());
+        let total: f32 = room.rooms().iter().map(Room::volume).sum();
+        assert!((total - (36.0 + 25.0 - 4.0) * 3.0).abs() < 1e-3, "{total}");
+        assert!(room.problems().is_empty(), "{:?}", room.problems());
+    }
+
+    /// A chain from one corner out and back to another encloses the ground
+    /// between it and the room, which becomes a room too.
+    #[test]
+    fn a_chain_from_corner_to_corner_extends_the_room() {
+        let (mut room, ids) = a_square_room();
+        let chain = [ChainCorner::Existing(ids[1]), ChainCorner::New(corner(9.0, 3.0)), ChainCorner::Existing(ids[2])];
+        room.add_chain(&chain, false, &HashMap::new());
+        let total: f32 = room.rooms().iter().map(Room::volume).sum();
+        assert!((total - (36.0 + 9.0) * 3.0).abs() < 1e-3, "{total}");
+    }
+
+    #[test]
+    fn a_line_across_a_room_divides_nothing() {
+        let (mut room, ids) = a_square_room();
+        room.add_chain(&[ChainCorner::Existing(ids[0]), ChainCorner::Existing(ids[2])], false, &HashMap::new());
+        assert_eq!(room.rooms().len(), 1);
+        assert!((room.rooms()[0].volume() - 36.0 * 3.0).abs() < 1e-3);
+        assert_eq!(room.regions_now().len(), 2, "the line did not cut the plan");
+        assert!(room.regions_now().iter().all(|region| region.room.is_some()), "a half stopped being room");
+    }
+
+    #[test]
+    fn a_region_can_be_stood_down_and_up_again() {
+        let (mut room, _) = a_square_room();
+        room.add_chain(&new_corners(&[(2.0, 2.0), (3.0, 2.0), (3.0, 3.0), (2.0, 3.0)]), true, &HashMap::new());
+        room.set_room_at(Vec2::new(2.5, 2.5), true);
+        assert_eq!(room.rooms().len(), 2, "the pillar could not be made a room");
+        room.set_room_at(Vec2::new(2.5, 2.5), false);
+        assert_eq!(room.rooms().len(), 1);
+        room.set_room_at(Vec2::new(1.0, 1.0), false);
+        assert!(room.rooms().is_empty());
+        assert!(room.regions.is_empty(), "an entry nothing uses was kept");
+    }
+
+    #[test]
+    fn removing_a_line_takes_its_lonely_corners_and_loses_its_room() {
+        let (mut room, _) = a_square_room();
+        room.add_chain(&new_corners(&[(8.0, 0.0), (10.0, 0.0)]), false, &HashMap::new());
+        let spur = room.lines().last().unwrap().id;
+        room.remove_line(spur);
+        assert_eq!(room.corners.len(), 4, "the spur's corners stayed");
+
+        let side = room.lines()[0].id;
+        room.remove_line(side);
+        assert!(room.rooms().is_empty());
+        assert!(room.problems().iter().any(|p| matches!(p, Problem::Lost(_))));
+    }
+
+    #[test]
+    fn a_dragged_corner_moves_its_wall() {
+        let (mut room, ids) = a_square_room();
+        assert!(room.drag_corner(ids[2], Vec2::new(8.0, 6.0)));
+        let room = resolved(room);
+        assert!((room.rooms()[0].volume() - (36.0 + 6.0) * 3.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_ceiling_drags_as_a_height_and_the_floor_carries_it() {
+        let (mut room, _) = a_square_room();
+        assert!(room.drag_handle(true, 1, 4.5));
+        assert!(room.drag_handle(false, 1, 1.0));
+        let room = resolved(room);
+        assert_eq!((room.rooms()[0].floor, room.rooms()[0].ceiling), (1.0, 5.5));
+        let mut room = room;
+        room.drag_handle(true, 1, -10.0);
+        assert_eq!(room.height(), MIN_HEIGHT, "a ceiling went through its floor");
+    }
+
+    /// The map's undo is whole-map snapshots, so a footprint's edits are
+    /// undone by its serde; this is what notices a field left out of it.
+    #[test]
+    fn a_drawn_on_and_dragged_footprint_undoes_one_edit_at_a_time() {
+        use crate::editor::editable::FeatureTimeline;
+
+        let (room, ids) = a_square_room();
+        let mut timeline = FeatureTimeline::default();
+        let id = timeline.apply_feature(Box::new(room));
+        timeline.checkpoint();
+
+        let edit = |timeline: &mut FeatureTimeline, change: &dyn Fn(&mut FootprintRoom)| {
+            let mut feature = timeline.features_mut().remove(&id).unwrap();
+            change(feature.object_mut().footprint_mut().unwrap());
+            feature.object_mut().resolve_references(timeline.features_map());
+            timeline.features_mut().insert(id, feature);
+            timeline.checkpoint();
+        };
+        let x_of = |timeline: &FeatureTimeline| {
+            timeline.get_feature(&id).unwrap().object().get_point_ref(&format!("corner#{}", ids[2].0)).unwrap().x.value()
+        };
+        let pillar = new_corners(&[(2.0, 2.0), (3.0, 2.0), (3.0, 3.0), (2.0, 3.0)]);
+
+        edit(&mut timeline, &|room| room.add_chain(&pillar, true, &HashMap::new()));
+        edit(&mut timeline, &|room| {
+            room.drag_corner(ids[2], Vec2::new(9.0, 6.0));
+        });
+        assert_eq!(x_of(&timeline), 9.0);
+
+        timeline.undo();
+        assert_eq!(x_of(&timeline), 6.0, "the drag was not one step");
+        let lines = timeline.get_feature(&id).unwrap().object().footprint().unwrap().lines().len();
+        assert_eq!(lines, 8, "undoing the drag took the pillar too");
+        timeline.undo();
+        let lines = timeline.get_feature(&id).unwrap().object().footprint().unwrap().lines().len();
+        assert_eq!(lines, 4, "the pillar was not one step");
     }
 }

@@ -142,6 +142,10 @@ open = "Line { line } bounds nothing"
 zero_length = "Line { line } has no length"
 coincident = "Lines { a } and { b } lie on each other"
 missing_point = "Line { line } names a corner that is not there"
+regions = "Regions"
+region = "Region { n }, { area } m²"
+lines = "Lines"
+line = "Line { id }: { a } to { b }"
 
 [editor.features.grackle_point_light]
 title = "Point Light"

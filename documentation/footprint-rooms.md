@@ -140,7 +140,10 @@ every corner, so another feature can reference one.
       click lands where the Room tool's would and sets the floor; every
       later one is where the pointer's ray meets that plane (a side view
       keeps the axis it cannot see from the last corner), snapped to 0.1 m.
-      Shift-click on a feature's point adds a corner measured from it.
+      Shift-click on a feature's point adds a corner measured from it; with
+      no point under the pointer, Shift changes nothing and the click goes on
+      the grid. The footprint being drawn onto is left out of Shift's search,
+      since a corner measured from its own footprint is a cycle.
       Clicking within 0.3 m of the first corner, with three or more down,
       closes the loop; `Backspace` takes the last corner back and `Escape`
       drops the drawing.
@@ -152,16 +155,35 @@ every corner, so another feature can reference one.
       and the loop it would make hatched (the prop sketch's `hatch`).
 - [x] `tools.footprint` in `en-US`.
 - [x] Tried by hand in the editor.
-- Only one loop per drawing: a pillar, or a second loop crossing the first,
-  is adding lines to an existing footprint, which is Stage 3.
+- With no footprint selected a drawing is one loop, made into a new
+  footprint; with one selected it is added to that one (Stage 3).
 
 ### Stage 3 — editing one
 
-- [ ] Corner handles, dragged in the floor plane.
-- [ ] Floor and ceiling handles.
-- [ ] Adding lines to an existing footprint (the draw tool on a selected one),
-      erasing a line, toggling which regions are rooms.
-- [ ] Every edit one undo step (free from `checkpoint_when_idle`; checked).
+- [x] Corner handles (`src/tool/footprint_drag.rs`, under Select), dragged
+      in the floor plane and snapped to 0.1 m. A corner moves through its own
+      `PointRef` (`drag_corner`), so one measured from another feature keeps
+      the reference and only its offset changes.
+- [x] Floor and ceiling handles over the first room's `floor_point`, through
+      `drag_handle` on `y`. The ceiling is a height above the floor, so the
+      floor carries it; it stops `MIN_HEIGHT` short of the floor.
+- [x] The draw tool on a selected footprint adds to it (`add_chain`):
+      corners snap onto its own within 0.3 m, and a chain ending on one of
+      them is finished there. **One rule decides what becomes a room**, for a
+      new footprint and an added chain alike: every region a new line bounds
+      that none of the footprint's rooms already covers. So a loop inside a
+      room is a pillar, one outside is a new room, a loop crossing a room adds
+      only what is outside it, a wing out from one corner and back to another
+      is a room, and a line across a room divides nothing.
+- [x] Inspector: every region as it is arranged now, with a checkbox for
+      whether it is a room (`set_room_at`); every line, with a button to
+      remove it (`remove_line`, which takes corners no line uses any more and
+      loses, visibly, a room the line bounded).
+- [x] Every edit one undo step: a test drives the timeline's own
+      checkpoints through a pillar and a corner drag and undoes them one at a
+      time. Nothing per edit is needed — the map's undo is snapshots of each
+      feature's serde, taken when idle.
+- [x] Tried by hand in the editor.
 
 ### Later, not in this plan
 

@@ -1134,7 +1134,11 @@ stands up a box; `FootprintRoom`
 [documentation/footprint-rooms.md](documentation/footprint-rooms.md)) is a
 sketch whose corners are `PointRef`s, each named region one room on a child
 entity. Anything that needs a feature's rooms asks `FeatureTrait::rooms`,
-never its `type_key` or its box.
+never its `type_key` or its box. Tools that edit a footprint's own drawing
+reach it through `FeatureTrait::footprint`/`footprint_mut` — a typetag trait
+object has no `Any` to downcast through. What a drawn chain makes a room is
+one rule, `FootprintRoom::add_chain`'s, for a new footprint and an added
+chain alike: a region a new line bounds that no room of it already covers.
 Ask it for `bounds`, `contains` and `solid` rather than treating it as a box.
 **Each room's share is cut relative to its own corner**: the kernel's
 tolerance is absolute, and an angled face far enough from the origin is split
