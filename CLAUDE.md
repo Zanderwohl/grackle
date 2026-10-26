@@ -838,10 +838,9 @@ section of the file is kept whatever the archetype, so flipping it and back
 loses nothing, and a held prop writes none of them.
 
 **A collider is a rounded box** — a core plus a radius — so a box, a sphere and
-an upright capsule are one shape to the collision world. `RoundedBox::slab_along`
-turns one into the wall slab `move_and_slide` already sweeps against, for a body
-at that position on the other two axes, which is what makes a pillar round to
-walk past rather than square. Colliders are axis-aligned in the prop; a turned
+an upright capsule are one shape to the collision world. A body is swept
+against it grown by the body's own box — another rounded box — which is what
+makes a pillar round to walk past rather than square. Colliders are axis-aligned in the prop; a turned
 placement collides as the bounding box of its turned core.
 
 **Placed props follow the carousel rule.** The map `Prop` feature names a
@@ -1106,8 +1105,13 @@ subtraction, via `Room::collision_slabs`, so an opening you can see through is
 an opening you can walk through. Two operations, and they are not
 interchangeable:
 
-- `move_and_slide` is swept per axis. It asks whether the body's leading edge
-  crosses a wall plane during the step, so speed cannot tunnel through a wall.
+- `slide` is swept: it stops at the first surface the box would touch, takes
+  the part of the move that goes into it out, and goes on, so speed cannot
+  tunnel through a wall. What it returns is the **normals** it touched, never
+  axes: `Player.ground` is a touched floor no steeper than `WALKABLE`, and
+  `against_wall` is anything neither floor nor ceiling. On the ground the walk
+  follows the floor and gravity does nothing, which is what lets a body stand
+  on a slope without sliding down it.
 - `depenetrate` handles the world moving instead of the body: a floor raised
   onto a standing player encloses it having crossed nothing. It prefers escapes
   that land inside a room over shorter ones that do not, because the short way
@@ -1118,7 +1122,7 @@ being replaced by one world surface that both rendering and collision come
 from, with convex hulls, triangles and contact normals, so angled walls,
 footprint rooms and displacements can exist. The plan and checklist are
 [documentation/collision.md](documentation/collision.md). Do not build new
-features on `WallSlab`, `BVec3` contacts or `Room` as a box.
+features on `WallSlab` or `Room` as a box.
 
 ## What a body does once it is dead
 

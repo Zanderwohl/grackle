@@ -131,14 +131,12 @@ A triangle is not its own shape: it is a hull whose two faces point opposite
 ways, so one grown-plane routine answers both. Props stay `RoundedBox`es in
 their own list, swept as a rounded box grown by the body.
 
-**Bits against box walls are pinned.** A corpse is a replicated seed that
-every machine simulates, and
-`the_solver_reaches_the_same_bits_it_always_has` holds the arithmetic — with a
-release-profile number that cannot be re-recorded without a release build. So a
-contact or an escape against an axis-aligned plane is written as the plane's
-own number (`onto_plane`), not as a step from where the box started; any other
-way round is a different rounding and a different corpse. Angled planes have no
-history to match and use the step.
+**A contact on an axis-aligned plane is written as the plane's own number**
+(`onto_plane`), not as a step from where the box started. Stage 1 needed that
+to reach the ragdoll's pinned bits exactly; it stays because a box resting on a
+floor then rests on the same number every tick rather than one that wanders by
+a rounding. `ground` backs off *straight up* from a slope rather than along its
+normal, or a body settled onto it each tick creeps down it.
 
 `slide(centre, half, delta) -> (end, contacts)` is built on `sweep` and is what
 `step_player`, the camera and the ragdoll call; `fits` is `inside_map` and no
@@ -163,14 +161,22 @@ history to match and use the step.
 
 ### Stage 2 — contacts as normals
 
-- [ ] `slide` over planes replaces `move_and_slide`; returns contact normals.
-- [ ] `Player.blocked: BVec3` replaced by what the animator and step need
-      (`ground_normal: Option<Vec3>`, `wall_ahead`); `on_ground` by slope.
-- [ ] Ragdoll contacts and friction by normal.
-- [ ] `depenetrate` on `overlap`, keeping the into-the-map preference.
-- [ ] Third-person camera on `sweep`.
-- [ ] A body standing on a slope it can walk does not slide; one too steep
-      slides off. A body in a V-shaped crease stops rather than jitters.
+- [x] `slide` replaces `move_and_slide`; returns `Touched` (`contact.rs`),
+      whose `clip` slides along one surface, runs along a crease, or stops.
+- [x] `Player.blocked: BVec3` and `on_ground: bool` replaced by
+      `ground: Option<Vec3>` (a floor within `WALKABLE`, found by
+      `CollisionWorld::ground` after the step) and `against_wall`.
+- [x] Ragdoll contacts are `Touched`; friction takes out the velocity along
+      each normal. Fingerprint re-recorded for debug.
+- [x] `depenetrate` on hull `escapes`, keeping the into-the-map preference
+      (done in Stage 1).
+- [x] Third-person camera on `travel` — a sweep that stops on its line rather
+      than sliding the camera along the wall.
+- [x] Tests through `step_player`: standing still on 30°, walking up it,
+      sliding off 60°, coming to rest in a V.
+- [ ] **Release fingerprint**: the ragdoll's release-profile number in
+      `the_solver_reaches_the_same_bits_it_always_has` is the Stage 1 one and
+      is now stale; `cargo test --release` fails there until it is re-recorded.
 
 ### Stage 3 — the world surface
 
@@ -205,5 +211,9 @@ history to match and use the step.
 
 - Rays ignore props, as they always have: a crate does not stop a bullet or a
   blast. Kept for Stage 1; whether it should is a weapons question.
+- A body on a slope too steep to stand on slides off it slowly, at about
+  half a metre a second: `step_player` writes horizontal velocity outright from
+  the input every step, so only the fall carries between ticks. The same gap as
+  knockback, and the same fix — a movement model with momentum.
 - `Grid::near` allocates a `Vec` per query. Cheap next to the linear scan it
   replaced; worth a scratch buffer if ragdolls show up in a profile.

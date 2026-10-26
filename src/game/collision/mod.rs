@@ -1,6 +1,7 @@
 //! The solid world, and the questions movement, weapons and corpses ask it.
 //! See `documentation/collision.md`.
 
+mod contact;
 mod grid;
 pub mod hull;
 mod rounded;
@@ -10,6 +11,7 @@ use bevy::prelude::*;
 use crate::prop::archetype::RoundedBox;
 use crate::tool::room::Room;
 use grid::Grid;
+pub use contact::{Touched, MOST_TOUCHED};
 pub use hull::{onto_plane, Hit, Hull};
 
 /// How far each wall slab extends behind its face, in metres. Only the face
@@ -61,6 +63,13 @@ impl CollisionWorld {
         self.hulls = hulls;
     }
 
+    /// Add to the static world without rebuilding what is there.
+    pub fn add_hulls(&mut self, more: impl IntoIterator<Item = Hull>) {
+        let mut hulls = std::mem::take(&mut self.hulls);
+        hulls.extend(more);
+        self.set_hulls(hulls);
+    }
+
     fn hulls_near(&self, min: Vec3, max: Vec3) -> impl Iterator<Item = &Hull> {
         self.grid.near(min, max).into_iter().map(|index| &self.hulls[index as usize])
     }
@@ -77,38 +86,62 @@ impl CollisionWorld {
     }
 
     /// Move a box by `delta`, one axis at a time so a diagonal run into a wall
-    /// slides along it. Returns the new centre and which axes were blocked.
+    /// Move a box by `delta`, sliding along whatever it meets: sweep, stop
+    /// `SKIN` short, take the part of the rest that goes into what was hit out,
+    /// and go again. Returns where it ended and what it touched.
     ///
     /// Swept, so a body moving further than a wall is thick cannot tunnel
-    /// through.
-    pub fn move_and_slide(&self, centre: Vec3, half: Vec3, delta: Vec3) -> (Vec3, BVec3) {
-        let mut centre = centre;
-        let mut blocked = BVec3::FALSE;
+    /// through. A motion turned back against where it started is dropped
+    /// rather than followed, which is what stops a box rattling in a corner.
+    pub fn slide(&self, centre: Vec3, half: Vec3, delta: Vec3) -> (Vec3, Touched) {
+        let mut at = centre;
+        let mut remaining = delta;
+        let mut touched = Touched::default();
 
-        for axis in 0..3 {
-            let step = delta[axis];
-            if step == 0.0 {
-                continue;
+        for _ in 0..MOST_TOUCHED {
+            if remaining == Vec3::ZERO {
+                break;
             }
-            let mut along = Vec3::ZERO;
-            along[axis] = step;
-
-            match self.sweep(centre, half, along) {
-                Some(hit) => {
-                    blocked = set_axis(blocked, axis, true);
-                    centre = if hit.normal[axis].abs() == 1.0 {
-                        onto_plane(centre, hit.normal, hit.plane + SKIN)
-                    } else {
-                        let mut stopped = centre;
-                        stopped[axis] += step * hit.t - step.signum() * SKIN;
-                        stopped
-                    };
-                }
-                None => centre[axis] += step,
+            let Some(hit) = self.sweep(at, half, remaining) else {
+                at += remaining;
+                break;
+            };
+            at = onto_plane(at + remaining * hit.t, hit.normal, hit.plane + SKIN);
+            touched.add(hit.normal);
+            remaining = touched.clip(remaining * (1.0 - hit.t));
+            if remaining.dot(delta) <= 0.0 {
+                break;
             }
         }
 
-        (centre, blocked)
+        (at, touched)
+    }
+
+    /// How far a box gets along `delta` before it touches anything, `SKIN`
+    /// short of it. No sliding: for something that should stay on its line,
+    /// like a camera.
+    pub fn travel(&self, centre: Vec3, half: Vec3, delta: Vec3) -> Vec3 {
+        match self.sweep(centre, half, delta) {
+            Some(hit) => onto_plane(centre + delta * hit.t, hit.normal, hit.plane + SKIN),
+            None => centre + delta,
+        }
+    }
+
+    /// The walkable surface right under a box, if there is one within
+    /// `reach` — a normal no further from up than `walkable`, a cosine — as
+    /// where the box rests on it and its normal.
+    pub fn ground(&self, centre: Vec3, half: Vec3, reach: f32, walkable: f32) -> Option<(Vec3, Vec3)> {
+        let delta = Vec3::NEG_Y * reach;
+        let hit = self.sweep(centre, half, delta).filter(|hit| hit.normal.y >= walkable)?;
+        let touching = centre + delta * hit.t;
+        // Backed off straight up, not along the normal: along it, a body
+        // settled each tick on a slope creeps down it.
+        let resting = if hit.normal.y == 1.0 {
+            onto_plane(touching, hit.normal, hit.plane + SKIN)
+        } else {
+            touching + Vec3::Y * ((hit.plane + SKIN - hit.normal.dot(touching)) / hit.normal.y)
+        };
+        Some((resting, hit.normal))
     }
 
     pub fn inside_map(&self, point: Vec3) -> bool {
@@ -199,16 +232,6 @@ impl CollisionWorld {
     }
 }
 
-fn set_axis(mut mask: BVec3, axis: usize, value: bool) -> BVec3 {
-    match axis {
-        0 => mask.x = value,
-        1 => mask.y = value,
-        2 => mask.z = value,
-        _ => unreachable!(),
-    }
-    mask
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +244,11 @@ mod tests {
     }
 
     const HALF: Vec3 = Vec3::new(0.35, 0.9, 0.35);
+
+    /// Whether something facing along `axis`, either way, was touched.
+    fn touched_on(touched: &Touched, axis: Vec3) -> bool {
+        touched.iter().any(|n| n.dot(axis).abs() > 0.99)
+    }
 
     #[test]
     fn a_ray_stops_at_the_wall_it_crosses() {
@@ -245,14 +273,14 @@ mod tests {
         world.props.push(RoundedBox { centre: Vec3::new(2.0, 0.5, 0.0), core: Vec3::splat(0.5), radius: 0.0 });
 
         let start = Vec3::new(0.0, HALF.y + 0.01, 0.0);
-        let (end, blocked) = world.move_and_slide(start, HALF, Vec3::new(3.0, 0.0, 0.0));
-        assert!(blocked.x, "walked straight through the crate");
+        let (end, touched) = world.slide(start, HALF, Vec3::new(3.0, 0.0, 0.0));
+        assert!(touched_on(&touched, Vec3::X), "walked straight through the crate");
         assert!((end.x - (1.5 - HALF.x)).abs() < 0.01, "stopped at {}", end.x);
         assert!(!world.fits(Vec3::new(2.0, HALF.y, 0.0), HALF));
     }
 
-    /// Fails if a crate that lands on a body leaves it inside, where
-    /// `move_and_slide` lets it walk out through the far side.
+    /// Fails if a crate that lands on a body leaves it inside, where a sweep
+    /// lets it walk out through the far side.
     #[test]
     fn a_body_inside_a_crate_is_pushed_out_of_it() {
         let mut world = one_room();
@@ -263,17 +291,20 @@ mod tests {
         assert!(world.fits(out, HALF), "still inside the crate at {out}");
     }
 
-    /// Off-centre, a pillar's round side lets a body further in than its
-    /// bounding box would.
+    /// Head on, a pillar stops a body; off-centre, its round side turns the
+    /// body aside and lets it past, which a square one would not.
     #[test]
     fn a_round_pillar_is_round() {
         let mut world = one_room();
         world.props.push(RoundedBox { centre: Vec3::new(2.0, 2.0, 0.0), core: Vec3::new(0.0, 2.0, 0.0), radius: 0.5 });
 
-        let head_on = world.move_and_slide(Vec3::new(0.0, HALF.y + 0.01, 0.0), HALF, Vec3::X * 3.0).0;
-        let glancing = world.move_and_slide(Vec3::new(0.0, HALF.y + 0.01, 0.8), HALF, Vec3::X * 3.0).0;
+        let head_on = world.slide(Vec3::new(0.0, HALF.y + 0.01, 0.0), HALF, Vec3::X * 3.0).0;
+        assert!((head_on.x - (1.5 - HALF.x)).abs() < 0.01, "head on stopped at {}", head_on.x);
+
+        let glancing = world.slide(Vec3::new(0.0, HALF.y + 0.01, 0.8), HALF, Vec3::X * 3.0).0;
+        assert!(glancing.z > 0.8 + 0.01, "the round side did not turn the body aside: {glancing}");
         assert!(glancing.x > head_on.x + 0.1, "head on {} glancing {}", head_on.x, glancing.x);
-        assert!(glancing.x < 2.0, "glancing passed through the pillar");
+        assert!(world.fits(glancing, HALF), "glancing ended inside the pillar at {glancing}");
     }
 
     #[test]
@@ -285,9 +316,9 @@ mod tests {
     fn walking_into_a_wall_stops_at_it() {
         let world = one_room();
         let start = Vec3::new(0.0, 0.9, 0.0);
-        let (end, blocked) = world.move_and_slide(start, HALF, Vec3::new(100.0, 0.0, 0.0));
+        let (end, touched) = world.slide(start, HALF, Vec3::new(100.0, 0.0, 0.0));
 
-        assert!(blocked.x);
+        assert!(touched_on(&touched, Vec3::X));
         assert!((end.x - (5.0 - HALF.x)).abs() < 0.01, "stopped at {}", end.x);
     }
 
@@ -295,19 +326,19 @@ mod tests {
     fn running_diagonally_into_a_wall_slides_along_it() {
         let world = one_room();
         let start = Vec3::new(0.0, 0.9, 0.0);
-        let (end, blocked) = world.move_and_slide(start, HALF, Vec3::new(100.0, 0.0, 2.0));
+        let (end, touched) = world.slide(start, HALF, Vec3::new(100.0, 0.0, 2.0));
 
-        assert!(blocked.x);
-        assert!(!blocked.z);
+        assert!(touched_on(&touched, Vec3::X));
+        assert!(!touched_on(&touched, Vec3::Z));
         assert!((end.z - 2.0).abs() < 0.01, "lost the free axis: z = {}", end.z);
     }
 
     #[test]
     fn falling_lands_on_the_floor() {
         let world = one_room();
-        let (end, blocked) = world.move_and_slide(Vec3::new(0.0, 3.0, 0.0), HALF, Vec3::new(0.0, -10.0, 0.0));
+        let (end, touched) = world.slide(Vec3::new(0.0, 3.0, 0.0), HALF, Vec3::new(0.0, -10.0, 0.0));
 
-        assert!(blocked.y);
+        assert!(touched_on(&touched, Vec3::Y));
         assert!((end.y - HALF.y).abs() < 0.01, "landed at {}", end.y);
     }
 
@@ -317,7 +348,7 @@ mod tests {
     fn a_fast_mover_does_not_pass_through_a_wall() {
         let world = one_room();
         let start = Vec3::new(0.0, 0.9, 0.0);
-        let (end, _) = world.move_and_slide(start, HALF, Vec3::new(1000.0, 0.0, 0.0));
+        let (end, _) = world.slide(start, HALF, Vec3::new(1000.0, 0.0, 0.0));
 
         assert!(end.x < 5.0, "tunnelled through to {}", end.x);
     }
@@ -332,9 +363,9 @@ mod tests {
         ]);
 
         let start = Vec3::new(-2.0, 0.9, 0.0);
-        let (end, blocked) = world.move_and_slide(start, HALF, Vec3::new(4.0, 0.0, 0.0));
+        let (end, touched) = world.slide(start, HALF, Vec3::new(4.0, 0.0, 0.0));
 
-        assert!(!blocked.x, "the shared wall was solid");
+        assert!(!touched_on(&touched, Vec3::X), "the shared wall was solid");
         assert!((end.x - 2.0).abs() < 0.01, "stopped at {}", end.x);
     }
 
@@ -387,8 +418,8 @@ mod tests {
             Room::new(Vec3::new(0.0, 0.0, -5.0), Vec3::new(5.0, 4.0, 5.0)),
         ]);
 
-        let (end, blocked) = world.move_and_slide(Vec3::new(-2.0, 0.9, 0.0), HALF, Vec3::new(100.0, 0.0, 0.0));
-        assert!(blocked.x);
+        let (end, touched) = world.slide(Vec3::new(-2.0, 0.9, 0.0), HALF, Vec3::new(100.0, 0.0, 0.0));
+        assert!(touched_on(&touched, Vec3::X));
         assert!((end.x - (5.0 - HALF.x)).abs() < 0.01, "stopped at {}", end.x);
     }
 
@@ -407,8 +438,8 @@ mod tests {
     fn a_body_falling_onto_a_ramp_lands_on_it_and_not_on_the_floor_under_it() {
         let world = a_ramp();
         // The uphill edge, at x + 0.35, meets the slope first.
-        let (end, blocked) = world.move_and_slide(Vec3::new(0.0, 3.5, 0.0), HALF, Vec3::NEG_Y * 5.0);
-        assert!(blocked.y);
+        let (end, touched) = world.slide(Vec3::new(0.0, 3.5, 0.0), HALF, Vec3::NEG_Y * 5.0);
+        assert!(touched.iter().any(|n| n.y > 0.9), "touched {touched:?}");
         let surface_under_the_corner = (end.x + HALF.x + 4.0) / 4.0;
         assert!((end.y - HALF.y - surface_under_the_corner).abs() < 0.01, "landed at {end}");
     }

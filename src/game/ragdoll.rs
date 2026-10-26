@@ -50,7 +50,7 @@ use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
 use crate::common::team::Team;
 use crate::game::body_mesh::BodyTint;
-use crate::game::collision::CollisionWorld;
+use crate::game::collision::{CollisionWorld, Touched};
 use crate::game::damage::DamageSystems;
 use crate::game::death::{announce_the_dead, reap_the_dead, Dying};
 use crate::game::player::PhysicsBody;
@@ -248,15 +248,15 @@ impl Ragdoll {
         for (was, point) in started.iter_mut().zip(&self.points) {
             *was = point.at;
         }
-        let mut touching = Scratch::<BVec3, POINTS_ON_THE_STACK>::new(self.points.len(), BVec3::FALSE);
+        let mut touching = Scratch::<Touched, POINTS_ON_THE_STACK>::new(self.points.len(), Touched::default());
 
         let fall = Vec3::Y * fall * dt * dt;
         for (point, contact) in self.points.iter_mut().zip(touching.iter_mut()) {
             let carried = (point.at - point.previous) * (1.0 - DRAG);
             // Swept: a point thrown by an explosion can cover more than a wall's
             // thickness in a tick.
-            let (moved, blocked) = world.move_and_slide(point.at, point.half, carried + fall);
-            *contact = blocked;
+            let (moved, touched) = world.slide(point.at, point.half, carried + fall);
+            *contact = touched;
             point.at = moved;
         }
 
@@ -279,14 +279,13 @@ impl Ragdoll {
 
         for ((point, was), contact) in self.points.iter_mut().zip(started.iter()).zip(touching.iter()) {
             let mut velocity = point.at - *was;
-            for axis in 0..3 {
-                if contact.test(axis) {
-                    velocity[axis] = 0.0;
-                }
+            // Into the surface and off it alike: a bounce is not wanted.
+            for normal in contact.iter() {
+                velocity -= normal * velocity.dot(normal);
             }
             // Friction is the only thing that takes angular momentum away, so
             // a corpse that lands spinning stops.
-            if contact.any() {
+            if !contact.is_empty() {
                 velocity *= 1.0 - FRICTION;
                 if velocity.length() < STICK_SPEED * dt {
                     velocity = Vec3::ZERO;
@@ -461,7 +460,7 @@ impl Ragdoll {
     /// Lift every point back out of anything it has been pushed into.
     /// [`CollisionWorld::depenetrate`], because the shortest way out of a floor
     /// is downwards, out of the level.
-    fn clear_walls(&mut self, world: &CollisionWorld, touching: &mut [BVec3]) {
+    fn clear_walls(&mut self, world: &CollisionWorld, touching: &mut [Touched]) {
         for (point, contact) in self.points.iter_mut().zip(touching) {
             let out = world.depenetrate(point.at, point.half);
 
@@ -469,10 +468,9 @@ impl Ragdoll {
             // keeps pressing into the floor never gets friction and buzzes
             // forever; the swept move cannot see it, since a point starting
             // inside a wall never crosses one.
-            for axis in 0..3 {
-                if (out[axis] - point.at[axis]).abs() > 1.0e-6 {
-                    *contact = set_axis(*contact, axis);
-                }
+            let pushed = out - point.at;
+            if pushed.length_squared() > 1.0e-12 {
+                contact.add(pushed.normalize());
             }
             point.at = out;
         }
@@ -517,13 +515,6 @@ impl Ragdoll {
             self.asleep = true;
         }
     }
-}
-
-/// `BVec3` has no per-index setter, so this is it.
-fn set_axis(flags: BVec3, axis: usize) -> BVec3 {
-    let mut set = [flags.x, flags.y, flags.z];
-    set[axis] = true;
-    BVec3::from_array(set)
 }
 
 /// Solver points kept on the stack: two per bone.
@@ -1568,7 +1559,7 @@ mod tests {
 
         if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
             let expected = if cfg!(debug_assertions) {
-                0x801d_1968_7a9c_e32e
+                0xa09d_03d2_752e_c58b
             } else {
                 0x93d1_f1d3_b313_e938
             };

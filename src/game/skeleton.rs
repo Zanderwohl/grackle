@@ -245,14 +245,14 @@ fn describe_player_bodies(
             running_backward: input.movement.y < -MOVING,
             strafing_left: input.movement.x < -MOVING,
             strafing_right: input.movement.x > MOVING,
-            airborne: !player.on_ground,
+            airborne: !player.on_ground(),
             // The stance, not the key: a body that cannot stand up under a
             // vent is still crouched.
             crouching: *stance == Stance::Crouched,
             wall_ahead: false,
         };
         // The step is the only thing that knows a wall was hit.
-        described.wall_ahead = described.moving() && (player.blocked.x || player.blocked.z);
+        described.wall_ahead = described.moving() && player.against_wall;
         // Built whole and compared: `BodyRequests` is replicated.
         requests.set_if_neq(described);
     }
@@ -822,7 +822,7 @@ mod tests {
         let player = app
             .world_mut()
             .spawn((
-                Player { on_ground: true, blocked: BVec3::new(false, false, true), ..default() },
+                Player { ground: Some(Vec3::Y), against_wall: true, ..default() },
                 ActionState(PlayerInput { movement: Vec2::new(0.0, 1.0), ..default() }),
                 Stance::Standing,
                 BodyRequests::default(),
