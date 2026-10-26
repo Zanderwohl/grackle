@@ -892,9 +892,10 @@ Edit and Mode menus, editing one `.tgraph` under a pack's `materials/`. What
 a material is *for* is [documentation/surfaces.md](documentation/surfaces.md);
 nothing in a map reads one yet.
 
-- **The crates are pinned to a git rev, and the rev moves with Bevy.** The
-  editor's egui and wgpu must be the ones bevy_egui and Bevy use, or its
-  types are not ours. Bump them together.
+- **The crates track texture-graph's `main`, and it moves with Bevy.**
+  Cargo.lock holds the commit; `cargo update -p texture-graph-core` moves
+  it. The editor's egui and wgpu must be the ones bevy_egui and Bevy use, or
+  its types are not ours, so update the two together.
 - **It takes the whole window**, so `AppMode::shows_the_viewports` is false
   for it and the four editor cameras are switched off on entry. A mode that
   shows them switches them back on.

@@ -433,7 +433,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -3159,7 +3159,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "windows 0.62.2",
+ "windows 0.61.1",
 ]
 
 [[package]]
@@ -3739,7 +3739,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cea14ef9355e3beab063703aa9dab15afd25f0667c341310c1e5274bb1d0da18"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4314,7 +4314,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.20",
- "windows 0.62.2",
+ "windows 0.61.1",
 ]
 
 [[package]]
@@ -4562,7 +4562,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.1",
 ]
 
 [[package]]
@@ -5072,7 +5072,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a793df0d7afeac54f95b471d3af7f0d4fb975699f972341a4b76988d49cdf0c"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -7828,7 +7828,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8555,7 +8555,7 @@ dependencies = [
 [[package]]
 name = "texture-graph-core"
 version = "0.1.0"
-source = "git+https://github.com/Zanderwohl/texture-graph?rev=6e83279c7653b7839016aad2a9caf4e39f993ca2#6e83279c7653b7839016aad2a9caf4e39f993ca2"
+source = "git+https://github.com/Zanderwohl/texture-graph?branch=main#dc217dba1d56cf83d8cd939d2cf8bb1676db1245"
 dependencies = [
  "palette",
  "ron",
@@ -8566,7 +8566,7 @@ dependencies = [
 [[package]]
 name = "texture-graph-editor"
 version = "0.1.0"
-source = "git+https://github.com/Zanderwohl/texture-graph?rev=6e83279c7653b7839016aad2a9caf4e39f993ca2#6e83279c7653b7839016aad2a9caf4e39f993ca2"
+source = "git+https://github.com/Zanderwohl/texture-graph?branch=main#dc217dba1d56cf83d8cd939d2cf8bb1676db1245"
 dependencies = [
  "egui",
  "glam 0.33.12",
@@ -8580,7 +8580,7 @@ dependencies = [
 [[package]]
 name = "texture-graph-gpu"
 version = "0.1.0"
-source = "git+https://github.com/Zanderwohl/texture-graph?rev=6e83279c7653b7839016aad2a9caf4e39f993ca2#6e83279c7653b7839016aad2a9caf4e39f993ca2"
+source = "git+https://github.com/Zanderwohl/texture-graph?branch=main#dc217dba1d56cf83d8cd939d2cf8bb1676db1245"
 dependencies = [
  "bytemuck",
  "glam 0.33.12",
@@ -9863,7 +9863,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
