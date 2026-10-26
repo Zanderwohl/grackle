@@ -320,6 +320,13 @@ through the wrong one. The viewmodel camera is a **child** of the play camera,
 so the two can never disagree about where you are looking and
 `despawn_the_view` takes it down without knowing it exists.
 
+**Only the bottom camera on a window clears.** Cameras on one window with
+matching settings share a main texture, and a clear wipes all of it, not
+just the camera's viewport — so the four editor viewports clear only on the
+lowest-order one, the same way the viewmodel and HUD cameras already set
+`ClearColorConfig::None`. Let each clear and every view but the top one is
+blank, with no error.
+
 Three more keys while playing: **`F`** swaps between first and third person
 (`ViewMode` in [`src/game/player.rs`](src/game/player.rs) — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),

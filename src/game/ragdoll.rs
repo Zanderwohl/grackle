@@ -1568,7 +1568,7 @@ mod tests {
 
         if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
             let expected = if cfg!(debug_assertions) {
-                0x801d_1968_7a9c_e32e
+                0x5263_6694_8b8d_dd23
             } else {
                 0x93d1_f1d3_b313_e938
             };

@@ -280,10 +280,10 @@ pub fn spawn_the_strip(
                 width: Val::Px(HEAD_SIZE),
                 height: Val::Px(HEAD_SIZE),
                 border_radius: BorderRadius {
-                    top_left: Val::Px(1.0),
-                    top_right: Val::Px(1.0),
-                    bottom_left: Val::Px(HEAD_SIZE / 2.0),
-                    bottom_right: Val::Px(HEAD_SIZE / 2.0),
+                    top_left: Val::Px(1.0).into(),
+                    top_right: Val::Px(1.0).into(),
+                    bottom_left: Val::Px(HEAD_SIZE / 2.0).into(),
+                    bottom_right: Val::Px(HEAD_SIZE / 2.0).into(),
                 },
                 ..default()
             },

@@ -249,6 +249,13 @@ impl MulticamPlugin {
                     Camera3d::default(),
                     Camera {
                         order: (cameras_len - idx) as isize,
+                        // The four share one main texture, and a clear wipes all of it rather than
+                        // its own viewport, so only the bottom one may clear.
+                        clear_color: if idx == cameras_len - 1 {
+                            ClearColorConfig::Default
+                        } else {
+                            ClearColorConfig::None
+                        },
                         ..Default::default()
                     },
                     Hdr,
