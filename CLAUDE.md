@@ -378,7 +378,8 @@ consequences:
   first operand and then failed to find its second would delete a body it
   never used, and the half that vanishes is not the feature that looks wrong.
 
-The kernel ([`src/prop/csg.rs`](src/prop/csg.rs)) is the `csg.js` BSP
+The kernel ([`src/common/csg.rs`](src/common/csg.rs), shared with the map's
+surface and generic over what a face is made of) is the `csg.js` BSP
 algorithm written out, and **a solid is a bag of convex polygons that happens
 to be closed**. Nothing checks either property and both matter: a plane cuts a
 convex polygon into exactly two pieces, which is the assumption the splitter
@@ -1099,11 +1100,18 @@ alongside the camera's: put `With<Player>` in the filter next to
 disjoint from the camera's `Without<Player>` one, and without it Bevy refuses
 the system at runtime rather than at compile time.
 
-Collision comes from the rooms, not from the baked meshes
-([`src/game/collision/`](src/game/collision/mod.rs)) — but from the *same* face
-subtraction, via `Room::collision_slabs`, so an opening you can see through is
-an opening you can walk through. Two operations, and they are not
-interchangeable:
+**Rendering, collision and editor picking all come from one surface**
+([`src/common/world_surface.rs`](src/common/world_surface.rs)): the boundary of
+the union of the rooms, faces pointing into the air, cut with the CSG kernel.
+Each room's share is its own walls clipped against every room touching it, so
+auto-bake still rebuilds one room at a time. Collision
+([`src/game/collision/`](src/game/collision/mod.rs)) stands each face out into
+the solid behind it as a hull, straight from the rooms rather than from the
+baked meshes, so an edit lands without waiting for a bake — and an opening you
+can see through is an opening you can walk and shoot through. Because it is a
+union, a room wholly inside another adds nothing, and a room's wall inside
+another room is gone even where the old rectangle bake kept it. Two collision
+operations, and they are not interchangeable:
 
 - `slide` is swept: it stops at the first surface the box would touch, takes
   the part of the move that goes into it out, and goes on, so speed cannot
@@ -1117,12 +1125,9 @@ interchangeable:
   that land inside a room over shorter ones that do not, because the short way
   out of a floor is downwards, through the map.
 
-**All of this is temporary.** Box-only collision and the rectangle bake are
-being replaced by one world surface that both rendering and collision come
-from, with convex hulls, triangles and contact normals, so angled walls,
-footprint rooms and displacements can exist. The plan and checklist are
-[documentation/collision.md](documentation/collision.md). Do not build new
-features on `WallSlab` or `Room` as a box.
+Rooms are still boxes; prism rooms (footprints), stairs and displacements are
+the stages left in [documentation/collision.md](documentation/collision.md).
+Do not build new features on `Room` being a box.
 
 ## What a body does once it is dead
 

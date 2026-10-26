@@ -180,17 +180,31 @@ normal, or a body settled onto it each tick creeps down it.
 
 ### Stage 3 — the world surface
 
-- [ ] CSG kernel to `src/common/`; tolerance measured at map scale.
-- [ ] A room's share of the surface: its boundary clipped against every room
-      it touches. The `room.rs` bake tests ported as area tests (a shared full
-      wall leaves 5 faces' area, a doorway leaves the frame's).
-- [ ] Render mesh and collision shapes both from it; `rect_subtract`,
-      `RoomFace`, `WallSlab` and `collision_slabs` deleted.
-- [ ] Editor picking (`ray_hit_from_inside`) against the same surface.
-- [ ] `CollisionWorld` rebuilt from the surface, not `Query<&Room>`; removed
-      rooms detected (today's `rebuild_collision_when_rooms_change` misses
-      them).
-- [ ] Engulfed-room change noted in CLAUDE.md.
+- [x] CSG kernel to `src/common/csg.rs`, generic over a face's material
+      (`Polygon<S>`; the prop's is `Polygon<Surface>`), with `clip_outside`
+      and `cuboid` added.
+- [x] Tolerance at map scale: a shared wall at ~120 m from the origin, on
+      0.1 m-ish coordinates, still opens. Box rooms only meet on axis planes,
+      which are exact; angled rooms will need measuring again in Stage 4.
+- [x] A room's share (`world_surface::room_share`): its six faces clipped
+      against every room touching it. Coincident faces facing the same way —
+      two floors at one height — are kept by exactly one room, by an order
+      on the boxes that does not depend on which is being rebuilt. The
+      `room.rs` bake and pick tests ported as area and pick tests.
+- [x] Render mesh, collision hulls (`Hull::slab`, each face stood out behind
+      it) and editor picking all from it; `rect_subtract`, `RoomFace`,
+      `WallSlab`, `collision_slabs`, `bake_faces` and `ray_hit_from_inside`
+      deleted.
+- [x] `CollisionWorld::set_surface` takes faces; `rebuild(&[Room])` is now
+      only "these rooms' surface and volumes". Removed rooms are detected.
+- [x] Engulfed-room change noted in CLAUDE.md. It is wider than planned: the
+      rectangle bake skipped a cut whenever the other room spanned this one
+      along the face's own axis, so a corridor running into a big room kept
+      its side walls inside it as floating panels. The union removes them;
+      over a fan of 672 picks through such a map, 6 landed differently, all
+      on those panels.
+- [x] The ragdoll's fingerprint is unchanged: one room's slabs reduce to the
+      same six planes.
 
 ### Stage 4 — shapes that are not boxes
 
@@ -215,5 +229,11 @@ normal, or a body settled onto it each tick creeps down it.
   half a metre a second: `step_player` writes horizontal velocity outright from
   the input every step, so only the fall carries between ticks. The same gap as
   knockback, and the same fix — a movement model with momentum.
+- Walls are still 0.5 m slabs behind each face, so a room separated from
+  another by less than that has the other's wall slab poking into it, as
+  before. Harmless with box rooms on a snap grid; worth revisiting when
+  surfaces can be thin.
+- Editor picking computes the shares of every room the ray's box test hits,
+  each frame. Cheap at today's map sizes; cache it beside the bake if not.
 - `Grid::near` allocates a `Vec` per query. Cheap next to the linear scan it
   replaced; worth a scratch buffer if ragdolls show up in a profile.

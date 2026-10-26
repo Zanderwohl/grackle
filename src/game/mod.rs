@@ -234,14 +234,16 @@ pub(crate) fn set_cursor_captured(
     });
 }
 
-/// Removing a room is not detected; `RemovedComponents` will be needed once
-/// rooms can be deleted mid-match.
 pub(crate) fn rebuild_collision_when_rooms_change(
     mut collision: ResMut<CollisionWorld>,
     changed: Query<(), Changed<Room>>,
+    mut removed: RemovedComponents<Room>,
     rooms: Query<&Room>,
 ) {
-    if changed.is_empty() {
+    // Drained either way, or a removal seen on a frame with a change is seen
+    // again next frame.
+    let removed = removed.read().count() > 0;
+    if changed.is_empty() && !removed {
         return;
     }
     let rooms: Vec<Room> = rooms.iter().cloned().collect();

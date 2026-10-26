@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
+
+use crate::common::world_surface;
 use crate::common::app_mode::AppMode;
 use bevy_egui::egui;
 use crate::editor::editable::FeatureTag;
@@ -210,8 +212,8 @@ impl BakePlugin {
         let mut done = 0;
         while done < ROOMS_PER_FRAME {
             let Some(entity) = bake.queue.pop_front() else { break };
-            let Ok((_, room)) = rooms.get(entity) else { continue };
-            bake_one(entity, room, &all, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);
+            if !rooms.contains(entity) { continue; }
+            bake_one(entity, &all, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);
             done += 1;
         }
     }
@@ -279,7 +281,7 @@ impl BakePlugin {
     }
 }
 
-/// Build one mesh per room, minus the faces neighbouring rooms open up, all in
+/// Build one mesh per room, its share of the map's surface, all in
 /// this frame. Shared by the editor's bake and the round-start bake.
 fn bake_rooms(
     bake: &mut RoomBake,
@@ -296,8 +298,8 @@ fn bake_rooms(
     let material = bake.material(materials);
     let all: Vec<(Entity, &Room)> = rooms.iter().collect();
 
-    for (entity, room) in &all {
-        bake_one(*entity, room, &all, None, &material, commands, meshes);
+    for (entity, _) in &all {
+        bake_one(*entity, &all, None, &material, commands, meshes);
     }
 
     bake.queue.clear();
@@ -309,17 +311,17 @@ fn bake_rooms(
 /// if it already has a bake.
 fn bake_one(
     entity: Entity,
-    room: &Room,
     all: &[(Entity, &Room)],
     existing: Option<Entity>,
     material: &Handle<StandardMaterial>,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
 ) {
-    let others: Vec<Room> = all.iter().filter(|(e, _)| *e != entity).map(|(_, r)| (*r).clone()).collect();
+    let rooms: Vec<Room> = all.iter().map(|(_, r)| (*r).clone()).collect();
+    let index = all.iter().position(|(e, _)| *e == entity).expect("a room is baked against a list it is in");
     let bundle = (
         BakedRoomGeometry { room: entity },
-        Mesh3d(meshes.add(room.bake_faces(&others))),
+        Mesh3d(meshes.add(world_surface::mesh(&world_surface::room_share(&rooms, index)))),
         MeshMaterial3d(material.clone()),
     );
     match existing {

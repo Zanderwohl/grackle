@@ -8,13 +8,14 @@ mod rounded;
 
 use bevy::prelude::*;
 
+use crate::common::world_surface::{self, Face};
 use crate::prop::archetype::RoundedBox;
 use crate::tool::room::Room;
 use grid::Grid;
 pub use contact::{Touched, MOST_TOUCHED};
 pub use hull::{onto_plane, Hit, Hull};
 
-/// How far each wall slab extends behind its face, in metres. Only the face
+/// How far each wall stands out behind its face, in metres. Only the face
 /// matters to a sweep; the depth gives depenetration somewhere to measure from.
 const WALL_THICKNESS: f32 = 0.5;
 
@@ -22,8 +23,8 @@ const WALL_THICKNESS: f32 = 0.5;
 /// does not find it touching again.
 const SKIN: f32 = 0.001;
 
-/// Built from the `Room` components rather than baked meshes, so an edit
-/// lands without waiting for a re-bake. Same geometry either way.
+/// Built from the rooms' surface directly rather than from the baked meshes,
+/// so an edit lands without waiting for a re-bake. Same faces either way.
 #[derive(Resource, Default)]
 pub struct CollisionWorld {
     hulls: Vec<Hull>,
@@ -38,23 +39,16 @@ pub struct CollisionWorld {
 }
 
 impl CollisionWorld {
+    /// The rooms' volumes, and the surface they make — the same one that is
+    /// drawn — as the walls.
     pub fn rebuild(&mut self, rooms: &[Room]) {
         self.interiors = rooms.iter().map(|room| (room.min.min(room.max), room.min.max(room.max))).collect();
-        let mut hulls = Vec::new();
-        for (i, room) in rooms.iter().enumerate() {
-            let others: Vec<Room> = rooms
-                .iter()
-                .enumerate()
-                .filter(|(j, _)| *j != i)
-                .map(|(_, r)| r.clone())
-                .collect();
-            hulls.extend(
-                room.collision_slabs(&others, WALL_THICKNESS)
-                    .into_iter()
-                    .map(|slab| Hull::cuboid(slab.min, slab.max)),
-            );
-        }
-        self.set_hulls(hulls);
+        self.set_surface(&world_surface::of_rooms(rooms));
+    }
+
+    /// Each face of the surface stood out into the solid behind it as a hull.
+    pub fn set_surface(&mut self, faces: &[Face]) {
+        self.set_hulls(faces.iter().map(|face| Hull::slab(&face.vertices, face.plane.normal, WALL_THICKNESS)).collect());
     }
 
     /// Replace the static world, leaving the room interiors as they were.

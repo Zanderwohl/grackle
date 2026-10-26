@@ -89,6 +89,20 @@ impl Hull {
         Hull::new(&corners, &AXES, &[])
     }
 
+    /// A convex face given depth behind it: `normal` is the side it is hit
+    /// from, and the hull reaches `depth` the other way. The face's vertices
+    /// go counter-clockwise about `normal`.
+    pub fn slab(face: &[Vec3], normal: Vec3, depth: f32) -> Hull {
+        let behind = -normal * depth;
+        let vertices: Vec<Vec3> = face.iter().copied().chain(face.iter().map(|v| *v + behind)).collect();
+        let edges: Vec<Vec3> = (0..face.len()).map(|i| face[(i + 1) % face.len()] - face[i]).collect();
+        let mut faces = vec![normal, -normal];
+        faces.extend(edges.iter().map(|edge| edge.cross(normal)));
+        let mut directions = edges;
+        directions.push(normal);
+        Hull::new(&vertices, &faces, &directions)
+    }
+
     /// Two-sided: it can be hit, and escaped, from either face.
     pub fn triangle(a: Vec3, b: Vec3, c: Vec3) -> Hull {
         let n = (b - a).cross(c - a);
@@ -250,6 +264,17 @@ mod tests {
             .unwrap();
         assert!(!hull.overlaps(nearest, HALF));
         assert!((nearest - inside).normalize().abs_diff_eq(Vec3::new(-1.0, 0.0, -1.0).normalize(), 1e-4));
+    }
+
+    #[test]
+    fn a_slab_is_its_face_with_depth_behind_it() {
+        // The floor of a room, facing up into it.
+        let face = [Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 2.0), Vec3::new(2.0, 0.0, 2.0), Vec3::new(2.0, 0.0, 0.0)];
+        let slab = Hull::slab(&face, Vec3::Y, 0.5);
+        assert_eq!(slab.bounds(), (Vec3::new(0.0, -0.5, 0.0), Vec3::new(2.0, 0.0, 2.0)));
+        assert_eq!(slab.planes.len(), 6, "a rectangle's slab is a box: {:?}", slab.planes);
+        assert!(slab.overlaps(Vec3::new(1.0, 0.0, 1.0), Vec3::splat(0.1)));
+        assert!(!slab.overlaps(Vec3::new(3.0, 0.0, 1.0), Vec3::splat(0.1)));
     }
 
     #[test]
