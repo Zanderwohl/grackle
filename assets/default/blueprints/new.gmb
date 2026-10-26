@@ -71,9 +71,9 @@ Blueprint(
                         z: Relative(0.0),
                     ),
                     surfaces: RoomSurfaces(
-                        floor: Some("concrete"),
-                        walls: Some("concrete"),
-                        ceiling: Some("steel_plate"),
+                        floor: Some("tread_plate"),
+                        walls: Some("board_formed_concrete"),
+                        ceiling: Some("plaster"),
                     ),
                 ),
             },

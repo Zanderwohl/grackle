@@ -67,8 +67,11 @@ fn main() {
     // features can hang off.
     let min = timeline.apply_feature(Box::new(GlobalPoint::new(room_min.x, room_min.y, room_min.z)));
     let max = timeline.apply_feature(Box::new(GlobalPoint::new(room_max.x, room_max.y, room_max.z)));
-    let concrete = Some("concrete".to_owned());
-    let surfaces = RoomSurfaces { floor: concrete.clone(), walls: concrete, ceiling: Some("steel_plate".to_owned()) };
+    let surfaces = RoomSurfaces {
+        floor: Some("tread_plate".to_owned()),
+        walls: Some("board_formed_concrete".to_owned()),
+        ceiling: Some("plaster".to_owned()),
+    };
     let room = timeline.apply_feature(Box::new(EditorRoom::from_points(min, max).with_surfaces(surfaces)));
 
     // Anchored to the floor centre so resizing the room takes the contents along.
