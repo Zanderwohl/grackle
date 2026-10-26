@@ -8,6 +8,37 @@ use crate::tool::room::Room;
 use crate::tool::show::GizmoVisibility;
 
 pub const PICK_RADIUS: f32 = 0.1;
+
+/// Where a relatively placed point lands this frame: at `cursor` on a click
+/// or `Enter`, on the reference itself on `Escape` or a right click (not the
+/// end of a camera turn), or not yet.
+pub fn relative_commit(
+    mouse: &CurrentMouseInput,
+    keys: &ButtonInput<KeyCode>,
+    typing: bool,
+    cursor: Option<Vec3>,
+    reference: Vec3,
+) -> Option<Vec3> {
+    if (!typing && keys.just_pressed(KeyCode::Escape)) || (mouse.in_camera.is_some() && mouse.clicked(MouseButton::Right)) {
+        Some(reference)
+    } else if commit_at_cursor(mouse, keys, typing) {
+        cursor
+    } else {
+        None
+    }
+}
+
+/// The camera is being turned or panned. Shift is its speed boost then, so a
+/// Shift held through one is not a placement tool's Shift.
+pub fn camera_dragging(mouse: &CurrentMouseInput) -> bool {
+    matches!(mouse.pressed, Some(MouseButton::Right | MouseButton::Middle))
+}
+
+/// A click, or `Enter` while no text field has the keyboard.
+pub fn commit_at_cursor(mouse: &CurrentMouseInput, keys: &ButtonInput<KeyCode>, typing: bool) -> bool {
+    let enter = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter);
+    mouse.released == Some(MouseButton::Left) || (!typing && enter)
+}
 const SELECT_POINT_RADIUS: f32 = 0.3;
 
 /// The `s` for which `axis_origin + s * axis_dir` is the point on that line

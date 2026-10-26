@@ -302,15 +302,22 @@ fn dress_world_props(
 /// Lift and turn the parts of a hovering pickup, leaving the instance where it
 /// stands so its trigger does not move with the drawing. Purely drawn: the
 /// angle is this machine's clock, and nobody needs to agree on it.
+/// Still while authoring, so a mapper lines up a pickup that is not turning,
+/// but lifted, so it stands at the height it will in a round.
 fn float_pickups(
     time: Res<Time>,
+    mode: Res<State<AppMode>>,
     cache: Res<PropCache>,
     instances: Query<(&WorldProp, &DrawnProp)>,
     mut parts: Query<&mut Transform, With<WorldPropPart>>,
 ) {
     // Wrapped, or an `f32` of seconds steps visibly after a day. The wrap
     // period is a whole number of turns at this speed, so there is no jump.
-    let spin = Quat::from_rotation_y((time.elapsed_secs_wrapped() * SPIN_DEGREES_PER_SECOND).to_radians());
+    let spin = if mode.is_authoring() {
+        Quat::IDENTITY
+    } else {
+        Quat::from_rotation_y((time.elapsed_secs_wrapped() * SPIN_DEGREES_PER_SECOND).to_radians())
+    };
     for (prop, drawn) in &instances {
         let style = cache
             .get(&prop.model)
@@ -672,6 +679,28 @@ mod tests {
                 });
             });
         });
+    }
+
+    /// Fails if a TF2 pickup turns while it is being placed, or stops turning
+    /// in a round.
+    #[test]
+    fn a_tf2_pickup_turns_only_in_a_round() {
+        let mut app = app_with_assets();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)));
+        adopt_pickup(&mut app, PickupStyle::Tf2);
+        app.world_mut().spawn((PropMarker, PropModel("hovering".into()), Transform::default()));
+        let turn = |app: &mut App| {
+            for _ in 0..3 {
+                app.update();
+            }
+            let world = app.world_mut();
+            let drawn = world.query::<&DrawnProp>().single(world).unwrap();
+            world.get::<Transform>(drawn.parts[0]).unwrap().rotation
+        };
+
+        assert_eq!(turn(&mut app), Quat::IDENTITY, "it turned in the editor");
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        assert_ne!(turn(&mut app), Quat::IDENTITY, "it stood still in a round");
     }
 
     /// Fails if flipping the style moves what the pickup is taken through, or

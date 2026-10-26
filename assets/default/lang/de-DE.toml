@@ -47,6 +47,7 @@ retarget = "Neu verankern"
 [bakes]
 title = "Bake-Vorgänge"
 room_geometry = "Raumgeometrie"
+auto_rooms = "Räume automatisch backen"
 
 [show]
 title = "Ein-/Ausblenden"
@@ -85,10 +86,11 @@ granularity = "Granularität"
 active = "Am Raster einrasten"
 
 [editor.timeline]
+title = "Features"
 delete = "Löschen"
 
-[editor.history]
-title = "Verlauf"
+[editor.point_ref]
+none = "Keine"
 
 [editor.metadata]
 title = "Metadaten"
@@ -104,6 +106,7 @@ title = "Globaler Punkt"
 
 [editor.features.room]
 title = "Raum"
+own_min = "Min dieses Raums"
 
 [editor.features.grackle_point_light]
 title = "Punktlicht"

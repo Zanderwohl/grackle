@@ -181,6 +181,10 @@ mod tests {
         let min = timeline.apply_feature(Box::new(GlobalPoint::new(-2.0, 0.0, -2.0)));
         let max = timeline.apply_feature(Box::new(GlobalPoint::new(2.0, 3.0, 2.0)));
         let room = timeline.apply_feature(Box::new(EditorRoom::from_points(min, max)));
+        timeline.apply_feature(Box::new(EditorRoom::from_min_and_size(
+            PointRef::reference_with_offset(max, 1.0, 0.0, 1.0),
+            Vec3::new(4.0, 3.0, 5.0),
+        )));
         let mut light = GracklePointLight::from_point_ref(PointRef::reference_with_offset(min, 0.5, 1.0, 0.5));
         light.intensity = 1234.5;
         timeline.apply_feature(Box::new(light));

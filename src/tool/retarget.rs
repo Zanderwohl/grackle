@@ -56,15 +56,29 @@ impl RetargetPlugin {
 
         let allowed = Self::prior_features(&features, target_feature_id);
 
-        state.hovered_point = mouse_input.world_pos
-            .and_then(|ray| find_hovered_point_filtered(&ray, &features, PICK_RADIUS, &allowed));
+        let own = Self::own_bases(&features, target_feature_id, &state.target_point_ref_key);
+        state.hovered_point = mouse_input.world_pos.and_then(|ray| {
+            let elsewhere = find_hovered_point_filtered(&ray, &features, PICK_RADIUS, &allowed);
+            let distance = |pos: Vec3| ray_point_distance(&ray, pos);
+            let ours = own.iter()
+                .filter(|(_, pos)| distance(*pos) < PICK_RADIUS)
+                .min_by(|a, b| distance(a.1).total_cmp(&distance(b.1)))
+                .map(|(key, pos)| (target_feature_id, key.clone(), *pos));
+            match (elsewhere, ours) {
+                (Some(e), Some(o)) => Some(if distance(o.2) <= distance(e.2) { o } else { e }),
+                (e, o) => e.or(o),
+            }
+        });
 
         if mouse_input.released == Some(MouseButton::Left) {
             if let Some((ref_feature_id, ref_key, ref_pos)) = state.hovered_point.clone() {
                 let point_ref_key = state.target_point_ref_key.clone();
 
                 if let Some(mut feature) = features.features_mut().remove(&target_feature_id) {
-                    if let Some(pr) = feature.object_mut().get_point_ref_mut(&point_ref_key) {
+                    // Its own point: measured from itself, which a `PointRef` cannot say.
+                    if ref_feature_id == target_feature_id {
+                        feature.object_mut().rebase_on_own(&point_ref_key, &ref_key);
+                    } else if let Some(pr) = feature.object_mut().get_point_ref_mut(&point_ref_key) {
                         let old_base = pr.resolved_reference.unwrap_or(bevy::math::Vec3::ZERO);
                         let current_resolved = bevy::math::Vec3::new(
                             pr.x.resolve_with_base(Some(old_base.x)).unwrap_or(0.0),
@@ -106,6 +120,12 @@ impl RetargetPlugin {
         }
     }
 
+    fn own_bases(features: &FeatureTimeline, target: FeatureId, point_ref_key: &str) -> Vec<(String, Vec3)> {
+        features.features_map().get(&target)
+            .map(|feature| feature.object().own_bases(point_ref_key))
+            .unwrap_or_default()
+    }
+
     fn draw_gizmos(
         state: Res<RetargetState>,
         features: Res<FeatureTimeline>,
@@ -117,6 +137,13 @@ impl RetargetPlugin {
 
         let allowed = Self::prior_features(&features, target_feature_id);
         draw_picking_gizmos_filtered(&mut gizmos, &ray, &features, &state.hovered_point, &allowed);
+        // Always drawn: unlike another feature's points, these are not near the pointer by chance.
+        for (key, pos) in Self::own_bases(&features, target_feature_id, &state.target_point_ref_key) {
+            let hovered = state.hovered_point.as_ref()
+                .is_some_and(|(id, k, _)| *id == target_feature_id && *k == key);
+            let color = if hovered { Color::srgb_u8(0, 230, 0) } else { Color::srgb_u8(200, 200, 200) };
+            gizmos.sphere(Isometry3d::from_translation(pos), 0.1, color);
+        }
     }
 
     fn on_exit(mut state: ResMut<RetargetState>) {
