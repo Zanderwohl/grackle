@@ -328,6 +328,10 @@ impl FeatureTrait for EditorRoom {
         true
     }
 
+    fn rooms(&self) -> Vec<Room> {
+        vec![Room::new(self.resolved_min, self.resolved_max)]
+    }
+
     fn drag_handle_bounds(&self) -> Option<(Vec3, Vec3)> {
         Some((self.resolved_min.min(self.resolved_max), self.resolved_min.max(self.resolved_max)))
     }

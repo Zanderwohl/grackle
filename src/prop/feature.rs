@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::get;
 use crate::prop::profile::Placement;
-use crate::prop::csg::Polygon;
+use crate::prop::solid::Polygon;
 use crate::prop::line::LineRef;
 use crate::prop::plane::{Datum, OriginPlane, PlaneRef, MIN_ORIGIN_HALF};
 use crate::prop::plane::Plane;
