@@ -37,8 +37,8 @@ TextureGraphFile(
                         ColorStop(
                             t: 0.25,
                             color: Const(Oklch(
-                                l: 0.85,
-                                chroma: 0.008,
+                                l: 0.86875,
+                                chroma: 0.00875,
                                 hue: OklabHue(85.0),
                                 alpha: 1.0,
                             )),
@@ -46,8 +46,8 @@ TextureGraphFile(
                         ColorStop(
                             t: 0.75,
                             color: Const(Oklch(
-                                l: 0.9,
-                                chroma: 0.01,
+                                l: 0.88125,
+                                chroma: 0.00925,
                                 hue: OklabHue(85.0),
                                 alpha: 1.0,
                             )),
@@ -92,7 +92,7 @@ TextureGraphFile(
                         ColorStop(
                             t: 0.0,
                             color: Const(Oklch(
-                                l: 0.8,
+                                l: 0.85625,
                                 chroma: 0.0,
                                 hue: OklabHue(0.0),
                                 alpha: 1.0,
@@ -101,7 +101,7 @@ TextureGraphFile(
                         ColorStop(
                             t: 1.0,
                             color: Const(Oklch(
-                                l: 0.95,
+                                l: 0.89375,
                                 chroma: 0.0,
                                 hue: OklabHue(0.0),
                                 alpha: 1.0,
@@ -245,7 +245,7 @@ TextureGraphFile(
                 name: "normal",
                 kind: HeightToNormal(HeightToNormal(
                     source: Some(14),
-                    strength: 0.003,
+                    strength: 0.00075,
                 )),
             ),
         ],

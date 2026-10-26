@@ -405,8 +405,8 @@ TextureGraphFile(
                         ColorStop(
                             t: 0.25,
                             color: Const(Oklch(
-                                l: 0.46,
-                                chroma: 0.006,
+                                l: 0.51250005,
+                                chroma: 0.00525,
                                 hue: OklabHue(70.0),
                                 alpha: 1.0,
                             )),
@@ -414,8 +414,8 @@ TextureGraphFile(
                         ColorStop(
                             t: 0.75,
                             color: Const(Oklch(
-                                l: 0.6,
-                                chroma: 0.004,
+                                l: 0.5475,
+                                chroma: 0.00475,
                                 hue: OklabHue(230.0),
                                 alpha: 1.0,
                             )),
@@ -461,7 +461,7 @@ TextureGraphFile(
                         ColorStop(
                             t: 0.0,
                             color: Const(Oklch(
-                                l: 0.7,
+                                l: 0.60625,
                                 chroma: 0.0,
                                 hue: OklabHue(0.0),
                                 alpha: 1.0,
@@ -470,7 +470,7 @@ TextureGraphFile(
                         ColorStop(
                             t: 1.0,
                             color: Const(Oklch(
-                                l: 0.45,
+                                l: 0.54375,
                                 chroma: 0.0,
                                 hue: OklabHue(0.0),
                                 alpha: 1.0,

@@ -45,6 +45,33 @@ fn tiling_fbm(seed_offset: u32, frequency: u32, octaves: u32) -> LayerKind {
     })
 }
 
+/// How much of its full swing a room material's noise keeps: mottling, grime, streaks, grain and
+/// noisy relief. Patterns — lozenges, seams, boards, holes — keep all of theirs.
+const NOISE: f32 = 0.25;
+
+/// `lo..hi` narrowed about its middle to [`NOISE`] of its width.
+fn noisy(lo: f32, hi: f32) -> (f32, f32) {
+    let middle = (lo + hi) / 2.0;
+    let half = (hi - lo) / 2.0 * NOISE;
+    (middle - half, middle + half)
+}
+
+/// `c`, [`NOISE`] of the way out from `middle` in lightness and chroma; its own hue.
+fn toward(middle: Color, c: Color) -> Color {
+    oklcha(
+        middle.l + (c.l - middle.l) * NOISE,
+        middle.chroma + (c.chroma - middle.chroma) * NOISE,
+        c.hue.into_positive_degrees(),
+        c.alpha,
+    )
+}
+
+/// Two colours a noise swings between, narrowed about their middle by [`NOISE`].
+fn noisy_pair(a: Color, b: Color) -> (Color, Color) {
+    let middle = oklcha((a.l + b.l) / 2.0, (a.chroma + b.chroma) / 2.0, 0.0, 1.0);
+    (toward(middle, a), toward(middle, b))
+}
+
 fn ramp(stops: &[(f32, Color)]) -> LayerKind {
     LayerKind::ColorRamp(ColorRamp {
         stops: stops.iter().map(|&(t, c)| ColorStop { t, color: ColorInput::Const(c) }).collect(),
@@ -252,13 +279,12 @@ fn tread_plate() -> Graph {
     let height = pick(&mut g, "height", these, those, MinMaxMode::Max);
 
     let grime = g.add_layer("grime", tiling_fbm(20, 4, 5)).unwrap();
-    let sheet = mapped(&mut g, "sheet", grime, &[
-        (0.25, oklcha(0.46, 0.006, 70.0, 1.0)),
-        (0.75, oklcha(0.60, 0.004, 230.0, 1.0)),
-    ]);
+    let (grimy, clean) = noisy_pair(oklcha(0.46, 0.006, 70.0, 1.0), oklcha(0.60, 0.004, 230.0, 1.0));
+    let sheet = mapped(&mut g, "sheet", grime, &[(0.25, grimy), (0.75, clean)]);
     let polished = solid(&mut g, "polished", oklcha(0.74, 0.004, 230.0, 1.0));
     let colour = blend(&mut g, "colour", sheet, polished, height);
-    let dull = scaled(&mut g, "dull", grime, 0.70, 0.45);
+    let (rough, smooth) = noisy(0.45, 0.70);
+    let dull = scaled(&mut g, "dull", grime, smooth, rough);
     let shine = solid(&mut g, "shine", gray(0.28));
     let roughness = blend(&mut g, "roughness", dull, shine, height);
     let normal = normal_of(&mut g, height, 0.004);
@@ -318,10 +344,11 @@ fn board_formed_concrete() -> Graph {
         .unwrap();
 
     let mottle = g.add_layer("mottle", tiling_fbm(0, 4, 6)).unwrap();
+    let middle = oklcha(0.61, 0.008, 75.0, 1.0);
     let base = mapped(&mut g, "base", mottle, &[
-        (0.2, oklcha(0.52, 0.007, 75.0, 1.0)),
-        (0.5, oklcha(0.61, 0.008, 75.0, 1.0)),
-        (0.8, oklcha(0.69, 0.010, 75.0, 1.0)),
+        (0.2, toward(middle, oklcha(0.52, 0.007, 75.0, 1.0))),
+        (0.5, middle),
+        (0.8, toward(middle, oklcha(0.69, 0.010, 75.0, 1.0))),
     ]);
     let streak_noise = g.add_layer("streak noise", tiling_fbm(2, 4, 4)).unwrap();
     let streaks = g
@@ -339,11 +366,11 @@ fn board_formed_concrete() -> Graph {
         )
         .unwrap();
     let staining = remap(&mut g, "staining", streaks, 0.6, 0.9);
-    let faint = scaled(&mut g, "faint", staining, 0.0, 0.18);
+    let faint = scaled(&mut g, "faint", staining, 0.0, 0.18 * NOISE);
     let stain = solid(&mut g, "stain", oklcha(0.42, 0.012, 70.0, 1.0));
     let alternate = scaled(&mut g, "alternate", board_tone, 0.0, 0.08);
     let toned = blend(&mut g, "toned", base, stain, alternate);
-    let wood = scaled(&mut g, "wood", grain, 0.0, 0.12);
+    let wood = scaled(&mut g, "wood", grain, 0.0, 0.12 * NOISE);
     let grained = blend(&mut g, "grained", toned, stain, wood);
     let lines = scaled(&mut g, "lines", board_seam, 0.0, 0.25);
     let lined = blend(&mut g, "lined", grained, stain, lines);
@@ -352,13 +379,14 @@ fn board_formed_concrete() -> Graph {
     let deep = scaled(&mut g, "deep", recess, 0.0, 0.8);
     let colour = blend(&mut g, "colour", stained, shadow, deep);
 
-    let roughness = scaled(&mut g, "roughness", mottle, 0.82, 0.95);
+    let (smooth, rough) = noisy(0.82, 0.95);
+    let roughness = scaled(&mut g, "roughness", mottle, smooth, rough);
     let pits = g.add_layer("pits", tiling_fbm(1, 32, 3)).unwrap();
-    let fine = scaled(&mut g, "fine", pits, 0.0, 0.04);
+    let fine = scaled(&mut g, "fine", pits, 0.0, 0.04 * NOISE);
     let face = remap(&mut g, "face", recess, 0.9, 0.0);
     let imprint = scaled(&mut g, "imprint", board_seam, 0.0, 0.08);
     let boarded = mix(&mut g, "boarded", face, imprint, BlendMode::Subtract);
-    let grain_relief = scaled(&mut g, "grain relief", grain, 0.0, 0.02);
+    let grain_relief = scaled(&mut g, "grain relief", grain, 0.0, 0.02 * NOISE);
     let textured = mix(&mut g, "textured", boarded, grain_relief, BlendMode::Add);
     let height = mix(&mut g, "height", textured, fine, BlendMode::Add);
     let normal = normal_of(&mut g, height, 0.002);
@@ -375,19 +403,18 @@ fn board_formed_concrete() -> Graph {
 fn plaster() -> Graph {
     let mut g = empty();
     let trowel = g.add_layer("trowel", tiling_fbm(30, 2, 5)).unwrap();
-    let colour = mapped(&mut g, "colour", trowel, &[
-        (0.25, oklcha(0.85, 0.008, 85.0, 1.0)),
-        (0.75, oklcha(0.90, 0.010, 85.0, 1.0)),
-    ]);
+    let (shaded, bright) = noisy_pair(oklcha(0.85, 0.008, 85.0, 1.0), oklcha(0.90, 0.010, 85.0, 1.0));
+    let colour = mapped(&mut g, "colour", trowel, &[(0.25, shaded), (0.75, bright)]);
     let sheen = g.add_layer("sheen", tiling_fbm(32, 4, 3)).unwrap();
-    let roughness = scaled(&mut g, "roughness", sheen, 0.80, 0.95);
+    let (smooth, rough) = noisy(0.80, 0.95);
+    let roughness = scaled(&mut g, "roughness", sheen, smooth, rough);
     let peel = g.add_layer("peel", tiling_fbm(31, 64, 2)).unwrap();
     let fine = scaled(&mut g, "fine", peel, 0.0, 0.5);
     // The trowel's undulation, much broader and so much gentler in slope than the peel.
     let skim = g.add_layer("skim", tiling_fbm(33, 3, 3)).unwrap();
     let broad = scaled(&mut g, "broad", skim, 0.0, 0.5);
     let height = mix(&mut g, "height", fine, broad, BlendMode::Add);
-    let normal = normal_of(&mut g, height, 0.003);
+    let normal = normal_of(&mut g, height, 0.003 * NOISE);
     finish(g, Output {
         color: Some(colour),
         roughness: ScalarInput::Layer(roughness),
