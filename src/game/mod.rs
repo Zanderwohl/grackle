@@ -16,12 +16,14 @@ use crate::game::player::{
     aim_the_view_at_our_body, despawn_the_view, face_bodies, gather_aim, gather_input,
     interpolate_bodies, place_camera,
     spawn_the_view, step_player, toggle_view, write_client_inputs, InputLatch, Player, ViewMode,
+    ViewPreference,
 };
 use crate::tool::bakes::BakeSystems;
 use crate::tool::room::Room;
 
 pub mod body_mesh;
 pub mod collision;
+pub mod condition;
 pub mod damage;
 pub mod death;
 pub mod hat;
@@ -83,6 +85,8 @@ impl Plugin for GamePlugin {
             .init_resource::<AnimationClock>()
             .init_resource::<InputLatch>()
             .init_resource::<ViewMode>()
+            .init_resource::<ViewPreference>()
+            .add_plugins(crate::game::condition::ConditionPlugin)
             .add_systems(Update, (toggle_mode, start_in_play))
             .add_systems(Update, (
                 toggle_view,

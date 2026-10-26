@@ -302,8 +302,8 @@ pub(crate) fn hide_own_body(
         Visibility::Hidden
     };
 
-    // The body's children rather than `BodyMesh.parts`, so held weapons and
-    // anything else carrying the marker are covered.
+    // The body's children rather than `BodyMesh.parts`, so a hat and anything
+    // else carrying the marker are covered. Held parts are `show_held_weapons`'s.
     for children in &players {
         for child in children.iter() {
             let Ok(mut visibility) = parts.get_mut(child) else { continue };

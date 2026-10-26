@@ -199,22 +199,29 @@ outside its layer's claim is a problem `Clip::problems` reports.
 
 ## Checklist
 
-- [ ] Regions, and a rank and claim on each `Playing`; `apply_stack` resolves
-      per region.
-- [ ] `grip_the_weapon`, `look_with_the_head` and `plant_feet` drive only the
-      regions their layer won, with the test above.
+- [x] Regions, and a rank and claim on each `Playing`; `apply_stack` resolves
+      per region. (`Layer` has only `Locomotion`, `Weapon` and `Humiliation`
+      so far; the rest join as they are built.)
+- [x] `grip_the_weapon` drives only the arms its layer won, with the test
+      above. `look_with_the_head` and `plant_feet` run before the stack, so a
+      higher layer's `Replace` track already overrides them; neither needed a
+      check of its own.
 - [ ] Blend in and out per layer from a pack file, overridable per clip;
       one-shots fade out instead of being dropped.
-- [ ] `Condition` component, replicated: humiliated, or taunting (which taunt,
-      start tick). `pull_trigger` refuses; `HeldModel` hides the weapon per
-      condition.
-- [ ] `humiliate` and `taunt` edges in `PlayerInput` on `H` and `G`; the
-      authority toggles the condition.
-- [ ] Humiliation: a hands-up clip on arms, torso and head, legs left to
-      locomotion.
+- [x] `Condition` component, replicated: humiliated. `pull_trigger` refuses;
+      `show_held_weapons` hides the weapon per condition.
+- [ ] Taunting as a condition (which taunt, start tick).
+- [x] `humiliate` edge in `PlayerInput` on `H`; the authority toggles it.
+- [ ] `taunt` edge on `G`.
+- [x] Humiliation: a hands-up clip (`animations/humiliated.gpa`) on the arms,
+      legs left to locomotion. Keyed in `Space::Shoulders`, the carry point
+      turned with the body rather than the aim, so looking up does not tilt
+      it.
 - [ ] `taunts.toml` read into a resource, synced like the other pack tables;
       the wave clip; `step_player` applies the taunt's movement.
-- [ ] Effective view mode: forced third person under a condition.
+- [x] Effective view mode: forced third person under a condition.
+      `ViewPreference` is what `F` toggles; `decide_the_view` is the only
+      writer of `ViewMode`.
 - [ ] `Effect::Fired`; a fire clip started from it on every other machine, and
       optimistically from input on the shooter's.
 - [ ] Reload interrupted by firing, in `reload_weapons`.

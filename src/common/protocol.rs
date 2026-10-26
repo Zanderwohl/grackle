@@ -67,6 +67,9 @@ impl Plugin for ProtocolPlugin {
         // one writer.
         app.component::<crate::common::weapon::Equipped>().replicate();
 
+        // Not predicted, though a client's own body reads it: one writer.
+        app.component::<crate::game::condition::Condition>().replicate();
+
         // Separate from `Equipped` because it changes every shot, and
         // replication is change-detected per component.
         app.component::<crate::common::weapon::Ammo>().replicate();

@@ -732,7 +732,7 @@ impl AnimTabs<'_> {
                 egui::ComboBox::from_id_salt("anim_space")
                     .selected_text(get!(space_key(edited.space)))
                     .show_ui(ui, |ui| {
-                        for space in [Space::Body, Space::Carry, Space::Weapon, Space::Eye] {
+                        for space in [Space::Body, Space::Carry, Space::Shoulders, Space::Weapon, Space::Eye] {
                             changed |= ui
                                 .selectable_value(&mut edited.space, space, get!(space_key(space)))
                                 .changed();
@@ -1390,6 +1390,7 @@ fn space_key(space: Space) -> &'static str {
     match space {
         Space::Body => "anim.space.body",
         Space::Carry => "anim.space.carry",
+        Space::Shoulders => "anim.space.shoulders",
         Space::Weapon => "anim.space.weapon",
         Space::Eye => "anim.space.eye",
     }

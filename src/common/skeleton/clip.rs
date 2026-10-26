@@ -51,6 +51,9 @@ pub enum Space {
     Body,
     /// The point between the shoulders, turned by the aim.
     Carry,
+    /// The same point, turned with the body and not the aim: for hands up or
+    /// a wave, which should not tilt as the player looks up.
+    Shoulders,
     /// The weapon's frame, origin at its grip. A target here stays on the weapon
     /// through a recoil.
     Weapon,

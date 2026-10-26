@@ -19,7 +19,7 @@ use bevy::window::PrimaryWindow;
 
 use crate::common::app_mode::AppMode;
 use crate::common::skeleton::clip::Clip;
-use crate::common::skeleton::play::{key_the_channel, Playing};
+use crate::common::skeleton::play::{key_the_channel, Layer, Playing};
 use crate::prop::document::PropEditor;
 use crate::prop::figure::FigurePerformance;
 use crate::prop::view::PropSceneSystems;
@@ -819,10 +819,10 @@ fn drive_the_preview(
             if let (Some(heading), Some(animation)) = (anim.blend_preview, animation.filter(|_| blend.is_some())) {
                 if let Some((first, second)) = animation.at_heading(heading) {
                     let first = previews.show(0, first, from, &mut assets);
-                    performance.0 .0.push(Playing { clip: first, time: cursor.time, weight: 1.0 });
+                    performance.0 .0.push(Playing::new(Layer::Locomotion, first, cursor.time));
                     if let Some((other, t)) = second {
                         let other = previews.show(1, other, from, &mut assets);
-                        performance.0 .0.push(Playing { clip: other, time: cursor.time, weight: t });
+                        performance.0 .0.push(Playing { weight: t, ..Playing::new(Layer::Locomotion, other, cursor.time) });
                     }
                     return;
                 }
@@ -831,7 +831,7 @@ fn drive_the_preview(
     }
 
     let clip = previews.show(0, clip, from, &mut assets);
-    performance.0 .0.push(Playing { clip, time: cursor.time, weight: 1.0 });
+    performance.0 .0.push(Playing::new(Layer::Locomotion, clip, cursor.time));
 }
 
 #[cfg(test)]

@@ -207,8 +207,99 @@ impl Frames<'_> {
         match space {
             Space::Body => Some(self.body),
             Space::Carry => Some(self.carry),
+            Space::Shoulders => Some(Transform::from_translation(self.carry.translation)
+                .with_rotation(self.body.rotation)),
             Space::Weapon => self.weapon,
             Space::Eye => self.eye,
+        }
+    }
+}
+
+/// Which part of the ranking a clip plays at. Later variants outrank earlier
+/// ones wherever both claim a region; see `documentation/animation-layers.md`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Layer {
+    /// A body clip: what the animator plays, or the editor previews.
+    #[default]
+    Locomotion,
+    /// A weapon's own clips. The hold sits here too, as the arms' default.
+    Weapon,
+    Humiliation,
+}
+
+impl Layer {
+    /// What a clip on this layer claims unless it says otherwise.
+    pub const fn claims(self) -> Regions {
+        match self {
+            Layer::Locomotion => Regions::ALL,
+            Layer::Weapon => Regions::ARMS.union(Regions::WEAPON),
+            Layer::Humiliation => Regions::ARMS
+                .union(Regions::TORSO)
+                .union(Regions::HEAD)
+                .union(Regions::WEAPON),
+        }
+    }
+
+    /// Whether `grip_the_weapon` may solve an arm this layer owns. Anything
+    /// above the weapon family has taken the hand off the weapon.
+    pub fn grips_the_weapon(self) -> bool {
+        self <= Layer::Weapon
+    }
+}
+
+/// Parts of a body a layer can claim. `WEAPON` is the weapon's placement, not
+/// a bone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Regions(u8);
+
+impl Regions {
+    pub const NONE: Regions = Regions(0);
+    /// The pelvis, the legs and the root offset.
+    pub const LEGS: Regions = Regions(1);
+    pub const TORSO: Regions = Regions(1 << 1);
+    /// Neck and head.
+    pub const HEAD: Regions = Regions(1 << 2);
+    pub const ARM_L: Regions = Regions(1 << 3);
+    pub const ARM_R: Regions = Regions(1 << 4);
+    pub const WEAPON: Regions = Regions(1 << 5);
+    pub const ARMS: Regions = Regions::ARM_L.union(Regions::ARM_R);
+    pub const ALL: Regions = Regions(0b11_1111);
+
+    pub const fn union(self, other: Regions) -> Regions {
+        Regions(self.0 | other.0)
+    }
+
+    pub fn overlaps(self, other: Regions) -> bool {
+        self.0 & other.0 != 0
+    }
+
+    /// `NONE` for a name the rig does not have, so it is never masked.
+    pub fn of_bone(name: &str) -> Regions {
+        use super::rig::bone;
+        match name {
+            bone::PELVIS => Regions::LEGS,
+            bone::CHEST => Regions::TORSO,
+            bone::NECK | bone::HEAD => Regions::HEAD,
+            bone::CLAVICLE_L | bone::UPPER_ARM_L | bone::FOREARM_L | bone::HAND_L => Regions::ARM_L,
+            bone::CLAVICLE_R | bone::UPPER_ARM_R | bone::FOREARM_R | bone::HAND_R => Regions::ARM_R,
+            bone::THIGH_L | bone::SHIN_L | bone::FOOT_L | bone::THIGH_R | bone::SHIN_R | bone::FOOT_R => {
+                Regions::LEGS
+            }
+            _ => Regions::NONE,
+        }
+    }
+
+    /// What a track moves.
+    pub fn of_track(channel: &Channel) -> Regions {
+        match channel {
+            Channel::Rotation { bone, .. } => Regions::of_bone(bone),
+            Channel::Effector { chain, .. } => match chain {
+                ChainRef::LeftArm => Regions::ARM_L,
+                ChainRef::RightArm => Regions::ARM_R,
+                ChainRef::LeftLeg | ChainRef::RightLeg => Regions::LEGS,
+            },
+            Channel::Weapon { .. } | Channel::WeaponRotation { .. } => Regions::WEAPON,
+            Channel::Root { .. } => Regions::LEGS,
         }
     }
 }
@@ -224,11 +315,42 @@ pub struct Playing {
     pub time: f32,
     /// `0..=1`.
     pub weight: f32,
+    pub layer: Layer,
+    /// Tracks outside these still play, unless a higher layer claims them.
+    pub claims: Regions,
 }
 
-/// Everything playing on this body, bottom layer first.
+impl Playing {
+    /// At full weight, claiming what its layer does.
+    pub fn new(layer: Layer, clip: Handle<Clip>, time: f32) -> Playing {
+        Playing { clip, time, weight: 1.0, layer, claims: layer.claims() }
+    }
+}
+
+/// Everything playing on this body, in any order: [`apply_stack`] ranks it.
 #[derive(Component, Clone, Debug, Default)]
 pub struct ClipStack(pub Vec<Playing>);
+
+impl ClipStack {
+    /// The highest layer audibly claiming any of `region`. `None` leaves it to
+    /// whatever ran before the stack: the animator and the hold.
+    pub fn owner(&self, region: Regions) -> Option<Layer> {
+        self.0
+            .iter()
+            .filter(|playing| playing.weight > 0.0 && playing.claims.overlaps(region))
+            .map(|playing| playing.layer)
+            .max()
+    }
+
+    /// Everything fully covered by layers above `layer`. A layer still blending
+    /// in masks nothing, so it fades in over what is beneath it.
+    fn claimed_above(&self, layer: Layer) -> Regions {
+        self.0
+            .iter()
+            .filter(|playing| playing.weight >= 1.0 && playing.layer > layer)
+            .fold(Regions::NONE, |claimed, playing| claimed.union(playing.claims))
+    }
+}
 
 /// Registers `Clip` as an asset, whoever asks first.
 ///
@@ -339,7 +461,20 @@ pub fn apply(
     skeleton: &Skeleton,
     pose: &mut Pose,
     frames: &Frames,
+    weapon: Option<&mut Transform>,
+) -> Vec<Reach> {
+    apply_masked(clip, time, skeleton, pose, frames, weapon, Regions::NONE)
+}
+
+/// [`apply`], skipping every track in `masked`: regions a higher layer owns.
+pub fn apply_masked(
+    clip: &Clip,
+    time: f32,
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    frames: &Frames,
     mut weapon: Option<&mut Transform>,
+    masked: Regions,
 ) -> Vec<Reach> {
     let time = clip.wrap(time);
     let length = clip.length;
@@ -347,7 +482,7 @@ pub fn apply(
     let mut reaches = Vec::new();
 
     for track in &clip.tracks {
-        if !track.enabled {
+        if !track.enabled || masked.overlaps(Regions::of_track(&track.channel)) {
             continue;
         }
         let time = track_time(track.timing, time, frames.footfalls);
@@ -488,9 +623,10 @@ fn default_pole(chain: ChainRef) -> Vec3 {
     }
 }
 
-/// Apply a whole stack, bottom layer first. A partial-weight layer is applied
-/// to a copy and blended back with [`Pose::lerp`]; full weight skips the clone.
-/// Clips are looked up in `clips` as they are sampled.
+/// Apply a whole stack, lowest layer first; within a layer, in stack order.
+/// A track in a region a higher layer claims is skipped. A partial-weight
+/// layer is applied to a copy and blended back with [`Pose::lerp`]; full
+/// weight skips the clone. Clips are looked up in `clips` as they are sampled.
 pub fn apply_stack(
     stack: &ClipStack,
     clips: &Assets<Clip>,
@@ -499,37 +635,28 @@ pub fn apply_stack(
     frames: &Frames,
     mut weapon: Option<&mut Transform>,
 ) {
-    for playing in &stack.0 {
+    let mut ranked: Vec<&Playing> = stack.0.iter().collect();
+    // Stable, so a blend's two variants keep their order.
+    ranked.sort_by_key(|playing| playing.layer);
+
+    for playing in ranked {
         if playing.weight <= 0.0 {
             continue;
         }
         let Some(clip) = clips.get(&playing.clip) else {
             continue;
         };
+        let masked = stack.claimed_above(playing.layer);
 
         if playing.weight >= 1.0 {
-            apply(
-                clip,
-                playing.time,
-                skeleton,
-                pose,
-                frames,
-                weapon.as_deref_mut(),
-            );
+            apply_masked(clip, playing.time, skeleton, pose, frames, weapon.as_deref_mut(), masked);
             continue;
         }
 
         let before = pose.clone();
         // The weapon blends by weight too.
         let was = weapon.as_deref().copied();
-        apply(
-            clip,
-            playing.time,
-            skeleton,
-            pose,
-            frames,
-            weapon.as_deref_mut(),
-        );
+        apply_masked(clip, playing.time, skeleton, pose, frames, weapon.as_deref_mut(), masked);
         *pose = Pose::lerp(&before, pose, playing.weight);
 
         if let (Some(placed), Some(was)) = (weapon.as_deref_mut(), was) {
@@ -1027,7 +1154,7 @@ mod tests {
         let full = {
             let mut pose = Pose::rest();
             apply_stack(
-                &ClipStack(vec![Playing { clip: clip.clone(), time: 0.0, weight: 1.0 }]),
+                &ClipStack(vec![Playing::new(Layer::Locomotion, clip.clone(), 0.0)]),
                 &clips, &rig, &mut pose, &frames, None,
             );
             pose.joint(bone::CHEST)
@@ -1036,7 +1163,7 @@ mod tests {
         let half = {
             let mut pose = Pose::rest();
             apply_stack(
-                &ClipStack(vec![Playing { clip: clip.clone(), time: 0.0, weight: 0.5 }]),
+                &ClipStack(vec![Playing { weight: 0.5, ..Playing::new(Layer::Locomotion, clip.clone(), 0.0) }]),
                 &clips, &rig, &mut pose, &frames, None,
             );
             pose.joint(bone::CHEST)
@@ -1045,7 +1172,7 @@ mod tests {
         let none = {
             let mut pose = Pose::rest();
             apply_stack(
-                &ClipStack(vec![Playing { clip, time: 0.0, weight: 0.0 }]),
+                &ClipStack(vec![Playing { weight: 0.0, ..Playing::new(Layer::Locomotion, clip, 0.0) }]),
                 &clips, &rig, &mut pose, &frames, None,
             );
             pose.joint(bone::CHEST)
@@ -1054,6 +1181,43 @@ mod tests {
         assert_eq!(none, Quat::IDENTITY, "a weightless layer showed");
         assert!(half.angle_between(Quat::IDENTITY) < full.angle_between(Quat::IDENTITY));
         assert!(half.angle_between(Quat::IDENTITY) > 1e-3, "a half-weight layer did not show at all");
+    }
+
+    /// Whatever order a stack is in, the higher layer wins a region it claims,
+    /// and a lower layer still plays where nothing outranks it.
+    #[test]
+    fn a_higher_layer_wins_what_it_claims_and_nothing_else() {
+        let rig = default_humanoid().clone();
+        let ground = |_: Vec3| 0.0;
+        let frames = Frames::standing(Transform::IDENTITY, Transform::IDENTITY, &ground);
+        let turning = |bones: &[(&str, f32)]| {
+            let tracks = bones
+                .iter()
+                .map(|(bone, angle)| {
+                    let mut track = Track::rotation(*bone);
+                    let Channel::Rotation { keys, .. } = &mut track.channel else { unreachable!() };
+                    keys.push(Key::all(0.0, [*angle, 0.0, 0.0], Interpolation::Linear));
+                    track
+                })
+                .collect();
+            Clip { length: 1.0, tracks, ..Clip::default() }
+        };
+        let mut clips = Assets::<Clip>::default();
+        let below = clips.add(turning(&[(bone::CHEST, 0.6), (bone::THIGH_L, 0.4)]));
+        let above = clips.add(turning(&[(bone::CHEST, 0.2)]));
+
+        let mut pose = Pose::rest();
+        let stack = ClipStack(vec![
+            Playing { claims: Regions::TORSO, ..Playing::new(Layer::Humiliation, above, 0.0) },
+            Playing::new(Layer::Locomotion, below, 0.0),
+        ]);
+        apply_stack(&stack, &clips, &rig, &mut pose, &frames, None);
+
+        let angle = |joint| pose.joint(joint).angle_between(Quat::IDENTITY);
+        assert!((angle(bone::CHEST) - 0.2).abs() < 1e-4, "the lower layer won the chest");
+        assert!((angle(bone::THIGH_L) - 0.4).abs() < 1e-4, "the higher layer masked a leg it never claimed");
+        assert_eq!(stack.owner(Regions::TORSO), Some(Layer::Humiliation));
+        assert_eq!(stack.owner(Regions::LEGS), Some(Layer::Locomotion));
     }
 
     fn chest_turned_by(angle: f32) -> Clip {
@@ -1075,7 +1239,7 @@ mod tests {
 
         let mut clips = Assets::<Clip>::default();
         let handle = clips.add(chest_turned_by(0.2));
-        let stack = ClipStack(vec![Playing { clip: handle.clone(), time: 0.0, weight: 1.0 }]);
+        let stack = ClipStack(vec![Playing::new(Layer::Locomotion, handle.clone(), 0.0)]);
 
         let chest = |clips: &Assets<Clip>| {
             let mut pose = Pose::rest();
@@ -1107,7 +1271,7 @@ mod tests {
 
         let mut pose = Pose::rest();
         apply_stack(
-            &ClipStack(vec![Playing { clip: handle, time: 0.0, weight: 1.0 }]),
+            &ClipStack(vec![Playing::new(Layer::Locomotion, handle, 0.0)]),
             &clips, &rig, &mut pose, &frames, None,
         );
         assert_eq!(pose.joint(bone::CHEST), Quat::IDENTITY);

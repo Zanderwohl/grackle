@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn a_previewed_idle_keeps_its_feet_on_the_floor() {
         use crate::common::app_mode::AppMode;
-        use crate::common::skeleton::play::Playing;
+        use crate::common::skeleton::play::{Layer, Playing};
         use crate::common::skeleton::state::{AnimationState, PoseInputs};
         use bevy::ecs::system::RunSystemOnce;
 
@@ -380,11 +380,7 @@ mod tests {
             let clip = world
                 .resource_mut::<Assets<crate::common::skeleton::clip::Clip>>()
                 .add(clip.clone());
-            world.insert_resource(FigurePerformance(ClipStack(vec![Playing {
-                clip,
-                time,
-                weight: 1.0,
-            }])));
+            world.insert_resource(FigurePerformance(ClipStack(vec![Playing::new(Layer::Locomotion, clip, time)])));
             world.insert_resource(FigureCorrections(corrected.then_some((
                 AnimationState::Idle,
                 PoseInputs { seconds: time, ..Default::default() },

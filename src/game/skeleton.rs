@@ -65,6 +65,9 @@ impl Plugin for SkeletonPlugin {
             .init_resource::<ShowBones>()
             .init_resource::<ClassBuilds>()
             .add_systems(Update, toggle_bones)
+            // Here rather than in `ConditionPlugin`: the clips are assets, and
+            // the game's tests run without the asset plugins.
+            .add_systems(Startup, crate::game::condition::load_condition_clips)
             .add_systems(Update, (
                 describe_player_bodies
                     .run_if(in_state(AppMode::Play))
@@ -94,6 +97,7 @@ impl Plugin for SkeletonPlugin {
                 // In the chain so starting and playing a clip are never a
                 // frame apart.
                 crate::game::held::perform_weapon_clips,
+                crate::game::condition::perform_conditions,
                 crate::game::held::play_the_clips,
                 crate::game::held::grip_the_weapon,
             ).chain())

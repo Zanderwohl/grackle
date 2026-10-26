@@ -431,6 +431,7 @@ remove = "Remove"
 
 [anim.clips]
 deploy = "Deploy"
+humiliated = "Humiliated"
 
 [anim.channel]
 root = "Body"
@@ -442,6 +443,7 @@ weapon_rotation = "Weapon turn"
 [anim.space]
 body = "Body"
 carry = "Carry"
+shoulders = "Shoulders"
 weapon = "Weapon"
 eye = "Eye"
 

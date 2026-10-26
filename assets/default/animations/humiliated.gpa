@@ -1,0 +1,81 @@
+name_key = "anim.clips.humiliated"
+length = 1.2
+clock = "seconds"
+looping = true
+note = "Hands up beside the head, from the shoulders in arm lengths so every build reaches the same pose, and turned with the body so looking up does not tilt it. Elbows out and down. The legs are left to locomotion."
+
+[[tracks]]
+combine = "replace"
+space = "shoulders"
+unit = "arm_lengths"
+enabled = true
+
+[tracks.channel]
+channel = "effector"
+chain = "right_arm"
+pole = [1.0, -0.6, 0.2]
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.55,
+    0.75,
+    -0.15,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.6
+to = [
+    0.55,
+    0.7,
+    -0.15,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.2
+to = [
+    0.55,
+    0.75,
+    -0.15,
+]
+ease = "smoother_step"
+
+[[tracks]]
+combine = "replace"
+space = "shoulders"
+unit = "arm_lengths"
+enabled = true
+
+[tracks.channel]
+channel = "effector"
+chain = "left_arm"
+pole = [-1.0, -0.6, 0.2]
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.55,
+    0.75,
+    -0.15,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.6
+to = [
+    -0.55,
+    0.7,
+    -0.15,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.2
+to = [
+    -0.55,
+    0.75,
+    -0.15,
+]
+ease = "smoother_step"

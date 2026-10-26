@@ -16,6 +16,7 @@ use crate::common::class::{
 use crate::game::collision::CollisionWorld;
 use crate::common::class::Class;
 use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalogue};
+use crate::game::condition::Condition;
 use crate::game::weapon::Trigger;
 use crate::tool::room::Room;
 
@@ -49,7 +50,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 // `Transform` and `Visibility` because a replicated body is built by
 // inserting components rather than through `spawn_player`, and without them
 // its children have nothing to inherit.
-#[require(Hitboxes, Damageable, Equipped, Ammo, Trigger, Inputs, Transform, Visibility)]
+#[require(Hitboxes, Damageable, Equipped, Ammo, Trigger, Inputs, Condition, Transform, Visibility)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -107,6 +108,9 @@ pub struct PlayerInput {
     pub alt_attack_held: bool,
     /// A reload was asked for since the last tick consumed it.
     pub reload: bool,
+    /// Humiliation was toggled since the last tick consumed it. A debug key
+    /// until there are rounds to lose.
+    pub humiliate: bool,
     /// Look direction about world Y, radians. An input because facing decides
     /// which way "forward" is, so a server needs it to reproduce movement.
     pub yaw: f32,
@@ -195,6 +199,12 @@ pub enum ViewMode {
     FirstPerson,
     ThirdPerson,
 }
+
+/// The view the player picked with `F`. [`ViewMode`] is what is drawn, and
+/// `decide_the_view` is its only writer, so a condition forcing third person
+/// never has to remember what to put back.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ViewPreference(pub ViewMode);
 
 impl ViewMode {
     /// Whether the player's own body is drawn. Other bodies always are.
@@ -393,6 +403,7 @@ pub fn gather_input(
     input.alt_attack_held = buttons.pressed(MouseButton::Right);
 
     input.reload |= keys.just_pressed(KeyCode::KeyR);
+    input.humiliate |= keys.just_pressed(KeyCode::KeyH);
 
     // All six slots are bound whatever the class carries: an unbound key and
     // a key bound to an empty slot are the same to a player.
@@ -452,6 +463,7 @@ pub fn write_client_inputs(
     latch.0.attack = false;
     latch.0.alt_attack = false;
     latch.0.reload = false;
+    latch.0.humiliate = false;
     latch.0.select = None;
 }
 
@@ -472,11 +484,11 @@ pub fn face_bodies(mut bodies: Query<(&Player, &mut Transform)>) {
 }
 
 /// `F` swaps between looking out of the body and looking at it.
-pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<ViewMode>) {
+pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut preference: ResMut<ViewPreference>) {
     if !keys.just_pressed(KeyCode::KeyF) {
         return;
     }
-    *mode = match *mode {
+    preference.0 = match preference.0 {
         ViewMode::FirstPerson => ViewMode::ThirdPerson,
         ViewMode::ThirdPerson => ViewMode::FirstPerson,
     };
@@ -845,7 +857,7 @@ mod tests {
     #[test]
     fn f_toggles_the_view() {
         let mut app = App::new();
-        app.init_resource::<ViewMode>();
+        app.init_resource::<ViewPreference>();
         app.add_plugins(bevy::input::InputPlugin);
 
         let press = |app: &mut App| {
@@ -859,11 +871,12 @@ mod tests {
             keys.clear();
         };
 
-        assert_eq!(*app.world().resource::<ViewMode>(), ViewMode::FirstPerson);
+        let view = |app: &App| app.world().resource::<ViewPreference>().0;
+        assert_eq!(view(&app), ViewMode::FirstPerson);
         press(&mut app);
-        assert_eq!(*app.world().resource::<ViewMode>(), ViewMode::ThirdPerson);
+        assert_eq!(view(&app), ViewMode::ThirdPerson);
         press(&mut app);
-        assert_eq!(*app.world().resource::<ViewMode>(), ViewMode::FirstPerson);
+        assert_eq!(view(&app), ViewMode::FirstPerson);
     }
 
     /// Your own body is hidden only in first person.

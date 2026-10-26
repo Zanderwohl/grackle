@@ -314,7 +314,8 @@ so the two can never disagree about where you are looking and
 `despawn_the_view` takes it down without knowing it exists.
 
 Three more keys while playing: **`F`** swaps between first and third person
-(`ViewMode` in [`src/game/player.rs`](src/game/player.rs) — your own body and
+(`ViewPreference` in [`src/game/player.rs`](src/game/player.rs), which a
+condition can override; `ViewMode` is what is drawn — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
 **`F4`** toggles the hitbox gizmos and the debug laser aimed at them, and
 **`F6`** toggles the bone gizmos. Both are off by default: they are debug
@@ -323,7 +324,9 @@ is the perf overlay in both modes.
 
 Weapon slots are on **`1`–`6`**, the left mouse button fires the weapon's
 primary and the right its secondary — held, for anything automatic — and
-**`R`** reloads. What each slot holds is a property of the class, which is read off disk; see "What a weapon is" below.
+**`R`** reloads. **`H`** toggles humiliation, a debug key until there are
+rounds to lose: hands up, no weapon, no firing, third person. What each slot
+holds is a property of the class, which is read off disk; see "What a weapon is" below.
 
 ## Modelling a prop
 
@@ -762,7 +765,12 @@ Three things there are load-bearing:
 
 Ranking what may drive which bones — taunts, humiliation, firing, reloads,
 the hold, locomotion — and which passes yield when outranked is planned in
-[documentation/animation-layers.md](documentation/animation-layers.md).
+[documentation/animation-layers.md](documentation/animation-layers.md). Each
+`Playing` carries a `Layer` and the `Regions` it claims; `apply_stack` ranks
+the stack, and **`grip_the_weapon` leaves an arm alone when a layer above the
+weapon owns it**. A `Condition` (humiliation now) is gameplay state written
+by the authority and read by firing, the held weapon, the view and the
+stack; nothing in the animation decides whether a body may shoot.
 
 `every_class_can_reach_every_shipped_props_grip` is what keeps a hold
 authorable: a build whose hand cannot get to the grip holds nothing while its

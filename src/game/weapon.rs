@@ -17,6 +17,7 @@ use crate::common::net::has_authority;
 use crate::common::weapon::{
     Ammo, Cadence, Cost, Equipped, Magazine, Mounted, WeaponAction, WeaponCatalogue,
 };
+use crate::game::condition::Condition;
 use crate::game::damage::{DamagePlugin, DamageSystems};
 use crate::game::explosion::ExplosionPlugin;
 use crate::game::flame::FlamePlugin;
@@ -117,13 +118,19 @@ impl Plugin for WeaponPlugin {
 pub fn pull_trigger(
     time: Res<Time<Fixed>>,
     catalogue: Res<WeaponCatalogue>,
-    mut shooters: Query<(Entity, &Equipped, &mut Ammo, &mut Trigger, &Inputs), With<Player>>,
+    mut shooters: Query<
+        (Entity, &Equipped, &mut Ammo, &mut Trigger, &Inputs, &Condition),
+        With<Player>,
+    >,
     mut fired: MessageWriter<WeaponActionFired>,
 ) {
     let dt = time.delta_secs();
 
-    for (shooter, equipped, mut ammo, mut trigger, input) in &mut shooters {
+    for (shooter, equipped, mut ammo, mut trigger, input, condition) in &mut shooters {
         trigger.tick(dt);
+        if !condition.may_fire() {
+            continue;
+        }
 
         let held = equipped.held;
         let Some(weapon) = catalogue.held_by(equipped) else { continue };
@@ -425,6 +432,23 @@ mod tests {
         input(&mut world, shooter).attack = false;
         step(&mut world);
         assert!(shots(&mut world).is_empty(), "holding the button fired a second time");
+    }
+
+    /// A humiliated body's press goes nowhere, and costs nothing.
+    #[test]
+    fn a_humiliated_body_does_not_fire() {
+        let mut world = a_world(one_weapon(weapon(
+            semi(WeaponAction::Hitscan(LASER), 1),
+            Mounted::EMPTY,
+            Magazine { clip: Some(12), reserve: 12, reload: 1.0, reload_one_at_a_time: false },
+        )));
+        let shooter = a_shooter(&mut world);
+        *world.get_mut::<Condition>(shooter).unwrap() = Condition::Humiliated;
+        input(&mut world, shooter).attack = true;
+
+        step(&mut world);
+        assert!(shots(&mut world).is_empty(), "a humiliated body fired");
+        assert_eq!(ammo(&world, shooter, Slot::Primary).clip, 12, "a refused shot was paid for");
     }
 
     /// An automatic weapon fires on its own interval while held, not per tick.

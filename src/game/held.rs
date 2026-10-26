@@ -13,15 +13,15 @@ use crate::common::class::Class;
 use std::collections::BTreeMap;
 
 use crate::common::skeleton::clip::Clip;
-use crate::common::skeleton::play::{apply_stack, ClipAssetsPlugin, ClipStack, Frames, Playing};
+use crate::common::skeleton::play::{apply_stack, ClipAssetsPlugin, ClipStack, Frames, Layer, Playing, Regions};
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::weapon::{Equipped, WeaponCatalogue, WeaponId};
-use crate::game::body_mesh::FirstPersonHidden;
+use crate::game::condition::Condition;
 use crate::game::player::{LocalPlayer, Player, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
 use crate::prop::baked::{PropCache, SurfaceMaterials};
 use crate::game::collision::CollisionWorld;
-use crate::prop::hold::{carry_frame, grip_with, weapon_transform, HoldSpec, ViewmodelSpec};
+use crate::prop::hold::{carry_frame, grip_hands, weapon_transform, HoldSpec, ViewmodelSpec};
 
 /// Metres above a point to start looking for the floor, and below it to keep
 /// looking. Generous: a keyed foot mid-stride is above the ground, and one on a
@@ -102,7 +102,7 @@ impl Plugin for HeldWeaponPlugin {
         app.add_plugins(ClipAssetsPlugin)
             .init_resource::<PropCache>()
             .init_resource::<SurfaceMaterials>()
-            .add_systems(Update, dress_held_weapons)
+            .add_systems(Update, (dress_held_weapons, show_held_weapons).chain())
             // Before propagation, with the bone meshes, or a held part is drawn
             // a frame behind the hand.
             .add_systems(
@@ -149,11 +149,18 @@ fn dress_held_weapons(
     mut clip_assets: ResMut<Assets<Clip>>,
     view: Res<ViewMode>,
     bodies: Query<
-        (Entity, &Equipped, Option<&Class>, Option<&LocalPlayer>, Option<&HeldModel>),
+        (
+            Entity,
+            &Equipped,
+            Option<&Class>,
+            Has<LocalPlayer>,
+            Option<&HeldModel>,
+            Option<&Condition>,
+        ),
         With<Skeleton>,
     >,
 ) {
-    for (body, equipped, class, ours, drawn) in &bodies {
+    for (body, equipped, class, ours, drawn, condition) in &bodies {
         let held = equipped.held();
         if let Some(drawn) = drawn
             && drawn.weapon == held
@@ -199,14 +206,10 @@ fn dress_held_weapons(
                             spawned.push(
                                 body.spawn((
                                     HeldPart,
-                                    FirstPersonHidden,
-                                    // Spawned already hidden: `hide_own_body`
+                                    // Spawned already hidden: `show_held_weapons`
                                     // only catches it a frame later, which
                                     // flashes the weapon across your view.
-                                    match ours.is_some() && !view.shows_own_body() {
-                                        true => Visibility::Hidden,
-                                        false => Visibility::Inherited,
-                                    },
+                                    held_visibility(ours, *view, condition.copied()),
                                     Mesh3d(mesh),
                                     MeshMaterial3d(material),
                                     // Overwritten by `place_held_weapons`
@@ -336,21 +339,23 @@ pub(crate) fn perform_weapon_clips(
         }
 
         let elapsed = *elapsed;
-        match stack.0.as_mut_slice() {
+        let ours = |playing: &Playing| playing.layer == Layer::Weapon;
+        match stack.0.iter_mut().find(|playing| ours(playing)) {
             // The common case: the same clip, a little further on.
-            [playing] if playing.clip == *handle => playing.time = elapsed,
+            Some(playing) if playing.clip == *handle => playing.time = elapsed,
             _ => {
-                stack.0.clear();
-                stack.0.push(Playing { clip: handle.clone(), time: elapsed, weight: 1.0 });
+                stack.0.retain(|playing| !ours(playing));
+                stack.0.push(Playing::new(Layer::Weapon, handle.clone(), elapsed));
             }
         }
     }
 }
 
-/// Take everything off a stack, without marking an empty one changed.
+/// Take the weapon's clips off a stack, leaving other layers' and without
+/// marking it changed when there were none.
 fn stop(stack: &mut Mut<ClipStack>) {
-    if !stack.0.is_empty() {
-        stack.0.clear();
+    if stack.0.iter().any(|playing| playing.layer == Layer::Weapon) {
+        stack.0.retain(|playing| playing.layer != Layer::Weapon);
     }
 }
 
@@ -423,6 +428,10 @@ pub(crate) fn play_the_clips(
 /// [`prop::hold`], shared with the prop editor's reference figure so the two
 /// cannot disagree.
 ///
+/// An arm a layer above the weapon family owns is left alone: the hand has
+/// been taken off the weapon, and gripping anyway is TF2's humiliated Medic
+/// with his hand twisted round an invisible medigun.
+///
 /// [`prop::hold`]: crate::prop::hold
 pub(crate) fn grip_the_weapon(
     mut bodies: Query<(
@@ -431,15 +440,54 @@ pub(crate) fn grip_the_weapon(
         Option<&SkeletonRoot>,
         &HeldModel,
         &WeaponInHand,
+        Option<&ClipStack>,
     )>,
 ) {
-    for (skeleton, mut pose, offset, held, weapon) in &mut bodies {
+    for (skeleton, mut pose, offset, held, weapon, stack) in &mut bodies {
         if !held.resolved || held.weapon.is_none() {
+            continue;
+        }
+        let free = |arm| {
+            stack
+                .and_then(|stack| stack.owner(arm))
+                .is_none_or(Layer::grips_the_weapon)
+        };
+        let which = [free(Regions::ARM_R), free(Regions::ARM_L)];
+        if which == [false; 2] {
             continue;
         }
 
         let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
-        grip_with(skeleton, &mut pose, &root, &held.hold, &weapon.0);
+        grip_hands(skeleton, &mut pose, &root, &held.hold, &weapon.0, which);
+    }
+}
+
+/// A held weapon is hidden from inside your own head, and whenever its
+/// body's condition takes it away. The only writer of a held part's
+/// visibility; `hide_own_body` leaves held parts to this.
+fn held_visibility(ours: bool, view: ViewMode, condition: Option<Condition>) -> Visibility {
+    let inside_our_head = ours && !view.shows_own_body();
+    let taken_away = condition.is_some_and(|condition| !condition.shows_weapon());
+    match inside_our_head || taken_away {
+        true => Visibility::Hidden,
+        false => Visibility::Inherited,
+    }
+}
+
+fn show_held_weapons(
+    view: Res<ViewMode>,
+    bodies: Query<(&HeldModel, Has<LocalPlayer>, Option<&Condition>)>,
+    mut parts: Query<&mut Visibility, With<HeldPart>>,
+) {
+    for (held, ours, condition) in &bodies {
+        let wanted = held_visibility(ours, *view, condition.copied());
+        for part in &held.parts {
+            let Ok(mut visibility) = parts.get_mut(*part) else { continue };
+            // Assigned only on change, so parts are not dirtied every frame.
+            if *visibility != wanted {
+                *visibility = wanted;
+            }
+        }
     }
 }
 
@@ -730,7 +778,6 @@ mod tests {
     #[test]
     fn a_clip_moves_the_weapon_and_the_hands_follow_it() {
         use crate::common::skeleton::clip::{Axis, Channel, Clip, Combine, Key, Space, Track, Unit};
-        use crate::common::skeleton::play::{ClipStack, Playing};
         use crate::common::skeleton::Interpolation;
 
         let wrist = |world: &World, body: Entity| {
@@ -769,11 +816,7 @@ mod tests {
             ..Clip::default()
         };
         let clip = world.resource_mut::<Assets<Clip>>().add(clip);
-        world.entity_mut(moved).insert(ClipStack(vec![Playing {
-            clip,
-            time: 0.0,
-            weight: 1.0,
-        }]));
+        world.entity_mut(moved).insert(ClipStack(vec![Playing::new(Layer::Weapon, clip, 0.0)]));
         world.run_system_once(place_the_weapon).unwrap();
         world.run_system_once(play_the_clips).unwrap();
         world.run_system_once(grip_the_weapon).unwrap();
@@ -793,6 +836,34 @@ mod tests {
             wrist(&plain, still).y,
             wrist(&world, moved).y,
         );
+    }
+
+    /// TF2's humiliated Medic: a layer above the weapon owns the arms, so the
+    /// grip must not drag the hands back onto a weapon nobody is holding.
+    #[test]
+    fn a_hand_a_higher_layer_owns_is_not_gripped() {
+        let hand = |world: &World, body: Entity| {
+            let skeleton = world.get::<Skeleton>(body).unwrap().clone();
+            let pose = world.get::<Pose>(body).unwrap().clone();
+            let index = skeleton.index_of(crate::common::skeleton::rig::bone::FOREARM_R).unwrap();
+            skeleton.posed_bones(&pose, &Transform::IDENTITY)[index].tail
+        };
+        let mut world = World::new();
+        let gripping = body_holding(&mut world, Class::Medic, 0.0);
+        let humiliated = body_holding(&mut world, Class::Medic, 0.0);
+        let rest = hand(&world, humiliated);
+        // An empty clip: what matters is who owns the arms, not what it keys.
+        let nothing = world.resource_mut::<Assets<Clip>>().add(Clip::default());
+        world
+            .entity_mut(humiliated)
+            .insert(ClipStack(vec![Playing::new(Layer::Humiliation, nothing, 0.0)]));
+
+        world.run_system_once(place_the_weapon).unwrap();
+        world.run_system_once(play_the_clips).unwrap();
+        world.run_system_once(grip_the_weapon).unwrap();
+
+        assert!(hand(&world, gripping).distance(rest) > 0.05, "the plain body did not grip at all");
+        assert_eq!(hand(&world, humiliated), rest, "the grip took a hand a higher layer owns");
     }
 
     /// A carry is in fractions of arm length so it retargets; a class whose
