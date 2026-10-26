@@ -1,5 +1,7 @@
 use bevy::app::App;
 use bevy::prelude::*;
+use crate::common::csg::Polygon;
+use crate::common::triangulate::triangulate;
 use bevy_egui::input::EguiWantsInput;
 use crate::common::app_mode::AppMode;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline, PointRef};
@@ -313,7 +315,9 @@ impl RoomTool {
     ) {
         let color = Color::srgb_u8(100, 100, 100);
         for (_, room) in rooms {
-            bounds_gizmo(&mut gizmos, room.min, room.max, color);
+            for (a, b) in room.edges() {
+                gizmos.line(a, b, color);
+            }
         }
     }
 }
@@ -632,10 +636,17 @@ mod drag_handle_tests {
     }
 }
 
-#[derive(Component, Clone, Debug)]
+/// A volume of air: a floor plan stood between two heights. A box is the
+/// four-corner case. The map is the union of these
+/// ([`crate::common::world_surface`]).
+#[derive(Component, Clone, Debug, PartialEq)]
 pub struct Room {
-    pub min: Vec3,
-    pub max: Vec3,
+    /// Metres along `x` and `z`, counter-clockwise by `perp_dot` (which is
+    /// clockwise seen from above). Need not be convex. Private so the
+    /// winding cannot be got wrong from outside.
+    footprint: Vec<Vec2>,
+    pub floor: f32,
+    pub ceiling: f32,
 }
 
 impl Default for Room {
@@ -645,9 +656,143 @@ impl Default for Room {
 }
 
 impl Room {
-    pub fn new(min: Vec3, max: Vec3) -> Self {
-        Self { min, max }
+    /// A box, whichever way round the corners are given.
+    pub fn new(a: Vec3, b: Vec3) -> Self {
+        let (min, max) = (a.min(b), a.max(b));
+        Self::prism(
+            vec![Vec2::new(min.x, min.z), Vec2::new(max.x, min.z), Vec2::new(max.x, max.z), Vec2::new(min.x, max.z)],
+            min.y,
+            max.y,
+        )
     }
+
+    /// Any floor plan, wound either way round.
+    pub fn prism(mut footprint: Vec<Vec2>, floor: f32, ceiling: f32) -> Self {
+        if signed_area_x2(&footprint) < 0.0 {
+            footprint.reverse();
+        }
+        Self { footprint, floor: floor.min(ceiling), ceiling: floor.max(ceiling) }
+    }
+
+    pub fn translated(&self, by: Vec3) -> Room {
+        Room {
+            footprint: self.footprint.iter().map(|p| *p + Vec2::new(by.x, by.z)).collect(),
+            floor: self.floor + by.y,
+            ceiling: self.ceiling + by.y,
+        }
+    }
+
+    pub fn footprint(&self) -> &[Vec2] {
+        &self.footprint
+    }
+
+    pub fn bounds(&self) -> (Vec3, Vec3) {
+        let (low, high) = self.footprint.iter().fold((Vec2::INFINITY, Vec2::NEG_INFINITY), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+        (Vec3::new(low.x, self.floor, low.y), Vec3::new(high.x, self.ceiling, high.y))
+    }
+
+    pub fn volume(&self) -> f32 {
+        signed_area_x2(&self.footprint) / 2.0 * (self.ceiling - self.floor)
+    }
+
+    /// Inclusive: a point on a wall is in the room.
+    pub fn contains(&self, point: Vec3) -> bool {
+        point.y >= self.floor && point.y <= self.ceiling && in_footprint(&self.footprint, Vec2::new(point.x, point.z))
+    }
+
+    /// A point on the floor inside the plan: the middle of its bounds if that
+    /// is in it, otherwise the middle of its biggest triangle, which always is.
+    pub fn floor_point(&self) -> Vec3 {
+        let (min, max) = self.bounds();
+        let middle = (min + max) / 2.0;
+        if in_footprint(&self.footprint, Vec2::new(middle.x, middle.z)) {
+            return Vec3::new(middle.x, self.floor, middle.z);
+        }
+        let p = &self.footprint;
+        let biggest = triangulate(p)
+            .into_iter()
+            .max_by(|a, b| triangle_area(p, a).total_cmp(&triangle_area(p, b)))
+            .map(|[a, b, c]| (p[a] + p[b] + p[c]) / 3.0)
+            .unwrap_or(Vec2::new(middle.x, middle.z));
+        Vec3::new(biggest.x, self.floor, biggest.y)
+    }
+
+    /// The edges round the floor and the ceiling and the uprights between,
+    /// for drawing it.
+    pub fn edges(&self) -> impl Iterator<Item = (Vec3, Vec3)> + '_ {
+        let at = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+        let count = self.footprint.len();
+        (0..count).flat_map(move |i| {
+            let (a, b) = (self.footprint[i], self.footprint[(i + 1) % count]);
+            [
+                (at(a, self.floor), at(b, self.floor)),
+                (at(a, self.ceiling), at(b, self.ceiling)),
+                (at(a, self.floor), at(a, self.ceiling)),
+            ]
+        })
+    }
+
+    /// The volume as a closed solid, faces out. A convex plan's floor and
+    /// ceiling are one face each, so a box is six; a notched one's are
+    /// triangles, since the kernel's faces must be convex.
+    pub fn solid<S: Copy>(&self, surface: S) -> Vec<Polygon<S>> {
+        let p = &self.footprint;
+        let at = |q: Vec2, y: f32| Vec3::new(q.x, y, q.y);
+        let mut faces = Vec::new();
+        let caps: Vec<Vec<usize>> = if is_convex(p) {
+            vec![(0..p.len()).collect()]
+        } else {
+            triangulate(p).into_iter().map(|t| t.to_vec()).collect()
+        };
+        for cap in &caps {
+            // Counter-clockwise in `perp_dot` faces down.
+            faces.extend(Polygon::new(cap.iter().map(|i| at(p[*i], self.floor)).collect(), surface));
+            faces.extend(Polygon::new(cap.iter().rev().map(|i| at(p[*i], self.ceiling)).collect(), surface));
+        }
+        for i in 0..p.len() {
+            let (a, b) = (p[i], p[(i + 1) % p.len()]);
+            faces.extend(Polygon::new(
+                vec![at(a, self.floor), at(a, self.ceiling), at(b, self.ceiling), at(b, self.floor)],
+                surface,
+            ));
+        }
+        faces
+    }
+}
+
+fn signed_area_x2(points: &[Vec2]) -> f32 {
+    (0..points.len()).map(|i| points[i].perp_dot(points[(i + 1) % points.len()])).sum()
+}
+
+fn triangle_area(points: &[Vec2], [a, b, c]: &[usize; 3]) -> f32 {
+    (points[*b] - points[*a]).perp_dot(points[*c] - points[*a])
+}
+
+fn is_convex(points: &[Vec2]) -> bool {
+    let count = points.len();
+    (0..count).all(|i| {
+        let (a, b, c) = (points[i], points[(i + 1) % count], points[(i + 2) % count]);
+        (b - a).perp_dot(c - b) >= 0.0
+    })
+}
+
+/// Even-odd, with the boundary counted in.
+fn in_footprint(points: &[Vec2], q: Vec2) -> bool {
+    const ON_THE_EDGE: f32 = 1.0e-5;
+    let count = points.len();
+    let mut inside = false;
+    for i in 0..count {
+        let (a, b) = (points[i], points[(i + 1) % count]);
+        let along = b - a;
+        let t = (q - a).dot(along) / along.length_squared().max(f32::MIN_POSITIVE);
+        if (0.0..=1.0).contains(&t) && (a + along * t).distance(q) <= ON_THE_EDGE {
+            return true;
+        }
+        if (a.y > q.y) != (b.y > q.y) && q.x < a.x + (q.y - a.y) / (b.y - a.y) * along.x {
+            inside = !inside;
+        }
+    }
+    inside
 }
 
 #[derive(Message)]
@@ -655,3 +800,59 @@ pub struct CalculateRoomGeometry;
 
 #[derive(Message)]
 pub struct ClearRoomGeometry;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::csg::signed_volume_x6;
+
+    /// An L, 3 × 3 with the 2 × 2 corner out of it, two metres high.
+    fn an_l() -> Room {
+        Room::prism(
+            vec![Vec2::new(0.0, 0.0), Vec2::new(3.0, 0.0), Vec2::new(3.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(1.0, 3.0), Vec2::new(0.0, 3.0)],
+            0.0,
+            2.0,
+        )
+    }
+
+    #[test]
+    fn a_box_is_a_four_cornered_prism() {
+        let room = Room::new(Vec3::new(4.0, 3.0, 2.0), Vec3::new(-1.0, 0.0, 0.0));
+        assert_eq!(room.bounds(), (Vec3::new(-1.0, 0.0, 0.0), Vec3::new(4.0, 3.0, 2.0)));
+        assert!((room.volume() - 30.0).abs() < 1e-5);
+        assert_eq!(room.solid(()).len(), 6);
+    }
+
+    #[test]
+    fn a_plan_wound_the_other_way_round_is_the_same_room() {
+        let mut backwards: Vec<Vec2> = an_l().footprint().to_vec();
+        backwards.reverse();
+        assert_eq!(Room::prism(backwards, 0.0, 2.0).volume(), an_l().volume());
+    }
+
+    #[test]
+    fn a_notched_room_is_closed_faces_out_and_holds_what_its_plan_says() {
+        let room = an_l();
+        assert!((room.volume() - 10.0).abs() < 1e-5);
+        assert!((signed_volume_x6(&room.solid(())) / 6.0 - 10.0).abs() < 1e-4, "inside out or open");
+    }
+
+    #[test]
+    fn the_notch_of_an_l_is_not_in_it() {
+        let room = an_l();
+        assert!(room.contains(Vec3::new(0.5, 1.0, 2.5)));
+        assert!(!room.contains(Vec3::new(2.0, 1.0, 2.0)), "the notch counted as room");
+        assert!(room.contains(Vec3::new(3.0, 1.0, 0.5)), "a point on the wall is in the room");
+        assert!(!room.contains(Vec3::new(0.5, 2.5, 0.5)), "above the ceiling counted as room");
+    }
+
+    /// The middle of an L's bounds is in its notch.
+    #[test]
+    fn a_floor_point_is_on_the_floor_inside_the_plan() {
+        let room = an_l();
+        let point = room.floor_point();
+        assert_eq!(point.y, 0.0);
+        assert!(room.contains(point), "{point}");
+        assert_eq!(Room::new(Vec3::ZERO, Vec3::new(4.0, 1.0, 2.0)).floor_point(), Vec3::new(2.0, 0.0, 1.0));
+    }
+}

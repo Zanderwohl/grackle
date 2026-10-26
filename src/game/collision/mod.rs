@@ -29,9 +29,9 @@ const SKIN: f32 = 0.001;
 pub struct CollisionWorld {
     hulls: Vec<Hull>,
     grid: Grid,
-    /// Room interiors as (min, max). [`CollisionWorld::depenetrate`] needs
-    /// them to tell which way out of a wall is into the level.
-    interiors: Vec<(Vec3, Vec3)>,
+    /// The rooms' volumes. [`CollisionWorld::depenetrate`] needs them to tell
+    /// which way out of a wall is into the level.
+    interiors: Vec<Room>,
     /// Placed props that block movement. Kept apart from `hulls` because they
     /// are rebuilt on a different trigger: rooms change with the map, props
     /// with what the authority has standing.
@@ -42,7 +42,7 @@ impl CollisionWorld {
     /// The rooms' volumes, and the surface they make — the same one that is
     /// drawn — as the walls.
     pub fn rebuild(&mut self, rooms: &[Room]) {
-        self.interiors = rooms.iter().map(|room| (room.min.min(room.max), room.min.max(room.max))).collect();
+        self.interiors = rooms.to_vec();
         self.set_surface(&world_surface::of_rooms(rooms));
     }
 
@@ -139,9 +139,7 @@ impl CollisionWorld {
     }
 
     pub fn inside_map(&self, point: Vec3) -> bool {
-        self.interiors.iter().any(|(min, max)| {
-            (0..3).all(|axis| point[axis] >= min[axis] && point[axis] <= max[axis])
-        })
+        self.interiors.iter().any(|room| room.contains(point))
     }
 
     /// Whether a body stands clear: in the map and touching no wall. A low
@@ -415,6 +413,21 @@ mod tests {
         let (end, touched) = world.slide(Vec3::new(-2.0, 0.9, 0.0), HALF, Vec3::new(100.0, 0.0, 0.0));
         assert!(touched_on(&touched, Vec3::X));
         assert!((end.x - (5.0 - HALF.x)).abs() < 0.01, "stopped at {}", end.x);
+    }
+
+    /// Breaks if walls stop coming from the surface: a box-only bake has no
+    /// diagonal to slide along.
+    #[test]
+    fn walking_into_a_rooms_diagonal_wall_slides_along_it() {
+        let mut world = CollisionWorld::default();
+        world.rebuild(&[Room::prism(vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(0.0, 10.0)], 0.0, 4.0)]);
+        let start = Vec3::new(2.0, HALF.y + 0.01, 4.0);
+        let (end, touched) = world.slide(start, HALF, Vec3::X * 6.0);
+        assert!(touched.iter().any(|n| n.x < -0.5 && n.z < -0.5), "touched {touched:?}");
+        assert!(end.z < start.z - 0.5, "did not slide along the wall: {end}");
+        // The box's far corner is on the wall, x + z = 10.
+        assert!((end.x + HALF.x + end.z + HALF.z - 10.0).abs() < 0.01, "{end}");
+        assert!(!world.inside_map(Vec3::new(8.0, 1.0, 8.0)), "the far side of the diagonal is map");
     }
 
     /// A floor that is not a box: two triangles, tilted up towards `+X`.

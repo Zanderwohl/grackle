@@ -258,21 +258,10 @@ pub fn usable_spawns(spawns: &[Spawn], world: &CollisionWorld) -> Vec<Spawn> {
 /// The fallback for a map with no usable spawn point. Largest by volume is a
 /// crude guess at the main space, and beats refusing to start.
 pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
-    let largest = rooms.iter().max_by(|a, b| {
-        let volume = |r: &Room| {
-            let size = (r.max - r.min).abs();
-            size.x * size.y * size.z
-        };
-        volume(a).total_cmp(&volume(b))
-    });
+    let largest = rooms.iter().max_by(|a, b| a.volume().total_cmp(&b.volume()));
 
     let feet = match largest {
-        Some(room) => {
-            let min = room.min.min(room.max);
-            let max = room.min.max(room.max);
-            let centre = (min + max) / 2.0;
-            Vec3::new(centre.x, min.y, centre.z)
-        }
+        Some(room) => room.floor_point(),
         None => {
             warn!("No rooms on the map; spawning at the origin");
             Vec3::ZERO

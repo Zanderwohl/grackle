@@ -133,8 +133,8 @@ fn nearest_wall(rooms: &[Room], ray: &Ray3d) -> Option<(f32, Vec3)> {
 /// Where `ray` meets `rooms[index]`'s share of the surface from inside it. A
 /// room's share lies on its box, so a box the ray misses is not carved at all.
 fn room_wall_hit(rooms: &[Room], index: usize, ray: &Ray3d) -> Option<(f32, Vec3)> {
-    let room = &rooms[index];
-    if !ray_intersects_aabb(ray, room.min.min(room.max), room.min.max(room.max)) {
+    let (min, max) = rooms[index].bounds();
+    if !ray_intersects_aabb(ray, min, max) {
         return None;
     }
     world_surface::ray_from_inside(&world_surface::room_share(rooms, index), ray)

@@ -34,6 +34,7 @@ pub mod csg;
 pub mod world_surface;
 pub mod cuboid;
 pub mod rotation;
+pub mod triangulate;
 pub mod mode;
 pub mod movement_rules;
 pub mod render_layers;

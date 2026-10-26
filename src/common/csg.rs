@@ -166,6 +166,12 @@ impl<S: Copy> Polygon<S> {
         self.vertices.reverse();
         self.plane.flip();
     }
+
+    pub fn translated(mut self, offset: Vec3) -> Polygon<S> {
+        self.vertices.iter_mut().for_each(|v| *v += offset);
+        self.plane.w += self.plane.normal.dot(offset);
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -256,12 +262,18 @@ impl<S: Copy> Node<S> {
     }
 
     /// Divides space by the first polygon's plane.
-    fn build(&mut self, polygons: Vec<Polygon<S>>) {
+    fn build(&mut self, mut polygons: Vec<Polygon<S>>) {
         if polygons.is_empty() {
             return;
         }
         if self.plane.is_none() {
-            self.plane = Some(polygons[0].plane);
+            // Kept outright rather than classified: far enough from the
+            // origin, a polygon's own corners are off the plane made from
+            // them by more than the tolerance, and one split by its own plane
+            // hands each piece the same plane to be split by again, forever.
+            let first = polygons.remove(0);
+            self.plane = Some(first.plane);
+            self.polygons.push(first);
         }
         let plane = self.plane.expect("just set above");
 
@@ -455,6 +467,21 @@ mod tests {
             let centre = polygon.vertices.iter().sum::<Vec3>() / 4.0;
             assert!(polygon.plane.normal.dot(centre - Vec3::ONE) > 0.0);
         }
+    }
+
+    /// Breaks without `build` keeping its first polygon outright: this far
+    /// out a slanted face's corners are off its own plane by more than the
+    /// tolerance, and the tree splits it by itself until the stack runs out.
+    #[test]
+    fn a_slanted_solid_far_from_the_origin_does_not_split_itself_forever() {
+        let wedge = |at: Vec3| {
+            crate::tool::room::Room::prism(vec![Vec2::new(0.0, 0.0), Vec2::new(10.3, 0.0), Vec2::new(0.0, 10.3)], 0.0, 3.14)
+                .translated(at)
+                .solid(0u8)
+        };
+        let far = Vec3::new(143.37, 1.13, 87.91);
+        let joined = union(&wedge(far), &wedge(far + Vec3::new(2.0, 0.0, 1.0)));
+        assert!(!joined.is_empty());
     }
 
     #[test]

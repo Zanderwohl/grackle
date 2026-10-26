@@ -1103,7 +1103,7 @@ mod tests {
         // Raise the floor by two metres, the way a drag handle would.
         let mut rooms = app.world_mut().query::<&mut Room>();
         for mut room in rooms.iter_mut(app.world_mut()) {
-            room.min.y = 2.0;
+            room.floor = 2.0;
         }
         tick(&mut app, 60);
 

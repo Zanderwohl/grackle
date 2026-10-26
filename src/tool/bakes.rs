@@ -108,11 +108,8 @@ impl RoomBake {
 /// Inclusive, because a shared wall is an opening too. Engulfing counts,
 /// which `clip_rect` would reject: a few spare rebakes, never a missed one.
 fn touches(a: &Room, b: &Room) -> bool {
-    a.min.cmple(b.max).all() && b.min.cmple(a.max).all()
-}
-
-fn same_box(a: &Room, b: &Room) -> bool {
-    a.min == b.min && a.max == b.max
+    let ((a_min, a_max), (b_min, b_max)) = (a.bounds(), b.bounds());
+    a_min.cmple(b_max).all() && b_min.cmple(a_max).all()
 }
 
 impl BakePlugin {
@@ -186,7 +183,7 @@ impl BakePlugin {
         let mut urgent = Vec::new();
         for (entity, room) in &all {
             match bake.seen.get(entity) {
-                Some(old) if same_box(old, room) => continue,
+                Some(old) if old == *room => continue,
                 Some(old) => urgent.extend(touching(old)),
                 None => {}
             }

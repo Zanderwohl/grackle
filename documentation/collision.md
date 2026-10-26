@@ -208,8 +208,22 @@ normal, or a body settled onto it each tick creeps down it.
 
 ### Stage 4 — shapes that are not boxes
 
-- [ ] Room volumes as prisms (a polygon and a height range); `inside_map` and
-      `fallback_spawn`'s "largest room" over them.
+- [x] `Room` is a prism: a footprint in `x`/`z` (either winding, normalised
+      on construction, need not be convex) between `floor` and `ceiling`;
+      `Room::new` is the four-corner box. `Room::solid` is one face per cap
+      when the plan is convex — so a box is still six faces and the ragdoll's
+      bits are unchanged — and ear-clipped triangles when it is not
+      (`triangulate` moved to `src/common/`).
+- [x] `inside_map` is `Room::contains`; the spawn fallback takes the largest
+      by `volume` and stands on `floor_point`, which is inside even an L. The
+      editor's room gizmo draws the prism's edges.
+- [x] Tolerance on angled walls, measured: a diagonal wall two rooms share
+      ~170 m out overflowed the stack (a face split by its own plane, forever)
+      and, with that stopped, lost 125 m² of surface. Two fixes, each with a
+      test that fails without it: `build` keeps a node's first polygon
+      outright, and each room's share is cut in coordinates relative to its
+      own corner, so precision depends on a neighbourhood's size rather than
+      on where it is.
 - [ ] Footprint room: a sketch (`src/prop/sketch.rs`, `region.rs` moved to
       `src/common/`) on a floor plane, extruded between two heights; holes
       are pillars. Its own plan once Stage 3 lands.
@@ -235,5 +249,10 @@ normal, or a body settled onto it each tick creeps down it.
   surfaces can be thin.
 - Editor picking computes the shares of every room the ray's box test hits,
   each frame. Cheap at today's map sizes; cache it beside the bake if not.
+- Room-local cutting only moves the problem: one room a hundred metres
+  across with angled walls is as far from its own corner as the far test was
+  from the origin. If that turns up, the fix is `f64` inside the kernel, not a
+  bigger tolerance.
+- No feature makes a non-box room yet; the footprint tool is what will.
 - `Grid::near` allocates a `Vec` per query. Cheap next to the linear scan it
   replaced; worth a scratch buffer if ragdolls show up in a profile.

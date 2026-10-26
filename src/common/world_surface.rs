@@ -24,25 +24,33 @@ use crate::tool::room::Room;
 pub type Face = Polygon<()>;
 
 /// The share of the surface that belongs to `rooms[index]`, facing into it.
+///
+/// Cut in coordinates relative to the room's own corner, so the kernel's
+/// tolerance is measured against the size of a neighbourhood rather than the
+/// distance from the origin.
 pub fn room_share(rooms: &[Room], index: usize) -> Vec<Face> {
     let room = &rooms[index];
-    let (min, max) = bounds(room);
-    let mut faces = csg::cuboid(min, max, ());
+    let origin = room.bounds().0;
+    let mut faces = room.translated(-origin).solid(());
 
     for (other_index, other) in rooms.iter().enumerate() {
         if other_index == index || !touching(room, other) {
             continue;
         }
-        let (other_min, other_max) = bounds(other);
         let owns_shared = precedes(other, other_index, room, index);
-        faces = csg::clip_outside(faces, &csg::cuboid(other_min, other_max, ()), owns_shared);
+        faces = csg::clip_outside(faces, &other.translated(-origin).solid(()), owns_shared);
         if faces.is_empty() {
             break;
         }
     }
 
-    faces.iter_mut().for_each(Polygon::flip);
     faces
+        .into_iter()
+        .map(|mut face| {
+            face.flip();
+            face.translated(origin)
+        })
+        .collect()
 }
 
 /// Every room's share, in room order.
@@ -50,22 +58,18 @@ pub fn of_rooms(rooms: &[Room]) -> Vec<Face> {
     (0..rooms.len()).flat_map(|index| room_share(rooms, index)).collect()
 }
 
-fn bounds(room: &Room) -> (Vec3, Vec3) {
-    (room.min.min(room.max), room.min.max(room.max))
-}
-
 /// Overlapping or meeting, faces and edges included: a room meeting this one
 /// along a wall opens it.
 fn touching(a: &Room, b: &Room) -> bool {
-    let ((a_min, a_max), (b_min, b_max)) = (bounds(a), bounds(b));
+    let ((a_min, a_max), (b_min, b_max)) = (a.bounds(), b.bounds());
     (0..3).all(|axis| a_min[axis] <= b_max[axis] && b_min[axis] <= a_max[axis])
 }
 
 /// Which of two rooms keeps a face they share facing the same way: the lower
-/// box, then the lower index for two boxes that are the same.
+/// bounding box, then the lower index for two with the same box.
 fn precedes(a: &Room, a_index: usize, b: &Room, b_index: usize) -> bool {
     let key = |room: &Room| {
-        let (min, max) = bounds(room);
+        let (min, max) = room.bounds();
         [min.x, min.y, min.z, max.x, max.y, max.z]
     };
     let by_box = key(a)
@@ -261,6 +265,57 @@ mod tests {
         let a = room_share(&rooms, 0);
         let open = (99.9 - 95.1) * 3.1;
         assert!((area_facing(&a, Vec3::NEG_X) - (7.6 * 3.1 - open)).abs() < 1e-2);
+    }
+
+    fn area(faces: &[Face]) -> f32 {
+        faces
+            .iter()
+            .map(|face| {
+                let a = face.vertices[0];
+                face.vertices[1..].windows(2).map(|w| (w[0] - a).cross(w[1] - a).length() / 2.0).sum::<f32>()
+            })
+            .sum()
+    }
+
+    /// Two triangles making a square, `size` across and `height` high, split
+    /// along its diagonal, with the corner at `at`.
+    fn a_square_cut_corner_to_corner(at: Vec3, size: f32, height: f32) -> [Room; 2] {
+        let p = |x: f32, z: f32| Vec2::new(at.x + x, at.z + z);
+        [
+            Room::prism(vec![p(0.0, 0.0), p(size, 0.0), p(0.0, size)], at.y, at.y + height),
+            Room::prism(vec![p(size, 0.0), p(size, size), p(0.0, size)], at.y, at.y + height),
+        ]
+    }
+
+    #[test]
+    fn a_diagonal_wall_two_rooms_share_is_open() {
+        let rooms = a_square_cut_corner_to_corner(Vec3::ZERO, 10.0, 3.0);
+        let surface = of_rooms(&rooms);
+        assert!((area(&surface) - (200.0 + 120.0)).abs() < 1e-2, "area {}", area(&surface));
+        let diagonal = surface.iter().filter(|face| face.plane.normal.x.abs() > 0.1 && face.plane.normal.z.abs() > 0.1).count();
+        assert_eq!(diagonal, 0, "the shared diagonal wall was kept");
+    }
+
+    /// The tolerance on a wall that is not on an axis plane, where the two
+    /// rooms' planes come from different corners and round differently.
+    #[test]
+    fn a_diagonal_wall_far_from_the_origin_still_opens() {
+        let rooms = a_square_cut_corner_to_corner(Vec3::new(143.37, 1.13, 87.91), 10.3, 3.14);
+        let surface = of_rooms(&rooms);
+        let expected = 2.0 * 10.3 * 10.3 + 4.0 * 10.3 * 3.14;
+        assert!((area(&surface) - expected).abs() < 1e-2, "area {} of {expected}", area(&surface));
+    }
+
+    #[test]
+    fn a_notched_room_is_walled_round_its_notch() {
+        let l = Room::prism(
+            vec![Vec2::new(0.0, 0.0), Vec2::new(3.0, 0.0), Vec2::new(3.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(1.0, 3.0), Vec2::new(0.0, 3.0)],
+            0.0,
+            2.0,
+        );
+        let surface = room_share(&[l], 0);
+        assert!((area(&surface) - (2.0 * 5.0 + 12.0 * 2.0)).abs() < 1e-3);
+        assert!((area_facing(&surface, Vec3::Y) - 5.0).abs() < 1e-3, "the floor does not face up");
     }
 
     #[test]

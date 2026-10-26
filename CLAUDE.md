@@ -59,10 +59,10 @@ It is a third `AppMode` and the frontier next to it: the geometry it builds is
 correct and nothing yet *holds* one — a weapon names its model and no system
 reads that name.
 
-`cargo check --all-targets` and `cargo test` both pass. The `Room` type is
-still dead — superseded by `EditorRoom` for authoring — but it is what
-`CollisionWorld` is rebuilt from, so deleting it is not the small change it
-looks like.
+`cargo check --all-targets` and `cargo test` both pass. `EditorRoom` is what a
+mapper edits; the `Room` component it stands up is the volume of air the map's
+surface, its collision and its picking are all built from (see "What a body is
+drawn as" for collision and `src/common/world_surface.rs`).
 
 ## Layout
 
@@ -1125,9 +1125,13 @@ operations, and they are not interchangeable:
   that land inside a room over shorter ones that do not, because the short way
   out of a floor is downwards, through the map.
 
-Rooms are still boxes; prism rooms (footprints), stairs and displacements are
-the stages left in [documentation/collision.md](documentation/collision.md).
-Do not build new features on `Room` being a box.
+A `Room` is a prism — a floor plan, not necessarily convex, between two
+heights — and a box is the four-corner case; nothing makes any other kind yet.
+Ask it for `bounds`, `contains` and `solid` rather than treating it as a box.
+**Each room's share is cut relative to its own corner**: the kernel's
+tolerance is absolute, and an angled face far enough from the origin is split
+by its own plane. The footprint tool, stairs and displacements are the stages
+left in [documentation/collision.md](documentation/collision.md).
 
 ## What a body does once it is dead
 
