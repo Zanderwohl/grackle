@@ -1,29 +1,35 @@
+//! The solid world, and the questions movement, weapons and corpses ask it.
+//! See `documentation/collision.md`.
+
+mod grid;
+pub mod hull;
+mod rounded;
+
 use bevy::prelude::*;
 
-use crate::common::ray::{ray_aabb_distance, ray_aabb_entry};
 use crate::prop::archetype::RoundedBox;
-use crate::tool::room::{Room, WallSlab};
+use crate::tool::room::Room;
+use grid::Grid;
+pub use hull::{onto_plane, Hit, Hull};
 
 /// How far each wall slab extends behind its face, in metres. Only the face
-/// matters to the swept test; the depth makes the slab a proper box for the
-/// lateral overlap test.
+/// matters to a sweep; the depth gives depenetration somewhere to measure from.
 const WALL_THICKNESS: f32 = 0.5;
 
 /// Clearance left when a body is pushed off a wall, so the next overlap test
 /// does not find it touching again.
 const SKIN: f32 = 0.001;
 
-/// The solid world, as boxes.
-///
 /// Built from the `Room` components rather than baked meshes, so an edit
 /// lands without waiting for a re-bake. Same geometry either way.
 #[derive(Resource, Default)]
 pub struct CollisionWorld {
-    pub slabs: Vec<WallSlab>,
+    hulls: Vec<Hull>,
+    grid: Grid,
     /// Room interiors as (min, max). [`CollisionWorld::depenetrate`] needs
     /// them to tell which way out of a wall is into the level.
     interiors: Vec<(Vec3, Vec3)>,
-    /// Placed props that block movement. Kept apart from `slabs` because they
+    /// Placed props that block movement. Kept apart from `hulls` because they
     /// are rebuilt on a different trigger: rooms change with the map, props
     /// with what the authority has standing.
     pub props: Vec<RoundedBox>,
@@ -31,11 +37,8 @@ pub struct CollisionWorld {
 
 impl CollisionWorld {
     pub fn rebuild(&mut self, rooms: &[Room]) {
-        self.slabs.clear();
-        self.interiors.clear();
-        for room in rooms {
-            self.interiors.push((room.min.min(room.max), room.min.max(room.max)));
-        }
+        self.interiors = rooms.iter().map(|room| (room.min.min(room.max), room.min.max(room.max))).collect();
+        let mut hulls = Vec::new();
         for (i, room) in rooms.iter().enumerate() {
             let others: Vec<Room> = rooms
                 .iter()
@@ -43,15 +46,41 @@ impl CollisionWorld {
                 .filter(|(j, _)| *j != i)
                 .map(|(_, r)| r.clone())
                 .collect();
-            self.slabs.extend(room.collision_slabs(&others, WALL_THICKNESS));
+            hulls.extend(
+                room.collision_slabs(&others, WALL_THICKNESS)
+                    .into_iter()
+                    .map(|slab| Hull::cuboid(slab.min, slab.max)),
+            );
         }
+        self.set_hulls(hulls);
+    }
+
+    /// Replace the static world, leaving the room interiors as they were.
+    pub fn set_hulls(&mut self, hulls: Vec<Hull>) {
+        self.grid = Grid::build(hulls.iter().map(Hull::bounds));
+        self.hulls = hulls;
+    }
+
+    fn hulls_near(&self, min: Vec3, max: Vec3) -> impl Iterator<Item = &Hull> {
+        self.grid.near(min, max).into_iter().map(|index| &self.hulls[index as usize])
+    }
+
+    /// The first thing a box moving by `delta` touches: a wall or a solid prop.
+    pub fn sweep(&self, centre: Vec3, half: Vec3, delta: Vec3) -> Option<Hit> {
+        let (min, max) = ((centre - half).min(centre + delta - half), (centre + half).max(centre + delta + half));
+        let walls = self.hulls_near(min, max).filter_map(|hull| hull.sweep(centre, half, delta));
+        let props = self.props.iter().filter_map(|prop| rounded::sweep(prop, centre, half, delta));
+        walls.chain(props).fold(None, |best: Option<Hit>, hit| match best {
+            Some(best) if best.t <= hit.t => Some(best),
+            _ => Some(hit),
+        })
     }
 
     /// Move a box by `delta`, one axis at a time so a diagonal run into a wall
     /// slides along it. Returns the new centre and which axes were blocked.
     ///
-    /// Swept per axis: it asks whether the leading edge crosses a wall plane,
-    /// so a body moving further than a slab is thick cannot tunnel through.
+    /// Swept, so a body moving further than a wall is thick cannot tunnel
+    /// through.
     pub fn move_and_slide(&self, centre: Vec3, half: Vec3, delta: Vec3) -> (Vec3, BVec3) {
         let mut centre = centre;
         let mut blocked = BVec3::FALSE;
@@ -61,36 +90,22 @@ impl CollisionWorld {
             if step == 0.0 {
                 continue;
             }
+            let mut along = Vec3::ZERO;
+            along[axis] = step;
 
-            let mut target = centre[axis] + step;
-
-            // `centre` already holds the resolved value for earlier axes.
-            let walls = self
-                .slabs
-                .iter()
-                .filter(|slab| overlaps_other_axes(centre, half, slab, axis))
-                .map(|slab| (slab.min[axis], slab.max[axis]));
-            // A rounded shape is a slab whose width depends on where the body
-            // passes it, which is what lets a body slide round a pillar.
-            let props = self.props.iter().filter_map(|prop| prop.slab_along(axis, centre, half));
-
-            for (min, max) in walls.chain(props) {
-                if step > 0.0 {
-                    let leading = centre[axis] + half[axis];
-                    if leading <= min && target + half[axis] > min {
-                        target = target.min(min - half[axis] - SKIN);
-                        blocked = set_axis(blocked, axis, true);
-                    }
-                } else {
-                    let trailing = centre[axis] - half[axis];
-                    if trailing >= max && target - half[axis] < max {
-                        target = target.max(max + half[axis] + SKIN);
-                        blocked = set_axis(blocked, axis, true);
-                    }
+            match self.sweep(centre, half, along) {
+                Some(hit) => {
+                    blocked = set_axis(blocked, axis, true);
+                    centre = if hit.normal[axis].abs() == 1.0 {
+                        onto_plane(centre, hit.normal, hit.plane + SKIN)
+                    } else {
+                        let mut stopped = centre;
+                        stopped[axis] += step * hit.t - step.signum() * SKIN;
+                        stopped
+                    };
                 }
+                None => centre[axis] += step,
             }
-
-            centre[axis] = target;
         }
 
         (centre, blocked)
@@ -106,28 +121,23 @@ impl CollisionWorld {
     /// ceiling is a slab the body overlaps, so this covers headroom too.
     pub fn fits(&self, centre: Vec3, half: Vec3) -> bool {
         self.inside_map(centre)
-            && !self.slabs.iter().any(|slab| overlaps(centre, half, slab))
+            && !self.hulls_near(centre - half, centre + half).any(|hull| hull.overlaps(centre, half))
             && !self.props.iter().any(|prop| prop.overlaps(centre, half))
     }
 
     /// How far along the ray the first wall is, or `None` if nothing solid is
     /// in the way within `range`.
     pub fn ray_distance(&self, ray: &Ray3d, range: f32) -> Option<f32> {
-        self.slabs
-            .iter()
-            .filter_map(|slab| ray_aabb_distance(ray, slab.min, slab.max))
-            .filter(|distance| *distance <= range)
-            .min_by(f32::total_cmp)
+        self.ray_hit(ray, range).map(|(distance, _)| distance)
     }
 
     /// The first wall along the ray, as a distance and the normal of the face
     /// crossed. The crossed face, not the nearest: a bounce off the wrong
     /// normal goes through the floor.
     pub fn ray_hit(&self, ray: &Ray3d, range: f32) -> Option<(f32, Vec3)> {
-        self.slabs
-            .iter()
-            .filter_map(|slab| ray_aabb_entry(ray, slab.min, slab.max))
-            .filter(|(distance, _)| *distance <= range)
+        let end = ray.origin + *ray.direction * range;
+        self.hulls_near(ray.origin.min(end), ray.origin.max(end))
+            .filter_map(|hull| hull.ray(ray, range))
             .min_by(|a, b| a.0.total_cmp(&b.0))
     }
 
@@ -146,23 +156,16 @@ impl CollisionWorld {
         // Clearing one wall can bury the body in another. Bounded, for a body
         // wedged with nowhere to go.
         for _ in 0..4 {
-            let Some(extent) = self.first_overlap(centre, half) else { break };
+            let Some(escapes) = self.escapes(centre, half) else { break };
 
             let mut best: Option<(f32, Vec3)> = None;
-            for axis in 0..3 {
-                let (min, max) = extent[axis];
-                let candidates = [max + half[axis] + SKIN, min - half[axis] - SKIN];
-                for value in candidates {
-                    let mut moved = centre;
-                    moved[axis] = value;
-
-                    let mut score = (value - centre[axis]).abs();
-                    if !self.inside_map(moved) {
-                        score += OUTSIDE_MAP_PENALTY;
-                    }
-                    if best.is_none_or(|(best_score, _)| score < best_score) {
-                        best = Some((score, moved));
-                    }
+            for moved in escapes {
+                let mut score = (moved - centre).length();
+                if !self.inside_map(moved) {
+                    score += OUTSIDE_MAP_PENALTY;
+                }
+                if best.is_none_or(|(best_score, _)| score < best_score) {
+                    best = Some((score, moved));
                 }
             }
 
@@ -175,29 +178,25 @@ impl CollisionWorld {
         centre
     }
 
-    /// The first wall or solid prop the box is inside, as its `(min, max)` on
-    /// each axis. A rounded prop's extent on an axis is the one the body would
-    /// meet moving along it from where it is.
-    fn first_overlap(&self, centre: Vec3, half: Vec3) -> Option<[(f32, f32); 3]> {
-        if let Some(slab) = self.slabs.iter().find(|slab| overlaps(centre, half, slab)) {
-            return Some([0, 1, 2].map(|axis| (slab.min[axis], slab.max[axis])));
+    /// The ways out of the first wall or solid prop the box is inside. A
+    /// rounded prop is escaped along the axes, by its extent on each as the
+    /// body would meet it moving along that axis from where it is.
+    fn escapes(&self, centre: Vec3, half: Vec3) -> Option<Vec<Vec3>> {
+        if let Some(hull) = self.hulls_near(centre - half, centre + half).find(|hull| hull.overlaps(centre, half)) {
+            return Some(hull.escapes(centre, half, SKIN).collect());
         }
         let prop = self.props.iter().find(|prop| prop.overlaps(centre, half))?;
-        let along = |axis: usize| prop.slab_along(axis, centre, half);
-        Some([along(0)?, along(1)?, along(2)?])
+        let mut escapes = Vec::with_capacity(6);
+        for axis in 0..3 {
+            let (min, max) = prop.slab_along(axis, centre, half)?;
+            for value in [max + half[axis] + SKIN, min - half[axis] - SKIN] {
+                let mut moved = centre;
+                moved[axis] = value;
+                escapes.push(moved);
+            }
+        }
+        Some(escapes)
     }
-}
-
-fn overlaps(centre: Vec3, half: Vec3, slab: &WallSlab) -> bool {
-    (0..3).all(|axis| {
-        centre[axis] - half[axis] < slab.max[axis] && centre[axis] + half[axis] > slab.min[axis]
-    })
-}
-
-fn overlaps_other_axes(centre: Vec3, half: Vec3, slab: &WallSlab, axis: usize) -> bool {
-    (0..3).filter(|other| *other != axis).all(|other| {
-        centre[other] - half[other] < slab.max[other] && centre[other] + half[other] > slab.min[other]
-    })
 }
 
 fn set_axis(mut mask: BVec3, axis: usize, value: bool) -> BVec3 {
@@ -279,7 +278,7 @@ mod tests {
 
     #[test]
     fn a_lone_room_is_walled_on_all_six_sides() {
-        assert_eq!(one_room().slabs.len(), 6);
+        assert_eq!(one_room().hulls.len(), 6);
     }
 
     #[test]
@@ -391,5 +390,44 @@ mod tests {
         let (end, blocked) = world.move_and_slide(Vec3::new(-2.0, 0.9, 0.0), HALF, Vec3::new(100.0, 0.0, 0.0));
         assert!(blocked.x);
         assert!((end.x - (5.0 - HALF.x)).abs() < 0.01, "stopped at {}", end.x);
+    }
+
+    /// A floor that is not a box: two triangles, tilted up towards `+X`.
+    fn a_ramp() -> CollisionWorld {
+        let mut world = one_room();
+        let (a, b) = (Vec3::new(-4.0, 0.0, -4.0), Vec3::new(-4.0, 0.0, 4.0));
+        let (c, d) = (Vec3::new(4.0, 2.0, 4.0), Vec3::new(4.0, 2.0, -4.0));
+        let mut hulls = world.hulls.clone();
+        hulls.extend([Hull::triangle(a, b, c), Hull::triangle(a, c, d)]);
+        world.set_hulls(hulls);
+        world
+    }
+
+    #[test]
+    fn a_body_falling_onto_a_ramp_lands_on_it_and_not_on_the_floor_under_it() {
+        let world = a_ramp();
+        // The uphill edge, at x + 0.35, meets the slope first.
+        let (end, blocked) = world.move_and_slide(Vec3::new(0.0, 3.5, 0.0), HALF, Vec3::NEG_Y * 5.0);
+        assert!(blocked.y);
+        let surface_under_the_corner = (end.x + HALF.x + 4.0) / 4.0;
+        assert!((end.y - HALF.y - surface_under_the_corner).abs() < 0.01, "landed at {end}");
+    }
+
+    #[test]
+    fn a_shot_down_at_a_ramp_bounces_off_its_slope() {
+        let world = a_ramp();
+        let (distance, normal) = world.ray_hit(&Ray3d::new(Vec3::new(0.0, 3.0, 0.0), Dir3::NEG_Y), 10.0).unwrap();
+        assert!((distance - 2.0).abs() < 1e-4, "{distance}");
+        assert!(normal.abs_diff_eq(Vec3::new(-1.0, 4.0, 0.0).normalize(), 1e-5), "{normal}");
+    }
+
+    #[test]
+    fn a_body_buried_in_a_ramp_is_lifted_out_of_it() {
+        let world = a_ramp();
+        let buried = Vec3::new(0.0, 1.2, 0.0);
+        assert!(!world.fits(buried, HALF));
+        let freed = world.depenetrate(buried, HALF);
+        assert!(world.fits(freed, HALF), "still inside at {freed}");
+        assert!(freed.y > buried.y, "pushed down through the ramp to {freed}");
     }
 }

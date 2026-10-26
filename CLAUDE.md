@@ -1101,7 +1101,7 @@ disjoint from the camera's `Without<Player>` one, and without it Bevy refuses
 the system at runtime rather than at compile time.
 
 Collision comes from the rooms, not from the baked meshes
-([`src/game/collision.rs`](src/game/collision.rs)) — but from the *same* face
+([`src/game/collision/`](src/game/collision/mod.rs)) — but from the *same* face
 subtraction, via `Room::collision_slabs`, so an opening you can see through is
 an opening you can walk through. Two operations, and they are not
 interchangeable:
@@ -1112,6 +1112,13 @@ interchangeable:
   onto a standing player encloses it having crossed nothing. It prefers escapes
   that land inside a room over shorter ones that do not, because the short way
   out of a floor is downwards, through the map.
+
+**All of this is temporary.** Box-only collision and the rectangle bake are
+being replaced by one world surface that both rendering and collision come
+from, with convex hulls, triangles and contact normals, so angled walls,
+footprint rooms and displacements can exist. The plan and checklist are
+[documentation/collision.md](documentation/collision.md). Do not build new
+features on `WallSlab`, `BVec3` contacts or `Room` as a box.
 
 ## What a body does once it is dead
 
