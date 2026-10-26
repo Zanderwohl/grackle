@@ -158,6 +158,43 @@ baked texel**.
 Props use the same materials, projected in object space; today's styles and
 tints become the fallback for a prop that names none.
 
+### Sky
+
+**Sky** is a material a slot or a `Paint` can hold, like any other, and it is
+how a map fakes being outdoors: a ceiling painted sky is open air. It is the
+same idea as Quake's sky texture and Source's `toolsskybox`, and it comes last
+on the checklist.
+
+- **It is sampled by direction, not position.** The fragment shader samples
+  the sky along the line from the camera to the fragment, so what a sky
+  surface shows does not move as you walk — that is what reads as infinitely
+  far away. Nothing is unwrapped and nothing is in the atlas.
+- **The surface is still real.** It writes its own depth, so it hides what is
+  behind it; that is the illusion. It still collides like any wall — a sky
+  ceiling is a ceiling you cannot jump through.
+- **One sky per map**, in `MapMetadata`, named like any material. It is a
+  texture-graph baked to a cubemap — texture-graph already samples cube faces
+  (`cube_sample`) — and cached like every other bake. A sky paint holds no
+  graph of its own, so changing the sky changes every sky surface at once.
+- **Sky is unlit.** It receives no lighting, AO or geometry inputs, and casts
+  no shadow on itself. A sun derived from the sky is a later question.
+- **Sky is never team-coded by itself.** A role may resolve to sky on one side
+  and to a roof on the other, so it is just one more entry in the palette.
+- **Every camera sees it the same way**, because the direction comes from
+  whichever camera is drawing: the four editor viewports and the play camera
+  need nothing per camera. In an orthographic viewport every pixel looks the
+  same way, so a sky surface there is one flat colour. That is correct, not a
+  bug to work round.
+- **What hits sky is lost.** A projectile reaching a sky surface is removed
+  without exploding, and a tracer ends there, as in Quake: a rocket going off
+  against a sky reads as hitting an invisible wall. That is the one place game
+  logic asks what material a surface is. It reads the *assignment*, never a
+  baked texel, so it is as deterministic as collision is.
+
+Out of scope: Source's 3D skybox (a scaled-down scene drawn behind the sky,
+with parallax). A sky that is only a cubemap is the version that costs a
+browser nothing.
+
 ### Rooms will not stay boxes
 
 Not in this version, but planned: **Doom-style polygon rooms** (a floor
@@ -201,4 +238,6 @@ should not need to know it exists.
 - [ ] Full bake to atlases, cached on disk / in IndexedDB
 - [ ] Non-blocking bake on wasm, flat colour until ready
 - [ ] Binary blueprint encoding for `map_sync`, parsed defensively
+- [ ] Sky: the map's sky graph baked to a cubemap; a sky material sampled by view direction, unlit
+- [ ] Sky: projectiles and tracers lost against a sky surface
 - [ ] Later, not this version: polygon rooms, displacements and their blend weight
