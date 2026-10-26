@@ -154,6 +154,16 @@ pub trait FeatureTrait: Send + Sync {
     /// [`Mirror`]: crate::editor::mirror::Mirror
     fn mirror(&mut self, _mirroring: &Mirroring) -> bool { false }
 
+    /// The volumes of air this feature stands up, as its entities carry them.
+    /// Asked by picking, which works from features rather than entities.
+    fn rooms(&self) -> Vec<crate::tool::room::Room> { Vec::new() }
+
+    /// The footprint this feature is, for the tools that edit a footprint's
+    /// own drawing. Two methods rather than a downcast because a typetag
+    /// trait object has no `Any`.
+    fn footprint(&self) -> Option<&crate::editor::footprint_room::FootprintRoom> { None }
+    fn footprint_mut(&mut self) -> Option<&mut crate::editor::footprint_room::FootprintRoom> { None }
+
     /// What this feature stands in the world beyond itself, as features: a Mirror's copies.
     fn standing_copies(&self) -> Vec<&dyn FeatureTrait> { Vec::new() }
 }

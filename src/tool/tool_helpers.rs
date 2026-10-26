@@ -1,6 +1,6 @@
-use std::borrow::Borrow;
-
 use bevy::prelude::*;
+use crate::common::ray::ray_intersects_aabb;
+use crate::common::world_surface;
 use crate::editor::editable::{FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::{CameraAxis, Multicam};
@@ -117,29 +117,27 @@ fn cursor_from_room_faces(
     snap: bool,
     snap_granularity: f32,
 ) -> Option<Vec3> {
-    let rooms: Vec<&Room> = rooms.iter().collect();
+    let rooms: Vec<Room> = rooms.iter().cloned().collect();
     nearest_wall(&rooms, ray)
         .map(|(_, pos)| if snap { snap_vec3(pos, snap_granularity) } else { pos })
 }
 
 /// The nearest solid wall `ray` meets from inside any of `rooms`, each room
 /// carved by all the others.
-fn nearest_wall<R: Borrow<Room>>(rooms: &[R], ray: &Ray3d) -> Option<(f32, Vec3)> {
-    rooms
-        .iter()
-        .enumerate()
-        .filter_map(|(index, room)| room.borrow().ray_hit_from_inside(rooms_but(rooms, index), ray))
+fn nearest_wall(rooms: &[Room], ray: &Ray3d) -> Option<(f32, Vec3)> {
+    (0..rooms.len())
+        .filter_map(|index| room_wall_hit(rooms, index, ray))
         .min_by(|(a, _), (b, _)| a.total_cmp(b))
 }
 
-/// Every room except the one at `index`: what carves openings into it.
-/// Borrowed, not collected, since it is asked once per room per frame.
-fn rooms_but<R: Borrow<Room>>(rooms: &[R], index: usize) -> impl Iterator<Item = &Room> + Clone {
-    rooms
-        .iter()
-        .enumerate()
-        .filter(move |(i, _)| *i != index)
-        .map(|(_, room)| room.borrow())
+/// Where `ray` meets `rooms[index]`'s share of the surface from inside it. A
+/// room's share lies on its box, so a box the ray misses is not carved at all.
+fn room_wall_hit(rooms: &[Room], index: usize, ray: &Ray3d) -> Option<(f32, Vec3)> {
+    let (min, max) = rooms[index].bounds();
+    if !ray_intersects_aabb(ray, min, max) {
+        return None;
+    }
+    world_surface::ray_from_inside(&world_surface::room_share(rooms, index), ray)
 }
 
 /// Find the closest reference point to the mouse ray within `pick_radius`.
@@ -304,39 +302,22 @@ pub fn find_nearest_feature_hit(
     let mut best_t = f32::MAX;
     let mut best: Option<(FeatureId, Vec3)> = None;
 
-    // Hidden rooms too: they still carve openings into their neighbours. In
-    // `active_features` order, so the loop below walks `next_room` forwards.
-    let (room_ids, mut rooms): (Vec<FeatureId>, Vec<Room>) = features
+    // Hidden rooms too: they still carve openings into their neighbours. A
+    // Mirror's copies are unpickable, but they carve.
+    let (owners, rooms): (Vec<Option<FeatureId>>, Vec<Room>) = features
         .active_features()
-        .filter(|(_, feature)| feature.object().type_key() == "editor_room")
-        .filter_map(|(id, feature)| {
-            let (min, max) = feature.object().drag_handle_bounds()?;
-            Some((id, Room::new(min, max)))
+        .flat_map(|(id, feature)| {
+            let own = feature.object().rooms().into_iter().map(move |room| (Some(id), room));
+            let copies = feature.object().standing_copies().into_iter().flat_map(|copy| copy.rooms()).map(|room| (None, room));
+            own.chain(copies).collect::<Vec<_>>()
         })
         .unzip();
-    // After the features' own, so `room_ids` still indexes the front. Unpickable, but they carve.
-    rooms.extend(
-        features
-            .active_features()
-            .flat_map(|(_, feature)| feature.object().standing_copies())
-            .filter(|copy| copy.type_key() == "editor_room")
-            .filter_map(|copy| copy.drag_handle_bounds())
-            .map(|(min, max)| Room::new(min, max)),
-    );
-    let mut next_room = 0;
 
     for (feature_id, feature) in features.active_features() {
         let key = feature.object().type_key();
-        // Advanced before anything can `continue`, hidden or not. A room with
-        // no bounds was never collected, so it is not the next one.
-        let room_index = (key == "editor_room" && room_ids.get(next_room) == Some(&feature_id))
-            .then(|| {
-                next_room += 1;
-                next_room - 1
-            });
         let visible = match key {
             "global_point" => visibility.points,
-            "editor_room" => visibility.rooms,
+            "editor_room" | "footprint_room" => visibility.rooms,
             "grackle_point_light" => visibility.point_lights,
             "spawn_point" => visibility.spawn_points,
             "prop" => visibility.props,
@@ -348,12 +329,14 @@ pub fn find_nearest_feature_hit(
         if !visible { continue; }
 
         match key {
-            "editor_room" => {
-                let Some(index) = room_index else { continue };
-                if let Some((t, hit)) = rooms[index].ray_hit_from_inside(rooms_but(&rooms, index), ray) {
-                    if t < best_t {
-                        best_t = t;
-                        best = Some((feature_id, hit));
+            "editor_room" | "footprint_room" => {
+                let own = owners.iter().enumerate().filter(|(_, owner)| **owner == Some(feature_id));
+                for (index, _) in own {
+                    if let Some((t, hit)) = room_wall_hit(&rooms, index, ray) {
+                        if t < best_t {
+                            best_t = t;
+                            best = Some((feature_id, hit));
+                        }
                     }
                 }
             }
@@ -383,54 +366,4 @@ pub fn find_nearest_feature_hit(
     }
 
     best
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Borrowing the other rooms instead of copying them must not change what
-    /// a pick lands on: checked against the copying version over rays fanned
-    /// through doorways, through overlaps and along shared walls.
-    #[test]
-    fn picking_against_borrowed_rooms_lands_where_copied_rooms_did() {
-        let rooms = [
-            Room::new(Vec3::ZERO, Vec3::splat(10.0)),
-            // A corridor through a doorway in A's +X wall.
-            Room::new(Vec3::new(10.0, 0.0, 2.0), Vec3::new(20.0, 4.0, 4.0)),
-            // Overlapping the corridor's far end.
-            Room::new(Vec3::new(18.0, -2.0, -5.0), Vec3::new(30.0, 8.0, 10.0)),
-            // Sharing all of A's -Z wall, so it carves the whole face away.
-            Room::new(Vec3::new(0.0, 0.0, -10.0), Vec3::new(10.0, 10.0, 0.0)),
-        ];
-        let copied = |ray: &Ray3d| {
-            (0..rooms.len())
-                .filter_map(|index| {
-                    let others: Vec<Room> = rooms
-                        .iter()
-                        .enumerate()
-                        .filter(|(i, _)| *i != index)
-                        .map(|(_, room)| room.clone())
-                        .collect();
-                    rooms[index].ray_hit_from_inside(&others, ray)
-                })
-                .min_by(|(a, _), (b, _)| a.total_cmp(b))
-        };
-
-        let mut hits = 0;
-        for origin in [Vec3::new(5.0, 2.0, 3.0), Vec3::new(-5.0, 3.0, 3.0), Vec3::new(15.0, 2.0, 3.0), Vec3::new(5.0, 5.0, -5.0)] {
-            for yaw in 0..24 {
-                for pitch in -3..=3 {
-                    let (yaw, pitch) = (yaw as f32 * 15f32.to_radians(), pitch as f32 * 20f32.to_radians());
-                    let direction = Vec3::new(yaw.cos() * pitch.cos(), pitch.sin(), yaw.sin() * pitch.cos());
-                    let ray = Ray3d::new(origin, Dir3::new(direction).unwrap());
-                    let expected = copied(&ray);
-                    assert_eq!(nearest_wall(&rooms, &ray), expected, "{ray:?}");
-                    assert_eq!(nearest_wall(&rooms.iter().collect::<Vec<_>>(), &ray), expected, "{ray:?}");
-                    hits += expected.is_some() as usize;
-                }
-            }
-        }
-        assert!(hits > 100, "the rays should mostly hit something, hit {hits}");
-    }
 }

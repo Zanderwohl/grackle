@@ -7,6 +7,8 @@ use crate::get;
 use crate::tool::animation_display::AnimationDisplayPlugin;
 use crate::tool::animation_grid::AnimationGridPlugin;
 use crate::tool::bakes::BakePlugin;
+use crate::tool::footprint::FootprintPlugin;
+use crate::tool::footprint_drag::FootprintDragPlugin;
 use crate::tool::mirror::MirrorPlugin;
 use crate::tool::movement::MovementPlugin;
 use crate::tool::point::PointPlugin;
@@ -33,6 +35,8 @@ pub mod prop;
 pub mod rotate_drag;
 pub mod retarget;
 pub mod room;
+pub mod footprint;
+pub mod footprint_drag;
 pub mod movement;
 pub mod bakes;
 pub mod show;
@@ -59,7 +63,9 @@ impl Plugin for ToolPlugin {
             .add_plugins(AnimationDisplayPlugin)
             .add_plugins(AnimationGridPlugin)
             .add_plugins(RetargetPlugin)
-            .add_plugins(RoomPlugin);
+            .add_plugins(RoomPlugin)
+            .add_plugins(FootprintPlugin)
+            .add_plugins(FootprintDragPlugin);
     }
 }
 
@@ -86,6 +92,7 @@ pub enum Tools {
     AnimationDisplay,
     AnimationGrid,
     Room,
+    Footprint,
     Mirror,
     Retarget,
 }
@@ -101,6 +108,7 @@ impl Tools {
             Self::AnimationDisplay => get!("tools.animation_display"),
             Self::AnimationGrid => get!("tools.animation_grid"),
             Self::Room => get!("tools.room"),
+            Self::Footprint => get!("tools.footprint"),
             Self::Mirror => get!("tools.mirror"),
             Self::Retarget => "Retarget".into(),
         }

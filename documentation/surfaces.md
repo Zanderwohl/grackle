@@ -7,7 +7,7 @@ checklist is the source of truth.
 ## Where it starts (October 2026)
 
 Every room is baked with one shared `StandardMaterial` (`RoomBake::material`),
-and `bake_faces` emits UVs nothing reads. Props colour themselves with a style
+and `world_surface::mesh` emits UVs (metres across each face) nothing reads. Props colour themselves with a style
 and a tint, four numbers on a `StandardMaterial`.
 
 ## What is wrong with the two usual answers
@@ -145,11 +145,12 @@ baked texel**.
   `texture-graph-gpu` on Bevy's own device, to a small tileable set — albedo,
   roughness, normal — keyed by hash. A room material samples it by the
   projection above and blends clean and worn per fragment from the geometry
-  inputs, carried as vertex attributes from `bake_faces`. An edit changes
+  inputs, carried as vertex attributes from `world_surface::mesh`. An edit changes
   vertices, not textures, so `RoomBake`'s incremental rebake stays cheap.
 - **Full bake** (on load, cached): unwrap the resolved geometry and evaluate
   every graph per texel with its inputs, AO and decals into atlas pages.
-  Today's geometry is axis-aligned rectangles, which chart trivially; the
+  Today's geometry is planar convex faces cut from prism rooms, which chart
+  as easily as the rectangles they replaced; the
   charting is still written against arbitrary planar polygons and grids, so it
   is not the thing that breaks when rooms stop being boxes.
 - On wasm a bake cannot block on a device poll. A surface is drawn in its
@@ -219,9 +220,9 @@ AABB where the assumption would have to be dug out later:
   paints (Source's alpha), for grass into dirt across a hillside. It is a vertex
   attribute like the others and needs nothing new from the material.
 
-`bake_faces` is the single place that turns a room into triangles and inputs,
-so a new room shape is a new producer of that mesh, and the material side
-should not need to know it exists.
+`world_surface::mesh` is the single place that turns a room's share of the
+surface into triangles and inputs, so a new room shape is a new producer of
+faces for it, and the material side should not need to know it exists.
 
 ## Checklist
 
@@ -243,7 +244,8 @@ should not need to know it exists.
 - [ ] Grain axis with a `PointRef` anchor
 - [ ] Geometry inputs as vertex attributes; clean/worn blend
 - [ ] `Paint` feature: a box and a material, timeline-ordered
-- [ ] Roles and the palette in `MapMetadata`; role paint resolved by `Side`
+- [x] Roles and the palette in `MapMetadata`; a room slot's role resolved by `Side`
+- [ ] Editing the palette in the Metadata panel (the template writes one; nothing edits it yet)
 - [ ] Decals anchored to features
 - [ ] Props: materials in object space, style and tint as fallback
 - [ ] Full bake to atlases, cached on disk / in IndexedDB

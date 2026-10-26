@@ -22,21 +22,18 @@ pub struct Palette {
     pub roles: BTreeMap<String, RolePaint>,
 }
 
-/// One role's material per side.
+/// One role's material per side. No field is skipped when empty: the palette crosses the wire
+/// with postcard, which cannot read a field left out.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct RolePaint {
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub sides: BTreeMap<Team, String>,
     /// For a room no Mirror claims, or a side the role does not name. `None` draws plain.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub unsided: Option<String>,
 }
 
 impl Palette {
-    pub fn is_empty(&self) -> bool {
-        self.roles.is_empty()
-    }
-
     /// The material a slot naming `name` is painted with on `side`: the name itself unless it is a
     /// role. `None` for a role with nothing for this side, which draws plain.
     pub fn resolve<'a>(&'a self, name: &'a str, side: Option<Side>) -> Option<&'a str> {
@@ -93,10 +90,12 @@ mod tests {
     }
 
     /// The palette crosses the wire inside the map's settings, which Lightyear encodes with
-    /// postcard; a map keyed by an enum has to survive that.
+    /// postcard: a map keyed by an enum has to survive that, and so does a role with nothing set,
+    /// which a skipped empty field would not.
     #[test]
     fn a_palette_survives_the_wire() {
-        let palette = spawn_walls();
+        let mut palette = spawn_walls();
+        palette.roles.insert("bare".into(), RolePaint::default());
         let bytes = postcard::to_stdvec(&palette).expect("encodes");
         let back: Palette = postcard::from_bytes(&bytes).expect("decodes");
         assert_eq!(back, palette);

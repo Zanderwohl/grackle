@@ -41,7 +41,9 @@ pub struct SavedMetadata {
     game_mode: String,
     #[serde(default)]
     movement: MovementRules,
-    #[serde(default, skip_serializing_if = "Palette::is_empty")]
+    /// Always written: the settings cross the wire with postcard, which cannot read a field left
+    /// out.
+    #[serde(default)]
     palette: Palette,
 }
 
@@ -160,6 +162,8 @@ mod tests {
     use crate::editor::animation_grid::{AnimationGrid, RosterTeam};
     use crate::editor::editable::PointRef;
     use crate::editor::editor_room::EditorRoom;
+    use crate::editor::editable::FeatureTrait;
+    use crate::editor::footprint_room::FootprintRoom;
     use crate::editor::global_point::GlobalPoint;
     use crate::editor::grackle_point_light::GracklePointLight;
     use crate::editor::mirror::{Mirror, Symmetry};
@@ -211,6 +215,17 @@ mod tests {
                 .with_sources(vec![room, min])
                 .with_teams(Team::Yellow, Team::Green),
         ));
+
+        let mut footprint = FootprintRoom::new(PointRef::reference_with_offset(min, 0.0, 0.5, 0.0), 2.75);
+        let a = footprint.add_corner(PointRef::reference_with_offset(max, 1.0, 0.0, 0.0));
+        let b = footprint.add_corner(PointRef::absolute(6.0, 0.0, 2.0));
+        let c = footprint.add_corner(PointRef::absolute(6.0, 0.0, 6.0));
+        for (from, to) in [(a, b), (b, c), (c, a)] {
+            footprint.add_line(from, to);
+        }
+        footprint.resolve_references(timeline.features_map());
+        assert!(footprint.name_region_at(bevy::math::Vec2::new(5.0, 3.0)), "the triangle encloses nothing there");
+        timeline.apply_feature(Box::new(footprint));
 
         let mut metadata = MapMetadata::default();
         metadata.display_name = Some("2 Fort".into());

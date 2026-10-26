@@ -138,10 +138,16 @@ fn main() {
     let nook_spawn = timeline.apply_feature(Box::new(
         SpawnPoint::from_point_ref(on_the_floor(nook, Vec3::ZERO)).with_yaw(FRAC_PI_2),
     ));
+    // Its own light: the room's is across the map and the side wall shades the nook from it.
+    let mut nook_light = GracklePointLight::from_point_ref(on_the_floor(nook, Vec3::Y * (NOOK_M.y - 0.4)));
+    nook_light.intensity = 40_000.0;
+    nook_light.radius = 0.3;
+    nook_light.range = 8.0;
+    let nook_light = timeline.apply_feature(Box::new(nook_light));
     timeline.apply_feature(Box::new(
         Mirror::new(on_the_floor(room, Vec3::ZERO))
             .with_symmetry(Symmetry::MirrorX)
-            .with_sources(vec![nook, nook_spawn])
+            .with_sources(vec![nook, nook_spawn, nook_light])
             .with_teams(Team::Red, Team::Blue),
     ));
 

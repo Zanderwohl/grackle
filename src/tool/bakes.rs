@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
+
+use crate::common::world_surface;
 use crate::common::app_mode::AppMode;
 use bevy_egui::egui;
 use crate::editor::editable::FeatureTag;
@@ -107,11 +109,8 @@ impl RoomBake {
 /// Inclusive, because a shared wall is an opening too. Engulfing counts,
 /// which `clip_rect` would reject: a few spare rebakes, never a missed one.
 fn touches(a: &Room, b: &Room) -> bool {
-    a.min.cmple(b.max).all() && b.min.cmple(a.max).all()
-}
-
-fn same_box(a: &Room, b: &Room) -> bool {
-    a.min == b.min && a.max == b.max
+    let ((a_min, a_max), (b_min, b_max)) = (a.bounds(), b.bounds());
+    a_min.cmple(b_max).all() && b_min.cmple(a_max).all()
 }
 
 impl BakePlugin {
@@ -185,7 +184,7 @@ impl BakePlugin {
         let mut urgent = Vec::new();
         for (entity, room) in &all {
             match bake.seen.get(entity) {
-                Some(old) if same_box(old, room) => continue,
+                Some(old) if old == *room => continue,
                 Some(old) => urgent.extend(touching(old)),
                 None => {}
             }
@@ -211,8 +210,8 @@ impl BakePlugin {
         let mut done = 0;
         while done < ROOMS_PER_FRAME {
             let Some(entity) = bake.queue.pop_front() else { break };
-            let Ok((_, room)) = rooms.get(entity) else { continue };
-            bake_one(entity, room, &all, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);
+            if !rooms.contains(entity) { continue; }
+            bake_one(entity, &all, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);
             done += 1;
         }
     }
@@ -280,7 +279,7 @@ impl BakePlugin {
     }
 }
 
-/// Build one mesh per room, minus the faces neighbouring rooms open up, all in
+/// Build one mesh per room, its share of the map's surface, all in
 /// this frame. Shared by the editor's bake and the round-start bake.
 fn bake_rooms(
     bake: &mut RoomBake,
@@ -297,8 +296,8 @@ fn bake_rooms(
     let material = bake.material(materials);
     let all: Vec<(Entity, &Room)> = rooms.iter().collect();
 
-    for (entity, room) in &all {
-        bake_one(*entity, room, &all, None, &material, commands, meshes);
+    for (entity, _) in &all {
+        bake_one(*entity, &all, None, &material, commands, meshes);
     }
 
     bake.queue.clear();
@@ -310,14 +309,14 @@ fn bake_rooms(
 /// if it already has a bake.
 fn bake_one(
     entity: Entity,
-    room: &Room,
     all: &[(Entity, &Room)],
     existing: Option<Entity>,
     material: &Handle<StandardMaterial>,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
 ) {
-    let others: Vec<Room> = all.iter().filter(|(e, _)| *e != entity).map(|(_, r)| (*r).clone()).collect();
+    let rooms: Vec<Room> = all.iter().map(|(_, r)| (*r).clone()).collect();
+    let index = all.iter().position(|(e, _)| *e == entity).expect("a room is baked against a list it is in");
     let mut baked = match existing {
         Some(baked) => {
             let mut baked = commands.entity(baked);
@@ -327,7 +326,7 @@ fn bake_one(
         None => commands.spawn((BakedRoomGeometry { room: entity }, Transform::default(), Visibility::default())),
     };
     baked.with_children(|parts| {
-        for (slot, mesh) in room.bake_slots(&others) {
+        for (slot, mesh) in world_surface::slot_meshes(&world_surface::room_share(&rooms, index)) {
             // The default until `paint_rooms` finds the slot's own material.
             parts.spawn((RoomSlotMesh { room: entity, slot }, Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.clone())));
         }

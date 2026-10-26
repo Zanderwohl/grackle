@@ -59,10 +59,10 @@ It is a third `AppMode` and the frontier next to it: the geometry it builds is
 correct and nothing yet *holds* one — a weapon names its model and no system
 reads that name.
 
-`cargo check --all-targets` and `cargo test` both pass. The `Room` type is
-still dead — superseded by `EditorRoom` for authoring — but it is what
-`CollisionWorld` is rebuilt from, so deleting it is not the small change it
-looks like.
+`cargo check --all-targets` and `cargo test` both pass. `EditorRoom` is what a
+mapper edits; the `Room` component it stands up is the volume of air the map's
+surface, its collision and its picking are all built from (see "What a body is
+drawn as" for collision and `src/common/world_surface.rs`).
 
 **Rooms are axis-aligned boxes today and will not stay that way.** Doom-style
 polygon rooms and Source-style displacements are planned, though not for this
@@ -126,7 +126,10 @@ from the editor — it is written by
 ([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the
 repo root, and that file is where its contents are reviewable. It currently
 also ships an animation grid, which is why the room is 24 m square: the grid is
-a testing convenience rather than something a new map owes you.
+a testing convenience rather than something a new map owes you. It also ships
+a spawn nook on each side wall, Red's authored and Blue's made by a Mirror,
+with walls naming the `spawn_walls` role — the smallest map that exercises
+sides, mirroring and the palette at once.
 
 Choice is uniform random among the spawns on the body's own side — a spawn's
 `Side`, from a Mirror (see "Mirroring half a map") — falling back to spawns
@@ -394,7 +397,8 @@ consequences:
   first operand and then failed to find its second would delete a body it
   never used, and the half that vanishes is not the feature that looks wrong.
 
-The kernel ([`src/prop/csg.rs`](src/prop/csg.rs)) is the `csg.js` BSP
+The kernel ([`src/common/csg.rs`](src/common/csg.rs), shared with the map's
+surface and generic over what a face is made of) is the `csg.js` BSP
 algorithm written out, and **a solid is a bag of convex polygons that happens
 to be closed**. Nothing checks either property and both matter: a plane cuts a
 convex polygon into exactly two pieces, which is the assumption the splitter
@@ -854,10 +858,9 @@ section of the file is kept whatever the archetype, so flipping it and back
 loses nothing, and a held prop writes none of them.
 
 **A collider is a rounded box** — a core plus a radius — so a box, a sphere and
-an upright capsule are one shape to the collision world. `RoundedBox::slab_along`
-turns one into the wall slab `move_and_slide` already sweeps against, for a body
-at that position on the other two axes, which is what makes a pillar round to
-walk past rather than square. Colliders are axis-aligned in the prop; a turned
+an upright capsule are one shape to the collision world. A body is swept
+against it grown by the body's own box — another rounded box — which is what
+makes a pillar round to walk past rather than square. Colliders are axis-aligned in the prop; a turned
 placement collides as the bounding box of its turned core.
 
 **Placed props follow the carousel rule.** The map `Prop` feature names a
@@ -961,6 +964,16 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   equal to its frequency; `every_shipped_material_tiles` checks each shipped
   one's opposite edges on the CPU. The default pack's are written by
   `cargo run --bin default_materials`, like the map template.
+- **A slot may name a role instead**, which the map's palette
+  ([`src/common/palette.rs`](src/common/palette.rs), in `MapMetadata`)
+  resolves by the room's `Side` — so a Mirror's copy comes out in the other
+  team's colours with nothing on the copy saying so. A role's name shadows a
+  material of the same name. `publish_palette` is the one writer of the
+  `Palette` resource; nothing reads `MapMetadata` for it.
+- **No palette field is skipped when empty.** It crosses the wire inside the
+  settings, with postcard, which cannot read a field left out: a skipped
+  field decodes as garbage after it, and `the_settings_survive_the_wire_encoding`
+  is what failed.
 - **Not sent to clients.** Materials are pack content like props, but nothing
   syncs them yet; a client without the file draws that slot plain.
 
@@ -1197,18 +1210,50 @@ alongside the camera's: put `With<Player>` in the filter next to
 disjoint from the camera's `Without<Player>` one, and without it Bevy refuses
 the system at runtime rather than at compile time.
 
-Collision comes from the rooms, not from the baked meshes
-([`src/game/collision.rs`](src/game/collision.rs)) — but from the *same* face
-subtraction, via `Room::collision_slabs`, so an opening you can see through is
-an opening you can walk through. Two operations, and they are not
-interchangeable:
+**Rendering, collision and editor picking all come from one surface**
+([`src/common/world_surface.rs`](src/common/world_surface.rs)): the boundary of
+the union of the rooms, faces pointing into the air, cut with the CSG kernel.
+Each room's share is its own walls clipped against every room touching it, so
+auto-bake still rebuilds one room at a time. Collision
+([`src/game/collision/`](src/game/collision/mod.rs)) stands each face out into
+the solid behind it as a hull, straight from the rooms rather than from the
+baked meshes, so an edit lands without waiting for a bake — and an opening you
+can see through is an opening you can walk and shoot through. Because it is a
+union, a room wholly inside another adds nothing, and a room's wall inside
+another room is gone even where the old rectangle bake kept it. Two collision
+operations, and they are not interchangeable:
 
-- `move_and_slide` is swept per axis. It asks whether the body's leading edge
-  crosses a wall plane during the step, so speed cannot tunnel through a wall.
+- `slide` is swept: it stops at the first surface the box would touch, takes
+  the part of the move that goes into it out, and goes on, so speed cannot
+  tunnel through a wall. What it returns is the **normals** it touched, never
+  axes: `Player.ground` is a touched floor no steeper than `WALKABLE`, and
+  `against_wall` is anything neither floor nor ceiling. On the ground the walk
+  follows the floor and gravity does nothing, which is what lets a body stand
+  on a slope without sliding down it. A wall lower than `STEP_HEIGHT` is
+  walked up (`step_up`), but only when that gets the body further than the
+  plain slide did — otherwise pressing into a real wall hops on the spot.
 - `depenetrate` handles the world moving instead of the body: a floor raised
   onto a standing player encloses it having crossed nothing. It prefers escapes
   that land inside a room over shorter ones that do not, because the short way
   out of a floor is downwards, through the map.
+
+A `Room` is a prism — a floor plan, not necessarily convex and possibly with
+holes, between two heights — and a box is the four-corner case. `EditorRoom`
+stands up a box; `FootprintRoom`
+([`src/editor/footprint_room.rs`](src/editor/footprint_room.rs),
+[documentation/footprint-rooms.md](documentation/footprint-rooms.md)) is a
+sketch whose corners are `PointRef`s, each named region one room on a child
+entity. Anything that needs a feature's rooms asks `FeatureTrait::rooms`,
+never its `type_key` or its box. Tools that edit a footprint's own drawing
+reach it through `FeatureTrait::footprint`/`footprint_mut` — a typetag trait
+object has no `Any` to downcast through. What a drawn chain makes a room is
+one rule, `FootprintRoom::add_chain`'s, for a new footprint and an added
+chain alike: a region a new line bounds that no room of it already covers.
+Ask it for `bounds`, `contains` and `solid` rather than treating it as a box.
+**Each room's share is cut relative to its own corner**: the kernel's
+tolerance is absolute, and an angled face far enough from the origin is split
+by its own plane. The footprint tool, stairs and displacements are the stages
+left in [documentation/collision.md](documentation/collision.md).
 
 ## What a body does once it is dead
 
@@ -2177,8 +2222,8 @@ machine, and things happen in it.
 The core abstraction is `FeatureTrait` in
 [`src/editor/editable.rs`](src/editor/editable.rs) — a `#[typetag::serde]`
 trait object. Implementors today: `GlobalPoint`, `GracklePointLight`,
-`EditorRoom`, `SpawnPoint`, `Prop`, `AnimationDisplay`, `AnimationGrid` and
-`Mirror`.
+`EditorRoom`, `FootprintRoom`, `SpawnPoint`, `Prop`, `AnimationDisplay`,
+`AnimationGrid` and `Mirror`.
 
 A feature does not store bare coordinates. It stores `PointRef`s, which are
 per-axis absolute-or-relative references to *another feature's named point*.
