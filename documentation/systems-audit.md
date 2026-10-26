@@ -40,7 +40,7 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
   pre-filter never filtered. Done: the viewer holds it through
   `bypass_change_detection()`, `FeatureTimeline::ui` returns whether it
   edited, selected, deleted or rolled back, and the panel `set_changed()`s on
-  that. Guarded by `the_history_panel_left_alone_changes_nothing`.
+  that. Guarded by `the_features_panel_left_alone_changes_nothing`.
   - [ ] Same pattern, still open and cheaper since nothing reads their change
     ticks today: `map_metadata` (also `sync_authors_ui_buffer_from_authors`
     every frame), `multicam_state`, `gizmo_visibility`, `next_tool`,

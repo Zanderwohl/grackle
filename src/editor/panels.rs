@@ -24,7 +24,7 @@ use crate::editor::net_menu::{network_menu, ConnectDialog};
 use crate::editor::save::{self, LoadedBlueprint};
 use crate::get;
 use crate::tool::Tools;
-use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS};
+use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
 use crate::tool::retarget::RetargetState;
 use crate::tool::show::{ShowPlugin, GizmoVisibility};
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
@@ -102,7 +102,7 @@ enum TabKinds {
     Show,
     Metadata,
     /// The feature list with its rollback bar, and the selected feature's editor beneath.
-    History,
+    Features,
 }
 
 /// The panels' writes, bundled because `ui` hit Bevy's sixteen-parameter limit.
@@ -111,6 +111,7 @@ struct PanelMessages<'w> {
     room: MessageWriter<'w, CalculateRoomGeometry>,
     clear_room: MessageWriter<'w, ClearRoomGeometry>,
     log_ecs: MessageWriter<'w, LogECS>,
+    room_bake: ResMut<'w, RoomBake>,
     edits: MessageWriter<'w, EditEvent>,
     net: MessageWriter<'w, NetRequest>,
     exit: MessageWriter<'w, AppExit>,
@@ -132,7 +133,7 @@ struct TabViewerAndResources<'a> {
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
     retarget_request: &'a mut Option<(FeatureId, String)>,
-    /// Whether the History panel changed the timeline, which it holds with
+    /// Whether the Features panel changed the timeline, which it holds with
     /// change detection bypassed.
     timeline_touched: bool,
 }
@@ -147,7 +148,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Bakes => "bakes".to_owned(),
             TabKinds::Show => "show".to_owned(),
             TabKinds::Metadata => "metadata".to_owned(),
-            TabKinds::History => "history".to_owned(),
+            TabKinds::Features => "features".to_owned(),
         })
     }
 
@@ -158,7 +159,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Bakes => { get!("bakes.title").into() }
             TabKinds::Show => { get!("show.title").into() }
             TabKinds::Metadata => { get!("editor.metadata.title").into() }
-            TabKinds::History => { get!("editor.history.title").into() }
+            TabKinds::Features => { get!("editor.timeline.title").into() }
         }
     }
 
@@ -171,7 +172,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 Tools::ui(ui, self.current_tool, self.next_tool);
             }
             TabKinds::Bakes => {
-                *self.bake_commands = BakePlugin::ui(ui);
+                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto);
             }
             TabKinds::Show => {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
@@ -179,7 +180,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Metadata => {
                 map_metadata_panel_ui(ui, self.map_metadata);
             }
-            TabKinds::History => {
+            TabKinds::Features => {
                 self.timeline_touched |= FeatureTimeline::ui(
                     ui,
                     self.editor_features,
@@ -243,7 +244,7 @@ impl Default for EditorPanels {
 impl EditorPanels {
     pub fn new() -> Self {
         let default_top_tabs = vec![TabKinds::Tools,];
-        let default_left_tabs = vec![TabKinds::History, TabKinds::Bakes,];
+        let default_left_tabs = vec![TabKinds::Features, TabKinds::Bakes,];
         let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata];
         let default_bottom_tabs = vec![TabKinds::Empty("Delta".to_owned()), TabKinds::Empty("Epsilon".to_owned())];
         
@@ -298,7 +299,7 @@ impl EditorPanels {
 
         map_metadata.sync_authors_ui_buffer_from_authors();
         
-        let mut bake_commands = BakeCommands::default();
+        let mut bake_commands = BakeCommands { auto: messages.room_bake.auto(), ..default() };
         let mut pending_edits = PendingEditEvents::default();
         let mut retarget_request: Option<(FeatureId, String)> = None;
         let mut loaded_blueprint: Option<LoadedBlueprint> = None;
@@ -317,7 +318,7 @@ impl EditorPanels {
         let mut viewer = TabViewerAndResources  {
             current_tool: & *current_tool,
             next_tool: &mut *next_tool,
-            // Bypassed, and marked below only if the History panel said it
+            // Bypassed, and marked below only if the Features panel said it
             // changed something. Borrowed mutably for the whole frame, it
             // read as changed every frame — so the undo checkpoint serialised
             // the map on every idle frame and `map_sync`'s pre-filter never
@@ -546,6 +547,9 @@ impl EditorPanels {
             }
         }
 
+        if bake_commands.auto != messages.room_bake.auto() {
+            messages.room_bake.set_auto(bake_commands.auto);
+        }
         if bake_commands.calculate_room_geometry {
             messages.room.write(CalculateRoomGeometry);
         }

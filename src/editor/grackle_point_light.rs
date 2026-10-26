@@ -10,6 +10,8 @@ use crate::get;
 const DEFAULT_INTENSITY: f32 = 10_000.0;
 const DEFAULT_RADIUS: f32 = 0.1;
 const DEFAULT_RANGE: f32 = 20.0;
+/// In lumens. Logarithmic on the slider, since the useful values span orders of magnitude.
+const MAX_INTENSITY: f32 = 1.0e7;
 
 #[derive(Serialize, Deserialize)]
 pub struct GracklePointLight {
@@ -40,7 +42,7 @@ impl FeatureTrait for GracklePointLight {
 
         ui.separator();
         ui.label(get!("editor.features.grackle_point_light.params"));
-        changed |= ui.add(egui::Slider::new(&mut self.intensity, 0.0..=10000.0).text(get!("editor.features.grackle_point_light.intensity"))).changed();
+        changed |= ui.add(egui::Slider::new(&mut self.intensity, 0.0..=MAX_INTENSITY).logarithmic(true).smallest_positive(1.0).text(get!("editor.features.grackle_point_light.intensity"))).changed();
         changed |= ui.add(egui::Slider::new(&mut self.radius, 0.0..=10.0).text(get!("editor.features.grackle_point_light.radius"))).changed();
         changed |= ui.add(egui::Slider::new(&mut self.range, 0.0..=100.0).text(get!("editor.features.grackle_point_light.range"))).changed();
 
@@ -56,6 +58,11 @@ impl FeatureTrait for GracklePointLight {
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         gizmos.sphere(Isometry3d::from_translation(self.resolved_location), 0.2, Color::srgb_u8(255, 255, 0));
         self.location.debug_gizmos(self.resolved_location, gizmos);
+    }
+
+    fn selected_gizmos(&self, gizmos: &mut Gizmos) {
+        gizmos.sphere(Isometry3d::from_translation(self.resolved_location), self.range, Color::srgb_u8(80, 140, 255))
+            .resolution(64);
     }
 
     fn entity(&self) -> Option<Entity> {

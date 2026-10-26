@@ -6,6 +6,7 @@ use std::marker::PhantomData;
 
 use bevy::app::App;
 use bevy::prelude::*;
+use bevy_egui::input::EguiWantsInput;
 
 use crate::common::app_mode::AppMode;
 use crate::editor::editable::{FeatureId, FeatureTimeline, FeatureTrait, PointRef};
@@ -48,6 +49,8 @@ pub struct PointPlacementTool<F: PlaceablePoint> {
     reference_key: String,
     reference_resolved: Option<Vec3>,
     hovered_point: Option<(FeatureId, String, Vec3)>,
+    /// The Shift held for picking was used to fly; releasing it keeps the reference.
+    flew: bool,
     snap: bool,
     snap_granularity: f32,
     _feature: PhantomData<F>,
@@ -63,6 +66,7 @@ impl<F: PlaceablePoint> Default for PointPlacementTool<F> {
             reference_key: String::new(),
             reference_resolved: None,
             hovered_point: None,
+            flew: false,
             snap: true,
             snap_granularity: DEFAULT_SNAP_GRANULARITY,
             _feature: PhantomData,
@@ -100,6 +104,7 @@ impl<F: PlaceablePoint> PointPlacementTool<F> {
         mut features: ResMut<FeatureTimeline>,
         rooms: Query<&Room>,
         mut next_tool: ResMut<NextState<Tools>>,
+        egui: Res<EguiWantsInput>,
     ) {
         let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let shift_just_pressed = keys.just_pressed(KeyCode::ShiftLeft) || keys.just_pressed(KeyCode::ShiftRight);
@@ -114,8 +119,9 @@ impl<F: PlaceablePoint> PointPlacementTool<F> {
                 if shift_held {
                     tool.mode = PointPlacementMode::Picking;
                     tool.hovered_point = None;
+                    tool.flew = false;
                 } else if let Some(cursor) = tool.cursor {
-                    if mouse_input.released == Some(MouseButton::Left) {
+                    if commit_at_cursor(&mouse_input, &keys, egui.wants_keyboard_input()) {
                         let id = features.apply_feature(F::from_position(cursor));
                         features.select(Some(id));
                         tool.last_position = cursor;
@@ -124,9 +130,17 @@ impl<F: PlaceablePoint> PointPlacementTool<F> {
                 }
             }
             PointPlacementMode::Picking => {
+                tool.flew |= camera_dragging(&mouse_input);
                 if !shift_held {
-                    tool.mode = PointPlacementMode::Normal;
                     tool.hovered_point = None;
+                    if tool.flew && tool.reference_feature.is_some() {
+                        tool.mode = PointPlacementMode::RelativeSelected;
+                    } else {
+                        tool.mode = PointPlacementMode::Normal;
+                        tool.reference_feature = None;
+                        tool.reference_key.clear();
+                        tool.reference_resolved = None;
+                    }
                     return;
                 }
 
@@ -143,28 +157,28 @@ impl<F: PlaceablePoint> PointPlacementTool<F> {
                 }
             }
             PointPlacementMode::RelativeSelected => {
+                // Kept until Shift comes up, in case it was held to fly faster.
                 if shift_just_pressed {
-                    tool.mode = PointPlacementMode::Normal;
-                    tool.reference_feature = None;
-                    tool.reference_key.clear();
-                    tool.reference_resolved = None;
+                    tool.mode = PointPlacementMode::Picking;
+                    tool.hovered_point = None;
+                    tool.flew = false;
                     return;
                 }
 
-                if let Some(cursor) = tool.cursor {
-                    if mouse_input.released == Some(MouseButton::Left) {
-                        if let (Some(ref_feature), Some(ref_resolved)) = (tool.reference_feature, tool.reference_resolved) {
-                            let d = cursor - ref_resolved;
-                            let mut pr = PointRef::reference_with_offset(ref_feature, d.x, d.y, d.z);
-                            if !tool.reference_key.is_empty() {
-                                pr.point_key = tool.reference_key.clone();
-                            }
-                            let id = features.apply_feature(F::from_point_ref(pr));
-                            features.select(Some(id));
-                            tool.last_position = cursor;
-                            next_tool.set(Tools::Select);
-                        }
+                let (Some(ref_feature), Some(ref_resolved)) = (tool.reference_feature, tool.reference_resolved) else {
+                    return;
+                };
+                let typing = egui.wants_keyboard_input();
+                if let Some(at) = relative_commit(&mouse_input, &keys, typing, tool.cursor, ref_resolved) {
+                    let d = at - ref_resolved;
+                    let mut pr = PointRef::reference_with_offset(ref_feature, d.x, d.y, d.z);
+                    if !tool.reference_key.is_empty() {
+                        pr.point_key = tool.reference_key.clone();
                     }
+                    let id = features.apply_feature(F::from_point_ref(pr));
+                    features.select(Some(id));
+                    tool.last_position = at;
+                    next_tool.set(Tools::Select);
                 }
             }
         }

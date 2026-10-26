@@ -63,6 +63,7 @@ retarget = "Retarget"
 [bakes]
 title = "Bake Operations"
 room_geometry = "Room Geometry"
+auto_rooms = "Auto-bake Rooms"
 
 [show]
 title = "Show/Hide"
@@ -105,12 +106,13 @@ granularity = "Granularity"
 active = "Snap to grid"
 
 [editor.timeline]
+title = "Features"
 delete = "Delete"
 roll_back_here = "Roll back to here"
 roll_to_end = "Roll to end"
 
-[editor.history]
-title = "History"
+[editor.point_ref]
+none = "None"
 
 [editor.metadata]
 title = "Metadata"
@@ -126,6 +128,7 @@ title = "Global Point"
 
 [editor.features.room]
 title = "Room"
+own_min = "This room's Min"
 
 [editor.features.grackle_point_light]
 title = "Point Light"

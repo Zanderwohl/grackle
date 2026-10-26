@@ -34,6 +34,8 @@ pub struct CurrentMouseInput {
     pub started_in_camera: Option<Entity>,
     pub local_pos: Option<Vec2>,
     pub delta_pos: Vec2,
+    /// Pixels moved since the last press, kept through the frame of its release.
+    pub travel: f32,
     pub normalized_pos: Option<Vec2>,
     pub global_pos: Option<Vec2>,
     pub world_pos: Option<Ray3d>,
@@ -49,6 +51,7 @@ impl Default for CurrentMouseInput {
             started_in_camera: None,
             local_pos: None,
             delta_pos: Vec2::ZERO,
+            travel: 0.0,
             normalized_pos: None,
             global_pos: None,
             world_pos: None,
@@ -135,8 +138,18 @@ impl CurrentKeyboardInput {
         self.left = keys.pressed(KeyCode::KeyA);
         self.right = keys.pressed(KeyCode::KeyD);
         self.backward = keys.pressed(KeyCode::KeyS);
-        self.up = keys.pressed(KeyCode::KeyQ);
-        self.down = keys.pressed(KeyCode::KeyE);
+        self.up = keys.pressed(KeyCode::KeyE);
+        self.down = keys.pressed(KeyCode::KeyQ);
+    }
+}
+
+/// Further than this between press and release is a drag, not a click.
+const CLICK_SLOP: f32 = 4.0;
+
+impl CurrentMouseInput {
+    /// `button` was released this frame without having been dragged.
+    pub fn clicked(&self, button: MouseButton) -> bool {
+        self.released == Some(button) && self.travel <= CLICK_SLOP
     }
 }
 
@@ -168,6 +181,14 @@ impl EditorInputPlugin {
         current_input.pressed = pressed;
         current_input.released = released;
 
+        current_input.delta_pos = evr_motion.read().map(|ev| ev.delta).sum();
+        if just_pressed {
+            current_input.travel = 0.0;
+        }
+        if pressed.is_some() {
+            current_input.travel += current_input.delta_pos.length();
+        }
+
         if ctx.is_pointer_over_egui() || ctx.egui_wants_pointer_input() {
             current_input.in_camera = None;
             current_input.local_pos = None;
@@ -176,11 +197,6 @@ impl EditorInputPlugin {
             current_input.world_pos = None;
             if pressed.is_none() {
                 current_input.started_in_camera = None;
-            }
-            current_input.delta_pos = Vec2::ZERO;
-            for ev in evr_motion.read() {
-                current_input.delta_pos.x += ev.delta.x;
-                current_input.delta_pos.y += ev.delta.y;
             }
             return;
         }
@@ -228,11 +244,6 @@ impl EditorInputPlugin {
             current_input.world_pos = None;
         }
         
-        current_input.delta_pos = Vec2::ZERO;
-        for ev in evr_motion.read() {
-            current_input.delta_pos.x += ev.delta.x;
-            current_input.delta_pos.y += ev.delta.y;
-        }
     }
     
     fn keyboard_input(

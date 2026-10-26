@@ -5,15 +5,35 @@ use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
 use crate::common::cuboid::CuboidPoint;
 use crate::common::ray::ray_intersects_aabb;
-use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
+use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, OwnBase, PointRef};
 use crate::editor::mirror::Mirroring;
 use crate::tool::room::Room;
 use crate::get;
+
+/// What `max`'s relative axes are measured from.
+#[derive(Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MaxBase {
+    /// Whatever `max.reference` names, or nothing.
+    #[default]
+    Reference,
+    /// This room's own min, so the far corner is a size. A room's min cannot
+    /// be named by its own `PointRef`: that would make the room its own parent.
+    OwnMin,
+}
+
+impl MaxBase {
+    fn is_reference(&self) -> bool {
+        *self == MaxBase::Reference
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct EditorRoom {
     min: PointRef,
     max: PointRef,
+    /// Beside `max` rather than replacing it, so maps saved before it read unchanged.
+    #[serde(default, skip_serializing_if = "MaxBase::is_reference")]
+    max_base: MaxBase,
     #[serde(skip)]
     resolved_min: Vec3,
     #[serde(skip)]
@@ -27,6 +47,7 @@ impl EditorRoom {
         Self {
             min: PointRef::reference(min_feature),
             max: PointRef::reference(max_feature),
+            max_base: MaxBase::Reference,
             resolved_min: Vec3::ZERO,
             resolved_max: Vec3::ZERO,
             entity: None,
@@ -37,9 +58,54 @@ impl EditorRoom {
         Self {
             min,
             max,
+            max_base: MaxBase::Reference,
             resolved_min: Vec3::ZERO,
             resolved_max: Vec3::ZERO,
             entity: None,
+        }
+    }
+
+    /// A room whose far corner is `size` from `min`, and follows it.
+    pub fn from_min_and_size(min: PointRef, size: Vec3) -> Self {
+        let mut max = PointRef::absolute(0.0, 0.0, 0.0);
+        max.x = AxisRef::Relative(size.x);
+        max.y = AxisRef::Relative(size.y);
+        max.z = AxisRef::Relative(size.z);
+        Self {
+            min,
+            max,
+            max_base: MaxBase::OwnMin,
+            resolved_min: Vec3::ZERO,
+            resolved_max: Vec3::ZERO,
+            entity: None,
+        }
+    }
+
+    /// Min first, since an `OwnMin` max is measured from it. A max that has
+    /// been given a reference (the retarget tool writes one straight into the
+    /// `PointRef`) is measured from that instead.
+    fn resolve_corners(&mut self, features: &HashMap<FeatureId, Feature>) {
+        if let Ok(v) = self.min.resolve(features) {
+            self.resolved_min = v;
+        }
+        if self.max.reference.is_some() {
+            self.max_base = MaxBase::Reference;
+        }
+        match self.max_base {
+            MaxBase::Reference => {
+                if let Ok(v) = self.max.resolve(features) {
+                    self.resolved_max = v;
+                }
+            }
+            MaxBase::OwnMin => {
+                let base = self.resolved_min;
+                self.max.resolved_reference = Some(base);
+                self.resolved_max = Vec3::new(
+                    self.max.x.resolve_with_base(Some(base.x)).unwrap_or(base.x),
+                    self.max.y.resolve_with_base(Some(base.y)).unwrap_or(base.y),
+                    self.max.z.resolve_with_base(Some(base.z)).unwrap_or(base.z),
+                );
+            }
         }
     }
 }
@@ -65,16 +131,22 @@ impl FeatureTrait for EditorRoom {
         let size = self.resolved_max - self.resolved_min;
         ui.label(format!("Size: {}", size));
         ui.separator();
-        changed |= self.min.editor_ui(ui, "Min", features, prior_feature_order, retarget_request);
+        if self.min.editor_ui(ui, "Min", features, prior_feature_order, retarget_request) {
+            // Before the max's widgets, which offer the min as a base.
+            self.resolve_corners(features);
+            changed = true;
+        }
         ui.separator();
-        changed |= self.max.editor_ui(ui, "Max", features, prior_feature_order, retarget_request);
+        let own_label = get!("editor.features.room.own_min");
+        let mut from_min = self.max_base == MaxBase::OwnMin;
+        changed |= self.max.editor_ui_with_own(ui, "Max", features, prior_feature_order, retarget_request, Some(OwnBase {
+            label: &own_label,
+            point: self.resolved_min,
+            active: &mut from_min,
+        }));
+        self.max_base = if from_min { MaxBase::OwnMin } else { MaxBase::Reference };
         if changed {
-            if let Ok(v) = self.min.resolve(features) {
-                self.resolved_min = v;
-            }
-            if let Ok(v) = self.max.resolve(features) {
-                self.resolved_max = v;
-            }
+            self.resolve_corners(features);
         }
         changed
     }
@@ -128,12 +200,7 @@ impl FeatureTrait for EditorRoom {
     }
 
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {
-        if let Ok(v) = self.min.resolve(features) {
-            self.resolved_min = v;
-        }
-        if let Ok(v) = self.max.resolve(features) {
-            self.resolved_max = v;
-        }
+        self.resolve_corners(features);
     }
 
     fn parent_ids(&self) -> Vec<FeatureId> {
@@ -203,18 +270,16 @@ impl FeatureTrait for EditorRoom {
         if axis > 2 {
             return false;
         }
-        let corners_swapped = self.resolved_min[axis as usize] > self.resolved_max[axis as usize];
+        let i = axis as usize;
+        let corners_swapped = self.resolved_min[i] > self.resolved_max[i];
         let is_max = is_max != corners_swapped;
         let point_ref = if is_max { &mut self.max } else { &mut self.min };
         let axis_ref = match axis {
             0 => &mut point_ref.x,
             1 => &mut point_ref.y,
-            2 => &mut point_ref.z,
-            _ => return false,
+            _ => &mut point_ref.z,
         };
-        let base = point_ref.resolved_reference.map(|b| match axis {
-            0 => b.x, 1 => b.y, 2 => b.z, _ => 0.0,
-        });
+        let base = point_ref.resolved_reference.map(|b| b[i]);
         match axis_ref {
             AxisRef::Absolute(v) => *v = new_world_value,
             AxisRef::Relative(offset) => {
@@ -222,10 +287,44 @@ impl FeatureTrait for EditorRoom {
             }
         }
         if is_max {
-            match axis { 0 => self.resolved_max.x = new_world_value, 1 => self.resolved_max.y = new_world_value, 2 => self.resolved_max.z = new_world_value, _ => {} }
+            self.resolved_max[i] = new_world_value;
         } else {
-            match axis { 0 => self.resolved_min.x = new_world_value, 1 => self.resolved_min.y = new_world_value, 2 => self.resolved_min.z = new_world_value, _ => {} }
+            // A face handle resizes. A max measured from the min would
+            // otherwise be carried along, moving the room instead.
+            if self.max_base == MaxBase::OwnMin {
+                let moved_by = new_world_value - self.resolved_min[i];
+                let max_axis = match axis { 0 => &mut self.max.x, 1 => &mut self.max.y, _ => &mut self.max.z };
+                if let AxisRef::Relative(offset) = max_axis {
+                    *offset -= moved_by;
+                }
+                if let Some(base) = &mut self.max.resolved_reference {
+                    base[i] = new_world_value;
+                }
+            }
+            self.resolved_min[i] = new_world_value;
         }
+        true
+    }
+
+    fn own_bases(&self, point_ref_key: &str) -> Vec<(String, Vec3)> {
+        match point_ref_key {
+            "Max" | "max" => vec![("min".into(), self.resolved_min)],
+            _ => Vec::new(),
+        }
+    }
+
+    fn rebase_on_own(&mut self, point_ref_key: &str, base: &str) -> bool {
+        if !matches!(point_ref_key, "Max" | "max") || base != "min" {
+            return false;
+        }
+        let offset = self.resolved_max - self.resolved_min;
+        self.max.reference = None;
+        self.max.point_key.clear();
+        self.max.x = AxisRef::Relative(offset.x);
+        self.max.y = AxisRef::Relative(offset.y);
+        self.max.z = AxisRef::Relative(offset.z);
+        self.max.resolved_reference = Some(self.resolved_min);
+        self.max_base = MaxBase::OwnMin;
         true
     }
 
@@ -265,6 +364,61 @@ mod tests {
         room.resolved_min = min;
         room.resolved_max = max;
         room
+    }
+
+    fn drawn_from(min: Vec3, size: Vec3) -> EditorRoom {
+        let mut room = EditorRoom::from_min_and_size(PointRef::absolute(min.x, min.y, min.z), size);
+        room.resolve_corners(&HashMap::new());
+        room
+    }
+
+    #[test]
+    fn a_far_corner_drawn_from_the_min_follows_it() {
+        let mut room = drawn_from(Vec3::ZERO, Vec3::new(4.0, 3.0, 5.0));
+        assert_eq!(room.resolved_max, Vec3::new(4.0, 3.0, 5.0));
+
+        room.min = PointRef::absolute(10.0, 1.0, 0.0);
+        room.resolve_corners(&HashMap::new());
+        assert_eq!(room.resolved_max, Vec3::new(14.0, 4.0, 5.0));
+    }
+
+    /// Breaks if a min face's handle moves the room: its far corner is
+    /// measured from the min, so it has to be held where it was.
+    #[test]
+    fn dragging_a_min_face_resizes_a_room_drawn_from_its_min() {
+        let mut room = drawn_from(Vec3::ZERO, Vec3::new(4.0, 3.0, 5.0));
+        assert!(room.drag_handle(false, 0, -2.0));
+        room.resolve_corners(&HashMap::new());
+        assert_eq!(room.drag_handle_bounds(), Some((Vec3::new(-2.0, 0.0, 0.0), Vec3::new(4.0, 3.0, 5.0))));
+    }
+
+    #[test]
+    fn rebasing_onto_the_min_keeps_the_far_corner_where_it_is() {
+        let mut room = room(Vec3::new(1.0, 0.0, 1.0), Vec3::new(5.0, 3.0, 4.0));
+        assert!(room.rebase_on_own("Max", "min"));
+        room.resolve_corners(&HashMap::new());
+        assert_eq!(room.max_base, MaxBase::OwnMin);
+        assert_eq!(room.resolved_max, Vec3::new(5.0, 3.0, 4.0));
+    }
+
+    /// The retarget tool writes a reference straight into the `PointRef`;
+    /// from then on that is what the far corner is measured from.
+    #[test]
+    fn a_far_corner_given_a_reference_stops_following_the_min() {
+        let mut room = drawn_from(Vec3::ZERO, Vec3::ONE);
+        room.max.reference = Some(FeatureId::from_raw(99));
+        room.resolve_corners(&HashMap::new());
+        assert_eq!(room.max_base, MaxBase::Reference);
+    }
+
+    /// Breaks if every room starts writing the field: maps would churn on
+    /// their next save for nothing.
+    #[test]
+    fn a_room_not_drawn_from_its_min_writes_no_base() {
+        let text = ron::to_string(&room(Vec3::ZERO, Vec3::ONE)).unwrap();
+        assert!(!text.contains("max_base"), "{text}");
+        let text = ron::to_string(&drawn_from(Vec3::ZERO, Vec3::ONE)).unwrap();
+        assert!(text.contains("max_base"), "{text}");
     }
 
     #[test]

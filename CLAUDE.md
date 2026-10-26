@@ -857,7 +857,7 @@ game's tests run with no asset plugins.
 A placed prop's origin is where it stands on the floor. A pickup with no
 collider is taken through a small sphere, and is walked past by somebody it
 would give nothing to. A pickup's **style** is drawing only: `Tf2`
-lifts and turns its parts (`float_pickups`), never the instance, so the same
+lifts and turns its parts (`float_pickups`; lifted but still while authoring), never the instance, so the same
 placement and trigger serve both and the switch can be flipped freely. Armour and the flag are kinds with no behaviour yet.
 
 **A hat sits at the crown** — the head bone's tail — in the *body's* frame
@@ -939,6 +939,18 @@ map arriving mid-round, the set covers one arriving as the round starts.
 The actual work is the free function `bake_rooms`, called by both paths, so
 that "somebody pressed the button" and "a round is starting" cannot bake
 slightly differently.
+
+**Auto-bake** (`RoomBake`, on by default, a checkbox in the Bakes panel)
+rebuilds only the rooms a change touches, `ROOMS_PER_FRAME` at a time, so a
+big map opens into an editor you can already work in. A room's mesh depends on
+every room touching it, so a changed box queues itself, whatever touched its
+old box and whatever touches its new one — the old box being the one *seen
+last frame*, not the one its mesh was baked from, which a room dragged before
+its first bake does not have. Edits jump ahead of a load-in still in progress.
+With it on, `CalculateRoomGeometry` is ignored (it would stall the frame the
+budget protects) and the panel's Bake is greyed out; Clear forgets what was
+seen, so it is a rebuild from scratch. Entering Play still bakes everything at
+once.
 
 ## What a body is drawn as
 
@@ -2080,6 +2092,12 @@ follows. Consequences to respect when adding a feature type:
   feature under-reports its parents.
 - `available_point_keys()` is what the Retarget tool offers; a point you don't
   publish there cannot be referenced.
+- A `PointRef` cannot name its own feature — that is a cycle. A room's far
+  corner can still be measured from its own min (`MaxBase::OwnMin`, which is
+  what the Room tool draws unless Shift picks another point): the base lives
+  beside the `PointRef`, and the Retarget tool and the corner's dropdown offer
+  it through `FeatureTrait::own_bases` / `rebase_on_own`. With it, a min
+  face's handle shortens the max's offset so a drag resizes rather than moves.
 - **Saving, loading, undo and sending to clients need nothing per type.**
   They all go through the feature's own serde — `typetag` names the type —
   so a new `FeatureTrait` implementor saves the day it is written. What can
@@ -2113,7 +2131,7 @@ undo step (`replace_as_edit`), and the map knows whether it matches its file
 (`is_dirty`), which is what greys Revert out and puts the asterisk in the menu
 bar.
 
-**The History panel is the feature list**, with a rollback bar drawn in it:
+**The Features panel is the feature list**, with a rollback bar drawn in it:
 drag it up to see the map as it stood partway through, or roll back from a
 row's menu. The bar is `rollback: Option<FeatureId>` — the last feature shown,
 by id, so edits above it cannot move it — and it is **view state**: not saved,
