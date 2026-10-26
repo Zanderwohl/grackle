@@ -13,7 +13,9 @@ use crate::common::class::Class;
 use std::collections::BTreeMap;
 
 use crate::common::skeleton::clip::Clip;
-use crate::common::skeleton::play::{apply_stack, ClipAssetsPlugin, ClipStack, Frames, Layer, Playing, Regions};
+use crate::common::skeleton::play::{
+    apply_stack, ClipAssetsPlugin, ClipStack, Frames, Layer, LayerBlends, Regions,
+};
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::weapon::{Equipped, WeaponCatalogue, WeaponId};
 use crate::game::condition::Condition;
@@ -292,9 +294,8 @@ pub(crate) fn place_the_weapon(
 /// clip. A switch is noticed by comparing, so a weapon that resolves late still
 /// deploys.
 ///
-/// A one-shot is dropped when it ends. That is seamless only because a deploy
-/// ends at zero offset; a clip ending elsewhere would need blending out via
-/// `Playing::weight`.
+/// A clip that ends or is replaced is sent out rather than dropped, and fades
+/// at its layer's blend; see `fade_the_layers`.
 ///
 /// Not simulation: nothing here is predicted, replicated or reconciled.
 pub(crate) fn perform_weapon_clips(
@@ -339,23 +340,37 @@ pub(crate) fn perform_weapon_clips(
         }
 
         let elapsed = *elapsed;
-        let ours = |playing: &Playing| playing.layer == Layer::Weapon;
-        match stack.0.iter_mut().find(|playing| ours(playing)) {
-            // The common case: the same clip, a little further on.
-            Some(playing) if playing.clip == *handle => playing.time = elapsed,
-            _ => {
-                stack.0.retain(|playing| !ours(playing));
-                stack.0.push(Playing::new(Layer::Weapon, handle.clone(), elapsed));
-            }
+        if let Some(playing) = stack.keep(is_the_weapons, Some((Layer::Weapon, handle))) {
+            playing.time = elapsed;
         }
     }
 }
 
-/// Take the weapon's clips off a stack, leaving other layers' and without
-/// marking it changed when there were none.
+fn is_the_weapons(layer: Layer) -> bool {
+    layer == Layer::Weapon
+}
+
+/// Send the weapon's clips out, leaving other layers' and without marking the
+/// stack changed when there were none.
 fn stop(stack: &mut Mut<ClipStack>) {
-    if stack.0.iter().any(|playing| playing.layer == Layer::Weapon) {
-        stack.0.retain(|playing| playing.layer != Layer::Weapon);
+    if stack.has_staying(is_the_weapons) {
+        stack.keep(is_the_weapons, None);
+    }
+}
+
+/// Fade every stack's clips in and out; runs after everything that starts or
+/// stops one, so a clip sent out this frame starts fading this frame.
+pub(crate) fn fade_the_layers(
+    time: Res<Time>,
+    clips: Res<Assets<Clip>>,
+    blends: Res<LayerBlends>,
+    mut stacks: Query<&mut ClipStack>,
+) {
+    let delta = time.delta_secs();
+    for mut stack in &mut stacks {
+        if stack.is_fading() {
+            stack.fade(delta, &clips, &blends);
+        }
     }
 }
 
@@ -430,7 +445,9 @@ pub(crate) fn play_the_clips(
 ///
 /// An arm a layer above the weapon family owns is left alone: the hand has
 /// been taken off the weapon, and gripping anyway is TF2's humiliated Medic
-/// with his hand twisted round an invisible medigun.
+/// with his hand twisted round an invisible medigun. One fading in or out
+/// over the arm shares it: the grip is solved and then pulled back towards
+/// the clip by that layer's weight, so the hand leaves the weapon smoothly.
 ///
 /// [`prop::hold`]: crate::prop::hold
 pub(crate) fn grip_the_weapon(
@@ -447,18 +464,27 @@ pub(crate) fn grip_the_weapon(
         if !held.resolved || held.weapon.is_none() {
             continue;
         }
-        let free = |arm| {
-            stack
-                .and_then(|stack| stack.owner(arm))
-                .is_none_or(Layer::grips_the_weapon)
-        };
-        let which = [free(Regions::ARM_R), free(Regions::ARM_L)];
-        if which == [false; 2] {
+        let arms = [Regions::ARM_R, Regions::ARM_L];
+        let cover = arms.map(|arm| stack.map_or(0.0, |stack| stack.cover(arm, Layer::Weapon)));
+        if cover.iter().all(|cover| *cover >= 1.0) {
             continue;
         }
 
         let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
-        grip_hands(skeleton, &mut pose, &root, &held.hold, &weapon.0, which);
+        let clipped = pose.clone();
+        grip_hands(skeleton, &mut pose, &root, &held.hold, &weapon.0, cover.map(|cover| cover < 1.0));
+
+        for (arm, cover) in arms.into_iter().zip(cover) {
+            if cover <= 0.0 || cover >= 1.0 {
+                continue;
+            }
+            for bone in skeleton.bones() {
+                if Regions::of_bone(bone.name) == arm {
+                    let gripped = pose.joint(bone.name);
+                    pose.set(bone.name, gripped.slerp(clipped.joint(bone.name), cover));
+                }
+            }
+        }
     }
 }
 
@@ -509,6 +535,7 @@ mod tests {
 
     use strum::IntoEnumIterator;
     use super::*;
+    use crate::common::skeleton::play::Playing;
     use crate::common::weapon::{Magazine, Mounted, Slot, Weapon};
     use crate::common::class::Class;
     use crate::common::skeleton::rig::bone;
@@ -703,7 +730,7 @@ mod tests {
             world.run_system_once(perform_weapon_clips).unwrap();
         }
         assert!(
-            world.get::<ClipStack>(body).unwrap().0.is_empty(),
+            world.get::<ClipStack>(body).unwrap().0.iter().all(|playing| playing.leaving),
             "the deploy never ended",
         );
     }
@@ -864,6 +891,37 @@ mod tests {
 
         assert!(hand(&world, gripping).distance(rest) > 0.05, "the plain body did not grip at all");
         assert_eq!(hand(&world, humiliated), rest, "the grip took a hand a higher layer owns");
+    }
+
+    /// Halfway into humiliation, the hand is halfway off the weapon rather
+    /// than snapped to either end.
+    #[test]
+    fn a_layer_fading_over_an_arm_shares_it_with_the_grip() {
+        let hand = |world: &World, body: Entity| {
+            let skeleton = world.get::<Skeleton>(body).unwrap().clone();
+            let pose = world.get::<Pose>(body).unwrap().clone();
+            let index = skeleton.index_of(crate::common::skeleton::rig::bone::FOREARM_R).unwrap();
+            skeleton.posed_bones(&pose, &Transform::IDENTITY)[index].tail
+        };
+        let mut world = World::new();
+        let gripping = body_holding(&mut world, Class::Medic, 0.0);
+        let halfway = body_holding(&mut world, Class::Medic, 0.0);
+        let rest = hand(&world, halfway);
+        let nothing = world.resource_mut::<Assets<Clip>>().add(Clip::default());
+        world.entity_mut(halfway).insert(ClipStack(vec![Playing {
+            weight: 0.5,
+            ..Playing::new(Layer::Humiliation, nothing, 0.0)
+        }]));
+
+        world.run_system_once(place_the_weapon).unwrap();
+        world.run_system_once(play_the_clips).unwrap();
+        world.run_system_once(grip_the_weapon).unwrap();
+
+        let gripped = hand(&world, gripping);
+        let shared = hand(&world, halfway);
+        let span = gripped.distance(rest);
+        assert!(shared.distance(rest) > 0.2 * span, "the hand stayed where the clip left it");
+        assert!(shared.distance(gripped) > 0.2 * span, "the hand snapped onto the weapon");
     }
 
     /// A carry is in fractions of arm length so it retargets; a class whose

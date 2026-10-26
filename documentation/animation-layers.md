@@ -135,9 +135,14 @@ Each layer has a **blend in** and a **blend out** in seconds, ramping
 blend out, so nothing pops. A finished one-shot fades out rather than being
 dropped, which replaces "seamless only because a deploy ends at zero offset".
 
-Defaults per layer are pack content, beside `classes.toml`, so they are tuned
-without a rebuild. A clip may override its layer's numbers; absence means the
-layer's.
+Defaults per layer are pack content, `layers.toml` beside `classes.toml`, so
+they are tuned without a rebuild. A clip may override its layer's numbers;
+absence means the layer's. The weapon layer fades in at zero, since a deploy
+starts below the frame and fading it in would show the hold first.
+
+A layer fading in masks nothing beneath it, so it blends over what is there.
+The grip is shared the same way: solved, then pulled back towards the clip by
+the weight of whatever is fading over the arm.
 
 ### Some layers reach the viewmodel, some do not
 
@@ -206,8 +211,11 @@ outside its layer's claim is a problem `Clip::problems` reports.
       above. `look_with_the_head` and `plant_feet` run before the stack, so a
       higher layer's `Replace` track already overrides them; neither needed a
       check of its own.
-- [ ] Blend in and out per layer from a pack file, overridable per clip;
-      one-shots fade out instead of being dropped.
+- [x] Blend in and out per layer from `layers.toml`, overridable per clip
+      (`blend_in`/`blend_out` on the clip, in the file only — no editor field
+      yet); one-shots fade out instead of being dropped. Owners send clips
+      out with `ClipStack::keep`, and `fade_the_layers` takes them down and
+      off. The grip shares an arm with a layer fading over it.
 - [x] `Condition` component, replicated: humiliated. `pull_trigger` refuses;
       `show_held_weapons` hides the weapon per condition.
 - [ ] Taunting as a condition (which taunt, start tick).

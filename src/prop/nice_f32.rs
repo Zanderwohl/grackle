@@ -23,6 +23,18 @@ pub mod scalar {
     }
 }
 
+pub mod option {
+    use super::*;
+
+    pub fn serialize<S: Serializer>(value: &Option<f32>, serializer: S) -> Result<S::Ok, S::Error> {
+        value.map(widen).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<f32>, D::Error> {
+        Option::<f64>::deserialize(deserializer).map(|value| value.map(|value| value as f32))
+    }
+}
+
 pub mod array {
     use super::*;
 

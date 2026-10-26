@@ -11,6 +11,7 @@ pub mod weapon;
 pub mod weapon_file;
 pub mod pack_sync;
 pub mod class_file;
+pub mod layer_file;
 pub mod hitbox;
 pub mod flame;
 pub mod hitscan;

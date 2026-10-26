@@ -1,0 +1,11 @@
+# Seconds each animation layer takes to fade in over what is beneath it, and
+# back out. A layer not named here snaps. A clip may override either number
+# with `blend_in` or `blend_out` of its own.
+
+[weapon]
+blend_in = 0.0
+blend_out = 0.12
+
+[humiliation]
+blend_in = 0.25
+blend_out = 0.2

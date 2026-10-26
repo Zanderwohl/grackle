@@ -563,6 +563,14 @@ pub struct Clip {
     pub note: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tracks: Vec<Track>,
+    /// Seconds to fade in over the layer beneath, overriding the layer's
+    /// `layers.toml` entry. A clip that starts away from where its layer
+    /// leaves things — a deploy, from below the frame — wants zero.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::prop::nice_f32::option")]
+    pub blend_in: Option<f32>,
+    /// Seconds to fade back out, likewise.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::prop::nice_f32::option")]
+    pub blend_out: Option<f32>,
 }
 
 /// How many strides a [`Clock::Stride`] clip of `length` is played over, never
@@ -889,6 +897,8 @@ mod tests {
             length: 2.0,
             clock: Clock::Seconds,
             looping: false,
+            blend_in: None,
+            blend_out: None,
             note: String::new(),
             tracks: vec![
                 Track {

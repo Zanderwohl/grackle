@@ -785,6 +785,8 @@ mod tests {
                 length: 0.45,
                 clock: Clock::Seconds,
                 looping: false,
+                blend_in: None,
+                blend_out: None,
                 note: "the launcher swings up as it comes out".into(),
                 tracks: vec![Track {
                     combine: Combine::Compose,

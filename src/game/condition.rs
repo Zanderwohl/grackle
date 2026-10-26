@@ -10,7 +10,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::assets::Assets as PackAssets;
 use crate::common::assets::default_packs;
 use crate::common::skeleton::clip::Clip;
-use crate::common::skeleton::play::{ClipStack, Layer, Playing};
+use crate::common::skeleton::play::{ClipStack, Layer};
 use crate::game::player::{Inputs, LocalPlayer, ViewMode, ViewPreference};
 
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, Serialize, Deserialize)]
@@ -138,20 +138,11 @@ pub(crate) fn perform_conditions(
         let wanted = condition
             .performance()
             .and_then(|(layer, _)| Some((layer, clips.as_deref()?.of(*condition)?)));
-        let playing = stack.0.iter().position(|playing| is_a_condition(playing.layer));
-
-        match (wanted, playing) {
-            (Some((layer, handle)), Some(index))
-                if stack.0[index].layer == layer && stack.0[index].clip == *handle =>
-            {
-                stack.0[index].time += delta;
-            }
-            (Some((layer, handle)), _) => {
-                stack.0.retain(|playing| !is_a_condition(playing.layer));
-                stack.0.push(Playing::new(layer, handle.clone(), 0.0));
-            }
-            (None, Some(_)) => stack.0.retain(|playing| !is_a_condition(playing.layer)),
-            (None, None) => {}
+        if wanted.is_none() && !stack.has_staying(is_a_condition) {
+            continue;
+        }
+        if let Some(playing) = stack.keep(is_a_condition, wanted) {
+            playing.time += delta;
         }
     }
 }
@@ -165,6 +156,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
+    use crate::common::skeleton::play::Playing;
     use crate::game::player::PlayerInput;
 
     #[test]
@@ -214,7 +206,7 @@ mod tests {
         assert_eq!(*world.resource::<ViewMode>(), ViewMode::FirstPerson);
     }
 
-    /// The clip goes on with the condition and comes off with it, and a
+    /// The clip goes on with the condition and is sent out with it, and a
     /// weapon's clip beside it is left alone.
     #[test]
     fn the_condition_clip_follows_the_condition() {
@@ -234,13 +226,14 @@ mod tests {
         world.run_system_once(perform_conditions).unwrap();
         let stack = world.get::<ClipStack>(body).unwrap();
         assert_eq!(stack.0.len(), 2);
-        assert_eq!(stack.owner(crate::common::skeleton::play::Regions::ARM_R), Some(Layer::Humiliation));
+        assert!(stack.0.iter().any(|playing| playing.layer == Layer::Humiliation && !playing.leaving));
 
         *world.get_mut::<Condition>(body).unwrap() = Condition::Normal;
         world.run_system_once(perform_conditions).unwrap();
         let stack = world.get::<ClipStack>(body).unwrap();
-        assert_eq!(stack.0.len(), 1, "the humiliation clip outlived humiliation");
-        assert_eq!(stack.0[0].layer, Layer::Weapon, "the weapon's clip was taken off too");
+        let leaving = |layer| stack.0.iter().find(|playing| playing.layer == layer).unwrap().leaving;
+        assert!(leaving(Layer::Humiliation), "the humiliation clip outlived humiliation");
+        assert!(!leaving(Layer::Weapon), "the weapon's clip was sent out too");
     }
 
     /// Every build gets both hands up from the shipped clip, at both ends of

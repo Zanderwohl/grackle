@@ -10,6 +10,7 @@
 //! leaves the layer beneath alone, as absence does in a [`Pose`].
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use super::clip::{Axis, ChainRef, Channel, Clip, Combine, Key, Space, Unit};
 use super::ik::{self, Chain, Reach};
@@ -240,10 +241,45 @@ impl Layer {
         }
     }
 
-    /// Whether `grip_the_weapon` may solve an arm this layer owns. Anything
-    /// above the weapon family has taken the hand off the weapon.
-    pub fn grips_the_weapon(self) -> bool {
-        self <= Layer::Weapon
+    /// How a layer is written in `layers.toml`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Layer::Locomotion => "locomotion",
+            Layer::Weapon => "weapon",
+            Layer::Humiliation => "humiliation",
+        }
+    }
+
+    pub fn named(key: &str) -> Option<Layer> {
+        Layer::ALL.into_iter().find(|layer| layer.key() == key)
+    }
+
+    pub const ALL: [Layer; 3] = [Layer::Locomotion, Layer::Weapon, Layer::Humiliation];
+}
+
+/// Seconds a layer takes to fade in over what is beneath it, and back out.
+/// Zero snaps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Blend {
+    #[serde(default, with = "crate::prop::nice_f32::scalar")]
+    pub blend_in: f32,
+    #[serde(default, with = "crate::prop::nice_f32::scalar")]
+    pub blend_out: f32,
+}
+
+/// Each layer's [`Blend`], from the packs' `layers.toml`. A layer the file
+/// does not name snaps.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct LayerBlends(pub std::collections::BTreeMap<Layer, Blend>);
+
+impl LayerBlends {
+    /// `clip`'s own numbers where it has them, its layer's otherwise.
+    pub fn of(&self, layer: Layer, clip: Option<&Clip>) -> Blend {
+        let layer = self.0.get(&layer).copied().unwrap_or_default();
+        Blend {
+            blend_in: clip.and_then(|clip| clip.blend_in).unwrap_or(layer.blend_in),
+            blend_out: clip.and_then(|clip| clip.blend_out).unwrap_or(layer.blend_out),
+        }
     }
 }
 
@@ -318,12 +354,20 @@ pub struct Playing {
     pub layer: Layer,
     /// Tracks outside these still play, unless a higher layer claims them.
     pub claims: Regions,
+    /// Whoever started it is done with it: [`ClipStack::fade`] takes it down
+    /// and then off. Its owner looks past it, and may take it back.
+    pub leaving: bool,
 }
 
 impl Playing {
     /// At full weight, claiming what its layer does.
     pub fn new(layer: Layer, clip: Handle<Clip>, time: f32) -> Playing {
-        Playing { clip, time, weight: 1.0, layer, claims: layer.claims() }
+        Playing { clip, time, weight: 1.0, layer, claims: layer.claims(), leaving: false }
+    }
+
+    /// At no weight, for [`ClipStack::fade`] to bring in.
+    pub fn entering(layer: Layer, clip: Handle<Clip>, time: f32) -> Playing {
+        Playing { weight: 0.0, ..Playing::new(layer, clip, time) }
     }
 }
 
@@ -340,6 +384,78 @@ impl ClipStack {
             .filter(|playing| playing.weight > 0.0 && playing.claims.overlaps(region))
             .map(|playing| playing.layer)
             .max()
+    }
+
+    /// How much of `region` layers above `above` show, `0..=1`: the most any
+    /// one of them does.
+    pub fn cover(&self, region: Regions, above: Layer) -> f32 {
+        self.0
+            .iter()
+            .filter(|playing| playing.layer > above && playing.claims.overlaps(region))
+            .map(|playing| playing.weight)
+            .fold(0.0, f32::max)
+    }
+
+    /// Bring entering clips up to full weight and leaving ones down and off,
+    /// at their [`Blend`]s. A leaving clip's time is ticked here, since its
+    /// owner has stopped ticking it.
+    pub fn fade(&mut self, delta: f32, clips: &Assets<Clip>, blends: &LayerBlends) {
+        for playing in &mut self.0 {
+            let blend = blends.of(playing.layer, clips.get(&playing.clip));
+            let step = |seconds: f32| if seconds > 0.0 { delta / seconds } else { 1.0 };
+            if playing.leaving {
+                playing.weight = (playing.weight - step(blend.blend_out)).max(0.0);
+                playing.time += delta;
+            } else if playing.weight < 1.0 {
+                playing.weight = (playing.weight + step(blend.blend_in)).min(1.0);
+            }
+        }
+        self.0.retain(|playing| !playing.leaving || playing.weight > 0.0);
+    }
+
+    /// Make `wanted` the one clip of `ours` that is staying: taken back if it
+    /// was on its way out, brought in if it is not here, and every other clip
+    /// of `ours` sent out. `None` sends them all. Returns the one staying, for
+    /// its owner to tick.
+    pub fn keep(
+        &mut self,
+        ours: impl Fn(Layer) -> bool,
+        wanted: Option<(Layer, &Handle<Clip>)>,
+    ) -> Option<&mut Playing> {
+        let is_wanted = |playing: &Playing| {
+            wanted.is_some_and(|(layer, clip)| playing.layer == layer && playing.clip == *clip)
+        };
+        let mut staying = None;
+        for (index, playing) in self.0.iter_mut().enumerate() {
+            if !ours(playing.layer) {
+                continue;
+            }
+            if staying.is_none() && is_wanted(playing) {
+                playing.leaving = false;
+                staying = Some(index);
+            } else {
+                playing.leaving = true;
+            }
+        }
+        let index = match (staying, wanted) {
+            (Some(index), _) => index,
+            (None, Some((layer, clip))) => {
+                self.0.push(Playing::entering(layer, clip.clone(), 0.0));
+                self.0.len() - 1
+            }
+            (None, None) => return None,
+        };
+        Some(&mut self.0[index])
+    }
+
+    /// Whether any clip of `ours` is playing and not on its way out.
+    pub fn has_staying(&self, ours: impl Fn(Layer) -> bool) -> bool {
+        self.0.iter().any(|playing| ours(playing.layer) && !playing.leaving)
+    }
+
+    /// Whether [`ClipStack::fade`] has anything to do.
+    pub fn is_fading(&self) -> bool {
+        self.0.iter().any(|playing| playing.leaving || playing.weight < 1.0)
     }
 
     /// Everything fully covered by layers above `layer`. A layer still blending
@@ -1218,6 +1334,67 @@ mod tests {
         assert!((angle(bone::THIGH_L) - 0.4).abs() < 1e-4, "the higher layer masked a leg it never claimed");
         assert_eq!(stack.owner(Regions::TORSO), Some(Layer::Humiliation));
         assert_eq!(stack.owner(Regions::LEGS), Some(Layer::Locomotion));
+    }
+
+    /// In over its blend, out over its blend, then off the stack; a layer
+    /// with no blend snaps both ways.
+    #[test]
+    fn a_clip_fades_in_and_out_at_its_layers_blend() {
+        let mut clips = Assets::<Clip>::default();
+        let clip = clips.add(Clip::default());
+        let blends = LayerBlends(
+            [(Layer::Humiliation, Blend { blend_in: 0.2, blend_out: 0.4 })].into_iter().collect(),
+        );
+        let wanted = Some((Layer::Humiliation, &clip));
+        let ours = |layer| layer == Layer::Humiliation;
+
+        let mut stack = ClipStack::default();
+        stack.keep(ours, wanted);
+        assert_eq!(stack.0[0].weight, 0.0, "a clip came in already showing");
+        stack.fade(0.1, &clips, &blends);
+        assert!((stack.0[0].weight - 0.5).abs() < 1e-5, "{}", stack.0[0].weight);
+        stack.fade(0.1, &clips, &blends);
+        assert_eq!(stack.0[0].weight, 1.0);
+
+        stack.keep(ours, None);
+        stack.fade(0.2, &clips, &blends);
+        assert!((stack.0[0].weight - 0.5).abs() < 1e-5, "{}", stack.0[0].weight);
+        assert!((stack.0[0].time - 0.2).abs() < 1e-5, "a leaving clip stopped its clock");
+
+        // Wanted back halfway out: the same clip returns, from where it was.
+        stack.keep(ours, wanted);
+        assert_eq!(stack.0.len(), 1, "a second copy was brought in");
+        stack.fade(0.05, &clips, &blends);
+        assert!((stack.0[0].weight - 0.75).abs() < 1e-5, "{}", stack.0[0].weight);
+
+        stack.keep(ours, None);
+        stack.fade(1.0, &clips, &blends);
+        assert!(stack.0.is_empty(), "a faded-out clip stayed on the stack");
+
+        let mut snapping = ClipStack::default();
+        snapping.keep(ours, wanted);
+        snapping.fade(1e-3, &clips, &LayerBlends::default());
+        assert_eq!(snapping.0[0].weight, 1.0, "a layer with no blend faded");
+    }
+
+    /// A layer fading in masks nothing, so it blends over what is beneath.
+    #[test]
+    fn a_layer_fading_in_shows_over_the_one_beneath() {
+        let rig = default_humanoid().clone();
+        let ground = |_: Vec3| 0.0;
+        let frames = Frames::standing(Transform::IDENTITY, Transform::IDENTITY, &ground);
+        let mut clips = Assets::<Clip>::default();
+        let below = clips.add(chest_turned_by(0.6));
+        let above = clips.add(chest_turned_by(0.2));
+
+        let mut pose = Pose::rest();
+        let stack = ClipStack(vec![
+            Playing { weight: 0.5, ..Playing::new(Layer::Humiliation, above, 0.0) },
+            Playing::new(Layer::Locomotion, below, 0.0),
+        ]);
+        apply_stack(&stack, &clips, &rig, &mut pose, &frames, None);
+        let angle = pose.joint(bone::CHEST).angle_between(Quat::IDENTITY);
+        assert!((angle - 0.4).abs() < 1e-3, "halfway from 0.6 to 0.2 should be 0.4, not {angle}");
     }
 
     fn chest_turned_by(angle: f32) -> Clip {

@@ -263,6 +263,8 @@ fn bake_clip(seed: Seed, heading: f32) -> Clip {
         length,
         clock,
         looping,
+        blend_in: None,
+        blend_out: None,
         note: note.to_string(),
         tracks,
     }
@@ -379,6 +381,8 @@ fn bake_a_stride(seed: Seed, heading: f32) -> Clip {
         length,
         clock,
         looping,
+        blend_in: None,
+        blend_out: None,
         note: note.to_string(),
         tracks,
     }

@@ -770,7 +770,10 @@ the hold, locomotion — and which passes yield when outranked is planned in
 the stack, and **`grip_the_weapon` leaves an arm alone when a layer above the
 weapon owns it**. A `Condition` (humiliation now) is gameplay state written
 by the authority and read by firing, the held weapon, the view and the
-stack; nothing in the animation decides whether a body may shoot.
+stack; nothing in the animation decides whether a body may shoot. Clips fade
+in and out at their layer's blend from `assets/default/layers.toml`: an owner
+sends a clip out with `ClipStack::keep` rather than removing it, and
+`fade_the_layers` is the only thing that takes one off.
 
 `every_class_can_reach_every_shipped_props_grip` is what keeps a hold
 authorable: a build whose hand cannot get to the grip holds nothing while its
