@@ -10,6 +10,8 @@
 //! `a_new_map_can_be_stood_in_lit_and_spawned_into` in
 //! [`grackle::editor::save`], which deliberately pins no coordinates.
 
+use std::collections::BTreeMap;
+use std::f32::consts::{FRAC_PI_2, PI};
 use std::path::PathBuf;
 
 use bevy::prelude::Vec3;
@@ -23,6 +25,9 @@ use grackle::editor::grackle_point_light::GracklePointLight;
 use grackle::editor::map_metadata::MapMetadata;
 use grackle::editor::prop::Prop;
 use grackle::editor::save;
+use grackle::common::palette::{Palette, RolePaint};
+use grackle::common::team::Team;
+use grackle::editor::mirror::{Mirror, Symmetry};
 use grackle::editor::spawn_point::SpawnPoint;
 
 /// Clear floor between the grid and the walls: enough to back away and see a
@@ -37,6 +42,12 @@ const LIGHT_HEIGHT_M: f32 = 4.5;
 
 /// How far each pack sits from both walls of its corner.
 const PACK_FROM_WALLS_M: f32 = 1.5;
+
+/// A team's spawn nook, butted against a side wall so the shared face opens it into the room.
+const NOOK_M: Vec3 = Vec3::new(2.0, 3.0, 2.0);
+
+/// The role a nook's walls name; the palette paints it in each side's colour.
+const SPAWN_WALLS: &str = "spawn_walls";
 
 fn main() {
     let mut timeline = FeatureTimeline::default();
@@ -85,7 +96,7 @@ fn main() {
     // Facing +Z, towards the grid.
     timeline.apply_feature(Box::new(
         SpawnPoint::from_point_ref(on_the_floor(room, spawn_offset))
-            .with_yaw(std::f32::consts::PI),
+            .with_yaw(PI),
     ));
 
     // Yaw zero faces -Z, so the roster looks back at the spawn.
@@ -110,10 +121,48 @@ fn main() {
         timeline.apply_feature(Box::new(Prop::from_point_ref(at).with_model(model)));
     }
 
+    // Red's nook on the +X wall, as the spawn above faces its left, and Blue's made from it by the
+    // Mirror. Anchored to the middle of that wall's floor edge, so it follows the wall when the
+    // room is resized.
+    let mut nook_corner = PointRef::reference_with_offset(room, 0.0, 0.0, -NOOK_M.z / 2.0);
+    nook_corner.point_key = "back_bottom_edge_center".to_owned();
+    let nook_surfaces = RoomSurfaces {
+        floor: Some("tread_plate".to_owned()),
+        walls: Some(SPAWN_WALLS.to_owned()),
+        ceiling: Some("plaster".to_owned()),
+    };
+    let nook = timeline.apply_feature(Box::new(
+        EditorRoom::from_min_and_size(nook_corner, NOOK_M).with_surfaces(nook_surfaces),
+    ));
+    // Yaw a quarter turn faces -X: out of the nook and into the room.
+    let nook_spawn = timeline.apply_feature(Box::new(
+        SpawnPoint::from_point_ref(on_the_floor(nook, Vec3::ZERO)).with_yaw(FRAC_PI_2),
+    ));
+    timeline.apply_feature(Box::new(
+        Mirror::new(on_the_floor(room, Vec3::ZERO))
+            .with_symmetry(Symmetry::MirrorX)
+            .with_sources(vec![nook, nook_spawn])
+            .with_teams(Team::Red, Team::Blue),
+    ));
+
+    let mut metadata = MapMetadata::default();
+    metadata.palette = Palette {
+        roles: BTreeMap::from([(
+            SPAWN_WALLS.to_owned(),
+            RolePaint {
+                sides: BTreeMap::from([
+                    (Team::Red, "plaster_red".to_owned()),
+                    (Team::Blue, "plaster_blue".to_owned()),
+                ]),
+                unsided: Some("plaster".to_owned()),
+            },
+        )]),
+    };
+
     let path = PathBuf::from(format!(
         "assets/default/blueprints/new.{MAP_BLUEPRINT_EXTENSION}"
     ));
-    match save::save(&path, &timeline, &MapMetadata::default()) {
+    match save::save(&path, &timeline, &metadata) {
         Ok(()) => println!("Wrote {}", path.display()),
         Err(error) => {
             eprintln!("Could not write {}: {error}", path.display());

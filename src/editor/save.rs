@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::mode::GameMode;
 use crate::common::movement_rules::MovementRules;
+use crate::common::palette::Palette;
 use crate::constants::{MAP_BACKUP_EXTENSION, MAP_BLUEPRINT_EXTENSION};
 use crate::editor::editable::{Feature, FeatureId, FeatureTimeline};
 use crate::editor::map_metadata::MapMetadata;
@@ -40,6 +41,8 @@ pub struct SavedMetadata {
     game_mode: String,
     #[serde(default)]
     movement: MovementRules,
+    #[serde(default, skip_serializing_if = "Palette::is_empty")]
+    palette: Palette,
 }
 
 impl SavedMetadata {
@@ -49,6 +52,7 @@ impl SavedMetadata {
             authors: metadata.authors.clone(),
             game_mode: metadata.game_mode.prefix().to_owned(),
             movement: metadata.movement,
+            palette: metadata.palette.clone(),
         }
     }
 
@@ -60,6 +64,7 @@ impl SavedMetadata {
         }
         metadata.game_mode = GameMode::try_from(self.game_mode.as_str()).unwrap_or(GameMode::Arena);
         metadata.movement = self.movement;
+        metadata.palette = self.palette;
         metadata.normalize_authors_ui_text();
         metadata
     }

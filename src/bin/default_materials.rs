@@ -23,7 +23,9 @@ fn main() {
         ("steel_plate", steel_plate()),
         ("tread_plate", tread_plate()),
         ("board_formed_concrete", board_formed_concrete()),
-        ("plaster", plaster()),
+        ("plaster", plaster(Paint::OFF_WHITE)),
+        ("plaster_red", plaster(Paint::PASTEL_RED)),
+        ("plaster_blue", plaster(Paint::PASTEL_BLUE)),
     ] {
         let path = dir.join(format!("{name}.{}", material::FILE_EXTENSION));
         material::save(&path, &graph).unwrap_or_else(|e| panic!("{e}"));
@@ -398,12 +400,29 @@ fn board_formed_concrete() -> Graph {
     })
 }
 
-/// Painted plaster: warm off-white, broad soft variation and a gentle undulation from the trowel,
-/// and a fine orange-peel relief from the paint roller.
-fn plaster() -> Graph {
+/// What a plaster is painted, in Oklch: the shaded and bright ends its trowel swings between.
+struct Paint {
+    lightness: (f32, f32),
+    chroma: (f32, f32),
+    hue: f32,
+}
+
+impl Paint {
+    const OFF_WHITE: Paint = Paint { lightness: (0.85, 0.90), chroma: (0.008, 0.010), hue: 85.0 };
+    /// The spawn rooms' team colours: pale enough to read as painted plaster, not as a light.
+    const PASTEL_RED: Paint = Paint { lightness: (0.78, 0.83), chroma: (0.088, 0.092), hue: 22.0 };
+    const PASTEL_BLUE: Paint = Paint { lightness: (0.77, 0.82), chroma: (0.078, 0.082), hue: 245.0 };
+}
+
+/// Painted plaster: broad soft variation and a gentle undulation from the trowel, and a fine
+/// orange-peel relief from the paint roller.
+fn plaster(paint: Paint) -> Graph {
     let mut g = empty();
     let trowel = g.add_layer("trowel", tiling_fbm(30, 2, 5)).unwrap();
-    let (shaded, bright) = noisy_pair(oklcha(0.85, 0.008, 85.0, 1.0), oklcha(0.90, 0.010, 85.0, 1.0));
+    let (shaded, bright) = noisy_pair(
+        oklcha(paint.lightness.0, paint.chroma.0, paint.hue, 1.0),
+        oklcha(paint.lightness.1, paint.chroma.1, paint.hue, 1.0),
+    );
     let colour = mapped(&mut g, "colour", trowel, &[(0.25, shaded), (0.75, bright)]);
     let sheen = g.add_layer("sheen", tiling_fbm(32, 4, 3)).unwrap();
     let (smooth, rough) = noisy(0.80, 0.95);

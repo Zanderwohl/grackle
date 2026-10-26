@@ -17,6 +17,8 @@ use super::gpu::{BakedTextures, BevyDevice, Encoding, Sampling};
 use super::{FILE_EXTENSION, MATERIALS_DIR};
 use crate::common::assets::{default_packs, Assets as PackAssets};
 use crate::tool::bakes::{RoomBake, RoomSlotMesh};
+use crate::common::palette::Palette;
+use crate::common::team::Side;
 use crate::tool::room::RoomSurfaces;
 
 pub const TILE_TEXELS: u32 = 512;
@@ -134,11 +136,14 @@ pub fn paint_rooms(
     mut bake: ResMut<RoomBake>,
     packs: Res<PackAssets>,
     device: BevyDevice,
-    rooms: Query<&RoomSurfaces>,
+    palette: Res<Palette>,
+    rooms: Query<(&RoomSurfaces, Option<&Side>)>,
     mut parts: Query<(&RoomSlotMesh, &mut MeshMaterial3d<StandardMaterial>)>,
 ) {
     for (part, mut drawn) in &mut parts {
-        let named = rooms.get(part.room).ok().and_then(|surfaces| surfaces.of(part.slot));
+        let named = rooms.get(part.room).ok().and_then(|(surfaces, side)| {
+            palette.resolve(surfaces.of(part.slot)?, side.copied())
+        });
         let wanted = match named
             .and_then(|name| library.ensure(name, &packs, &device, &mut baked, &mut standard))
         {
