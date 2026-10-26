@@ -43,6 +43,13 @@ strum_macros = "0.27.2"
 rand = "0.9.2"
 lightyear = { version = "0.31", features = ["netcode", "udp", "input_native"] }
 
+# Pinned to a commit: texture-graph is not on crates.io yet. Its egui and wgpu
+# have to be the ones bevy_egui and bevy use, or the editor's types do not
+# meet ours; bump the rev and bevy together. `default-features = false` keeps
+# core's `std-fs` off, which wasm needs.
+texture-graph-core = { git = "https://github.com/Zanderwohl/texture-graph", rev = "8513b5f12e06fe2b8f1f2edde1c57fc5896ea8be", default-features = false }
+texture-graph-editor = { git = "https://github.com/Zanderwohl/texture-graph", rev = "8513b5f12e06fe2b8f1f2edde1c57fc5896ea8be" }
+
 # Only used from tests: the encoding Lightyear puts messages on the wire in. A
 # message carrying an internally tagged enum fails to *decode* at the far end
 # and nowhere else, which is a silent bug on a live connection — so the tests
