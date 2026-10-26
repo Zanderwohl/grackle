@@ -906,9 +906,19 @@ nothing in a map reads one yet.
 - **The panels add their canvas on first draw**, which is housekeeping, not an
   edit. `MaterialEditor::show` adds it on open and restore so a fresh file
   neither reads as changed nor offers an undo that removes the canvas.
-- **Previews take texture-graph's CPU path**, because sharing Bevy's device
-  needs a `TextureRegistry` that turns a baked wgpu texture into an egui id
-  through bevy_egui, which only takes `Handle<Image>`. That is the next piece.
+- **Previews bake on Bevy's own device**
+  ([`src/material/gpu.rs`](src/material/gpu.rs)). bevy_egui only draws
+  `Image` assets, so a baked texture is given an invented `AssetId` with no
+  `Image` behind it, registered as a weak handle, and a `GpuImage` wrapping
+  it is put into `RenderAssets<GpuImage>` after Bevy prepares its own. With
+  no asset, nothing in Bevy ever removes the entry; freeing it is ours.
+- **The registry is lent per frame**, not owned by the editor, because it
+  borrows `EguiContexts`, which also holds bevy_egui's user textures — ask
+  for `EguiUserTextures` beside it and Bevy refuses the system at startup.
+- **Previews are viewed as `Rgba8UnormSrgb`.** texture-graph stores
+  sRGB-encoded bytes in `Rgba8Unorm` (storage writes cannot be sRGB);
+  bevy_egui blends in linear space, so drawn as they are every preview is
+  washed out, with no error.
 
 ## Thumbnails
 

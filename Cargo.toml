@@ -47,8 +47,12 @@ lightyear = { version = "0.31", features = ["netcode", "udp", "input_native"] }
 # have to be the ones bevy_egui and bevy use, or the editor's types do not
 # meet ours; bump the rev and bevy together. `default-features = false` keeps
 # core's `std-fs` off, which wasm needs.
-texture-graph-core = { git = "https://github.com/Zanderwohl/texture-graph", rev = "8513b5f12e06fe2b8f1f2edde1c57fc5896ea8be", default-features = false }
-texture-graph-editor = { git = "https://github.com/Zanderwohl/texture-graph", rev = "8513b5f12e06fe2b8f1f2edde1c57fc5896ea8be" }
+texture-graph-core = { git = "https://github.com/Zanderwohl/texture-graph", rev = "6e83279c7653b7839016aad2a9caf4e39f993ca2", default-features = false }
+texture-graph-gpu = { git = "https://github.com/Zanderwohl/texture-graph", rev = "6e83279c7653b7839016aad2a9caf4e39f993ca2" }
+texture-graph-editor = { git = "https://github.com/Zanderwohl/texture-graph", rev = "6e83279c7653b7839016aad2a9caf4e39f993ca2" }
+# Bevy's own version, named so the material editor can hand texture-graph the
+# wgpu types it bakes with. Must match what `cargo tree -i wgpu` shows.
+wgpu = "30.0.1"
 
 # Only used from tests: the encoding Lightyear puts messages on the wire in. A
 # message carrying an internally tagged enum fails to *decode* at the far end
