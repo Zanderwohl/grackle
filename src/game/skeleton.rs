@@ -64,6 +64,7 @@ impl Plugin for SkeletonPlugin {
             // Ungated: the editor shows bodies, and bodies in an animation
             // grid hold weapons and wear hats too.
             .add_plugins((BodyMeshPlugin, HeldWeaponPlugin, crate::game::hat::HatPlugin, ViewmodelPlugin))
+            .add_plugins(crate::game::recoil::RecoilPlugin)
             .add_plugins(GameTimePlugin)
             .init_resource::<ShowBones>()
             .init_resource::<ClassBuilds>()

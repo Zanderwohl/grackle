@@ -1545,7 +1545,20 @@ or automatically once the clip is empty, because a weapon that needed a
 keypress to become useful again reads as broken before it reads as empty. A
 clip that is merely short does not top up, or the magazine size would mean
 nothing. Switching weapons cancels a reload rather than remembering it: a clip
-that filled in a holster is a weapon reloading with nobody holding it.
+that filled in a holster is a weapon reloading with nobody holding it. **A
+shot cancels one too**, in `pull_trigger` where the shot is paid for: firing
+with a round left is choosing to fire rather than to reload.
+
+**Recoil is drawn, not simulated** ([`src/game/recoil.rs`](src/game/recoil.rs)).
+Every shot the authority decides becomes an `Effect::Fired`, relayed like a
+tracer; every machine turns it into a kick for that body. A client starts its
+own kick from its own mouse press, guessed from what it can see (condition,
+replicated ammo, its own cooldown), and skips its own `Fired` when it
+arrives — waiting a round trip for your own recoil is lag you feel. Each view
+plays the held prop's own kick where it ships one — `recoil`/`alt_recoil` on
+the body, `fire`/`alt_fire` on the viewmodel, which has a stack of its own and
+whose arms are solved onto the kicked weapon — and the shared
+`animations/recoil.gpa` where it does not.
 
 **`Magazine.clip: None` is the minigun**: no magazine, each shot straight out
 of the reserve, never reloads. Stated as an absent clip rather than as a clip

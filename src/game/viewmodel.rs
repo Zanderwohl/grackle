@@ -25,7 +25,9 @@ use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::team::Team;
 use crate::common::weapon::WeaponId;
 use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
-use crate::game::held::{HeldModel, HeldPart};
+use crate::common::skeleton::clip::Clip;
+use crate::common::skeleton::play::{apply_stack, ClipStack, Frames};
+use crate::game::held::{perform, HeldModel, HeldPart, Performance, SharedWeaponClips};
 use crate::game::player::{place_camera, LocalPlayer, PlayerCamera, ViewMode, PLAY_CAMERA_ORDER};
 use crate::prop::hold::{grip_with, ViewmodelSpec};
 
@@ -83,6 +85,9 @@ pub struct Viewmodel {
     /// it costs a comparison rather than a solve. Cleared whenever the arms are
     /// rebuilt: they spawn hidden, and only placing them shows them.
     arms_placed_for: Option<ArmsKey>,
+    /// Where the weapon was drawn this frame, after its clips: what the arms
+    /// are solved onto.
+    weapon: Option<Transform>,
 }
 
 /// Everything [`place_the_viewmodel_arms`] reads, and nothing else.
@@ -99,6 +104,13 @@ struct ArmsKey {
     held: Tick,
     fov: u32,
     aspect: u32,
+    /// The weapon as drawn, so a clip moving it re-solves the arms.
+    weapon: [u32; 7],
+}
+
+fn bits(transform: &Transform) -> [u32; 7] {
+    let (t, r) = (transform.translation, transform.rotation);
+    [t.x, t.y, t.z, r.x, r.y, r.z, r.w].map(f32::to_bits)
 }
 
 /// Where this machine's shots appear to leave, in world space: the held
@@ -131,6 +143,7 @@ impl Plugin for ViewmodelPlugin {
                 give_the_view_its_own_camera,
                 dress_the_viewmodel,
                 dress_the_viewmodel_arms,
+                perform_viewmodel_clips,
                 place_the_viewmodel,
                 place_the_viewmodel_arms,
                 show_it_only_in_first_person,
@@ -146,7 +159,12 @@ fn give_the_view_its_own_camera(
     views: Query<Entity, (With<PlayerCamera>, Without<Viewmodel>)>,
 ) {
     for view in &views {
-        commands.entity(view).insert(Viewmodel::default()).with_children(|view| {
+        // Its own performance and stack: first person performs the weapon's
+        // own clips, which the body in third person does not.
+        commands
+            .entity(view)
+            .insert((Viewmodel::default(), Performance::default(), ClipStack::default()))
+            .with_children(|view| {
             view.spawn((
                 ViewmodelCamera,
                 Camera3d::default(),
@@ -223,23 +241,46 @@ fn dress_the_viewmodel(
     }
 }
 
-/// Every frame: the placement is a fraction of the frustum, so it changes with
-/// the window's aspect.
-fn place_the_viewmodel(
+/// The viewmodel's deploy and kicks, from the held weapon's clips: the same
+/// performance a body runs, on a stack of its own.
+fn perform_viewmodel_clips(
+    time: Res<Time>,
+    clips: Res<Assets<Clip>>,
+    shared: Option<Res<SharedWeaponClips>>,
     held: Query<&HeldModel, With<LocalPlayer>>,
-    cameras: Query<(&Camera, &Projection, &Children), With<ViewmodelCamera>>,
-    mut parts: Query<&mut Transform, With<ViewmodelPart>>,
+    mut views: Query<(&mut Performance, &mut ClipStack), With<Viewmodel>>,
 ) {
     let Ok(held) = held.single() else { return };
+    for (mut performance, mut stack) in &mut views {
+        perform(held, shared.as_deref(), &mut performance, &mut stack, &clips, time.delta_secs());
+    }
+}
+
+/// Every frame: the placement is a fraction of the frustum, so it changes with
+/// the window's aspect. Then the viewmodel's clips move it, in eye space:
+/// `Space::Carry` is the framed weapon and `Space::Eye` the camera.
+fn place_the_viewmodel(
+    clips: Res<Assets<Clip>>,
+    held: Query<(&HeldModel, &Skeleton), With<LocalPlayer>>,
+    mut views: Query<(&mut Viewmodel, &ClipStack)>,
+    cameras: Query<(&Camera, &Projection, &Children, &ChildOf), With<ViewmodelCamera>>,
+    mut parts: Query<&mut Transform, With<ViewmodelPart>>,
+) {
+    let Ok((held, skeleton)) = held.single() else { return };
     let spec = held.viewmodel();
 
-    for (camera, projection, children) in &cameras {
+    for (camera, projection, children, view) in &cameras {
         let Projection::Perspective(perspective) = projection else { continue };
         let Some(size) = camera.logical_viewport_size().filter(|size| size.y > 0.0) else {
             continue;
         };
+        let Ok((mut viewmodel, stack)) = views.get_mut(view.parent()) else { continue };
 
-        let placed = spec.transform(perspective.fov, size.x / size.y);
+        let framed = spec.transform(perspective.fov, size.x / size.y);
+        let placed = played(framed, stack, skeleton, &clips);
+        if viewmodel.weapon != Some(placed) {
+            viewmodel.weapon = Some(placed);
+        }
         for child in children.iter() {
             let Ok(mut transform) = parts.get_mut(child) else { continue };
             // Compared first: this runs every frame, and an unchanged
@@ -247,6 +288,27 @@ fn place_the_viewmodel(
             transform.set_if_neq(placed);
         }
     }
+}
+
+/// `framed` moved by whatever the stack is playing.
+fn played(framed: Transform, stack: &ClipStack, skeleton: &Skeleton, clips: &Assets<Clip>) -> Transform {
+    if stack.0.is_empty() {
+        return framed;
+    }
+    let ground = |_: Vec3| 0.0;
+    let frames = Frames {
+        body: eye_space(skeleton),
+        carry: framed,
+        weapon: Some(framed),
+        eye: Some(Transform::IDENTITY),
+        ground: &ground,
+        footfalls: None,
+    };
+    // The pose is thrown away: the arms are solved onto the weapon afterwards.
+    let mut pose = Pose::rest();
+    let mut moving = framed;
+    apply_stack(stack, clips, skeleton, &mut pose, &frames, Some(&mut moving));
+    moving
 }
 
 /// `muzzle` in the play camera's frame. The two cameras share a frame but not a
@@ -373,14 +435,18 @@ fn place_the_viewmodel_arms(
         };
         let aspect = size.x / size.y;
 
+        let Ok(mut viewmodel) = views.get_mut(view.parent()) else { continue };
+        let weapon = viewmodel
+            .weapon
+            .unwrap_or_else(|| held.viewmodel().transform(perspective.fov, aspect));
         let key = ArmsKey {
             body,
             skeleton: skeleton.last_changed(),
             held: held.last_changed(),
             fov: perspective.fov.to_bits(),
             aspect: aspect.to_bits(),
+            weapon: bits(&weapon),
         };
-        let Ok(mut viewmodel) = views.get_mut(view.parent()) else { continue };
         if viewmodel.arms_placed_for == Some(key) {
             continue;
         }
@@ -388,7 +454,6 @@ fn place_the_viewmodel_arms(
 
         let skeleton: &Skeleton = &skeleton;
         let root = eye_space(skeleton);
-        let weapon = held.viewmodel().transform(perspective.fov, aspect);
 
         // From rest: a camera that does not bob must not have arms that do.
         let mut pose = Pose::rest();
@@ -662,7 +727,8 @@ mod tests {
             physical_size: UVec2::new(1600, 900),
             scale_factor: 1.0,
         });
-        let view = world.spawn(Viewmodel::default()).id();
+        world.init_resource::<Assets<Clip>>();
+        let view = world.spawn((Viewmodel::default(), ClipStack::default())).id();
         let camera = world
             .spawn((
                 ViewmodelCamera,

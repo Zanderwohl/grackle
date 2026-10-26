@@ -433,6 +433,8 @@ remove = "Remove"
 deploy = "Deploy"
 humiliated = "Humiliated"
 taunt_wave = "Wave"
+recoil = "Recoil"
+fire = "Fire"
 
 [anim.channel]
 root = "Body"

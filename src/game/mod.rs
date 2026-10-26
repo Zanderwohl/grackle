@@ -33,6 +33,7 @@ pub mod explosion;
 pub mod flame;
 pub mod hitscan;
 pub mod projectile;
+pub mod recoil;
 pub mod reset;
 pub mod respawn;
 pub mod weapon;

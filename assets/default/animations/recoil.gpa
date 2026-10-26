@@ -1,0 +1,78 @@
+name_key = "anim.clips.recoil"
+length = 0.25
+clock = "seconds"
+looping = false
+note = "The kick every weapon shares in third person, which indicates rather than performs. Composed onto the carry, so the hold stays where the weapon lives and the hands follow it through the grip: back and up, muzzle lifting, and home by the end so it fades out from where it rests."
+
+[[tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[tracks.channel]
+channel = "weapon"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[tracks.channel.keys]]
+at = 0.04
+to = [
+    "free",
+    0.03,
+    0.12,
+]
+ease = "cubic_out"
+
+[[tracks.channel.keys]]
+at = 0.25
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[tracks]]
+combine = "compose"
+space = "carry"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "weapon_rotation"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "linear"
+
+[[tracks.channel.keys]]
+at = 0.04
+to = [
+    0.2,
+    "free",
+    "free",
+]
+ease = "cubic_out"
+
+[[tracks.channel.keys]]
+at = 0.25
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "linear"
+

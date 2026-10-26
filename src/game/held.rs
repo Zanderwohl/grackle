@@ -63,15 +63,60 @@ pub struct HeldModel {
     clips: BTreeMap<String, Handle<Clip>>,
 }
 
-/// What a body's weapon is in the middle of doing. A clip name rather than a
-/// handle, looked up in `HeldModel` every frame, so a re-bake cannot leave a
-/// stale clip playing.
+/// What a body's weapon, or the viewmodel's, is in the middle of doing. A clip
+/// named rather than held by handle, looked up every frame, so a re-bake
+/// cannot leave a stale clip playing.
 #[derive(Component, Default)]
 pub struct Performance {
-    /// Clip name and seconds into it.
-    playing: Option<(String, f32)>,
+    /// The clip and seconds into it.
+    playing: Option<(WeaponClip, f32)>,
     /// A change of weapon restarts the clip; comparing needs no event.
     started_for: Option<WeaponId>,
+}
+
+impl Performance {
+    /// Play `clip` from the start, cutting whatever was playing: a shot during
+    /// a deploy or another shot is the shot that matters now.
+    pub fn start(&mut self, clip: WeaponClip) {
+        self.playing = Some((clip, 0.0));
+    }
+
+    pub fn clip(&self) -> Option<&WeaponClip> {
+        self.playing.as_ref().map(|(clip, _)| clip)
+    }
+}
+
+/// Where a weapon clip comes from.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WeaponClip {
+    /// One the held prop ships, by name.
+    Prop(String),
+    /// The recoil every weapon shares where it has none of its own; see
+    /// [`SharedWeaponClips`].
+    Recoil,
+}
+
+/// Clips every weapon shares, read from the packs at startup. Third person
+/// indicates rather than performs, so a body's recoil is one generic kick,
+/// not each weapon's.
+#[derive(Resource, Default)]
+pub struct SharedWeaponClips {
+    pub recoil: Option<Handle<Clip>>,
+}
+
+const RECOIL_CLIP: &str = "recoil";
+
+fn load_shared_weapon_clips(
+    mut commands: Commands,
+    packs: Res<PackAssets>,
+    mut clips: ResMut<Assets<Clip>>,
+) {
+    let recoil = crate::common::clip_file::load_named_clip(
+        &packs,
+        &crate::common::assets::default_packs(),
+        RECOIL_CLIP,
+    );
+    commands.insert_resource(SharedWeaponClips { recoil: recoil.map(|clip| clips.add(clip)) });
 }
 
 impl HeldModel {
@@ -96,6 +141,18 @@ impl HeldModel {
     pub fn muzzle(&self) -> Option<Vec3> {
         self.muzzle
     }
+
+    pub fn has_clip(&self, name: &str) -> bool {
+        self.clips.contains_key(name)
+    }
+
+    /// Holding something whose prop ships clips of these names, for tests
+    /// that only ask which clip is chosen.
+    #[cfg(test)]
+    pub(crate) fn with_clips(names: &[&str]) -> HeldModel {
+        let clips = names.iter().map(|name| (name.to_string(), Handle::default())).collect();
+        HeldModel { clips, ..default() }
+    }
 }
 
 pub struct HeldWeaponPlugin;
@@ -105,6 +162,8 @@ impl Plugin for HeldWeaponPlugin {
         app.add_plugins(ClipAssetsPlugin)
             .init_resource::<PropCache>()
             .init_resource::<SurfaceMaterials>()
+            .init_resource::<SharedWeaponClips>()
+            .add_systems(Startup, load_shared_weapon_clips)
             .add_systems(Update, (dress_held_weapons, show_held_weapons).chain())
             // Before propagation, with the bone meshes, or a held part is drawn
             // a frame behind the hand.
@@ -303,48 +362,62 @@ pub(crate) fn place_the_weapon(
 pub(crate) fn perform_weapon_clips(
     time: Res<Time>,
     clips: Res<Assets<Clip>>,
+    shared: Option<Res<SharedWeaponClips>>,
     mut bodies: Query<(&HeldModel, &mut Performance, &mut ClipStack)>,
 ) {
     let delta = time.delta_secs();
-
     for (held, mut performance, mut stack) in &mut bodies {
-        // A different weapon restarts; the same weapon re-resolving (a re-bake,
-        // a late catalogue) does not.
-        if performance.started_for != held.weapon {
-            performance.started_for = held.weapon;
-            performance.playing = held
-                .clips
-                .get(DEPLOY)
-                .map(|_| (DEPLOY.to_string(), 0.0));
-        }
+        perform(held, shared.as_deref(), &mut performance, &mut stack, &clips, delta);
+    }
+}
 
-        let Some((name, elapsed)) = performance.playing.as_mut() else {
-            stop(&mut stack);
-            continue;
-        };
-        *elapsed += delta;
-
-        // Name and handle resolved every frame: a save mid-round is refilled
-        // under the same handle, and a re-bake without this clip ends it.
-        let found = held
+/// One performance, for a body or the viewmodel: deploy on a switch, tick
+/// what is playing, and send it out when it ends.
+pub(crate) fn perform(
+    held: &HeldModel,
+    shared: Option<&SharedWeaponClips>,
+    performance: &mut Performance,
+    stack: &mut Mut<ClipStack>,
+    clips: &Assets<Clip>,
+    delta: f32,
+) {
+    // A different weapon restarts; the same weapon re-resolving (a re-bake, a
+    // late catalogue) does not.
+    if performance.started_for != held.weapon {
+        performance.started_for = held.weapon;
+        performance.playing = held
             .clips
-            .get(name.as_str())
-            .and_then(|handle| Some((handle, clips.get(handle)?)));
-        let Some((handle, clip)) = found else {
-            performance.playing = None;
-            stop(&mut stack);
-            continue;
-        };
-        if !clip.looping && *elapsed > clip.length {
-            performance.playing = None;
-            stop(&mut stack);
-            continue;
-        }
+            .get(DEPLOY)
+            .map(|_| (WeaponClip::Prop(DEPLOY.to_string()), 0.0));
+    }
 
-        let elapsed = *elapsed;
-        if let Some(playing) = stack.keep(is_the_weapons, Some((Layer::Weapon, handle))) {
-            playing.time = elapsed;
-        }
+    let Some((source, elapsed)) = performance.playing.as_mut() else {
+        stop(stack);
+        return;
+    };
+    *elapsed += delta;
+
+    // Resolved every frame: a save mid-round is refilled under the same
+    // handle, and a re-bake without this clip ends it.
+    let handle = match source {
+        WeaponClip::Prop(name) => held.clips.get(name.as_str()),
+        WeaponClip::Recoil => shared.and_then(|shared| shared.recoil.as_ref()),
+    };
+    let found = handle.and_then(|handle| Some((handle, clips.get(handle)?)));
+    let Some((handle, clip)) = found else {
+        performance.playing = None;
+        stop(stack);
+        return;
+    };
+    if !clip.looping && *elapsed > clip.length {
+        performance.playing = None;
+        stop(stack);
+        return;
+    }
+
+    let elapsed = *elapsed;
+    if let Some(playing) = stack.keep(is_the_weapons, Some((Layer::Weapon, handle))) {
+        playing.time = elapsed;
     }
 }
 

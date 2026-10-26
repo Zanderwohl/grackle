@@ -155,8 +155,8 @@ Two different things, and only one belongs to the layer stack:
   and shows again when the region is handed back. Firing over running.
 - **Interrupting**: the lower one's action is cancelled and its clip ends.
   **A reload is interrupted by firing** with a round in the clip, TF2-style.
-  That is a rule in `reload_weapons`, on the authority, and the reload clip
-  ends because the reload did.
+  That is a rule in `pull_trigger`, on the authority — the one place a shot
+  is paid for — and the reload clip ends because the reload did.
 
 The stack never cancels anything on its own; it only ranks what is playing.
 
@@ -184,8 +184,10 @@ which rigs it drives:
 
 - The weapon family drives **both**, from separate clips where they differ:
   a first-person reload is per-weapon and authored, a third-person one is the
-  generic busy indication or nothing. Fire is a per-weapon kick in first
-  person and a generic recoil in third.
+  generic busy indication or nothing. Fire is a kick per weapon in both:
+  `fire` in first person and `recoil` in third, each falling back on its own
+  to the shared `animations/recoil.gpa`, so a weapon nobody has animated yet
+  still kicks.
 - Gestures and flinches are **third person only**. A flinch in first person,
   if ever, is a camera punch, not an arm clip.
 - Taunt and humiliation never reach the viewmodel because they force third
@@ -279,12 +281,20 @@ outside its layer's claim is a problem `Clip::problems` reports.
 - [x] Effective view mode: forced third person under a condition.
       `ViewPreference` is what `F` toggles; `decide_the_view` is the only
       writer of `ViewMode`.
-- [ ] `Effect::Fired`; a fire clip started from it on every other machine, and
-      optimistically from input on the shooter's.
-- [ ] Reload interrupted by firing, in `reload_weapons`.
-- [ ] Layers declare first person, third person or both; the viewmodel arms
-      play first-person layers in eye space.
-- [ ] A fire clip on the rocket launcher.
+- [x] `Effect::Fired`, written by `announce_shots` from every shot and
+      relayed like a tracer; `see_shots` turns it into a `ShotSeen` on every
+      machine, and `guess_our_shots` makes our own from the mouse on a
+      client, which then skips its own `Fired` (`src/game/recoil.rs`).
+- [x] Reload interrupted by firing, in `pull_trigger`.
+- [x] First and third person play different things. A body plays the held
+      prop's `recoil` or `alt_recoil`; the viewmodel has a `Performance` and
+      `ClipStack` of its own and plays its `deploy` and `fire` or `alt_fire`.
+      Either falls back to the shared `animations/recoil.gpa`, and the arms are
+      solved onto wherever the clips put the weapon. In the viewmodel
+      `Space::Carry` is the framed weapon and `Space::Eye` the camera.
+- [x] A fire clip on the rocket launcher.
+- [ ] The apparent muzzle still reads the framed weapon, not the kicked one,
+      so an own tracer starts a few centimetres off during a kick.
 - [ ] Animation editor: preview a layer over a locomotion state, and show
       which regions a clip claims.
 
