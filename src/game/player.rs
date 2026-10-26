@@ -13,7 +13,7 @@ use crate::common::team::Team;
 use crate::common::class::{
     body_centre_from_feet, Stance, CLASS_HALF_EXTENTS,
 };
-use crate::game::collision::CollisionWorld;
+use crate::game::collision::{CollisionWorld, Touched};
 use crate::common::class::Class;
 use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalogue};
 use crate::game::weapon::Trigger;
@@ -35,6 +35,9 @@ const JUMP_SPEED: f32 = 7.0;
 /// The steepest floor a body stands on, as the cosine of its tilt: about 45°,
 /// Quake's number. Anything steeper is a wall that slopes, and is slid off.
 pub const WALKABLE: f32 = 0.7;
+/// The tallest ledge a body walks up rather than being stopped by: TF2's
+/// eighteen units, a little over a stair.
+pub const STEP_HEIGHT: f32 = 0.45;
 /// How far below its feet a body looks for a floor after each step. Has to
 /// clear the collision skin, which is where a step leaves a body standing.
 const GROUND_PROBE: f32 = 0.02;
@@ -573,10 +576,23 @@ pub fn step_player(
         // A room edited mid-match can enclose a body that crossed nothing,
         // which a sweep cannot see.
         let start = world.depenetrate(body.current, half);
-        let (mut position, touched) = world.slide(start, half, player.velocity * dt);
+        let delta = player.velocity * dt;
+        let (mut position, mut touched) = world.slide(start, half, delta);
+
+        // A stair is a wall too low to be one. Taken only if it gets further,
+        // so pressing into a real wall does not hop on the spot.
+        let walled = |touched: &Touched| touched.iter().any(|n| n.y.abs() < WALKABLE);
+        if player.on_ground() && !jumped && walled(&touched) {
+            if let Some((stepped, over)) = world.step_up(start, half, delta, STEP_HEIGHT, WALKABLE) {
+                let level = |p: Vec3| Vec2::new(p.x - start.x, p.z - start.z).length();
+                if level(stepped) > level(position) + 1.0e-4 {
+                    (position, touched) = (stepped, over);
+                }
+            }
+        }
 
         player.velocity = touched.clip(player.velocity);
-        player.against_wall = touched.iter().any(|n| n.y.abs() < WALKABLE);
+        player.against_wall = walled(&touched);
         // Settled onto a floor found within the probe, so a body that ended a
         // fall just short of one does not stand on air.
         // Walking up a slope rises too; only a jump, or still going up after

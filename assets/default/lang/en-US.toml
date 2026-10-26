@@ -130,6 +130,18 @@ title = "Global Point"
 title = "Room"
 own_min = "This room's Min"
 
+[editor.features.footprint_room]
+title = "Footprint Room"
+floor = "Floor"
+height = "Height"
+corner = "Corner { id }"
+ceiling_of = "{ corner }, ceiling"
+lost = "{ region } no longer resolves: a line round it was removed"
+open = "Line { line } bounds nothing"
+zero_length = "Line { line } has no length"
+coincident = "Lines { a } and { b } lie on each other"
+missing_point = "Line { line } names a corner that is not there"
+
 [editor.features.grackle_point_light]
 title = "Point Light"
 params = "Light Parameters"

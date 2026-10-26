@@ -121,6 +121,21 @@ impl CollisionWorld {
         }
     }
 
+    /// [`CollisionWorld::slide`] taken over a ledge up to `height` high: lift,
+    /// slide the level part of `delta`, and come back down onto a walkable
+    /// floor. `None` if there is no room to lift or nowhere to land, which the
+    /// caller reads as "walk normally".
+    pub fn step_up(&self, centre: Vec3, half: Vec3, delta: Vec3, height: f32, walkable: f32) -> Option<(Vec3, Touched)> {
+        let raised = self.travel(centre, half, Vec3::Y * height);
+        let lift = raised.y - centre.y;
+        if lift <= SKIN {
+            return None;
+        }
+        let (across, touched) = self.slide(raised, half, Vec3::new(delta.x, 0.0, delta.z));
+        let (landed, _) = self.ground(across, half, lift + SKIN, walkable)?;
+        Some((landed, touched))
+    }
+
     /// The walkable surface right under a box, if there is one within
     /// `reach` — a normal no further from up than `walkable`, a cosine — as
     /// where the box rests on it and its normal.

@@ -224,10 +224,14 @@ normal, or a body settled onto it each tick creeps down it.
       outright, and each room's share is cut in coordinates relative to its
       own corner, so precision depends on a neighbourhood's size rather than
       on where it is.
-- [ ] Footprint room: a sketch (`src/prop/sketch.rs`, `region.rs` moved to
-      `src/common/`) on a floor plane, extruded between two heights; holes
-      are pillars. Its own plan once Stage 3 lands.
-- [ ] Step-up for stairs.
+- [ ] Footprint room: planned in [footprint-rooms.md](footprint-rooms.md),
+      with three decisions open.
+- [x] Step-up for stairs: `CollisionWorld::step_up` lifts by `STEP_HEIGHT`
+      (0.45 m, TF2's eighteen units), slides the level part of the move and
+      comes down onto a walkable floor. `step_player` takes it only on the
+      ground, only after touching a wall, and only if it gets further, so
+      pressing into a real wall does not hop. Tested on a flight of three
+      0.3 m steps, a 0.6 m ledge and a plain wall.
 
 ### Stage 5 — displacements
 

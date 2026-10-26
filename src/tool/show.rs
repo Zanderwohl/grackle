@@ -81,7 +81,7 @@ impl ShowPlugin {
             let key = feature.object().type_key();
             let draw = match key {
                 "global_point" => visibility.points,
-                "editor_room" => visibility.rooms,
+                "editor_room" | "footprint_room" => visibility.rooms,
                 "grackle_point_light" => visibility.point_lights,
                 "spawn_point" => visibility.spawn_points,
                 "prop" => visibility.props,

@@ -302,39 +302,22 @@ pub fn find_nearest_feature_hit(
     let mut best_t = f32::MAX;
     let mut best: Option<(FeatureId, Vec3)> = None;
 
-    // Hidden rooms too: they still carve openings into their neighbours. In
-    // `active_features` order, so the loop below walks `next_room` forwards.
-    let (room_ids, mut rooms): (Vec<FeatureId>, Vec<Room>) = features
+    // Hidden rooms too: they still carve openings into their neighbours. A
+    // Mirror's copies are unpickable, but they carve.
+    let (owners, rooms): (Vec<Option<FeatureId>>, Vec<Room>) = features
         .active_features()
-        .filter(|(_, feature)| feature.object().type_key() == "editor_room")
-        .filter_map(|(id, feature)| {
-            let (min, max) = feature.object().drag_handle_bounds()?;
-            Some((id, Room::new(min, max)))
+        .flat_map(|(id, feature)| {
+            let own = feature.object().rooms().into_iter().map(move |room| (Some(id), room));
+            let copies = feature.object().standing_copies().into_iter().flat_map(|copy| copy.rooms()).map(|room| (None, room));
+            own.chain(copies).collect::<Vec<_>>()
         })
         .unzip();
-    // After the features' own, so `room_ids` still indexes the front. Unpickable, but they carve.
-    rooms.extend(
-        features
-            .active_features()
-            .flat_map(|(_, feature)| feature.object().standing_copies())
-            .filter(|copy| copy.type_key() == "editor_room")
-            .filter_map(|copy| copy.drag_handle_bounds())
-            .map(|(min, max)| Room::new(min, max)),
-    );
-    let mut next_room = 0;
 
     for (feature_id, feature) in features.active_features() {
         let key = feature.object().type_key();
-        // Advanced before anything can `continue`, hidden or not. A room with
-        // no bounds was never collected, so it is not the next one.
-        let room_index = (key == "editor_room" && room_ids.get(next_room) == Some(&feature_id))
-            .then(|| {
-                next_room += 1;
-                next_room - 1
-            });
         let visible = match key {
             "global_point" => visibility.points,
-            "editor_room" => visibility.rooms,
+            "editor_room" | "footprint_room" => visibility.rooms,
             "grackle_point_light" => visibility.point_lights,
             "spawn_point" => visibility.spawn_points,
             "prop" => visibility.props,
@@ -346,12 +329,14 @@ pub fn find_nearest_feature_hit(
         if !visible { continue; }
 
         match key {
-            "editor_room" => {
-                let Some(index) = room_index else { continue };
-                if let Some((t, hit)) = room_wall_hit(&rooms, index, ray) {
-                    if t < best_t {
-                        best_t = t;
-                        best = Some((feature_id, hit));
+            "editor_room" | "footprint_room" => {
+                let own = owners.iter().enumerate().filter(|(_, owner)| **owner == Some(feature_id));
+                for (index, _) in own {
+                    if let Some((t, hit)) = room_wall_hit(&rooms, index, ray) {
+                        if t < best_t {
+                            best_t = t;
+                            best = Some((feature_id, hit));
+                        }
                     }
                 }
             }

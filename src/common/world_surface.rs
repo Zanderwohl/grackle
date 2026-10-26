@@ -319,6 +319,16 @@ mod tests {
     }
 
     #[test]
+    fn a_pillar_is_walled_and_its_floor_is_not_there() {
+        let square = |lo: f32, hi: f32| vec![Vec2::new(lo, lo), Vec2::new(hi, lo), Vec2::new(hi, hi), Vec2::new(lo, hi)];
+        let room = Room::with_holes(square(0.0, 4.0), vec![square(1.5, 2.5)], 0.0, 3.0);
+        let surface = room_share(&[room], 0);
+        assert!((area(&surface) - (15.0 + 15.0 + 48.0 + 12.0)).abs() < 1e-3, "area {}", area(&surface));
+        let (t, _) = ray_from_inside(&surface, &ray(Vec3::new(0.5, 1.0, 2.0), Vec3::X)).unwrap();
+        assert!((t - 1.0).abs() < 1e-4, "a shot across the room passed through the pillar: {t}");
+    }
+
+    #[test]
     fn a_pick_from_outside_passes_the_near_wall_and_lands_on_the_far_one() {
         let rooms = [Room::new(Vec3::ZERO, Vec3::splat(10.0))];
         let (t, hit) = ray_from_inside(&room_share(&rooms, 0), &ray(Vec3::new(-5.0, 5.0, 5.0), Vec3::X)).unwrap();

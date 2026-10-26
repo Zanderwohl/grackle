@@ -1119,14 +1119,22 @@ operations, and they are not interchangeable:
   axes: `Player.ground` is a touched floor no steeper than `WALKABLE`, and
   `against_wall` is anything neither floor nor ceiling. On the ground the walk
   follows the floor and gravity does nothing, which is what lets a body stand
-  on a slope without sliding down it.
+  on a slope without sliding down it. A wall lower than `STEP_HEIGHT` is
+  walked up (`step_up`), but only when that gets the body further than the
+  plain slide did — otherwise pressing into a real wall hops on the spot.
 - `depenetrate` handles the world moving instead of the body: a floor raised
   onto a standing player encloses it having crossed nothing. It prefers escapes
   that land inside a room over shorter ones that do not, because the short way
   out of a floor is downwards, through the map.
 
-A `Room` is a prism — a floor plan, not necessarily convex, between two
-heights — and a box is the four-corner case; nothing makes any other kind yet.
+A `Room` is a prism — a floor plan, not necessarily convex and possibly with
+holes, between two heights — and a box is the four-corner case. `EditorRoom`
+stands up a box; `FootprintRoom`
+([`src/editor/footprint_room.rs`](src/editor/footprint_room.rs),
+[documentation/footprint-rooms.md](documentation/footprint-rooms.md)) is a
+sketch whose corners are `PointRef`s, each named region one room on a child
+entity. Anything that needs a feature's rooms asks `FeatureTrait::rooms`,
+never its `type_key` or its box.
 Ask it for `bounds`, `contains` and `solid` rather than treating it as a box.
 **Each room's share is cut relative to its own corner**: the kernel's
 tolerance is absolute, and an angled face far enough from the origin is split
@@ -2099,8 +2107,8 @@ machine, and things happen in it.
 The core abstraction is `FeatureTrait` in
 [`src/editor/editable.rs`](src/editor/editable.rs) — a `#[typetag::serde]`
 trait object. Implementors today: `GlobalPoint`, `GracklePointLight`,
-`EditorRoom`, `SpawnPoint`, `Prop`, `AnimationDisplay`, `AnimationGrid` and
-`Mirror`.
+`EditorRoom`, `FootprintRoom`, `SpawnPoint`, `Prop`, `AnimationDisplay`,
+`AnimationGrid` and `Mirror`.
 
 A feature does not store bare coordinates. It stores `PointRef`s, which are
 per-axis absolute-or-relative references to *another feature's named point*.

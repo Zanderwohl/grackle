@@ -62,9 +62,11 @@ impl SelectionPlugin {
         let highlight = Color::srgb_u8(0, 230, 0);
 
         match feature.object().type_key() {
-            "editor_room" => {
-                if let Some((min, max)) = feature.object().drag_handle_bounds() {
-                    bounds_gizmo(&mut gizmos, min, max, highlight);
+            "editor_room" | "footprint_room" => {
+                for room in feature.object().rooms() {
+                    for (a, b) in room.edges() {
+                        gizmos.line(a, b, highlight);
+                    }
                 }
             }
             _ => {

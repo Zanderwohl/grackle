@@ -488,6 +488,56 @@ mod tests {
         assert!((later - settled).length() < 1e-4, "jittered from {settled} to {later}");
     }
 
+    /// A body standing at `x = 3` in a room with its floor at zero, walking
+    /// towards `+X` into whatever else `rooms` adds, for two seconds.
+    fn walked_towards(rooms: &[Room]) -> App {
+        let mut all = vec![room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 4.0, 5.0))];
+        all.extend_from_slice(rooms);
+        let mut app = headless(&all);
+        enter(&mut app);
+        tick(&mut app, 1);
+        let body = app.world_mut().query_filtered::<Entity, With<LocalPlayer>>().single(app.world()).unwrap();
+        *app.world_mut().get_mut::<PhysicsBody>(body).unwrap() = PhysicsBody::at(Vec3::new(3.0, PLAYER_HALF.y + 0.01, 0.0));
+        *app.world_mut().get_mut::<Player>(body).unwrap() = Player::default();
+        tick(&mut app, 10);
+        app.world_mut().resource_mut::<InputLatch>().0.movement = Vec2::new(1.0, 0.0);
+        tick(&mut app, 128);
+        app
+    }
+
+    #[test]
+    fn a_body_walks_up_a_flight_of_stairs() {
+        let mut app = walked_towards(&[
+            room(Vec3::new(5.0, 0.3, -5.0), Vec3::new(6.0, 4.0, 5.0)),
+            room(Vec3::new(6.0, 0.6, -5.0), Vec3::new(7.0, 4.0, 5.0)),
+            room(Vec3::new(7.0, 0.9, -5.0), Vec3::new(12.0, 4.0, 5.0)),
+        ]);
+        let end = player_position(&mut app);
+        assert!(end.x > 7.5, "stopped at the stairs: {end}");
+        assert!((end.y - (0.9 + PLAYER_HALF.y)).abs() < 0.01, "not standing on the top step: {end}");
+        assert!(on_ground(&mut app));
+    }
+
+    #[test]
+    fn a_ledge_taller_than_a_step_stops_a_body() {
+        let mut app = walked_towards(&[room(Vec3::new(5.0, 0.6, -5.0), Vec3::new(10.0, 4.0, 5.0))]);
+        let end = player_position(&mut app);
+        assert!(end.x < 5.0, "walked up a 0.6 m ledge: {end}");
+        assert!((end.y - PLAYER_HALF.y).abs() < 0.01, "{end}");
+    }
+
+    /// Breaks if a failed step is taken anyway: the body would hop on the spot.
+    #[test]
+    fn pressing_into_a_wall_neither_climbs_nor_hops() {
+        let mut app = walked_towards(&[]);
+        let end = player_position(&mut app);
+        assert!((end.x - (5.0 - PLAYER_HALF.x)).abs() < 0.01 && (end.y - PLAYER_HALF.y).abs() < 0.01, "{end}");
+        tick(&mut app, 10);
+        assert!((player_position(&mut app) - end).length() < 1e-4, "moved while pressed to the wall");
+        let body = app.world_mut().query_filtered::<&Player, With<LocalPlayer>>().single(app.world()).unwrap();
+        assert!(body.against_wall);
+    }
+
     /// Catches a floor slab facing the wrong way, which would pass the landing
     /// test only because the body never moved.
     #[test]
