@@ -9,3 +9,7 @@ blend_out = 0.12
 [humiliation]
 blend_in = 0.25
 blend_out = 0.2
+
+[taunt]
+blend_in = 0.2
+blend_out = 0.2

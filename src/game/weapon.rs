@@ -443,7 +443,7 @@ mod tests {
             Magazine { clip: Some(12), reserve: 12, reload: 1.0, reload_one_at_a_time: false },
         )));
         let shooter = a_shooter(&mut world);
-        *world.get_mut::<Condition>(shooter).unwrap() = Condition::Humiliated;
+        *world.get_mut::<Condition>(shooter).unwrap() = Condition::HUMILIATED;
         input(&mut world, shooter).attack = true;
 
         step(&mut world);

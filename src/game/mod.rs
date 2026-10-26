@@ -71,6 +71,8 @@ impl Plugin for GamePlugin {
             // Bodies are rigged from it; replaced by the server's on connect.
             .init_resource::<crate::common::class::ClassBuilds>()
             .add_systems(Startup, crate::common::class_file::load_builds_at_startup)
+            .init_resource::<crate::common::taunt::Taunts>()
+            .add_systems(Startup, crate::common::taunt::load_taunts_at_startup)
             // A pack that ships no clips leaves bodies on the built-in poses.
             .add_systems(
                 Startup,
@@ -531,6 +533,46 @@ mod tests {
             (player_position(&mut app).y - once).abs() < 1e-5,
             "the replayed tick did not reach the same place"
         );
+    }
+
+    /// `G` starts the shipped wave, which stops a walking body and its gun;
+    /// `G` again gives both back.
+    #[test]
+    fn the_wave_stops_you_walking_and_g_again_lets_you_go() {
+        use crate::game::condition::Condition;
+
+        let mut app = headless(&[room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 4.0, 10.0))]);
+        enter(&mut app);
+        tick(&mut app, 30);
+        let condition = |app: &mut App| {
+            *app.world_mut()
+                .query_filtered::<&Condition, With<LocalPlayer>>()
+                .single(app.world())
+                .unwrap()
+        };
+        let walked = |app: &mut App| {
+            latch(app).0.movement = Vec2::Y;
+            let from = player_position(app);
+            tick(app, 16);
+            latch(app).0.movement = Vec2::ZERO;
+            (player_position(app) - from).with_y(0.0).length()
+        };
+        let toggle = |app: &mut App| {
+            latch(app).0.taunt = true;
+            tick(app, 1);
+        };
+
+        assert!(walked(&mut app) > 0.5, "the body would not walk before taunting");
+
+        toggle(&mut app);
+        let taunting = condition(&mut app);
+        assert!(taunting.taunt.is_some(), "G started no taunt");
+        assert!(!taunting.may_fire());
+        assert!(walked(&mut app) < 1e-4, "the wave did not stop the body");
+
+        toggle(&mut app);
+        assert_eq!(condition(&mut app).taunt, None, "G again did not end the taunt");
+        assert!(walked(&mut app) > 0.5, "the body stayed stopped after the taunt");
     }
 
     /// Simulated at 64 Hz, drawn between the last two steps.

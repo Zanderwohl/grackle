@@ -39,6 +39,13 @@ impl PackTable for WeaponCatalogue {
     }
 }
 
+impl PackTable for crate::common::taunt::Taunts {
+    const WHAT: &'static str = "taunts";
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
 impl PackTable for ClassBuilds {
     const WHAT: &'static str = "class builds";
     fn len(&self) -> usize {
@@ -74,6 +81,7 @@ impl Plugin for PackSyncPlugin {
 
         sync::<WeaponCatalogue>(app);
         sync::<ClassBuilds>(app);
+        sync::<crate::common::taunt::Taunts>(app);
     }
 }
 
@@ -181,6 +189,7 @@ mod tests {
     fn every_table_survives_the_round_trip() {
         round_trip(default_catalogue());
         round_trip(ClassBuilds::shipped());
+        round_trip(crate::common::taunt::Taunts::shipped());
     }
 
     /// Fails if the payload stops being bytes that postcard round-trips, and

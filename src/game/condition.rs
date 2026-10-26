@@ -1,7 +1,9 @@
-//! What is being done to a body that is not damage: humiliation now, taunts
-//! and stuns later. Gameplay state with one writer, the authority, and
-//! replicated; firing, the held weapon, the view and the animation all read
-//! it. See `documentation/animation-layers.md`.
+//! What is being done to a body that is not damage: humiliation and taunts
+//! now, stuns later. Gameplay state with one writer, the authority, and
+//! replicated; firing, movement, the held weapon, the view and the animation
+//! all read it. See `documentation/animation-layers.md`.
+
+use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -11,37 +13,50 @@ use crate::common::assets::Assets as PackAssets;
 use crate::common::assets::default_packs;
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{ClipStack, Layer};
+use crate::common::taunt::{TauntId, TauntWeapon, Taunts};
 use crate::game::player::{Inputs, LocalPlayer, ViewMode, ViewPreference};
 
+/// Not an enum: a humiliated body may still taunt, as in TF2, and the taunt
+/// outranks the humiliation while it lasts.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, Serialize, Deserialize)]
 #[require(ClipStack)]
-pub enum Condition {
-    #[default]
-    Normal,
+pub struct Condition {
     /// Hands up, weapon gone, no shooting. `H` toggles it until there are
     /// rounds to lose.
-    Humiliated,
+    pub humiliated: bool,
+    /// `G` toggles the first taunt in `taunts.toml` until there is a way to
+    /// choose one.
+    pub taunt: Option<TauntId>,
 }
 
 impl Condition {
+    pub const HUMILIATED: Condition = Condition { humiliated: true, taunt: None };
+
     pub fn may_fire(self) -> bool {
-        matches!(self, Condition::Normal)
+        !self.humiliated && self.taunt.is_none()
     }
 
-    pub fn shows_weapon(self) -> bool {
-        matches!(self, Condition::Normal)
+    /// A taunt decides for itself; one whose entry has not arrived hides it,
+    /// since a weapon flickering in and out is worse than one missing.
+    pub fn shows_weapon(self, taunts: Option<&Taunts>) -> bool {
+        match self.taunt {
+            Some(id) => taunts
+                .and_then(|taunts| taunts.get(id))
+                .is_some_and(|taunt| taunt.weapon == TauntWeapon::Shown),
+            None => !self.humiliated,
+        }
     }
 
     pub fn forces_third_person(self) -> bool {
-        !matches!(self, Condition::Normal)
+        self.humiliated || self.taunt.is_some()
     }
 
-    /// The layer its clip plays on, and the clip's file under `animations/`.
-    fn performance(self) -> Option<(Layer, &'static str)> {
-        match self {
-            Condition::Normal => None,
-            Condition::Humiliated => Some((Layer::Humiliation, "humiliated")),
-        }
+    /// What the body's own speed is multiplied by. A taunt whose entry has not
+    /// arrived leaves it alone, and the server corrects the guess.
+    pub fn speed_factor(self, taunts: Option<&Taunts>) -> f32 {
+        self.taunt
+            .and_then(|id| taunts?.get(id))
+            .map_or(1.0, |taunt| taunt.movement.speed_factor())
     }
 }
 
@@ -66,13 +81,19 @@ impl Plugin for ConditionPlugin {
     }
 }
 
-/// Reads the edge and never takes it: `write_client_inputs` already did.
-pub fn toggle_conditions(mut bodies: Query<(&Inputs, &mut Condition)>) {
+/// Reads the edges and never takes them: `write_client_inputs` already did.
+pub fn toggle_conditions(
+    taunts: Option<Res<Taunts>>,
+    mut bodies: Query<(&Inputs, &mut Condition)>,
+) {
     for (input, mut condition) in &mut bodies {
         if input.humiliate {
-            *condition = match *condition {
-                Condition::Humiliated => Condition::Normal,
-                Condition::Normal => Condition::Humiliated,
+            condition.humiliated = !condition.humiliated;
+        }
+        if input.taunt {
+            condition.taunt = match condition.taunt {
+                Some(_) => None,
+                None => taunts.as_deref().and_then(Taunts::first).map(|taunt| taunt.id),
             };
         }
     }
@@ -95,20 +116,16 @@ pub fn decide_the_view(
     }
 }
 
-/// Each condition's clip, read from the packs at startup. A condition whose
+const HUMILIATED_CLIP: &str = "humiliated";
+
+/// Each condition's clip, read from this machine's packs. A condition whose
 /// file is missing plays nothing and still does everything else it does.
 #[derive(Resource, Default)]
 pub struct ConditionClips {
     humiliated: Option<Handle<Clip>>,
-}
-
-impl ConditionClips {
-    fn of(&self, condition: Condition) -> Option<&Handle<Clip>> {
-        match condition {
-            Condition::Normal => None,
-            Condition::Humiliated => self.humiliated.as_ref(),
-        }
-    }
+    /// By clip name. A miss is remembered too, so it is not read again every
+    /// time the table changes.
+    taunts: BTreeMap<String, Option<Handle<Clip>>>,
 }
 
 pub fn load_condition_clips(
@@ -116,39 +133,68 @@ pub fn load_condition_clips(
     packs: Res<PackAssets>,
     mut clips: ResMut<Assets<Clip>>,
 ) {
-    let mut load = |condition: Condition| {
-        let (_, name) = condition.performance()?;
-        let clip = crate::common::clip_file::load_named_clip(&packs, &default_packs(), name)?;
-        Some(clips.add(clip))
-    };
-    let humiliated = load(Condition::Humiliated);
-    commands.insert_resource(ConditionClips { humiliated });
+    let humiliated = crate::common::clip_file::load_named_clip(&packs, &default_packs(), HUMILIATED_CLIP)
+        .map(|clip| clips.add(clip));
+    commands.insert_resource(ConditionClips { humiliated, taunts: BTreeMap::new() });
 }
 
-/// Keep each body's condition clip on its stack, and tick it. Runs in the
+/// The taunt table can arrive from the server after startup, naming clips
+/// nobody has read yet. Clips themselves are not sent: each machine draws
+/// from its own pack, as with body animations.
+pub fn load_taunt_clips(
+    taunts: Option<Res<Taunts>>,
+    packs: Res<PackAssets>,
+    mut clips: ResMut<Assets<Clip>>,
+    mut loaded: ResMut<ConditionClips>,
+) {
+    let Some(taunts) = taunts.filter(|taunts| taunts.is_changed()) else { return };
+    for taunt in &taunts.0 {
+        if loaded.taunts.contains_key(&taunt.clip) {
+            continue;
+        }
+        let clip = crate::common::clip_file::load_named_clip(&packs, &default_packs(), &taunt.clip);
+        if clip.is_none() {
+            warn!("The `{}` taunt's clip `{}` is not in any pack", taunt.key, taunt.clip);
+        }
+        loaded.taunts.insert(taunt.clip.clone(), clip.map(|clip| clips.add(clip)));
+    }
+}
+
+/// Keep each body's condition clips on its stack, and tick them. Runs in the
 /// pose chain before `play_the_clips`, so starting one and playing it are
 /// never a frame apart.
 pub(crate) fn perform_conditions(
     time: Res<Time>,
     clips: Option<Res<ConditionClips>>,
+    taunts: Option<Res<Taunts>>,
     mut bodies: Query<(&Condition, &mut ClipStack)>,
 ) {
     let delta = time.delta_secs();
+    let clips = clips.as_deref();
     for (condition, mut stack) in &mut bodies {
-        let wanted = condition
-            .performance()
-            .and_then(|(layer, _)| Some((layer, clips.as_deref()?.of(*condition)?)));
-        if wanted.is_none() && !stack.has_staying(is_a_condition) {
-            continue;
-        }
-        if let Some(playing) = stack.keep(is_a_condition, wanted) {
-            playing.time += delta;
+        let humiliation = condition
+            .humiliated
+            .then(|| clips?.humiliated.as_ref())
+            .flatten()
+            .map(|clip| (clip, Layer::Humiliation.claims()));
+        let taunt = condition
+            .taunt
+            .and_then(|id| taunts.as_deref()?.get(id))
+            .and_then(|taunt| Some((clips?.taunts.get(&taunt.clip)?.as_ref()?, taunt.claims)));
+
+        for (layer, wanted) in [(Layer::Humiliation, humiliation), (Layer::Taunt, taunt)] {
+            let ours = |playing: Layer| playing == layer;
+            if wanted.is_none() && !stack.has_staying(ours) {
+                continue;
+            }
+            if let Some(playing) = stack.keep(ours, wanted.map(|(clip, _)| (layer, clip))) {
+                playing.time += delta;
+                if let Some((_, claims)) = wanted {
+                    playing.claims = claims;
+                }
+            }
         }
     }
-}
-
-fn is_a_condition(layer: Layer) -> bool {
-    matches!(layer, Layer::Humiliation)
 }
 
 #[cfg(test)]
@@ -162,7 +208,7 @@ mod tests {
     #[test]
     fn h_humiliates_and_h_again_lets_go() {
         let mut world = World::new();
-        let body = world.spawn((Condition::Normal, Inputs::default())).id();
+        let body = world.spawn((Condition::default(), Inputs::default())).id();
 
         let press = |world: &mut World, pressed: bool| {
             world.get_mut::<Inputs>(body).unwrap().0 = PlayerInput { humiliate: pressed, ..default() };
@@ -170,9 +216,9 @@ mod tests {
             *world.get::<Condition>(body).unwrap()
         };
 
-        assert_eq!(press(&mut world, true), Condition::Humiliated);
-        assert_eq!(press(&mut world, false), Condition::Humiliated, "a tick with no press toggled");
-        assert_eq!(press(&mut world, true), Condition::Normal);
+        assert_eq!(press(&mut world, true), Condition::HUMILIATED);
+        assert_eq!(press(&mut world, false), Condition::HUMILIATED, "a tick with no press toggled");
+        assert_eq!(press(&mut world, true), Condition::default());
     }
 
     /// Forced, and the preference is still there afterwards.
@@ -181,13 +227,13 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(ViewPreference(ViewMode::FirstPerson));
         world.init_resource::<ViewMode>();
-        let body = world.spawn((LocalPlayer, Condition::Humiliated)).id();
+        let body = world.spawn((LocalPlayer, Condition::HUMILIATED)).id();
 
         world.run_system_once(decide_the_view).unwrap();
         assert_eq!(*world.resource::<ViewMode>(), ViewMode::ThirdPerson);
         assert_eq!(world.resource::<ViewPreference>().0, ViewMode::FirstPerson);
 
-        *world.get_mut::<Condition>(body).unwrap() = Condition::Normal;
+        *world.get_mut::<Condition>(body).unwrap() = Condition::default();
         world.run_system_once(decide_the_view).unwrap();
         assert_eq!(*world.resource::<ViewMode>(), ViewMode::FirstPerson);
     }
@@ -199,8 +245,8 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(ViewPreference(ViewMode::FirstPerson));
         world.init_resource::<ViewMode>();
-        world.spawn(Condition::Humiliated);
-        world.spawn((LocalPlayer, Condition::Normal));
+        world.spawn(Condition::HUMILIATED);
+        world.spawn((LocalPlayer, Condition::default()));
 
         world.run_system_once(decide_the_view).unwrap();
         assert_eq!(*world.resource::<ViewMode>(), ViewMode::FirstPerson);
@@ -215,10 +261,10 @@ mod tests {
         let mut clips = Assets::<Clip>::default();
         let humiliated = clips.add(Clip::default());
         let deploy = clips.add(Clip::default());
-        world.insert_resource(ConditionClips { humiliated: Some(humiliated.clone()) });
+        world.insert_resource(ConditionClips { humiliated: Some(humiliated.clone()), taunts: BTreeMap::new() });
         let body = world
             .spawn((
-                Condition::Humiliated,
+                Condition::HUMILIATED,
                 ClipStack(vec![Playing::new(Layer::Weapon, deploy, 0.0)]),
             ))
             .id();
@@ -228,12 +274,43 @@ mod tests {
         assert_eq!(stack.0.len(), 2);
         assert!(stack.0.iter().any(|playing| playing.layer == Layer::Humiliation && !playing.leaving));
 
-        *world.get_mut::<Condition>(body).unwrap() = Condition::Normal;
+        *world.get_mut::<Condition>(body).unwrap() = Condition::default();
         world.run_system_once(perform_conditions).unwrap();
         let stack = world.get::<ClipStack>(body).unwrap();
         let leaving = |layer| stack.0.iter().find(|playing| playing.layer == layer).unwrap().leaving;
         assert!(leaving(Layer::Humiliation), "the humiliation clip outlived humiliation");
         assert!(!leaving(Layer::Weapon), "the weapon's clip was sent out too");
+    }
+
+    /// A humiliated body may still taunt, as in TF2: both clips play, the
+    /// taunt on top with the claims its entry states.
+    #[test]
+    fn a_humiliated_body_can_still_taunt() {
+        let taunts = Taunts::shipped();
+        let wave = taunts.first().unwrap().clone();
+        let mut world = World::new();
+        world.init_resource::<Time>();
+        let mut clips = Assets::<Clip>::default();
+        let humiliated = clips.add(Clip::default());
+        let waving = clips.add(Clip::default());
+        world.insert_resource(ConditionClips {
+            humiliated: Some(humiliated),
+            taunts: BTreeMap::from([(wave.clip.clone(), Some(waving))]),
+        });
+        world.insert_resource(taunts.clone());
+        let both = Condition { humiliated: true, taunt: Some(wave.id) };
+        let body = world.spawn(both).id();
+
+        world.run_system_once(perform_conditions).unwrap();
+        let stack = world.get::<ClipStack>(body).unwrap();
+        let on = |layer| stack.0.iter().find(|playing| playing.layer == layer && !playing.leaving);
+        assert!(on(Layer::Humiliation).is_some(), "the taunt pushed humiliation off");
+        assert_eq!(on(Layer::Taunt).expect("no taunt playing").claims, wave.claims);
+
+        assert!(!both.may_fire());
+        assert!(both.forces_third_person());
+        assert!(!both.shows_weapon(Some(&taunts)), "the wave says the weapon is hidden");
+        assert_eq!(both.speed_factor(Some(&taunts)), 0.0);
     }
 
     /// Every build gets both hands up from the shipped clip, at both ends of
@@ -273,5 +350,45 @@ mod tests {
             }
         }
     }
-}
 
+    /// Every build can get its right hand up by its head and sweep it from
+    /// one side of the wave to the other.
+    #[test]
+    fn every_class_can_wave() {
+        use strum::IntoEnumIterator;
+        use crate::common::class::{Class, ClassBuilds};
+        use crate::common::skeleton::ik::Reach;
+        use crate::common::skeleton::play::{apply, Frames};
+        use crate::common::skeleton::rig::bone;
+        use crate::common::skeleton::{humanoid, Pose};
+
+        let taunts = Taunts::shipped();
+        let wave = taunts.first().expect("the default pack ships no taunt");
+        let clip = crate::common::clip_file::load_named_clip(
+            &PackAssets::default(),
+            &[std::path::PathBuf::from("assets/default")],
+            &wave.clip,
+        )
+        .expect("the first taunt's clip is not in the default pack");
+        let ground = |_: Vec3| 0.0;
+
+        for class in Class::iter() {
+            let rig = humanoid(ClassBuilds::shipped().of(class));
+            for time in [0.0, 0.2, 0.4] {
+                let mut pose = Pose::rest();
+                let root = Transform::IDENTITY;
+                let carry = crate::prop::hold::carry_frame(&rig, &pose, &root, Quat::IDENTITY).unwrap();
+                let reaches = apply(&clip, time, &rig, &mut pose, &Frames::standing(root, carry, &ground), None);
+                assert_eq!(reaches, vec![Reach::Reached], "{class:?} cannot wave at {time} s");
+
+                let bones = rig.posed_bones(&pose, &root);
+                let head = &bones[rig.index_of(bone::HEAD).unwrap()];
+                let wrist = bones[rig.index_of(bone::FOREARM_R).unwrap()].tail;
+                // Halfway up the head: the arm is up, whatever the build's
+                // neck and shoulders make of exactly how far.
+                let eyes = (head.head.y + head.tail.y) / 2.0;
+                assert!(wrist.y > eyes, "{class:?}'s wrist is below its eyes at {time} s");
+            }
+        }
+    }
+}

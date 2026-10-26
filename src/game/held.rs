@@ -18,6 +18,7 @@ use crate::common::skeleton::play::{
 };
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::weapon::{Equipped, WeaponCatalogue, WeaponId};
+use crate::common::taunt::Taunts;
 use crate::game::condition::Condition;
 use crate::game::player::{LocalPlayer, Player, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
@@ -150,6 +151,7 @@ fn dress_held_weapons(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut clip_assets: ResMut<Assets<Clip>>,
     view: Res<ViewMode>,
+    taunts: Option<Res<Taunts>>,
     bodies: Query<
         (
             Entity,
@@ -211,7 +213,7 @@ fn dress_held_weapons(
                                     // Spawned already hidden: `show_held_weapons`
                                     // only catches it a frame later, which
                                     // flashes the weapon across your view.
-                                    held_visibility(ours, *view, condition.copied()),
+                                    held_visibility(ours, *view, condition.copied(), taunts.as_deref()),
                                     Mesh3d(mesh),
                                     MeshMaterial3d(material),
                                     // Overwritten by `place_held_weapons`
@@ -491,9 +493,14 @@ pub(crate) fn grip_the_weapon(
 /// A held weapon is hidden from inside your own head, and whenever its
 /// body's condition takes it away. The only writer of a held part's
 /// visibility; `hide_own_body` leaves held parts to this.
-fn held_visibility(ours: bool, view: ViewMode, condition: Option<Condition>) -> Visibility {
+fn held_visibility(
+    ours: bool,
+    view: ViewMode,
+    condition: Option<Condition>,
+    taunts: Option<&Taunts>,
+) -> Visibility {
     let inside_our_head = ours && !view.shows_own_body();
-    let taken_away = condition.is_some_and(|condition| !condition.shows_weapon());
+    let taken_away = condition.is_some_and(|condition| !condition.shows_weapon(taunts));
     match inside_our_head || taken_away {
         true => Visibility::Hidden,
         false => Visibility::Inherited,
@@ -502,11 +509,12 @@ fn held_visibility(ours: bool, view: ViewMode, condition: Option<Condition>) -> 
 
 fn show_held_weapons(
     view: Res<ViewMode>,
+    taunts: Option<Res<Taunts>>,
     bodies: Query<(&HeldModel, Has<LocalPlayer>, Option<&Condition>)>,
     mut parts: Query<&mut Visibility, With<HeldPart>>,
 ) {
     for (held, ours, condition) in &bodies {
-        let wanted = held_visibility(ours, *view, condition.copied());
+        let wanted = held_visibility(ours, *view, condition.copied(), taunts.as_deref());
         for part in &held.parts {
             let Ok(mut visibility) = parts.get_mut(*part) else { continue };
             // Assigned only on change, so parts are not dirtied every frame.

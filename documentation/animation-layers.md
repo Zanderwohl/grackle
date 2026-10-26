@@ -63,7 +63,9 @@ its hands up rather than sliding across the floor in a standing pose.
 
 Humiliation, taunting and stuns are **one replicated `Condition` on the body**,
 written by the simulation on the authority. Everything reads it and nobody
-else writes it:
+else writes it. It is a struct, not an enum — `humiliated` and an optional
+`taunt` — because a humiliated body may still taunt, and the taunt's layer
+outranks humiliation's while it lasts:
 
 - `pull_trigger` refuses to fire.
 - `HeldModel` hides the weapon. Whether a condition shows the weapon is a
@@ -185,9 +187,11 @@ would kick twice.
 
 ### What crosses the wire
 
-- **State, replicated:** `Condition` (which one, and the tick it started, so
-  a late joiner sees a taunt at the right point in it and every machine plays
-  it in step), what is carried, the reload in progress.
+- **State, replicated:** `Condition`, what is carried, the reload in
+  progress. The taunt table is sent like the weapon catalogue, since its
+  movement is part of the predicted step. A taunt's start tick is not sent
+  yet: the wave loops, so where in it a late joiner starts does not show. A
+  taunt with a length of its own will need it.
 - **Input:** the `humiliate` and `taunt` toggles.
 - **Events, relayed:** firing, as an `Effect` carrying the shooter and the
   button, so every other machine starts the recoil; gestures.
@@ -218,15 +222,18 @@ outside its layer's claim is a problem `Clip::problems` reports.
       off. The grip shares an arm with a layer fading over it.
 - [x] `Condition` component, replicated: humiliated. `pull_trigger` refuses;
       `show_held_weapons` hides the weapon per condition.
-- [ ] Taunting as a condition (which taunt, start tick).
+- [x] Taunting as a condition: `Condition::taunt`, beside `humiliated`.
+- [ ] A taunt's start tick, once a taunt is not a loop.
 - [x] `humiliate` edge in `PlayerInput` on `H`; the authority toggles it.
-- [ ] `taunt` edge on `G`.
+- [x] `taunt` edge on `G`; the authority toggles the first taunt.
 - [x] Humiliation: a hands-up clip (`animations/humiliated.gpa`) on the arms,
       legs left to locomotion. Keyed in `Space::Shoulders`, the carry point
       turned with the body rather than the aim, so looking up does not tilt
       it.
-- [ ] `taunts.toml` read into a resource, synced like the other pack tables;
-      the wave clip; `step_player` applies the taunt's movement.
+- [x] `taunts.toml` read into `Taunts`, synced like the other pack tables;
+      the wave clip (`animations/taunt_wave.gpa`); `step_player` applies the
+      taunt's movement. Clips are not sent: each machine reads its own, as
+      with body animations.
 - [x] Effective view mode: forced third person under a condition.
       `ViewPreference` is what `F` toggles; `decide_the_view` is the only
       writer of `ViewMode`.

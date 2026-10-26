@@ -1,0 +1,43 @@
+name_key = "anim.clips.taunt_wave"
+length = 0.8
+clock = "seconds"
+looping = true
+note = "The right hand up over the head, swept from over the crown out past the shoulder. Every build's arm is 0.85 arm lengths from shoulder to wrist and its shoulder sits 0.3 to 0.67 out from the middle, which is what bounds these numbers. From the shoulders in arm lengths, turned with the body, as the humiliation pose is. Only the right arm is keyed: the taunt claims the left too, which lets it hang as locomotion has it rather than staying on the weapon or up in surrender."
+
+[[tracks]]
+combine = "replace"
+space = "shoulders"
+unit = "arm_lengths"
+enabled = true
+
+[tracks.channel]
+channel = "effector"
+chain = "right_arm"
+pole = [1.0, -0.3, 0.3]
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.3,
+    0.7,
+    -0.1,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.4
+to = [
+    0.68,
+    0.7,
+    -0.1,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.8
+to = [
+    0.3,
+    0.7,
+    -0.1,
+]
+ease = "smoother_step"

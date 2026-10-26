@@ -226,6 +226,8 @@ pub enum Layer {
     /// A weapon's own clips. The hold sits here too, as the arms' default.
     Weapon,
     Humiliation,
+    /// Above humiliation, as in TF2: a humiliated body may still taunt.
+    Taunt,
 }
 
 impl Layer {
@@ -238,6 +240,8 @@ impl Layer {
                 .union(Regions::TORSO)
                 .union(Regions::HEAD)
                 .union(Regions::WEAPON),
+            // Each taunt states its own; see `taunts.toml`.
+            Layer::Taunt => Regions::ALL,
         }
     }
 
@@ -247,6 +251,7 @@ impl Layer {
             Layer::Locomotion => "locomotion",
             Layer::Weapon => "weapon",
             Layer::Humiliation => "humiliation",
+            Layer::Taunt => "taunt",
         }
     }
 
@@ -254,7 +259,7 @@ impl Layer {
         Layer::ALL.into_iter().find(|layer| layer.key() == key)
     }
 
-    pub const ALL: [Layer; 3] = [Layer::Locomotion, Layer::Weapon, Layer::Humiliation];
+    pub const ALL: [Layer; 4] = [Layer::Locomotion, Layer::Weapon, Layer::Humiliation, Layer::Taunt];
 }
 
 /// Seconds a layer takes to fade in over what is beneath it, and back out.
@@ -285,7 +290,7 @@ impl LayerBlends {
 
 /// Parts of a body a layer can claim. `WEAPON` is the weapon's placement, not
 /// a bone.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Regions(u8);
 
 impl Regions {
@@ -307,6 +312,19 @@ impl Regions {
 
     pub fn overlaps(self, other: Regions) -> bool {
         self.0 & other.0 != 0
+    }
+
+    /// How a region is written in a pack file.
+    pub fn named(name: &str) -> Option<Regions> {
+        match name {
+            "legs" => Some(Regions::LEGS),
+            "torso" => Some(Regions::TORSO),
+            "head" => Some(Regions::HEAD),
+            "arm.l" => Some(Regions::ARM_L),
+            "arm.r" => Some(Regions::ARM_R),
+            "weapon" => Some(Regions::WEAPON),
+            _ => None,
+        }
     }
 
     /// `NONE` for a name the rig does not have, so it is never masked.

@@ -432,6 +432,7 @@ remove = "Remove"
 [anim.clips]
 deploy = "Deploy"
 humiliated = "Humiliated"
+taunt_wave = "Wave"
 
 [anim.channel]
 root = "Body"

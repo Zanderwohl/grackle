@@ -325,7 +325,10 @@ is the perf overlay in both modes.
 Weapon slots are on **`1`–`6`**, the left mouse button fires the weapon's
 primary and the right its secondary — held, for anything automatic — and
 **`R`** reloads. **`H`** toggles humiliation, a debug key until there are
-rounds to lose: hands up, no weapon, no firing, third person. What each slot
+rounds to lose: hands up, no weapon, no firing, third person. **`G`** toggles
+the first taunt in `assets/default/taunts.toml` (a wave), which also works
+while humiliated, as in TF2; each taunt states what it claims, whether it
+shows the weapon, and whether it stops or slows you. What each slot
 holds is a property of the class, which is read off disk; see "What a weapon is" below.
 
 ## Modelling a prop

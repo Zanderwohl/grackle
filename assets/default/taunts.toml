@@ -1,0 +1,10 @@
+# Each taunt is a clip under `animations/` and what performing it does to the
+# body. `claims` are the parts the taunt takes from the layers beneath it:
+# legs, torso, head, arm.l, arm.r, weapon. `movement` is "free", "stopped",
+# or { slowed = 0.5 }. `weapon` is "hidden" or "shown".
+
+[wave]
+clip = "taunt_wave"
+claims = ["arm.l", "arm.r", "torso", "head", "weapon"]
+movement = "stopped"
+weapon = "hidden"

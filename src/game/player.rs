@@ -111,6 +111,8 @@ pub struct PlayerInput {
     /// Humiliation was toggled since the last tick consumed it. A debug key
     /// until there are rounds to lose.
     pub humiliate: bool,
+    /// The taunt was toggled since the last tick consumed it.
+    pub taunt: bool,
     /// Look direction about world Y, radians. An input because facing decides
     /// which way "forward" is, so a server needs it to reproduce movement.
     pub yaw: f32,
@@ -404,6 +406,7 @@ pub fn gather_input(
 
     input.reload |= keys.just_pressed(KeyCode::KeyR);
     input.humiliate |= keys.just_pressed(KeyCode::KeyH);
+    input.taunt |= keys.just_pressed(KeyCode::KeyG);
 
     // All six slots are bound whatever the class carries: an unbound key and
     // a key bound to an empty slot are the same to a player.
@@ -464,6 +467,7 @@ pub fn write_client_inputs(
     latch.0.alt_attack = false;
     latch.0.reload = false;
     latch.0.humiliate = false;
+    latch.0.taunt = false;
     latch.0.select = None;
 }
 
@@ -540,14 +544,20 @@ pub fn step_player(
     time: Res<Time>,
     world: Res<CollisionWorld>,
     rules: Res<MovementRules>,
-    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance, &Inputs), With<Simulated>>,
+    // Absent in tests that build no game; the same table on both ends, since
+    // the server sends it.
+    taunts: Option<Res<crate::common::taunt::Taunts>>,
+    mut players: Query<
+        (&mut Player, &mut PhysicsBody, &mut Stance, &Inputs, &Condition),
+        With<Simulated>,
+    >,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {
         return;
     }
 
-    for (mut player_slot, mut body_slot, mut stance_slot, input) in &mut players {
+    for (mut player_slot, mut body_slot, mut stance_slot, input, condition) in &mut players {
         // Stepped on copies and written back only if different: all three are
         // replicated, and a still body would otherwise be resent every tick.
         let mut player = player_slot.clone();
@@ -568,6 +578,9 @@ pub fn step_player(
         // The animation measures ground covered; it is never told which speed.
         let speed = if rules.sprint.sprints(input.sprint) { SPRINT_SPEED } else { WALK_SPEED };
         let speed = if stance == Stance::Crouched { CROUCH_SPEED } else { speed };
+        // A replicated, unpredicted `Condition`: the tick a taunt starts or
+        // stops is a rollback, which is correct and rare.
+        let speed = speed * condition.speed_factor(taunts.as_deref());
         player.velocity.x = wish.x * speed;
         player.velocity.z = wish.z * speed;
 
