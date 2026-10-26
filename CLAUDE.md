@@ -964,7 +964,11 @@ slightly differently.
 
 Three volumes, and they are kept apart on purpose — the movement hull, the
 hitboxes and the bones are covered in
-[`src/common/hitbox.rs`](src/common/hitbox.rs). The mesh is a fourth, and it is
+[`src/common/hitbox.rs`](src/common/hitbox.rs). As in TF2, only the head box
+matters to damage, and it is **wherever the head is**: built on the tick from
+the same layers the body is drawn in (animator, claims, look, stack), so
+looking down, a lean or a taunt moves the headshot with the head. The body box
+is the hull and never moves. The mesh is a fourth, and it is
 the only one that is authoritative about nothing: it is built from the bones
 and nothing tests against it.
 

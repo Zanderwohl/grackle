@@ -341,11 +341,17 @@ fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
             // Skipping keeps a still body from dirtying its pose every frame.
             continue;
         }
-        let pitch = head_pitch(player.pitch);
-        for (joint, share) in [(bone::NECK, NECK_SHARE), (bone::HEAD, HEAD_SHARE)] {
-            let animated = pose.joint(joint);
-            pose.set(joint, animated * Quat::from_rotation_x(-pitch * share));
-        }
+        look(&mut pose, player.pitch);
+    }
+}
+
+/// Bend the neck and head towards `pitch`, onto whatever the pose has them
+/// doing. Shared with the hitboxes, which must put the head where it is drawn.
+pub(crate) fn look(pose: &mut Pose, pitch: f32) {
+    let pitch = head_pitch(pitch);
+    for (joint, share) in [(bone::NECK, NECK_SHARE), (bone::HEAD, HEAD_SHARE)] {
+        let animated = pose.joint(joint);
+        pose.set(joint, animated * Quat::from_rotation_x(-pitch * share));
     }
 }
 
@@ -484,7 +490,7 @@ fn advance_animators(
 ///
 /// Not the weapon layer's claims: the grip owns the arms there, and an arm
 /// under a deploy still swings when the weapon has no grip for it.
-fn stand_where_claimed(
+pub(crate) fn stand_where_claimed(
     skeleton: &Skeleton,
     pose: &mut Pose,
     stack: &ClipStack,

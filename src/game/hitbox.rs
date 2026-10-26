@@ -3,6 +3,12 @@
 //! The pose is sampled on the tick rather than read off the body: the drawn
 //! pose is written at frame rate, so reading it here would make where a body
 //! can be hit depend on the viewer's frame rate. See [`crate::common::hitbox`].
+//!
+//! It is built the way the drawn pose is, in the same order: the animator,
+//! a claim standing what it owns, the look, then the layer stack. The stack's
+//! clips are read at the time their owners last set, at most a frame behind
+//! the tick; they are taunts and kicks held for a good part of a second, not
+//! cycles, so the head is where it is drawn give or take a frame.
 
 use bevy::prelude::*;
 
@@ -15,10 +21,15 @@ use crate::common::skeleton::state::ClipLibrary;
 use crate::common::skeleton::{
     animator_pose, AnimationClock, AnimationPhase, Gait, PoseInputs, Skeleton, SkeletonAnimator,
 };
-use crate::game::player::{step_player, LocalPlayer, PhysicsBody, ViewMode};
+use crate::common::skeleton::clip::Clip;
+use crate::common::skeleton::ik::finish_pose;
+use crate::common::skeleton::play::{apply_stack, ClipStack, Frames};
+use crate::common::skeleton::state::{AnimationState, BodyRequests};
+use crate::game::player::{step_player, LocalPlayer, PhysicsBody, Player, ViewMode};
 use crate::game::skeleton::{
-    advance_animation_clock, advance_gaits, skeleton_root, SkeletonRoot,
+    advance_animation_clock, advance_gaits, look, skeleton_root, stand_where_claimed, SkeletonRoot,
 };
+use crate::prop::hold::carry_frame;
 
 /// Whether hitboxes, and the debug laser aimed at them, are drawn. `F4`
 /// toggles both. Off by default: a debug view, and the laser traces every body.
@@ -60,21 +71,21 @@ pub fn update_hitboxes(
     clock: Res<AnimationClock>,
     // Absent with no clips loaded and in tests; every state is then a function.
     library: Option<Res<ClipLibrary>>,
+    layer_clips: Option<Res<Assets<Clip>>>,
     mut bodies: Query<(
-        &Skeleton,
-        &SkeletonAnimator,
-        Option<&AnimationPhase>,
-        Option<&Gait>,
+        (&Skeleton, &SkeletonAnimator, Option<&AnimationPhase>, Option<&Gait>),
         Option<&Stance>,
         &GlobalTransform,
         Option<&SkeletonRoot>,
         Option<&PhysicsBody>,
+        (Option<&Player>, Option<&ClipStack>, Option<&BodyRequests>),
         &mut Hitboxes,
     )>,
 ) {
-    for (skeleton, animator, phase, gait, stance, global, offset, physics, mut boxes) in
+    for ((skeleton, animator, phase, gait), stance, global, offset, physics, layers, mut boxes) in
         &mut bodies
     {
+        let (player, stack, requests) = layers;
         // The step's position, not the interpolated transform, which depends
         // on frame rate.
         let mut placed = *global;
@@ -93,16 +104,30 @@ pub fn update_hitboxes(
             speed: gait.speed(),
             travel: gait.travel(),
         };
-        let pose = animator_pose(skeleton, animator, &inputs, &root, clips);
-        // The pose with the cycle stopped: ducking moves the head box, a step
-        // bob does not.
-        let settled = animator_pose(
-            skeleton,
-            animator,
-            &PoseInputs { seconds: 0.0, stride: 0.0, ..inputs },
-            &root,
-            clips,
-        );
+        let mut pose = animator_pose(skeleton, animator, &inputs, &root, clips);
+        if let Some(stack) = stack {
+            let still = AnimationState::from_requests(&BodyRequests {
+                crouching: requests.is_some_and(|requests| requests.crouching),
+                airborne: requests.is_some_and(|requests| requests.airborne),
+                ..default()
+            });
+            stand_where_claimed(skeleton, &mut pose, stack, || {
+                finish_pose(skeleton, still, &inputs, &root, clips)
+            });
+        }
+        let pitch = player.map_or(0.0, |player| player.pitch);
+        look(&mut pose, pitch);
+        if let (Some(stack), Some(layer_clips)) = (stack, layer_clips.as_deref()) {
+            let floor = root.translation.y;
+            let ground = move |_: Vec3| floor;
+            let aim = Quat::from_rotation_x(pitch);
+            let frames = Frames::standing(
+                root,
+                carry_frame(skeleton, &pose, &root, aim).unwrap_or(root),
+                &ground,
+            );
+            apply_stack(stack, layer_clips, skeleton, &mut pose, &frames, None);
+        }
         // A body shown rather than simulated has no stance; infer it from the
         // animation.
         let stance = stance.copied().unwrap_or_else(|| {
@@ -113,7 +138,7 @@ pub fn update_hitboxes(
             }
         });
 
-        *boxes = hitboxes(skeleton, &pose, &settled, &root, stance);
+        *boxes = hitboxes(skeleton, &pose, &root, stance);
     }
 }
 
@@ -273,4 +298,63 @@ mod tests {
             boxes.body.centre.x
         );
     }
+
+    /// The head box of a body at `pitch`, with `stack` playing over it.
+    fn head_box_of(pitch: f32, stack: ClipStack, clips: Assets<Clip>) -> crate::common::hitbox::Box3 {
+        let mut world = World::new();
+        world.init_resource::<AnimationClock>();
+        world.insert_resource(clips);
+        let body = world
+            .spawn((
+                humanoid(Proportions::DEFAULT),
+                Pose::rest(),
+                SkeletonAnimator::default(),
+                Player { pitch, ..default() },
+                stack,
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+            ))
+            .id();
+        world.run_system_once(update_hitboxes).unwrap();
+        world.get::<Hitboxes>(body).unwrap().head.unwrap()
+    }
+
+    /// Looking at the floor takes the head, and so the headshot, down and
+    /// forward with it, as in TF2.
+    #[test]
+    fn the_head_box_looks_where_the_body_looks() {
+        let level = head_box_of(0.0, ClipStack::default(), Assets::default());
+        let down = head_box_of(-1.2, ClipStack::default(), Assets::default());
+        assert!(down.centre.y < level.centre.y - 0.02, "looking down left the head box up");
+        assert!(down.centre.z < level.centre.z - 0.02, "looking down left the head box back");
+    }
+
+    /// A layer that moves the head moves the box: a taunt's head is where it
+    /// is shot.
+    #[test]
+    fn the_head_box_follows_a_layer_that_moves_the_head() {
+        use crate::common::skeleton::clip::{Channel, Key, Track};
+        use crate::common::skeleton::play::{Layer, Playing, Regions};
+        use crate::common::skeleton::rig::bone;
+        use crate::common::skeleton::Interpolation;
+
+        let mut clips = Assets::<Clip>::default();
+        let mut bow = Track::rotation(bone::CHEST);
+        let Channel::Rotation { keys, .. } = &mut bow.channel else { unreachable!() };
+        keys.push(Key::all(0.0, [1.0, 0.0, 0.0], Interpolation::Linear));
+        let bowing = clips.add(Clip { length: 1.0, tracks: vec![bow], ..default() });
+        let stack = ClipStack(vec![Playing {
+            claims: Regions::TORSO.union(Regions::HEAD),
+            ..Playing::new(Layer::Taunt, bowing, 0.0)
+        }]);
+
+        let upright = head_box_of(0.0, ClipStack::default(), Assets::default());
+        let bowed = head_box_of(0.0, stack, clips);
+        assert!(
+            (bowed.centre - upright.centre).length() > 0.2,
+            "a bow moved the head box {} m",
+            (bowed.centre - upright.centre).length(),
+        );
+    }
 }
+
