@@ -15,19 +15,19 @@ not a convenience. Design accordingly:
 - Anything that only works because the editor is native (a file dialog, a
   blocking call, a background thread, a C library) becomes a problem the moment
   editing happens mid-match in a browser tab. See "Targeting wasm" below.
-- Two map formats are intended, and the split is deliberate:
-  - **Blueprint (`.gmb`)** — the authoring format: the map's feature list as
-    RON text, written by the features' own serde. No undo history — that
-    lives in memory, as a prop's does. This is what the editor saves.
+- Two file formats, and the split is deliberate:
+  - **Blueprint (`.gmb`)** — a map: its feature list as RON text, written by
+    the features' own serde. No undo history — that lives in memory, as a
+    prop's does. This is what the editor saves **and what ships**.
   - **Prop (`.gpp`)** — a *thing*, not a place: a weapon, a crate, a control
     point. Flat text, because the game reads one — see "Modelling
     a prop" below.
-  - **Compiled map** — not written yet. A simpler, flatter runtime format that a
-    more traditional art-filled map can be baked into and shipped. The game
-    loads this; it does not load blueprints in the general case.
 
-  Between-round editing works on live features. Compilation is for the other
-  direction: authored content that ships.
+  **There is no compiled map file.** Flat runtime geometry is resolved in
+  memory; baked textures and lighting are a cache keyed by content hash, like
+  `cache/thumbnail/`, never authoritative; an art-heavy map's weight is meshes
+  and textures, which are pack content. Materials ship as texture-graphs, not
+  pixels — see [documentation/surfaces.md](documentation/surfaces.md).
 
 The intended service topology — accounts, items, matchmaking, play servers,
 client — is sketched in [documentation/sketch.md](documentation/sketch.md).
@@ -63,6 +63,13 @@ reads that name.
 still dead — superseded by `EditorRoom` for authoring — but it is what
 `CollisionWorld` is rebuilt from, so deleting it is not the small change it
 looks like.
+
+**Rooms are axis-aligned boxes today and will not stay that way.** Doom-style
+polygon rooms and Source-style displacements are planned, though not for this
+version. New code that consumes room geometry (materials, bakes, collision)
+should take triangles and normals rather than a room's min and max, so a new
+shape is a new producer and not a rewrite of every consumer — see
+[documentation/surfaces.md](documentation/surfaces.md).
 
 ## Layout
 
@@ -915,7 +922,7 @@ against a world that has been rebuilt rather than one that is about to be.
 
 It is a **set, not a list of named systems**, for the same reason
 `DamageSystems` is one: rooms are the only thing baked today, and a second kind
-— navmesh, lightmap, whatever the compiled map format wants — joins by naming
+— navmesh, lightmap, material atlases — joins by naming
 the set. Name the systems instead and the ordering lives somewhere that does
 not know about them, and forgetting one produces no error, just a round that
 starts before its world is finished.
@@ -2023,8 +2030,9 @@ A client also declines to adopt a map identical to the one it already has,
 since adopting is a visible rebuild in exchange for nothing.
 
 The wire format is JSON, which is the wrong choice for anything large and is
-knowingly temporary — it is what `typetag` gives for free. The compiled map
-format is where this stops being acceptable.
+knowingly temporary — it is what `typetag` gives for free. A blueprint is what
+ships, so it gives way to a compact binary encoding of the same blueprint,
+parsed as defensively as [sketch.md](documentation/sketch.md) asks.
 
 ### The transport behind it
 
