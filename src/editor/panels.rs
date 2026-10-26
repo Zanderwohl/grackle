@@ -564,9 +564,9 @@ impl EditorPanels {
             retarget_state.target_feature = Some(feature_id);
             retarget_state.target_point_ref_key = label;
             retarget_state.hovered_point = None;
-            // `set_if_neq`, not `set`: a same-state `set` still runs the transition, and
+            // `set_if_different`, not `set`: a same-state `set` still runs the transition, and
             // `OnExit(Tools::Retarget)` would clear the `RetargetState` just filled in.
-            (&mut *next_tool).set_if_neq(Tools::Retarget);
+            next_tool.set_if_different(Tools::Retarget);
         }
 
         for event in pending_edits.events.drain(..) {

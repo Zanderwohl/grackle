@@ -68,7 +68,7 @@ impl Plugin for MatchStatePlugin {
 fn announce_mode_change(
     mode: Res<State<AppMode>>,
     role: Res<NetRole>,
-    server: Option<Single<&Server>>,
+    server: Option<Single<&Endpoint, With<Server>>>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
     if !role.is_authority() {

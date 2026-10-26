@@ -130,7 +130,7 @@ fn encode(timeline: &FeatureTimeline) -> Option<Vec<u8>> {
 fn broadcast_map_changes(
     time: Res<Time>,
     timeline: Res<FeatureTimeline>,
-    server: Option<Single<&Server>>,
+    server: Option<Single<&Endpoint, With<Server>>>,
     mut last: ResMut<LastMapSent>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
@@ -187,7 +187,7 @@ fn send_map_to_new_clients(
 /// value because the panel marks the metadata changed every frame it is open.
 fn broadcast_metadata_changes(
     metadata: Res<MapMetadata>,
-    server: Option<Single<&Server>>,
+    server: Option<Single<&Endpoint, With<Server>>>,
     mut last: Local<Option<SavedMetadata>>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {

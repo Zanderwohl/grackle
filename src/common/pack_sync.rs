@@ -108,7 +108,7 @@ fn send_to_new_clients<T: PackTable>(
 /// files mid-match.
 fn broadcast_changes<T: PackTable>(
     table: Res<T>,
-    server: Option<Single<&Server>>,
+    server: Option<Single<&Endpoint, With<Server>>>,
     mut last: ResMut<LastSent<T>>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
