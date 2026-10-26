@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use bevy_egui::egui::{self, Id, LayerId, Ui, UiBuilder};
 use bevy_egui::EguiContexts;
 
+use super::gpu::{BakedTextures, BevyEguiTextures};
 use super::{load, save, MaterialEditor, FILE_EXTENSION, MATERIALS_DIR};
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
@@ -63,6 +64,7 @@ fn panels(
     // Optional: a build with no `NetPlugin` is a closed game, its own authority.
     role: Option<Res<NetRole>>,
     mut exit: MessageWriter<AppExit>,
+    mut baked: ResMut<BakedTextures>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let ctx = ctx.clone();
@@ -93,7 +95,8 @@ fn panels(
         });
     });
 
-    let changed = material.editor.show(&mut window_ui);
+    let mut textures = BevyEguiTextures { egui: &mut contexts, baked: &mut baked };
+    let changed = material.editor.show(&mut window_ui, Some(&mut textures));
     material.edited(changed);
     material.checkpoint_when_idle(!ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input());
 

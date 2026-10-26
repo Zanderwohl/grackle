@@ -3,12 +3,13 @@
 //! [documentation/surfaces.md](../../documentation/surfaces.md).
 //!
 //! The panels and their text are texture-graph's, so they are English whatever `--lang` says;
-//! Grackle's menus around them go through the lang layer. Previews take texture-graph's CPU path
-//! until they share Bevy's device.
+//! Grackle's menus around them go through the lang layer. Previews are baked on Bevy's own device
+//! ([`gpu`]) and fall back to texture-graph's CPU path until it exists.
 //!
 //! Undo is whole-graph snapshots taken when the editor is idle, as the map's is: texture-graph
 //! queues its edits as commands and has no history of its own.
 
+pub mod gpu;
 pub mod ui;
 
 use std::path::{Path, PathBuf};
@@ -25,8 +26,8 @@ pub use texture_graph_core::FILE_EXTENSION;
 
 const UNDO_DEPTH: usize = 256;
 
-/// Square. The CPU path evaluates every pixel on the main thread, so it stays small.
-const PREVIEW_SIZE: u32 = 256;
+/// Square; the panel offers others.
+const PREVIEW_SIZE: u32 = 512;
 
 /// Non-`Send`: the editor holds its host's texture registry as a trait object.
 pub struct MaterialEditor {
@@ -209,6 +210,22 @@ fn start_in_the_material_editor(
     *done = true;
 }
 
+/// Once, the first time the mode opens: the renderer's device does not exist while plugins build.
+fn share_bevys_gpu(
+    mut material: NonSendMut<MaterialEditor>,
+    adapter: Option<Res<bevy::render::renderer::RenderAdapter>>,
+    device: Option<Res<bevy::render::renderer::RenderDevice>>,
+    queue: Option<Res<bevy::render::renderer::RenderQueue>>,
+) {
+    if material.editor.gpu.is_some() {
+        return;
+    }
+    material.editor.gpu = gpu::shared_gpu(adapter.as_deref(), device.as_deref(), queue.as_deref());
+    if material.editor.gpu.is_none() {
+        warn!("No render device to bake materials on; previews use the CPU");
+    }
+}
+
 /// The panels cover the window, so the viewports would draw for nobody. The next mode that shows
 /// them switches them back on.
 fn switch_the_viewports_off(mut cameras: Query<&mut Camera, With<Multicam>>) {
@@ -225,8 +242,8 @@ impl Plugin for MaterialEditorPlugin {
             .init_resource::<StartInMaterialEditor>()
             // Ungated: it has to run in whatever mode the process started in.
             .add_systems(Update, start_in_the_material_editor)
-            .add_systems(OnEnter(AppMode::Material), switch_the_viewports_off)
-            .add_plugins(ui::MaterialUiPlugin);
+            .add_systems(OnEnter(AppMode::Material), (switch_the_viewports_off, share_bevys_gpu))
+            .add_plugins((gpu::MaterialGpuPlugin, ui::MaterialUiPlugin));
     }
 }
 
