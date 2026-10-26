@@ -61,7 +61,7 @@ impl Plugin for NetEventsPlugin {
 /// without naming itself here.
 fn send_hits(
     mut hits: MessageReader<DamageDealt>,
-    server: Option<Single<&Server>>,
+    server: Option<Single<&Endpoint, With<Server>>>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
     let Some(server) = server else {
@@ -76,7 +76,7 @@ fn send_hits(
 
 fn send_deaths(
     mut deaths: MessageReader<Died>,
-    server: Option<Single<&Server>>,
+    server: Option<Single<&Endpoint, With<Server>>>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
@@ -112,7 +112,7 @@ fn receive_deaths(
 
 fn send_effects(
     mut effects: MessageReader<Effect>,
-    server: Option<Single<&Server>>,
+    server: Option<Single<&Endpoint, With<Server>>>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
@@ -135,7 +135,7 @@ fn receive_effects(
 
 fn send_shoves(
     mut shoves: MessageReader<RagdollShove>,
-    server: Option<Single<&Server>>,
+    server: Option<Single<&Endpoint, With<Server>>>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };

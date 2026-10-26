@@ -194,7 +194,8 @@ fn dress_held_weapons(
                     viewmodel = baked.viewmodel;
                     muzzle = baked.muzzle.map(|muzzle| muzzle.point());
                     clips = baked.clips.clone();
-                    commands.entity(body).with_children(|body| {
+                    // Before the parts: a carousel body is spawned without one.
+                    commands.entity(body).insert_if_new(Visibility::default()).with_children(|body| {
                         for (mesh, material) in parts {
                             spawned.push(
                                 body.spawn((

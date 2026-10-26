@@ -156,7 +156,9 @@ nobody else has ever seen, so there is no repository it could have come from.
 
 Two mechanisms, one pipe at different granularities:
 
-- **Full transfer at join.** The compiled runtime format, sent whole.
+- **Full transfer at join.** The blueprint, in a compact binary encoding,
+  sent whole. There is no compiled map format; see
+  [surfaces.md](surfaces.md).
 - **Incremental edits during play.** The `FeatureDelta` log described below,
   which is the same content expressed as changes.
 
@@ -166,13 +168,13 @@ solves, and a reason to keep the two representations convertible rather than
 letting the runtime format drift into something the timeline cannot produce.
 
 Being sent executable-ish content by a stranger's server is a real attack
-surface, and Source's history with it is not encouraging. The compiled format
+surface, and Source's history with it is not encouraging. The wire encoding
 should be designed to be parsed defensively by a client that assumes the sender
 is hostile: bounded sizes, no dynamic allocation driven by attacker-controlled
 counts, and nothing that reaches the filesystem. This is much easier to get
-right while designing the format than to add to it afterwards, and it is a
-second argument against shipping raw `.gmb` SQLite over the wire — handing a
-stranger's bytes to a C SQLite parser is not a boundary anyone wants to defend.
+right while designing the encoding than to add to it afterwards. The same goes
+for the texture-graphs a map ships: a hostile graph must not be able to ask
+for an unbounded bake.
 
 **The client is a browser.** A wasm client cannot open a UDP socket, which rules
 out the transport every shooter of this kind normally uses. WebTransport is the
