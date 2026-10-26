@@ -11,6 +11,7 @@ use crate::common::shortcuts::chords;
 use crate::common::PointResolutionError;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::common::movement_rules::MovementRules;
+use crate::common::palette::{publish_palette, Palette};
 use crate::editor::map_metadata::{publish_movement_rules, MapMetadata};
 use crate::editor::mirror::{assign_sides, Mirroring};
 use crate::editor::save;
@@ -30,7 +31,8 @@ impl Plugin for EditorStepsPlugin {
             .init_resource::<MovementRules>()
             .add_message::<EditEvent>()
             .add_systems(Startup, load_startup_blueprint)
-            .add_systems(Update, publish_movement_rules)
+            .init_resource::<Palette>()
+            .add_systems(Update, (publish_movement_rules, publish_palette))
             // A round is played on the whole map. On the transition rather than `OnEnter(Play)`, so the
             // features past the bar have entities before the bake and collision rebuild run there.
             .add_systems(
@@ -103,6 +105,13 @@ pub trait FeatureTrait: Send + Sync {
     fn type_name(&self) -> String;
     fn type_key(&self) -> &'static str;
     fn debug_gizmos(&self, gizmos: &mut Gizmos);
+    /// Drawn on top of `debug_gizmos` while this feature is the one selected.
+    fn selected_gizmos(&self, _gizmos: &mut Gizmos) {}
+    /// Points of this feature's own that the point ref under `point_ref_key`
+    /// may be measured from, by key — which no other feature can name.
+    fn own_bases(&self, _point_ref_key: &str) -> Vec<(String, Vec3)> { Vec::new() }
+    /// Measure `point_ref_key` from its own `base`, keeping where it resolves.
+    fn rebase_on_own(&mut self, _point_ref_key: &str, _base: &str) -> bool { false }
     fn entity(&self) -> Option<Entity>;
     fn set_entity(&mut self, entity: Option<Entity>);
     fn apply_to_entity(&mut self, commands: &mut Commands, entity: Entity);
@@ -144,6 +153,16 @@ pub trait FeatureTrait: Send + Sync {
     ///
     /// [`Mirror`]: crate::editor::mirror::Mirror
     fn mirror(&mut self, _mirroring: &Mirroring) -> bool { false }
+
+    /// The volumes of air this feature stands up, as its entities carry them.
+    /// Asked by picking, which works from features rather than entities.
+    fn rooms(&self) -> Vec<crate::tool::room::Room> { Vec::new() }
+
+    /// The footprint this feature is, for the tools that edit a footprint's
+    /// own drawing. Two methods rather than a downcast because a typetag
+    /// trait object has no `Any`.
+    fn footprint(&self) -> Option<&crate::editor::footprint_room::FootprintRoom> { None }
+    fn footprint_mut(&mut self) -> Option<&mut crate::editor::footprint_room::FootprintRoom> { None }
 
     /// What this feature stands in the world beyond itself, as features: a Mirror's copies.
     fn standing_copies(&self) -> Vec<&dyn FeatureTrait> { Vec::new() }
@@ -600,7 +619,7 @@ impl FeatureTimeline {
         self.forget_a_missing_bar();
     }
     
-    /// The History panel. Says whether it changed the timeline, because the
+    /// The Features panel. Says whether it changed the timeline, because the
     /// caller hands it one with change detection bypassed — see
     /// `EditorPanels::ui`.
     pub fn ui(
@@ -855,6 +874,9 @@ impl FeatureTimeline {
                 feature.object.debug_gizmos(&mut gizmos);
             }
         }
+        if let Some(selected) = features.selected_feature.and_then(|id| features.features.get(&id)) {
+            selected.object.selected_gizmos(&mut gizmos);
+        }
     }
 }
 
@@ -957,6 +979,14 @@ impl AxisRef {
     }
 }
 
+/// A point of a point ref's own feature, offered as its base by
+/// [`PointRef::editor_ui_with_own`]. `active` is whether it is the base now.
+pub struct OwnBase<'a> {
+    pub label: &'a str,
+    pub point: Vec3,
+    pub active: &'a mut bool,
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct PointRef {
     pub reference: Option<FeatureId>,
@@ -1039,6 +1069,20 @@ impl PointRef {
         prior_feature_order: &[FeatureId],
         retarget_request: &mut Option<String>,
     ) -> bool {
+        self.editor_ui_with_own(ui, label, features, prior_feature_order, retarget_request, None)
+    }
+
+    /// [`Self::editor_ui`], also offering `own` — a point of the feature this
+    /// belongs to — as a base, which no other feature can name.
+    pub fn editor_ui_with_own(
+        &mut self,
+        ui: &mut egui::Ui,
+        label: &str,
+        features: &HashMap<FeatureId, Feature>,
+        prior_feature_order: &[FeatureId],
+        retarget_request: &mut Option<String>,
+        mut own: Option<OwnBase>,
+    ) -> bool {
         let mut changed = false;
 
         ui.horizontal(|ui| {
@@ -1050,56 +1094,77 @@ impl PointRef {
             }
         });
 
-        let ref_label = self.reference
-            .and_then(|id| features.get(&id))
-            .map(|a| a.type_name_with_id())
-            .unwrap_or_else(|| "None".to_string());
+        let own_active = own.as_ref().is_some_and(|own| *own.active);
+        let ref_label = match &own {
+            Some(own) if own_active => own.label.to_string(),
+            _ => self.reference
+                .and_then(|id| features.get(&id))
+                .map(|a| a.type_name_with_id())
+                .unwrap_or_else(|| get!("editor.point_ref.none")),
+        };
 
-        let mut new_reference = self.reference;
-        let mut ref_changed = false;
+        enum Target { Absolute, Own, Feature(FeatureId) }
+        let mut target = None;
 
         egui::ComboBox::from_id_salt(format!("{}_ref", label))
             .selected_text(&ref_label)
             .width(ui.available_width())
             .show_ui(ui, |ui| {
-                if ui.selectable_label(self.reference.is_none(), "None").clicked() && self.reference.is_some() {
-                    new_reference = None;
-                    ref_changed = true;
+                let absolute = self.reference.is_none() && !own_active;
+                if ui.selectable_label(absolute, get!("editor.point_ref.none")).clicked() && !absolute {
+                    target = Some(Target::Absolute);
+                }
+                if let Some(own) = &own
+                    && ui.selectable_label(own_active, own.label).clicked() && !own_active
+                {
+                    target = Some(Target::Own);
                 }
                 for &id in prior_feature_order {
                     if let Some(feature) = features.get(&id) {
                         let is_selected = self.reference == Some(id);
                         if ui.selectable_label(is_selected, feature.type_name_with_id()).clicked() && !is_selected {
-                            new_reference = Some(id);
-                            ref_changed = true;
+                            target = Some(Target::Feature(id));
                         }
                     }
                 }
             });
 
-        if ref_changed {
+        if let Some(target) = target {
             let old_base = self.resolved_reference.unwrap_or(Vec3::ZERO);
-
-            if new_reference.is_none() {
-                for (axis, base_val) in [(&mut self.x, old_base.x), (&mut self.y, old_base.y), (&mut self.z, old_base.z)] {
-                    if axis.is_relative() {
-                        *axis = AxisRef::Absolute(base_val + axis.value());
-                    }
-                }
-                self.resolved_reference = None;
-            } else {
-                let new_base = new_reference
-                    .and_then(|id| features.get(&id))
+            let new_base = match target {
+                Target::Absolute => None,
+                Target::Own => own.as_ref().map(|own| own.point),
+                Target::Feature(id) => Some(features.get(&id)
                     .map(|a| a.object.get_point(&self.point_key).unwrap_or(Vec3::ZERO))
-                    .unwrap_or(Vec3::ZERO);
-                for (axis, old_b, new_b) in [(&mut self.x, old_base.x, new_base.x), (&mut self.y, old_base.y, new_base.y), (&mut self.z, old_base.z, new_base.z)] {
-                    if axis.is_relative() {
-                        *axis = AxisRef::Relative(axis.value() + old_b - new_b);
+                    .unwrap_or(Vec3::ZERO)),
+            };
+            match new_base {
+                None => {
+                    for (axis, base_val) in [(&mut self.x, old_base.x), (&mut self.y, old_base.y), (&mut self.z, old_base.z)] {
+                        if axis.is_relative() {
+                            *axis = AxisRef::Absolute(base_val + axis.value());
+                        }
                     }
                 }
-                self.resolved_reference = Some(new_base);
+                Some(new_base) => {
+                    for (axis, old_b, new_b) in [(&mut self.x, old_base.x, new_base.x), (&mut self.y, old_base.y, new_base.y), (&mut self.z, old_base.z, new_base.z)] {
+                        if axis.is_relative() {
+                            *axis = AxisRef::Relative(axis.value() + old_b - new_b);
+                        }
+                    }
+                }
             }
-            self.reference = new_reference;
+            self.resolved_reference = new_base;
+            self.reference = match target {
+                Target::Feature(id) => Some(id),
+                _ => None,
+            };
+            if matches!(target, Target::Own) {
+                self.point_key.clear();
+            }
+            if let Some(own) = &mut own {
+                *own.active = matches!(target, Target::Own);
+            }
             changed = true;
         }
 
@@ -1144,7 +1209,7 @@ impl PointRef {
             }
         }
 
-        let has_ref = self.reference.is_some();
+        let has_ref = self.reference.is_some() || own.as_ref().is_some_and(|own| *own.active);
         let base = self.resolved_reference.unwrap_or(Vec3::ZERO);
         changed |= axis_row(ui, &mut self.x, "X", has_ref, base.x);
         changed |= axis_row(ui, &mut self.y, "Y", has_ref, base.y);
@@ -1286,10 +1351,10 @@ mod tests {
         assert_eq!(x_of(&timeline, a), Some(4.0));
     }
 
-    /// Breaks if an idle History panel reports a change: the panel marks the
+    /// Breaks if an idle Features panel reports a change: the panel marks the
     /// timeline only on that answer, or the checkpoint serialises every frame.
     #[test]
-    fn the_history_panel_left_alone_changes_nothing() {
+    fn the_features_panel_left_alone_changes_nothing() {
         let mut timeline = FeatureTimeline::default();
         let a = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
         timeline.apply_feature(Box::new(GlobalPoint::new(2.0, 0.0, 0.0)));
@@ -1306,7 +1371,7 @@ mod tests {
             });
             // Nothing renders here, so the font atlas is discarded on purpose.
             output.textures_delta.clear();
-            assert!(!touched, "frame {frame} of an idle History panel reported a change");
+            assert!(!touched, "frame {frame} of an idle Features panel reported a change");
         }
         assert!(events.is_empty());
         assert_eq!(timeline.selected_feature, Some(a));

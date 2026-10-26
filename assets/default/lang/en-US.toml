@@ -57,12 +57,14 @@ animation_display = "Animation Display"
 animation_grid = "Animation Grid"
 move = "Move"
 room = "Room"
+footprint = "Footprint"
 mirror = "Mirror"
 retarget = "Retarget"
 
 [bakes]
 title = "Bake Operations"
 room_geometry = "Room Geometry"
+auto_rooms = "Auto-bake Rooms"
 
 [show]
 title = "Show/Hide"
@@ -105,12 +107,13 @@ granularity = "Granularity"
 active = "Snap to grid"
 
 [editor.timeline]
+title = "Features"
 delete = "Delete"
 roll_back_here = "Roll back to here"
 roll_to_end = "Roll to end"
 
-[editor.history]
-title = "History"
+[editor.point_ref]
+none = "None"
 
 [editor.metadata]
 title = "Metadata"
@@ -126,6 +129,27 @@ title = "Global Point"
 
 [editor.features.room]
 title = "Room"
+own_min = "This room's Min"
+materials = "Materials"
+floor = "Floor"
+walls = "Walls"
+ceiling = "Ceiling"
+
+[editor.features.footprint_room]
+title = "Footprint Room"
+floor = "Floor"
+height = "Height"
+corner = "Corner { id }"
+ceiling_of = "{ corner }, ceiling"
+lost = "{ region } no longer resolves: a line round it was removed"
+open = "Line { line } bounds nothing"
+zero_length = "Line { line } has no length"
+coincident = "Lines { a } and { b } lie on each other"
+missing_point = "Line { line } names a corner that is not there"
+regions = "Regions"
+region = "Region { n }, { area } m²"
+lines = "Lines"
+line = "Line { id }: { a } to { b }"
 
 [editor.features.grackle_point_light]
 title = "Point Light"
@@ -518,6 +542,7 @@ smoother_step = "Smoother"
 editor = "Map Editor"
 prop = "Prop Editor"
 animation = "Animation Editor"
+material = "Material Editor"
 play = "Play"
 
 # Every authoring mode's File pulldown. The entries mean whatever the thing
@@ -543,6 +568,9 @@ server_decides = "The server decides when the match is played."
 
 [prop]
 untitled = "Untitled prop"
+
+[material]
+untitled = "Untitled material"
 
 [prop.menu]
 frame = "Frame"

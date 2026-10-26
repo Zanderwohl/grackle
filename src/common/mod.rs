@@ -32,11 +32,14 @@ pub mod perf;
 pub(crate) mod painter;
 pub(crate) mod ray;
 pub mod item;
+pub mod csg;
+pub mod world_surface;
 pub mod cuboid;
-pub mod rect_subtract;
 pub mod rotation;
+pub mod triangulate;
 pub mod mode;
 pub mod movement_rules;
+pub mod palette;
 pub mod render_layers;
 pub mod shortcuts;
 

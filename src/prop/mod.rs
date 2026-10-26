@@ -43,7 +43,6 @@ use crate::prop::document::{prop_path, PropDoc, PropEditor};
 pub mod archetype;
 pub mod baked;
 pub mod camera;
-pub mod csg;
 pub mod document;
 pub mod feature;
 pub mod figure;

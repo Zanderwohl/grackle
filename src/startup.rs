@@ -11,6 +11,7 @@ pub struct EditorParams {
     pub start_playing: bool,
     pub start_animating: bool,
     pub start_modelling: bool,
+    pub start_texturing: bool,
 }
 
 impl EditorParams {
@@ -75,6 +76,13 @@ impl EditorParams {
                     .help("Open the animation editor rather than the map editor.")
             )
             .arg(
+                Arg::new("material")
+                    .long("material")
+                    .action(ArgAction::SetTrue)
+                    .conflicts_with_all(["play", "prop", "anim"])
+                    .help("Open the material editor rather than the map editor.")
+            )
+            .arg(
                 Arg::new("connect")
                     .long("connect")
                     .short('c')
@@ -116,6 +124,7 @@ impl EditorParams {
             start_playing: matches.get_flag("play"),
             start_modelling: matches.get_flag("prop"),
             start_animating: matches.get_flag("anim"),
+            start_texturing: matches.get_flag("material"),
         })
     }
 }
@@ -183,6 +192,8 @@ mod tests {
         assert!(parse(&["--prop"]).unwrap().start_modelling);
         assert!(!parse(&[]).unwrap().start_animating);
         assert!(parse(&["--anim"]).unwrap().start_animating);
+        assert!(!parse(&[]).unwrap().start_texturing);
+        assert!(parse(&["--material"]).unwrap().start_texturing);
     }
 
     /// A process cannot open in two modes; silently picking one makes a flag
@@ -192,6 +203,8 @@ mod tests {
         assert!(parse(&["--play", "--prop"]).is_err());
         assert!(parse(&["--play", "--anim"]).is_err());
         assert!(parse(&["--prop", "--anim"]).is_err());
+        assert!(parse(&["--material", "--prop"]).is_err());
+        assert!(parse(&["--material", "--play"]).is_err());
     }
 
     #[test]

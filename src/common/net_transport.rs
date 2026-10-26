@@ -188,7 +188,7 @@ fn open_link_for_role(
 /// Every client gets its own `LinkOf` child, and replication is addressed
 /// through it. Without a `ReplicationSender` the handshake completes, nothing
 /// flows, and the client times out.
-fn dress_new_client(add: On<Add, LinkOf>, mut commands: Commands) {
+fn dress_new_client(add: On<Add<LinkOf>>, mut commands: Commands) {
     commands
         .entity(add.entity)
         .insert((
@@ -218,7 +218,7 @@ fn report_status(
 
     let next = if let Some(server) = servers.iter().next() {
         NetStatus::Hosting {
-            clients: links_of.iter().filter(|link| link.server == server).count(),
+            clients: links_of.iter().filter(|link| link.endpoint == server).count(),
         }
     } else if let Some((connected, connecting, disconnected)) = clients.iter().next() {
         match (connected, connecting, disconnected) {

@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use bevy_egui::egui::UiKind;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 
 use crate::common::net::NetRole;
 use crate::get;
@@ -13,7 +15,8 @@ use crate::get;
 /// modes are indistinguishable there.
 ///
 /// [`MatchMode`]: crate::common::match_state::MatchMode
-#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+/// Declaration order is menu order.
+#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default, EnumIter)]
 pub enum AppMode {
     #[default]
     Editor,
@@ -21,6 +24,8 @@ pub enum AppMode {
     /// The timeline over a weapon's clips. Its own mode rather than a prop
     /// editor tab because it wants the whole window and a body.
     Animation,
+    /// A texture-graph: a surface for the map, edited on its own.
+    Material,
     Play,
 }
 
@@ -28,7 +33,13 @@ impl AppMode {
     /// Ask this rather than matching variants, so a new authoring mode joins
     /// in one place.
     pub fn is_authoring(self) -> bool {
-        matches!(self, AppMode::Editor | AppMode::Prop | AppMode::Animation)
+        matches!(self, AppMode::Editor | AppMode::Prop | AppMode::Animation | AppMode::Material)
+    }
+
+    /// Whether the four 3D viewports are drawn. The material editor takes the
+    /// whole window; nothing in a map can show a material yet.
+    pub fn shows_the_viewports(self) -> bool {
+        self.is_authoring() && self != AppMode::Material
     }
 
     /// For gizmo overlays: the prop modes hide the world's entities, but a
@@ -48,6 +59,7 @@ impl AppMode {
             AppMode::Editor => get!("app_mode.editor"),
             AppMode::Prop => get!("app_mode.prop"),
             AppMode::Animation => get!("app_mode.animation"),
+            AppMode::Material => get!("app_mode.material"),
             AppMode::Play => get!("app_mode.play"),
         }
     }
@@ -80,6 +92,10 @@ pub fn showing_the_world(mode: Res<State<AppMode>>) -> bool {
     mode.get().shows_the_world()
 }
 
+pub fn showing_the_viewports(mode: Res<State<AppMode>>) -> bool {
+    mode.get().shows_the_viewports()
+}
+
 /// The menu bar's Mode pulldown. Beside the enum because both editors show
 /// it, so a new mode cannot be offered from one menu bar and not the other.
 pub fn mode_menu(
@@ -92,7 +108,7 @@ pub fn mode_menu(
     let authority = role.is_none_or(|role| role.is_authority());
 
     ui.menu_button(get!("app_mode.menu.title"), |ui| {
-        for mode in [AppMode::Editor, AppMode::Prop, AppMode::Animation, AppMode::Play] {
+        for mode in AppMode::iter() {
             let enabled = mode.selectable_from(current, authority);
             let entry = ui.add_enabled(enabled, egui::Button::new(mode.name()));
             if entry.clicked() {
@@ -146,7 +162,7 @@ mod tests {
     /// Fails if the current mode is offered, which for Play restarts the round.
     #[test]
     fn the_mode_you_are_in_is_never_offered() {
-        for mode in [AppMode::Editor, AppMode::Prop, AppMode::Animation, AppMode::Play] {
+        for mode in AppMode::iter() {
             assert!(!mode.selectable_from(mode, true), "{mode:?} offered itself");
         }
     }
@@ -158,6 +174,17 @@ mod tests {
         assert!(AppMode::Play.shows_the_world());
         assert!(!AppMode::Prop.shows_the_world());
         assert!(!AppMode::Animation.shows_the_world());
+        assert!(!AppMode::Material.shows_the_world());
+    }
+
+    /// Fails if the material editor's full-window panels are drawn over live viewports, or if
+    /// Play gets the editor's four.
+    #[test]
+    fn only_the_scene_editors_show_the_viewports() {
+        for mode in AppMode::iter() {
+            let expected = matches!(mode, AppMode::Editor | AppMode::Prop | AppMode::Animation);
+            assert_eq!(mode.shows_the_viewports(), expected, "{mode:?}");
+        }
     }
 
     #[test]

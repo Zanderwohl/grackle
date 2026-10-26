@@ -8,6 +8,9 @@ use crate::editor::input::{CurrentKeyboardInput, CurrentMouseInput};
 use crate::editor::multicam::Multicam;
 use crate::get;
 
+/// Camera flying speed with Shift held.
+const FAST_MULTIPLIER: f32 = 3.0;
+
 pub struct MovementPlugin;
 
 impl Plugin for MovementPlugin {
@@ -97,27 +100,28 @@ impl MovementPlugin {
             let local_y = transform.local_y();
             transform.translation += local_y * pan_scaled_y;
         } else {
-            let pi_halves = std::f32::consts::FRAC_PI_2;
-
             transform.rotate_y(-delta.x * movement_settings.perspective_rotate);
             transform.rotate_local_x(-delta.y * movement_settings.perspective_rotate);
-
-
-            let (ry, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
-            let local_dx = keyboard_input.backward() * movement_settings.perspective_speed;
-            let local_dz = keyboard_input.right() * movement_settings.perspective_speed;
-            let dx = local_dx * f32::sin(ry) + local_dz * f32::sin(ry + pi_halves);
-            let dz = local_dx * f32::cos(ry) + local_dz * f32::cos(ry + pi_halves);
-            
-            let dy = keyboard_input.up() * movement_settings.perspective_speed;
-
-            transform.translation += Vec3::new(dx, dy, dz);
         }
+        // Panning too: Shift is both the pan modifier and the speed boost.
+        Self::fly(transform, movement_settings.perspective_speed, keyboard_input);
+    }
+
+    /// WASD along the ground under the camera's heading, Q/E straight down and up.
+    fn fly(transform: &mut Mut<Transform>, speed: f32, keyboard_input: &Res<CurrentKeyboardInput>) {
+        let speed = if keyboard_input.modify { speed * FAST_MULTIPLIER } else { speed };
+        let pi_halves = std::f32::consts::FRAC_PI_2;
+        let (ry, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        let local_dx = keyboard_input.backward() * speed;
+        let local_dz = keyboard_input.right() * speed;
+        let dx = local_dx * f32::sin(ry) + local_dz * f32::sin(ry + pi_halves);
+        let dz = local_dx * f32::cos(ry) + local_dz * f32::cos(ry + pi_halves);
+        let dy = keyboard_input.up() * speed;
+
+        transform.translation += Vec3::new(dx, dy, dz);
     }
 
     fn ortho_move(transform: &mut Mut<Transform>, delta: Vec2, projection: &OrthographicProjection, movement_settings: &Res<MovementSettings>, keyboard_input: &Res<CurrentKeyboardInput>) {
-        let pi_halves = std::f32::consts::FRAC_PI_2;
-
         let pan_scaled_x = delta.x * projection.scale;
         let pan_scaled_y = delta.y * projection.scale;
 
@@ -126,15 +130,7 @@ impl MovementPlugin {
         let local_y = transform.local_y();
         transform.translation += local_y * pan_scaled_y;
 
-        let (ry, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
-        let local_dx = keyboard_input.backward() * movement_settings.orthographic_speed;
-        let local_dz = keyboard_input.right() * movement_settings.orthographic_speed;
-        let dx = local_dx * f32::sin(ry) + local_dz * f32::sin(ry + pi_halves);
-        let dz = local_dx * f32::cos(ry) + local_dz * f32::cos(ry + pi_halves);
-
-        let dy = keyboard_input.up() * movement_settings.orthographic_speed;
-
-        transform.translation += Vec3::new(dx, dy, dz);
+        Self::fly(transform, movement_settings.orthographic_speed, keyboard_input);
     }
     
     fn debug_window(

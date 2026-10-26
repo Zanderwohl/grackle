@@ -5,6 +5,7 @@ pub mod map_metadata;
 pub mod global_point;
 pub mod grackle_point_light;
 pub mod editor_room;
+pub mod footprint_room;
 pub mod net_menu;
 pub mod panels;
 pub mod save;

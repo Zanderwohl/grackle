@@ -170,7 +170,7 @@ fn toggle_mode(
         AppMode::Editor => AppMode::Play,
         AppMode::Play => AppMode::Editor,
         // No wildcard: a new mode should have to decide what F5 means to it.
-        mode @ (AppMode::Prop | AppMode::Animation) => {
+        mode @ (AppMode::Prop | AppMode::Animation | AppMode::Material) => {
             info!(
                 "F5 swaps the map editor and Play; use the Mode menu to leave {}.",
                 mode.name(),
@@ -244,14 +244,16 @@ pub(crate) fn set_cursor_captured(
     });
 }
 
-/// Removing a room is not detected; `RemovedComponents` will be needed once
-/// rooms can be deleted mid-match.
 pub(crate) fn rebuild_collision_when_rooms_change(
     mut collision: ResMut<CollisionWorld>,
     changed: Query<(), Changed<Room>>,
+    mut removed: RemovedComponents<Room>,
     rooms: Query<&Room>,
 ) {
-    if changed.is_empty() {
+    // Drained either way, or a removal seen on a frame with a change is seen
+    // again next frame.
+    let removed = removed.read().count() > 0;
+    if changed.is_empty() && !removed {
         return;
     }
     let rooms: Vec<Room> = rooms.iter().cloned().collect();
@@ -417,6 +419,135 @@ mod tests {
         );
     }
 
+    /// A plane rising towards `+X` from the line `x = 0` on the floor, `degrees`
+    /// steep, as two triangles; mirrored, it rises towards `-X` instead.
+    fn slope(degrees: f32, mirrored: bool) -> [crate::game::collision::Hull; 2] {
+        use crate::game::collision::Hull;
+        let s = if mirrored { -1.0 } else { 1.0 };
+        let rise = 5.0 * degrees.to_radians().tan();
+        let (a, b) = (Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.0, 5.0));
+        let (c, d) = (Vec3::new(5.0 * s, rise, 5.0), Vec3::new(5.0 * s, rise, -5.0));
+        [Hull::triangle(a, b, c), Hull::triangle(a, c, d)]
+    }
+
+    /// A body dropped at `drop` onto whatever `hulls` add to a plain room, and
+    /// left to come to rest.
+    fn dropped_onto(hulls: impl IntoIterator<Item = crate::game::collision::Hull>, drop: Vec3) -> App {
+        let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 6.0, 5.0))]);
+        enter(&mut app);
+        tick(&mut app, 1);
+        app.world_mut().resource_mut::<CollisionWorld>().add_hulls(hulls);
+        let body = app.world_mut().query_filtered::<Entity, With<LocalPlayer>>().single(app.world()).unwrap();
+        *app.world_mut().get_mut::<PhysicsBody>(body).unwrap() = PhysicsBody::at(drop);
+        *app.world_mut().get_mut::<Player>(body).unwrap() = Player::default();
+        tick(&mut app, 60);
+        app
+    }
+
+    fn on_ground(app: &mut App) -> bool {
+        app.world_mut().query_filtered::<&Player, With<LocalPlayer>>().single(app.world()).unwrap().on_ground()
+    }
+
+    #[test]
+    fn a_body_on_a_slope_it_can_walk_stands_still_on_it() {
+        let mut app = dropped_onto(slope(30.0, false), Vec3::new(2.0, 3.5, 0.0));
+        assert!(on_ground(&mut app), "a 30° slope was not ground");
+        let settled = player_position(&mut app);
+        assert!(settled.y > PLAYER_HALF.y + 0.5, "fell through the slope to {settled}");
+
+        tick(&mut app, 120);
+        let later = player_position(&mut app);
+        assert!((later - settled).length() < 1e-3, "slid from {settled} to {later}");
+    }
+
+    #[test]
+    fn a_body_walks_up_a_slope_it_can_walk() {
+        let mut app = dropped_onto(slope(30.0, false), Vec3::new(1.0, 2.5, 0.0));
+        let start = player_position(&mut app);
+        // Facing `-Z`; walking right is towards `+X`, up the slope.
+        app.world_mut().resource_mut::<InputLatch>().0.movement = Vec2::new(1.0, 0.0);
+        tick(&mut app, 30);
+        let end = player_position(&mut app);
+        assert!(end.x > start.x + 0.5 && end.y > start.y + 0.2, "from {start} to {end}");
+        assert!(on_ground(&mut app), "walking up the slope left the ground");
+    }
+
+    /// Slowly: horizontal velocity is written outright every step, so only
+    /// the fall carries from one tick to the next. Momentum is its own change.
+    #[test]
+    fn a_body_on_a_slope_too_steep_to_stand_on_slides_off_it() {
+        let mut app = dropped_onto(slope(60.0, false), Vec3::new(2.0, 5.0, 0.0));
+        assert!(!on_ground(&mut app), "a 60° slope was ground");
+        let before = player_position(&mut app);
+        tick(&mut app, 30);
+        let after = player_position(&mut app);
+        assert!(after.x < before.x - 0.1 && after.y < before.y - 0.1, "stuck on a 60° slope: {before} then {after}");
+    }
+
+    /// Breaks if each surface is slid along in turn: every slide down one
+    /// side of the V pushes into the other.
+    #[test]
+    fn a_body_in_a_v_comes_to_rest_rather_than_jittering() {
+        let hulls = slope(60.0, false).into_iter().chain(slope(60.0, true));
+        let mut app = dropped_onto(hulls, Vec3::new(0.3, 4.0, 0.0));
+        let settled = player_position(&mut app);
+        assert!(settled.x.abs() < 0.01, "not in the bottom of the V: {settled}");
+
+        tick(&mut app, 60);
+        let later = player_position(&mut app);
+        assert!((later - settled).length() < 1e-4, "jittered from {settled} to {later}");
+    }
+
+    /// A body standing at `x = 3` in a room with its floor at zero, walking
+    /// towards `+X` into whatever else `rooms` adds, for two seconds.
+    fn walked_towards(rooms: &[Room]) -> App {
+        let mut all = vec![room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 4.0, 5.0))];
+        all.extend_from_slice(rooms);
+        let mut app = headless(&all);
+        enter(&mut app);
+        tick(&mut app, 1);
+        let body = app.world_mut().query_filtered::<Entity, With<LocalPlayer>>().single(app.world()).unwrap();
+        *app.world_mut().get_mut::<PhysicsBody>(body).unwrap() = PhysicsBody::at(Vec3::new(3.0, PLAYER_HALF.y + 0.01, 0.0));
+        *app.world_mut().get_mut::<Player>(body).unwrap() = Player::default();
+        tick(&mut app, 10);
+        app.world_mut().resource_mut::<InputLatch>().0.movement = Vec2::new(1.0, 0.0);
+        tick(&mut app, 128);
+        app
+    }
+
+    #[test]
+    fn a_body_walks_up_a_flight_of_stairs() {
+        let mut app = walked_towards(&[
+            room(Vec3::new(5.0, 0.3, -5.0), Vec3::new(6.0, 4.0, 5.0)),
+            room(Vec3::new(6.0, 0.6, -5.0), Vec3::new(7.0, 4.0, 5.0)),
+            room(Vec3::new(7.0, 0.9, -5.0), Vec3::new(12.0, 4.0, 5.0)),
+        ]);
+        let end = player_position(&mut app);
+        assert!(end.x > 7.5, "stopped at the stairs: {end}");
+        assert!((end.y - (0.9 + PLAYER_HALF.y)).abs() < 0.01, "not standing on the top step: {end}");
+        assert!(on_ground(&mut app));
+    }
+
+    #[test]
+    fn a_ledge_taller_than_a_step_stops_a_body() {
+        let mut app = walked_towards(&[room(Vec3::new(5.0, 0.6, -5.0), Vec3::new(10.0, 4.0, 5.0))]);
+        let end = player_position(&mut app);
+        assert!(end.x < 5.0, "walked up a 0.6 m ledge: {end}");
+        assert!((end.y - PLAYER_HALF.y).abs() < 0.01, "{end}");
+    }
+
+    /// Breaks if a failed step is taken anyway: the body would hop on the spot.
+    #[test]
+    fn pressing_into_a_wall_neither_climbs_nor_hops() {
+        let mut app = walked_towards(&[]);
+        let end = player_position(&mut app);
+        assert!((end.x - (5.0 - PLAYER_HALF.x)).abs() < 0.01 && (end.y - PLAYER_HALF.y).abs() < 0.01, "{end}");
+        tick(&mut app, 10);
+        assert!((player_position(&mut app) - end).length() < 1e-4, "moved while pressed to the wall");
+        let body = app.world_mut().query_filtered::<&Player, With<LocalPlayer>>().single(app.world()).unwrap();
+        assert!(body.against_wall);
+    }
+
     /// Catches a floor slab facing the wrong way, which would pass the landing
     /// test only because the body never moved.
     #[test]
@@ -528,7 +659,7 @@ mod tests {
             *physics = PhysicsBody::at(Vec3::new(0.0, rest, 0.0));
             let mut player = app.world_mut().get_mut::<Player>(body).unwrap();
             player.velocity = Vec3::ZERO;
-            player.on_ground = true;
+            player.ground = Some(Vec3::Y);
         }
         app.world_mut().resource_mut::<Time>().advance_by(one_tick());
         app.world_mut().run_schedule(FixedUpdate);
@@ -1092,7 +1223,7 @@ mod tests {
         // Raise the floor by two metres, the way a drag handle would.
         let mut rooms = app.world_mut().query::<&mut Room>();
         for mut room in rooms.iter_mut(app.world_mut()) {
-            room.min.y = 2.0;
+            room.floor = 2.0;
         }
         tick(&mut app, 60);
 
