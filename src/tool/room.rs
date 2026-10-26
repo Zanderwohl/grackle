@@ -732,53 +732,153 @@ impl Room {
     /// Bake this room's wall geometry, carving openings where other rooms
     /// overlap or share walls. Returns a single Mesh with inward-facing normals.
     pub fn bake_faces(&self, others: &[Room]) -> Mesh {
-        let mut vertices: Vec<[f32; 3]> = Vec::new();
-        let mut normals: Vec<[f32; 3]> = Vec::new();
-        let mut uvs: Vec<[f32; 2]> = Vec::new();
-        let mut indices: Vec<u32> = Vec::new();
+        let mut mesh = FaceMesh::default();
+        self.for_each_solid_rect(others, |face, rect| mesh.push(face, rect));
+        mesh.into_mesh()
+    }
 
+    /// [`Room::bake_faces`] split by [`RoomSlot`], so each slot can take its
+    /// own material. A slot every face of which was opened up is left out.
+    pub fn bake_slots(&self, others: &[Room]) -> Vec<(RoomSlot, Mesh)> {
+        let mut by_slot: [FaceMesh; 3] = Default::default();
         self.for_each_solid_rect(others, |face, rect| {
-            {
-                let base = vertices.len() as u32;
-                let (p0, p1, p2, p3) = face.rect_to_3d(rect);
-                vertices.push(p0.into());
-                vertices.push(p1.into());
-                vertices.push(p2.into());
-                vertices.push(p3.into());
-                let n: [f32; 3] = face.normal.into();
-                normals.extend_from_slice(&[n, n, n, n]);
-
-                let face_u_span = face.rect.max_u - face.rect.min_u;
-                let face_v_span = face.rect.max_v - face.rect.min_v;
-                let u0 = if face_u_span > 0.0 { (rect.min_u - face.rect.min_u) / face_u_span } else { 0.0 };
-                let u1 = if face_u_span > 0.0 { (rect.max_u - face.rect.min_u) / face_u_span } else { 1.0 };
-                let v0 = if face_v_span > 0.0 { (rect.min_v - face.rect.min_v) / face_v_span } else { 0.0 };
-                let v1 = if face_v_span > 0.0 { (rect.max_v - face.rect.min_v) / face_v_span } else { 1.0 };
-                uvs.push([u0, v0]);
-                uvs.push([u1, v0]);
-                uvs.push([u1, v1]);
-                uvs.push([u0, v1]);
-
-                // Two triangles per quad, winding matches the face's inward normal
-                if face.winding_flip {
-                    indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
-                } else {
-                    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-                }
-            }
+            by_slot[RoomSlot::of(face.normal) as usize].push(face, rect);
         });
+        RoomSlot::ALL
+            .into_iter()
+            .zip(by_slot)
+            .filter(|(_, mesh)| !mesh.indices.is_empty())
+            .map(|(slot, mesh)| (slot, mesh.into_mesh()))
+            .collect()
+    }
+}
 
+/// Which of a room's materials a surface takes. Decided by its inward normal
+/// rather than by which side of the box it is, so a room that is not a box
+/// sorts its surfaces the same way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RoomSlot {
+    Floor,
+    Walls,
+    Ceiling,
+}
+
+impl RoomSlot {
+    /// Index order, as [`Room::bake_slots`] fills them.
+    pub const ALL: [RoomSlot; 3] = [RoomSlot::Floor, RoomSlot::Walls, RoomSlot::Ceiling];
+
+    pub fn name_key(self) -> &'static str {
+        match self {
+            RoomSlot::Floor => "editor.features.room.floor",
+            RoomSlot::Walls => "editor.features.room.walls",
+            RoomSlot::Ceiling => "editor.features.room.ceiling",
+        }
+    }
+
+    pub fn of(inward: Vec3) -> Self {
+        if inward.y > 0.5 {
+            RoomSlot::Floor
+        } else if inward.y < -0.5 {
+            RoomSlot::Ceiling
+        } else {
+            RoomSlot::Walls
+        }
+    }
+}
+
+/// The material each of a room's slots takes, by name under a pack's
+/// `materials/`. `None` is the plain default, which is also what a name with no
+/// file behind it draws as. Copied onto the room's entity from its feature.
+#[derive(Component, serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoomSurfaces {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walls: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling: Option<String>,
+}
+
+impl RoomSurfaces {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn of(&self, slot: RoomSlot) -> Option<&str> {
+        self.slot(slot).as_deref()
+    }
+
+    pub fn slot(&self, slot: RoomSlot) -> &Option<String> {
+        match slot {
+            RoomSlot::Floor => &self.floor,
+            RoomSlot::Walls => &self.walls,
+            RoomSlot::Ceiling => &self.ceiling,
+        }
+    }
+
+    pub fn slot_mut(&mut self, slot: RoomSlot) -> &mut Option<String> {
+        match slot {
+            RoomSlot::Floor => &mut self.floor,
+            RoomSlot::Walls => &mut self.walls,
+            RoomSlot::Ceiling => &mut self.ceiling,
+        }
+    }
+}
+
+/// Metres one repeat of a material covers. A stand-in: the scale belongs to
+/// the material, which has nowhere to say it yet.
+pub const MATERIAL_TILE_METRES: f32 = 2.0;
+
+/// Texture coordinates in material tiles from the world position, on the two
+/// axes the face spans, so a texture runs on across neighbouring walls and
+/// does not stretch with the room. `v` runs down, as image rows do.
+fn world_uv(point: Vec3, fixed_axis: u8) -> [f32; 2] {
+    let (u, v) = match fixed_axis {
+        0 => (point.z, point.y),
+        1 => (point.x, point.z),
+        _ => (point.x, point.y),
+    };
+    [u / MATERIAL_TILE_METRES, -v / MATERIAL_TILE_METRES]
+}
+
+#[derive(Default)]
+struct FaceMesh {
+    vertices: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    uvs: Vec<[f32; 2]>,
+    indices: Vec<u32>,
+}
+
+impl FaceMesh {
+    fn push(&mut self, face: &RoomFace, rect: &crate::common::rect_subtract::Rect2D) {
+        let base = self.vertices.len() as u32;
+        let (p0, p1, p2, p3) = face.rect_to_3d(rect);
+        for p in [p0, p1, p2, p3] {
+            self.vertices.push(p.into());
+            self.uvs.push(world_uv(p, face.fixed_axis));
+        }
+        let n: [f32; 3] = face.normal.into();
+        self.normals.extend_from_slice(&[n, n, n, n]);
+
+        // Two triangles per quad, winding matches the face's inward normal
+        if face.winding_flip {
+            self.indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+        } else {
+            self.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+
+    fn into_mesh(self) -> Mesh {
         let mut mesh = Mesh::new(
             bevy::render::render_resource::PrimitiveTopology::TriangleList,
             bevy::asset::RenderAssetUsages::default(),
         );
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-        mesh.insert_indices(bevy::mesh::Indices::U32(indices));
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.vertices);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs);
+        mesh.insert_indices(bevy::mesh::Indices::U32(self.indices));
         mesh
     }
-    
 }
 
 /// One solid piece of wall, as a world-space axis-aligned box.
@@ -976,6 +1076,48 @@ mod tests {
             Some(bevy::mesh::Indices::U32(v)) => v.len() / 3,
             _ => 0,
         }
+    }
+
+    #[test]
+    fn a_rooms_slots_are_sorted_by_which_way_they_face() {
+        let room = Room::new(Vec3::ZERO, Vec3::new(10.0, 3.0, 10.0));
+        let slots = room.bake_slots(&[]);
+        let tris: Vec<(RoomSlot, usize)> = slots.iter().map(|(slot, mesh)| (*slot, triangle_count(mesh))).collect();
+        assert_eq!(tris, vec![(RoomSlot::Floor, 2), (RoomSlot::Walls, 8), (RoomSlot::Ceiling, 2)]);
+    }
+
+    /// A slot with nothing left in it is not baked: an empty mesh is an entity drawing nothing.
+    #[test]
+    fn a_slot_opened_up_entirely_is_left_out() {
+        let lower = Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0));
+        let upper = Room::new(Vec3::new(0.0, 3.0, 0.0), Vec3::new(4.0, 6.0, 4.0));
+        let slots: Vec<RoomSlot> = lower.bake_slots(&[upper]).into_iter().map(|(slot, _)| slot).collect();
+        assert_eq!(slots, vec![RoomSlot::Floor, RoomSlot::Walls]);
+    }
+
+    /// Breaks if texture coordinates go back to per-face fractions: a material then stretches
+    /// with the room and jumps where two rooms' walls meet.
+    #[test]
+    fn texture_coordinates_are_world_space_so_walls_line_up() {
+        let a = Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 6.0));
+        let b = Room::new(Vec3::new(4.0, 0.0, 0.0), Vec3::new(9.0, 3.0, 6.0));
+        let point = Vec3::new(4.0, 3.0, 6.0);
+        // On the back walls, which face -Z and so map x across and y down.
+        let uv_at = |room: &Room| {
+            let (_, walls) = room.bake_slots(&[]).into_iter().find(|(slot, _)| *slot == RoomSlot::Walls).unwrap();
+            let positions = walls.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap().to_vec();
+            let normals = walls.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap().as_float3().unwrap().to_vec();
+            let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) = walls.attribute(Mesh::ATTRIBUTE_UV_0)
+            else {
+                panic!("no texture coordinates")
+            };
+            let at = (0..positions.len())
+                .position(|i| Vec3::from(positions[i]) == point && Vec3::from(normals[i]) == Vec3::NEG_Z)
+                .expect("the shared corner is a vertex of both rooms' back walls");
+            uvs[at]
+        };
+        assert_eq!(uv_at(&a), uv_at(&b));
+        assert_eq!(uv_at(&a), [point.x / MATERIAL_TILE_METRES, -point.y / MATERIAL_TILE_METRES]);
     }
 
     #[test]

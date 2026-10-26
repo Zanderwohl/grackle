@@ -1,19 +1,21 @@
-//! The material editor's GPU path on Bevy's own device.
+//! texture-graph's bakes, drawn through Bevy on Bevy's own device: the material editor's previews
+//! and the map's materials alike.
 //!
-//! texture-graph bakes into plain wgpu textures and asks its host to make them drawable by egui.
-//! bevy_egui only draws `Image` assets, so a baked texture is given an invented [`AssetId`] — no
-//! `Image` behind it — registered with bevy_egui as a weak handle, and in the render world a
-//! [`GpuImage`] wrapping the baked texture is inserted under that id. bevy_egui rebuilds its
-//! texture bind groups from `RenderAssets<GpuImage>` every frame, so it draws ours like any other.
+//! texture-graph bakes into plain wgpu textures, and Bevy draws only `Image` assets. So a baked
+//! texture is given an invented [`AssetId`] — no `Image` behind it — and in the render world a
+//! [`GpuImage`] wrapping it is inserted under that id. A preview registers the id with bevy_egui
+//! as a weak handle; a material names it as its texture through [`BakedTextures::handle`]. Both
+//! look `RenderAssets<GpuImage>` up when they draw, so they draw ours like any other.
 //!
 //! An id with no asset behind it gets no asset events, so nothing in Bevy removes our entries;
-//! [`swap_in_baked_textures`] does, when the editor frees one.
+//! [`swap_in_baked_textures`] does, when one is removed from [`BakedTextures`].
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::asset::uuid::Uuid;
 use bevy::platform::collections::HashSet;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::render_asset::{prepare_assets, RenderAssets};
@@ -29,14 +31,53 @@ use texture_graph_gpu::{Baker, DeviceCtx};
 /// Above any `AssetId` Bevy hands out by index, and unlikely to meet another invented one.
 const BAKED_ID_BASE: u128 = 0x7e47_93a1_0000_4000_8000_0000_0000_0000;
 
-/// The editor's baked textures, by the id egui knows them as. Extracted to the render world each
-/// frame; cloning a wgpu handle is a reference count.
+/// How a baked texture is sampled where it is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sampling {
+    /// A preview in a panel.
+    Clamp,
+    /// A material on a wall, which tiles.
+    Repeat,
+}
+
+/// Every baked texture drawn through Bevy, by the invented id it is drawn under. Extracted to the
+/// render world each frame; cloning a wgpu handle is a reference count.
 #[derive(Resource, Clone, Default, ExtractResource)]
 #[extract_app(RenderApp)]
 pub struct BakedTextures {
-    textures: HashMap<AssetId<Image>, (wgpu::Texture, wgpu::TextureView)>,
+    textures: HashMap<AssetId<Image>, (wgpu::Texture, wgpu::TextureView, Sampling)>,
     by_egui_id: HashMap<egui::TextureId, AssetId<Image>>,
     next: u128,
+}
+
+impl BakedTextures {
+    /// An `Rgba8Unorm` texture holds sRGB-encoded bytes (texture-graph's `SRGB_VIEW`), and
+    /// everything Bevy draws with blends in linear space, so it is viewed as sRGB for the GPU to
+    /// decode. Drawn as they are, the colours are washed out.
+    pub fn insert(&mut self, texture: &wgpu::Texture, sampling: Sampling) -> AssetId<Image> {
+        let asset = AssetId::Uuid { uuid: Uuid::from_u128(BAKED_ID_BASE + self.next) };
+        self.next += 1;
+        let format = match texture.format() {
+            wgpu::TextureFormat::Rgba8Unorm => Some(texture_graph_gpu::SRGB_VIEW[0]),
+            _ => None,
+        };
+        let view = texture.create_view(&wgpu::TextureViewDescriptor { format, ..default() });
+        self.textures.insert(asset, (texture.clone(), view, sampling));
+        asset
+    }
+
+    pub fn remove(&mut self, asset: AssetId<Image>) {
+        self.textures.remove(&asset);
+    }
+
+    /// A handle to draw an inserted texture with, such as a material's `base_color_texture`. It
+    /// owns nothing: the texture lives until [`BakedTextures::remove`].
+    pub fn handle(asset: AssetId<Image>) -> Handle<Image> {
+        match asset {
+            AssetId::Uuid { uuid } => Handle::from(uuid),
+            AssetId::Index { .. } => unreachable!("baked textures are only given invented ids"),
+        }
+    }
 }
 
 /// Borrowed for one frame and lent to the editor. Through `EguiContexts`, which already holds
@@ -47,20 +88,9 @@ pub struct BevyEguiTextures<'a, 'w, 's> {
 }
 
 impl TextureRegistry for BevyEguiTextures<'_, '_, '_> {
-    fn register(&mut self, texture: &wgpu::Texture, view: &wgpu::TextureView) -> egui::TextureId {
-        let asset = AssetId::Uuid { uuid: Uuid::from_u128(BAKED_ID_BASE + self.baked.next) };
-        self.baked.next += 1;
+    fn register(&mut self, texture: &wgpu::Texture, _view: &wgpu::TextureView) -> egui::TextureId {
+        let asset = self.baked.insert(texture, Sampling::Clamp);
         let id = self.egui.add_image(EguiTextureHandle::Weak(asset));
-        // bevy_egui blends in linear space and these bytes are sRGB-encoded, so the GPU decodes
-        // them through an sRGB view; drawn as they are, every preview is washed out.
-        let view = match texture.format() {
-            wgpu::TextureFormat::Rgba8Unorm => texture.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(texture_graph_gpu::SRGB_VIEW[0]),
-                ..default()
-            }),
-            _ => view.clone(),
-        };
-        self.baked.textures.insert(asset, (texture.clone(), view));
         self.baked.by_egui_id.insert(id, asset);
         id
     }
@@ -68,23 +98,32 @@ impl TextureRegistry for BevyEguiTextures<'_, '_, '_> {
     fn free(&mut self, id: egui::TextureId) {
         let Some(asset) = self.baked.by_egui_id.remove(&id) else { return };
         self.egui.remove_image(asset);
-        self.baked.textures.remove(&asset);
+        self.baked.remove(asset);
     }
 }
 
 /// Bevy's adapter, device and queue, so a bake is visible to the frame that draws it without a
-/// copy. `None` until the renderer has made them.
-pub fn shared_gpu(
-    adapter: Option<&RenderAdapter>,
-    device: Option<&RenderDevice>,
-    queue: Option<&RenderQueue>,
-) -> Option<Gpu> {
-    let ctx = DeviceCtx::from_shared(
-        Arc::new((**adapter?).clone()),
-        Arc::new(device?.wgpu_device().clone()),
-        Arc::new((**queue?).clone()),
-    );
-    Some(Gpu::new(Baker::new(ctx)))
+/// copy. Absent until the renderer has made them, and in a test with no renderer.
+#[derive(SystemParam)]
+pub struct BevyDevice<'w> {
+    adapter: Option<Res<'w, RenderAdapter>>,
+    device: Option<Res<'w, RenderDevice>>,
+    queue: Option<Res<'w, RenderQueue>>,
+}
+
+impl BevyDevice<'_> {
+    pub fn baker(&self) -> Option<Baker> {
+        let ctx = DeviceCtx::from_shared(
+            Arc::new((**self.adapter.as_deref()?).clone()),
+            Arc::new(self.device.as_deref()?.wgpu_device().clone()),
+            Arc::new((**self.queue.as_deref()?).clone()),
+        );
+        Some(Baker::new(ctx))
+    }
+
+    pub fn gpu(&self) -> Option<Gpu> {
+        self.baker().map(Gpu::new)
+    }
 }
 
 /// Puts each baked texture into `RenderAssets<GpuImage>` under its invented id, after Bevy's own
@@ -94,7 +133,7 @@ fn swap_in_baked_textures(
     device: Res<RenderDevice>,
     mut images: ResMut<RenderAssets<GpuImage>>,
     mut inserted: Local<HashSet<AssetId<Image>>>,
-    mut sampler: Local<Option<Sampler>>,
+    mut samplers: Local<Option<(Sampler, Sampler)>>,
 ) {
     inserted.retain(|asset| {
         let keep = baked.textures.contains_key(asset);
@@ -103,15 +142,22 @@ fn swap_in_baked_textures(
         }
         keep
     });
-    let sampler = sampler.get_or_insert_with(|| {
-        device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("material editor previews"),
+    let (clamp, repeat) = samplers.get_or_insert_with(|| {
+        let linear = wgpu::SamplerDescriptor {
+            label: Some("baked textures"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..default()
-        })
+        };
+        let repeat = wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            ..linear.clone()
+        };
+        (device.create_sampler(&linear), device.create_sampler(&repeat))
     });
-    for (asset, (texture, view)) in &baked.textures {
+    for (asset, (texture, view, sampling)) in &baked.textures {
         if !inserted.insert(*asset) {
             continue;
         }
@@ -130,7 +176,10 @@ fn swap_in_baked_textures(
             GpuImage {
                 texture: texture.clone().into(),
                 texture_view: view.clone().into(),
-                sampler: sampler.clone(),
+                sampler: match sampling {
+                    Sampling::Clamp => clamp.clone(),
+                    Sampling::Repeat => repeat.clone(),
+                },
                 texture_descriptor: descriptor,
                 texture_view_descriptor: None,
                 had_data: true,

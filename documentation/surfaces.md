@@ -229,9 +229,15 @@ should not need to know it exists.
 - [x] A Material authoring mode hosting them: open, save, undo, revert, under `materials/`
 - [x] Material previews on Bevy's device: a `TextureRegistry` over bevy_egui
 - [ ] texture-graph: an evaluator version, separate from `CURRENT_FORMAT_VERSION`
-- [ ] Materials under a pack's `materials/`, loaded through `AssetSource`
-- [ ] Bake a material to a tileable set on Bevy's device, cached by hash and evaluator version
-- [ ] Room floor / wall / ceiling slots (classified by normal), triplanar world-space projection
+- [x] Materials under a pack's `materials/`, loaded through `AssetSource`
+- [x] Bake a material's colour to a repeating tile on Bevy's device, once per name
+- [ ] The rest of a material: roughness, metallic, a normal map (needs mesh tangents), mipmaps
+- [ ] A material's own tile size in metres, rather than `MATERIAL_TILE_METRES`
+- [ ] Cache bakes by hash and evaluator version
+- [x] Room floor / wall / ceiling slots, classified by normal, world-space coordinates
+- [ ] Triplanar projection, for surfaces that are not axis-aligned
+- [ ] Picking a slot's material from a list rather than typing its name
+- [ ] Materials sent to clients that lack them, as props are
 - [ ] Grain axis with a `PointRef` anchor
 - [ ] Geometry inputs as vertex attributes; clean/worn blend
 - [ ] `Paint` feature: a box and a material, timeline-ordered

@@ -10,6 +10,7 @@
 //! queues its edits as commands and has no history of its own.
 
 pub mod gpu;
+pub mod library;
 pub mod ui;
 
 use std::path::{Path, PathBuf};
@@ -43,6 +44,8 @@ pub struct MaterialEditor {
     clean: String,
     /// Set when an edit lands; the checkpoint waits for idle.
     unsettled: bool,
+    /// Names saved since the map last looked, so it bakes them again.
+    saved_names: Vec<String>,
 }
 
 impl Default for MaterialEditor {
@@ -55,6 +58,7 @@ impl Default for MaterialEditor {
             checkpoint: (Graph::new(), String::new()),
             clean: String::new(),
             unsettled: false,
+            saved_names: Vec::new(),
         };
         material.open(Graph::new(), None);
         material
@@ -160,6 +164,10 @@ impl MaterialEditor {
     pub fn mark_saved(&mut self, path: PathBuf) {
         self.checkpoint_when_idle(true);
         self.clean = self.checkpoint.1.clone();
+        // The stem, because that is what a room names a material by.
+        if let Some(stem) = path.file_stem() {
+            self.saved_names.push(stem.to_string_lossy().into_owned());
+        }
         self.path = Some(path);
     }
 }
@@ -211,18 +219,26 @@ fn start_in_the_material_editor(
 }
 
 /// Once, the first time the mode opens: the renderer's device does not exist while plugins build.
-fn share_bevys_gpu(
-    mut material: NonSendMut<MaterialEditor>,
-    adapter: Option<Res<bevy::render::renderer::RenderAdapter>>,
-    device: Option<Res<bevy::render::renderer::RenderDevice>>,
-    queue: Option<Res<bevy::render::renderer::RenderQueue>>,
-) {
+fn share_bevys_gpu(mut material: NonSendMut<MaterialEditor>, device: gpu::BevyDevice) {
     if material.editor.gpu.is_some() {
         return;
     }
-    material.editor.gpu = gpu::shared_gpu(adapter.as_deref(), device.as_deref(), queue.as_deref());
+    material.editor.gpu = device.gpu();
     if material.editor.gpu.is_none() {
         warn!("No render device to bake materials on; previews use the CPU");
+    }
+}
+
+/// Saving a material is publishing it: without this, a wall drawn before the save keeps the old
+/// bake for the rest of the process.
+fn publish_saved_materials(
+    mut material: NonSendMut<MaterialEditor>,
+    mut library: ResMut<library::MaterialLibrary>,
+    mut baked: ResMut<gpu::BakedTextures>,
+    mut standard: ResMut<Assets<StandardMaterial>>,
+) {
+    for name in std::mem::take(&mut material.saved_names) {
+        library.forget(&name, &mut baked, &mut standard);
     }
 }
 
@@ -240,6 +256,9 @@ impl Plugin for MaterialEditorPlugin {
     fn build(&self, app: &mut App) {
         app.insert_non_send(MaterialEditor::default())
             .init_resource::<StartInMaterialEditor>()
+            .init_resource::<library::MaterialLibrary>()
+            // Ungated: rooms are drawn in the editor and in a round alike.
+            .add_systems(Update, (publish_saved_materials, library::paint_rooms).chain())
             // Ungated: it has to run in whatever mode the process started in.
             .add_systems(Update, start_in_the_material_editor)
             .add_systems(OnEnter(AppMode::Material), (switch_the_viewports_off, share_bevys_gpu))

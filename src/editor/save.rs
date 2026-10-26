@@ -180,7 +180,11 @@ mod tests {
         let mut timeline = FeatureTimeline::default();
         let min = timeline.apply_feature(Box::new(GlobalPoint::new(-2.0, 0.0, -2.0)));
         let max = timeline.apply_feature(Box::new(GlobalPoint::new(2.0, 3.0, 2.0)));
-        let room = timeline.apply_feature(Box::new(EditorRoom::from_points(min, max)));
+        let surfaces = crate::tool::room::RoomSurfaces {
+            walls: Some("concrete".into()),
+            ..Default::default()
+        };
+        let room = timeline.apply_feature(Box::new(EditorRoom::from_points(min, max).with_surfaces(surfaces)));
         timeline.apply_feature(Box::new(EditorRoom::from_min_and_size(
             PointRef::reference_with_offset(max, 1.0, 0.0, 1.0),
             Vec3::new(4.0, 3.0, 5.0),

@@ -129,6 +129,10 @@ title = "Global Point"
 [editor.features.room]
 title = "Room"
 own_min = "This room's Min"
+materials = "Materials"
+floor = "Floor"
+walls = "Walls"
+ceiling = "Ceiling"
 
 [editor.features.grackle_point_light]
 title = "Point Light"

@@ -7,7 +7,7 @@ use crate::common::cuboid::CuboidPoint;
 use crate::common::ray::ray_intersects_aabb;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, OwnBase, PointRef};
 use crate::editor::mirror::Mirroring;
-use crate::tool::room::Room;
+use crate::tool::room::{Room, RoomSlot, RoomSurfaces};
 use crate::get;
 
 /// What `max`'s relative axes are measured from.
@@ -34,6 +34,8 @@ pub struct EditorRoom {
     /// Beside `max` rather than replacing it, so maps saved before it read unchanged.
     #[serde(default, skip_serializing_if = "MaxBase::is_reference")]
     max_base: MaxBase,
+    #[serde(default, skip_serializing_if = "RoomSurfaces::is_empty")]
+    surfaces: RoomSurfaces,
     #[serde(skip)]
     resolved_min: Vec3,
     #[serde(skip)]
@@ -48,6 +50,7 @@ impl EditorRoom {
             min: PointRef::reference(min_feature),
             max: PointRef::reference(max_feature),
             max_base: MaxBase::Reference,
+            surfaces: RoomSurfaces::default(),
             resolved_min: Vec3::ZERO,
             resolved_max: Vec3::ZERO,
             entity: None,
@@ -59,6 +62,7 @@ impl EditorRoom {
             min,
             max,
             max_base: MaxBase::Reference,
+            surfaces: RoomSurfaces::default(),
             resolved_min: Vec3::ZERO,
             resolved_max: Vec3::ZERO,
             entity: None,
@@ -75,10 +79,16 @@ impl EditorRoom {
             min,
             max,
             max_base: MaxBase::OwnMin,
+            surfaces: RoomSurfaces::default(),
             resolved_min: Vec3::ZERO,
             resolved_max: Vec3::ZERO,
             entity: None,
         }
+    }
+
+    pub fn with_surfaces(mut self, surfaces: RoomSurfaces) -> Self {
+        self.surfaces = surfaces;
+        self
     }
 
     /// Min first, since an `OwnMin` max is measured from it. A max that has
@@ -148,6 +158,20 @@ impl FeatureTrait for EditorRoom {
         if changed {
             self.resolve_corners(features);
         }
+        ui.separator();
+        ui.label(get!("editor.features.room.materials"));
+        for slot in RoomSlot::ALL {
+            ui.horizontal(|ui| {
+                ui.label(get!(slot.name_key()));
+                let name = self.surfaces.slot_mut(slot);
+                let mut text = name.clone().unwrap_or_default();
+                if ui.text_edit_singleline(&mut text).changed() {
+                    let text = text.trim();
+                    *name = (!text.is_empty()).then(|| text.to_owned());
+                    changed = true;
+                }
+            });
+        }
         changed
     }
 
@@ -196,6 +220,7 @@ impl FeatureTrait for EditorRoom {
         commands.entity(entity).insert((
             Transform::from_translation(center),
             Room::new(min, max),
+            self.surfaces.clone(),
         ));
     }
 

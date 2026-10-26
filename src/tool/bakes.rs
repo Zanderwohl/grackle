@@ -6,7 +6,7 @@ use crate::common::app_mode::AppMode;
 use bevy_egui::egui;
 use crate::editor::editable::FeatureTag;
 use crate::get;
-use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, Room};
+use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, Room, RoomSlot};
 
 #[derive(Message)]
 pub struct LogECS;
@@ -82,7 +82,8 @@ impl RoomBake {
         self.auto = auto;
     }
 
-    fn material(&mut self, materials: &mut Assets<StandardMaterial>) -> Handle<StandardMaterial> {
+    /// What a slot with no material of its own is drawn with.
+    pub fn material(&mut self, materials: &mut Assets<StandardMaterial>) -> Handle<StandardMaterial> {
         self.material
             .get_or_insert_with(|| materials.add(StandardMaterial {
                 base_color: Color::srgb_u8(255, 255, 255),
@@ -317,21 +318,34 @@ fn bake_one(
     meshes: &mut Assets<Mesh>,
 ) {
     let others: Vec<Room> = all.iter().filter(|(e, _)| *e != entity).map(|(_, r)| (*r).clone()).collect();
-    let bundle = (
-        BakedRoomGeometry { room: entity },
-        Mesh3d(meshes.add(room.bake_faces(&others))),
-        MeshMaterial3d(material.clone()),
-    );
-    match existing {
-        Some(baked) => { commands.entity(baked).insert(bundle); }
-        None => { commands.spawn(bundle); }
-    }
+    let mut baked = match existing {
+        Some(baked) => {
+            let mut baked = commands.entity(baked);
+            baked.despawn_children();
+            baked
+        }
+        None => commands.spawn((BakedRoomGeometry { room: entity }, Transform::default(), Visibility::default())),
+    };
+    baked.with_children(|parts| {
+        for (slot, mesh) in room.bake_slots(&others) {
+            // The default until `paint_rooms` finds the slot's own material.
+            parts.spawn((RoomSlotMesh { room: entity, slot }, Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.clone())));
+        }
+    });
 }
 
-/// One room's walls, rebuilt in place when that room is rebaked.
+/// One room's walls, rebuilt in place when that room is rebaked. Its children are a
+/// [`RoomSlotMesh`] each.
 #[derive(Component)]
 pub struct BakedRoomGeometry {
     room: Entity,
+}
+
+/// One slot of a room's baked walls, so it can take its own material.
+#[derive(Component)]
+pub struct RoomSlotMesh {
+    pub room: Entity,
+    pub slot: RoomSlot,
 }
 
 #[cfg(test)]
@@ -374,12 +388,14 @@ mod tests {
         Room::new(Vec3::new(x, 0.0, 0.0), Vec3::new(x + 2.0, 2.0, 2.0))
     }
 
-    /// Each room's current mesh, to tell which were rebaked.
+    /// Each room's current walls mesh, to tell which were rebaked. Every room in these tests has
+    /// walls left standing.
     fn meshes(app: &mut App) -> HashMap<Entity, AssetId<Mesh>> {
         app.world_mut()
-            .query::<(&BakedRoomGeometry, &Mesh3d)>()
+            .query::<(&RoomSlotMesh, &Mesh3d)>()
             .iter(app.world())
-            .map(|(baked, mesh)| (baked.room, mesh.id()))
+            .filter(|(part, _)| part.slot == RoomSlot::Walls)
+            .map(|(part, mesh)| (part.room, mesh.id()))
             .collect()
     }
 

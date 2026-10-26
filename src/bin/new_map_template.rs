@@ -17,6 +17,7 @@ use grackle::constants::MAP_BLUEPRINT_EXTENSION;
 use grackle::editor::animation_grid::{self, AnimationGrid};
 use grackle::editor::editable::{FeatureId, FeatureTimeline, PointRef};
 use grackle::editor::editor_room::EditorRoom;
+use grackle::tool::room::RoomSurfaces;
 use grackle::editor::global_point::GlobalPoint;
 use grackle::editor::grackle_point_light::GracklePointLight;
 use grackle::editor::map_metadata::MapMetadata;
@@ -66,7 +67,9 @@ fn main() {
     // features can hang off.
     let min = timeline.apply_feature(Box::new(GlobalPoint::new(room_min.x, room_min.y, room_min.z)));
     let max = timeline.apply_feature(Box::new(GlobalPoint::new(room_max.x, room_max.y, room_max.z)));
-    let room = timeline.apply_feature(Box::new(EditorRoom::from_points(min, max)));
+    let concrete = Some("concrete".to_owned());
+    let surfaces = RoomSurfaces { floor: concrete.clone(), walls: concrete, ceiling: None };
+    let room = timeline.apply_feature(Box::new(EditorRoom::from_points(min, max).with_surfaces(surfaces)));
 
     // Anchored to the floor centre so resizing the room takes the contents along.
     let mut light = GracklePointLight::from_point_ref(on_the_floor(room, Vec3::Y * LIGHT_HEIGHT_M));

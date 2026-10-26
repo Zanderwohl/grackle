@@ -83,7 +83,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/material/` | The material editor: texture-graph's panels as an authoring mode. See "Editing a material". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`. |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 | `cache/` | Gitignored, derived from the packs: `thumbnail/props/{name}.png`. Safe to delete. |
@@ -890,7 +890,7 @@ at the origin and the figure stands under it, inverted through the same
 `texture-graph-editor`, egui panels and nothing else — under Grackle's File,
 Edit and Mode menus, editing one `.tgraph` under a pack's `materials/`. What
 a material is *for* is [documentation/surfaces.md](documentation/surfaces.md);
-nothing in a map reads one yet.
+rooms paint with them — see "Materials on rooms".
 
 - **The crates track texture-graph's `main`, and it moves with Bevy.**
   Cargo.lock holds the commit; `cargo update -p texture-graph-core` moves
@@ -920,6 +920,35 @@ nothing in a map reads one yet.
   sRGB-encoded bytes in `Rgba8Unorm` (storage writes cannot be sRGB);
   bevy_egui blends in linear space, so drawn as they are every preview is
   washed out, with no error.
+
+## Materials on rooms
+
+A room names a material per **slot** — floor, walls, ceiling — as
+`RoomSurfaces` on its feature, copied onto its entity. `None` draws the plain
+default, as does a name with no file behind it. The material editor's own
+GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
+[`gpu.rs`](src/material/gpu.rs)).
+
+- **Slots are sorted by inward normal**, not by side of the box
+  (`RoomSlot::of`), so a room that is not a box sorts the same way. Each slot
+  is its own child mesh (`RoomSlotMesh`) under the room's
+  `BakedRoomGeometry`; a slot opened up entirely is not baked.
+- **Painting is not baking.** `paint_rooms` picks each slot's material every
+  frame, so changing a name repaints without rebuilding walls, and a material
+  that bakes late — no device yet — arrives on its own.
+- **Texture coordinates are world-space**, in tiles of
+  `MATERIAL_TILE_METRES`, so a material runs on across neighbouring walls and
+  does not stretch with the room. The tile size is a stand-in: it belongs to
+  the material, which has nowhere to say it yet.
+- **A material is baked once per name**, colour only, into a
+  `TILE_TEXELS` tile with a repeating sampler and no mipmaps (distant walls
+  shimmer). Saving one in the material editor makes the map bake it again.
+- **A material repeats, so it must tile.** Value noise with a lattice period
+  equal to its frequency; `every_shipped_material_tiles` checks each shipped
+  one's opposite edges on the CPU. The default pack's are written by
+  `cargo run --bin default_materials`, like the map template.
+- **Not sent to clients.** Materials are pack content like props, but nothing
+  syncs them yet; a client without the file draws that slot plain.
 
 ## Thumbnails
 

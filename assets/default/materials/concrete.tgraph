@@ -1,0 +1,101 @@
+TextureGraphFile(
+    format_version: 3,
+    metadata: FileMetadata(
+        name: "concrete",
+        description: None,
+        authors: [],
+        modified: "",
+        written_by: "grackle 0.1.0",
+    ),
+    graph: Graph(
+        layers: [
+            Layer(
+                id: 2,
+                name: "mottle",
+                kind: Noise(Noise(
+                    dims: D2,
+                    seed_offset: 0,
+                    frequency: 4.0,
+                    range: Unsigned,
+                    output: Grayscale,
+                    kernel: Value,
+                    period: (4, 4, 0),
+                    fractal: Fractal(
+                        octaves: 6,
+                        lacunarity: 2.0,
+                        gain: 0.5,
+                        mode: Standard,
+                        normalize: true,
+                    ),
+                )),
+            ),
+            Layer(
+                id: 3,
+                name: "concrete",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.2,
+                            color: Const(Oklch(
+                                l: 0.5,
+                                chroma: 0.006,
+                                hue: OklabHue(75.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 0.5,
+                            color: Const(Oklch(
+                                l: 0.6,
+                                chroma: 0.008,
+                                hue: OklabHue(75.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 0.8,
+                            color: Const(Oklch(
+                                l: 0.7,
+                                chroma: 0.01,
+                                hue: OklabHue(75.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 4,
+                name: "colour",
+                kind: Map(Map(
+                    value: Some(2),
+                    palette: Some(3),
+                )),
+            ),
+        ],
+        list_order: [
+            2,
+            3,
+            4,
+        ],
+        canvases: {
+            "main": Canvas(
+                positions: {
+                    2: (0.0, 0.0),
+                    3: (260.0, 150.0),
+                    4: (520.0, 0.0),
+                },
+                output_pos: Some((780.0, 0.0)),
+            ),
+        },
+        output: Output(
+            color: Some(4),
+            roughness: Const(0.9),
+            metallic: Const(0.0),
+            normal: None,
+        ),
+        params: {},
+        next_id: 5,
+    ),
+)
