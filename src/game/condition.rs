@@ -16,8 +16,9 @@ use crate::common::assets::default_packs;
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{ClipStack, Layer};
 use crate::common::taunt::{TauntId, TauntTurning, TauntWeapon, Taunts};
+use crate::game::death::Dying;
 use crate::game::player::{
-    CameraPull, Inputs, LocalPlayer, ViewMode, ViewPreference, CAMERA_PULL_SECONDS,
+    CameraPull, DeathCam, Inputs, LocalPlayer, ViewMode, ViewPreference, CAMERA_PULL_SECONDS,
 };
 
 /// Not an enum: a humiliated body may still taunt, as in TF2, and the taunt
@@ -151,14 +152,27 @@ pub fn end_taunts(
 /// The one writer of [`ViewMode`] and [`CameraPull`]. The preference is
 /// never overwritten, so it returns when the condition ends. The view is
 /// third person until the camera is all the way back in the head.
+///
+/// A [`DeathCam`] forces third person too, until a living body is ours again.
+/// That cuts rather than swings, since the new body is somewhere else
+/// entirely.
 pub fn decide_the_view(
+    mut commands: Commands,
     time: Res<Time>,
     preference: Res<ViewPreference>,
-    ours: Option<Single<&Condition, With<LocalPlayer>>>,
+    death_cam: Option<Res<DeathCam>>,
+    ours: Option<Single<(&Condition, Has<Dying>), With<LocalPlayer>>>,
     mut pull: ResMut<CameraPull>,
     mut view: ResMut<ViewMode>,
 ) {
-    let wanted = match ours.is_some_and(|condition| condition.forces_third_person()) {
+    let alive = ours.as_deref().is_some_and(|(_, dying)| !dying);
+    let respawned = death_cam.is_some() && alive;
+    if respawned {
+        commands.remove_resource::<DeathCam>();
+    }
+    let dead = death_cam.is_some() && !respawned;
+    let forced = dead || ours.is_some_and(|ours| ours.0.forces_third_person());
+    let wanted = match forced {
         true => ViewMode::ThirdPerson,
         false => preference.0,
     };
@@ -166,7 +180,10 @@ pub fn decide_the_view(
         ViewMode::ThirdPerson => 1.0,
         ViewMode::FirstPerson => 0.0,
     };
-    let step = time.delta_secs() / CAMERA_PULL_SECONDS;
+    let step = match respawned {
+        true => 1.0,
+        false => time.delta_secs() / CAMERA_PULL_SECONDS,
+    };
     let pulled = pull.0 + (out - pull.0).clamp(-step, step);
     if pull.0 != pulled {
         pull.0 = pulled;
@@ -369,6 +386,28 @@ mod tests {
         let half = CameraPull(0.5).place(first, third);
         assert!((half.translation.z - 1.75).abs() < 1e-4, "{}", half.translation);
         assert!(half.rotation.angle_between(Quat::from_rotation_y(0.2)) < 1e-4);
+    }
+
+    /// Dead, the view is out of the head whatever the preference; the next
+    /// living body cuts straight back in rather than swinging from the corpse.
+    #[test]
+    fn the_death_cam_holds_third_person_until_a_living_body_is_ours() {
+        let mut world = a_view_world(ViewMode::FirstPerson);
+        let dying = world.spawn((LocalPlayer, Condition::default(), Dying)).id();
+        world.insert_resource(DeathCam { pivot: Vec3::ZERO, whose: None });
+
+        decide_after(&mut world, 1.0);
+        assert_eq!(world.resource::<CameraPull>().0, 1.0);
+        world.despawn(dying);
+        decide_after(&mut world, 1.0);
+        assert_eq!(*world.resource::<ViewMode>(), ViewMode::ThirdPerson, "the reaped body ended the death cam");
+        assert!(world.contains_resource::<DeathCam>());
+
+        world.spawn((LocalPlayer, Condition::default()));
+        decide_after(&mut world, 0.001);
+        assert_eq!(world.resource::<CameraPull>().0, 0.0, "the camera swung in from the corpse");
+        assert_eq!(*world.resource::<ViewMode>(), ViewMode::FirstPerson);
+        assert!(!world.contains_resource::<DeathCam>());
     }
 
     /// Only the local body's condition moves our camera.

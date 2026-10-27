@@ -134,6 +134,8 @@ pub struct PlayerInput {
     /// A debug key until there are rounds to lose.
     pub humiliate: bool,
     pub taunt: bool,
+    /// A debug key until there is a kill command.
+    pub suicide: bool,
     /// Look direction about world Y, radians. An input because facing decides
     /// which way "forward" is, so a server needs it to reproduce movement.
     pub yaw: f32,
@@ -438,6 +440,7 @@ pub fn gather_input(
     input.reload |= keys.just_pressed(KeyCode::KeyR);
     input.humiliate |= keys.just_pressed(KeyCode::KeyH);
     input.taunt |= keys.just_pressed(KeyCode::KeyG);
+    input.suicide |= keys.just_pressed(KeyCode::KeyO);
 
     // All six slots are bound whatever the class carries: an unbound key and
     // a key bound to an empty slot are the same to a player.
@@ -485,13 +488,16 @@ pub fn gather_aim(
 /// The one place an edge is consumed. Level fields are carried across, since
 /// they are re-read every frame. In `FixedPreUpdate`'s `WriteClientInputs` set
 /// because what is written here is what Lightyear buffers and sends.
+///
+/// Edges are consumed with no body too, so a click made while dead does not
+/// fire on respawning.
 pub fn write_client_inputs(
     mut latch: ResMut<InputLatch>,
     input: Option<Single<&mut Inputs, With<LocalPlayer>>>,
 ) {
-    let Some(input) = input else { return };
-    let mut input = input.into_inner();
-    input.0 = latch.0;
+    if let Some(input) = input {
+        input.into_inner().0 = latch.0;
+    }
 
     latch.0.jump = false;
     latch.0.attack = false;
@@ -499,6 +505,7 @@ pub fn write_client_inputs(
     latch.0.reload = false;
     latch.0.humiliate = false;
     latch.0.taunt = false;
+    latch.0.suicide = false;
     latch.0.select = None;
 }
 
@@ -535,19 +542,23 @@ pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut preference: ResMut<ViewP
 /// looking around never waits on a round-trip.
 ///
 /// Runs after `interpolate_bodies`; earlier, it sits a frame behind the body.
+///
+/// With no body, it orbits the [`DeathCam`] instead, still aimed by the latch.
 pub fn place_camera(
     pull: Res<CameraPull>,
     world: Res<CollisionWorld>,
     latch: Res<InputLatch>,
+    death_cam: Option<Res<DeathCam>>,
     body: Option<Single<(&Transform, &Stance), (With<LocalPlayer>, Without<PlayerCamera>)>>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
-    let Some(body) = body else { return };
-    let (body, stance) = body.into_inner();
-    // Ducking lowers the eye and the third-person pivot with it.
-    let eye = stance.eye_offset();
+    let pivot = match (body, death_cam) {
+        // Ducking lowers the eye and the third-person pivot with it.
+        (Some(body), _) => body.0.translation + Vec3::Y * body.1.eye_offset(),
+        (None, Some(dead)) => dead.pivot,
+        (None, None) => return,
+    };
     let aim = Quat::from_rotation_y(latch.0.yaw) * Quat::from_rotation_x(latch.0.pitch);
-    let pivot = body.translation + Vec3::Y * eye;
 
     let first = Transform::from_translation(pivot).with_rotation(aim);
     let third = Transform::from_translation(third_person_camera(pivot, aim, &world)).with_rotation(aim);
@@ -556,6 +567,57 @@ pub fn place_camera(
         camera.translation = placed.translation;
         camera.rotation = placed.rotation;
     }
+}
+
+/// What the view orbits while we have no body: TF2's death cam with nobody to
+/// credit. Present from the death until the next body arrives, forcing third
+/// person; `decide_the_view` takes it down.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct DeathCam {
+    /// Starts at the dying body's eye and is eased onto our corpse.
+    pub pivot: Vec3,
+    /// Whose corpse to follow. A body with no id leaves the pivot where it
+    /// died.
+    pub whose: Option<PlayerId>,
+}
+
+/// Metres above the corpse's pelvis the death cam orbits, so a body lying on
+/// the floor is looked down at rather than along.
+const DEATH_CAM_LIFT: f32 = 0.6;
+
+/// Per second. Eases the pivot off the eye when the corpse appears and damps
+/// the ragdoll's tumbling, which is shake at the camera's distance.
+const DEATH_CAM_FOLLOW_RATE: f32 = 6.0;
+
+/// Replicated `Dying`, so a client starts its own the same way.
+pub fn start_the_death_cam(
+    mut commands: Commands,
+    ours: Query<
+        (&Transform, &Stance, Option<&PlayerId>),
+        (With<LocalPlayer>, Added<crate::game::death::Dying>),
+    >,
+) {
+    for (body, stance, id) in &ours {
+        commands.insert_resource(DeathCam {
+            pivot: body.translation + Vec3::Y * stance.eye_offset(),
+            whose: id.copied(),
+        });
+    }
+}
+
+/// Move the death cam's pivot towards our corpse's pelvis. A corpse not yet
+/// arrived, or already retired, leaves it where it was.
+pub fn follow_our_corpse(
+    time: Res<Time>,
+    death_cam: Option<ResMut<DeathCam>>,
+    corpses: Query<(&crate::game::ragdoll::Ragdoll, &crate::game::ragdoll::CorpseOf)>,
+) {
+    let Some(mut death_cam) = death_cam else { return };
+    let Some(whose) = death_cam.whose else { return };
+    let Some((corpse, _)) = corpses.iter().find(|(_, of)| of.0 == whose) else { return };
+    let target = corpse.pelvis() + Vec3::Y * DEATH_CAM_LIFT;
+    let t = 1.0 - (-DEATH_CAM_FOLLOW_RATE * time.delta_secs()).exp();
+    death_cam.pivot = death_cam.pivot.lerp(target, t);
 }
 
 /// Where the third-person camera sits, in world space.
@@ -740,6 +802,32 @@ mod tests {
 
     use super::*;
     use crate::tool::room::Room;
+
+    /// Eased towards our own corpse, not whichever corpse is nearest.
+    #[test]
+    fn the_death_cam_follows_our_own_corpse() {
+        use crate::common::skeleton::{rig::{humanoid, Proportions}, Pose};
+        use crate::game::ragdoll::{CorpseOf, Ragdoll};
+
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let corpse_at = |x: f32| {
+            Ragdoll::from_body(&skeleton, &Pose::rest(), &Transform::from_xyz(x, 0.0, 0.0), Vec3::ZERO)
+        };
+        let mut world = World::new();
+        world.init_resource::<Time>();
+        world.spawn((corpse_at(10.0), CorpseOf(PlayerId(1))));
+        world.spawn((corpse_at(-10.0), CorpseOf(PlayerId(2))));
+        world.insert_resource(DeathCam { pivot: Vec3::ZERO, whose: Some(PlayerId(1)) });
+
+        for _ in 0..120 {
+            world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+            world.run_system_once(follow_our_corpse).unwrap();
+        }
+
+        let pivot = world.resource::<DeathCam>().pivot;
+        assert!((pivot.x - 10.0).abs() < 0.1, "{pivot}");
+        assert!(pivot.y > DEATH_CAM_LIFT, "not above the pelvis: {pivot}");
+    }
 
     fn world(rooms: &[Room]) -> CollisionWorld {
         let mut world = CollisionWorld::default();

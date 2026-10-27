@@ -41,8 +41,8 @@ The editor is real and works. **The game barely exists.** There is a damage
 layer, weapons read off disk, teams, and a server-authoritative network layer
 that carries the map, the weapons, the bodies, damage, deaths and corpses.
 Weapons have clips, reserves and reloads. There is no round structure: a body
-that dies leaves a ragdoll and comes straight back, on the same side, as the
-same player. A client predicts its own movement and is rolled back when the
+that dies leaves a ragdoll and comes back a few seconds later, on the same
+side, as the same player. A client predicts its own movement and is rolled back when the
 server disagrees. There is also no wasm build yet. Adding the runtime is the
 current frontier, not a finished thing to extend.
 
@@ -347,7 +347,8 @@ primary and the right its secondary — held, for anything automatic — and
 **`R`** reloads. **`H`** toggles humiliation, a debug key until there are
 rounds to lose: hands up, no weapon, no firing, third person. **`G`** starts
 the first taunt in `assets/default/taunts.toml` (a wave, which ends by itself;
-`G` again ends it early), and works while humiliated, as in TF2; nobody
+`G` again ends it early), and works while humiliated, as in TF2; **`O`** is
+suicide, 1000 damage credited to yourself, a debug key for the death cam; nobody
 crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
 camera) can turn. What each slot
@@ -1312,7 +1313,7 @@ The authority makes one and everybody else is sent the seed.
 
 **A corpse's clock is its own.** `RAGDOLL_LIFETIME` is ten seconds of game time
 and nothing else ends it: a body and its corpse are not mutually exclusive, and
-since respawning is immediate, clearing a corpse when its owner came back would
+since respawning is quicker than that, clearing a corpse when its owner came back would
 be a corpse nobody ever saw. Standing over your own body is the correct
 picture. Only the round ends one early — `clear_ragdolls` on leaving Play and
 `reset_for_play` on entering it, both on the authority, since a client's copies
@@ -1484,15 +1485,24 @@ and finished by symmetry.
 
 Death used to be the end of the session: the body was despawned, the camera
 went with it as a child, and what was left was a map with nobody in it. Now you
-come straight back, and the rule that puts you there is the same one that hands
+come back, and the rule that puts you there is the same one that hands
 a body to somebody joining mid-round — see "Who gets a body, and when it goes
 away" below. There is no respawn system: `give_bodies_to_whoever_needs_one`
 asks who should have a body and does not, and dying is one of the ways to be in
 that state.
 
-Instant is a placeholder and is meant to look like one; a respawn timer, wave
-respawns and spawn protection are a gamemode's numbers. Two parts of the shape
-are not placeholders, and both live in
+The wait is `RESPAWN_SECONDS`, a placeholder; wave respawns and spawn
+protection are a gamemode's numbers. A dead player is not owed a body while
+their `RespawnTimers` entry runs, which is the absence rule with one more
+clause rather than a queue. Meanwhile the view is the **death cam**:
+`DeathCam` starts at our eye where the body died, from the replicated
+`Dying` so a client starts its own, and `place_camera` orbits it in third
+person under the mouse. `follow_our_corpse` eases the pivot onto the pelvis
+of the corpse whose replicated `CorpseOf` names our `PlayerId` — the corpse
+carries an id for this and nothing else, so it is still not a player. `decide_the_view` ends it when a living body is ours
+again, and cuts back in rather than swinging from the corpse. It is TF2's
+death with nobody to credit; a killer cam is the next step. Two parts of the
+shape are not placeholders, and both live in
 [`src/game/respawn.rs`](src/game/respawn.rs):
 
 - **Your identity outlives your body.** `Identity` is a `PlayerId` and a
@@ -2018,14 +2028,14 @@ Asking about absence rather than about events is what makes it hold: there is
 no queue to keep, no timer keyed to an entity that has already been despawned,
 and nothing to get wrong when a case nobody thought of turns up.
 
-**Respawning is immediate, and that is a placeholder rather than a decision.**
+**The respawn delay is a placeholder rather than a decision.**
 When a body comes back — on a wave, after a delay, at your team's end of the
 map — is a gamemode question, and this layer answers none of those. What it
 guarantees is only that being alive is the resting state.
 
 | Moment | What happens |
 | --- | --- |
-| Anybody has no body | `give_bodies_to_whoever_needs_one`, next `Update`, wearing the `Identity` they already had |
+| Anybody has no body | `give_bodies_to_whoever_needs_one`, once any respawn timer is out, wearing the `Identity` they already had |
 | Client's body reaches it | `claim_our_own_body` marks it `LocalPlayer` + `InputMarker` |
 | Client disconnects | `ControlledBy { lifetime: SessionBased }` despawns it on the server; the despawn replicates |
 | Round ends | the server's `leave_play` despawns every body; a client's despawns none, because they are not its to despawn |

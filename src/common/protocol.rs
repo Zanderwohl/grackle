@@ -58,6 +58,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<crate::game::ragdoll::Ragdoll>().replicate_once();
         // The build is read off the rig, not a `Class`, which not every body has.
         app.component::<crate::game::ragdoll::CorpseBuild>().replicate_once();
+        app.component::<crate::game::ragdoll::CorpseOf>().replicate_once();
 
         // Replicated rather than re-simulated: see `replicate_projectiles`.
         app.component::<crate::game::projectile::Projectile>().replicate();

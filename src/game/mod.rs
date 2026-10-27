@@ -13,9 +13,8 @@ use crate::game::pause_menu::PauseMenuPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::respawn::OurIdentity;
 use crate::game::player::{
-    aim_the_view_at_our_body, despawn_the_view, face_bodies, gather_aim, gather_input,
-    interpolate_bodies, place_camera,
-    spawn_the_view, step_player, toggle_view, write_client_inputs, InputLatch, Player, ViewMode,
+    aim_the_view_at_our_body, despawn_the_view, face_bodies, follow_our_corpse, gather_aim,
+    gather_input, interpolate_bodies, place_camera, spawn_the_view, start_the_death_cam, step_player, toggle_view, write_client_inputs, InputLatch, Player, ViewMode,
     ViewPreference,
 };
 use crate::tool::bakes::BakeSystems;
@@ -99,6 +98,7 @@ impl Plugin for GamePlugin {
                 // Ungated: on a client the body arrives from the server some
                 // time after the round starts.
                 spawn_the_view,
+                start_the_death_cam,
             ).run_if(in_state(AppMode::Play)))
             // After `BakeSystems::All`: a round entered before the bake is
             // played in a map nobody can see, which is what a client just
@@ -139,7 +139,7 @@ impl Plugin for GamePlugin {
             // origin until a round starts.
             .add_systems(RunFixedMainLoop, interpolate_bodies
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop))
-            .add_systems(RunFixedMainLoop, (face_bodies, place_camera)
+            .add_systems(RunFixedMainLoop, (face_bodies, follow_our_corpse, place_camera)
                 .chain()
                 .after(interpolate_bodies)
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
@@ -221,6 +221,7 @@ fn leave_play(
     }
     // Kept, the next match's first body would inherit it.
     commands.remove_resource::<OurIdentity>();
+    commands.remove_resource::<crate::game::player::DeathCam>();
 
     for mut camera in &mut editor_cameras {
         camera.is_active = true;
