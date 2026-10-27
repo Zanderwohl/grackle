@@ -225,7 +225,7 @@ grip_rotation = [
 support = [
     -0.131,
     -0.095,
-    0.18,
+    0.33,
 ]
 support_rotation = [
     -3.281219,

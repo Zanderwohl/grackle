@@ -1,0 +1,386 @@
+name_key = "weapon.names.flamethrower"
+next_id = 11
+
+[[features]]
+id = 0
+name = "Body"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 12
+radius = 0.045
+height = 0.6
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.0,
+    0.0,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.55,
+    0.14,
+    0.11,
+]
+
+[[features]]
+id = 1
+name = "Nozzle"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 10
+radius = 0.03
+height = 0.22
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.0,
+    -0.41,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.3,
+    0.32,
+    0.34,
+]
+
+[[features]]
+id = 2
+name = "Bell"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "cone"
+sides = 12
+radius = 0.065
+height = 0.12
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.0,
+    -0.52,
+]
+rotation = [
+    1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.3,
+    0.32,
+    0.34,
+]
+
+[[features]]
+id = 3
+name = "Nozzle and bell"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "union"
+target = 1
+tool = 2
+
+[[features]]
+id = 4
+name = "Jet"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 10
+radius = 0.022
+height = 0.4
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.0,
+    -0.45,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.3,
+    0.32,
+    0.34,
+]
+
+[[features]]
+id = 5
+name = "Nozzle"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "subtract"
+target = 3
+tool = 4
+
+[[features]]
+id = 6
+name = "Tank"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 12
+radius = 0.055
+height = 0.32
+
+[features.op.placement]
+origin = [
+    0.0,
+    -0.1,
+    0.12,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.62,
+    0.48,
+    0.22,
+]
+
+[[features]]
+id = 7
+name = "Feed"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 6
+radius = 0.01
+height = 0.46
+
+[features.op.placement]
+origin = [
+    0.0,
+    -0.05,
+    -0.23,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.62,
+    0.48,
+    0.22,
+]
+
+[[features]]
+id = 8
+name = "Housing"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.07,
+    0.09,
+    0.2,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.0,
+    0.36,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.55,
+    0.14,
+    0.11,
+]
+
+[[features]]
+id = 9
+name = "Grip"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.035,
+    0.12,
+    0.055,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    -0.1,
+    0.42,
+]
+rotation = [
+    0.21,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.13,
+    0.13,
+    0.15,
+]
+
+[[features]]
+id = 10
+name = "Pilot light"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "sphere"
+sides = 8
+rings = 6
+radius = 0.013
+
+[features.op.placement]
+origin = [
+    0.0,
+    -0.045,
+    -0.5,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    1.0,
+    0.45,
+    0.08,
+]
+
+[hold]
+grip = [
+    0.0,
+    -0.11,
+    0.401,
+]
+grip_rotation = [
+    -1.6580628,
+    1.6755161,
+    -1.7976891,
+]
+support = [
+    -0.115,
+    -0.1,
+    0.22,
+]
+support_rotation = [
+    -3.281219,
+    0.0872665,
+    -1.4486233,
+]
+two_handed = true
+carry = [
+    0.15,
+    -0.1,
+    -0.8,
+]
+carry_rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[viewmodel]
+across = [
+    0.58,
+    -0.58,
+]
+depth = 0.45
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[muzzle]
+at = [
+    0.0,
+    0.0,
+    -0.58,
+]
