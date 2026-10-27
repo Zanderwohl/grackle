@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn the_placeholder_class_starts_with_full_clips_and_full_reserves() {
         let catalogue = the_default_pack();
-        let (equipped, ammo) = catalogue.starting_equipment(Class::Mercenary);
+        let (equipped, ammo) = catalogue.starting_equipment(Class::Mercenary, None);
 
         let mut carried = 0;
         for slot in Slot::ALL {
@@ -317,6 +317,18 @@ mod tests {
         }
         assert!(carried > 0, "the placeholder class spawned empty-handed");
         assert!(equipped.held().is_some(), "it spawned holding nothing while carrying something");
+    }
+
+    #[test]
+    fn a_modes_loadout_carries_only_what_it_names() {
+        let catalogue = the_default_pack();
+        let only = [WeaponId::of("medi_wrench"), WeaponId::of("nothing_called_this")];
+        let (equipped, ammo) = catalogue.starting_equipment(Class::Mercenary, Some(&only));
+
+        let carried: Vec<WeaponId> = Slot::ALL.into_iter().filter_map(|slot| equipped.get(slot)).collect();
+        assert_eq!(carried, vec![only[0]]);
+        assert_eq!(equipped.held(), Some(only[0]));
+        assert_eq!(*ammo.at(Slot::Primary), Default::default(), "ammo for a weapon it does not carry");
     }
 
     /// Fails if a shipped weapon is no slot's default. Nothing switches within

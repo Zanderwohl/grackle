@@ -1,5 +1,5 @@
-//! Handing the server's pack tables — the weapon catalogue and the class
-//! builds — to every client, so a server can ship its own and nobody else
+//! Handing the server's pack tables — the weapon catalogue, the class
+//! builds, the taunts and the game modes — to every client, so a server can ship its own and nobody else
 //! needs the files. Shaped like [`crate::common::map_sync`], but with no
 //! resend interval, since nothing edits these at frame rate.
 //!
@@ -46,6 +46,13 @@ impl PackTable for crate::common::taunt::Taunts {
     }
 }
 
+impl PackTable for crate::common::game_rules::Modes {
+    const WHAT: &'static str = "game modes";
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
 impl PackTable for ClassBuilds {
     const WHAT: &'static str = "class builds";
     fn len(&self) -> usize {
@@ -82,6 +89,7 @@ impl Plugin for PackSyncPlugin {
         sync::<WeaponCatalogue>(app);
         sync::<ClassBuilds>(app);
         sync::<crate::common::taunt::Taunts>(app);
+        sync::<crate::common::game_rules::Modes>(app);
     }
 }
 

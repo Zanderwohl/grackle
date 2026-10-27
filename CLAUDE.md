@@ -1414,14 +1414,23 @@ the rule with a hole through it. Anything else with an effect that is not a
 `Damage` message has the same problem — ask `Allegiances::may_hurt`, do not
 re-derive the rule.
 
-A body's colour is its team (`body_look`), outranking `BodyTint` — a tint says
+A body's colour is its team (`body_look`), outranking its `PlayerColour` and `BodyTint` — a tint says
 "draw this specially", a team says which side you are on, and the second is
 what you read across a room in a fight. A spawn point's preview stays green
 even with a `Side` — that is not a `Team` — and the editor draws a ring at its
 feet in the side's colour instead. Corpses keep their team, so a pile of them
 still says which way a fight went.
 
-The player does not choose: `next_team` in
+**A mode may have no teams** — arena, from `assets/default/modes.toml` via
+`GameRules` ([`src/common/game_rules.rs`](src/common/game_rules.rs), written
+only by `publish_game_rules`; a mode with no entry plays as below). Then a
+body carries no `Team`, spawns anywhere, and is drawn in its own
+`PlayerColour` ([`src/common/player_colour.rs`](src/common/player_colour.rs)),
+which the authority picks and replicates — never derived from join order. The
+new-map template is an arena map. See
+[documentation/arena.md](documentation/arena.md).
+
+Otherwise the player does not choose: `next_team` in
 [`src/game/respawn.rs`](src/game/respawn.rs) alternates Red and Blue as people
 turn up, because there is no lobby and nothing that could balance. Alternating
 rather than a constant so that **two people on one map are on different

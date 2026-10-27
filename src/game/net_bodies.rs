@@ -9,13 +9,15 @@ use lightyear::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::damage::NextPlayerId;
+use crate::common::game_rules::{GameRules, ModeRules};
+use crate::common::player_colour::lowest_free;
 use crate::common::net::NetRole;
 use crate::common::team::Side;
 use crate::common::weapon::WeaponCatalogue;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{spawn_player, LocalPlayer, Player, Simulated, Spawn};
-use crate::game::respawn::{choose_spawn, next_team, placed_spawns, Identity, OurIdentity};
+use crate::game::respawn::{choose_spawn, next_team, placed_spawns, team_name, HueStart, Identity, OurIdentity};
 use crate::tool::room::Room;
 
 /// Spawns bodies for connected clients and marks our own when it arrives.
@@ -42,12 +44,12 @@ impl Plugin for NetBodiesPlugin {
 fn spawn_body_for(
     commands: &mut Commands,
     spawn: Spawn,
-    who: Identity,
-    link: Entity,
-    peer: PeerId,
+    (who, start): (Identity, HueStart),
+    (link, peer): (Entity, PeerId),
+    rules: &ModeRules,
     catalogue: &WeaponCatalogue,
 ) {
-    let body = spawn_player(commands, spawn, who.id, who.team, catalogue);
+    let body = spawn_player(commands, spawn, &who, who.colour(&start), rules, catalogue);
     commands.entity(body).insert((
         Replicate::to_clients(NetworkTarget::All),
         PredictionTarget::to_clients(NetworkTarget::Single(peer)),
@@ -73,6 +75,8 @@ fn give_bodies_to_whoever_needs_one(
     spawns: Query<(&Transform, Option<&Side>), With<SpawnPointMarker>>,
     rooms: Query<&Room>,
     mut ids: ResMut<NextPlayerId>,
+    hue_start: Option<Res<HueStart>>,
+    rules: Res<GameRules>,
     catalogue: Res<WeaponCatalogue>,
 ) {
     if !role.as_deref().is_none_or(NetRole::is_authority) {
@@ -83,9 +87,29 @@ fn give_bodies_to_whoever_needs_one(
     let placed = placed_spawns(&spawns);
     let rooms: Vec<Room> = rooms.iter().cloned().collect();
 
-    // Decides the next player's team. Counted from existing identities, so
-    // somebody leaving frees their side up.
+    // Decides the next player's team and colour. Counted from existing
+    // identities, so somebody leaving frees their side and hue up.
     let mut here = identities.iter().count() + usize::from(us.is_some());
+    let mut hues: Vec<usize> =
+        identities.iter().chain(us.as_deref().map(|us| &us.0)).map(|who| who.colour).collect();
+    let start = match hue_start {
+        Some(start) => *start,
+        None => {
+            let start = HueStart::random();
+            commands.insert_resource(start);
+            start
+        }
+    };
+    let mut meet = |ids: &mut NextPlayerId| {
+        let who = Identity {
+            id: ids.allocate(),
+            team: next_team(here, rules.teams),
+            colour: lowest_free(hues.iter().copied()),
+        };
+        here += 1;
+        hues.push(who.colour);
+        who
+    };
 
     if ours.is_empty() {
         // The identity outlives the body, so a respawn is the same player on
@@ -93,15 +117,14 @@ fn give_bodies_to_whoever_needs_one(
         let who = match us {
             Some(us) => us.0,
             None => {
-                let who = Identity { id: ids.allocate(), team: next_team(here) };
+                let who = meet(&mut ids);
                 commands.insert_resource(OurIdentity(who));
-                here += 1;
                 who
             }
         };
         let spawn = choose_spawn(&placed, who.team, &collision, &rooms);
-        info!("Standing our own body up as {} on {}", who.id, who.team.name());
-        let body = spawn_player(&mut commands, spawn, who.id, who.team, &catalogue);
+        info!("Standing our own body up as {} on {}", who.id, team_name(who.team));
+        let body = spawn_player(&mut commands, spawn, &who, who.colour(&start), &rules, &catalogue);
         commands.entity(body).insert(LocalPlayer);
         if hosting {
             commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
@@ -116,15 +139,14 @@ fn give_bodies_to_whoever_needs_one(
         let who = match identities.get(link) {
             Ok(who) => *who,
             Err(_) => {
-                let who = Identity { id: ids.allocate(), team: next_team(here) };
+                let who = meet(&mut ids);
                 commands.entity(link).insert(who);
-                here += 1;
                 who
             }
         };
         let spawn = choose_spawn(&placed, who.team, &collision, &rooms);
-        info!("Standing a client's body up as {} on {}", who.id, who.team.name());
-        spawn_body_for(&mut commands, spawn, who, link, peer.0, &catalogue);
+        info!("Standing a client's body up as {} on {}", who.id, team_name(who.team));
+        spawn_body_for(&mut commands, spawn, (who, start), (link, peer.0), &rules, &catalogue);
     }
 }
 
@@ -152,6 +174,7 @@ mod tests {
 
     use super::*;
     use crate::common::damage::{Damageable, PlayerId};
+    use crate::common::player_colour::PlayerColour;
     use crate::common::team::Team;
 
     fn a_map(world: &mut World) {
@@ -162,6 +185,7 @@ mod tests {
         world.init_resource::<NextPlayerId>();
         // The real catalogue, so test bodies are armed as in a round.
         world.insert_resource(crate::common::weapon_file::default_catalogue());
+        world.init_resource::<GameRules>();
         world.spawn(room);
         world.spawn((Transform::from_xyz(2.0, 0.0, -3.0), SpawnPointMarker));
     }
@@ -239,6 +263,37 @@ mod tests {
         a_turn(&mut world);
 
         assert_eq!(world.query_filtered::<(), With<Player>>().iter(&world).count(), 1);
+    }
+
+    #[test]
+    fn without_teams_a_body_has_no_side_but_a_colour_and_the_modes_loadout() {
+        let mut world = World::new();
+        a_map(&mut world);
+        let wrench = crate::common::weapon::WeaponId::of("medi_wrench");
+        world.insert_resource(GameRules(ModeRules { teams: false, loadout: Some(vec![wrench]), ..default() }));
+
+        a_turn(&mut world);
+
+        let body = world.query_filtered::<Entity, With<Player>>().single(&world).unwrap();
+        assert!(world.get::<Team>(body).is_none(), "put on a side in a mode without teams");
+        let start = *world.resource::<HueStart>();
+        assert_eq!(world.get::<PlayerColour>(body), Some(&PlayerColour::nth(start.0, 0)));
+        assert_eq!(world.get::<crate::common::weapon::Equipped>(body).unwrap().held(), Some(wrench));
+    }
+
+    #[test]
+    fn a_new_life_keeps_its_colour() {
+        let mut world = World::new();
+        a_map(&mut world);
+
+        a_turn(&mut world);
+        let body = world.query_filtered::<Entity, With<Player>>().single(&world).unwrap();
+        let first = *world.get::<PlayerColour>(body).unwrap();
+        world.despawn(body);
+        a_turn(&mut world);
+
+        let body = world.query_filtered::<Entity, With<Player>>().single(&world).unwrap();
+        assert_eq!(*world.get::<PlayerColour>(body).unwrap(), first);
     }
 
     #[test]

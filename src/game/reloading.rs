@@ -110,7 +110,7 @@ mod tests {
         let mut loadout = Loadout::default();
         loadout.set(Slot::Primary, SlotChoices { permitted: vec![id], default: id });
         catalogue.set_loadout(Class::Mercenary, loadout);
-        let (equipped, ammo) = catalogue.starting_equipment(Class::Mercenary);
+        let (equipped, ammo) = catalogue.starting_equipment(Class::Mercenary, None);
         world.insert_resource(catalogue);
         let body = world.spawn((LocalPlayer, equipped, ammo, HeldModel::default())).id();
         let view = world.spawn((Viewmodel::default(), Performance::default())).id();

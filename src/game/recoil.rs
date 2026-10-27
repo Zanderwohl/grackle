@@ -185,7 +185,7 @@ mod tests {
         let mut loadout = Loadout::default();
         loadout.set(Slot::Primary, SlotChoices { permitted: vec![id], default: id });
         catalogue.set_loadout(Class::Mercenary, loadout);
-        let (equipped, mut ammo) = catalogue.starting_equipment(Class::Mercenary);
+        let (equipped, mut ammo) = catalogue.starting_equipment(Class::Mercenary, None);
         ammo.at_mut(Slot::Primary).clip = clip;
         world.insert_resource(catalogue);
         world.init_resource::<Time>();

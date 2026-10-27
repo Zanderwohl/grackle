@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::common::game_rules::{GameRules, Modes};
 use crate::common::mode::GameMode;
 use crate::common::movement_rules::MovementRules;
 use crate::common::palette::Palette;
@@ -68,6 +69,14 @@ impl MapMetadata {
 pub fn publish_movement_rules(metadata: Res<MapMetadata>, mut rules: ResMut<MovementRules>) {
     if metadata.is_changed() {
         rules.set_if_neq(metadata.movement);
+    }
+}
+
+/// The only writer of [`GameRules`]. Ungated, like [`publish_movement_rules`]; a client's
+/// [`Modes`] may arrive after its map.
+pub fn publish_game_rules(metadata: Res<MapMetadata>, modes: Res<Modes>, mut rules: ResMut<GameRules>) {
+    if metadata.is_changed() || modes.is_changed() {
+        rules.set_if_neq(GameRules(modes.of(metadata.game_mode)));
     }
 }
 

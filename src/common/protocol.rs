@@ -45,6 +45,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<crate::common::class::Class>().replicate_once();
         // Once: a new side is a new life, which is a new body.
         app.component::<crate::common::team::Team>().replicate_once();
+        app.component::<crate::common::player_colour::PlayerColour>().replicate_once();
         app.component::<crate::common::skeleton::ForcedAnimation>().replicate();
         app.component::<crate::common::skeleton::gait::DisplaySpeed>().replicate();
 

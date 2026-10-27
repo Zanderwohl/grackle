@@ -390,7 +390,7 @@ mod tests {
     fn a_shooter(world: &mut World) -> Entity {
         let catalogue = world.resource::<WeaponCatalogue>().clone();
         let (equipped, ammo) =
-            catalogue.starting_equipment(crate::common::class::Class::Mercenary);
+            catalogue.starting_equipment(crate::common::class::Class::Mercenary, None);
         world.spawn((Player::default(), equipped, ammo, Trigger::default())).id()
     }
 

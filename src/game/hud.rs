@@ -535,7 +535,7 @@ mod tests {
     fn mercenary() -> (WeaponCatalogue, Equipped, Ammo) {
         let catalogue = default_catalogue();
         let (equipped, ammo) =
-            catalogue.starting_equipment(crate::common::class::Class::Mercenary);
+            catalogue.starting_equipment(crate::common::class::Class::Mercenary, None);
         (catalogue, equipped, ammo)
     }
 

@@ -1,0 +1,15 @@
+# What each game mode changes, keyed the way a map file names its mode
+# (`arena`, `ctf`, `pl`, `plr`, `koth`, `cp`, `sd`). A mode with no entry plays
+# by the defaults: teams, every class, each class's own loadout.
+#
+# `teams`    false puts nobody on a side; everybody is hostile to everybody.
+# `classes`  which classes may be played, by the names `classes.toml` uses.
+#            Empty or absent allows all of them.
+# `loadout`  what a body starts with, by the names `weapons.toml` uses. Each
+#            lands in the slot its class's loadout permits it in. Absent is the
+#            class's own loadout.
+
+[arena]
+teams = false
+classes = ["mercenary"]
+loadout = ["medi_wrench", "laser_rifle"]

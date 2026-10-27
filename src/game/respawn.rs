@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use rand::seq::IndexedRandom;
 
 use crate::common::damage::PlayerId;
+use crate::common::player_colour::PlayerColour;
 use crate::common::team::{Side, Team};
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
@@ -19,7 +20,28 @@ use crate::tool::room::Room;
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Identity {
     pub id: PlayerId,
-    pub team: Team,
+    /// `None` in a mode without teams.
+    pub team: Option<Team>,
+    /// Which hue on the wheel, for [`PlayerColour::nth`]. An index rather than
+    /// the hue, so a new match's [`HueStart`] turns everybody's together.
+    pub colour: usize,
+}
+
+impl Identity {
+    pub fn colour(&self, start: &HueStart) -> PlayerColour {
+        PlayerColour::nth(start.0, self.colour)
+    }
+}
+
+/// Where this match's colour wheel starts, in degrees. Random per match, so
+/// the same player is not always the same red; dropped with [`OurIdentity`].
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct HueStart(pub f32);
+
+impl HueStart {
+    pub fn random() -> Self {
+        Self(rand::random_range(0.0..360.0))
+    }
 }
 
 /// The identity of whoever is sitting at this machine. Absent on a client,
@@ -28,18 +50,27 @@ pub struct Identity {
 pub struct OurIdentity(pub Identity);
 
 /// Alternates, a placeholder, so two people on one map are on different
-/// sides and friendly fire can be checked by hand.
-pub fn next_team(already_here: usize) -> Team {
+/// sides and friendly fire can be checked by hand. Nobody, in a mode without
+/// teams.
+pub fn next_team(already_here: usize, teams: bool) -> Option<Team> {
+    if !teams {
+        return None;
+    }
     match already_here % 2 {
-        0 => Team::Red,
-        _ => Team::Blue,
+        0 => Some(Team::Red),
+        _ => Some(Team::Blue),
     }
 }
 
+/// For the log.
+pub fn team_name(team: Option<Team>) -> String {
+    team.map_or_else(|| "no team".to_string(), Team::name)
+}
+
 /// Where to put a body: a usable spawn point on its team's side uniformly at
-/// random, else the largest room. The one choice for first spawns and respawns
-/// alike.
-pub fn choose_spawn(placed: &[Spawn], team: Team, collision: &CollisionWorld, rooms: &[Room]) -> Spawn {
+/// random, else the largest room. With no team, any spawn. The one choice for
+/// first spawns and respawns alike.
+pub fn choose_spawn(placed: &[Spawn], team: Option<Team>, collision: &CollisionWorld, rooms: &[Room]) -> Spawn {
     // Sides are chosen before headroom, so a team whose own spawns are all
     // blocked falls back to the largest room rather than into the enemy base.
     let pool = preferred(placed, team);
@@ -49,22 +80,24 @@ pub fn choose_spawn(placed: &[Spawn], team: Team, collision: &CollisionWorld, ro
             "{} of {} spawn point(s) for {} have too little headroom to stand in",
             pool.len() - usable.len(),
             pool.len(),
-            team.name()
+            team_name(team)
         );
     }
 
     match usable.choose(&mut rand::rng()) {
         Some(spawn) => *spawn,
         None => {
-            warn!("No usable spawn point for {}; falling back to the largest room", team.name());
+            warn!("No usable spawn point for {}; falling back to the largest room", team_name(team));
             fallback_spawn(rooms)
         }
     }
 }
 
 /// The team's own spawns if the map has any, else the ones nobody claimed,
-/// else anybody's: a map with no spawn for a team still starts.
-fn preferred(placed: &[Spawn], team: Team) -> Vec<Spawn> {
+/// else anybody's: a map with no spawn for a team still starts. Nobody's team
+/// is anybody's spawn.
+fn preferred(placed: &[Spawn], team: Option<Team>) -> Vec<Spawn> {
+    let Some(team) = team else { return placed.to_vec() };
     for wanted in [Some(team), None] {
         let pool: Vec<Spawn> = placed.iter().copied().filter(|spawn| spawn.side == wanted).collect();
         if !pool.is_empty() {
@@ -94,9 +127,14 @@ mod tests {
 
     #[test]
     fn the_second_player_is_put_on_the_other_side() {
-        assert_eq!(next_team(0), Team::Red);
-        assert_eq!(next_team(1), Team::Blue);
-        assert_ne!(next_team(0), next_team(1));
+        assert_eq!(next_team(0, true), Some(Team::Red));
+        assert_eq!(next_team(1, true), Some(Team::Blue));
+    }
+
+    #[test]
+    fn without_teams_nobody_is_on_a_side() {
+        assert_eq!(next_team(0, false), None);
+        assert_eq!(next_team(1, false), None);
     }
 
     #[test]
@@ -106,8 +144,9 @@ mod tests {
         let blue = at(2.0, Some(Team::Blue));
         let anybody = at(3.0, None);
 
-        assert_eq!(preferred(&[red, blue, anybody], Team::Blue), vec![blue]);
-        assert_eq!(preferred(&[red, anybody], Team::Blue), vec![anybody], "an unclaimed spawn before the enemy's");
-        assert_eq!(preferred(&[red], Team::Blue), vec![red], "a map with no spawn for a team still starts");
+        assert_eq!(preferred(&[red, blue, anybody], Some(Team::Blue)), vec![blue]);
+        assert_eq!(preferred(&[red, anybody], Some(Team::Blue)), vec![anybody], "an unclaimed spawn before the enemy's");
+        assert_eq!(preferred(&[red], Some(Team::Blue)), vec![red], "a map with no spawn for a team still starts");
+        assert_eq!(preferred(&[red, blue, anybody], None), vec![red, blue, anybody], "a side kept somebody with no team out");
     }
 }

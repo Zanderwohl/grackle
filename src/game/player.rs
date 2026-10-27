@@ -6,16 +6,18 @@ use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
 use lightyear::prelude::input::native::ActionState;
 
-use crate::common::damage::{Damageable, PlayerId};
+use crate::common::damage::Damageable;
 use crate::common::hitbox::Hitboxes;
 use crate::common::movement_rules::MovementRules;
 use crate::common::taunt::TauntTurning;
+use crate::common::game_rules::ModeRules;
 use crate::common::team::Team;
+use crate::common::player_colour::PlayerColour;
+use crate::game::respawn::Identity;
 use crate::common::class::{
     body_centre_from_feet, Stance, CLASS_HALF_EXTENTS,
 };
 use crate::game::collision::{CollisionWorld, Touched};
-use crate::common::class::Class;
 use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalogue};
 use crate::game::condition::Condition;
 use crate::game::weapon::Trigger;
@@ -319,37 +321,40 @@ pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
 pub fn spawn_player(
     commands: &mut Commands,
     spawn: Spawn,
-    id: PlayerId,
-    team: Team,
+    who: &Identity,
+    colour: PlayerColour,
+    rules: &ModeRules,
     catalogue: &WeaponCatalogue,
 ) -> Entity {
     let position = body_centre_from_feet(spawn.feet);
 
-    // Everybody is a Mercenary until classes can be picked. This decides what
-    // the body carries; a corpse's build is still read off the rig.
-    let class = Class::Mercenary;
-    let (equipped, ammo) = catalogue.starting_equipment(class);
+    // This decides what the body carries; a corpse's build is still read off
+    // the rig.
+    let class = rules.class_to_play();
+    let (equipped, ammo) = catalogue.starting_equipment(class, rules.loadout.as_deref());
 
-    commands
-        .spawn((
-            Player { yaw: spawn.yaw, ..default() },
-            class,
-            equipped,
-            ammo,
-            // Whoever stands a body up steps it.
-            Simulated,
-            // Seeded, since the step copies aim off the input and a zero would
-            // snap the body north on its first step.
-            ActionState(PlayerInput { yaw: spawn.yaw, ..default() }),
-            id,
-            team,
-            Stance::default(),
-            PhysicsBody::at(position),
-            Transform::from_translation(position).with_rotation(Quat::from_rotation_y(spawn.yaw)),
-            Visibility::default(),
-            Name::new("Player"),
-        ))
-        .id()
+    let mut body = commands.spawn((
+        Player { yaw: spawn.yaw, ..default() },
+        class,
+        equipped,
+        ammo,
+        // Whoever stands a body up steps it.
+        Simulated,
+        // Seeded, since the step copies aim off the input and a zero would
+        // snap the body north on its first step.
+        ActionState(PlayerInput { yaw: spawn.yaw, ..default() }),
+        who.id,
+        colour,
+        Stance::default(),
+        PhysicsBody::at(position),
+        Transform::from_translation(position).with_rotation(Quat::from_rotation_y(spawn.yaw)),
+        Visibility::default(),
+        Name::new("Player"),
+    ));
+    if let Some(team) = who.team {
+        body.insert(team);
+    }
+    body.id()
 }
 
 /// Hang a camera off whichever body this machine is looking out of.

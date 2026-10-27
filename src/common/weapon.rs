@@ -382,7 +382,10 @@ impl WeaponCatalogue {
 
     /// Returned together so a body cannot hold a weapon with no ammo entry.
     /// Anything missing gives empty hands rather than a panic.
-    pub fn starting_equipment(&self, class: Class) -> (Equipped, Ammo) {
+    ///
+    /// `only` is a mode's loadout: each slot gets the first of those weapons
+    /// the class permits there, else nothing. `None` is the class's defaults.
+    pub fn starting_equipment(&self, class: Class, only: Option<&[WeaponId]>) -> (Equipped, Ammo) {
         let mut equipped = Equipped::default();
         let mut ammo = Ammo::default();
 
@@ -392,7 +395,11 @@ impl WeaponCatalogue {
 
         for slot in Slot::ALL {
             let Some(choices) = loadout.at(slot) else { continue };
-            let Some(weapon) = self.get(choices.default) else { continue };
+            let chosen = match only {
+                None => Some(choices.default),
+                Some(only) => only.iter().copied().find(|id| choices.permitted.contains(id)),
+            };
+            let Some(weapon) = chosen.and_then(|id| self.get(id)) else { continue };
             equipped.slots[slot.index()] = Some(weapon.id);
             ammo.slots[slot.index()] = Ammo::full(&weapon.magazine);
         }

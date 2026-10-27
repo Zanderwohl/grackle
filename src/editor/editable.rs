@@ -12,7 +12,7 @@ use crate::common::PointResolutionError;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::common::movement_rules::MovementRules;
 use crate::common::palette::{publish_palette, Palette};
-use crate::editor::map_metadata::{publish_movement_rules, MapMetadata};
+use crate::editor::map_metadata::{publish_game_rules, publish_movement_rules, MapMetadata};
 use crate::editor::mirror::{assign_sides, Mirroring};
 use crate::editor::save;
 use crate::get;
@@ -29,10 +29,12 @@ impl Plugin for EditorStepsPlugin {
             .init_resource::<FeatureTimeline>()
             .init_resource::<MapMetadata>()
             .init_resource::<MovementRules>()
+            .init_resource::<crate::common::game_rules::Modes>()
+            .init_resource::<crate::common::game_rules::GameRules>()
             .add_message::<EditEvent>()
             .add_systems(Startup, load_startup_blueprint)
             .init_resource::<Palette>()
-            .add_systems(Update, (publish_movement_rules, publish_palette))
+            .add_systems(Update, (publish_movement_rules, publish_game_rules, publish_palette))
             // A round is played on the whole map. On the transition rather than `OnEnter(Play)`, so the
             // features past the bar have entities before the bake and collision rebuild run there.
             .add_systems(

@@ -17,6 +17,7 @@ use crate::common::flame::Burning;
 use crate::common::skeleton::mesh::body_meshes;
 use crate::common::skeleton::rig::Proportions;
 use crate::common::skeleton::{Pose, Skeleton};
+use crate::common::player_colour::PlayerColour;
 use crate::common::team::Team;
 use crate::game::player::{LocalPlayer, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
@@ -38,8 +39,9 @@ pub struct BoneMesh(pub usize);
 #[derive(Component)]
 pub struct FirstPersonHidden;
 
-/// A body's colour when it has no team. [`Team`] outranks it: which side a
-/// body is on is what must read across a room.
+/// A body's colour when it has no team and no [`PlayerColour`], which both
+/// outrank it: who a body is, and above all which side, is what must read
+/// across a room.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct BodyTint(pub Color);
 
@@ -68,12 +70,14 @@ impl BodyLook {
 /// [`BodyTint`], which would have to be restored when the fire went out.
 pub fn body_look(
     team: Option<&Team>,
+    player: Option<&PlayerColour>,
     tint: Option<&BodyTint>,
     burning: Option<&Burning>,
 ) -> BodyLook {
     BodyLook {
         colour: team
             .map(|team| team.colour())
+            .or_else(|| player.map(|player| player.colour()))
             .or_else(|| tint.map(|tint| tint.0))
             .unwrap_or(DEFAULT_BODY_COLOUR),
         burning: burning.is_some(),
@@ -175,21 +179,22 @@ fn build_body_meshes(
             Entity,
             &Skeleton,
             Option<&Team>,
+            Option<&PlayerColour>,
             Option<&BodyTint>,
             Option<&Burning>,
             Option<&BodyMesh>,
         ),
-        Or<(Changed<Skeleton>, Changed<Team>, Changed<BodyTint>)>,
+        Or<(Changed<Skeleton>, Changed<Team>, Changed<PlayerColour>, Changed<BodyTint>)>,
     >,
 ) {
-    for (body, skeleton, team, tint, burning, existing) in &bodies {
+    for (body, skeleton, team, player, tint, burning, existing) in &bodies {
         if let Some(existing) = existing {
             for part in &existing.parts {
                 commands.entity(*part).despawn();
             }
         }
 
-        let material = palette.get(body_look(team, tint, burning), &mut materials);
+        let material = palette.get(body_look(team, player, tint, burning), &mut materials);
 
         let handles = cache.handles(skeleton, &mut meshes);
 
@@ -229,15 +234,15 @@ fn recolour_bodies(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut extinguished: RemovedComponents<Burning>,
     lit: Query<Entity, Added<Burning>>,
-    bodies: Query<(&BodyMesh, Option<&Team>, Option<&BodyTint>, Option<&Burning>)>,
+    bodies: Query<(&BodyMesh, Option<&Team>, Option<&PlayerColour>, Option<&BodyTint>, Option<&Burning>)>,
     mut parts: Query<&mut MeshMaterial3d<StandardMaterial>>,
 ) {
     // Both edges, or a body stays scorched after the fire is out.
     for body in lit.iter().chain(extinguished.read()) {
         // Undressed, or killed by the burn that lit it.
-        let Ok((mesh, team, tint, burning)) = bodies.get(body) else { continue };
+        let Ok((mesh, team, player, tint, burning)) = bodies.get(body) else { continue };
 
-        let material = palette.get(body_look(team, tint, burning), &mut materials);
+        let material = palette.get(body_look(team, player, tint, burning), &mut materials);
         for part in &mesh.parts {
             let Ok(mut slot) = parts.get_mut(*part) else { continue };
             slot.0 = material.clone();
@@ -385,8 +390,8 @@ mod tests {
         let burning = Burning::lit(&FlameSpec::FLAMETHROWER, DamageSource::World);
 
         for team in Team::ALL {
-            let plain = body_look(Some(&team), None, None);
-            let alight = body_look(Some(&team), None, Some(&burning));
+            let plain = body_look(Some(&team), None, None, None);
+            let alight = body_look(Some(&team), None, None, Some(&burning));
 
             assert_eq!(plain.colour, team.colour());
             assert_eq!(alight.colour, team.colour(), "the fire repainted a {team:?}");
@@ -396,17 +401,18 @@ mod tests {
         }
     }
 
-    /// Team outranks tint, tint outranks the default.
     #[test]
-    fn a_team_outranks_a_tint_which_outranks_the_default() {
+    fn a_team_outranks_a_players_colour_which_outranks_a_tint_then_the_default() {
         let tint = BodyTint(Color::srgb(0.2, 0.9, 0.3));
+        let player = PlayerColour { hue: 200.0 };
 
-        assert_eq!(body_look(None, None, None).colour, DEFAULT_BODY_COLOUR);
-        assert_eq!(body_look(None, Some(&tint), None).colour, tint.0);
+        assert_eq!(body_look(None, None, None, None).colour, DEFAULT_BODY_COLOUR);
+        assert_eq!(body_look(None, None, Some(&tint), None).colour, tint.0);
+        assert_eq!(body_look(None, Some(&player), Some(&tint), None).colour, player.colour());
         assert_eq!(
-            body_look(Some(&Team::Blue), Some(&tint), None).colour,
+            body_look(Some(&Team::Blue), Some(&player), Some(&tint), None).colour,
             Team::Blue.colour(),
-            "a spawn point's green hid a team"
+            "which side somebody is on was hidden"
         );
     }
 

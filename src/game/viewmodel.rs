@@ -23,6 +23,7 @@ use crate::common::flame::Burning;
 use crate::common::skeleton::ik::Reach;
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{Pose, Skeleton};
+use crate::common::player_colour::PlayerColour;
 use crate::common::team::Team;
 use crate::common::weapon::WeaponId;
 use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
@@ -366,7 +367,7 @@ fn dress_the_viewmodel_arms(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     bodies: Query<
-        (Entity, &Skeleton, Option<&Team>, Option<&BodyTint>, Option<&Burning>),
+        (Entity, &Skeleton, Option<&Team>, Option<&PlayerColour>, Option<&BodyTint>, Option<&Burning>),
         With<LocalPlayer>,
     >,
     mut views: Query<&mut Viewmodel>,
@@ -387,9 +388,9 @@ fn dress_the_viewmodel_arms(
         }
 
         // No body: no arms, rather than somebody else's.
-        let Some((_, skeleton, team, tint, burning)) = body else { continue };
+        let Some((_, skeleton, team, player, tint, burning)) = body else { continue };
 
-        let material = palette.get(body_look(team, tint, burning), &mut materials);
+        let material = palette.get(body_look(team, player, tint, burning), &mut materials);
         let handles = cache.handles(skeleton, &mut meshes).clone();
 
         let mut arms = Vec::new();

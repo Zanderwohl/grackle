@@ -76,6 +76,9 @@ impl Plugin for GamePlugin {
             .add_systems(Startup, crate::common::class_file::load_builds_at_startup)
             .init_resource::<crate::common::taunt::Taunts>()
             .add_systems(Startup, crate::common::taunt::load_taunts_at_startup)
+            .init_resource::<crate::common::game_rules::Modes>()
+            .add_systems(Startup, crate::common::game_rules::load_modes_at_startup)
+            .init_resource::<crate::common::game_rules::GameRules>()
             // A pack that ships no clips leaves bodies on the built-in poses.
             .add_systems(
                 Startup,
@@ -193,8 +196,10 @@ fn enter_play(
     collision.rebuild(&rooms);
 
     // A new match is a new player: dropping the identity makes the next body
-    // allocate a fresh id. Dying inside a match keeps it.
+    // allocate a fresh id. Dying inside a match keeps it. A new match turns
+    // the colour wheel too.
     commands.remove_resource::<OurIdentity>();
+    commands.remove_resource::<crate::game::respawn::HueStart>();
 
 
     for mut camera in &mut editor_cameras {
@@ -221,6 +226,7 @@ fn leave_play(
     }
     // Kept, the next match's first body would inherit it.
     commands.remove_resource::<OurIdentity>();
+    commands.remove_resource::<crate::game::respawn::HueStart>();
 
     for mut camera in &mut editor_cameras {
         camera.is_active = true;
@@ -1167,11 +1173,17 @@ mod tests {
         let mut queue = bevy::ecs::world::CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, app.world());
+            let who = crate::game::respawn::Identity {
+                id: crate::common::damage::PlayerId(99),
+                team: Some(Team::Red),
+                colour: 1,
+            };
             spawn_player(
                 &mut commands,
                 spawn,
-                crate::common::damage::PlayerId(99),
-                Team::Red,
+                &who,
+                who.colour(&crate::game::respawn::HueStart(0.0)),
+                &crate::common::game_rules::ModeRules::default(),
                 &crate::common::weapon::WeaponCatalogue::default(),
             );
         }

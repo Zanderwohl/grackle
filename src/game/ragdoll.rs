@@ -48,6 +48,7 @@ use crate::common::damage::falloff;
 use crate::common::movement_rules::MovementRules;
 use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
+use crate::common::player_colour::PlayerColour;
 use crate::common::team::Team;
 use crate::game::body_mesh::BodyTint;
 use crate::game::collision::{CollisionWorld, Touched};
@@ -577,13 +578,14 @@ pub fn raise_ragdolls(
             Option<&SkeletonRoot>,
             Option<&BodyTint>,
             Option<&Team>,
+            Option<&PlayerColour>,
             Option<&PhysicsBody>,
             Option<&Name>,
         ),
         (Added<Dying>, Without<Ragdolled>),
     >,
 ) {
-    for (entity, skeleton, pose, global, offset, tint, team, physics, name) in &bodies {
+    for (entity, skeleton, pose, global, offset, tint, team, player, physics, name) in &bodies {
         // Per-tick displacement, which is the unit the solver keeps.
         let carried = physics.map_or(Vec3::ZERO, |body| body.current - body.previous);
         let ragdoll = Ragdoll::from_body(skeleton, pose, &skeleton_root(global, offset), carried);
@@ -610,6 +612,9 @@ pub fn raise_ragdolls(
             // Corpses keep their team colour, so a pile of them shows which way
             // a fight went.
             corpse.insert(*team);
+        }
+        if let Some(player) = player {
+            corpse.insert(*player);
         }
 
         // Read off the rig the body actually had.
