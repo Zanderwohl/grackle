@@ -36,7 +36,7 @@ pub enum NetStatus {
 }
 
 impl NetStatus {
-    /// Localised display text; not for parsing or comparing.
+    /// Localized display text; not for parsing or comparing.
     pub fn describe(&self) -> String {
         match self {
             NetStatus::Offline => crate::get!("net.status.offline"),

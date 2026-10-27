@@ -156,7 +156,7 @@ Two different things, and only one belongs to the layer stack:
 
 - **Masking**: a higher layer takes a region. The lower one keeps its clock
   and shows again when the region is handed back. Firing over running.
-- **Interrupting**: the lower one's action is cancelled and its clip ends.
+- **Interrupting**: the lower one's action is canceled and its clip ends.
   **A reload is interrupted by firing** with a round in the clip, TF2-style.
   That is a rule in `pull_trigger`, on the authority — the one place a shot
   is paid for — and the reload clip ends because the reload did.
@@ -176,7 +176,7 @@ absence means the layer's. The weapon layer fades in at zero, since a deploy
 starts below the frame and fading it in would show the hold first.
 
 A layer fading in masks nothing beneath it, so it blends over what is there.
-The grip is shared the same way: solved, then pulled back towards the clip by
+The grip is shared the same way: solved, then pulled back toward the clip by
 the weight of whatever is fading over the arm.
 
 ### Some layers reach the viewmodel, some do not
@@ -208,7 +208,7 @@ putting it back, and forgetting leaves somebody in third person after a
 taunt.
 
 **The camera swings rather than cuts.** `CameraPull` runs 0 (the eye) to 1
-(where third person puts it) and is eased towards the wanted view over
+(where third person puts it) and is eased toward the wanted view over
 `CAMERA_PULL_SECONDS`; `place_camera` works out both positions every frame
 and blends them, so the view not in use is always current and a swing starts
 from where it really is. `ViewMode` — what everything that hides your own
@@ -233,7 +233,7 @@ would kick twice.
 ### What crosses the wire
 
 - **State, replicated:** `Condition`, what is carried, the reload in
-  progress. The taunt table is sent like the weapon catalogue, since its
+  progress. The taunt table is sent like the weapon catalog, since its
   movement is part of the predicted step. `Condition::taunt_started` is the
   tick the taunt began on, so a body seen mid-taunt plays it from where it is.
   Only viewers read it: the authority ends a taunt on its own `TauntClock`, so
@@ -323,7 +323,7 @@ either falls back to the shared `animations/reload.gpa`.
       past it**: an arm effector in `Space::Grip` is an offset from that
       hand's own grip, in the weapon's axes, which `grip_offsets` reads off
       the stack and `grip_hands` solves onto — so zero is holding, the
-      per-class support grip is honoured, and fading the clip in or out slides
+      per-class support grip is honored, and fading the clip in or out slides
       the hand rather than popping it. A clip that keys no hand leaves the
       hand where the clip beneath put it, so a kick over a reload does not
       snap it back. The body, the viewmodel and the editor's figure all read
@@ -339,7 +339,7 @@ masks nothing, owns nothing, stands nothing, and its tracks compose onto
 whatever won, so a body shot mid-taunt still jolts. It is started by every
 `DamageDealt` — local on the authority, relayed elsewhere — and restarted from
 the top by the next hit. Which of four clips (`flinch_back`, `_forward`,
-`_left`, `_right`) is picked by the way the hit travelled in the body's own
+`_left`, `_right`) is picked by the way the hit traveled in the body's own
 frame: from the attacker's body where there is one, otherwise away from where
 it landed. Chest and neck only, so a flinch never lifts a planted foot.
 

@@ -1,5 +1,5 @@
-//! A colour per player, for telling bodies apart where teams do not. See
-//! "Body colour" in [documentation/arena.md](../../documentation/arena.md).
+//! A color per player, for telling bodies apart where teams do not. See
+//! "Body color" in [documentation/arena.md](../../documentation/arena.md).
 //!
 //! Decided once on the authority and replicated, never derived: two machines
 //! agreeing on join order is a coincidence.
@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Fixed so only the hue says who somebody is; about as light and as muted as
-/// [`Team::colour`](crate::common::team::Team::colour), so every player reads
+/// [`Team::color`](crate::common::team::Team::color), so every player reads
 /// as well under map lighting as a team does.
 const LIGHTNESS: f32 = 0.62;
 /// About the most every hue holds inside sRGB at this lightness; cyan runs
@@ -20,17 +20,17 @@ const FIRST_ROUND: usize = 12;
 
 /// A hue in degrees on the OKLCH wheel.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct PlayerColour {
+pub struct PlayerColor {
     pub hue: f32,
 }
 
-impl PlayerColour {
+impl PlayerColor {
     /// `start` in degrees, chosen per match; `index` as from [`lowest_free`].
     pub fn nth(start: f32, index: usize) -> Self {
         Self { hue: (start + hue_offset(index)).rem_euclid(360.0) }
     }
 
-    pub fn colour(self) -> Color {
+    pub fn color(self) -> Color {
         Color::oklch(LIGHTNESS, CHROMA, self.hue)
     }
 }
@@ -93,10 +93,10 @@ mod tests {
     #[test]
     fn every_hue_is_in_the_srgb_gamut() {
         for index in 0..48 {
-            let colour = PlayerColour::nth(0.0, index);
-            let rgb = Srgba::from(colour.colour());
+            let color = PlayerColor::nth(0.0, index);
+            let rgb = Srgba::from(color.color());
             for channel in [rgb.red, rgb.green, rgb.blue] {
-                assert!((-1.0e-3..=1.0 + 1.0e-3).contains(&channel), "{colour:?} is {rgb:?}");
+                assert!((-1.0e-3..=1.0 + 1.0e-3).contains(&channel), "{color:?} is {rgb:?}");
             }
         }
     }

@@ -43,7 +43,7 @@ use crate::game::player::{
 
 /// Where a skeleton's feet sit relative to the entity carrying it.
 ///
-/// A rig is placed by its feet, but a body's origin is the centre of its
+/// A rig is placed by its feet, but a body's origin is the center of its
 /// collision box. A component rather than a child entity holds the difference.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct SkeletonRoot(pub Vec3);
@@ -348,7 +348,7 @@ fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
     }
 }
 
-/// Bend the neck and head towards `pitch`, onto whatever the pose has them
+/// Bend the neck and head toward `pitch`, onto whatever the pose has them
 /// doing. Shared with the hitboxes, which must put the head where it is drawn.
 pub(crate) fn look(pose: &mut Pose, pitch: f32) {
     let pitch = head_pitch(pitch);
@@ -365,7 +365,7 @@ pub(crate) fn look(pose: &mut Pose, pitch: f32) {
 /// so a body the authority stood up keeps its own rig.
 ///
 /// `Without<Player>` keeps this disjoint from [`dress_new_players`]: this one
-/// inserts no `SkeletonRoot`, so a player dressed here floats half a metre up.
+/// inserts no `SkeletonRoot`, so a player dressed here floats half a meter up.
 fn dress_bodies_from_elsewhere(
     mut commands: Commands,
     builds: Res<ClassBuilds>,

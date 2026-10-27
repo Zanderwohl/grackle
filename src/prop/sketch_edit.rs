@@ -26,10 +26,10 @@ use crate::prop::sketch::{PlacedSketch, Sketch, SketchId};
 use crate::prop::view::PropBuild;
 use crate::tool::tool_helpers::dashed_line;
 
-/// Metres between grid lines, and what an unsnapped point rounds to.
+/// Meters between grid lines, and what an unsnapped point rounds to.
 pub const GRID: f32 = 0.005;
 
-/// Metres the grid is drawn behind the plane, away from the viewer.
+/// Meters the grid is drawn behind the plane, away from the viewer.
 const GRID_BEHIND: f32 = 0.0001;
 
 /// Pixels within which the cursor lands on a point rather than the grid.
@@ -39,7 +39,7 @@ const SNAP_PX: f32 = 10.0;
 const DRAG_PX: f32 = 3.0;
 
 /// Grid lines each way past which the grid is not drawn: a sketch the size of
-/// a cannon at five millimetres would be thousands of lines.
+/// a cannon at five millimeters would be thousands of lines.
 const MAX_GRID_LINES: i32 = 200;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -260,19 +260,19 @@ fn aim_the_view(
     match session.view {
         ViewChange::None => {}
         ViewChange::Restore => {
-            if let Some((entity, transform, projection, centre)) = session.saved.take()
+            if let Some((entity, transform, projection, center)) = session.saved.take()
                 && let Ok((_, mut current, mut current_projection, _)) = cameras.get_mut(entity)
             {
                 *current = transform;
                 *current_projection = projection;
-                pivot.0 = centre;
+                pivot.0 = center;
             }
             session.view = ViewChange::None;
         }
         ViewChange::Aim => {
             let Some(placed) = live(&session, &editor, &build) else { return };
-            let (centre, radius) = extent(&placed.sketch);
-            let centre = placed.plane.lift(centre);
+            let (center, radius) = extent(&placed.sketch);
+            let center = placed.plane.lift(center);
             for (entity, mut transform, projection, multicam) in &mut cameras {
                 if multicam.axis != CameraAxis::None {
                     continue;
@@ -280,10 +280,10 @@ fn aim_the_view(
                 if session.saved.is_none() {
                     session.saved = Some((entity, *transform, projection.clone(), pivot.0));
                 }
-                *transform = Transform::from_translation(centre + *placed.plane.normal * radius * 3.2)
-                    .looking_at(centre, *placed.plane.y());
+                *transform = Transform::from_translation(center + *placed.plane.normal * radius * 3.2)
+                    .looking_at(center, *placed.plane.y());
             }
-            pivot.0 = centre;
+            pivot.0 = center;
             session.view = ViewChange::None;
         }
     }
@@ -562,7 +562,7 @@ fn crossed_pieces(sketch: &Sketch, from: Vec2, to: Vec2) -> Vec<(Vec2, Vec2)> {
 const POINT: Color = Color::srgb(0.92, 0.92, 0.98);
 const PICKED: Color = Color::srgb(1.0, 0.8, 0.2);
 const HOVERED: Color = Color::srgb(0.5, 0.9, 1.0);
-const GRID_COLOUR: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
+const GRID_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
 const REGION: Color = Color::srgba(0.55, 0.8, 0.95, 0.35);
 const DOOMED: Color = Color::srgb(1.0, 0.35, 0.3);
 
@@ -584,7 +584,7 @@ fn draw_the_session(
     mut gizmos: Gizmos,
 ) {
     let Some(placed) = live(&session, &editor, &build) else { return };
-    let (centre, reach) = extent(&placed.sketch);
+    let (center, reach) = extent(&placed.sketch);
     let marker = reach * 0.02;
 
     // Gizmos in one plane depth-fight, so the grid sits just behind the plane
@@ -594,25 +594,25 @@ fn draw_the_session(
         .find(|(entity, ..)| Some(*entity) == mouse.in_camera)
         .or_else(|| cameras.iter().find(|(.., multicam)| multicam.axis == CameraAxis::None))
         .map(|(_, at, _)| at.translation());
-    let facing = viewer.map_or(1.0, |eye| (eye - placed.world(centre)).dot(*placed.plane.normal).signum());
+    let facing = viewer.map_or(1.0, |eye| (eye - placed.world(center)).dot(*placed.plane.normal).signum());
     let behind = -*placed.plane.normal * facing * GRID_BEHIND;
 
     // Snapped to the grid's own lines, so the grid does not slide as the
     // sketch grows.
     let half = ((reach * 1.6 / GRID).ceil() as i32).min(MAX_GRID_LINES);
-    let middle = (centre / GRID).round() * GRID;
+    let middle = (center / GRID).round() * GRID;
     for i in -half..=half {
         let offset = i as f32 * GRID;
         let span = half as f32 * GRID;
         gizmos.line(
             placed.world(middle + Vec2::new(offset, -span)) + behind,
             placed.world(middle + Vec2::new(offset, span)) + behind,
-            GRID_COLOUR,
+            GRID_COLOR,
         );
         gizmos.line(
             placed.world(middle + Vec2::new(-span, offset)) + behind,
             placed.world(middle + Vec2::new(span, offset)) + behind,
-            GRID_COLOUR,
+            GRID_COLOR,
         );
     }
 
@@ -626,7 +626,7 @@ fn draw_the_session(
         }
     }
 
-    let colour_of = |pick: SketchPick| {
+    let color_of = |pick: SketchPick| {
         if session.picks.contains(&pick) {
             Some(PICKED)
         } else if session.hovered == Some(pick) {
@@ -637,21 +637,21 @@ fn draw_the_session(
     };
     for point in &placed.sketch.points {
         let pick = SketchPick::Point(point.id);
-        let colour = match session.chain == Some(point.id) {
+        let color = match session.chain == Some(point.id) {
             true => HOVERED,
-            false => colour_of(pick).unwrap_or(POINT),
+            false => color_of(pick).unwrap_or(POINT),
         };
         let at = placed.world(Vec2::from_array(point.at));
-        gizmos.sphere(Isometry3d::from_translation(at), marker, colour);
+        gizmos.sphere(Isometry3d::from_translation(at), marker, color);
     }
     for (id, a, b, construction) in placed.sketch.lines() {
         let (Some(a), Some(b)) = (placed.sketch.point(a), placed.sketch.point(b)) else { continue };
-        let colour = colour_of(SketchPick::Line(id)).unwrap_or(POINT);
+        let color = color_of(SketchPick::Line(id)).unwrap_or(POINT);
         let (a, b) = (placed.world(a), placed.world(b));
         match construction {
-            true => dashed_line(&mut gizmos, a, b, colour, marker * 2.0, marker),
+            true => dashed_line(&mut gizmos, a, b, color, marker * 2.0, marker),
             false => {
-                gizmos.line(a, b, colour);
+                gizmos.line(a, b, color);
             }
         }
     }

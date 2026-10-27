@@ -25,13 +25,13 @@ use crate::game::ragdoll::{Push, RagdollShove};
 use crate::common::weapon::{HitscanSpec, WeaponAction};
 use crate::game::weapon::WeaponActionFired;
 
-/// How far the debug laser reaches, in metres.
+/// How far the debug laser reaches, in meters.
 pub const LASER_RANGE: f32 = 200.0;
 
 /// Seconds. Short enough that a stream of tracers does not read as one beam.
 const TRACER_LIFETIME: f32 = 0.12;
 
-/// Radius of the ball drawn at a hit, in metres.
+/// Radius of the ball drawn at a hit, in meters.
 pub const HIT_BALL_RADIUS: f32 = 0.1;
 
 pub struct HitscanPlugin;
@@ -74,10 +74,10 @@ pub(crate) fn aim(player: &Player) -> Dir3 {
     Dir3::new(looking * Vec3::NEG_Z).unwrap_or(Dir3::NEG_Z)
 }
 
-/// Where the eye is, given a body's centre. Takes a centre because the laser
+/// Where the eye is, given a body's center. Takes a center because the laser
 /// passes the interpolated transform and the shot the fixed step's position.
-pub(crate) fn eye(centre: Vec3, stance: Stance) -> Vec3 {
-    centre + Vec3::Y * stance.eye_offset()
+pub(crate) fn eye(center: Vec3, stance: Stance) -> Vec3 {
+    center + Vec3::Y * stance.eye_offset()
 }
 
 /// The nearest body `ray` reaches other than `shooter`, whose own boxes
@@ -228,9 +228,9 @@ fn draw_debug_laser(
     shooters: Query<(Entity, &Transform, &Player, &Stance)>,
     targets: Query<(Entity, &Hitboxes)>,
 ) {
-    let beam_colour = Color::srgb(0.35, 0.8, 1.0);
-    let body_colour = Color::srgb(0.2, 0.95, 0.35);
-    let head_colour = Color::srgb(1.0, 0.15, 0.15);
+    let beam_color = Color::srgb(0.35, 0.8, 1.0);
+    let body_color = Color::srgb(0.2, 0.95, 0.35);
+    let head_color = Color::srgb(1.0, 0.15, 0.15);
 
     for (shooter, transform, player, stance) in &shooters {
         let ray = Ray3d::new(eye(transform.translation, *stance), aim(player));
@@ -243,14 +243,14 @@ fn draw_debug_laser(
             Some(hit) => hit.point,
             None => ray.origin + *ray.direction * range,
         };
-        gizmos.line(ray.origin, end, beam_colour);
+        gizmos.line(ray.origin, end, beam_color);
 
         if let Some(hit) = hit {
-            let colour = match hit.zone {
-                HitZone::Body => body_colour,
-                HitZone::Head => head_colour,
+            let color = match hit.zone {
+                HitZone::Body => body_color,
+                HitZone::Head => head_color,
             };
-            gizmos.sphere(Isometry3d::from_translation(hit.point), HIT_BALL_RADIUS, colour);
+            gizmos.sphere(Isometry3d::from_translation(hit.point), HIT_BALL_RADIUS, color);
         }
     }
 }
@@ -260,7 +260,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
-    use crate::common::class::{body_centre_from_feet, TALLEST_CLASS_EYE_HEIGHT};
+    use crate::common::class::{body_center_from_feet, TALLEST_CLASS_EYE_HEIGHT};
     use crate::common::hitbox::Box3;
     use crate::common::projectile::ProjectileSpec;
 
@@ -274,13 +274,13 @@ mod tests {
         world.init_resource::<Messages<RagdollShove>>();
         world.init_resource::<Messages<Effect>>();
 
-        let centre = body_centre_from_feet(Vec3::ZERO);
+        let center = body_center_from_feet(Vec3::ZERO);
         let shooter = world
             .spawn((
                 Player::default(),
                 PlayerId(7),
                 Stance::Standing,
-                PhysicsBody { previous: centre, current: centre },
+                PhysicsBody { previous: center, current: center },
                 Hitboxes::default(),
             ))
             .id();
@@ -289,16 +289,16 @@ mod tests {
         (world, shooter, target)
     }
 
-    /// Boxes `away` metres down -Z at eye height, head on top.
+    /// Boxes `away` meters down -Z at eye height, head on top.
     fn target_boxes(away: f32) -> Hitboxes {
         let eye = TALLEST_CLASS_EYE_HEIGHT;
         Hitboxes {
             body: Box3 {
-                centre: Vec3::new(0.0, eye, -away),
+                center: Vec3::new(0.0, eye, -away),
                 half_extents: Vec3::new(0.4, 0.9, 0.4),
             },
             head: Some(Box3 {
-                centre: Vec3::new(0.0, eye + 0.7, -away),
+                center: Vec3::new(0.0, eye + 0.7, -away),
                 half_extents: Vec3::splat(0.15),
             }),
         }
@@ -403,7 +403,7 @@ mod tests {
     fn a_head_shot_is_worth_the_multiplier() {
         let mut boxes = target_boxes(5.0);
         // Aimed level, so only a head box at eye height is in the way.
-        boxes.head.as_mut().unwrap().centre.y = TALLEST_CLASS_EYE_HEIGHT;
+        boxes.head.as_mut().unwrap().center.y = TALLEST_CLASS_EYE_HEIGHT;
         let (mut world, shooter, _) = a_shooter_and_a_target(boxes);
 
         fire(&mut world, shooter);
@@ -453,10 +453,10 @@ mod tests {
     #[test]
     fn a_shot_never_lands_on_the_body_that_fired_it() {
         let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(5.0));
-        let centre = body_centre_from_feet(Vec3::ZERO);
+        let center = body_center_from_feet(Vec3::ZERO);
         world.entity_mut(shooter).insert(Hitboxes {
-            body: Box3 { centre, half_extents: Vec3::new(0.4, 0.9, 0.4) },
-            head: Some(Box3 { centre: centre + Vec3::Y * 0.7, half_extents: Vec3::splat(0.15) }),
+            body: Box3 { center, half_extents: Vec3::new(0.4, 0.9, 0.4) },
+            head: Some(Box3 { center: center + Vec3::Y * 0.7, half_extents: Vec3::splat(0.15) }),
         });
 
         fire(&mut world, shooter);
@@ -488,10 +488,10 @@ mod tests {
 
     #[test]
     fn the_beam_starts_at_eye_height() {
-        use crate::common::class::body_centre_from_feet;
+        use crate::common::class::body_center_from_feet;
 
         let feet = Vec3::new(2.0, 3.0, -1.0);
-        let origin = eye(body_centre_from_feet(feet), Stance::Standing);
+        let origin = eye(body_center_from_feet(feet), Stance::Standing);
 
         assert!((origin.y - feet.y - TALLEST_CLASS_EYE_HEIGHT).abs() < 1e-5, "at {origin:?}");
         assert!((origin.xz() - feet.xz()).length() < 1e-5);

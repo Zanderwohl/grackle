@@ -33,7 +33,7 @@ impl NetRole {
         !matches!(self, NetRole::Solo)
     }
 
-    /// Localised display text; not for parsing or comparing.
+    /// Localized display text; not for parsing or comparing.
     pub fn describe(&self) -> String {
         match self {
             NetRole::Solo => get!("net.role.solo"),

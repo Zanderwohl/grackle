@@ -314,7 +314,7 @@ Blueprint(
             ),
             object: {
                 "mirror": Mirror(
-                    centre: PointRef(
+                    center: PointRef(
                         reference: Some(FeatureId(
                             _id: 2,
                         )),

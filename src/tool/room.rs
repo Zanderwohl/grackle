@@ -668,9 +668,9 @@ impl RoomSurfaces {
     }
 }
 
-/// Metres one repeat of a material covers. A stand-in: the scale belongs to
+/// Meters one repeat of a material covers. A stand-in: the scale belongs to
 /// the material, which has nowhere to say it yet.
-pub const MATERIAL_TILE_METRES: f32 = 2.0;
+pub const MATERIAL_TILE_METERS: f32 = 2.0;
 
 
 #[cfg(test)]
@@ -718,7 +718,7 @@ mod drag_handle_tests {
 /// ([`crate::common::world_surface`]).
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct Room {
-    /// Metres along `x` and `z`, counter-clockwise by `perp_dot` (which is
+    /// Meters along `x` and `z`, counter-clockwise by `perp_dot` (which is
     /// clockwise seen from above). Need not be convex. Private so the
     /// winding cannot be got wrong from outside.
     footprint: Vec<Vec2>,
@@ -819,7 +819,7 @@ impl Room {
         triangles
             .into_iter()
             .map(|[a, b, c]| (p[a] + p[b] + p[c]) / 3.0)
-            .map(|centre| Vec3::new(centre.x, self.floor, centre.y))
+            .map(|center| Vec3::new(center.x, self.floor, center.y))
             .find(|point| self.contains(*point))
             .unwrap_or(middle)
     }
@@ -934,7 +934,7 @@ mod tests {
     use super::*;
     use crate::common::csg::signed_volume_x6;
 
-    /// An L, 3 × 3 with the 2 × 2 corner out of it, two metres high.
+    /// An L, 3 × 3 with the 2 × 2 corner out of it, two meters high.
     fn an_l() -> Room {
         Room::prism(
             vec![Vec2::new(0.0, 0.0), Vec2::new(3.0, 0.0), Vec2::new(3.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(1.0, 3.0), Vec2::new(0.0, 3.0)],
@@ -974,7 +974,7 @@ mod tests {
         assert!(!room.contains(Vec3::new(0.5, 2.5, 0.5)), "above the ceiling counted as room");
     }
 
-    /// Four by four with a one-metre pillar in the middle, three high.
+    /// Four by four with a one-meter pillar in the middle, three high.
     fn a_room_with_a_pillar() -> Room {
         let square = |lo: f32, hi: f32| vec![Vec2::new(lo, lo), Vec2::new(hi, lo), Vec2::new(hi, hi), Vec2::new(lo, hi)];
         Room::with_holes(square(0.0, 4.0), vec![square(1.5, 2.5)], 0.0, 3.0)

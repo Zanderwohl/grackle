@@ -46,7 +46,7 @@ impl Path {
     }
 
     /// A polygon whose every corner is replaced by a [`Corner`]. A radius
-    /// longer than half either neighbouring edge is cut to it, so two corners
+    /// longer than half either neighboring edge is cut to it, so two corners
     /// never overlap on a short edge.
     pub fn rounded_polygon(points: &[Vec2], corner: Corner) -> Self {
         Self::rounded_polygon_each(points, &vec![corner; points.len()])
@@ -126,7 +126,7 @@ impl Path {
 
 /// A rounded corner: how far back along each edge it starts, and how square
 /// it is. Exponent 2 is an elliptical arc; 4 is the classic squircle; higher
-/// creeps towards the sharp corner.
+/// creeps toward the sharp corner.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Corner {
     pub radius: f32,
@@ -145,21 +145,21 @@ impl Corner {
     }
 }
 
-/// A quarter superellipse from `into` to `out`, bulging towards `corner`, in
+/// A quarter superellipse from `into` to `out`, bulging toward `corner`, in
 /// the affine frame the three points make, so it works at any angle and not
 /// only on right angles.
 fn squircle_corner(into: Vec2, corner: Vec2, out: Vec2, exponent: f32) -> Vec<Segment> {
-    // The centre is the parallelogram's fourth point: `into` and `out` are
+    // The center is the parallelogram's fourth point: `into` and `out` are
     // its two axes' ends.
-    let centre = into + out - corner;
-    let along_into = into - centre;
-    let along_out = out - centre;
+    let center = into + out - corner;
+    let along_into = into - center;
+    let along_out = out - center;
     let power = 2.0 / exponent.max(1.0);
     (1..=STEPS_PER_CURVE)
         .map(|step| {
             let theta = step as f32 / STEPS_PER_CURVE as f32 * std::f32::consts::FRAC_PI_2;
             let (s, c) = theta.sin_cos();
-            Segment::Line(centre + along_into * c.max(0.0).powf(power) + along_out * s.max(0.0).powf(power))
+            Segment::Line(center + along_into * c.max(0.0).powf(power) + along_out * s.max(0.0).powf(power))
         })
         .collect()
 }
@@ -171,11 +171,11 @@ pub fn parametric(samples: usize, curve: impl Fn(f32) -> Vec2) -> Vec<Vec2> {
 }
 
 /// A whole superellipse: `|x/a|^n + |y/b|^n = 1`.
-pub fn superellipse(centre: Vec2, half_size: Vec2, exponent: f32, samples: usize) -> Vec<Vec2> {
+pub fn superellipse(center: Vec2, half_size: Vec2, exponent: f32, samples: usize) -> Vec<Vec2> {
     let power = 2.0 / exponent.max(1.0);
     parametric(samples, |t| {
         let (s, c) = (t * std::f32::consts::TAU).sin_cos();
-        centre + half_size * Vec2::new(c.signum() * c.abs().powf(power), s.signum() * s.abs().powf(power))
+        center + half_size * Vec2::new(c.signum() * c.abs().powf(power), s.signum() * s.abs().powf(power))
     })
 }
 

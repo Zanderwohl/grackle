@@ -2,7 +2,7 @@
 //! so it exists in a build with no editor.
 //!
 //! Everything but the crosshair sits in the **safe zone**: a 4:3 box the
-//! height of the window, centred. On a 4:3 window it is the whole screen; on
+//! height of the window, centered. On a 4:3 window it is the whole screen; on
 //! an ultrawide the readouts stay near the crosshair rather than out at the
 //! edges where reading them means looking away from the fight. Narrower than
 //! 4:3 it is clamped to the window. `F9` outlines it.
@@ -12,8 +12,8 @@
 //! painted over by the arms; the viewmodel camera cannot carry it either,
 //! being switched off in third person.
 //!
-//! Ids are resolved through the catalogue every frame rather than cached:
-//! `Equipped` and the catalogue arrive on different channels, and an id that
+//! Ids are resolved through the catalog every frame rather than cached:
+//! `Equipped` and the catalog arrive on different channels, and an id that
 //! does not resolve yet draws blank.
 
 use bevy::camera::visibility::RenderLayers;
@@ -22,12 +22,12 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::damage::{Armour, Damageable};
+use crate::common::damage::{Armor, Damageable};
 use crate::common::fonts::DisplayFont;
 use crate::common::swatch::{Ink, Swatch};
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, Path, ShapeMaterial, ShapeStyle};
-use crate::common::weapon::{Ammo, Equipped, WeaponCatalogue};
+use crate::common::weapon::{Ammo, Equipped, WeaponCatalog};
 use crate::game::player::LocalPlayer;
 use crate::game::viewmodel::VIEWMODEL_CAMERA_ORDER;
 use crate::get;
@@ -36,7 +36,7 @@ use crate::get;
 const CROSSHAIR_GAP: f32 = 4.0;
 /// Logical pixels.
 const CROSSHAIR_ARM: f32 = 7.0;
-/// Logical pixels. Even, so an arm straddles the centre line cleanly.
+/// Logical pixels. Even, so an arm straddles the center line cleanly.
 const CROSSHAIR_THICKNESS: f32 = 2.0;
 
 pub const HUD_CAMERA_ORDER: isize = VIEWMODEL_CAMERA_ORDER + 1;
@@ -68,7 +68,7 @@ struct HudRoot;
 #[derive(Component)]
 struct SafeZone;
 
-/// A panel a readout sits on. The shape is fixed; its colours follow the
+/// A panel a readout sits on. The shape is fixed; its colors follow the
 /// local body's team.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 enum HudZone {
@@ -93,7 +93,7 @@ impl HudZone {
         }
     }
 
-    /// Leaning trapezoids, the two leaning towards the middle of the screen,
+    /// Leaning trapezoids, the two leaning toward the middle of the screen,
     /// with big squircle corners on one diagonal and tight ones on the other.
     /// The box is inset by the stroke and the drop so neither is cut off.
     fn outline(self) -> Path {
@@ -156,7 +156,7 @@ impl HudZone {
         )
     }
 
-    /// The readout over a panel: as wide, and centred on the panel rather
+    /// The readout over a panel: as wide, and centered on the panel rather
     /// than on its drop shadow.
     fn readout(self) -> Node {
         Node {
@@ -177,7 +177,7 @@ impl HudZone {
 enum HudText {
     Health,
     /// Hidden while there is none.
-    Armour,
+    Armor,
     WeaponName,
     Reloading,
     /// What is in the clip; for a weapon with no clip, what is left at all.
@@ -275,8 +275,8 @@ fn safe_zone(font: &Handle<Font>) -> impl Bundle {
     )
 }
 
-/// Four bars around a gap, dead centre. The arms hang off a zero-size node
-/// centred by flexbox, so each is a pixel offset from the exact middle rather
+/// Four bars around a gap, dead center. The arms hang off a zero-size node
+/// centered by flexbox, so each is a pixel offset from the exact middle rather
 /// than a percentage that lands half a pixel out.
 fn crosshair() -> impl Bundle {
     fn arm(node: Node) -> impl Bundle {
@@ -289,7 +289,7 @@ fn crosshair() -> impl Bundle {
     let gap = Val::Px(CROSSHAIR_GAP);
     let long = Val::Px(CROSSHAIR_ARM);
     let thick = Val::Px(CROSSHAIR_THICKNESS);
-    let centred = Val::Px(-CROSSHAIR_THICKNESS * 0.5);
+    let centered = Val::Px(-CROSSHAIR_THICKNESS * 0.5);
 
     (
         Node {
@@ -304,10 +304,10 @@ fn crosshair() -> impl Bundle {
         children![(
             Node::default(),
             children![
-                arm(Node { right: gap, top: centred, width: long, height: thick, ..default() }),
-                arm(Node { left: gap, top: centred, width: long, height: thick, ..default() }),
-                arm(Node { bottom: gap, left: centred, width: thick, height: long, ..default() }),
-                arm(Node { top: gap, left: centred, width: thick, height: long, ..default() }),
+                arm(Node { right: gap, top: centered, width: long, height: thick, ..default() }),
+                arm(Node { left: gap, top: centered, width: long, height: thick, ..default() }),
+                arm(Node { bottom: gap, left: centered, width: thick, height: long, ..default() }),
+                arm(Node { top: gap, left: centered, width: thick, height: long, ..default() }),
             ],
         )],
     )
@@ -334,7 +334,7 @@ fn health_readout(font: &Handle<Font>) -> impl Bundle {
         Pickable::IGNORE,
         children![
             HudZone::Health.panel(),
-            text(font, HudText::Armour, SMALL, 0.9),
+            text(font, HudText::Armor, SMALL, 0.9),
             text(font, HudText::Health, BIG, 1.0),
         ],
     )
@@ -409,10 +409,10 @@ fn paint_the_zones(
     }
 
     let ink = swatch.text();
-    for mut colour in &mut texts {
-        let wanted = ink.with_alpha(colour.0.alpha());
-        if colour.0 != wanted {
-            colour.0 = wanted;
+    for mut color in &mut texts {
+        let wanted = ink.with_alpha(color.0.alpha());
+        if color.0 != wanted {
+            color.0 = wanted;
         }
     }
 }
@@ -426,7 +426,7 @@ fn toggle_safe_zone_outline(
     }
 }
 
-/// Colour rather than insert-and-remove, which would move tables each toggle.
+/// Color rather than insert-and-remove, which would move tables each toggle.
 /// Every frame rather than on change, so a HUD spawned while it is on starts
 /// outlined.
 fn outline_the_safe_zone(
@@ -445,7 +445,7 @@ fn outline_the_safe_zone(
 #[derive(Debug, Default, PartialEq)]
 struct Readout {
     health: String,
-    armour: String,
+    armor: String,
     name: String,
     reloading: bool,
     loaded: String,
@@ -454,19 +454,19 @@ struct Readout {
 
 impl Readout {
     fn of(
-        catalogue: &WeaponCatalogue,
+        catalog: &WeaponCatalog,
         health: &Damageable,
-        armour: Option<&Armour>,
+        armor: Option<&Armor>,
         equipped: &Equipped,
         ammo: &Ammo,
     ) -> Self {
         let health = health.health().to_string();
-        let armour = match armour.map(Armour::points) {
-            Some(points) if points > 0 => get!("hud.armour", "points", points),
+        let armor = match armor.map(Armor::points) {
+            Some(points) if points > 0 => get!("hud.armor", "points", points),
             _ => String::new(),
         };
-        let Some(weapon) = catalogue.held_by(equipped) else {
-            return Self { health, armour, ..default() };
+        let Some(weapon) = catalog.held_by(equipped) else {
+            return Self { health, armor, ..default() };
         };
 
         let state = ammo.at(equipped.held);
@@ -478,7 +478,7 @@ impl Readout {
 
         Self {
             health,
-            armour,
+            armor,
             name: get!(weapon.name_key),
             reloading: state.reloading > 0.0,
             loaded,
@@ -489,7 +489,7 @@ impl Readout {
     fn text(&self, kind: HudText) -> &str {
         match kind {
             HudText::Health => &self.health,
-            HudText::Armour => &self.armour,
+            HudText::Armor => &self.armor,
             HudText::WeaponName => &self.name,
             HudText::Reloading => "",
             HudText::Loaded => &self.loaded,
@@ -501,12 +501,12 @@ impl Readout {
 /// Compares before writing: a written `Text` or `Node` counts as changed and
 /// would be re-laid-out every frame.
 fn fill_in_the_readouts(
-    catalogue: Res<WeaponCatalogue>,
-    body: Option<Single<(&Damageable, Option<&Armour>, &Equipped, &Ammo), With<LocalPlayer>>>,
+    catalog: Res<WeaponCatalog>,
+    body: Option<Single<(&Damageable, Option<&Armor>, &Equipped, &Ammo), With<LocalPlayer>>>,
     mut texts: Query<(&HudText, &mut Text, &mut Node)>,
 ) {
     let readout = match body.as_deref() {
-        Some((health, armour, equipped, ammo)) => Readout::of(&catalogue, health, *armour, equipped, ammo),
+        Some((health, armor, equipped, ammo)) => Readout::of(&catalog, health, *armor, equipped, ammo),
         None => Readout::default(),
     };
 
@@ -531,7 +531,7 @@ fn fill_in_the_readouts(
         if text.0 != wanted {
             text.0 = wanted.to_owned();
         }
-        if kind == HudText::Armour {
+        if kind == HudText::Armor {
             let display = if wanted.is_empty() { Display::None } else { Display::Flex };
             if node.display != display {
                 node.display = display;
@@ -550,36 +550,36 @@ fn despawn_the_hud(mut commands: Commands, roots: Query<Entity, With<HudRoot>>) 
 mod tests {
     use super::*;
     use crate::common::weapon::Slot;
-    use crate::common::weapon_file::default_catalogue;
+    use crate::common::weapon_file::default_catalog;
 
-    fn mercenary() -> (WeaponCatalogue, Equipped, Ammo) {
-        let catalogue = default_catalogue();
+    fn mercenary() -> (WeaponCatalog, Equipped, Ammo) {
+        let catalog = default_catalog();
         let (equipped, ammo) =
-            catalogue.starting_equipment(crate::common::class::Class::Mercenary, None);
-        (catalogue, equipped, ammo)
+            catalog.starting_equipment(crate::common::class::Class::Mercenary, None);
+        (catalog, equipped, ammo)
     }
 
     #[test]
-    fn armour_is_shown_only_while_there_is_some() {
-        let (catalogue, equipped, ammo) = mercenary();
+    fn armor_is_shown_only_while_there_is_some() {
+        let (catalog, equipped, ammo) = mercenary();
         let health = Damageable::default();
-        let mut armour = Armour::default();
+        let mut armor = Armor::default();
 
-        let none = Readout::of(&catalogue, &health, Some(&armour), &equipped, &ammo);
-        assert!(none.armour.is_empty());
-        armour.add(35);
-        let some = Readout::of(&catalogue, &health, Some(&armour), &equipped, &ammo);
-        assert!(some.armour.contains("35"), "{}", some.armour);
+        let none = Readout::of(&catalog, &health, Some(&armor), &equipped, &ammo);
+        assert!(none.armor.is_empty());
+        armor.add(35);
+        let some = Readout::of(&catalog, &health, Some(&armor), &equipped, &ammo);
+        assert!(some.armor.contains("35"), "{}", some.armor);
     }
 
     /// Breaks if the lookup panics when `Equipped` arrives before the
-    /// catalogue, which is the ordinary order on a client.
+    /// catalog, which is the ordinary order on a client.
     #[test]
     fn a_body_whose_weapon_has_not_arrived_yet_is_drawn_blank() {
         let (_, equipped, ammo) = mercenary();
         let health = Damageable::with_health(125);
 
-        let readout = Readout::of(&WeaponCatalogue::default(), &health, None, &equipped, &ammo);
+        let readout = Readout::of(&WeaponCatalog::default(), &health, None, &equipped, &ammo);
         assert_eq!(
             readout,
             Readout { health: "125".into(), ..default() },
@@ -589,32 +589,32 @@ mod tests {
 
     #[test]
     fn a_weapon_with_a_clip_shows_both_counts() {
-        let (catalogue, mut equipped, ammo) = mercenary();
+        let (catalog, mut equipped, ammo) = mercenary();
         equipped.select(Slot::Secondary);
         let state = ammo.at(Slot::Secondary);
 
-        let readout = Readout::of(&catalogue, &Damageable::default(), None, &equipped, &ammo);
+        let readout = Readout::of(&catalog, &Damageable::default(), None, &equipped, &ammo);
         assert_eq!(readout.loaded, state.clip.to_string());
         assert_eq!(readout.reserve, state.reserve.to_string());
     }
 
     #[test]
     fn a_weapon_with_no_clip_does_not_read_as_zero_of_something() {
-        let (catalogue, mut equipped, ammo) = mercenary();
+        let (catalog, mut equipped, ammo) = mercenary();
         equipped.select(Slot::Utility);
         let state = ammo.at(Slot::Utility);
 
-        let readout = Readout::of(&catalogue, &Damageable::default(), None, &equipped, &ammo);
+        let readout = Readout::of(&catalog, &Damageable::default(), None, &equipped, &ammo);
         assert_eq!(readout.loaded, state.reserve.to_string());
         assert_eq!(readout.reserve, "", "a weapon with no clip showed a second count");
     }
 
     #[test]
     fn a_reloading_weapon_says_so_and_keeps_its_counts() {
-        let (catalogue, equipped, mut ammo) = mercenary();
+        let (catalog, equipped, mut ammo) = mercenary();
         ammo.at_mut(equipped.held).reloading = 0.5;
 
-        let readout = Readout::of(&catalogue, &Damageable::default(), None, &equipped, &ammo);
+        let readout = Readout::of(&catalog, &Damageable::default(), None, &equipped, &ammo);
         assert!(readout.reloading);
         assert!(!readout.loaded.is_empty(), "the count vanished during a reload");
     }

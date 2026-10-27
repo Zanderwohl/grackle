@@ -46,7 +46,7 @@ const PACK_FROM_WALLS_M: f32 = 1.5;
 /// A team's spawn nook, butted against a side wall so the shared face opens it into the room.
 const NOOK_M: Vec3 = Vec3::new(2.0, 3.0, 2.0);
 
-/// The role a nook's walls name; the palette paints it in each side's colour.
+/// The role a nook's walls name; the palette paints it in each side's color.
 const SPAWN_WALLS: &str = "spawn_walls";
 
 fn main() {
@@ -58,7 +58,7 @@ fn main() {
     let grid_offset = Vec3::new(0.0, 0.0, -(grid_min.z + grid_max.z) * 0.5);
     let spawn_offset = grid_offset + Vec3::new(0.0, 0.0, grid_min.z - SPAWN_DISTANCE_M);
 
-    // Symmetric about the origin, so the floor centre everything is anchored
+    // Symmetric about the origin, so the floor center everything is anchored
     // to is where these offsets were measured from.
     let margin = Vec3::new(ROOM_MARGIN_M, 0.0, ROOM_MARGIN_M);
     let corners = [
@@ -69,7 +69,7 @@ fn main() {
     let half = corners
         .iter()
         .fold(Vec3::ZERO, |half, corner| half.max(corner.abs()))
-        // Whole metres, so the corners read as typed; rounding up only adds margin.
+        // Whole meters, so the corners read as typed; rounding up only adds margin.
         .ceil();
     let room_min = Vec3::new(-half.x, 0.0, -half.z);
     let room_max = Vec3::new(half.x, ROOM_HEIGHT_M, half.z);
@@ -85,7 +85,7 @@ fn main() {
     };
     let room = timeline.apply_feature(Box::new(EditorRoom::from_points(min, max).with_surfaces(surfaces)));
 
-    // Anchored to the floor centre so resizing the room takes the contents along.
+    // Anchored to the floor center so resizing the room takes the contents along.
     let mut light = GracklePointLight::from_point_ref(on_the_floor(room, Vec3::Y * LIGHT_HEIGHT_M));
     light.intensity = 250_000.0;
     light.radius = 3.1;
@@ -93,7 +93,7 @@ fn main() {
     light.range = (room_max - room_min).length();
     timeline.apply_feature(Box::new(light));
 
-    // Facing +Z, towards the grid.
+    // Facing +Z, toward the grid.
     timeline.apply_feature(Box::new(
         SpawnPoint::from_point_ref(on_the_floor(room, spawn_offset))
             .with_yaw(PI),

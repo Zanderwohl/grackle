@@ -50,7 +50,7 @@ pub struct FigureCorrections(
 /// Where the prop is being held, once a performance has moved it.
 ///
 /// In the animation editor the weapon moves and the body stands still: through
-/// the modelling surface's inversion, a clip that lowers the weapon would tip
+/// the modeling surface's inversion, a clip that lowers the weapon would tip
 /// the body over instead.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct FigureWeapon(pub Transform);
@@ -77,7 +77,7 @@ impl Default for FigureStage {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Anchor {
-    /// The grip sits at the origin, as on the modelling surface. A body clip's
+    /// The grip sits at the origin, as on the modeling surface. A body clip's
     /// bob then shows up as the feet bobbing.
     #[default]
     Weapon,
@@ -108,10 +108,10 @@ pub fn stage_in_force(
     }
 }
 
-/// Metres to the side of a placed prop the figure stands, clear of a crate.
+/// Meters to the side of a placed prop the figure stands, clear of a crate.
 const PLACED_PROP_CLEARANCE: f32 = 1.0;
 
-/// Not a team colour: the figure has no side.
+/// Not a team color: the figure has no side.
 const FIGURE_TINT: Color = Color::srgb(0.34, 0.40, 0.36);
 
 /// Keyed on the choice or the builds changing: re-inserting a `Skeleton`

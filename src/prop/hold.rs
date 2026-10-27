@@ -50,7 +50,7 @@ pub struct HoldSpec {
 }
 
 /// Where the weapon hangs in first person. Not the carry, which sits well below
-/// the eye. Stated across the frustum rather than in metres, so it stays in
+/// the eye. Stated across the frustum rather than in meters, so it stays in
 /// place at any FOV or aspect.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ViewmodelSpec {
@@ -59,7 +59,7 @@ pub struct ViewmodelSpec {
     /// corner.
     #[serde(default = "default_across", with = "crate::prop::nice_f32::array")]
     pub across: [f32; 2],
-    /// How far in front of the eye, in metres; this decides apparent size.
+    /// How far in front of the eye, in meters; this decides apparent size.
     #[serde(default = "default_depth", with = "crate::prop::nice_f32::scalar")]
     pub depth: f32,
     /// Euler angles in axis order.
@@ -166,7 +166,7 @@ impl Default for HoldSpec {
             support: [0.0, 0.0, -0.07],
             support_rotation: DEFAULT_SUPPORT_ROTATION,
             two_handed: true,
-            // Close to the centreline: out at the shoulder, the support hand
+            // Close to the centerline: out at the shoulder, the support hand
             // cannot reach without a torso twist the state machine never does.
             carry: [0.05, -0.14, -0.22],
             carry_rotation: [0.0; 3],
@@ -230,7 +230,7 @@ impl HoldSpec {
         self.two_handed.then(|| Vec3::from_array(self.support))
     }
 
-    /// Metres, for arms this long.
+    /// Meters, for arms this long.
     pub fn carry(&self, arm_length: f32) -> Vec3 {
         Vec3::from_array(self.carry) * arm_length
     }
@@ -261,7 +261,7 @@ pub fn weapon_transform(
     let chest = skeleton.index_of(bone::CHEST)?;
     // The chest's tail is the point between the shoulders.
     let pivot = skeleton.posed_bone(pose, root, chest).tail;
-    let arm = skeleton.proportions().arm_metres();
+    let arm = skeleton.proportions().arm_meters();
 
     Some(
         Transform::from_translation(pivot + aim * hold.carry(arm))
@@ -413,7 +413,7 @@ mod tests {
                 let root = Transform::IDENTITY;
 
                 let chest = skeleton.index_of(bone::CHEST).expect("bone is in the rig");
-                let arm = skeleton.proportions().arm_metres();
+                let arm = skeleton.proportions().arm_meters();
                 let pivot = skeleton.posed_bones(&pose, &root)[chest].tail;
                 let placed = Transform::from_translation(pivot + hold.carry(arm));
 

@@ -68,10 +68,10 @@ impl Plugin for GamePlugin {
             .init_resource::<crate::common::assets::Assets>()
             // Here rather than in `WeaponPlugin` because `spawn_player` reads
             // it. On a client it is replaced by the server's on connect.
-            .init_resource::<crate::common::weapon::WeaponCatalogue>()
+            .init_resource::<crate::common::weapon::WeaponCatalog>()
             .add_systems(
                 Startup,
-                crate::common::weapon_file::load_catalogue_at_startup,
+                crate::common::weapon_file::load_catalog_at_startup,
             )
             // Bodies are rigged from it; replaced by the server's on connect.
             .init_resource::<crate::common::class::ClassBuilds>()
@@ -90,7 +90,7 @@ impl Plugin for GamePlugin {
             .init_resource::<CollisionWorld>()
             .init_resource::<MovementRules>()
             .init_resource::<NextPlayerId>()
-            // Owned by `SkeletonPlugin`, initialised here too because the
+            // Owned by `SkeletonPlugin`, initialized here too because the
             // reset writes it: without that plugin the first F5 would fail.
             .init_resource::<AnimationClock>()
             .init_resource::<InputLatch>()
@@ -199,7 +199,7 @@ fn enter_play(
 
     // A new match is a new player: dropping the identity makes the next body
     // allocate a fresh id. Dying inside a match keeps it. A new match turns
-    // the colour wheel too.
+    // the color wheel too.
     commands.remove_resource::<OurIdentity>();
     commands.remove_resource::<crate::game::respawn::HueStart>();
 
@@ -427,8 +427,8 @@ mod tests {
         );
     }
 
-    /// A plane rising towards `+X` from the line `x = 0` on the floor, `degrees`
-    /// steep, as two triangles; mirrored, it rises towards `-X` instead.
+    /// A plane rising toward `+X` from the line `x = 0` on the floor, `degrees`
+    /// steep, as two triangles; mirrored, it rises toward `-X` instead.
     fn slope(degrees: f32, mirrored: bool) -> [crate::game::collision::Hull; 2] {
         use crate::game::collision::Hull;
         let s = if mirrored { -1.0 } else { 1.0 };
@@ -472,7 +472,7 @@ mod tests {
     fn a_body_walks_up_a_slope_it_can_walk() {
         let mut app = dropped_onto(slope(30.0, false), Vec3::new(1.0, 2.5, 0.0));
         let start = player_position(&mut app);
-        // Facing `-Z`; walking right is towards `+X`, up the slope.
+        // Facing `-Z`; walking right is toward `+X`, up the slope.
         app.world_mut().resource_mut::<InputLatch>().0.movement = Vec2::new(1.0, 0.0);
         tick(&mut app, 30);
         let end = player_position(&mut app);
@@ -507,7 +507,7 @@ mod tests {
     }
 
     /// A body standing at `x = 3` in a room with its floor at zero, walking
-    /// towards `+X` into whatever else `rooms` adds, for two seconds.
+    /// toward `+X` into whatever else `rooms` adds, for two seconds.
     fn walked_towards(rooms: &[Room]) -> App {
         let mut all = vec![room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 4.0, 5.0))];
         all.extend_from_slice(rooms);
@@ -839,7 +839,7 @@ mod tests {
         );
         enter(&mut app);
 
-        // Feet where the spawn point is; the body stands centred above it.
+        // Feet where the spawn point is; the body stands centered above it.
         let position = player_position(&mut app);
         assert!((position.x - 7.0).abs() < 0.01, "spawned at {position}");
         assert!((position.z + 3.0).abs() < 0.01, "spawned at {position}");
@@ -1178,15 +1178,15 @@ mod tests {
             let who = crate::game::respawn::Identity {
                 id: crate::common::damage::PlayerId(99),
                 team: Some(Team::Red),
-                colour: 1,
+                color: 1,
             };
             spawn_player(
                 &mut commands,
                 spawn,
                 &who,
-                who.colour(&crate::game::respawn::HueStart(0.0)),
+                who.color(&crate::game::respawn::HueStart(0.0)),
                 &crate::common::game_rules::ModeRules::default(),
-                &crate::common::weapon::WeaponCatalogue::default(),
+                &crate::common::weapon::WeaponCatalog::default(),
             );
         }
         queue.apply(app.world_mut());
@@ -1236,7 +1236,7 @@ mod tests {
         tick(&mut app, 60);
         assert!((player_position(&mut app).y - PLAYER_HALF.y).abs() < 0.05);
 
-        // Raise the floor by two metres, the way a drag handle would.
+        // Raise the floor by two meters, the way a drag handle would.
         let mut rooms = app.world_mut().query::<&mut Room>();
         for mut room in rooms.iter_mut(app.world_mut()) {
             room.floor = 2.0;

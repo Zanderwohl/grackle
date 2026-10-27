@@ -9,7 +9,7 @@ note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper 
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [blend.tracks.channel]
@@ -28,7 +28,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [blend.tracks.channel]
@@ -47,7 +47,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "left_foot"
 
@@ -373,7 +373,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "left_foot"
 
@@ -393,7 +393,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "right_foot"
 
@@ -728,7 +728,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "right_foot"
 
@@ -1008,7 +1008,7 @@ note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper 
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [blend.tracks.channel]
@@ -1027,7 +1027,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [blend.tracks.channel]
@@ -1046,7 +1046,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "left_foot"
 
@@ -1345,7 +1345,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "left_foot"
 
@@ -1365,7 +1365,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "right_foot"
 
@@ -1673,7 +1673,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "right_foot"
 
@@ -1953,7 +1953,7 @@ note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper 
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [blend.tracks.channel]
@@ -1972,7 +1972,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [blend.tracks.channel]
@@ -1991,7 +1991,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "left_foot"
 
@@ -2191,7 +2191,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "left_foot"
 
@@ -2211,7 +2211,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "right_foot"
 
@@ -2411,7 +2411,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "right_foot"
 
@@ -2691,7 +2691,7 @@ note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper 
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [blend.tracks.channel]
@@ -2710,7 +2710,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [blend.tracks.channel]
@@ -2729,7 +2729,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "left_foot"
 
@@ -3028,7 +3028,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "left_foot"
 
@@ -3048,7 +3048,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "right_foot"
 
@@ -3347,7 +3347,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "right_foot"
 
@@ -3627,7 +3627,7 @@ note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper 
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [blend.tracks.channel]
@@ -3646,7 +3646,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [blend.tracks.channel]
@@ -3665,7 +3665,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "left_foot"
 
@@ -4000,7 +4000,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "left_foot"
 
@@ -4020,7 +4020,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "right_foot"
 
@@ -4346,7 +4346,7 @@ ease = "linear"
 [[blend.tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 timing = "right_foot"
 

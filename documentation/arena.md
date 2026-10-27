@@ -23,7 +23,7 @@ so the first piece is a resource that answers for the mode.
 shape as `publish_movement_rules`: it reads the map's `game_mode`, looks it up
 in the modes table, and writes the result. Nothing else reads `MapMetadata` for
 it. A mode with no entry gets `GameRules::default()`, which is today's
-behaviour exactly — teams, class loadouts, no scoring limit — so CTF and the
+behavior exactly — teams, class loadouts, no scoring limit — so CTF and the
 rest are unchanged by any of this.
 
 **The modes table is pack content**, `assets/default/modes.toml`, keyed by
@@ -76,39 +76,39 @@ so your own rocket still hurts you.
 none the pool is every spawn on the map. Avoiding the spawn nearest an enemy is
 a later refinement, not a requirement.
 
-### Body colour
+### Body color
 
-A body's colour is its team, so with no teams every body would be the same grey
-and nobody could tell who they were fighting. Each player gets a colour of
+A body's color is its team, so with no teams every body would be the same gray
+and nobody could tell who they were fighting. Each player gets a color of
 their own instead:
 
 - **OKLCH, fixed lightness and chroma, hue rotated per player.** Fixed L and C
-  keep every player as readable under map lighting as the team colours are
+  keep every player as readable under map lighting as the team colors are
   (L 0.62, C 0.10 — about the most chroma every hue holds inside sRGB, cyan
   running out first); only the hue says who you are.
 - **The hue is `start + step × index`.** The first twelve players are 30°
   apart. The thirteenth onwards fill in at the 15° points between them, then
   7.5°, and so on — each round of filling halves the step and offsets by half
-  of it, so the colours already handed out never move.
+  of it, so the colors already handed out never move.
 - **`start` is random per match**, chosen by the server when it makes the first
   identity, so the same player is not always the same red.
 - **`index` is the lowest one not in use**, so a player who leaves frees their
   hue for the next to join rather than pushing everybody further round the
   wheel.
 
-**The colour is decided on the authority** — the identity holds an index on
+**The color is decided on the authority** — the identity holds an index on
 the wheel and the match holds the start (`HueStart`, dropped with
-`OurIdentity`), so a new match turns everybody's colour together. The body gets
-the resulting `PlayerColour` hue, which reaches everybody else as a
+`OurIdentity`), so a new match turns everybody's color together. The body gets
+the resulting `PlayerColor` hue, which reaches everybody else as a
 `replicate_once` component, the way `Team` does. No machine derives it: two
-clients agreeing on join order is a coincidence, and a colour derived from it
+clients agreeing on join order is a coincidence, and a color derived from it
 is a body that is purple on one screen and green on another.
 
-`body_look` picks **team colour, then player colour, then tint, then the
-default**. In a team mode a player still has a colour; the team outranks it
+`body_look` picks **team color, then player color, then tint, then the
+default**. In a team mode a player still has a color; the team outranks it
 because which side you are on is what you read across a room. Corpses keep
-their `PlayerColour` as they keep their team. `BodyMaterials` is keyed by
-colour, so materials are per colour, not per body — a dozen players is a
+their `PlayerColor` as they keep their team. `BodyMaterials` is keyed by
+color, so materials are per color, not per body — a dozen players is a
 dozen materials.
 
 ## Weapon pickups
@@ -128,7 +128,7 @@ model follows.
 | --- | --- |
 | `location` | `PointRef` — where it stands on the floor, like a `Prop` |
 | `yaw` | radians |
-| `weapon` | a catalogue name, as written in `weapons.toml` |
+| `weapon` | a catalog name, as written in `weapons.toml` |
 | `respawn` | seconds of game time before a taken one is back |
 | `ammo` | fraction of the weapon's reserve given to somebody who already has it |
 | `style` | `PickupStyle`, defaulting to `Tf2` (hovers and turns) |
@@ -142,8 +142,8 @@ The usual new-feature work, per CLAUDE.md: `show.rs`, `tool_helpers.rs`,
 `every_feature_type_survives_a_save_and_load`, and `mirror` — carry the location
 and reflect the yaw, so a symmetrical arena gets its pickups on both halves.
 
-**The panel picks from the catalogue**, a combo over `WeaponCatalogue` sorted
-by display name. Not a text field: the catalogue is already loaded in the
+**The panel picks from the catalog**, a combo over `WeaponCatalog` sorted
+by display name. Not a text field: the catalog is already loaded in the
 editor, and a typed name is the thing that silently draws nothing.
 
 ### In the world
@@ -155,14 +155,14 @@ the `WeaponId`, its transform, and the existing `Pickup` and `Restock`, which
 already mean "taken" and "coming back".
 
 **Drawn from the weapon's model**, baked through `PropCache` by
-`Weapon.model` — `prop::baked` stays the only baker. An id the catalogue cannot
+`Weapon.model` — `prop::baked` stays the only baker. An id the catalog cannot
 resolve yet draws nothing and is redressed when it can: key on absence, never
 on arrival, as everything else that reads an id does. `float_pickups` gains a
 `WorldWeapon` arm, or is generalised over both.
 
 **The trigger is a fixed sphere**, a constant in `world_prop.rs`. A held prop
 has no colliders, and a weapon's pickup volume is a game rule, not something a
-modeller should have to author on every gun.
+modeler should have to author on every gun.
 
 ### Taking one
 
@@ -203,34 +203,34 @@ Three things, stated as interface so the two threads can land in either order:
 Until then, a pickup can land in the 6-slot `Equipped` by the loadout's
 `permitted` lists, which is enough to test the pickup on its own.
 
-## Armour
+## Armor
 
-**`Armour` is a component beside `Damageable`**: points and a max, replicated,
+**`Armor` is a component beside `Damageable`**: points and a max, replicated,
 in the Consequence layer — the damage layer on the authority is its only
 writer.
 
 **`apply_damage` is where it is spent**, and nowhere else, for the reason
 health is: two writers is a scoreboard that adds up to more than the map
-contains. Of each hit, `ARMOUR_ABSORBS` (Quake's two-thirds) comes off armour,
+contains. Of each hit, `ARMOR_ABSORBS` (Quake's two-thirds) comes off armor,
 rounded up, until it runs out; the rest comes off health. Afterburn and your
-own splash go through `apply_damage` like anything else, so armour soaks them
+own splash go through `apply_damage` like anything else, so armor soaks them
 too. `DamageDealt` keeps reporting the whole hit, because a floating number is
-what you did, not where it landed; the armour share can be added to the record
+what you did, not where it landed; the armor share can be added to the record
 when something wants to draw it.
 
-**The max is `DEFAULT_MAX_ARMOUR`**, a constant beside `DEFAULT_HEALTH`, and
+**The max is `DEFAULT_MAX_ARMOR`**, a constant beside `DEFAULT_HEALTH`, and
 goes per class when health does: a Heavy and a Scout should not carry the same
-plate, but giving armour a per-class table before health has one would be two
+plate, but giving armor a per-class table before health has one would be two
 pools described in two places. Likewise the absorbed share is a constant until
-a mode wants a different one. Every `Player` requires an `Armour`, and a body
+a mode wants a different one. Every `Player` requires an `Armor`, and a body
 starts with none.
 
 A pickup's share of a maximum is rounded up past float noise (`share` in
 `world_prop.rs`): `0.6 * 100.0` is `60.000002` in `f32`, which a plain `ceil`
-made 61 — for health and ammo packs too, before armour found it. `PickupKind::Armor`
+made 61 — for health and ammo packs too, before armor found it. `PickupKind::Armor`
 already exists and already has an amount as a fraction of the taker's max, so
-its arm in `give` is a few lines; the default pack ships `armour_pack.gpp` next
-to the health and ammo packs. Over-max armour that decays (Quake's red armour) is
+its arm in `give` is a few lines; the default pack ships `armor_pack.gpp` next
+to the health and ammo packs. Over-max armor that decays (Quake's red armor) is
 later.
 
 The HUD shows it over the health number while there is any.
@@ -245,7 +245,7 @@ explosion already carries the number it would want.
 ### Momentum
 
 **Movement becomes Quake-style acceleration and friction.** On the ground,
-friction brings velocity down and acceleration brings it up towards the
+friction brings velocity down and acceleration brings it up toward the
 wish direction and speed; in the air, acceleration is small and friction is
 none. Velocity carries between ticks, so an impulse lives until friction or a
 wall eats it. Tuned so walking feels as it does now — a ground acceleration
@@ -300,12 +300,12 @@ part of this plan.
 
 **A score belongs to the player, not the body** — the rule `Identity` already
 follows. Each player gets a replicated **`Standing`** entity on the authority
-([`src/game/score.rs`](../src/game/score.rs)): `PlayerId`, team, colour, frags,
+([`src/game/score.rs`](../src/game/score.rs)): `PlayerId`, team, color, frags,
 deaths. Replicated to everybody, because every machine draws the scoreboard.
 `keep_standings` keys them on absence, the way bodies are: an identity with no
 standing gets one, a standing whose identity has gone (a client who left) goes.
 All of them are cleared on **entering** Play, not leaving it, so the final
-standings are still in the world afterwards — though nothing draws them in the
+standings are still in the world afterward — though nothing draws them in the
 editor yet.
 
 **`record_frags` runs in `DamageSystems::Resolve`**, after `announce_the_dead`,
@@ -331,7 +331,7 @@ screen yet.
 **Bevy UI, top-left, on the HUD camera** — part of the game, so not egui, the
 same reasoning as the pause menu. A column of rows ranked by frags, ties broken
 by fewer deaths and then by `PlayerId` so the order is the same on every
-machine. Each row: a swatch in the player's colour, their name, their frags.
+machine. Each row: a swatch in the player's color, their name, their frags.
 Your own row is marked.
 
 Players have no names. A row says "Player {id}" through the lang layer until
@@ -345,7 +345,7 @@ a kill feed and a results screen are all later.
 
 Mode rules
 - [x] `modes.toml` and its `PackTable`, synced on connect
-- [x] `GameRules` and `publish_game_rules`; default is today's behaviour
+- [x] `GameRules` and `publish_game_rules`; default is today's behavior
 - [x] `starting_equipment` reads the mode's loadout
 - [x] The body's class is the first the mode allows
 - [ ] A client's identity made fresh each match, as the host's is
@@ -354,25 +354,25 @@ No teams
 - [x] `Identity.team: Option<Team>`, bodies with no `Team`
 - [x] `next_team` asks the rules
 - [x] `choose_spawn` with no team uses every spawn
-- [x] `PlayerColour`: OKLCH, 30° then halving, random start, lowest free index
-- [x] `PlayerColour` replicated on bodies and kept by corpses; `body_look` uses it
-- [ ] HUD zones in the player's colour when there is no team (neutral today)
+- [x] `PlayerColor`: OKLCH, 30° then halving, random start, lowest free index
+- [x] `PlayerColor` replicated on bodies and kept by corpses; `body_look` uses it
+- [ ] HUD zones in the player's color when there is no team (neutral today)
 
 Weapon pickups
 - [ ] `WeaponPickup` feature: serde, save test, show/pick, mirror
-- [ ] Panel combo over the catalogue
+- [ ] Panel combo over the catalog
 - [ ] Authority stands `WorldWeapon`s up; replicated; drawn from the weapon's model
 - [ ] `take_pickups` gives weapons: grant, or top up, or walk past
 - [ ] An arena map in the default pack with pickups in it
 - [ ] Lands in the new slots once the slots work is in
 
-Armour
-- [x] `Armour` component, replicated
-- [x] `apply_damage` spends it at `ARMOUR_ABSORBS`
+Armor
+- [x] `Armor` component, replicated
+- [x] `apply_damage` spends it at `ARMOR_ABSORBS`
 - [ ] Max per class, when health is
-- [x] Armour pickup gives it; example armour prop
+- [x] Armor pickup gives it; example armor prop
 - [x] HUD readout
-- [ ] Armour packs on the template map
+- [ ] Armor packs on the template map
 
 Knockback
 - [ ] Acceleration and friction in `step_player`, tuned to feel as now
@@ -391,7 +391,7 @@ Scoring
 Later
 - [ ] Dropping the held weapon on death
 - [ ] Spawn choice away from enemies
-- [ ] Over-max armour and mega health that decay
+- [ ] Over-max armor and mega health that decay
 - [ ] Per-class knockback scale
 - [ ] Predicting your own rocket jump
 - [ ] Tab scoreboard, kill feed, results screen, names

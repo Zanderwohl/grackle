@@ -1,5 +1,5 @@
 //! Taunts: pack content in `taunts.toml`. Sent to clients like the weapon
-//! catalogue, since movement is part of the predicted step and both ends must
+//! catalog, since movement is part of the predicted step and both ends must
 //! agree on it. A bad entry is dropped with a line saying why.
 
 use std::path::{Path, PathBuf};
@@ -66,14 +66,14 @@ impl TauntTurning {
             TauntTurning::Locked => return body,
             TauntTurning::AtMost(degrees) => degrees.to_radians() * dt,
         };
-        let towards = |from: f32, by: f32| from + by.clamp(-step, step);
+        let toward = |from: f32, by: f32| from + by.clamp(-step, step);
         let yaw_by = (aim.0 - body.0 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
             - std::f32::consts::PI;
         // The aim itself, whole turns and all, so a caught-up body equals it.
         if yaw_by.abs() <= step && (aim.1 - body.1).abs() <= step {
             return aim;
         }
-        (towards(body.0, yaw_by), towards(body.1, aim.1 - body.1))
+        (toward(body.0, yaw_by), toward(body.1, aim.1 - body.1))
     }
 }
 

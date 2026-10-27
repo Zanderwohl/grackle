@@ -3,7 +3,7 @@
 //! damage numbers.
 //!
 //! Both are pack content, read once at `Startup` through [`Assets`] like the
-//! weapon catalogue, so a browser build fetches them the same way. A font that
+//! weapon catalog, so a browser build fetches them the same way. A font that
 //! is missing leaves the built-in one in its place rather than refusing to
 //! start.
 

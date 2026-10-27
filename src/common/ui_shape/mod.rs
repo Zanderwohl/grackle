@@ -45,7 +45,7 @@ pub struct ShapeStyle {
     /// How deep both bands reach in from the stroke. Zero paints it flat.
     pub rim: f32,
     pub stroke: Color,
-    /// Centred on the path, so half of it is outside.
+    /// Centered on the path, so half of it is outside.
     pub stroke_width: f32,
     /// A copy of the silhouette, stroke included, drawn behind it.
     pub drop: Color,
@@ -122,7 +122,7 @@ pub struct ShapeUniform {
 
 impl From<&ShapeMaterial> for ShapeUniform {
     fn from(material: &ShapeMaterial) -> Self {
-        let colour = |c: Color| Vec4::from_array(c.to_linear().to_f32_array());
+        let color = |c: Color| Vec4::from_array(c.to_linear().to_f32_array());
         let style = &material.style;
         let mut points = [Vec4::ZERO; MAX_POINTS / 2];
         for (i, pair) in material.points.chunks(2).enumerate() {
@@ -130,11 +130,11 @@ impl From<&ShapeMaterial> for ShapeUniform {
             points[i] = Vec4::new(pair[0].x, pair[0].y, second.x, second.y);
         }
         Self {
-            fill: colour(style.fill),
-            highlight: colour(style.highlight),
-            shadow: colour(style.shadow),
-            stroke: colour(style.stroke),
-            drop: colour(style.drop),
+            fill: color(style.fill),
+            highlight: color(style.highlight),
+            shadow: color(style.shadow),
+            stroke: color(style.stroke),
+            drop: color(style.drop),
             frame: Vec4::new(material.size.x, material.size.y, style.stroke_width, style.rim),
             extra: Vec4::new(
                 style.drop_offset.x,

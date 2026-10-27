@@ -72,13 +72,13 @@ pub fn explode(
                 continue;
             }
 
-            let centre = boxes.body.centre;
-            let distance = centre.distance(blast.at);
+            let center = boxes.body.center;
+            let distance = center.distance(blast.at);
             let reach = falloff(distance, blast.radius);
             if reach <= 0.0 {
                 continue;
             }
-            if !in_sight(&world, blast.at, centre, distance) {
+            if !in_sight(&world, blast.at, center, distance) {
                 continue;
             }
 
@@ -93,7 +93,7 @@ pub fn explode(
                 amount,
                 // Over the body: at the blast point every victim's number
                 // would be drawn on top of the others.
-                point: centre,
+                point: center,
             });
         }
 
@@ -106,8 +106,8 @@ pub fn explode(
     }
 }
 
-/// Metres short of its target a line of sight stops, because a body against a
-/// wall has the wall a few centimetres behind its chest.
+/// Meters short of its target a line of sight stops, because a body against a
+/// wall has the wall a few centimeters behind its chest.
 const SIGHT_CLEARANCE: f32 = 0.05;
 
 /// Whether there is a clear line from the blast to a point `distance` away.
@@ -183,11 +183,11 @@ mod tests {
         world
     }
 
-    fn body(world: &mut World, centre: Vec3) -> Entity {
+    fn body(world: &mut World, center: Vec3) -> Entity {
         world
             .spawn(Hitboxes {
-                body: Box3 { centre, half_extents: Vec3::new(0.4, 0.9, 0.4) },
-                head: Some(Box3 { centre: centre + Vec3::Y * 0.8, half_extents: Vec3::splat(0.15) }),
+                body: Box3 { center, half_extents: Vec3::new(0.4, 0.9, 0.4) },
+                head: Some(Box3 { center: center + Vec3::Y * 0.8, half_extents: Vec3::splat(0.15) }),
             })
             .id()
     }

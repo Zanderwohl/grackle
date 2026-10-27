@@ -12,7 +12,7 @@ use strum_macros::EnumIter;
 
 use crate::get;
 
-/// Metres per second squared, downwards.
+/// Meters per second squared, downwards.
 pub const DEFAULT_GRAVITY: f32 = 20.0;
 
 /// What holding the sprint key does.
@@ -51,7 +51,7 @@ impl Display for SprintPolicy {
 #[serde(rename = "Movement", default)]
 pub struct MovementRules {
     pub sprint: SprintPolicy,
-    /// Metres per second squared, downwards.
+    /// Meters per second squared, downwards.
     pub gravity: f32,
 }
 

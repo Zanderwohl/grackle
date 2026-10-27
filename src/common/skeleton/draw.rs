@@ -5,12 +5,12 @@ use bevy::prelude::*;
 
 use crate::common::skeleton::rig::{Pose, Side, Skeleton};
 
-/// The colours a skeleton is drawn in.
+/// The colors a skeleton is drawn in.
 #[derive(Clone, Copy, Debug)]
 pub struct SkeletonPalette {
     pub left: Color,
     pub right: Color,
-    pub centre: Color,
+    pub center: Color,
     pub joint: Color,
 }
 
@@ -20,20 +20,20 @@ impl SkeletonPalette {
     pub const SIDES: SkeletonPalette = SkeletonPalette {
         left: Color::srgb(0.47, 0.75, 1.0),
         right: Color::srgb(1.0, 0.59, 0.35),
-        centre: Color::srgb(0.9, 0.9, 0.9),
+        center: Color::srgb(0.9, 0.9, 0.9),
         joint: Color::srgb(1.0, 0.94, 0.47),
     };
 
-    /// One colour throughout, for a body drawn inside another feature's gizmo.
-    pub fn flat(colour: Color) -> SkeletonPalette {
-        SkeletonPalette { left: colour, right: colour, centre: colour, joint: colour }
+    /// One color throughout, for a body drawn inside another feature's gizmo.
+    pub fn flat(color: Color) -> SkeletonPalette {
+        SkeletonPalette { left: color, right: color, center: color, joint: color }
     }
 
     fn for_bone(&self, name: &str) -> Color {
         match Side::of(name) {
             Side::Left => self.left,
             Side::Right => self.right,
-            Side::Centre => self.centre,
+            Side::Center => self.center,
         }
     }
 }

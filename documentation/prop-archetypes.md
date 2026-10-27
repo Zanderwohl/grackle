@@ -54,7 +54,7 @@ leaving Play forgets.
 
 ### Pickups
 
-Health and ammo are real; armour and the flag are kinds with no behaviour yet,
+Health and ammo are real; armor and the flag are kinds with no behavior yet,
 the way the stub weapon actions are. A taken pickup is hidden and comes back
 after its own number of seconds; that countdown is replicated so clients stop
 drawing it too. Taking one is authority-only.
@@ -94,6 +94,6 @@ hat stays at the origin and the figure is placed under it.
 - [x] Example props: a hat, a crate, a health pack, an ammo pack
 - [ ] Colliders stopping shots and projectiles for obstacles
 - [ ] Viewport handles for colliders and the hat fit
-- [ ] Armour: a pool in the damage layer
+- [ ] Armor: a pool in the damage layer
 - [ ] Flag: carried, dropped on death, returned
 - [ ] Picking a map prop's model from a list rather than typing its name

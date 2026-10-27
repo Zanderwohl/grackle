@@ -19,13 +19,13 @@ use crate::prop::view::{PropBuild, PropSceneSystems};
 /// How much room to leave around a framed prop.
 const FRAMING_MARGIN: f32 = 1.6;
 
-/// Radius framed when the prop is empty, in metres: weapon scale, not map scale.
+/// Radius framed when the prop is empty, in meters: weapon scale, not map scale.
 const EMPTY_RADIUS: f32 = 0.25;
 
 /// Radians of orbit per pixel dragged.
 const ORBIT_RATE: f32 = 0.006;
 
-/// Metres panned per pixel, per metre of distance to the pivot.
+/// Meters panned per pixel, per meter of distance to the pivot.
 const PAN_RATE: f32 = 0.0016;
 
 /// Zoom ratio per notch, about seven percent.
@@ -35,7 +35,7 @@ const ZOOM_PER_NOTCH: f32 = 1.0 / 15.0;
 /// crosses the whole zoom range.
 pub(crate) const PIXELS_PER_NOTCH: f32 = 40.0;
 
-/// Metres from the pivot the perspective camera may be.
+/// Meters from the pivot the perspective camera may be.
 const DISTANCE_RANGE: std::ops::RangeInclusive<f32> = 0.02..=40.0;
 
 /// World units per pixel in the orthographic views.
@@ -130,7 +130,7 @@ fn frame_one(
     projection: &mut Projection,
     camera: &Camera,
     multicam: &Multicam,
-    centre: Vec3,
+    center: Vec3,
     radius: f32,
 ) {
     let distance = (radius * FRAMING_MARGIN * 2.0).max(*DISTANCE_RANGE.start());
@@ -142,7 +142,7 @@ fn frame_one(
         CameraAxis::Y => (Vec3::Y, Vec3::NEG_Z),
         CameraAxis::Z => (Vec3::Z, Vec3::Y),
     };
-    *transform = Transform::from_translation(centre + offset * distance).looking_at(centre, up);
+    *transform = Transform::from_translation(center + offset * distance).looking_at(center, up);
 
     // Orthographic scale is world units per pixel, so it depends on viewport width.
     if let Projection::Orthographic(ortho) = projection {
@@ -167,11 +167,11 @@ fn frame_all(
     pivot: &mut OrbitPivot,
     bounds: Option<(Vec3, Vec3)>,
 ) {
-    let (centre, radius) = subject(bounds);
-    pivot.0 = centre;
+    let (center, radius) = subject(bounds);
+    pivot.0 = center;
     for (entity, mut transform, mut projection, camera, multicam) in cameras.iter_mut() {
         remember(saved, entity, &transform, &projection);
-        frame_one(&mut transform, &mut projection, camera, multicam, centre, radius);
+        frame_one(&mut transform, &mut projection, camera, multicam, center, radius);
     }
 }
 
@@ -185,8 +185,8 @@ fn remember(saved: &mut MapViewpoints, entity: Entity, transform: &Transform, pr
 type FigureQuery<'w, 's> =
     Query<'w, 's, (&'static Transform, &'static Skeleton), (With<ScaleFigureMarker>, Without<Multicam>)>;
 
-/// The prop plus the figure, if one is up: a body is two metres and a prop
-/// centimetres, so framing the prop alone puts the figure off-screen.
+/// The prop plus the figure, if one is up: a body is two meters and a prop
+/// centimeters, so framing the prop alone puts the figure off-screen.
 ///
 /// The figure is measured at its rest pose, or the view would jump every time
 /// the playhead moves.
@@ -255,10 +255,10 @@ fn reset_the_hovered_view(
         return;
     };
 
-    let (centre, radius) = subject(build.evaluated.bounds());
+    let (center, radius) = subject(build.evaluated.bounds());
     remember(&mut saved, entity, &transform, &projection);
-    frame_one(&mut transform, &mut projection, camera, multicam, centre, radius);
-    pivot.0 = centre;
+    frame_one(&mut transform, &mut projection, camera, multicam, center, radius);
+    pivot.0 = center;
 }
 
 fn navigate(

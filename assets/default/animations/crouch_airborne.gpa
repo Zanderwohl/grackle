@@ -2,12 +2,12 @@ name_key = "animation.states.crouch_airborne"
 length = 1.0
 clock = "shared"
 looping = false
-note = "Sampled from `crouch_posture` with `airborne_legs`. Still: folded like a crouch, legs tucked like a jump. `duck_under` folds it under the short hull afterwards, as it does for every crouched state."
+note = "Sampled from `crouch_posture` with `airborne_legs`. Still: folded like a crouch, legs tucked like a jump. `duck_under` folds it under the short hull afterward, as it does for every crouched state."
 
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -26,7 +26,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -45,7 +45,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -64,7 +64,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -83,7 +83,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -102,7 +102,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -121,7 +121,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -140,7 +140,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -159,7 +159,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -178,7 +178,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]

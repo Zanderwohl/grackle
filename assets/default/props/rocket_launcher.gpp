@@ -308,7 +308,7 @@ ease = "linear"
 [[animations.clips.deploy.tracks]]
 combine = "compose"
 space = "carry"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [animations.clips.deploy.tracks.channel]
@@ -378,7 +378,7 @@ ease = "linear"
 [[animations.clips.fire.tracks]]
 combine = "compose"
 space = "carry"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [animations.clips.fire.tracks.channel]
@@ -457,7 +457,7 @@ ease = "linear"
 [[animations.clips.recoil.tracks]]
 combine = "compose"
 space = "carry"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [animations.clips.recoil.tracks.channel]
@@ -563,7 +563,7 @@ ease = "linear"
 [[animations.clips.reload.tracks]]
 combine = "compose"
 space = "carry"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [animations.clips.reload.tracks.channel]

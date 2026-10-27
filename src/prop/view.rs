@@ -1,7 +1,7 @@
 //! Showing a prop in the editor's four viewports. On the way in, everything
 //! that is not [`PropScene`] is hidden (not unloaded), the cameras are framed
 //! (see [`super::camera`]) and the prop gets its own lights; all of it is
-//! undone on the way out. See "Modelling a prop" in `CLAUDE.md`.
+//! undone on the way out. See "Modeling a prop" in `CLAUDE.md`.
 //!
 //! The hiding rule names what to keep rather than what to hide, because
 //! loose entities (grid bodies, corpses, projectiles) are not feature
@@ -54,7 +54,7 @@ struct PropStageLight;
 /// What was hidden and its previous value, restored exactly rather than set
 /// to `Inherited`, since some things are hidden on purpose.
 #[derive(Resource, Default)]
-struct HiddenForModelling(HashMap<Entity, Visibility>);
+struct HiddenForModeling(HashMap<Entity, Visibility>);
 
 /// The last evaluation, reused by the panels.
 #[derive(Resource, Default)]
@@ -96,7 +96,7 @@ impl Plugin for PropViewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PropBuild>()
             .init_resource::<SurfaceMaterials>()
-            .init_resource::<HiddenForModelling>()
+            .init_resource::<HiddenForModeling>()
             .init_resource::<ScaleFigure>()
             .init_resource::<crate::prop::figure::FigureStage>()
             // Chained: framing reads the prop's bounds, which are stale from
@@ -144,7 +144,7 @@ impl Plugin for PropViewPlugin {
     }
 }
 
-/// Moves the prop where an animation holds it (identity while modelling), and
+/// Moves the prop where an animation holds it (identity while modeling), and
 /// hides it when the staged figure is holding nothing. Separate from the
 /// rebuild, which only runs on edits.
 pub fn carry_the_prop(
@@ -171,7 +171,7 @@ pub fn carry_the_prop(
 /// Roots only, because `Visibility` inherits and other systems hide
 /// individual children. `Without<Node>` keeps the viewport labels (UI).
 fn set_the_world_aside(
-    mut hidden: ResMut<HiddenForModelling>,
+    mut hidden: ResMut<HiddenForModeling>,
     mut entities: Query<
         (Entity, &mut Visibility, Option<&RenderLayers>),
         (Without<ChildOf>, Without<Node>, Without<PropScene>),
@@ -192,7 +192,7 @@ fn set_the_world_aside(
 }
 
 fn put_the_world_back(
-    mut hidden: ResMut<HiddenForModelling>,
+    mut hidden: ResMut<HiddenForModeling>,
     mut entities: Query<&mut Visibility>,
 ) {
     for (entity, was) in hidden.0.drain() {
@@ -319,12 +319,12 @@ fn draw_the_bench(
     );
     let primary = editor.primary();
     let marker = build.evaluated.bounds().map_or(MIN_MARKER, |(min, max)| (max - min).length() * MARKER_SIZE).max(MIN_MARKER);
-    let picked_colour = |pick: &Pick| match Some(pick) == primary {
+    let picked_color = |pick: &Pick| match Some(pick) == primary {
         true => PICKED,
         false => PICKED.with_alpha(0.5),
     };
     // Across the origin planes, which is also how far they can be picked.
-    for (axis, colour) in [
+    for (axis, color) in [
         (Axis::X, Color::srgb(0.9, 0.3, 0.3)),
         (Axis::Y, Color::srgb(0.3, 0.9, 0.3)),
         (Axis::Z, Color::srgb(0.3, 0.5, 0.9)),
@@ -332,31 +332,31 @@ fn draw_the_bench(
         let pick = Pick::Axis(axis);
         let Some((a, b)) = build.evaluated.locate_line(&LineRef::Origin { axis }) else { continue };
         let (positive, negative) = if editor.picks().contains(&pick) {
-            (picked_colour(&pick), picked_colour(&pick))
+            (picked_color(&pick), picked_color(&pick))
         } else if hovered.0.as_ref() == Some(&pick) {
             (HOVERED, HOVERED)
         } else {
-            (colour, colour.with_alpha(0.3))
+            (color, color.with_alpha(0.3))
         };
         gizmos.line(Vec3::ZERO, b, positive);
         gizmos.line(a, Vec3::ZERO, negative);
     }
     for pick in editor.picks() {
         match pick {
-            Pick::Body(picked) => draw_body_box(&mut gizmos, &build, *picked, picked_colour(pick)),
+            Pick::Body(picked) => draw_body_box(&mut gizmos, &build, *picked, picked_color(pick)),
             Pick::Geom(reference) => {
                 if let Some(at) = build.evaluated.locate(reference) {
-                    draw_located(&mut gizmos, at, marker, picked_colour(pick));
+                    draw_located(&mut gizmos, at, marker, picked_color(pick));
                 }
             }
             // Drawn with every other plane and axis.
             Pick::Plane(_) | Pick::Axis(_) => {}
             Pick::SketchLine { .. } => {
                 if let Some((a, b)) = pick.line().and_then(|line| build.evaluated.locate_line(&line)) {
-                    draw_located(&mut gizmos, Located::Edge(a, b), marker, picked_colour(pick));
+                    draw_located(&mut gizmos, Located::Edge(a, b), marker, picked_color(pick));
                 }
             }
-            Pick::Region { sketch, region } => draw_region(&mut gizmos, &build, *sketch, region, picked_colour(pick)),
+            Pick::Region { sketch, region } => draw_region(&mut gizmos, &build, *sketch, region, picked_color(pick)),
         }
     }
     match &hovered.0 {
@@ -392,23 +392,23 @@ fn draw_the_bench(
     }
     // The sketch being edited is drawn by the session, from the document.
     for placed in build.evaluated.sketches.iter().filter(|placed| Some(placed.id) != session.editing()) {
-        let colour = match picked_features.contains(&placed.id) {
+        let color = match picked_features.contains(&placed.id) {
             true => PICKED,
             false => SKETCH,
         };
         for (a, b, construction) in placed.world_lines() {
             match construction {
-                true => dashed_line(&mut gizmos, a, b, colour, marker * 2.0, marker),
+                true => dashed_line(&mut gizmos, a, b, color, marker * 2.0, marker),
                 false => {
-                    gizmos.line(a, b, colour);
+                    gizmos.line(a, b, color);
                 }
             }
         }
     }
     for datum in &build.evaluated.planes {
         let pick = Pick::Plane(datum.id);
-        let colour = if editor.picks().contains(&pick) {
-            picked_colour(&pick)
+        let color = if editor.picks().contains(&pick) {
+            picked_color(&pick)
         } else if hovered.0.as_ref() == Some(&pick) {
             HOVERED
         } else if datum.id.feature().is_none() {
@@ -417,7 +417,7 @@ fn draw_the_bench(
         } else {
             PLANE
         };
-        draw_square(&mut gizmos, &datum.corners, colour);
+        draw_square(&mut gizmos, &datum.corners, color);
     }
 }
 
@@ -427,44 +427,44 @@ const PLANE: Color = Color::srgb(0.55, 0.55, 0.55);
 const SKETCH: Color = Color::srgb(0.92, 0.92, 0.98);
 
 /// An eaten feature has no body and is not outlined.
-fn draw_body_box(gizmos: &mut Gizmos, build: &PropBuild, body: PropFeatureId, colour: Color) {
+fn draw_body_box(gizmos: &mut Gizmos, build: &PropBuild, body: PropFeatureId, color: Color) {
     let bounds = build.evaluated.bodies.iter().find(|(id, _)| *id == body).and_then(|(_, solid)| solid.bounds());
     if let Some((min, max)) = bounds {
-        gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), colour);
+        gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), color);
     }
 }
 
-fn draw_region(gizmos: &mut Gizmos, build: &PropBuild, sketch: PropFeatureId, region: &RegionRef, colour: Color) {
+fn draw_region(gizmos: &mut Gizmos, build: &PropBuild, sketch: PropFeatureId, region: &RegionRef, color: Color) {
     let Some(placed) = build.evaluated.sketch(sketch) else { return };
     let Some(found) = placed.arrangement.find(region) else { return };
-    // Metres; a floor so a speck of a region is not hatched a thousand times.
+    // Meters; a floor so a speck of a region is not hatched a thousand times.
     let spacing = (crate::prop::region::reach_of(&found.outer) / 10.0).max(1e-4);
     for (a, b) in crate::prop::sketch_edit::hatch(&found.outer, &found.holes, spacing) {
-        gizmos.line(placed.world(a), placed.world(b), colour);
+        gizmos.line(placed.world(a), placed.world(b), color);
     }
 }
 
 /// A corner's marker as a fraction of the prop's size. Not camera-relative,
 /// for the same reason a feature's handles are not: four viewports.
 const MARKER_SIZE: f32 = 0.012;
-/// Metres.
+/// Meters.
 const MIN_MARKER: f32 = 0.002;
 
-fn draw_located(gizmos: &mut Gizmos, at: Located, size: f32, colour: Color) {
+fn draw_located(gizmos: &mut Gizmos, at: Located, size: f32, color: Color) {
     match at {
         Located::Face { points, .. } => {
             for i in 0..points.len() {
-                gizmos.line(points[i], points[(i + 1) % points.len()], colour);
+                gizmos.line(points[i], points[(i + 1) % points.len()], color);
             }
-            let centre = points.iter().sum::<Vec3>() / points.len() as f32;
-            gizmos.sphere(Isometry3d::from_translation(centre), size * 0.5, colour);
+            let center = points.iter().sum::<Vec3>() / points.len() as f32;
+            gizmos.sphere(Isometry3d::from_translation(center), size * 0.5, color);
         }
         Located::Point(p) => {
-            gizmos.sphere(Isometry3d::from_translation(p), size, colour);
+            gizmos.sphere(Isometry3d::from_translation(p), size, color);
         }
         Located::Edge(a, b) => {
-            gizmos.line(a, b, colour);
-            gizmos.sphere(Isometry3d::from_translation((a + b) / 2.0), size * 0.5, colour);
+            gizmos.line(a, b, color);
+            gizmos.sphere(Isometry3d::from_translation((a + b) / 2.0), size * 0.5, color);
         }
     }
 }
@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn everything_but_the_prop_is_hidden_and_then_put_back_as_it_was() {
         let mut world = World::new();
-        world.init_resource::<HiddenForModelling>();
+        world.init_resource::<HiddenForModeling>();
 
         let loose = world.spawn(Visibility::Inherited).id();
         let parent = world.spawn(Visibility::Visible).id();
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn a_second_pass_does_not_forget_what_the_first_one_saved() {
         let mut world = World::new();
-        world.init_resource::<HiddenForModelling>();
+        world.init_resource::<HiddenForModeling>();
         let was_visible = world.spawn(Visibility::Visible).id();
 
         world.run_system_once(set_the_world_aside).unwrap();

@@ -60,7 +60,7 @@ Everything underneath is built ([collision.md](collision.md), Stages 1–4):
   `extrude_region` does), and `contains`, `volume` and `floor_point` leave
   them out. A pillar is a loop drawn inside a room.
 - **Arranged in local coordinates.** `region::TOLERANCE` is `1e-6`,
-  absolute, and chosen for a prop centimetres across, so the corners are
+  absolute, and chosen for a prop centimeters across, so the corners are
   arranged relative to the footprint's own first corner. Measured: slanted,
   crossing loops ~170 m out arrange correctly *without* it, unlike the CSG
   kernel; it is kept because it costs nothing, not because a test needs it.
@@ -69,7 +69,7 @@ Everything underneath is built ([collision.md](collision.md), Stages 1–4):
   inspector says which in orange, as the Mirror lists what it cannot copy.
 - **Imported from `src/prop/`, not moved.** The map editor already depends on
   the prop module (placed props), and moving `sketch.rs` and `region.rs` to
-  `src/common/` is churn with no behaviour in it. Left for when a third
+  `src/common/` is churn with no behavior in it. Left for when a third
   consumer appears.
 - **Drawn on the floor plane, in any viewport.** Each click lands where the
   pointer's ray meets the horizontal plane through the floor, snapped to the
@@ -91,7 +91,7 @@ Everything underneath is built ([collision.md](collision.md), Stages 1–4):
 ```
 FootprintRoom {
     floor: PointRef,                 // its y is the floor
-    height: f32,                     // ceiling above the floor, metres
+    height: f32,                     // ceiling above the floor, meters
     next_id: u32,                    // shared by corners, lines and regions
     corners: Vec<Corner>,
     lines: Vec<Line>,                // { id, a, b, construction }

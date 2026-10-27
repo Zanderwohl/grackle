@@ -24,7 +24,7 @@ pub struct Hull {
 }
 
 /// Where a sweep first touched something: a fraction of the move, the
-/// surface's outward normal there, and `normal · centre` at the touch.
+/// surface's outward normal there, and `normal · center` at the touch.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hit {
     pub t: f32,
@@ -32,15 +32,15 @@ pub struct Hit {
     pub plane: f32,
 }
 
-/// `centre`, moved onto `n · x = plane` along `n`. On an axis it is written
-/// as the plane's own number rather than as a step from `centre`, which keeps
+/// `center`, moved onto `n · x = plane` along `n`. On an axis it is written
+/// as the plane's own number rather than as a step from `center`, which keeps
 /// a box against a box wall on exactly the bits the per-axis code reached;
 /// the ragdoll pins those.
-pub fn onto_plane(centre: Vec3, n: Vec3, plane: f32) -> Vec3 {
-    let mut moved = centre;
+pub fn onto_plane(center: Vec3, n: Vec3, plane: f32) -> Vec3 {
+    let mut moved = center;
     match (0..3).find(|axis| n[*axis].abs() == 1.0) {
         Some(axis) => moved[axis] = n[axis] * plane,
-        None => moved += n * (plane - n.dot(centre)),
+        None => moved += n * (plane - n.dot(center)),
     }
     moved
 }
@@ -121,13 +121,13 @@ impl Hull {
     /// The first touch of a box moving by `delta`, if before the end of the
     /// move. A box already inside is not hit (that is
     /// [`Hull::escapes`]'s job); one touching and moving in is hit at zero.
-    pub fn sweep(&self, centre: Vec3, half: Vec3, delta: Vec3) -> Option<Hit> {
-        enter(self.grown(half), centre, delta)
+    pub fn sweep(&self, center: Vec3, half: Vec3, delta: Vec3) -> Option<Hit> {
+        enter(self.grown(half), center, delta)
     }
 
     /// Strict: touching is not overlapping.
-    pub fn overlaps(&self, centre: Vec3, half: Vec3) -> bool {
-        self.grown(half).all(|(n, w)| n.dot(centre) - w < 0.0)
+    pub fn overlaps(&self, center: Vec3, half: Vec3) -> bool {
+        self.grown(half).all(|(n, w)| n.dot(center) - w < 0.0)
     }
 
     /// Distance to where the ray enters, with the entry face's normal. An
@@ -165,8 +165,8 @@ impl Hull {
 
     /// Where a box overlapping this hull could go to be just clear of it, one
     /// candidate per plane, `skin` beyond it.
-    pub fn escapes(&self, centre: Vec3, half: Vec3, skin: f32) -> impl Iterator<Item = Vec3> + '_ {
-        self.grown(half).map(move |(n, w)| onto_plane(centre, n, w + skin))
+    pub fn escapes(&self, center: Vec3, half: Vec3, skin: f32) -> impl Iterator<Item = Vec3> + '_ {
+        self.grown(half).map(move |(n, w)| onto_plane(center, n, w + skin))
     }
 }
 
@@ -210,7 +210,7 @@ mod tests {
     const HALF: Vec3 = Vec3::splat(0.5);
 
     /// A wall turned 45° about Y, its inner face through the origin facing
-    /// `-X -Z`, a metre thick.
+    /// `-X -Z`, a meter thick.
     fn turned_wall() -> Hull {
         let out = Vec3::new(-1.0, 0.0, -1.0).normalize();
         let along = Vec3::new(1.0, 0.0, -1.0).normalize();

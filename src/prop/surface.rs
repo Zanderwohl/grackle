@@ -1,4 +1,4 @@
-//! A style (how light comes off a surface) and a tint (its colour), kept
+//! A style (how light comes off a surface) and a tint (its color), kept
 //! apart so red plastic and red-painted metal differ. A style is a few
 //! `StandardMaterial` numbers, not a texture.
 
@@ -57,7 +57,7 @@ impl Style {
     }
 }
 
-/// sRGB channels in `0..=1`. Not a Bevy [`Color`], which serialises as
+/// sRGB channels in `0..=1`. Not a Bevy [`Color`], which serializes as
 /// whichever representation it happens to hold.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Tint(#[serde(with = "crate::prop::nice_f32::array")] pub [f32; 3]);

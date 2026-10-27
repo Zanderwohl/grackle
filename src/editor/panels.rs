@@ -320,7 +320,7 @@ impl EditorPanels {
             next_tool: &mut *next_tool,
             // Bypassed, and marked below only if the Features panel said it
             // changed something. Borrowed mutably for the whole frame, it
-            // read as changed every frame — so the undo checkpoint serialised
+            // read as changed every frame — so the undo checkpoint serialized
             // the map on every idle frame and `map_sync`'s pre-filter never
             // filtered anything.
             editor_features: editor_features.bypass_change_detection(),

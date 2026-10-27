@@ -9,7 +9,7 @@
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::weapon::{Ammo, Equipped, WeaponCatalogue};
+use crate::common::weapon::{Ammo, Equipped, WeaponCatalog};
 use crate::game::held::{perform_weapon_clips, HeldModel, Performance, WeaponClip};
 use crate::game::player::LocalPlayer;
 use crate::game::viewmodel::Viewmodel;
@@ -36,7 +36,7 @@ impl Plugin for ReloadingPlugin {
 const STARTED: f32 = 1e-4;
 
 pub(crate) fn perform_reloads(
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     mut bodies: Query<
         (&Equipped, &Ammo, &HeldModel, &mut Performance, &mut ReloadSeen, Has<LocalPlayer>),
         Without<Viewmodel>,
@@ -54,7 +54,7 @@ pub(crate) fn perform_reloads(
         if was != left {
             seen.0 = left;
         }
-        let Some(whole) = catalogue.held_by(equipped).map(|weapon| weapon.magazine.reload) else {
+        let Some(whole) = catalog.held_by(equipped).map(|weapon| weapon.magazine.reload) else {
             continue;
         };
 
@@ -98,8 +98,8 @@ mod tests {
     /// [`RELOAD_SECONDS`] and ships no clips of its own.
     fn a_reloader(world: &mut World) -> (Entity, Entity) {
         let id = WeaponId::of("test");
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.insert(Weapon {
+        let mut catalog = WeaponCatalog::default();
+        catalog.insert(Weapon {
             id,
             name_key: "weapon.names.test".into(),
             model: None,
@@ -109,9 +109,9 @@ mod tests {
         });
         let mut loadout = Loadout::default();
         loadout.set(Slot::Primary, SlotChoices { permitted: vec![id], default: id });
-        catalogue.set_loadout(Class::Mercenary, loadout);
-        let (equipped, ammo) = catalogue.starting_equipment(Class::Mercenary, None);
-        world.insert_resource(catalogue);
+        catalog.set_loadout(Class::Mercenary, loadout);
+        let (equipped, ammo) = catalog.starting_equipment(Class::Mercenary, None);
+        world.insert_resource(catalog);
         let body = world.spawn((LocalPlayer, equipped, ammo, HeldModel::default())).id();
         let view = world.spawn((Viewmodel::default(), Performance::default())).id();
         (body, view)

@@ -9,7 +9,7 @@ use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRe
 use crate::editor::mirror::Mirroring;
 use crate::get;
 
-/// Edge length of the stand-in box, in metres. Exactly half a metre so mappers can count them.
+/// Edge length of the stand-in box, in meters. Exactly half a meter so mappers can count them.
 pub const PROP_SIZE: f32 = 0.5;
 
 /// Marks the entity a [`Prop`] feature drives, so its mesh can be attached without the feature
@@ -22,7 +22,7 @@ pub struct PropMarker;
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
 pub struct PropModel(pub String);
 
-/// A placed piece of map furniture. Its point is the centre of the box, so rotating does not slide
+/// A placed piece of map furniture. Its point is the center of the box, so rotating does not slide
 /// it across the floor.
 #[derive(Serialize, Deserialize)]
 pub struct Prop {
@@ -51,7 +51,7 @@ impl FeatureTrait for Prop {
             ui.label(get!("editor.features.prop.model"));
             changed |= ui.text_edit_singleline(&mut self.model).changed();
         });
-        let label = get!("editor.features.prop.centre");
+        let label = get!("editor.features.prop.center");
         changed |= self.location.editor_ui(ui, &label, features, prior_feature_order, retarget_request);
 
         ui.separator();
@@ -97,16 +97,16 @@ impl FeatureTrait for Prop {
         let rotation = quat_from_euler(self.rotation);
         let teal = Color::srgb_u8(90, 220, 200);
 
-        let centre = self.box_centre();
+        let center = self.box_center();
         gizmos.cube(
-            Transform::from_translation(centre)
+            Transform::from_translation(center)
                 .with_rotation(rotation)
                 .with_scale(Vec3::splat(PROP_SIZE)),
             teal,
         );
 
         let front = rotation * Vec3::NEG_Z;
-        gizmos.arrow(centre, centre + front * PROP_SIZE, teal);
+        gizmos.arrow(center, center + front * PROP_SIZE, teal);
 
         self.location.debug_gizmos(self.resolved_location, gizmos);
     }
@@ -139,7 +139,7 @@ impl FeatureTrait for Prop {
     }
 
     fn available_point_keys(&self) -> Vec<(String, String)> {
-        vec![("".into(), get!("editor.features.prop.centre"))]
+        vec![("".into(), get!("editor.features.prop.center"))]
     }
 
     fn reference_points_for_ray(&self, _ray: &Ray3d) -> Vec<(String, Vec3)> {
@@ -150,7 +150,7 @@ impl FeatureTrait for Prop {
     /// the same size standing where a model does.
     fn pick_boxes(&self) -> Vec<crate::common::ray::PickBox> {
         vec![crate::common::ray::PickBox {
-            centre: self.box_centre(),
+            center: self.box_center(),
             rotation: quat_from_euler(self.rotation),
             half_extents: Vec3::splat(PROP_SIZE * 0.5),
         }]
@@ -233,9 +233,9 @@ impl Prop {
         self
     }
 
-    /// The stand-in cube is centred on the point; a model stands on it, so its
+    /// The stand-in cube is centered on the point; a model stands on it, so its
     /// box is lifted to sit on the floor the model does.
-    fn box_centre(&self) -> Vec3 {
+    fn box_center(&self) -> Vec3 {
         match self.model.is_empty() {
             true => self.resolved_location,
             false => {

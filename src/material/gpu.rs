@@ -43,9 +43,9 @@ pub enum Sampling {
 /// What a baked texture's bytes mean, which decides how it is viewed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Encoding {
-    /// sRGB-encoded colour, as texture-graph stores anything meant for display: viewed as sRGB so
+    /// sRGB-encoded color, as texture-graph stores anything meant for display: viewed as sRGB so
     /// the GPU decodes it. Drawn as it is, Bevy, which blends in linear space, washes it out.
-    Colour,
+    Color,
     /// Linear data — roughness, metallic, a normal — read as it is stored.
     Data,
 }
@@ -65,7 +65,7 @@ impl BakedTextures {
         let asset = AssetId::Uuid { uuid: Uuid::from_u128(BAKED_ID_BASE + self.next) };
         self.next += 1;
         let format = match (encoding, texture.format()) {
-            (Encoding::Colour, wgpu::TextureFormat::Rgba8Unorm) => Some(texture_graph_gpu::SRGB_VIEW[0]),
+            (Encoding::Color, wgpu::TextureFormat::Rgba8Unorm) => Some(texture_graph_gpu::SRGB_VIEW[0]),
             _ => None,
         };
         // Narrowed to sampling: a bake's outputs are storage textures too, and an sRGB format
@@ -102,7 +102,7 @@ pub struct BevyEguiTextures<'a, 'w, 's> {
 
 impl TextureRegistry for BevyEguiTextures<'_, '_, '_> {
     fn register(&mut self, texture: &wgpu::Texture, _view: &wgpu::TextureView) -> egui::TextureId {
-        let asset = self.baked.insert(texture, Sampling::Clamp, Encoding::Colour);
+        let asset = self.baked.insert(texture, Sampling::Clamp, Encoding::Color);
         let id = self.egui.add_image(EguiTextureHandle::Weak(asset));
         self.baked.by_egui_id.insert(id, asset);
         id

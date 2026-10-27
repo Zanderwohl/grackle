@@ -3,7 +3,7 @@
 A 2D drawing on a plane, which Extrude and Revolve turn into solids. This is
 the plan for adding them to the prop editor (`src/prop/`). It is deliberately a
 small tool inside a small tool: lines first, the few checks a sweep needs to be
-honest, and nothing a full CAD sketcher has that a weapon modeller would not
+honest, and nothing a full CAD sketcher has that a weapon modeler would not
 miss. Tick items off as they land; the checklist is the source of truth for
 what is done.
 
@@ -52,7 +52,7 @@ what is done.
   itself. The entry holds the boundary, an optional label and a hint point.
   Two sweeps of one region share the entry, so re-picking it once re-points
   both, and a Problem can say "needs *Grip*" rather than list line ids.
-  Unlabelled entries nothing uses are dropped when a feature is removed.
+  Unlabeled entries nothing uses are dropped when a feature is removed.
 - **A split keeps the region; a merge loses it.** Lines drawn across a named
   region cut it into pieces whose outline is still exactly its name, so the
   pieces are joined back up and the sweep does not change — picking one piece
@@ -98,7 +98,7 @@ what is done.
 ```
 Sketch {
     on: PlaneRef,                  // a plane feature, or an origin plane
-    points:   Vec<SketchPoint>,    // id, position in the plane's x/y, metres
+    points:   Vec<SketchPoint>,    // id, position in the plane's x/y, meters
     entities: Vec<SketchEntity>,   // id, kind, construction
     next_id: u32,
 }
@@ -174,7 +174,7 @@ tested.
       hand. Done: neither sweep has a profile or placement now, and the
       profile editor is gone. The shipped launcher's one extrude, the Bore, is
       now the equivalent prism.
-- [x] Named regions: sweeps name entries on the sketch, labelled in the
+- [x] Named regions: sweeps name entries on the sketch, labeled in the
       Inspector, re-pointed from a pick or from the region at the old spot.
       Split regions are joined back up; merged ones are a Problem.
 - [ ] Hide a sketch once something sweeps it, as CAD tools do, so its regions

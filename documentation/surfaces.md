@@ -1,4 +1,4 @@
-# Surfaces: colouring and texturing a map
+# Surfaces: coloring and texturing a map
 
 How walls, floors and ceilings get a material, and why a map ships as its
 blueprint rather than as a compiled file. Tick items off as they land; the
@@ -7,7 +7,7 @@ checklist is the source of truth.
 ## Where it starts (October 2026)
 
 Every room is baked with one shared `StandardMaterial` (`RoomBake::material`),
-and `world_surface::mesh` emits UVs (metres across each face) nothing reads. Props colour themselves with a style
+and `world_surface::mesh` emits UVs (meters across each face) nothing reads. Props color themselves with a style
 and a tint, four numbers on a `StandardMaterial`.
 
 ## What is wrong with the two usual answers
@@ -25,11 +25,11 @@ reason a BSP polygon in the prop kernel does not.
 
 ## Decisions
 
-### Materials are texture-graphs, in metres
+### Materials are texture-graphs, in meters
 
 A material is a `.tgraph` ([texture-graph](../../texture-graph)) under a pack's
 `materials/`, beside `weapons.toml`, named rather than embedded. Its scale is
-stated in metres — a brick is 0.215 m by 0.065 m — never in texels per unit, so
+stated in meters — a brick is 0.215 m by 0.065 m — never in texels per unit, so
 there is no scale to retune per face.
 
 ### The system projects; the mapper does not
@@ -84,8 +84,8 @@ The palette lives in the metadata, not in the paint: a paint holding a
 material per team would be a second writer of team identity. It also makes
 reskinning a map one table.
 
-A role changes *which* material; a material that merely leans towards the team
-colour does that with a `side` parameter. Those are different jobs and stay
+A role changes *which* material; a material that merely leans toward the team
+color does that with a `side` parameter. Those are different jobs and stay
 different mechanisms.
 
 ### Variation is inputs, not more tiles
@@ -154,7 +154,7 @@ baked texel**.
   charting is still written against arbitrary planar polygons and grids, so it
   is not the thing that breaks when rooms stop being boxes.
 - On wasm a bake cannot block on a device poll. A surface is drawn in its
-  material's flat colour until its bake lands.
+  material's flat color until its bake lands.
 
 Props use the same materials, projected in object space; today's styles and
 tints become the fallback for a prop that names none.
@@ -184,7 +184,7 @@ on the checklist.
 - **Every camera sees it the same way**, because the direction comes from
   whichever camera is drawing: the four editor viewports and the play camera
   need nothing per camera. In an orthographic viewport every pixel looks the
-  same way, so a sky surface there is one flat colour. That is correct, not a
+  same way, so a sky surface there is one flat color. That is correct, not a
   bug to work round.
 - **What hits sky is lost.** A projectile reaching a sky surface is removed
   without exploding, and a tracer ends there, as in Quake: a rocket going off
@@ -231,11 +231,11 @@ faces for it, and the material side should not need to know it exists.
 - [x] Material previews on Bevy's device: a `TextureRegistry` over bevy_egui
 - [ ] texture-graph: an evaluator version, separate from `CURRENT_FORMAT_VERSION`
 - [x] Materials under a pack's `materials/`, loaded through `AssetSource`
-- [x] Bake a material's colour to a repeating tile on Bevy's device, once per name
+- [x] Bake a material's color to a repeating tile on Bevy's device, once per name
 - [x] The rest of a material: roughness, metallic, a normal map, mipmaps
 - [ ] texture-graph's GPU height-to-normal wraps at a tiling bake's edges (it clamps: a one-sided slope on the border row)
 - [ ] An environment map, so metal reflects something
-- [ ] A material's own tile size in metres, rather than `MATERIAL_TILE_METRES`
+- [ ] A material's own tile size in meters, rather than `MATERIAL_TILE_METERS`
 - [ ] Cache bakes by hash and evaluator version
 - [x] Room floor / wall / ceiling slots, classified by normal, world-space coordinates
 - [ ] Triplanar projection, for surfaces that are not axis-aligned
@@ -249,7 +249,7 @@ faces for it, and the material side should not need to know it exists.
 - [ ] Decals anchored to features
 - [ ] Props: materials in object space, style and tint as fallback
 - [ ] Full bake to atlases, cached on disk / in IndexedDB
-- [ ] Non-blocking bake on wasm, flat colour until ready
+- [ ] Non-blocking bake on wasm, flat color until ready
 - [ ] Binary blueprint encoding for `map_sync`, parsed defensively
 - [ ] Sky: the map's sky graph baked to a cubemap; a sky material sampled by view direction, unlit
 - [ ] Sky: projectiles and tracers lost against a sky surface

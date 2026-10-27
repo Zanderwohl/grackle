@@ -18,7 +18,7 @@ use crate::common::damage::{DamageSource, Died, PlayerId};
 use crate::common::fonts::DisplayFont;
 use crate::common::game_rules::GameRules;
 use crate::common::net::{has_authority, NetRole};
-use crate::common::player_colour::PlayerColour;
+use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
 use crate::game::body_mesh::body_look;
 use crate::game::damage::DamageSystems;
@@ -30,7 +30,7 @@ use crate::get;
 pub struct Standing {
     pub id: PlayerId,
     pub team: Option<Team>,
-    pub colour: PlayerColour,
+    pub color: PlayerColor,
     /// Negative is possible: killing yourself costs one.
     pub frags: i32,
     pub deaths: u32,
@@ -38,12 +38,12 @@ pub struct Standing {
 
 impl Standing {
     fn of(who: &Identity, start: &HueStart) -> Self {
-        Self { id: who.id, team: who.team, colour: who.colour(start), frags: 0, deaths: 0 }
+        Self { id: who.id, team: who.team, color: who.color(start), frags: 0, deaths: 0 }
     }
 
     /// The same rule a body is drawn by, so a row matches its body.
     pub fn swatch(&self) -> Color {
-        body_look(self.team.as_ref(), Some(&self.colour), None, None).colour
+        body_look(self.team.as_ref(), Some(&self.color), None, None).color
     }
 
     /// What one death does to the standings.
@@ -124,10 +124,10 @@ fn keep_standings(
         match here.iter().find(|who| who.id == standing.id) {
             None => commands.entity(entity).despawn(),
             Some(who) => {
-                let colour = who.colour(&start);
-                if standing.team != who.team || standing.colour != colour {
+                let color = who.color(&start);
+                if standing.team != who.team || standing.color != color {
                     standing.team = who.team;
-                    standing.colour = colour;
+                    standing.color = color;
                 }
             }
         }
@@ -290,7 +290,7 @@ mod tests {
     use super::*;
 
     fn standing(id: u64, frags: i32, deaths: u32) -> Standing {
-        Standing { id: PlayerId(id), team: None, colour: PlayerColour { hue: 0.0 }, frags, deaths }
+        Standing { id: PlayerId(id), team: None, color: PlayerColor { hue: 0.0 }, frags, deaths }
     }
 
     fn died(victim: u64, killer: DamageSource) -> Died {
@@ -349,7 +349,7 @@ mod tests {
     fn every_player_gets_one_standing_and_a_leaver_loses_theirs() {
         let mut world = World::new();
         world.insert_resource(HueStart(0.0));
-        let who = |id: u64, colour: usize| Identity { id: PlayerId(id), team: None, colour };
+        let who = |id: u64, color: usize| Identity { id: PlayerId(id), team: None, color };
         world.insert_resource(OurIdentity(who(0, 0)));
         let client = world.spawn(who(1, 1)).id();
 

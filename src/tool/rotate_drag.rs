@@ -89,7 +89,7 @@ impl RotateDragState {
             RING_RADIUS + RING_THICKNESS,
         )));
 
-        // The arrows' axis colours.
+        // The arrows' axis colors.
         let colors = [
             Color::srgb(1.0, 0.0, 0.0),
             Color::srgb(0.0, 1.0, 0.0),
@@ -306,7 +306,7 @@ impl RotateDragState {
     }
 
     /// Lights the ring on `highlighted` and puts every other one back to its
-    /// own colour, writing a material only when it is not already the one
+    /// own color, writing a material only when it is not already the one
     /// wanted — this runs every frame the pointer is over a viewport, and an
     /// unconditional write re-extracts every ring for rendering for nothing.
     fn paint(

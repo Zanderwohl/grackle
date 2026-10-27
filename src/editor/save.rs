@@ -272,7 +272,7 @@ mod tests {
     /// coordinates here.
     #[test]
     fn a_new_map_can_be_stood_in_lit_and_spawned_into() {
-        use crate::common::class::{body_centre_from_feet, CLASS_HALF_EXTENTS};
+        use crate::common::class::{body_center_from_feet, CLASS_HALF_EXTENTS};
         use crate::game::collision::CollisionWorld;
 
         let path = PathBuf::from(format!(
@@ -309,7 +309,7 @@ mod tests {
         assert!(
             spawns
                 .iter()
-                .any(|feet| world.fits(body_centre_from_feet(*feet), CLASS_HALF_EXTENTS)),
+                .any(|feet| world.fits(body_center_from_feet(*feet), CLASS_HALF_EXTENTS)),
             "no spawn point in the template has room to stand: {spawns:?}"
         );
     }

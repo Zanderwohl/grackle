@@ -19,7 +19,7 @@ grid of 9 speeds × 5 headings was still 4.7° out at worst.
 ## The design
 
 **1. A track can be timed by a foot** (`Track::timing`: `Clip`, `LeftFoot`,
-`RightFoot`). Its time is that foot's own cycle, normalised so **0–½ is the
+`RightFoot`). Its time is that foot's own cycle, normalized so **0–½ is the
 foot on the ground and ½–1 is the foot in the air**, whatever the stance
 fraction is. An arm keyed this way is right at every speed — measured 0.06° —
 because what made the function speed-dependent was only *where* in the stride
@@ -45,7 +45,7 @@ Strafes get none — pressing a diagonal is running, not strafing.
   `heading` (radians). A file without `blend` is a plain clip, as today.
   Parsed by looking for the key rather than by `#[serde(untagged)]`, so a bad
   file still says what is wrong with it.
-- At run time a blend is two neighbouring variants as a two-layer
+- At run time a blend is two neighboring variants as a two-layer
   `ClipStack`, the upper at the blend weight — `apply_stack` already lerps a
   partial layer. Outside the range, the nearest variant.
 - **Speed is not a blend axis**, because footfall timing already answers it.

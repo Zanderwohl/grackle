@@ -61,7 +61,7 @@ impl Placement {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "shape", rename_all = "snake_case")]
 pub enum Profile {
-    /// Centred on the sketch origin, `half` each way.
+    /// Centered on the sketch origin, `half` each way.
     Rect {
         #[serde(with = "crate::prop::nice_f32::array")]
         half: [f32; 2],

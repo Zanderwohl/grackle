@@ -3,7 +3,7 @@
 //! [the plan](../../documentation/prop-archetypes.md).
 //!
 //! Compared every frame rather than keyed on arrival, as a held weapon is: the
-//! class, the catalogue and the model each turn up on their own schedule.
+//! class, the catalog and the model each turn up on their own schedule.
 
 use bevy::prelude::*;
 
@@ -11,7 +11,7 @@ use crate::common::assets::Assets as PackAssets;
 use crate::common::class::Class;
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::{Pose, Skeleton};
-use crate::common::weapon::WeaponCatalogue;
+use crate::common::weapon::WeaponCatalog;
 use crate::game::body_mesh::FirstPersonHidden;
 use crate::game::player::{LocalPlayer, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
@@ -48,7 +48,7 @@ impl Plugin for HatPlugin {
 #[allow(clippy::too_many_arguments)]
 fn dress_hats(
     mut commands: Commands,
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     packs: Res<PackAssets>,
     mut cache: ResMut<PropCache>,
     mut surfaces: ResMut<SurfaceMaterials>,
@@ -59,7 +59,7 @@ fn dress_hats(
     bodies: Query<(Entity, &Class, Has<LocalPlayer>, Option<&WornHat>), With<Skeleton>>,
 ) {
     for (body, class, ours, worn) in &bodies {
-        let wanted = catalogue.loadout(*class).and_then(|loadout| loadout.hat.clone());
+        let wanted = catalog.loadout(*class).and_then(|loadout| loadout.hat.clone());
         if let Some(worn) = worn
             && worn.model == wanted
             && worn.class == *class
@@ -154,9 +154,9 @@ mod tests {
         ));
         app.init_asset::<StandardMaterial>();
         app.add_plugins(crate::common::skeleton::ClipAssetsPlugin);
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.set_loadout(Class::Mercenary, Loadout { hat: Some("top_hat".into()), ..default() });
-        app.insert_resource(catalogue)
+        let mut catalog = WeaponCatalog::default();
+        catalog.set_loadout(Class::Mercenary, Loadout { hat: Some("top_hat".into()), ..default() });
+        app.insert_resource(catalog)
             .init_resource::<PackAssets>()
             .init_resource::<ViewMode>()
             .add_plugins(HatPlugin);
@@ -200,9 +200,9 @@ mod tests {
         ));
         app.init_asset::<StandardMaterial>();
         app.add_plugins(crate::common::skeleton::ClipAssetsPlugin);
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.set_loadout(Class::Mercenary, Loadout { hat: Some("top_hat".into()), ..default() });
-        app.insert_resource(catalogue)
+        let mut catalog = WeaponCatalog::default();
+        catalog.set_loadout(Class::Mercenary, Loadout { hat: Some("top_hat".into()), ..default() });
+        app.insert_resource(catalog)
             .init_resource::<PackAssets>()
             .insert_resource(ViewMode::FirstPerson)
             .add_plugins(HatPlugin)

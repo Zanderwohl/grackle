@@ -1,4 +1,4 @@
-name_key = "prop.names.armour_pack"
+name_key = "prop.names.armor_pack"
 archetype = "pickup"
 next_id = 5
 

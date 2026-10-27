@@ -15,7 +15,7 @@ use grid::Grid;
 pub use contact::{Touched, MOST_TOUCHED};
 pub use hull::{onto_plane, Hit, Hull};
 
-/// How far each wall stands out behind its face, in metres. Only the face
+/// How far each wall stands out behind its face, in meters. Only the face
 /// matters to a sweep; the depth gives depenetration somewhere to measure from.
 const WALL_THICKNESS: f32 = 0.5;
 
@@ -69,10 +69,10 @@ impl CollisionWorld {
     }
 
     /// The first thing a box moving by `delta` touches: a wall or a solid prop.
-    pub fn sweep(&self, centre: Vec3, half: Vec3, delta: Vec3) -> Option<Hit> {
-        let (min, max) = ((centre - half).min(centre + delta - half), (centre + half).max(centre + delta + half));
-        let walls = self.hulls_near(min, max).filter_map(|hull| hull.sweep(centre, half, delta));
-        let props = self.props.iter().filter_map(|prop| rounded::sweep(prop, centre, half, delta));
+    pub fn sweep(&self, center: Vec3, half: Vec3, delta: Vec3) -> Option<Hit> {
+        let (min, max) = ((center - half).min(center + delta - half), (center + half).max(center + delta + half));
+        let walls = self.hulls_near(min, max).filter_map(|hull| hull.sweep(center, half, delta));
+        let props = self.props.iter().filter_map(|prop| rounded::sweep(prop, center, half, delta));
         walls.chain(props).fold(None, |best: Option<Hit>, hit| match best {
             Some(best) if best.t <= hit.t => Some(best),
             _ => Some(hit),
@@ -87,8 +87,8 @@ impl CollisionWorld {
     /// Swept, so a body moving further than a wall is thick cannot tunnel
     /// through. A motion turned back against where it started is dropped
     /// rather than followed, which is what stops a box rattling in a corner.
-    pub fn slide(&self, centre: Vec3, half: Vec3, delta: Vec3) -> (Vec3, Touched) {
-        let mut at = centre;
+    pub fn slide(&self, center: Vec3, half: Vec3, delta: Vec3) -> (Vec3, Touched) {
+        let mut at = center;
         let mut remaining = delta;
         let mut touched = Touched::default();
 
@@ -114,10 +114,10 @@ impl CollisionWorld {
     /// How far a box gets along `delta` before it touches anything, `SKIN`
     /// short of it. No sliding: for something that should stay on its line,
     /// like a camera.
-    pub fn travel(&self, centre: Vec3, half: Vec3, delta: Vec3) -> Vec3 {
-        match self.sweep(centre, half, delta) {
-            Some(hit) => onto_plane(centre + delta * hit.t, hit.normal, hit.plane + SKIN),
-            None => centre + delta,
+    pub fn travel(&self, center: Vec3, half: Vec3, delta: Vec3) -> Vec3 {
+        match self.sweep(center, half, delta) {
+            Some(hit) => onto_plane(center + delta * hit.t, hit.normal, hit.plane + SKIN),
+            None => center + delta,
         }
     }
 
@@ -125,9 +125,9 @@ impl CollisionWorld {
     /// slide the level part of `delta`, and come back down onto a walkable
     /// floor. `None` if there is no room to lift or nowhere to land, which the
     /// caller reads as "walk normally".
-    pub fn step_up(&self, centre: Vec3, half: Vec3, delta: Vec3, height: f32, walkable: f32) -> Option<(Vec3, Touched)> {
-        let raised = self.travel(centre, half, Vec3::Y * height);
-        let lift = raised.y - centre.y;
+    pub fn step_up(&self, center: Vec3, half: Vec3, delta: Vec3, height: f32, walkable: f32) -> Option<(Vec3, Touched)> {
+        let raised = self.travel(center, half, Vec3::Y * height);
+        let lift = raised.y - center.y;
         if lift <= SKIN {
             return None;
         }
@@ -139,10 +139,10 @@ impl CollisionWorld {
     /// The walkable surface right under a box, if there is one within
     /// `reach` — a normal no further from up than `walkable`, a cosine — as
     /// where the box rests on it and its normal.
-    pub fn ground(&self, centre: Vec3, half: Vec3, reach: f32, walkable: f32) -> Option<(Vec3, Vec3)> {
+    pub fn ground(&self, center: Vec3, half: Vec3, reach: f32, walkable: f32) -> Option<(Vec3, Vec3)> {
         let delta = Vec3::NEG_Y * reach;
-        let hit = self.sweep(centre, half, delta).filter(|hit| hit.normal.y >= walkable)?;
-        let touching = centre + delta * hit.t;
+        let hit = self.sweep(center, half, delta).filter(|hit| hit.normal.y >= walkable)?;
+        let touching = center + delta * hit.t;
         // Backed off straight up, not along the normal: along it, a body
         // settled each tick on a slope creeps down it.
         let resting = if hit.normal.y == 1.0 {
@@ -159,10 +159,10 @@ impl CollisionWorld {
 
     /// Whether a body stands clear: in the map and touching no wall. A low
     /// ceiling is a slab the body overlaps, so this covers headroom too.
-    pub fn fits(&self, centre: Vec3, half: Vec3) -> bool {
-        self.inside_map(centre)
-            && !self.hulls_near(centre - half, centre + half).any(|hull| hull.overlaps(centre, half))
-            && !self.props.iter().any(|prop| prop.overlaps(centre, half))
+    pub fn fits(&self, center: Vec3, half: Vec3) -> bool {
+        self.inside_map(center)
+            && !self.hulls_near(center - half, center + half).any(|hull| hull.overlaps(center, half))
+            && !self.props.iter().any(|prop| prop.overlaps(center, half))
     }
 
     /// How far along the ray the first wall is, or `None` if nothing solid is
@@ -187,20 +187,20 @@ impl CollisionWorld {
     ///
     /// Escapes that land inside a room beat shorter ones that do not; least
     /// depth alone pushes a body under a raised floor down through the map.
-    pub fn depenetrate(&self, centre: Vec3, half: Vec3) -> Vec3 {
+    pub fn depenetrate(&self, center: Vec3, half: Vec3) -> Vec3 {
         /// Large enough that any escape staying in the map wins.
         const OUTSIDE_MAP_PENALTY: f32 = 1.0e6;
 
-        let mut centre = centre;
+        let mut center = center;
 
         // Clearing one wall can bury the body in another. Bounded, for a body
         // wedged with nowhere to go.
         for _ in 0..4 {
-            let Some(escapes) = self.escapes(centre, half) else { break };
+            let Some(escapes) = self.escapes(center, half) else { break };
 
             let mut best: Option<(f32, Vec3)> = None;
             for moved in escapes {
-                let mut score = (moved - centre).length();
+                let mut score = (moved - center).length();
                 if !self.inside_map(moved) {
                     score += OUTSIDE_MAP_PENALTY;
                 }
@@ -210,27 +210,27 @@ impl CollisionWorld {
             }
 
             match best {
-                Some((_, moved)) => centre = moved,
+                Some((_, moved)) => center = moved,
                 None => break,
             }
         }
 
-        centre
+        center
     }
 
     /// The ways out of the first wall or solid prop the box is inside. A
     /// rounded prop is escaped along the axes, by its extent on each as the
     /// body would meet it moving along that axis from where it is.
-    fn escapes(&self, centre: Vec3, half: Vec3) -> Option<Vec<Vec3>> {
-        if let Some(hull) = self.hulls_near(centre - half, centre + half).find(|hull| hull.overlaps(centre, half)) {
-            return Some(hull.escapes(centre, half, SKIN).collect());
+    fn escapes(&self, center: Vec3, half: Vec3) -> Option<Vec<Vec3>> {
+        if let Some(hull) = self.hulls_near(center - half, center + half).find(|hull| hull.overlaps(center, half)) {
+            return Some(hull.escapes(center, half, SKIN).collect());
         }
-        let prop = self.props.iter().find(|prop| prop.overlaps(centre, half))?;
+        let prop = self.props.iter().find(|prop| prop.overlaps(center, half))?;
         let mut escapes = Vec::with_capacity(6);
         for axis in 0..3 {
-            let (min, max) = prop.slab_along(axis, centre, half)?;
+            let (min, max) = prop.slab_along(axis, center, half)?;
             for value in [max + half[axis] + SKIN, min - half[axis] - SKIN] {
-                let mut moved = centre;
+                let mut moved = center;
                 moved[axis] = value;
                 escapes.push(moved);
             }
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn a_crate_stops_a_body_walking_into_it() {
         let mut world = one_room();
-        world.props.push(RoundedBox { centre: Vec3::new(2.0, 0.5, 0.0), core: Vec3::splat(0.5), radius: 0.0 });
+        world.props.push(RoundedBox { center: Vec3::new(2.0, 0.5, 0.0), core: Vec3::splat(0.5), radius: 0.0 });
 
         let start = Vec3::new(0.0, HALF.y + 0.01, 0.0);
         let (end, touched) = world.slide(start, HALF, Vec3::new(3.0, 0.0, 0.0));
@@ -291,19 +291,19 @@ mod tests {
     #[test]
     fn a_body_inside_a_crate_is_pushed_out_of_it() {
         let mut world = one_room();
-        world.props.push(RoundedBox { centre: Vec3::new(0.2, 0.5, 0.0), core: Vec3::splat(0.5), radius: 0.0 });
+        world.props.push(RoundedBox { center: Vec3::new(0.2, 0.5, 0.0), core: Vec3::splat(0.5), radius: 0.0 });
 
         let inside = Vec3::new(0.0, HALF.y + 0.01, 0.0);
         let out = world.depenetrate(inside, HALF);
         assert!(world.fits(out, HALF), "still inside the crate at {out}");
     }
 
-    /// Head on, a pillar stops a body; off-centre, its round side turns the
+    /// Head on, a pillar stops a body; off-center, its round side turns the
     /// body aside and lets it past, which a square one would not.
     #[test]
     fn a_round_pillar_is_round() {
         let mut world = one_room();
-        world.props.push(RoundedBox { centre: Vec3::new(2.0, 2.0, 0.0), core: Vec3::new(0.0, 2.0, 0.0), radius: 0.5 });
+        world.props.push(RoundedBox { center: Vec3::new(2.0, 2.0, 0.0), core: Vec3::new(0.0, 2.0, 0.0), radius: 0.5 });
 
         let head_on = world.slide(Vec3::new(0.0, HALF.y + 0.01, 0.0), HALF, Vec3::X * 3.0).0;
         assert!((head_on.x - (1.5 - HALF.x)).abs() < 0.01, "head on stopped at {}", head_on.x);
@@ -357,7 +357,7 @@ mod tests {
         let start = Vec3::new(0.0, 0.9, 0.0);
         let (end, _) = world.slide(start, HALF, Vec3::new(1000.0, 0.0, 0.0));
 
-        assert!(end.x < 5.0, "tunnelled through to {}", end.x);
+        assert!(end.x < 5.0, "tunneled through to {}", end.x);
     }
 
     /// Breaks if collision stops using the mesh's face subtraction.
@@ -445,7 +445,7 @@ mod tests {
         assert!(!world.inside_map(Vec3::new(8.0, 1.0, 8.0)), "the far side of the diagonal is map");
     }
 
-    /// A floor that is not a box: two triangles, tilted up towards `+X`.
+    /// A floor that is not a box: two triangles, tilted up toward `+X`.
     fn a_ramp() -> CollisionWorld {
         let mut world = one_room();
         let (a, b) = (Vec3::new(-4.0, 0.0, -4.0), Vec3::new(-4.0, 0.0, 4.0));

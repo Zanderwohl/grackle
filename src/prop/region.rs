@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::prop::sketch::{Sketch, SketchId};
 
-/// Metres. Points nearer than this are one point, or on a line. Well below
+/// Meters. Points nearer than this are one point, or on a line. Well below
 /// anything drawn on a prop, well above `f32` rounding at its size.
 pub(crate) const TOLERANCE: f32 = 1e-6;
 
@@ -49,7 +49,7 @@ pub struct Region {
 }
 
 impl Region {
-    /// Square metres, holes taken away.
+    /// Square meters, holes taken away.
     pub fn area(&self) -> f32 {
         signed_area(&self.outer) - self.holes.iter().map(|hole| signed_area(hole).abs()).sum::<f32>()
     }
@@ -812,7 +812,7 @@ mod tests {
     }
 
     #[test]
-    fn a_region_merged_with_its_neighbour_is_lost() {
+    fn a_region_merged_with_its_neighbor_is_lost() {
         let mut sketch = Sketch::default();
         square(&mut sketch, 0.0, 2.0);
         let divider = line(&mut sketch, [1.0, 0.0], [1.0, 2.0]);

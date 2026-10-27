@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn a_shot_through_the_head_is_a_head_shot() {
         let boxes = body(Vec3::ZERO);
-        let ray = shoot_at(Vec3::new(0.0, boxes.head.unwrap().centre.y, -5.0), boxes.head.unwrap().centre);
+        let ray = shoot_at(Vec3::new(0.0, boxes.head.unwrap().center.y, -5.0), boxes.head.unwrap().center);
 
         let hit = trace(&ray, 100.0, [((), boxes)]).expect("missed a head it was aimed at");
         assert_eq!(hit.zone, HitZone::Head);
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn a_shot_through_the_chest_is_a_body_shot() {
         let boxes = body(Vec3::ZERO);
-        let chest = Vec3::new(0.0, boxes.body.centre.y, 0.0);
+        let chest = Vec3::new(0.0, boxes.body.center.y, 0.0);
         let hit = trace(&shoot_at(Vec3::new(0.0, chest.y, -5.0), chest), 100.0, [((), boxes)]).unwrap();
         assert_eq!(hit.zone, HitZone::Body);
     }
@@ -108,7 +108,7 @@ mod tests {
     fn the_nearer_body_is_the_one_that_is_hit() {
         let near = body(Vec3::new(0.0, 0.0, 0.0));
         let far = body(Vec3::new(0.0, 0.0, 10.0));
-        let ray = shoot_at(Vec3::new(0.0, near.body.centre.y, -5.0), Vec3::new(0.0, near.body.centre.y, 0.0));
+        let ray = shoot_at(Vec3::new(0.0, near.body.center.y, -5.0), Vec3::new(0.0, near.body.center.y, 0.0));
 
         let hit = trace(&ray, 100.0, [("near", near), ("far", far)]).unwrap();
         assert_eq!(hit.target, "near");
@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn a_body_past_the_range_is_not_hit() {
         let boxes = body(Vec3::new(0.0, 0.0, 20.0));
-        let ray = Ray3d::new(Vec3::new(0.0, boxes.body.centre.y, 0.0), Dir3::Z);
+        let ray = Ray3d::new(Vec3::new(0.0, boxes.body.center.y, 0.0), Dir3::Z);
 
         assert!(trace(&ray, 5.0, [((), boxes)]).is_none());
         assert!(trace(&ray, 100.0, [((), boxes)]).is_some());
@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn a_ray_pointed_elsewhere_hits_nothing() {
         let boxes = body(Vec3::ZERO);
-        let ray = Ray3d::new(Vec3::new(0.0, boxes.body.centre.y, -5.0), Dir3::NEG_Z);
+        let ray = Ray3d::new(Vec3::new(0.0, boxes.body.center.y, -5.0), Dir3::NEG_Z);
         assert!(trace(&ray, 100.0, [((), boxes)]).is_none());
     }
 }

@@ -20,7 +20,7 @@
 use bevy::prelude::*;
 
 /// How close to a plane counts as *on* it. Generous, because a tolerance tight
-/// enough for a millimetre leaves a sliver of polygon at every cut.
+/// enough for a millimeter leaves a sliver of polygon at every cut.
 const EPSILON: f32 = 1e-5;
 
 /// `w` is the distance from the origin along `normal`.
@@ -395,7 +395,7 @@ mod tests {
         signed_volume_x6(polygons) / 6.0
     }
 
-    /// Centred on `at`.
+    /// Centered on `at`.
     fn block(size: Vec3, at: Vec3) -> Vec<Polygon<u8>> {
         cuboid(at - size / 2.0, at + size / 2.0, 0)
     }
@@ -407,7 +407,7 @@ mod tests {
         let solid = block(Vec3::ONE, Vec3::ZERO);
         assert!(
             (volume(&solid) - 1.0).abs() < 1e-4,
-            "a 1m box came out at {} cubic metres",
+            "a 1m box came out at {} cubic meters",
             volume(&solid),
         );
     }
@@ -464,8 +464,8 @@ mod tests {
         let solid = block(Vec3::new(2.0, 3.0, 4.0), Vec3::new(1.0, 1.0, 1.0));
         assert!((volume(&solid) - 24.0).abs() < 1e-4);
         for polygon in &solid {
-            let centre = polygon.vertices.iter().sum::<Vec3>() / 4.0;
-            assert!(polygon.plane.normal.dot(centre - Vec3::ONE) > 0.0);
+            let center = polygon.vertices.iter().sum::<Vec3>() / 4.0;
+            assert!(polygon.plane.normal.dot(center - Vec3::ONE) > 0.0);
         }
     }
 

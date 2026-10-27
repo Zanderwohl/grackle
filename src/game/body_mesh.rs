@@ -17,7 +17,7 @@ use crate::common::flame::Burning;
 use crate::common::skeleton::mesh::body_meshes;
 use crate::common::skeleton::rig::Proportions;
 use crate::common::skeleton::{Pose, Skeleton};
-use crate::common::player_colour::PlayerColour;
+use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
 use crate::game::player::{LocalPlayer, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
@@ -39,30 +39,30 @@ pub struct BoneMesh(pub usize);
 #[derive(Component)]
 pub struct FirstPersonHidden;
 
-/// A body's colour when it has no team and no [`PlayerColour`], which both
+/// A body's color when it has no team and no [`PlayerColor`], which both
 /// outrank it: who a body is, and above all which side, is what must read
 /// across a room.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct BodyTint(pub Color);
 
-pub const DEFAULT_BODY_COLOUR: Color = Color::srgb(0.62, 0.64, 0.70);
+pub const DEFAULT_BODY_COLOR: Color = Color::srgb(0.62, 0.64, 0.70);
 
 /// The emissive light of a body on fire, in linear light. A glow rather than a
-/// hue shift, so it reads the same on all four team colours. Over 1.0 on
+/// hue shift, so it reads the same on all four team colors. Over 1.0 on
 /// purpose: the play camera is HDR and tone-mapped.
 pub const BURNING_GLOW: LinearRgba = LinearRgba::rgb(2.4, 0.55, 0.06);
 
 /// How a body is drawn. Also the material cache's key.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BodyLook {
-    pub colour: Color,
+    pub color: Color,
     pub burning: bool,
 }
 
 impl BodyLook {
-    /// Colour to eight bits a channel, plus the fire.
+    /// Color to eight bits a channel, plus the fire.
     fn key(self) -> ([u8; 4], bool) {
-        (self.colour.to_srgba().to_u8_array(), self.burning)
+        (self.color.to_srgba().to_u8_array(), self.burning)
     }
 }
 
@@ -70,16 +70,16 @@ impl BodyLook {
 /// [`BodyTint`], which would have to be restored when the fire went out.
 pub fn body_look(
     team: Option<&Team>,
-    player: Option<&PlayerColour>,
+    player: Option<&PlayerColor>,
     tint: Option<&BodyTint>,
     burning: Option<&Burning>,
 ) -> BodyLook {
     BodyLook {
-        colour: team
-            .map(|team| team.colour())
-            .or_else(|| player.map(|player| player.colour()))
+        color: team
+            .map(|team| team.color())
+            .or_else(|| player.map(|player| player.color()))
             .or_else(|| tint.map(|tint| tint.0))
-            .unwrap_or(DEFAULT_BODY_COLOUR),
+            .unwrap_or(DEFAULT_BODY_COLOR),
         burning: burning.is_some(),
     }
 }
@@ -100,7 +100,7 @@ impl BodyMaterials {
             .entry(look.key())
             .or_insert_with(|| {
                 materials.add(StandardMaterial {
-                    base_color: look.colour,
+                    base_color: look.color,
                     emissive: if look.burning { BURNING_GLOW } else { LinearRgba::BLACK },
                     perceptual_roughness: 0.85,
                     ..default()
@@ -155,9 +155,9 @@ impl Plugin for BodyMeshPlugin {
         app
             .init_resource::<BodyMeshCache>()
             .init_resource::<BodyMaterials>()
-            // `recolour_bodies` after the build, so a body lit on the frame it
+            // `recolor_bodies` after the build, so a body lit on the frame it
             // is dressed ends up lit.
-            .add_systems(Update, (build_body_meshes, recolour_bodies).chain())
+            .add_systems(Update, (build_body_meshes, recolor_bodies).chain())
             .add_systems(Update, hide_own_body)
             // Before propagation, or every body is drawn a frame behind its
             // bones.
@@ -167,7 +167,7 @@ impl Plugin for BodyMeshPlugin {
 }
 
 /// Give every body a part per bone, and rebuild them if it changes shape or
-/// colour. Change detection covers insertion, so this also dresses new bodies.
+/// color. Change detection covers insertion, so this also dresses new bodies.
 fn build_body_meshes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -179,12 +179,12 @@ fn build_body_meshes(
             Entity,
             &Skeleton,
             Option<&Team>,
-            Option<&PlayerColour>,
+            Option<&PlayerColor>,
             Option<&BodyTint>,
             Option<&Burning>,
             Option<&BodyMesh>,
         ),
-        Or<(Changed<Skeleton>, Changed<Team>, Changed<PlayerColour>, Changed<BodyTint>)>,
+        Or<(Changed<Skeleton>, Changed<Team>, Changed<PlayerColor>, Changed<BodyTint>)>,
     >,
 ) {
     for (body, skeleton, team, player, tint, burning, existing) in &bodies {
@@ -229,12 +229,12 @@ fn build_body_meshes(
 /// Swap the material when a body catches fire or goes out, rather than letting
 /// `build_body_meshes` respawn every part, which a flamethrower would trigger
 /// ten times a second.
-fn recolour_bodies(
+fn recolor_bodies(
     mut palette: ResMut<BodyMaterials>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut extinguished: RemovedComponents<Burning>,
     lit: Query<Entity, Added<Burning>>,
-    bodies: Query<(&BodyMesh, Option<&Team>, Option<&PlayerColour>, Option<&BodyTint>, Option<&Burning>)>,
+    bodies: Query<(&BodyMesh, Option<&Team>, Option<&PlayerColor>, Option<&BodyTint>, Option<&Burning>)>,
     mut parts: Query<&mut MeshMaterial3d<StandardMaterial>>,
 ) {
     // Both edges, or a body stays scorched after the fire is out.
@@ -262,7 +262,7 @@ fn pose_body_meshes(
     mut parts: Query<(&BoneMesh, &mut Transform)>,
 ) {
     for (skeleton, pose, offset, mesh) in &bodies {
-        // The skeleton's root in the body's frame: its feet, below the centre
+        // The skeleton's root in the body's frame: its feet, below the center
         // of the collision box.
         let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
 
@@ -381,7 +381,7 @@ mod tests {
         }
     }
 
-    /// A burning body keeps its team colour and gets a separate material.
+    /// A burning body keeps its team color and gets a separate material.
     #[test]
     fn burning_lights_a_body_up_without_changing_whose_it_is() {
         use crate::common::damage::DamageSource;
@@ -393,8 +393,8 @@ mod tests {
             let plain = body_look(Some(&team), None, None, None);
             let alight = body_look(Some(&team), None, None, Some(&burning));
 
-            assert_eq!(plain.colour, team.colour());
-            assert_eq!(alight.colour, team.colour(), "the fire repainted a {team:?}");
+            assert_eq!(plain.color, team.color());
+            assert_eq!(alight.color, team.color(), "the fire repainted a {team:?}");
             assert!(!plain.burning);
             assert!(alight.burning);
             assert_ne!(plain.key(), alight.key(), "the two share a material");
@@ -402,16 +402,16 @@ mod tests {
     }
 
     #[test]
-    fn a_team_outranks_a_players_colour_which_outranks_a_tint_then_the_default() {
+    fn a_team_outranks_a_players_color_which_outranks_a_tint_then_the_default() {
         let tint = BodyTint(Color::srgb(0.2, 0.9, 0.3));
-        let player = PlayerColour { hue: 200.0 };
+        let player = PlayerColor { hue: 200.0 };
 
-        assert_eq!(body_look(None, None, None, None).colour, DEFAULT_BODY_COLOUR);
-        assert_eq!(body_look(None, None, Some(&tint), None).colour, tint.0);
-        assert_eq!(body_look(None, Some(&player), Some(&tint), None).colour, player.colour());
+        assert_eq!(body_look(None, None, None, None).color, DEFAULT_BODY_COLOR);
+        assert_eq!(body_look(None, None, Some(&tint), None).color, tint.0);
+        assert_eq!(body_look(None, Some(&player), Some(&tint), None).color, player.color());
         assert_eq!(
-            body_look(Some(&Team::Blue), Some(&player), Some(&tint), None).colour,
-            Team::Blue.colour(),
+            body_look(Some(&Team::Blue), Some(&player), Some(&tint), None).color,
+            Team::Blue.color(),
             "which side somebody is on was hidden"
         );
     }

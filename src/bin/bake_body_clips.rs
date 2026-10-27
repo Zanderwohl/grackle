@@ -73,7 +73,7 @@ fn main() {
     for seed in chosen {
         let clip = bake(seed);
         let path = directory.join(format!("{}.{CLIP_EXTENSION}", seed.state.clip_name()));
-        let text = clip.to_toml().expect("a clip should serialise");
+        let text = clip.to_toml().expect("a clip should serialize");
 
         match outcome(&path, &clip, &text, args.force) {
             Outcome::Written => {
@@ -122,7 +122,7 @@ fn outcome(path: &std::path::Path, clip: &StateAnimation, text: &str, force: boo
     match StateAnimation::from_toml(&existing) {
         Ok(found) => {
             let mut fresh = clip.clone();
-            fresh.normalise();
+            fresh.normalize();
             if found == fresh {
                 Outcome::Unchanged
             } else {

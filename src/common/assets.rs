@@ -116,7 +116,7 @@ mod tests {
     }
 
     /// A working directory that is not the repo root fails here rather than as
-    /// an empty catalogue.
+    /// an empty catalog.
     #[test]
     fn a_file_that_is_there_comes_back() {
         let source = NativeFiles;

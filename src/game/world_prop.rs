@@ -12,10 +12,10 @@ use serde::{Deserialize, Serialize};
 use crate::common::app_mode::AppMode;
 use crate::common::assets::Assets as PackAssets;
 use crate::common::class::Stance;
-use crate::common::damage::{Armour, Damageable};
+use crate::common::damage::{Armor, Damageable};
 use crate::common::hitbox::{Box3, Hitboxes};
 use crate::common::skeleton::clip::Clip;
-use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalogue};
+use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalog};
 use crate::editor::prop::{PropMarker, PropModel};
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{PhysicsBody, Player};
@@ -77,11 +77,11 @@ struct DrawnProp {
 #[derive(Component)]
 struct WorldPropPart;
 
-/// The trigger a pickup with no colliders is taken through, in metres.
+/// The trigger a pickup with no colliders is taken through, in meters.
 const DEFAULT_PICKUP_RADIUS: f32 = 0.4;
 
 /// How far a [`PickupStyle::Tf2`] pickup is drawn above where it stands, in
-/// metres, and how fast it turns.
+/// meters, and how fast it turns.
 const HOVER: f32 = 0.15;
 const SPIN_DEGREES_PER_SECOND: f32 = 90.0;
 
@@ -348,7 +348,7 @@ pub fn placed_colliders<'a>(
 }
 
 /// What a pickup is taken through: its colliders, or a small sphere when it
-/// has none, so a pack modelled without one can still be walked into.
+/// has none, so a pack modeled without one can still be walked into.
 fn triggers(baked: &BakedProp, at: &Transform) -> Vec<RoundedBox> {
     if baked.colliders.is_empty() {
         let fallback = Collider {
@@ -386,13 +386,13 @@ fn box_breakables(
 
 fn bounding(shapes: impl Iterator<Item = RoundedBox>) -> Option<Box3> {
     let (min, max) = shapes.fold(None, |bounds: Option<(Vec3, Vec3)>, shape| {
-        let (lo, hi) = (shape.centre - shape.half_extents(), shape.centre + shape.half_extents());
+        let (lo, hi) = (shape.center - shape.half_extents(), shape.center + shape.half_extents());
         Some(match bounds {
             Some((min, max)) => (min.min(lo), max.max(hi)),
             None => (lo, hi),
         })
     })?;
-    Some(Box3 { centre: (min + max) * 0.5, half_extents: (max - min) * 0.5 })
+    Some(Box3 { center: (min + max) * 0.5, half_extents: (max - min) * 0.5 })
 }
 
 /// Build the solid props into the collision world. On every machine, so a
@@ -422,14 +422,14 @@ fn take_pickups(
     mut commands: Commands,
     time: Res<Time>,
     cache: Res<PropCache>,
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     mut pickups: Query<(Entity, &WorldProp, &mut Pickup, Option<&mut Restock>)>,
     mut bodies: Query<
         (
             &PhysicsBody,
             &Stance,
             Option<&mut Damageable>,
-            Option<&mut Armour>,
+            Option<&mut Armor>,
             Option<&mut Ammo>,
             Option<&Equipped>,
         ),
@@ -454,13 +454,13 @@ fn take_pickups(
 
         let Some(baked) = cache.get(&prop.model) else { continue };
         let triggers = triggers(baked, &prop.transform());
-        for (body, stance, health, armour, ammo, equipped) in &mut bodies {
+        for (body, stance, health, armor, ammo, equipped) in &mut bodies {
             let half = stance.half_extents();
             if !triggers.iter().any(|trigger| trigger.overlaps(body.current, half)) {
                 continue;
             }
             let ammo = ammo.zip(equipped).map(|(ammo, equipped)| (ammo, equipped));
-            if !give(&baked.pickup, health, armour, ammo, &catalogue) {
+            if !give(&baked.pickup, health, armor, ammo, &catalog) {
                 continue;
             }
             pickup.taken = true;
@@ -474,9 +474,9 @@ fn take_pickups(
 fn give(
     spec: &PickupSpec,
     health: Option<Mut<Damageable>>,
-    armour: Option<Mut<Armour>>,
+    armor: Option<Mut<Armor>>,
     ammo: Option<(Mut<Ammo>, &Equipped)>,
-    catalogue: &WeaponCatalogue,
+    catalog: &WeaponCatalog,
 ) -> bool {
     let fraction = spec.amount.max(0.0);
     match spec.kind {
@@ -492,7 +492,7 @@ fn give(
             let Some((mut ammo, equipped)) = ammo else { return false };
             let mut gained = false;
             for slot in Slot::ALL {
-                let Some(weapon) = equipped.get(slot).and_then(|id| catalogue.get(id)) else {
+                let Some(weapon) = equipped.get(slot).and_then(|id| catalog.get(id)) else {
                     continue;
                 };
                 let max = weapon.magazine.reserve;
@@ -508,14 +508,14 @@ fn give(
             gained
         }
         PickupKind::Armor => {
-            let Some(mut armour) = armour else { return false };
-            if armour.is_full() {
+            let Some(mut armor) = armor else { return false };
+            if armor.is_full() {
                 return false;
             }
-            let amount = share(armour.max(), fraction);
-            armour.add(amount) > 0
+            let amount = share(armor.max(), fraction);
+            armor.add(amount) > 0
         }
-        // Specced, with no behaviour yet: there is no flag mode.
+        // Specced, with no behavior yet: there is no flag mode.
         PickupKind::Flag => false,
     }
 }
@@ -645,7 +645,7 @@ mod tests {
         app.init_state::<AppMode>()
             .init_resource::<PackAssets>()
             .init_resource::<CollisionWorld>()
-            .init_resource::<WeaponCatalogue>()
+            .init_resource::<WeaponCatalog>()
             .add_plugins(WorldPropPlugin);
         app
     }
@@ -765,9 +765,9 @@ mod tests {
         assert!(world.resource::<CollisionWorld>().props.is_empty(), "a health pack is a wall");
     }
 
-    fn rifle() -> (WeaponCatalogue, Equipped) {
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.insert(Weapon {
+    fn rifle() -> (WeaponCatalog, Equipped) {
+        let mut catalog = WeaponCatalog::default();
+        catalog.insert(Weapon {
             id: WeaponId::of("rifle"),
             name_key: "weapon.names.rifle".into(),
             model: None,
@@ -777,15 +777,15 @@ mod tests {
         });
         let mut equipped = Equipped::default();
         equipped.slots[Slot::Primary.index()] = Some(WeaponId::of("rifle"));
-        (catalogue, equipped)
+        (catalog, equipped)
     }
 
-    fn give_to(spec: PickupSpec, health: &mut Damageable, ammo: &mut Ammo, equipped: &Equipped, catalogue: &WeaponCatalogue) -> bool {
+    fn give_to(spec: PickupSpec, health: &mut Damageable, ammo: &mut Ammo, equipped: &Equipped, catalog: &WeaponCatalog) -> bool {
         let mut world = World::new();
         let body = world.spawn((*health, *ammo)).id();
         let mut query = world.query::<(&mut Damageable, &mut Ammo)>();
         let (h, a) = query.get_mut(&mut world, body).unwrap();
-        let gained = give(&spec, Some(h), None, Some((a, equipped)), catalogue);
+        let gained = give(&spec, Some(h), None, Some((a, equipped)), catalog);
         *health = *world.get::<Damageable>(body).unwrap();
         *ammo = *world.get::<Ammo>(body).unwrap();
         gained
@@ -793,55 +793,55 @@ mod tests {
 
     #[test]
     fn a_health_pack_heals_by_a_fraction_and_is_walked_past_at_full() {
-        let (catalogue, equipped) = rifle();
+        let (catalog, equipped) = rifle();
         let spec = PickupSpec { kind: PickupKind::Health, amount: 0.25, respawn: 1.0, ..default() };
         let mut ammo = Ammo::default();
 
         let mut health = Damageable::with_health(200);
-        assert!(!give_to(spec, &mut health, &mut ammo, &equipped, &catalogue), "full health took it");
+        assert!(!give_to(spec, &mut health, &mut ammo, &equipped, &catalog), "full health took it");
 
         health.apply(120);
-        assert!(give_to(spec, &mut health, &mut ammo, &equipped, &catalogue));
+        assert!(give_to(spec, &mut health, &mut ammo, &equipped, &catalog));
         assert_eq!(health.health(), 130);
     }
 
     #[test]
     fn an_ammo_pack_tops_up_reserves_and_no_further() {
-        let (catalogue, equipped) = rifle();
+        let (catalog, equipped) = rifle();
         let spec = PickupSpec { kind: PickupKind::Ammo, amount: 0.5, respawn: 1.0, ..default() };
         let mut health = Damageable::with_health(100);
         let mut ammo = Ammo::default();
         ammo.at_mut(Slot::Primary).reserve = 30;
 
-        assert!(give_to(spec, &mut health, &mut ammo, &equipped, &catalogue));
+        assert!(give_to(spec, &mut health, &mut ammo, &equipped, &catalog));
         assert_eq!(ammo.at(Slot::Primary).reserve, 40, "topped up past the reserve");
-        assert!(!give_to(spec, &mut health, &mut ammo, &equipped, &catalogue), "full reserves took it");
+        assert!(!give_to(spec, &mut health, &mut ammo, &equipped, &catalog), "full reserves took it");
     }
 
     #[test]
     fn a_flag_gives_nothing_yet() {
-        let (catalogue, equipped) = rifle();
+        let (catalog, equipped) = rifle();
         let mut health = Damageable::with_health(100);
         health.apply(50);
         let mut ammo = Ammo::default();
         let spec = PickupSpec { kind: PickupKind::Flag, amount: 1.0, respawn: 1.0, ..default() };
-        assert!(!give_to(spec, &mut health, &mut ammo, &equipped, &catalogue));
+        assert!(!give_to(spec, &mut health, &mut ammo, &equipped, &catalog));
     }
 
     #[test]
-    fn armour_fills_by_a_fraction_of_its_maximum_and_is_walked_past_full() {
+    fn armor_fills_by_a_fraction_of_its_maximum_and_is_walked_past_full() {
         let mut world = World::new();
-        let body = world.spawn(Armour::default()).id();
+        let body = world.spawn(Armor::default()).id();
         let spec = PickupSpec { kind: PickupKind::Armor, amount: 0.6, respawn: 1.0, ..default() };
         let take = |world: &mut World| {
-            let armour = world.get_mut::<Armour>(body).unwrap();
-            give(&spec, None, Some(armour), None, &WeaponCatalogue::default())
+            let armor = world.get_mut::<Armor>(body).unwrap();
+            give(&spec, None, Some(armor), None, &WeaponCatalog::default())
         };
 
         assert!(take(&mut world));
-        assert_eq!(world.get::<Armour>(body).unwrap().points(), 60);
+        assert_eq!(world.get::<Armor>(body).unwrap().points(), 60);
         assert!(take(&mut world), "a part-full body was refused");
-        assert!(world.get::<Armour>(body).unwrap().is_full());
-        assert!(!take(&mut world), "full armour took it");
+        assert!(world.get::<Armor>(body).unwrap().is_full());
+        assert!(!take(&mut world), "full armor took it");
     }
 }

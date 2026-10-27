@@ -16,12 +16,12 @@ use crate::get;
 /// How the copy is made from the original. Every one keeps a room an axis-aligned box.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Symmetry {
-    /// Across the plane through the centre facing X: east becomes west.
+    /// Across the plane through the center facing X: east becomes west.
     #[default]
     MirrorX,
-    /// Across the plane through the centre facing Z.
+    /// Across the plane through the center facing Z.
     MirrorZ,
-    /// Half a turn about the vertical through the centre. Keeps handedness, so the copy is the same
+    /// Half a turn about the vertical through the center. Keeps handedness, so the copy is the same
     /// base turned round rather than its mirror image.
     Rotate180,
 }
@@ -42,12 +42,12 @@ impl Symmetry {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mirroring {
     pub symmetry: Symmetry,
-    pub centre: Vec3,
+    pub center: Vec3,
 }
 
 impl Mirroring {
     pub fn point(&self, point: Vec3) -> Vec3 {
-        self.centre + self.direction(point - self.centre)
+        self.center + self.direction(point - self.center)
     }
 
     pub fn direction(&self, v: Vec3) -> Vec3 {
@@ -113,13 +113,13 @@ struct MirroredCopy {
 /// edit to one half is an edit to both. A copy is never a feature itself, and nothing references it.
 #[derive(Serialize, Deserialize)]
 pub struct Mirror {
-    centre: PointRef,
+    center: PointRef,
     symmetry: Symmetry,
     sources: Vec<FeatureId>,
     /// The originals' team, then the copies'.
     teams: [Team; 2],
     #[serde(skip)]
-    resolved_centre: Vec3,
+    resolved_center: Vec3,
     #[serde(skip)]
     copies: Vec<MirroredCopy>,
     #[serde(skip)]
@@ -133,13 +133,13 @@ pub struct Mirror {
 }
 
 impl Mirror {
-    pub fn new(centre: PointRef) -> Self {
+    pub fn new(center: PointRef) -> Self {
         Self {
-            centre,
+            center,
             symmetry: Symmetry::default(),
             sources: Vec::new(),
             teams: [Team::Red, Team::Blue],
-            resolved_centre: Vec3::ZERO,
+            resolved_center: Vec3::ZERO,
             copies: Vec::new(),
             left_out: Vec::new(),
             entity: None,
@@ -163,7 +163,7 @@ impl Mirror {
     }
 
     pub fn mirroring(&self) -> Mirroring {
-        Mirroring { symmetry: self.symmetry, centre: self.resolved_centre }
+        Mirroring { symmetry: self.symmetry, center: self.resolved_center }
     }
 
 }
@@ -181,18 +181,18 @@ fn mirrored_copy(
     copy.mirror(mirroring).then_some(copy)
 }
 
-const MIRROR_COLOUR: Color = Color::srgb(0.9, 0.35, 0.9);
+const MIRROR_COLOR: Color = Color::srgb(0.9, 0.35, 0.9);
 
 #[typetag::serde(name = "mirror")]
 impl FeatureTrait for Mirror {
     fn get_point(&self, _key: &str) -> Result<Vec3, PointResolutionError> {
-        Ok(self.resolved_centre)
+        Ok(self.resolved_center)
     }
 
     fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool {
         let mut changed = false;
-        let label = get!("editor.features.mirror.centre");
-        changed |= self.centre.editor_ui(ui, &label, features, prior_feature_order, retarget_request);
+        let label = get!("editor.features.mirror.center");
+        changed |= self.center.editor_ui(ui, &label, features, prior_feature_order, retarget_request);
 
         ui.separator();
         egui::ComboBox::from_label(get!("editor.features.mirror.symmetry"))
@@ -305,29 +305,29 @@ impl FeatureTrait for Mirror {
 
     /// The plane or axis, sized to reach the copies, and every copy's own gizmo.
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
-        let centre = self.resolved_centre;
+        let center = self.resolved_center;
         let reach = self
             .copies
             .iter()
             .filter_map(|copy| copy.object.get_point("").ok())
-            .map(|point| (point - centre).with_y(0.0).length())
+            .map(|point| (point - center).with_y(0.0).length())
             .fold(4.0, f32::max)
             + 1.0;
 
-        gizmos.sphere(Isometry3d::from_translation(centre), 0.2, MIRROR_COLOUR);
+        gizmos.sphere(Isometry3d::from_translation(center), 0.2, MIRROR_COLOR);
         match self.symmetry {
             Symmetry::MirrorX => {
-                gizmos.rect(Isometry3d::new(centre, Quat::from_rotation_y(FRAC_PI_2)), Vec2::splat(reach * 2.0), MIRROR_COLOUR);
+                gizmos.rect(Isometry3d::new(center, Quat::from_rotation_y(FRAC_PI_2)), Vec2::splat(reach * 2.0), MIRROR_COLOR);
             }
             Symmetry::MirrorZ => {
-                gizmos.rect(Isometry3d::from_translation(centre), Vec2::splat(reach * 2.0), MIRROR_COLOUR);
+                gizmos.rect(Isometry3d::from_translation(center), Vec2::splat(reach * 2.0), MIRROR_COLOR);
             }
             Symmetry::Rotate180 => {
-                gizmos.line(centre - Vec3::Y * reach, centre + Vec3::Y * reach, MIRROR_COLOUR);
-                gizmos.circle(Isometry3d::new(centre, Quat::from_rotation_x(FRAC_PI_2)), reach, MIRROR_COLOUR);
+                gizmos.line(center - Vec3::Y * reach, center + Vec3::Y * reach, MIRROR_COLOR);
+                gizmos.circle(Isometry3d::new(center, Quat::from_rotation_x(FRAC_PI_2)), reach, MIRROR_COLOR);
             }
         }
-        self.centre.debug_gizmos(centre, gizmos);
+        self.center.debug_gizmos(center, gizmos);
 
         for copy in &self.copies {
             copy.object.debug_gizmos(gizmos);
@@ -378,8 +378,8 @@ impl FeatureTrait for Mirror {
     }
 
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {
-        if let Ok(v) = self.centre.resolve(features) {
-            self.resolved_centre = v;
+        if let Ok(v) = self.center.resolve(features) {
+            self.resolved_center = v;
         }
         let mirroring = self.mirroring();
         self.copies.clear();
@@ -408,7 +408,7 @@ impl FeatureTrait for Mirror {
 
     /// The sources too: an edit to one is an edit to its copy, which is how it reaches here.
     fn parent_ids(&self) -> Vec<FeatureId> {
-        let mut ids = self.centre.referenced_features();
+        let mut ids = self.center.referenced_features();
         for id in &self.sources {
             if !ids.contains(id) {
                 ids.push(*id);
@@ -418,11 +418,11 @@ impl FeatureTrait for Mirror {
     }
 
     fn available_point_keys(&self) -> Vec<(String, String)> {
-        vec![("".into(), get!("editor.features.mirror.centre"))]
+        vec![("".into(), get!("editor.features.mirror.center"))]
     }
 
     fn reference_points_for_ray(&self, _ray: &Ray3d) -> Vec<(String, Vec3)> {
-        vec![("".into(), self.resolved_centre)]
+        vec![("".into(), self.resolved_center)]
     }
 
     fn standing_copies(&self) -> Vec<&dyn FeatureTrait> {
@@ -435,18 +435,18 @@ impl FeatureTrait for Mirror {
     }
 
     fn get_point_ref(&self, _key: &str) -> Option<&PointRef> {
-        Some(&self.centre)
+        Some(&self.center)
     }
 
     fn get_point_ref_mut(&mut self, _key: &str) -> Option<&mut PointRef> {
-        Some(&mut self.centre)
+        Some(&mut self.center)
     }
 
     fn drag_handle(&mut self, _is_max: bool, axis: u8, new_world_value: f32) -> bool {
-        if !self.centre.drag_axis(axis, new_world_value) {
+        if !self.center.drag_axis(axis, new_world_value) {
             return false;
         }
-        self.resolved_centre[axis as usize] = new_world_value;
+        self.resolved_center[axis as usize] = new_world_value;
         true
     }
 }
@@ -505,8 +505,8 @@ mod tests {
     use crate::editor::editor_room::EditorRoom;
     use crate::editor::spawn_point::{SpawnPoint, SpawnPointMarker};
 
-    fn at(symmetry: Symmetry, centre: Vec3) -> Mirroring {
-        Mirroring { symmetry, centre }
+    fn at(symmetry: Symmetry, center: Vec3) -> Mirroring {
+        Mirroring { symmetry, center }
     }
 
     /// Doing it twice is doing nothing, for every symmetry: the property that makes the two halves

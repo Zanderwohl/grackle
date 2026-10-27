@@ -25,7 +25,7 @@ impl std::fmt::Display for SketchId {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SketchPoint {
     pub id: SketchId,
-    /// Metres along the plane's `x` and `y`.
+    /// Meters along the plane's `x` and `y`.
     #[serde(with = "crate::prop::nice_f32::array")]
     pub at: [f32; 2],
 }
@@ -39,7 +39,7 @@ pub enum SketchEntity {
         a: SketchId,
         b: SketchId,
         /// Drawn and snapped to, never part of a region: a revolve's axis, a
-        /// centre line.
+        /// center line.
         #[serde(default)]
         construction: bool,
     },

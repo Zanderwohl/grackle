@@ -2,7 +2,7 @@
 //!
 //! Values and pure functions only, so both can be re-run against a rewound
 //! world. The cone has no randomness: an RNG spread cannot be reconciled, and
-//! a fixed pattern can be learnt.
+//! a fixed pattern can be learned.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -109,7 +109,7 @@ const GOLDEN_ANGLE: f32 = 2.399_963_2;
 ///
 /// The first is always the axis, so the middle is never a gap. The angle from
 /// the axis goes as the square root of the index, which spreads rays evenly by
-/// area rather than bunching them at the centre.
+/// area rather than bunching them at the center.
 pub fn cone_directions(axis: Dir3, spread: f32, count: u32) -> Vec<Dir3> {
     if count == 0 {
         return Vec::new();

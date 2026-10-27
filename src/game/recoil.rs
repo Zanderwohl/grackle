@@ -14,7 +14,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::damage::PlayerId;
 use crate::common::effects::Effect;
 use crate::common::net::{has_authority, is_remote_client, NetRole};
-use crate::common::weapon::{Ammo, AmmoState, Cadence, Equipped, Slot, WeaponAction, WeaponCatalogue};
+use crate::common::weapon::{Ammo, AmmoState, Cadence, Equipped, Slot, WeaponAction, WeaponCatalog};
 use crate::game::condition::Condition;
 use crate::game::held::{perform_weapon_clips, HeldModel, Performance, WeaponClip};
 use crate::game::player::LocalPlayer;
@@ -89,7 +89,7 @@ fn guess_our_shots(
     time: Res<Time>,
     buttons: Res<ButtonInput<MouseButton>>,
     paused: Option<Res<crate::game::pause_menu::PauseMenu>>,
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     ours: Option<Single<(Entity, &Equipped, &Ammo, &Condition), With<LocalPlayer>>>,
     mut cooldown: Local<[f32; 2]>,
     // The replicated state last guessed from, and what our guesses left of it.
@@ -104,7 +104,7 @@ fn guess_our_shots(
     if paused.is_some_and(|menu| menu.open) || !condition.may_fire() {
         return;
     }
-    let Some(weapon) = catalogue.held_by(equipped) else { return };
+    let Some(weapon) = catalog.held_by(equipped) else { return };
     let told = *ammo.at(equipped.held);
     let mut state = match *guessed {
         Some((slot, was, left)) if slot == equipped.held && was == told => left,
@@ -169,8 +169,8 @@ mod tests {
     /// A Mercenary holding one weapon, firing `cadence` from a clip of `clip`.
     fn holding(world: &mut World, cadence: Cadence, clip: u32) -> Entity {
         let id = WeaponId::of("test");
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.insert(Weapon {
+        let mut catalog = WeaponCatalog::default();
+        catalog.insert(Weapon {
             id,
             name_key: "weapon.names.test".into(),
             model: None,
@@ -184,10 +184,10 @@ mod tests {
         });
         let mut loadout = Loadout::default();
         loadout.set(Slot::Primary, SlotChoices { permitted: vec![id], default: id });
-        catalogue.set_loadout(Class::Mercenary, loadout);
-        let (equipped, mut ammo) = catalogue.starting_equipment(Class::Mercenary, None);
+        catalog.set_loadout(Class::Mercenary, loadout);
+        let (equipped, mut ammo) = catalog.starting_equipment(Class::Mercenary, None);
         ammo.at_mut(Slot::Primary).clip = clip;
-        world.insert_resource(catalogue);
+        world.insert_resource(catalog);
         world.init_resource::<Time>();
         world.init_resource::<ButtonInput<MouseButton>>();
         world.init_resource::<Messages<ShotSeen>>();

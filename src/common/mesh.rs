@@ -66,7 +66,7 @@ impl MeshBuilder {
     }
 
     /// The wall between two rings listed in the same order. Rings wound clockwise
-    /// seen from `head` towards `tail` give an outward-facing wall.
+    /// seen from `head` toward `tail` give an outward-facing wall.
     ///
     /// Panics on a length mismatch rather than leaving a silent hole.
     pub fn tube(&mut self, head: &[Vec3], tail: &[Vec3]) {
@@ -93,18 +93,18 @@ impl MeshBuilder {
         }
     }
 
-    /// Close a ring off with a fan from its centre. `reverse` flips the winding;
+    /// Close a ring off with a fan from its center. `reverse` flips the winding;
     /// the two ends of a shape need opposite senses.
     pub fn cap(&mut self, ring: &[Vec3], reverse: bool) {
         if ring.len() < 3 {
             return;
         }
-        let centre = ring.iter().copied().sum::<Vec3>() / ring.len() as f32;
+        let center = ring.iter().copied().sum::<Vec3>() / ring.len() as f32;
         let n = ring.len();
         for i in 0..n {
             let j = (i + 1) % n;
             let (a, b) = if reverse { (ring[j], ring[i]) } else { (ring[i], ring[j]) };
-            self.tri([centre, a, b]);
+            self.tri([center, a, b]);
         }
     }
 
@@ -129,7 +129,7 @@ impl MeshBuilder {
     }
 }
 
-/// A rectangular ring in the plane `y = y`, centred on `offset`. Wound so a
+/// A rectangular ring in the plane `y = y`, centered on `offset`. Wound so a
 /// stack built smallest-`y`-first faces outwards under [`MeshBuilder::hull`]
 /// (a bone's local `+Y` runs head to tail).
 pub fn rect_ring(y: f32, half: Vec2, offset: Vec2) -> Vec<Vec3> {
@@ -197,13 +197,13 @@ mod tests {
         let mesh = cube();
         let positions = attribute(&mesh, Mesh::ATTRIBUTE_POSITION.id);
         let normals = attribute(&mesh, Mesh::ATTRIBUTE_NORMAL.id);
-        let centre = Vec3::new(0.0, 0.5, 0.0);
+        let center = Vec3::new(0.0, 0.5, 0.0);
 
         for (position, normal) in positions.iter().zip(&normals) {
             let position = Vec3::from_array(*position);
             let normal = Vec3::from_array(*normal);
-            // A fan's centre vertex lies on its own face's plane; skip it.
-            let outward = position - centre;
+            // A fan's center vertex lies on its own face's plane; skip it.
+            let outward = position - center;
             if outward.length() < 1e-4 {
                 continue;
             }
@@ -250,7 +250,7 @@ mod tests {
             let position = Vec3::from_array(*position);
             let outward = position - Vec3::new(0.0, 0.5, 0.0);
             let normal = Vec3::from_array(*normal);
-            // Skip the caps and fan centres, which have no sideways direction.
+            // Skip the caps and fan centers, which have no sideways direction.
             if outward.xz().length() < 1e-4 || normal.xz().length() < 1e-4 {
                 continue;
             }

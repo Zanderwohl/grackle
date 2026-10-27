@@ -702,7 +702,7 @@ impl FeatureTimeline {
                 let is_selected = features.selected_feature == Some(*id);
                 let is_active = i < shown;
 
-                // The trailing `Atom::grow` left-justifies the title; egui centres a stretched button's contents.
+                // The trailing `Atom::grow` left-justifies the title; egui centers a stretched button's contents.
                 let label_text = feature.type_name_with_id();
                 // Past the bar: faded rather than struck through, which reads as deleted.
                 let response = ui
@@ -1354,7 +1354,7 @@ mod tests {
     }
 
     /// Breaks if an idle Features panel reports a change: the panel marks the
-    /// timeline only on that answer, or the checkpoint serialises every frame.
+    /// timeline only on that answer, or the checkpoint serializes every frame.
     #[test]
     fn the_features_panel_left_alone_changes_nothing() {
         let mut timeline = FeatureTimeline::default();

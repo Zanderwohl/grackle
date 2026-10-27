@@ -13,7 +13,7 @@ use bevy::ecs::entity::{EntityMapper, MapEntities};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Seconds of game time a hit still counts towards an assist. A guess at the
+/// Seconds of game time a hit still counts toward an assist. A guess at the
 /// right order of magnitude; ultimately a gamemode's number.
 pub const ASSIST_WINDOW: f32 = 8.0;
 
@@ -122,27 +122,27 @@ impl Damageable {
 }
 
 /// Placeholder, like [`DEFAULT_HEALTH`]: per class once health is.
-pub const DEFAULT_MAX_ARMOUR: u32 = 100;
+pub const DEFAULT_MAX_ARMOR: u32 = 100;
 
-/// The share of each hit armour takes while it lasts, as in Quake.
-pub const ARMOUR_ABSORBS: f32 = 2.0 / 3.0;
+/// The share of each hit armor takes while it lasts, as in Quake.
+pub const ARMOR_ABSORBS: f32 = 2.0 / 3.0;
 
 /// A second pool in front of [`Damageable`]. Spent only by
 /// [`apply_damage`](crate::game::damage::apply_damage). A body starts with
 /// none.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Reflect, Serialize, Deserialize)]
-pub struct Armour {
+pub struct Armor {
     points: u32,
     max: u32,
 }
 
-impl Default for Armour {
+impl Default for Armor {
     fn default() -> Self {
-        Self { points: 0, max: DEFAULT_MAX_ARMOUR }
+        Self { points: 0, max: DEFAULT_MAX_ARMOR }
     }
 }
 
-impl Armour {
+impl Armor {
     pub fn points(&self) -> u32 {
         self.points
     }
@@ -162,17 +162,17 @@ impl Armour {
         added
     }
 
-    /// Takes [`ARMOUR_ABSORBS`] of a hit, rounded up so a 1-point hit is not
-    /// free of armour for ever, and returns what is left for health.
+    /// Takes [`ARMOR_ABSORBS`] of a hit, rounded up so a 1-point hit is not
+    /// free of armor for ever, and returns what is left for health.
     pub fn soak(&mut self, amount: u32) -> u32 {
-        let wanted = (amount as f32 * ARMOUR_ABSORBS).ceil() as u32;
+        let wanted = (amount as f32 * ARMOR_ABSORBS).ceil() as u32;
         let taken = wanted.min(self.points).min(amount);
         self.points -= taken;
         amount - taken
     }
 }
 
-/// Linear from 1 at the centre to 0 at `radius`. Shared by splash damage and
+/// Linear from 1 at the center to 0 at `radius`. Shared by splash damage and
 /// shove so a body is never thrown further than it was hurt. A radius `<= 0`
 /// reaches nothing.
 pub fn falloff(distance: f32, radius: f32) -> f32 {
@@ -200,9 +200,9 @@ pub struct Damage {
 pub struct Explosion {
     pub at: Vec3,
     pub radius: f32,
-    /// At the centre.
+    /// At the center.
     pub damage: u32,
-    /// Metres per second of corpse shove at the centre.
+    /// Meters per second of corpse shove at the center.
     pub knockback: f32,
     pub source: DamageSource,
     /// The body hit squarely, which takes this amount instead of splash, not
@@ -288,22 +288,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn armour_takes_two_thirds_until_it_runs_out() {
-        let mut armour = Armour::default();
-        armour.add(10);
-        assert_eq!(armour.soak(9), 3);
-        assert_eq!(armour.points(), 4);
-        assert_eq!(armour.soak(30), 26, "took more than it had");
-        assert_eq!(armour.points(), 0);
-        assert_eq!(armour.soak(30), 30);
+    fn armor_takes_two_thirds_until_it_runs_out() {
+        let mut armor = Armor::default();
+        armor.add(10);
+        assert_eq!(armor.soak(9), 3);
+        assert_eq!(armor.points(), 4);
+        assert_eq!(armor.soak(30), 26, "took more than it had");
+        assert_eq!(armor.points(), 0);
+        assert_eq!(armor.soak(30), 30);
     }
 
     #[test]
-    fn armour_fills_to_its_maximum_and_no_further() {
-        let mut armour = Armour::default();
-        assert_eq!(armour.add(70), 70);
-        assert_eq!(armour.add(70), DEFAULT_MAX_ARMOUR - 70);
-        assert!(armour.is_full());
+    fn armor_fills_to_its_maximum_and_no_further() {
+        let mut armor = Armor::default();
+        assert_eq!(armor.add(70), 70);
+        assert_eq!(armor.add(70), DEFAULT_MAX_ARMOR - 70);
+        assert!(armor.is_full());
     }
 
     struct Shift;

@@ -1,7 +1,7 @@
 //! What a weapon is, as data. The systems live in [`crate::game::weapon`].
 //!
 //! These values cross the wire, so a server can ship its own weapons. Nothing
-//! here reads a file: a client is told its catalogue by the server.
+//! here reads a file: a client is told its catalog by the server.
 //!
 //! An action is what one button does; a weapon is a pair of them. A new weapon
 //! is a row in a data file; a new kind of weapon is a [`WeaponAction`] variant
@@ -15,7 +15,7 @@ use crate::common::class::Class;
 use crate::common::flame::FlameSpec;
 use crate::common::projectile::ProjectileSpec;
 
-/// A stable FNV-1a hash of the id string, not an index into the catalogue,
+/// A stable FNV-1a hash of the id string, not an index into the catalog,
 /// so machines with differently ordered files agree on it.
 ///
 /// Written out rather than taken from a std hasher, whose output may change
@@ -45,7 +45,7 @@ pub struct HitscanSpec {
     pub range_m: f32,
     pub damage: u32,
     pub headshot_multiplier: u32,
-    /// Metres per second of corpse shove, per point of damage.
+    /// Meters per second of corpse shove, per point of damage.
     pub shove_per_damage: f32,
     #[serde(rename = "shove_radius")]
     pub shove_radius_m: f32,
@@ -80,7 +80,7 @@ pub struct ScopeSpec {
 
 /// What one mouse button does.
 ///
-/// The stubs round-trip through the data files but have no behaviour yet.
+/// The stubs round-trip through the data files but have no behavior yet.
 /// They log rather than panic, so a listen server does not drop everybody
 /// because somebody right-clicked.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
@@ -180,8 +180,8 @@ pub struct Weapon {
     /// A lang key, not display text.
     pub name_key: String,
     /// A prop name under a pack's `props/`, without the extension. A name
-    /// rather than geometry so the catalogue stays small on the wire; each
-    /// machine builds the model from its own pack. `None` is unmodelled, kept
+    /// rather than geometry so the catalog stays small on the wire; each
+    /// machine builds the model from its own pack. `None` is unmodeled, kept
     /// distinct from a name that fails to load.
     #[serde(default)]
     pub model: Option<String>,
@@ -345,12 +345,12 @@ impl Loadout {
 /// send it, and a `HashMap` iterates in an arbitrary order. A few dozen
 /// weapons make a scan free.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct WeaponCatalogue {
+pub struct WeaponCatalog {
     pub weapons: Vec<Weapon>,
     pub loadouts: Vec<(Class, Loadout)>,
 }
 
-impl WeaponCatalogue {
+impl WeaponCatalog {
     pub fn get(&self, id: WeaponId) -> Option<&Weapon> {
         self.weapons.iter().find(|weapon| weapon.id == id)
     }
@@ -374,7 +374,7 @@ impl WeaponCatalogue {
         }
     }
 
-    /// Resolve on every call; never cache. The ids and the catalogue arrive on
+    /// Resolve on every call; never cache. The ids and the catalog arrive on
     /// different channels.
     pub fn held_by(&self, equipped: &Equipped) -> Option<&Weapon> {
         self.get(equipped.held()?)

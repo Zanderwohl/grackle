@@ -18,7 +18,7 @@ use bevy::prelude::*;
 use crate::common::class::Stance;
 use crate::common::skeleton::rig::{bone, Pose, Skeleton};
 
-/// Metres added on each side of the head bone, so a shot clipping an ear
+/// Meters added on each side of the head bone, so a shot clipping an ear
 /// counts.
 pub const HEAD_MARGIN: f32 = 0.03;
 
@@ -26,21 +26,21 @@ pub const HEAD_MARGIN: f32 = 0.03;
 /// comparison rather than a transform.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Box3 {
-    pub centre: Vec3,
+    pub center: Vec3,
     pub half_extents: Vec3,
 }
 
 impl Box3 {
     pub fn min(&self) -> Vec3 {
-        self.centre - self.half_extents
+        self.center - self.half_extents
     }
 
     pub fn max(&self) -> Vec3 {
-        self.centre + self.half_extents
+        self.center + self.half_extents
     }
 
     pub fn contains(&self, point: Vec3) -> bool {
-        let d = (point - self.centre).abs();
+        let d = (point - self.center).abs();
         d.x <= self.half_extents.x && d.y <= self.half_extents.y && d.z <= self.half_extents.z
     }
 }
@@ -68,7 +68,7 @@ pub fn hitboxes(skeleton: &Skeleton, pose: &Pose, root: &Transform, stance: Stan
 /// different idea and should not change by accident with the hull.
 fn body_box(root: &Transform, stance: Stance) -> Box3 {
     Box3 {
-        centre: root.translation + Vec3::Y * (stance.height() * 0.5),
+        center: root.translation + Vec3::Y * (stance.height() * 0.5),
         half_extents: stance.half_extents(),
     }
 }
@@ -84,7 +84,7 @@ fn head_box(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Box3 {
     let half = Vec3::new(posed.thickness.x * 0.5, posed.length * 0.5, posed.thickness.y * 0.5);
     let turned = Mat3::from_quat(posed.rotation).abs() * half;
     Box3 {
-        centre: posed.prism().translation,
+        center: posed.prism().translation,
         half_extents: turned + Vec3::splat(HEAD_MARGIN),
     }
 }
@@ -134,7 +134,7 @@ mod tests {
         let rest = hitboxes(&skeleton, &Pose::rest(), &root, Stance::Standing).head.unwrap();
         let moved = hitboxes(&skeleton, &thrown, &root, Stance::Standing).head.unwrap();
 
-        assert!((moved.centre - rest.centre).length() > 0.2, "the box stayed behind");
+        assert!((moved.center - rest.center).length() > 0.2, "the box stayed behind");
         assert!(moved.contains(head.head) && moved.contains(head.tail), "the thrown head is outside its box");
         // Tilted, so wider than it is tall would be wrong the other way round.
         assert!(moved.half_extents.z > rest.half_extents.z, "the box did not widen for a tilted head");
@@ -156,9 +156,9 @@ mod tests {
         let down = hitboxes(&skeleton, &ducked, &root, Stance::Crouched).head.unwrap();
 
         assert!(
-            up.centre.y - down.centre.y > 0.5,
+            up.center.y - down.center.y > 0.5,
             "ducking moved the head box by {:.2} m",
-            up.centre.y - down.centre.y
+            up.center.y - down.center.y
         );
 
         let head = skeleton
@@ -190,7 +190,7 @@ mod tests {
                 boxes.head.unwrap().contains(head.head) && boxes.head.unwrap().contains(head.tail),
                 "{class:?} is not boxed around its own head"
             );
-            heights.push(boxes.head.unwrap().centre.y);
+            heights.push(boxes.head.unwrap().center.y);
         }
 
         // Otherwise the check above could pass on one generous box.

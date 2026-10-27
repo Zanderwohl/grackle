@@ -21,12 +21,12 @@ use crate::tool::Tools;
 
 const SNAP: f32 = 0.1;
 
-/// How near a corner, in metres across the floor, a click lands on it — the
+/// How near a corner, in meters across the floor, a click lands on it — the
 /// first, to close the loop, or one of the footprint's own — rather than
 /// beside it.
 const CLOSE_RADIUS: f32 = 0.3;
 
-/// Hatching across a loop that would close into a room, in metres.
+/// Hatching across a loop that would close into a room, in meters.
 const HATCH_SPACING: f32 = 0.5;
 
 pub struct FootprintPlugin;

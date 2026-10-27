@@ -297,7 +297,7 @@ impl PointDragState {
     }
 
     /// Lights the arrow on `highlighted` and puts every other one back to
-    /// its own colour. A material is only written when it is not already the
+    /// its own color. A material is only written when it is not already the
     /// one wanted: this runs every frame the pointer is over a viewport, and
     /// an unconditional write is a changed component on every arrow mesh, so
     /// every one of them re-extracted for rendering for nothing.

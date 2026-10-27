@@ -39,10 +39,10 @@ impl Team {
     /// Fixed order, so dealing teams out agrees on every machine.
     pub const ALL: [Team; 4] = [Team::Red, Team::Blue, Team::Yellow, Team::Green];
 
-    /// Desaturated: the base colour of a whole body under map lighting. Yellow is
-    /// pulled towards amber and green away from blue so the four stay apart at a
-    /// distance and under coloured light.
-    pub fn colour(self) -> Color {
+    /// Desaturated: the base color of a whole body under map lighting. Yellow is
+    /// pulled toward amber and green away from blue so the four stay apart at a
+    /// distance and under colored light.
+    pub fn color(self) -> Color {
         match self {
             Team::Red => Color::srgb(0.72, 0.20, 0.18),
             Team::Blue => Color::srgb(0.20, 0.38, 0.72),
@@ -136,11 +136,11 @@ mod tests {
         assert!(hostile(None, None));
     }
 
-    /// Colour is how a friend is told from a target; a duplicate is a team you
+    /// Color is how a friend is told from a target; a duplicate is a team you
     /// cannot see.
     #[test]
-    fn every_team_has_its_own_colour() {
-        let mut seen: Vec<[u8; 4]> = Team::iter().map(|t| t.colour().to_srgba().to_u8_array()).collect();
+    fn every_team_has_its_own_color() {
+        let mut seen: Vec<[u8; 4]> = Team::iter().map(|t| t.color().to_srgba().to_u8_array()).collect();
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), Team::ALL.len());

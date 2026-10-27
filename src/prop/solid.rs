@@ -58,7 +58,7 @@ impl Solid {
         self
     }
 
-    /// Cubic metres.
+    /// Cubic meters.
     pub fn volume(&self) -> f32 {
         csg::signed_volume_x6(&self.polygons) / 6.0
     }
@@ -318,7 +318,7 @@ impl Solid {
         Solid::from_polygons(polygons)
     }
 
-    /// Centred on the origin.
+    /// Centered on the origin.
     pub fn cuboid(size: Vec3, surface: Surface) -> Solid {
         Solid::extrude(
             &Profile::Rect { half: [size.x / 2.0, size.y / 2.0] },
@@ -328,7 +328,7 @@ impl Solid {
         )
     }
 
-    /// One mesh per distinct surface. UVs are a planar projection in metres.
+    /// One mesh per distinct surface. UVs are a planar projection in meters.
     pub fn meshes(&self) -> Vec<(Surface, Mesh)> {
         let mut groups: Vec<(Surface, MeshParts)> = Vec::new();
         for polygon in &self.polygons {
@@ -396,7 +396,7 @@ pub fn is_full_turn(degrees: f32) -> bool {
     degrees.abs() >= 360.0 - 1e-3
 }
 
-/// Smallest half-extent, in metres, so a shape cannot be collapsed to nothing.
+/// Smallest half-extent, in meters, so a shape cannot be collapsed to nothing.
 pub const MIN_EXTENT: f32 = 0.001;
 
 /// A 3D primitive. [`Shape::solid`] is built from the same two sweeps as
@@ -404,7 +404,7 @@ pub const MIN_EXTENT: f32 = 0.001;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Shape {
-    /// Centred on the origin.
+    /// Centered on the origin.
     Box {
         #[serde(with = "crate::prop::nice_f32::array")]
         size: [f32; 3],
@@ -468,7 +468,7 @@ impl Shape {
     }
 
     /// A radial axis grows both ways, so its handle sets the radius and the
-    /// centre stays put; treated as free, a cylinder slides sideways on resize.
+    /// center stays put; treated as free, a cylinder slides sideways on resize.
     pub fn axis_is_radial(&self, axis: usize) -> bool {
         match self {
             Shape::Box { .. } | Shape::Wedge { .. } => false,
@@ -496,7 +496,7 @@ impl Shape {
         }
     }
 
-    /// Centred on the origin.
+    /// Centered on the origin.
     pub fn solid(&self, surface: Surface) -> Solid {
         let (sweep, transform) = self.sweep();
         match sweep {
@@ -579,7 +579,7 @@ enum Sweep {
 mod tests {
     use super::*;
 
-    /// Fails if any face of a sweep is wound against its neighbours: every
+    /// Fails if any face of a sweep is wound against its neighbors: every
     /// edge must be walked once each way. Volume cannot catch this for a part
     /// turn's caps, which lie in planes through the axis.
     #[test]
@@ -635,7 +635,7 @@ mod tests {
             let solid = shape.solid(Surface::default());
             assert!(
                 solid.volume() > 0.0,
-                "{shape:?} came out inside out, at {} cubic metres",
+                "{shape:?} came out inside out, at {} cubic meters",
                 solid.volume(),
             );
         }
@@ -679,7 +679,7 @@ mod tests {
         assert!(mirrored.volume() > 0.0, "the mirrored copy is inside out");
     }
 
-    /// Fails as default grey down every hole if [`Solid::subtract`] stops
+    /// Fails as default gray down every hole if [`Solid::subtract`] stops
     /// repainting the tool.
     #[test]
     fn the_walls_of_a_cut_are_made_of_what_was_cut() {
@@ -729,7 +729,7 @@ mod tests {
             );
             assert!(
                 ((min + max) / 2.0).abs().max_element() < 1e-4,
-                "{shape:?} is not centred on its own origin",
+                "{shape:?} is not centered on its own origin",
             );
         }
 

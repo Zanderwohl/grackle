@@ -27,10 +27,10 @@ const KEY_SIZE: f32 = 11.0;
 
 const HEAD_SIZE: f32 = 9.0;
 
-/// Unlabelled divisions between labelled gridlines; the eye judges distance by counting them.
+/// Unlabeled divisions between labeled gridlines; the eye judges distance by counting them.
 const MINOR_PER_MAJOR: usize = 5;
 
-/// The grab zone is invisible, centred on the line, and wider so it can be hit.
+/// The grab zone is invisible, centered on the line, and wider so it can be hit.
 const PLAYHEAD_WIDTH: f32 = 1.0;
 const GRAB_WIDTH: f32 = 13.0;
 
@@ -208,7 +208,7 @@ pub struct TimelinePools {
     head: Option<Entity>,
     grab: Option<Entity>,
     band: Option<Entity>,
-    /// Per division: lane line, ruler tick, label. The last two show only on labelled divisions.
+    /// Per division: lane line, ruler tick, label. The last two show only on labeled divisions.
     grid: Vec<(Entity, Entity, Entity)>,
     rows: Vec<Entity>,
     keys: Vec<Entity>,
@@ -234,7 +234,7 @@ pub fn spawn_the_strip(
     };
 
     // Bevy UI has no painter, so every band, hairline and tick is a node.
-    let bare = |commands: &mut Commands, colour: Color, z: i32| {
+    let bare = |commands: &mut Commands, color: Color, z: i32| {
         commands
             .spawn((
                 UiTargetCamera(camera),
@@ -242,7 +242,7 @@ pub fn spawn_the_strip(
                     position_type: PositionType::Absolute,
                     ..default()
                 },
-                BackgroundColor(colour),
+                BackgroundColor(color),
                 GlobalZIndex(z),
             ))
             .id()
@@ -534,7 +534,7 @@ pub fn lay_out_the_timeline(
     anim: Option<Res<crate::anim::AnimEditor>>,
     mut pools: ResMut<TimelinePools>,
     mut nodes: Query<&mut Node>,
-    mut colours: Query<&mut BackgroundColor>,
+    mut colors: Query<&mut BackgroundColor>,
     mut borders: Query<&mut BorderColor>,
     mut texts: Query<&mut Text>,
     mut label_text: Local<String>,
@@ -595,7 +595,7 @@ pub fn lay_out_the_timeline(
         });
     }
 
-    // Laid out from the view, so zooming allocates nothing. Drawn at minor divisions, labelled every
+    // Laid out from the view, so zooming allocates nothing. Drawn at minor divisions, labeled every
     // fifth.
     let step = grid_step(view.pixels_per_second);
     let minor = step / MINOR_PER_MAJOR as f32;
@@ -625,10 +625,10 @@ pub fn lay_out_the_timeline(
             node.width = Val::Px(1.0);
             node.height = Val::Px((rect.height() - RULER_HEIGHT).max(0.0));
         });
-        if let Ok(mut colour) = colours.get_mut(line) {
+        if let Ok(mut color) = colors.get_mut(line) {
             let wanted = if major { paint::MAJOR } else { paint::MINOR };
-            if colour.0 != wanted {
-                colour.0 = wanted;
+            if color.0 != wanted {
+                color.0 = wanted;
             }
         }
 
@@ -686,13 +686,13 @@ pub fn lay_out_the_timeline(
 
         let top = row_top(slot);
         let picked = picked_track == Some(slot);
-        if let Ok(mut colour) = colours.get_mut(stripe) {
+        if let Ok(mut color) = colors.get_mut(stripe) {
             let wanted = match picked {
                 true => paint::ROW_PICKED_LANE,
                 false => paint::ROW_ODD,
             };
-            if colour.0 != wanted {
-                colour.0 = wanted;
+            if color.0 != wanted {
+                color.0 = wanted;
             }
         }
         place(&mut nodes, stripe, |node| {
@@ -718,14 +718,14 @@ pub fn lay_out_the_timeline(
                     key: index,
                 })
             });
-            if let Ok(mut colour) = colours.get_mut(key) {
+            if let Ok(mut color) = colors.get_mut(key) {
                 let wanted = match (picked, track.enabled) {
                     (true, _) => paint::KEY_PICKED,
                     (false, true) => paint::KEY,
                     (false, false) => paint::KEY_OFF,
                 };
-                if colour.0 != wanted {
-                    colour.0 = wanted;
+                if color.0 != wanted {
+                    color.0 = wanted;
                 }
             }
             if let Ok(mut border) = borders.get_mut(key) {
@@ -879,7 +879,7 @@ mod tests {
             tracks: vec![Track {
                 combine: Combine::Replace,
                 space: Space::Body,
-                unit: Unit::Metres,
+                unit: Unit::Meters,
                 enabled: true,
                 timing: Default::default(),
                 channel: Channel::Weapon {
@@ -971,7 +971,7 @@ mod tests {
 
         assert_eq!(shown.len(), 3, "expected three keys on the strip: {shown:?}");
         for (at, left) in [0.0_f32, 0.5, 1.0].into_iter().zip(&shown) {
-            // Relative to the strip, and centred on the time.
+            // Relative to the strip, and centered on the time.
             let wanted = view.x_of(at) - view.rect.min.x - KEY_SIZE / 2.0;
             assert!(
                 (left - wanted).abs() < 1e-3,

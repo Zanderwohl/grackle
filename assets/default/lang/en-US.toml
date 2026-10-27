@@ -168,7 +168,7 @@ clearance = "Needs { height } m of clear headroom."
 [editor.features.prop]
 title = "Prop"
 model = "Model"
-centre = "Centre"
+center = "Center"
 rotation = "Rotation"
 yaw = "Yaw"
 pitch = "Pitch"
@@ -183,7 +183,7 @@ state = "Animation"
 
 [editor.features.animation_grid]
 title = "Animation Grid"
-feet = "Front Centre"
+feet = "Front Center"
 facing = "Facing"
 teams = "Teams"
 striped = "Striped"
@@ -191,7 +191,7 @@ summary = "{ bodies } bodies, { width } m by { depth } m."
 
 [editor.features.mirror]
 title = "Mirror"
-centre = "Centre"
+center = "Center"
 symmetry = "Symmetry"
 mirror_x = "Mirror across X"
 mirror_z = "Mirror across Z"
@@ -226,7 +226,7 @@ player = "Player { id }"
 
 [hud]
 reloading = "Reloading"
-armour = "{ points } armour"
+armor = "{ points } armor"
 
 [class.names]
 scout = "Scout"
@@ -500,7 +500,7 @@ grip = "Grip"
 eye = "Eye"
 
 [anim.unit]
-metres = "Metres"
+meters = "Meters"
 leg_lengths = "Leg lengths"
 arm_lengths = "Arm lengths"
 hip_heights = "Hip heights"
@@ -618,7 +618,7 @@ top_hat = "Top Hat"
 crate = "Crate"
 health_pack = "Health Pack"
 ammo_pack = "Ammo Pack"
-armour_pack = "Armour"
+armor_pack = "Armor"
 
 [prop.archetype]
 held = "Held"
@@ -640,7 +640,7 @@ health = "Health"
 [prop.pickup]
 health = "Health"
 ammo = "Ammo"
-armor = "Armour"
+armor = "Armor"
 flag = "Flag"
 amount = "Amount"
 respawn = "Back after"

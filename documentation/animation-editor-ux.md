@@ -65,7 +65,7 @@ items as they land; anything struck out was decided against, with why.
   free-standing when none are.
 - **A multi-key edit writes only what changed**, never the first key's whole
   `to` across the others — a selection spanning a rotation and a position
-  would otherwise write degrees into metres. Only keys of the same kind
+  would otherwise write degrees into meters. Only keys of the same kind
   (angles or places) as the first are written to.
 - Display text through `get!` — including track row names and Problems.
 - **The UI is not a tutorial.** It shows current state ("No track picked."),
@@ -119,7 +119,7 @@ items as they land; anything struck out was decided against, with why.
   **Weapon** (grip at the origin, body hung off it — right for weapon clips)
   or the **Floor** (feet at the origin; the weapon placed off the animated
   chest, then moved by whatever the clip did to it — what a body clip looks
-  like in a match). The modelling surface always reads the default.
+  like in a match). The modeling surface always reads the default.
 
 - **A body clip is previewed through its state's corrections**
   (`ik::correct_for_state`, shared with `finish_pose`): duck, then plant the

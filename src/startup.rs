@@ -10,7 +10,7 @@ pub struct EditorParams {
     pub net: NetRole,
     pub start_playing: bool,
     pub start_animating: bool,
-    pub start_modelling: bool,
+    pub start_modeling: bool,
     pub start_texturing: bool,
 }
 
@@ -122,7 +122,7 @@ impl EditorParams {
             game_id: game_id.to_owned(),
             net,
             start_playing: matches.get_flag("play"),
-            start_modelling: matches.get_flag("prop"),
+            start_modeling: matches.get_flag("prop"),
             start_animating: matches.get_flag("anim"),
             start_texturing: matches.get_flag("material"),
         })
@@ -188,8 +188,8 @@ mod tests {
 
     #[test]
     fn the_prop_editor_is_off_unless_asked_for() {
-        assert!(!parse(&[]).unwrap().start_modelling);
-        assert!(parse(&["--prop"]).unwrap().start_modelling);
+        assert!(!parse(&[]).unwrap().start_modeling);
+        assert!(parse(&["--prop"]).unwrap().start_modeling);
         assert!(!parse(&[]).unwrap().start_animating);
         assert!(parse(&["--anim"]).unwrap().start_animating);
         assert!(!parse(&[]).unwrap().start_texturing);
@@ -199,7 +199,7 @@ mod tests {
     /// A process cannot open in two modes; silently picking one makes a flag
     /// appear to do nothing.
     #[test]
-    fn playing_and_modelling_at_once_is_refused() {
+    fn playing_and_modeling_at_once_is_refused() {
         assert!(parse(&["--play", "--prop"]).is_err());
         assert!(parse(&["--play", "--anim"]).is_err());
         assert!(parse(&["--prop", "--anim"]).is_err());

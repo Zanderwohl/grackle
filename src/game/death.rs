@@ -117,7 +117,7 @@ mod tests {
         world.resource_mut::<AnimationClock>().advance(seconds);
     }
 
-    /// Land one hit and let `record_damage` see it. Drained afterwards, since
+    /// Land one hit and let `record_damage` see it. Drained afterward, since
     /// each `run_system_once` has a fresh cursor that would re-read it.
     fn land(world: &mut World, target: Entity, source: DamageSource) {
         world.write_message(DamageDealt {

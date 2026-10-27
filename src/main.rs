@@ -58,7 +58,7 @@ fn main() {
         )
         .insert_resource(editor_params.net.clone())
         .insert_resource(StartInPlay(editor_params.start_playing))
-        .insert_resource(StartInPropEditor(editor_params.start_modelling))
+        .insert_resource(StartInPropEditor(editor_params.start_modeling))
         .insert_resource(StartInAnimEditor(editor_params.start_animating))
         .insert_resource(StartInMaterialEditor(editor_params.start_texturing))
         .add_plugins((

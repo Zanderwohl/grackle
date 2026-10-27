@@ -28,7 +28,7 @@ impl From<AppMode> for MatchMode {
 }
 
 /// Lossy on purpose: the server has no opinion on `AppMode::Prop`, so a client
-/// modelling a prop when the round ends goes back to the map editor.
+/// modeling a prop when the round ends goes back to the map editor.
 impl From<MatchMode> for AppMode {
     fn from(mode: MatchMode) -> Self {
         match mode.playing {

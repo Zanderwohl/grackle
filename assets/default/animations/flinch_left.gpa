@@ -7,7 +7,7 @@ note = "Composed onto whatever the body is doing, on the flinch layer, which cla
 [[tracks]]
 combine = "compose"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -44,7 +44,7 @@ ease = "linear"
 [[tracks]]
 combine = "compose"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]

@@ -302,7 +302,7 @@ pub fn find_nearest_feature_hit(
     let mut best_t = f32::MAX;
     let mut best: Option<(FeatureId, Vec3)> = None;
 
-    // Hidden rooms too: they still carve openings into their neighbours. A
+    // Hidden rooms too: they still carve openings into their neighbors. A
     // Mirror's copies are unpickable, but they carve.
     let (owners, rooms): (Vec<Option<FeatureId>>, Vec<Room>) = features
         .active_features()

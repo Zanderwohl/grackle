@@ -52,7 +52,7 @@ ease = "linear"
 [[tracks]]
 combine = "compose"
 space = "carry"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -97,7 +97,7 @@ ease = "linear"
 [[tracks]]
 combine = "replace"
 space = "grip"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]

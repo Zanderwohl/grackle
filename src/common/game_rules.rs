@@ -151,7 +151,7 @@ pub fn load_modes_at_startup(assets: Res<Assets>, mut modes: ResMut<Modes>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::weapon_file::default_catalogue;
+    use crate::common::weapon_file::default_catalog;
 
     fn parse(text: &str) -> Modes {
         let mut modes = Modes::default();
@@ -173,13 +173,13 @@ mod tests {
         assert_eq!(arena.classes, vec![Class::Mercenary]);
     }
 
-    /// A misspelt weapon would spawn everybody short of it, silently.
+    /// A misspelled weapon would spawn everybody short of it, silently.
     #[test]
     fn every_shipped_loadout_names_weapons_that_exist() {
-        let catalogue = default_catalogue();
+        let catalog = default_catalog();
         for (mode, rules) in Modes::shipped().0 {
             for id in rules.loadout.iter().flatten() {
-                assert!(catalogue.get(*id).is_some(), "`{mode}` names a weapon nobody defines");
+                assert!(catalog.get(*id).is_some(), "`{mode}` names a weapon nobody defines");
             }
         }
     }

@@ -6,7 +6,7 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
-/// Metres. About a body's width a few times over: a body's query touches a
+/// Meters. About a body's width a few times over: a body's query touches a
 /// handful of cells, and a 24 m floor slab sits in a few dozen.
 const CELL: f32 = 4.0;
 

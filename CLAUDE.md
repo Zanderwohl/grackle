@@ -20,7 +20,7 @@ not a convenience. Design accordingly:
     the features' own serde. No undo history — that lives in memory, as a
     prop's does. This is what the editor saves **and what ships**.
   - **Prop (`.gpp`)** — a *thing*, not a place: a weapon, a crate, a control
-    point. Flat text, because the game reads one — see "Modelling
+    point. Flat text, because the game reads one — see "Modeling
     a prop" below.
 
   **There is no compiled map file.** Flat runtime geometry is resolved in
@@ -79,7 +79,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/editor/` | The document model: features, timeline, save/load, panels, cameras. |
 | `src/tool/` | One module per editor tool, each its own `Plugin` with its own `Tools` state. |
 | `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls, placed props, hats. |
-| `src/prop/` | The prop editor: a CSG kernel, the modelling feature list, and the mode around it. |
+| `src/prop/` | The prop editor: a CSG kernel, the modeling feature list, and the mode around it. |
 | `src/material/` | The material editor: texture-graph's panels as an authoring mode. See "Editing a material". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
@@ -171,7 +171,7 @@ without an egui context.
 **Every authoring mode has the same Edit menu**, just right of File:
 [`src/common/edit_menu.rs`](src/common/edit_menu.rs), with Undo, Redo and
 *Revert to Saved*. Each mode passes an `EditAvailability` and each entry is
-greyed out on its own when it cannot be done — nothing to undo, nothing to
+grayed out on its own when it cannot be done — nothing to undo, nothing to
 redo, no file to go back to, or (where a mode can tell) nothing changed since
 it was saved. Each mode answers the request with the same handler its chords
 go through, so a chord and its menu entry are one action. **Revert is one undo
@@ -207,8 +207,8 @@ A fourth authoring mode then joins by answering `true` rather than by being
 found again in every match that forgot about it.
 
 Across the wire `Prop` does not exist: `MatchMode` states whether the match is
-*being played*, and modelling is one of the ways of not playing. That is lossy
-on purpose — a client modelling a weapon is put back in the map editor with
+*being played*, and modeling is one of the ways of not playing. That is lossy
+on purpose — a client modeling a weapon is put back in the map editor with
 everybody else when the server ends the round, which is the same authority
 rule rather than an exception to it.
 
@@ -264,7 +264,7 @@ and `Tonemapping::None`, since it draws no scene to grade.
 
 The HUD's readouts sit in a **safe zone**
 ([`src/game/hud.rs`](src/game/hud.rs)): a 4:3 box the height of the window,
-centred, so on an ultrawide the numbers stay near the crosshair. `F9`
+centered, so on an ultrawide the numbers stay near the crosshair. `F9`
 outlines it. Its width is in viewport heights, not `aspect_ratio`, which
 shrank it to the top of a portrait window.
 
@@ -284,7 +284,7 @@ slab of shoulder in the corner; **an arm that did not reach is not drawn**,
 because `grip_with` leaves an unsolved hand where it was and in front of an eye
 that is a forearm lying across the screen; and the meshes and material are the
 **body's own**, from `BodyMeshCache` and `BodyMaterials`, so a first-person
-forearm is that forearm seen closer up, in your team's colour, alight when you
+forearm is that forearm seen closer up, in your team's color, alight when you
 are.
 
 A prop's `ViewmodelSpec` is **not** its carry: a carry is anatomical, in arm
@@ -292,14 +292,14 @@ lengths, putting the weapon where a body really holds it — well below the eye 
 while a viewmodel is a framing decision. Reusing the carry drew the weapon
 perfectly, off the bottom of the screen.
 
-It is stated **across the frustum rather than in metres sideways**: a weapon
-pinned at a fixed offset in view space drifts towards the middle of the screen
+It is stated **across the frustum rather than in meters sideways**: a weapon
+pinned at a fixed offset in view space drifts toward the middle of the screen
 as the field of view widens or the window gets wider, and a weapon that drifts
 inwards eventually shows the cut end it is meant to be hanging off the edge of.
 As a fraction of the frustum at its own depth it stays where it was put
 whatever shape the window is, which is why `place_the_viewmodel` runs every
 frame and reads the camera's aspect rather than placing it once. Depth stays in
-metres, because that is the one part of the framing that is about size.
+meters, because that is the one part of the framing that is about size.
 
 **Shots are drawn from the barrel in first person, and fired from the eye
 always.** A prop may mark a `[muzzle]` (the Fit workspace's Hold panel, and
@@ -353,7 +353,7 @@ shows the weapon, how far you can move, and how far your body (never the
 camera) can turn. What each slot
 holds is a property of the class, which is read off disk; see "What a weapon is" below.
 
-## Modelling a prop
+## Modeling a prop
 
 A **prop** is geometry with a life of its own — a weapon first of all — and it
 is deliberately *not* map content: it lives in a pack beside `weapons.toml`,
@@ -366,7 +366,7 @@ felt by everything after it, so a barrel drilled through stays drilled through
 when the barrel gets longer. Four things about it differ from the map's model,
 and each is a decision rather than a shortcut:
 
-- **A modelling feature is an `enum`, not a `typetag` trait object.** The
+- **A modeling feature is an `enum`, not a `typetag` trait object.** The
   map's features are a trait because a map is open-ended. A boolean has to
   *know what it is subtracting*, so there is no writing "cut B out of A"
   against a trait object without the kernel answering for every shape anyway —
@@ -418,7 +418,7 @@ rather than fanned** — a fan is right for a rectangle and silently wrong for
 anything with a notch in it.
 
 **A solid's faces point outwards, and that is measured rather than derived.**
-What measuring cannot catch is one face wound against its neighbours: a part
+What measuring cannot catch is one face wound against its neighbors: a part
 turn's caps lie in planes through the axis and add nothing to the volume, so
 inward caps measured right and broke every boolean against them.
 `every_sweep_is_wound_consistently` checks that each edge is walked once each
@@ -434,23 +434,23 @@ box with a hole in it is arithmetic.
 
 **Materials are the layer above the kernel's.** The kernel keeps a face's own
 surface through a cut, which is arithmetically honest and the wrong answer for
-a modelling tool: drilling a bore through a steel barrel should leave steel
-inside the bore, not whatever colour the drill was, and nobody sets a drill's
-colour because a drill is not part of the finished prop. So `Solid::subtract`
+a modeling tool: drilling a bore through a steel barrel should leave steel
+inside the bore, not whatever color the drill was, and nobody sets a drill's
+color because a drill is not part of the finished prop. So `Solid::subtract`
 and `intersect` repaint the tool with the target's dominant surface — by
 **area**, since a barrel is mostly its long sides — and `union` deliberately
 does not, because joining a wooden stock to a steel receiver is two materials
 meeting.
 
 A **style** (metal, plastic, wood) is how light comes off a surface and a
-**tint** is what colour it was painted; they are kept apart so a red plastic
+**tint** is what color it was painted; they are kept apart so a red plastic
 grip and a red painted barrel are obviously different objects. A style is four
 numbers on a `StandardMaterial`, not a texture — the right fidelity for
 flat-shaded polygons and the only one that costs a browser nothing.
 
 The mode itself ([`view.rs`](src/prop/view.rs)) does three reversible things
 on the way in: the world is **hidden rather than unloaded** (a prop is
-centimetres across and a map is tens of metres, so leaving it in puts the prop
+centimeters across and a map is tens of meters, so leaving it in puts the prop
 inside a wall), the four editor cameras are **framed on the prop and saved**
 so they go back where they were, and the prop gets **its own lights**, since
 the map's lights are feature entities and went out with everything else. The
@@ -497,18 +497,18 @@ ones the moment anybody left the mode.
 viewports and deliberately *not* the map editor's movement. The gesture is the
 same — **right button drags, the modifier key turns a rotate into a pan, and
 the middle button always pans** (in an ortho view both buttons pan) — so
-a mapper who has learnt one has learnt the other, but three things differ
+a mapper who has learned one has learned the other, but three things differ
 because a prop is not a map:
 
 - **The perspective view orbits a pivot** rather than turning in place. There
-  is no centre to a map, so free-look is the only thing flying one could mean;
-  a prop *is* a centre, and seeing the other side of it is what you want a
+  is no center to a map, so free-look is the only thing flying one could mean;
+  a prop *is* a center, and seeing the other side of it is what you want a
   hundred times an hour. The orbit works in spherical coordinates about the
   pivot rather than by composing rotations, because composing them drifts —
   and a horizon a degree off after ten minutes is worse than one obviously
   wrong.
 - **Zoom is multiplicative**, a constant ratio per notch. A map's step is
-  metres and a prop's is millimetres; an additive step tuned for one is either
+  meters and a prop's is millimeters; an additive step tuned for one is either
   imperceptible or catastrophic in the other. It is also clamped short of the
   pivot, because zoom that could reach zero is zoom you cannot come back out
   of.
@@ -541,8 +541,8 @@ appears.
 
 **The reference figure** ([`figure.rs`](src/prop/figure.rs)) is a body standing
 holding the prop, off by default — a `ScaleFigure` resource of `Option<Class>`,
-picked from the **View** menu, and always up in the Fit workspace. A weapon is modelled in metres and nothing in an
-empty viewport says how big a metre is; the question being asked is never "how
+picked from the **View** menu, and always up in the Fit workspace. A weapon is modeled in meters and nothing in an
+empty viewport says how big a meter is; the question being asked is never "how
 long is this" but "does this look right in somebody's hands". It is a rig with
 a `Pose` and deliberately **no `SkeletonAnimator`** — the pose is set once and
 nothing else may write it, the rule a corpse already follows — so the ungated
@@ -577,7 +577,7 @@ the keyboard are idle, which is what makes typing a name one step rather than
 one per letter.
 
 **The verbs act on the selection**, not on whatever was added last, and **none
-is ever greyed out** ([`tool.rs`](src/prop/tool.rs)). Each tool states what it
+is ever grayed out** ([`tool.rs`](src/prop/tool.rs)). Each tool states what it
 needs as a list of slots — Combine a body then a second body (target, then
 tool: the order it is said in), Mirror a body then a plane, Revolve regions
 then an axis — and clicking one fills the slots from the selection in pick
@@ -660,7 +660,7 @@ corner, two coplanar edges, or one flat face; the frame comes from pick order,
 or from a face's own outward normal, so something sketched on it extrudes
 out of the body. **Its references are resolved as the prop stood when it
 runs**, against the bodies live at that point in the list, so a mirror below
-it that takes the original away does not move it. It is drawn as a grey dashed
+it that takes the original away does not move it. It is drawn as a gray dashed
 square and picked by its border, so one through a body does not stop clicks
 reaching the body. `FeatureOp::references` is what it names without consuming,
 and `depends_on` — operands and references together — is what the feature
@@ -736,7 +736,7 @@ drift, and the symptom would be a dropdown offering bodies that have already
 been eaten.
 
 `assets/default/props/rocket_launcher.gpp` is the example, and the prop editor
-opens onto it: an empty modelling tool is a blank screen with no sense of
+opens onto it: an empty modeling tool is a blank screen with no sense of
 scale, and loading it every time the editor starts means the path the *game*
 will read a model by is exercised constantly rather than first run in anger a
 month later. `every_prop_the_default_pack_ships_loads_and_builds` is what keeps
@@ -749,12 +749,12 @@ about.
 Lightyear encodes with postcard, which refuses `deserialize_any` — what
 `#[serde(tag = "kind")]` needs to read itself back — and that tagging is
 exactly what makes `weapons.toml` and a `.gpp` readable. So
-[`pack_sync`](src/common/pack_sync.rs) sends the catalogue as JSON bytes
+[`pack_sync`](src/common/pack_sync.rs) sends the catalog as JSON bytes
 and [`prop::sync`](src/prop/sync.rs) sends a model as the text its file holds,
 the way [`map_sync`](src/common/map_sync.rs) already sent bytes for its own
 reason. **It failed in the way nobody notices**: the send reports success, the
 receive errors inside Lightyear, and both machines already had the same files —
-so the catalogue sync was a no-op in the only arrangement anybody ran. Two
+so the catalog sync was a no-op in the only arrangement anybody ran. Two
 tests encode the way the wire does and assert the typed value still would not,
 so putting it back fails there rather than on somebody's server.
 
@@ -782,7 +782,7 @@ Three things there are load-bearing:
   weapon away from where the shot goes; ignoring its position would detach the
   weapon from a body that is bobbing.
 - **`carry` is in fractions of arm length**, the way a crouch's root offset is
-  in hip-heights. A Heavy's arms are not a Scout's, and a carry in metres puts
+  in hip-heights. A Heavy's arms are not a Scout's, and a carry in meters puts
   one of them out of its own reach.
 - **A hand that cannot reach does not stretch for it.** `ik::solve` writes a
   straightened limb and *then* reports `Short` — right for a foot pointed at a
@@ -835,7 +835,7 @@ error there is a handle that runs away from the pointer.
 The hold's handles and a feature's are **mutually exclusive**, and which are up
 is the **workspace**: a toggle at the start of the toolbar, **Model** or
 **Fit**. A grip sits at the prop's origin by convention, which is exactly where
-a feature's move arrows are, so the two cannot share a viewport — and modelling
+a feature's move arrows are, so the two cannot share a viewport — and modeling
 and fitting are different jobs anyway. Model has the verbs, the inspector and
 the feature handles; Fit has the Hold panel, the hold's handles, and a body
 standing there (`PropPanels::switch_to` stands one up, remembers the class, and
@@ -861,9 +861,9 @@ be holding.
 **`prop::baked` is the only thing that bakes a prop.** The prop editor's
 viewport and a weapon in somebody's hand go through it alike; two bakers for
 one format would show up as a weapon that looks one way in the editor it was
-modelled in and another in a match. `Weapon.model`
+modeled in and another in a match. `Weapon.model`
 is an `Option<String>` naming a prop under a pack's `props/`; it crosses the
-wire with the rest of the catalogue, so each machine builds the model from its
+wire with the rest of the catalog, so each machine builds the model from its
 own pack — the same arrangement `Equipped` already has, one level down.
 Nothing draws it. That is the next piece, not a gap in this one.
 
@@ -898,7 +898,7 @@ A placed prop's origin is where it stands on the floor. A pickup with no
 collider is taken through a small sphere, and is walked past by somebody it
 would give nothing to. A pickup's **style** is drawing only: `Tf2`
 lifts and turns its parts (`float_pickups`; lifted but still while authoring), never the instance, so the same
-placement and trigger serve both and the switch can be flipped freely. Armour and the flag are kinds with no behaviour yet.
+placement and trigger serve both and the switch can be flipped freely. Armor and the flag are kinds with no behavior yet.
 
 **A hat sits at the crown** — the head bone's tail — in the *body's* frame
 (`-Z` forward), carried along by however far the head has turned from rest,
@@ -961,18 +961,18 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   frame, so changing a name repaints without rebuilding walls, and a material
   that bakes late — no device yet — arrives on its own.
 - **Texture coordinates are world-space**, in tiles of
-  `MATERIAL_TILE_METRES`, so a material runs on across neighbouring walls and
+  `MATERIAL_TILE_METERS`, so a material runs on across neighboring walls and
   does not stretch with the room. The tile size is a stand-in: it belongs to
   the material, which has nowhere to say it yet.
 - **A material is baked once per name** into a `TILE_TEXELS` tile, as the
-  three maps `StandardMaterial` reads — colour, glTF-packed
+  three maps `StandardMaterial` reads — color, glTF-packed
   metallic-roughness, normal — each with a full mip chain, by texture-graph's
   `MaterialMapper`. Sampled trilinear and 16x anisotropic: a wall seen
   edge-on is where tiling shimmers. Saving one in the material editor makes
   the map bake it again.
-- **Colour is viewed as sRGB and the other two are not** (`Encoding`).
+- **Color is viewed as sRGB and the other two are not** (`Encoding`).
   texture-graph stores display bytes; metallic-roughness and normals are
-  data, and decoding them as colour bends every value.
+  data, and decoding them as color bends every value.
 - **Normal maps are flipped in Y** (`FLIP_NORMAL_MAP_Y`): texture-graph's are
   +Y down the image, Bevy's bitangent points up it. Unflipped, every bump is
   lit from the wrong side and nothing errors;
@@ -988,7 +988,7 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
 - **A slot may name a role instead**, which the map's palette
   ([`src/common/palette.rs`](src/common/palette.rs), in `MapMetadata`)
   resolves by the room's `Side` — so a Mirror's copy comes out in the other
-  team's colours with nothing on the copy saying so. A role's name shadows a
+  team's colors with nothing on the copy saying so. A role's name shadows a
   material of the same name. `publish_palette` is the one writer of the
   `Palette` resource; nothing reads `MapMetadata` for it.
 - **No palette field is skipped when empty.** It crosses the wire inside the
@@ -1029,7 +1029,7 @@ Three things there fail silently:
 - **The studio's root is on the thumbnail layer**, which is what the prop
   editor's hiding rule reads: it leaves alone any root no viewport draws.
   Without that, every picture taken in that mode is empty.
-- **A picture that is all one colour, or that never comes back, is
+- **A picture that is all one color, or that never comes back, is
   retaken**, because pipelines compile in the background and a capture can
   be dropped. After about ten seconds the prop is given up on until the next
   bake.
@@ -1079,7 +1079,7 @@ old box and whatever touches its new one — the old box being the one *seen
 last frame*, not the one its mesh was baked from, which a room dragged before
 its first bake does not have. Edits jump ahead of a load-in still in progress.
 With it on, `CalculateRoomGeometry` is ignored (it would stall the frame the
-budget protects) and the panel's Bake is greyed out; Clear forgets what was
+budget protects) and the panel's Bake is grayed out; Clear forgets what was
 seen, so it is a rebuild from scratch. Entering Play still bakes everything at
 once.
 
@@ -1117,7 +1117,7 @@ multiplier on the bone's own thickness. So nothing here is a second opinion
 about how big a body is — `girth` and `belly` already differ per class, and a
 new class is nine numbers rather than a model somebody authored. Meshes are
 cached per build, not per body, which is what makes the sixty-body animation
-grid ten meshes; materials are cached per colour, `BodyTint` overriding the
+grid ten meshes; materials are cached per color, `BodyTint` overriding the
 default on a body that wants its own.
 
 **Hitboxes are asked for, not handed out.** Every rig gets a `Gait`, because
@@ -1296,7 +1296,7 @@ health pool at zero waiting to be reaped again.
 zero. A crate has health and no skeleton, so it vanishes as before; a spawn
 point's preview has a skeleton and no health, so nothing can kill it. The
 corpse carries the *same* `Skeleton`, so `BodyMeshPlugin` dresses it from the
-same cached meshes in the same colour — a class's corpse is its own build,
+same cached meshes in the same color — a class's corpse is its own build,
 with no second asset anywhere. What it must never carry is a
 `SkeletonAnimator`: the solver owns a corpse's `Pose`, and two writers on one
 component is a body that lies there playing its idle.
@@ -1347,7 +1347,7 @@ Four things about it are load-bearing and easy to undo by accident:
   hips. Bodies pick up a bias that drag exactly cancels and slide across the
   room forever. It is seeded from the pose the body died in and only ever
   swung onto wherever the pelvis now points.
-- **Limits are relaxed towards, not snapped onto.** A hinge removes sideways
+- **Limits are relaxed toward, not snapped onto.** A hinge removes sideways
   motion outright, and a hard projection fighting the distance constraints
   overshoots — an arm flaps at the elbow for as long as you watch it.
 - **Limits are stated in the bone's own rest frame.** That is what lets one
@@ -1364,10 +1364,10 @@ point. Write a blast as a directed shove and it slides every corpse in the
 room the same way instead of throwing them off it. A weapon writes a shove for
 *every* hit it lands and never asks whether anything died; the shot that happens to be fatal lands on a corpse
 raised earlier in the same tick. Its units are honest: `push` is a speed at
-the centre, not momentum to be divided by a mass. Mass is real — a bone's own
+the center, not momentum to be divided by a mass. Mass is real — a bone's own
 volume — and what it decides is how much of the body a shove drags with it,
 not how fast the bone that was hit leaves, because a rocket that flings a
-scout's hand at two hundred metres per second is a correct simulation and a
+scout's hand at two hundred meters per second is a correct simulation and a
 bad game.
 
 None of that announces itself when it breaks — you get a corpse that crawls,
@@ -1414,18 +1414,18 @@ the rule with a hole through it. Anything else with an effect that is not a
 `Damage` message has the same problem — ask `Allegiances::may_hurt`, do not
 re-derive the rule.
 
-A body's colour is its team (`body_look`), outranking its `PlayerColour` and `BodyTint` — a tint says
+A body's color is its team (`body_look`), outranking its `PlayerColor` and `BodyTint` — a tint says
 "draw this specially", a team says which side you are on, and the second is
 what you read across a room in a fight. A spawn point's preview stays green
 even with a `Side` — that is not a `Team` — and the editor draws a ring at its
-feet in the side's colour instead. Corpses keep their team, so a pile of them
+feet in the side's color instead. Corpses keep their team, so a pile of them
 still says which way a fight went.
 
 **A mode may have no teams** — arena, from `assets/default/modes.toml` via
 `GameRules` ([`src/common/game_rules.rs`](src/common/game_rules.rs), written
 only by `publish_game_rules`; a mode with no entry plays as below). Then a
 body carries no `Team`, spawns anywhere, and is drawn in its own
-`PlayerColour` ([`src/common/player_colour.rs`](src/common/player_colour.rs)),
+`PlayerColor` ([`src/common/player_color.rs`](src/common/player_color.rs)),
 which the authority picks and replicates — never derived from join order. The
 new-map template is an arena map. A mode with a `frag_limit` keeps score on a
 replicated `Standing` per player ([`src/game/score.rs`](src/game/score.rs)),
@@ -1461,7 +1461,7 @@ re-inserting a `Skeleton`, one component along.
 ## Mirroring half a map
 
 A **Mirror** ([`src/editor/mirror.rs`](src/editor/mirror.rs)) is a feature
-holding a centre (a `PointRef`, so it can ride on a room), a `Symmetry` —
+holding a center (a `PointRef`, so it can ride on a room), a `Symmetry` —
 mirror across X, mirror across Z, or rotate 180° about Y — a list of source
 features and two teams. The workflow it serves is a CTF map built as one half
 and finished by symmetry.
@@ -1532,7 +1532,7 @@ are not placeholders, and both live in
 ## Damage, weapons and projectiles
 
 **Nothing applies damage to a health pool except one system.** Nor to
-`Armour`, the pool in front of it that `apply_damage` spends first. A weapon writes
+`Armor`, the pool in front of it that `apply_damage` spends first. A weapon writes
 a `Damage` message — target, source, amount, where — and is finished;
 `apply_damage` ([`src/game/damage.rs`](src/game/damage.rs)) is the only thing
 that touches a `Damageable`, clamps the overkill and writes the `DamageDealt`
@@ -1561,7 +1561,7 @@ wrong: a wall stops a blast (the same `ray_distance` that shortens a bullet), a
 direct hit takes the direct number *instead of* splash rather than on top of
 it, corpses are thrown `Push::Outward` rather than along, and each damage
 number is anchored **over the body it hurt** rather than over the blast —
-every victim of one rocket shares the blast's centre exactly, so numbers put
+every victim of one rocket shares the blast's center exactly, so numbers put
 there are superimposed rather than merely close and six hits read as one.
 Anything that hurts several bodies at once from a single origin wants that
 last one. Splash reaches anything with `Hitboxes` — being shootable and being
@@ -1578,7 +1578,7 @@ it would want.
 **An action is what one mouse button does; a weapon is a pair of them.**
 `WeaponAction` ([`src/common/weapon.rs`](src/common/weapon.rs)) is a hitscan, a
 projectile, a cone of flame, `None`, or one of four stubs — extinguish, heal
-beam, invuln, scope — that have their real specs and no behaviour yet. A
+beam, invuln, scope — that have their real specs and no behavior yet. A
 `Weapon` mounts one on each button, with a `Cadence` and a `Cost` per button
 and a `Magazine` for the whole thing. Adding a *weapon* is a row in a file;
 adding a *kind* of weapon is a variant and a system that answers for it.
@@ -1594,11 +1594,11 @@ and `loadouts.toml`, read at `Startup` through
 that method is deliberately not `list`, because nothing behind a `fetch` can
 enumerate a directory and a manifest saying what one holds is a second
 description of the pack. The browser build replaces `NativeFiles` and one line
-in `GamePlugin`. There is **no second catalogue written in Rust**: one that
+in `GamePlugin`. There is **no second catalog written in Rust**: one that
 drifted from the files would be a game that plays differently under test than
 it does in front of you.
 
-A bad file is not fatal. A file that will not parse leaves the catalogue as it
+A bad file is not fatal. A file that will not parse leaves the catalog as it
 was; a bad entry — a colliding id, a default outside its own permitted list, a
 loadout naming a weapon nobody defines — is dropped with a line saying which
 file and why. The failure then reads as "the Mercenary has no rocket launcher",
@@ -1625,10 +1625,10 @@ message, so a body keyed on the class arriving would go undressed for the rest
 of the match if it turned up a frame late, and undressed is invisible rather
 than an error. And `dress_bodies_from_elsewhere` carries a `Without<Player>`,
 because a player's body has a `Class` too now and that system inserts no
-`SkeletonRoot` — a player dressed by the wrong one is drawn half a metre off
+`SkeletonRoot` — a player dressed by the wrong one is drawn half a meter off
 the ground.
 
-**The catalogue and the class builds are one description each, held by the
+**The catalog and the class builds are one description each, held by the
 authority.** [`src/common/pack_sync.rs`](src/common/pack_sync.rs) sends both to
 each client on connect, `map_sync` style — so a server can ship its own weapons
 and builds and nobody else needs the files. It is one set of systems generic
@@ -1641,10 +1641,10 @@ body whose rig no longer matches its class. Corpses are left alone: they keep
 the build they died with.
 
 Its collections are **lists and not maps**, and the on-disk types are
-`BTreeMap`s, because the catalogue is compared for equality to decide whether
+`BTreeMap`s, because the catalog is compared for equality to decide whether
 to send it and a `HashMap` walks in an order nobody chose. Filled in hash
 order, two reads of the same file compared unequal — often enough to broadcast
-the whole catalogue at frame rate, rarely enough to ship.
+the whole catalog at frame rate, rarely enough to ship.
 `only_a_change_puts_a_table_on_the_wire` caught it the day it was
 written.
 
@@ -1655,10 +1655,10 @@ price is a HUD naming a new weapon a round trip late. `Equipped` is one
 component rather than two for the reason the corpse layer already paid for:
 replication does not promise to deliver two components in one packet, and half
 an answer is a body nothing can describe. A `WeaponId` is a hash of its name
-rather than an index, because an index is a fact about the order a catalogue
+rather than an index, because an index is a fact about the order a catalog
 loaded in.
 
-An id and the catalogue that describes it arrive on different channels, so a
+An id and the catalog that describes it arrive on different channels, so a
 body really can be holding a weapon nobody can name yet. **Nothing caches a
 resolution**: an id is looked up every time it is drawn, and one that resolves
 to nothing draws blank. Key on absence, not on arrival.
@@ -1667,7 +1667,7 @@ Things worth knowing before touching `src/game/projectile.rs`:
 
 - **The move is swept**, against the walls and the hitboxes at once, using the
   same two functions hit registration uses (`trace`, `CollisionWorld::ray_hit`).
-  A rocket covers half a metre a tick and a wall slab is half a metre thick, so
+  A rocket covers half a meter a tick and a wall slab is half a meter thick, so
   a teleport-then-overlap test waves it straight through.
 - **Bounces are resolved inside the step**, bounded at four contacts. A pipe
   thrown into a corner meets two walls in the same 15 ms.
@@ -1700,7 +1700,7 @@ one would let an alt-fire's cooldown eat the stream the primary is meant to be
 putting out, which reads as lag rather than as a bug. It counts *down*, so the
 default of zero is a body that may fire immediately; counting up would make a
 freshly spawned player wait out an interval before their first shot and read as
-a misfire. The rate is quantised to whole ticks, deliberately: carrying the
+a misfire. The rate is quantized to whole ticks, deliberately: carrying the
 remainder would let a weapon that had been idle empty several shots on
 consecutive ticks.
 
@@ -1747,7 +1747,7 @@ hand to the magazine well and back without a second solver over the arms.
 from the `DamageDealt` every machine already reads, as hard as the hit hurt
 (`Playing::strength`, not the weight, which `fade` owns). The flinch layer claims
 nothing, so it composes onto whatever won — a taunt included — and one of four
-clips is picked by the way the hit travelled in the body's own frame. Every
+clips is picked by the way the hit traveled in the body's own frame. Every
 `SkeletonAnimator` brings a `ClipStack` and `play_the_clips` takes bodies with
 no `Player` (aiming level), so an animation grid's bodies flinch too; a
 corpse has no animator and does not.
@@ -1786,12 +1786,12 @@ it needed no new machinery for that: `burn` sits in `Deal` and writes a
   it.** Overwriting the tint means remembering what was underneath and putting
   it back, and forgetting leaves a body scorched for the rest of the match.
   `body_look` in [`body_mesh.rs`](src/game/body_mesh.rs) is the one place that
-  decides, and `recolour_bodies` swaps materials on the existing parts rather
+  decides, and `recolor_bodies` swaps materials on the existing parts rather
   than rebuilding a body because somebody set it on fire.
-- **Fire is a glow, not a hue.** It used to lerp the base colour towards
-  orange, which worked while every body was the same grey; now that a body's
-  colour is its team, an emissive term (`BURNING_GLOW`) is the one signal that
-  reads the same on all four of them. A burning red pulling further towards
+- **Fire is a glow, not a hue.** It used to lerp the base color toward
+  orange, which worked while every body was the same gray; now that a body's
+  color is its team, an emissive term (`BURNING_GLOW`) is the one signal that
+  reads the same on all four of them. A burning red pulling further toward
   red is a burning body you cannot see.
 
 `ProjectileEmitter` fires a spec along its own forward on an interval.
@@ -1947,7 +1947,7 @@ Four things about that are load-bearing:
 - **Only the authority retires one.** `retire_ragdolls` is split out of
   `step_ragdolls` for exactly that: a client counting down its own lifetime
   would remove something that is not its to remove, at a slightly different
-  moment, since its copy started ageing when the spawn arrived.
+  moment, since its copy started aging when the spawn arrived.
 - **`RagdollShove` is relayed on `EventChannel`**, like `Effect` and for the
   same reason — it is pure geometry, so no entity mapping. Without it the
   simulation is identical on every machine except that nobody but the server
@@ -1971,8 +1971,8 @@ area was two writers for one thing — a body turned by the mouse locally and by
 its yaw remotely, a body spawned by the map on one end and by replication on
 the other — and each showed up as something that looked unrelated to its cause.
 Prediction was smeared through movement, input, damage and drawing before, and
-that is what made the two ends disagree; it went back on afterwards, as one
-layer, changing the behaviour of exactly one system.
+that is what made the two ends disagree; it went back on afterward, as one
+layer, changing the behavior of exactly one system.
 
 Three markers, and they are not synonyms:
 
@@ -2056,7 +2056,7 @@ body on the receiving end, and a second copy is a second writer.
 
 Replication carries **state**: health is a component, so a client is told the
 number. It cannot carry **events** — a hit landed *here*, for *this much*, by
-*this person* — because an event is not a value anything holds afterwards. Two
+*this person* — because an event is not a value anything holds afterward. Two
 hits of thirty in one tick and one hit of sixty leave a body at identical
 health, and a client watching only the number would draw one number instead of
 two, in the wrong place, credited to nobody.
@@ -2104,7 +2104,7 @@ Two things about tracers specifically:
 ### Projectiles are replicated, not re-simulated
 
 Every client could step the same spec from the same origin and get the same
-arc — the map is identical and the maths is deterministic — right up until it
+arc — the map is identical and the math is deterministic — right up until it
 meets a body, and a client's copy of a remote body is always a little behind
 the server's. A locally simulated rocket would detonate against a player who,
 on the server, was never there: a puff of smoke and no damage, which reads as
@@ -2124,7 +2124,7 @@ fly:
   tumbling projectile that does not tumble.
 - **Scale.** `dress_projectiles` sizes the transform from `spec.radius`. A
   replicated projectile is built by inserting components and never went through
-  `launch`, so its transform starts at unit scale and a rocket is drawn a metre
+  `launch`, so its transform starts at unit scale and a rocket is drawn a meter
   wide.
 
 `Projectile.shooter` is `#[serde(skip)]`: it is only ever asked by the process
@@ -2173,7 +2173,7 @@ origin until somebody starts a round.
   replicated — but a puff fired by somebody whose weapon you cannot resolve yet
   draws nothing. Fire has no `Effect` variant of its own.
 - `BodyTint` is not replicated either, so a corpse elsewhere is drawn in its
-  class's default colour rather than whatever its body was tinted.
+  class's default color rather than whatever its body was tinted.
 - Aim is part of the predicted `Player`, so turning triggers a rollback per
   tick while you turn. It is correct and cheap — the replay reaches the same
   yaw — but wasteful, since aim is copied from input and can only ever
@@ -2342,7 +2342,7 @@ Two things keep that cheap and correct:
 History is not saved and does not cross the wire: `adopt` — opening a file,
 or a client being handed the server's map — resets it. Revert to Saved is one
 undo step (`replace_as_edit`), and the map knows whether it matches its file
-(`is_dirty`), which is what greys Revert out and puts the asterisk in the menu
+(`is_dirty`), which is what grays Revert out and puts the asterisk in the menu
 bar.
 
 **The Features panel is the feature list**, with a rollback bar drawn in it:

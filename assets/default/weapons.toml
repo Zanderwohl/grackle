@@ -13,9 +13,9 @@
 # with `kind = "none"` rather than being left out.
 #
 # `model` names a prop under `props/`, without its extension — the geometry the
-# weapon is drawn as, modelled in the prop editor. It is a name rather
+# weapon is drawn as, modeled in the prop editor. It is a name rather
 # than a path because a client is told which prop to build and builds it from
-# its own pack. Omitted means nobody has modelled this weapon yet, which is
+# its own pack. Omitted means nobody has modeled this weapon yet, which is
 # every weapon so far.
 #
 # **Animations, when they exist, go at the bottom of an entry.** Not tidiness:

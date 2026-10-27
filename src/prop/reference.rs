@@ -74,7 +74,7 @@ impl Located {
 }
 
 /// `outward` is stored rather than derived from the winding, because the
-/// winding is only fixed afterwards by [`Solid::oriented_outward`].
+/// winding is only fixed afterward by [`Solid::oriented_outward`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutlineFace {
     pub points: Vec<u32>,
@@ -388,10 +388,10 @@ pub struct Pickable {
     pub at: Located,
 }
 
-/// Metres. Well above the kernel's rounding, well below anything modelled.
+/// Meters. Well above the kernel's rounding, well below anything modeled.
 const ON_SURFACE: f32 = 1e-4;
 
-/// An edge shorter than this has collapsed onto a point; metres.
+/// An edge shorter than this has collapsed onto a point; meters.
 const DEGENERATE_EDGE: f32 = 1e-5;
 
 /// Every named element of `wires` on `solid`'s surface. A cut-away corner is
@@ -657,7 +657,7 @@ mod tests {
         assert_eq!(alone.locate(&original), None);
     }
 
-    /// Straight-on orthographic projection, a pixel a millimetre.
+    /// Straight-on orthographic projection, a pixel a millimeter.
     fn looking_down_z(p: Vec3) -> Option<Vec2> {
         Some(p.truncate() * 1000.0)
     }
@@ -715,8 +715,8 @@ mod tests {
                 }
                 assert!(face.is_flat(), "outline {n}, face {i} is not flat");
                 flat += 1;
-                let centre = points.iter().sum::<Vec3>() / points.len() as f32;
-                assert!(normal.dot(centre - middle) > 0.0, "outline {n}, face {i} points inwards");
+                let center = points.iter().sum::<Vec3>() / points.len() as f32;
+                assert!(normal.dot(center - middle) > 0.0, "outline {n}, face {i} points inwards");
             }
             assert!(flat >= 4, "outline {n} has only {flat} faces with area");
         }

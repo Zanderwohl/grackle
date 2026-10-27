@@ -83,7 +83,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -102,7 +102,7 @@ ease = "linear"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]

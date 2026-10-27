@@ -31,7 +31,7 @@ TextureGraphFile(
             ),
             Layer(
                 id: 3,
-                name: "colour ramp",
+                name: "color ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
                         ColorStop(
@@ -67,7 +67,7 @@ TextureGraphFile(
             ),
             Layer(
                 id: 4,
-                name: "colour",
+                name: "color",
                 kind: Map(Map(
                     value: Some(2),
                     palette: Some(3),

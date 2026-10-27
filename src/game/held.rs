@@ -2,7 +2,7 @@
 //! weapon clips move it, and then both arms are solved onto it. See
 //! [the plan](../../documentation/weapons-in-hand.md).
 //!
-//! Nothing is cached on arrival: `Equipped`, the catalogue and the model each
+//! Nothing is cached on arrival: `Equipped`, the catalog and the model each
 //! arrive on their own schedule, so what is drawn is compared with what is
 //! held every frame and redrawn when they differ.
 
@@ -17,7 +17,7 @@ use crate::common::skeleton::play::{
     apply_stack, grip_offsets, ClipAssetsPlugin, ClipStack, Frames, Layer, LayerBlends, Regions,
 };
 use crate::common::skeleton::{Pose, Skeleton};
-use crate::common::weapon::{Equipped, WeaponCatalogue, WeaponId};
+use crate::common::weapon::{Equipped, WeaponCatalog, WeaponId};
 use crate::common::taunt::Taunts;
 use crate::game::condition::Condition;
 use crate::game::player::{LocalPlayer, Player, ViewMode};
@@ -26,7 +26,7 @@ use crate::prop::baked::{PropCache, SurfaceMaterials};
 use crate::game::collision::CollisionWorld;
 use crate::prop::hold::{carry_frame, grip_hands, weapon_transform, HoldSpec, ViewmodelSpec};
 
-/// Metres above a point to start looking for the floor, and below it to keep
+/// Meters above a point to start looking for the floor, and below it to keep
 /// looking. Generous: a keyed foot mid-stride is above the ground, and one on a
 /// step down is below.
 const GROUND_PROBE: f32 = 2.0;
@@ -46,8 +46,8 @@ pub struct WeaponInHand(pub Transform);
 #[require(ClipStack, Performance, crate::game::reloading::ReloadSeen)]
 pub struct HeldModel {
     weapon: Option<WeaponId>,
-    /// The catalogue and prop cache have both answered, possibly with "no
-    /// model". Without it, a weapon whose catalogue entry had not arrived yet
+    /// The catalog and prop cache have both answered, possibly with "no
+    /// model". Without it, a weapon whose catalog entry had not arrived yet
     /// would be recorded as nothing to draw and never revisited.
     resolved: bool,
     /// Cache generation the answer came from. A server's model can arrive after
@@ -231,7 +231,7 @@ impl Plugin for HeldWeaponPlugin {
 /// without a `World`.
 #[derive(Debug, PartialEq)]
 enum Wanted<'a> {
-    /// Held, but the catalogue entry has not arrived (it comes on a different
+    /// Held, but the catalog entry has not arrived (it comes on a different
     /// channel). Ask again next frame.
     Unknown,
     /// Settled: empty hands, or a weapon with no model.
@@ -239,11 +239,11 @@ enum Wanted<'a> {
     Model(&'a str),
 }
 
-fn wanted_model<'a>(equipped: &Equipped, catalogue: &'a WeaponCatalogue) -> Wanted<'a> {
+fn wanted_model<'a>(equipped: &Equipped, catalog: &'a WeaponCatalog) -> Wanted<'a> {
     let Some(id) = equipped.held() else {
         return Wanted::Nothing;
     };
-    let Some(weapon) = catalogue.get(id) else {
+    let Some(weapon) = catalog.get(id) else {
         return Wanted::Unknown;
     };
     match weapon.model.as_deref() {
@@ -255,7 +255,7 @@ fn wanted_model<'a>(equipped: &Equipped, catalogue: &'a WeaponCatalogue) -> Want
 #[allow(clippy::too_many_arguments)]
 fn dress_held_weapons(
     mut commands: Commands,
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     packs: Res<PackAssets>,
     mut cache: ResMut<PropCache>,
     mut surfaces: ResMut<SurfaceMaterials>,
@@ -286,9 +286,9 @@ fn dress_held_weapons(
             continue;
         }
 
-        match wanted_model(equipped, &catalogue) {
+        match wanted_model(equipped, &catalog) {
             // Recorded only if the held weapon changed, so waiting for a
-            // catalogue does not re-insert the component every frame.
+            // catalog does not re-insert the component every frame.
             Wanted::Unknown => {
                 if drawn.is_none_or(|drawn| drawn.weapon != held) {
                     replace_parts(
@@ -435,7 +435,7 @@ pub(crate) fn perform(
     delta: f32,
 ) {
     // A different weapon restarts; the same weapon re-resolving (a re-bake, a
-    // late catalogue) does not.
+    // late catalog) does not.
     if performance.started_for != held.weapon {
         performance.started_for = held.weapon;
         performance.playing = held.clips.get(DEPLOY).map(|_| Playback {
@@ -576,7 +576,7 @@ pub(crate) fn play_the_clips(
 ///
 /// An arm a layer above the weapon owns is left alone, or a humiliated hand
 /// twists round a weapon nobody is holding. A layer fading over the arm pulls
-/// the solved grip back towards its clip by its weight.
+/// the solved grip back toward its clip by its weight.
 ///
 /// [`prop::hold`]: crate::prop::hold
 pub(crate) fn grip_the_weapon(
@@ -695,34 +695,34 @@ mod tests {
         equipped
     }
 
-    /// Two cases draw nothing, but only a missing catalogue entry is retried.
+    /// Two cases draw nothing, but only a missing catalog entry is retried.
     #[test]
-    fn an_unknown_weapon_is_asked_about_again_and_an_unmodelled_one_is_not() {
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.insert(weapon("modelled", Some("rocket_launcher")));
-        catalogue.insert(weapon("bare", None));
+    fn an_unknown_weapon_is_asked_about_again_and_an_unmodeled_one_is_not() {
+        let mut catalog = WeaponCatalog::default();
+        catalog.insert(weapon("modeled", Some("rocket_launcher")));
+        catalog.insert(weapon("bare", None));
 
         assert_eq!(
-            wanted_model(&holding(Some(WeaponId::of("modelled"))), &catalogue),
+            wanted_model(&holding(Some(WeaponId::of("modeled"))), &catalog),
             Wanted::Model("rocket_launcher"),
         );
         assert_eq!(
-            wanted_model(&holding(Some(WeaponId::of("bare"))), &catalogue),
+            wanted_model(&holding(Some(WeaponId::of("bare"))), &catalog),
             Wanted::Nothing,
-            "a weapon nobody has modelled is an answer, not a thing to retry",
+            "a weapon nobody has modeled is an answer, not a thing to retry",
         );
         assert_eq!(
-            wanted_model(&holding(Some(WeaponId::of("never heard of"))), &catalogue),
+            wanted_model(&holding(Some(WeaponId::of("never heard of"))), &catalog),
             Wanted::Unknown,
-            "a weapon whose catalogue entry is still in flight must be retried",
+            "a weapon whose catalog entry is still in flight must be retried",
         );
-        assert_eq!(wanted_model(&holding(None), &catalogue), Wanted::Nothing);
+        assert_eq!(wanted_model(&holding(None), &catalog), Wanted::Nothing);
     }
 
     /// A weapon's model name reaches meshes on the body, using the prop the
     /// default pack ships so a rename or broken file fails here.
     #[test]
-    fn a_modelled_weapon_reaches_the_hand() {
+    fn a_modeled_weapon_reaches_the_hand() {
         let mut world = World::new();
         world.insert_resource(Assets::<Mesh>::default());
         world.insert_resource(Assets::<StandardMaterial>::default());
@@ -732,10 +732,10 @@ mod tests {
         world.init_resource::<PackAssets>();
         world.init_resource::<ViewMode>();
 
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.insert(weapon("launcher", Some("rocket_launcher")));
-        catalogue.insert(weapon("bare", None));
-        world.insert_resource(catalogue);
+        let mut catalog = WeaponCatalog::default();
+        catalog.insert(weapon("launcher", Some("rocket_launcher")));
+        catalog.insert(weapon("bare", None));
+        world.insert_resource(catalog);
 
         let held = world
             .spawn((
@@ -765,7 +765,7 @@ mod tests {
         }
 
         let bare = world.get::<HeldModel>(empty).expect("the body was never dressed");
-        assert!(bare.resolved, "an unmodelled weapon should not be retried");
+        assert!(bare.resolved, "an unmodeled weapon should not be retried");
         assert!(bare.parts.is_empty());
     }
 
@@ -965,7 +965,7 @@ mod tests {
             tracks: vec![Track {
                 combine: Combine::Compose,
                 space: Space::Carry,
-                unit: Unit::Metres,
+                unit: Unit::Meters,
                 enabled: true,
                 timing: Default::default(),
                 channel: Channel::Weapon {

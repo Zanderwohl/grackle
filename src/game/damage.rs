@@ -13,7 +13,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
-use crate::common::damage::{Armour, Damage, DamageDealt, Damageable, Died};
+use crate::common::damage::{Armor, Damage, DamageDealt, Damageable, Died};
 use crate::common::team::Allegiances;
 use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage};
 use crate::game::player::PlayerCamera;
@@ -92,16 +92,16 @@ impl Plugin for DamagePlugin {
     }
 }
 
-/// The only system that touches a health pool or [`Armour`], and where teams
+/// The only system that touches a health pool or [`Armor`], and where teams
 /// are enforced (see [`crate::common::team`]).
 ///
 /// A target with no [`Damageable`] is skipped: an explosion sweeps up whatever
 /// is nearby. A request at a teammate is dropped with no [`DamageDealt`], so
-/// no zero is drawn over a friend. The record is the whole hit, armour's share
+/// no zero is drawn over a friend. The record is the whole hit, armor's share
 /// included: a number is what you did, not where it landed.
 pub fn apply_damage(
     mut requests: MessageReader<Damage>,
-    mut health: Query<(&mut Damageable, Option<&mut Armour>)>,
+    mut health: Query<(&mut Damageable, Option<&mut Armor>)>,
     allegiances: Allegiances,
     mut dealt: MessageWriter<DamageDealt>,
 ) {
@@ -109,11 +109,11 @@ pub fn apply_damage(
         if !allegiances.may_hurt(request.source, request.target) {
             continue;
         }
-        let Ok((mut target, armour)) = health.get_mut(request.target) else { continue };
+        let Ok((mut target, armor)) = health.get_mut(request.target) else { continue };
 
-        // An emptied body's armour is not spent on it.
-        let through = match armour {
-            Some(mut armour) if target.is_alive() && armour.points() > 0 => armour.soak(request.amount),
+        // An emptied body's armor is not spent on it.
+        let through = match armor {
+            Some(mut armor) if target.is_alive() && armor.points() > 0 => armor.soak(request.amount),
             _ => request.amount,
         };
         // Written even at zero, so a debug harness can keep shooting an
@@ -298,18 +298,18 @@ mod tests {
     }
 
     #[test]
-    fn armour_soaks_most_of_a_hit_and_the_record_is_the_whole_hit() {
+    fn armor_soaks_most_of_a_hit_and_the_record_is_the_whole_hit() {
         let mut world = World::new();
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<DamageDealt>>();
-        let mut armour = Armour::default();
-        armour.add(50);
-        let target = world.spawn((Damageable::with_health(100), armour)).id();
+        let mut armor = Armor::default();
+        armor.add(50);
+        let target = world.spawn((Damageable::with_health(100), armor)).id();
         world.write_message(Damage { target, source: DamageSource::World, amount: 30, point: Vec3::ZERO });
 
         world.run_system_once(apply_damage).unwrap();
 
-        assert_eq!(world.get::<Armour>(target).unwrap().points(), 30);
+        assert_eq!(world.get::<Armor>(target).unwrap().points(), 30);
         assert_eq!(world.get::<Damageable>(target).unwrap().health(), 90);
         let messages = world.resource::<Messages<DamageDealt>>();
         let mut cursor = messages.get_cursor();
@@ -363,21 +363,21 @@ mod tests {
         app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
         app.update();
 
-        let centre = Vec3::new(0.0, 1.0, 0.0);
+        let center = Vec3::new(0.0, 1.0, 0.0);
         let victim = app
             .world_mut()
             .spawn((
                 Damageable::with_health(20),
                 DamageLog::default(),
                 Hitboxes {
-                    body: Box3 { centre, half_extents: Vec3::splat(0.5) },
-                    head: Some(Box3 { centre, half_extents: Vec3::splat(0.15) }),
+                    body: Box3 { center, half_extents: Vec3::splat(0.5) },
+                    head: Some(Box3 { center, half_extents: Vec3::splat(0.15) }),
                 },
                 Name::new("Bystander"),
             ))
             .id();
         app.world_mut().write_message(Explosion {
-            at: centre,
+            at: center,
             radius: 4.0,
             damage: 60,
             knockback: 10.0,

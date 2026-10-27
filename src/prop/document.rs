@@ -128,7 +128,7 @@ pub struct PropDoc {
     /// is stated relative to the hold.
     ///
     /// Must stay the last field: a TOML array-of-tables header captures every
-    /// key after it, so a field serialised below `[[features]]` would be read
+    /// key after it, so a field serialized below `[[features]]` would be read
     /// back into the last feature.
     #[serde(default, skip_serializing_if = "ClipSet::is_empty")]
     pub animations: ClipSet,
@@ -205,7 +205,7 @@ impl PropDoc {
         self.prune_sketch_regions();
     }
 
-    /// Drops sketch region entries no sweep names, unless they were labelled.
+    /// Drops sketch region entries no sweep names, unless they were labeled.
     pub fn prune_sketch_regions(&mut self) {
         let used: Vec<(PropFeatureId, SketchId)> = self
             .features
@@ -729,7 +729,7 @@ mod tests {
     #[test]
     fn a_document_round_trips_through_its_file_format() {
         let doc = sample();
-        let text = to_text(&doc).expect("a prop serialises");
+        let text = to_text(&doc).expect("a prop serializes");
         let back = parse(&text).unwrap_or_else(|e| panic!("{e}\n---\n{text}"));
         assert_eq!(doc, back);
     }
@@ -766,7 +766,7 @@ mod tests {
         }
     }
 
-    /// Fails if the animations are serialised under `[[features]]` and
+    /// Fails if the animations are serialized under `[[features]]` and
     /// swallowed by the last feature; the load still succeeds.
     #[test]
     fn animations_survive_the_round_trip_beside_the_features() {
@@ -812,7 +812,7 @@ mod tests {
             },
         );
 
-        let text = to_text(&doc).expect("a prop with a clip should serialise");
+        let text = to_text(&doc).expect("a prop with a clip should serialize");
         let back = parse(&text).expect("a prop with a clip should come back");
 
         assert_eq!(
@@ -994,7 +994,7 @@ mod tests {
         for (name, kind) in [
             ("health_pack", PickupKind::Health),
             ("ammo_pack", PickupKind::Ammo),
-            ("armour_pack", PickupKind::Armor),
+            ("armor_pack", PickupKind::Armor),
         ] {
             let pack = read(name).unwrap();
             assert_eq!(pack.archetype, Archetype::Pickup, "{name}");
@@ -1073,7 +1073,7 @@ mod tests {
             for (id, solid) in &built.bodies {
                 assert!(
                     solid.volume() > 0.0,
-                    "{}: body {id} came out inside out, at {} cubic metres",
+                    "{}: body {id} came out inside out, at {} cubic meters",
                     path.display(),
                     solid.volume(),
                 );

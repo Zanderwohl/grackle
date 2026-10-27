@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use rand::seq::IndexedRandom;
 
 use crate::common::damage::PlayerId;
-use crate::common::player_colour::PlayerColour;
+use crate::common::player_color::PlayerColor;
 use crate::common::team::{Side, Team};
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
@@ -22,18 +22,18 @@ pub struct Identity {
     pub id: PlayerId,
     /// `None` in a mode without teams.
     pub team: Option<Team>,
-    /// Which hue on the wheel, for [`PlayerColour::nth`]. An index rather than
+    /// Which hue on the wheel, for [`PlayerColor::nth`]. An index rather than
     /// the hue, so a new match's [`HueStart`] turns everybody's together.
-    pub colour: usize,
+    pub color: usize,
 }
 
 impl Identity {
-    pub fn colour(&self, start: &HueStart) -> PlayerColour {
-        PlayerColour::nth(start.0, self.colour)
+    pub fn color(&self, start: &HueStart) -> PlayerColor {
+        PlayerColor::nth(start.0, self.color)
     }
 }
 
-/// Where this match's colour wheel starts, in degrees. Random per match, so
+/// Where this match's color wheel starts, in degrees. Random per match, so
 /// the same player is not always the same red; dropped with [`OurIdentity`].
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct HueStart(pub f32);

@@ -7,7 +7,7 @@ note = "Sampled from `airborne_pose`. Still, for now: a real jump wants keys thr
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -26,7 +26,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -45,7 +45,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -64,7 +64,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -83,7 +83,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -102,7 +102,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -121,7 +121,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -140,7 +140,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]

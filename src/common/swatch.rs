@@ -1,14 +1,14 @@
-//! Interface colours, as against a map's paint in [`crate::common::palette`]:
+//! Interface colors, as against a map's paint in [`crate::common::palette`]:
 //! one base per team, and its highlights and shadows derived in OKLCH, where
 //! lightness is perceptual and so a "lighter" red and a "lighter" yellow look
 //! equally lighter.
 //!
-//! These are not [`Team::colour`], which is a body's base under map lighting
+//! These are not [`Team::color`], which is a body's base under map lighting
 //! and deliberately muted. Flat panels under no light want more chroma.
 //!
-//! Highlights warm towards yellow and shadows cool towards blue, the way paint
-//! and light do, rather than simply mixing with white and black, which greys a
-//! colour out.
+//! Highlights warm toward yellow and shadows cool toward blue, the way paint
+//! and light do, rather than simply mixing with white and black, which grays a
+//! color out.
 
 use bevy::prelude::*;
 
@@ -19,7 +19,7 @@ const WARM_HUE: f32 = 95.0;
 /// Where shadows lean: a cool blue-violet.
 const COOL_HUE: f32 = 275.0;
 
-/// One colour and the tones around it.
+/// One color and the tones around it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Swatch {
     pub base: Color,
@@ -78,7 +78,7 @@ impl Swatch {
     }
 }
 
-/// An outline colour.
+/// An outline color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ink {
     White,
@@ -97,28 +97,28 @@ impl Ink {
     }
 }
 
-/// Turn `from` a fraction of the short way round towards `to`, in degrees.
+/// Turn `from` a fraction of the short way round toward `to`, in degrees.
 fn lean(from: f32, to: f32, amount: f32) -> f32 {
     let delta = (to - from + 540.0).rem_euclid(360.0) - 180.0;
     (from + delta * amount).rem_euclid(360.0)
 }
 
-/// Lose chroma until the colour fits in sRGB, keeping lightness and hue.
+/// Lose chroma until the color fits in sRGB, keeping lightness and hue.
 /// Clamping channels instead would shift the hue of a saturated yellow.
-fn in_gamut(colour: Oklcha) -> Color {
+fn in_gamut(color: Oklcha) -> Color {
     let fits = |c: Oklcha| {
         let rgb = Srgba::from(c);
         [rgb.red, rgb.green, rgb.blue].iter().all(|v| (-1e-4..=1.0 + 1e-4).contains(v))
     };
-    if fits(colour) {
-        return colour.into();
+    if fits(color) {
+        return color.into();
     }
-    let (mut low, mut high) = (0.0, colour.chroma);
+    let (mut low, mut high) = (0.0, color.chroma);
     for _ in 0..20 {
         let mid = (low + high) * 0.5;
-        if fits(colour.with_chroma(mid)) { low = mid } else { high = mid }
+        if fits(color.with_chroma(mid)) { low = mid } else { high = mid }
     }
-    colour.with_chroma(low).into()
+    color.with_chroma(low).into()
 }
 
 #[cfg(test)]

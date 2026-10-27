@@ -2,7 +2,7 @@
 //!
 //! A key holds a target, not a value: what to move, where, in which [`Space`]
 //! and [`Unit`], per axis. Points are in leg- or arm-lengths for the same
-//! reason [`FootOffset`] and [`HoldSpec::carry`] are: a point in metres is
+//! reason [`FootOffset`] and [`HoldSpec::carry`] are: a point in meters is
 //! right for one build only. The per-axis shape mirrors the map editor's
 //! `PointRef`.
 //!
@@ -71,7 +71,7 @@ pub enum Space {
 #[serde(rename_all = "snake_case")]
 pub enum Unit {
     #[default]
-    Metres,
+    Meters,
     LegLengths,
     ArmLengths,
     HipHeights,
@@ -103,7 +103,7 @@ pub enum Combine {
 
 /// What a track's keys are timed against.
 ///
-/// A foot's cycle is normalised so 0–½ is that foot on the ground and ½–1 in
+/// A foot's cycle is normalized so 0–½ is that foot on the ground and ½–1 in
 /// the air. Stance fraction changes with speed, so keys timed against a foot
 /// stay right at every speed where keys timed against the stride would not.
 /// Only meaningful on the stride clock.
@@ -340,7 +340,7 @@ pub enum Channel {
         keys: Vec<Key>,
     },
     /// Where the weapon is, as a deviation from the hold's carry. The hands
-    /// follow because `grip_the_weapon` solves both arms onto it afterwards.
+    /// follow because `grip_the_weapon` solves both arms onto it afterward.
     Weapon {
         #[serde(default)]
         keys: Vec<Key>,
@@ -594,7 +594,7 @@ impl Clip {
         }
     }
 
-    pub fn normalise(&mut self) {
+    pub fn normalize(&mut self) {
         for track in &mut self.tracks {
             track.channel.sort();
         }
@@ -735,7 +735,7 @@ impl StateAnimation {
             true => StateAnimation::Blend(toml::from_str::<BlendFile>(text)?.blend),
             false => StateAnimation::Single(toml::from_str(text)?),
         };
-        animation.normalise();
+        animation.normalize();
         Ok(animation)
     }
 
@@ -749,12 +749,12 @@ impl StateAnimation {
     }
 
     /// Keys in time order, and variants in heading order.
-    pub fn normalise(&mut self) {
+    pub fn normalize(&mut self) {
         match self {
-            StateAnimation::Single(clip) => clip.normalise(),
+            StateAnimation::Single(clip) => clip.normalize(),
             StateAnimation::Blend(variants) => {
                 for variant in variants.iter_mut() {
-                    variant.clip.normalise();
+                    variant.clip.normalize();
                 }
                 variants.sort_by(|a, b| a.heading.total_cmp(&b.heading));
             }
@@ -832,7 +832,7 @@ impl StateAnimation {
                     message: crate::get!("anim.problem.empty_blend"),
                 });
             }
-            // A joint one variant drives and its neighbour does not blends towards
+            // A joint one variant drives and its neighbor does not blends toward
             // rest, so the body sags between headings.
             for pair in variants.windows(2) {
                 let drives = |clip: &Clip| -> Vec<String> {
@@ -885,9 +885,9 @@ impl ClipSet {
         self.clips.is_empty()
     }
 
-    pub fn normalise(&mut self) {
+    pub fn normalize(&mut self) {
         for clip in self.clips.values_mut() {
-            clip.normalise();
+            clip.normalize();
         }
     }
 }
@@ -932,7 +932,7 @@ mod tests {
                 Track {
                     combine: Combine::Compose,
                     space: Space::Carry,
-                    unit: Unit::Metres,
+                    unit: Unit::Meters,
                     enabled: true,
                     timing: Default::default(),
                     channel: Channel::Rotation {
@@ -947,7 +947,7 @@ mod tests {
     #[test]
     fn a_clip_round_trips_through_its_own_text() {
         let clip = a_clip();
-        let text = toml::to_string_pretty(&clip).expect("a clip should serialise");
+        let text = toml::to_string_pretty(&clip).expect("a clip should serialize");
         let back: Clip = toml::from_str(&text).expect("a clip should come back");
         assert_eq!(clip, back, "round trip changed the clip:\n{text}");
     }
@@ -963,7 +963,7 @@ mod tests {
         let holder = Holder {
             to: [Axis::Value(0.05), Axis::ON_THE_GROUND, Axis::Free],
         };
-        let text = toml::to_string(&holder).expect("axes should serialise");
+        let text = toml::to_string(&holder).expect("axes should serialize");
 
         assert!(text.contains("0.05"), "nice_f32 was bypassed: {text}");
         assert!(
@@ -1013,7 +1013,7 @@ mod tests {
         };
         keys.swap(0, 1);
 
-        clip.normalise();
+        clip.normalize();
 
         let times = clip.tracks[0].channel.key_times();
         assert!(
@@ -1029,7 +1029,7 @@ mod tests {
         clip.tracks.push(Track {
             combine: Combine::Replace,
             space: Space::Body,
-            unit: Unit::Metres,
+            unit: Unit::Meters,
             enabled: true,
             timing: Default::default(),
             channel: Channel::Weapon {
@@ -1088,14 +1088,14 @@ mod tests {
     /// `nudge` must report where a dragged key landed, or the next frame of the
     /// drag moves whichever key inherited its index.
     #[test]
-    fn a_key_dragged_across_its_neighbour_is_followed() {
+    fn a_key_dragged_across_its_neighbor_is_followed() {
         let mut channel = point_track(&[0.0, 0.25, 0.5]);
         let landed = channel.nudge(&[0], 0.4, 1.0);
 
         assert_eq!(times(&channel), vec![0.25, 0.4, 0.5]);
         assert_eq!(landed, vec![1], "the moved key was not followed");
 
-        // And it is still the key it was: the value travelled with the time.
+        // And it is still the key it was: the value traveled with the time.
         let Channel::Weapon { keys } = &channel else { unreachable!() };
         assert_eq!(keys[1].to[0], Axis::Value(0.0), "a key's value was left behind");
     }

@@ -6,19 +6,19 @@ use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
 use lightyear::prelude::input::native::ActionState;
 
-use crate::common::damage::{Armour, Damageable};
+use crate::common::damage::{Armor, Damageable};
 use crate::common::hitbox::Hitboxes;
 use crate::common::movement_rules::MovementRules;
 use crate::common::taunt::TauntTurning;
 use crate::common::game_rules::ModeRules;
 use crate::common::team::Team;
-use crate::common::player_colour::PlayerColour;
+use crate::common::player_color::PlayerColor;
 use crate::game::respawn::Identity;
 use crate::common::class::{
-    body_centre_from_feet, Stance, CLASS_HALF_EXTENTS,
+    body_center_from_feet, Stance, CLASS_HALF_EXTENTS,
 };
 use crate::game::collision::{CollisionWorld, Touched};
-use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalogue};
+use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalog};
 use crate::game::condition::Condition;
 use crate::game::weapon::Trigger;
 use crate::tool::room::Room;
@@ -26,14 +26,14 @@ use crate::tool::room::Room;
 /// Half-extents of the body box: the tallest class, which spawn points are
 /// checked against.
 pub const PLAYER_HALF: Vec3 = CLASS_HALF_EXTENTS;
-/// Metres per second. The gait reads speed off the ground covered, so this is
+/// Meters per second. The gait reads speed off the ground covered, so this is
 /// what makes it a walk.
 const WALK_SPEED: f32 = 2.6;
 
-/// Metres per second.
+/// Meters per second.
 const SPRINT_SPEED: f32 = 7.0;
 
-/// Metres per second. Wins over sprint.
+/// Meters per second. Wins over sprint.
 const CROUCH_SPEED: f32 = 1.2;
 const JUMP_SPEED: f32 = 7.0;
 /// The steepest floor a body stands on, as the cosine of its tilt: about 45°,
@@ -52,7 +52,7 @@ const FIELD_OF_VIEW: f32 = std::f32::consts::FRAC_PI_2;
 /// Short of straight up and down, so the view never flips over.
 const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 
-/// The body. Its `Transform` is the centre of the collision box, not the feet
+/// The body. Its `Transform` is the center of the collision box, not the feet
 /// or the eye; [`PLAYER_HALF`] is measured from here.
 ///
 /// The required components are ones whose absence fails silently: a body
@@ -62,7 +62,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 // `Transform` and `Visibility` because a replicated body is built by
 // inserting components rather than through `spawn_player`, and without them
 // its children have nothing to inherit.
-#[require(Hitboxes, Damageable, Armour, Equipped, Ammo, Trigger, Inputs, Condition, Transform, Visibility)]
+#[require(Hitboxes, Damageable, Armor, Equipped, Ammo, Trigger, Inputs, Condition, Transform, Visibility)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -292,7 +292,7 @@ pub fn usable_spawns(spawns: &[Spawn], world: &CollisionWorld) -> Vec<Spawn> {
     spawns
         .iter()
         .copied()
-        .filter(|spawn| world.fits(body_centre_from_feet(spawn.feet), PLAYER_HALF))
+        .filter(|spawn| world.fits(body_center_from_feet(spawn.feet), PLAYER_HALF))
         .collect()
 }
 
@@ -313,7 +313,7 @@ pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
     Spawn { feet, yaw: SPAWN_YAW, side: None }
 }
 
-/// The spawn's `feet` is its own position; the body is centred above it.
+/// The spawn's `feet` is its own position; the body is centered above it.
 ///
 /// Does not mark the body [`LocalPlayer`]: a server spawns every player's body
 /// and drives none, and whose body it is is answered by `enter_play` or
@@ -322,16 +322,16 @@ pub fn spawn_player(
     commands: &mut Commands,
     spawn: Spawn,
     who: &Identity,
-    colour: PlayerColour,
+    color: PlayerColor,
     rules: &ModeRules,
-    catalogue: &WeaponCatalogue,
+    catalog: &WeaponCatalog,
 ) -> Entity {
-    let position = body_centre_from_feet(spawn.feet);
+    let position = body_center_from_feet(spawn.feet);
 
     // This decides what the body carries; a corpse's build is still read off
     // the rig.
     let class = rules.class_to_play();
-    let (equipped, ammo) = catalogue.starting_equipment(class, rules.loadout.as_deref());
+    let (equipped, ammo) = catalog.starting_equipment(class, rules.loadout.as_deref());
 
     let mut body = commands.spawn((
         Player { yaw: spawn.yaw, ..default() },
@@ -344,7 +344,7 @@ pub fn spawn_player(
         // snap the body north on its first step.
         ActionState(PlayerInput { yaw: spawn.yaw, ..default() }),
         who.id,
-        colour,
+        color,
         Stance::default(),
         PhysicsBody::at(position),
         Transform::from_translation(position).with_rotation(Quat::from_rotation_y(spawn.yaw)),
@@ -693,7 +693,7 @@ fn change_stance(
     wants_crouch: bool,
     world: &CollisionWorld,
 ) {
-    let shift = Stance::centre_shift();
+    let shift = Stance::center_shift();
     let (wanted, movement) = match (wants_crouch, *stance) {
         (true, Stance::Standing) => (
             Stance::Crouched,
@@ -861,7 +861,7 @@ mod tests {
     fn crouching_on_the_ground_keeps_the_feet_and_drops_the_head() {
         let world = open_room();
         let mut stance = Stance::Standing;
-        let mut body = PhysicsBody::at(body_centre_from_feet(Vec3::ZERO));
+        let mut body = PhysicsBody::at(body_center_from_feet(Vec3::ZERO));
 
         let head = body.current.y + Stance::Standing.half_extents().y;
         change_stance(&mut stance, &mut body, true, true, &world);
@@ -893,7 +893,7 @@ mod tests {
         );
         let lifted = body.current.y - Stance::Crouched.half_extents().y - feet;
         assert!(
-            (lifted - 2.0 * Stance::centre_shift()).abs() < 1e-5,
+            (lifted - 2.0 * Stance::center_shift()).abs() < 1e-5,
             "the feet came up by {lifted}"
         );
     }
@@ -924,7 +924,7 @@ mod tests {
     #[test]
     fn a_stance_change_moves_both_ends_of_the_interpolation() {
         let mut stance = Stance::Standing;
-        let mut body = PhysicsBody::at(body_centre_from_feet(Vec3::ZERO));
+        let mut body = PhysicsBody::at(body_center_from_feet(Vec3::ZERO));
 
         change_stance(&mut stance, &mut body, true, true, &open_room());
 

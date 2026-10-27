@@ -106,20 +106,20 @@ impl Collider {
     /// The shape as a core box plus a radius: the one form the collision world
     /// answers for.
     pub fn rounded(&self) -> RoundedBox {
-        let centre = Vec3::from_array(self.origin);
+        let center = Vec3::from_array(self.origin);
         match self.shape {
             ColliderShape::Box { size } => RoundedBox {
-                centre,
+                center,
                 core: Vec3::from_array(size).abs() * 0.5,
                 radius: 0.0,
             },
             ColliderShape::Sphere { radius } => {
-                RoundedBox { centre, core: Vec3::ZERO, radius: radius.max(0.0) }
+                RoundedBox { center, core: Vec3::ZERO, radius: radius.max(0.0) }
             }
             ColliderShape::Capsule { radius, height } => {
                 let radius = radius.max(0.0);
                 RoundedBox {
-                    centre,
+                    center,
                     core: Vec3::new(0.0, (height * 0.5 - radius).max(0.0), 0.0),
                     radius,
                 }
@@ -133,7 +133,7 @@ impl Collider {
 /// tall.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RoundedBox {
-    pub centre: Vec3,
+    pub center: Vec3,
     /// Half extents of the core.
     pub core: Vec3,
     pub radius: f32,
@@ -147,7 +147,7 @@ impl RoundedBox {
         let abs = Mat3::from_cols(rotation.x_axis.abs(), rotation.y_axis.abs(), rotation.z_axis.abs());
         let scale = at.scale.abs();
         RoundedBox {
-            centre: at.transform_point(self.centre),
+            center: at.transform_point(self.center),
             core: abs * (self.core * scale),
             radius: self.radius * scale.max_element(),
         }
@@ -157,33 +157,33 @@ impl RoundedBox {
         self.core + Vec3::splat(self.radius)
     }
 
-    /// How far the box `(centre, half)` is from the core on each axis, zero
+    /// How far the box `(center, half)` is from the core on each axis, zero
     /// where they overlap.
-    fn gaps(&self, centre: Vec3, half: Vec3) -> Vec3 {
-        ((centre - self.centre).abs() - half - self.core).max(Vec3::ZERO)
+    fn gaps(&self, center: Vec3, half: Vec3) -> Vec3 {
+        ((center - self.center).abs() - half - self.core).max(Vec3::ZERO)
     }
 
     /// Strict, like the wall test: touching is not overlapping.
-    pub fn overlaps(&self, centre: Vec3, half: Vec3) -> bool {
-        let gaps = self.gaps(centre, half);
+    pub fn overlaps(&self, center: Vec3, half: Vec3) -> bool {
+        let gaps = self.gaps(center, half);
         if self.radius <= 0.0 {
             return (0..3).all(|axis| {
-                (centre[axis] - self.centre[axis]).abs() < half[axis] + self.core[axis]
+                (center[axis] - self.center[axis]).abs() < half[axis] + self.core[axis]
             });
         }
         gaps.length_squared() < self.radius * self.radius
     }
 
     /// Where along `axis` this shape stands, as a slab `(min, max)`, for a box
-    /// sitting where `centre` puts it on the other two axes. `None` when the
+    /// sitting where `center` puts it on the other two axes. `None` when the
     /// box would pass it by. What depenetration escapes along, axis by axis.
-    pub fn slab_along(&self, axis: usize, centre: Vec3, half: Vec3) -> Option<(f32, f32)> {
-        let mut gaps = self.gaps(centre, half);
+    pub fn slab_along(&self, axis: usize, center: Vec3, half: Vec3) -> Option<(f32, f32)> {
+        let mut gaps = self.gaps(center, half);
         gaps[axis] = 0.0;
         let reach = if self.radius <= 0.0 {
             // Must overlap outright on the other axes, as a wall slab must.
             let clear = (0..3).filter(|other| *other != axis).any(|other| {
-                (centre[other] - self.centre[other]).abs() >= half[other] + self.core[other]
+                (center[other] - self.center[other]).abs() >= half[other] + self.core[other]
             });
             if clear {
                 return None;
@@ -197,7 +197,7 @@ impl RoundedBox {
             left.sqrt()
         };
         let extent = self.core[axis] + reach;
-        Some((self.centre[axis] - extent, self.centre[axis] + extent))
+        Some((self.center[axis] - extent, self.center[axis] + extent))
     }
 }
 
@@ -218,7 +218,7 @@ pub enum PickupKind {
     #[default]
     Health,
     Ammo,
-    /// Specced, not yet built: there is no armour pool.
+    /// Specced, not yet built: there is no armor pool.
     Armor,
     /// Specced, not yet built: there is no capture-the-flag mode.
     Flag,
@@ -390,8 +390,8 @@ mod tests {
     use super::*;
     use crate::common::skeleton::default_humanoid;
 
-    fn unit_box_at(centre: Vec3) -> RoundedBox {
-        RoundedBox { centre, core: Vec3::splat(0.5), radius: 0.0 }
+    fn unit_box_at(center: Vec3) -> RoundedBox {
+        RoundedBox { center, core: Vec3::splat(0.5), radius: 0.0 }
     }
 
     #[test]
@@ -401,11 +401,11 @@ mod tests {
         assert!(!shape.overlaps(Vec3::new(1.0, 0.0, 0.0), Vec3::splat(0.5)), "touching is not inside");
     }
 
-    /// A box diagonally off a sphere's centre is further away than either
+    /// A box diagonally off a sphere's center is further away than either
     /// axis alone says; treating the sphere as its bounding box would catch it.
     #[test]
     fn a_sphere_is_round_at_the_corners() {
-        let sphere = RoundedBox { centre: Vec3::ZERO, core: Vec3::ZERO, radius: 1.0 };
+        let sphere = RoundedBox { center: Vec3::ZERO, core: Vec3::ZERO, radius: 1.0 };
         let half = Vec3::splat(0.1);
         assert!(sphere.overlaps(Vec3::new(1.0, 0.0, 0.0), half));
         assert!(!sphere.overlaps(Vec3::new(0.9, 0.9, 0.0), half), "the corner of the bounding box counted");
@@ -421,11 +421,11 @@ mod tests {
         assert_eq!(capsule.half_extents(), Vec3::new(0.25, 1.0, 0.25));
     }
 
-    /// The slab narrows the further off-centre the box passes, which is what
+    /// The slab narrows the further off-center the box passes, which is what
     /// lets a body slide round a pillar rather than stopping square against it.
     #[test]
-    fn a_rounded_slab_narrows_off_centre() {
-        let sphere = RoundedBox { centre: Vec3::ZERO, core: Vec3::ZERO, radius: 1.0 };
+    fn a_rounded_slab_narrows_off_center() {
+        let sphere = RoundedBox { center: Vec3::ZERO, core: Vec3::ZERO, radius: 1.0 };
         let half = Vec3::ZERO;
         let (_, head_on) = sphere.slab_along(0, Vec3::ZERO, half).unwrap();
         let (_, glancing) = sphere.slab_along(0, Vec3::new(0.0, 0.0, 0.8), half).unwrap();
@@ -436,10 +436,10 @@ mod tests {
 
     #[test]
     fn a_quarter_turn_swaps_a_boxs_sides() {
-        let long = RoundedBox { centre: Vec3::X, core: Vec3::new(2.0, 0.5, 0.25), radius: 0.0 };
+        let long = RoundedBox { center: Vec3::X, core: Vec3::new(2.0, 0.5, 0.25), radius: 0.0 };
         let placed = long.placed(&Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)));
         assert!(placed.core.abs_diff_eq(Vec3::new(0.25, 0.5, 2.0), 1e-5), "{:?}", placed.core);
-        assert!(placed.centre.abs_diff_eq(Vec3::NEG_Z, 1e-5), "{:?}", placed.centre);
+        assert!(placed.center.abs_diff_eq(Vec3::NEG_Z, 1e-5), "{:?}", placed.center);
     }
 
     /// The hat's frame is the body's, not the head bone's: a bare hat at rest

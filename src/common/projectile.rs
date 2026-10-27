@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 /// Everything that distinguishes one thrown weapon from another.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct ProjectileSpec {
-    /// Metres per second.
+    /// Meters per second.
     pub initial_speed: f32,
     /// Fraction of gravity felt: `0.0` flies flat, `1.0` arcs.
     pub gravity_factor: f32,
@@ -33,17 +33,17 @@ pub struct ProjectileSpec {
     pub explodes_at_last_bounce: bool,
     /// Whether the fuse running out detonates it.
     pub explodes_at_lifetime_end: bool,
-    /// Metres. Splash and shove fall off to zero here
+    /// Meters. Splash and shove fall off to zero here
     /// ([`crate::common::damage::falloff`]).
     pub explosion_radius: f32,
     /// Taken by the body hit directly, instead of splash rather than on top of it.
     pub damage_direct_hit: u32,
-    /// Splash at the centre; others in the radius take a share.
+    /// Splash at the center; others in the radius take a share.
     pub damage_splash: u32,
-    /// Speed given to a corpse at the centre, in metres per second; a speed, not
+    /// Speed given to a corpse at the center, in meters per second; a speed, not
     /// an impulse (see [`crate::game::ragdoll::RagdollShove`]).
     pub knockback: f32,
-    /// Metres. How big it is drawn and how far off a wall it stops.
+    /// Meters. How big it is drawn and how far off a wall it stops.
     pub radius: f32,
 }
 

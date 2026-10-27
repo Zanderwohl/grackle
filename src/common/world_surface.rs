@@ -18,7 +18,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
 use crate::common::csg::{self, Polygon};
-use crate::tool::room::{Room, RoomSlot, MATERIAL_TILE_METRES};
+use crate::tool::room::{Room, RoomSlot, MATERIAL_TILE_METERS};
 
 /// A piece of the map's surface. Walls are made of nothing yet.
 pub type Face = Polygon<()>;
@@ -26,7 +26,7 @@ pub type Face = Polygon<()>;
 /// The share of the surface that belongs to `rooms[index]`, facing into it.
 ///
 /// Cut in coordinates relative to the room's own corner, so the kernel's
-/// tolerance is measured against the size of a neighbourhood rather than the
+/// tolerance is measured against the size of a neighborhood rather than the
 /// distance from the origin.
 pub fn room_share(rooms: &[Room], index: usize) -> Vec<Face> {
     let room = &rooms[index];
@@ -83,8 +83,8 @@ fn precedes(a: &Room, a_index: usize, b: &Room, b_index: usize) -> bool {
 
 /// Flat-shaded triangles, normals into the room, with mikktspace tangents for a
 /// material's normal map. UVs are world-space in material tiles
-/// ([`MATERIAL_TILE_METRES`]) across the face's two widest axes, so a material
-/// runs on across neighbouring walls instead of stretching with the room, and
+/// ([`MATERIAL_TILE_METERS`]) across the face's two widest axes, so a material
+/// runs on across neighboring walls instead of stretching with the room, and
 /// `v` runs down a wall, as image rows do.
 pub fn mesh(faces: &[Face]) -> Mesh {
     let mut positions: Vec<[f32; 3]> = Vec::new();
@@ -103,7 +103,7 @@ pub fn mesh(faces: &[Face]) -> Mesh {
             } else {
                 (p.x, -p.y)
             };
-            [u / MATERIAL_TILE_METRES, v / MATERIAL_TILE_METRES]
+            [u / MATERIAL_TILE_METERS, v / MATERIAL_TILE_METERS]
         };
         let base = positions.len() as u32;
         for vertex in &face.vertices {
@@ -131,7 +131,7 @@ pub fn mesh(faces: &[Face]) -> Mesh {
 
 /// [`mesh`] once per [`RoomSlot`], each slot sorted by its faces' inward
 /// normals, so each can take its own material. A slot with no faces left —
-/// every one opened up by a neighbour — is left out.
+/// every one opened up by a neighbor — is left out.
 pub fn slot_meshes(faces: &[Face]) -> Vec<(RoomSlot, Mesh)> {
     RoomSlot::ALL
         .into_iter()
@@ -249,7 +249,7 @@ mod tests {
             uvs[at]
         };
         assert_eq!(uv_at(0), uv_at(1));
-        assert_eq!(uv_at(0), [point.x / MATERIAL_TILE_METRES, -point.y / MATERIAL_TILE_METRES]);
+        assert_eq!(uv_at(0), [point.x / MATERIAL_TILE_METERS, -point.y / MATERIAL_TILE_METERS]);
     }
 
     fn total_area(faces: &[Face]) -> f32 {

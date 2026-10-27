@@ -68,7 +68,7 @@ fn toward(middle: Color, c: Color) -> Color {
     )
 }
 
-/// Two colours a noise swings between, narrowed about their middle by [`NOISE`].
+/// Two colors a noise swings between, narrowed about their middle by [`NOISE`].
 fn noisy_pair(a: Color, b: Color) -> (Color, Color) {
     let middle = oklcha((a.l + b.l) / 2.0, (a.chroma + b.chroma) / 2.0, 0.0, 1.0);
     (toward(middle, a), toward(middle, b))
@@ -96,7 +96,7 @@ fn empty() -> Graph {
     g
 }
 
-/// `value` through a ramp: the usual way a noise becomes a colour or a gray.
+/// `value` through a ramp: the usual way a noise becomes a color or a gray.
 fn mapped(g: &mut Graph, name: &str, value: LayerId, stops: &[(f32, Color)]) -> LayerId {
     let palette = g.add_layer(format!("{name} ramp"), ramp(stops)).unwrap();
     g.add_layer(name, LayerKind::Map(Map { value: Some(value), palette: Some(palette) })).unwrap()
@@ -146,7 +146,7 @@ fn mix(g: &mut Graph, name: &str, a: LayerId, b: LayerId, mode: BlendMode) -> La
     .unwrap()
 }
 
-/// `a` towards `b` by `by`'s L.
+/// `a` toward `b` by `by`'s L.
 fn blend(g: &mut Graph, name: &str, a: LayerId, b: LayerId, by: LayerId) -> LayerId {
     g.add_layer(
         name,
@@ -199,11 +199,11 @@ fn finish(mut g: Graph, output: Output) -> Graph {
     g
 }
 
-/// Poured concrete: grey, a little warm, mottled, finely pitted, rough with damper-looking patches.
+/// Poured concrete: gray, a little warm, mottled, finely pitted, rough with damper-looking patches.
 fn concrete() -> Graph {
     let mut g = empty();
     let mottle = g.add_layer("mottle", tiling_fbm(0, 4, 6)).unwrap();
-    let colour = mapped(&mut g, "colour", mottle, &[
+    let color = mapped(&mut g, "color", mottle, &[
         (0.2, oklcha(0.50, 0.006, 75.0, 1.0)),
         (0.5, oklcha(0.60, 0.008, 75.0, 1.0)),
         (0.8, oklcha(0.70, 0.010, 75.0, 1.0)),
@@ -214,18 +214,18 @@ fn concrete() -> Graph {
         .add_layer("relief", LayerKind::HeightToNormal(HeightToNormal { source: Some(pits), strength: 0.012 }))
         .unwrap();
     finish(g, Output {
-        color: Some(colour),
+        color: Some(color),
         roughness: ScalarInput::Layer(roughness),
         metallic: ScalarInput::Const(0.0),
         normal: Some(normal),
     })
 }
 
-/// Rolled steel: metal, cool grey, smoother than concrete, with faint waviness from the mill.
+/// Rolled steel: metal, cool gray, smoother than concrete, with faint waviness from the mill.
 fn steel_plate() -> Graph {
     let mut g = empty();
     let sheen = g.add_layer("sheen", tiling_fbm(10, 2, 4)).unwrap();
-    let colour = mapped(&mut g, "colour", sheen, &[
+    let color = mapped(&mut g, "color", sheen, &[
         (0.2, oklcha(0.62, 0.008, 240.0, 1.0)),
         (0.8, oklcha(0.72, 0.006, 240.0, 1.0)),
     ]);
@@ -235,7 +235,7 @@ fn steel_plate() -> Graph {
         .add_layer("waviness", LayerKind::HeightToNormal(HeightToNormal { source: Some(waves), strength: 0.01 }))
         .unwrap();
     finish(g, Output {
-        color: Some(colour),
+        color: Some(color),
         roughness: ScalarInput::Layer(roughness),
         metallic: ScalarInput::Const(1.0),
         normal: Some(normal),
@@ -243,7 +243,7 @@ fn steel_plate() -> Graph {
 }
 
 /// Diamond tread plate: raised lozenges on a steel sheet, alternating between the two diagonals
-/// so each one's neighbours across the grid lie the other way. Tops polished by boots, grime
+/// so each one's neighbors across the grid lie the other way. Tops polished by boots, grime
 /// between.
 ///
 /// Built on the diagonals `p = u + v` and `q = u - v`, so every wave stays whole across the tile.
@@ -284,25 +284,25 @@ fn tread_plate() -> Graph {
     let (grimy, clean) = noisy_pair(oklcha(0.46, 0.006, 70.0, 1.0), oklcha(0.60, 0.004, 230.0, 1.0));
     let sheet = mapped(&mut g, "sheet", grime, &[(0.25, grimy), (0.75, clean)]);
     let polished = solid(&mut g, "polished", oklcha(0.74, 0.004, 230.0, 1.0));
-    let colour = blend(&mut g, "colour", sheet, polished, height);
+    let color = blend(&mut g, "color", sheet, polished, height);
     let (rough, smooth) = noisy(0.45, 0.70);
     let dull = scaled(&mut g, "dull", grime, smooth, rough);
     let shine = solid(&mut g, "shine", gray(0.28));
     let roughness = blend(&mut g, "roughness", dull, shine, height);
     let normal = normal_of(&mut g, height, 0.004);
     finish(g, Output {
-        color: Some(colour),
+        color: Some(color),
         roughness: ScalarInput::Layer(roughness),
         metallic: ScalarInput::Const(1.0),
         normal: Some(normal),
     })
 }
 
-/// Board-formed concrete: panels a metre high with shallow seams between them, the imprint of the
-/// formwork's boards across each, a form-tie hole every metre, mottled, with faint streaks where
+/// Board-formed concrete: panels a meter high with shallow seams between them, the imprint of the
+/// formwork's boards across each, a form-tie hole every meter, mottled, with faint streaks where
 /// water has run down it.
 ///
-/// On a wall `v` runs down, a tile is two metres square, so seams every half `v` are a metre apart.
+/// On a wall `v` runs down, a tile is two meters square, so seams every half `v` are a meter apart.
 fn board_formed_concrete() -> Graph {
     let mut g = empty();
     let u = coordinate(&mut g, Axis::U);
@@ -313,7 +313,7 @@ fn board_formed_concrete() -> Graph {
     let row_seam = remap(&mut g, "row seam", rows, 0.96, 0.99);
     let column_seam = remap(&mut g, "column seam", columns, 0.98, 0.995);
     let seams = pick(&mut g, "seams", row_seam, column_seam, MinMaxMode::Max);
-    // Half a cycle off the seams: a tie hole in the middle of each metre.
+    // Half a cycle off the seams: a tie hole in the middle of each meter.
     // Halved before adding, because a gray above 1 does not survive a ramp.
     let tie_u = wave(&mut g, "tie u", u, WaveShape::Triangle, 2.0, 0.75);
     let tie_v = wave(&mut g, "tie v", v, WaveShape::Triangle, 2.0, 0.75);
@@ -379,7 +379,7 @@ fn board_formed_concrete() -> Graph {
     let stained = blend(&mut g, "stained", lined, stain, faint);
     let shadow = solid(&mut g, "shadow", oklcha(0.34, 0.006, 75.0, 1.0));
     let deep = scaled(&mut g, "deep", recess, 0.0, 0.8);
-    let colour = blend(&mut g, "colour", stained, shadow, deep);
+    let color = blend(&mut g, "color", stained, shadow, deep);
 
     let (smooth, rough) = noisy(0.82, 0.95);
     let roughness = scaled(&mut g, "roughness", mottle, smooth, rough);
@@ -393,7 +393,7 @@ fn board_formed_concrete() -> Graph {
     let height = mix(&mut g, "height", textured, fine, BlendMode::Add);
     let normal = normal_of(&mut g, height, 0.002);
     finish(g, Output {
-        color: Some(colour),
+        color: Some(color),
         roughness: ScalarInput::Layer(roughness),
         metallic: ScalarInput::Const(0.0),
         normal: Some(normal),
@@ -409,7 +409,7 @@ struct Paint {
 
 impl Paint {
     const OFF_WHITE: Paint = Paint { lightness: (0.85, 0.90), chroma: (0.008, 0.010), hue: 85.0 };
-    /// The spawn rooms' team colours: pale enough to read as painted plaster, not as a light.
+    /// The spawn rooms' team colors: pale enough to read as painted plaster, not as a light.
     const PASTEL_RED: Paint = Paint { lightness: (0.78, 0.83), chroma: (0.088, 0.092), hue: 22.0 };
     const PASTEL_BLUE: Paint = Paint { lightness: (0.77, 0.82), chroma: (0.078, 0.082), hue: 245.0 };
 }
@@ -423,7 +423,7 @@ fn plaster(paint: Paint) -> Graph {
         oklcha(paint.lightness.0, paint.chroma.0, paint.hue, 1.0),
         oklcha(paint.lightness.1, paint.chroma.1, paint.hue, 1.0),
     );
-    let colour = mapped(&mut g, "colour", trowel, &[(0.25, shaded), (0.75, bright)]);
+    let color = mapped(&mut g, "color", trowel, &[(0.25, shaded), (0.75, bright)]);
     let sheen = g.add_layer("sheen", tiling_fbm(32, 4, 3)).unwrap();
     let (smooth, rough) = noisy(0.80, 0.95);
     let roughness = scaled(&mut g, "roughness", sheen, smooth, rough);
@@ -435,7 +435,7 @@ fn plaster(paint: Paint) -> Graph {
     let height = mix(&mut g, "height", fine, broad, BlendMode::Add);
     let normal = normal_of(&mut g, height, 0.003 * NOISE);
     finish(g, Output {
-        color: Some(colour),
+        color: Some(color),
         roughness: ScalarInput::Layer(roughness),
         metallic: ScalarInput::Const(0.0),
         normal: Some(normal),

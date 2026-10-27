@@ -86,7 +86,7 @@ mod tests {
             .sum();
         assert!(
             (area - 3.0).abs() < 1e-5,
-            "the L's 3 square metres triangulated to {area}",
+            "the L's 3 square meters triangulated to {area}",
         );
     }
 }

@@ -17,7 +17,7 @@ use crate::get;
 pub struct SpawnPointMarker;
 
 /// Nothing else on the map is this green, so the preview cannot be mistaken for a player.
-pub const SPAWN_BODY_COLOUR: Color = Color::srgb(0.13, 0.95, 0.35);
+pub const SPAWN_BODY_COLOR: Color = Color::srgb(0.13, 0.95, 0.35);
 
 /// Somewhere a player can be put at the start of a round. The point is the feet; everything above
 /// comes from the class metrics, so a spawn stays valid when they change.
@@ -118,7 +118,7 @@ impl FeatureTrait for SpawnPoint {
             .insert_if_new((
                 default_humanoid().clone(),
                 Pose::rest(),
-                BodyTint(SPAWN_BODY_COLOUR),
+                BodyTint(SPAWN_BODY_COLOR),
             ));
     }
 
@@ -263,8 +263,8 @@ mod tests {
         assert!(world.get::<Skeleton>(entity).is_some(), "nothing is standing there");
         assert_eq!(
             world.get::<BodyTint>(entity).map(|tint| tint.0),
-            Some(SPAWN_BODY_COLOUR),
-            "the preview body is not the preview colour",
+            Some(SPAWN_BODY_COLOR),
+            "the preview body is not the preview color",
         );
         assert!(
             world.get::<Hitboxes>(entity).is_none(),

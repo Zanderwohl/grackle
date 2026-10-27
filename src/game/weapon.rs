@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::weapon::{
-    Ammo, Cadence, Cost, Equipped, Magazine, Mounted, WeaponAction, WeaponCatalogue,
+    Ammo, Cadence, Cost, Equipped, Magazine, Mounted, WeaponAction, WeaponCatalog,
 };
 use crate::game::condition::Condition;
 use crate::game::damage::{DamagePlugin, DamageSystems};
@@ -63,7 +63,7 @@ pub struct WeaponActionFired {
 /// Not reset by a switch, so quick-switching past a cooldown is not free.
 ///
 /// Counts down so the default, zero, may fire at once. Floors at zero, which
-/// quantises the rate to whole ticks: carrying the remainder would let an idle
+/// quantizes the rate to whole ticks: carrying the remainder would let an idle
 /// weapon fire on several consecutive ticks.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Trigger {
@@ -117,7 +117,7 @@ impl Plugin for WeaponPlugin {
 /// that was also a hold is one shot, not two.
 pub fn pull_trigger(
     time: Res<Time<Fixed>>,
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     mut shooters: Query<
         (Entity, &Equipped, &mut Ammo, &mut Trigger, &Inputs, &Condition),
         With<Player>,
@@ -133,7 +133,7 @@ pub fn pull_trigger(
         }
 
         let held = equipped.held;
-        let Some(weapon) = catalogue.held_by(equipped) else { continue };
+        let Some(weapon) = catalog.held_by(equipped) else { continue };
 
         // A copy, written back only on change: `Ammo` is replicated and a `Mut`
         // deref marks it changed, which would send it 64 times a second.
@@ -236,14 +236,14 @@ fn begin_reload(state: &mut crate::common::weapon::AmmoState, magazine: &Magazin
 /// or the magazine size would mean nothing.
 pub fn reload_weapons(
     time: Res<Time<Fixed>>,
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     mut carriers: Query<(&Equipped, &mut Ammo, &Inputs), With<Player>>,
 ) {
     let dt = time.delta_secs();
 
     for (equipped, mut ammo, input) in &mut carriers {
         let held = equipped.held;
-        let Some(weapon) = catalogue.held_by(equipped) else { continue };
+        let Some(weapon) = catalog.held_by(equipped) else { continue };
         let Some(size) = weapon.magazine.clip else { continue };
 
         let mut state = *ammo.at(held);
@@ -326,7 +326,7 @@ mod tests {
 
     use super::*;
     use crate::common::weapon::{HitscanSpec, Magazine, Slot, Weapon, WeaponId, SLOTS};
-    use crate::common::weapon_file::default_catalogue;
+    use crate::common::weapon_file::default_catalog;
 
     /// Bevy's default 64 Hz.
 
@@ -338,10 +338,10 @@ mod tests {
         shove_radius_m: 0.4,
     };
 
-    fn a_world(catalogue: WeaponCatalogue) -> World {
+    fn a_world(catalog: WeaponCatalog) -> World {
         let mut world = World::new();
         world.init_resource::<Messages<WeaponActionFired>>();
-        world.insert_resource(catalogue);
+        world.insert_resource(catalog);
 
         let mut fixed = Time::<Fixed>::default();
         fixed.advance_by(crate::constants::one_tick());
@@ -350,18 +350,18 @@ mod tests {
     }
 
     /// One weapon, in the Mercenary's primary slot.
-    fn one_weapon(weapon: Weapon) -> WeaponCatalogue {
+    fn one_weapon(weapon: Weapon) -> WeaponCatalog {
         let id = weapon.id;
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.insert(weapon);
+        let mut catalog = WeaponCatalog::default();
+        catalog.insert(weapon);
 
         let mut loadout = crate::common::weapon::Loadout::default();
         loadout.set(
             Slot::Primary,
             crate::common::weapon::SlotChoices { permitted: vec![id], default: id },
         );
-        catalogue.set_loadout(crate::common::class::Class::Mercenary, loadout);
-        catalogue
+        catalog.set_loadout(crate::common::class::Class::Mercenary, loadout);
+        catalog
     }
 
     fn weapon(primary: Mounted, secondary: Mounted, magazine: Magazine) -> Weapon {
@@ -388,9 +388,9 @@ mod tests {
     }
 
     fn a_shooter(world: &mut World) -> Entity {
-        let catalogue = world.resource::<WeaponCatalogue>().clone();
+        let catalog = world.resource::<WeaponCatalog>().clone();
         let (equipped, ammo) =
-            catalogue.starting_equipment(crate::common::class::Class::Mercenary, None);
+            catalog.starting_equipment(crate::common::class::Class::Mercenary, None);
         world.spawn((Player::default(), equipped, ammo, Trigger::default())).id()
     }
 
@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(shots(&mut world).len(), 1, "the shot did not go off");
         let state = ammo(&world, shooter, Slot::Primary);
         assert_eq!(state.reloading, 0.0, "the reload carried on after the shot");
-        assert_eq!((state.clip, state.reserve), (2, 8), "rounds moved for a reload that was cancelled");
+        assert_eq!((state.clip, state.reserve), (2, 8), "rounds moved for a reload that was canceled");
     }
 
     /// A humiliated body's press goes nowhere, and costs nothing.
@@ -538,7 +538,7 @@ mod tests {
     /// Input lives on the body: one body firing does not fire the others.
     #[test]
     fn one_body_firing_does_not_fire_the_others() {
-        let mut world = a_world(default_catalogue());
+        let mut world = a_world(default_catalog());
         let shooting = a_shooter(&mut world);
         let idle = a_shooter(&mut world);
         input(&mut world, shooting).attack = true;
@@ -554,7 +554,7 @@ mod tests {
     /// A replayed tick reading the same switch reaches the same loadout.
     #[test]
     fn acting_on_a_switch_twice_is_the_same_as_once() {
-        let mut world = a_world(default_catalogue());
+        let mut world = a_world(default_catalog());
         let body = a_shooter(&mut world);
         input(&mut world, body).select = Some(Slot::Secondary);
 
@@ -618,7 +618,7 @@ mod tests {
     /// The message carries the action fired, not what is held when it is read.
     #[test]
     fn the_action_that_was_fired_is_the_one_the_message_carries() {
-        let mut world = a_world(default_catalogue());
+        let mut world = a_world(default_catalog());
         let shooter = a_shooter(&mut world);
         input(&mut world, shooter).attack = true;
 
@@ -817,7 +817,7 @@ mod tests {
     /// Switching weapons cancels a reload.
     #[test]
     fn switching_weapons_cancels_a_reload() {
-        let mut world = a_world(default_catalogue());
+        let mut world = a_world(default_catalog());
         let shooter = a_shooter(&mut world);
         let held = world.get::<Equipped>(shooter).unwrap().held;
 

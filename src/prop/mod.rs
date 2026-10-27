@@ -1,5 +1,5 @@
-//! Modelling props: geometry referred to by name from a pack, not map
-//! content. See "Modelling a prop" in `CLAUDE.md`.
+//! Modeling props: geometry referred to by name from a pack, not map
+//! content. See "Modeling a prop" in `CLAUDE.md`.
 //!
 //! | Module | What is in it |
 //! | --- | --- |
@@ -68,7 +68,7 @@ pub struct PropEditorPlugin;
 
 impl Plugin for PropEditorPlugin {
     fn build(&self, app: &mut App) {
-        // Also initialised by `GamePlugin`; done again here so reading pack
+        // Also initialized by `GamePlugin`; done again here so reading pack
         // files does not depend on the game layer being wired up first.
         app.init_resource::<Assets>()
             .init_resource::<baked::PropCache>()
@@ -97,7 +97,7 @@ impl Plugin for PropEditorPlugin {
 const EXAMPLE_PROP: &str = "rocket_launcher";
 
 fn load_the_example_prop(assets: Res<Assets>, mut editor: ResMut<PropEditor>) {
-    // Highest priority last, the way the weapon catalogue is read, so a pack
+    // Highest priority last, the way the weapon catalog is read, so a pack
     // overriding the example wins.
     for pack in default_packs().iter() {
         match document::load(&assets, pack, EXAMPLE_PROP) {

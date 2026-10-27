@@ -2,7 +2,7 @@
 
 The prop editor (`src/prop/`) works, but its panels grew one feature at a time
 and read that way. This is the plan for reorganising it around what somebody
-modelling a weapon is actually doing. Tick items off as they land; the checklist
+modeling a weapon is actually doing. Tick items off as they land; the checklist
 is the source of truth for what is done.
 
 ## Diagnosis (October 2026)
@@ -10,14 +10,14 @@ is the source of truth for what is done.
 - **The Features panel does three jobs**: undo/redo buttons, the Add menu and
   the tree. Undo is not a property of the tree, and neither is creation.
 - **Operations act on recency, not selection.** Boolean took the last two live
-  bodies, Mirror and Paint the last one; operands were fixed up afterwards in
+  bodies, Mirror and Paint the last one; operands were fixed up afterward in
   dropdowns. Every CAD tool people know is select-then-act.
 - **Hold is a different job hidden as a tab**, with a hidden mode switch (the
   "handles" checkbox silently turns the feature gizmos off).
 - **Scene is one dropdown** — the reference figure, which matters almost only
   while authoring the hold.
 - **The inspector is one flat scroll**, and rotations are bare Euler angles.
-- **Two places to colour a body** — a surface on the producing feature, or a
+- **Two places to color a body** — a surface on the producing feature, or a
   Paint feature — and nothing says which wins.
 - **Consumption is invisible structure**: a boolean's operands are only dimmed
   rows, not shown as belonging to it.
@@ -59,7 +59,7 @@ a toolbar under the menu bar.
   bore, Subtract" reads in the order it is said.
 - **Paint becomes Repaint**: an action on a body's right-click menu rather than
   a peer of Extrude in the Add menu. Body-producing features keep their own
-  surface as the main way to colour something. The on-disk tag stays `paint`.
+  surface as the main way to color something. The on-disk tag stays `paint`.
 - **Rotation fields** get a friendlier control (axis presets / "point this axis
   along…"), with the raw Euler angles behind a disclosure.
 - **Profile points: deferred.** The numeric list stays until a 2D sketch overlay
@@ -102,7 +102,7 @@ a toolbar under the menu bar.
       `PickedPlane`, recomputed when the picks or the build change.
 - [x] Face picks, standing in for their body. A lone flat face makes a plane.
 - [x] Plane feature (`FeatureOp::Plane`) from the toolbar's **Plane**: drawn
-      grey and dashed, picked by its border, resolved where it sits in the
+      gray and dashed, picked by its border, resolved where it sits in the
       list. A lone plane pick is a valid plane too.
 - [x] **Use plane** in the Inspector: the same tool as the toolbar's Plane,
       offered under the same condition (`plane_through_picks`).
@@ -127,11 +127,11 @@ a toolbar under the menu bar.
       faint wireframe where they stood, cached on generation + selection.
 - [x] Linear / radial pattern feature (`FeatureOp::Pattern`).
 - [x] Revert to saved — on a shared **Edit** menu (Undo / Redo / Revert)
-      added to every authoring mode, each entry greyed out on its own. One
+      added to every authoring mode, each entry grayed out on its own. One
       undo step in the prop and animation editors; a plain reload in the map
       editor, whose history lives in the blueprint.
 
-- [x] Tools ask for what they need rather than greying out: each lists its
+- [x] Tools ask for what they need rather than graying out: each lists its
       slots (`tool.rs`), takes what fits from the selection, and prompts
       "Pick a …" for the rest, with the viewport offering only fitting picks.
 - [x] Line picks — edges, sketch lines, origin axes — as one `LineRef`.
