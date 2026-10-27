@@ -1675,14 +1675,24 @@ Source — and a **deploy** time, in `weapons.toml`. A bucket is the weapon's;
 a `Slot` is a place in a class's loadout, and the two are deliberately not
 the same thing. Several weapons may share a bucket: pressing its digit again
 moves along them, in loadout-slot order, and the wheel steps through
-everything carried (up is back towards `1`). The switch is immediate.
+everything carried (up is back towards `1`).
+
+**What is chosen and what is held are two things.** Choosing moves only
+`WeaponSelection::highlight`; one switch is sent when it settles
+(`SETTLE_SECONDS` of quiet) or on a left click, and a right click cancels.
+A switch per notch would have the server draw every weapon scrolled past,
+restarting its deploy and cancelling a reload nobody meant to touch. A digit
+for a bucket of one weapon chooses between nothing, so it switches at once.
+The confirming or cancelling click is the selector's: `choose_weapons` takes it
+back off the latch until the button is let go, and the recoil guess asks
+`holds_the_buttons` — otherwise the click that picks a rifle also fires the
+launcher it is leaving.
 
 **What "again" means is decided on the machine with the keyboard**
 ([`src/game/weapon_select.rs`](src/game/weapon_select.rs)) and sent as a
 plain `Slot`, because "next in bucket 2" depends on what is held and a
 replayed tick must reach the same loadout from the same input. While the
-selector is open a second press moves on from `WeaponSelection::highlight` —
-what this machine last asked for — not from the replicated `Equipped`, which
+selector is open a second press moves on from the highlight, not from the replicated `Equipped`, which
 is a round trip behind: from that, a quick double-tap would choose the same
 weapon twice.
 
