@@ -1,0 +1,205 @@
+Blueprint(
+    metadata: Metadata(
+        authors: [
+            "anonymous",
+        ],
+        game_mode: "arena",
+    ),
+    next_id: 8,
+    features: [
+        Feature(
+            id: FeatureId(
+                _id: 0,
+            ),
+            object: {
+                "global_point": GlobalPoint(
+                    location: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Absolute(-15.815),
+                        y: Absolute(0.0),
+                        z: Absolute(-6.4506116),
+                    ),
+                ),
+            },
+            parents: [],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 1,
+            ),
+            object: {
+                "global_point": GlobalPoint(
+                    location: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Absolute(15.815),
+                        y: Absolute(6.0),
+                        z: Absolute(6.4506116),
+                    ),
+                ),
+            },
+            parents: [],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 2,
+            ),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(0.0),
+                    ),
+                    max: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 1,
+                        )),
+                        point_key: "",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(0.0),
+                    ),
+                ),
+            },
+            parents: [
+                FeatureId(
+                    _id: 0,
+                ),
+                FeatureId(
+                    _id: 1,
+                ),
+            ],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 3,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 2,
+                        )),
+                        point_key: "bottom_plane_center",
+                        x: Relative(0.0),
+                        y: Relative(4.5),
+                        z: Relative(0.0),
+                    ),
+                    intensity: 250000.0,
+                    radius: 3.1,
+                    range: 34.682823,
+                ),
+            },
+            parents: [
+                FeatureId(
+                    _id: 2,
+                ),
+            ],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 4,
+            ),
+            object: {
+                "spawn_point": SpawnPoint(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 2,
+                        )),
+                        point_key: "bottom_plane_center",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(-3.4506116),
+                    ),
+                    yaw: 3.1415927,
+                ),
+            },
+            parents: [
+                FeatureId(
+                    _id: 2,
+                ),
+            ],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 5,
+            ),
+            object: {
+                "animation_grid": AnimationGrid(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 2,
+                        )),
+                        point_key: "bottom_plane_center",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(-0.0),
+                    ),
+                    yaw: 0.0,
+                    teams: Striped,
+                ),
+            },
+            parents: [
+                FeatureId(
+                    _id: 2,
+                ),
+            ],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 6,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 2,
+                        )),
+                        point_key: "back_bottom_right_corner",
+                        x: Relative(-1.5),
+                        y: Relative(0.0),
+                        z: Relative(1.5),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "ammo_pack",
+                ),
+            },
+            parents: [
+                FeatureId(
+                    _id: 2,
+                ),
+            ],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 7,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 2,
+                        )),
+                        point_key: "back_bottom_left_corner",
+                        x: Relative(-1.5),
+                        y: Relative(0.0),
+                        z: Relative(-1.5),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "health_pack",
+                ),
+            },
+            parents: [
+                FeatureId(
+                    _id: 2,
+                ),
+            ],
+        ),
+    ],
+)
