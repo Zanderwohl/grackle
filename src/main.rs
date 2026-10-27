@@ -8,6 +8,8 @@ use bevy_egui::{EguiPlugin};
 use bevy_vector_shapes::prelude::*;
 use grackle::{get, startup};
 use grackle::common::app_mode::StartInPlay;
+use grackle::common::fonts::FontsPlugin;
+use grackle::common::ui_shape::UiShapePlugin;
 use grackle::common::lang::{change_lang_or_fallback, default_packs};
 use grackle::common::net::NetPlugin;
 use grackle::common::net_transport::NetTransportPlugin;
@@ -85,7 +87,7 @@ fn main() {
             GamePlugin,
             (WorldPropPlugin, ThumbnailPlugin),
             SkeletonPlugin,
-            PerfPlugin,
+            (PerfPlugin, FontsPlugin, UiShapePlugin),
             ))
         .run();
 }
