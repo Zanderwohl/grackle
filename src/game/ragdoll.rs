@@ -59,9 +59,8 @@ use crate::game::skeleton::{skeleton_root, SkeletonRoot};
 /// How long a corpse lies there, in seconds of game time, so corpses do not
 /// age in the editor.
 ///
-/// Not tied to the body that left it: it outlasts the respawn delay, so a
-/// player can have more than one corpse lying about. Only the round ends it
-/// early.
+/// Not tied to the body that left it, and it outlasts the respawn delay, so a
+/// player may have two. Only the round ends it early.
 pub const RAGDOLL_LIFETIME: f32 = 10.0;
 
 /// Constraint passes per tick. PBD stiffness is this number; eight keeps a leg
@@ -142,8 +141,7 @@ pub struct RagdollShove {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CorpseBuild(pub Proportions);
 
-/// Whose body this corpse was, so the death cam can find its own. Only a
-/// player's corpse has one.
+/// So the death cam can find its own. Only a player's corpse has one.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CorpseOf(pub PlayerId);
 

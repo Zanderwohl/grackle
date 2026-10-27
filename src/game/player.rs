@@ -570,42 +570,34 @@ pub fn place_camera(
     }
 }
 
-/// What the view orbits while we have no body: TF2's death cam with nobody to
-/// credit. Present from the death until the next body arrives, forcing third
-/// person; `decide_the_view` takes it down.
+/// What the view orbits while we have no body. `decide_the_view` takes it
+/// down when the next body arrives.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct DeathCam {
-    /// Starts at the dying body's eye and is eased onto our corpse.
+    /// Eased from the dying eye onto our corpse.
     pub pivot: Vec3,
-    /// Whose corpse to follow. A body with no id leaves the pivot where it
-    /// died.
+    /// `None` leaves the pivot where the body died.
     pub whose: Option<PlayerId>,
 }
 
-/// Metres above the corpse's pelvis the death cam orbits, so a body lying on
-/// the floor is looked down at rather than along.
+/// Metres above the corpse's pelvis, so a body on the floor is looked down at.
 const DEATH_CAM_LIFT: f32 = 0.6;
 
-/// Per second. Eases the pivot off the eye when the corpse appears and damps
-/// the ragdoll's tumbling, which is shake at the camera's distance.
+/// Per second. Also damps the ragdoll's tumbling, which shakes the camera.
 const DEATH_CAM_FOLLOW_RATE: f32 = 6.0;
 
-/// Where our body's eye last was, for the death cam to start from once the
-/// body is gone. Removed on leaving Play, so a new round does not open on the
-/// last one's death.
+/// Removed on leaving Play, so a new round does not open on the last one's
+/// death.
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct OurLastBody {
     cam: DeathCam,
-    /// We have been told this body died. A body gone for any other reason (a
-    /// disconnect, a round ending) is not a death.
+    /// A body gone without dying, at a disconnect or a round's end, is no death.
     died: bool,
 }
 
-/// Keyed on our body being gone *and* having died, not on `Dying` arriving:
-/// `Dying` and the despawn are a tick apart, and a frame longer than two ticks
-/// runs both before `Update` sees either, leaving the camera frozen at the eye.
-/// `Died` is unordered against the despawn on a client, so either may come
-/// first.
+/// Not on `Added<Dying>`: a frame longer than two ticks runs `Dying` and the
+/// despawn before `Update` sees either. On a client `Died` and the despawn
+/// arrive in either order.
 pub fn start_the_death_cam(
     mut commands: Commands,
     mut deaths: MessageReader<Died>,
@@ -641,8 +633,7 @@ pub fn start_the_death_cam(
     }
 }
 
-/// Move the death cam's pivot towards our corpse's pelvis. A corpse not yet
-/// arrived, or already retired, leaves it where it was.
+/// With no corpse of ours, the pivot stays where it is.
 pub fn follow_our_corpse(
     time: Res<Time>,
     death_cam: Option<ResMut<DeathCam>>,
@@ -650,7 +641,7 @@ pub fn follow_our_corpse(
 ) {
     let Some(mut death_cam) = death_cam else { return };
     let Some(whose) = death_cam.whose else { return };
-    // The youngest: corpses outlive a respawn, so an earlier death's may still lie there.
+    // Corpses outlive a respawn, so an earlier one of ours may still lie there.
     let ours = corpses.iter().filter(|(_, of)| of.0 == whose);
     let Some((corpse, _)) = ours.min_by(|(a, _), (b, _)| a.age().total_cmp(&b.age())) else { return };
     let target = corpse.pelvis() + Vec3::Y * DEATH_CAM_LIFT;
@@ -852,9 +843,8 @@ mod tests {
         }
     }
 
-    /// Breaks if the death cam waits to see `Dying`, which a slow frame
-    /// reaps before `Update` runs. The `Died` comes after the despawn here,
-    /// as it may on a client.
+    /// Breaks if the death cam waits to see `Dying`. `Died` comes after the
+    /// despawn here, as it may on a client.
     #[test]
     fn the_death_cam_starts_when_our_body_is_gone_and_died() {
         let mut world = World::new();
@@ -878,8 +868,7 @@ mod tests {
         assert!((death_cam.pivot.y - (1.0 + Stance::default().eye_offset())).abs() < 1e-5);
     }
 
-    /// A body taken away without dying, as at a round's end, is not a death,
-    /// and neither is somebody else's death.
+    /// Breaks if a body lost without dying, or somebody else's death, starts it.
     #[test]
     fn losing_a_body_without_dying_is_not_a_death() {
         let mut world = World::new();

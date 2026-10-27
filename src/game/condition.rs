@@ -152,9 +152,8 @@ pub fn end_taunts(
 /// never overwritten, so it returns when the condition ends. The view is
 /// third person until the camera is all the way back in the head.
 ///
-/// A [`DeathCam`] forces third person too, until a living body is ours again.
-/// That cuts rather than swings, since the new body is somewhere else
-/// entirely.
+/// A [`DeathCam`] forces third person; the next body cuts back in rather
+/// than swinging, since it is somewhere else.
 pub fn decide_the_view(
     mut commands: Commands,
     time: Res<Time>,
@@ -387,8 +386,7 @@ mod tests {
         assert!(half.rotation.angle_between(Quat::from_rotation_y(0.2)) < 1e-4);
     }
 
-    /// Dead, the view is out of the head whatever the preference; the next
-    /// living body cuts straight back in rather than swinging from the corpse.
+    /// Breaks if the next body swings in from the corpse rather than cutting.
     #[test]
     fn the_death_cam_holds_third_person_until_a_living_body_is_ours() {
         let mut world = a_view_world(ViewMode::FirstPerson);

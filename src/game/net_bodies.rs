@@ -41,12 +41,10 @@ impl Plugin for NetBodiesPlugin {
     }
 }
 
-/// Seconds between dying and coming back: a placeholder until gamemodes have
-/// numbers of their own, long enough to watch the death cam.
+/// A placeholder until gamemodes have numbers of their own.
 pub const RESPAWN_SECONDS: f32 = 3.0;
 
-/// Seconds left before each dead player may have a body again. Keyed by the
-/// identity, which outlives the body.
+/// Seconds left before each dead player is owed a body again.
 #[derive(Resource, Default, Debug)]
 pub struct RespawnTimers(pub HashMap<PlayerId, f32>);
 
@@ -56,10 +54,8 @@ impl RespawnTimers {
     }
 }
 
-/// Chained before `give_bodies_to_whoever_needs_one` and writing the timer
-/// directly, not through `Commands`, so the rule never sees a dead player with
-/// no timer — the tick between `Died` and the reap is no guarantee, since a
-/// slow frame runs both.
+/// Chained before `give_bodies_to_whoever_needs_one` and not through
+/// `Commands`: a slow frame runs the death and the reap before either runs.
 fn start_respawn_timers(
     time: Res<Time>,
     role: Option<Res<NetRole>>,

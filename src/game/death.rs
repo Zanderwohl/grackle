@@ -14,11 +14,9 @@ use crate::common::damage::{Damage, DamageDealt, DamageLog, DamageSource, Damage
 use crate::common::skeleton::AnimationClock;
 use crate::game::player::Inputs;
 
-/// Enough to kill any class outright.
 const SUICIDE_DAMAGE: u32 = 1000;
 
-/// `O`: a debug key for the death cam until there is a kill command. Credited
-/// to yourself, which `apply_damage` always lets through.
+/// Credited to yourself, which the team rule always lets through.
 pub fn suicide(
     bodies: Query<(Entity, &Inputs, &PlayerId, &GlobalTransform), Without<Dying>>,
     mut damage: MessageWriter<Damage>,
