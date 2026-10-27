@@ -250,30 +250,41 @@ node, hidden together while there is none.
 ## Knockback
 
 Rocket jumping is the iconic arena move and needs a movement model with
-momentum. Today it has none: `step_player` writes horizontal velocity outright
-from the input every tick, so an impulse is gone by the next step. The
-explosion already carries the number it would want.
+momentum, which it now has. The explosion already carries the number an
+impulse would want.
 
 ### Momentum
 
-**Movement becomes Quake-style acceleration and friction.** On the ground,
-friction brings velocity down and acceleration brings it up toward the
-wish direction and speed; in the air, acceleration is small and friction is
-none. Velocity carries between ticks, so an impulse lives until friction or a
-wall eats it. Tuned so walking feels as it does now — a ground acceleration
-high enough that starting and stopping are nearly immediate.
+**Movement is Quake's acceleration and friction, at TF2's numbers**
+(`friction`, `accelerate` and `onto_floor` in
+[`player.rs`](../src/game/player.rs)). On the ground, friction (4 a second,
+acting as if at 2.54 m/s below that) brings velocity down and acceleration
+(10 × the wished speed a second) brings it up toward the wished direction and
+speed; in the air there is no friction and the keys push at most
+`AIR_WISH_SPEED`, 0.76 m/s, along any one direction. Velocity carries between
+ticks, so an impulse lives until friction or a wall eats it. A sprint takes
+about a tenth of a second to reach and half a second to coast down from; the
+top speeds are unchanged.
+
+- **The tick that jumps feels no friction**, so a jump chained on landing
+  keeps its speed. There is no bunny-hop cap, as in Quake and unlike TF2.
+- **Speed on a slope is kept, not projected away**, as Quake does: walking
+  up a 30° floor is as fast as walking on the flat.
+- **A landing loses its fall**, including one the ground probe settles that
+  the slide never touched; left in, it would turn into speed along the floor.
+- **A taunt that stops you lets you coast to a stop** rather than freezing
+  you, since freezing would also swallow a knockback.
 
 It is the model, not an arena option. Two movement models is two sets of
 prediction bugs, and everything here is about feel that ought to be the same
 in every mode. The tuning numbers go in `MovementRules` beside gravity if a map
 ever needs them, not before.
 
-A consequence worth deciding on purpose rather than discovering: Quake's air
-acceleration, clamped on the wish-direction component of velocity, is exactly
-what makes strafe-jumping possible. The air acceleration constant decides how
-much of that we get. Strafe-jumping is as iconic as rocket jumping, so the
-proposal is to keep the Quake formulation and tune the constant, not to clamp it
-away.
+Air acceleration is clamped on the wish-direction component of velocity,
+which is exactly what makes air strafing possible: holding a strafe key and
+turning with the motion keeps adding speed. It is Source's formulation, kept
+on purpose; `the_air_keeps_momentum_and_strafing_through_a_turn_adds_to_it`
+pins it.
 
 ### Impulses
 
@@ -388,7 +399,7 @@ Armor
 - [x] Armor packs on the template map
 
 Knockback
-- [ ] Acceleration and friction in `step_player`, tuned to feel as now
+- [x] Acceleration and friction in `step_player`, at TF2's numbers
 - [ ] `Impulse` written by explosions, folded in by the step
 - [ ] Upward impulse leaves the ground; friction off briefly after
 - [ ] `self_damage` scaling in `apply_damage`

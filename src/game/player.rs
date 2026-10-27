@@ -37,6 +37,25 @@ const SPRINT_SPEED: f32 = 7.0;
 /// Meters per second. Wins over sprint.
 const CROUCH_SPEED: f32 = 1.2;
 const JUMP_SPEED: f32 = 7.0;
+
+// Movement with momentum, as Quake and Source write it (`PM_Friction`,
+// `PM_Accelerate`, `PM_AirAccelerate`), at Source's numbers — TF2's — turned
+// from units into meters at 0.0254 m a unit.
+
+/// Ground friction, per second: the fraction of speed lost each second above
+/// [`STOP_SPEED`].
+const FRICTION: f32 = 4.0;
+/// Below this, meters per second, friction acts as if at this speed, so a
+/// slow body stops in a moment rather than creeping on forever.
+const STOP_SPEED: f32 = 2.54;
+/// Per second, in multiples of the wished-for speed.
+const GROUND_ACCELERATE: f32 = 10.0;
+const AIR_ACCELERATE: f32 = 10.0;
+/// How fast, meters per second, the keys alone push a body in the air along
+/// any one direction. Small, so the air is mostly momentum — but measured
+/// along the wish, so turning the view while strafing keeps adding speed
+/// sideways to the motion: air strafing.
+const AIR_WISH_SPEED: f32 = 0.76;
 /// The steepest floor a body stands on, as the cosine of its tilt: about 45°,
 /// Quake's number. Anything steeper is a wall that slopes, and is slid off.
 pub const WALKABLE: f32 = 0.7;
@@ -697,6 +716,7 @@ pub fn step_player(
         let half = stance.half_extents();
         let wish = Vec3::new(input.movement.x, 0.0, -input.movement.y).normalize_or_zero();
         let wish = Quat::from_rotation_y(player.yaw) * wish;
+        let wishing = wish != Vec3::ZERO;
 
         // The animation measures ground covered; it is never told which speed.
         let speed = if rules.sprint.sprints(input.sprint) { SPRINT_SPEED } else { WALK_SPEED };
@@ -704,17 +724,25 @@ pub fn step_player(
         // A replicated, unpredicted `Condition`: the tick a taunt starts or
         // stops is a rollback, which is correct and rare.
         let speed = speed * condition.speed_factor(taunts.as_deref());
-        let walk = wish * speed;
+        let speed = if wishing { speed } else { 0.0 };
 
         // A held jump re-fires on landing, so chaining jumps needs no fresh
-        // press. On the ground the walk follows the floor and gravity does
-        // nothing, so a walkable slope is walked up and down and not slid
-        // down when standing still.
+        // press. The tick that jumps feels no friction, so a hop chained on
+        // landing keeps its speed: bunny hopping. On the ground velocity
+        // follows the floor and gravity does nothing, so a walkable slope is
+        // walked up and down and not slid down when standing still.
         let jumped = player.on_ground() && jump;
         player.velocity = match player.ground {
-            Some(_) if jump => Vec3::new(walk.x, JUMP_SPEED, walk.z),
-            Some(floor) => walk - floor * walk.dot(floor),
-            None => Vec3::new(walk.x, player.velocity.y + rules.fall() * dt, walk.z),
+            Some(floor) => {
+                let along_floor = (wish - floor * wish.dot(floor)).normalize_or_zero();
+                let coasting = if jump { player.velocity } else { friction(player.velocity, dt) };
+                let moving = accelerate(coasting, along_floor, speed, speed, GROUND_ACCELERATE, dt);
+                if jump { Vec3::new(moving.x, JUMP_SPEED, moving.z) } else { onto_floor(moving, floor) }
+            }
+            None => {
+                let moving = accelerate(player.velocity, wish, speed, speed.min(AIR_WISH_SPEED), AIR_ACCELERATE, dt);
+                Vec3::new(moving.x, player.velocity.y + rules.fall() * dt, moving.z)
+            }
         };
 
         // A room edited mid-match can enclose a body that crossed nothing,
@@ -743,8 +771,15 @@ pub fn step_player(
         // one, leaves the ground.
         let rising = jumped || (player.ground.is_none() && player.velocity.y > 0.0);
         let ground = (!rising).then(|| world.ground(position, half, GROUND_PROBE, WALKABLE)).flatten();
-        if let Some((resting, _)) = ground {
+        if let Some((resting, floor)) = ground {
             position = resting;
+            // A landing settled by the probe touched nothing in the slide, so
+            // the fall is taken off here; left in, the next tick would turn
+            // it into speed along the floor.
+            let into = player.velocity.dot(floor);
+            if into < 0.0 {
+                player.velocity -= floor * into;
+            }
         }
         player.ground = ground.map(|(_, normal)| normal);
 
@@ -755,6 +790,37 @@ pub fn step_player(
         body_slot.set_if_neq(body);
         stance_slot.set_if_neq(stance);
     }
+}
+
+/// Slow down, by [`FRICTION`] scaled by horizontal speed — a slope's rise is
+/// not speed to be rubbed off — applied to the whole of it.
+fn friction(velocity: Vec3, dt: f32) -> Vec3 {
+    let speed = Vec2::new(velocity.x, velocity.z).length();
+    if speed < 1.0e-3 {
+        return Vec3::ZERO;
+    }
+    let drop = speed.max(STOP_SPEED) * FRICTION * dt;
+    velocity * ((speed - drop).max(0.0) / speed)
+}
+
+/// Push along `direction` until the speed *along it* reaches `cap`, at most
+/// `rate × wish_speed` per second. Speed along other directions is neither
+/// added to nor taken away, which is what lets momentum carry and what makes
+/// air strafing: past `cap` in one direction, a direction at right angles to
+/// the motion still has all of `cap` to give.
+fn accelerate(velocity: Vec3, direction: Vec3, wish_speed: f32, cap: f32, rate: f32, dt: f32) -> Vec3 {
+    let short = cap - velocity.dot(direction);
+    if short <= 0.0 {
+        return velocity;
+    }
+    velocity + direction * (rate * wish_speed * dt).min(short)
+}
+
+/// Along the floor at the same speed, as Quake does: a slope neither slows a
+/// body walking up it nor speeds one walking down.
+fn onto_floor(velocity: Vec3, floor: Vec3) -> Vec3 {
+    let speed = velocity.length();
+    (velocity - floor * velocity.dot(floor)).normalize_or_zero() * speed
 }
 
 /// Duck, or stand back up if there is room.
@@ -831,6 +897,60 @@ mod tests {
             assist: None,
             at: Vec3::ZERO,
         }
+    }
+
+    const TICK: f32 = 1.0 / crate::constants::TICK_HZ as f32;
+
+    fn run_on_the_ground(mut velocity: Vec3, direction: Vec3, ticks: usize) -> Vec3 {
+        let speed = if direction == Vec3::ZERO { 0.0 } else { SPRINT_SPEED };
+        for _ in 0..ticks {
+            velocity = accelerate(friction(velocity, TICK), direction, speed, speed, GROUND_ACCELERATE, TICK);
+        }
+        velocity
+    }
+
+    #[test]
+    fn a_run_builds_to_its_top_speed_and_no_further() {
+        let early = run_on_the_ground(Vec3::ZERO, Vec3::NEG_Z, 3);
+        assert!(early.length() < SPRINT_SPEED * 0.5, "at {early} after three ticks: no momentum");
+        let later = run_on_the_ground(Vec3::ZERO, Vec3::NEG_Z, crate::constants::TICK_HZ as usize);
+        assert!((later.length() - SPRINT_SPEED).abs() < 1e-3, "a second's run settled at {later}");
+    }
+
+    #[test]
+    fn letting_go_coasts_and_then_stops() {
+        let running = Vec3::NEG_Z * SPRINT_SPEED;
+        let coasting = run_on_the_ground(running, Vec3::ZERO, 4);
+        assert!(coasting.length() > SPRINT_SPEED * 0.5, "stopped dead at {coasting}");
+        let stopped = run_on_the_ground(running, Vec3::ZERO, crate::constants::TICK_HZ as usize);
+        assert_eq!(stopped, Vec3::ZERO, "still moving a second after letting go");
+    }
+
+    #[test]
+    fn the_air_keeps_momentum_and_strafing_through_a_turn_adds_to_it() {
+        let flying = Vec3::NEG_Z * SPRINT_SPEED;
+        let air = |v: Vec3, wish: Vec3| accelerate(v, wish, SPRINT_SPEED, SPRINT_SPEED.min(AIR_WISH_SPEED), AIR_ACCELERATE, TICK);
+
+        assert_eq!(air(flying, Vec3::ZERO), flying, "the air slowed a body with no keys down");
+        let backpedal = air(flying, Vec3::Z);
+        assert!(backpedal.length() < SPRINT_SPEED, "backpedaling in the air did nothing");
+
+        // Holding a strafe key and turning with the motion: the wish stays at
+        // right angles to where the body is going.
+        let mut v = flying;
+        for _ in 0..crate::constants::TICK_HZ as usize {
+            let sideways = Vec3::Y.cross(v).normalize();
+            v = air(v, sideways);
+        }
+        assert!(v.length() > SPRINT_SPEED * 1.2, "a second's air strafe reached only {}", v.length());
+    }
+
+    #[test]
+    fn a_slope_neither_slows_nor_speeds_a_body_along_it() {
+        let floor = Vec3::new(0.5, 1.0, 0.0).normalize();
+        let along = onto_floor(Vec3::X * 5.0, floor);
+        assert!((along.length() - 5.0).abs() < 1e-4);
+        assert!(along.dot(floor).abs() < 1e-4, "{along} is not along the floor");
     }
 
     /// Breaks if the death cam waits to see `Dying`. `Died` comes after the

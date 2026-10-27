@@ -1592,11 +1592,11 @@ Anything that hurts several bodies at once from a single origin wants that
 last one. Splash reaches anything with `Hitboxes` — being shootable and being
 catchable in a blast are deliberately the same property.
 
-**Knockback on a body that is still alive is missing on purpose.** `step_player`
-writes horizontal velocity outright from the movement input every step, so an
-impulse given to a standing player is gone by the next tick. Rocket jumping
-needs a movement model with momentum; the explosion already carries the number
-it would want.
+**Movement has momentum**: Quake's friction and acceleration at TF2's numbers,
+with air strafing and chained hops kept (see "Momentum" in
+[documentation/arena.md](documentation/arena.md)). **Knockback on a body that
+is still alive is still missing**; the explosion already carries the number it
+would want, and nothing yet adds it to a body's velocity.
 
 ### What a weapon is
 

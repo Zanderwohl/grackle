@@ -489,16 +489,14 @@ mod tests {
         assert!(on_ground(&mut app), "walking up the slope left the ground");
     }
 
-    /// Slowly: horizontal velocity is written outright every step, so only
-    /// the fall carries from one tick to the next. Momentum is its own change.
+    /// All the way down to the floor at its foot, within the second
+    /// `dropped_onto` waits: what slides off a wall keeps its speed.
     #[test]
     fn a_body_on_a_slope_too_steep_to_stand_on_slides_off_it() {
         let mut app = dropped_onto(slope(60.0, false), Vec3::new(2.0, 5.0, 0.0));
-        assert!(!on_ground(&mut app), "a 60° slope was ground");
-        let before = player_position(&mut app);
-        tick(&mut app, 30);
         let after = player_position(&mut app);
-        assert!(after.x < before.x - 0.1 && after.y < before.y - 0.1, "stuck on a 60° slope: {before} then {after}");
+        assert!(after.x < 1.0 && after.y < PLAYER_HALF.y + 0.3, "stuck on a 60° slope at {after}");
+        assert!(on_ground(&mut app), "never reached the floor under the slope");
     }
 
     /// Breaks if each surface is slid along in turn: every slide down one
@@ -702,11 +700,15 @@ mod tests {
                 .single(app.world())
                 .unwrap()
         };
+        // Coasting to a stop afterward, so a walk does not carry into the next.
         let walked = |app: &mut App| {
             latch(app).0.movement = Vec2::Y;
             let from = player_position(app);
             tick(app, 16);
             latch(app).0.movement = Vec2::ZERO;
+            // Half a second stops a sprint; short enough to stay inside the
+            // wave's 1.2 s with the turn below.
+            tick(app, 40);
             (player_position(app) - from).with_y(0.0).length()
         };
         let toggle = |app: &mut App| {
