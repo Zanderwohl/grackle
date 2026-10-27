@@ -589,19 +589,35 @@ const DEATH_CAM_LIFT: f32 = 0.6;
 /// the ragdoll's tumbling, which is shake at the camera's distance.
 const DEATH_CAM_FOLLOW_RATE: f32 = 6.0;
 
-/// Replicated `Dying`, so a client starts its own the same way.
+/// Where our body's eye last was, for the death cam to start from once the
+/// body is gone. Removed on leaving Play, so a new round does not open on the
+/// last one's death.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct OurLastBody(DeathCam);
+
+/// Keyed on our body being gone, not on `Dying` arriving: `Dying` and the
+/// despawn are a tick apart, and a frame longer than two ticks runs both
+/// before `Update` sees either, leaving the camera frozen at the eye.
 pub fn start_the_death_cam(
     mut commands: Commands,
-    ours: Query<
-        (&Transform, &Stance, Option<&PlayerId>),
-        (With<LocalPlayer>, Added<crate::game::death::Dying>),
-    >,
+    last: Option<Res<OurLastBody>>,
+    death_cam: Option<Res<DeathCam>>,
+    ours: Option<Single<(&Transform, &Stance, Option<&PlayerId>), With<LocalPlayer>>>,
 ) {
-    for (body, stance, id) in &ours {
-        commands.insert_resource(DeathCam {
-            pivot: body.translation + Vec3::Y * stance.eye_offset(),
-            whose: id.copied(),
-        });
+    match ours {
+        Some(ours) => {
+            let (body, stance, id) = ours.into_inner();
+            commands.insert_resource(OurLastBody(DeathCam {
+                pivot: body.translation + Vec3::Y * stance.eye_offset(),
+                whose: id.copied(),
+            }));
+        }
+        None => {
+            if let (Some(last), None) = (last, death_cam) {
+                commands.insert_resource(last.0);
+                commands.remove_resource::<OurLastBody>();
+            }
+        }
     }
 }
 
@@ -802,6 +818,34 @@ mod tests {
 
     use super::*;
     use crate::tool::room::Room;
+
+    /// Breaks if the death cam waits to see `Dying`, which a slow frame
+    /// reaps before `Update` runs.
+    #[test]
+    fn the_death_cam_starts_when_our_body_is_gone() {
+        let mut world = World::new();
+        let start = world.register_system(start_the_death_cam);
+        let body = world
+            .spawn((LocalPlayer, Transform::from_xyz(1.0, 1.0, 0.0), Stance::default(), PlayerId(5)))
+            .id();
+
+        world.run_system(start).unwrap();
+        assert!(!world.contains_resource::<DeathCam>(), "a living body started the death cam");
+
+        world.despawn(body);
+        world.run_system(start).unwrap();
+        let death_cam = *world.resource::<DeathCam>();
+        assert_eq!(death_cam.whose, Some(PlayerId(5)));
+        assert!((death_cam.pivot.y - (1.0 + Stance::default().eye_offset())).abs() < 1e-5);
+    }
+
+    /// No body yet at the start of a round is not a death.
+    #[test]
+    fn having_had_no_body_is_not_a_death() {
+        let mut world = World::new();
+        world.run_system_once(start_the_death_cam).unwrap();
+        assert!(!world.contains_resource::<DeathCam>());
+    }
 
     /// Eased towards our own corpse, not whichever corpse is nearest.
     #[test]

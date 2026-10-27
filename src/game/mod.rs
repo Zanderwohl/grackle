@@ -222,6 +222,7 @@ fn leave_play(
     // Kept, the next match's first body would inherit it.
     commands.remove_resource::<OurIdentity>();
     commands.remove_resource::<crate::game::player::DeathCam>();
+    commands.remove_resource::<crate::game::player::OurLastBody>();
 
     for mut camera in &mut editor_cameras {
         camera.is_active = true;
