@@ -9,8 +9,19 @@ Blueprint(
             sprint: Always,
             gravity: 20.0,
         ),
+        palette: Palette(
+            roles: {
+                "spawn_walls": RolePaint(
+                    sides: {
+                        Red: "plaster_red",
+                        Blue: "plaster_blue",
+                    },
+                    unsided: Some("plaster"),
+                ),
+            },
+        ),
     ),
-    next_id: 8,
+    next_id: 12,
     features: [
         Feature(
             id: FeatureId(
@@ -69,6 +80,11 @@ Blueprint(
                         x: Relative(0.0),
                         y: Relative(0.0),
                         z: Relative(0.0),
+                    ),
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("board_formed_concrete"),
+                        ceiling: Some("plaster"),
                     ),
                 ),
             },
@@ -203,6 +219,137 @@ Blueprint(
             parents: [
                 FeatureId(
                     _id: 2,
+                ),
+            ],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 8,
+            ),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 2,
+                        )),
+                        point_key: "back_bottom_edge_center",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(-1.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(2.0),
+                        y: Relative(3.0),
+                        z: Relative(2.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("spawn_walls"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+            parents: [
+                FeatureId(
+                    _id: 2,
+                ),
+            ],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 9,
+            ),
+            object: {
+                "spawn_point": SpawnPoint(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 8,
+                        )),
+                        point_key: "bottom_plane_center",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(0.0),
+                    ),
+                    yaw: 1.5707964,
+                ),
+            },
+            parents: [
+                FeatureId(
+                    _id: 8,
+                ),
+            ],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 10,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 8,
+                        )),
+                        point_key: "bottom_plane_center",
+                        x: Relative(0.0),
+                        y: Relative(2.6),
+                        z: Relative(0.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.3,
+                    range: 8.0,
+                ),
+            },
+            parents: [
+                FeatureId(
+                    _id: 8,
+                ),
+            ],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 11,
+            ),
+            object: {
+                "mirror": Mirror(
+                    centre: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 2,
+                        )),
+                        point_key: "bottom_plane_center",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(0.0),
+                    ),
+                    symmetry: MirrorX,
+                    sources: [
+                        FeatureId(
+                            _id: 8,
+                        ),
+                        FeatureId(
+                            _id: 9,
+                        ),
+                        FeatureId(
+                            _id: 10,
+                        ),
+                    ],
+                    teams: (Red, Blue),
+                ),
+            },
+            parents: [
+                FeatureId(
+                    _id: 2,
+                ),
+                FeatureId(
+                    _id: 8,
+                ),
+                FeatureId(
+                    _id: 9,
+                ),
+                FeatureId(
+                    _id: 10,
                 ),
             ],
         ),

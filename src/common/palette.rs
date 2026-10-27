@@ -1,161 +1,103 @@
-//! Interface colours: one base per team, and its highlights and shadows
-//! derived in OKLCH, where lightness is perceptual and so a "lighter" red and
-//! a "lighter" yellow look equally lighter.
+//! A map's palette: what a **role** is painted with on each side. A room slot names either a
+//! material or a role, and a role is resolved by the room's [`Side`] — which is the Mirror's
+//! answer, not the room's — so one half of a map is authored and the copy comes out in the other
+//! team's colours. See "Team-coded paint is a role" in documentation/surfaces.md.
 //!
-//! These are not [`Team::colour`], which is a body's base under map lighting
-//! and deliberately muted. Flat panels under no light want more chroma.
-//!
-//! Highlights warm towards yellow and shadows cool towards blue, the way paint
-//! and light do, rather than simply mixing with white and black, which greys a
-//! colour out.
+//! Part of the map's metadata, so it saves with the blueprint and reaches clients with the rest of
+//! the settings. [`publish_palette`] is the only writer of the [`Palette`] resource; nothing reads
+//! `MapMetadata` for it.
+
+use std::collections::BTreeMap;
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
-use crate::common::team::Team;
+use crate::common::team::{Side, Team};
+use crate::editor::map_metadata::MapMetadata;
 
-/// Where highlights lean, in OKLCH degrees: a warm yellow.
-const WARM_HUE: f32 = 95.0;
-/// Where shadows lean: a cool blue-violet.
-const COOL_HUE: f32 = 275.0;
-
-/// One colour and the tones around it.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Swatch {
-    pub base: Color,
-    /// For rims and glints.
-    pub highlight: Color,
-    /// For the side away from the light.
-    pub shadow: Color,
-    /// Darker still: drop shadows and text on light bases.
-    pub deep: Color,
+/// Keyed by role name. A slot's name is looked up here first, so a role shadows a material of the
+/// same name.
+#[derive(Resource, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct Palette {
+    pub roles: BTreeMap<String, RolePaint>,
 }
 
-impl Swatch {
-    pub fn from_oklch(lightness: f32, chroma: f32, hue: f32) -> Self {
-        let base = Oklcha::lch(lightness, chroma, hue);
-        Self {
-            base: in_gamut(base),
-            highlight: in_gamut(Oklcha::lch(
-                (lightness + 0.13).min(0.97),
-                chroma * 0.85,
-                lean(hue, WARM_HUE, 0.2),
-            )),
-            shadow: in_gamut(Oklcha::lch(
-                (lightness - 0.16).max(0.05),
-                chroma * 1.05,
-                lean(hue, COOL_HUE, 0.15),
-            )),
-            deep: in_gamut(Oklcha::lch(
-                (lightness - 0.38).max(0.04),
-                chroma * 0.7,
-                lean(hue, COOL_HUE, 0.25),
-            )),
-        }
-    }
+/// One role's material per side. No field is skipped when empty: the palette crosses the wire
+/// with postcard, which cannot read a field left out.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct RolePaint {
+    #[serde(default)]
+    pub sides: BTreeMap<Team, String>,
+    /// For a room no Mirror claims, or a side the role does not name. `None` draws plain.
+    #[serde(default)]
+    pub unsided: Option<String>,
+}
 
-    pub fn team(team: Team) -> Self {
-        match team {
-            Team::Red => Self::from_oklch(0.60, 0.20, 27.0),
-            Team::Blue => Self::from_oklch(0.56, 0.15, 255.0),
-            Team::Yellow => Self::from_oklch(0.84, 0.16, 88.0),
-            Team::Green => Self::from_oklch(0.64, 0.16, 148.0),
-        }
-    }
-
-    /// Before a body has a team: a cream that reads against any map.
-    pub fn neutral() -> Self {
-        Self::from_oklch(0.88, 0.035, 85.0)
-    }
-
-    pub fn of(team: Option<Team>) -> Self {
-        team.map_or_else(Self::neutral, Self::team)
-    }
-
-    /// Whichever of white and [`Ink::Black`] stands out on the base.
-    pub fn text(&self) -> Color {
-        if Oklcha::from(self.base).lightness > 0.72 { Ink::Black.on(self) } else { Ink::White.on(self) }
+impl Palette {
+    /// The material a slot naming `name` is painted with on `side`: the name itself unless it is a
+    /// role. `None` for a role with nothing for this side, which draws plain.
+    pub fn resolve<'a>(&'a self, name: &'a str, side: Option<Side>) -> Option<&'a str> {
+        let Some(role) = self.roles.get(name) else { return Some(name) };
+        side.and_then(|Side(team)| role.sides.get(&team))
+            .or(role.unsided.as_ref())
+            .map(String::as_str)
     }
 }
 
-/// An outline colour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ink {
-    White,
-    /// Not pure black: a deep warm brown-black, which is what print uses.
-    Black,
-    Highlight,
-}
-
-impl Ink {
-    pub fn on(self, swatch: &Swatch) -> Color {
-        match self {
-            Ink::White => Color::oklch(0.98, 0.01, WARM_HUE),
-            Ink::Black => Color::oklch(0.17, 0.015, 60.0),
-            Ink::Highlight => swatch.highlight,
-        }
+/// Ungated, as [`publish_movement_rules`](crate::editor::map_metadata::publish_movement_rules) is:
+/// a client is handed settings at any time.
+pub fn publish_palette(metadata: Res<MapMetadata>, mut palette: ResMut<Palette>) {
+    if metadata.is_changed() && *palette != metadata.palette {
+        *palette = metadata.palette.clone();
     }
-}
-
-/// Turn `from` a fraction of the short way round towards `to`, in degrees.
-fn lean(from: f32, to: f32, amount: f32) -> f32 {
-    let delta = (to - from + 540.0).rem_euclid(360.0) - 180.0;
-    (from + delta * amount).rem_euclid(360.0)
-}
-
-/// Lose chroma until the colour fits in sRGB, keeping lightness and hue.
-/// Clamping channels instead would shift the hue of a saturated yellow.
-fn in_gamut(colour: Oklcha) -> Color {
-    let fits = |c: Oklcha| {
-        let rgb = Srgba::from(c);
-        [rgb.red, rgb.green, rgb.blue].iter().all(|v| (-1e-4..=1.0 + 1e-4).contains(v))
-    };
-    if fits(colour) {
-        return colour.into();
-    }
-    let (mut low, mut high) = (0.0, colour.chroma);
-    for _ in 0..20 {
-        let mid = (low + high) * 0.5;
-        if fits(colour.with_chroma(mid)) { low = mid } else { high = mid }
-    }
-    colour.with_chroma(low).into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn lightness(c: Color) -> f32 {
-        Oklcha::from(c).lightness
+    fn spawn_walls() -> Palette {
+        let mut palette = Palette::default();
+        palette.roles.insert(
+            "spawn_walls".into(),
+            RolePaint {
+                sides: BTreeMap::from([(Team::Red, "plaster_red".into()), (Team::Blue, "plaster_blue".into())]),
+                unsided: Some("plaster".into()),
+            },
+        );
+        palette
     }
 
     #[test]
-    fn every_swatch_is_ordered_light_to_dark() {
-        for swatch in Team::ALL.map(Swatch::team).into_iter().chain([Swatch::neutral()]) {
-            assert!(lightness(swatch.highlight) > lightness(swatch.base));
-            assert!(lightness(swatch.base) > lightness(swatch.shadow));
-            assert!(lightness(swatch.shadow) > lightness(swatch.deep));
-        }
+    fn a_role_is_painted_by_side() {
+        let palette = spawn_walls();
+        assert_eq!(palette.resolve("spawn_walls", Some(Side(Team::Red))), Some("plaster_red"));
+        assert_eq!(palette.resolve("spawn_walls", Some(Side(Team::Blue))), Some("plaster_blue"));
+    }
+
+    /// A side the role does not name, and a room no Mirror claims, both fall back.
+    #[test]
+    fn a_role_falls_back_to_its_unsided_paint() {
+        let palette = spawn_walls();
+        assert_eq!(palette.resolve("spawn_walls", Some(Side(Team::Green))), Some("plaster"));
+        assert_eq!(palette.resolve("spawn_walls", None), Some("plaster"));
     }
 
     #[test]
-    fn every_tone_is_displayable() {
-        for swatch in Team::ALL.map(Swatch::team) {
-            for c in [swatch.base, swatch.highlight, swatch.shadow, swatch.deep] {
-                let rgb = c.to_srgba();
-                assert!([rgb.red, rgb.green, rgb.blue].iter().all(|v| (-1e-3..=1.001).contains(v)), "{c:?}");
-            }
-        }
+    fn a_name_that_is_no_role_is_a_material() {
+        let palette = spawn_walls();
+        assert_eq!(palette.resolve("concrete", Some(Side(Team::Red))), Some("concrete"));
     }
 
+    /// The palette crosses the wire inside the map's settings, which Lightyear encodes with
+    /// postcard: a map keyed by an enum has to survive that, and so does a role with nothing set,
+    /// which a skipped empty field would not.
     #[test]
-    fn leaning_takes_the_short_way_round() {
-        assert!((lean(350.0, 10.0, 0.5) - 0.0).abs() < 1e-4);
-        assert!((lean(10.0, 350.0, 0.5) - 0.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn yellow_takes_dark_text_and_blue_light() {
-        assert_eq!(Swatch::team(Team::Yellow).text(), Ink::Black.on(&Swatch::team(Team::Yellow)));
-        assert_eq!(Swatch::team(Team::Blue).text(), Ink::White.on(&Swatch::team(Team::Blue)));
+    fn a_palette_survives_the_wire() {
+        let mut palette = spawn_walls();
+        palette.roles.insert("bare".into(), RolePaint::default());
+        let bytes = postcard::to_stdvec(&palette).expect("encodes");
+        let back: Palette = postcard::from_bytes(&bytes).expect("decodes");
+        assert_eq!(back, palette);
     }
 }

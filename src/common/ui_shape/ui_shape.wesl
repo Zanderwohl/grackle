@@ -1,7 +1,7 @@
 // A closed polygon drawn by signed distance: drop shadow, fill with a rim
 // light and shadow, then the stroke. See `ui_shape/mod.rs`.
 
-#import bevy_ui::ui_vertex_output::UiVertexOutput
+import bevy_ui_render::ui_vertex_output::UiVertexOutput;
 
 struct Shape {
     fill: vec4<f32>,

@@ -13,7 +13,7 @@ use crate::common::team::Team;
 use crate::common::class::{
     body_centre_from_feet, Stance, CLASS_HALF_EXTENTS,
 };
-use crate::game::collision::CollisionWorld;
+use crate::game::collision::{CollisionWorld, Touched};
 use crate::common::class::Class;
 use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalogue};
 use crate::game::weapon::Trigger;
@@ -32,6 +32,15 @@ const SPRINT_SPEED: f32 = 7.0;
 /// Metres per second. Wins over sprint.
 const CROUCH_SPEED: f32 = 1.2;
 const JUMP_SPEED: f32 = 7.0;
+/// The steepest floor a body stands on, as the cosine of its tilt: about 45°,
+/// Quake's number. Anything steeper is a wall that slopes, and is slid off.
+pub const WALKABLE: f32 = 0.7;
+/// The tallest ledge a body walks up rather than being stopped by: TF2's
+/// eighteen units, a little over a stair.
+pub const STEP_HEIGHT: f32 = 0.45;
+/// How far below its feet a body looks for a floor after each step. Has to
+/// clear the collision skin, which is where a step leaves a body standing.
+const GROUND_PROBE: f32 = 0.02;
 const MOUSE_SENSITIVITY: f32 = 0.0022;
 /// Vertical field of view. Bevy measures FOV vertically, where Source's 90 is
 /// horizontal at 4:3, so this is wider than Source's.
@@ -54,12 +63,19 @@ pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
     pub pitch: f32,
-    pub on_ground: bool,
-    /// Which axes the last step was stopped on.
-    ///
-    /// Kept because a blocked move cannot be recovered from position alone.
-    /// The animation layer reads it to tell running from running into a wall.
-    pub blocked: BVec3,
+    /// The normal of the floor under the body after the last step, if it is
+    /// one it can stand on. Kept because the next step walks along it.
+    pub ground: Option<Vec3>,
+    /// The last step was stopped by something neither floor nor ceiling.
+    /// A stopped move cannot be recovered from position alone; the animation
+    /// layer reads this to tell running from running into a wall.
+    pub against_wall: bool,
+}
+
+impl Player {
+    pub fn on_ground(&self) -> bool {
+        self.ground.is_some()
+    }
 }
 
 impl Default for Player {
@@ -68,8 +84,8 @@ impl Default for Player {
             velocity: Vec3::ZERO,
             yaw: 0.0,
             pitch: 0.0,
-            on_ground: false,
-            blocked: BVec3::FALSE,
+            ground: None,
+            against_wall: false,
         }
     }
 }
@@ -245,21 +261,10 @@ pub fn usable_spawns(spawns: &[Spawn], world: &CollisionWorld) -> Vec<Spawn> {
 /// The fallback for a map with no usable spawn point. Largest by volume is a
 /// crude guess at the main space, and beats refusing to start.
 pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
-    let largest = rooms.iter().max_by(|a, b| {
-        let volume = |r: &Room| {
-            let size = (r.max - r.min).abs();
-            size.x * size.y * size.z
-        };
-        volume(a).total_cmp(&volume(b))
-    });
+    let largest = rooms.iter().max_by(|a, b| a.volume().total_cmp(&b.volume()));
 
     let feet = match largest {
-        Some(room) => {
-            let min = room.min.min(room.max);
-            let max = room.min.max(room.max);
-            let centre = (min + max) / 2.0;
-            Vec3::new(centre.x, min.y, centre.z)
-        }
+        Some(room) => room.floor_point(),
         None => {
             warn!("No rooms on the map; spawning at the origin");
             Vec3::ZERO
@@ -517,8 +522,7 @@ pub fn place_camera(
 /// solid.
 pub fn third_person_camera(pivot: Vec3, aim: Quat, world: &CollisionWorld) -> Vec3 {
     let wanted = pivot + aim * Vec3::Z * THIRD_PERSON_DISTANCE;
-    let (stopped, _) = world.move_and_slide(pivot, Vec3::splat(CAMERA_RADIUS), wanted - pivot);
-    stopped
+    world.travel(pivot, Vec3::splat(CAMERA_RADIUS), wanted - pivot)
 }
 
 /// Walk, fall, jump, and stop at walls — one fixed step.
@@ -548,7 +552,7 @@ pub fn step_player(
 
         player.yaw = input.yaw;
         player.pitch = input.pitch;
-        change_stance(&mut stance, &mut body, player.on_ground, input.crouch, &world);
+        change_stance(&mut stance, &mut body, player.on_ground(), input.crouch, &world);
         let half = stance.half_extents();
         let wish = Vec3::new(input.movement.x, 0.0, -input.movement.y).normalize_or_zero();
         let wish = Quat::from_rotation_y(player.yaw) * wish;
@@ -556,34 +560,52 @@ pub fn step_player(
         // The animation measures ground covered; it is never told which speed.
         let speed = if rules.sprint.sprints(input.sprint) { SPRINT_SPEED } else { WALK_SPEED };
         let speed = if stance == Stance::Crouched { CROUCH_SPEED } else { speed };
-        player.velocity.x = wish.x * speed;
-        player.velocity.z = wish.z * speed;
+        let walk = wish * speed;
 
         // A held jump re-fires on landing, so chaining jumps needs no fresh
-        // press.
-        if player.on_ground && jump {
-            player.velocity.y = JUMP_SPEED;
-        } else {
-            player.velocity.y += rules.fall() * dt;
-        }
+        // press. On the ground the walk follows the floor and gravity does
+        // nothing, so a walkable slope is walked up and down and not slid
+        // down when standing still.
+        let jumped = player.on_ground() && jump;
+        player.velocity = match player.ground {
+            Some(_) if jump => Vec3::new(walk.x, JUMP_SPEED, walk.z),
+            Some(floor) => walk - floor * walk.dot(floor),
+            None => Vec3::new(walk.x, player.velocity.y + rules.fall() * dt, walk.z),
+        };
 
         // A room edited mid-match can enclose a body that crossed nothing,
-        // which `move_and_slide` cannot see.
+        // which a sweep cannot see.
         let start = world.depenetrate(body.current, half);
-
         let delta = player.velocity * dt;
-        let (position, blocked) = world.move_and_slide(start, half, delta);
+        let (mut position, mut touched) = world.slide(start, half, delta);
+
+        // A stair is a wall too low to be one. Taken only if it gets further,
+        // so pressing into a real wall does not hop on the spot.
+        let walled = |touched: &Touched| touched.iter().any(|n| n.y.abs() < WALKABLE);
+        if player.on_ground() && !jumped && walled(&touched) {
+            if let Some((stepped, over)) = world.step_up(start, half, delta, STEP_HEIGHT, WALKABLE) {
+                let level = |p: Vec3| Vec2::new(p.x - start.x, p.z - start.z).length();
+                if level(stepped) > level(position) + 1.0e-4 {
+                    (position, touched) = (stepped, over);
+                }
+            }
+        }
+
+        player.velocity = touched.clip(player.velocity);
+        player.against_wall = walled(&touched);
+        // Settled onto a floor found within the probe, so a body that ended a
+        // fall just short of one does not stand on air.
+        // Walking up a slope rises too; only a jump, or still going up after
+        // one, leaves the ground.
+        let rising = jumped || (player.ground.is_none() && player.velocity.y > 0.0);
+        let ground = (!rising).then(|| world.ground(position, half, GROUND_PROBE, WALKABLE)).flatten();
+        if let Some((resting, _)) = ground {
+            position = resting;
+        }
+        player.ground = ground.map(|(_, normal)| normal);
 
         body.previous = body.current;
         body.current = position;
-
-        // On the ground only if the downward move was blocked; a ceiling also
-        // blocks Y.
-        player.blocked = blocked;
-        player.on_ground = blocked.y && delta.y <= 0.0;
-        if blocked.y {
-            player.velocity.y = 0.0;
-        }
 
         player_slot.set_if_neq(player);
         body_slot.set_if_neq(body);

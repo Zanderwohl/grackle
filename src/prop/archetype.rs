@@ -176,8 +176,7 @@ impl RoundedBox {
 
     /// Where along `axis` this shape stands, as a slab `(min, max)`, for a box
     /// sitting where `centre` puts it on the other two axes. `None` when the
-    /// box would pass it by. Reduces a sweep against a rounded shape to the
-    /// sweep against a wall slab that `move_and_slide` already does.
+    /// box would pass it by. What depenetration escapes along, axis by axis.
     pub fn slab_along(&self, axis: usize, centre: Vec3, half: Vec3) -> Option<(f32, f32)> {
         let mut gaps = self.gaps(centre, half);
         gaps[axis] = 0.0;

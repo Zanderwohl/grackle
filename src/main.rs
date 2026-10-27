@@ -24,6 +24,7 @@ use grackle::game::skeleton::SkeletonPlugin;
 use grackle::game::GamePlugin;
 use grackle::game::world_prop::WorldPropPlugin;
 use grackle::anim::{AnimPlugin, StartInAnimEditor};
+use grackle::material::{MaterialEditorPlugin, StartInMaterialEditor};
 use grackle::prop::thumbnail::ThumbnailPlugin;
 use grackle::prop::{PropEditorPlugin, StartInPropEditor};
 use grackle::tool::ToolPlugin;
@@ -59,6 +60,7 @@ fn main() {
         .insert_resource(StartInPlay(editor_params.start_playing))
         .insert_resource(StartInPropEditor(editor_params.start_modelling))
         .insert_resource(StartInAnimEditor(editor_params.start_animating))
+        .insert_resource(StartInMaterialEditor(editor_params.start_texturing))
         .add_plugins((
             EguiPlugin::default(),
             Shape2dPlugin::default(),
@@ -81,7 +83,7 @@ fn main() {
             EditorStepsPlugin,
             ToolPlugin,
             PropEditorPlugin,
-            AnimPlugin,
+            (AnimPlugin, MaterialEditorPlugin),
             GamePlugin,
             (WorldPropPlugin, ThumbnailPlugin),
             SkeletonPlugin,

@@ -2,11 +2,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
+
+use crate::common::world_surface;
 use crate::common::app_mode::AppMode;
 use bevy_egui::egui;
 use crate::editor::editable::FeatureTag;
 use crate::get;
-use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, Room};
+use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, Room, RoomSlot};
 
 #[derive(Message)]
 pub struct LogECS;
@@ -82,7 +84,8 @@ impl RoomBake {
         self.auto = auto;
     }
 
-    fn material(&mut self, materials: &mut Assets<StandardMaterial>) -> Handle<StandardMaterial> {
+    /// What a slot with no material of its own is drawn with.
+    pub fn material(&mut self, materials: &mut Assets<StandardMaterial>) -> Handle<StandardMaterial> {
         self.material
             .get_or_insert_with(|| materials.add(StandardMaterial {
                 base_color: Color::srgb_u8(255, 255, 255),
@@ -106,11 +109,8 @@ impl RoomBake {
 /// Inclusive, because a shared wall is an opening too. Engulfing counts,
 /// which `clip_rect` would reject: a few spare rebakes, never a missed one.
 fn touches(a: &Room, b: &Room) -> bool {
-    a.min.cmple(b.max).all() && b.min.cmple(a.max).all()
-}
-
-fn same_box(a: &Room, b: &Room) -> bool {
-    a.min == b.min && a.max == b.max
+    let ((a_min, a_max), (b_min, b_max)) = (a.bounds(), b.bounds());
+    a_min.cmple(b_max).all() && b_min.cmple(a_max).all()
 }
 
 impl BakePlugin {
@@ -184,7 +184,7 @@ impl BakePlugin {
         let mut urgent = Vec::new();
         for (entity, room) in &all {
             match bake.seen.get(entity) {
-                Some(old) if same_box(old, room) => continue,
+                Some(old) if old == *room => continue,
                 Some(old) => urgent.extend(touching(old)),
                 None => {}
             }
@@ -210,8 +210,8 @@ impl BakePlugin {
         let mut done = 0;
         while done < ROOMS_PER_FRAME {
             let Some(entity) = bake.queue.pop_front() else { break };
-            let Ok((_, room)) = rooms.get(entity) else { continue };
-            bake_one(entity, room, &all, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);
+            if !rooms.contains(entity) { continue; }
+            bake_one(entity, &all, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);
             done += 1;
         }
     }
@@ -279,7 +279,7 @@ impl BakePlugin {
     }
 }
 
-/// Build one mesh per room, minus the faces neighbouring rooms open up, all in
+/// Build one mesh per room, its share of the map's surface, all in
 /// this frame. Shared by the editor's bake and the round-start bake.
 fn bake_rooms(
     bake: &mut RoomBake,
@@ -296,8 +296,8 @@ fn bake_rooms(
     let material = bake.material(materials);
     let all: Vec<(Entity, &Room)> = rooms.iter().collect();
 
-    for (entity, room) in &all {
-        bake_one(*entity, room, &all, None, &material, commands, meshes);
+    for (entity, _) in &all {
+        bake_one(*entity, &all, None, &material, commands, meshes);
     }
 
     bake.queue.clear();
@@ -309,29 +309,42 @@ fn bake_rooms(
 /// if it already has a bake.
 fn bake_one(
     entity: Entity,
-    room: &Room,
     all: &[(Entity, &Room)],
     existing: Option<Entity>,
     material: &Handle<StandardMaterial>,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
 ) {
-    let others: Vec<Room> = all.iter().filter(|(e, _)| *e != entity).map(|(_, r)| (*r).clone()).collect();
-    let bundle = (
-        BakedRoomGeometry { room: entity },
-        Mesh3d(meshes.add(room.bake_faces(&others))),
-        MeshMaterial3d(material.clone()),
-    );
-    match existing {
-        Some(baked) => { commands.entity(baked).insert(bundle); }
-        None => { commands.spawn(bundle); }
-    }
+    let rooms: Vec<Room> = all.iter().map(|(_, r)| (*r).clone()).collect();
+    let index = all.iter().position(|(e, _)| *e == entity).expect("a room is baked against a list it is in");
+    let mut baked = match existing {
+        Some(baked) => {
+            let mut baked = commands.entity(baked);
+            baked.despawn_children();
+            baked
+        }
+        None => commands.spawn((BakedRoomGeometry { room: entity }, Transform::default(), Visibility::default())),
+    };
+    baked.with_children(|parts| {
+        for (slot, mesh) in world_surface::slot_meshes(&world_surface::room_share(&rooms, index)) {
+            // The default until `paint_rooms` finds the slot's own material.
+            parts.spawn((RoomSlotMesh { room: entity, slot }, Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.clone())));
+        }
+    });
 }
 
-/// One room's walls, rebuilt in place when that room is rebaked.
+/// One room's walls, rebuilt in place when that room is rebaked. Its children are a
+/// [`RoomSlotMesh`] each.
 #[derive(Component)]
 pub struct BakedRoomGeometry {
     room: Entity,
+}
+
+/// One slot of a room's baked walls, so it can take its own material.
+#[derive(Component)]
+pub struct RoomSlotMesh {
+    pub room: Entity,
+    pub slot: RoomSlot,
 }
 
 #[cfg(test)]
@@ -374,12 +387,14 @@ mod tests {
         Room::new(Vec3::new(x, 0.0, 0.0), Vec3::new(x + 2.0, 2.0, 2.0))
     }
 
-    /// Each room's current mesh, to tell which were rebaked.
+    /// Each room's current walls mesh, to tell which were rebaked. Every room in these tests has
+    /// walls left standing.
     fn meshes(app: &mut App) -> HashMap<Entity, AssetId<Mesh>> {
         app.world_mut()
-            .query::<(&BakedRoomGeometry, &Mesh3d)>()
+            .query::<(&RoomSlotMesh, &Mesh3d)>()
             .iter(app.world())
-            .map(|(baked, mesh)| (baked.room, mesh.id()))
+            .filter(|(part, _)| part.slot == RoomSlot::Walls)
+            .map(|(part, mesh)| (part.room, mesh.id()))
             .collect()
     }
 

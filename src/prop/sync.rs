@@ -135,7 +135,7 @@ fn broadcast_model_changes(
     moved: Query<(), Changed<WorldProp>>,
     // Absent in a build with no prop editor.
     editor: Option<Res<crate::prop::document::PropEditor>>,
-    server: Option<Single<&Server>>,
+    server: Option<Single<&Endpoint, With<Server>>>,
     mut last: ResMut<LastModelsSent>,
     mut saves: Local<u64>,
     mut sender: ServerMultiMessageSender,

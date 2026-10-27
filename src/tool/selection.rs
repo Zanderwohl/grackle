@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::editor::editable::{FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
+use crate::tool::footprint_drag::FootprintDragState;
 use crate::tool::point_drag::PointDragState;
 use crate::tool::room::RoomDragState;
 use crate::tool::rotate_drag::RotateDragState;
@@ -32,6 +33,7 @@ impl SelectionPlugin {
         visibility: Res<GizmoVisibility>,
         point_drag: Res<PointDragState>,
         room_drag: Res<RoomDragState>,
+        footprint_drag: Res<FootprintDragState>,
         rotate_drag: Res<RotateDragState>,
     ) {
         state.hovered = None;
@@ -43,6 +45,7 @@ impl SelectionPlugin {
 
             let any_drag = point_drag.is_dragging()
                 || room_drag.is_dragging()
+                || footprint_drag.is_dragging()
                 || rotate_drag.is_dragging();
             if mouse_input.released == Some(MouseButton::Left) && !any_drag {
                 let selection = state.hovered.map(|(id, _)| id);
@@ -62,9 +65,11 @@ impl SelectionPlugin {
         let highlight = Color::srgb_u8(0, 230, 0);
 
         match feature.object().type_key() {
-            "editor_room" => {
-                if let Some((min, max)) = feature.object().drag_handle_bounds() {
-                    bounds_gizmo(&mut gizmos, min, max, highlight);
+            "editor_room" | "footprint_room" => {
+                for room in feature.object().rooms() {
+                    for (a, b) in room.edges() {
+                        gizmos.line(a, b, highlight);
+                    }
                 }
             }
             _ => {

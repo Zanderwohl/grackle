@@ -28,7 +28,7 @@ pub struct UiShapePlugin;
 
 impl Plugin for UiShapePlugin {
     fn build(&self, app: &mut App) {
-        bevy::asset::embedded_asset!(app, "ui_shape.wgsl");
+        bevy::asset::embedded_asset!(app, "ui_shape.wesl");
         app.add_plugins(UiMaterialPlugin::<ShapeMaterial>::default());
     }
 }
@@ -99,11 +99,11 @@ impl ShapeMaterial {
 
 impl UiMaterial for ShapeMaterial {
     fn fragment_shader() -> ShaderRef {
-        "embedded://grackle/common/ui_shape/ui_shape.wgsl".into()
+        "embedded://grackle/common/ui_shape/ui_shape.wesl".into()
     }
 }
 
-/// Mirrors `Shape` in `ui_shape.wgsl`. Scalars are packed into `Vec4`s so the
+/// Mirrors `Shape` in `ui_shape.wesl`. Scalars are packed into `Vec4`s so the
 /// two layouts cannot disagree about padding.
 #[derive(ShaderType, Debug, Clone)]
 pub struct ShapeUniform {

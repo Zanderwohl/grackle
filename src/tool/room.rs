@@ -1,5 +1,7 @@
 use bevy::app::App;
 use bevy::prelude::*;
+use crate::common::csg::{self, Polygon};
+use crate::common::triangulate::triangulate;
 use bevy_egui::input::EguiWantsInput;
 use crate::common::app_mode::AppMode;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline, PointRef};
@@ -313,7 +315,9 @@ impl RoomTool {
     ) {
         let color = Color::srgb_u8(100, 100, 100);
         for (_, room) in rooms {
-            bounds_gizmo(&mut gizmos, room.min, room.max, color);
+            for (a, b) in room.edges() {
+                gizmos.line(a, b, color);
+            }
         }
     }
 }
@@ -592,6 +596,83 @@ impl RoomDragState {
     }
 }
 
+/// Which of a room's materials a surface takes. Decided by its inward normal
+/// rather than by which side of the room it is, so a room of any shape sorts
+/// its surfaces the same way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RoomSlot {
+    Floor,
+    Walls,
+    Ceiling,
+}
+
+impl RoomSlot {
+    pub const ALL: [RoomSlot; 3] = [RoomSlot::Floor, RoomSlot::Walls, RoomSlot::Ceiling];
+
+    pub fn name_key(self) -> &'static str {
+        match self {
+            RoomSlot::Floor => "editor.features.room.floor",
+            RoomSlot::Walls => "editor.features.room.walls",
+            RoomSlot::Ceiling => "editor.features.room.ceiling",
+        }
+    }
+
+    pub fn of(inward: Vec3) -> Self {
+        if inward.y > 0.5 {
+            RoomSlot::Floor
+        } else if inward.y < -0.5 {
+            RoomSlot::Ceiling
+        } else {
+            RoomSlot::Walls
+        }
+    }
+}
+
+/// The material each of a room's slots takes, by name under a pack's
+/// `materials/`, or a role the map's palette resolves. `None` is the plain
+/// default, which is also what a name with no file behind it draws as. Copied
+/// onto the room's entity from its feature.
+#[derive(Component, serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoomSurfaces {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walls: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling: Option<String>,
+}
+
+impl RoomSurfaces {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn of(&self, slot: RoomSlot) -> Option<&str> {
+        self.slot(slot).as_deref()
+    }
+
+    pub fn slot(&self, slot: RoomSlot) -> &Option<String> {
+        match slot {
+            RoomSlot::Floor => &self.floor,
+            RoomSlot::Walls => &self.walls,
+            RoomSlot::Ceiling => &self.ceiling,
+        }
+    }
+
+    pub fn slot_mut(&mut self, slot: RoomSlot) -> &mut Option<String> {
+        match slot {
+            RoomSlot::Floor => &mut self.floor,
+            RoomSlot::Walls => &mut self.walls,
+            RoomSlot::Ceiling => &mut self.ceiling,
+        }
+    }
+}
+
+/// Metres one repeat of a material covers. A stand-in: the scale belongs to
+/// the material, which has nowhere to say it yet.
+pub const MATERIAL_TILE_METRES: f32 = 2.0;
+
+
 #[cfg(test)]
 mod drag_handle_tests {
     use super::*;
@@ -632,10 +713,20 @@ mod drag_handle_tests {
     }
 }
 
-#[derive(Component, Clone, Debug)]
+/// A volume of air: a floor plan stood between two heights. A box is the
+/// four-corner case. The map is the union of these
+/// ([`crate::common::world_surface`]).
+#[derive(Component, Clone, Debug, PartialEq)]
 pub struct Room {
-    pub min: Vec3,
-    pub max: Vec3,
+    /// Metres along `x` and `z`, counter-clockwise by `perp_dot` (which is
+    /// clockwise seen from above). Need not be convex. Private so the
+    /// winding cannot be got wrong from outside.
+    footprint: Vec<Vec2>,
+    /// Loops inside the footprint that are not room — a pillar — wound the
+    /// same way as it.
+    holes: Vec<Vec<Vec2>>,
+    pub floor: f32,
+    pub ceiling: f32,
 }
 
 impl Default for Room {
@@ -645,320 +736,191 @@ impl Default for Room {
 }
 
 impl Room {
-    pub fn new(min: Vec3, max: Vec3) -> Self {
-        Self { min, max }
+    /// A box, whichever way round the corners are given.
+    pub fn new(a: Vec3, b: Vec3) -> Self {
+        let (min, max) = (a.min(b), a.max(b));
+        Self::prism(
+            vec![Vec2::new(min.x, min.z), Vec2::new(max.x, min.z), Vec2::new(max.x, max.z), Vec2::new(min.x, max.z)],
+            min.y,
+            max.y,
+        )
     }
 
-    /// Walk the solid parts of this room's six faces, after every opening
-    /// other rooms carve. Rendering and collision both use this so they agree.
-    fn for_each_solid_rect(
-        &self,
-        others: &[Room],
-        mut visit: impl FnMut(&RoomFace, &crate::common::rect_subtract::Rect2D),
-    ) {
-        use crate::common::rect_subtract::subtract_rects;
+    /// Any floor plan, wound either way round.
+    pub fn prism(footprint: Vec<Vec2>, floor: f32, ceiling: f32) -> Self {
+        Self::with_holes(footprint, Vec::new(), floor, ceiling)
+    }
 
-        for face in RoomFace::enumerate(self) {
-            let mut holes = Vec::new();
-            for other in others {
-                if let Some(clip) = face.clip_rect(other) {
-                    holes.push(clip);
-                }
+    /// A floor plan with loops inside it taken out, each wound either way.
+    pub fn with_holes(footprint: Vec<Vec2>, holes: Vec<Vec<Vec2>>, floor: f32, ceiling: f32) -> Self {
+        let wound = |mut points: Vec<Vec2>| {
+            if signed_area_x2(&points) < 0.0 {
+                points.reverse();
             }
-
-            for rect in subtract_rects(&face.rect, &holes) {
-                visit(&face, &rect);
-            }
+            points
+        };
+        Self {
+            footprint: wound(footprint),
+            holes: holes.into_iter().map(wound).collect(),
+            floor: floor.min(ceiling),
+            ceiling: floor.max(ceiling),
         }
     }
 
-    /// The solid wall rectangles [`Room::bake_faces`] renders, as world-space
-    /// boxes. `thickness` extends each slab away from the interior.
-    pub fn collision_slabs(&self, others: &[Room], thickness: f32) -> Vec<WallSlab> {
-        let mut slabs = Vec::new();
-        self.for_each_solid_rect(others, |face, rect| {
-            slabs.push(face.rect_to_slab(rect, thickness));
-        });
-        slabs
-    }
-
-    /// How far along `ray` it first meets this room's solid wall from the
-    /// inside, and where.
-    ///
-    /// Outsides are culled by the renderer and ignored here too, so whatever
-    /// stands inside a room is nearer than the room. Openings use the same
-    /// holes [`Room::bake_faces`] cuts, so a pick goes through a doorway.
-    /// `others` is an iterator, not a slice, so a picker asking this of every
-    /// room needs no `Vec` of everybody else.
-    pub fn ray_hit_from_inside<'a>(
-        &self,
-        others: impl IntoIterator<Item = &'a Room, IntoIter: Clone>,
-        ray: &Ray3d,
-    ) -> Option<(f32, Vec3)> {
-        let others = others.into_iter();
-        let dir = Vec3::from(ray.direction);
-        let mut best: Option<(f32, Vec3)> = None;
-
-        for face in RoomFace::enumerate(self) {
-            if face.normal.dot(dir) >= 0.0 {
-                continue;
-            }
-            let axis = face.fixed_axis as usize;
-            if dir[axis].abs() < 1e-8 {
-                continue;
-            }
-            let t = (face.fixed_value - ray.origin[axis]) / dir[axis];
-            if t < 0.0 || best.is_some_and(|(best_t, _)| t >= best_t) {
-                continue;
-            }
-
-            let hit = ray.origin + dir * t;
-            let (u, v) = face.uv(hit);
-            let on_face = u >= face.rect.min_u && u <= face.rect.max_u
-                && v >= face.rect.min_v && v <= face.rect.max_v;
-            // Strictly inside: a hit on a hole's edge is still on wall.
-            let in_a_hole = others.clone().filter_map(|other| face.clip_rect(other)).any(|hole| {
-                u > hole.min_u && u < hole.max_u && v > hole.min_v && v < hole.max_v
-            });
-
-            if on_face && !in_a_hole {
-                best = Some((t, hit));
-            }
+    pub fn translated(&self, by: Vec3) -> Room {
+        let moved = |points: &Vec<Vec2>| points.iter().map(|p| *p + Vec2::new(by.x, by.z)).collect();
+        Room {
+            footprint: moved(&self.footprint),
+            holes: self.holes.iter().map(moved).collect(),
+            floor: self.floor + by.y,
+            ceiling: self.ceiling + by.y,
         }
-
-        best
     }
 
-    /// Bake this room's wall geometry, carving openings where other rooms
-    /// overlap or share walls. Returns a single Mesh with inward-facing normals.
-    pub fn bake_faces(&self, others: &[Room]) -> Mesh {
-        let mut vertices: Vec<[f32; 3]> = Vec::new();
-        let mut normals: Vec<[f32; 3]> = Vec::new();
-        let mut uvs: Vec<[f32; 2]> = Vec::new();
-        let mut indices: Vec<u32> = Vec::new();
-
-        self.for_each_solid_rect(others, |face, rect| {
-            {
-                let base = vertices.len() as u32;
-                let (p0, p1, p2, p3) = face.rect_to_3d(rect);
-                vertices.push(p0.into());
-                vertices.push(p1.into());
-                vertices.push(p2.into());
-                vertices.push(p3.into());
-                let n: [f32; 3] = face.normal.into();
-                normals.extend_from_slice(&[n, n, n, n]);
-
-                let face_u_span = face.rect.max_u - face.rect.min_u;
-                let face_v_span = face.rect.max_v - face.rect.min_v;
-                let u0 = if face_u_span > 0.0 { (rect.min_u - face.rect.min_u) / face_u_span } else { 0.0 };
-                let u1 = if face_u_span > 0.0 { (rect.max_u - face.rect.min_u) / face_u_span } else { 1.0 };
-                let v0 = if face_v_span > 0.0 { (rect.min_v - face.rect.min_v) / face_v_span } else { 0.0 };
-                let v1 = if face_v_span > 0.0 { (rect.max_v - face.rect.min_v) / face_v_span } else { 1.0 };
-                uvs.push([u0, v0]);
-                uvs.push([u1, v0]);
-                uvs.push([u1, v1]);
-                uvs.push([u0, v1]);
-
-                // Two triangles per quad, winding matches the face's inward normal
-                if face.winding_flip {
-                    indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
-                } else {
-                    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-                }
-            }
-        });
-
-        let mut mesh = Mesh::new(
-            bevy::render::render_resource::PrimitiveTopology::TriangleList,
-            bevy::asset::RenderAssetUsages::default(),
-        );
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-        mesh.insert_indices(bevy::mesh::Indices::U32(indices));
-        mesh
+    pub fn footprint(&self) -> &[Vec2] {
+        &self.footprint
     }
-    
+
+    pub fn holes(&self) -> &[Vec<Vec2>] {
+        &self.holes
+    }
+
+    pub fn bounds(&self) -> (Vec3, Vec3) {
+        let (low, high) = self.footprint.iter().fold((Vec2::INFINITY, Vec2::NEG_INFINITY), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+        (Vec3::new(low.x, self.floor, low.y), Vec3::new(high.x, self.ceiling, high.y))
+    }
+
+    pub fn volume(&self) -> f32 {
+        let holes: f32 = self.holes.iter().map(|hole| signed_area_x2(hole)).sum();
+        (signed_area_x2(&self.footprint) - holes) / 2.0 * (self.ceiling - self.floor)
+    }
+
+    /// Inclusive: a point on a wall, a pillar's included, is in the room.
+    pub fn contains(&self, point: Vec3) -> bool {
+        let q = Vec2::new(point.x, point.z);
+        point.y >= self.floor
+            && point.y <= self.ceiling
+            && in_footprint(&self.footprint, q)
+            && !self.holes.iter().any(|hole| in_footprint(hole, q) && !on_edge(hole, q))
+    }
+
+    /// A point on the floor inside the plan: the middle of its bounds if that
+    /// is in it, otherwise the middle of the biggest triangle of the outline
+    /// whose middle is not in a hole.
+    pub fn floor_point(&self) -> Vec3 {
+        let (min, max) = self.bounds();
+        let middle = Vec3::new((min.x + max.x) / 2.0, self.floor, (min.z + max.z) / 2.0);
+        if self.contains(middle) {
+            return middle;
+        }
+        let p = &self.footprint;
+        let mut triangles = triangulate(p);
+        triangles.sort_by(|a, b| triangle_area(p, b).total_cmp(&triangle_area(p, a)));
+        triangles
+            .into_iter()
+            .map(|[a, b, c]| (p[a] + p[b] + p[c]) / 3.0)
+            .map(|centre| Vec3::new(centre.x, self.floor, centre.y))
+            .find(|point| self.contains(*point))
+            .unwrap_or(middle)
+    }
+
+    /// The edges round the floor and the ceiling and the uprights between,
+    /// for drawing it.
+    pub fn edges(&self) -> impl Iterator<Item = (Vec3, Vec3)> + '_ {
+        let at = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+        std::iter::once(&self.footprint).chain(&self.holes).flat_map(move |points| {
+            let count = points.len();
+            (0..count).flat_map(move |i| {
+                let (a, b) = (points[i], points[(i + 1) % count]);
+                [
+                    (at(a, self.floor), at(b, self.floor)),
+                    (at(a, self.ceiling), at(b, self.ceiling)),
+                    (at(a, self.floor), at(a, self.ceiling)),
+                ]
+            })
+        })
+    }
+
+    /// The volume as a closed solid, faces out. A convex plan's floor and
+    /// ceiling are one face each, so a box is six; a notched one's are
+    /// triangles, since the kernel's faces must be convex. Each hole is cut
+    /// out by its own prism, reaching a little past the floor and ceiling so
+    /// no cap of the cutter is coplanar with the room's — coplanar faces are
+    /// where a BSP boolean is least sure which side it is on.
+    pub fn solid<S: Copy>(&self, surface: S) -> Vec<Polygon<S>> {
+        let outer = prism_faces(&self.footprint, self.floor, self.ceiling, surface);
+        let over = (self.ceiling - self.floor) * 0.01 + 1.0e-4;
+        self.holes.iter().fold(outer, |solid, hole| {
+            csg::subtract(&solid, &prism_faces(hole, self.floor - over, self.ceiling + over, surface))
+        })
+    }
 }
 
-/// One solid piece of wall, as a world-space axis-aligned box.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WallSlab {
-    pub min: Vec3,
-    pub max: Vec3,
+/// A closed prism over `p`, which is wound as [`Room::footprint`] is.
+fn prism_faces<S: Copy>(p: &[Vec2], floor: f32, ceiling: f32, surface: S) -> Vec<Polygon<S>> {
+    let at = |q: Vec2, y: f32| Vec3::new(q.x, y, q.y);
+    let mut faces = Vec::new();
+    let caps: Vec<Vec<usize>> = if is_convex(p) {
+        vec![(0..p.len()).collect()]
+    } else {
+        triangulate(p).into_iter().map(|t| t.to_vec()).collect()
+    };
+    for cap in &caps {
+        // Counter-clockwise in `perp_dot` faces down.
+        faces.extend(Polygon::new(cap.iter().map(|i| at(p[*i], floor)).collect(), surface));
+        faces.extend(Polygon::new(cap.iter().rev().map(|i| at(p[*i], ceiling)).collect(), surface));
+    }
+    for i in 0..p.len() {
+        let (a, b) = (p[i], p[(i + 1) % p.len()]);
+        faces.extend(Polygon::new(
+            vec![at(a, floor), at(a, ceiling), at(b, ceiling), at(b, floor)],
+            surface,
+        ));
+    }
+    faces
 }
 
-/// Represents one face of a room cuboid, projected into a 2D coordinate system.
-struct RoomFace {
-    /// Which axis is fixed (0=X, 1=Y, 2=Z)
-    fixed_axis: u8,
-    /// The value on the fixed axis where this face lives
-    fixed_value: f32,
-    /// The opposite end of the room on the fixed axis
-    opposite_value: f32,
-    /// Whether this is the min or max face on that axis
-    is_max: bool,
-    /// The 2D rectangle in (u, v) space for the two remaining axes
-    rect: crate::common::rect_subtract::Rect2D,
-    /// The inward-facing normal
-    normal: Vec3,
-    /// Whether the triangle winding needs to be flipped for this face
-    winding_flip: bool,
+fn signed_area_x2(points: &[Vec2]) -> f32 {
+    (0..points.len()).map(|i| points[i].perp_dot(points[(i + 1) % points.len()])).sum()
 }
 
-impl RoomFace {
-    fn enumerate(room: &Room) -> [RoomFace; 6] {
-        use crate::common::rect_subtract::Rect2D;
-        [
-            // -X face (left wall), normal +X (inward)
-            RoomFace {
-                fixed_axis: 0, fixed_value: room.min.x, opposite_value: room.max.x, is_max: false,
-                rect: Rect2D::new(room.min.z, room.min.y, room.max.z, room.max.y),
-                normal: Vec3::X,
-                winding_flip: true,
-            },
-            // +X face (right wall), normal -X (inward)
-            RoomFace {
-                fixed_axis: 0, fixed_value: room.max.x, opposite_value: room.min.x, is_max: true,
-                rect: Rect2D::new(room.min.z, room.min.y, room.max.z, room.max.y),
-                normal: Vec3::NEG_X,
-                winding_flip: false,
-            },
-            // -Y face (floor), normal +Y (inward)
-            RoomFace {
-                fixed_axis: 1, fixed_value: room.min.y, opposite_value: room.max.y, is_max: false,
-                rect: Rect2D::new(room.min.x, room.min.z, room.max.x, room.max.z),
-                normal: Vec3::Y,
-                winding_flip: true,
-            },
-            // +Y face (ceiling), normal -Y (inward)
-            RoomFace {
-                fixed_axis: 1, fixed_value: room.max.y, opposite_value: room.min.y, is_max: true,
-                rect: Rect2D::new(room.min.x, room.min.z, room.max.x, room.max.z),
-                normal: Vec3::NEG_Y,
-                winding_flip: false,
-            },
-            // -Z face (front wall), normal +Z (inward)
-            RoomFace {
-                fixed_axis: 2, fixed_value: room.min.z, opposite_value: room.max.z, is_max: false,
-                rect: Rect2D::new(room.min.x, room.min.y, room.max.x, room.max.y),
-                normal: Vec3::Z,
-                winding_flip: false,
-            },
-            // +Z face (back wall), normal -Z (inward)
-            RoomFace {
-                fixed_axis: 2, fixed_value: room.max.z, opposite_value: room.min.z, is_max: true,
-                rect: Rect2D::new(room.min.x, room.min.y, room.max.x, room.max.y),
-                normal: Vec3::NEG_Z,
-                winding_flip: true,
-            },
-        ]
+fn triangle_area(points: &[Vec2], [a, b, c]: &[usize; 3]) -> f32 {
+    (points[*b] - points[*a]).perp_dot(points[*c] - points[*a])
+}
+
+fn is_convex(points: &[Vec2]) -> bool {
+    let count = points.len();
+    (0..count).all(|i| {
+        let (a, b, c) = (points[i], points[(i + 1) % count], points[(i + 2) % count]);
+        (b - a).perp_dot(c - b) >= 0.0
+    })
+}
+
+/// Even-odd, with the boundary counted in.
+fn in_footprint(points: &[Vec2], q: Vec2) -> bool {
+    if on_edge(points, q) {
+        return true;
     }
-
-    /// Returns the 2D clipping rectangle if `other` room overlaps this face.
-    /// Covers both shared-wall (coplanar) and penetration cases,
-    /// but rejects engulfment (other room fully contains this room on the fixed axis).
-    fn clip_rect(&self, other: &Room) -> Option<crate::common::rect_subtract::Rect2D> {
-        let (other_min_fixed, other_max_fixed, other_min_u, other_max_u, other_min_v, other_max_v) =
-            match self.fixed_axis {
-                0 => (other.min.x, other.max.x, other.min.z, other.max.z, other.min.y, other.max.y),
-                1 => (other.min.y, other.max.y, other.min.x, other.max.x, other.min.z, other.max.z),
-                2 => (other.min.z, other.max.z, other.min.x, other.max.x, other.min.y, other.max.y),
-                _ => unreachable!(),
-            };
-
-        // The other room must cross this face from outside: a shared wall
-        // (it starts at the face plane F and extends outward) or penetration
-        // (other_min < F < other_max). Engulfing the room on this axis does
-        // not count as connecting to it.
-
-        let straddles = if self.is_max {
-            other_min_fixed <= self.fixed_value && other_max_fixed > self.fixed_value
-        } else {
-            other_min_fixed < self.fixed_value && other_max_fixed >= self.fixed_value
-        };
-
-        if !straddles {
-            return None;
-        }
-
-        let engulfs = if self.is_max {
-            other_min_fixed <= self.opposite_value && other_max_fixed >= self.fixed_value
-        } else {
-            other_min_fixed <= self.fixed_value && other_max_fixed >= self.opposite_value
-        };
-
-        if engulfs {
-            return None;
-        }
-
-        let clip = crate::common::rect_subtract::Rect2D::new(
-            other_min_u, other_min_v,
-            other_max_u, other_max_v,
-        );
-
-        self.rect.intersection(&clip)
-    }
-
-    /// A world-space point on this face's plane, in the face's `(u, v)`.
-    /// The inverse of [`RoomFace::rect_to_3d`]'s axis mapping.
-    fn uv(&self, p: Vec3) -> (f32, f32) {
-        match self.fixed_axis {
-            0 => (p.z, p.y),
-            1 => (p.x, p.z),
-            2 => (p.x, p.y),
-            _ => unreachable!(),
+    let count = points.len();
+    let mut inside = false;
+    for i in 0..count {
+        let (a, b) = (points[i], points[(i + 1) % count]);
+        if (a.y > q.y) != (b.y > q.y) && q.x < a.x + (q.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+            inside = !inside;
         }
     }
+    inside
+}
 
-    /// Convert a 2D sub-rectangle into a solid box behind this face, grown
-    /// away from `opposite_value`. Mirrors [`RoomFace::rect_to_3d`]'s axis
-    /// mapping.
-    fn rect_to_slab(&self, r: &crate::common::rect_subtract::Rect2D, thickness: f32) -> WallSlab {
-        let (near, far) = if self.is_max {
-            (self.fixed_value, self.fixed_value + thickness)
-        } else {
-            (self.fixed_value - thickness, self.fixed_value)
-        };
-        match self.fixed_axis {
-            0 => WallSlab {
-                min: Vec3::new(near, r.min_v, r.min_u),
-                max: Vec3::new(far, r.max_v, r.max_u),
-            },
-            1 => WallSlab {
-                min: Vec3::new(r.min_u, near, r.min_v),
-                max: Vec3::new(r.max_u, far, r.max_v),
-            },
-            2 => WallSlab {
-                min: Vec3::new(r.min_u, r.min_v, near),
-                max: Vec3::new(r.max_u, r.max_v, far),
-            },
-            _ => unreachable!(),
-        }
-    }
-
-    /// Convert a 2D sub-rectangle back into four 3D vertices on this face's plane.
-    /// Returns corners in order: (min_u, min_v), (max_u, min_v), (max_u, max_v), (min_u, max_v)
-    fn rect_to_3d(&self, r: &crate::common::rect_subtract::Rect2D) -> (Vec3, Vec3, Vec3, Vec3) {
-        match self.fixed_axis {
-            0 => {
-                let x = self.fixed_value;
-                (Vec3::new(x, r.min_v, r.min_u), Vec3::new(x, r.min_v, r.max_u),
-                 Vec3::new(x, r.max_v, r.max_u), Vec3::new(x, r.max_v, r.min_u))
-            }
-            1 => {
-                let y = self.fixed_value;
-                (Vec3::new(r.min_u, y, r.min_v), Vec3::new(r.max_u, y, r.min_v),
-                 Vec3::new(r.max_u, y, r.max_v), Vec3::new(r.min_u, y, r.max_v))
-            }
-            2 => {
-                let z = self.fixed_value;
-                (Vec3::new(r.min_u, r.min_v, z), Vec3::new(r.max_u, r.min_v, z),
-                 Vec3::new(r.max_u, r.max_v, z), Vec3::new(r.min_u, r.max_v, z))
-            }
-            _ => unreachable!(),
-        }
-    }
+fn on_edge(points: &[Vec2], q: Vec2) -> bool {
+    const ON_THE_EDGE: f32 = 1.0e-5;
+    let count = points.len();
+    (0..count).any(|i| {
+        let (a, b) = (points[i], points[(i + 1) % count]);
+        let along = b - a;
+        let t = (q - a).dot(along) / along.length_squared().max(f32::MIN_POSITIVE);
+        (0.0..=1.0).contains(&t) && (a + along * t).distance(q) <= ON_THE_EDGE
+    })
 }
 
 #[derive(Message)]
@@ -970,122 +932,85 @@ pub struct ClearRoomGeometry;
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    fn triangle_count(mesh: &Mesh) -> usize {
-        match mesh.indices() {
-            Some(bevy::mesh::Indices::U32(v)) => v.len() / 3,
-            _ => 0,
-        }
+    use crate::common::csg::signed_volume_x6;
+
+    /// An L, 3 × 3 with the 2 × 2 corner out of it, two metres high.
+    fn an_l() -> Room {
+        Room::prism(
+            vec![Vec2::new(0.0, 0.0), Vec2::new(3.0, 0.0), Vec2::new(3.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(1.0, 3.0), Vec2::new(0.0, 3.0)],
+            0.0,
+            2.0,
+        )
     }
 
     #[test]
-    fn bake_isolated_room_has_12_tris() {
-        let room = Room::new(Vec3::ZERO, Vec3::new(10.0, 3.0, 10.0));
-        let mesh = room.bake_faces(&[]);
-        // 6 faces * 1 quad each * 2 tris/quad = 12
-        assert_eq!(triangle_count(&mesh), 12);
+    fn a_box_is_a_four_cornered_prism() {
+        let room = Room::new(Vec3::new(4.0, 3.0, 2.0), Vec3::new(-1.0, 0.0, 0.0));
+        assert_eq!(room.bounds(), (Vec3::new(-1.0, 0.0, 0.0), Vec3::new(4.0, 3.0, 2.0)));
+        assert!((room.volume() - 30.0).abs() < 1e-5);
+        assert_eq!(room.solid(()).len(), 6);
     }
 
     #[test]
-    fn bake_shared_full_wall_removes_both_faces() {
-        // Two rooms sharing the x=10 / x=10 wall with identical y/z extents
-        let a = Room::new(Vec3::ZERO, Vec3::new(10.0, 3.0, 10.0));
-        let b = Room::new(Vec3::new(10.0, 0.0, 0.0), Vec3::new(20.0, 3.0, 10.0));
-
-        let mesh_a = a.bake_faces(&[b.clone()]);
-        let mesh_b = b.bake_faces(&[a.clone()]);
-
-        // Each room should have 5 full faces = 10 tris (the shared wall is fully carved)
-        assert_eq!(triangle_count(&mesh_a), 10);
-        assert_eq!(triangle_count(&mesh_b), 10);
+    fn a_plan_wound_the_other_way_round_is_the_same_room() {
+        let mut backwards: Vec<Vec2> = an_l().footprint().to_vec();
+        backwards.reverse();
+        assert_eq!(Room::prism(backwards, 0.0, 2.0).volume(), an_l().volume());
     }
 
     #[test]
-    fn bake_partial_wall_carves_opening() {
-        // Room B only covers part of room A's +X face
-        let a = Room::new(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0));
-        let b = Room::new(Vec3::new(10.0, 2.0, 2.0), Vec3::new(20.0, 8.0, 8.0));
-
-        let mesh_a = a.bake_faces(&[b.clone()]);
-
-        // A 6x6 hole in A's 10x10 +X face. 5 unmodified faces = 10 tris.
-        let tris = triangle_count(&mesh_a);
-        assert!(tris > 12, "expected more than 12 tris due to carving, got {}", tris);
-        // The carved face's frame is at most 4 rectangles = 8 tris: 10 + 8.
-        assert!(tris <= 18, "expected at most 18 tris, got {}", tris);
+    fn a_notched_room_is_closed_faces_out_and_holds_what_its_plan_says() {
+        let room = an_l();
+        assert!((room.volume() - 10.0).abs() < 1e-5);
+        assert!((signed_volume_x6(&room.solid(())) / 6.0 - 10.0).abs() < 1e-4, "inside out or open");
     }
 
     #[test]
-    fn bake_overlap_penetration() {
-        // Room B penetrates through Room A's +X face
-        let a = Room::new(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0));
-        let b = Room::new(Vec3::new(5.0, 3.0, 3.0), Vec3::new(15.0, 7.0, 7.0));
+    fn the_notch_of_an_l_is_not_in_it() {
+        let room = an_l();
+        assert!(room.contains(Vec3::new(0.5, 1.0, 2.5)));
+        assert!(!room.contains(Vec3::new(2.0, 1.0, 2.0)), "the notch counted as room");
+        assert!(room.contains(Vec3::new(3.0, 1.0, 0.5)), "a point on the wall is in the room");
+        assert!(!room.contains(Vec3::new(0.5, 2.5, 0.5)), "above the ceiling counted as room");
+    }
 
-        let mesh_a = a.bake_faces(&[b.clone()]);
-
-        // A's +X face has a 4x4 hole; -X is untouched.
-        let tris = triangle_count(&mesh_a);
-        assert!(tris > 12, "overlap should produce more tris, got {}", tris);
+    /// Four by four with a one-metre pillar in the middle, three high.
+    fn a_room_with_a_pillar() -> Room {
+        let square = |lo: f32, hi: f32| vec![Vec2::new(lo, lo), Vec2::new(hi, lo), Vec2::new(hi, hi), Vec2::new(lo, hi)];
+        Room::with_holes(square(0.0, 4.0), vec![square(1.5, 2.5)], 0.0, 3.0)
     }
 
     #[test]
-    fn bake_engulfed_room_keeps_all_faces() {
-        // Room B is fully inside Room A -- B's walls should remain
-        let a = Room::new(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0));
-        let b = Room::new(Vec3::new(3.0, 3.0, 3.0), Vec3::new(7.0, 7.0, 7.0));
-
-        let mesh_b = b.bake_faces(&[a.clone()]);
-        assert_eq!(triangle_count(&mesh_b), 12, "engulfed room should keep all 6 faces");
-
-        // A should also be unaffected (B is fully inside, doesn't reach A's faces)
-        let mesh_a = a.bake_faces(&[b.clone()]);
-        assert_eq!(triangle_count(&mesh_a), 12, "engulfing room should keep all 6 faces");
-    }
-
-    fn ray(origin: Vec3, direction: Vec3) -> Ray3d {
-        Ray3d::new(origin, Dir3::new(direction).unwrap())
+    fn a_pillar_is_not_room_but_its_face_is() {
+        let room = a_room_with_a_pillar();
+        assert!((room.volume() - 45.0).abs() < 1e-4);
+        assert!(!room.contains(Vec3::new(2.0, 1.0, 2.0)), "inside the pillar counted as room");
+        assert!(room.contains(Vec3::new(1.5, 1.0, 2.0)), "the pillar's face is not in the room");
+        assert!(room.contains(Vec3::new(0.5, 1.0, 0.5)));
     }
 
     #[test]
-    fn a_pick_from_outside_passes_the_near_wall_and_lands_on_the_far_one() {
-        let room = Room::new(Vec3::ZERO, Vec3::splat(10.0));
-        let (t, hit) = room.ray_hit_from_inside(&[], &ray(Vec3::new(-5.0, 5.0, 5.0), Vec3::X)).unwrap();
-        assert!((t - 15.0).abs() < 1e-4, "{t}");
-        assert!((hit.x - 10.0).abs() < 1e-4, "{hit}");
+    fn a_room_with_a_pillar_is_closed_faces_out() {
+        let room = a_room_with_a_pillar();
+        assert!((signed_volume_x6(&room.solid(())) / 6.0 - 45.0).abs() < 1e-3, "inside out, open or uncut");
     }
 
+    /// The middle of its bounds is inside the pillar.
     #[test]
-    fn a_pick_from_inside_lands_on_the_wall_in_front() {
-        let room = Room::new(Vec3::ZERO, Vec3::splat(10.0));
-        let (t, _) = room.ray_hit_from_inside(&[], &ray(Vec3::splat(5.0), Vec3::X)).unwrap();
-        assert!((t - 5.0).abs() < 1e-4, "{t}");
+    fn a_floor_point_is_not_inside_a_pillar() {
+        let room = a_room_with_a_pillar();
+        let point = room.floor_point();
+        let in_the_pillar = (1.5..=2.5).contains(&point.x) && (1.5..=2.5).contains(&point.z);
+        assert!(room.contains(point) && !in_the_pillar, "{point}");
     }
 
-    /// Breaks if picking tests the whole box instead of the baked holes.
+    /// The middle of an L's bounds is in its notch.
     #[test]
-    fn a_pick_goes_through_an_opening_and_not_through_the_wall_beside_it() {
-        let a = Room::new(Vec3::ZERO, Vec3::splat(10.0));
-        let b = Room::new(Vec3::new(10.0, 0.0, 2.0), Vec3::new(20.0, 4.0, 4.0));
-
-        let through = ray(Vec3::new(5.0, 2.0, 3.0), Vec3::X);
-        assert_eq!(a.ray_hit_from_inside(&[b.clone()], &through), None, "A has no wall in the doorway");
-        let (t, _) = b.ray_hit_from_inside(&[a.clone()], &through).unwrap();
-        assert!((t - 15.0).abs() < 1e-4, "B's far wall, got {t}");
-
-        let beside = ray(Vec3::new(5.0, 7.0, 7.0), Vec3::X);
-        let (t, _) = a.ray_hit_from_inside(&[b.clone()], &beside).unwrap();
-        assert!((t - 5.0).abs() < 1e-4, "A's wall beside the doorway, got {t}");
-    }
-
-    #[test]
-    fn bake_non_overlapping_rooms_unchanged() {
-        let a = Room::new(Vec3::ZERO, Vec3::new(5.0, 5.0, 5.0));
-        let b = Room::new(Vec3::new(100.0, 100.0, 100.0), Vec3::new(105.0, 105.0, 105.0));
-
-        let mesh_a = a.bake_faces(&[b.clone()]);
-        let mesh_b = b.bake_faces(&[a.clone()]);
-
-        assert_eq!(triangle_count(&mesh_a), 12);
-        assert_eq!(triangle_count(&mesh_b), 12);
+    fn a_floor_point_is_on_the_floor_inside_the_plan() {
+        let room = an_l();
+        let point = room.floor_point();
+        assert_eq!(point.y, 0.0);
+        assert!(room.contains(point), "{point}");
+        assert_eq!(Room::new(Vec3::ZERO, Vec3::new(4.0, 1.0, 2.0)).floor_point(), Vec3::new(2.0, 0.0, 1.0));
     }
 }

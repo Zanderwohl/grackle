@@ -14,7 +14,10 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::prop::csg::{self, Polygon};
+use crate::common::csg;
+
+/// A face of a prop, made of a [`Surface`].
+pub type Polygon = csg::Polygon<Surface>;
 use crate::prop::profile::{sides, triangulate, Profile};
 use crate::prop::reference::Outline;
 use crate::prop::surface::Surface;

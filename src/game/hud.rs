@@ -24,7 +24,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::damage::Damageable;
 use crate::common::fonts::DisplayFont;
-use crate::common::palette::{Ink, Swatch};
+use crate::common::swatch::{Ink, Swatch};
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, Path, ShapeMaterial, ShapeStyle};
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalogue};

@@ -15,19 +15,19 @@ not a convenience. Design accordingly:
 - Anything that only works because the editor is native (a file dialog, a
   blocking call, a background thread, a C library) becomes a problem the moment
   editing happens mid-match in a browser tab. See "Targeting wasm" below.
-- Two map formats are intended, and the split is deliberate:
-  - **Blueprint (`.gmb`)** — the authoring format: the map's feature list as
-    RON text, written by the features' own serde. No undo history — that
-    lives in memory, as a prop's does. This is what the editor saves.
+- Two file formats, and the split is deliberate:
+  - **Blueprint (`.gmb`)** — a map: its feature list as RON text, written by
+    the features' own serde. No undo history — that lives in memory, as a
+    prop's does. This is what the editor saves **and what ships**.
   - **Prop (`.gpp`)** — a *thing*, not a place: a weapon, a crate, a control
     point. Flat text, because the game reads one — see "Modelling
     a prop" below.
-  - **Compiled map** — not written yet. A simpler, flatter runtime format that a
-    more traditional art-filled map can be baked into and shipped. The game
-    loads this; it does not load blueprints in the general case.
 
-  Between-round editing works on live features. Compilation is for the other
-  direction: authored content that ships.
+  **There is no compiled map file.** Flat runtime geometry is resolved in
+  memory; baked textures and lighting are a cache keyed by content hash, like
+  `cache/thumbnail/`, never authoritative; an art-heavy map's weight is meshes
+  and textures, which are pack content. Materials ship as texture-graphs, not
+  pixels — see [documentation/surfaces.md](documentation/surfaces.md).
 
 The intended service topology — accounts, items, matchmaking, play servers,
 client — is sketched in [documentation/sketch.md](documentation/sketch.md).
@@ -59,10 +59,17 @@ It is a third `AppMode` and the frontier next to it: the geometry it builds is
 correct and nothing yet *holds* one — a weapon names its model and no system
 reads that name.
 
-`cargo check --all-targets` and `cargo test` both pass. The `Room` type is
-still dead — superseded by `EditorRoom` for authoring — but it is what
-`CollisionWorld` is rebuilt from, so deleting it is not the small change it
-looks like.
+`cargo check --all-targets` and `cargo test` both pass. `EditorRoom` is what a
+mapper edits; the `Room` component it stands up is the volume of air the map's
+surface, its collision and its picking are all built from (see "What a body is
+drawn as" for collision and `src/common/world_surface.rs`).
+
+**Rooms are axis-aligned boxes today and will not stay that way.** Doom-style
+polygon rooms and Source-style displacements are planned, though not for this
+version. New code that consumes room geometry (materials, bakes, collision)
+should take triangles and normals rather than a room's min and max, so a new
+shape is a new producer and not a rewrite of every consumer — see
+[documentation/surfaces.md](documentation/surfaces.md).
 
 ## Layout
 
@@ -73,9 +80,10 @@ looks like.
 | `src/tool/` | One module per editor tool, each its own `Plugin` with its own `Tools` state. |
 | `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls, placed props, hats. |
 | `src/prop/` | The prop editor: a CSG kernel, the modelling feature list, and the mode around it. |
+| `src/material/` | The material editor: texture-graph's panels as an authoring mode. See "Editing a material". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`. |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 | `cache/` | Gitignored, derived from the packs: `thumbnail/props/{name}.png`. Safe to delete. |
@@ -118,7 +126,10 @@ from the editor — it is written by
 ([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the
 repo root, and that file is where its contents are reviewable. It currently
 also ships an animation grid, which is why the room is 24 m square: the grid is
-a testing convenience rather than something a new map owes you.
+a testing convenience rather than something a new map owes you. It also ships
+a spawn nook on each side wall, Red's authored and Blue's made by a Mirror,
+with walls naming the `spawn_walls` role — the smallest map that exercises
+sides, mirroring and the palette at once.
 
 Choice is uniform random among the spawns on the body's own side — a spawn's
 `Side`, from a Mirror (see "Mirroring half a map") — falling back to spawns
@@ -130,7 +141,8 @@ is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop` or `Play`. **`F5` swaps between the map editor and Play, and nothing
+`Prop`, `Animation`, `Material` or `Play`, iterable in that order, which is
+the Mode menu's order. **`F5` swaps between the map editor and Play, and nothing
 else** — the only way back to the editor, as `Escape` belongs to the pause
 menu. From the prop editor it is answered with a line in the log rather than
 starting a round: the key's whole meaning is that it toggles between *two*
@@ -313,6 +325,13 @@ through the wrong one. The viewmodel camera is a **child** of the play camera,
 so the two can never disagree about where you are looking and
 `despawn_the_view` takes it down without knowing it exists.
 
+**Only the bottom camera on a window clears.** Cameras on one window with
+matching settings share a main texture, and a clear wipes all of it, not
+just the camera's viewport — so the four editor viewports clear only on the
+lowest-order one, the same way the viewmodel and HUD cameras already set
+`ClearColorConfig::None`. Let each clear and every view but the top one is
+blank, with no error.
+
 Three more keys while playing: **`F`** swaps between first and third person
 (`ViewMode` in [`src/game/player.rs`](src/game/player.rs) — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
@@ -378,7 +397,8 @@ consequences:
   first operand and then failed to find its second would delete a body it
   never used, and the half that vanishes is not the feature that looks wrong.
 
-The kernel ([`src/prop/csg.rs`](src/prop/csg.rs)) is the `csg.js` BSP
+The kernel ([`src/common/csg.rs`](src/common/csg.rs), shared with the map's
+surface and generic over what a face is made of) is the `csg.js` BSP
 algorithm written out, and **a solid is a bag of convex polygons that happens
 to be closed**. Nothing checks either property and both matter: a plane cuts a
 convex polygon into exactly two pieces, which is the assumption the splitter
@@ -838,10 +858,9 @@ section of the file is kept whatever the archetype, so flipping it and back
 loses nothing, and a held prop writes none of them.
 
 **A collider is a rounded box** — a core plus a radius — so a box, a sphere and
-an upright capsule are one shape to the collision world. `RoundedBox::slab_along`
-turns one into the wall slab `move_and_slide` already sweeps against, for a body
-at that position on the other two axes, which is what makes a pillar round to
-walk past rather than square. Colliders are axis-aligned in the prop; a turned
+an upright capsule are one shape to the collision world. A body is swept
+against it grown by the body's own box — another rounded box — which is what
+makes a pillar round to walk past rather than square. Colliders are axis-aligned in the prop; a turned
 placement collides as the bounding box of its turned core.
 
 **Placed props follow the carousel rule.** The map `Prop` feature names a
@@ -866,6 +885,97 @@ so the head bone's own odd rest rotation never reaches a hat's numbers. Which
 hat is a class's is `hat` on its entry in `loadouts.toml`. In Fit a hat stays
 at the origin and the figure stands under it, inverted through the same
 `hat_transform` the game uses.
+
+## Editing a material
+
+`AppMode::Material` ([`src/material/`](src/material/)) is
+[texture-graph](https://github.com/Zanderwohl/texture-graph)'s editor —
+`texture-graph-editor`, egui panels and nothing else — under Grackle's File,
+Edit and Mode menus, editing one `.tgraph` under a pack's `materials/`. What
+a material is *for* is [documentation/surfaces.md](documentation/surfaces.md);
+rooms paint with them — see "Materials on rooms".
+
+- **The crates track texture-graph's `main`, and it moves with Bevy.**
+  Cargo.lock holds the commit; `cargo update -p texture-graph-core` moves
+  it. The editor's egui and wgpu must be the ones bevy_egui and Bevy use, or
+  its types are not ours, so update the two together.
+- **It takes the whole window**, so `AppMode::shows_the_viewports` is false
+  for it and the four editor cameras are switched off on entry. A mode that
+  shows them switches them back on.
+- **`MaterialEditor` is a non-`Send` resource**, because the editor holds its
+  host's texture registry as a trait object.
+- **Undo is whole-graph snapshots taken when idle**, as the map's is,
+  compared as RON text because `Graph` has no `PartialEq`. texture-graph
+  queues edits as commands and keeps no history.
+- **The panels add their canvas on first draw**, which is housekeeping, not an
+  edit. `MaterialEditor::show` adds it on open and restore so a fresh file
+  neither reads as changed nor offers an undo that removes the canvas.
+- **Previews bake on Bevy's own device**
+  ([`src/material/gpu.rs`](src/material/gpu.rs)). bevy_egui only draws
+  `Image` assets, so a baked texture is given an invented `AssetId` with no
+  `Image` behind it, registered as a weak handle, and a `GpuImage` wrapping
+  it is put into `RenderAssets<GpuImage>` after Bevy prepares its own. With
+  no asset, nothing in Bevy ever removes the entry; freeing it is ours.
+- **The registry is lent per frame**, not owned by the editor, because it
+  borrows `EguiContexts`, which also holds bevy_egui's user textures — ask
+  for `EguiUserTextures` beside it and Bevy refuses the system at startup.
+- **Previews are viewed as `Rgba8UnormSrgb`.** texture-graph stores
+  sRGB-encoded bytes in `Rgba8Unorm` (storage writes cannot be sRGB);
+  bevy_egui blends in linear space, so drawn as they are every preview is
+  washed out, with no error.
+
+## Materials on rooms
+
+A room names a material per **slot** — floor, walls, ceiling — as
+`RoomSurfaces` on its feature, copied onto its entity. `None` draws the plain
+default, as does a name with no file behind it. The material editor's own
+GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
+[`gpu.rs`](src/material/gpu.rs)).
+
+- **Slots are sorted by inward normal**, not by side of the box
+  (`RoomSlot::of`), so a room that is not a box sorts the same way. Each slot
+  is its own child mesh (`RoomSlotMesh`) under the room's
+  `BakedRoomGeometry`; a slot opened up entirely is not baked.
+- **Painting is not baking.** `paint_rooms` picks each slot's material every
+  frame, so changing a name repaints without rebuilding walls, and a material
+  that bakes late — no device yet — arrives on its own.
+- **Texture coordinates are world-space**, in tiles of
+  `MATERIAL_TILE_METRES`, so a material runs on across neighbouring walls and
+  does not stretch with the room. The tile size is a stand-in: it belongs to
+  the material, which has nowhere to say it yet.
+- **A material is baked once per name** into a `TILE_TEXELS` tile, as the
+  three maps `StandardMaterial` reads — colour, glTF-packed
+  metallic-roughness, normal — each with a full mip chain, by texture-graph's
+  `MaterialMapper`. Sampled trilinear and 16x anisotropic: a wall seen
+  edge-on is where tiling shimmers. Saving one in the material editor makes
+  the map bake it again.
+- **Colour is viewed as sRGB and the other two are not** (`Encoding`).
+  texture-graph stores display bytes; metallic-roughness and normals are
+  data, and decoding them as colour bends every value.
+- **Normal maps are flipped in Y** (`FLIP_NORMAL_MAP_Y`): texture-graph's are
+  +Y down the image, Bevy's bitangent points up it. Unflipped, every bump is
+  lit from the wrong side and nothing errors;
+  `texture_graph_normals_face_uphill_on_a_wall` rebuilds a world normal from
+  a room mesh's own tangents to decide it. Room meshes carry mikktspace
+  tangents for this.
+- **Metal reads dark** without an environment map to reflect: the map has
+  only its point lights.
+- **A material repeats, so it must tile.** Value noise with a lattice period
+  equal to its frequency; `every_shipped_material_tiles` checks each shipped
+  one's opposite edges on the CPU. The default pack's are written by
+  `cargo run --bin default_materials`, like the map template.
+- **A slot may name a role instead**, which the map's palette
+  ([`src/common/palette.rs`](src/common/palette.rs), in `MapMetadata`)
+  resolves by the room's `Side` — so a Mirror's copy comes out in the other
+  team's colours with nothing on the copy saying so. A role's name shadows a
+  material of the same name. `publish_palette` is the one writer of the
+  `Palette` resource; nothing reads `MapMetadata` for it.
+- **No palette field is skipped when empty.** It crosses the wire inside the
+  settings, with postcard, which cannot read a field left out: a skipped
+  field decodes as garbage after it, and `the_settings_survive_the_wire_encoding`
+  is what failed.
+- **Not sent to clients.** Materials are pack content like props, but nothing
+  syncs them yet; a client without the file draws that slot plain.
 
 ## Thumbnails
 
@@ -915,7 +1025,7 @@ against a world that has been rebuilt rather than one that is about to be.
 
 It is a **set, not a list of named systems**, for the same reason
 `DamageSystems` is one: rooms are the only thing baked today, and a second kind
-— navmesh, lightmap, whatever the compiled map format wants — joins by naming
+— navmesh, lightmap, material atlases — joins by naming
 the set. Name the systems instead and the ordering lives somewhere that does
 not know about them, and forgetting one produces no error, just a round that
 starts before its world is finished.
@@ -1100,18 +1210,50 @@ alongside the camera's: put `With<Player>` in the filter next to
 disjoint from the camera's `Without<Player>` one, and without it Bevy refuses
 the system at runtime rather than at compile time.
 
-Collision comes from the rooms, not from the baked meshes
-([`src/game/collision.rs`](src/game/collision.rs)) — but from the *same* face
-subtraction, via `Room::collision_slabs`, so an opening you can see through is
-an opening you can walk through. Two operations, and they are not
-interchangeable:
+**Rendering, collision and editor picking all come from one surface**
+([`src/common/world_surface.rs`](src/common/world_surface.rs)): the boundary of
+the union of the rooms, faces pointing into the air, cut with the CSG kernel.
+Each room's share is its own walls clipped against every room touching it, so
+auto-bake still rebuilds one room at a time. Collision
+([`src/game/collision/`](src/game/collision/mod.rs)) stands each face out into
+the solid behind it as a hull, straight from the rooms rather than from the
+baked meshes, so an edit lands without waiting for a bake — and an opening you
+can see through is an opening you can walk and shoot through. Because it is a
+union, a room wholly inside another adds nothing, and a room's wall inside
+another room is gone even where the old rectangle bake kept it. Two collision
+operations, and they are not interchangeable:
 
-- `move_and_slide` is swept per axis. It asks whether the body's leading edge
-  crosses a wall plane during the step, so speed cannot tunnel through a wall.
+- `slide` is swept: it stops at the first surface the box would touch, takes
+  the part of the move that goes into it out, and goes on, so speed cannot
+  tunnel through a wall. What it returns is the **normals** it touched, never
+  axes: `Player.ground` is a touched floor no steeper than `WALKABLE`, and
+  `against_wall` is anything neither floor nor ceiling. On the ground the walk
+  follows the floor and gravity does nothing, which is what lets a body stand
+  on a slope without sliding down it. A wall lower than `STEP_HEIGHT` is
+  walked up (`step_up`), but only when that gets the body further than the
+  plain slide did — otherwise pressing into a real wall hops on the spot.
 - `depenetrate` handles the world moving instead of the body: a floor raised
   onto a standing player encloses it having crossed nothing. It prefers escapes
   that land inside a room over shorter ones that do not, because the short way
   out of a floor is downwards, through the map.
+
+A `Room` is a prism — a floor plan, not necessarily convex and possibly with
+holes, between two heights — and a box is the four-corner case. `EditorRoom`
+stands up a box; `FootprintRoom`
+([`src/editor/footprint_room.rs`](src/editor/footprint_room.rs),
+[documentation/footprint-rooms.md](documentation/footprint-rooms.md)) is a
+sketch whose corners are `PointRef`s, each named region one room on a child
+entity. Anything that needs a feature's rooms asks `FeatureTrait::rooms`,
+never its `type_key` or its box. Tools that edit a footprint's own drawing
+reach it through `FeatureTrait::footprint`/`footprint_mut` — a typetag trait
+object has no `Any` to downcast through. What a drawn chain makes a room is
+one rule, `FootprintRoom::add_chain`'s, for a new footprint and an added
+chain alike: a region a new line bounds that no room of it already covers.
+Ask it for `bounds`, `contains` and `solid` rather than treating it as a box.
+**Each room's share is cut relative to its own corner**: the kernel's
+tolerance is absolute, and an angled face far enough from the origin is split
+by its own plane. The footprint tool, stairs and displacements are the stages
+left in [documentation/collision.md](documentation/collision.md).
 
 ## What a body does once it is dead
 
@@ -2023,8 +2165,9 @@ A client also declines to adopt a map identical to the one it already has,
 since adopting is a visible rebuild in exchange for nothing.
 
 The wire format is JSON, which is the wrong choice for anything large and is
-knowingly temporary — it is what `typetag` gives for free. The compiled map
-format is where this stops being acceptable.
+knowingly temporary — it is what `typetag` gives for free. A blueprint is what
+ships, so it gives way to a compact binary encoding of the same blueprint,
+parsed as defensively as [sketch.md](documentation/sketch.md) asks.
 
 ### The transport behind it
 
@@ -2079,8 +2222,8 @@ machine, and things happen in it.
 The core abstraction is `FeatureTrait` in
 [`src/editor/editable.rs`](src/editor/editable.rs) — a `#[typetag::serde]`
 trait object. Implementors today: `GlobalPoint`, `GracklePointLight`,
-`EditorRoom`, `SpawnPoint`, `Prop`, `AnimationDisplay`, `AnimationGrid` and
-`Mirror`.
+`EditorRoom`, `FootprintRoom`, `SpawnPoint`, `Prop`, `AnimationDisplay`,
+`AnimationGrid` and `Mirror`.
 
 A feature does not store bare coordinates. It stores `PointRef`s, which are
 per-axis absolute-or-relative references to *another feature's named point*.
@@ -2167,6 +2310,9 @@ gravity from the server's is the rubber-banding `map_sync` exists to prevent.
 
 Every user-visible string goes through the lang layer in
 [`src/common/lang.rs`](src/common/lang.rs). Never hardcode display text.
+**The one exception is the material editor's panels**, which are
+texture-graph's and English; Grackle's menus around them still go through
+the layer.
 
 ```rust
 get!("tools.select")                          // plain lookup
@@ -2261,7 +2407,8 @@ C are gone. What is left is Grackle's own code:
   WebTransport — the reason Lightyear was chosen.
 - **`rfd` + `pollster::block_on` inside `std::thread::spawn`**
   ([`panels.rs:402`](src/editor/panels.rs:402), and the same pattern in
-  [`src/prop/ui.rs`](src/prop/ui.rs)) — no threads on wasm, and blocking the
+  [`src/prop/ui.rs`](src/prop/ui.rs) and
+  [`src/material/ui.rs`](src/material/ui.rs)) — no threads on wasm, and blocking the
   main thread deadlocks — and on wasm `FileHandle::path()` and `pick_folder`
   do not exist at all, which is what the compiler stops on. All of it is on
   the *authoring* side; `src/prop/`'s reading path deliberately is not.
@@ -2279,7 +2426,7 @@ over `FrameTimeDiagnosticsPlugin`, so there is no per-Bevy-release fork to
 chase.
 
 `cargo check --lib --target wasm32-unknown-unknown` is worth running as a
-probe: it now compiles every dependency and stops on seven errors in
+probe: it now compiles every dependency and stops on nine errors in
 Grackle's own code — the transport and the file dialogs above.
 
 When adding runtime code, keep it free of these rather than porting them later.
