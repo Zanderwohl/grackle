@@ -8,7 +8,9 @@ use lightyear::prelude::input::native::InputMarker;
 use lightyear::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::damage::NextPlayerId;
+use std::collections::HashMap;
+
+use crate::common::damage::{Died, NextPlayerId, PlayerId};
 use crate::common::net::NetRole;
 use crate::common::team::Side;
 use crate::common::weapon::WeaponCatalogue;
@@ -23,14 +25,60 @@ pub struct NetBodiesPlugin;
 
 impl Plugin for NetBodiesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (
-                give_bodies_to_whoever_needs_one.run_if(in_state(AppMode::Play)),
-                claim_our_own_body,
-            ),
-        );
+        // Also `DamagePlugin`'s; here too because the timers read it.
+        app.add_message::<Died>()
+            .init_resource::<RespawnTimers>()
+            .add_systems(
+                Update,
+                (
+                    (start_respawn_timers, give_bodies_to_whoever_needs_one)
+                        .chain()
+                        .run_if(in_state(AppMode::Play)),
+                    claim_our_own_body,
+                ),
+            )
+            .add_systems(OnEnter(AppMode::Play), forget_respawn_timers);
     }
+}
+
+/// A placeholder until gamemodes have numbers of their own.
+pub const RESPAWN_SECONDS: f32 = 3.0;
+
+/// Seconds left before each dead player is owed a body again.
+#[derive(Resource, Default, Debug)]
+pub struct RespawnTimers(pub HashMap<PlayerId, f32>);
+
+impl RespawnTimers {
+    fn waiting(&self, id: PlayerId) -> bool {
+        self.0.contains_key(&id)
+    }
+}
+
+/// Chained before `give_bodies_to_whoever_needs_one` and not through
+/// `Commands`: a slow frame runs the death and the reap before either runs.
+fn start_respawn_timers(
+    time: Res<Time>,
+    role: Option<Res<NetRole>>,
+    mut deaths: MessageReader<Died>,
+    mut timers: ResMut<RespawnTimers>,
+) {
+    // Drained either way; a client's are relayed copies.
+    let deaths: Vec<PlayerId> = deaths.read().filter_map(|death| death.victim_id).collect();
+    if !role.as_deref().is_none_or(NetRole::is_authority) {
+        return;
+    }
+    let dt = time.delta_secs();
+    timers.0.retain(|_, left| {
+        *left -= dt;
+        *left > 0.0
+    });
+    for id in deaths {
+        timers.0.insert(id, RESPAWN_SECONDS);
+    }
+}
+
+fn forget_respawn_timers(mut timers: ResMut<RespawnTimers>) {
+    timers.0.clear();
 }
 
 /// Stand a body up for one client and start replicating it.
@@ -59,8 +107,8 @@ fn spawn_body_for(
 /// Give a body to everybody who should have one and does not.
 ///
 /// Keyed on absence, so joining, round start and death are one case with no
-/// queue or timer. Respawning is therefore immediate; delays are a gamemode
-/// question.
+/// queue. A player who died is not owed one until their [`RespawnTimers`]
+/// entry runs out.
 fn give_bodies_to_whoever_needs_one(
     mut commands: Commands,
     role: Option<Res<NetRole>>,
@@ -74,7 +122,9 @@ fn give_bodies_to_whoever_needs_one(
     rooms: Query<&Room>,
     mut ids: ResMut<NextPlayerId>,
     catalogue: Res<WeaponCatalogue>,
+    timers: Option<Res<RespawnTimers>>,
 ) {
+    let waiting = |who: Identity| timers.as_deref().is_some_and(|timers| timers.waiting(who.id));
     if !role.as_deref().is_none_or(NetRole::is_authority) {
         return;
     }
@@ -99,12 +149,14 @@ fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
-        let spawn = choose_spawn(&placed, who.team, &collision, &rooms);
-        info!("Standing our own body up as {} on {}", who.id, who.team.name());
-        let body = spawn_player(&mut commands, spawn, who.id, who.team, &catalogue);
-        commands.entity(body).insert(LocalPlayer);
-        if hosting {
-            commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
+        if !waiting(who) {
+            let spawn = choose_spawn(&placed, who.team, &collision, &rooms);
+            info!("Standing our own body up as {} on {}", who.id, who.team.name());
+            let body = spawn_player(&mut commands, spawn, who.id, who.team, &catalogue);
+            commands.entity(body).insert(LocalPlayer);
+            if hosting {
+                commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
+            }
         }
     }
 
@@ -122,6 +174,9 @@ fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
+        if waiting(who) {
+            continue;
+        }
         let spawn = choose_spawn(&placed, who.team, &collision, &rooms);
         info!("Standing a client's body up as {} on {}", who.id, who.team.name());
         spawn_body_for(&mut commands, spawn, who, link, peer.0, &catalogue);
@@ -190,6 +245,24 @@ mod tests {
             "not put on the spawn point: {}",
             placed.translation
         );
+    }
+
+    /// Dead, nobody is owed a body until the timer runs out.
+    #[test]
+    fn the_dead_wait_out_their_respawn_timer() {
+        let mut world = World::new();
+        a_map(&mut world);
+        let us = Identity { id: PlayerId(7), team: Team::Red };
+        world.insert_resource(OurIdentity(us));
+        world.init_resource::<RespawnTimers>();
+        world.resource_mut::<RespawnTimers>().0.insert(us.id, RESPAWN_SECONDS);
+
+        a_turn(&mut world);
+        assert_eq!(world.query_filtered::<(), With<Player>>().iter(&world).count(), 0);
+
+        world.resource_mut::<RespawnTimers>().0.clear();
+        a_turn(&mut world);
+        assert_eq!(world.query_filtered::<(), With<Player>>().iter(&world).count(), 1);
     }
 
     /// Breaks if dying allocates a new id or team.

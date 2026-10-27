@@ -15,7 +15,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::damage::{Damage, DamageDealt, Damageable, Died};
 use crate::common::team::Allegiances;
-use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage};
+use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage, suicide};
 use crate::game::player::PlayerCamera;
 
 /// How long a damage number lasts, in seconds.
@@ -74,6 +74,7 @@ impl Plugin for DamagePlugin {
                     .run_if(has_authority),
             )
             .add_systems(FixedUpdate, apply_damage.in_set(DamageSystems::Apply))
+            .add_systems(FixedUpdate, suicide.in_set(DamageSystems::Deal))
             .add_systems(
                 FixedUpdate,
                 // `reap_the_dead` removes what was marked on an earlier tick,

@@ -10,8 +10,28 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::common::damage::{DamageDealt, DamageLog, DamageSource, Damageable, Died, PlayerId};
+use crate::common::damage::{Damage, DamageDealt, DamageLog, DamageSource, Damageable, Died, PlayerId};
 use crate::common::skeleton::AnimationClock;
+use crate::game::player::Inputs;
+
+const SUICIDE_DAMAGE: u32 = 1000;
+
+/// Credited to yourself, which the team rule always lets through.
+pub fn suicide(
+    bodies: Query<(Entity, &Inputs, &PlayerId, &GlobalTransform), Without<Dying>>,
+    mut damage: MessageWriter<Damage>,
+) {
+    for (body, input, id, placed) in &bodies {
+        if input.suicide {
+            damage.write(Damage {
+                target: body,
+                source: DamageSource::Player(*id),
+                amount: SUICIDE_DAMAGE,
+                point: placed.translation(),
+            });
+        }
+    }
+}
 
 /// Put every hit into the victim's log. Game time, not wall time, so the
 /// assist window does not run while somebody is in the editor.
@@ -200,6 +220,47 @@ mod tests {
         assert_eq!(record[0].victim_id, None);
         assert_eq!(record[0].killer, DamageSource::World);
         assert!(world.get_entity(crate_entity).is_err());
+    }
+
+    /// Credited to yourself, so it passes the team rule.
+    #[test]
+    fn suicide_is_enough_damage_at_yourself() {
+        let mut world = a_world();
+        world.init_resource::<Messages<Damage>>();
+        let us = world
+            .spawn((
+                lightyear::prelude::input::native::ActionState(crate::game::player::PlayerInput { suicide: true, ..default() }),
+                PlayerId(3),
+                GlobalTransform::default(),
+            ))
+            .id();
+        world.spawn((Inputs::default(), PlayerId(4), GlobalTransform::default()));
+
+        world.run_system_once(suicide).unwrap();
+
+        let messages = world.resource::<Messages<Damage>>();
+        let written: Vec<Damage> = messages.get_cursor().read(messages).copied().collect();
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].target, us);
+        assert_eq!(written[0].source, DamageSource::Player(PlayerId(3)));
+        assert!(written[0].amount >= 1000);
+    }
+
+    /// A body in its dying tick is not killed a second time.
+    #[test]
+    fn a_dying_body_cannot_suicide_again() {
+        let mut world = a_world();
+        world.init_resource::<Messages<Damage>>();
+        world.spawn((
+            lightyear::prelude::input::native::ActionState(crate::game::player::PlayerInput { suicide: true, ..default() }),
+            PlayerId(3),
+            GlobalTransform::default(),
+            Dying,
+        ));
+
+        world.run_system_once(suicide).unwrap();
+
+        assert!(world.resource::<Messages<Damage>>().is_empty());
     }
 
     #[test]
