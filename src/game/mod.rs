@@ -720,6 +720,8 @@ mod tests {
 
         toggle(&mut app);
         assert_eq!(condition(&mut app).taunt, None, "G again did not end the taunt");
+        assert_ne!(body_yaw(&mut app), latch(&mut app).0.yaw, "the body snapped to the aim in one tick");
+        tick(&mut app, 8);
         assert_eq!(body_yaw(&mut app), latch(&mut app).0.yaw, "the body did not turn back to the aim");
         assert!(walked(&mut app) > 0.5, "the body stayed stopped after the taunt");
 

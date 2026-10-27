@@ -9,6 +9,7 @@ use lightyear::prelude::input::native::ActionState;
 use crate::common::damage::{Damageable, PlayerId};
 use crate::common::hitbox::Hitboxes;
 use crate::common::movement_rules::MovementRules;
+use crate::common::taunt::TauntTurning;
 use crate::common::team::Team;
 use crate::common::class::{
     body_centre_from_feet, Stance, CLASS_HALF_EXTENTS,
@@ -71,7 +72,13 @@ pub struct Player {
     /// A stopped move cannot be recovered from position alone; the animation
     /// layer reads this to tell running from running into a wall.
     pub against_wall: bool,
+    /// A taunt held the body back from the aim and has ended: it turns to the
+    /// aim at [`CATCH_UP_DEGREES_PER_SECOND`] rather than in one tick.
+    pub catching_up: bool,
 }
+
+/// How fast a body released by a taunt turns back to the aim.
+pub const CATCH_UP_DEGREES_PER_SECOND: f32 = 720.0;
 
 impl Player {
     pub fn on_ground(&self) -> bool {
@@ -87,6 +94,7 @@ impl Default for Player {
             pitch: 0.0,
             ground: None,
             against_wall: false,
+            catching_up: false,
         }
     }
 }
@@ -600,9 +608,17 @@ pub fn step_player(
         // A taunt may hold the body back from the aim; the view is aimed from
         // the latch and never is. Movement below is measured from the body's
         // yaw, so a held body walks the way it is facing, not the way you look.
-        (player.yaw, player.pitch) = condition
-            .turning(taunts.as_deref())
-            .follow((player.yaw, player.pitch), (input.yaw, input.pitch), dt);
+        let turning = condition.turning(taunts.as_deref());
+        let aim = (input.yaw, input.pitch);
+        (player.yaw, player.pitch) = match turning {
+            TauntTurning::Free if player.catching_up => TauntTurning::AtMost(CATCH_UP_DEGREES_PER_SECOND),
+            turning => turning,
+        }
+        .follow((player.yaw, player.pitch), aim, dt);
+        player.catching_up = match turning {
+            TauntTurning::Free => (player.yaw, player.pitch) != aim,
+            _ => true,
+        };
         let crouch = input.crouch && condition.may_crouch();
         change_stance(&mut stance, &mut body, player.on_ground(), crouch, &world);
         let half = stance.half_extents();

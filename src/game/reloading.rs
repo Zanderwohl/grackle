@@ -28,7 +28,10 @@ impl Plugin for ReloadingPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            perform_reloads.before(perform_weapon_clips).run_if(in_state(AppMode::Play)),
+            perform_reloads
+                .after(crate::game::recoil::start_recoil)
+                .before(perform_weapon_clips)
+                .run_if(in_state(AppMode::Play)),
         );
     }
 }
@@ -48,6 +51,12 @@ pub(crate) fn perform_reloads(
     for (equipped, ammo, held, mut performance, mut seen, ours) in &mut bodies {
         let left = ammo.at(equipped.held).reloading;
         let was = seen.0;
+        // The reload the last shot of a clip starts waits out that shot's
+        // kick rather than cutting it. `seen` is left behind, so the rise is
+        // still seen once the kick is done, and the reload joins partway.
+        if left > was + STARTED && performance.clip().is_some_and(WeaponClip::is_kick) {
+            continue;
+        }
         if was != left {
             seen.0 = left;
         }
@@ -160,6 +169,24 @@ mod tests {
         reloading(&mut world, body, RELOAD_SECONDS);
         let at = world.get::<Performance>(body).unwrap().time_into(1.0).unwrap();
         assert_eq!(at, 0.0, "the next shell did not start the clip again");
+    }
+
+    /// The reload the last shot starts does not cut that shot's kick: it
+    /// waits, then joins as far in as the reload has got.
+    #[test]
+    fn a_reload_waits_for_the_last_shots_kick() {
+        let mut world = World::new();
+        let (body, _) = a_reloader(&mut world);
+        world.get_mut::<Performance>(body).unwrap().start(WeaponClip::Recoil);
+
+        reloading(&mut world, body, RELOAD_SECONDS);
+        assert_eq!(playing(&world, body), Some(WeaponClip::Recoil), "the reload cut the kick");
+
+        world.get_mut::<Performance>(body).unwrap().stop(&WeaponClip::Recoil);
+        reloading(&mut world, body, RELOAD_SECONDS * 0.75);
+        assert_eq!(playing(&world, body), Some(WeaponClip::Reload), "the reload never started");
+        let at = world.get::<Performance>(body).unwrap().time_into(1.0).unwrap();
+        assert!((at - 0.25).abs() < 1e-5, "joined at {at}, not a quarter in");
     }
 
     /// A clip fitted to a reload takes the reload's length, however long the

@@ -138,6 +138,17 @@ pub enum WeaponClip {
     Reload,
 }
 
+impl WeaponClip {
+    /// A shot's kick, in either view.
+    pub fn is_kick(&self) -> bool {
+        match self {
+            WeaponClip::Recoil => true,
+            WeaponClip::Prop(name) => matches!(name.as_str(), "recoil" | "alt_recoil" | "fire" | "alt_fire"),
+            WeaponClip::Reload => false,
+        }
+    }
+}
+
 /// Clips every weapon shares, read from the packs at startup. Third person
 /// indicates rather than performs, so a body's recoil is one generic kick,
 /// not each weapon's.

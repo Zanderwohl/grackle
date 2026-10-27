@@ -19,7 +19,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::damage::PlayerId;
 use crate::common::effects::Effect;
 use crate::common::net::{has_authority, is_remote_client, NetRole};
-use crate::common::weapon::{Ammo, Cadence, Equipped, WeaponAction, WeaponCatalogue};
+use crate::common::weapon::{Ammo, AmmoState, Cadence, Equipped, Slot, WeaponAction, WeaponCatalogue};
 use crate::game::condition::Condition;
 use crate::game::held::{perform_weapon_clips, HeldModel, Performance, WeaponClip};
 use crate::game::player::LocalPlayer;
@@ -102,6 +102,9 @@ fn guess_our_shots(
     catalogue: Res<WeaponCatalogue>,
     ours: Option<Single<(Entity, &Equipped, &Ammo, &Condition), With<LocalPlayer>>>,
     mut cooldown: Local<[f32; 2]>,
+    // The replicated state we last guessed from, and what our guesses left of
+    // it: until the server's count changes, its rounds are already spent.
+    mut guessed: Local<Option<(Slot, AmmoState, AmmoState)>>,
     mut seen: MessageWriter<ShotSeen>,
 ) {
     for left in cooldown.iter_mut() {
@@ -113,7 +116,11 @@ fn guess_our_shots(
         return;
     }
     let Some(weapon) = catalogue.held_by(equipped) else { return };
-    let mut state = *ammo.at(equipped.held);
+    let told = *ammo.at(equipped.held);
+    let mut state = match *guessed {
+        Some((slot, was, left)) if slot == equipped.held && was == told => left,
+        _ => told,
+    };
 
     for (button, mouse) in [(Button::Primary, MouseButton::Left), (Button::Secondary, MouseButton::Right)] {
         let mounted = button.of(weapon);
@@ -133,12 +140,13 @@ fn guess_our_shots(
         }
         seen.write(ShotSeen { body, button });
     }
+    *guessed = Some((equipped.held, told, state));
 }
 
 /// The body plays the weapon's own third-person `recoil` or `alt_recoil`, and
 /// our own viewmodel its first-person `fire` or `alt_fire`; either falls back
 /// to the shared recoil when the prop ships no clip of that name.
-fn start_recoil(
+pub(crate) fn start_recoil(
     mut seen: MessageReader<ShotSeen>,
     mut bodies: Query<(&mut Performance, Option<&HeldModel>, Has<LocalPlayer>), Without<Viewmodel>>,
     mut views: Query<&mut Performance, With<Viewmodel>>,
@@ -258,6 +266,29 @@ mod tests {
         }
         // 0.3 s at one every 0.1 s, the first at once.
         assert_eq!(kicks, 3, "{kicks} kicks in 0.3 s");
+    }
+
+    /// A guess spends the round it guessed: with one left and the server's
+    /// count not yet down, holding the trigger kicks once, and a new count
+    /// from the server is believed again.
+    #[test]
+    fn a_guessed_shot_spends_its_round_until_the_server_says() {
+        let mut world = World::new();
+        let body = holding(&mut world, Cadence::Automatic { interval: 0.1 }, 1);
+        world.resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        let guess = world.register_system(guess_our_shots);
+        let mut kicks = 0;
+        for _ in 0..10 {
+            world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(0.03));
+            world.run_system(guess).unwrap();
+            kicks += seen(&mut world).len();
+        }
+        assert_eq!(kicks, 1, "one round kicked {kicks} times");
+
+        world.get_mut::<Ammo>(body).unwrap().at_mut(Slot::Primary).clip = 3;
+        world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(0.2));
+        world.run_system(guess).unwrap();
+        assert_eq!(seen(&mut world).len(), 1, "a reloaded clip from the server was not believed");
     }
 
     /// The authority's shot reaches the wire as an effect, and comes back as

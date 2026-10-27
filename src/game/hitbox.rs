@@ -23,7 +23,7 @@ use crate::common::skeleton::{
 };
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::ik::finish_pose;
-use crate::common::skeleton::play::{apply_stack, ClipStack, Frames};
+use crate::common::skeleton::play::{apply_stack, ClipStack, Frames, Layer};
 use crate::common::skeleton::state::{AnimationState, BodyRequests};
 use crate::game::player::{step_player, LocalPlayer, PhysicsBody, Player, ViewMode};
 use crate::game::skeleton::{
@@ -126,7 +126,11 @@ pub fn update_hitboxes(
                 carry_frame(skeleton, &pose, &root, aim).unwrap_or(root),
                 &ground,
             );
-            apply_stack(stack, layer_clips, skeleton, &mut pose, &frames, None);
+            // Not the flinch: it is started by the last hit and run on frame
+            // time, so the next shot would be tested against a jolt whose size
+            // depends on the server's frame rate.
+            let held = ClipStack(stack.0.iter().filter(|playing| playing.layer != Layer::Flinch).cloned().collect());
+            apply_stack(&held, layer_clips, skeleton, &mut pose, &frames, None);
         }
         // A body shown rather than simulated has no stance; infer it from the
         // animation.

@@ -797,8 +797,13 @@ fn default_pole(chain: ChainRef) -> Vec3 {
 /// a reload does not snap the hand back.
 pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton) -> [Vec3; 2] {
     let mut offsets = [Vec3::ZERO; 2];
-    let mut ranked: Vec<&Playing> = stack.0.iter().collect();
-    ranked.sort_by_key(|playing| playing.layer);
+    if stack.0.is_empty() {
+        return offsets;
+    }
+    // Ranked without sorting a copy: this runs for every holding body every frame.
+    let ranked = Layer::ALL
+        .into_iter()
+        .flat_map(|layer| stack.0.iter().filter(move |playing| playing.layer == layer));
 
     for playing in ranked {
         let shown = (playing.weight * playing.strength).clamp(0.0, 1.0);

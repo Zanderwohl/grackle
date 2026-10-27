@@ -6,7 +6,6 @@
 //! A bad entry is dropped with a line saying why; a taunt that does not load
 //! is one nobody can start, which is something you can see.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
@@ -76,6 +75,11 @@ impl TauntTurning {
         let towards = |from: f32, by: f32| from + by.clamp(-step, step);
         let yaw_by = (aim.0 - body.0 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
             - std::f32::consts::PI;
+        // Arrived: the aim itself, whole turns and all, so a caught-up body is
+        // equal to its aim and not a turn off it.
+        if yaw_by.abs() <= step && (aim.1 - body.1).abs() <= step {
+            return aim;
+        }
         (towards(body.0, yaw_by), towards(body.1, aim.1 - body.1))
     }
 }
@@ -138,14 +142,14 @@ struct TauntEntry {
 
 /// Lowest priority first; a later pack replaces a taunt's whole entry.
 pub fn load_taunts(assets: &Assets, packs: &[PathBuf]) -> Taunts {
-    let mut taunts = BTreeMap::new();
+    let mut taunts = Vec::new();
     for pack in packs {
         load_pack(assets, pack, &mut taunts);
     }
-    Taunts(taunts.into_values().collect())
+    Taunts(taunts)
 }
 
-fn load_pack(assets: &Assets, pack: &Path, taunts: &mut BTreeMap<String, Taunt>) {
+fn load_pack(assets: &Assets, pack: &Path, taunts: &mut Vec<Taunt>) {
     let named = format!("{}/{TAUNTS_FILE}", pack.display());
     let text = match assets.read(pack, TAUNTS_FILE) {
         Ok(bytes) => match String::from_utf8(bytes) {
@@ -158,16 +162,21 @@ fn load_pack(assets: &Assets, pack: &Path, taunts: &mut BTreeMap<String, Taunt>)
     merge(&named, &text, taunts);
 }
 
-fn merge(named: &str, text: &str, taunts: &mut BTreeMap<String, Taunt>) {
-    let file: BTreeMap<String, TauntEntry> = match toml::from_str(text) {
+/// In file order; a later pack's entry replaces an earlier one where it stood.
+fn merge(named: &str, text: &str, taunts: &mut Vec<Taunt>) {
+    let file: toml::Table = match toml::from_str(text) {
         Ok(file) => file,
         Err(e) => return error!("{named} will not parse: {e}"),
     };
-    for (key, entry) in file {
-        match check(&key, entry) {
-            Ok(taunt) => {
-                taunts.insert(key, taunt);
-            }
+    for (key, value) in file {
+        let checked = TauntEntry::deserialize(value)
+            .map_err(|e| e.to_string())
+            .and_then(|entry| check(&key, entry));
+        match checked {
+            Ok(taunt) => match taunts.iter_mut().find(|known| known.key == key) {
+                Some(known) => *known = taunt,
+                None => taunts.push(taunt),
+            },
             Err(why) => warn!("{named}: `{key}` is dropped: {why}"),
         }
     }
@@ -217,9 +226,18 @@ mod tests {
     use super::*;
 
     fn parse(text: &str) -> Taunts {
-        let mut taunts = BTreeMap::new();
+        let mut taunts = Vec::new();
         merge("test.toml", text, &mut taunts);
-        Taunts(taunts.into_values().collect())
+        Taunts(taunts)
+    }
+
+    #[test]
+    fn the_first_taunt_is_the_first_in_its_file() {
+        let taunts = parse(
+            "[wave]\nclip = \"x\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\n\
+             [conga]\nclip = \"y\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\n",
+        );
+        assert_eq!(taunts.first().unwrap().key, "wave", "the taunts were sorted by name");
     }
 
     #[test]
@@ -258,10 +276,15 @@ mod tests {
         assert!((yaw - step).abs() < 1e-5, "{yaw}");
         assert!((pitch + 0.5).abs() < 1e-5, "a turn within the rate was held back: {pitch}");
 
-        // Three whole turns and a little to the left: a little to the left.
-        let spun = -0.1 + 3.0 * std::f32::consts::TAU;
+        // Three whole turns and well to the left: a step to the left.
+        let spun = -1.5 + 3.0 * std::f32::consts::TAU;
         let (yaw, _) = TauntTurning::AtMost(90.0).follow(body, (spun, 0.0), 0.5);
-        assert!((yaw + 0.1).abs() < 1e-4, "the body went the long way round: {yaw}");
+        assert!((yaw + step).abs() < 1e-4, "the body went the long way round: {yaw}");
+
+        // Within a step it arrives on the aim itself, whole turns and all.
+        let near = -0.1 + 3.0 * std::f32::consts::TAU;
+        let (yaw, _) = TauntTurning::AtMost(90.0).follow(body, (near, 0.0), 0.5);
+        assert_eq!(yaw, near, "an arrived body is a turn off its aim");
     }
 
     #[test]
