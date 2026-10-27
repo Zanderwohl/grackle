@@ -23,6 +23,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::damage::Damageable;
+use crate::common::fonts::DisplayFont;
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalogue};
 use crate::game::player::LocalPlayer;
 use crate::game::viewmodel::VIEWMODEL_CAMERA_ORDER;
@@ -75,6 +76,7 @@ pub struct HudPlugin;
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SafeZoneOutline>()
+            .init_resource::<DisplayFont>()
             .add_systems(
                 Update,
                 (
@@ -117,6 +119,7 @@ fn spawn_the_hud(
     mut commands: Commands,
     bodies: Query<Entity, Added<LocalPlayer>>,
     existing: Query<(), With<HudRoot>>,
+    font: Res<DisplayFont>,
 ) {
     if bodies.is_empty() || !existing.is_empty() {
         return;
@@ -133,7 +136,7 @@ fn spawn_the_hud(
         },
         // A full-screen node would otherwise swallow the pause menu's clicks.
         Pickable::IGNORE,
-        children![crosshair(), safe_zone()],
+        children![crosshair(), safe_zone(&font.0)],
     ));
 }
 
@@ -141,7 +144,7 @@ fn spawn_the_hud(
 /// `aspect_ratio`: with that, Taffy re-derived the height from a clamped width,
 /// and on a portrait window the readouts floated halfway up the screen.
 /// Narrower than 4:3, `max_width` makes it the window.
-fn safe_zone() -> impl Bundle {
+fn safe_zone(font: &Handle<Font>) -> impl Bundle {
     (
         SafeZone,
         Node {
@@ -153,7 +156,7 @@ fn safe_zone() -> impl Bundle {
         // Drawn inside the box, so it is on screen when the box is the window.
         Outline::new(Val::Px(2.0), Val::Px(-2.0), Color::NONE),
         Pickable::IGNORE,
-        children![health_readout(), weapon_readout()],
+        children![health_readout(font), weapon_readout(font)],
     )
 }
 
@@ -195,17 +198,17 @@ fn crosshair() -> impl Bundle {
     )
 }
 
-fn text(kind: HudText, size: f32, alpha: f32) -> impl Bundle {
+fn text(font: &Handle<Font>, kind: HudText, size: f32, alpha: f32) -> impl Bundle {
     (
         kind,
         Text::new(""),
-        TextFont { font_size: bevy::text::FontSize::Px(size), ..default() },
+        TextFont { font: font.into(), font_size: bevy::text::FontSize::Px(size), ..default() },
         TextColor(Color::srgba(1.0, 1.0, 1.0, alpha)),
         Pickable::IGNORE,
     )
 }
 
-fn health_readout() -> impl Bundle {
+fn health_readout(font: &Handle<Font>) -> impl Bundle {
     (
         Node {
             position_type: PositionType::Absolute,
@@ -214,13 +217,13 @@ fn health_readout() -> impl Bundle {
             ..default()
         },
         Pickable::IGNORE,
-        children![text(HudText::Health, BIG, 1.0)],
+        children![text(font, HudText::Health, BIG, 1.0)],
     )
 }
 
 /// The name, a reload notice when there is one, then the loaded count large
 /// and the reserve small beside it, sharing a baseline.
-fn weapon_readout() -> impl Bundle {
+fn weapon_readout(font: &Handle<Font>) -> impl Bundle {
     (
         Node {
             position_type: PositionType::Absolute,
@@ -233,8 +236,8 @@ fn weapon_readout() -> impl Bundle {
         },
         Pickable::IGNORE,
         children![
-            text(HudText::WeaponName, SMALL, 0.85),
-            (text(HudText::Reloading, SMALL, 0.85), Node { display: Display::None, ..default() }),
+            text(font, HudText::WeaponName, SMALL, 0.85),
+            (text(font, HudText::Reloading, SMALL, 0.85), Node { display: Display::None, ..default() }),
             (
                 Node {
                     align_items: AlignItems::Baseline,
@@ -243,8 +246,8 @@ fn weapon_readout() -> impl Bundle {
                 },
                 Pickable::IGNORE,
                 children![
-                    text(HudText::Loaded, BIG, 1.0),
-                    text(HudText::Reserve, SMALL, 0.85),
+                    text(font, HudText::Loaded, BIG, 1.0),
+                    text(font, HudText::Reserve, SMALL, 0.85),
                 ],
             ),
         ],

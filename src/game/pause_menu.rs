@@ -4,6 +4,7 @@
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
+use crate::common::fonts::DisplayFont;
 use crate::get;
 
 /// Whether the pause menu is showing.
@@ -26,6 +27,7 @@ pub struct PauseMenuPlugin;
 impl Plugin for PauseMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PauseMenu>()
+            .init_resource::<DisplayFont>()
             .add_systems(
                 Update,
                 (
@@ -55,6 +57,7 @@ fn show_or_hide(
     window: Query<Entity, With<bevy::window::PrimaryWindow>>,
     mode: Res<State<AppMode>>,
     latch: Option<ResMut<crate::game::player::InputLatch>>,
+    font: Res<DisplayFont>,
 ) {
     for root in &existing {
         commands.entity(root).despawn();
@@ -81,7 +84,11 @@ fn show_or_hide(
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
             children![(
                 Text::new(get!("pause.title")),
-                TextFont { font_size: bevy::text::FontSize::Px(42.0), ..default() },
+                TextFont {
+                    font: (&font.0).into(),
+                    font_size: bevy::text::FontSize::Px(42.0),
+                    ..default()
+                },
                 TextColor(Color::WHITE),
             )],
         ));
