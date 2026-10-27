@@ -347,7 +347,8 @@ primary and the right its secondary — held, for anything automatic — and
 **`R`** reloads. **`H`** toggles humiliation, a debug key until there are
 rounds to lose: hands up, no weapon, no firing, third person. **`G`** starts
 the first taunt in `assets/default/taunts.toml` (a wave, which ends by itself;
-`G` again ends it early), and works while humiliated, as in TF2; each taunt states what it claims, whether it
+`G` again ends it early), and works while humiliated, as in TF2; nobody
+crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
 camera) can turn. What each slot
 holds is a property of the class, which is read off disk; see "What a weapon is" below.
@@ -1725,9 +1726,14 @@ short ends it, and a body seen mid-reload starts it partway. The clip is
 *fitted* to the weapon's reload time (`Performance::start_fitted`), since that
 is gameplay and differs per weapon; `body_reload` on the body and `reload` on
 the viewmodel, each falling back to the shared `animations/reload.gpa`.
+**A clip moves a hand by moving its grip**: an arm effector in `Space::Grip`
+is an offset from that hand's grip in the weapon's axes, read by
+`grip_offsets` and solved by the grip, so the shared reload takes the support
+hand to the magazine well and back without a second solver over the arms.
 
 **A body flinches when it is hurt** ([`src/game/flinch.rs`](src/game/flinch.rs)),
-from the `DamageDealt` every machine already reads. The flinch layer claims
+from the `DamageDealt` every machine already reads, as hard as the hit hurt
+(`Playing::strength`, not the weight, which `fade` owns). The flinch layer claims
 nothing, so it composes onto whatever won — a taunt included — and one of four
 clips is picked by the way the hit travelled in the body's own frame. Every
 `SkeletonAnimator` brings a `ClipStack` and `play_the_clips` takes bodies with

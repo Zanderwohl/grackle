@@ -2,7 +2,7 @@ name_key = "anim.clips.reload"
 length = 1.0
 clock = "seconds"
 looping = false
-note = "The reload every weapon shares: the weapon drops and rolls away for the length of it and comes back up. Fitted to the weapon's reload time, so this length is only the shape. Composed on the carry, so it is the hold that moves and the hands follow."
+note = "The reload every weapon shares: the weapon drops and rolls away for the length of it and comes back up. Fitted to the weapon's reload time, so this length is only the shape. Composed on the carry, so it is the hold that moves and the hands follow. The support hand slides back under the receiver as the weapon goes down, dips to the magazine well and comes back, close enough to the body that every build reaches it; a one-handed weapon has no support hand, so that track does nothing there."
 
 [[tracks]]
 combine = "compose"
@@ -94,3 +94,75 @@ to = [
 ]
 ease = "linear"
 
+[[tracks]]
+combine = "replace"
+space = "grip"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "effector"
+chain = "left_arm"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.2
+to = [
+    0.0,
+    -0.03,
+    0.18,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.4
+to = [
+    0.0,
+    -0.07,
+    0.24,
+]
+ease = "linear"
+
+[[tracks.channel.keys]]
+at = 0.55
+to = [
+    0.0,
+    -0.07,
+    0.24,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 0.7
+to = [
+    0.0,
+    -0.03,
+    0.18,
+]
+ease = "linear"
+
+[[tracks.channel.keys]]
+at = 0.8
+to = [
+    0.0,
+    -0.03,
+    0.18,
+]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"

@@ -492,6 +492,7 @@ body = "Body"
 carry = "Carry"
 shoulders = "Shoulders"
 weapon = "Weapon"
+grip = "Grip"
 eye = "Eye"
 
 [anim.unit]

@@ -61,6 +61,12 @@ impl Condition {
         }
     }
 
+    /// A taunt's clip is authored standing, so a taunting body stands up as
+    /// soon as there is room, crouch held or not.
+    pub fn may_crouch(self) -> bool {
+        self.taunt.is_none()
+    }
+
     pub fn forces_third_person(self) -> bool {
         self.humiliated || self.taunt.is_some()
     }
@@ -286,6 +292,15 @@ mod tests {
     use super::*;
     use crate::common::skeleton::play::Playing;
     use crate::game::player::PlayerInput;
+
+    /// The bug was crouching mid-wave: a taunt's clip is authored standing.
+    #[test]
+    fn a_taunt_stands_the_body_up_and_humiliation_does_not() {
+        let taunting = Condition { taunt: Some(Taunts::shipped().first().unwrap().id), ..default() };
+        assert!(!taunting.may_crouch());
+        assert!(Condition::HUMILIATED.may_crouch(), "humiliation stopped a crouch, which TF2 allows");
+        assert!(Condition::default().may_crouch());
+    }
 
     #[test]
     fn h_humiliates_and_h_again_lets_go() {

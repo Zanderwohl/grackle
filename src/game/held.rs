@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{
-    apply_stack, ClipAssetsPlugin, ClipStack, Frames, Layer, LayerBlends, Regions,
+    apply_stack, grip_offsets, ClipAssetsPlugin, ClipStack, Frames, Layer, LayerBlends, Regions,
 };
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::weapon::{Equipped, WeaponCatalogue, WeaponId};
@@ -588,6 +588,7 @@ pub(crate) fn grip_the_weapon(
         &WeaponInHand,
         Option<&ClipStack>,
     )>,
+    clips: Res<Assets<Clip>>,
 ) {
     for (skeleton, mut pose, offset, held, weapon, stack) in &mut bodies {
         if !held.resolved || held.weapon.is_none() {
@@ -601,7 +602,8 @@ pub(crate) fn grip_the_weapon(
 
         let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
         let clipped = pose.clone();
-        grip_hands(skeleton, &mut pose, &root, &held.hold, &weapon.0, cover.map(|cover| cover < 1.0));
+        let grips = stack.map_or([Vec3::ZERO; 2], |stack| grip_offsets(stack, &clips, skeleton));
+        grip_hands(skeleton, &mut pose, &root, &held.hold, &weapon.0, cover.map(|cover| cover < 1.0), grips);
 
         for (arm, cover) in arms.into_iter().zip(cover) {
             if cover <= 0.0 || cover >= 1.0 {
@@ -1057,6 +1059,52 @@ mod tests {
         let span = gripped.distance(rest);
         assert!(shared.distance(rest) > 0.2 * span, "the hand stayed where the clip left it");
         assert!(shared.distance(gripped) > 0.2 * span, "the hand snapped onto the weapon");
+    }
+
+    /// The shared reload takes the support hand off its grip to the magazine
+    /// well and back: the grip solves onto where the clip moved it, wherever
+    /// the clip has moved the weapon, and every build reaches the whole way, so
+    /// no hand is left behind partway.
+    #[test]
+    fn a_reload_takes_the_support_hand_off_its_grip_and_back() {
+        let packs = [std::path::PathBuf::from("assets/default")];
+        let reload = crate::common::clip_file::load_named_clip(&Default::default(), &packs, "reload")
+            .expect("the default pack ships no reload");
+        let hold = HoldSpec::default();
+        assert!(hold.two_handed);
+
+        for class in Class::iter() {
+            for step in 0..=20 {
+                let time = reload.length * step as f32 / 20.0;
+                let mut world = World::new();
+                let body = body_holding(&mut world, class, 0.0);
+                let clip = world.resource_mut::<Assets<Clip>>().add(reload.clone());
+                let stack = ClipStack(vec![Playing::new(Layer::Weapon, clip, time)]);
+                world.entity_mut(body).insert(stack.clone());
+                world.run_system_once(place_the_weapon).unwrap();
+                world.run_system_once(play_the_clips).unwrap();
+                world.run_system_once(grip_the_weapon).unwrap();
+
+                let skeleton = world.get::<Skeleton>(body).unwrap().clone();
+                let pose = world.get::<Pose>(body).unwrap().clone();
+                let weapon = world.get::<WeaponInHand>(body).unwrap().0;
+                let index = skeleton.index_of(bone::HAND_L).unwrap();
+                let hand = skeleton.posed_bones(&pose, &Transform::IDENTITY)[index].head;
+                let offset = grip_offsets(&stack, world.resource::<Assets<Clip>>(), &skeleton)[1];
+                let wanted = weapon.transform_point(hold.support().unwrap() + offset);
+                assert!(
+                    hand.distance(wanted) < 0.02,
+                    "{class:?}'s support hand is {} off where the reload put it at {time}",
+                    hand.distance(wanted),
+                );
+                if step == 10 {
+                    assert!(offset.length() > 0.1, "the reload did not take the hand off its grip");
+                }
+                if step == 20 {
+                    assert!(offset.length() < 1e-5, "the reload did not bring the hand back");
+                }
+            }
+        }
     }
 
     /// A carry is in fractions of arm length so it retargets; a class whose

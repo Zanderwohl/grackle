@@ -89,6 +89,15 @@ fn load_flinch_clips(packs: Res<PackAssets>, mut clips: ResMut<Assets<Clip>>, mu
     }
 }
 
+/// A hit this big flinches fully; anything bigger flinches no more.
+const FULL_FLINCH_DAMAGE: f32 = 60.0;
+/// The least a hit flinches, so an afterburn tick still shows.
+const SLIGHTEST_FLINCH: f32 = 0.2;
+
+fn strength_of(amount: u32) -> f32 {
+    (amount as f32 / FULL_FLINCH_DAMAGE).clamp(SLIGHTEST_FLINCH, 1.0)
+}
+
 fn is_a_flinch(layer: Layer) -> bool {
     layer == Layer::Flinch
 }
@@ -96,10 +105,12 @@ fn is_a_flinch(layer: Layer) -> bool {
 /// Every hit starts its body's flinch again from the top, in the direction
 /// the hit travelled: from the attacker's body where there is one to look at,
 /// otherwise away from where it landed (your own rocket, the map, an attacker
-/// already dead).
+/// already dead). As strong as the hit, or as what is left of the flinch it
+/// interrupts if that is more, so a pistol shot mid-rocket does not shrink it.
 fn start_flinches(
     mut hits: MessageReader<DamageDealt>,
     clips: Res<FlinchClips>,
+    assets: Res<Assets<Clip>>,
     attackers: Query<(Entity, &PlayerId, &GlobalTransform)>,
     mut bodies: Query<(&GlobalTransform, &mut ClipStack)>,
 ) {
@@ -117,8 +128,19 @@ fn start_flinches(
         let travel = placed.rotation().inverse() * (at - from);
 
         let Some(clip) = clips.of(Push::of(travel)) else { continue };
+        let left = stack
+            .0
+            .iter()
+            .filter(|playing| is_a_flinch(playing.layer) && !playing.leaving)
+            .map(|playing| {
+                let length = assets.get(&playing.clip).map_or(0.0, |clip| clip.length);
+                let through = if length > 0.0 { (playing.time / length).min(1.0) } else { 1.0 };
+                playing.strength * (1.0 - through)
+            })
+            .fold(0.0, f32::max);
         if let Some(playing) = stack.keep(is_a_flinch, Some((Layer::Flinch, clip))) {
             playing.time = 0.0;
+            playing.strength = strength_of(hit.amount).max(left);
         }
     }
 }
@@ -230,6 +252,42 @@ mod tests {
         assert!(flinch(&world).unwrap().leaving, "the flinch outlived its clip");
     }
 
+    /// A hit flinches as hard as it hurt; a small one landing straight after a
+    /// big one keeps most of the big one's jolt rather than shrinking it.
+    #[test]
+    fn a_flinch_is_as_strong_as_the_hit() {
+        let mut world = World::new();
+        world.init_resource::<Messages<DamageDealt>>();
+        let mut assets = Assets::<Clip>::default();
+        let clip = assets.add(Clip { length: 0.4, ..default() });
+        world.insert_resource(assets);
+        world.insert_resource(FlinchClips([Some(clip.clone()), Some(clip.clone()), Some(clip.clone()), Some(clip)]));
+        let body = world.spawn((GlobalTransform::IDENTITY, ClipStack::default())).id();
+        let hit = |world: &mut World, amount: u32| {
+            world.write_message(DamageDealt {
+                target: body,
+                source: DamageSource::World,
+                amount,
+                remaining: 50,
+                point: Vec3::new(0.0, 1.0, -1.0),
+            });
+            world.run_system_once(start_flinches).unwrap();
+            // A fresh reader per run would read every earlier hit again.
+            world.resource_mut::<Messages<DamageDealt>>().clear();
+            world.get::<ClipStack>(body).unwrap().0.iter().find(|playing| !playing.leaving).unwrap().strength
+        };
+
+        assert_eq!(hit(&mut world, 90), 1.0, "a rocket did not flinch fully");
+        world.get_mut::<ClipStack>(body).unwrap().0[0].time = 0.1;
+        let after = hit(&mut world, 3);
+        assert!((after - 0.75).abs() < 1e-5, "a tick a quarter into a full flinch left {after}");
+
+        world.get_mut::<ClipStack>(body).unwrap().0[0].time = 0.4;
+        assert!((hit(&mut world, 30) - 0.5).abs() < 1e-5, "half the full damage is not half a flinch");
+        world.get_mut::<ClipStack>(body).unwrap().0[0].time = 0.4;
+        assert_eq!(hit(&mut world, 1), SLIGHTEST_FLINCH, "a scratch did not flinch at all");
+    }
+
     /// A body nobody steers — an animation grid's — flinches too: it has an
     /// animator, so a stack, and the stack is played without a `Player`.
     #[test]
@@ -258,7 +316,7 @@ mod tests {
         world.write_message(DamageDealt {
             target: body,
             source: DamageSource::World,
-            amount: 10,
+            amount: 90,
             remaining: 90,
             point: Vec3::new(0.0, 1.0, -1.0),
         });

@@ -292,11 +292,13 @@ pub fn grip_with(
     hold: &HoldSpec,
     weapon: &Transform,
 ) -> [Reach; 2] {
-    grip_hands(skeleton, pose, root, hold, weapon, [true; 2])
+    grip_hands(skeleton, pose, root, hold, weapon, [true; 2], [Vec3::ZERO; 2])
 }
 
 /// [`grip_with`], solving only the hands in `which`, trigger hand first. A
-/// hand left out is untouched and reports `Impossible`.
+/// hand left out is untouched and reports `Impossible`. Each grip is moved by
+/// its `offsets` entry, in the weapon's axes, keeping the hand's rotation:
+/// what a clip's `Space::Grip` tracks ask for.
 pub fn grip_hands(
     skeleton: &Skeleton,
     pose: &mut Pose,
@@ -304,6 +306,7 @@ pub fn grip_hands(
     hold: &HoldSpec,
     weapon: &Transform,
     which: [bool; 2],
+    offsets: [Vec3; 2],
 ) -> [Reach; 2] {
     let mut reached = [Reach::Impossible; 2];
     let hands = [
@@ -312,7 +315,8 @@ pub fn grip_hands(
     ];
 
     for (index, (chain, hand, side, frame)) in hands.into_iter().enumerate() {
-        let Some(frame) = frame.filter(|_| which[index]) else { continue };
+        let Some(mut frame) = frame.filter(|_| which[index]) else { continue };
+        frame.translation += offsets[index];
         let placed = weapon.mul_transform(frame);
         reached[index] = reach_or_leave(skeleton, pose, root, &chain, placed.translation, root.rotation * ik::elbow_pole(side));
         if reached[index] == Reach::Reached {

@@ -18,9 +18,9 @@ use crate::common::skeleton::{humanoid, Pose, Skeleton};
 use crate::game::body_mesh::BodyTint;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::document::PropEditor;
-use crate::common::skeleton::play::{apply_stack, ClipStack, Frames};
+use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
 use crate::prop::archetype::{hat_transform, Archetype};
-use crate::prop::hold::{carry_frame, grip_with, weapon_transform};
+use crate::prop::hold::{carry_frame, grip_hands, weapon_transform};
 
 /// Which class is standing there, if any. View state, not part of the document.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -266,7 +266,11 @@ pub fn pose_the_figure(
         }
 
         if stage.holding {
-            reach.0 = grip_with(skeleton, &mut standing, &root, &hold, &placed);
+            let grips = match (performance.as_deref(), clips.as_deref()) {
+                (Some(performance), Some(clips)) => grip_offsets(&performance.0, clips, skeleton),
+                _ => [Vec3::ZERO; 2],
+            };
+            reach.0 = grip_hands(skeleton, &mut standing, &root, &hold, &placed, [true; 2], grips);
         }
 
         *pose = standing;
@@ -289,7 +293,7 @@ pub fn clear_the_figure(
 mod tests {
     use super::*;
     use crate::common::skeleton::rig::bone;
-    use crate::prop::hold::HoldSpec;
+    use crate::prop::hold::{grip_with, HoldSpec};
 
     fn staged(stage: FigureStage, mode: crate::common::app_mode::AppMode) -> (World, Entity) {
         use bevy::ecs::system::RunSystemOnce;

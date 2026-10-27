@@ -27,10 +27,10 @@ use crate::common::team::Team;
 use crate::common::weapon::WeaponId;
 use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
 use crate::common::skeleton::clip::Clip;
-use crate::common::skeleton::play::{apply_stack, ClipStack, Frames};
+use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
 use crate::game::held::{perform, HeldModel, HeldPart, Performance, SharedWeaponClips};
 use crate::game::player::{place_camera, LocalPlayer, PlayerCamera, ViewMode, PLAY_CAMERA_ORDER};
-use crate::prop::hold::grip_with;
+use crate::prop::hold::grip_hands;
 
 pub const VIEWMODEL_LAYER: usize = crate::common::render_layers::VIEWMODEL;
 
@@ -55,7 +55,7 @@ pub struct ViewmodelPart;
 pub struct ViewmodelArm {
     /// Index into [`Skeleton::posed_bones`].
     bone: usize,
-    /// Index into [`grip_with`]'s answer: 0 trigger hand, 1 support.
+    /// Index into [`grip_hands`]'s answer: 0 trigger hand, 1 support.
     hand: usize,
 }
 
@@ -89,6 +89,8 @@ pub struct Viewmodel {
     /// Where the weapon was drawn this frame, after its clips: what the arms
     /// are solved onto.
     weapon: Option<Transform>,
+    /// Where the clips moved each hand's grip, trigger hand first.
+    grips: [Vec3; 2],
 }
 
 /// Everything [`place_the_viewmodel_arms`] reads, and nothing else.
@@ -107,6 +109,8 @@ struct ArmsKey {
     aspect: u32,
     /// The weapon as drawn, so a clip moving it re-solves the arms.
     weapon: [u32; 7],
+    /// The grips, so a clip taking a hand off the weapon does too.
+    grips: [[u32; 3]; 2],
 }
 
 fn bits(transform: &Transform) -> [u32; 7] {
@@ -282,6 +286,10 @@ fn place_the_viewmodel(
         if viewmodel.weapon != Some(placed) {
             viewmodel.weapon = Some(placed);
         }
+        let grips = grip_offsets(stack, &clips, skeleton);
+        if viewmodel.grips != grips {
+            viewmodel.grips = grips;
+        }
         for child in children.iter() {
             let Ok(mut transform) = parts.get_mut(child) else { continue };
             // Compared first: this runs every frame, and an unchanged
@@ -448,6 +456,7 @@ fn place_the_viewmodel_arms(
             fov: perspective.fov.to_bits(),
             aspect: aspect.to_bits(),
             weapon: bits(&weapon),
+            grips: viewmodel.grips.map(|grip| grip.to_array().map(f32::to_bits)),
         };
         if viewmodel.arms_placed_for == Some(key) {
             continue;
@@ -459,7 +468,7 @@ fn place_the_viewmodel_arms(
 
         // From rest: a camera that does not bob must not have arms that do.
         let mut pose = Pose::rest();
-        let reached = grip_with(skeleton, &mut pose, &root, held.hold(), &weapon);
+        let reached = grip_hands(skeleton, &mut pose, &root, held.hold(), &weapon, [true; 2], viewmodel.grips);
         let posed = skeleton.posed_bones(&pose, &root);
 
         for child in children.iter() {
@@ -514,7 +523,7 @@ mod tests {
     use crate::common::skeleton::humanoid;
     use crate::common::skeleton::ik::Reach;
     use crate::prop::document;
-    use crate::prop::hold::{HoldSpec, ViewmodelSpec};
+    use crate::prop::hold::{grip_with, HoldSpec, ViewmodelSpec};
 
     use super::*;
 

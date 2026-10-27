@@ -59,6 +59,11 @@ pub enum Space {
     Weapon,
     /// The eye, for a viewmodel clip.
     Eye,
+    /// An arm's own grip on the weapon: origin where that hand holds, axes the
+    /// weapon's. An arm effector here moves the grip rather than the hand, so
+    /// a key at zero is holding and a reload can take the support hand to a
+    /// magazine and back. Read by the grip, never solved by the clip.
+    Grip,
 }
 
 /// What a number on a key is measured in.

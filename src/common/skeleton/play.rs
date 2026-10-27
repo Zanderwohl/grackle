@@ -212,6 +212,8 @@ impl Frames<'_> {
                 .with_rotation(self.body.rotation)),
             Space::Weapon => self.weapon,
             Space::Eye => self.eye,
+            // `grip_offsets`' to read; the grip solves onto it.
+            Space::Grip => None,
         }
     }
 }
@@ -396,6 +398,10 @@ pub struct Playing {
     pub time: f32,
     /// `0..=1`.
     pub weight: f32,
+    /// `0..=1`: how far the clip moves what it plays, on top of `weight`.
+    /// Not how faded in it is, so it masks nothing less and [`ClipStack::fade`]
+    /// leaves it alone — a gentle flinch is not one stuck half-entered.
+    pub strength: f32,
     pub layer: Layer,
     /// Tracks outside these still play, unless a higher layer claims them.
     pub claims: Regions,
@@ -407,7 +413,7 @@ pub struct Playing {
 impl Playing {
     /// At full weight, claiming what its layer does.
     pub fn new(layer: Layer, clip: Handle<Clip>, time: f32) -> Playing {
-        Playing { clip, time, weight: 1.0, layer, claims: layer.claims(), leaving: false }
+        Playing { clip, time, weight: 1.0, strength: 1.0, layer, claims: layer.claims(), leaving: false }
     }
 
     /// At no weight, for [`ClipStack::fade`] to bring in.
@@ -784,9 +790,47 @@ fn default_pole(chain: ChainRef) -> Vec3 {
     }
 }
 
+/// Where the stack has moved each hand's grip, trigger hand first: metres
+/// from the grip, in the weapon's axes. Each clip's `Space::Grip` arm
+/// effector is laid over the clips beneath by how much it shows, as a track
+/// is; a clip that does not key a hand leaves it where it was, so a kick over
+/// a reload does not snap the hand back.
+pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton) -> [Vec3; 2] {
+    let mut offsets = [Vec3::ZERO; 2];
+    let mut ranked: Vec<&Playing> = stack.0.iter().collect();
+    ranked.sort_by_key(|playing| playing.layer);
+
+    for playing in ranked {
+        let shown = (playing.weight * playing.strength).clamp(0.0, 1.0);
+        let Some(clip) = clips.get(&playing.clip).filter(|_| shown > 0.0) else { continue };
+        let masked = stack.claimed_above(playing.layer);
+        let time = clip.wrap(playing.time);
+        for track in clip.tracks.iter().filter(|track| track.enabled && track.space == Space::Grip) {
+            let Channel::Effector { chain, keys, .. } = &track.channel else { continue };
+            let hand = match chain {
+                ChainRef::RightArm => 0,
+                ChainRef::LeftArm => 1,
+                ChainRef::LeftLeg | ChainRef::RightLeg => continue,
+            };
+            if masked.overlaps(Regions::of_track(&track.channel)) {
+                continue;
+            }
+            let time = track_time(track.timing, time, None);
+            let Some(to) = sample_key(keys, time, clip.length, clip.looping) else { continue };
+            let scale = metres_per(track.unit, skeleton);
+            let moved = Vec3::from_array(to.map(|axis| match axis {
+                Axis::Value(at) => at * scale,
+                Axis::Free | Axis::Ground { .. } => 0.0,
+            }));
+            offsets[hand] = offsets[hand].lerp(moved, shown);
+        }
+    }
+    offsets
+}
+
 /// Apply a whole stack, lowest layer first; within a layer, in stack order.
-/// A track in a region a higher layer claims is skipped. A partial-weight
-/// layer is applied to a copy and blended back with [`Pose::lerp`]; full
+/// A track in a region a higher layer claims is skipped. A layer shown at
+/// less than full weight or strength is applied to a copy and blended back with [`Pose::lerp`]; full
 /// weight skips the clone. Clips are looked up in `clips` as they are sampled.
 pub fn apply_stack(
     stack: &ClipStack,
@@ -801,7 +845,8 @@ pub fn apply_stack(
     ranked.sort_by_key(|playing| playing.layer);
 
     for playing in ranked {
-        if playing.weight <= 0.0 {
+        let shown = playing.weight * playing.strength;
+        if shown <= 0.0 {
             continue;
         }
         let Some(clip) = clips.get(&playing.clip) else {
@@ -809,7 +854,7 @@ pub fn apply_stack(
         };
         let masked = stack.claimed_above(playing.layer);
 
-        if playing.weight >= 1.0 {
+        if shown >= 1.0 {
             apply_masked(clip, playing.time, skeleton, pose, frames, weapon.as_deref_mut(), masked);
             continue;
         }
@@ -818,11 +863,11 @@ pub fn apply_stack(
         // The weapon blends by weight too.
         let was = weapon.as_deref().copied();
         apply_masked(clip, playing.time, skeleton, pose, frames, weapon.as_deref_mut(), masked);
-        *pose = Pose::lerp(&before, pose, playing.weight);
+        *pose = Pose::lerp(&before, pose, shown);
 
         if let (Some(placed), Some(was)) = (weapon.as_deref_mut(), was) {
-            placed.translation = was.translation.lerp(placed.translation, playing.weight);
-            placed.rotation = was.rotation.slerp(placed.rotation, playing.weight);
+            placed.translation = was.translation.lerp(placed.translation, shown);
+            placed.rotation = was.rotation.slerp(placed.rotation, shown);
         }
     }
 }
@@ -1300,6 +1345,48 @@ mod tests {
         }
     }
 
+    /// A grip track moves its hand by how much its clip shows; a clip above
+    /// that keys no hand leaves the hand where the one beneath put it.
+    #[test]
+    fn a_grip_offset_blends_and_an_unkeyed_clip_leaves_it() {
+        let rig = default_humanoid().clone();
+        let mut clips = Assets::<Clip>::default();
+        let reach = clips.add(Clip {
+            length: 1.0,
+            tracks: vec![Track {
+                space: Space::Grip,
+                channel: Channel::Effector {
+                    chain: ChainRef::LeftArm,
+                    pole: None,
+                    keys: vec![Key::all(0.0, [0.0, -0.1, 0.2], Interpolation::Linear)],
+                },
+                ..Track::rotation(bone::CHEST)
+            }],
+            ..Clip::default()
+        });
+        let kick = clips.add(Clip { length: 1.0, ..Clip::default() });
+
+        let full = grip_offsets(&ClipStack(vec![Playing::new(Layer::Weapon, reach.clone(), 0.0)]), &clips, &rig);
+        assert_eq!(full, [Vec3::ZERO, Vec3::new(0.0, -0.1, 0.2)], "the trigger hand moved, or the support did not");
+
+        let half = grip_offsets(
+            &ClipStack(vec![Playing { weight: 0.5, ..Playing::new(Layer::Weapon, reach.clone(), 0.0) }]),
+            &clips,
+            &rig,
+        );
+        assert!((half[1] - Vec3::new(0.0, -0.05, 0.1)).length() < 1e-6, "{}", half[1]);
+
+        let under_a_kick = grip_offsets(
+            &ClipStack(vec![
+                Playing::new(Layer::Weapon, reach, 0.0),
+                Playing::new(Layer::Weapon, kick, 0.0),
+            ]),
+            &clips,
+            &rig,
+        );
+        assert_eq!(under_a_kick, full, "a clip keying no hand snapped it back to the grip");
+    }
+
     #[test]
     fn a_layer_shows_as_much_of_itself_as_its_weight() {
         let rig = default_humanoid().clone();
@@ -1329,6 +1416,16 @@ mod tests {
             );
             pose.joint(bone::CHEST)
         };
+
+        let gentle = {
+            let mut pose = Pose::rest();
+            apply_stack(
+                &ClipStack(vec![Playing { strength: 0.5, ..Playing::new(Layer::Locomotion, clip.clone(), 0.0) }]),
+                &clips, &rig, &mut pose, &frames, None,
+            );
+            pose.joint(bone::CHEST)
+        };
+        assert!(gentle.angle_between(half) < 1e-5, "half strength is not half weight's pose");
 
         let none = {
             let mut pose = Pose::rest();

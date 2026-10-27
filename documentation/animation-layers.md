@@ -132,7 +132,10 @@ one, and its legs stand however hard the player presses forward. A body is
 also *described* from the movement its taunt allows rather than from the keys
 held (`describe_player_bodies`), so a stopped body is not told it is running
 and frozen mid-stride for want of ground covered. The two settings are independent on purpose: a taunt could claim the legs
-for a dance and still be shuffled across the floor slowly.
+for a dance and still be shuffled across the floor slowly. **Nobody crouches
+while taunting** (`Condition::may_crouch`): a taunt's clip is authored
+standing, so a crouched body stands up as soon as there is room. Humiliation
+still crouches, as in TF2.
 
 **So is turning.** `turning` is how far the *body* follows the aim: `locked`
 keeps the facing it started with, `at_most` turns it no faster than so many
@@ -316,10 +319,18 @@ either falls back to the shared `animations/reload.gpa`.
 
 - [x] Reload clips from `Ammo`, fitted, joined partway, cut short; the shared
       reload and the rocket launcher's own first-person one.
-- [ ] The support hand still holds the weapon throughout; a reload that
-      takes the hand to a magazine or the tube's breech needs the hand keyed
-      off the weapon, which a layer above the hold can do and this one does
-      not yet.
+- [x] The support hand leaves the weapon. A hand is moved **by its grip, not
+      past it**: an arm effector in `Space::Grip` is an offset from that
+      hand's own grip, in the weapon's axes, which `grip_offsets` reads off
+      the stack and `grip_hands` solves onto — so zero is holding, the
+      per-class support grip is honoured, and fading the clip in or out slides
+      the hand rather than popping it. A clip that keys no hand leaves the
+      hand where the clip beneath put it, so a kick over a reload does not
+      snap it back. The body, the viewmodel and the editor's figure all read
+      it. The shared reload slides the hand back under the receiver as the
+      weapon drops, dips to the magazine well and returns, on a path every
+      build reaches: further out, the Heavy and the Civilian already lost the
+      support grip under the reload's drop.
 
 ### A flinch composes; it does not rank
 
@@ -333,9 +344,13 @@ frame: from the attacker's body where there is one, otherwise away from where
 it landed. Chest and neck only, so a flinch never lifts a planted foot.
 
 - [x] Flinch layer, four directional clips, restarted per hit.
-- [ ] Strength by damage: every hit flinches the same. A weight below one
-      would be faded back up by `ClipStack::fade`, so a scale needs to be its
-      own field on `Playing` rather than the weight.
+- [x] Strength by damage: `Playing::strength`, beside the weight, is how far
+      a clip moves what it plays and not how faded in it is, so it masks no
+      less and `fade` leaves it alone. A hit of `FULL_FLINCH_DAMAGE` (60) or
+      more flinches fully, the least is `SLIGHTEST_FLINCH`, and a hit
+      landing mid-flinch takes the larger of its own strength and what is
+      left of the one it interrupts, so an afterburn tick does not shrink a
+      rocket's jolt.
 
 ## Open questions
 

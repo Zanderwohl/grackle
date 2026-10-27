@@ -603,7 +603,8 @@ pub fn step_player(
         (player.yaw, player.pitch) = condition
             .turning(taunts.as_deref())
             .follow((player.yaw, player.pitch), (input.yaw, input.pitch), dt);
-        change_stance(&mut stance, &mut body, player.on_ground(), input.crouch, &world);
+        let crouch = input.crouch && condition.may_crouch();
+        change_stance(&mut stance, &mut body, player.on_ground(), crouch, &world);
         let half = stance.half_extents();
         let wish = Vec3::new(input.movement.x, 0.0, -input.movement.y).normalize_or_zero();
         let wish = Quat::from_rotation_y(player.yaw) * wish;
