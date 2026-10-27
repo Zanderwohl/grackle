@@ -24,6 +24,9 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::damage::Damageable;
 use crate::common::fonts::DisplayFont;
+use crate::common::palette::{Ink, Swatch};
+use crate::common::team::Team;
+use crate::common::ui_shape::{Corner, Path, ShapeMaterial, ShapeStyle};
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalogue};
 use crate::game::player::LocalPlayer;
 use crate::game::viewmodel::VIEWMODEL_CAMERA_ORDER;
@@ -46,6 +49,11 @@ const MARGIN_Y: f32 = 20.0;
 const BIG: f32 = 44.0;
 const SMALL: f32 = 22.0;
 
+/// Logical pixels, in each zone's own box.
+const ZONE_STROKE: f32 = 5.0;
+const ZONE_RIM: f32 = 5.0;
+const ZONE_DROP: Vec2 = Vec2::new(5.0, 6.0);
+
 /// Whether the safe zone is outlined. Survives rounds: it is a debug view,
 /// and somebody laying out the HUD wants it to stay on.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +67,110 @@ struct HudRoot;
 
 #[derive(Component)]
 struct SafeZone;
+
+/// A panel a readout sits on. The shape is fixed; its colours follow the
+/// local body's team.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+enum HudZone {
+    Health,
+    Ammo,
+}
+
+impl HudZone {
+    fn size(self) -> Vec2 {
+        match self {
+            HudZone::Health => Vec2::new(200.0, 48.0),
+            HudZone::Ammo => Vec2::new(280.0, 64.0),
+        }
+    }
+
+    /// How far the panel's box sits above its readout's bottom. The ammo
+    /// panel's bottom edge runs through the middle of the weapon name.
+    fn raised(self) -> f32 {
+        match self {
+            HudZone::Health => 0.0,
+            HudZone::Ammo => 2.0,
+        }
+    }
+
+    /// Leaning trapezoids, the two leaning towards the middle of the screen,
+    /// with big squircle corners on one diagonal and tight ones on the other.
+    /// The box is inset by the stroke and the drop so neither is cut off.
+    fn outline(self) -> Path {
+        let size = self.size();
+        let lo = Vec2::splat(ZONE_STROKE);
+        let hi = size - Vec2::splat(ZONE_STROKE) - ZONE_DROP;
+        let lean = 0.12 * (hi.y - lo.y);
+        let (big, small) = (Corner::squircle(34.0), Corner::squircle(10.0));
+        match self {
+            HudZone::Health => Path::rounded_polygon_each(
+                &[
+                    Vec2::new(lo.x + lean, lo.y),
+                    Vec2::new(hi.x, lo.y),
+                    Vec2::new(hi.x - lean, hi.y),
+                    Vec2::new(lo.x, hi.y),
+                ],
+                &[small, big, small, big],
+            ),
+            HudZone::Ammo => Path::rounded_polygon_each(
+                &[
+                    Vec2::new(lo.x, lo.y),
+                    Vec2::new(hi.x - lean, lo.y),
+                    Vec2::new(hi.x, hi.y),
+                    Vec2::new(lo.x + lean, hi.y),
+                ],
+                &[big, small, big, small],
+            ),
+        }
+    }
+
+    fn style(swatch: &Swatch) -> ShapeStyle {
+        ShapeStyle {
+            fill: swatch.base,
+            highlight: swatch.highlight,
+            shadow: swatch.shadow,
+            rim: ZONE_RIM,
+            stroke: Ink::Black.on(swatch),
+            stroke_width: ZONE_STROKE,
+            drop: swatch.deep.with_alpha(0.75),
+            drop_offset: ZONE_DROP,
+        }
+    }
+
+    /// Drawn behind the readout rather than being it, so the text can stand
+    /// out past the panel's edge. First among its siblings, so it is under
+    /// them.
+    fn panel(self) -> impl Bundle {
+        let size = self.size();
+        (
+            self,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                bottom: Val::Px(self.raised()),
+                width: Val::Px(size.x),
+                height: Val::Px(size.y),
+                ..default()
+            },
+            Pickable::IGNORE,
+        )
+    }
+
+    /// The readout over a panel: as wide, and centred on the panel rather
+    /// than on its drop shadow.
+    fn readout(self) -> Node {
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(MARGIN_Y),
+            width: Val::Px(self.size().x),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::End,
+            padding: UiRect::right(Val::Px(ZONE_DROP.x)),
+            ..default()
+        }
+    }
+}
 
 /// Which readout a `Text` is, so one system can write them all.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
@@ -82,7 +194,8 @@ impl Plugin for HudPlugin {
                 (
                     spawn_the_hud,
                     toggle_safe_zone_outline,
-                    (outline_the_safe_zone, fill_in_the_readouts),
+                    (outline_the_safe_zone, fill_in_the_readouts, dress_the_zones),
+                    paint_the_zones,
                 )
                     .chain()
                     .run_if(in_state(AppMode::Play)),
@@ -211,32 +324,29 @@ fn text(font: &Handle<Font>, kind: HudText, size: f32, alpha: f32) -> impl Bundl
 fn health_readout(font: &Handle<Font>) -> impl Bundle {
     (
         Node {
-            position_type: PositionType::Absolute,
             left: Val::Px(MARGIN_X),
-            bottom: Val::Px(MARGIN_Y),
-            ..default()
+            // Sits low enough that the panel cuts across the number.
+            padding: UiRect { right: Val::Px(ZONE_DROP.x), bottom: Val::Px(8.0), ..default() },
+            ..HudZone::Health.readout()
         },
         Pickable::IGNORE,
-        children![text(font, HudText::Health, BIG, 1.0)],
+        children![HudZone::Health.panel(), text(font, HudText::Health, BIG, 1.0)],
     )
 }
 
-/// The name, a reload notice when there is one, then the loaded count large
-/// and the reserve small beside it, sharing a baseline.
+/// A reload notice when there is one, the loaded count large and the reserve
+/// small beside it on one baseline, then the name. The notice goes on top so
+/// it pushes nothing the panel is lined up against.
 fn weapon_readout(font: &Handle<Font>) -> impl Bundle {
     (
         Node {
-            position_type: PositionType::Absolute,
             right: Val::Px(MARGIN_X),
-            bottom: Val::Px(MARGIN_Y),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::End,
             row_gap: Val::Px(2.0),
-            ..default()
+            ..HudZone::Ammo.readout()
         },
         Pickable::IGNORE,
         children![
-            text(font, HudText::WeaponName, SMALL, 0.85),
+            HudZone::Ammo.panel(),
             (text(font, HudText::Reloading, SMALL, 0.85), Node { display: Display::None, ..default() }),
             (
                 Node {
@@ -250,8 +360,55 @@ fn weapon_readout(font: &Handle<Font>) -> impl Bundle {
                     text(font, HudText::Reserve, SMALL, 0.85),
                 ],
             ),
+            text(font, HudText::WeaponName, SMALL, 0.85),
         ],
     )
+}
+
+/// Separate from spawning because there are no material assets in a test app
+/// with no renderer; the readouts still work without their panels.
+fn dress_the_zones(
+    mut commands: Commands,
+    zones: Query<(Entity, &HudZone), Added<HudZone>>,
+    materials: Option<ResMut<Assets<ShapeMaterial>>>,
+) {
+    let Some(mut materials) = materials else { return };
+    for (entity, &zone) in &zones {
+        let material = ShapeMaterial::from_path(
+            &zone.outline(),
+            zone.size(),
+            HudZone::style(&Swatch::neutral()),
+        );
+        commands.entity(entity).insert(MaterialNode(materials.add(material)));
+    }
+}
+
+/// Every frame, comparing first: a client is told its team after its body.
+fn paint_the_zones(
+    team: Option<Single<&Team, With<LocalPlayer>>>,
+    zones: Query<&MaterialNode<ShapeMaterial>, With<HudZone>>,
+    mut texts: Query<&mut TextColor, With<HudText>>,
+    materials: Option<ResMut<Assets<ShapeMaterial>>>,
+) {
+    let swatch = Swatch::of(team.map(|team| **team));
+    let style = HudZone::style(&swatch);
+    if let Some(mut materials) = materials {
+        for zone in &zones {
+            if materials.get(&zone.0).is_some_and(|m| m.style != style) {
+                if let Some(mut material) = materials.get_mut(&zone.0) {
+                    material.style = style;
+                }
+            }
+        }
+    }
+
+    let ink = swatch.text();
+    for mut colour in &mut texts {
+        let wanted = ink.with_alpha(colour.0.alpha());
+        if colour.0 != wanted {
+            colour.0 = wanted;
+        }
+    }
 }
 
 fn toggle_safe_zone_outline(

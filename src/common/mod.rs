@@ -6,6 +6,8 @@ pub mod dock;
 pub mod edit_menu;
 pub mod file_menu;
 pub mod fonts;
+pub mod palette;
+pub mod ui_shape;
 pub mod damage;
 pub mod team;
 pub mod weapon;
