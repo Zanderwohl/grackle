@@ -1,0 +1,525 @@
+name_key = "weapon.names.pill_launcher"
+next_id = 17
+
+[[features]]
+id = 0
+name = "Barrel"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 10
+radius = 0.045
+height = 0.42
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.24,
+    -0.33,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.3,
+    0.32,
+    0.34,
+]
+
+[[features]]
+id = 1
+name = "Bore"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 10
+radius = 0.034
+height = 0.5
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.24,
+    -0.33,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.3,
+    0.32,
+    0.34,
+]
+
+[[features]]
+id = 2
+name = "Drilled"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "subtract"
+target = 0
+tool = 1
+
+[[features]]
+id = 3
+name = "Drum"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.085
+height = 0.14
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.24,
+    -0.04,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.27,
+    0.36,
+    0.52,
+]
+
+[[features]]
+id = 4
+name = "Chamber 1"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.022
+height = 0.2
+
+[features.op.placement]
+origin = [
+    0.05,
+    0.24,
+    -0.04,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.27,
+    0.36,
+    0.52,
+]
+
+[[features]]
+id = 5
+name = "Drum 1"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "subtract"
+target = 3
+tool = 4
+
+[[features]]
+id = 6
+name = "Chamber 2"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.022
+height = 0.2
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.29,
+    -0.04,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.27,
+    0.36,
+    0.52,
+]
+
+[[features]]
+id = 7
+name = "Drum 2"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "subtract"
+target = 5
+tool = 6
+
+[[features]]
+id = 8
+name = "Chamber 3"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.022
+height = 0.2
+
+[features.op.placement]
+origin = [
+    -0.05,
+    0.24,
+    -0.04,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.27,
+    0.36,
+    0.52,
+]
+
+[[features]]
+id = 9
+name = "Drum 3"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "subtract"
+target = 7
+tool = 8
+
+[[features]]
+id = 10
+name = "Chamber 4"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.022
+height = 0.2
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.19,
+    -0.04,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.27,
+    0.36,
+    0.52,
+]
+
+[[features]]
+id = 11
+name = "Chambered"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "subtract"
+target = 9
+tool = 10
+
+[[features]]
+id = 12
+name = "Axle"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.012
+height = 0.2
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.24,
+    -0.04,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.3,
+    0.32,
+    0.34,
+]
+
+[[features]]
+id = 13
+name = "Grip"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.05,
+    0.15,
+    0.07,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.11,
+    -0.06,
+]
+rotation = [
+    0.21,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.13,
+    0.13,
+    0.15,
+]
+
+[[features]]
+id = 14
+name = "Stock"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.04,
+    0.07,
+    0.24,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.2,
+    0.15,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "wood"
+tint = [
+    0.41,
+    0.22,
+    0.13,
+]
+
+[[features]]
+id = 15
+name = "Butt"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.05,
+    0.13,
+    0.035,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.18,
+    0.285,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.13,
+    0.13,
+    0.15,
+]
+
+[[features]]
+id = 16
+name = "Sight"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.012,
+    0.04,
+    0.012,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.3,
+    -0.5,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.3,
+    0.32,
+    0.34,
+]
+
+[hold]
+grip = [
+    0.021,
+    0.07,
+    -0.001,
+]
+grip_rotation = [
+    -1.5707964,
+    1.3962634,
+    -1.279,
+]
+support = [
+    0.0,
+    0.0,
+    -0.25,
+]
+support_rotation = [
+    -1.374,
+    0.3441,
+    -1.2572,
+]
+two_handed = false
+carry = [
+    0.33,
+    -0.27,
+    -0.37,
+]
+carry_rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[viewmodel]
+across = [
+    1.1,
+    -2.0,
+]
+depth = 0.29
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[muzzle]
+at = [
+    0.0,
+    0.24,
+    -0.54,
+]
