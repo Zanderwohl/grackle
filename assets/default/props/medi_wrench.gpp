@@ -1,0 +1,277 @@
+name_key = "weapon.names.medi_wrench"
+next_id = 7
+
+[[features]]
+id = 0
+name = "Handle"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.045,
+    0.15,
+    0.06,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.11,
+    -0.06,
+]
+rotation = [
+    0.21,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.85,
+    0.85,
+    0.82,
+]
+
+[[features]]
+id = 1
+name = "Shaft"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.03,
+    0.035,
+    0.42,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.2,
+    -0.25,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.55,
+    0.57,
+    0.6,
+]
+
+[[features]]
+id = 2
+name = "Pommel"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.03
+height = 0.06
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.2,
+    -0.01,
+]
+rotation = [
+    -1.5707963,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.55,
+    0.57,
+    0.6,
+]
+
+[[features]]
+id = 3
+name = "Head"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.1,
+    0.05,
+    0.09,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.2,
+    -0.5,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.55,
+    0.57,
+    0.6,
+]
+
+[[features]]
+id = 4
+name = "Jaw"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.05,
+    0.06,
+    0.06,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.2,
+    -0.53,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.55,
+    0.57,
+    0.6,
+]
+
+[[features]]
+id = 5
+name = "Head"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "subtract"
+target = 3
+tool = 4
+
+[[features]]
+id = 6
+name = "Emitter"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "sphere"
+sides = 10
+rings = 8
+radius = 0.018
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.2,
+    -0.51,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.85,
+    0.12,
+    0.12,
+]
+
+[hold]
+grip = [
+    0.021,
+    0.07,
+    -0.001,
+]
+grip_rotation = [
+    -1.5707964,
+    1.3962634,
+    -1.279,
+]
+support = [
+    0.0,
+    0.0,
+    -0.25,
+]
+support_rotation = [
+    -1.374,
+    0.3441,
+    -1.2572,
+]
+two_handed = false
+carry = [
+    0.33,
+    -0.27,
+    -0.37,
+]
+carry_rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[viewmodel]
+across = [
+    1.1,
+    -2.0,
+]
+depth = 0.29
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[muzzle]
+at = [
+    0.0,
+    0.2,
+    -0.53,
+]
