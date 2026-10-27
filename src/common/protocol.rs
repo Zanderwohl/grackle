@@ -14,7 +14,7 @@ use lightyear::prelude::input::native::InputPlugin;
 use lightyear::prelude::*;
 
 use crate::common::class::Stance;
-use crate::common::damage::{Damageable, PlayerId};
+use crate::common::damage::{Armour, Damageable, PlayerId};
 use crate::common::skeleton::BodyRequests;
 use crate::game::player::{PhysicsBody, Player, PlayerInput};
 
@@ -39,6 +39,8 @@ impl Plugin for ProtocolPlugin {
         // Not predicted: a wrongly guessed kill is a body that falls over and
         // stands back up.
         app.component::<Damageable>().replicate();
+        app.component::<Armour>().replicate();
+        app.component::<crate::game::score::Standing>().replicate();
 
         // With `PhysicsBody`, everything a viewer needs to draw a body somebody
         // else drives, grid bodies included.

@@ -121,6 +121,57 @@ impl Damageable {
     }
 }
 
+/// Placeholder, like [`DEFAULT_HEALTH`]: per class once health is.
+pub const DEFAULT_MAX_ARMOUR: u32 = 100;
+
+/// The share of each hit armour takes while it lasts, as in Quake.
+pub const ARMOUR_ABSORBS: f32 = 2.0 / 3.0;
+
+/// A second pool in front of [`Damageable`]. Spent only by
+/// [`apply_damage`](crate::game::damage::apply_damage). A body starts with
+/// none.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Reflect, Serialize, Deserialize)]
+pub struct Armour {
+    points: u32,
+    max: u32,
+}
+
+impl Default for Armour {
+    fn default() -> Self {
+        Self { points: 0, max: DEFAULT_MAX_ARMOUR }
+    }
+}
+
+impl Armour {
+    pub fn points(&self) -> u32 {
+        self.points
+    }
+
+    pub fn max(&self) -> u32 {
+        self.max
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.points >= self.max
+    }
+
+    /// Returns what actually went on, capped at the maximum.
+    pub fn add(&mut self, amount: u32) -> u32 {
+        let added = amount.min(self.max - self.points.min(self.max));
+        self.points += added;
+        added
+    }
+
+    /// Takes [`ARMOUR_ABSORBS`] of a hit, rounded up so a 1-point hit is not
+    /// free of armour for ever, and returns what is left for health.
+    pub fn soak(&mut self, amount: u32) -> u32 {
+        let wanted = (amount as f32 * ARMOUR_ABSORBS).ceil() as u32;
+        let taken = wanted.min(self.points).min(amount);
+        self.points -= taken;
+        amount - taken
+    }
+}
+
 /// Linear from 1 at the centre to 0 at `radius`. Shared by splash damage and
 /// shove so a body is never thrown further than it was hurt. A radius `<= 0`
 /// reaches nothing.
@@ -235,6 +286,25 @@ pub struct Died {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn armour_takes_two_thirds_until_it_runs_out() {
+        let mut armour = Armour::default();
+        armour.add(10);
+        assert_eq!(armour.soak(9), 3);
+        assert_eq!(armour.points(), 4);
+        assert_eq!(armour.soak(30), 26, "took more than it had");
+        assert_eq!(armour.points(), 0);
+        assert_eq!(armour.soak(30), 30);
+    }
+
+    #[test]
+    fn armour_fills_to_its_maximum_and_no_further() {
+        let mut armour = Armour::default();
+        assert_eq!(armour.add(70), 70);
+        assert_eq!(armour.add(70), DEFAULT_MAX_ARMOUR - 70);
+        assert!(armour.is_full());
+    }
 
     struct Shift;
     impl EntityMapper for Shift {

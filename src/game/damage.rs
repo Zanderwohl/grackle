@@ -13,7 +13,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
-use crate::common::damage::{Damage, DamageDealt, Damageable, Died};
+use crate::common::damage::{Armour, Damage, DamageDealt, Damageable, Died};
 use crate::common::team::Allegiances;
 use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage};
 use crate::game::player::PlayerCamera;
@@ -92,15 +92,16 @@ impl Plugin for DamagePlugin {
     }
 }
 
-/// The only system that touches a health pool, and where teams are enforced
-/// (see [`crate::common::team`]).
+/// The only system that touches a health pool or [`Armour`], and where teams
+/// are enforced (see [`crate::common::team`]).
 ///
 /// A target with no [`Damageable`] is skipped: an explosion sweeps up whatever
 /// is nearby. A request at a teammate is dropped with no [`DamageDealt`], so
-/// no zero is drawn over a friend.
+/// no zero is drawn over a friend. The record is the whole hit, armour's share
+/// included: a number is what you did, not where it landed.
 pub fn apply_damage(
     mut requests: MessageReader<Damage>,
-    mut health: Query<&mut Damageable>,
+    mut health: Query<(&mut Damageable, Option<&mut Armour>)>,
     allegiances: Allegiances,
     mut dealt: MessageWriter<DamageDealt>,
 ) {
@@ -108,11 +109,16 @@ pub fn apply_damage(
         if !allegiances.may_hurt(request.source, request.target) {
             continue;
         }
-        let Ok(mut target) = health.get_mut(request.target) else { continue };
+        let Ok((mut target, armour)) = health.get_mut(request.target) else { continue };
 
+        // An emptied body's armour is not spent on it.
+        let through = match armour {
+            Some(mut armour) if target.is_alive() && armour.points() > 0 => armour.soak(request.amount),
+            _ => request.amount,
+        };
         // Written even at zero, so a debug harness can keep shooting an
         // emptied body.
-        let amount = target.apply(request.amount);
+        let amount = request.amount - through + target.apply(through);
         dealt.write(DamageDealt {
             target: request.target,
             source: request.source,
@@ -289,6 +295,26 @@ mod tests {
         world.run_system_once(apply_damage).unwrap();
 
         assert_eq!(world.get::<Damageable>(me).unwrap().health(), 60);
+    }
+
+    #[test]
+    fn armour_soaks_most_of_a_hit_and_the_record_is_the_whole_hit() {
+        let mut world = World::new();
+        world.init_resource::<Messages<Damage>>();
+        world.init_resource::<Messages<DamageDealt>>();
+        let mut armour = Armour::default();
+        armour.add(50);
+        let target = world.spawn((Damageable::with_health(100), armour)).id();
+        world.write_message(Damage { target, source: DamageSource::World, amount: 30, point: Vec3::ZERO });
+
+        world.run_system_once(apply_damage).unwrap();
+
+        assert_eq!(world.get::<Armour>(target).unwrap().points(), 30);
+        assert_eq!(world.get::<Damageable>(target).unwrap().health(), 90);
+        let messages = world.resource::<Messages<DamageDealt>>();
+        let mut cursor = messages.get_cursor();
+        let dealt: Vec<DamageDealt> = cursor.read(messages).copied().collect();
+        assert_eq!((dealt[0].amount, dealt[0].remaining), (30, 90));
     }
 
     /// A target with no health is skipped, not an error.

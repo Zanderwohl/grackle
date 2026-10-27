@@ -36,10 +36,9 @@ classes = ["mercenary"]
 # Each lands in the slot the class's loadout permits it in, until weapons
 # state their own slot.
 loadout = ["medi_wrench", "laser_rifle"]
-# Planned, each with the feature that reads it:
-# frag_limit = 20
+frag_limit = 20
+# Planned, with the feature that reads it:
 # self_damage = 0.5      # fraction of your own damage you take
-# armour_absorbs = 0.66  # fraction of each hit armour soaks up
 ```
 
 An entry is `deny_unknown_fields`, so a rule written before the game has it is
@@ -212,21 +211,29 @@ writer.
 
 **`apply_damage` is where it is spent**, and nowhere else, for the reason
 health is: two writers is a scoreboard that adds up to more than the map
-contains. Of each hit, `armour_absorbs` (Quake's two-thirds) comes off armour,
+contains. Of each hit, `ARMOUR_ABSORBS` (Quake's two-thirds) comes off armour,
 rounded up, until it runs out; the rest comes off health. Afterburn and your
 own splash go through `apply_damage` like anything else, so armour soaks them
 too. `DamageDealt` keeps reporting the whole hit, because a floating number is
 what you did, not where it landed; the armour share can be added to the record
 when something wants to draw it.
 
-**The max is per class**, a field in `classes.toml`, because a Heavy and a Scout
-should not carry the same plate. A body starts with none. `PickupKind::Armor`
+**The max is `DEFAULT_MAX_ARMOUR`**, a constant beside `DEFAULT_HEALTH`, and
+goes per class when health does: a Heavy and a Scout should not carry the same
+plate, but giving armour a per-class table before health has one would be two
+pools described in two places. Likewise the absorbed share is a constant until
+a mode wants a different one. Every `Player` requires an `Armour`, and a body
+starts with none.
+
+A pickup's share of a maximum is rounded up past float noise (`share` in
+`world_prop.rs`): `0.6 * 100.0` is `60.000002` in `f32`, which a plain `ceil`
+made 61 — for health and ammo packs too, before armour found it. `PickupKind::Armor`
 already exists and already has an amount as a fraction of the taker's max, so
-its arm in `give` is a few lines; the example pack gets an armour prop next to
-the health and ammo packs. Over-max armour that decays (Quake's red armour) is
+its arm in `give` is a few lines; the default pack ships `armour_pack.gpp` next
+to the health and ammo packs. Over-max armour that decays (Quake's red armour) is
 later.
 
-The HUD shows it beside health.
+The HUD shows it over the health number while there is any.
 
 ## Knockback
 
@@ -292,12 +299,14 @@ part of this plan.
 ## Scoring
 
 **A score belongs to the player, not the body** — the rule `Identity` already
-follows. Each player gets a replicated **`Standing`** entity on the authority:
-`PlayerId`, `PlayerColour`, frags, deaths. Replicated to everybody, because
-every machine draws the scoreboard. Made when the identity is made, despawned
-with the connection, and all of them cleared on **entering** Play, not leaving
-it — so the final standings are still there in the editor afterwards, where the
-next round is being built.
+follows. Each player gets a replicated **`Standing`** entity on the authority
+([`src/game/score.rs`](../src/game/score.rs)): `PlayerId`, team, colour, frags,
+deaths. Replicated to everybody, because every machine draws the scoreboard.
+`keep_standings` keys them on absence, the way bodies are: an identity with no
+standing gets one, a standing whose identity has gone (a client who left) goes.
+All of them are cleared on **entering** Play, not leaving it, so the final
+standings are still in the world afterwards — though nothing draws them in the
+editor yet.
 
 **`record_frags` runs in `DamageSystems::Resolve`**, after `announce_the_dead`,
 reading `Died`:
@@ -315,7 +324,7 @@ mode does with them is its own business.
 **The frag limit ends the round.** When a `Standing` reaches
 `GameRules::frag_limit`, the authority goes back to the editor through the same
 transition F5 uses, so `match_state` carries everybody with it. No results
-screen yet: the scoreboard staying up in the editor is the results screen.
+screen yet.
 
 ### The scoreboard
 
@@ -326,7 +335,8 @@ machine. Each row: a swatch in the player's colour, their name, their frags.
 Your own row is marked.
 
 Players have no names. A row says "Player {id}" through the lang layer until
-there is something better to say.
+there is something better to say. Rows are rebuilt only when a standing
+changes, comes or goes.
 
 Up in Play in modes with a frag limit. A Tab scoreboard with deaths and pings,
 a kill feed and a results screen are all later.
@@ -357,11 +367,12 @@ Weapon pickups
 - [ ] Lands in the new slots once the slots work is in
 
 Armour
-- [ ] `Armour` component, replicated
-- [ ] `apply_damage` spends it at `armour_absorbs`
-- [ ] Max per class in `classes.toml`
-- [ ] Armour pickup gives it; example armour prop
-- [ ] HUD readout
+- [x] `Armour` component, replicated
+- [x] `apply_damage` spends it at `ARMOUR_ABSORBS`
+- [ ] Max per class, when health is
+- [x] Armour pickup gives it; example armour prop
+- [x] HUD readout
+- [ ] Armour packs on the template map
 
 Knockback
 - [ ] Acceleration and friction in `step_player`, tuned to feel as now
@@ -371,10 +382,11 @@ Knockback
 - [ ] A test: a rocket at your feet lifts you higher than a jump
 
 Scoring
-- [ ] `Standing` entity per player, replicated, cleared on entering Play
-- [ ] `record_frags` in `Resolve`
-- [ ] Frag limit ends the round
-- [ ] Top-left scoreboard in Bevy UI
+- [x] `Standing` entity per player, replicated, cleared on entering Play
+- [x] `record_frags` in `Resolve`
+- [x] Frag limit ends the round
+- [x] Top-left scoreboard in Bevy UI
+- [ ] The last round's standings shown in the editor
 
 Later
 - [ ] Dropping the held weapon on death

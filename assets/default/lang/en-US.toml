@@ -221,8 +221,12 @@ utility = "Utility"
 gadget = "Gadget"
 special = "Special"
 
+[scoreboard]
+player = "Player { id }"
+
 [hud]
 reloading = "Reloading"
+armour = "{ points } armour"
 
 [class.names]
 scout = "Scout"
@@ -614,6 +618,7 @@ top_hat = "Top Hat"
 crate = "Crate"
 health_pack = "Health Pack"
 ammo_pack = "Ammo Pack"
+armour_pack = "Armour"
 
 [prop.archetype]
 held = "Held"

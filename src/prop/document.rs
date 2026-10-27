@@ -991,7 +991,11 @@ mod tests {
         assert_eq!(crate_.colliders.len(), 1);
         assert_eq!(crate_.breakable.health, 75);
 
-        for (name, kind) in [("health_pack", PickupKind::Health), ("ammo_pack", PickupKind::Ammo)] {
+        for (name, kind) in [
+            ("health_pack", PickupKind::Health),
+            ("ammo_pack", PickupKind::Ammo),
+            ("armour_pack", PickupKind::Armor),
+        ] {
             let pack = read(name).unwrap();
             assert_eq!(pack.archetype, Archetype::Pickup, "{name}");
             assert_eq!(pack.pickup.kind, kind, "{name}");

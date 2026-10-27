@@ -1427,7 +1427,9 @@ only by `publish_game_rules`; a mode with no entry plays as below). Then a
 body carries no `Team`, spawns anywhere, and is drawn in its own
 `PlayerColour` ([`src/common/player_colour.rs`](src/common/player_colour.rs)),
 which the authority picks and replicates — never derived from join order. The
-new-map template is an arena map. See
+new-map template is an arena map. A mode with a `frag_limit` keeps score on a
+replicated `Standing` per player ([`src/game/score.rs`](src/game/score.rs)),
+shows it top-left, and ends the round at the limit. See
 [documentation/arena.md](documentation/arena.md).
 
 Otherwise the player does not choose: `next_team` in
@@ -1529,7 +1531,8 @@ are not placeholders, and both live in
 
 ## Damage, weapons and projectiles
 
-**Nothing applies damage to a health pool except one system.** A weapon writes
+**Nothing applies damage to a health pool except one system.** Nor to
+`Armour`, the pool in front of it that `apply_damage` spends first. A weapon writes
 a `Damage` message — target, source, amount, where — and is finished;
 `apply_damage` ([`src/game/damage.rs`](src/game/damage.rs)) is the only thing
 that touches a `Damageable`, clamps the overkill and writes the `DamageDealt`

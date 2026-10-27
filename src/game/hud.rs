@@ -22,7 +22,7 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::damage::Damageable;
+use crate::common::damage::{Armour, Damageable};
 use crate::common::fonts::DisplayFont;
 use crate::common::swatch::{Ink, Swatch};
 use crate::common::team::Team;
@@ -176,6 +176,8 @@ impl HudZone {
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 enum HudText {
     Health,
+    /// Hidden while there is none.
+    Armour,
     WeaponName,
     Reloading,
     /// What is in the clip; for a weapon with no clip, what is left at all.
@@ -330,7 +332,11 @@ fn health_readout(font: &Handle<Font>) -> impl Bundle {
             ..HudZone::Health.readout()
         },
         Pickable::IGNORE,
-        children![HudZone::Health.panel(), text(font, HudText::Health, BIG, 1.0)],
+        children![
+            HudZone::Health.panel(),
+            text(font, HudText::Armour, SMALL, 0.9),
+            text(font, HudText::Health, BIG, 1.0),
+        ],
     )
 }
 
@@ -439,6 +445,7 @@ fn outline_the_safe_zone(
 #[derive(Debug, Default, PartialEq)]
 struct Readout {
     health: String,
+    armour: String,
     name: String,
     reloading: bool,
     loaded: String,
@@ -449,12 +456,17 @@ impl Readout {
     fn of(
         catalogue: &WeaponCatalogue,
         health: &Damageable,
+        armour: Option<&Armour>,
         equipped: &Equipped,
         ammo: &Ammo,
     ) -> Self {
         let health = health.health().to_string();
+        let armour = match armour.map(Armour::points) {
+            Some(points) if points > 0 => get!("hud.armour", "points", points),
+            _ => String::new(),
+        };
         let Some(weapon) = catalogue.held_by(equipped) else {
-            return Self { health, ..default() };
+            return Self { health, armour, ..default() };
         };
 
         let state = ammo.at(equipped.held);
@@ -466,6 +478,7 @@ impl Readout {
 
         Self {
             health,
+            armour,
             name: get!(weapon.name_key),
             reloading: state.reloading > 0.0,
             loaded,
@@ -476,6 +489,7 @@ impl Readout {
     fn text(&self, kind: HudText) -> &str {
         match kind {
             HudText::Health => &self.health,
+            HudText::Armour => &self.armour,
             HudText::WeaponName => &self.name,
             HudText::Reloading => "",
             HudText::Loaded => &self.loaded,
@@ -488,11 +502,11 @@ impl Readout {
 /// would be re-laid-out every frame.
 fn fill_in_the_readouts(
     catalogue: Res<WeaponCatalogue>,
-    body: Option<Single<(&Damageable, &Equipped, &Ammo), With<LocalPlayer>>>,
+    body: Option<Single<(&Damageable, Option<&Armour>, &Equipped, &Ammo), With<LocalPlayer>>>,
     mut texts: Query<(&HudText, &mut Text, &mut Node)>,
 ) {
     let readout = match body.as_deref() {
-        Some((health, equipped, ammo)) => Readout::of(&catalogue, health, equipped, ammo),
+        Some((health, armour, equipped, ammo)) => Readout::of(&catalogue, health, *armour, equipped, ammo),
         None => Readout::default(),
     };
 
@@ -517,6 +531,12 @@ fn fill_in_the_readouts(
         if text.0 != wanted {
             text.0 = wanted.to_owned();
         }
+        if kind == HudText::Armour {
+            let display = if wanted.is_empty() { Display::None } else { Display::Flex };
+            if node.display != display {
+                node.display = display;
+            }
+        }
     }
 }
 
@@ -539,6 +559,19 @@ mod tests {
         (catalogue, equipped, ammo)
     }
 
+    #[test]
+    fn armour_is_shown_only_while_there_is_some() {
+        let (catalogue, equipped, ammo) = mercenary();
+        let health = Damageable::default();
+        let mut armour = Armour::default();
+
+        let none = Readout::of(&catalogue, &health, Some(&armour), &equipped, &ammo);
+        assert!(none.armour.is_empty());
+        armour.add(35);
+        let some = Readout::of(&catalogue, &health, Some(&armour), &equipped, &ammo);
+        assert!(some.armour.contains("35"), "{}", some.armour);
+    }
+
     /// Breaks if the lookup panics when `Equipped` arrives before the
     /// catalogue, which is the ordinary order on a client.
     #[test]
@@ -546,7 +579,7 @@ mod tests {
         let (_, equipped, ammo) = mercenary();
         let health = Damageable::with_health(125);
 
-        let readout = Readout::of(&WeaponCatalogue::default(), &health, &equipped, &ammo);
+        let readout = Readout::of(&WeaponCatalogue::default(), &health, None, &equipped, &ammo);
         assert_eq!(
             readout,
             Readout { health: "125".into(), ..default() },
@@ -560,7 +593,7 @@ mod tests {
         equipped.select(Slot::Secondary);
         let state = ammo.at(Slot::Secondary);
 
-        let readout = Readout::of(&catalogue, &Damageable::default(), &equipped, &ammo);
+        let readout = Readout::of(&catalogue, &Damageable::default(), None, &equipped, &ammo);
         assert_eq!(readout.loaded, state.clip.to_string());
         assert_eq!(readout.reserve, state.reserve.to_string());
     }
@@ -571,7 +604,7 @@ mod tests {
         equipped.select(Slot::Utility);
         let state = ammo.at(Slot::Utility);
 
-        let readout = Readout::of(&catalogue, &Damageable::default(), &equipped, &ammo);
+        let readout = Readout::of(&catalogue, &Damageable::default(), None, &equipped, &ammo);
         assert_eq!(readout.loaded, state.reserve.to_string());
         assert_eq!(readout.reserve, "", "a weapon with no clip showed a second count");
     }
@@ -581,7 +614,7 @@ mod tests {
         let (catalogue, equipped, mut ammo) = mercenary();
         ammo.at_mut(equipped.held).reloading = 0.5;
 
-        let readout = Readout::of(&catalogue, &Damageable::default(), &equipped, &ammo);
+        let readout = Readout::of(&catalogue, &Damageable::default(), None, &equipped, &ammo);
         assert!(readout.reloading);
         assert!(!readout.loaded.is_empty(), "the count vanished during a reload");
     }

@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 
-use crate::common::damage::{DamageLog, Damageable};
+use crate::common::damage::{Armour, DamageLog, Damageable};
 use crate::common::flame::Burning;
 use crate::common::skeleton::{AnimationClock, Gait, SkeletonAnimator};
 use crate::game::damage::DamageNumber;
@@ -23,7 +23,7 @@ pub fn reset_for_play(
     mut latch: ResMut<InputLatch>,
     role: Option<Res<crate::common::net::NetRole>>,
     mut bodies: Query<(&mut Gait, &mut SkeletonAnimator)>,
-    mut health: Query<(&mut Damageable, &mut DamageLog)>,
+    mut health: Query<(&mut Damageable, &mut DamageLog, Option<&mut Armour>)>,
     numbers: Query<Entity, With<DamageNumber>>,
     corpses: Query<Entity, With<Ragdoll>>,
     in_flight: Query<Entity, Or<(With<Projectile>, With<ProjectileEmitter>)>>,
@@ -44,9 +44,12 @@ pub fn reset_for_play(
     // Health is replicated, so only the authority restores it.
     let authority = role.is_none_or(|role| role.is_authority());
     if authority {
-        for (mut body, mut log) in &mut health {
+        for (mut body, mut log, armour) in &mut health {
             body.restore();
             log.clear();
+            if let Some(mut armour) = armour {
+                *armour = Armour::default();
+            }
         }
     }
 

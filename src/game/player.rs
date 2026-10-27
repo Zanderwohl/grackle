@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
 use lightyear::prelude::input::native::ActionState;
 
-use crate::common::damage::Damageable;
+use crate::common::damage::{Armour, Damageable};
 use crate::common::hitbox::Hitboxes;
 use crate::common::movement_rules::MovementRules;
 use crate::common::taunt::TauntTurning;
@@ -62,7 +62,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 // `Transform` and `Visibility` because a replicated body is built by
 // inserting components rather than through `spawn_player`, and without them
 // its children have nothing to inherit.
-#[require(Hitboxes, Damageable, Equipped, Ammo, Trigger, Inputs, Condition, Transform, Visibility)]
+#[require(Hitboxes, Damageable, Armour, Equipped, Ammo, Trigger, Inputs, Condition, Transform, Visibility)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,

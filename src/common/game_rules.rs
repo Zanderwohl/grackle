@@ -29,11 +29,13 @@ pub struct ModeRules {
     /// `None` is each class's own loadout. Each weapon lands in the slot its
     /// class's loadout permits it in; one it permits nowhere is left out.
     pub loadout: Option<Vec<WeaponId>>,
+    /// The round ends when somebody reaches it. `None` has no scoreboard.
+    pub frag_limit: Option<u32>,
 }
 
 impl Default for ModeRules {
     fn default() -> Self {
-        Self { teams: true, classes: Vec::new(), loadout: None }
+        Self { teams: true, classes: Vec::new(), loadout: None, frag_limit: None }
     }
 }
 
@@ -75,6 +77,8 @@ struct ModeEntry {
     classes: Vec<String>,
     #[serde(default)]
     loadout: Option<Vec<String>>,
+    #[serde(default)]
+    frag_limit: Option<u32>,
 }
 
 fn yes() -> bool {
@@ -134,6 +138,7 @@ fn check(key: &str, entry: ModeEntry) -> Result<ModeRules, String> {
         teams: entry.teams,
         classes,
         loadout: entry.loadout.map(|names| names.iter().map(|name| WeaponId::of(name)).collect()),
+        frag_limit: entry.frag_limit.filter(|limit| *limit > 0),
     })
 }
 
@@ -184,7 +189,7 @@ mod tests {
         let modes = parse(
             "[deathball]\nteams = false\n\
              [ctf]\nclasses = [\"wizard\"]\n\
-             [koth]\nfrag_limit = 3\n",
+             [koth]\nself_damage = 0.5\n",
         );
         assert!(modes.0.is_empty(), "{modes:?}");
     }
