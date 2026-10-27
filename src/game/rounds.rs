@@ -100,7 +100,19 @@ mod tests {
     use crate::common::player_color::PlayerColor;
 
     fn standing(id: u64, frags: i32) -> Standing {
-        Standing { id: PlayerId(id), name: String::new(), team: None, color: PlayerColor { hue: 0.0 }, frags, deaths: 0 }
+        Standing {
+            id: PlayerId(id),
+            name: String::new(),
+            team: None,
+            color: PlayerColor { hue: 0.0 },
+            frags,
+            kills: 0,
+            assists: 0,
+            deaths: 0,
+            damage_dealt: 0,
+            damage_taken: 0,
+            healing: 0,
+        }
     }
 
     fn app() -> App {

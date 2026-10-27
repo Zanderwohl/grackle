@@ -246,6 +246,12 @@ special = "Special"
 
 [scoreboard]
 player = "Player { id }"
+name = "Name"
+points = "Points"
+kills = "Kills"
+assists = "Assists"
+deaths = "Deaths"
+healing = "Healing"
 
 [hud]
 reloading = "Reloading"

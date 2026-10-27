@@ -1,4 +1,4 @@
-//! Frags and deaths, the frag limit, and the scoreboard. See "Scoring" in
+//! What each player did this round, the frag limit, and the scoreboard. See "Scoring" in
 //! [documentation/arena.md](../../documentation/arena.md).
 //!
 //! A score belongs to the player, not the body, so it lives on a
@@ -14,7 +14,7 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
-use crate::common::damage::{DamageSource, Died, PlayerId};
+use crate::common::damage::{DamageDealt, DamageSource, Died, Healed, PlayerId};
 use crate::common::fonts::DisplayFont;
 use crate::common::game_rules::GameRules;
 use crate::common::net::{has_authority, NetRole};
@@ -34,14 +34,53 @@ pub struct Standing {
     pub name: String,
     pub team: Option<Team>,
     pub color: PlayerColor,
-    /// Negative is possible: killing yourself costs one.
+    /// What the frag limit counts. Negative is possible: killing yourself
+    /// costs one.
     pub frags: i32,
+    /// Other people killed; unlike `frags`, a suicide takes none away.
+    pub kills: u32,
+    pub assists: u32,
     pub deaths: u32,
+    /// To other players, armor included; not to yourself or to a crate.
+    pub damage_dealt: u32,
+    /// From anything, yourself included.
+    pub damage_taken: u32,
+    /// Given, to yourself or anybody else.
+    pub healing: u32,
 }
+
+/// What a round's points are made of. Every machine works them out from the
+/// replicated counts, so they are never sent.
+pub const POINTS_PER_KILL: i32 = 2;
+pub const POINTS_PER_ASSIST: i32 = 1;
+pub const POINTS_PER_DEATH: i32 = -1;
+pub const HEALING_PER_POINT: u32 = 150;
+pub const DAMAGE_PER_POINT: u32 = 300;
 
 impl Standing {
     fn of(who: &Identity, name: &str, start: &HueStart) -> Self {
-        Self { id: who.id, name: name.to_owned(), team: who.team, color: who.color(start), frags: 0, deaths: 0 }
+        Self {
+            id: who.id,
+            name: name.to_owned(),
+            team: who.team,
+            color: who.color(start),
+            frags: 0,
+            kills: 0,
+            assists: 0,
+            deaths: 0,
+            damage_dealt: 0,
+            damage_taken: 0,
+            healing: 0,
+        }
+    }
+
+    /// Partial hundreds of damage and healing count for nothing.
+    pub fn points(&self) -> i32 {
+        POINTS_PER_KILL * self.kills as i32
+            + POINTS_PER_ASSIST * self.assists as i32
+            + POINTS_PER_DEATH * self.deaths as i32
+            + (self.healing / HEALING_PER_POINT) as i32
+            + (self.damage_dealt / DAMAGE_PER_POINT) as i32
     }
 
     /// What a row says: the name, or "Player {id}" for somebody unnamed.
@@ -67,10 +106,18 @@ impl Standing {
             DamageSource::Player(killer) if killer != victim => {
                 if let Some(killer) = standings.iter_mut().find(|standing| standing.id == killer) {
                     killer.frags += 1;
+                    killer.kills += 1;
                 }
             }
             // Yourself, or the map.
             _ => standings[index].frags -= 1,
+        }
+        if let Some(DamageSource::Player(helper)) = died.assist
+            && helper != victim
+            && died.killer != DamageSource::Player(helper)
+            && let Some(helper) = standings.iter_mut().find(|standing| standing.id == helper)
+        {
+            helper.assists += 1;
         }
     }
 }
@@ -83,18 +130,30 @@ pub fn ranked<'a>(standings: impl IntoIterator<Item = &'a Standing>) -> Vec<&'a 
     ranked
 }
 
+/// Most points first, then most kills, then fewest deaths, then by id.
+pub fn ranked_by_points<'a>(standings: impl IntoIterator<Item = &'a Standing>) -> Vec<&'a Standing> {
+    let mut ranked: Vec<&Standing> = standings.into_iter().collect();
+    ranked.sort_by_key(|standing| (Reverse(standing.points()), Reverse(standing.kills), standing.deaths, standing.id));
+    ranked
+}
+
 pub struct ScorePlugin;
 
 impl Plugin for ScorePlugin {
     fn build(&self, app: &mut App) {
         // Also `DamagePlugin`'s; here too for an app without weapons.
-        app.add_message::<Died>().add_systems(
-            FixedUpdate,
-            record_frags
-                .after(crate::game::death::announce_the_dead)
-                .before(crate::game::death::reap_the_dead)
-                .in_set(DamageSystems::Resolve),
-        )
+        app.add_message::<Died>()
+            .add_message::<DamageDealt>()
+            .add_message::<Healed>()
+            .add_systems(
+                FixedUpdate,
+                // Before the reaping, while a hit's target still says who it was.
+                (record_damage, record_frags)
+                    .after(crate::game::death::announce_the_dead)
+                    .before(crate::game::death::reap_the_dead)
+                    .in_set(DamageSystems::Resolve),
+            )
+            .add_systems(Update, record_healing.run_if(in_state(AppMode::Play)).run_if(has_authority))
         .add_systems(
             Update,
             (keep_standings, end_the_round_at_the_frag_limit)
@@ -171,6 +230,34 @@ fn record_frags(mut died: MessageReader<Died>, mut standings: Query<&mut Standin
     }
 }
 
+fn record_damage(
+    mut dealt: MessageReader<DamageDealt>,
+    ids: Query<&PlayerId>,
+    mut standings: Query<&mut Standing>,
+) {
+    for hit in dealt.read() {
+        if hit.amount == 0 {
+            continue;
+        }
+        let Ok(&victim) = ids.get(hit.target) else { continue };
+        for mut standing in &mut standings {
+            if standing.id == victim {
+                standing.damage_taken += hit.amount;
+            } else if hit.source == DamageSource::Player(standing.id) {
+                standing.damage_dealt += hit.amount;
+            }
+        }
+    }
+}
+
+fn record_healing(mut healed: MessageReader<Healed>, mut standings: Query<&mut Standing>) {
+    for heal in healed.read() {
+        if let Some(mut standing) = standings.iter_mut().find(|standing| standing.id == heal.healer) {
+            standing.healing += heal.amount;
+        }
+    }
+}
+
 /// Back to the editor, through the transition F5 uses, so `match_state`
 /// carries everybody with it.
 fn end_the_round_at_the_frag_limit(
@@ -206,6 +293,7 @@ fn spawn_the_scoreboard(
     }
     commands.spawn((
         Scoreboard,
+        crate::game::hud::GameHud,
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(MARGIN),
@@ -309,7 +397,19 @@ mod tests {
     use super::*;
 
     fn standing(id: u64, frags: i32, deaths: u32) -> Standing {
-        Standing { id: PlayerId(id), name: String::new(), team: None, color: PlayerColor { hue: 0.0 }, frags, deaths }
+        Standing {
+            id: PlayerId(id),
+            name: String::new(),
+            team: None,
+            color: PlayerColor { hue: 0.0 },
+            frags,
+            kills: 0,
+            assists: 0,
+            deaths,
+            damage_dealt: 0,
+            damage_taken: 0,
+            healing: 0,
+        }
     }
 
     fn died(victim: u64, killer: DamageSource) -> Died {
@@ -349,6 +449,72 @@ mod tests {
     fn killing_yourself_or_dying_to_the_map_costs_a_frag() {
         let all = after(&[died(2, DamageSource::Player(PlayerId(2))), died(2, DamageSource::World)]);
         assert_eq!((all[2].frags, all[2].deaths), (-2, 2));
+    }
+
+    #[test]
+    fn a_kill_with_help_is_an_assist_and_a_suicide_is_no_kill() {
+        let mut death = died(2, DamageSource::Player(PlayerId(0)));
+        death.assist = Some(DamageSource::Player(PlayerId(1)));
+        let all = after(&[death, died(0, DamageSource::Player(PlayerId(0)))]);
+        assert_eq!((all[0].kills, all[0].frags, all[0].assists), (1, 0, 0));
+        assert_eq!((all[1].kills, all[1].assists), (0, 1));
+    }
+
+    #[test]
+    fn damage_counts_given_to_others_and_taken_from_anybody() {
+        let mut world = World::new();
+        world.init_resource::<Messages<DamageDealt>>();
+        for id in 0..2 {
+            world.spawn(standing(id, 0, 0));
+        }
+        let body = |world: &mut World, id: u64| world.spawn(PlayerId(id)).id();
+        let (zero, one) = (body(&mut world, 0), body(&mut world, 1));
+        let crate_ = world.spawn_empty().id();
+        let hit = |target, source, amount| DamageDealt { target, source, amount, remaining: 0, point: Vec3::ZERO };
+        world.write_message(hit(one, DamageSource::Player(PlayerId(0)), 40));
+        world.write_message(hit(zero, DamageSource::Player(PlayerId(0)), 15));
+        world.write_message(hit(crate_, DamageSource::Player(PlayerId(0)), 99));
+        world.write_message(hit(one, DamageSource::World, 5));
+        world.run_system_once(record_damage).unwrap();
+
+        let mut all: Vec<Standing> = world.query::<&Standing>().iter(&world).cloned().collect();
+        all.sort_by_key(|standing| standing.id);
+        assert_eq!((all[0].damage_dealt, all[0].damage_taken), (40, 15));
+        assert_eq!((all[1].damage_dealt, all[1].damage_taken), (0, 45));
+    }
+
+    #[test]
+    fn healing_is_credited_to_the_healer() {
+        let mut world = World::new();
+        world.init_resource::<Messages<Healed>>();
+        world.spawn(standing(0, 0, 0));
+        world.write_message(Healed { target: Entity::PLACEHOLDER, healer: PlayerId(0), amount: 75 });
+        world.run_system_once(record_healing).unwrap();
+        assert_eq!(world.query::<&Standing>().single(&world).unwrap().healing, 75);
+    }
+
+    #[test]
+    fn points_add_up_and_partial_hundreds_count_for_nothing() {
+        let mut someone = standing(0, 0, 2);
+        someone.kills = 3;
+        someone.assists = 1;
+        someone.healing = 299;
+        someone.damage_dealt = 650;
+        // 6 for kills, 1 assist, 1 for healing, 2 for damage, -2 for deaths.
+        assert_eq!(someone.points(), 8);
+    }
+
+    #[test]
+    fn the_tab_board_ranks_by_points_then_kills() {
+        let mut a = standing(0, 0, 0);
+        a.kills = 1;
+        let mut b = standing(1, 0, 0);
+        b.assists = 2;
+        let mut c = standing(2, 0, 3);
+        c.kills = 3;
+        let all = [a, b, c];
+        let order: Vec<u64> = ranked_by_points(&all).iter().map(|standing| standing.id.0).collect();
+        assert_eq!(order, vec![2, 0, 1]);
     }
 
     #[test]

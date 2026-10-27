@@ -1,6 +1,6 @@
-//! The two typefaces: JetBrains Mono for every egui surface, and Alfa Slab One
-//! for what a player sees during a round — the HUD, the pause menu and the
-//! damage numbers.
+//! The two typefaces: JetBrains Mono for every egui surface and the
+//! scoreboard, and Alfa Slab One for the rest of what a player sees during a
+//! round — the HUD, the pause menu and the damage numbers.
 //!
 //! Both are pack content, read once at `Startup` through [`Assets`] like the
 //! weapon catalog, so a browser build fetches them the same way. A font that
@@ -30,6 +30,11 @@ pub fn display_family() -> egui::FontFamily {
 #[derive(Resource, Default, Clone)]
 pub struct DisplayFont(pub Handle<Font>);
 
+/// JetBrains Mono for Bevy UI, where columns of numbers have to line up: the
+/// scoreboard.
+#[derive(Resource, Default, Clone)]
+pub struct MonoFont(pub Handle<Font>);
+
 /// Built at `Startup`, handed to egui on its first pass and then removed.
 #[derive(Resource)]
 struct PendingEguiFonts(egui::FontDefinitions);
@@ -40,6 +45,7 @@ impl Plugin for FontsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Assets>()
             .init_resource::<DisplayFont>()
+            .init_resource::<MonoFont>()
             .add_systems(Startup, load_fonts)
             .add_systems(
                 EguiPrimaryContextPass,
@@ -74,6 +80,9 @@ fn load_fonts(
 
     if let Some(bytes) = &display {
         commands.insert_resource(DisplayFont(fonts.add(Font::from_bytes(bytes.clone()))));
+    }
+    if let Some(bytes) = &ui {
+        commands.insert_resource(MonoFont(fonts.add(Font::from_bytes(bytes.clone()))));
     }
     commands.insert_resource(PendingEguiFonts(egui_fonts(ui, display)));
 }

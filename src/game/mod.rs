@@ -47,6 +47,7 @@ pub mod hud;
 pub mod pickup_beam;
 pub mod rounds;
 pub mod score;
+pub mod tab_board;
 pub mod ragdoll;
 pub mod skeleton;
 pub mod viewmodel;
@@ -65,6 +66,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::game::hud::HudPlugin)
             .add_plugins(crate::game::score::ScorePlugin)
             .add_plugins(crate::game::rounds::RoundHistoryPlugin)
+            .add_plugins(crate::game::tab_board::TabBoardPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
 

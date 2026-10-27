@@ -76,6 +76,11 @@ pub struct HudCamera;
 #[derive(Component)]
 struct HudRoot;
 
+/// On every root of the play HUD, which the Tab scoreboard hides while it is
+/// up.
+#[derive(Component)]
+pub struct GameHud;
+
 #[derive(Component)]
 struct SafeZone;
 
@@ -272,6 +277,7 @@ fn spawn_the_hud(
 
     commands.spawn((
         HudRoot,
+        GameHud,
         Node {
             position_type: PositionType::Absolute,
             width: Val::Percent(100.0),

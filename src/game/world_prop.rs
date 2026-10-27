@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::app_mode::AppMode;
 use crate::common::assets::Assets as PackAssets;
 use crate::common::class::{Class, Stance};
-use crate::common::damage::{Armor, Damageable};
+use crate::common::damage::{Armor, Damageable, Healed, PlayerId};
 use crate::common::hitbox::{Box3, Hitboxes};
 use crate::common::skeleton::clip::Clip;
 use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalog, WeaponId};
@@ -120,7 +120,8 @@ pub struct WorldPropPlugin;
 
 impl Plugin for WorldPropPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PropCache>()
+        app.add_message::<Healed>()
+            .init_resource::<PropCache>()
             .init_resource::<SurfaceMaterials>()
             .add_plugins(crate::game::pickup_beam::PickupBeamPlugin)
             .add_systems(
@@ -537,6 +538,7 @@ fn take_pickups(
     mut pickups: Query<(Entity, &WorldProp, &mut Pickup, Option<&mut Restock>, Option<&GivesWeapon>)>,
     mut bodies: Query<
         (
+            Entity,
             &PhysicsBody,
             &Stance,
             Option<&mut Damageable>,
@@ -545,9 +547,11 @@ fn take_pickups(
             Option<&mut Equipped>,
             Option<&mut Trigger>,
             Option<&Class>,
+            Option<&PlayerId>,
         ),
         With<Player>,
     >,
+    mut healed: MessageWriter<Healed>,
 ) {
     for (entity, prop, mut pickup, restock, gives) in &mut pickups {
         if pickup.taken {
@@ -572,7 +576,7 @@ fn take_pickups(
                 (triggers(baked, &prop.transform()), baked.pickup.respawn)
             }
         };
-        for (body, stance, health, armor, ammo, equipped, trigger, class) in &mut bodies {
+        for (body_entity, body, stance, health, armor, ammo, equipped, trigger, class, id) in &mut bodies {
             let half = stance.half_extents();
             if !triggers.iter().any(|trigger| trigger.overlaps(body.current, half)) {
                 continue;
@@ -587,7 +591,17 @@ fn take_pickups(
                 None => {
                     let Some(baked) = cache.get(&prop.model) else { continue };
                     let ammo = ammo.zip(equipped).map(|(ammo, equipped)| (ammo, equipped.into_inner() as &Equipped));
-                    give(&baked.pickup, health, armor, ammo, &catalog)
+                    match give(&baked.pickup, health, armor, ammo, &catalog) {
+                        None => false,
+                        Some(amount) => {
+                            if let Some(&healer) = id
+                                && amount > 0
+                            {
+                                healed.write(Healed { target: body_entity, healer, amount });
+                            }
+                            true
+                        }
+                    }
                 }
             };
             if !gained {
@@ -600,26 +614,27 @@ fn take_pickups(
     }
 }
 
-/// Returns whether the taker got anything.
+/// `None` if the taker got nothing, else how much health it got back.
 fn give(
     spec: &PickupSpec,
     health: Option<Mut<Damageable>>,
     armor: Option<Mut<Armor>>,
     ammo: Option<(Mut<Ammo>, &Equipped)>,
     catalog: &WeaponCatalog,
-) -> bool {
+) -> Option<u32> {
     let fraction = spec.amount.max(0.0);
     match spec.kind {
         PickupKind::Health => {
-            let Some(mut health) = health else { return false };
+            let mut health = health?;
             if health.is_full() {
-                return false;
+                return None;
             }
             let amount = share(health.max(), fraction);
-            health.heal(amount) > 0
+            let healed = health.heal(amount);
+            (healed > 0).then_some(healed)
         }
         PickupKind::Ammo => {
-            let Some((mut ammo, equipped)) = ammo else { return false };
+            let (mut ammo, equipped) = ammo?;
             let mut gained = false;
             for slot in Slot::ALL {
                 let Some(weapon) = equipped.get(slot).and_then(|id| catalog.get(id)) else {
@@ -635,18 +650,18 @@ fn give(
                 state.reserve = (state.reserve + amount).min(max);
                 gained = true;
             }
-            gained
+            gained.then_some(0)
         }
         PickupKind::Armor => {
-            let Some(mut armor) = armor else { return false };
+            let mut armor = armor?;
             if armor.is_full() {
-                return false;
+                return None;
             }
             let amount = share(armor.max(), fraction);
-            armor.add(amount) > 0
+            (armor.add(amount) > 0).then_some(0)
         }
         // Specced, with no behavior yet: there is no flag mode.
-        PickupKind::Flag => false,
+        PickupKind::Flag => None,
     }
 }
 
@@ -1166,7 +1181,7 @@ mod tests {
         let body = world.spawn((*health, *ammo)).id();
         let mut query = world.query::<(&mut Damageable, &mut Ammo)>();
         let (h, a) = query.get_mut(&mut world, body).unwrap();
-        let gained = give(&spec, Some(h), None, Some((a, equipped)), catalog);
+        let gained = give(&spec, Some(h), None, Some((a, equipped)), catalog).is_some();
         *health = *world.get::<Damageable>(body).unwrap();
         *ammo = *world.get::<Ammo>(body).unwrap();
         gained
@@ -1216,7 +1231,7 @@ mod tests {
         let spec = PickupSpec { kind: PickupKind::Armor, amount: 0.6, respawn: 1.0, ..default() };
         let take = |world: &mut World| {
             let armor = world.get_mut::<Armor>(body).unwrap();
-            give(&spec, None, Some(armor), None, &WeaponCatalog::default())
+            give(&spec, None, Some(armor), None, &WeaponCatalog::default()).is_some()
         };
 
         assert!(take(&mut world));

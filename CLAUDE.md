@@ -346,7 +346,9 @@ is the perf overlay in both modes.
 Weapons are drawn by **bucket** on **`1`–`9`** and the **wheel** (see
 "Choosing a weapon" below), the left mouse button fires the weapon's
 primary and the right its secondary — held, for anything automatic — and
-**`R`** reloads. **`H`** toggles humiliation, a debug key until there are
+**`R`** reloads. Holding **`Tab`** swaps the HUD for a scoreboard
+ranked by points (`tab_board`, recomputed from the key every frame so it
+cannot stick). **`H`** toggles humiliation, a debug key until there are
 rounds to lose: hands up, no weapon, no firing, third person. **`G`** starts
 the first taunt in `assets/default/taunts.toml` (a wave, which ends by itself;
 `G` again ends it early), and works while humiliated, as in TF2; **`O`** is

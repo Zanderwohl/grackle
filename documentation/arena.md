@@ -360,7 +360,7 @@ part of this plan.
 **A score belongs to the player, not the body** — the rule `Identity` already
 follows. Each player gets a replicated **`Standing`** entity on the authority
 ([`src/game/score.rs`](../src/game/score.rs)): `PlayerId`, team, color, frags,
-deaths. Replicated to everybody, because every machine draws the scoreboard.
+kills, assists, deaths, damage dealt and taken, and healing. Replicated to everybody, because every machine draws the scoreboard.
 `keep_standings` keys them on absence, the way bodies are: an identity with no
 standing gets one, a standing whose identity has gone (a client who left) goes.
 All of them are cleared on **entering** Play, not leaving it, so the final
@@ -376,9 +376,23 @@ reading `Died`:
 | yourself | — | −1 frag, +1 death |
 | nobody (the world) | — | −1 frag, +1 death |
 
-`Died.assist` is recorded for when a mode wants it; arena scores none. In a
-team mode this records too — the numbers are true whatever the mode, and what a
+A kill also counts in `kills`, which a suicide never takes from, and
+`Died.assist` is an assist to whoever it names, unless that is the victim or
+the killer. In a team mode this records too — the numbers are true whatever the mode, and what a
 mode does with them is its own business.
+
+**`record_damage`** sits beside it, reading `DamageDealt` before the reaping,
+while a hit's target still carries its `PlayerId`: the amount, armor
+included, is damage taken by the target and dealt by the source — unless they
+are the same person, and never against something with no `PlayerId`, so
+shooting crates scores nothing. **Healing** is a `Healed` message, written by
+whatever heals (a health pickup today, credited to whoever took it) and read
+by `record_healing`.
+
+**Points** are worked out from those counts, never stored or sent:
+`Standing::points`, with the weights as constants beside it — 2 a kill, 1 an
+assist, −1 a death, 1 per whole 150 healing and per whole 300 damage dealt.
+They are a first guess, to be tuned.
 
 **The frag limit ends the round.** When a `Standing` reaches
 `GameRules::frag_limit`, the authority goes back to the editor through the same
@@ -397,8 +411,22 @@ A row says the player's name, from their settings (see "Player settings"
 below), or "Player {id}" through the lang layer for somebody unnamed. Rows are rebuilt only when a standing
 changes, comes or goes.
 
-Up in Play in modes with a frag limit. A Tab scoreboard with deaths and pings,
-a kill feed and a results screen are all later.
+Up in Play in modes with a frag limit.
+
+### Holding Tab
+
+[`src/game/tab_board.rs`](../src/game/tab_board.rs): while Tab is held the
+play HUD — every root marked `GameHud`, the top-left board included — is
+hidden and a table of everybody comes up in the middle, ranked by points
+(then kills, fewer deaths, id): a squircle in the player's color, name,
+points, kills, assists, deaths, healing, in JetBrains Mono (`MonoFont`) so
+the numbers line up. In every mode, not only those with a frag limit.
+
+**It cannot stick.** `TabBoard::up` is recomputed every frame as "Tab is held
+now and the pause menu is not open", never toggled on a press and undone on a
+release, since a release can land somewhere else: the pause menu opening over
+it, or another window — and Bevy lets go of every key when the window loses
+focus. Leaving Play takes it down and puts the HUD back.
 
 ### Round history
 
@@ -488,4 +516,5 @@ Later
 - [ ] Over-max armor and mega health that decay
 - [ ] Per-class knockback scale
 - [ ] Predicting your own rocket jump
-- [ ] Tab scoreboard, kill feed, results screen, names
+- [x] Tab scoreboard, ranked by points
+- [ ] Kill feed, results screen, pings on the Tab board

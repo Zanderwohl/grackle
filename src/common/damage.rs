@@ -277,6 +277,17 @@ impl DamageLog {
     }
 }
 
+/// Health given back, for the scoreboard. Whatever heals writes one; nothing
+/// reads it to change health.
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct Healed {
+    pub target: Entity,
+    /// Credited with it: the target too, for a pickup.
+    pub healer: PlayerId,
+    /// Already capped at what was missing.
+    pub amount: u32,
+}
+
 /// Carries the victim's name because the entity is gone by the time anything
 /// reads this.
 #[derive(Message, Clone, Debug, PartialEq, Serialize, Deserialize)]

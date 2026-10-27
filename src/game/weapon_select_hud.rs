@@ -149,6 +149,7 @@ fn show_the_selector(
     let Ok((root, mut node)) = roots.single_mut() else {
         commands.spawn((
             SelectorRoot,
+            crate::game::hud::GameHud,
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(TOP),
