@@ -586,7 +586,10 @@ impl Readout {
             return Self { health, armor, ..default() };
         };
 
-        let state = ammo.at(weapon.id);
+        let name = get!(weapon.name_key);
+        let Some(state) = ammo.at(weapon.id) else {
+            return Self { health, armor, name, ..default() };
+        };
         let (loaded, reserve) = match weapon.magazine.clip {
             // Nothing is loaded, so the reserve is the number that matters.
             None => (state.reserve.to_string(), String::new()),
@@ -596,7 +599,7 @@ impl Readout {
         Self {
             health,
             armor,
-            name: get!(weapon.name_key),
+            name,
             reloading: state.reloading > 0.0,
             loaded,
             reserve,
@@ -684,7 +687,7 @@ mod tests {
         wanted: impl Fn(&crate::common::weapon::Weapon) -> bool,
     ) -> crate::common::weapon::WeaponId {
         *equipped
-            .carried
+            .carried()
             .iter()
             .find(|id| catalog.get(**id).is_some_and(&wanted))
             .expect("the placeholder class carries no such weapon")
@@ -749,7 +752,7 @@ mod tests {
         let (catalog, mut equipped, ammo) = mercenary();
         let id = carried_where(&catalog, &equipped, |weapon| weapon.magazine.clip.is_some());
         equipped.select(id);
-        let state = ammo.at(id);
+        let state = ammo.at(id).unwrap();
 
         let readout = Readout::of(&catalog, &Damageable::default(), None, &equipped, &ammo);
         assert_eq!(readout.loaded, state.clip.to_string());
@@ -761,7 +764,7 @@ mod tests {
         let (catalog, mut equipped, ammo) = mercenary();
         let id = carried_where(&catalog, &equipped, |weapon| weapon.magazine.clip.is_none());
         equipped.select(id);
-        let state = ammo.at(id);
+        let state = ammo.at(id).unwrap();
 
         let readout = Readout::of(&catalog, &Damageable::default(), None, &equipped, &ammo);
         assert_eq!(readout.loaded, state.reserve.to_string());
@@ -771,7 +774,7 @@ mod tests {
     #[test]
     fn a_reloading_weapon_says_so_and_keeps_its_counts() {
         let (catalog, equipped, mut ammo) = mercenary();
-        ammo.at_mut(equipped.held.unwrap()).reloading = 0.5;
+        ammo.at_mut(equipped.held().unwrap()).reloading = 0.5;
 
         let readout = Readout::of(&catalog, &Damageable::default(), None, &equipped, &ammo);
         assert!(readout.reloading);

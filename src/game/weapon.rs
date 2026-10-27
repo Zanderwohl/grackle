@@ -168,7 +168,7 @@ pub fn pull_trigger(
 
         // A copy, written back only on change: `Ammo` is replicated and a `Mut`
         // deref marks it changed, which would send it 64 times a second.
-        let mut state = *ammo.at(held);
+        let mut state = ammo.at(held).copied().unwrap_or_default();
 
         for button in Button::BOTH {
             // Read, never taken: the edge was consumed in `write_client_inputs`
@@ -209,7 +209,7 @@ pub fn pull_trigger(
             fired.write(WeaponActionFired { shooter, button, action: mounted.action });
         }
 
-        if state != *ammo.at(held) {
+        if ammo.at(held) != Some(&state) {
             *ammo.at_mut(held) = state;
         }
     }
@@ -281,7 +281,7 @@ pub fn reload_weapons(
         let held = weapon.id;
         let Some(size) = weapon.magazine.clip else { continue };
 
-        let mut state = *ammo.at(held);
+        let mut state = ammo.at(held).copied().unwrap_or_default();
 
         let unasked = auto.is_some_and(|auto| auto.0) && trigger.idle >= AUTO_RELOAD_AFTER;
         if input.reload || state.clip == 0 || unasked {
@@ -310,7 +310,7 @@ pub fn reload_weapons(
             }
         }
 
-        if state != *ammo.at(held) {
+        if ammo.at(held) != Some(&state) {
             *ammo.at_mut(held) = state;
         }
     }
@@ -328,7 +328,7 @@ pub fn select_weapons(
         trigger.deploying = (trigger.deploying - dt).max(0.0);
 
         let Some(weapon) = input.select else { continue };
-        if equipped.held == Some(weapon) || !equipped.carries(weapon) {
+        if equipped.held() == Some(weapon) || !equipped.carries(weapon) {
             continue;
         }
 
@@ -339,15 +339,14 @@ pub fn select_weapons(
     }
 }
 
-/// Take up `weapon` and wait out its deploy, as a switch does. One not
-/// carried is ignored.
+/// Take up `weapon` and wait out its deploy. One not carried is ignored.
 pub fn draw(weapon: WeaponId, equipped: &mut Equipped, ammo: &mut Ammo, trigger: &mut Trigger, catalog: &WeaponCatalog) {
     if !equipped.carries(weapon) {
         return;
     }
     // A reload does not continue in a holster.
-    if let Some(was) = equipped.held
-        && ammo.at(was).reloading > 0.0
+    if let Some(was) = equipped.held()
+        && ammo.at(was).is_some_and(|state| state.reloading > 0.0)
     {
         ammo.at_mut(was).reloading = 0.0;
     }
@@ -382,7 +381,7 @@ mod tests {
 
     use super::*;
     use crate::common::weapon::Slot;
-    use crate::common::weapon::{HitscanSpec, Magazine, Weapon, WeaponId, SLOTS};
+    use crate::common::weapon::{HitscanSpec, Magazine, Weapon, WeaponId};
     use crate::common::weapon_file::default_catalog;
 
     /// Bevy's default 64 Hz.
@@ -461,12 +460,11 @@ mod tests {
     /// Of what the body is holding.
     fn ammo(world: &World, body: Entity) -> crate::common::weapon::AmmoState {
         let held = world.get::<Equipped>(body).and_then(Equipped::held).expect("holding nothing");
-        *world.get::<Ammo>(body).expect("body has no ammo").at(held)
+        *world.get::<Ammo>(body).expect("body has no ammo").at(held).expect("no ammo for it")
     }
 
-    /// The second weapon the class starts with.
     fn second(world: &World, body: Entity) -> WeaponId {
-        world.get::<Equipped>(body).expect("carries nothing").carried[1]
+        world.get::<Equipped>(body).expect("carries nothing").carried()[1]
     }
 
     fn shots(world: &mut World) -> Vec<WeaponActionFired> {
@@ -660,7 +658,7 @@ mod tests {
         world.run_system_once(select_weapons).unwrap();
         world.run_system_once(select_weapons).unwrap();
 
-        assert_eq!(world.get::<Equipped>(body).unwrap().held, Some(next));
+        assert_eq!(world.get::<Equipped>(body).unwrap().held(), Some(next));
         assert_eq!(
             input(&mut world, body).select,
             Some(next),
@@ -676,13 +674,13 @@ mod tests {
             Magazine::BOTTOMLESS,
         )));
         let body = a_shooter(&mut world);
-        let held = world.get::<Equipped>(body).unwrap().held;
+        let held = world.get::<Equipped>(body).unwrap().held();
         assert_eq!(held, Some(WeaponId::of("test")));
 
         input(&mut world, body).select = Some(WeaponId::of("nothing"));
         world.run_system_once(select_weapons).unwrap();
 
-        assert_eq!(world.get::<Equipped>(body).unwrap().held, held, "a weapon not carried was drawn");
+        assert_eq!(world.get::<Equipped>(body).unwrap().held(), held, "a weapon not carried was drawn");
     }
 
     /// One shared clock would let the alt-fire's cooldown eat the primary's.
@@ -917,7 +915,7 @@ mod tests {
     fn switching_weapons_cancels_a_reload() {
         let mut world = a_world(default_catalog());
         let shooter = a_shooter(&mut world);
-        let held = world.get::<Equipped>(shooter).unwrap().held.unwrap();
+        let held = world.get::<Equipped>(shooter).unwrap().held().unwrap();
 
         world.get_mut::<Ammo>(shooter).unwrap().at_mut(held).reloading = 5.0;
 
@@ -925,7 +923,7 @@ mod tests {
         world.run_system_once(select_weapons).unwrap();
 
         assert_eq!(
-            world.get::<Ammo>(shooter).unwrap().at(held).reloading,
+            world.get::<Ammo>(shooter).unwrap().at(held).unwrap().reloading,
             0.0,
             "the holstered weapon went on reloading"
         );
@@ -1022,16 +1020,5 @@ mod tests {
             (expected..=expected + 1).contains(&ticks),
             "fired on tick {ticks}, deploy is {expected} ticks"
         );
-    }
-
-    /// `Slot::ALL`, `index` and `from_index` agree.
-    #[test]
-    fn every_slot_has_a_home() {
-        assert_eq!(Slot::ALL.len(), SLOTS);
-        for (index, slot) in Slot::ALL.into_iter().enumerate() {
-            assert_eq!(slot.index(), index);
-            assert_eq!(Slot::from_index(index), Some(slot));
-        }
-        assert_eq!(Slot::from_index(SLOTS), None, "a digit past the last slot found one");
     }
 }

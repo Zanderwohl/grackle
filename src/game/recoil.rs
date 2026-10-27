@@ -115,16 +115,16 @@ fn guess_our_shots(
     let Some(weapon) = catalog.held_by(equipped) else { return };
     // A new body spawns ready; only a switch on the same body draws.
     match drawing.0 {
-        Some((was_body, was_held)) if was_body == body && was_held != equipped.held => {
+        Some((was_body, was_held)) if was_body == body && was_held != equipped.held() => {
             drawing.1 = weapon.deploy;
         }
         _ => {}
     }
-    drawing.0 = Some((body, equipped.held));
+    drawing.0 = Some((body, equipped.held()));
     if drawing.1 > 0.0 {
         return;
     }
-    let told = *ammo.at(weapon.id);
+    let Some(&told) = ammo.at(weapon.id) else { return };
     let mut state = match *guessed {
         Some((id, was, left)) if id == weapon.id && was == told => left,
         _ => told,

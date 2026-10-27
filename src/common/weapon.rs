@@ -215,8 +215,7 @@ pub struct Weapon {
 /// A bucket is the weapon's; a [`Slot`] is a place in a class's loadout.
 pub const BUCKETS: u8 = 9;
 
-/// The places a class's loadout names. What a body *carries* is not bounded
-/// by them: see [`Equipped`].
+/// The places a class's loadout names; no bound on what a body carries.
 pub const SLOTS: usize = 6;
 
 #[derive(
@@ -244,14 +243,6 @@ impl Slot {
         Slot::Special,
     ];
 
-    pub fn index(self) -> usize {
-        self as usize
-    }
-
-    pub fn from_index(index: usize) -> Option<Self> {
-        Self::ALL.get(index).copied()
-    }
-
     pub fn name(self) -> String {
         match self {
             Slot::Primary => crate::get!("weapon.slots.primary"),
@@ -264,20 +255,33 @@ impl Slot {
     }
 }
 
-/// What a body carries, as ids, never weapon numbers: as many as it picks up.
-/// The list and what is held are one component because replication does not
-/// promise to deliver two components in one packet.
+/// What a body carries, by id. The list and what is held are one component
+/// because replication does not promise to deliver two in one packet.
 #[derive(Component, Clone, Debug, Default, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct Equipped {
     /// The class's starting weapons in loadout-slot order, then pickups in
     /// the order they were taken. Never reordered and never holding one id
     /// twice.
-    pub carried: Vec<WeaponId>,
+    carried: Vec<WeaponId>,
     /// Always one of `carried`, or nothing.
-    pub held: Option<WeaponId>,
+    held: Option<WeaponId>,
 }
 
 impl Equipped {
+    /// Holding the first, with any repeat dropped.
+    pub fn carrying(weapons: impl IntoIterator<Item = WeaponId>) -> Self {
+        let mut equipped = Self::default();
+        for weapon in weapons {
+            equipped.add(weapon);
+        }
+        equipped.held = equipped.carried.first().copied();
+        equipped
+    }
+
+    pub fn carried(&self) -> &[WeaponId] {
+        &self.carried
+    }
+
     pub fn held(&self) -> Option<WeaponId> {
         self.held
     }
@@ -314,22 +318,19 @@ pub struct AmmoState {
     pub charge: f32,
 }
 
-const NO_AMMO: AmmoState = AmmoState { clip: 0, reserve: 0, reloading: 0.0, charge: 0.0 };
-
 /// Separate from [`Equipped`] because ammo changes every shot and a switch is
-/// rare, and replication is change-detected per component. Keyed by weapon
-/// rather than lined up with `Equipped::carried`: the two arrive in different
-/// packets, and a list one longer than the other would pair every weapon after
-/// the gap with the wrong count.
+/// rare, and replication is change-detected per component. Keyed by weapon,
+/// not by position in `Equipped::carried`, because the two arrive in
+/// different packets.
 #[derive(Component, Clone, Debug, Default, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct Ammo {
     pub weapons: Vec<(WeaponId, AmmoState)>,
 }
 
 impl Ammo {
-    /// Empty for a weapon with no entry yet.
-    pub fn at(&self, weapon: WeaponId) -> &AmmoState {
-        self.weapons.iter().find(|(id, _)| *id == weapon).map_or(&NO_AMMO, |(_, state)| state)
+    /// `None` until a client's `Ammo` catches up with a pickup: draw blank.
+    pub fn at(&self, weapon: WeaponId) -> Option<&AmmoState> {
+        self.weapons.iter().find(|(id, _)| *id == weapon).map(|(_, state)| state)
     }
 
     /// Makes an empty entry if there is none.
@@ -337,7 +338,7 @@ impl Ammo {
         let index = match self.weapons.iter().position(|(id, _)| *id == weapon) {
             Some(index) => index,
             None => {
-                self.weapons.push((weapon, NO_AMMO));
+                self.weapons.push((weapon, AmmoState::default()));
                 self.weapons.len() - 1
             }
         };

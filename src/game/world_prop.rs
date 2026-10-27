@@ -635,11 +635,11 @@ fn give(
         PickupKind::Ammo => {
             let (mut ammo, equipped) = ammo?;
             let mut gained = false;
-            for &id in &equipped.carried {
+            for &id in equipped.carried() {
                 let Some(weapon) = catalog.get(id) else { continue };
                 let max = weapon.magazine.reserve;
                 // Read before writing, so a full body is not marked changed.
-                if ammo.at(id).reserve >= max {
+                if ammo.at(id).map_or(0, |state| state.reserve) >= max {
                     continue;
                 }
                 let amount = share(max, fraction);
@@ -702,10 +702,8 @@ fn weapon_trigger(at: &Transform) -> RoundedBox {
     .placed(at)
 }
 
-/// A weapon not carried is added, with full ammo, and drawn; which digit
-/// draws it later is its bucket's business. One already carried tops up its
-/// reserve and leaves the hands alone, and a full reserve leaves the pickup
-/// where it is. Returns whether the taker got anything.
+/// A weapon not carried is added with full ammo and drawn; one carried tops
+/// up its reserve. Returns whether the taker got anything.
 fn give_weapon(
     gives: &GivesWeapon,
     equipped: &mut Mut<Equipped>,
@@ -718,7 +716,7 @@ fn give_weapon(
     if equipped.carries(weapon.id) {
         let max = weapon.magazine.reserve;
         // Read before writing, so a full body is not marked changed.
-        if ammo.at(weapon.id).reserve >= max || gives.ammo <= 0.0 {
+        if ammo.at(weapon.id).map_or(0, |state| state.reserve) >= max || gives.ammo <= 0.0 {
             return false;
         }
         let state = ammo.at_mut(weapon.id);
@@ -991,7 +989,7 @@ mod tests {
             magazine: Magazine { clip: Some(10), reserve: 40, reload: 1.0, reload_one_at_a_time: false },
         });
         let rifle = WeaponId::of("rifle");
-        (catalog, Equipped { carried: vec![rifle], held: Some(rifle) })
+        (catalog, Equipped::carrying([rifle]))
     }
 
     fn with_launcher(catalog: &mut WeaponCatalog) -> WeaponId {
@@ -1039,8 +1037,8 @@ mod tests {
         let (gained, equipped, ammo, _) = take_weapon(gives(launcher), equipped, Ammo::default(), &catalog);
 
         assert!(gained);
-        assert_eq!(equipped.carried, vec![WeaponId::of("rifle"), launcher]);
-        assert_eq!((ammo.at(launcher).clip, ammo.at(launcher).reserve), (4, 20));
+        assert_eq!(equipped.carried(), [WeaponId::of("rifle"), launcher]);
+        assert_eq!((ammo.at(launcher).unwrap().clip, ammo.at(launcher).unwrap().reserve), (4, 20));
     }
 
     #[test]
@@ -1051,11 +1049,11 @@ mod tests {
 
         let (gained, equipped, ammo, _) = take_weapon(gives(WeaponId::of("rifle")), equipped, ammo, &catalog);
         assert!(gained);
-        assert_eq!(ammo.at(WeaponId::of("rifle")).reserve, 30);
+        assert_eq!(ammo.at(WeaponId::of("rifle")).unwrap().reserve, 30);
 
         let (gained, _, ammo, _) = take_weapon(gives(WeaponId::of("rifle")), equipped.clone(), ammo, &catalog);
         assert!(gained);
-        assert_eq!(ammo.at(WeaponId::of("rifle")).reserve, 40, "topped up past the reserve");
+        assert_eq!(ammo.at(WeaponId::of("rifle")).unwrap().reserve, 40, "topped up past the reserve");
         let (gained, _, _, _) = take_weapon(gives(WeaponId::of("rifle")), equipped, ammo, &catalog);
         assert!(!gained, "a full reserve took it");
     }
@@ -1066,11 +1064,11 @@ mod tests {
         let (mut catalog, _) = rifle();
         let launcher = with_launcher(&mut catalog);
         let many: Vec<WeaponId> = (0..12).map(|n| WeaponId::of(&format!("filler {n}"))).collect();
-        let equipped = Equipped { carried: many.clone(), held: Some(many[0]) };
+        let equipped = Equipped::carrying(many);
 
         let (gained, after, _, _) = take_weapon(gives(launcher), equipped, Ammo::default(), &catalog);
         assert!(gained);
-        assert_eq!(after.carried.len(), 13);
+        assert_eq!(after.carried().len(), 13);
         assert_eq!(after.held(), Some(launcher));
     }
 
@@ -1085,7 +1083,7 @@ mod tests {
         let (_, drawn, ammo, trigger) = take_weapon(gives(launcher), equipped, ammo, &catalog);
         assert_eq!(drawn.held(), Some(launcher));
         assert!(!trigger.deployed(), "it was drawn without a deploy");
-        assert_eq!(ammo.at(WeaponId::of("rifle")).reloading, 0.0, "the rifle went on reloading in a holster");
+        assert_eq!(ammo.at(WeaponId::of("rifle")).unwrap().reloading, 0.0, "the rifle went on reloading in a holster");
 
         let mut low = ammo.clone();
         low.at_mut(WeaponId::of("rifle")).reserve = 0;
@@ -1194,7 +1192,7 @@ mod tests {
         ammo.at_mut(WeaponId::of("rifle")).reserve = 30;
 
         assert!(give_to(spec, &mut health, &mut ammo, &equipped, &catalog));
-        assert_eq!(ammo.at(WeaponId::of("rifle")).reserve, 40, "topped up past the reserve");
+        assert_eq!(ammo.at(WeaponId::of("rifle")).unwrap().reserve, 40, "topped up past the reserve");
         assert!(!give_to(spec, &mut health, &mut ammo, &equipped, &catalog), "full reserves took it");
     }
 

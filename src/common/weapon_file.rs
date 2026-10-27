@@ -335,14 +335,15 @@ mod tests {
         let catalog = the_default_pack();
         let (equipped, ammo) = catalog.starting_equipment(Class::Mercenary, None);
 
-        for &id in &equipped.carried {
+        for &id in equipped.carried() {
             let weapon = catalog.get(id).expect("carrying a weapon nobody defines");
-            assert_eq!(ammo.at(id).clip, weapon.magazine.clip.unwrap_or(0));
-            assert_eq!(ammo.at(id).reserve, weapon.magazine.reserve);
-            assert_eq!(ammo.at(id).reloading, 0.0, "{} spawned mid-reload", weapon.key);
+            let state = ammo.at(id).expect("carrying a weapon with no ammo");
+            assert_eq!(state.clip, weapon.magazine.clip.unwrap_or(0));
+            assert_eq!(state.reserve, weapon.magazine.reserve);
+            assert_eq!(state.reloading, 0.0, "{} spawned mid-reload", weapon.key);
         }
-        assert_eq!(ammo.weapons.len(), equipped.carried.len(), "ammo for a weapon it does not carry");
-        assert!(!equipped.carried.is_empty(), "the placeholder class spawned empty-handed");
+        assert_eq!(ammo.weapons.len(), equipped.carried().len(), "ammo for a weapon it does not carry");
+        assert!(!equipped.carried().is_empty(), "the placeholder class spawned empty-handed");
         assert!(equipped.held().is_some(), "it spawned holding nothing while carrying something");
     }
 
@@ -352,7 +353,7 @@ mod tests {
         let only = [WeaponId::of("medi_wrench"), WeaponId::of("nothing_called_this")];
         let (equipped, ammo) = catalog.starting_equipment(Class::Mercenary, Some(&only));
 
-        assert_eq!(equipped.carried, vec![only[0]]);
+        assert_eq!(equipped.carried(), [only[0]]);
         assert_eq!(equipped.held(), Some(only[0]));
         assert_eq!(ammo.weapons.len(), 1, "ammo for a weapon it does not carry");
     }

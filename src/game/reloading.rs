@@ -44,7 +44,7 @@ pub(crate) fn perform_reloads(
     mut views: Query<&mut Performance, With<Viewmodel>>,
 ) {
     for (equipped, ammo, held, mut performance, mut seen, ours) in &mut bodies {
-        let left = equipped.held.map_or(0.0, |id| ammo.at(id).reloading);
+        let left = equipped.held().and_then(|id| ammo.at(id)).map_or(0.0, |state| state.reloading);
         let was = seen.0;
         // The reload the last shot starts waits out that shot's kick. `seen`
         // stays behind, so the rise is still seen and the reload joins partway.

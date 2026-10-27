@@ -173,11 +173,15 @@ fn show_the_selector(
     // Kept while closed, so reopening onto the same thing rebuilds nothing.
     let Some((equipped, team, color)) = ours else { return };
     let swatch = Swatch::of_body(team.copied(), color.copied());
-    let from = (selection.highlight, equipped.clone(), swatch, thumbnails.as_ref().map_or(0, |t| t.len()));
-    if built_from.as_ref() == Some(&from) && !catalog.is_changed() {
+    let pictures = thumbnails.as_ref().map_or(0, |t| t.len());
+    // Compared before cloning: this runs every frame the selector is open.
+    let same = built_from.as_ref().is_some_and(|(highlight, built, was, count)| {
+        *highlight == selection.highlight && built == equipped && *was == swatch && *count == pictures
+    });
+    if same && !catalog.is_changed() {
         return;
     }
-    *built_from = Some(from);
+    *built_from = Some((selection.highlight, equipped.clone(), swatch, pictures));
     let wanted = Shown::of(&catalog, equipped, selection.highlight, thumbnails.as_deref(), swatch);
 
     // Absent in a test app with no renderer; the text still lays out.
@@ -347,7 +351,7 @@ mod tests {
     #[test]
     fn weapons_nobody_can_name_yet_show_nothing() {
         let (_, equipped) = mercenary();
-        let shown = Shown::of(&WeaponCatalog::default(), &equipped, equipped.held, None, Swatch::neutral());
+        let shown = Shown::of(&WeaponCatalog::default(), &equipped, equipped.held(), None, Swatch::neutral());
         assert!(shown.columns.is_empty(), "{shown:?}");
     }
 }

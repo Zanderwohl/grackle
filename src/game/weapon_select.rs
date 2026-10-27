@@ -86,7 +86,7 @@ impl WeaponSelection {
 /// cannot name yet is left out.
 pub fn carried(equipped: &Equipped, catalog: &WeaponCatalog) -> Vec<(u8, WeaponId)> {
     let mut order: Vec<(u8, WeaponId)> =
-        equipped.carried.iter().filter_map(|&id| Some((catalog.get(id)?.bucket, id))).collect();
+        equipped.carried().iter().filter_map(|&id| Some((catalog.get(id)?.bucket, id))).collect();
     // Stable, so a bucket keeps the carried order.
     order.sort_by_key(|(bucket, _)| *bucket);
     order
@@ -145,12 +145,12 @@ pub fn choose_weapons(
     }
     let dt = time.delta_secs();
     selection.open_for = (selection.open_for - dt).max(0.0);
-    if selection.sent.is_some() && selection.sent == equipped.held {
+    if selection.sent.is_some() && selection.sent == equipped.held() {
         selection.sent = None;
     }
     if !selection.is_open() {
         *selection = WeaponSelection {
-            highlight: equipped.held,
+            highlight: equipped.held(),
             swallowing: selection.swallowing,
             body: selection.body,
             ..default()
@@ -201,7 +201,7 @@ pub fn choose_weapons(
             selection.send(&mut latch);
             selection.swallowing[0] = true;
         } else if latch.0.alt_attack {
-            selection.highlight = equipped.held;
+            selection.highlight = equipped.held();
             selection.forget();
             selection.swallowing[1] = true;
         }
@@ -292,8 +292,8 @@ mod tests {
         let (equipped, _) = catalog.starting_equipment(crate::common::class::Class::Mercenary, None);
         let order = carried(&equipped, &catalog);
 
-        assert_eq!(order.len(), equipped.carried.len());
-        let place = |id: WeaponId| equipped.carried.iter().position(|carried| *carried == id);
+        assert_eq!(order.len(), equipped.carried().len());
+        let place = |id: WeaponId| equipped.carried().iter().position(|carried| *carried == id);
         assert!(
             order.windows(2).all(|pair| (pair[0].0, place(pair[0].1)) < (pair[1].0, place(pair[1].1))),
             "{order:?}"
@@ -324,7 +324,7 @@ mod tests {
         let order = carried(&equipped, &catalog);
         let bucket = order.windows(2).find(|pair| pair[0].0 == pair[1].0).unwrap()[0].0;
         let inside = order.iter().filter(|(at, _)| *at == bucket).map(|(_, slot)| *slot).collect();
-        equipped.held = Some(order.iter().find(|(at, _)| *at != bucket).unwrap().1);
+        equipped.select(order.iter().find(|(at, _)| *at != bucket).unwrap().1);
 
         world.insert_resource(catalog);
         world.init_resource::<Time>();
@@ -409,7 +409,7 @@ mod tests {
             assert!(!input.attack && !input.attack_held, "the confirming click fired");
         }
         assert_eq!(sent(&world), Some(inside[0]));
-        world.query::<&mut Equipped>().single_mut(&mut world).unwrap().held = Some(inside[0]);
+        world.query::<&mut Equipped>().single_mut(&mut world).unwrap().select(inside[0]);
         frame(&mut world, 0.01, None);
         assert!(!world.resource::<WeaponSelection>().holds_the_buttons(), "never let go");
 
@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn a_right_click_cancels() {
         let (mut world, bucket, _) = a_chooser();
-        let held = world.query::<&Equipped>().single(&world).unwrap().held;
+        let held = world.query::<&Equipped>().single(&world).unwrap().held();
         frame(&mut world, 0.0, Some(DIGITS[bucket as usize - 1]));
 
         world.resource_mut::<InputLatch>().0.alt_attack = true;
@@ -451,7 +451,7 @@ mod tests {
             "the weapon being put away could be guessed to fire"
         );
 
-        world.query::<&mut Equipped>().single_mut(&mut world).unwrap().held = Some(slot);
+        world.query::<&mut Equipped>().single_mut(&mut world).unwrap().select(slot);
         frame(&mut world, 0.01, None);
         assert!(!world.resource::<WeaponSelection>().holds_the_buttons());
     }
@@ -469,6 +469,6 @@ mod tests {
         frame(&mut world, SETTLE_SECONDS * 2.0, None);
 
         assert_eq!(sent(&world), None, "the dead body's choice reached the new one");
-        assert_eq!(highlight(&world), equipped.held);
+        assert_eq!(highlight(&world), equipped.held());
     }
 }

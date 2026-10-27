@@ -157,9 +157,8 @@ pub struct PlayerInput {
     /// Asking to duck. [`Stance`] can disagree: a body under a low ceiling
     /// cannot stand up.
     pub crouch: bool,
-    /// A weapon asked for since the last tick consumed it, by id rather
-    /// than by place in the list, which a pickup landing in between could
-    /// shift.
+    /// A weapon asked for since the last tick consumed it. By id, since a
+    /// pickup can shift its place in the list.
     pub select: Option<WeaponId>,
     /// The trigger was pulled since the last tick consumed it. Latched, since
     /// a shot is an edge.

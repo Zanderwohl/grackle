@@ -267,7 +267,7 @@ fn bake_what_we_carry(
     ours: Option<Single<&Equipped, With<LocalPlayer>>>,
 ) {
     let Some(equipped) = ours else { return };
-    for id in &equipped.carried {
+    for id in equipped.carried() {
         let Some(model) = catalog.get(*id).and_then(|weapon| weapon.model.as_deref()) else {
             continue;
         };
@@ -733,7 +733,7 @@ mod tests {
     }
 
     fn holding(id: Option<WeaponId>) -> Equipped {
-        Equipped { carried: id.into_iter().collect(), held: id }
+        Equipped::carrying(id)
     }
 
     /// Two cases draw nothing, but only a missing catalog entry is retried.

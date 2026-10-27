@@ -1736,7 +1736,8 @@ A weapon names its **bucket** — the digit that draws it, `1`–`9`, as in
 Source — and a **deploy** time, in `weapons.toml`. A bucket is the weapon's;
 a `Slot` is a place in a class's loadout, and the two are deliberately not
 the same thing. Several weapons may share a bucket: pressing its digit again
-moves along them, in loadout-slot order, and the wheel steps through
+moves along them, in the order they were carried (a class's starting
+weapons, then pickups), and the wheel steps through
 everything carried (up is back toward `1`).
 
 **What is chosen and what is held are two things.** Choosing moves only
