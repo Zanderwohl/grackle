@@ -17,6 +17,7 @@ use crate::common::net::has_authority;
 use crate::common::weapon::{
     Ammo, Cadence, Cost, Equipped, Magazine, Mounted, WeaponAction, WeaponCatalogue,
 };
+use crate::game::condition::Condition;
 use crate::game::damage::{DamagePlugin, DamageSystems};
 use crate::game::explosion::ExplosionPlugin;
 use crate::game::flame::FlamePlugin;
@@ -26,7 +27,7 @@ use crate::game::projectile::ProjectilePlugin;
 
 /// Which half of the weapon went off. Not a [`Slot`]: a slot picks the weapon,
 /// a button picks which of its two actions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Button {
     Primary,
     Secondary,
@@ -39,7 +40,7 @@ impl Button {
         self as usize
     }
 
-    fn of(self, weapon: &crate::common::weapon::Weapon) -> Mounted {
+    pub(crate) fn of(self, weapon: &crate::common::weapon::Weapon) -> Mounted {
         match self {
             Button::Primary => weapon.primary,
             Button::Secondary => weapon.secondary,
@@ -117,13 +118,19 @@ impl Plugin for WeaponPlugin {
 pub fn pull_trigger(
     time: Res<Time<Fixed>>,
     catalogue: Res<WeaponCatalogue>,
-    mut shooters: Query<(Entity, &Equipped, &mut Ammo, &mut Trigger, &Inputs), With<Player>>,
+    mut shooters: Query<
+        (Entity, &Equipped, &mut Ammo, &mut Trigger, &Inputs, &Condition),
+        With<Player>,
+    >,
     mut fired: MessageWriter<WeaponActionFired>,
 ) {
     let dt = time.delta_secs();
 
-    for (shooter, equipped, mut ammo, mut trigger, input) in &mut shooters {
+    for (shooter, equipped, mut ammo, mut trigger, input, condition) in &mut shooters {
         trigger.tick(dt);
+        if !condition.may_fire() {
+            continue;
+        }
 
         let held = equipped.held;
         let Some(weapon) = catalogue.held_by(equipped) else { continue };
@@ -161,6 +168,10 @@ pub fn pull_trigger(
             if !spend(&mut state, &weapon.magazine, mounted.cost) {
                 continue;
             }
+            // A shot ends a reload, TF2-style: firing with a round left is
+            // choosing to fire rather than to reload. Here rather than in
+            // `reload_weapons` because this is the one place a shot happens.
+            state.reloading = 0.0;
 
             if let Cadence::Automatic { interval } = mounted.cadence {
                 trigger.arm(button, interval);
@@ -177,7 +188,7 @@ pub fn pull_trigger(
 
 /// Take what a pull costs, or return false. A weapon with no clip spends its
 /// reserve directly.
-fn spend(
+pub(crate) fn spend(
     state: &mut crate::common::weapon::AmmoState,
     magazine: &Magazine,
     cost: Cost,
@@ -425,6 +436,49 @@ mod tests {
         input(&mut world, shooter).attack = false;
         step(&mut world);
         assert!(shots(&mut world).is_empty(), "holding the button fired a second time");
+    }
+
+    /// Firing with a round in the clip cancels the reload under way, and the
+    /// rounds it had not yet moved stay in the reserve.
+    #[test]
+    fn a_shot_interrupts_a_reload() {
+        let mut world = a_world(one_weapon(weapon(
+            semi(WeaponAction::Hitscan(LASER), 1),
+            Mounted::EMPTY,
+            Magazine { clip: Some(4), reserve: 8, reload: 1.0, reload_one_at_a_time: false },
+        )));
+        let shooter = a_shooter(&mut world);
+        input(&mut world, shooter).attack = true;
+        step(&mut world);
+        input(&mut world, shooter).attack = false;
+        input(&mut world, shooter).reload = true;
+        step(&mut world);
+        input(&mut world, shooter).reload = false;
+        assert!(ammo(&world, shooter, Slot::Primary).reloading > 0.0, "the reload never started");
+
+        input(&mut world, shooter).attack = true;
+        step(&mut world);
+        assert_eq!(shots(&mut world).len(), 1, "the shot did not go off");
+        let state = ammo(&world, shooter, Slot::Primary);
+        assert_eq!(state.reloading, 0.0, "the reload carried on after the shot");
+        assert_eq!((state.clip, state.reserve), (2, 8), "rounds moved for a reload that was cancelled");
+    }
+
+    /// A humiliated body's press goes nowhere, and costs nothing.
+    #[test]
+    fn a_humiliated_body_does_not_fire() {
+        let mut world = a_world(one_weapon(weapon(
+            semi(WeaponAction::Hitscan(LASER), 1),
+            Mounted::EMPTY,
+            Magazine { clip: Some(12), reserve: 12, reload: 1.0, reload_one_at_a_time: false },
+        )));
+        let shooter = a_shooter(&mut world);
+        *world.get_mut::<Condition>(shooter).unwrap() = Condition::HUMILIATED;
+        input(&mut world, shooter).attack = true;
+
+        step(&mut world);
+        assert!(shots(&mut world).is_empty(), "a humiliated body fired");
+        assert_eq!(ammo(&world, shooter, Slot::Primary).clip, 12, "a refused shot was paid for");
     }
 
     /// An automatic weapon fires on its own interval while held, not per tick.

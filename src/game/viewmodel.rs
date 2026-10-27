@@ -3,7 +3,8 @@
 //! weapon from clipping into walls. Every camera query filters on a marker;
 //! see CLAUDE.md, "Editor and game in one process".
 //!
-//! The weapon is placed by the prop's [`ViewmodelSpec`], not the body's carry:
+//! The weapon is placed by the prop's
+//! [`ViewmodelSpec`](crate::prop::hold::ViewmodelSpec), not the body's carry:
 //! the carry put the grip 0.39 m under the eye where the frustum is 0.16 m
 //! tall, off the bottom of the screen.
 //!
@@ -25,9 +26,11 @@ use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::team::Team;
 use crate::common::weapon::WeaponId;
 use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
-use crate::game::held::{HeldModel, HeldPart};
+use crate::common::skeleton::clip::Clip;
+use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
+use crate::game::held::{perform, HeldModel, HeldPart, Performance, SharedWeaponClips};
 use crate::game::player::{place_camera, LocalPlayer, PlayerCamera, ViewMode, PLAY_CAMERA_ORDER};
-use crate::prop::hold::{grip_with, ViewmodelSpec};
+use crate::prop::hold::grip_hands;
 
 pub const VIEWMODEL_LAYER: usize = crate::common::render_layers::VIEWMODEL;
 
@@ -52,7 +55,7 @@ pub struct ViewmodelPart;
 pub struct ViewmodelArm {
     /// Index into [`Skeleton::posed_bones`].
     bone: usize,
-    /// Index into [`grip_with`]'s answer: 0 trigger hand, 1 support.
+    /// Index into [`grip_hands`]'s answer: 0 trigger hand, 1 support.
     hand: usize,
 }
 
@@ -83,6 +86,11 @@ pub struct Viewmodel {
     /// it costs a comparison rather than a solve. Cleared whenever the arms are
     /// rebuilt: they spawn hidden, and only placing them shows them.
     arms_placed_for: Option<ArmsKey>,
+    /// Where the weapon was drawn this frame, after its clips: what the arms
+    /// are solved onto.
+    weapon: Option<Transform>,
+    /// Where the clips moved each hand's grip, trigger hand first.
+    grips: [Vec3; 2],
 }
 
 /// Everything [`place_the_viewmodel_arms`] reads, and nothing else.
@@ -99,6 +107,15 @@ struct ArmsKey {
     held: Tick,
     fov: u32,
     aspect: u32,
+    /// The weapon as drawn, so a clip moving it re-solves the arms.
+    weapon: [u32; 7],
+    /// The grips, so a clip taking a hand off the weapon does too.
+    grips: [[u32; 3]; 2],
+}
+
+fn bits(transform: &Transform) -> [u32; 7] {
+    let (t, r) = (transform.translation, transform.rotation);
+    [t.x, t.y, t.z, r.x, r.y, r.z, r.w].map(f32::to_bits)
 }
 
 /// Where this machine's shots appear to leave, in world space: the held
@@ -131,6 +148,7 @@ impl Plugin for ViewmodelPlugin {
                 give_the_view_its_own_camera,
                 dress_the_viewmodel,
                 dress_the_viewmodel_arms,
+                perform_viewmodel_clips,
                 place_the_viewmodel,
                 place_the_viewmodel_arms,
                 show_it_only_in_first_person,
@@ -146,7 +164,12 @@ fn give_the_view_its_own_camera(
     views: Query<Entity, (With<PlayerCamera>, Without<Viewmodel>)>,
 ) {
     for view in &views {
-        commands.entity(view).insert(Viewmodel::default()).with_children(|view| {
+        // Its own performance and stack: first person plays the prop's `fire`
+        // and `reload`, not the body's clips.
+        commands
+            .entity(view)
+            .insert((Viewmodel::default(), Performance::default(), ClipStack::default()))
+            .with_children(|view| {
             view.spawn((
                 ViewmodelCamera,
                 Camera3d::default(),
@@ -223,23 +246,49 @@ fn dress_the_viewmodel(
     }
 }
 
-/// Every frame: the placement is a fraction of the frustum, so it changes with
-/// the window's aspect.
-fn place_the_viewmodel(
+/// The same performance a body runs, on a stack of its own.
+fn perform_viewmodel_clips(
+    time: Res<Time>,
+    clips: Res<Assets<Clip>>,
+    shared: Option<Res<SharedWeaponClips>>,
     held: Query<&HeldModel, With<LocalPlayer>>,
-    cameras: Query<(&Camera, &Projection, &Children), With<ViewmodelCamera>>,
-    mut parts: Query<&mut Transform, With<ViewmodelPart>>,
+    mut views: Query<(&mut Performance, &mut ClipStack), With<Viewmodel>>,
 ) {
     let Ok(held) = held.single() else { return };
+    for (mut performance, mut stack) in &mut views {
+        perform(held, shared.as_deref(), &mut performance, &mut stack, &clips, time.delta_secs());
+    }
+}
+
+/// Every frame: the placement is a fraction of the frustum, so it changes with
+/// the window's aspect. Then the viewmodel's clips move it, in eye space:
+/// `Space::Carry` is the framed weapon and `Space::Eye` the camera.
+fn place_the_viewmodel(
+    clips: Res<Assets<Clip>>,
+    held: Query<(&HeldModel, &Skeleton), With<LocalPlayer>>,
+    mut views: Query<(&mut Viewmodel, &ClipStack)>,
+    cameras: Query<(&Camera, &Projection, &Children, &ChildOf), With<ViewmodelCamera>>,
+    mut parts: Query<&mut Transform, With<ViewmodelPart>>,
+) {
+    let Ok((held, skeleton)) = held.single() else { return };
     let spec = held.viewmodel();
 
-    for (camera, projection, children) in &cameras {
+    for (camera, projection, children, view) in &cameras {
         let Projection::Perspective(perspective) = projection else { continue };
         let Some(size) = camera.logical_viewport_size().filter(|size| size.y > 0.0) else {
             continue;
         };
+        let Ok((mut viewmodel, stack)) = views.get_mut(view.parent()) else { continue };
 
-        let placed = spec.transform(perspective.fov, size.x / size.y);
+        let framed = spec.transform(perspective.fov, size.x / size.y);
+        let placed = played(framed, stack, skeleton, &clips);
+        if viewmodel.weapon != Some(placed) {
+            viewmodel.weapon = Some(placed);
+        }
+        let grips = grip_offsets(stack, &clips, skeleton);
+        if viewmodel.grips != grips {
+            viewmodel.grips = grips;
+        }
         for child in children.iter() {
             let Ok(mut transform) = parts.get_mut(child) else { continue };
             // Compared first: this runs every frame, and an unchanged
@@ -249,26 +298,43 @@ fn place_the_viewmodel(
     }
 }
 
-/// `muzzle` in the play camera's frame. The two cameras share a frame but not a
-/// field of view, so the point the viewmodel draws is moved to where the play
-/// camera sees the same pixel, at the same depth.
-pub fn muzzle_in_view(
-    spec: &ViewmodelSpec,
-    muzzle: Vec3,
-    viewmodel_fov: f32,
-    play_fov: f32,
-    aspect: f32,
-) -> Vec3 {
-    let drawn = spec.transform(viewmodel_fov, aspect).transform_point(muzzle);
+/// `framed` moved by whatever the stack is playing.
+fn played(framed: Transform, stack: &ClipStack, skeleton: &Skeleton, clips: &Assets<Clip>) -> Transform {
+    if stack.0.is_empty() {
+        return framed;
+    }
+    let ground = |_: Vec3| 0.0;
+    let frames = Frames {
+        body: eye_space(skeleton),
+        carry: framed,
+        weapon: Some(framed),
+        eye: Some(Transform::IDENTITY),
+        ground: &ground,
+        footfalls: None,
+    };
+    // The pose is thrown away: the arms are solved onto the weapon afterwards.
+    let mut pose = Pose::rest();
+    let mut moving = framed;
+    apply_stack(stack, clips, skeleton, &mut pose, &frames, Some(&mut moving));
+    moving
+}
+
+/// `muzzle` in the play camera's frame, for a weapon drawn at `weapon` in the
+/// viewmodel camera's. The cameras share a frame but not a field of view, so
+/// the point moves to where the play camera sees the same pixel and depth.
+pub fn muzzle_in_view(weapon: &Transform, muzzle: Vec3, viewmodel_fov: f32, play_fov: f32) -> Vec3 {
+    let drawn = weapon.transform_point(muzzle);
     let widen = (play_fov / 2.0).tan() / (viewmodel_fov / 2.0).tan();
     Vec3::new(drawn.x * widen, drawn.y * widen, drawn.z)
 }
 
+/// From the weapon as drawn, kick and all. That is last frame's drawing, since
+/// this runs before `Update`; a frame's lag is inside a muzzle flash.
 pub fn find_the_apparent_muzzle(
     view: Res<ViewMode>,
     held: Query<&HeldModel, With<LocalPlayer>>,
     viewmodels: Query<(&Camera, &Projection), With<ViewmodelCamera>>,
-    plays: Query<(&Transform, &Projection), With<PlayerCamera>>,
+    plays: Query<(&Transform, &Projection, Option<&Viewmodel>), With<PlayerCamera>>,
     mut apparent: ResMut<ApparentMuzzle>,
 ) {
     let found = || {
@@ -280,10 +346,12 @@ pub fn find_the_apparent_muzzle(
         let (camera, Projection::Perspective(viewmodel)) = viewmodels.single().ok()? else {
             return None;
         };
-        let (eye, Projection::Perspective(play)) = plays.single().ok()? else { return None };
+        let (eye, Projection::Perspective(play), drawn) = plays.single().ok()? else { return None };
         let size = camera.logical_viewport_size().filter(|size| size.y > 0.0)?;
-        let seen =
-            muzzle_in_view(&held.viewmodel(), muzzle, viewmodel.fov, play.fov, size.x / size.y);
+        let weapon = drawn
+            .and_then(|drawn| drawn.weapon)
+            .unwrap_or_else(|| held.viewmodel().transform(viewmodel.fov, size.x / size.y));
+        let seen = muzzle_in_view(&weapon, muzzle, viewmodel.fov, play.fov);
         Some(eye.transform_point(seen))
     };
     apparent.set_if_neq(ApparentMuzzle(found()));
@@ -373,14 +441,19 @@ fn place_the_viewmodel_arms(
         };
         let aspect = size.x / size.y;
 
+        let Ok(mut viewmodel) = views.get_mut(view.parent()) else { continue };
+        let weapon = viewmodel
+            .weapon
+            .unwrap_or_else(|| held.viewmodel().transform(perspective.fov, aspect));
         let key = ArmsKey {
             body,
             skeleton: skeleton.last_changed(),
             held: held.last_changed(),
             fov: perspective.fov.to_bits(),
             aspect: aspect.to_bits(),
+            weapon: bits(&weapon),
+            grips: viewmodel.grips.map(|grip| grip.to_array().map(f32::to_bits)),
         };
-        let Ok(mut viewmodel) = views.get_mut(view.parent()) else { continue };
         if viewmodel.arms_placed_for == Some(key) {
             continue;
         }
@@ -388,11 +461,10 @@ fn place_the_viewmodel_arms(
 
         let skeleton: &Skeleton = &skeleton;
         let root = eye_space(skeleton);
-        let weapon = held.viewmodel().transform(perspective.fov, aspect);
 
         // From rest: a camera that does not bob must not have arms that do.
         let mut pose = Pose::rest();
-        let reached = grip_with(skeleton, &mut pose, &root, held.hold(), &weapon);
+        let reached = grip_hands(skeleton, &mut pose, &root, held.hold(), &weapon, [true; 2], viewmodel.grips);
         let posed = skeleton.posed_bones(&pose, &root);
 
         for child in children.iter() {
@@ -447,7 +519,7 @@ mod tests {
     use crate::common::skeleton::humanoid;
     use crate::common::skeleton::ik::Reach;
     use crate::prop::document;
-    use crate::prop::hold::{HoldSpec, ViewmodelSpec};
+    use crate::prop::hold::{grip_with, HoldSpec, ViewmodelSpec};
 
     use super::*;
 
@@ -611,13 +683,49 @@ mod tests {
                 let half = (fov / 2.0).tan();
                 Vec2::new(point.x / (-point.z * half * aspect), point.y / (-point.z * half))
             };
-            let drawn = spec.transform(VIEWMODEL_FOV, aspect).transform_point(muzzle);
-            let seen = muzzle_in_view(&spec, muzzle, VIEWMODEL_FOV, play_fov, aspect);
+            let weapon = spec.transform(VIEWMODEL_FOV, aspect);
+            let drawn = weapon.transform_point(muzzle);
+            let seen = muzzle_in_view(&weapon, muzzle, VIEWMODEL_FOV, play_fov);
 
             let (want, got) = (on_screen(drawn, VIEWMODEL_FOV), on_screen(seen, play_fov));
             assert!(want.abs_diff_eq(got, 1e-5), "drawn at {want}, seen at {got}");
             assert_eq!(seen.z, drawn.z, "the depth moved");
         }
+    }
+
+    /// A kick moves where an own tracer starts: the apparent muzzle follows
+    /// the weapon as drawn, not as framed.
+    #[test]
+    fn the_apparent_muzzle_follows_the_kick() {
+        let mut world = World::new();
+        world.insert_resource(ViewMode::FirstPerson);
+        world.init_resource::<ApparentMuzzle>();
+        world.spawn((LocalPlayer, HeldModel::with_muzzle(Vec3::new(0.0, 0.0, -0.5))));
+        let mut camera = Camera::default();
+        camera.computed.target_info = Some(bevy::camera::RenderTargetInfo {
+            physical_size: UVec2::new(1600, 900),
+            scale_factor: 1.0,
+        });
+        let projection = |fov| Projection::Perspective(PerspectiveProjection { fov, ..default() });
+        world.spawn((ViewmodelCamera, camera, projection(VIEWMODEL_FOV)));
+        let framed = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
+        let view = world
+            .spawn((PlayerCamera, Transform::IDENTITY, projection(VIEWMODEL_FOV), Viewmodel {
+                weapon: Some(framed),
+                ..default()
+            }))
+            .id();
+
+        let muzzle = |world: &mut World| {
+            world.run_system_once(find_the_apparent_muzzle).unwrap();
+            world.resource::<ApparentMuzzle>().0.expect("no muzzle found")
+        };
+        let resting = muzzle(&mut world);
+        let kick = Vec3::new(0.0, 0.02, 0.06);
+        world.get_mut::<Viewmodel>(view).unwrap().weapon =
+            Some(Transform { translation: framed.translation + kick, ..framed });
+        let kicked = muzzle(&mut world);
+        assert!((kicked - resting).abs_diff_eq(kick, 1e-5), "the muzzle moved {} for a kick of {kick}", kicked - resting);
     }
 
     /// Drawn over the world and under the UI.
@@ -662,7 +770,8 @@ mod tests {
             physical_size: UVec2::new(1600, 900),
             scale_factor: 1.0,
         });
-        let view = world.spawn(Viewmodel::default()).id();
+        world.init_resource::<Assets<Clip>>();
+        let view = world.spawn((Viewmodel::default(), ClipStack::default())).id();
         let camera = world
             .spawn((
                 ViewmodelCamera,

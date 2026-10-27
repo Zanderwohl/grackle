@@ -9,6 +9,7 @@ use lightyear::prelude::input::native::ActionState;
 use crate::common::damage::{Damageable, PlayerId};
 use crate::common::hitbox::Hitboxes;
 use crate::common::movement_rules::MovementRules;
+use crate::common::taunt::TauntTurning;
 use crate::common::team::Team;
 use crate::common::class::{
     body_centre_from_feet, Stance, CLASS_HALF_EXTENTS,
@@ -16,6 +17,7 @@ use crate::common::class::{
 use crate::game::collision::{CollisionWorld, Touched};
 use crate::common::class::Class;
 use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalogue};
+use crate::game::condition::Condition;
 use crate::game::weapon::Trigger;
 use crate::tool::room::Room;
 
@@ -58,7 +60,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 // `Transform` and `Visibility` because a replicated body is built by
 // inserting components rather than through `spawn_player`, and without them
 // its children have nothing to inherit.
-#[require(Hitboxes, Damageable, Equipped, Ammo, Trigger, Inputs, Transform, Visibility)]
+#[require(Hitboxes, Damageable, Equipped, Ammo, Trigger, Inputs, Condition, Transform, Visibility)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -70,7 +72,12 @@ pub struct Player {
     /// A stopped move cannot be recovered from position alone; the animation
     /// layer reads this to tell running from running into a wall.
     pub against_wall: bool,
+    /// A taunt held the body back from the aim, so it turns back at
+    /// [`CATCH_UP_DEGREES_PER_SECOND`] rather than in one tick.
+    pub catching_up: bool,
 }
+
+pub const CATCH_UP_DEGREES_PER_SECOND: f32 = 720.0;
 
 impl Player {
     pub fn on_ground(&self) -> bool {
@@ -86,6 +93,7 @@ impl Default for Player {
             pitch: 0.0,
             ground: None,
             against_wall: false,
+            catching_up: false,
         }
     }
 }
@@ -123,6 +131,9 @@ pub struct PlayerInput {
     pub alt_attack_held: bool,
     /// A reload was asked for since the last tick consumed it.
     pub reload: bool,
+    /// A debug key until there are rounds to lose.
+    pub humiliate: bool,
+    pub taunt: bool,
     /// Look direction about world Y, radians. An input because facing decides
     /// which way "forward" is, so a server needs it to reproduce movement.
     pub yaw: f32,
@@ -210,6 +221,33 @@ pub enum ViewMode {
     #[default]
     FirstPerson,
     ThirdPerson,
+}
+
+/// The view picked with `F`. [`ViewMode`] is what is drawn, so a condition
+/// forcing third person never has to remember what to put back.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ViewPreference(pub ViewMode);
+
+/// How far the camera has come out of the head: 0 at the eye, 1 where third
+/// person puts it. [`ViewMode`] is third person whenever this is above zero,
+/// so the body is drawn whenever the camera is not inside it.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct CameraPull(pub f32);
+
+/// Seconds for the camera to come all the way out of the head, or back in.
+pub const CAMERA_PULL_SECONDS: f32 = 0.35;
+
+impl CameraPull {
+    /// Both views are worked out every frame, so a swing starts from where the
+    /// unused one really is.
+    pub fn place(self, first: Transform, third: Transform) -> Transform {
+        let t = EaseFunction::SmoothStep.sample_clamped(self.0);
+        Transform {
+            translation: first.translation.lerp(third.translation, t),
+            rotation: first.rotation.slerp(third.rotation, t),
+            scale: Vec3::ONE,
+        }
+    }
 }
 
 impl ViewMode {
@@ -398,6 +436,8 @@ pub fn gather_input(
     input.alt_attack_held = buttons.pressed(MouseButton::Right);
 
     input.reload |= keys.just_pressed(KeyCode::KeyR);
+    input.humiliate |= keys.just_pressed(KeyCode::KeyH);
+    input.taunt |= keys.just_pressed(KeyCode::KeyG);
 
     // All six slots are bound whatever the class carries: an unbound key and
     // a key bound to an empty slot are the same to a player.
@@ -457,6 +497,8 @@ pub fn write_client_inputs(
     latch.0.attack = false;
     latch.0.alt_attack = false;
     latch.0.reload = false;
+    latch.0.humiliate = false;
+    latch.0.taunt = false;
     latch.0.select = None;
 }
 
@@ -477,11 +519,11 @@ pub fn face_bodies(mut bodies: Query<(&Player, &mut Transform)>) {
 }
 
 /// `F` swaps between looking out of the body and looking at it.
-pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<ViewMode>) {
+pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut preference: ResMut<ViewPreference>) {
     if !keys.just_pressed(KeyCode::KeyF) {
         return;
     }
-    *mode = match *mode {
+    preference.0 = match preference.0 {
         ViewMode::FirstPerson => ViewMode::ThirdPerson,
         ViewMode::ThirdPerson => ViewMode::FirstPerson,
     };
@@ -494,7 +536,7 @@ pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<ViewMode>) 
 ///
 /// Runs after `interpolate_bodies`; earlier, it sits a frame behind the body.
 pub fn place_camera(
-    mode: Res<ViewMode>,
+    pull: Res<CameraPull>,
     world: Res<CollisionWorld>,
     latch: Res<InputLatch>,
     body: Option<Single<(&Transform, &Stance), (With<LocalPlayer>, Without<PlayerCamera>)>>,
@@ -507,12 +549,12 @@ pub fn place_camera(
     let aim = Quat::from_rotation_y(latch.0.yaw) * Quat::from_rotation_x(latch.0.pitch);
     let pivot = body.translation + Vec3::Y * eye;
 
+    let first = Transform::from_translation(pivot).with_rotation(aim);
+    let third = Transform::from_translation(third_person_camera(pivot, aim, &world)).with_rotation(aim);
+    let placed = pull.place(first, third);
     for mut camera in &mut cameras {
-        camera.rotation = aim;
-        camera.translation = match *mode {
-            ViewMode::FirstPerson => pivot,
-            ViewMode::ThirdPerson => third_person_camera(pivot, aim, &world),
-        };
+        camera.translation = placed.translation;
+        camera.rotation = placed.rotation;
     }
 }
 
@@ -532,14 +574,20 @@ pub fn step_player(
     time: Res<Time>,
     world: Res<CollisionWorld>,
     rules: Res<MovementRules>,
-    mut players: Query<(&mut Player, &mut PhysicsBody, &mut Stance, &Inputs), With<Simulated>>,
+    // Absent in tests that build no game; the same table on both ends, since
+    // the server sends it.
+    taunts: Option<Res<crate::common::taunt::Taunts>>,
+    mut players: Query<
+        (&mut Player, &mut PhysicsBody, &mut Stance, &Inputs, &Condition),
+        With<Simulated>,
+    >,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {
         return;
     }
 
-    for (mut player_slot, mut body_slot, mut stance_slot, input) in &mut players {
+    for (mut player_slot, mut body_slot, mut stance_slot, input, condition) in &mut players {
         // Stepped on copies and written back only if different: all three are
         // replicated, and a still body would otherwise be resent every tick.
         let mut player = player_slot.clone();
@@ -550,9 +598,21 @@ pub fn step_player(
         // and rollback replays this input.
         let jump = input.jump;
 
-        player.yaw = input.yaw;
-        player.pitch = input.pitch;
-        change_stance(&mut stance, &mut body, player.on_ground(), input.crouch, &world);
+        // The view is aimed from the latch and never held back. Movement below
+        // is from the body's yaw, so a held body walks the way it faces.
+        let turning = condition.turning(taunts.as_deref());
+        let aim = (input.yaw, input.pitch);
+        (player.yaw, player.pitch) = match turning {
+            TauntTurning::Free if player.catching_up => TauntTurning::AtMost(CATCH_UP_DEGREES_PER_SECOND),
+            turning => turning,
+        }
+        .follow((player.yaw, player.pitch), aim, dt);
+        player.catching_up = match turning {
+            TauntTurning::Free => (player.yaw, player.pitch) != aim,
+            _ => true,
+        };
+        let crouch = input.crouch && condition.may_crouch();
+        change_stance(&mut stance, &mut body, player.on_ground(), crouch, &world);
         let half = stance.half_extents();
         let wish = Vec3::new(input.movement.x, 0.0, -input.movement.y).normalize_or_zero();
         let wish = Quat::from_rotation_y(player.yaw) * wish;
@@ -560,6 +620,9 @@ pub fn step_player(
         // The animation measures ground covered; it is never told which speed.
         let speed = if rules.sprint.sprints(input.sprint) { SPRINT_SPEED } else { WALK_SPEED };
         let speed = if stance == Stance::Crouched { CROUCH_SPEED } else { speed };
+        // A replicated, unpredicted `Condition`: the tick a taunt starts or
+        // stops is a rollback, which is correct and rare.
+        let speed = speed * condition.speed_factor(taunts.as_deref());
         let walk = wish * speed;
 
         // A held jump re-fires on landing, so chaining jumps needs no fresh
@@ -737,7 +800,7 @@ mod tests {
     #[test]
     fn first_person_puts_the_camera_at_the_eye() {
         let mut app = App::new();
-        app.init_resource::<ViewMode>();
+        app.init_resource::<CameraPull>();
         app.init_resource::<InputLatch>();
         app.insert_resource(open_room());
         let body = Vec3::new(0.0, 1.0, 0.0);
@@ -767,7 +830,7 @@ mod tests {
     #[test]
     fn the_view_is_aimed_by_the_latch_not_by_the_body() {
         let mut app = App::new();
-        app.init_resource::<ViewMode>();
+        app.init_resource::<CameraPull>();
         app.insert_resource(open_room());
         let yaw = 1.1;
         app.insert_resource(InputLatch(PlayerInput { yaw, ..default() }));
@@ -867,7 +930,7 @@ mod tests {
     #[test]
     fn f_toggles_the_view() {
         let mut app = App::new();
-        app.init_resource::<ViewMode>();
+        app.init_resource::<ViewPreference>();
         app.add_plugins(bevy::input::InputPlugin);
 
         let press = |app: &mut App| {
@@ -881,11 +944,12 @@ mod tests {
             keys.clear();
         };
 
-        assert_eq!(*app.world().resource::<ViewMode>(), ViewMode::FirstPerson);
+        let view = |app: &App| app.world().resource::<ViewPreference>().0;
+        assert_eq!(view(&app), ViewMode::FirstPerson);
         press(&mut app);
-        assert_eq!(*app.world().resource::<ViewMode>(), ViewMode::ThirdPerson);
+        assert_eq!(view(&app), ViewMode::ThirdPerson);
         press(&mut app);
-        assert_eq!(*app.world().resource::<ViewMode>(), ViewMode::FirstPerson);
+        assert_eq!(view(&app), ViewMode::FirstPerson);
     }
 
     /// Your own body is hidden only in first person.

@@ -19,7 +19,7 @@ use bevy::window::PrimaryWindow;
 
 use crate::common::app_mode::AppMode;
 use crate::common::skeleton::clip::Clip;
-use crate::common::skeleton::play::{key_the_channel, Playing};
+use crate::common::skeleton::play::{key_the_channel, Layer, Playing};
 use crate::prop::document::PropEditor;
 use crate::prop::figure::FigurePerformance;
 use crate::prop::view::PropSceneSystems;
@@ -52,6 +52,10 @@ pub struct AnimEditor {
     /// Preview a blended state's whole blend at this heading. Radians; `None` is the edited variant
     /// alone.
     pub blend_preview: Option<f32>,
+    /// What the figure does beneath a weapon clip: a body state on the
+    /// locomotion layer, so a deploy or a kick can be watched over a run the
+    /// way a match layers it. `None` stands at rest.
+    pub underlay: Option<crate::common::skeleton::state::AnimationState>,
     /// Framing cannot happen on entry: egui has not measured the strip yet, and the figure is spawned
     /// through `Commands`. Waits for both rather than for a frame count.
     pending_frame: bool,
@@ -736,9 +740,10 @@ pub fn preview_inputs(
 
 /// The clips the figure previews, as handles kept and refilled rather than
 /// replaced: slot 0 for the strip's clip or a blend's first variant, slot 1
-/// for its second. A slot is refilled only when its [`PreviewSource`] moved.
+/// for its second, and slots 2 and 3 for the body state a weapon clip is
+/// played over. A slot is refilled only when its [`PreviewSource`] moved.
 #[derive(Resource, Default)]
-pub struct PreviewClips([Option<(Handle<Clip>, PreviewSource)>; 2]);
+pub struct PreviewClips([Option<(Handle<Clip>, PreviewSource)>; 4]);
 
 /// What a previewed clip is read from: the strip's clip, the body clips a
 /// blend comes out of, and the heading it is blended at.
@@ -819,10 +824,10 @@ fn drive_the_preview(
             if let (Some(heading), Some(animation)) = (anim.blend_preview, animation.filter(|_| blend.is_some())) {
                 if let Some((first, second)) = animation.at_heading(heading) {
                     let first = previews.show(0, first, from, &mut assets);
-                    performance.0 .0.push(Playing { clip: first, time: cursor.time, weight: 1.0 });
+                    performance.0 .0.push(Playing::new(Layer::Locomotion, first, cursor.time));
                     if let Some((other, t)) = second {
                         let other = previews.show(1, other, from, &mut assets);
-                        performance.0 .0.push(Playing { clip: other, time: cursor.time, weight: t });
+                        performance.0 .0.push(Playing { weight: t, ..Playing::new(Layer::Locomotion, other, cursor.time) });
                     }
                     return;
                 }
@@ -830,8 +835,29 @@ fn drive_the_preview(
         }
     }
 
+    // A weapon clip plays on the weapon layer, over whatever body state is
+    // chosen beneath it, on the same clock.
+    if anim.source == ClipSource::Prop {
+        let under = anim.underlay.and_then(|state| {
+            let animation = clips.animations().get(state.clip_name())?;
+            Some((state, animation.at_heading(0.0)?))
+        });
+        if let Some((state, (first, second))) = under {
+            corrections.0 = Some((state, preview_inputs(first, cursor.time, state, 0.0)));
+            let first = previews.show(2, first, from, &mut assets);
+            performance.0 .0.push(Playing::new(Layer::Locomotion, first, cursor.time));
+            if let Some((other, t)) = second {
+                let other = previews.show(3, other, from, &mut assets);
+                performance.0 .0.push(Playing { weight: t, ..Playing::new(Layer::Locomotion, other, cursor.time) });
+            }
+        }
+        let clip = previews.show(0, clip, from, &mut assets);
+        performance.0 .0.push(Playing::new(Layer::Weapon, clip, cursor.time));
+        return;
+    }
+
     let clip = previews.show(0, clip, from, &mut assets);
-    performance.0 .0.push(Playing { clip, time: cursor.time, weight: 1.0 });
+    performance.0 .0.push(Playing::new(Layer::Locomotion, clip, cursor.time));
 }
 
 #[cfg(test)]
@@ -941,6 +967,7 @@ mod tests {
             track: None,
             free_drag: false,
             blend_preview: None,
+            underlay: None,
             pending_frame: false,
         };
         (editor, anim)
@@ -959,6 +986,47 @@ mod tests {
             original: clip.tracks[0].channel.clone(),
             held: keys.to_vec(),
         }]
+    }
+
+    /// A weapon clip is previewed on the weapon layer, over the body state
+    /// chosen beneath it, with that state's corrections, as a match layers it.
+    #[test]
+    fn a_weapon_clip_is_previewed_over_the_state_beneath_it() {
+        use bevy::ecs::system::RunSystemOnce;
+        use crate::common::skeleton::state::AnimationState;
+
+        let mut world = World::new();
+        world.init_resource::<Assets<Clip>>();
+        world.init_resource::<PreviewClips>();
+        world.init_resource::<FigurePerformance>();
+        world.init_resource::<crate::prop::figure::FigureCorrections>();
+        world.insert_resource(TimelineCursor::default());
+        world.insert_resource(ShownClip(Some(Clip { length: 0.4, ..Clip::default() })));
+        let mut body = body::BodyClips::default();
+        body.ensure_loaded(&crate::common::assets::Assets::default());
+        world.insert_resource(body);
+        world.insert_resource(AnimEditor {
+            source: ClipSource::Prop,
+            selected: Some("deploy".into()),
+            underlay: Some(AnimationState::RunForward),
+            ..default()
+        });
+
+        world.run_system_once(drive_the_preview).unwrap();
+        let layers: Vec<Layer> =
+            world.resource::<FigurePerformance>().0 .0.iter().map(|playing| playing.layer).collect();
+        assert!(layers.contains(&Layer::Locomotion), "nothing played beneath the weapon clip");
+        assert_eq!(layers.last(), Some(&Layer::Weapon), "the weapon clip was not on the weapon layer");
+        assert_eq!(
+            world.resource::<crate::prop::figure::FigureCorrections>().0.map(|(state, _)| state),
+            Some(AnimationState::RunForward),
+        );
+
+        world.resource_mut::<AnimEditor>().underlay = None;
+        world.run_system_once(drive_the_preview).unwrap();
+        let layers: Vec<Layer> =
+            world.resource::<FigurePerformance>().0 .0.iter().map(|playing| playing.layer).collect();
+        assert_eq!(layers, [Layer::Weapon], "a weapon clip at rest played something beneath it");
     }
 
     /// A track picked by its header must not be unpicked by the empty key selection that comes with it.

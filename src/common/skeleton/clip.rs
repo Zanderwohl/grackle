@@ -51,11 +51,19 @@ pub enum Space {
     Body,
     /// The point between the shoulders, turned by the aim.
     Carry,
+    /// The same point, turned with the body and not the aim: for hands up or
+    /// a wave, which should not tilt as the player looks up.
+    Shoulders,
     /// The weapon's frame, origin at its grip. A target here stays on the weapon
     /// through a recoil.
     Weapon,
     /// The eye, for a viewmodel clip.
     Eye,
+    /// An arm's own grip on the weapon: origin where that hand holds, axes the
+    /// weapon's. An arm effector here moves the grip rather than the hand, so
+    /// a key at zero is holding and a reload can take the support hand to a
+    /// magazine and back. Read by the grip, never solved by the clip.
+    Grip,
 }
 
 /// What a number on a key is measured in.
@@ -560,6 +568,14 @@ pub struct Clip {
     pub note: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tracks: Vec<Track>,
+    /// Seconds to fade in over the layer beneath, overriding the layer's
+    /// `layers.toml` entry. A clip that starts away from where its layer
+    /// leaves things — a deploy, from below the frame — wants zero.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::prop::nice_f32::option")]
+    pub blend_in: Option<f32>,
+    /// Seconds to fade back out, likewise.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::prop::nice_f32::option")]
+    pub blend_out: Option<f32>,
 }
 
 /// How many strides a [`Clock::Stride`] clip of `length` is played over, never
@@ -886,6 +902,8 @@ mod tests {
             length: 2.0,
             clock: Clock::Seconds,
             looping: false,
+            blend_in: None,
+            blend_out: None,
             note: String::new(),
             tracks: vec![
                 Track {

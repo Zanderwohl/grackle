@@ -394,7 +394,12 @@ impl ClipLibrary {
 }
 
 /// The state machine, and the only thing that writes a [`Pose`].
+///
+/// Brings a [`ClipStack`](super::play::ClipStack): anything animated can have
+/// a layer played over it — a flinch on a grid body as much as a taunt on a
+/// player. A corpse has no animator, so nothing layers onto one.
 #[derive(Component, Clone, Copy, Debug, Default)]
+#[require(super::play::ClipStack)]
 pub struct SkeletonAnimator {
     state: AnimationState,
     /// The state being blended out of; `blend` runs 0 to 1 over [`BLEND_TIME`].

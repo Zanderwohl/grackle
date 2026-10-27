@@ -21,7 +21,9 @@ use crate::common::app_mode::{showing_the_world, AppMode};
 use crate::common::class::Stance;
 use crate::common::damage::PlayerId;
 use crate::common::class::{Class, ClassBuilds};
-use crate::common::skeleton::state::ClipLibrary;
+use crate::common::skeleton::ik::finish_pose;
+use crate::common::skeleton::play::{ClipStack, Layer, Regions};
+use crate::common::skeleton::state::{AnimationState, ClipLibrary};
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{
     draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
@@ -30,6 +32,7 @@ use crate::common::skeleton::{
     SkeletonPalette,
 };
 use crate::game::body_mesh::BodyMeshPlugin;
+use crate::game::condition::Condition;
 use crate::game::held::HeldWeaponPlugin;
 use crate::game::viewmodel::ViewmodelPlugin;
 use crate::game::hitbox::HitboxPlugin;
@@ -61,10 +64,21 @@ impl Plugin for SkeletonPlugin {
             // Ungated: the editor shows bodies, and bodies in an animation
             // grid hold weapons and wear hats too.
             .add_plugins((BodyMeshPlugin, HeldWeaponPlugin, crate::game::hat::HatPlugin, ViewmodelPlugin))
+            .add_plugins((
+                crate::game::recoil::RecoilPlugin,
+                crate::game::reloading::ReloadingPlugin,
+                crate::game::flinch::FlinchPlugin,
+            ))
             .add_plugins(GameTimePlugin)
             .init_resource::<ShowBones>()
             .init_resource::<ClassBuilds>()
             .add_systems(Update, toggle_bones)
+            // Here rather than in `ConditionPlugin`: the clips are assets, and
+            // the game's tests run without the asset plugins.
+            .add_systems(Startup, crate::game::condition::load_condition_clips)
+            .add_systems(Update, crate::game::condition::load_taunt_clips)
+            .init_resource::<crate::common::skeleton::play::LayerBlends>()
+            .add_systems(Startup, crate::common::layer_file::load_blends_at_startup)
             .add_systems(Update, (
                 describe_player_bodies
                     .run_if(in_state(AppMode::Play))
@@ -94,6 +108,8 @@ impl Plugin for SkeletonPlugin {
                 // In the chain so starting and playing a clip are never a
                 // frame apart.
                 crate::game::held::perform_weapon_clips,
+                crate::game::condition::perform_conditions,
+                crate::game::held::fade_the_layers,
                 crate::game::held::play_the_clips,
                 crate::game::held::grip_the_weapon,
             ).chain())
@@ -236,15 +252,23 @@ const MOVING: f32 = 0.5;
 ///
 /// Authority only: `BodyRequests` is replicated, and a client has no `Inputs`
 /// for remote bodies, so describing them would flatten them to standing.
+///
+/// What the body may do, not only what was pressed: a body a taunt stops,
+/// described as running, freezes mid-stride.
 fn describe_player_bodies(
-    mut players: Query<(&Player, &Stance, &Inputs, &mut BodyRequests)>,
+    taunts: Option<Res<crate::common::taunt::Taunts>>,
+    mut players: Query<(&Player, &Stance, &Inputs, &Condition, &mut BodyRequests)>,
 ) {
-    for (player, stance, input, mut requests) in &mut players {
+    for (player, stance, input, condition, mut requests) in &mut players {
+        let movement = match condition.speed_factor(taunts.as_deref()) > 0.0 {
+            true => input.movement,
+            false => Vec2::ZERO,
+        };
         let mut described = BodyRequests {
-            running_forward: input.movement.y > MOVING,
-            running_backward: input.movement.y < -MOVING,
-            strafing_left: input.movement.x < -MOVING,
-            strafing_right: input.movement.x > MOVING,
+            running_forward: movement.y > MOVING,
+            running_backward: movement.y < -MOVING,
+            strafing_left: movement.x < -MOVING,
+            strafing_right: movement.x > MOVING,
             airborne: !player.on_ground(),
             // The stance, not the key: a body that cannot stand up under a
             // vent is still crouched.
@@ -320,11 +344,17 @@ fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
             // Skipping keeps a still body from dirtying its pose every frame.
             continue;
         }
-        let pitch = head_pitch(player.pitch);
-        for (joint, share) in [(bone::NECK, NECK_SHARE), (bone::HEAD, HEAD_SHARE)] {
-            let animated = pose.joint(joint);
-            pose.set(joint, animated * Quat::from_rotation_x(-pitch * share));
-        }
+        look(&mut pose, player.pitch);
+    }
+}
+
+/// Bend the neck and head towards `pitch`, onto whatever the pose has them
+/// doing. Shared with the hitboxes, which must put the head where it is drawn.
+pub(crate) fn look(pose: &mut Pose, pitch: f32) {
+    let pitch = head_pitch(pitch);
+    for (joint, share) in [(bone::NECK, NECK_SHARE), (bone::HEAD, HEAD_SHARE)] {
+        let animated = pose.joint(joint);
+        pose.set(joint, animated * Quat::from_rotation_x(-pitch * share));
     }
 }
 
@@ -413,11 +443,12 @@ fn advance_animators(
         Option<&ForcedAnimation>,
         Option<&AnimationPhase>,
         Option<&Gait>,
+        Option<&ClipStack>,
     )>,
 ) {
     let dt = time.delta_secs();
     let clips = library.as_deref();
-    for (skeleton, mut animator, mut pose, global, offset, requests, forced, phase, gait) in
+    for (skeleton, mut animator, mut pose, global, offset, requests, forced, phase, gait, stack) in
         &mut bodies
     {
         match forced {
@@ -437,13 +468,51 @@ fn advance_animators(
             speed: gait.speed(),
             travel: gait.travel(),
         };
-        *pose = animator_pose(
-            skeleton,
-            &animator,
-            &inputs,
-            &skeleton_root(global, offset),
-            clips,
-        );
+        let root = skeleton_root(global, offset);
+        *pose = animator_pose(skeleton, &animator, &inputs, &root, clips);
+
+        if let Some(stack) = stack {
+            let still = AnimationState::from_requests(&BodyRequests {
+                crouching: requests.is_some_and(|requests| requests.crouching),
+                airborne: requests.is_some_and(|requests| requests.airborne),
+                ..default()
+            });
+            stand_where_claimed(skeleton, &mut pose, stack, || {
+                finish_pose(skeleton, still, &inputs, &root, clips)
+            });
+        }
+    }
+}
+
+/// A region a layer above the weapon claims stands still beneath it, so a
+/// taunt that claims the legs and keys none does not walk on the spot.
+/// Standing is the state with no movement asked for, so a crouch stays
+/// crouched; blended by the layer's cover.
+///
+/// Not the weapon layer's claims: the grip owns the arms there, and an arm
+/// with no grip still swings.
+pub(crate) fn stand_where_claimed(
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    stack: &ClipStack,
+    still: impl FnOnce() -> Pose,
+) {
+    let regions = [Regions::LEGS, Regions::TORSO, Regions::HEAD, Regions::ARM_L, Regions::ARM_R];
+    let cover = regions.map(|region| stack.cover(region, Layer::Weapon));
+    if cover.iter().all(|cover| *cover <= 0.0) {
+        return;
+    }
+    let still = still();
+    for bone in skeleton.bones() {
+        let region = Regions::of_bone(bone.name);
+        let Some(index) = regions.iter().position(|claimed| *claimed == region) else { continue };
+        if cover[index] > 0.0 {
+            pose.set(bone.name, pose.joint(bone.name).slerp(still.joint(bone.name), cover[index]));
+        }
+    }
+    let legs = cover[0];
+    if legs > 0.0 {
+        pose.root_offset = pose.root_offset.lerp(still.root_offset, legs);
     }
 }
 
@@ -477,7 +546,6 @@ mod tests {
     use super::*;
     use crate::common::hitbox::Hitboxes;
     use crate::common::skeleton::rig::{humanoid, Proportions};
-    use crate::common::skeleton::AnimationState;
     use bevy::ecs::system::RunSystemOnce;
 
     /// One frame of animation. An animator handed a `dt` of zero never leaves
@@ -842,5 +910,71 @@ mod tests {
         app.world_mut().run_system_once(describe_player_bodies).unwrap();
         let again = app.world().entity(player).get_ref::<BodyRequests>().unwrap().last_changed();
         assert_eq!(again, described, "an unchanged description was written anyway");
+    }
+
+    /// A taunt claiming the legs at full weight stands them; one fading in
+    /// stands them partway; the weapon layer's claim stands nothing.
+    #[test]
+    fn a_claim_above_the_weapon_stands_what_it_claims() {
+        use crate::common::skeleton::play::Playing;
+        use crate::common::skeleton::rig::bone;
+
+        let rig = crate::common::skeleton::default_humanoid().clone();
+        let striding = {
+            let mut pose = Pose::rest();
+            pose.set(bone::THIGH_L, Quat::from_rotation_x(0.8));
+            pose.set(bone::UPPER_ARM_R, Quat::from_rotation_x(0.5));
+            pose
+        };
+        let clip = Handle::<crate::common::skeleton::clip::Clip>::default();
+        let claiming = |layer, weight| {
+            ClipStack(vec![Playing {
+                weight,
+                claims: Regions::LEGS,
+                ..Playing::new(layer, clip.clone(), 0.0)
+            }])
+        };
+        let thigh_after = |stack: ClipStack| {
+            let mut pose = striding.clone();
+            stand_where_claimed(&rig, &mut pose, &stack, Pose::rest);
+            (pose.joint(bone::THIGH_L).angle_between(Quat::IDENTITY), pose.joint(bone::UPPER_ARM_R))
+        };
+
+        let (thigh, arm) = thigh_after(claiming(Layer::Taunt, 1.0));
+        assert!(thigh < 1e-5, "the claimed leg still strides: {thigh}");
+        assert_eq!(arm, striding.joint(bone::UPPER_ARM_R), "an unclaimed arm was stood");
+
+        let (thigh, _) = thigh_after(claiming(Layer::Taunt, 0.5));
+        assert!((thigh - 0.4).abs() < 1e-3, "half a fade should stand it halfway, not {thigh}");
+
+        let (thigh, _) = thigh_after(claiming(Layer::Weapon, 1.0));
+        assert!((thigh - 0.8).abs() < 1e-5, "the weapon layer stood a leg");
+    }
+
+    /// Pressing forward while a taunt holds you still is not running.
+    #[test]
+    fn a_body_a_taunt_holds_still_is_not_described_as_running() {
+        use crate::common::taunt::{TauntId, Taunts};
+
+        let mut world = World::new();
+        world.insert_resource(Taunts::shipped());
+        let pressing_forward =
+            ActionState(PlayerInput { movement: Vec2::Y, ..default() });
+        let free = world
+            .spawn((Player::default(), Stance::Standing, pressing_forward.clone(), BodyRequests::default()))
+            .id();
+        let waving = world
+            .spawn((
+                Player::default(),
+                Stance::Standing,
+                pressing_forward,
+                Condition { taunt: Some(TauntId::of("wave")), ..default() },
+                BodyRequests::default(),
+            ))
+            .id();
+
+        world.run_system_once(describe_player_bodies).unwrap();
+        assert!(world.get::<BodyRequests>(free).unwrap().running_forward);
+        assert!(!world.get::<BodyRequests>(waving).unwrap().moving(), "the waving body was described as running");
     }
 }

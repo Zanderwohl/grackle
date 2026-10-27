@@ -1,0 +1,15 @@
+# Each taunt is a clip under `animations/` and what performing it does to the
+# body. `claims` are the parts the taunt takes from the layers beneath it:
+# legs, torso, head, arm.l, arm.r, weapon. `movement` is "free", "stopped",
+# or { slowed = 0.5 }. `turning` is how far the body follows the aim: "free",
+# "locked", or { at_most = 90 } degrees a second; the camera always turns.
+# `weapon` is "hidden" or "shown". `length` is seconds
+# until it ends by itself; leave it out and it lasts until G is pressed again.
+
+[wave]
+clip = "taunt_wave"
+claims = ["legs", "arm.l", "arm.r", "torso", "head", "weapon"]
+movement = "stopped"
+turning = "locked"
+weapon = "hidden"
+length = 1.2

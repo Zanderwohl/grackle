@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use strum::IntoEnumIterator;
 
 use crate::common::assets::{default_packs, AssetError, Assets};
-use crate::common::skeleton::clip::StateAnimation;
+use crate::common::skeleton::clip::{Clip, StateAnimation};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary};
 
 pub const CLIPS_DIR: &str = "animations";
@@ -57,6 +57,35 @@ pub fn load_body_clips(assets: &Assets, packs: &[PathBuf]) -> ClipLibrary {
     }
 
     library
+}
+
+/// A clip named outright rather than by state, as a condition's is: the
+/// highest-priority pack that has it wins, and a file that will not parse is
+/// logged and skipped.
+pub fn load_named_clip(assets: &Assets, packs: &[PathBuf], name: &str) -> Option<Clip> {
+    let relative = format!("{CLIPS_DIR}/{name}.{CLIP_EXTENSION}");
+    let mut found = None;
+    for pack in packs {
+        let bytes = match assets.read(pack, &relative) {
+            Ok(bytes) => bytes,
+            Err(AssetError::NotFound(_)) => continue,
+            Err(error) => {
+                warn!("{}/{relative}: {error}", pack.display());
+                continue;
+            }
+        };
+        let parsed = String::from_utf8(bytes)
+            .map_err(|error| error.to_string())
+            .and_then(|text| toml::from_str::<Clip>(&text).map_err(|error| error.to_string()));
+        match parsed {
+            Ok(mut clip) => {
+                clip.normalise();
+                found = Some(clip);
+            }
+            Err(why) => warn!("{}/{relative}: {why}", pack.display()),
+        }
+    }
+    found
 }
 
 pub fn load_body_clips_at_startup(mut commands: Commands, assets: Res<Assets>) {

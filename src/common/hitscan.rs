@@ -76,7 +76,7 @@ mod tests {
     fn body(feet: Vec3) -> Hitboxes {
         let skeleton = humanoid(Proportions::DEFAULT);
         let root = Transform::from_translation(feet);
-        crate::common::hitbox::hitboxes(&skeleton, &Pose::rest(), &Pose::rest(), &root, Stance::Standing)
+        crate::common::hitbox::hitboxes(&skeleton, &Pose::rest(), &root, Stance::Standing)
     }
 
     fn shoot_at(origin: Vec3, at: Vec3) -> Ray3d {

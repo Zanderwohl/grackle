@@ -16,12 +16,14 @@ use crate::game::player::{
     aim_the_view_at_our_body, despawn_the_view, face_bodies, gather_aim, gather_input,
     interpolate_bodies, place_camera,
     spawn_the_view, step_player, toggle_view, write_client_inputs, InputLatch, Player, ViewMode,
+    ViewPreference,
 };
 use crate::tool::bakes::BakeSystems;
 use crate::tool::room::Room;
 
 pub mod body_mesh;
 pub mod collision;
+pub mod condition;
 pub mod damage;
 pub mod death;
 pub mod hat;
@@ -29,8 +31,11 @@ pub mod held;
 pub mod hitbox;
 pub mod explosion;
 pub mod flame;
+pub mod flinch;
 pub mod hitscan;
 pub mod projectile;
+pub mod recoil;
+pub mod reloading;
 pub mod reset;
 pub mod respawn;
 pub mod weapon;
@@ -69,6 +74,8 @@ impl Plugin for GamePlugin {
             // Bodies are rigged from it; replaced by the server's on connect.
             .init_resource::<crate::common::class::ClassBuilds>()
             .add_systems(Startup, crate::common::class_file::load_builds_at_startup)
+            .init_resource::<crate::common::taunt::Taunts>()
+            .add_systems(Startup, crate::common::taunt::load_taunts_at_startup)
             // A pack that ships no clips leaves bodies on the built-in poses.
             .add_systems(
                 Startup,
@@ -83,6 +90,9 @@ impl Plugin for GamePlugin {
             .init_resource::<AnimationClock>()
             .init_resource::<InputLatch>()
             .init_resource::<ViewMode>()
+            .init_resource::<ViewPreference>()
+            .init_resource::<crate::game::player::CameraPull>()
+            .add_plugins(crate::game::condition::ConditionPlugin)
             .add_systems(Update, (toggle_mode, start_in_play))
             .add_systems(Update, (
                 toggle_view,
@@ -658,6 +668,68 @@ mod tests {
             (player_position(&mut app).y - once).abs() < 1e-5,
             "the replayed tick did not reach the same place"
         );
+    }
+
+    /// `G` starts the shipped wave, which stops a walking body and its gun;
+    /// `G` again gives both back, and so does waiting it out.
+    #[test]
+    fn the_wave_stops_you_walking_and_g_again_lets_you_go() {
+        use crate::game::condition::Condition;
+
+        let mut app = headless(&[room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 4.0, 10.0))]);
+        enter(&mut app);
+        tick(&mut app, 30);
+        let condition = |app: &mut App| {
+            *app.world_mut()
+                .query_filtered::<&Condition, With<LocalPlayer>>()
+                .single(app.world())
+                .unwrap()
+        };
+        let walked = |app: &mut App| {
+            latch(app).0.movement = Vec2::Y;
+            let from = player_position(app);
+            tick(app, 16);
+            latch(app).0.movement = Vec2::ZERO;
+            (player_position(app) - from).with_y(0.0).length()
+        };
+        let toggle = |app: &mut App| {
+            latch(app).0.taunt = true;
+            tick(app, 1);
+        };
+
+        assert!(walked(&mut app) > 0.5, "the body would not walk before taunting");
+
+        toggle(&mut app);
+        let taunting = condition(&mut app);
+        assert!(taunting.taunt.is_some(), "G started no taunt");
+        assert!(!taunting.may_fire());
+        assert!(walked(&mut app) < 1e-4, "the wave did not stop the body");
+
+        // The aim turns and the body does not; the view follows the aim.
+        let body_yaw = |app: &mut App| {
+            app.world_mut()
+                .query_filtered::<&Player, With<LocalPlayer>>()
+                .single(app.world())
+                .unwrap()
+                .yaw
+        };
+        let facing = body_yaw(&mut app);
+        latch(&mut app).0.yaw += 1.0;
+        tick(&mut app, 4);
+        assert_eq!(body_yaw(&mut app), facing, "the wave let the body turn");
+
+        toggle(&mut app);
+        assert_eq!(condition(&mut app).taunt, None, "G again did not end the taunt");
+        assert_ne!(body_yaw(&mut app), latch(&mut app).0.yaw, "the body snapped to the aim in one tick");
+        tick(&mut app, 8);
+        assert_eq!(body_yaw(&mut app), latch(&mut app).0.yaw, "the body did not turn back to the aim");
+        assert!(walked(&mut app) > 0.5, "the body stayed stopped after the taunt");
+
+        // Left alone, it ends by itself after its length.
+        toggle(&mut app);
+        assert!(condition(&mut app).taunt.is_some());
+        tick(&mut app, 2 * crate::constants::TICK_HZ as usize);
+        assert_eq!(condition(&mut app).taunt, None, "the wave never ended by itself");
     }
 
     /// Simulated at 64 Hz, drawn between the last two steps.

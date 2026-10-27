@@ -1,4 +1,4 @@
-//! Things you saw happen: tracers and blasts. Nothing depends on one, so a lost
+//! Things you saw happen: tracers, blasts and shots. Nothing depends on one, so a lost
 //! effect costs a flash, never a disagreement about who is alive.
 //!
 //! The visuals read only this queue, filled locally on the authority or off
@@ -22,6 +22,9 @@ pub enum Effect {
         by: Option<PlayerId>,
     },
     Blast { at: Vec3, radius: f32 },
+    /// A weapon went off: every machine starts that body's recoil. The
+    /// shooter's own machine has already started it from its own input.
+    Fired { by: PlayerId, button: crate::game::weapon::Button },
 }
 
 // Registered by `DamagePlugin`, so a weapon that produces effects registers

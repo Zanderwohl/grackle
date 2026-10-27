@@ -304,8 +304,8 @@ metres, because that is the one part of the framing that is about size.
 **Shots are drawn from the barrel in first person, and fired from the eye
 always.** A prop may mark a `[muzzle]` (the Fit workspace's Hold panel, and
 a handle there); `ApparentMuzzle` is where that point is drawn — the
-viewmodel's muzzle carried across to the play camera's field of view, at the
-same pixel and depth — and is `None` in third person or with no muzzle.
+viewmodel's muzzle, as kicked by whatever clip is playing on it, carried
+across to the play camera's field of view, at the same pixel and depth — and is `None` in third person or with no muzzle.
 Only the shooter's own machine uses it, and only to draw: an own projectile
 gets a `FromTheMuzzle` offset that eases onto its real path over half a
 second's flight — measured in distance, and cut short by the first wall or
@@ -333,7 +333,9 @@ lowest-order one, the same way the viewmodel and HUD cameras already set
 blank, with no error.
 
 Three more keys while playing: **`F`** swaps between first and third person
-(`ViewMode` in [`src/game/player.rs`](src/game/player.rs) — your own body and
+(`ViewPreference` in [`src/game/player.rs`](src/game/player.rs), which a
+condition can override; `ViewMode` is what is drawn, and the camera swings
+between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
 **`F4`** toggles the hitbox gizmos and the debug laser aimed at them, and
 **`F6`** toggles the bone gizmos. Both are off by default: they are debug
@@ -341,10 +343,15 @@ views, and now that bodies have geometry neither is what a player sees. `F3`
 is the perf overlay in both modes.
 
 Weapon slots are on **`1`–`6`**, the left mouse button fires the weapon's
-primary and the right its secondary — held, for anything automatic — **`R`**
-reloads, and **`G`** plants an emitter firing whatever projectile you are
-holding every two seconds with **`B`** to clear them. What each slot holds is a
-property of the class, which is read off disk; see "What a weapon is" below.
+primary and the right its secondary — held, for anything automatic — and
+**`R`** reloads. **`H`** toggles humiliation, a debug key until there are
+rounds to lose: hands up, no weapon, no firing, third person. **`G`** starts
+the first taunt in `assets/default/taunts.toml` (a wave, which ends by itself;
+`G` again ends it early), and works while humiliated, as in TF2; nobody
+crouches while taunting; each taunt states what it claims, whether it
+shows the weapon, how far you can move, and how far your body (never the
+camera) can turn. What each slot
+holds is a property of the class, which is read off disk; see "What a weapon is" below.
 
 ## Modelling a prop
 
@@ -782,6 +789,20 @@ Three things there are load-bearing:
   floor, wrong for an arm, which reads as broken rather than as not holding. So
   `reach_for` puts the joints back.
 
+Ranking what may drive which bones — taunts, humiliation, firing, reloads,
+the hold, locomotion — and which passes yield when outranked is planned in
+[documentation/animation-layers.md](documentation/animation-layers.md). Each
+`Playing` carries a `Layer` and the `Regions` it claims; `apply_stack` ranks
+the stack, and **`grip_the_weapon` leaves an arm alone when a layer above the
+weapon owns it**. A `Condition` (humiliation now) is gameplay state written
+by the authority and read by firing, the held weapon, the view and the
+stack; nothing in the animation decides whether a body may shoot. Clips fade
+in and out at their layer's blend from `assets/default/layers.toml`: an owner
+sends a clip out with `ClipStack::keep` rather than removing it, and
+`fade_the_layers` is the only thing that takes one off. A region claimed by a
+layer above the weapon stands still beneath it (`stand_where_claimed`), so a
+taunt that claims the legs owns them whether or not it keys them.
+
 `every_class_can_reach_every_shipped_props_grip` is what keeps a hold
 authorable: a build whose hand cannot get to the grip holds nothing while its
 arm swings past it, and nothing about that is loud.
@@ -1066,7 +1087,11 @@ once.
 
 Three volumes, and they are kept apart on purpose — the movement hull, the
 hitboxes and the bones are covered in
-[`src/common/hitbox.rs`](src/common/hitbox.rs). The mesh is a fourth, and it is
+[`src/common/hitbox.rs`](src/common/hitbox.rs). As in TF2, only the head box
+matters to damage, and it is **wherever the head is**: built on the tick from
+the same layers the body is drawn in (animator, claims, look, stack), so
+looking down, a lean or a taunt moves the headshot with the head. The body box
+is the hull and never moves. The mesh is a fourth, and it is
 the only one that is authoritative about nothing: it is built from the bones
 and nothing tests against it.
 
@@ -1150,7 +1175,9 @@ different set of inputs; a global input would walk them all the same way.
 Two consequences worth knowing:
 
 - **Aim travels in the input, and nowhere else.** `gather_aim` accumulates
-  `yaw`/`pitch` onto the latch and the step copies them onto the body. Facing
+  `yaw`/`pitch` onto the latch and the step copies them onto the body — or
+  follows them only as far as a taunt's `turning` allows, since the step is
+  the one writer of `Player.yaw` and the rate limit is state plus input. Facing
   decides which way "forward" is, so a server handed movement without aim walks
   the body the wrong way. Nothing writes a body's rotation from the mouse — the
   view is a separate entity aimed straight from the latch, which is what keeps
@@ -1677,7 +1704,41 @@ or automatically once the clip is empty, because a weapon that needed a
 keypress to become useful again reads as broken before it reads as empty. A
 clip that is merely short does not top up, or the magazine size would mean
 nothing. Switching weapons cancels a reload rather than remembering it: a clip
-that filled in a holster is a weapon reloading with nobody holding it.
+that filled in a holster is a weapon reloading with nobody holding it. **A
+shot cancels one too**, in `pull_trigger` where the shot is paid for: firing
+with a round left is choosing to fire rather than to reload.
+
+**Recoil is drawn, not simulated** ([`src/game/recoil.rs`](src/game/recoil.rs)).
+Every shot the authority decides becomes an `Effect::Fired`, relayed like a
+tracer; every machine turns it into a kick for that body. A client starts its
+own kick from its own mouse press, guessed from what it can see (condition,
+replicated ammo, its own cooldown), and skips its own `Fired` when it
+arrives — waiting a round trip for your own recoil is lag you feel. Each view
+plays the held prop's own kick where it ships one — `recoil`/`alt_recoil` on
+the body, `fire`/`alt_fire` on the viewmodel, which has a stack of its own and
+whose arms are solved onto the kicked weapon — and the shared
+`animations/recoil.gpa` where it does not.
+
+**Reloads are drawn from the replicated `Ammo`**
+([`src/game/reloading.rs`](src/game/reloading.rs)), not from an event: a reload
+starting — or starting again, a shell at a time — starts the clip, one cut
+short ends it, and a body seen mid-reload starts it partway. The clip is
+*fitted* to the weapon's reload time (`Performance::start_fitted`), since that
+is gameplay and differs per weapon; `body_reload` on the body and `reload` on
+the viewmodel, each falling back to the shared `animations/reload.gpa`.
+**A clip moves a hand by moving its grip**: an arm effector in `Space::Grip`
+is an offset from that hand's grip in the weapon's axes, read by
+`grip_offsets` and solved by the grip, so the shared reload takes the support
+hand to the magazine well and back without a second solver over the arms.
+
+**A body flinches when it is hurt** ([`src/game/flinch.rs`](src/game/flinch.rs)),
+from the `DamageDealt` every machine already reads, as hard as the hit hurt
+(`Playing::strength`, not the weight, which `fade` owns). The flinch layer claims
+nothing, so it composes onto whatever won — a taunt included — and one of four
+clips is picked by the way the hit travelled in the body's own frame. Every
+`SkeletonAnimator` brings a `ClipStack` and `play_the_clips` takes bodies with
+no `Player` (aiming level), so an animation grid's bodies flinch too; a
+corpse has no animator and does not.
 
 **`Magazine.clip: None` is the minigun**: no magazine, each shot straight out
 of the reserve, never reloads. Stated as an absent clip rather than as a clip
@@ -1721,11 +1782,9 @@ it needed no new machinery for that: `burn` sits in `Deal` and writes a
   reads the same on all four of them. A burning red pulling further towards
   red is a burning body you cannot see.
 
-Testing all of this by hand is what `ProjectileEmitter` is for: `G` plants one
-firing whatever you are holding every two seconds, `B` clears them. Plant one
-in front of the animation grid and the sixty standing bodies become a firing
-range. It reads the keyboard directly rather than going through `PlayerInput`,
-which is fine precisely because planting a prop is not part of the simulation.
+`ProjectileEmitter` fires a spec along its own forward on an interval.
+Nothing places one: the player's key for it is gone, and it is meant to come
+back as a map feature.
 
 ## Which end of the wire this is
 

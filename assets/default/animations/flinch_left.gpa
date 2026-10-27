@@ -1,0 +1,80 @@
+name_key = "anim.clips.flinch_left"
+length = 0.4
+clock = "seconds"
+looping = false
+note = "Composed onto whatever the body is doing, on the flinch layer, which claims nothing: a jolt to the body's left and back, over 0.4 s. Chest and neck only, so a flinch never moves the feet a match has planted."
+
+[[tracks]]
+combine = "compose"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "chest"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0,
+    0,
+    0,
+]
+ease = "linear"
+
+[[tracks.channel.keys]]
+at = 0.06
+to = [
+    0,
+    0,
+    -0.2,
+]
+ease = "cubic_out"
+
+[[tracks.channel.keys]]
+at = 0.4
+to = [
+    0,
+    0,
+    0,
+]
+ease = "linear"
+
+[[tracks]]
+combine = "compose"
+space = "body"
+unit = "metres"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "neck"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0,
+    0,
+    0,
+]
+ease = "linear"
+
+[[tracks.channel.keys]]
+at = 0.06
+to = [
+    0,
+    0,
+    -0.12,
+]
+ease = "cubic_out"
+
+[[tracks.channel.keys]]
+at = 0.4
+to = [
+    0,
+    0,
+    0,
+]
+ease = "linear"
+
