@@ -6,9 +6,8 @@
 //!   far less.
 //! - Bones: move as the animation says.
 //!
-//! The head hitbox is wherever the head is, as TF2's is: a taunt, a lean or
-//! looking at the floor moves the headshot target with the head. The body box
-//! does not move, which is TF2's answer for everything but a headshot too.
+//! The head box is wherever the head is, as in TF2; the body box does not
+//! move.
 //!
 //! Hitboxes are computed from a pose sampled on the tick, never the drawn
 //! pose, which is written at frame rate and would resolve differently on
@@ -74,10 +73,9 @@ fn body_box(root: &Transform, stance: Stance) -> Box3 {
     }
 }
 
-/// Sized and placed from the rig, so each class is boxed around its own head,
-/// and around the head as it is turned: the box is axis-aligned, so a head
-/// tilted to look at the floor gets the box that encloses it tilted rather
-/// than an upright one that leaves the crown out.
+/// From the rig, around the head as it is turned: the box is axis-aligned, so
+/// it encloses the tilted head rather than an upright one that leaves the
+/// crown out.
 fn head_box(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Box3 {
     let Some(index) = skeleton.index_of(bone::HEAD) else {
         return Box3::default();
@@ -120,8 +118,7 @@ mod tests {
         assert!(boxes.head.unwrap().half_extents.x > head.thickness.x * 0.5);
     }
 
-    /// The box goes where the head goes, however far: looking at the floor,
-    /// a lean, a taunt. A box held back would leave the head out of it.
+    /// The box goes where the head goes, however far.
     #[test]
     fn the_head_box_follows_the_head_wherever_it_goes() {
         let skeleton = rig();

@@ -253,9 +253,8 @@ const MOVING: f32 = 0.5;
 /// Authority only: `BodyRequests` is replicated, and a client has no `Inputs`
 /// for remote bodies, so describing them would flatten them to standing.
 ///
-/// What the body may do, not only what was pressed: a taunt that stops the
-/// body is not running, and described as running it freezes mid-stride, since
-/// no ground is covered for the stride to advance on.
+/// What the body may do, not only what was pressed: a body a taunt stops,
+/// described as running, freezes mid-stride.
 fn describe_player_bodies(
     taunts: Option<Res<crate::common::taunt::Taunts>>,
     mut players: Query<(&Player, &Stance, &Inputs, &Condition, &mut BodyRequests)>,
@@ -485,15 +484,13 @@ fn advance_animators(
     }
 }
 
-/// What a layer above the weapon claims is its own, so the animator's motion
-/// there does not show through what the layer leaves unkeyed: a taunt that
-/// claims the legs and keys none of them stands, rather than walking on the
-/// spot beneath it. "Standing" is the state the body would be in with no
-/// movement asked for, so a crouched taunt stays crouched. Blended by how
-/// much the layer covers, so it fades with the layer.
+/// A region a layer above the weapon claims stands still beneath it, so a
+/// taunt that claims the legs and keys none does not walk on the spot.
+/// Standing is the state with no movement asked for, so a crouch stays
+/// crouched; blended by the layer's cover.
 ///
 /// Not the weapon layer's claims: the grip owns the arms there, and an arm
-/// under a deploy still swings when the weapon has no grip for it.
+/// with no grip still swings.
 pub(crate) fn stand_where_claimed(
     skeleton: &Skeleton,
     pose: &mut Pose,
@@ -954,9 +951,7 @@ mod tests {
         assert!((thigh - 0.8).abs() < 1e-5, "the weapon layer stood a leg");
     }
 
-    /// Pressing forward while a taunt holds you still is not running:
-    /// described as running, the legs freeze mid-stride, since no ground is
-    /// covered for the stride to advance on.
+    /// Pressing forward while a taunt holds you still is not running.
     #[test]
     fn a_body_a_taunt_holds_still_is_not_described_as_running() {
         use crate::common::taunt::{TauntId, Taunts};

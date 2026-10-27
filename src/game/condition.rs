@@ -25,21 +25,17 @@ use crate::game::player::{
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, Serialize, Deserialize)]
 #[require(ClipStack, TauntClock)]
 pub struct Condition {
-    /// Hands up, weapon gone, no shooting. `H` toggles it until there are
-    /// rounds to lose.
+    /// `H` toggles it until there are rounds to lose.
     pub humiliated: bool,
-    /// `G` toggles the first taunt in `taunts.toml` until there is a way to
-    /// choose one.
+    /// `G` toggles the first taunt in `taunts.toml` until there is a menu.
     pub taunt: Option<TauntId>,
-    /// The authority's tick the taunt began on. A viewer starts the clip this
-    /// far in, so somebody who arrives mid-taunt sees it where it is rather
-    /// than from the top. Lightyear's timeline, since a client's is synced to
-    /// the server's; meaningless while `taunt` is `None`.
+    /// The authority's tick the taunt began on, so a viewer arriving mid-taunt
+    /// starts the clip partway. Lightyear's, since a client's timeline is
+    /// synced to the server's.
     pub taunt_started: Tick,
 }
 
-/// Seconds into the current taunt, on the authority, which is the only end
-/// that reads it. Not replicated: the end is, as `Condition::taunt` going.
+/// Seconds into the current taunt, on the authority only.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct TauntClock(pub f32);
 
@@ -88,7 +84,7 @@ impl Condition {
     }
 }
 
-/// The toggles and the view: gameplay, so no asset plugins needed.
+/// Gameplay, so no asset plugins needed.
 pub struct ConditionPlugin;
 
 impl Plugin for ConditionPlugin {
@@ -131,10 +127,8 @@ pub fn toggle_conditions(
     }
 }
 
-/// End a taunt once it has lasted its `length`. A taunt whose entry is gone
-/// ends at once rather than lasting forever. Counted on the authority's own
-/// clock rather than off `taunt_started`, so ending a taunt is gameplay that
-/// does not depend on the network layer's timeline being there.
+/// A taunt whose entry is gone ends at once. Counted on the authority's own
+/// clock rather than off `taunt_started`, so it needs no network timeline.
 pub fn end_taunts(
     // Inside `FixedUpdate` this is the fixed clock, as `step_player` reads it.
     time: Res<Time>,
@@ -154,11 +148,9 @@ pub fn end_taunts(
     }
 }
 
-/// The one writer of [`ViewMode`] and [`CameraPull`]: the player's
-/// preference, unless our body's condition forces third person. The
-/// preference is never overwritten, so it is still there when the condition
-/// ends. The camera swings towards the wanted view rather than cutting, and
-/// the view reads as third person until it is all the way back in the head.
+/// The one writer of [`ViewMode`] and [`CameraPull`]. The preference is
+/// never overwritten, so it returns when the condition ends. The view is
+/// third person until the camera is all the way back in the head.
 pub fn decide_the_view(
     time: Res<Time>,
     preference: Res<ViewPreference>,
@@ -191,13 +183,12 @@ pub fn decide_the_view(
 
 const HUMILIATED_CLIP: &str = "humiliated";
 
-/// Each condition's clip, read from this machine's packs. A condition whose
-/// file is missing plays nothing and still does everything else it does.
+/// From this machine's packs. A missing clip plays nothing; the condition
+/// still applies.
 #[derive(Resource, Default)]
 pub struct ConditionClips {
     humiliated: Option<Handle<Clip>>,
-    /// By clip name. A miss is remembered too, so it is not read again every
-    /// time the table changes.
+    /// By clip name. A miss is kept too, so it is not read again.
     taunts: BTreeMap<String, Option<Handle<Clip>>>,
 }
 
@@ -211,9 +202,8 @@ pub fn load_condition_clips(
     commands.insert_resource(ConditionClips { humiliated, taunts: BTreeMap::new() });
 }
 
-/// The taunt table can arrive from the server after startup, naming clips
-/// nobody has read yet. Clips themselves are not sent: each machine draws
-/// from its own pack, as with body animations.
+/// The table can arrive from the server after startup. Clips are not sent:
+/// each machine reads its own pack.
 pub fn load_taunt_clips(
     taunts: Option<Res<Taunts>>,
     packs: Res<PackAssets>,
@@ -233,9 +223,8 @@ pub fn load_taunt_clips(
     }
 }
 
-/// Keep each body's condition clips on its stack, and tick them. Runs in the
-/// pose chain before `play_the_clips`, so starting one and playing it are
-/// never a frame apart.
+/// In the pose chain before `play_the_clips`, so a clip starts and plays in
+/// the same frame.
 pub(crate) fn perform_conditions(
     time: Res<Time>,
     clips: Option<Res<ConditionClips>>,
@@ -264,9 +253,8 @@ pub(crate) fn perform_conditions(
                 continue;
             }
             if let Some(playing) = stack.keep(ours, wanted.map(|(clip, _)| (layer, clip))) {
-                // Lined up with the authority once, as it arrives, then ticked
-                // by the frame: the timeline steps at the tick rate, which a
-                // clip read straight off it would show as a stutter.
+                // Lined up with the authority on arrival, then ticked by frame:
+                // read straight off the timeline it would step at the tick rate.
                 playing.time = match (arriving, layer, now) {
                     (true, Layer::Taunt, Some(now)) => since(condition.taunt_started, now),
                     _ => playing.time + delta,
@@ -293,7 +281,7 @@ mod tests {
     use crate::common::skeleton::play::Playing;
     use crate::game::player::PlayerInput;
 
-    /// The bug was crouching mid-wave: a taunt's clip is authored standing.
+    /// A taunt's clip is authored standing.
     #[test]
     fn a_taunt_stands_the_body_up_and_humiliation_does_not() {
         let taunting = Condition { taunt: Some(Taunts::shipped().first().unwrap().id), ..default() };
@@ -348,9 +336,8 @@ mod tests {
         assert_eq!(*world.resource::<ViewMode>(), ViewMode::FirstPerson);
     }
 
-    /// The camera swings out over the pull time and back in; the body is
-    /// drawn the whole time the camera is out of the head, including on the
-    /// way back in, or the view would slide through an empty world.
+    /// The body is drawn whenever the camera is out of the head, including on
+    /// the way back in.
     #[test]
     fn the_camera_swings_out_and_the_body_shows_until_it_is_back() {
         let mut world = a_view_world(ViewMode::FirstPerson);
@@ -384,8 +371,7 @@ mod tests {
         assert!(half.rotation.angle_between(Quat::from_rotation_y(0.2)) < 1e-4);
     }
 
-    /// Only the local body forces anything: somebody else being humiliated
-    /// is not a reason to move our camera.
+    /// Only the local body's condition moves our camera.
     #[test]
     fn somebody_elses_humiliation_leaves_our_view_alone() {
         let mut world = a_view_world(ViewMode::FirstPerson);
@@ -489,9 +475,8 @@ mod tests {
         assert!((time(&world) - half - 0.1).abs() < 1e-5, "it was lined up again rather than ticked");
     }
 
-    /// Every build gets both hands up from the shipped clip, at both ends of
-    /// its bob: a hand that cannot reach is left hanging, which reads as a
-    /// broken pose rather than an error.
+    /// Every build gets both hands up, at both ends of the bob: a hand that
+    /// cannot reach is left hanging, with no error.
     #[test]
     fn every_class_can_put_its_hands_up() {
         use strum::IntoEnumIterator;
@@ -592,8 +577,7 @@ mod tests {
         );
     }
 
-    /// The taunt's length is the server's and the clip's is each machine's;
-    /// two numbers for one thing, so they are pinned together here.
+    /// The taunt's length and its clip's are two numbers for one thing.
     #[test]
     fn a_taunt_that_ends_lasts_as_long_as_its_clip() {
         for taunt in &Taunts::shipped().0 {

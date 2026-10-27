@@ -1,17 +1,12 @@
 //! A weapon kicking when it goes off: drawing, not simulation. See
-//! `documentation/animation-layers.md`, "Your own recoil starts on your own
-//! machine".
+//! `documentation/animation-layers.md`.
 //!
-//! The authority turns every shot into an `Effect::Fired`, which is relayed
-//! like a tracer, and every machine starts that body's recoil from it. A
-//! client does not wait a round trip for its own: it starts the kick from its
-//! own button press when what it can see says a shot would happen, and
-//! ignores its own `Fired` when that arrives. A shot the server refused
-//! still kicks; that is the price, and it is a presentational one.
+//! Every shot the authority decides becomes an `Effect::Fired`, relayed like a
+//! tracer. A client guesses its own kick from its own press and ignores its own
+//! `Fired`; a shot the server refuses still kicks.
 //!
-//! Each weapon may ship its own kick for each view — `recoil`/`alt_recoil`
-//! for the body, `fire`/`alt_fire` for the viewmodel — and anything it does
-//! not ship is the shared `animations/recoil.gpa`.
+//! A prop may ship `recoil`/`alt_recoil` for the body and `fire`/`alt_fire`
+//! for the viewmodel; anything missing is the shared `animations/recoil.gpa`.
 
 use bevy::prelude::*;
 
@@ -59,8 +54,6 @@ impl Plugin for RecoilPlugin {
     }
 }
 
-/// Every shot the authority decided on becomes an effect, which the relay
-/// carries to everybody else.
 fn announce_shots(
     mut fired: MessageReader<WeaponActionFired>,
     shooters: Query<&PlayerId>,
@@ -72,8 +65,7 @@ fn announce_shots(
     }
 }
 
-/// A `Fired` for a body we can find. A remote client skips its own, since
-/// it started that kick from its own press a round trip ago.
+/// A remote client skips its own: it guessed that kick from its own press.
 fn see_shots(
     role: Option<Res<NetRole>>,
     mut effects: MessageReader<Effect>,
@@ -91,10 +83,8 @@ fn see_shots(
     }
 }
 
-/// Our own shot, guessed from the mouse the way `pull_trigger` would decide
-/// it from what this machine can see: the condition, the replicated ammo,
-/// and our own reckoning of the cooldown. Reads `ButtonInput` in `Update`,
-/// where it is per frame and nothing replays it.
+/// Our own shot, decided as `pull_trigger` would from what this machine can
+/// see. Reads `ButtonInput` in `Update`, where nothing replays it.
 fn guess_our_shots(
     time: Res<Time>,
     buttons: Res<ButtonInput<MouseButton>>,
@@ -102,8 +92,7 @@ fn guess_our_shots(
     catalogue: Res<WeaponCatalogue>,
     ours: Option<Single<(Entity, &Equipped, &Ammo, &Condition), With<LocalPlayer>>>,
     mut cooldown: Local<[f32; 2]>,
-    // The replicated state we last guessed from, and what our guesses left of
-    // it: until the server's count changes, its rounds are already spent.
+    // The replicated state last guessed from, and what our guesses left of it.
     mut guessed: Local<Option<(Slot, AmmoState, AmmoState)>>,
     mut seen: MessageWriter<ShotSeen>,
 ) {
@@ -143,9 +132,6 @@ fn guess_our_shots(
     *guessed = Some((equipped.held, told, state));
 }
 
-/// The body plays the weapon's own third-person `recoil` or `alt_recoil`, and
-/// our own viewmodel its first-person `fire` or `alt_fire`; either falls back
-/// to the shared recoil when the prop ships no clip of that name.
 pub(crate) fn start_recoil(
     mut seen: MessageReader<ShotSeen>,
     mut bodies: Query<(&mut Performance, Option<&HeldModel>, Has<LocalPlayer>), Without<Viewmodel>>,
@@ -268,9 +254,8 @@ mod tests {
         assert_eq!(kicks, 3, "{kicks} kicks in 0.3 s");
     }
 
-    /// A guess spends the round it guessed: with one left and the server's
-    /// count not yet down, holding the trigger kicks once, and a new count
-    /// from the server is believed again.
+    /// With one round left and the server's count not yet down, holding the
+    /// trigger kicks once; a new count from the server is believed again.
     #[test]
     fn a_guessed_shot_spends_its_round_until_the_server_says() {
         let mut world = World::new();
@@ -291,8 +276,7 @@ mod tests {
         assert_eq!(seen(&mut world).len(), 1, "a reloaded clip from the server was not believed");
     }
 
-    /// The authority's shot reaches the wire as an effect, and comes back as
-    /// a seen shot for the body it names, except on a client for its own body.
+    /// Every shot is seen from its effect, except a client's own.
     #[test]
     fn a_shot_is_announced_and_seen_except_our_own_on_a_client() {
         let mut world = World::new();
@@ -332,9 +316,7 @@ mod tests {
         assert!(!bodies.contains(&ours), "a client kicked twice for its own shot");
     }
 
-    /// Each view plays the weapon's own kick where the prop ships one —
-    /// `recoil` for the body, `fire` for our viewmodel — and the shared kick
-    /// where it does not.
+    /// Each view plays the prop's own kick where it ships one, else the shared.
     #[test]
     fn each_view_plays_the_weapons_own_kick_or_the_shared_one() {
         let shoot = |held: HeldModel| {

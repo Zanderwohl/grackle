@@ -230,9 +230,8 @@ pub enum Layer {
     Humiliation,
     /// Above humiliation, as in TF2: a humiliated body may still taunt.
     Taunt,
-    /// Outside the order in all but name: it claims nothing, so it masks
-    /// nothing and owns nothing, and its tracks compose onto whatever won.
-    /// Last so it is applied last. A body shot mid-taunt still jolts.
+    /// Claims nothing, so its tracks compose onto whatever won; last so it is
+    /// applied last.
     Flinch,
 }
 
@@ -398,15 +397,14 @@ pub struct Playing {
     pub time: f32,
     /// `0..=1`.
     pub weight: f32,
-    /// `0..=1`: how far the clip moves what it plays, on top of `weight`.
-    /// Not how faded in it is, so it masks nothing less and [`ClipStack::fade`]
-    /// leaves it alone — a gentle flinch is not one stuck half-entered.
+    /// `0..=1`: how far the clip moves what it plays. Not its fade, so it
+    /// masks no less and [`ClipStack::fade`] leaves it alone.
     pub strength: f32,
     pub layer: Layer,
     /// Tracks outside these still play, unless a higher layer claims them.
     pub claims: Regions,
-    /// Whoever started it is done with it: [`ClipStack::fade`] takes it down
-    /// and then off. Its owner looks past it, and may take it back.
+    /// Sent out: [`ClipStack::fade`] takes it down and off. Its owner may take
+    /// it back.
     pub leaving: bool,
 }
 
@@ -427,8 +425,8 @@ impl Playing {
 pub struct ClipStack(pub Vec<Playing>);
 
 impl ClipStack {
-    /// The highest layer audibly claiming any of `region`. `None` leaves it to
-    /// whatever ran before the stack: the animator and the hold.
+    /// The highest layer showing over any of `region`. `None` leaves it to the
+    /// animator and the hold.
     pub fn owner(&self, region: Regions) -> Option<Layer> {
         self.0
             .iter()
@@ -447,9 +445,8 @@ impl ClipStack {
             .fold(0.0, f32::max)
     }
 
-    /// Bring entering clips up to full weight and leaving ones down and off,
-    /// at their [`Blend`]s. A leaving clip's time is ticked here, since its
-    /// owner has stopped ticking it.
+    /// At each clip's [`Blend`]. A leaving clip's time is ticked here; its
+    /// owner has stopped.
     pub fn fade(&mut self, delta: f32, clips: &Assets<Clip>, blends: &LayerBlends) {
         for playing in &mut self.0 {
             let blend = blends.of(playing.layer, clips.get(&playing.clip));
@@ -464,10 +461,8 @@ impl ClipStack {
         self.0.retain(|playing| !playing.leaving || playing.weight > 0.0);
     }
 
-    /// Make `wanted` the one clip of `ours` that is staying: taken back if it
-    /// was on its way out, brought in if it is not here, and every other clip
-    /// of `ours` sent out. `None` sends them all. Returns the one staying, for
-    /// its owner to tick.
+    /// Make `wanted` the one clip of `ours` staying, taking it back if it was
+    /// leaving, and send out the rest. Returns it for its owner to tick.
     pub fn keep(
         &mut self,
         ours: impl Fn(Layer) -> bool,
@@ -791,16 +786,15 @@ fn default_pole(chain: ChainRef) -> Vec3 {
 }
 
 /// Where the stack has moved each hand's grip, trigger hand first: metres
-/// from the grip, in the weapon's axes. Each clip's `Space::Grip` arm
-/// effector is laid over the clips beneath by how much it shows, as a track
-/// is; a clip that does not key a hand leaves it where it was, so a kick over
-/// a reload does not snap the hand back.
+/// from the grip, in the weapon's axes. A clip that keys no hand leaves it
+/// where the clips beneath put it, so a kick over a reload does not snap it
+/// back.
 pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton) -> [Vec3; 2] {
     let mut offsets = [Vec3::ZERO; 2];
     if stack.0.is_empty() {
         return offsets;
     }
-    // Ranked without sorting a copy: this runs for every holding body every frame.
+    // No sorted copy: this runs for every holding body every frame.
     let ranked = Layer::ALL
         .into_iter()
         .flat_map(|layer| stack.0.iter().filter(move |playing| playing.layer == layer));
@@ -833,10 +827,9 @@ pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton
     offsets
 }
 
-/// Apply a whole stack, lowest layer first; within a layer, in stack order.
-/// A track in a region a higher layer claims is skipped. A layer shown at
-/// less than full weight or strength is applied to a copy and blended back with [`Pose::lerp`]; full
-/// weight skips the clone. Clips are looked up in `clips` as they are sampled.
+/// Lowest layer first; within a layer, in stack order. A track in a region a
+/// higher layer claims is skipped. A layer shown below full weight or strength
+/// is applied to a copy and blended back.
 pub fn apply_stack(
     stack: &ClipStack,
     clips: &Assets<Clip>,

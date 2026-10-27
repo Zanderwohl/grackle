@@ -1,7 +1,6 @@
 //! Reading how fast each animation layer fades, from a pack's `layers.toml`.
 //!
-//! Pack content so it is tuned without a rebuild. A bad entry is dropped with
-//! a line saying why, and that layer snaps: a pop is something you can see.
+//! A bad entry is dropped with a line saying why, and that layer snaps.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

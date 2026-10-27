@@ -1,10 +1,6 @@
-//! Taunts: pack content in `taunts.toml`, each a clip plus what performing it
-//! does to the body. Held by the authority and sent to clients like the
-//! weapon catalogue, since movement is part of the predicted step and both
-//! ends have to agree on it.
-//!
-//! A bad entry is dropped with a line saying why; a taunt that does not load
-//! is one nobody can start, which is something you can see.
+//! Taunts: pack content in `taunts.toml`. Sent to clients like the weapon
+//! catalogue, since movement is part of the predicted step and both ends must
+//! agree on it. A bad entry is dropped with a line saying why.
 
 use std::path::{Path, PathBuf};
 
@@ -49,9 +45,8 @@ impl TauntMovement {
     }
 }
 
-/// How far the body may follow the aim while taunting. The view is aimed
-/// straight from the input and is never held back: this is the body, which
-/// is what everyone else sees and what "forward" is measured from.
+/// How far the body may follow the aim while taunting. The view is never
+/// held back; this is the body, which "forward" is measured from.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TauntTurning {
@@ -63,9 +58,8 @@ pub enum TauntTurning {
 }
 
 impl TauntTurning {
-    /// The body's `(yaw, pitch)` after `dt` of following `aim` from `body`.
-    /// Yaw goes the short way round, since both are unwrapped angles and the
-    /// aim may have spun whole turns while the body was held.
+    /// Yaw goes the short way round: both are unwrapped, and the aim may have
+    /// spun whole turns while the body was held.
     pub fn follow(self, body: (f32, f32), aim: (f32, f32), dt: f32) -> (f32, f32) {
         let step = match self {
             TauntTurning::Free => return aim,
@@ -75,8 +69,7 @@ impl TauntTurning {
         let towards = |from: f32, by: f32| from + by.clamp(-step, step);
         let yaw_by = (aim.0 - body.0 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
             - std::f32::consts::PI;
-        // Arrived: the aim itself, whole turns and all, so a caught-up body is
-        // equal to its aim and not a turn off it.
+        // The aim itself, whole turns and all, so a caught-up body equals it.
         if yaw_by.abs() <= step && (aim.1 - body.1).abs() <= step {
             return aim;
         }
@@ -101,15 +94,13 @@ pub struct Taunt {
     pub movement: TauntMovement,
     pub turning: TauntTurning,
     pub weapon: TauntWeapon,
-    /// Seconds until the authority ends it. `None` lasts until `G` again.
-    /// Gameplay rather than read off the clip, since a clip is each
-    /// machine's own and the end of a taunt is the server's to decide.
+    /// Seconds until the authority ends it; `None` lasts until `G` again. Not
+    /// read off the clip: a clip is each machine's own.
     pub length: Option<f32>,
 }
 
-/// Every taunt the packs define, in key order: `G` plays the first until
-/// there is a way to choose. A list rather than a map so two loads of the
-/// same files compare equal, which is what decides whether it is sent.
+/// In file order: `G` plays the first. A list rather than a map so two loads
+/// of the same files compare equal, which decides whether it is sent.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Taunts(pub Vec<Taunt>);
 
@@ -140,7 +131,7 @@ struct TauntEntry {
     length: Option<f32>,
 }
 
-/// Lowest priority first; a later pack replaces a taunt's whole entry.
+/// Lowest priority first.
 pub fn load_taunts(assets: &Assets, packs: &[PathBuf]) -> Taunts {
     let mut taunts = Vec::new();
     for pack in packs {
@@ -263,8 +254,7 @@ mod tests {
         assert_eq!(taunts.0[1].turning, TauntTurning::AtMost(90.0));
     }
 
-    /// Locked holds, at-most steps by its rate, and the yaw goes the short way
-    /// round even when the aim has spun whole turns.
+    /// The yaw goes the short way round even when the aim has spun whole turns.
     #[test]
     fn a_body_follows_the_aim_only_as_far_as_its_taunt_lets_it() {
         let body = (0.0, 0.0);

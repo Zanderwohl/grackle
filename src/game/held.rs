@@ -63,9 +63,8 @@ pub struct HeldModel {
     clips: BTreeMap<String, Handle<Clip>>,
 }
 
-/// What a body's weapon, or the viewmodel's, is in the middle of doing. A clip
-/// named rather than held by handle, looked up every frame, so a re-bake
-/// cannot leave a stale clip playing.
+/// What a body's weapon, or the viewmodel's, is in the middle of doing. Named
+/// rather than held by handle, so a re-bake cannot leave a stale clip playing.
 #[derive(Component, Default)]
 pub struct Performance {
     playing: Option<Playback>,
@@ -78,14 +77,12 @@ struct Playback {
     clip: WeaponClip,
     /// Real seconds since it started.
     seconds: f32,
-    /// Stretched to a length that is the weapon's rather than the clip's: the
-    /// fraction of the clip it started at, and the seconds the whole clip
-    /// takes. `None` plays at the clip's own speed from its start.
+    /// The fraction it started at and the seconds the whole clip takes, for a
+    /// clip stretched to the weapon's length. `None` plays at its own speed.
     fit: Option<(f32, f32)>,
 }
 
 impl Playback {
-    /// Where in the clip it is, on the clip's own clock.
     fn time(&self, length: f32) -> f32 {
         match self.fit {
             None => self.seconds,
@@ -96,19 +93,18 @@ impl Playback {
 }
 
 impl Performance {
-    /// Play `clip` from the start, cutting whatever was playing: a shot during
-    /// a deploy or another shot is the shot that matters now.
+    /// Cuts whatever was playing: a shot during a deploy matters more.
     pub fn start(&mut self, clip: WeaponClip) {
         self.playing = Some(Playback { clip, seconds: 0.0, fit: None });
     }
 
-    /// Play `clip` stretched so the whole of it takes `whole` seconds, starting
-    /// `from` of the way in: a reload the clip is fitted to, joined partway.
+    /// Stretched so the whole clip takes `whole` seconds, starting `from` of
+    /// the way in.
     pub fn start_fitted(&mut self, clip: WeaponClip, from: f32, whole: f32) {
         self.playing = Some(Playback { clip, seconds: 0.0, fit: Some((from.clamp(0.0, 1.0), whole)) });
     }
 
-    /// End `clip` early if it is what is playing, as a reload cut short is.
+    /// Only if `clip` is what is playing.
     pub fn stop(&mut self, clip: &WeaponClip) {
         if self.clip() == Some(clip) {
             self.playing = None;
@@ -131,10 +127,8 @@ impl Performance {
 pub enum WeaponClip {
     /// One the held prop ships, by name.
     Prop(String),
-    /// The recoil every weapon shares where it has none of its own; see
-    /// [`SharedWeaponClips`].
+    /// See [`SharedWeaponClips`].
     Recoil,
-    /// The reload every weapon shares, likewise.
     Reload,
 }
 
@@ -149,9 +143,7 @@ impl WeaponClip {
     }
 }
 
-/// Clips every weapon shares, read from the packs at startup. Third person
-/// indicates rather than performs, so a body's recoil is one generic kick,
-/// not each weapon's.
+/// What a prop that ships no clip of its own plays instead.
 #[derive(Resource, Default)]
 pub struct SharedWeaponClips {
     pub recoil: Option<Handle<Clip>>,
@@ -433,8 +425,7 @@ pub(crate) fn perform_weapon_clips(
     }
 }
 
-/// One performance, for a body or the viewmodel: deploy on a switch, tick
-/// what is playing, and send it out when it ends.
+/// For a body or the viewmodel alike.
 pub(crate) fn perform(
     held: &HeldModel,
     shared: Option<&SharedWeaponClips>,
@@ -489,16 +480,16 @@ fn is_the_weapons(layer: Layer) -> bool {
     layer == Layer::Weapon
 }
 
-/// Send the weapon's clips out, leaving other layers' and without marking the
-/// stack changed when there were none.
+/// Send the weapon's clips out, without marking the stack changed when there
+/// were none.
 fn stop(stack: &mut Mut<ClipStack>) {
     if stack.has_staying(is_the_weapons) {
         stack.keep(is_the_weapons, None);
     }
 }
 
-/// Fade every stack's clips in and out; runs after everything that starts or
-/// stops one, so a clip sent out this frame starts fading this frame.
+/// After everything that starts or stops a clip, so one sent out this frame
+/// starts fading this frame.
 pub(crate) fn fade_the_layers(
     time: Res<Time>,
     clips: Res<Assets<Clip>>,
@@ -583,11 +574,9 @@ pub(crate) fn play_the_clips(
 /// [`prop::hold`], shared with the prop editor's reference figure so the two
 /// cannot disagree.
 ///
-/// An arm a layer above the weapon family owns is left alone: the hand has
-/// been taken off the weapon, and gripping anyway is TF2's humiliated Medic
-/// with his hand twisted round an invisible medigun. One fading in or out
-/// over the arm shares it: the grip is solved and then pulled back towards
-/// the clip by that layer's weight, so the hand leaves the weapon smoothly.
+/// An arm a layer above the weapon owns is left alone, or a humiliated hand
+/// twists round a weapon nobody is holding. A layer fading over the arm pulls
+/// the solved grip back towards its clip by its weight.
 ///
 /// [`prop::hold`]: crate::prop::hold
 pub(crate) fn grip_the_weapon(
@@ -630,9 +619,8 @@ pub(crate) fn grip_the_weapon(
     }
 }
 
-/// A held weapon is hidden from inside your own head, and whenever its
-/// body's condition takes it away. The only writer of a held part's
-/// visibility; `hide_own_body` leaves held parts to this.
+/// The only writer of a held part's visibility; `hide_own_body` leaves held
+/// parts to this.
 fn held_visibility(
     ours: bool,
     view: ViewMode,
@@ -1013,8 +1001,7 @@ mod tests {
         );
     }
 
-    /// TF2's humiliated Medic: a layer above the weapon owns the arms, so the
-    /// grip must not drag the hands back onto a weapon nobody is holding.
+    /// A layer above the weapon owns the arms, so the grip leaves them.
     #[test]
     fn a_hand_a_higher_layer_owns_is_not_gripped() {
         let hand = |world: &World, body: Entity| {
@@ -1041,8 +1028,7 @@ mod tests {
         assert_eq!(hand(&world, humiliated), rest, "the grip took a hand a higher layer owns");
     }
 
-    /// Halfway into humiliation, the hand is halfway off the weapon rather
-    /// than snapped to either end.
+    /// Halfway into humiliation, the hand is halfway off the weapon.
     #[test]
     fn a_layer_fading_over_an_arm_shares_it_with_the_grip() {
         let hand = |world: &World, body: Entity| {
@@ -1072,10 +1058,8 @@ mod tests {
         assert!(shared.distance(gripped) > 0.2 * span, "the hand snapped onto the weapon");
     }
 
-    /// The shared reload takes the support hand off its grip to the magazine
-    /// well and back: the grip solves onto where the clip moved it, wherever
-    /// the clip has moved the weapon, and every build reaches the whole way, so
-    /// no hand is left behind partway.
+    /// The shared reload takes the support hand to the magazine well and back,
+    /// and every build reaches the whole way.
     #[test]
     fn a_reload_takes_the_support_hand_off_its_grip_and_back() {
         let packs = [std::path::PathBuf::from("assets/default")];

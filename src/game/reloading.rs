@@ -1,13 +1,10 @@
-//! A weapon being reloaded, drawn. Driven by the replicated `Ammo` rather
-//! than an event, so every machine reads the same state and nothing new
-//! crosses the wire: a reload starting (or starting again, one shell at a
-//! time) starts the clip, a reload cut short ends it, and somebody seen
-//! mid-reload starts it partway.
+//! A weapon being reloaded, drawn from the replicated `Ammo` rather than an
+//! event, so nothing new crosses the wire and a body seen mid-reload starts
+//! the clip partway.
 //!
-//! The clip is fitted to the weapon's reload time, which is gameplay and
-//! differs per weapon; a clip authored at any length plays across it. Each
-//! view plays the held prop's own — `body_reload` on the body, `reload` on the
-//! viewmodel — and the shared `animations/reload.gpa` where there is none.
+//! The clip is fitted to the weapon's reload time. The body plays the prop's
+//! `body_reload`, the viewmodel its `reload`, each falling back to the shared
+//! `animations/reload.gpa`.
 
 use bevy::prelude::*;
 
@@ -17,8 +14,7 @@ use crate::game::held::{perform_weapon_clips, HeldModel, Performance, WeaponClip
 use crate::game::player::LocalPlayer;
 use crate::game::viewmodel::Viewmodel;
 
-/// Seconds of reload this body had left last frame, so a start, a restart and
-/// an early end can be told apart by comparing.
+/// Seconds of reload left last frame, to tell a start from a countdown.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ReloadSeen(pub f32);
 
@@ -36,8 +32,7 @@ impl Plugin for ReloadingPlugin {
     }
 }
 
-/// Above this much more reload than last frame, a reload began: it only ever
-/// counts down otherwise.
+/// A rise of more than this is a reload beginning; otherwise it only counts down.
 const STARTED: f32 = 1e-4;
 
 pub(crate) fn perform_reloads(
@@ -51,9 +46,8 @@ pub(crate) fn perform_reloads(
     for (equipped, ammo, held, mut performance, mut seen, ours) in &mut bodies {
         let left = ammo.at(equipped.held).reloading;
         let was = seen.0;
-        // The reload the last shot of a clip starts waits out that shot's
-        // kick rather than cutting it. `seen` is left behind, so the rise is
-        // still seen once the kick is done, and the reload joins partway.
+        // The reload the last shot starts waits out that shot's kick. `seen`
+        // stays behind, so the rise is still seen and the reload joins partway.
         if left > was + STARTED && performance.clip().is_some_and(WeaponClip::is_kick) {
             continue;
         }
@@ -79,9 +73,7 @@ pub(crate) fn perform_reloads(
                 }
             }
         } else if left <= 0.0 && was > 0.0 {
-            // Cut short, by a shot or a switch; a reload that ran its course
-            // ends with its clip anyway. A shot has already started a kick,
-            // which this leaves alone.
+            // Cut short by a shot or a switch.
             performance.stop(&body);
             if ours {
                 for mut viewmodel in &mut views {
@@ -134,8 +126,7 @@ mod tests {
         world.get::<Performance>(entity).unwrap().clip().cloned()
     }
 
-    /// A reload starts both views' clips, fitted to the reload; one cut short
-    /// ends them.
+    /// A reload starts both views' clips; one cut short ends them.
     #[test]
     fn a_reload_plays_while_it_lasts() {
         let mut world = World::new();
@@ -171,8 +162,7 @@ mod tests {
         assert_eq!(at, 0.0, "the next shell did not start the clip again");
     }
 
-    /// The reload the last shot starts does not cut that shot's kick: it
-    /// waits, then joins as far in as the reload has got.
+    /// The reload waits out the last shot's kick, then joins partway.
     #[test]
     fn a_reload_waits_for_the_last_shots_kick() {
         let mut world = World::new();
@@ -189,8 +179,7 @@ mod tests {
         assert!((at - 0.25).abs() < 1e-5, "joined at {at}, not a quarter in");
     }
 
-    /// A clip fitted to a reload takes the reload's length, however long the
-    /// clip was authored.
+    /// A fitted clip takes the reload's length, however long it was authored.
     #[test]
     fn a_fitted_clip_runs_at_the_weapons_pace() {
         let mut performance = Performance::default();

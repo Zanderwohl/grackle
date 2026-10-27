@@ -72,12 +72,11 @@ pub struct Player {
     /// A stopped move cannot be recovered from position alone; the animation
     /// layer reads this to tell running from running into a wall.
     pub against_wall: bool,
-    /// A taunt held the body back from the aim and has ended: it turns to the
-    /// aim at [`CATCH_UP_DEGREES_PER_SECOND`] rather than in one tick.
+    /// A taunt held the body back from the aim, so it turns back at
+    /// [`CATCH_UP_DEGREES_PER_SECOND`] rather than in one tick.
     pub catching_up: bool,
 }
 
-/// How fast a body released by a taunt turns back to the aim.
 pub const CATCH_UP_DEGREES_PER_SECOND: f32 = 720.0;
 
 impl Player {
@@ -132,10 +131,8 @@ pub struct PlayerInput {
     pub alt_attack_held: bool,
     /// A reload was asked for since the last tick consumed it.
     pub reload: bool,
-    /// Humiliation was toggled since the last tick consumed it. A debug key
-    /// until there are rounds to lose.
+    /// A debug key until there are rounds to lose.
     pub humiliate: bool,
-    /// The taunt was toggled since the last tick consumed it.
     pub taunt: bool,
     /// Look direction about world Y, radians. An input because facing decides
     /// which way "forward" is, so a server needs it to reproduce movement.
@@ -226,17 +223,14 @@ pub enum ViewMode {
     ThirdPerson,
 }
 
-/// The view the player picked with `F`. [`ViewMode`] is what is drawn, and
-/// `decide_the_view` is its only writer, so a condition forcing third person
-/// never has to remember what to put back.
+/// The view picked with `F`. [`ViewMode`] is what is drawn, so a condition
+/// forcing third person never has to remember what to put back.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ViewPreference(pub ViewMode);
 
 /// How far the camera has come out of the head: 0 at the eye, 1 where third
-/// person puts it. Eased towards the wanted view by `decide_the_view`, so a
-/// taunt or `F` swings the camera out and back rather than cutting.
-/// [`ViewMode`] is third person whenever this is above zero, so the body is
-/// drawn for as long as the camera is anywhere but inside it.
+/// person puts it. [`ViewMode`] is third person whenever this is above zero,
+/// so the body is drawn whenever the camera is not inside it.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
 pub struct CameraPull(pub f32);
 
@@ -244,9 +238,8 @@ pub struct CameraPull(pub f32);
 pub const CAMERA_PULL_SECONDS: f32 = 0.35;
 
 impl CameraPull {
-    /// Where the camera is, given where each view would put it. Both are
-    /// worked out every frame, so the one not in use is always current and a
-    /// swing starts from where it really is.
+    /// Both views are worked out every frame, so a swing starts from where the
+    /// unused one really is.
     pub fn place(self, first: Transform, third: Transform) -> Transform {
         let t = EaseFunction::SmoothStep.sample_clamped(self.0);
         Transform {
@@ -605,9 +598,8 @@ pub fn step_player(
         // and rollback replays this input.
         let jump = input.jump;
 
-        // A taunt may hold the body back from the aim; the view is aimed from
-        // the latch and never is. Movement below is measured from the body's
-        // yaw, so a held body walks the way it is facing, not the way you look.
+        // The view is aimed from the latch and never held back. Movement below
+        // is from the body's yaw, so a held body walks the way it faces.
         let turning = condition.turning(taunts.as_deref());
         let aim = (input.yaw, input.pitch);
         (player.yaw, player.pitch) = match turning {

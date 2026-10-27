@@ -164,8 +164,8 @@ fn give_the_view_its_own_camera(
     views: Query<Entity, (With<PlayerCamera>, Without<Viewmodel>)>,
 ) {
     for view in &views {
-        // Its own performance and stack: first person performs the weapon's
-        // own clips, which the body in third person does not.
+        // Its own performance and stack: first person plays the prop's `fire`
+        // and `reload`, not the body's clips.
         commands
             .entity(view)
             .insert((Viewmodel::default(), Performance::default(), ClipStack::default()))
@@ -246,8 +246,7 @@ fn dress_the_viewmodel(
     }
 }
 
-/// The viewmodel's deploy and kicks, from the held weapon's clips: the same
-/// performance a body runs, on a stack of its own.
+/// The same performance a body runs, on a stack of its own.
 fn perform_viewmodel_clips(
     time: Res<Time>,
     clips: Res<Assets<Clip>>,
@@ -321,19 +320,16 @@ fn played(framed: Transform, stack: &ClipStack, skeleton: &Skeleton, clips: &Ass
 }
 
 /// `muzzle` in the play camera's frame, for a weapon drawn at `weapon` in the
-/// viewmodel camera's. The two cameras share a frame but not a field of view,
-/// so the point the viewmodel draws is moved to where the play camera sees the
-/// same pixel, at the same depth.
+/// viewmodel camera's. The cameras share a frame but not a field of view, so
+/// the point moves to where the play camera sees the same pixel and depth.
 pub fn muzzle_in_view(weapon: &Transform, muzzle: Vec3, viewmodel_fov: f32, play_fov: f32) -> Vec3 {
     let drawn = weapon.transform_point(muzzle);
     let widen = (play_fov / 2.0).tan() / (viewmodel_fov / 2.0).tan();
     Vec3::new(drawn.x * widen, drawn.y * widen, drawn.z)
 }
 
-/// From where the weapon was drawn, kick and all, so an own tracer leaves the
-/// barrel rather than where the barrel rests. That is last frame's drawing:
-/// this runs before `Update` places this frame's, and a kick a frame old is
-/// well inside a muzzle flash.
+/// From the weapon as drawn, kick and all. That is last frame's drawing, since
+/// this runs before `Update`; a frame's lag is inside a muzzle flash.
 pub fn find_the_apparent_muzzle(
     view: Res<ViewMode>,
     held: Query<&HeldModel, With<LocalPlayer>>,

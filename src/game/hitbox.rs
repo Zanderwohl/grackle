@@ -4,11 +4,8 @@
 //! pose is written at frame rate, so reading it here would make where a body
 //! can be hit depend on the viewer's frame rate. See [`crate::common::hitbox`].
 //!
-//! It is built the way the drawn pose is, in the same order: the animator,
-//! a claim standing what it owns, the look, then the layer stack. The stack's
-//! clips are read at the time their owners last set, at most a frame behind
-//! the tick; they are taunts and kicks held for a good part of a second, not
-//! cycles, so the head is where it is drawn give or take a frame.
+//! Built in the drawn pose's order: the animator, claims standing, the look,
+//! then the layer stack, whose clips are at most a frame behind the tick.
 
 use bevy::prelude::*;
 
@@ -126,9 +123,8 @@ pub fn update_hitboxes(
                 carry_frame(skeleton, &pose, &root, aim).unwrap_or(root),
                 &ground,
             );
-            // Not the flinch: it is started by the last hit and run on frame
-            // time, so the next shot would be tested against a jolt whose size
-            // depends on the server's frame rate.
+            // Not the flinch: started by the last hit and run on frame time, it
+            // would move the next shot's target by the server's frame rate.
             let held = ClipStack(stack.0.iter().filter(|playing| playing.layer != Layer::Flinch).cloned().collect());
             apply_stack(&held, layer_clips, skeleton, &mut pose, &frames, None);
         }
@@ -323,8 +319,7 @@ mod tests {
         world.get::<Hitboxes>(body).unwrap().head.unwrap()
     }
 
-    /// Looking at the floor takes the head, and so the headshot, down and
-    /// forward with it, as in TF2.
+    /// Looking at the floor takes the head box down and forward, as in TF2.
     #[test]
     fn the_head_box_looks_where_the_body_looks() {
         let level = head_box_of(0.0, ClipStack::default(), Assets::default());
@@ -333,8 +328,7 @@ mod tests {
         assert!(down.centre.z < level.centre.z - 0.02, "looking down left the head box back");
     }
 
-    /// A layer that moves the head moves the box: a taunt's head is where it
-    /// is shot.
+    /// A layer that moves the head moves the box.
     #[test]
     fn the_head_box_follows_a_layer_that_moves_the_head() {
         use crate::common::skeleton::clip::{Channel, Key, Track};

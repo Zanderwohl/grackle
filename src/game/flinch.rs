@@ -1,11 +1,8 @@
-//! A body jolting when it is hurt: drawing, from the `DamageDealt` records
-//! every machine already has (local on the authority, relayed elsewhere). See
-//! `documentation/animation-layers.md`.
+//! A body jolting when it is hurt, drawn from the `DamageDealt` records every
+//! machine already has. See `documentation/animation-layers.md`.
 //!
-//! The flinch is on [`Layer::Flinch`], which claims nothing: its tracks
-//! compose onto whatever won, so it shows over a run, a taunt or humiliation
-//! alike and hides none of them. Which way the body is pushed picks one of
-//! four clips, in the body's own frame.
+//! [`Layer::Flinch`] claims nothing, so its tracks compose onto whatever won,
+//! a taunt included.
 
 use bevy::prelude::*;
 
@@ -38,9 +35,8 @@ impl Push {
         }
     }
 
-    /// From the direction the hit travelled, in the body's frame (`-Z` is
-    /// where it faces). Along its strongest axis; no direction at all is
-    /// taken as a hit from in front.
+    /// `travel` in the body's frame, `-Z` forward. No direction at all is a
+    /// hit from in front.
     pub fn of(travel: Vec3) -> Push {
         let flat = Vec2::new(travel.x, travel.z);
         if flat.length_squared() < 1e-8 {
@@ -55,8 +51,7 @@ impl Push {
     }
 }
 
-/// The four clips, from the packs. A missing one is a flinch that direction
-/// does not have.
+/// A missing clip is a direction with no flinch.
 #[derive(Resource, Default)]
 pub struct FlinchClips([Option<Handle<Clip>>; 4]);
 
@@ -102,11 +97,10 @@ fn is_a_flinch(layer: Layer) -> bool {
     layer == Layer::Flinch
 }
 
-/// Every hit starts its body's flinch again from the top, in the direction
-/// the hit travelled: from the attacker's body where there is one to look at,
-/// otherwise away from where it landed (your own rocket, the map, an attacker
-/// already dead). As strong as the hit, or as what is left of the flinch it
-/// interrupts if that is more, so a pistol shot mid-rocket does not shrink it.
+/// Pushed away from the attacker's body where there is one, otherwise from
+/// where the hit landed (your own rocket, the map, an attacker already dead).
+/// A hit mid-flinch keeps what is left of the one it interrupts if that is
+/// stronger, so a pistol shot does not shrink a rocket's jolt.
 fn start_flinches(
     mut hits: MessageReader<DamageDealt>,
     clips: Res<FlinchClips>,
@@ -145,7 +139,6 @@ fn start_flinches(
     }
 }
 
-/// A flinch is a one-shot: ticked here, and sent out when its clip ends.
 fn end_flinches(time: Res<Time>, clips: Res<Assets<Clip>>, mut stacks: Query<&mut ClipStack>) {
     for mut stack in &mut stacks {
         if !stack.has_staying(is_a_flinch) {
@@ -182,7 +175,7 @@ mod tests {
     }
 
     /// Each shipped flinch moves the head the way its name says, and lets go
-    /// by the end. Measured, since a sign on a roll is easy to get backwards.
+    /// by the end. A roll's sign is easy to get backwards.
     #[test]
     fn every_flinch_moves_the_head_the_way_it_is_named() {
         let rig = humanoid(crate::common::class::ClassBuilds::shipped().of(crate::common::class::Class::Soldier));
@@ -213,8 +206,7 @@ mod tests {
         }
     }
 
-    /// A hit starts its target's flinch, a second hit starts it again from
-    /// the top, and it is sent out once its clip has run.
+    /// A second hit restarts the flinch; it ends with its clip.
     #[test]
     fn a_hit_starts_a_flinch_and_it_runs_out() {
         let mut world = World::new();
@@ -252,8 +244,7 @@ mod tests {
         assert!(flinch(&world).unwrap().leaving, "the flinch outlived its clip");
     }
 
-    /// A hit flinches as hard as it hurt; a small one landing straight after a
-    /// big one keeps most of the big one's jolt rather than shrinking it.
+    /// A small hit straight after a big one keeps most of the big one's jolt.
     #[test]
     fn a_flinch_is_as_strong_as_the_hit() {
         let mut world = World::new();
@@ -288,8 +279,7 @@ mod tests {
         assert_eq!(hit(&mut world, 1), SLIGHTEST_FLINCH, "a scratch did not flinch at all");
     }
 
-    /// A body nobody steers — an animation grid's — flinches too: it has an
-    /// animator, so a stack, and the stack is played without a `Player`.
+    /// An animation grid's body flinches too, with no `Player`.
     #[test]
     fn a_grid_body_flinches() {
         use crate::common::skeleton::SkeletonAnimator;
