@@ -80,21 +80,30 @@ pub fn explode(
     for blast in blasts.read() {
         effects.write(Effect::Blast { at: blast.at, radius: blast.radius });
 
+        // Something hit squarely is hurt whether or not it can be caught in
+        // a blast; one that can is handled with the rest below.
+        if let Some((target, worth)) = blast.direct
+            && !bodies.contains(target)
+        {
+            damage.write(Damage { target, source: blast.source, amount: worth, point: blast.at });
+        }
+
         for (entity, boxes, impulse, stance, player) in &mut bodies {
             let center = boxes.body.center;
             let direct = blast.direct.filter(|(target, _)| *target == entity).map(|(_, worth)| worth);
-            // A direct hit is at the body's surface; a wall cannot be between.
-            if direct.is_none() && !in_sight(&world, blast.at, center, center.distance(blast.at)) {
-                continue;
-            }
-
             let mine = allegiances.is_self(blast.source, entity);
             let amount = match direct {
                 Some(worth) => worth,
                 None if mine => self_splash(blast, &boxes.body),
                 None => splash(blast, center),
             };
+            // Before the ray, which is the expensive part: most bodies in a
+            // map are nowhere near any one blast.
             if amount == 0 {
+                continue;
+            }
+            // A direct hit is at the body's surface; a wall cannot be between.
+            if direct.is_none() && !in_sight(&world, blast.at, center, center.distance(blast.at)) {
                 continue;
             }
 
@@ -338,6 +347,18 @@ mod tests {
     }
 
     /// A direct hit's number goes where the projectile struck, not the chest.
+    #[test]
+    fn a_direct_hit_on_something_with_no_hitboxes_still_hurts_it() {
+        let mut world = a_world();
+        let target = world.spawn_empty().id();
+        world.write_message(blast(Vec3::ZERO, Some((target, 90))));
+
+        world.run_system_once(explode).unwrap();
+
+        let hits = damage_written(&mut world);
+        assert_eq!(hits.iter().filter(|h| h.target == target).map(|h| h.amount).collect::<Vec<_>>(), vec![90]);
+    }
+
     #[test]
     fn a_direct_hit_is_anchored_where_it_struck() {
         let mut world = a_world();

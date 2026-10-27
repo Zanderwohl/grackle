@@ -36,9 +36,11 @@ impl Default for PlayerSettings {
 }
 
 impl PlayerSettings {
-    /// As the server holds it: trimmed and cut to [`NAME_LIMIT`].
+    /// As the server holds it: no control characters, which would break a
+    /// scoreboard row over several lines, trimmed and cut to [`NAME_LIMIT`].
     pub fn cleaned(mut self) -> Self {
-        self.name = self.name.trim().chars().take(NAME_LIMIT).collect();
+        let printable: String = self.name.chars().filter(|c| !c.is_control()).collect();
+        self.name = printable.trim().chars().take(NAME_LIMIT).collect();
         self
     }
 }
@@ -152,6 +154,12 @@ fn take_client_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_loses_its_control_characters() {
+        let broken = PlayerSettings { name: "a\n\n\tb\u{7}".into(), auto_reload: true }.cleaned();
+        assert_eq!(broken.name, "ab");
+    }
 
     #[test]
     fn a_name_is_trimmed_and_cut() {

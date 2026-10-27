@@ -23,11 +23,15 @@ impl Plugin for WeaponPickupPlugin {
     }
 }
 
-/// Every frame, so a catalog that arrives from a server or a change of
-/// language reaches an open panel. Unordered against the panels: the data
-/// outlives the frame, so at worst a panel lists last frame's.
-fn offer_the_catalog(mut contexts: EguiContexts, catalog: Res<WeaponCatalog>) {
+/// Once, and again whenever the catalog changes, as when a server's arrives:
+/// egui's temporary data outlives the frame. Unordered against the panels, so
+/// at worst a panel lists the previous catalog for a frame.
+fn offer_the_catalog(mut contexts: EguiContexts, catalog: Res<WeaponCatalog>, mut offered: Local<bool>) {
+    if *offered && !catalog.is_changed() {
+        return;
+    }
     let Ok(ctx) = contexts.ctx_mut() else { return };
+    *offered = true;
     let mut choices: Vec<(String, String)> =
         catalog.weapons.iter().map(|weapon| (weapon.key.clone(), get!(weapon.name_key))).collect();
     choices.sort_by(|a, b| a.1.cmp(&b.1));

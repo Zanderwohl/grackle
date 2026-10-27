@@ -1,10 +1,11 @@
 //! The last [`KEPT_ROUNDS`] rounds' final standings, newest first, for the
 //! editor's Rounds tab.
 //!
-//! On every machine, taken from the replicated [`Standing`]s as Play ends:
-//! those are cleared only when the next round starts, so a client still has
-//! them however the end reached it. Not saved and not sent; a client that
-//! joins late has only the rounds it saw.
+//! On every machine, taken from the replicated [`Standing`]s as Play ends, and
+//! kept in step with them until the next round starts, which is when they are
+//! cleared. A client is told the round is over on a different channel from
+//! the standings, so the final frag can arrive after it has left Play. Not
+//! saved and not sent; a client that joins late has only the rounds it saw.
 
 use std::collections::VecDeque;
 
@@ -31,6 +32,9 @@ pub struct RoundHistory {
     recorded: u32,
     /// Real seconds when the round under way started.
     started: Option<f32>,
+    /// The newest round still follows the standings: from its end until the
+    /// next round starts.
+    settling: bool,
 }
 
 impl RoundHistory {
@@ -43,6 +47,7 @@ impl RoundHistory {
         self.recorded += 1;
         self.rounds.push_front(Round { number: self.recorded, length, standings });
         self.rounds.truncate(KEPT_ROUNDS);
+        self.settling = true;
     }
 }
 
@@ -52,12 +57,30 @@ impl Plugin for RoundHistoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RoundHistory>()
             .add_systems(OnEnter(AppMode::Play), start_the_clock)
-            .add_systems(OnExit(AppMode::Play), record_the_round);
+            .add_systems(OnExit(AppMode::Play), record_the_round)
+            .add_systems(Update, settle_the_last_round.run_if(not(in_state(AppMode::Play))));
     }
 }
 
 fn start_the_clock(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>) {
     history.started = Some(time.elapsed_secs());
+    history.settling = false;
+}
+
+/// Only on a change, and only to the standings: a round's length is when it
+/// ended here.
+fn settle_the_last_round(
+    mut history: ResMut<RoundHistory>,
+    standings: Query<&Standing>,
+    changed: Query<(), Changed<Standing>>,
+) {
+    if !history.settling || changed.is_empty() {
+        return;
+    }
+    let settled: Vec<Standing> = ranked(standings.iter()).into_iter().cloned().collect();
+    if let Some(last) = history.rounds.front_mut() {
+        last.standings = settled;
+    }
 }
 
 /// A mode with no scoreboard has no standings, and leaves no round.
@@ -112,6 +135,30 @@ mod tests {
         assert_eq!(rounds[0].number, 2);
         let winners: Vec<PlayerId> = rounds[1].standings.iter().map(|standing| standing.id).collect();
         assert_eq!(winners, vec![PlayerId(2), PlayerId(1)]);
+    }
+
+    /// The final frag replicates after the client has already left Play.
+    #[test]
+    fn a_frag_that_arrives_after_the_round_ends_still_counts() {
+        let mut app = app();
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        let winner = app.world_mut().spawn(standing(1, 19)).id();
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Editor);
+        app.update();
+
+        app.world_mut().get_mut::<Standing>(winner).unwrap().frags = 20;
+        app.update();
+        let history = app.world().resource::<RoundHistory>();
+        assert_eq!(history.rounds().next().unwrap().standings[0].frags, 20);
+
+        // Not once the next round is under way.
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        app.world_mut().get_mut::<Standing>(winner).unwrap().frags = 0;
+        app.update();
+        let history = app.world().resource::<RoundHistory>();
+        assert_eq!(history.rounds().next().unwrap().standings[0].frags, 20);
     }
 
     #[test]
