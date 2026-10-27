@@ -266,7 +266,14 @@ The HUD's readouts sit in a **safe zone**
 ([`src/game/hud.rs`](src/game/hud.rs)): a 4:3 box the height of the window,
 centered, so on an ultrawide the numbers stay near the crosshair. `F9`
 outlines it. Its width is in viewport heights, not `aspect_ratio`, which
-shrank it to the top of a portrait window.
+shrank it to the top of a portrait window. The **window safe zone**
+(`WindowSafeZone`, 20 px in from every edge, outlined in blue by the same
+key) is for what belongs at the screen's edges: the damage direction
+indicator ([`src/game/damage_direction.rs`](src/game/damage_direction.rs)),
+a trapezoid just inside it pointing at the damage's source — the `from` a
+`Damage` carries: a muzzle, a blast, your own rocket — kept as a fixed point
+in the world so it tracks as you turn, one per source, wider with damage up
+to 200.
 
 **The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
 calls the same `grip_with` that puts a body's hands on a weapon, so a grip

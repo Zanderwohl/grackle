@@ -135,6 +135,7 @@ pub fn apply_damage(
             amount,
             remaining: target.health(),
             point: request.point,
+            from: request.from,
         });
     }
 }
@@ -228,6 +229,7 @@ mod tests {
             amount,
             remaining: 70,
             point,
+            from: None,
         }
     }
 
@@ -243,6 +245,7 @@ mod tests {
             source: DamageSource::Player(PlayerId(1)),
             amount: 90,
             point: Vec3::Y,
+            from: None,
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -275,6 +278,7 @@ mod tests {
             source: DamageSource::Player(shooter),
             amount: 40,
             point: Vec3::ZERO,
+            from: None,
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -300,6 +304,7 @@ mod tests {
             source: DamageSource::Player(id),
             amount: 40,
             point: Vec3::ZERO,
+            from: None,
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -315,7 +320,7 @@ mod tests {
         let mut armor = Armor::default();
         armor.add(50);
         let target = world.spawn((Damageable::with_health(100), armor)).id();
-        world.write_message(Damage { target, source: DamageSource::World, amount: 30, point: Vec3::ZERO });
+        world.write_message(Damage { target, source: DamageSource::World, amount: 30, point: Vec3::ZERO, from: None });
 
         world.run_system_once(apply_damage).unwrap();
 
@@ -339,6 +344,7 @@ mod tests {
             source: DamageSource::World,
             amount: 40,
             point: Vec3::ZERO,
+            from: None,
         });
 
         world.run_system_once(apply_damage).unwrap();

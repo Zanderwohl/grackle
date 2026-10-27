@@ -198,6 +198,9 @@ pub struct Damage {
     /// Before the clamp.
     pub amount: u32,
     pub point: Vec3,
+    /// Where it came from — a muzzle, a blast — for the victim's direction
+    /// indicator; `None` for what has no direction, like burning.
+    pub from: Option<Vec3>,
 }
 
 /// Anything that goes off writes one; only [`crate::game::explosion`] knows
@@ -225,6 +228,7 @@ pub struct DamageDealt {
     pub amount: u32,
     pub remaining: u32,
     pub point: Vec3,
+    pub from: Option<Vec3>,
 }
 
 /// The entity in a relayed record is the sender's and must be mapped, or a
@@ -342,6 +346,7 @@ mod tests {
             amount: 30,
             remaining: 70,
             point: Vec3::new(1.0, 2.0, 3.0),
+            from: None,
         };
         hit.map_entities(&mut Shift);
         assert_eq!(hit.target, Entity::from_raw_u32(107).unwrap());

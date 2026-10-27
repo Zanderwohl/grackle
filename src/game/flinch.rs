@@ -224,6 +224,7 @@ mod tests {
                 amount: 10,
                 remaining: 90,
                 point: Vec3::new(0.0, 1.0, -1.0),
+                from: None,
             });
             world.run_system_once(start_flinches).unwrap();
         };
@@ -261,6 +262,7 @@ mod tests {
                 amount,
                 remaining: 50,
                 point: Vec3::new(0.0, 1.0, -1.0),
+                from: None,
             });
             world.run_system_once(start_flinches).unwrap();
             // A fresh reader per run would read every earlier hit again.
@@ -309,6 +311,7 @@ mod tests {
             amount: 90,
             remaining: 90,
             point: Vec3::new(0.0, 1.0, -1.0),
+            from: None,
         });
         world.run_system_once(start_flinches).unwrap();
         world.get_mut::<ClipStack>(body).unwrap().0[0].weight = 1.0;

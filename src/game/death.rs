@@ -28,6 +28,7 @@ pub fn suicide(
                 source: DamageSource::Player(*id),
                 amount: SUICIDE_DAMAGE,
                 point: placed.translation(),
+                from: None,
             });
         }
     }
@@ -146,6 +147,7 @@ mod tests {
             amount: 1,
             remaining: 0,
             point: Vec3::ZERO,
+            from: None,
         });
         world.run_system_once(record_damage).unwrap();
         world.resource_mut::<Messages<DamageDealt>>().clear();

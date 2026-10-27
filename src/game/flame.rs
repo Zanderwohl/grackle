@@ -81,6 +81,7 @@ pub fn fire_flame(
                 source,
                 amount: spec.damage,
                 point: hit.point,
+                from: Some(origin),
             });
 
             match alight.get_mut(hit.target) {
@@ -116,6 +117,7 @@ pub fn burn(
                 source: burning.source,
                 amount: burning.damage,
                 point: at,
+                from: None,
             });
         }
 

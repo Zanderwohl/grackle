@@ -50,6 +50,9 @@ pub struct ShapeStyle {
     /// A copy of the silhouette, stroke included, drawn behind it.
     pub drop: Color,
     pub drop_offset: Vec2,
+    /// What the whole shape's opacity is multiplied by at the top of its box
+    /// and at the bottom, in between by height.
+    pub fade: [f32; 2],
 }
 
 impl Default for ShapeStyle {
@@ -63,6 +66,7 @@ impl Default for ShapeStyle {
             stroke_width: 0.0,
             drop: Color::NONE,
             drop_offset: Vec2::ZERO,
+            fade: [1.0, 1.0],
         }
     }
 }
@@ -116,6 +120,8 @@ pub struct ShapeUniform {
     frame: Vec4,
     /// Drop offset x, y, point count, unused.
     extra: Vec4,
+    /// Opacity at the top, at the bottom, unused, unused.
+    fade: Vec4,
     /// Two points to an element.
     points: [Vec4; MAX_POINTS / 2],
 }
@@ -142,6 +148,7 @@ impl From<&ShapeMaterial> for ShapeUniform {
                 material.points.len() as f32,
                 0.0,
             ),
+            fade: Vec4::new(style.fade[0], style.fade[1], 0.0, 0.0),
             points,
         }
     }

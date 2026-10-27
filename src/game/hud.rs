@@ -5,7 +5,8 @@
 //! height of the window, centered. On a 4:3 window it is the whole screen; on
 //! an ultrawide the readouts stay near the crosshair rather than out at the
 //! edges where reading them means looking away from the fight. Narrower than
-//! 4:3 it is clamped to the window. `F9` outlines it.
+//! 4:3 it is clamped to the window. `F9` outlines it in yellow, and the
+//! [`WindowSafeZone`] in blue.
 //!
 //! The HUD has a camera of its own, drawing nothing but UI, a child of the
 //! play camera and ordered above the viewmodel's. On the play camera it was
@@ -83,6 +84,15 @@ pub struct GameHud;
 
 #[derive(Component)]
 struct SafeZone;
+
+/// The whole window less [`WINDOW_MARGIN`] all round, unlike [`SafeZone`]: for
+/// what belongs at the screen's edges rather than near the crosshair, the
+/// damage direction indicator.
+#[derive(Component)]
+pub struct WindowSafeZone;
+
+/// Logical pixels.
+pub const WINDOW_MARGIN: f32 = 20.0;
 
 /// The armor readout and its panel, hidden together while there is none.
 #[derive(Component)]
@@ -203,6 +213,7 @@ pub(crate) fn panel_style(swatch: &Swatch) -> ShapeStyle {
         stroke_width: ZONE_STROKE,
         drop: swatch.deep.with_alpha(0.75),
         drop_offset: ZONE_DROP,
+        ..default()
     }
 }
 
@@ -287,7 +298,7 @@ fn spawn_the_hud(
         },
         // A full-screen node would otherwise swallow the pause menu's clicks.
         Pickable::IGNORE,
-        children![crosshair(), safe_zone(&font.0)],
+        children![window_safe_zone(), crosshair(), safe_zone(&font.0)],
     ));
 }
 
@@ -308,6 +319,22 @@ fn safe_zone(font: &Handle<Font>) -> impl Bundle {
         Outline::new(Val::Px(2.0), Val::Px(-2.0), Color::NONE),
         Pickable::IGNORE,
         children![health_readout(font), armor_readout(font), weapon_readout(font)],
+    )
+}
+
+fn window_safe_zone() -> impl Bundle {
+    (
+        WindowSafeZone,
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(WINDOW_MARGIN),
+            right: Val::Px(WINDOW_MARGIN),
+            top: Val::Px(WINDOW_MARGIN),
+            bottom: Val::Px(WINDOW_MARGIN),
+            ..default()
+        },
+        Outline::new(Val::Px(2.0), Val::Px(-2.0), Color::NONE),
+        Pickable::IGNORE,
     )
 }
 
@@ -517,10 +544,14 @@ fn toggle_safe_zone_outline(
 /// outlined.
 fn outline_the_safe_zone(
     shown: Res<SafeZoneOutline>,
-    mut zones: Query<&mut Outline, With<SafeZone>>,
+    mut zones: Query<(&mut Outline, Has<WindowSafeZone>), Or<(With<SafeZone>, With<WindowSafeZone>)>>,
 ) {
-    let color = if shown.0 { Color::srgba(1.0, 0.8, 0.0, 0.8) } else { Color::NONE };
-    for mut outline in &mut zones {
+    for (mut outline, window) in &mut zones {
+        let color = match (shown.0, window) {
+            (false, _) => Color::NONE,
+            (true, false) => Color::srgba(1.0, 0.8, 0.0, 0.8),
+            (true, true) => Color::srgba(0.0, 0.9, 1.0, 0.8),
+        };
         if outline.color != color {
             outline.color = color;
         }

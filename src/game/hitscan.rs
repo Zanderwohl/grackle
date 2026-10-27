@@ -141,6 +141,7 @@ pub fn fire_hitscan(
             source: id.map_or(DamageSource::World, |id| DamageSource::Player(*id)),
             amount: worth,
             point: hit.point,
+            from: Some(ray.origin),
         });
 
         // Written for every hit, fatal or not. Scaled by what the shot was

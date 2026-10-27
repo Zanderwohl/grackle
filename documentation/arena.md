@@ -392,6 +392,8 @@ by `record_healing`.
 **Points** are worked out from those counts, never stored or sent:
 `Standing::points`, with the weights as constants beside it — 2 a kill, 1 an
 assist, −1 a death, 1 per whole 150 healing and per whole 300 damage dealt.
+They are ranked as they are, negatives included, and shown never below 0
+(`shown_points`), so two players on 0 are still in the right order.
 They are a first guess, to be tuned.
 
 **The frag limit ends the round.** When a `Standing` reaches

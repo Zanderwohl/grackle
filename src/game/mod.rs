@@ -24,6 +24,7 @@ pub mod body_mesh;
 pub mod collision;
 pub mod condition;
 pub mod damage;
+pub mod damage_direction;
 pub mod death;
 pub mod hat;
 pub mod held;
@@ -67,6 +68,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::game::score::ScorePlugin)
             .add_plugins(crate::game::rounds::RoundHistoryPlugin)
             .add_plugins(crate::game::tab_board::TabBoardPlugin)
+            .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
 

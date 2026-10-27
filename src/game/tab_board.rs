@@ -261,7 +261,7 @@ fn row(
         .add_child(chip)
         .with_children(|row| {
             row.spawn(cell(font, standing.display_name(), NAME_WIDTH, false, white));
-            row.spawn(number(standing.points().to_string()));
+            row.spawn(number(standing.shown_points().to_string()));
             row.spawn(number(standing.kills.to_string()));
             row.spawn(number(standing.assists.to_string()));
             row.spawn(number(standing.deaths.to_string()));

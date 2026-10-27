@@ -74,13 +74,20 @@ impl Standing {
         }
     }
 
-    /// Partial hundreds of damage and healing count for nothing.
+    /// What players are ranked by. Partial hundreds of damage and healing
+    /// count for nothing. Negative for somebody who dies more than they score.
     pub fn points(&self) -> i32 {
         POINTS_PER_KILL * self.kills as i32
             + POINTS_PER_ASSIST * self.assists as i32
             + POINTS_PER_DEATH * self.deaths as i32
             + (self.healing / HEALING_PER_POINT) as i32
             + (self.damage_dealt / DAMAGE_PER_POINT) as i32
+    }
+
+    /// What a scoreboard shows: never below zero, though the ranking still
+    /// tells a −3 from a −1.
+    pub fn shown_points(&self) -> u32 {
+        self.points().max(0) as u32
     }
 
     /// What a row says: the name, or "Player {id}" for somebody unnamed.
@@ -470,7 +477,7 @@ mod tests {
         let body = |world: &mut World, id: u64| world.spawn(PlayerId(id)).id();
         let (zero, one) = (body(&mut world, 0), body(&mut world, 1));
         let crate_ = world.spawn_empty().id();
-        let hit = |target, source, amount| DamageDealt { target, source, amount, remaining: 0, point: Vec3::ZERO };
+        let hit = |target, source, amount| DamageDealt { target, source, amount, remaining: 0, point: Vec3::ZERO, from: None };
         world.write_message(hit(one, DamageSource::Player(PlayerId(0)), 40));
         world.write_message(hit(zero, DamageSource::Player(PlayerId(0)), 15));
         world.write_message(hit(crate_, DamageSource::Player(PlayerId(0)), 99));
@@ -502,6 +509,9 @@ mod tests {
         someone.damage_dealt = 650;
         // 6 for kills, 1 assist, 1 for healing, 2 for damage, -2 for deaths.
         assert_eq!(someone.points(), 8);
+
+        let unlucky = standing(1, 0, 5);
+        assert_eq!((unlucky.points(), unlucky.shown_points()), (-5, 0));
     }
 
     #[test]

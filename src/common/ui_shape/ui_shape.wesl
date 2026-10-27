@@ -13,6 +13,8 @@ struct Shape {
     frame: vec4<f32>,
     // Drop offset x, y, point count, unused.
     extra: vec4<f32>,
+    // Opacity at the top, at the bottom, unused, unused.
+    fade: vec4<f32>,
     points: array<vec4<f32>, 64>,
 };
 
@@ -93,5 +95,6 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
         let stroke = shape.stroke;
         out = over(vec4<f32>(stroke.rgb, stroke.a * coverage(abs(d) - half_stroke, px)), out);
     }
+    out.a *= mix(shape.fade.x, shape.fade.y, in.uv.y);
     return out;
 }
