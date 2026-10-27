@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::skeleton::rig::{humanoid, Proportions, Scratch, BONES_ON_THE_STACK};
-use crate::common::damage::falloff;
+use crate::common::damage::{falloff, PlayerId};
 use crate::common::movement_rules::MovementRules;
 use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
@@ -59,9 +59,8 @@ use crate::game::skeleton::{skeleton_root, SkeletonRoot};
 /// How long a corpse lies there, in seconds of game time, so corpses do not
 /// age in the editor.
 ///
-/// Not tied to the body that left it: respawning is immediate, so clearing the
-/// corpse on respawn would mean nobody ever saw it. Only the round ends it
-/// early.
+/// Not tied to the body that left it, and it outlasts the respawn delay, so a
+/// player may have two. Only the round ends it early.
 pub const RAGDOLL_LIFETIME: f32 = 10.0;
 
 /// Constraint passes per tick. PBD stiffness is this number; eight keeps a leg
@@ -141,6 +140,10 @@ pub struct RagdollShove {
 /// the rig rather than a class, because not every body has a class.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CorpseBuild(pub Proportions);
+
+/// So the death cam can find its own. Only a player's corpse has one.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CorpseOf(pub PlayerId);
 
 /// A corpse.
 #[derive(Component, Debug, Clone, Serialize, Deserialize)]
@@ -333,6 +336,11 @@ impl Ragdoll {
     /// Seconds of game time this corpse has lain here.
     pub fn age(&self) -> f32 {
         self.age
+    }
+
+    /// The root bone's head, in world space.
+    pub fn pelvis(&self) -> Vec3 {
+        self.points[0].at
     }
 
     /// Where the solver has bone `index`'s two ends, in world space.
@@ -579,11 +587,12 @@ pub fn raise_ragdolls(
             Option<&Team>,
             Option<&PhysicsBody>,
             Option<&Name>,
+            Option<&PlayerId>,
         ),
         (Added<Dying>, Without<Ragdolled>),
     >,
 ) {
-    for (entity, skeleton, pose, global, offset, tint, team, physics, name) in &bodies {
+    for (entity, skeleton, pose, global, offset, tint, team, physics, name, id) in &bodies {
         // Per-tick displacement, which is the unit the solver keeps.
         let carried = physics.map_or(Vec3::ZERO, |body| body.current - body.previous);
         let ragdoll = Ragdoll::from_body(skeleton, pose, &skeleton_root(global, offset), carried);
@@ -610,6 +619,9 @@ pub fn raise_ragdolls(
             // Corpses keep their team colour, so a pile of them shows which way
             // a fight went.
             corpse.insert(*team);
+        }
+        if let Some(id) = id {
+            corpse.insert(CorpseOf(*id));
         }
 
         // Read off the rig the body actually had.
