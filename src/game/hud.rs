@@ -97,31 +97,8 @@ impl HudZone {
     /// with big squircle corners on one diagonal and tight ones on the other.
     /// The box is inset by the stroke and the drop so neither is cut off.
     fn outline(self) -> Path {
-        let size = self.size();
-        let lo = Vec2::splat(ZONE_STROKE);
-        let hi = size - Vec2::splat(ZONE_STROKE) - ZONE_DROP;
-        let lean = 0.12 * (hi.y - lo.y);
         let (big, small) = (Corner::squircle(34.0), Corner::squircle(10.0));
-        match self {
-            HudZone::Health => Path::rounded_polygon_each(
-                &[
-                    Vec2::new(lo.x + lean, lo.y),
-                    Vec2::new(hi.x, lo.y),
-                    Vec2::new(hi.x - lean, hi.y),
-                    Vec2::new(lo.x, hi.y),
-                ],
-                &[small, big, small, big],
-            ),
-            HudZone::Ammo => Path::rounded_polygon_each(
-                &[
-                    Vec2::new(lo.x, lo.y),
-                    Vec2::new(hi.x - lean, lo.y),
-                    Vec2::new(hi.x, hi.y),
-                    Vec2::new(lo.x + lean, hi.y),
-                ],
-                &[big, small, big, small],
-            ),
-        }
+        leaning_panel(self.size(), self == HudZone::Health, big, small)
     }
 
     fn style(swatch: &Swatch) -> ShapeStyle {
@@ -160,6 +137,36 @@ impl HudZone {
             padding: UiRect::right(Val::Px(ZONE_DROP.x)),
             ..default()
         }
+    }
+}
+
+/// A trapezoid leaning so its top sits further right (or left), with `big`
+/// corners on one diagonal and `small` on the other. The box is inset by the
+/// stroke and the drop so neither is cut off.
+pub(crate) fn leaning_panel(size: Vec2, leans_right: bool, big: Corner, small: Corner) -> Path {
+    let lo = Vec2::splat(ZONE_STROKE);
+    let hi = size - Vec2::splat(ZONE_STROKE) - ZONE_DROP;
+    let lean = 0.12 * (hi.y - lo.y);
+    if leans_right {
+        Path::rounded_polygon_each(
+            &[
+                Vec2::new(lo.x + lean, lo.y),
+                Vec2::new(hi.x, lo.y),
+                Vec2::new(hi.x - lean, hi.y),
+                Vec2::new(lo.x, hi.y),
+            ],
+            &[small, big, small, big],
+        )
+    } else {
+        Path::rounded_polygon_each(
+            &[
+                Vec2::new(lo.x, lo.y),
+                Vec2::new(hi.x - lean, lo.y),
+                Vec2::new(hi.x, hi.y),
+                Vec2::new(lo.x + lean, hi.y),
+            ],
+            &[big, small, big, small],
+        )
     }
 }
 
@@ -317,14 +324,18 @@ fn crosshair() -> impl Bundle {
     )
 }
 
-fn text(font: &Handle<Font>, kind: HudText, size: f32, alpha: f32) -> impl Bundle {
+/// Play-mode text in the display font, which no click lands on.
+pub(crate) fn hud_text(font: &Handle<Font>, words: String, size: f32, colour: Color) -> impl Bundle {
     (
-        kind,
-        Text::new(""),
+        Text::new(words),
         TextFont { font: font.into(), font_size: bevy::text::FontSize::Px(size), ..default() },
-        TextColor(Color::srgba(1.0, 1.0, 1.0, alpha)),
+        TextColor(colour),
         Pickable::IGNORE,
     )
+}
+
+fn text(font: &Handle<Font>, kind: HudText, size: f32, alpha: f32) -> impl Bundle {
+    (kind, hud_text(font, String::new(), size, Color::srgba(1.0, 1.0, 1.0, alpha)))
 }
 
 fn health_readout(font: &Handle<Font>) -> impl Bundle {

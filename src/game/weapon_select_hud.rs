@@ -14,9 +14,9 @@ use crate::common::app_mode::AppMode;
 use crate::common::fonts::DisplayFont;
 use crate::common::swatch::{Ink, Swatch};
 use crate::common::team::Team;
-use crate::common::ui_shape::{Corner, Path, ShapeMaterial, ShapeStyle};
+use crate::common::ui_shape::{Corner, ShapeMaterial, ShapeStyle};
 use crate::common::weapon::{Equipped, Slot, WeaponCatalogue};
-use crate::game::hud::{panel_style, ZONE_DROP, ZONE_STROKE};
+use crate::game::hud::{hud_text, leaning_panel, panel_style, ZONE_DROP, ZONE_STROKE};
 use crate::game::player::LocalPlayer;
 use crate::game::weapon_select::{carried, WeaponSelection};
 use crate::get;
@@ -99,24 +99,6 @@ impl Shown {
     }
 }
 
-/// A box leaning like the HUD's panels, inset by the stroke and the drop so
-/// neither is cut off.
-fn outline(size: Vec2) -> Path {
-    let lo = Vec2::splat(ZONE_STROKE);
-    let hi = size - Vec2::splat(ZONE_STROKE) - ZONE_DROP;
-    let lean = 0.12 * (hi.y - lo.y);
-    let (big, small) = (Corner::squircle(18.0), Corner::squircle(6.0));
-    Path::rounded_polygon_each(
-        &[
-            Vec2::new(lo.x + lean, lo.y),
-            Vec2::new(hi.x, lo.y),
-            Vec2::new(hi.x - lean, hi.y),
-            Vec2::new(lo.x, hi.y),
-        ],
-        &[small, big, small, big],
-    )
-}
-
 /// What is not highlighted sits back: darker, flat, and see-through.
 fn dimmed(swatch: &Swatch) -> ShapeStyle {
     ShapeStyle {
@@ -125,6 +107,35 @@ fn dimmed(swatch: &Swatch) -> ShapeStyle {
         shadow: Color::NONE,
         drop: swatch.deep.with_alpha(0.35),
         ..panel_style(swatch)
+    }
+}
+
+/// What [`Shown`] is built from, compared first so it is not rebuilt, with
+/// its lang lookups, on every frame the selector is up.
+type ShownFrom = (Option<Slot>, Equipped, Option<Team>, usize);
+
+/// The three panels a selector draws, made once per team: a card lit, a card
+/// dimmed, and a closed bucket.
+struct Panels {
+    team: Option<Team>,
+    lit: Handle<ShapeMaterial>,
+    dim: Handle<ShapeMaterial>,
+    closed: Handle<ShapeMaterial>,
+}
+
+impl Panels {
+    fn new(team: Option<Team>, materials: &mut Assets<ShapeMaterial>) -> Self {
+        let swatch = Swatch::of(team);
+        let mut make = |size: Vec2, style: ShapeStyle| {
+            let outline = leaning_panel(size, true, Corner::squircle(18.0), Corner::squircle(6.0));
+            materials.add(ShapeMaterial::from_path(&outline, size, style))
+        };
+        Self {
+            team,
+            lit: make(CARD, panel_style(&swatch)),
+            dim: make(CARD, dimmed(&swatch)),
+            closed: make(CLOSED, dimmed(&swatch)),
+        }
     }
 }
 
@@ -137,8 +148,9 @@ fn show_the_selector(
     font: Res<DisplayFont>,
     ours: Option<Single<(&Equipped, Option<&Team>), With<LocalPlayer>>>,
     mut roots: Query<(Entity, &mut Node), With<SelectorRoot>>,
-    mut materials: Option<ResMut<Assets<ShapeMaterial>>>,
-    mut drawn: Local<Option<Shown>>,
+    materials: Option<ResMut<Assets<ShapeMaterial>>>,
+    mut built_from: Local<Option<ShownFrom>>,
+    mut panels: Local<Option<Panels>>,
 ) {
     let Ok((root, mut node)) = roots.single_mut() else {
         commands.spawn((
@@ -155,38 +167,35 @@ fn show_the_selector(
             },
             Pickable::IGNORE,
         ));
-        *drawn = None;
+        *built_from = None;
         return;
     };
 
-    let wanted = match ours {
-        Some(ours) if selection.is_open() => {
-            let (equipped, team) = ours.into_inner();
-            Some(Shown::of(&catalogue, equipped, selection.highlight, thumbnails.as_deref(), team.copied()))
-        }
-        _ => None,
-    };
-
-    let display = if wanted.is_some() { Display::Flex } else { Display::None };
+    let ours = ours.filter(|_| selection.is_open()).map(|ours| ours.into_inner());
+    let display = if ours.is_some() { Display::Flex } else { Display::None };
     if node.display != display {
         node.display = display;
     }
 
     // Kept while closed, so reopening onto the same thing rebuilds nothing.
-    let Some(wanted) = wanted else { return };
-    if drawn.as_ref() == Some(&wanted) {
+    let Some((equipped, team)) = ours else { return };
+    let team = team.copied();
+    let from = (selection.highlight, *equipped, team, thumbnails.as_ref().map_or(0, |t| t.len()));
+    if built_from.as_ref() == Some(&from) && !catalogue.is_changed() {
         return;
     }
+    *built_from = Some(from);
+    let wanted = Shown::of(&catalogue, equipped, selection.highlight, thumbnails.as_deref(), team);
 
-    let swatch = Swatch::of(wanted.team);
-    let text = |words: String, size: f32, colour: Color| {
-        (
-            Text::new(words),
-            TextFont { font: (&font.0).into(), font_size: bevy::text::FontSize::Px(size), ..default() },
-            TextColor(colour),
-            Pickable::IGNORE,
-        )
-    };
+    let swatch = Swatch::of(team);
+    // Absent in a test app with no renderer; the text still lays out.
+    if let Some(mut materials) = materials
+        && panels.as_ref().is_none_or(|panels| panels.team != team)
+    {
+        *panels = Some(Panels::new(team, &mut materials));
+    }
+    let panels = panels.as_ref();
+    let text = |words: String, size: f32, colour: Color| hud_text(&font.0, words, size, colour);
 
     let mut columns = Vec::new();
     for column in &wanted.columns {
@@ -194,7 +203,7 @@ fn show_the_selector(
         let mut boxes = Vec::new();
 
         if column.cards.is_empty() {
-            let backing = panel(&mut commands, materials.as_deref_mut(), CLOSED, dimmed(&swatch));
+            let backing = panel(&mut commands, panels.map(|p| p.closed.clone()), CLOSED);
             let label = commands.spawn(text(digit.clone(), DIGIT_SIZE, Ink::White.on(&swatch))).id();
             boxes.push(
                 commands
@@ -215,12 +224,12 @@ fn show_the_selector(
         }
 
         for (i, card) in column.cards.iter().enumerate() {
-            let (style, ink) = if card.highlighted {
-                (panel_style(&swatch), swatch.text())
+            let (material, ink) = if card.highlighted {
+                (panels.map(|p| p.lit.clone()), swatch.text())
             } else {
-                (dimmed(&swatch), Ink::White.on(&swatch))
+                (panels.map(|p| p.dim.clone()), Ink::White.on(&swatch))
             };
-            let mut parts = vec![panel(&mut commands, materials.as_deref_mut(), CARD, style)];
+            let mut parts = vec![panel(&mut commands, material, CARD)];
             // On the first card only: it heads the column.
             if i == 0 {
                 parts.push(
@@ -282,16 +291,10 @@ fn show_the_selector(
     }
 
     commands.entity(root).despawn_children().add_children(&columns);
-    *drawn = Some(wanted);
 }
 
 /// Drawn behind its box's contents, first among them so it is under them.
-fn panel(
-    commands: &mut Commands,
-    materials: Option<&mut Assets<ShapeMaterial>>,
-    size: Vec2,
-    style: ShapeStyle,
-) -> Entity {
+fn panel(commands: &mut Commands, material: Option<Handle<ShapeMaterial>>, size: Vec2) -> Entity {
     let mut panel = commands.spawn((
         Node {
             position_type: PositionType::Absolute,
@@ -303,9 +306,8 @@ fn panel(
         },
         Pickable::IGNORE,
     ));
-    // Absent in a test app with no renderer; the text still lays out.
-    if let Some(materials) = materials {
-        panel.insert(MaterialNode(materials.add(ShapeMaterial::from_path(&outline(size), size, style))));
+    if let Some(material) = material {
+        panel.insert(MaterialNode(material));
     }
     panel.id()
 }

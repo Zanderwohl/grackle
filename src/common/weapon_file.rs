@@ -341,9 +341,9 @@ mod tests {
         assert!(equipped.held().is_some(), "it spawned holding nothing while carrying something");
     }
 
-    /// Fails if a shipped weapon is no slot's default. Nothing switches within
-    /// a slot yet, so such a weapon is unreachable. Delete once something
-    /// does.
+    /// Fails if a shipped weapon is no slot's default. Only defaults are
+    /// carried until there is a loadout screen, so such a weapon is
+    /// unreachable.
     #[test]
     fn every_shipped_weapon_is_on_a_digit() {
         let catalogue = the_default_pack();

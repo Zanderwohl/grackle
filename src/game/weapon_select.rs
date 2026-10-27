@@ -61,6 +61,12 @@ pub struct WeaponSelection {
     /// confirmed or cancelled and is still down. It is not a shot until it is
     /// let go.
     swallowing: [bool; 2],
+    /// Sent, and not yet seen held: the server is drawing it, so a shot now
+    /// is not one the old weapon fires.
+    sent: Option<Slot>,
+    /// The body all this was chosen for. A new one — a new round, a respawn
+    /// — starts from nothing.
+    body: Option<Entity>,
 }
 
 impl WeaponSelection {
@@ -68,10 +74,10 @@ impl WeaponSelection {
         self.open_for > 0.0
     }
 
-    /// The mouse buttons are the selector's rather than the weapon's, so
-    /// nothing should guess a shot from them.
+    /// The mouse buttons are the selector's, or the weapon they would fire
+    /// is on its way out, so nothing should guess a shot from them.
     pub fn holds_the_buttons(&self) -> bool {
-        self.pending.is_some() || self.swallowing.contains(&true)
+        self.pending.is_some() || self.sent.is_some() || self.swallowing.contains(&true)
     }
 
     fn choose(&mut self, slot: Slot) {
@@ -81,13 +87,12 @@ impl WeaponSelection {
 
     fn send(&mut self, latch: &mut InputLatch) {
         self.pending = None;
+        self.sent = self.highlight;
         latch.0.select = self.highlight;
     }
 
     fn forget(&mut self) {
-        self.pending = None;
-        self.open_for = 0.0;
-        self.swallowing = [false; 2];
+        *self = Self { highlight: self.highlight, body: self.body, ..Self::default() };
     }
 }
 
@@ -137,7 +142,7 @@ pub fn choose_weapons(
     mut wheel: MessageReader<MouseWheel>,
     paused: Option<Res<PauseMenu>>,
     catalogue: Res<WeaponCatalogue>,
-    ours: Option<Single<&Equipped, With<LocalPlayer>>>,
+    ours: Option<Single<(Entity, &Equipped), With<LocalPlayer>>>,
     mut selection: ResMut<WeaponSelection>,
     mut travel: Local<f32>,
     mut latch: ResMut<InputLatch>,
@@ -149,39 +154,50 @@ pub fn choose_weapons(
         };
     }
 
-    let (Some(equipped), false) = (ours, paused.is_some_and(|menu| menu.open)) else {
+    let (Some(ours), false) = (ours, paused.is_some_and(|menu| menu.open)) else {
         *travel = 0.0;
         selection.forget();
         return;
     };
+    let (body, equipped) = ours.into_inner();
 
+    if selection.body != Some(body) {
+        *selection = WeaponSelection { body: Some(body), ..default() };
+    }
     let dt = time.delta_secs();
     selection.open_for = (selection.open_for - dt).max(0.0);
-    let order = carried(&equipped, &catalogue);
-    // Something no longer carried (a respawn into another loadout) is not
-    // somewhere to move on from.
-    let carrying = |slot: &Slot| order.iter().any(|(_, at)| at == slot);
-    if !selection.is_open() || !selection.highlight.is_some_and(|slot| carrying(&slot)) {
-        selection.highlight = Some(equipped.held).filter(carrying);
-        selection.pending = None;
+    if selection.sent == Some(equipped.held) {
+        selection.sent = None;
     }
+    if !selection.is_open() {
+        // A switch never seen held is given up on with the selector.
+        *selection = WeaponSelection {
+            highlight: Some(equipped.held),
+            swallowing: selection.swallowing,
+            body: selection.body,
+            ..default()
+        };
+    }
+
+    let pressed: Vec<u8> =
+        (1..=BUCKETS).zip(DIGITS).filter(|(_, key)| keys.just_pressed(*key)).map(|(b, _)| b).collect();
+    let notches = travel.trunc();
+    *travel -= notches;
 
     let mut chosen = None;
     let mut at_once = false;
-    for (bucket, key) in (1..=BUCKETS).zip(DIGITS) {
-        if keys.just_pressed(key) {
+    if !pressed.is_empty() || notches != 0.0 {
+        let order = carried(equipped, &catalogue);
+        for bucket in pressed {
             if let Some(slot) = press(&order, chosen.or(selection.highlight), bucket) {
                 chosen = Some(slot);
                 at_once = order.iter().filter(|(at, _)| *at == bucket).count() == 1;
             }
         }
-    }
-
-    let notches = travel.trunc();
-    *travel -= notches;
-    if notches != 0.0 {
         // Wheel up is back towards bucket 1, as Source binds it.
-        if let Some(slot) = scroll(&order, chosen.or(selection.highlight), -(notches as i32)) {
+        if notches != 0.0
+            && let Some(slot) = scroll(&order, chosen.or(selection.highlight), -(notches as i32))
+        {
             chosen = Some(slot);
             at_once = false;
         }
@@ -208,7 +224,7 @@ pub fn choose_weapons(
             selection.send(&mut latch);
             selection.swallowing[0] = true;
         } else if latch.0.alt_attack {
-            selection.highlight = Some(equipped.held).filter(carrying);
+            selection.highlight = Some(equipped.held);
             selection.forget();
             selection.swallowing[1] = true;
         }
@@ -418,6 +434,8 @@ mod tests {
             assert!(!input.attack && !input.attack_held, "the confirming click fired");
         }
         assert_eq!(sent(&world), Some(inside[0]));
+        world.query::<&mut Equipped>().single_mut(&mut world).unwrap().held = inside[0];
+        frame(&mut world, 0.01, None);
         assert!(!world.resource::<WeaponSelection>().holds_the_buttons(), "never let go");
 
         world.resource_mut::<InputLatch>().0.attack = true;
@@ -438,5 +456,45 @@ mod tests {
         assert_eq!(sent(&world), None, "a cancelled choice was sent");
         assert_eq!(highlight(&world), Some(held));
         assert!(!world.resource::<InputLatch>().0.alt_attack, "the cancelling click fired");
+    }
+
+    #[test]
+    fn a_sent_switch_holds_the_buttons_until_it_is_seen_held() {
+        let (mut world, _, _) = a_chooser();
+        let catalogue = world.resource::<WeaponCatalogue>().clone();
+        let equipped = *world.query::<&Equipped>().single(&world).unwrap();
+        let order = carried(&equipped, &catalogue);
+        let (alone, slot) = *order
+            .iter()
+            .find(|(at, _)| order.iter().filter(|(b, _)| b == at).count() == 1)
+            .unwrap();
+
+        frame(&mut world, 0.0, Some(DIGITS[alone as usize - 1]));
+        frame(&mut world, 0.01, None);
+        assert!(
+            world.resource::<WeaponSelection>().holds_the_buttons(),
+            "the weapon being put away could be guessed to fire"
+        );
+
+        world.query::<&mut Equipped>().single_mut(&mut world).unwrap().held = slot;
+        frame(&mut world, 0.01, None);
+        assert!(!world.resource::<WeaponSelection>().holds_the_buttons());
+    }
+
+    /// A choice made for a body that has gone — a death, a new round — is
+    /// not sent to the next one.
+    #[test]
+    fn a_new_body_starts_from_nothing() {
+        let (mut world, bucket, _) = a_chooser();
+        frame(&mut world, 0.0, Some(DIGITS[bucket as usize - 1]));
+
+        let old = world.query_filtered::<Entity, With<LocalPlayer>>().single(&world).unwrap();
+        let equipped = *world.get::<Equipped>(old).unwrap();
+        world.despawn(old);
+        world.spawn((equipped, LocalPlayer));
+        frame(&mut world, SETTLE_SECONDS * 2.0, None);
+
+        assert_eq!(sent(&world), None, "the dead body's choice reached the new one");
+        assert_eq!(highlight(&world), Some(equipped.held));
     }
 }

@@ -465,14 +465,26 @@ pub(crate) fn perform(
     // late catalogue) does not.
     if performance.started_for != held.weapon {
         performance.started_for = held.weapon;
-        // Stretched to the weapon's deploy time, which is gameplay; one with
-        // no entry yet plays at its own speed.
-        let deploy = held.weapon.and_then(|id| catalogue.get(id)).map(|weapon| weapon.deploy);
         performance.playing = held.clips.get(DEPLOY).map(|_| Playback {
             clip: WeaponClip::Prop(DEPLOY.to_string()),
             seconds: 0.0,
-            fit: deploy.map(|deploy| (0.0, deploy)),
+            fit: None,
         });
+    }
+
+    // Stretched to the weapon's deploy time, which is gameplay. Fitted here
+    // rather than at the start, since the catalogue can arrive after the
+    // weapon; a deploy of zero has no clip to stretch.
+    if let Some(playback) = performance.playing.as_mut()
+        && playback.fit.is_none()
+        && matches!(&playback.clip, WeaponClip::Prop(name) if name == DEPLOY)
+        && let Some(deploy) = held.weapon.and_then(|id| catalogue.get(id)).map(|weapon| weapon.deploy)
+    {
+        if deploy > 0.0 {
+            playback.fit = Some((0.0, deploy));
+        } else {
+            performance.playing = None;
+        }
     }
 
     let Some(playback) = performance.playing.as_mut() else {

@@ -134,6 +134,12 @@ impl Thumbnails {
         self.props.get(name)
     }
 
+    /// How many props have a picture. Only grows, since a handle is kept
+    /// across a retake, so a change means a new picture to show.
+    pub fn len(&self) -> usize {
+        self.props.len()
+    }
+
     fn keep(&mut self, name: &str, image: Image, images: &mut Assets<Image>) {
         match self.props.get(name) {
             Some(handle) => {
