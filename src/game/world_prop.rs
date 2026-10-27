@@ -122,6 +122,7 @@ impl Plugin for WorldPropPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PropCache>()
             .init_resource::<SurfaceMaterials>()
+            .add_plugins(crate::game::pickup_beam::PickupBeamPlugin)
             .add_systems(
                 Update,
                 // Not mode-gated: props are map content, standing in the
@@ -141,6 +142,14 @@ impl Plugin for WorldPropPlugin {
             )
             // Ungated: a client draws what it is sent.
             .add_systems(Update, (place_world_props, dress_world_props, float_pickups, box_breakables).chain())
+            // With the bones on F6: both are what a body is measured against.
+            .add_systems(
+                PostUpdate,
+                draw_pickup_triggers
+                    .run_if(resource_exists::<GizmoConfigStore>)
+                    .run_if(resource_exists::<crate::game::skeleton::ShowBones>)
+                    .run_if(crate::common::app_mode::showing_the_world),
+            )
             .add_systems(
                 Update,
                 take_pickups
@@ -638,6 +647,37 @@ fn give(
         }
         // Specced, with no behavior yet: there is no flag mode.
         PickupKind::Flag => false,
+    }
+}
+
+/// Bright while it can be taken, dim while it restocks. A trigger with a core
+/// is drawn as the box around it, which is a little generous at the corners.
+fn draw_pickup_triggers(
+    show: Res<crate::game::skeleton::ShowBones>,
+    cache: Res<PropCache>,
+    pickups: Query<(&WorldProp, &Pickup, Option<&GivesWeapon>)>,
+    mut gizmos: Gizmos,
+) {
+    if !show.0 {
+        return;
+    }
+    for (prop, pickup, gives) in &pickups {
+        let triggers = match gives {
+            Some(_) => vec![weapon_trigger(&prop.transform())],
+            None => match cache.get(&prop.model) {
+                Some(baked) => triggers(baked, &prop.transform()),
+                None => continue,
+            },
+        };
+        let color = if pickup.taken { Color::srgba(0.4, 0.9, 0.5, 0.25) } else { Color::srgb(0.4, 0.9, 0.5) };
+        for trigger in triggers {
+            if trigger.core == Vec3::ZERO {
+                gizmos.sphere(Isometry3d::from_translation(trigger.center), trigger.radius, color);
+            } else {
+                let size = (trigger.core + Vec3::splat(trigger.radius)) * 2.0;
+                gizmos.cube(Transform::from_translation(trigger.center).with_scale(size), color);
+            }
+        }
     }
 }
 
@@ -1172,7 +1212,7 @@ mod tests {
     #[test]
     fn armor_fills_by_a_fraction_of_its_maximum_and_is_walked_past_full() {
         let mut world = World::new();
-        let body = world.spawn(Armor::default()).id();
+        let body = world.spawn(Armor::with_max(100)).id();
         let spec = PickupSpec { kind: PickupKind::Armor, amount: 0.6, respawn: 1.0, ..default() };
         let take = |world: &mut World| {
             let armor = world.get_mut::<Armor>(body).unwrap();

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
 use lightyear::prelude::input::native::ActionState;
 
-use crate::common::damage::{Armor, Damageable, Died, PlayerId, DEFAULT_HEALTH};
+use crate::common::damage::{Armor, Damageable, Died, PlayerId, DEFAULT_HEALTH, DEFAULT_MAX_ARMOR};
 use crate::game::death::Dying;
 use crate::common::hitbox::Hitboxes;
 use crate::common::movement_rules::MovementRules;
@@ -374,12 +374,15 @@ pub fn spawn_player(
     // the rig.
     let class = rules.class_to_play();
     let (equipped, ammo) = catalog.starting_equipment(class, rules.loadout.as_deref());
-    let health = catalog.loadout(class).and_then(|loadout| loadout.health).unwrap_or(DEFAULT_HEALTH);
+    let loadout = catalog.loadout(class);
+    let health = loadout.and_then(|loadout| loadout.health).unwrap_or(DEFAULT_HEALTH);
+    let armor = loadout.and_then(|loadout| loadout.armor).unwrap_or(DEFAULT_MAX_ARMOR);
 
     let mut body = commands.spawn((
         Player { yaw: spawn.yaw, ..default() },
         class,
         Damageable::with_health(health),
+        Armor::with_max(armor),
         equipped,
         ammo,
         // Whoever stands a body up steps it.

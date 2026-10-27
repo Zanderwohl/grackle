@@ -116,6 +116,14 @@ roll_to_end = "Roll to end"
 [editor.point_ref]
 none = "None"
 
+[editor.rounds]
+title = "Rounds"
+round = "Round { number } ({ length })"
+player = "Player"
+frags = "Frags"
+deaths = "Deaths"
+none = "No rounds played"
+
 [editor.metadata]
 title = "Metadata"
 display_name = "Display name"

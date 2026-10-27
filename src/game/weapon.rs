@@ -883,10 +883,11 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_body_has_its_classs_health() {
+    fn a_fresh_body_has_its_classs_health_and_armor_cap() {
         let catalog = crate::common::weapon_file::default_catalog();
         let class = crate::common::class::Class::Mercenary;
         let expected = catalog.loadout(class).and_then(|loadout| loadout.health).expect("no health in loadouts.toml");
+        let cap = catalog.loadout(class).and_then(|loadout| loadout.armor).expect("no armor in loadouts.toml");
 
         let mut world = World::new();
         world.run_system_once(move |mut commands: Commands| {
@@ -902,6 +903,8 @@ mod tests {
         let health = world.query::<&crate::common::damage::Damageable>().single(&world).unwrap();
         assert_eq!(health.max(), expected);
         assert_eq!(health.health(), expected);
+        let armor = world.query::<&crate::common::damage::Armor>().single(&world).unwrap();
+        assert_eq!((armor.points(), armor.max()), (0, cap));
     }
 
     /// A weapon just drawn fires once its deploy has run out, and not before.

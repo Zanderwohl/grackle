@@ -338,7 +338,8 @@ condition can override; `ViewMode` is what is drawn, and the camera swings
 between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
 **`F4`** toggles the hitbox gizmos and the debug laser aimed at them, and
-**`F6`** toggles the bone gizmos. Both are off by default: they are debug
+**`F6`** toggles the bone gizmos and the pickups' trigger volumes
+(green, dim while one restocks). Both are off by default: they are debug
 views, and now that bodies have geometry neither is what a player sees. `F3`
 is the perf overlay in both modes.
 
@@ -900,7 +901,8 @@ game's tests run with no asset plugins.
 ([`src/editor/weapon_pickup.rs`](src/editor/weapon_pickup.rs)): the weapon
 names its own model, so the two cannot disagree. `sync_weapon_pickups` stands
 it up as a `WorldProp` of that model plus a `GivesWeapon`, hovering 1 m up by
-its lowest point, and taking one puts the weapon in a free slot, where its
+its lowest point over a beam of light (`pickup_beam`, dimmed while it
+restocks), and taking one puts the weapon in a free slot, where its
 bucket decides the digit, and draws it — unless it was already carried, which
 only tops up its ammo. See "Weapon
 pickups" in [documentation/arena.md](documentation/arena.md).
@@ -1440,7 +1442,10 @@ body carries no `Team`, spawns anywhere, and is drawn in its own
 which the authority picks and replicates — never derived from join order. The
 new-map template is an arena map. A mode with a `frag_limit` keeps score on a
 replicated `Standing` per player ([`src/game/score.rs`](src/game/score.rs)),
-shows it top-left, and ends the round at the limit. See
+shows it top-left, and ends the round at the limit; the editor's **Rounds**
+tab keeps the last 20 rounds' standings ([`src/game/rounds.rs`](src/game/rounds.rs)).
+The HUD is painted with `Swatch::of_body`: team, else player color, else
+neutral. See
 [documentation/arena.md](documentation/arena.md).
 
 Otherwise the player does not choose: `next_team` in
@@ -1633,8 +1638,9 @@ file and why. The failure then reads as "the Mercenary has no rocket launcher",
 which you can see, rather than as a panic on a listen server with people
 connected.
 
-A class's starting **health** is `health` on its entry in `loadouts.toml`
-(absent is `DEFAULT_HEALTH`), read by `spawn_player`.
+A class's starting **health** and its **armor** cap are `health` and `armor`
+on its entry in `loadouts.toml` (absent are `DEFAULT_HEALTH` and
+`DEFAULT_MAX_ARMOR`), read by `spawn_player`.
 
 **A class states what it may carry, per slot**, and there are six named slots
 (`Primary`, `Secondary`, `Melee`, `Utility`, `Gadget`, `Special`). A class that

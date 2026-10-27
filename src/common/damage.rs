@@ -121,8 +121,9 @@ impl Damageable {
     }
 }
 
-/// Placeholder, like [`DEFAULT_HEALTH`]: per class once health is.
-pub const DEFAULT_MAX_ARMOR: u32 = 100;
+/// For a class whose loadout states no `armor`, as [`DEFAULT_HEALTH`] is for
+/// health.
+pub const DEFAULT_MAX_ARMOR: u32 = 50;
 
 /// The share of each hit armor takes while it lasts, as in Quake.
 pub const ARMOR_ABSORBS: f32 = 2.0 / 3.0;
@@ -143,6 +144,11 @@ impl Default for Armor {
 }
 
 impl Armor {
+    /// Empty, holding at most `max`.
+    pub fn with_max(max: u32) -> Self {
+        Self { points: 0, max }
+    }
+
     pub fn points(&self) -> u32 {
         self.points
     }
@@ -301,9 +307,9 @@ mod tests {
 
     #[test]
     fn armor_fills_to_its_maximum_and_no_further() {
-        let mut armor = Armor::default();
+        let mut armor = Armor::with_max(100);
         assert_eq!(armor.add(70), 70);
-        assert_eq!(armor.add(70), DEFAULT_MAX_ARMOR - 70);
+        assert_eq!(armor.add(70), 30);
         assert!(armor.is_full());
     }
 

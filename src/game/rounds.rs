@@ -1,0 +1,129 @@
+//! The last [`KEPT_ROUNDS`] rounds' final standings, newest first, for the
+//! editor's Rounds tab.
+//!
+//! On every machine, taken from the replicated [`Standing`]s as Play ends:
+//! those are cleared only when the next round starts, so a client still has
+//! them however the end reached it. Not saved and not sent; a client that
+//! joins late has only the rounds it saw.
+
+use std::collections::VecDeque;
+
+use bevy::prelude::*;
+
+use crate::common::app_mode::AppMode;
+use crate::game::score::{ranked, Standing};
+
+pub const KEPT_ROUNDS: usize = 20;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Round {
+    /// Counted from one, over every round this process has recorded.
+    pub number: u32,
+    /// Wall-clock seconds, so a paused menu still counts.
+    pub length: f32,
+    /// Winner first.
+    pub standings: Vec<Standing>,
+}
+
+#[derive(Resource, Debug, Default)]
+pub struct RoundHistory {
+    rounds: VecDeque<Round>,
+    recorded: u32,
+    /// Real seconds when the round under way started.
+    started: Option<f32>,
+}
+
+impl RoundHistory {
+    /// Newest first.
+    pub fn rounds(&self) -> impl Iterator<Item = &Round> {
+        self.rounds.iter()
+    }
+
+    fn record(&mut self, standings: Vec<Standing>, length: f32) {
+        self.recorded += 1;
+        self.rounds.push_front(Round { number: self.recorded, length, standings });
+        self.rounds.truncate(KEPT_ROUNDS);
+    }
+}
+
+pub struct RoundHistoryPlugin;
+
+impl Plugin for RoundHistoryPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<RoundHistory>()
+            .add_systems(OnEnter(AppMode::Play), start_the_clock)
+            .add_systems(OnExit(AppMode::Play), record_the_round);
+    }
+}
+
+fn start_the_clock(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>) {
+    history.started = Some(time.elapsed_secs());
+}
+
+/// A mode with no scoreboard has no standings, and leaves no round.
+fn record_the_round(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>, standings: Query<&Standing>) {
+    let started = history.started.take();
+    if standings.is_empty() {
+        return;
+    }
+    let length = started.map_or(0.0, |started| time.elapsed_secs() - started);
+    history.record(ranked(standings.iter()).into_iter().copied().collect(), length);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::damage::PlayerId;
+    use crate::common::player_color::PlayerColor;
+
+    fn standing(id: u64, frags: i32) -> Standing {
+        Standing { id: PlayerId(id), team: None, color: PlayerColor { hue: 0.0 }, frags, deaths: 0 }
+    }
+
+    fn app() -> App {
+        let mut app = App::new();
+        app.add_plugins((bevy::time::TimePlugin, bevy::state::app::StatesPlugin))
+            .init_state::<AppMode>()
+            .add_plugins(RoundHistoryPlugin);
+        app.update();
+        app
+    }
+
+    fn play_a_round(app: &mut App, standings: &[Standing]) {
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        let spawned: Vec<Entity> = standings.iter().map(|standing| app.world_mut().spawn(*standing).id()).collect();
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Editor);
+        app.update();
+        for entity in spawned {
+            app.world_mut().despawn(entity);
+        }
+    }
+
+    #[test]
+    fn a_round_is_kept_ranked_and_newest_first() {
+        let mut app = app();
+        play_a_round(&mut app, &[standing(1, 3), standing(2, 7)]);
+        play_a_round(&mut app, &[standing(1, 5)]);
+
+        let history = app.world().resource::<RoundHistory>();
+        let rounds: Vec<&Round> = history.rounds().collect();
+        assert_eq!(rounds.len(), 2);
+        assert_eq!(rounds[0].number, 2);
+        let winners: Vec<PlayerId> = rounds[1].standings.iter().map(|standing| standing.id).collect();
+        assert_eq!(winners, vec![PlayerId(2), PlayerId(1)]);
+    }
+
+    #[test]
+    fn only_the_last_twenty_are_kept_and_a_round_with_no_scoreboard_is_none() {
+        let mut app = app();
+        play_a_round(&mut app, &[]);
+        for _ in 0..KEPT_ROUNDS + 5 {
+            play_a_round(&mut app, &[standing(1, 1)]);
+        }
+
+        let history = app.world().resource::<RoundHistory>();
+        assert_eq!(history.rounds().count(), KEPT_ROUNDS);
+        assert_eq!(history.rounds().next().unwrap().number, KEPT_ROUNDS as u32 + 5);
+    }
+}

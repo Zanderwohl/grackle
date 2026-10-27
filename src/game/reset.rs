@@ -48,7 +48,7 @@ pub fn reset_for_play(
             body.restore();
             log.clear();
             if let Some(mut armor) = armor {
-                *armor = Armor::default();
+                *armor = Armor::with_max(armor.max());
             }
         }
     }

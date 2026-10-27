@@ -44,6 +44,8 @@ pub mod player;
 pub mod net_bodies;
 pub mod pause_menu;
 pub mod hud;
+pub mod pickup_beam;
+pub mod rounds;
 pub mod score;
 pub mod ragdoll;
 pub mod skeleton;
@@ -62,6 +64,7 @@ impl Plugin for GamePlugin {
             .add_plugins(PauseMenuPlugin)
             .add_plugins(crate::game::hud::HudPlugin)
             .add_plugins(crate::game::score::ScorePlugin)
+            .add_plugins(crate::game::rounds::RoundHistoryPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
 

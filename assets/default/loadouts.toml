@@ -20,9 +20,11 @@
 # does not exist, so only each slot's default is carried.
 # `hat` names a prop under `props/`, worn on the head. A class's until there
 # are items to own one by. `health` is what a fresh body has; absent is 100.
+# `armor` is the most armor it can hold; absent is 50.
 [loadouts.mercenary]
 hat = "top_hat"
 health = 150
+armor = 50
 
 [loadouts.mercenary.primary]
 permitted = ["laser_rifle"]

@@ -22,6 +22,7 @@ use crate::editor::map_metadata::MapMetadata;
 use crate::editor::multicam::MulticamState;
 use crate::editor::net_menu::{network_menu, ConnectDialog};
 use crate::editor::save::{self, LoadedBlueprint};
+use crate::game::rounds::RoundHistory;
 use crate::get;
 use crate::tool::Tools;
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
@@ -103,11 +104,15 @@ enum TabKinds {
     Metadata,
     /// The feature list with its rollback bar, and the selected feature's editor beneath.
     Features,
+    /// The last rounds' final standings.
+    Rounds,
 }
 
-/// The panels' writes, bundled because `ui` hit Bevy's sixteen-parameter limit.
+/// The panels' writes, and one read, bundled because `ui` hit Bevy's
+/// sixteen-parameter limit.
 #[derive(SystemParam)]
 struct PanelMessages<'w> {
+    rounds: Res<'w, RoundHistory>,
     room: MessageWriter<'w, CalculateRoomGeometry>,
     clear_room: MessageWriter<'w, ClearRoomGeometry>,
     log_ecs: MessageWriter<'w, LogECS>,
@@ -136,6 +141,7 @@ struct TabViewerAndResources<'a> {
     /// Whether the Features panel changed the timeline, which it holds with
     /// change detection bypassed.
     timeline_touched: bool,
+    rounds: &'a RoundHistory,
 }
 
 impl<'a> TabViewer for TabViewerAndResources<'a> {
@@ -149,6 +155,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Show => "show".to_owned(),
             TabKinds::Metadata => "metadata".to_owned(),
             TabKinds::Features => "features".to_owned(),
+            TabKinds::Rounds => "rounds".to_owned(),
         })
     }
 
@@ -160,6 +167,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Show => { get!("show.title").into() }
             TabKinds::Metadata => { get!("editor.metadata.title").into() }
             TabKinds::Features => { get!("editor.timeline.title").into() }
+            TabKinds::Rounds => { get!("editor.rounds.title").into() }
         }
     }
 
@@ -187,6 +195,9 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                     &mut self.pending_edits.events,
                     self.retarget_request,
                 );
+            }
+            TabKinds::Rounds => {
+                rounds_panel_ui(ui, self.rounds);
             }
         }
     }
@@ -246,7 +257,7 @@ impl EditorPanels {
         let default_top_tabs = vec![TabKinds::Tools,];
         let default_left_tabs = vec![TabKinds::Features, TabKinds::Bakes,];
         let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata];
-        let default_bottom_tabs = vec![TabKinds::Empty("Delta".to_owned()), TabKinds::Empty("Epsilon".to_owned())];
+        let default_bottom_tabs = vec![TabKinds::Rounds, TabKinds::Empty("Epsilon".to_owned())];
         
         Self {
             top_tabs: DockState::new(default_top_tabs),
@@ -331,6 +342,7 @@ impl EditorPanels {
             pending_edits: &mut pending_edits,
             retarget_request: &mut retarget_request,
             timeline_touched: false,
+            rounds: &messages.rounds,
         };
 
         panels.menu_bar_height = egui::Panel::top("menu_bar")
@@ -594,6 +606,46 @@ impl EditorPanels {
             },
             window,
         );
+    }
+}
+
+/// Newest first, the newest open.
+fn rounds_panel_ui(ui: &mut egui::Ui, history: &RoundHistory) {
+    let mut any = false;
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        for (index, round) in history.rounds().enumerate() {
+            any = true;
+            let seconds = round.length.round() as u32;
+            let length = format!("{}:{:02}", seconds / 60, seconds % 60);
+            egui::CollapsingHeader::new(get!("editor.rounds.round", "number", round.number, "length", length))
+                .id_salt(("round", round.number))
+                .default_open(index == 0)
+                .show(ui, |ui| {
+                    egui::Grid::new(("round_standings", round.number)).striped(true).show(ui, |ui| {
+                        ui.label("");
+                        ui.strong(get!("editor.rounds.player"));
+                        ui.strong(get!("editor.rounds.frags"));
+                        ui.strong(get!("editor.rounds.deaths"));
+                        ui.end_row();
+                        for standing in &round.standings {
+                            let color = Srgba::from(standing.swatch());
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 2.0, egui::Color32::from_rgb(
+                                (color.red * 255.0).round() as u8,
+                                (color.green * 255.0).round() as u8,
+                                (color.blue * 255.0).round() as u8,
+                            ));
+                            ui.label(get!("scoreboard.player", "id", standing.id.0));
+                            ui.label(standing.frags.to_string());
+                            ui.label(standing.deaths.to_string());
+                            ui.end_row();
+                        }
+                    });
+                });
+        }
+    });
+    if !any {
+        ui.label(get!("editor.rounds.none"));
     }
 }
 

@@ -350,6 +350,9 @@ pub struct Loadout {
     /// A fresh body's health; `None` is [`DEFAULT_HEALTH`](crate::common::damage::DEFAULT_HEALTH).
     #[serde(default)]
     pub health: Option<u32>,
+    /// The most armor a body holds; `None` is [`DEFAULT_MAX_ARMOR`](crate::common::damage::DEFAULT_MAX_ARMOR).
+    #[serde(default)]
+    pub armor: Option<u32>,
 }
 
 impl Loadout {

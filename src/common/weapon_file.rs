@@ -63,6 +63,8 @@ struct LoadoutEntry {
     hat: Option<String>,
     #[serde(default)]
     health: Option<u32>,
+    #[serde(default)]
+    armor: Option<u32>,
     #[serde(flatten)]
     slots: BTreeMap<Slot, SlotEntry>,
 }
@@ -182,7 +184,12 @@ fn load_loadouts(assets: &Assets, pack: &Path, catalog: &mut WeaponCatalog) {
             continue;
         };
 
-        let mut loadout = Loadout { hat: entry.hat, health: entry.health.filter(|health| *health > 0), ..default() };
+        let mut loadout = Loadout {
+            hat: entry.hat,
+            health: entry.health.filter(|health| *health > 0),
+            armor: entry.armor,
+            ..default()
+        };
         for (slot, entry) in entry.slots {
             let Some(choices) = slot_choices(catalog, &key, slot, &entry, pack) else {
                 continue;

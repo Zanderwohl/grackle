@@ -24,6 +24,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::damage::{Armor, Damageable};
 use crate::common::fonts::DisplayFont;
+use crate::common::player_color::PlayerColor;
 use crate::common::swatch::{Ink, Swatch};
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, Path, ShapeMaterial, ShapeStyle};
@@ -465,13 +466,17 @@ fn dress_the_zones(
 }
 
 /// Every frame, comparing first: a client is told its team after its body.
+#[allow(clippy::type_complexity)]
 fn paint_the_zones(
-    team: Option<Single<&Team, With<LocalPlayer>>>,
+    ours: Option<Single<(Option<&Team>, Option<&PlayerColor>), With<LocalPlayer>>>,
     zones: Query<&MaterialNode<ShapeMaterial>, With<HudZone>>,
     mut texts: Query<&mut TextColor, With<HudText>>,
     materials: Option<ResMut<Assets<ShapeMaterial>>>,
 ) {
-    let swatch = Swatch::of(team.map(|team| **team));
+    let swatch = ours.map_or_else(Swatch::neutral, |ours| {
+        let (team, color) = ours.into_inner();
+        Swatch::of_body(team.copied(), color.copied())
+    });
     let style = HudZone::style(&swatch);
     if let Some(mut materials) = materials {
         for zone in &zones {

@@ -111,6 +111,12 @@ their `PlayerColor` as they keep their team. `BodyMaterials` is keyed by
 color, so materials are per color, not per body — a dozen players is a
 dozen materials.
 
+**The HUD is painted in the same order**: `Swatch::of_body` gives the team's
+swatch, else one built on the player's own hue (`Swatch::player`, as light as
+a team's and as saturated as the hue holds in sRGB), else neutral. The health,
+armor and ammo panels and the weapon selector's cards all ask it, so in arena
+your HUD is your color.
+
 ## Weapon pickups
 
 A weapon on the floor that a player walks over to add to what they carry, gone
@@ -179,6 +185,14 @@ reads the style off `GivesWeapon`, and the style only decides whether it
 turns. The editor's box is drawn at the same height, on a line down to the
 point it stands on.
 
+**A beam of light marks it** ([`pickup_beam.rs`](../src/game/pickup_beam.rs)):
+a white truncated cone from the floor up, 0.3 m across at the floor to 0.7 m
+at 2 m, 10% opaque at the bottom fading to clear at the top, and a spot light
+at the floor pointing up into the weapon, reaching 1.5 m. Both drop to 20%
+while the pickup restocks, so an empty pad still says where a weapon will be.
+They are children of the replicated instance, made on every machine where an
+instance has none, so they go with it and the prop editor hides them with it.
+
 **The trigger is a fixed sphere** (`WEAPON_PICKUP_RADIUS`, centered at the
 hover height). A held prop has no colliders, and a weapon's pickup volume is a game
 rule, not something a modeler should have to author on every gun.
@@ -227,11 +241,12 @@ too. `DamageDealt` keeps reporting the whole hit, because a floating number is
 what you did, not where it landed; the armor share can be added to the record
 when something wants to draw it.
 
-**The max is `DEFAULT_MAX_ARMOR`**, a constant beside `DEFAULT_HEALTH`, and
-goes per class when health does: a Heavy and a Scout should not carry the same
-plate, but giving armor a per-class table before health has one would be two
-pools described in two places. Likewise the absorbed share is a constant until
-a mode wants a different one. Every `Player` requires an `Armor`, and a body
+**The max is per class**, `armor` beside `health` on a class's entry in
+`loadouts.toml`, so the two pools are described in one place; absent is
+`DEFAULT_MAX_ARMOR`, 50, which is also what the Mercenary ships with until it
+is tuned. `spawn_player` gives a body an empty `Armor::with_max`, and a new
+round empties it and keeps the max. The absorbed share is a constant until a
+mode wants a different one. Every `Player` requires an `Armor`, and a body
 starts with none.
 
 A pickup's share of a maximum is rounded up past float noise (`share` in
@@ -386,6 +401,16 @@ changes, comes or goes.
 Up in Play in modes with a frag limit. A Tab scoreboard with deaths and pings,
 a kill feed and a results screen are all later.
 
+### Round history
+
+**The editor's Rounds tab** (bottom panel) lists the last 20 rounds' final
+standings, newest first and open, each with its length and every player's
+frags and deaths ([`rounds.rs`](../src/game/rounds.rs)). `RoundHistory` is
+recorded on every machine as Play ends, from the replicated `Standing`s,
+which are cleared only when the next round starts — so a client has them
+however the end reached it. A mode with no scoreboard leaves no round. It is
+not saved and not sent: a client that joined late has only the rounds it saw.
+
 ## Checklist
 
 Mode rules
@@ -401,7 +426,7 @@ No teams
 - [x] `choose_spawn` with no team uses every spawn
 - [x] `PlayerColor`: OKLCH, 30° then halving, random start, lowest free index
 - [x] `PlayerColor` replicated on bodies and kept by corpses; `body_look` uses it
-- [ ] HUD zones in the player's color when there is no team (neutral today)
+- [x] HUD zones in the player's color when there is no team
 
 Weapon pickups
 - [x] `WeaponPickup` feature: serde, save test, show/pick, mirror
@@ -415,7 +440,7 @@ Weapon pickups
 Armor
 - [x] `Armor` component, replicated
 - [x] `apply_damage` spends it at `ARMOR_ABSORBS`
-- [ ] Max per class, when health is
+- [x] Max per class (`armor` in `loadouts.toml`, 50 for now)
 - [x] Armor pickup gives it; example armor prop
 - [x] HUD readout
 - [x] Armor packs on the template map
@@ -432,7 +457,7 @@ Scoring
 - [x] `record_frags` in `Resolve`
 - [x] Frag limit ends the round
 - [x] Top-left scoreboard in Bevy UI
-- [ ] The last round's standings shown in the editor
+- [x] The last 20 rounds' standings in the editor's Rounds tab
 
 Later
 - [ ] Dropping the held weapon on death

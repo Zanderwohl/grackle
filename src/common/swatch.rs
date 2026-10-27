@@ -12,12 +12,17 @@
 
 use bevy::prelude::*;
 
+use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
 
 /// Where highlights lean, in OKLCH degrees: a warm yellow.
 const WARM_HUE: f32 = 95.0;
 /// Where shadows lean: a cool blue-violet.
 const COOL_HUE: f32 = 275.0;
+/// [`Swatch::player`]'s, between the four teams'. Chroma is asked for high
+/// and given back by [`in_gamut`] wherever a hue cannot hold it.
+const PLAYER_LIGHTNESS: f32 = 0.62;
+const PLAYER_CHROMA: f32 = 0.17;
 /// An outline's lightness in [`Ink::Dark`], whatever the base's.
 const DARK_INK_LIGHTNESS: f32 = 0.24;
 
@@ -72,6 +77,22 @@ impl Swatch {
 
     pub fn of(team: Option<Team>) -> Self {
         team.map_or_else(Self::neutral, Self::team)
+    }
+
+    /// A player's own hue, for a mode with no teams: as light as a team's and
+    /// as saturated as the hue allows.
+    pub fn player(color: PlayerColor) -> Self {
+        Self::from_oklch(PLAYER_LIGHTNESS, PLAYER_CHROMA, color.hue)
+    }
+
+    /// What a body's HUD is painted in: its team, else its own color, else
+    /// neutral, the order [`body_look`](crate::game::body_mesh) draws it in.
+    pub fn of_body(team: Option<Team>, color: Option<PlayerColor>) -> Self {
+        match (team, color) {
+            (Some(team), _) => Self::team(team),
+            (None, Some(color)) => Self::player(color),
+            (None, None) => Self::neutral(),
+        }
     }
 
     /// Whichever of white and [`Ink::Black`] stands out on the base.
@@ -148,6 +169,19 @@ mod tests {
             let turned = (ink.hue - base.hue + 540.0).rem_euclid(360.0) - 180.0;
             assert!(turned.abs() < 40.0, "{swatch:?} turned {turned} degrees");
         }
+    }
+
+    #[test]
+    fn a_player_color_makes_a_whole_swatch_and_a_team_outranks_it() {
+        for index in 0..24 {
+            let color = PlayerColor::nth(0.0, index);
+            let swatch = Swatch::player(color);
+            assert!(lightness(swatch.highlight) > lightness(swatch.base), "{color:?}");
+            assert!(lightness(swatch.base) > lightness(swatch.shadow), "{color:?}");
+            assert_eq!(Swatch::of_body(None, Some(color)), swatch);
+            assert_eq!(Swatch::of_body(Some(Team::Blue), Some(color)), Swatch::team(Team::Blue));
+        }
+        assert_eq!(Swatch::of_body(None, None), Swatch::neutral());
     }
 
     #[test]

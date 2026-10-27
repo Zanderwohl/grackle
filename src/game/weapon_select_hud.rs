@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::fonts::DisplayFont;
 use crate::common::swatch::{Ink, Swatch};
+use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, ShapeMaterial, ShapeStyle};
 use crate::common::weapon::{Equipped, Slot, WeaponCatalog};
@@ -42,7 +43,7 @@ struct SelectorRoot;
 
 #[derive(Debug, Clone, PartialEq)]
 struct Shown {
-    team: Option<Team>,
+    swatch: Swatch,
     columns: Vec<Column>,
 }
 
@@ -67,7 +68,7 @@ impl Shown {
         equipped: &Equipped,
         highlight: Option<Slot>,
         thumbnails: Option<&Thumbnails>,
-        team: Option<Team>,
+        swatch: Swatch,
     ) -> Self {
         let order = carried(equipped, catalog);
         let open = order.iter().find(|(_, slot)| Some(*slot) == highlight).map(|(at, _)| *at);
@@ -91,7 +92,7 @@ impl Shown {
             let card = Card { name: get!(weapon.name_key), picture, highlighted: highlight == Some(slot) };
             columns.last_mut().expect("pushed above").cards.push(card);
         }
-        Self { team, columns }
+        Self { swatch, columns }
     }
 }
 
@@ -107,25 +108,24 @@ fn dimmed(swatch: &Swatch) -> ShapeStyle {
 
 /// Compared first, so [`Shown`] and its lang lookups are not rebuilt every
 /// frame.
-type ShownFrom = (Option<Slot>, Equipped, Option<Team>, usize);
+type ShownFrom = (Option<Slot>, Equipped, Swatch, usize);
 
-/// Made once per team rather than per card.
+/// Made once per livery rather than per card.
 struct Panels {
-    team: Option<Team>,
+    swatch: Swatch,
     lit: Handle<ShapeMaterial>,
     dim: Handle<ShapeMaterial>,
     closed: Handle<ShapeMaterial>,
 }
 
 impl Panels {
-    fn new(team: Option<Team>, materials: &mut Assets<ShapeMaterial>) -> Self {
-        let swatch = Swatch::of(team);
+    fn new(swatch: Swatch, materials: &mut Assets<ShapeMaterial>) -> Self {
         let mut make = |size: Vec2, style: ShapeStyle| {
             let outline = leaning_panel(size, true, Corner::squircle(18.0), Corner::squircle(6.0));
             materials.add(ShapeMaterial::from_path(&outline, size, style))
         };
         Self {
-            team,
+            swatch,
             lit: make(CARD, panel_style(&swatch)),
             dim: make(CARD, dimmed(&swatch)),
             closed: make(CLOSED, dimmed(&swatch)),
@@ -133,14 +133,14 @@ impl Panels {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn show_the_selector(
     mut commands: Commands,
     selection: Res<WeaponSelection>,
     catalog: Res<WeaponCatalog>,
     thumbnails: Option<Res<Thumbnails>>,
     font: Res<DisplayFont>,
-    ours: Option<Single<(&Equipped, Option<&Team>), With<LocalPlayer>>>,
+    ours: Option<Single<(&Equipped, Option<&Team>, Option<&PlayerColor>), With<LocalPlayer>>>,
     mut roots: Query<(Entity, &mut Node), With<SelectorRoot>>,
     materials: Option<ResMut<Assets<ShapeMaterial>>>,
     mut built_from: Local<Option<ShownFrom>>,
@@ -172,21 +172,20 @@ fn show_the_selector(
     }
 
     // Kept while closed, so reopening onto the same thing rebuilds nothing.
-    let Some((equipped, team)) = ours else { return };
-    let team = team.copied();
-    let from = (selection.highlight, *equipped, team, thumbnails.as_ref().map_or(0, |t| t.len()));
+    let Some((equipped, team, color)) = ours else { return };
+    let swatch = Swatch::of_body(team.copied(), color.copied());
+    let from = (selection.highlight, *equipped, swatch, thumbnails.as_ref().map_or(0, |t| t.len()));
     if built_from.as_ref() == Some(&from) && !catalog.is_changed() {
         return;
     }
     *built_from = Some(from);
-    let wanted = Shown::of(&catalog, equipped, selection.highlight, thumbnails.as_deref(), team);
+    let wanted = Shown::of(&catalog, equipped, selection.highlight, thumbnails.as_deref(), swatch);
 
-    let swatch = Swatch::of(team);
     // Absent in a test app with no renderer; the text still lays out.
     if let Some(mut materials) = materials
-        && panels.as_ref().is_none_or(|panels| panels.team != team)
+        && panels.as_ref().is_none_or(|panels| panels.swatch != swatch)
     {
-        *panels = Some(Panels::new(team, &mut materials));
+        *panels = Some(Panels::new(swatch, &mut materials));
     }
     let panels = panels.as_ref();
     let text = |words: String, size: f32, color: Color| hud_text(&font.0, words, size, color);
@@ -328,7 +327,7 @@ mod tests {
         let order = carried(&equipped, &catalog);
         let (bucket, slot) = *order.iter().rev().find(|(at, _)| order.iter().filter(|(b, _)| b == at).count() > 1).unwrap();
 
-        let shown = Shown::of(&catalog, &equipped, Some(slot), None, None);
+        let shown = Shown::of(&catalog, &equipped, Some(slot), None, Swatch::neutral());
 
         for column in &shown.columns {
             let inside = order.iter().filter(|(at, _)| *at == column.bucket).count();
@@ -349,7 +348,7 @@ mod tests {
     #[test]
     fn weapons_nobody_can_name_yet_show_nothing() {
         let (_, equipped) = mercenary();
-        let shown = Shown::of(&WeaponCatalog::default(), &equipped, Some(equipped.held), None, None);
+        let shown = Shown::of(&WeaponCatalog::default(), &equipped, Some(equipped.held), None, Swatch::neutral());
         assert!(shown.columns.is_empty(), "{shown:?}");
     }
 }
