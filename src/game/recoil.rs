@@ -94,17 +94,33 @@ fn guess_our_shots(
     mut cooldown: Local<[f32; 2]>,
     // The replicated state last guessed from, and what our guesses left of it.
     mut guessed: Local<Option<(Slot, AmmoState, AmmoState)>>,
+    // What we last saw held, by which body, and how long it has left to draw.
+    // Started when the switch is seen rather than made, so it ends a little
+    // after the server's does.
+    mut drawing: Local<(Option<(Entity, Slot)>, f32)>,
     mut seen: MessageWriter<ShotSeen>,
 ) {
     for left in cooldown.iter_mut() {
         *left = (*left - time.delta_secs()).max(0.0);
     }
+    drawing.1 = (drawing.1 - time.delta_secs()).max(0.0);
     let Some(ours) = ours else { return };
     let (body, equipped, ammo, condition) = ours.into_inner();
     if paused.is_some_and(|menu| menu.open) || !condition.may_fire() {
         return;
     }
     let Some(weapon) = catalogue.held_by(equipped) else { return };
+    // A new body spawns ready; only a switch on the same body draws.
+    match drawing.0 {
+        Some((was_body, was_slot)) if was_body == body && was_slot != equipped.held => {
+            drawing.1 = weapon.deploy;
+        }
+        _ => {}
+    }
+    drawing.0 = Some((body, equipped.held));
+    if drawing.1 > 0.0 {
+        return;
+    }
     let told = *ammo.at(equipped.held);
     let mut state = match *guessed {
         Some((slot, was, left)) if slot == equipped.held && was == told => left,
@@ -174,6 +190,8 @@ mod tests {
             id,
             name_key: "weapon.names.test".into(),
             model: None,
+            bucket: 1,
+            deploy: 0.0,
             primary: Mounted {
                 action: WeaponAction::Projectile(ProjectileSpec::ROCKET),
                 cadence,

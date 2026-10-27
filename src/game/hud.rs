@@ -50,9 +50,9 @@ const BIG: f32 = 44.0;
 const SMALL: f32 = 22.0;
 
 /// Logical pixels, in each zone's own box.
-const ZONE_STROKE: f32 = 5.0;
+pub(crate) const ZONE_STROKE: f32 = 5.0;
 const ZONE_RIM: f32 = 5.0;
-const ZONE_DROP: Vec2 = Vec2::new(5.0, 6.0);
+pub(crate) const ZONE_DROP: Vec2 = Vec2::new(5.0, 6.0);
 
 /// Whether the safe zone is outlined. Survives rounds: it is a debug view,
 /// and somebody laying out the HUD wants it to stay on.
@@ -125,16 +125,7 @@ impl HudZone {
     }
 
     fn style(swatch: &Swatch) -> ShapeStyle {
-        ShapeStyle {
-            fill: swatch.base,
-            highlight: swatch.highlight,
-            shadow: swatch.shadow,
-            rim: ZONE_RIM,
-            stroke: Ink::Black.on(swatch),
-            stroke_width: ZONE_STROKE,
-            drop: swatch.deep.with_alpha(0.75),
-            drop_offset: ZONE_DROP,
-        }
+        panel_style(swatch)
     }
 
     /// Drawn behind the readout rather than being it, so the text can stand
@@ -172,6 +163,20 @@ impl HudZone {
     }
 }
 
+/// How every HUD panel is painted, in the colours of `swatch`.
+pub(crate) fn panel_style(swatch: &Swatch) -> ShapeStyle {
+    ShapeStyle {
+        fill: swatch.base,
+        highlight: swatch.highlight,
+        shadow: swatch.shadow,
+        rim: ZONE_RIM,
+        stroke: Ink::Black.on(swatch),
+        stroke_width: ZONE_STROKE,
+        drop: swatch.deep.with_alpha(0.75),
+        drop_offset: ZONE_DROP,
+    }
+}
+
 /// Which readout a `Text` is, so one system can write them all.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 enum HudText {
@@ -200,7 +205,8 @@ impl Plugin for HudPlugin {
                     .chain()
                     .run_if(in_state(AppMode::Play)),
             )
-            .add_systems(OnExit(AppMode::Play), despawn_the_hud);
+            .add_systems(OnExit(AppMode::Play), despawn_the_hud)
+            .add_plugins(crate::game::weapon_select_hud::WeaponSelectHudPlugin);
     }
 }
 

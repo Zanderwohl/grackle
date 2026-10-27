@@ -8,6 +8,7 @@
 
 use bevy::prelude::*;
 
+use crate::common::app_mode::AppMode;
 use crate::common::assets::Assets as PackAssets;
 use crate::common::class::Class;
 use std::collections::BTreeMap;
@@ -218,6 +219,7 @@ impl Plugin for HeldWeaponPlugin {
             .init_resource::<SharedWeaponClips>()
             .add_systems(Startup, load_shared_weapon_clips)
             .add_systems(Update, (dress_held_weapons, show_held_weapons).chain())
+            .add_systems(Update, bake_what_we_carry.run_if(in_state(AppMode::Play)))
             // Before propagation, with the bone meshes, or a held part is drawn
             // a frame behind the hand.
             .add_systems(
@@ -249,6 +251,29 @@ fn wanted_model<'a>(equipped: &Equipped, catalogue: &'a WeaponCatalogue) -> Want
     match weapon.model.as_deref() {
         Some(model) => Wanted::Model(model),
         None => Wanted::Nothing,
+    }
+}
+
+/// Every weapon the local body carries, not only the one in hand, so the
+/// weapon selector has a picture of each before it is first drawn.
+fn bake_what_we_carry(
+    catalogue: Res<WeaponCatalogue>,
+    packs: Res<PackAssets>,
+    mut cache: ResMut<PropCache>,
+    mut surfaces: ResMut<SurfaceMaterials>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut clips: ResMut<Assets<Clip>>,
+    ours: Option<Single<&Equipped, With<LocalPlayer>>>,
+) {
+    let Some(equipped) = ours else { return };
+    for id in equipped.slots.iter().flatten() {
+        let Some(model) = catalogue.get(*id).and_then(|weapon| weapon.model.as_deref()) else {
+            continue;
+        };
+        if !cache.knows(model) {
+            cache.ensure(model, &packs, &mut meshes, &mut materials, &mut surfaces, &mut clips);
+        }
     }
 }
 
@@ -417,17 +442,19 @@ pub(crate) fn perform_weapon_clips(
     time: Res<Time>,
     clips: Res<Assets<Clip>>,
     shared: Option<Res<SharedWeaponClips>>,
+    catalogue: Res<WeaponCatalogue>,
     mut bodies: Query<(&HeldModel, &mut Performance, &mut ClipStack)>,
 ) {
     let delta = time.delta_secs();
     for (held, mut performance, mut stack) in &mut bodies {
-        perform(held, shared.as_deref(), &mut performance, &mut stack, &clips, delta);
+        perform(held, &catalogue, shared.as_deref(), &mut performance, &mut stack, &clips, delta);
     }
 }
 
 /// For a body or the viewmodel alike.
 pub(crate) fn perform(
     held: &HeldModel,
+    catalogue: &WeaponCatalogue,
     shared: Option<&SharedWeaponClips>,
     performance: &mut Performance,
     stack: &mut Mut<ClipStack>,
@@ -438,10 +465,13 @@ pub(crate) fn perform(
     // late catalogue) does not.
     if performance.started_for != held.weapon {
         performance.started_for = held.weapon;
+        // Stretched to the weapon's deploy time, which is gameplay; one with
+        // no entry yet plays at its own speed.
+        let deploy = held.weapon.and_then(|id| catalogue.get(id)).map(|weapon| weapon.deploy);
         performance.playing = held.clips.get(DEPLOY).map(|_| Playback {
             clip: WeaponClip::Prop(DEPLOY.to_string()),
             seconds: 0.0,
-            fit: None,
+            fit: deploy.map(|deploy| (0.0, deploy)),
         });
     }
 
@@ -682,6 +712,8 @@ mod tests {
             id: WeaponId::of(name),
             name_key: format!("weapon.names.{name}"),
             model: model.map(str::to_owned),
+            bucket: 1,
+            deploy: 0.0,
             primary: Mounted::EMPTY,
             secondary: Mounted::EMPTY,
             magazine: Magazine::BOTTOMLESS,
@@ -836,6 +868,7 @@ mod tests {
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_secs_f32(0.1));
         world.insert_resource(time);
+        world.init_resource::<WeaponCatalogue>();
 
         let body = world
             .spawn((
@@ -898,6 +931,7 @@ mod tests {
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_secs_f32(0.1));
         world.insert_resource(time);
+        world.init_resource::<WeaponCatalogue>();
         world.insert_resource(assets);
         let body = world
             .spawn((

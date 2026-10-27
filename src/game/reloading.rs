@@ -103,6 +103,8 @@ mod tests {
             id,
             name_key: "weapon.names.test".into(),
             model: None,
+            bucket: 1,
+            deploy: 0.0,
             primary: Mounted::EMPTY,
             secondary: Mounted::EMPTY,
             magazine: Magazine { clip: Some(4), reserve: 8, reload: RELOAD_SECONDS, reload_one_at_a_time: false },

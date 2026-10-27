@@ -39,6 +39,8 @@ pub mod reloading;
 pub mod reset;
 pub mod respawn;
 pub mod weapon;
+pub mod weapon_select;
+pub mod weapon_select_hud;
 pub mod player;
 pub mod net_bodies;
 pub mod pause_menu;
@@ -89,6 +91,7 @@ impl Plugin for GamePlugin {
             // reset writes it: without that plugin the first F5 would fail.
             .init_resource::<AnimationClock>()
             .init_resource::<InputLatch>()
+            .init_resource::<crate::game::weapon_select::WeaponSelection>()
             .init_resource::<ViewMode>()
             .init_resource::<ViewPreference>()
             .init_resource::<crate::game::player::CameraPull>()
@@ -116,6 +119,9 @@ impl Plugin for GamePlugin {
             .add_systems(RunFixedMainLoop, (
                 // A released cursor must not walk the body.
                 gather_input.run_if(pause_menu::not_paused),
+                // Ungated for the same reason as `gather_aim`: it drains the
+                // wheel.
+                crate::game::weapon_select::choose_weapons,
                 // Ungated: it drains motion made while paused rather than
                 // applying all of it on the frame the menu closes.
                 gather_aim,
