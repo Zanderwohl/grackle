@@ -61,6 +61,8 @@ struct LoadoutEntry {
     /// Not checked here, as a weapon's model is not: a bad name draws nothing.
     #[serde(default)]
     hat: Option<String>,
+    #[serde(default)]
+    health: Option<u32>,
     #[serde(flatten)]
     slots: BTreeMap<Slot, SlotEntry>,
 }
@@ -180,7 +182,7 @@ fn load_loadouts(assets: &Assets, pack: &Path, catalog: &mut WeaponCatalog) {
             continue;
         };
 
-        let mut loadout = Loadout { hat: entry.hat, ..default() };
+        let mut loadout = Loadout { hat: entry.hat, health: entry.health.filter(|health| *health > 0), ..default() };
         for (slot, entry) in entry.slots {
             let Some(choices) = slot_choices(catalog, &key, slot, &entry, pack) else {
                 continue;

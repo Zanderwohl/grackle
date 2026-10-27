@@ -249,9 +249,8 @@ node, hidden together while there is none.
 
 ## Knockback
 
-Rocket jumping is the iconic arena move and needs a movement model with
-momentum, which it now has. The explosion already carries the number an
-impulse would want.
+Rocket jumping is the iconic arena move. It needed a movement model with
+momentum and a way for a blast to push a living body; both are built.
 
 ### Momentum
 
@@ -289,20 +288,43 @@ pins it.
 ### Impulses
 
 **`Impulse` is a component on a body: velocity to add on its next step.** The
-explosion writes it — `Push::Outward` at the blast's falloff, the same number
-corpses already get — and `step_player` folds it into `Player.velocity` at the
+explosion writes it and `step_player` folds it into `Player.velocity` at the
 start of the step and clears it. `step_player` stays the one writer of
 `Player.velocity`; an explosion writing velocity directly would be a second.
 
-- **An upward impulse leaves the ground.** A body on the floor with an impulse
-  carrying it up is treated as having jumped, or the ground snap puts it
-  straight back.
-- **Friction is off briefly after a knockback**, as Quake's knockback timer
-  does. A rocket at your feet on flat ground is otherwise mostly eaten by
-  friction before you leave the floor.
-- **Self-damage is scaled by `GameRules::self_damage`, knockback is not.** That
-  is what makes a rocket jump cost half and fly full. It lives in
-  `apply_damage`, beside the self exception.
+**How hard is TF2's formula** (`knockback` in
+[`explosion.rs`](../src/game/explosion.rs)): the push is the damage the blast
+deals that body, times 0.254 m/s a point (TF2's ten units), times 82/55 if
+the body is crouched, halved if it is your own blast and you are standing on
+something, capped at 25.4 m/s (a thousand units). It is aimed from 0.254 m
+below the blast at the body's center. Corpses still go by the blast's
+`knockback` number, which no longer touches a living body.
+
+- **Your own splash is TF2's too** (`self_splash`): you are caught if any of
+  your box is inside the radius, it is measured to the nearer of your box's
+  center and your feet, and it never falls below half. That is both what a
+  rocket jump costs and how hard it throws. Everybody else's splash still
+  falls from their center to nothing at the radius.
+- **The push uses the damage before the mode scales it**, so arena's
+  `self_damage = 0.5` halves what a jump costs and not how far it flies.
+  TF2's Soldier also takes 0.6 of his own damage while airborne; that is a
+  class rule, not ported.
+- **A blast pushes whoever it may hurt** (`Allegiances::may_hurt`), so a
+  teammate's rocket does not shove you and your own does.
+- **An impulse carrying a body off its floor faster than `LAUNCH_SPEED`
+  (0.25 m/s, Quake's ten units) leaves the ground**, or the walk would lay it
+  flat along the floor and the ground snap put the body straight back.
+- **Friction is off for `KNOCKBACK_SLIDE` (0.2 s) after a knockback**
+  (`Player.sliding`), as Quake's knockback timer does.
+- **Self-damage is scaled by `ModeRules::self_damage`, knockback is not.**
+  That is what makes a rocket jump cost half and fly full; arena ships 0.5.
+  It lives in `apply_damage`, asking `Allegiances::is_self`.
+
+The shipped rocket launcher splashes 90, as TF2's does, so a rocket at your
+feet pushes 11.3 m/s standing and 16.8 m/s crouched, against a 7 m/s jump:
+about 2.6 and 5.8 times a jump's height. Fired as you jump, airborne, it
+pushes 22.6 m/s, and crouched it hits the 25.4 m/s cap. The launcher's
+`damage_splash` is the dial, and it is also what an enemy's splash costs.
 - **Mass, later.** Δv is the blast's number for every body today. A per-class
   knockback scale (heavier classes are shoved less) goes in `classes.toml` when
   there is more than one class to play.
@@ -400,10 +422,10 @@ Armor
 
 Knockback
 - [x] Acceleration and friction in `step_player`, at TF2's numbers
-- [ ] `Impulse` written by explosions, folded in by the step
-- [ ] Upward impulse leaves the ground; friction off briefly after
-- [ ] `self_damage` scaling in `apply_damage`
-- [ ] A test: a rocket at your feet lifts you higher than a jump
+- [x] `Impulse` written by explosions, folded in by the step
+- [x] Upward impulse leaves the ground; friction off briefly after
+- [x] `self_damage` scaling in `apply_damage`
+- [x] A test: a rocket at your feet lifts you higher than a jump
 
 Scoring
 - [x] `Standing` entity per player, replicated, cleared on entering Play

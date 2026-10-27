@@ -136,16 +136,15 @@ fn guess_our_shots(
             continue;
         }
         let index = button as usize;
-        let asked = match mounted.cadence {
-            Cadence::Semi => buttons.just_pressed(mouse),
-            Cadence::Automatic { .. } => buttons.pressed(mouse) && cooldown[index] <= 0.0,
-        };
+        let asked = cooldown[index] <= 0.0
+            && match mounted.cadence {
+                Cadence::Semi { .. } => buttons.just_pressed(mouse),
+                Cadence::Automatic { .. } => buttons.pressed(mouse),
+            };
         if !asked || !spend(&mut state, &weapon.magazine, mounted.cost) {
             continue;
         }
-        if let Cadence::Automatic { interval } = mounted.cadence {
-            cooldown[index] = interval;
-        }
+        cooldown[index] = mounted.cadence.interval();
         seen.write(ShotSeen { body, button });
     }
     *guessed = Some((equipped.held, told, state));
@@ -235,7 +234,7 @@ mod tests {
     #[test]
     fn our_own_shot_is_guessed_from_what_we_can_see() {
         let mut world = World::new();
-        let body = holding(&mut world, Cadence::Semi, 2);
+        let body = holding(&mut world, Cadence::Semi { interval: 0.0 }, 2);
         press(&mut world);
         world.run_system_once(guess_our_shots).unwrap();
         assert_eq!(seen(&mut world), vec![ShotSeen { body, button: Button::Primary }]);

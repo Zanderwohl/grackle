@@ -31,11 +31,15 @@ pub struct ModeRules {
     pub loadout: Option<Vec<WeaponId>>,
     /// The round ends when somebody reaches it. `None` has no scoreboard.
     pub frag_limit: Option<u32>,
+    /// What hurting yourself costs, as a fraction of what it would cost
+    /// anybody else. Knockback is not scaled, so a rocket jump costs this and
+    /// flies full.
+    pub self_damage: f32,
 }
 
 impl Default for ModeRules {
     fn default() -> Self {
-        Self { teams: true, classes: Vec::new(), loadout: None, frag_limit: None }
+        Self { teams: true, classes: Vec::new(), loadout: None, frag_limit: None, self_damage: 1.0 }
     }
 }
 
@@ -79,10 +83,16 @@ struct ModeEntry {
     loadout: Option<Vec<String>>,
     #[serde(default)]
     frag_limit: Option<u32>,
+    #[serde(default = "whole")]
+    self_damage: f32,
 }
 
 fn yes() -> bool {
     true
+}
+
+fn whole() -> f32 {
+    1.0
 }
 
 /// Lowest priority first; a later pack replaces a mode's whole entry.
@@ -139,6 +149,7 @@ fn check(key: &str, entry: ModeEntry) -> Result<ModeRules, String> {
         classes,
         loadout: entry.loadout.map(|names| names.iter().map(|name| WeaponId::of(name)).collect()),
         frag_limit: entry.frag_limit.filter(|limit| *limit > 0),
+        self_damage: entry.self_damage.max(0.0),
     })
 }
 
@@ -189,7 +200,7 @@ mod tests {
         let modes = parse(
             "[deathball]\nteams = false\n\
              [ctf]\nclasses = [\"wizard\"]\n\
-             [koth]\nself_damage = 0.5\n",
+             [koth]\nrespawn_waves = true\n",
         );
         assert!(modes.0.is_empty(), "{modes:?}");
     }

@@ -102,6 +102,14 @@ impl Allegiances<'_, '_> {
         }
     }
 
+    /// Whether `target` is the body of whoever `source` is.
+    pub fn is_self(&self, source: DamageSource, target: Entity) -> bool {
+        matches!(
+            (source, self.bodies.get(target)),
+            (DamageSource::Player(shooter), Ok((_, Some(id)))) if shooter == *id
+        )
+    }
+
     /// The gate. True for a target not in the world: `apply_damage` drops it for
     /// having no health.
     pub fn may_hurt(&self, source: DamageSource, target: Entity) -> bool {

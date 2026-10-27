@@ -114,9 +114,23 @@ impl WeaponAction {
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Cadence {
-    Semi,
-    /// `interval` in seconds.
+    /// A shot per press. `interval`, in seconds, is the least time between
+    /// two, so clicking fast cannot outrun the weapon; a press inside it is
+    /// dropped, as one while drawing is.
+    Semi {
+        #[serde(default)]
+        interval: f32,
+    },
+    /// Shots while held, `interval` seconds apart.
     Automatic { interval: f32 },
+}
+
+impl Cadence {
+    pub fn interval(self) -> f32 {
+        match self {
+            Cadence::Semi { interval } | Cadence::Automatic { interval } => interval,
+        }
+    }
 }
 
 /// On the button rather than the weapon: a flamethrower's puff and airblast
@@ -143,7 +157,7 @@ pub struct Mounted {
 impl Mounted {
     pub const EMPTY: Self = Self {
         action: WeaponAction::None,
-        cadence: Cadence::Semi,
+        cadence: Cadence::Semi { interval: 0.0 },
         cost: Cost::Free,
     };
 }
@@ -333,6 +347,9 @@ pub struct Loadout {
     /// a player's until there are items to own one by.
     #[serde(default)]
     pub hat: Option<String>,
+    /// A fresh body's health; `None` is [`DEFAULT_HEALTH`](crate::common::damage::DEFAULT_HEALTH).
+    #[serde(default)]
+    pub health: Option<u32>,
 }
 
 impl Loadout {

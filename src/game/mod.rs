@@ -751,6 +751,112 @@ mod tests {
         assert_eq!(condition(&mut app).taunt, None, "the wave never ended by itself");
     }
 
+    /// Rises until it stops, and returns how far above `from` it peaked.
+    fn peak_above(app: &mut App, from: f32) -> f32 {
+        let mut peak = from;
+        for _ in 0..(2 * crate::constants::TICK_HZ as usize) {
+            tick(app, 1);
+            peak = peak.max(player_position(app).y);
+        }
+        peak - from
+    }
+
+    fn our_id(app: &mut App) -> crate::common::damage::PlayerId {
+        *app.world_mut()
+            .query_filtered::<&crate::common::damage::PlayerId, With<LocalPlayer>>()
+            .single(app.world())
+            .unwrap()
+    }
+
+    /// A headless game that can set things off. The body is boxed by hand:
+    /// its boxes come from a rig, which a headless game does not build.
+    fn armed(rooms: &[Room]) -> App {
+        let mut app = headless(rooms);
+        // `explode` alone: the plugin also draws, and a headless game has no gizmos.
+        app.add_plugins(crate::game::damage::DamagePlugin)
+            .add_message::<crate::common::damage::Explosion>()
+            .add_systems(
+                FixedUpdate,
+                crate::game::explosion::explode.in_set(crate::game::damage::DamageSystems::Deal),
+            );
+        app
+    }
+
+    fn rocket_at_our_feet(app: &mut App) {
+        use crate::common::damage::{DamageSource, Explosion};
+        use crate::common::hitbox::{Box3, Hitboxes};
+        let center = player_position(app);
+        let body = app.world_mut().query_filtered::<Entity, With<LocalPlayer>>().single(app.world()).unwrap();
+        app.world_mut().entity_mut(body).insert(Hitboxes {
+            body: Box3 { center, half_extents: PLAYER_HALF },
+            head: None,
+        });
+        let feet = center - Vec3::Y * (PLAYER_HALF.y - 0.1);
+        let source = DamageSource::Player(our_id(app));
+        app.world_mut().resource_mut::<Messages<Explosion>>().write(Explosion {
+            at: feet,
+            // The shipped rocket launcher's.
+            radius: 3.0,
+            damage: 90,
+            knockback: 9.0,
+            source,
+            direct: None,
+        });
+    }
+
+    fn health(app: &mut App) -> u32 {
+        app.world_mut()
+            .query_filtered::<&crate::common::damage::Damageable, With<LocalPlayer>>()
+            .single(app.world())
+            .unwrap()
+            .health()
+    }
+
+    #[test]
+    fn a_rocket_at_your_feet_lifts_you_higher_than_a_jump() {
+        let open = [room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 30.0, 10.0))];
+
+        let mut app = headless(&open);
+        enter(&mut app);
+        tick(&mut app, 30);
+        let standing = player_position(&mut app).y;
+        latch(&mut app).0.jump = true;
+        tick(&mut app, 1);
+        latch(&mut app).0.jump = false;
+        let jumped = peak_above(&mut app, standing);
+
+        let mut app = armed(&open);
+        enter(&mut app);
+        tick(&mut app, 30);
+        let standing = player_position(&mut app).y;
+        rocket_at_our_feet(&mut app);
+        let launched = peak_above(&mut app, standing);
+
+        assert!(jumped > 0.5, "the jump reached only {jumped}");
+        assert!(launched > jumped, "a rocket at the feet reached {launched}, a jump {jumped}");
+    }
+
+    #[test]
+    fn hurting_yourself_costs_what_the_mode_says() {
+        let open = [room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 30.0, 10.0))];
+        let cost = |self_damage: f32| {
+            let mut app = armed(&open);
+            app.insert_resource(crate::common::game_rules::GameRules(crate::common::game_rules::ModeRules {
+                self_damage,
+                ..default()
+            }));
+            enter(&mut app);
+            tick(&mut app, 30);
+            let before = health(&mut app);
+            rocket_at_our_feet(&mut app);
+            tick(&mut app, 1);
+            before - health(&mut app)
+        };
+        let full = cost(1.0);
+        assert!(full > 0, "a rocket at our feet did no damage");
+        assert_eq!(cost(0.5), (full as f32 * 0.5).round() as u32);
+    }
+
     /// Simulated at 64 Hz, drawn between the last two steps.
     #[test]
     fn the_drawn_position_sits_between_the_last_two_steps() {

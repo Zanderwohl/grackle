@@ -195,14 +195,15 @@ pub struct Damage {
 }
 
 /// Anything that goes off writes one; only [`crate::game::explosion`] knows
-/// what splash means. [`falloff`] applies to `damage` and `knockback` alike.
+/// what splash means.
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 pub struct Explosion {
     pub at: Vec3,
     pub radius: f32,
     /// At the center.
     pub damage: u32,
-    /// Meters per second of corpse shove at the center.
+    /// Meters per second of corpse shove at the center. A living body is
+    /// pushed by the damage it takes instead; see `crate::game::explosion`.
     pub knockback: f32,
     pub source: DamageSource,
     /// The body hit squarely, which takes this amount instead of splash, not

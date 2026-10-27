@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
 use lightyear::prelude::input::native::ActionState;
 
-use crate::common::damage::{Armor, Damageable, Died, PlayerId};
+use crate::common::damage::{Armor, Damageable, Died, PlayerId, DEFAULT_HEALTH};
 use crate::game::death::Dying;
 use crate::common::hitbox::Hitboxes;
 use crate::common::movement_rules::MovementRules;
@@ -62,6 +62,11 @@ pub const WALKABLE: f32 = 0.7;
 /// The tallest ledge a body walks up rather than being stopped by: TF2's
 /// eighteen units, a little over a stair.
 pub const STEP_HEIGHT: f32 = 0.45;
+/// An impulse carrying a body off its floor faster than this, meters per
+/// second, launches it; slower, the floor keeps it. Quake's ten units.
+const LAUNCH_SPEED: f32 = 0.25;
+/// Seconds of no ground friction after a knockback.
+const KNOCKBACK_SLIDE: f32 = 0.2;
 /// How far below its feet a body looks for a floor after each step. Has to
 /// clear the collision skin, which is where a step leaves a body standing.
 const GROUND_PROBE: f32 = 0.02;
@@ -82,7 +87,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 // `Transform` and `Visibility` because a replicated body is built by
 // inserting components rather than through `spawn_player`, and without them
 // its children have nothing to inherit.
-#[require(Hitboxes, Damageable, Armor, Equipped, Ammo, Trigger, Inputs, Condition, Transform, Visibility)]
+#[require(Hitboxes, Damageable, Armor, Equipped, Ammo, Trigger, Inputs, Condition, Impulse, Transform, Visibility)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -97,7 +102,21 @@ pub struct Player {
     /// A taunt held the body back from the aim, so it turns back at
     /// [`CATCH_UP_DEGREES_PER_SECOND`] rather than in one tick.
     pub catching_up: bool,
+    /// Seconds left of no ground friction after a knockback, as Quake's
+    /// knockback timer: a rocket at your feet would otherwise be mostly
+    /// rubbed off before you left the floor.
+    pub sliding: f32,
 }
+
+/// Velocity, meters per second, to add to a body on its next step, and what
+/// put it there. Written by explosions; [`step_player`] is the only thing that
+/// takes it, so velocity keeps one writer.
+///
+/// Authority-only and never replicated: only the authority sets things off,
+/// and it never rolls back, so taking it in the step replays nothing. A client
+/// learns of its own launch through the replicated `Player.velocity`.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Impulse(pub Vec3);
 
 pub const CATCH_UP_DEGREES_PER_SECOND: f32 = 720.0;
 
@@ -116,6 +135,7 @@ impl Default for Player {
             ground: None,
             against_wall: false,
             catching_up: false,
+            sliding: 0.0,
         }
     }
 }
@@ -354,10 +374,12 @@ pub fn spawn_player(
     // the rig.
     let class = rules.class_to_play();
     let (equipped, ammo) = catalog.starting_equipment(class, rules.loadout.as_deref());
+    let health = catalog.loadout(class).and_then(|loadout| loadout.health).unwrap_or(DEFAULT_HEALTH);
 
     let mut body = commands.spawn((
         Player { yaw: spawn.yaw, ..default() },
         class,
+        Damageable::with_health(health),
         equipped,
         ammo,
         // Whoever stands a body up steps it.
@@ -670,6 +692,7 @@ pub fn third_person_camera(pivot: Vec3, aim: Quat, world: &CollisionWorld) -> Ve
 /// Walk, fall, jump, and stop at walls — one fixed step.
 ///
 /// The same inputs and `dt` must give the same answer on client and server.
+#[allow(clippy::type_complexity)]
 pub fn step_player(
     time: Res<Time>,
     world: Res<CollisionWorld>,
@@ -678,7 +701,7 @@ pub fn step_player(
     // the server sends it.
     taunts: Option<Res<crate::common::taunt::Taunts>>,
     mut players: Query<
-        (&mut Player, &mut PhysicsBody, &mut Stance, &Inputs, &Condition),
+        (&mut Player, &mut PhysicsBody, &mut Stance, &Inputs, &Condition, &mut Impulse),
         With<Simulated>,
     >,
 ) {
@@ -687,12 +710,24 @@ pub fn step_player(
         return;
     }
 
-    for (mut player_slot, mut body_slot, mut stance_slot, input, condition) in &mut players {
+    for (mut player_slot, mut body_slot, mut stance_slot, input, condition, mut impulse) in &mut players {
         // Stepped on copies and written back only if different: all three are
         // replicated, and a still body would otherwise be resent every tick.
         let mut player = player_slot.clone();
         let mut body = *body_slot;
         let mut stance = *stance_slot;
+
+        player.sliding = (player.sliding - dt).max(0.0);
+        if impulse.0 != Vec3::ZERO {
+            let kick = std::mem::take(&mut impulse.0);
+            player.velocity += kick;
+            player.sliding = KNOCKBACK_SLIDE;
+            // Off the floor here, or the walk below lays the kick flat along
+            // it and the ground snap puts the body straight back.
+            if player.ground.is_some_and(|floor| player.velocity.dot(floor) > LAUNCH_SPEED) {
+                player.ground = None;
+            }
+        }
 
         // Read, never taken: `write_client_inputs` already consumed the edge,
         // and rollback replays this input.
@@ -735,7 +770,7 @@ pub fn step_player(
         player.velocity = match player.ground {
             Some(floor) => {
                 let along_floor = (wish - floor * wish.dot(floor)).normalize_or_zero();
-                let coasting = if jump { player.velocity } else { friction(player.velocity, dt) };
+                let coasting = if jump || player.sliding > 0.0 { player.velocity } else { friction(player.velocity, dt) };
                 let moving = accelerate(coasting, along_floor, speed, speed, GROUND_ACCELERATE, dt);
                 if jump { Vec3::new(moving.x, JUMP_SPEED, moving.z) } else { onto_floor(moving, floor) }
             }

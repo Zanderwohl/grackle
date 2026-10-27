@@ -159,13 +159,13 @@ pub fn pull_trigger(
                 continue;
             }
 
-            let asked = match mounted.cadence {
-                // No cooldown: as fast as you can click.
-                Cadence::Semi => pressed,
-                // `pressed` too: a tap released between ticks was never held on
-                // a tick that ran.
-                Cadence::Automatic { .. } => (down || pressed) && trigger.ready(button),
-            };
+            let asked = trigger.ready(button)
+                && match mounted.cadence {
+                    Cadence::Semi { .. } => pressed,
+                    // `pressed` too: a tap released between ticks was never
+                    // held on a tick that ran.
+                    Cadence::Automatic { .. } => down || pressed,
+                };
             if !asked {
                 continue;
             }
@@ -180,9 +180,7 @@ pub fn pull_trigger(
             // `reload_weapons` because this is the one place a shot happens.
             state.reloading = 0.0;
 
-            if let Cadence::Automatic { interval } = mounted.cadence {
-                trigger.arm(button, interval);
-            }
+            trigger.arm(button, mounted.cadence.interval());
 
             fired.write(WeaponActionFired { shooter, button, action: mounted.action });
         }
@@ -407,7 +405,7 @@ mod tests {
     }
 
     fn semi(action: WeaponAction, rounds: u32) -> Mounted {
-        Mounted { action, cadence: Cadence::Semi, cost: Cost::Ammo { rounds } }
+        Mounted { action, cadence: Cadence::Semi { interval: 0.0 }, cost: Cost::Ammo { rounds } }
     }
 
     fn auto(action: WeaponAction, interval: f32, rounds: u32) -> Mounted {
@@ -754,7 +752,7 @@ mod tests {
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted {
                 action: WeaponAction::Scope(crate::common::weapon::ScopeSpec { zoom: 2.0 }),
-                cadence: Cadence::Semi,
+                cadence: Cadence::Semi { interval: 0.0 },
                 cost: Cost::Free,
             },
             Magazine { clip: Some(0), reserve: 0, reload: 1.0, reload_one_at_a_time: false },
@@ -864,13 +862,55 @@ mod tests {
         );
     }
 
+    /// Clicking every tick fires once per interval, not once per click.
+    #[test]
+    fn a_semi_weapon_cannot_be_clicked_faster_than_its_interval() {
+        let half_a_second = Mounted {
+            action: WeaponAction::Hitscan(LASER),
+            cadence: Cadence::Semi { interval: 0.5 },
+            cost: Cost::Free,
+        };
+        let mut world = a_world(one_weapon(weapon(half_a_second, Mounted::EMPTY, Magazine::BOTTOMLESS)));
+        let shooter = a_shooter(&mut world);
+
+        let mut fired = 0;
+        for _ in 0..crate::constants::TICK_HZ as usize {
+            input(&mut world, shooter).attack = true;
+            step(&mut world);
+            fired += shots(&mut world).len();
+        }
+        assert_eq!(fired, 2, "a second of clicking fired {fired} times");
+    }
+
+    #[test]
+    fn a_fresh_body_has_its_classs_health() {
+        let catalog = crate::common::weapon_file::default_catalog();
+        let class = crate::common::class::Class::Mercenary;
+        let expected = catalog.loadout(class).and_then(|loadout| loadout.health).expect("no health in loadouts.toml");
+
+        let mut world = World::new();
+        world.run_system_once(move |mut commands: Commands| {
+            crate::game::player::spawn_player(
+                &mut commands,
+                crate::game::player::Spawn { feet: Vec3::ZERO, yaw: 0.0, side: None },
+                &crate::game::respawn::Identity { id: crate::common::damage::PlayerId(1), team: None, color: 0 },
+                crate::common::player_color::PlayerColor::nth(0.0, 0),
+                &crate::common::game_rules::ModeRules::default(),
+                &catalog,
+            );
+        }).unwrap();
+        let health = world.query::<&crate::common::damage::Damageable>().single(&world).unwrap();
+        assert_eq!(health.max(), expected);
+        assert_eq!(health.health(), expected);
+    }
+
     /// A weapon just drawn fires once its deploy has run out, and not before.
     #[test]
     fn a_weapon_just_drawn_waits_out_its_deploy() {
         const DEPLOY: f32 = 0.25;
         let free = Mounted {
             action: WeaponAction::Hitscan(LASER),
-            cadence: Cadence::Semi,
+            cadence: Cadence::Semi { interval: 0.0 },
             cost: Cost::Free,
         };
         let mut catalog = one_weapon(weapon(free, Mounted::EMPTY, Magazine::BOTTOMLESS));

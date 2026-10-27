@@ -10,9 +10,12 @@
 #            class's own loadout.
 # `frag_limit` the round ends when somebody reaches it, and a mode with one
 #            shows the scoreboard. Absent is no limit and no scoreboard.
+# `self_damage` what hurting yourself costs, as a fraction of what it would
+#            cost anybody else; knockback is not scaled. Absent is 1.
 
 [arena]
 teams = false
 classes = ["mercenary"]
 loadout = ["medi_wrench", "laser_rifle"]
 frag_limit = 20
+self_damage = 0.5

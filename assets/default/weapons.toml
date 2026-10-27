@@ -10,7 +10,10 @@
 #
 # Each of `primary` and `secondary` is one mouse button: what it does, how fast
 # it answers being held, and what it costs. A button that does nothing says so
-# with `kind = "none"` rather than being left out.
+# with `kind = "none"` rather than being left out. A `semi` cadence fires once
+# per press and an `automatic` one while held; both fire at most once every
+# `interval` seconds (absent on `semi` is no limit), and a press inside that
+# is dropped.
 #
 # `model` names a prop under `props/`, without its extension — the geometry the
 # weapon is drawn as, modeled in the prop editor. It is a name rather
@@ -43,7 +46,7 @@ bucket = 1
 deploy = 0.6
 model = "sniper_rifle"
 magazine = { clip = 12, reserve = 60, reload = 1.0 }
-primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 200.0, damage = 30, headshot_multiplier = 3, shove_per_damage = 0.15, shove_radius = 0.4 } }
+primary = { cadence = { kind = "semi", interval = 0.5 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 200.0, damage = 30, headshot_multiplier = 3, shove_per_damage = 0.15, shove_radius = 0.4 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "scope", zoom = 2.5 } }
 
 [weapons.rocket_launcher]
@@ -52,7 +55,7 @@ bucket = 2
 deploy = 0.5
 model = "rocket_launcher"
 magazine = { clip = 4, reserve = 20, reload = 0.8, reload_one_at_a_time = true }
-primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 30.0, gravity_factor = 0.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.0, damage_direct_hit = 90, damage_splash = 60, knockback = 9.0, radius = 0.12 } }
+primary = { cadence = { kind = "semi", interval = 0.8 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 30.0, gravity_factor = 0.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.0, damage_direct_hit = 90, damage_splash = 90, knockback = 9.0, radius = 0.12 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
 # The TF2C-style RPG: the same rocket as above, but it falls — one number
@@ -66,7 +69,7 @@ name_key = "weapon.names.rpg"
 bucket = 2
 deploy = 0.7
 magazine = { clip = 1, reserve = 8, reload = 1.5 }
-primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 34.0, gravity_factor = 1.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.2, damage_direct_hit = 110, damage_splash = 70, knockback = 11.0, radius = 0.14 } }
+primary = { cadence = { kind = "semi", interval = 0.8 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 34.0, gravity_factor = 1.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.2, damage_direct_hit = 110, damage_splash = 70, knockback = 11.0, radius = 0.14 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
 # The demoman's: pills that arc, tumble, bounce off a wall and go off on their
@@ -84,7 +87,7 @@ name_key = "weapon.names.pill_launcher"
 bucket = 2
 deploy = 0.5
 magazine = { clip = 4, reserve = 16, reload = 0.6, reload_one_at_a_time = true }
-primary = { cadence = { kind = "semi" }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 23.0, gravity_factor = 1.0, air_resistance = 0.1, spin_rate = 12.0, max_bounces = 2, restitution = 0.45, max_lifetime = 2.3, explodes_at_last_bounce = true, explodes_at_lifetime_end = true, explosion_radius = 3.4, damage_direct_hit = 100, damage_splash = 60, knockback = 10.0, radius = 0.14 } }
+primary = { cadence = { kind = "semi", interval = 0.6 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 23.0, gravity_factor = 1.0, air_resistance = 0.1, spin_rate = 12.0, max_bounces = 2, restitution = 0.45, max_lifetime = 2.3, explodes_at_last_bounce = true, explodes_at_lifetime_end = true, explosion_radius = 3.4, damage_direct_hit = 100, damage_splash = 60, knockback = 10.0, radius = 0.14 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
 # No clip: the whole supply is loaded, and it never reloads.

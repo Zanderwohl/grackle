@@ -1594,9 +1594,12 @@ catchable in a blast are deliberately the same property.
 
 **Movement has momentum**: Quake's friction and acceleration at TF2's numbers,
 with air strafing and chained hops kept (see "Momentum" in
-[documentation/arena.md](documentation/arena.md)). **Knockback on a body that
-is still alive is still missing**; the explosion already carries the number it
-would want, and nothing yet adds it to a body's velocity.
+[documentation/arena.md](documentation/arena.md)). **A blast pushes living
+bodies** by TF2's formula — by the damage it deals, harder crouched, half as
+hard from your own blast on the ground — writing an `Impulse` that
+`step_player` takes at the start of the step, so velocity keeps one writer; it is authority-only and not replicated,
+so a client's own rocket jump starts a round trip late. Hurting yourself is
+scaled by the mode's `self_damage` in `apply_damage`; knockback is not.
 
 ### What a weapon is
 
@@ -1629,6 +1632,9 @@ loadout naming a weapon nobody defines — is dropped with a line saying which
 file and why. The failure then reads as "the Mercenary has no rocket launcher",
 which you can see, rather than as a panic on a listen server with people
 connected.
+
+A class's starting **health** is `health` on its entry in `loadouts.toml`
+(absent is `DEFAULT_HEALTH`), read by `spawn_player`.
 
 **A class states what it may carry, per slot**, and there are six named slots
 (`Primary`, `Secondary`, `Melee`, `Utility`, `Gadget`, `Special`). A class that
@@ -1759,7 +1765,9 @@ It also means a firing system needs no access to a loadout at all, which is
 what took `fire_hitscan` off a component only the authority has ever had.
 `the_action_that_was_fired_is_the_one_the_message_carries` pins it.
 
-Whether holding a button keeps firing is the `Cadence` mounted on it, and the
+Whether holding a button keeps firing is the `Cadence` mounted on it — a
+`semi` button has an `interval` too, so clicking cannot outrun a rocket
+launcher, and a press inside it is dropped — and the
 cooldown lives in a `Trigger` on the body — **one clock per button**, because
 one would let an alt-fire's cooldown eat the stream the primary is meant to be
 putting out, which reads as lag rather than as a bug. It counts *down*, so the

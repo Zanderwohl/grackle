@@ -14,6 +14,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::damage::{Armor, Damage, DamageDealt, Damageable, Died};
+use crate::common::game_rules::GameRules;
 use crate::common::team::Allegiances;
 use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage, suicide};
 use crate::game::player::PlayerCamera;
@@ -104,22 +105,30 @@ pub fn apply_damage(
     mut requests: MessageReader<Damage>,
     mut health: Query<(&mut Damageable, Option<&mut Armor>)>,
     allegiances: Allegiances,
+    // Absent in tests that build no map.
+    rules: Option<Res<GameRules>>,
     mut dealt: MessageWriter<DamageDealt>,
 ) {
+    let self_damage = rules.map_or(1.0, |rules| rules.self_damage);
     for request in requests.read() {
         if !allegiances.may_hurt(request.source, request.target) {
             continue;
         }
         let Ok((mut target, armor)) = health.get_mut(request.target) else { continue };
+        let requested = if allegiances.is_self(request.source, request.target) {
+            (request.amount as f32 * self_damage).round() as u32
+        } else {
+            request.amount
+        };
 
         // An emptied body's armor is not spent on it.
         let through = match armor {
-            Some(mut armor) if target.is_alive() && armor.points() > 0 => armor.soak(request.amount),
-            _ => request.amount,
+            Some(mut armor) if target.is_alive() && armor.points() > 0 => armor.soak(requested),
+            _ => requested,
         };
         // Written even at zero, so a debug harness can keep shooting an
         // emptied body.
-        let amount = request.amount - through + target.apply(through);
+        let amount = requested - through + target.apply(through);
         dealt.write(DamageDealt {
             target: request.target,
             source: request.source,
