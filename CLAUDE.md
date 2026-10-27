@@ -911,8 +911,8 @@ game's tests run with no asset plugins.
 names its own model, so the two cannot disagree. `sync_weapon_pickups` stands
 it up as a `WorldProp` of that model plus a `GivesWeapon`, hovering 1 m up by
 its lowest point over a beam of light (`pickup_beam`, dimmed while it
-restocks), and taking one puts the weapon in a free slot, where its
-bucket decides the digit, and draws it — unless it was already carried, which
+restocks), and taking one adds the weapon to what the body carries, where
+its bucket decides the digit, and draws it — unless it was already carried, which
 only tops up its ammo. See "Weapon
 pickups" in [documentation/arena.md](documentation/arena.md).
 
@@ -1655,7 +1655,8 @@ on its entry in `loadouts.toml` (absent are `DEFAULT_HEALTH` and
 
 **A class states what it may carry, per slot**, and there are six named slots
 (`Primary`, `Secondary`, `Melee`, `Utility`, `Gadget`, `Special`). A class that
-uses three leaves three empty. Nobody picks a class yet, so `Class::Mercenary`
+uses three leaves three empty. Slots decide what a body *spawns* with; what
+it carries afterward is unbounded (see below). Nobody picks a class yet, so `Class::Mercenary`
 is the placeholder everybody plays as — deliberately a sampler, carrying one of
 every kind of action, so the whole table is reachable by walking up to it and
 clicking. `the_placeholder_class_carries_one_of_everything` is what fails when
@@ -1696,8 +1697,10 @@ the whole catalog at frame rate, rarely enough to ship.
 `only_a_change_puts_a_table_on_the_wire` caught it the day it was
 written.
 
-**A body carries ids, never numbers.** `Equipped` — six `Option<WeaponId>` and
-a held slot — and `Ammo` are replicated and neither is predicted; a client
+**A body carries ids, never numbers.** `Equipped` — the carried `WeaponId`s,
+starting weapons first and pickups after, and the one held — and `Ammo`,
+keyed by weapon id rather than by place in that list since the two arrive
+in different packets, are replicated and neither is predicted; a client
 guessing its switch landed is the same mistake as guessing a kill, and the
 price is a HUD naming a new weapon a round trip late. `Equipped` is one
 component rather than two for the reason the corpse layer already paid for:
@@ -1749,7 +1752,7 @@ launcher it is leaving.
 
 **What "again" means is decided on the machine with the keyboard**
 ([`src/game/weapon_select.rs`](src/game/weapon_select.rs)) and sent as a
-plain `Slot`, because "next in bucket 2" depends on what is held and a
+plain `WeaponId`, never a place in the list, because "next in bucket 2" depends on what is held and a
 replayed tick must reach the same loadout from the same input. While the
 selector is open a second press moves on from the highlight, not from the replicated `Equipped`, which
 is a round trip behind: from that, a quick double-tap would choose the same

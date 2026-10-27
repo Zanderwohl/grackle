@@ -19,7 +19,7 @@ use crate::common::class::{
     body_center_from_feet, Stance, CLASS_HALF_EXTENTS,
 };
 use crate::game::collision::{CollisionWorld, Touched};
-use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalog};
+use crate::common::weapon::{Ammo, Equipped, WeaponCatalog, WeaponId};
 use crate::game::condition::Condition;
 use crate::game::weapon::{AutoReload, Trigger};
 use crate::tool::room::Room;
@@ -157,9 +157,10 @@ pub struct PlayerInput {
     /// Asking to duck. [`Stance`] can disagree: a body under a low ceiling
     /// cannot stand up.
     pub crouch: bool,
-    /// A weapon slot asked for since the last tick consumed it. A [`Slot`]
-    /// rather than a weapon: what a slot holds is the server's business.
-    pub select: Option<Slot>,
+    /// A weapon asked for since the last tick consumed it, by id rather
+    /// than by place in the list, which a pickup landing in between could
+    /// shift.
+    pub select: Option<WeaponId>,
     /// The trigger was pulled since the last tick consumed it. Latched, since
     /// a shot is an edge.
     pub attack: bool,

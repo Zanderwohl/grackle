@@ -335,19 +335,14 @@ mod tests {
         let catalog = the_default_pack();
         let (equipped, ammo) = catalog.starting_equipment(Class::Mercenary, None);
 
-        let mut carried = 0;
-        for slot in Slot::ALL {
-            let Some(id) = equipped.get(slot) else {
-                assert_eq!(*ammo.at(slot), Default::default(), "{slot:?} has ammo for no weapon");
-                continue;
-            };
-            carried += 1;
+        for &id in &equipped.carried {
             let weapon = catalog.get(id).expect("carrying a weapon nobody defines");
-            assert_eq!(ammo.at(slot).clip, weapon.magazine.clip.unwrap_or(0));
-            assert_eq!(ammo.at(slot).reserve, weapon.magazine.reserve);
-            assert_eq!(ammo.at(slot).reloading, 0.0, "{slot:?} spawned mid-reload");
+            assert_eq!(ammo.at(id).clip, weapon.magazine.clip.unwrap_or(0));
+            assert_eq!(ammo.at(id).reserve, weapon.magazine.reserve);
+            assert_eq!(ammo.at(id).reloading, 0.0, "{} spawned mid-reload", weapon.key);
         }
-        assert!(carried > 0, "the placeholder class spawned empty-handed");
+        assert_eq!(ammo.weapons.len(), equipped.carried.len(), "ammo for a weapon it does not carry");
+        assert!(!equipped.carried.is_empty(), "the placeholder class spawned empty-handed");
         assert!(equipped.held().is_some(), "it spawned holding nothing while carrying something");
     }
 
@@ -357,10 +352,9 @@ mod tests {
         let only = [WeaponId::of("medi_wrench"), WeaponId::of("nothing_called_this")];
         let (equipped, ammo) = catalog.starting_equipment(Class::Mercenary, Some(&only));
 
-        let carried: Vec<WeaponId> = Slot::ALL.into_iter().filter_map(|slot| equipped.get(slot)).collect();
-        assert_eq!(carried, vec![only[0]]);
+        assert_eq!(equipped.carried, vec![only[0]]);
         assert_eq!(equipped.held(), Some(only[0]));
-        assert_eq!(*ammo.at(Slot::Primary), Default::default(), "ammo for a weapon it does not carry");
+        assert_eq!(ammo.weapons.len(), 1, "ammo for a weapon it does not carry");
     }
 
     /// Fails if a shipped weapon is no slot's default; only defaults are

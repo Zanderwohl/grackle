@@ -586,7 +586,7 @@ impl Readout {
             return Self { health, armor, ..default() };
         };
 
-        let state = ammo.at(equipped.held);
+        let state = ammo.at(weapon.id);
         let (loaded, reserve) = match weapon.magazine.clip {
             // Nothing is loaded, so the reserve is the number that matters.
             None => (state.reserve.to_string(), String::new()),
@@ -676,8 +676,19 @@ fn despawn_the_hud(mut commands: Commands, roots: Query<Entity, With<HudRoot>>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::weapon::Slot;
     use crate::common::weapon_file::default_catalog;
+
+    fn carried_where(
+        catalog: &WeaponCatalog,
+        equipped: &Equipped,
+        wanted: impl Fn(&crate::common::weapon::Weapon) -> bool,
+    ) -> crate::common::weapon::WeaponId {
+        *equipped
+            .carried
+            .iter()
+            .find(|id| catalog.get(**id).is_some_and(&wanted))
+            .expect("the placeholder class carries no such weapon")
+    }
 
     fn mercenary() -> (WeaponCatalog, Equipped, Ammo) {
         let catalog = default_catalog();
@@ -736,8 +747,9 @@ mod tests {
     #[test]
     fn a_weapon_with_a_clip_shows_both_counts() {
         let (catalog, mut equipped, ammo) = mercenary();
-        equipped.select(Slot::Secondary);
-        let state = ammo.at(Slot::Secondary);
+        let id = carried_where(&catalog, &equipped, |weapon| weapon.magazine.clip.is_some());
+        equipped.select(id);
+        let state = ammo.at(id);
 
         let readout = Readout::of(&catalog, &Damageable::default(), None, &equipped, &ammo);
         assert_eq!(readout.loaded, state.clip.to_string());
@@ -747,8 +759,9 @@ mod tests {
     #[test]
     fn a_weapon_with_no_clip_does_not_read_as_zero_of_something() {
         let (catalog, mut equipped, ammo) = mercenary();
-        equipped.select(Slot::Utility);
-        let state = ammo.at(Slot::Utility);
+        let id = carried_where(&catalog, &equipped, |weapon| weapon.magazine.clip.is_none());
+        equipped.select(id);
+        let state = ammo.at(id);
 
         let readout = Readout::of(&catalog, &Damageable::default(), None, &equipped, &ammo);
         assert_eq!(readout.loaded, state.reserve.to_string());
@@ -758,7 +771,7 @@ mod tests {
     #[test]
     fn a_reloading_weapon_says_so_and_keeps_its_counts() {
         let (catalog, equipped, mut ammo) = mercenary();
-        ammo.at_mut(equipped.held).reloading = 0.5;
+        ammo.at_mut(equipped.held.unwrap()).reloading = 0.5;
 
         let readout = Readout::of(&catalog, &Damageable::default(), None, &equipped, &ammo);
         assert!(readout.reloading);

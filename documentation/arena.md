@@ -200,15 +200,15 @@ rule, not something a modeler should have to author on every gun.
 
 `take_pickups` asks `give_weapon` for a `GivesWeapon` and `give` otherwise.
 
-- **A weapon you do not have** goes into a free slot of `Equipped` with full
-  ammo: the slot your class's loadout would put it in if that is free, else
-  the first free one. **Which digit draws it is its bucket's business** — the
-  selector lists everything carried by bucket — so the slot is only storage.
+- **A weapon you do not have** is added to the end of `Equipped::carried`
+  with full ammo. There is no limit: the class's loadout slots decide what
+  you spawn with, not what you can hold. **Which digit draws it is its
+  bucket's business** — the selector lists everything carried by bucket.
   **It is drawn at once**, through the same `draw` a switch goes through, so
   it waits out its deploy and a reload in progress is put down.
 - **A weapon you already have** tops up that weapon's reserve by `ammo`, and
   leaves your hands alone.
-- **Full on that weapon too, or no free slot** — walked past, untaken, like a
+- **Full on that weapon too** — walked past, untaken, like a
   health pack at full health. A pickup that gave nothing is not spent.
 
 **Losing them on death needs no code**, which is the point of checking it: a
@@ -217,13 +217,15 @@ body is a new entity each life, and its `Equipped` and `Ammo` are built by
 
 Dropping the held weapon on death as a temporary pickup is Quake's, and later.
 
-### Slots
+### Carrying
 
-`Equipped` is still six slots of one weapon each, so somebody carrying six
-cannot pick up a seventh. With arena's two-weapon start and six weapons in the
-default pack that is unreachable today. When it matters, the fix is more
-slots or several weapons per slot with `Ammo` per weapon; nothing about the
-pickup changes but `give_weapon`'s choice of slot.
+`Equipped` is a list of carried weapon ids and the one held, and `Ammo` is
+keyed by weapon id rather than lined up with that list: the two are separate
+components, replicated in separate packets, and a list one longer than the
+other would pair every weapon after the gap with the wrong count. A switch is
+sent as the weapon's id, never its place in the list, which a pickup landing
+between the press and the tick could shift. A loadout `Slot` is now only a
+place in a class's definition.
 
 ## Armor
 
@@ -488,7 +490,7 @@ Weapon pickups
 - [x] `take_pickups` gives weapons: grant, or top up, or walk past
 - [x] Pickups on the template map (an arena map of its own is still to make)
 - [x] Selected by bucket
-- [ ] More than six weapons carried
+- [x] As many weapons carried as are picked up
 
 Armor
 - [x] `Armor` component, replicated

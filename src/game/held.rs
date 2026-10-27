@@ -267,7 +267,7 @@ fn bake_what_we_carry(
     ours: Option<Single<&Equipped, With<LocalPlayer>>>,
 ) {
     let Some(equipped) = ours else { return };
-    for id in equipped.slots.iter().flatten() {
+    for id in &equipped.carried {
         let Some(model) = catalog.get(*id).and_then(|weapon| weapon.model.as_deref()) else {
             continue;
         };
@@ -713,7 +713,7 @@ mod tests {
     use strum::IntoEnumIterator;
     use super::*;
     use crate::common::skeleton::play::Playing;
-    use crate::common::weapon::{Magazine, Mounted, Slot, Weapon};
+    use crate::common::weapon::{Magazine, Mounted, Weapon};
     use crate::common::class::Class;
     use crate::common::skeleton::rig::bone;
     use crate::common::skeleton::{default_humanoid, humanoid, Pose};
@@ -733,10 +733,7 @@ mod tests {
     }
 
     fn holding(id: Option<WeaponId>) -> Equipped {
-        let mut equipped = Equipped::default();
-        equipped.slots[Slot::Primary.index()] = id;
-        equipped.held = Slot::Primary;
-        equipped
+        Equipped { carried: id.into_iter().collect(), held: id }
     }
 
     /// Two cases draw nothing, but only a missing catalog entry is retried.

@@ -11,11 +11,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
 use crate::common::assets::Assets as PackAssets;
-use crate::common::class::{Class, Stance};
+use crate::common::class::Stance;
 use crate::common::damage::{Armor, Damageable, Healed, PlayerId};
 use crate::common::hitbox::{Box3, Hitboxes};
 use crate::common::skeleton::clip::Clip;
-use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalog, WeaponId};
+use crate::common::weapon::{Ammo, Equipped, WeaponCatalog, WeaponId};
 use crate::editor::prop::{PropMarker, PropModel};
 use crate::editor::weapon_pickup::WeaponPickupSpec;
 use crate::game::collision::CollisionWorld;
@@ -546,7 +546,6 @@ fn take_pickups(
             Option<&mut Ammo>,
             Option<&mut Equipped>,
             Option<&mut Trigger>,
-            Option<&Class>,
             Option<&PlayerId>,
         ),
         With<Player>,
@@ -576,7 +575,7 @@ fn take_pickups(
                 (triggers(baked, &prop.transform()), baked.pickup.respawn)
             }
         };
-        for (body_entity, body, stance, health, armor, ammo, equipped, trigger, class, id) in &mut bodies {
+        for (body_entity, body, stance, health, armor, ammo, equipped, trigger, id) in &mut bodies {
             let half = stance.half_extents();
             if !triggers.iter().any(|trigger| trigger.overlaps(body.current, half)) {
                 continue;
@@ -586,7 +585,7 @@ fn take_pickups(
                     let (Some(mut ammo), Some(mut equipped), Some(mut trigger)) = (ammo, equipped, trigger) else {
                         continue;
                     };
-                    give_weapon(gives, &mut equipped, &mut ammo, &mut trigger, class.copied(), &catalog)
+                    give_weapon(gives, &mut equipped, &mut ammo, &mut trigger, &catalog)
                 }
                 None => {
                     let Some(baked) = cache.get(&prop.model) else { continue };
@@ -636,17 +635,15 @@ fn give(
         PickupKind::Ammo => {
             let (mut ammo, equipped) = ammo?;
             let mut gained = false;
-            for slot in Slot::ALL {
-                let Some(weapon) = equipped.get(slot).and_then(|id| catalog.get(id)) else {
-                    continue;
-                };
+            for &id in &equipped.carried {
+                let Some(weapon) = catalog.get(id) else { continue };
                 let max = weapon.magazine.reserve;
                 // Read before writing, so a full body is not marked changed.
-                if ammo.at(slot).reserve >= max {
+                if ammo.at(id).reserve >= max {
                     continue;
                 }
                 let amount = share(max, fraction);
-                let state = ammo.at_mut(slot);
+                let state = ammo.at_mut(id);
                 state.reserve = (state.reserve + amount).min(max);
                 gained = true;
             }
@@ -705,43 +702,33 @@ fn weapon_trigger(at: &Transform) -> RoundedBox {
     .placed(at)
 }
 
-/// A weapon not carried goes into a free slot — the one its class's loadout
-/// would put it in if that is free, else the first — with full ammo, and is
-/// drawn; which digit draws it later is its bucket's business. One already
-/// carried tops up its reserve and leaves the hands alone. Nothing gained, from a full reserve or no free slot, leaves the
-/// pickup where it is. Returns whether the taker got anything.
+/// A weapon not carried is added, with full ammo, and drawn; which digit
+/// draws it later is its bucket's business. One already carried tops up its
+/// reserve and leaves the hands alone, and a full reserve leaves the pickup
+/// where it is. Returns whether the taker got anything.
 fn give_weapon(
     gives: &GivesWeapon,
     equipped: &mut Mut<Equipped>,
     ammo: &mut Mut<Ammo>,
     trigger: &mut Trigger,
-    class: Option<Class>,
     catalog: &WeaponCatalog,
 ) -> bool {
     let Some(weapon) = catalog.get(gives.weapon) else { return false };
 
-    if let Some(slot) = Slot::ALL.into_iter().find(|slot| equipped.get(*slot) == Some(gives.weapon)) {
+    if equipped.carries(weapon.id) {
         let max = weapon.magazine.reserve;
         // Read before writing, so a full body is not marked changed.
-        if ammo.at(slot).reserve >= max || gives.ammo <= 0.0 {
+        if ammo.at(weapon.id).reserve >= max || gives.ammo <= 0.0 {
             return false;
         }
-        let state = ammo.at_mut(slot);
+        let state = ammo.at_mut(weapon.id);
         state.reserve = (state.reserve + share(max, gives.ammo)).min(max);
         return true;
     }
 
-    let free = |slot: &Slot| equipped.get(*slot).is_none();
-    let preferred = class.and_then(|class| catalog.loadout(class)).and_then(|loadout| {
-        Slot::ALL.into_iter().filter(free).find(|slot| {
-            loadout.at(*slot).is_some_and(|choices| choices.permitted.contains(&gives.weapon))
-        })
-    });
-    let Some(slot) = preferred.or_else(|| Slot::ALL.into_iter().find(free)) else { return false };
-
-    equipped.slots[slot.index()] = Some(gives.weapon);
-    *ammo.at_mut(slot) = Ammo::full(&weapon.magazine);
-    draw(slot, equipped, ammo, trigger, catalog);
+    equipped.add(weapon.id);
+    *ammo.at_mut(weapon.id) = Ammo::full(&weapon.magazine);
+    draw(weapon.id, equipped, ammo, trigger, catalog);
     true
 }
 
@@ -1003,9 +990,8 @@ mod tests {
             secondary: Mounted::EMPTY,
             magazine: Magazine { clip: Some(10), reserve: 40, reload: 1.0, reload_one_at_a_time: false },
         });
-        let mut equipped = Equipped::default();
-        equipped.slots[Slot::Primary.index()] = Some(WeaponId::of("rifle"));
-        (catalog, equipped)
+        let rifle = WeaponId::of("rifle");
+        (catalog, Equipped { carried: vec![rifle], held: Some(rifle) })
     }
 
     fn with_launcher(catalog: &mut WeaponCatalog) -> WeaponId {
@@ -1041,53 +1027,51 @@ mod tests {
         let mut trigger = Trigger::default();
         let mut query = world.query::<(&mut Equipped, &mut Ammo)>();
         let (mut e, mut a) = query.get_mut(&mut world, body).unwrap();
-        let gained = give_weapon(&gives, &mut e, &mut a, &mut trigger, None, catalog);
-        (gained, *world.get::<Equipped>(body).unwrap(), *world.get::<Ammo>(body).unwrap(), trigger)
+        let gained = give_weapon(&gives, &mut e, &mut a, &mut trigger, catalog);
+        (gained, world.get::<Equipped>(body).unwrap().clone(), world.get::<Ammo>(body).unwrap().clone(), trigger)
     }
 
     #[test]
-    fn a_weapon_not_carried_goes_into_a_free_slot_with_full_ammo() {
+    fn a_weapon_not_carried_is_added_with_full_ammo() {
         let (mut catalog, equipped) = rifle();
         let launcher = with_launcher(&mut catalog);
 
         let (gained, equipped, ammo, _) = take_weapon(gives(launcher), equipped, Ammo::default(), &catalog);
 
         assert!(gained);
-        let slot = Slot::ALL.into_iter().find(|slot| equipped.get(*slot) == Some(launcher)).expect("not carried");
-        assert_ne!(slot, Slot::Primary, "it took the rifle's place");
-        assert_eq!((ammo.at(slot).clip, ammo.at(slot).reserve), (4, 20));
-        assert_eq!(equipped.get(Slot::Primary), Some(WeaponId::of("rifle")));
+        assert_eq!(equipped.carried, vec![WeaponId::of("rifle"), launcher]);
+        assert_eq!((ammo.at(launcher).clip, ammo.at(launcher).reserve), (4, 20));
     }
 
     #[test]
     fn a_weapon_already_carried_tops_up_its_reserve_and_then_is_walked_past() {
         let (catalog, equipped) = rifle();
         let mut ammo = Ammo::default();
-        ammo.at_mut(Slot::Primary).reserve = 10;
+        ammo.at_mut(WeaponId::of("rifle")).reserve = 10;
 
         let (gained, equipped, ammo, _) = take_weapon(gives(WeaponId::of("rifle")), equipped, ammo, &catalog);
         assert!(gained);
-        assert_eq!(ammo.at(Slot::Primary).reserve, 30);
+        assert_eq!(ammo.at(WeaponId::of("rifle")).reserve, 30);
 
-        let (gained, _, ammo, _) = take_weapon(gives(WeaponId::of("rifle")), equipped, ammo, &catalog);
+        let (gained, _, ammo, _) = take_weapon(gives(WeaponId::of("rifle")), equipped.clone(), ammo, &catalog);
         assert!(gained);
-        assert_eq!(ammo.at(Slot::Primary).reserve, 40, "topped up past the reserve");
+        assert_eq!(ammo.at(WeaponId::of("rifle")).reserve, 40, "topped up past the reserve");
         let (gained, _, _, _) = take_weapon(gives(WeaponId::of("rifle")), equipped, ammo, &catalog);
         assert!(!gained, "a full reserve took it");
     }
 
+    /// The class's six loadout slots are no bound on what a body carries.
     #[test]
-    fn nobody_with_every_slot_full_can_take_a_new_weapon() {
+    fn a_body_carrying_many_weapons_still_takes_a_new_one() {
         let (mut catalog, _) = rifle();
         let launcher = with_launcher(&mut catalog);
-        let mut equipped = Equipped::default();
-        for slot in Slot::ALL {
-            equipped.slots[slot.index()] = Some(WeaponId::of("rifle"));
-        }
+        let many: Vec<WeaponId> = (0..12).map(|n| WeaponId::of(&format!("filler {n}"))).collect();
+        let equipped = Equipped { carried: many.clone(), held: Some(many[0]) };
 
         let (gained, after, _, _) = take_weapon(gives(launcher), equipped, Ammo::default(), &catalog);
-        assert!(!gained);
-        assert_eq!(after, equipped);
+        assert!(gained);
+        assert_eq!(after.carried.len(), 13);
+        assert_eq!(after.held(), Some(launcher));
     }
 
     #[test]
@@ -1096,16 +1080,16 @@ mod tests {
         let launcher = with_launcher(&mut catalog);
         catalog.weapons.iter_mut().find(|weapon| weapon.id == launcher).unwrap().deploy = 0.5;
         let mut ammo = Ammo::default();
-        ammo.at_mut(Slot::Primary).reloading = 1.0;
+        ammo.at_mut(WeaponId::of("rifle")).reloading = 1.0;
 
         let (_, drawn, ammo, trigger) = take_weapon(gives(launcher), equipped, ammo, &catalog);
         assert_eq!(drawn.held(), Some(launcher));
         assert!(!trigger.deployed(), "it was drawn without a deploy");
-        assert_eq!(ammo.at(Slot::Primary).reloading, 0.0, "the rifle went on reloading in a holster");
+        assert_eq!(ammo.at(WeaponId::of("rifle")).reloading, 0.0, "the rifle went on reloading in a holster");
 
-        let mut low = ammo;
-        low.at_mut(Slot::Primary).reserve = 0;
-        let (gained, after, _, trigger) = take_weapon(gives(WeaponId::of("rifle")), drawn, low, &catalog);
+        let mut low = ammo.clone();
+        low.at_mut(WeaponId::of("rifle")).reserve = 0;
+        let (gained, after, _, trigger) = take_weapon(gives(WeaponId::of("rifle")), drawn.clone(), low, &catalog);
         assert!(gained);
         assert_eq!(after.held(), Some(launcher), "topping up the rifle drew it");
         assert!(trigger.deployed());
@@ -1178,12 +1162,12 @@ mod tests {
 
     fn give_to(spec: PickupSpec, health: &mut Damageable, ammo: &mut Ammo, equipped: &Equipped, catalog: &WeaponCatalog) -> bool {
         let mut world = World::new();
-        let body = world.spawn((*health, *ammo)).id();
+        let body = world.spawn((*health, ammo.clone())).id();
         let mut query = world.query::<(&mut Damageable, &mut Ammo)>();
         let (h, a) = query.get_mut(&mut world, body).unwrap();
         let gained = give(&spec, Some(h), None, Some((a, equipped)), catalog).is_some();
         *health = *world.get::<Damageable>(body).unwrap();
-        *ammo = *world.get::<Ammo>(body).unwrap();
+        *ammo = world.get::<Ammo>(body).unwrap().clone();
         gained
     }
 
@@ -1207,10 +1191,10 @@ mod tests {
         let spec = PickupSpec { kind: PickupKind::Ammo, amount: 0.5, respawn: 1.0, ..default() };
         let mut health = Damageable::with_health(100);
         let mut ammo = Ammo::default();
-        ammo.at_mut(Slot::Primary).reserve = 30;
+        ammo.at_mut(WeaponId::of("rifle")).reserve = 30;
 
         assert!(give_to(spec, &mut health, &mut ammo, &equipped, &catalog));
-        assert_eq!(ammo.at(Slot::Primary).reserve, 40, "topped up past the reserve");
+        assert_eq!(ammo.at(WeaponId::of("rifle")).reserve, 40, "topped up past the reserve");
         assert!(!give_to(spec, &mut health, &mut ammo, &equipped, &catalog), "full reserves took it");
     }
 

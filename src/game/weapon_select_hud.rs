@@ -13,7 +13,7 @@ use crate::common::swatch::{Ink, Swatch};
 use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, ShapeMaterial, ShapeStyle};
-use crate::common::weapon::{Equipped, Slot, WeaponCatalog};
+use crate::common::weapon::{Equipped, WeaponCatalog, WeaponId};
 use crate::game::hud::{hud_text, leaning_panel, panel_style, ZONE_DROP, ZONE_STROKE};
 use crate::game::player::LocalPlayer;
 use crate::game::weapon_select::{carried, WeaponSelection};
@@ -66,7 +66,7 @@ impl Shown {
     fn of(
         catalog: &WeaponCatalog,
         equipped: &Equipped,
-        highlight: Option<Slot>,
+        highlight: Option<WeaponId>,
         thumbnails: Option<&Thumbnails>,
         swatch: Swatch,
     ) -> Self {
@@ -74,22 +74,20 @@ impl Shown {
         let open = order.iter().find(|(_, slot)| Some(*slot) == highlight).map(|(at, _)| *at);
 
         let mut columns: Vec<Column> = Vec::new();
-        for (bucket, slot) in order {
+        for (bucket, id) in order {
             if columns.last().is_none_or(|column| column.bucket != bucket) {
                 columns.push(Column { bucket, cards: Vec::new() });
             }
             if Some(bucket) != open {
                 continue;
             }
-            let Some(weapon) = equipped.get(slot).and_then(|id| catalog.get(id)) else {
-                continue;
-            };
+            let Some(weapon) = catalog.get(id) else { continue };
             let picture = weapon
                 .model
                 .as_deref()
                 .and_then(|model| thumbnails?.prop(model))
                 .cloned();
-            let card = Card { name: get!(weapon.name_key), picture, highlighted: highlight == Some(slot) };
+            let card = Card { name: get!(weapon.name_key), picture, highlighted: highlight == Some(id) };
             columns.last_mut().expect("pushed above").cards.push(card);
         }
         Self { swatch, columns }
@@ -108,7 +106,7 @@ fn dimmed(swatch: &Swatch) -> ShapeStyle {
 
 /// Compared first, so [`Shown`] and its lang lookups are not rebuilt every
 /// frame.
-type ShownFrom = (Option<Slot>, Equipped, Swatch, usize);
+type ShownFrom = (Option<WeaponId>, Equipped, Swatch, usize);
 
 /// Made once per livery rather than per card.
 struct Panels {
@@ -175,7 +173,7 @@ fn show_the_selector(
     // Kept while closed, so reopening onto the same thing rebuilds nothing.
     let Some((equipped, team, color)) = ours else { return };
     let swatch = Swatch::of_body(team.copied(), color.copied());
-    let from = (selection.highlight, *equipped, swatch, thumbnails.as_ref().map_or(0, |t| t.len()));
+    let from = (selection.highlight, equipped.clone(), swatch, thumbnails.as_ref().map_or(0, |t| t.len()));
     if built_from.as_ref() == Some(&from) && !catalog.is_changed() {
         return;
     }
@@ -349,7 +347,7 @@ mod tests {
     #[test]
     fn weapons_nobody_can_name_yet_show_nothing() {
         let (_, equipped) = mercenary();
-        let shown = Shown::of(&WeaponCatalog::default(), &equipped, Some(equipped.held), None, Swatch::neutral());
+        let shown = Shown::of(&WeaponCatalog::default(), &equipped, equipped.held, None, Swatch::neutral());
         assert!(shown.columns.is_empty(), "{shown:?}");
     }
 }

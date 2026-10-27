@@ -215,8 +215,8 @@ pub struct Weapon {
 /// A bucket is the weapon's; a [`Slot`] is a place in a class's loadout.
 pub const BUCKETS: u8 = 9;
 
-/// More than any class needs today, because growing it later means growing a
-/// replicated array.
+/// The places a class's loadout names. What a body *carries* is not bounded
+/// by them: see [`Equipped`].
 pub const SLOTS: usize = 6;
 
 #[derive(
@@ -264,32 +264,43 @@ impl Slot {
     }
 }
 
-/// Ids only, never weapon numbers. The ids and the held slot are one component
-/// because replication does not promise to deliver two components in one
-/// packet.
-#[derive(
-    Component, Clone, Copy, Debug, Default, PartialEq, Reflect, Serialize, Deserialize,
-)]
+/// What a body carries, as ids, never weapon numbers: as many as it picks up.
+/// The list and what is held are one component because replication does not
+/// promise to deliver two components in one packet.
+#[derive(Component, Clone, Debug, Default, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct Equipped {
-    pub slots: [Option<WeaponId>; SLOTS],
-    pub held: Slot,
+    /// The class's starting weapons in loadout-slot order, then pickups in
+    /// the order they were taken. Never reordered and never holding one id
+    /// twice.
+    pub carried: Vec<WeaponId>,
+    /// Always one of `carried`, or nothing.
+    pub held: Option<WeaponId>,
 }
 
 impl Equipped {
     pub fn held(&self) -> Option<WeaponId> {
-        self.slots[self.held.index()]
+        self.held
     }
 
-    pub fn get(&self, slot: Slot) -> Option<WeaponId> {
-        self.slots[slot.index()]
+    pub fn carries(&self, weapon: WeaponId) -> bool {
+        self.carried.contains(&weapon)
     }
 
-    /// An empty slot is ignored. Idempotent, so a replayed tick reaches the
+    /// One not carried is ignored. Idempotent, so a replayed tick reaches the
     /// same loadout.
-    pub fn select(&mut self, slot: Slot) {
-        if self.slots[slot.index()].is_some() {
-            self.held = slot;
+    pub fn select(&mut self, weapon: WeaponId) {
+        if self.carries(weapon) {
+            self.held = Some(weapon);
         }
+    }
+
+    /// Returns whether it was new.
+    pub fn add(&mut self, weapon: WeaponId) -> bool {
+        if self.carries(weapon) {
+            return false;
+        }
+        self.carried.push(weapon);
+        true
     }
 }
 
@@ -303,22 +314,34 @@ pub struct AmmoState {
     pub charge: f32,
 }
 
+const NO_AMMO: AmmoState = AmmoState { clip: 0, reserve: 0, reloading: 0.0, charge: 0.0 };
+
 /// Separate from [`Equipped`] because ammo changes every shot and a switch is
-/// rare, and replication is change-detected per component.
-#[derive(
-    Component, Clone, Copy, Debug, Default, PartialEq, Reflect, Serialize, Deserialize,
-)]
+/// rare, and replication is change-detected per component. Keyed by weapon
+/// rather than lined up with `Equipped::carried`: the two arrive in different
+/// packets, and a list one longer than the other would pair every weapon after
+/// the gap with the wrong count.
+#[derive(Component, Clone, Debug, Default, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct Ammo {
-    pub slots: [AmmoState; SLOTS],
+    pub weapons: Vec<(WeaponId, AmmoState)>,
 }
 
 impl Ammo {
-    pub fn at(&self, slot: Slot) -> &AmmoState {
-        &self.slots[slot.index()]
+    /// Empty for a weapon with no entry yet.
+    pub fn at(&self, weapon: WeaponId) -> &AmmoState {
+        self.weapons.iter().find(|(id, _)| *id == weapon).map_or(&NO_AMMO, |(_, state)| state)
     }
 
-    pub fn at_mut(&mut self, slot: Slot) -> &mut AmmoState {
-        &mut self.slots[slot.index()]
+    /// Makes an empty entry if there is none.
+    pub fn at_mut(&mut self, weapon: WeaponId) -> &mut AmmoState {
+        let index = match self.weapons.iter().position(|(id, _)| *id == weapon) {
+            Some(index) => index,
+            None => {
+                self.weapons.push((weapon, NO_AMMO));
+                self.weapons.len() - 1
+            }
+        };
+        &mut self.weapons[index].1
     }
 
     pub fn full(magazine: &Magazine) -> AmmoState {
@@ -431,16 +454,14 @@ impl WeaponCatalog {
                 Some(only) => only.iter().copied().find(|id| choices.permitted.contains(id)),
             };
             let Some(weapon) = chosen.and_then(|id| self.get(id)) else { continue };
-            equipped.slots[slot.index()] = Some(weapon.id);
-            ammo.slots[slot.index()] = Ammo::full(&weapon.magazine);
+            if equipped.add(weapon.id) {
+                *ammo.at_mut(weapon.id) = Ammo::full(&weapon.magazine);
+            }
         }
 
-        // Not `Primary` regardless: a class with an empty primary would spawn
-        // holding nothing.
-        equipped.held = Slot::ALL
-            .into_iter()
-            .find(|slot| equipped.get(*slot).is_some())
-            .unwrap_or_default();
+        // The first carried rather than the primary's: a class with an empty
+        // primary would spawn holding nothing.
+        equipped.held = equipped.carried.first().copied();
 
         (equipped, ammo)
     }
