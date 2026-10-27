@@ -56,8 +56,10 @@ impl RespawnTimers {
     }
 }
 
-/// Before the body is reaped, which is a tick after `Died` is written, so the
-/// rule never sees a dead player with no timer.
+/// Chained before `give_bodies_to_whoever_needs_one` and writing the timer
+/// directly, not through `Commands`, so the rule never sees a dead player with
+/// no timer — the tick between `Died` and the reap is no guarantee, since a
+/// slow frame runs both.
 fn start_respawn_timers(
     time: Res<Time>,
     role: Option<Res<NetRole>>,

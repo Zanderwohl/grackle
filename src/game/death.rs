@@ -248,6 +248,23 @@ mod tests {
         assert!(written[0].amount >= 1000);
     }
 
+    /// A body in its dying tick is not killed a second time.
+    #[test]
+    fn a_dying_body_cannot_suicide_again() {
+        let mut world = a_world();
+        world.init_resource::<Messages<Damage>>();
+        world.spawn((
+            lightyear::prelude::input::native::ActionState(crate::game::player::PlayerInput { suicide: true, ..default() }),
+            PlayerId(3),
+            GlobalTransform::default(),
+            Dying,
+        ));
+
+        world.run_system_once(suicide).unwrap();
+
+        assert!(world.resource::<Messages<Damage>>().is_empty());
+    }
+
     #[test]
     fn a_living_body_is_not_reaped() {
         let mut world = a_world();

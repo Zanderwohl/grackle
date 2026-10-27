@@ -88,6 +88,8 @@ impl Plugin for GamePlugin {
             // reset writes it: without that plugin the first F5 would fail.
             .init_resource::<AnimationClock>()
             .init_resource::<InputLatch>()
+            // Also `DamagePlugin`'s; here too because the death cam reads it.
+            .add_message::<crate::common::damage::Died>()
             .init_resource::<ViewMode>()
             .init_resource::<ViewPreference>()
             .init_resource::<crate::game::player::CameraPull>()

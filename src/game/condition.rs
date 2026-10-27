@@ -16,7 +16,6 @@ use crate::common::assets::default_packs;
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{ClipStack, Layer};
 use crate::common::taunt::{TauntId, TauntTurning, TauntWeapon, Taunts};
-use crate::game::death::Dying;
 use crate::game::player::{
     CameraPull, DeathCam, Inputs, LocalPlayer, ViewMode, ViewPreference, CAMERA_PULL_SECONDS,
 };
@@ -161,17 +160,17 @@ pub fn decide_the_view(
     time: Res<Time>,
     preference: Res<ViewPreference>,
     death_cam: Option<Res<DeathCam>>,
-    ours: Option<Single<(&Condition, Has<Dying>), With<LocalPlayer>>>,
+    ours: Option<Single<&Condition, With<LocalPlayer>>>,
     mut pull: ResMut<CameraPull>,
     mut view: ResMut<ViewMode>,
 ) {
-    let alive = ours.as_deref().is_some_and(|(_, dying)| !dying);
-    let respawned = death_cam.is_some() && alive;
+    // A death cam only starts once our body is gone, so any body is a new one.
+    let respawned = death_cam.is_some() && ours.is_some();
     if respawned {
         commands.remove_resource::<DeathCam>();
     }
     let dead = death_cam.is_some() && !respawned;
-    let forced = dead || ours.is_some_and(|ours| ours.0.forces_third_person());
+    let forced = dead || ours.is_some_and(|condition| condition.forces_third_person());
     let wanted = match forced {
         true => ViewMode::ThirdPerson,
         false => preference.0,
@@ -393,14 +392,11 @@ mod tests {
     #[test]
     fn the_death_cam_holds_third_person_until_a_living_body_is_ours() {
         let mut world = a_view_world(ViewMode::FirstPerson);
-        let dying = world.spawn((LocalPlayer, Condition::default(), Dying)).id();
         world.insert_resource(DeathCam { pivot: Vec3::ZERO, whose: None });
 
         decide_after(&mut world, 1.0);
         assert_eq!(world.resource::<CameraPull>().0, 1.0);
-        world.despawn(dying);
-        decide_after(&mut world, 1.0);
-        assert_eq!(*world.resource::<ViewMode>(), ViewMode::ThirdPerson, "the reaped body ended the death cam");
+        assert_eq!(*world.resource::<ViewMode>(), ViewMode::ThirdPerson);
         assert!(world.contains_resource::<DeathCam>());
 
         world.spawn((LocalPlayer, Condition::default()));

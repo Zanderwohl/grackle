@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
 use lightyear::prelude::input::native::ActionState;
 
-use crate::common::damage::{Damageable, PlayerId};
+use crate::common::damage::{Damageable, Died, PlayerId};
+use crate::game::death::Dying;
 use crate::common::hitbox::Hitboxes;
 use crate::common::movement_rules::MovementRules;
 use crate::common::taunt::TauntTurning;
@@ -593,31 +594,50 @@ const DEATH_CAM_FOLLOW_RATE: f32 = 6.0;
 /// body is gone. Removed on leaving Play, so a new round does not open on the
 /// last one's death.
 #[derive(Resource, Clone, Copy, Debug)]
-pub struct OurLastBody(DeathCam);
+pub struct OurLastBody {
+    cam: DeathCam,
+    /// We have been told this body died. A body gone for any other reason (a
+    /// disconnect, a round ending) is not a death.
+    died: bool,
+}
 
-/// Keyed on our body being gone, not on `Dying` arriving: `Dying` and the
-/// despawn are a tick apart, and a frame longer than two ticks runs both
-/// before `Update` sees either, leaving the camera frozen at the eye.
+/// Keyed on our body being gone *and* having died, not on `Dying` arriving:
+/// `Dying` and the despawn are a tick apart, and a frame longer than two ticks
+/// runs both before `Update` sees either, leaving the camera frozen at the eye.
+/// `Died` is unordered against the despawn on a client, so either may come
+/// first.
 pub fn start_the_death_cam(
     mut commands: Commands,
-    last: Option<Res<OurLastBody>>,
+    mut deaths: MessageReader<Died>,
+    last: Option<ResMut<OurLastBody>>,
     death_cam: Option<Res<DeathCam>>,
-    ours: Option<Single<(&Transform, &Stance, Option<&PlayerId>), With<LocalPlayer>>>,
+    ours: Option<Single<(&Transform, &Stance, Option<&PlayerId>, Has<Dying>), With<LocalPlayer>>>,
 ) {
-    match ours {
-        Some(ours) => {
-            let (body, stance, id) = ours.into_inner();
-            commands.insert_resource(OurLastBody(DeathCam {
-                pivot: body.translation + Vec3::Y * stance.eye_offset(),
-                whose: id.copied(),
-            }));
+    let seen = ours.map(|ours| {
+        let (body, stance, id, dying) = ours.into_inner();
+        let cam = DeathCam { pivot: body.translation + Vec3::Y * stance.eye_offset(), whose: id.copied() };
+        (cam, dying)
+    });
+    let mut last = match (last, seen) {
+        (Some(mut last), Some((cam, dying))) => {
+            last.cam = cam;
+            last.died |= dying;
+            last
         }
-        None => {
-            if let (Some(last), None) = (last, death_cam) {
-                commands.insert_resource(last.0);
-                commands.remove_resource::<OurLastBody>();
-            }
+        (Some(last), None) => last,
+        (None, Some((cam, dying))) => {
+            commands.insert_resource(OurLastBody { cam, died: dying });
+            return;
         }
+        (None, None) => return,
+    };
+    let whose = last.cam.whose;
+    if deaths.read().any(|death| whose.is_some() && death.victim_id == whose) {
+        last.died = true;
+    }
+    if seen.is_none() && last.died && death_cam.is_none() {
+        commands.insert_resource(last.cam);
+        commands.remove_resource::<OurLastBody>();
     }
 }
 
@@ -630,7 +650,9 @@ pub fn follow_our_corpse(
 ) {
     let Some(mut death_cam) = death_cam else { return };
     let Some(whose) = death_cam.whose else { return };
-    let Some((corpse, _)) = corpses.iter().find(|(_, of)| of.0 == whose) else { return };
+    // The youngest: corpses outlive a respawn, so an earlier death's may still lie there.
+    let ours = corpses.iter().filter(|(_, of)| of.0 == whose);
+    let Some((corpse, _)) = ours.min_by(|(a, _), (b, _)| a.age().total_cmp(&b.age())) else { return };
     let target = corpse.pelvis() + Vec3::Y * DEATH_CAM_LIFT;
     let t = 1.0 - (-DEATH_CAM_FOLLOW_RATE * time.delta_secs()).exp();
     death_cam.pivot = death_cam.pivot.lerp(target, t);
@@ -819,11 +841,24 @@ mod tests {
     use super::*;
     use crate::tool::room::Room;
 
+    fn a_death(id: PlayerId) -> crate::common::damage::Died {
+        crate::common::damage::Died {
+            victim: Entity::PLACEHOLDER,
+            victim_name: None,
+            victim_id: Some(id),
+            killer: crate::common::damage::DamageSource::World,
+            assist: None,
+            at: Vec3::ZERO,
+        }
+    }
+
     /// Breaks if the death cam waits to see `Dying`, which a slow frame
-    /// reaps before `Update` runs.
+    /// reaps before `Update` runs. The `Died` comes after the despawn here,
+    /// as it may on a client.
     #[test]
-    fn the_death_cam_starts_when_our_body_is_gone() {
+    fn the_death_cam_starts_when_our_body_is_gone_and_died() {
         let mut world = World::new();
+        world.init_resource::<Messages<Died>>();
         let start = world.register_system(start_the_death_cam);
         let body = world
             .spawn((LocalPlayer, Transform::from_xyz(1.0, 1.0, 0.0), Stance::default(), PlayerId(5)))
@@ -834,15 +869,36 @@ mod tests {
 
         world.despawn(body);
         world.run_system(start).unwrap();
+        assert!(!world.contains_resource::<DeathCam>(), "started before we were told of a death");
+
+        world.write_message(a_death(PlayerId(5)));
+        world.run_system(start).unwrap();
         let death_cam = *world.resource::<DeathCam>();
         assert_eq!(death_cam.whose, Some(PlayerId(5)));
         assert!((death_cam.pivot.y - (1.0 + Stance::default().eye_offset())).abs() < 1e-5);
+    }
+
+    /// A body taken away without dying, as at a round's end, is not a death,
+    /// and neither is somebody else's death.
+    #[test]
+    fn losing_a_body_without_dying_is_not_a_death() {
+        let mut world = World::new();
+        world.init_resource::<Messages<Died>>();
+        let start = world.register_system(start_the_death_cam);
+        let body = world.spawn((LocalPlayer, Transform::default(), Stance::default(), PlayerId(5))).id();
+        world.run_system(start).unwrap();
+
+        world.despawn(body);
+        world.write_message(a_death(PlayerId(6)));
+        world.run_system(start).unwrap();
+        assert!(!world.contains_resource::<DeathCam>());
     }
 
     /// No body yet at the start of a round is not a death.
     #[test]
     fn having_had_no_body_is_not_a_death() {
         let mut world = World::new();
+        world.init_resource::<Messages<Died>>();
         world.run_system_once(start_the_death_cam).unwrap();
         assert!(!world.contains_resource::<DeathCam>());
     }

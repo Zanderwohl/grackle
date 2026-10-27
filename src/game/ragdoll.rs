@@ -59,8 +59,8 @@ use crate::game::skeleton::{skeleton_root, SkeletonRoot};
 /// How long a corpse lies there, in seconds of game time, so corpses do not
 /// age in the editor.
 ///
-/// Not tied to the body that left it: respawning is immediate, so clearing the
-/// corpse on respawn would mean nobody ever saw it. Only the round ends it
+/// Not tied to the body that left it: it outlasts the respawn delay, so a
+/// player can have more than one corpse lying about. Only the round ends it
 /// early.
 pub const RAGDOLL_LIFETIME: f32 = 10.0;
 

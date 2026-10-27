@@ -1495,10 +1495,15 @@ The wait is `RESPAWN_SECONDS`, a placeholder; wave respawns and spawn
 protection are a gamemode's numbers. A dead player is not owed a body while
 their `RespawnTimers` entry runs, which is the absence rule with one more
 clause rather than a queue. Meanwhile the view is the **death cam**:
-`DeathCam` starts at our eye where the body died, from the replicated
-`Dying` so a client starts its own, and `place_camera` orbits it in third
-person under the mouse. `follow_our_corpse` eases the pivot onto the pelvis
-of the corpse whose replicated `CorpseOf` names our `PlayerId` — the corpse
+`DeathCam` starts at our eye where the body last was, once the body is gone
+*and* we have seen it `Dying` or read a `Died` naming us
+(`start_the_death_cam`, `OurLastBody`). Not on `Added<Dying>` alone: `Dying`
+and the despawn are a tick apart, a slow frame runs both before `Update`, and
+the camera froze at the eye. A body gone without dying — a disconnect, a round
+ending — is no death cam. `place_camera` orbits it in third person under the
+mouse. `follow_our_corpse` eases the pivot onto the pelvis
+of the youngest corpse whose replicated `CorpseOf` names our `PlayerId`
+(corpses outlive the respawn delay, so there may be two) — the corpse
 carries an id for this and nothing else, so it is still not a player. `decide_the_view` ends it when a living body is ours
 again, and cuts back in rather than swinging from the corpse. It is TF2's
 death with nobody to credit; a killer cam is the next step. Two parts of the
