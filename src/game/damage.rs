@@ -192,7 +192,7 @@ fn draw_damage_numbers(
             egui::pos2(screen.x, screen.y - rise(number.remaining, height)),
             egui::Align2::CENTER_CENTER,
             number.amount.to_string(),
-            egui::FontId::proportional(DAMAGE_NUMBER_SIZE),
+            egui::FontId::new(DAMAGE_NUMBER_SIZE, crate::common::fonts::display_family()),
             egui::Color32::from_rgba_unmultiplied(255, 40, 40, alpha),
         );
     }
