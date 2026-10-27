@@ -443,21 +443,6 @@ pub fn gather_input(
     input.taunt |= keys.just_pressed(KeyCode::KeyG);
     input.suicide |= keys.just_pressed(KeyCode::KeyO);
 
-    // All six slots are bound whatever the class carries: an unbound key and
-    // a key bound to an empty slot are the same to a player.
-    for (key, slot) in [
-        (KeyCode::Digit1, Slot::Primary),
-        (KeyCode::Digit2, Slot::Secondary),
-        (KeyCode::Digit3, Slot::Melee),
-        (KeyCode::Digit4, Slot::Utility),
-        (KeyCode::Digit5, Slot::Gadget),
-        (KeyCode::Digit6, Slot::Special),
-    ] {
-        if keys.just_pressed(key) {
-            input.select = Some(slot);
-        }
-    }
-
     input.sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     input.crouch = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
 }

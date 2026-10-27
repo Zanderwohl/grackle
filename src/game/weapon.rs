@@ -68,6 +68,8 @@ pub struct WeaponActionFired {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Trigger {
     ready_in: [f32; 2],
+    /// Seconds until the weapon just drawn may fire or reload.
+    deploying: f32,
 }
 
 impl Trigger {
@@ -83,6 +85,10 @@ impl Trigger {
 
     fn arm(&mut self, button: Button, interval: f32) {
         self.ready_in[button.index()] = interval;
+    }
+
+    pub fn deployed(&self) -> bool {
+        self.deploying <= 0.0
     }
 }
 
@@ -128,7 +134,8 @@ pub fn pull_trigger(
 
     for (shooter, equipped, mut ammo, mut trigger, input, condition) in &mut shooters {
         trigger.tick(dt);
-        if !condition.may_fire() {
+        // Dropped, not queued: a click while drawing is not a shot after it.
+        if !condition.may_fire() || !trigger.deployed() {
             continue;
         }
 
@@ -237,11 +244,14 @@ fn begin_reload(state: &mut crate::common::weapon::AmmoState, magazine: &Magazin
 pub fn reload_weapons(
     time: Res<Time<Fixed>>,
     catalogue: Res<WeaponCatalogue>,
-    mut carriers: Query<(&Equipped, &mut Ammo, &Inputs), With<Player>>,
+    mut carriers: Query<(&Equipped, &mut Ammo, &Trigger, &Inputs), With<Player>>,
 ) {
     let dt = time.delta_secs();
 
-    for (equipped, mut ammo, input) in &mut carriers {
+    for (equipped, mut ammo, trigger, input) in &mut carriers {
+        if !trigger.deployed() {
+            continue;
+        }
         let held = equipped.held;
         let Some(weapon) = catalogue.held_by(equipped) else { continue };
         let Some(size) = weapon.magazine.clip else { continue };
@@ -281,8 +291,16 @@ pub fn reload_weapons(
 }
 
 /// Act on a switch made since the last step.
-pub fn select_weapons(mut carriers: Query<(&mut Equipped, &mut Ammo, &Inputs), With<Player>>) {
-    for (mut equipped, mut ammo, input) in &mut carriers {
+pub fn select_weapons(
+    time: Res<Time<Fixed>>,
+    catalogue: Res<WeaponCatalogue>,
+    mut carriers: Query<(&mut Equipped, &mut Ammo, &mut Trigger, &Inputs), With<Player>>,
+) {
+    let dt = time.delta_secs();
+
+    for (mut equipped, mut ammo, mut trigger, input) in &mut carriers {
+        trigger.deploying = (trigger.deploying - dt).max(0.0);
+
         let Some(slot) = input.select else { continue };
         if equipped.held == slot || equipped.get(slot).is_none() {
             continue;
@@ -298,6 +316,8 @@ pub fn select_weapons(mut carriers: Query<(&mut Equipped, &mut Ammo, &Inputs), W
         // replicated, so a write is a packet. Idempotence also lets a replayed
         // tick read the same input and reach the same loadout.
         equipped.select(slot);
+        // A weapon nobody can name yet draws instantly rather than never.
+        trigger.deploying = catalogue.held_by(&equipped).map_or(0.0, |weapon| weapon.deploy);
     }
 }
 
@@ -369,6 +389,8 @@ mod tests {
             id: WeaponId::of("test"),
             name_key: "weapon.names.test".into(),
             model: None,
+            bucket: 1,
+            deploy: 0.0,
             primary,
             secondary,
             magazine,
@@ -830,6 +852,53 @@ mod tests {
             ammo(&world, shooter, held).reloading,
             0.0,
             "the holstered weapon went on reloading"
+        );
+    }
+
+    /// A weapon just drawn fires once its deploy has run out, and not before.
+    #[test]
+    fn a_weapon_just_drawn_waits_out_its_deploy() {
+        const DEPLOY: f32 = 0.25;
+        let free = Mounted {
+            action: WeaponAction::Hitscan(LASER),
+            cadence: Cadence::Semi,
+            cost: Cost::Free,
+        };
+        let mut catalogue = one_weapon(weapon(free, Mounted::EMPTY, Magazine::BOTTOMLESS));
+        let drawn = Weapon {
+            id: WeaponId::of("drawn"),
+            deploy: DEPLOY,
+            ..weapon(free, Mounted::EMPTY, Magazine::BOTTOMLESS)
+        };
+        let id = drawn.id;
+        catalogue.insert(drawn);
+        let mut loadout = catalogue.loadout(crate::common::class::Class::Mercenary).unwrap().clone();
+        loadout.set(
+            Slot::Secondary,
+            crate::common::weapon::SlotChoices { permitted: vec![id], default: id },
+        );
+        catalogue.set_loadout(crate::common::class::Class::Mercenary, loadout);
+
+        let mut world = a_world(catalogue);
+        let shooter = a_shooter(&mut world);
+        input(&mut world, shooter).select = Some(Slot::Secondary);
+
+        let mut ticks = 0;
+        loop {
+            ticks += 1;
+            assert!(ticks < 64, "the drawn weapon never fired");
+            world.run_system_once(select_weapons).unwrap();
+            input(&mut world, shooter).attack = true;
+            step(&mut world);
+            if !shots(&mut world).is_empty() {
+                break;
+            }
+        }
+
+        let expected = (DEPLOY / crate::constants::one_tick().as_secs_f32()).round() as i32;
+        assert!(
+            (expected..=expected + 1).contains(&ticks),
+            "fired on tick {ticks}, deploy is {expected} ticks"
         );
     }
 

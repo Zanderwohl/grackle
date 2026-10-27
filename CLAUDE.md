@@ -342,7 +342,8 @@ its hitboxes are hidden from inside your own head, nobody else's are),
 views, and now that bodies have geometry neither is what a player sees. `F3`
 is the perf overlay in both modes.
 
-Weapon slots are on **`1`–`6`**, the left mouse button fires the weapon's
+Weapons are drawn by **bucket** on **`1`–`9`** and the **wheel** (see
+"Choosing a weapon" below), the left mouse button fires the weapon's
 primary and the right its secondary — held, for anything automatic — and
 **`R`** reloads. **`H`** toggles humiliation, a debug key until there are
 rounds to lose: hands up, no weapon, no firing, third person. **`G`** starts
@@ -1681,6 +1682,46 @@ Things worth knowing before touching `src/game/projectile.rs`:
   back and change a shot that has already left.
 - Position goes through `PhysicsBody`, which buys interpolation for free —
   drawn at the tick, a 30 m/s rocket visibly stutters.
+
+### Choosing a weapon
+
+A weapon names its **bucket** — the digit that draws it, `1`–`9`, as in
+Source — and a **deploy** time, in `weapons.toml`. A bucket is the weapon's;
+a `Slot` is a place in a class's loadout, and the two are deliberately not
+the same thing. Several weapons may share a bucket: pressing its digit again
+moves along them, in loadout-slot order, and the wheel steps through
+everything carried (up is back towards `1`).
+
+**What is chosen and what is held are two things.** Choosing moves only
+`WeaponSelection::highlight`; one switch is sent when it settles
+(`SETTLE_SECONDS` of quiet) or on a left click, and a right click cancels.
+A switch per notch would have the server draw every weapon scrolled past,
+restarting its deploy and cancelling a reload nobody meant to touch. A digit
+for a bucket of one weapon chooses between nothing, so it switches at once.
+The confirming or cancelling click is the selector's: `choose_weapons` takes it
+back off the latch until the button is let go, and the recoil guess asks
+`holds_the_buttons` — otherwise the click that picks a rifle also fires the
+launcher it is leaving.
+
+**What "again" means is decided on the machine with the keyboard**
+([`src/game/weapon_select.rs`](src/game/weapon_select.rs)) and sent as a
+plain `Slot`, because "next in bucket 2" depends on what is held and a
+replayed tick must reach the same loadout from the same input. While the
+selector is open a second press moves on from the highlight, not from the replicated `Equipped`, which
+is a round trip behind: from that, a quick double-tap would choose the same
+weapon twice.
+
+**A weapon being drawn neither fires nor reloads.** `select_weapons` starts
+`Trigger`'s deploy clock and `reload_weapons` and `pull_trigger` wait on it; a
+press made during it is dropped, not saved for later. A body spawns ready. The
+model's `deploy` clip is stretched to the deploy time, as a reload's is, and a
+client's recoil guess waits it out from the moment it *sees* the switch.
+
+The selector ([`src/game/weapon_select_hud.rs`](src/game/weapon_select_hud.rs))
+is the row of buckets across the top, the open one a card per weapon with its
+thumbnail on the HUD's panel shapes. It only draws `WeaponSelection`.
+`bake_what_we_carry` bakes every carried model rather than only the one in
+hand, because a prop is photographed when it is baked.
 
 ### Pulling a trigger, and paying for it
 
