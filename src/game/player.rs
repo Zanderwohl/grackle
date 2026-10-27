@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
 use lightyear::prelude::input::native::ActionState;
 
-use crate::common::damage::{Armor, Damageable};
+use crate::common::damage::{Armor, Damageable, Died, PlayerId};
+use crate::game::death::Dying;
 use crate::common::hitbox::Hitboxes;
 use crate::common::movement_rules::MovementRules;
 use crate::common::taunt::TauntTurning;
@@ -136,6 +137,8 @@ pub struct PlayerInput {
     /// A debug key until there are rounds to lose.
     pub humiliate: bool,
     pub taunt: bool,
+    /// A debug key until there is a kill command.
+    pub suicide: bool,
     /// Look direction about world Y, radians. An input because facing decides
     /// which way "forward" is, so a server needs it to reproduce movement.
     pub yaw: f32,
@@ -443,21 +446,7 @@ pub fn gather_input(
     input.reload |= keys.just_pressed(KeyCode::KeyR);
     input.humiliate |= keys.just_pressed(KeyCode::KeyH);
     input.taunt |= keys.just_pressed(KeyCode::KeyG);
-
-    // All six slots are bound whatever the class carries: an unbound key and
-    // a key bound to an empty slot are the same to a player.
-    for (key, slot) in [
-        (KeyCode::Digit1, Slot::Primary),
-        (KeyCode::Digit2, Slot::Secondary),
-        (KeyCode::Digit3, Slot::Melee),
-        (KeyCode::Digit4, Slot::Utility),
-        (KeyCode::Digit5, Slot::Gadget),
-        (KeyCode::Digit6, Slot::Special),
-    ] {
-        if keys.just_pressed(key) {
-            input.select = Some(slot);
-        }
-    }
+    input.suicide |= keys.just_pressed(KeyCode::KeyO);
 
     input.sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     input.crouch = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
@@ -490,13 +479,16 @@ pub fn gather_aim(
 /// The one place an edge is consumed. Level fields are carried across, since
 /// they are re-read every frame. In `FixedPreUpdate`'s `WriteClientInputs` set
 /// because what is written here is what Lightyear buffers and sends.
+///
+/// Edges are consumed with no body too, so a click made while dead does not
+/// fire on respawning.
 pub fn write_client_inputs(
     mut latch: ResMut<InputLatch>,
     input: Option<Single<&mut Inputs, With<LocalPlayer>>>,
 ) {
-    let Some(input) = input else { return };
-    let mut input = input.into_inner();
-    input.0 = latch.0;
+    if let Some(input) = input {
+        input.into_inner().0 = latch.0;
+    }
 
     latch.0.jump = false;
     latch.0.attack = false;
@@ -504,6 +496,7 @@ pub fn write_client_inputs(
     latch.0.reload = false;
     latch.0.humiliate = false;
     latch.0.taunt = false;
+    latch.0.suicide = false;
     latch.0.select = None;
 }
 
@@ -540,19 +533,23 @@ pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut preference: ResMut<ViewP
 /// looking around never waits on a round-trip.
 ///
 /// Runs after `interpolate_bodies`; earlier, it sits a frame behind the body.
+///
+/// With no body, it orbits the [`DeathCam`] instead, still aimed by the latch.
 pub fn place_camera(
     pull: Res<CameraPull>,
     world: Res<CollisionWorld>,
     latch: Res<InputLatch>,
+    death_cam: Option<Res<DeathCam>>,
     body: Option<Single<(&Transform, &Stance), (With<LocalPlayer>, Without<PlayerCamera>)>>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
-    let Some(body) = body else { return };
-    let (body, stance) = body.into_inner();
-    // Ducking lowers the eye and the third-person pivot with it.
-    let eye = stance.eye_offset();
+    let pivot = match (body, death_cam) {
+        // Ducking lowers the eye and the third-person pivot with it.
+        (Some(body), _) => body.0.translation + Vec3::Y * body.1.eye_offset(),
+        (None, Some(dead)) => dead.pivot,
+        (None, None) => return,
+    };
     let aim = Quat::from_rotation_y(latch.0.yaw) * Quat::from_rotation_x(latch.0.pitch);
-    let pivot = body.translation + Vec3::Y * eye;
 
     let first = Transform::from_translation(pivot).with_rotation(aim);
     let third = Transform::from_translation(third_person_camera(pivot, aim, &world)).with_rotation(aim);
@@ -561,6 +558,85 @@ pub fn place_camera(
         camera.translation = placed.translation;
         camera.rotation = placed.rotation;
     }
+}
+
+/// What the view orbits while we have no body. `decide_the_view` takes it
+/// down when the next body arrives.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct DeathCam {
+    /// Eased from the dying eye onto our corpse.
+    pub pivot: Vec3,
+    /// `None` leaves the pivot where the body died.
+    pub whose: Option<PlayerId>,
+}
+
+/// Meters above the corpse's pelvis, so a body on the floor is looked down at.
+const DEATH_CAM_LIFT: f32 = 0.6;
+
+/// Per second. Also damps the ragdoll's tumbling, which shakes the camera.
+const DEATH_CAM_FOLLOW_RATE: f32 = 6.0;
+
+/// Removed on leaving Play, so a new round does not open on the last one's
+/// death.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct OurLastBody {
+    cam: DeathCam,
+    /// A body gone without dying, at a disconnect or a round's end, is no death.
+    died: bool,
+}
+
+/// Not on `Added<Dying>`: a frame longer than two ticks runs `Dying` and the
+/// despawn before `Update` sees either. On a client `Died` and the despawn
+/// arrive in either order.
+pub fn start_the_death_cam(
+    mut commands: Commands,
+    mut deaths: MessageReader<Died>,
+    last: Option<ResMut<OurLastBody>>,
+    death_cam: Option<Res<DeathCam>>,
+    ours: Option<Single<(&Transform, &Stance, Option<&PlayerId>, Has<Dying>), With<LocalPlayer>>>,
+) {
+    let seen = ours.map(|ours| {
+        let (body, stance, id, dying) = ours.into_inner();
+        let cam = DeathCam { pivot: body.translation + Vec3::Y * stance.eye_offset(), whose: id.copied() };
+        (cam, dying)
+    });
+    let mut last = match (last, seen) {
+        (Some(mut last), Some((cam, dying))) => {
+            last.cam = cam;
+            last.died |= dying;
+            last
+        }
+        (Some(last), None) => last,
+        (None, Some((cam, dying))) => {
+            commands.insert_resource(OurLastBody { cam, died: dying });
+            return;
+        }
+        (None, None) => return,
+    };
+    let whose = last.cam.whose;
+    if deaths.read().any(|death| whose.is_some() && death.victim_id == whose) {
+        last.died = true;
+    }
+    if seen.is_none() && last.died && death_cam.is_none() {
+        commands.insert_resource(last.cam);
+        commands.remove_resource::<OurLastBody>();
+    }
+}
+
+/// With no corpse of ours, the pivot stays where it is.
+pub fn follow_our_corpse(
+    time: Res<Time>,
+    death_cam: Option<ResMut<DeathCam>>,
+    corpses: Query<(&crate::game::ragdoll::Ragdoll, &crate::game::ragdoll::CorpseOf)>,
+) {
+    let Some(mut death_cam) = death_cam else { return };
+    let Some(whose) = death_cam.whose else { return };
+    // Corpses outlive a respawn, so an earlier one of ours may still lie there.
+    let ours = corpses.iter().filter(|(_, of)| of.0 == whose);
+    let Some((corpse, _)) = ours.min_by(|(a, _), (b, _)| a.age().total_cmp(&b.age())) else { return };
+    let target = corpse.pelvis() + Vec3::Y * DEATH_CAM_LIFT;
+    let t = 1.0 - (-DEATH_CAM_FOLLOW_RATE * time.delta_secs()).exp();
+    death_cam.pivot = death_cam.pivot.lerp(target, t);
 }
 
 /// Where the third-person camera sits, in world space.
@@ -745,6 +821,92 @@ mod tests {
 
     use super::*;
     use crate::tool::room::Room;
+
+    fn a_death(id: PlayerId) -> crate::common::damage::Died {
+        crate::common::damage::Died {
+            victim: Entity::PLACEHOLDER,
+            victim_name: None,
+            victim_id: Some(id),
+            killer: crate::common::damage::DamageSource::World,
+            assist: None,
+            at: Vec3::ZERO,
+        }
+    }
+
+    /// Breaks if the death cam waits to see `Dying`. `Died` comes after the
+    /// despawn here, as it may on a client.
+    #[test]
+    fn the_death_cam_starts_when_our_body_is_gone_and_died() {
+        let mut world = World::new();
+        world.init_resource::<Messages<Died>>();
+        let start = world.register_system(start_the_death_cam);
+        let body = world
+            .spawn((LocalPlayer, Transform::from_xyz(1.0, 1.0, 0.0), Stance::default(), PlayerId(5)))
+            .id();
+
+        world.run_system(start).unwrap();
+        assert!(!world.contains_resource::<DeathCam>(), "a living body started the death cam");
+
+        world.despawn(body);
+        world.run_system(start).unwrap();
+        assert!(!world.contains_resource::<DeathCam>(), "started before we were told of a death");
+
+        world.write_message(a_death(PlayerId(5)));
+        world.run_system(start).unwrap();
+        let death_cam = *world.resource::<DeathCam>();
+        assert_eq!(death_cam.whose, Some(PlayerId(5)));
+        assert!((death_cam.pivot.y - (1.0 + Stance::default().eye_offset())).abs() < 1e-5);
+    }
+
+    /// Breaks if a body lost without dying, or somebody else's death, starts it.
+    #[test]
+    fn losing_a_body_without_dying_is_not_a_death() {
+        let mut world = World::new();
+        world.init_resource::<Messages<Died>>();
+        let start = world.register_system(start_the_death_cam);
+        let body = world.spawn((LocalPlayer, Transform::default(), Stance::default(), PlayerId(5))).id();
+        world.run_system(start).unwrap();
+
+        world.despawn(body);
+        world.write_message(a_death(PlayerId(6)));
+        world.run_system(start).unwrap();
+        assert!(!world.contains_resource::<DeathCam>());
+    }
+
+    /// No body yet at the start of a round is not a death.
+    #[test]
+    fn having_had_no_body_is_not_a_death() {
+        let mut world = World::new();
+        world.init_resource::<Messages<Died>>();
+        world.run_system_once(start_the_death_cam).unwrap();
+        assert!(!world.contains_resource::<DeathCam>());
+    }
+
+    /// Eased toward our own corpse, not whichever corpse is nearest.
+    #[test]
+    fn the_death_cam_follows_our_own_corpse() {
+        use crate::common::skeleton::{rig::{humanoid, Proportions}, Pose};
+        use crate::game::ragdoll::{CorpseOf, Ragdoll};
+
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let corpse_at = |x: f32| {
+            Ragdoll::from_body(&skeleton, &Pose::rest(), &Transform::from_xyz(x, 0.0, 0.0), Vec3::ZERO)
+        };
+        let mut world = World::new();
+        world.init_resource::<Time>();
+        world.spawn((corpse_at(10.0), CorpseOf(PlayerId(1))));
+        world.spawn((corpse_at(-10.0), CorpseOf(PlayerId(2))));
+        world.insert_resource(DeathCam { pivot: Vec3::ZERO, whose: Some(PlayerId(1)) });
+
+        for _ in 0..120 {
+            world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+            world.run_system_once(follow_our_corpse).unwrap();
+        }
+
+        let pivot = world.resource::<DeathCam>().pivot;
+        assert!((pivot.x - 10.0).abs() < 0.1, "{pivot}");
+        assert!(pivot.y > DEATH_CAM_LIFT, "not above the pelvis: {pivot}");
+    }
 
     fn world(rooms: &[Room]) -> CollisionWorld {
         let mut world = CollisionWorld::default();

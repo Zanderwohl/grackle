@@ -771,6 +771,8 @@ mod tests {
             id: WeaponId::of("rifle"),
             name_key: "weapon.names.rifle".into(),
             model: None,
+            bucket: 1,
+            deploy: 0.0,
             primary: Mounted::EMPTY,
             secondary: Mounted::EMPTY,
             magazine: Magazine { clip: Some(10), reserve: 40, reload: 1.0, reload_one_at_a_time: false },

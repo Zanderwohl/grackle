@@ -25,7 +25,7 @@ use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
-use crate::common::weapon::WeaponId;
+use crate::common::weapon::{WeaponCatalog, WeaponId};
 use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
@@ -252,12 +252,13 @@ fn perform_viewmodel_clips(
     time: Res<Time>,
     clips: Res<Assets<Clip>>,
     shared: Option<Res<SharedWeaponClips>>,
+    catalog: Res<WeaponCatalog>,
     held: Query<&HeldModel, With<LocalPlayer>>,
     mut views: Query<(&mut Performance, &mut ClipStack), With<Viewmodel>>,
 ) {
     let Ok(held) = held.single() else { return };
     for (mut performance, mut stack) in &mut views {
-        perform(held, shared.as_deref(), &mut performance, &mut stack, &clips, time.delta_secs());
+        perform(held, &catalog, shared.as_deref(), &mut performance, &mut stack, &clips, time.delta_secs());
     }
 }
 

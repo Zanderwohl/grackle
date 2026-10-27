@@ -134,6 +134,11 @@ impl Thumbnails {
         self.props.get(name)
     }
 
+    /// Only grows, since a handle is kept across a retake.
+    pub fn len(&self) -> usize {
+        self.props.len()
+    }
+
     fn keep(&mut self, name: &str, image: Image, images: &mut Assets<Image>) {
         match self.props.get(name) {
             Some(handle) => {

@@ -13,9 +13,8 @@ use crate::game::pause_menu::PauseMenuPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::respawn::OurIdentity;
 use crate::game::player::{
-    aim_the_view_at_our_body, despawn_the_view, face_bodies, gather_aim, gather_input,
-    interpolate_bodies, place_camera,
-    spawn_the_view, step_player, toggle_view, write_client_inputs, InputLatch, Player, ViewMode,
+    aim_the_view_at_our_body, despawn_the_view, face_bodies, follow_our_corpse, gather_aim,
+    gather_input, interpolate_bodies, place_camera, spawn_the_view, start_the_death_cam, step_player, toggle_view, write_client_inputs, InputLatch, Player, ViewMode,
     ViewPreference,
 };
 use crate::tool::bakes::BakeSystems;
@@ -39,6 +38,8 @@ pub mod reloading;
 pub mod reset;
 pub mod respawn;
 pub mod weapon;
+pub mod weapon_select;
+pub mod weapon_select_hud;
 pub mod player;
 pub mod net_bodies;
 pub mod pause_menu;
@@ -94,6 +95,9 @@ impl Plugin for GamePlugin {
             // reset writes it: without that plugin the first F5 would fail.
             .init_resource::<AnimationClock>()
             .init_resource::<InputLatch>()
+            .init_resource::<crate::game::weapon_select::WeaponSelection>()
+            // Also `DamagePlugin`'s; here too because the death cam reads it.
+            .add_message::<crate::common::damage::Died>()
             .init_resource::<ViewMode>()
             .init_resource::<ViewPreference>()
             .init_resource::<crate::game::player::CameraPull>()
@@ -104,6 +108,7 @@ impl Plugin for GamePlugin {
                 // Ungated: on a client the body arrives from the server some
                 // time after the round starts.
                 spawn_the_view,
+                start_the_death_cam,
             ).run_if(in_state(AppMode::Play)))
             // After `BakeSystems::All`: a round entered before the bake is
             // played in a map nobody can see, which is what a client just
@@ -121,6 +126,8 @@ impl Plugin for GamePlugin {
             .add_systems(RunFixedMainLoop, (
                 // A released cursor must not walk the body.
                 gather_input.run_if(pause_menu::not_paused),
+                // Ungated: it drains the wheel, like `gather_aim`.
+                crate::game::weapon_select::choose_weapons,
                 // Ungated: it drains motion made while paused rather than
                 // applying all of it on the frame the menu closes.
                 gather_aim,
@@ -144,7 +151,7 @@ impl Plugin for GamePlugin {
             // origin until a round starts.
             .add_systems(RunFixedMainLoop, interpolate_bodies
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop))
-            .add_systems(RunFixedMainLoop, (face_bodies, place_camera)
+            .add_systems(RunFixedMainLoop, (face_bodies, follow_our_corpse, place_camera)
                 .chain()
                 .after(interpolate_bodies)
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
@@ -229,6 +236,8 @@ fn leave_play(
     // Kept, the next match's first body would inherit it.
     commands.remove_resource::<OurIdentity>();
     commands.remove_resource::<crate::game::respawn::HueStart>();
+    commands.remove_resource::<crate::game::player::DeathCam>();
+    commands.remove_resource::<crate::game::player::OurLastBody>();
 
     for mut camera in &mut editor_cameras {
         camera.is_active = true;

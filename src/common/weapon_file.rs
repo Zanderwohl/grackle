@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::assets::Assets;
 use crate::common::class::Class;
 use crate::common::weapon::{
-    Loadout, Magazine, Mounted, Slot, SlotChoices, Weapon, WeaponCatalog, WeaponId,
+    Loadout, Magazine, Mounted, Slot, SlotChoices, Weapon, WeaponCatalog, WeaponId, BUCKETS,
 };
 
 pub const WEAPONS_FILE: &str = "weapons.toml";
@@ -43,6 +43,8 @@ struct WeaponEntry {
     /// startup. A bad name draws nothing.
     #[serde(default)]
     model: Option<String>,
+    bucket: u8,
+    deploy: f32,
     primary: Mounted,
     secondary: Mounted,
     magazine: Magazine,
@@ -129,10 +131,30 @@ fn load_weapons(assets: &Assets, pack: &Path, catalog: &mut WeaponCatalog) {
             }
         }
 
+        if !(1..=BUCKETS).contains(&entry.bucket) {
+            error!(
+                "{}/{WEAPONS_FILE}: {name} is in bucket {}, which no key selects (1–{BUCKETS}); \
+                 ignoring it",
+                pack.display(),
+                entry.bucket
+            );
+            continue;
+        }
+        if !(entry.deploy >= 0.0) {
+            error!(
+                "{}/{WEAPONS_FILE}: {name} deploys in {} s; ignoring it",
+                pack.display(),
+                entry.deploy
+            );
+            continue;
+        }
+
         catalog.insert(Weapon {
             id,
             name_key: entry.name_key,
             model: entry.model,
+            bucket: entry.bucket,
+            deploy: entry.deploy,
             primary: entry.primary,
             secondary: entry.secondary,
             magazine: entry.magazine,
@@ -331,9 +353,8 @@ mod tests {
         assert_eq!(*ammo.at(Slot::Primary), Default::default(), "ammo for a weapon it does not carry");
     }
 
-    /// Fails if a shipped weapon is no slot's default. Nothing switches within
-    /// a slot yet, so such a weapon is unreachable. Delete once something
-    /// does.
+    /// Fails if a shipped weapon is no slot's default; only defaults are
+    /// carried, so it could never be held.
     #[test]
     fn every_shipped_weapon_is_on_a_digit() {
         let catalog = the_default_pack();

@@ -50,9 +50,9 @@ const BIG: f32 = 44.0;
 const SMALL: f32 = 22.0;
 
 /// Logical pixels, in each zone's own box.
-const ZONE_STROKE: f32 = 5.0;
+pub(crate) const ZONE_STROKE: f32 = 5.0;
 const ZONE_RIM: f32 = 5.0;
-const ZONE_DROP: Vec2 = Vec2::new(5.0, 6.0);
+pub(crate) const ZONE_DROP: Vec2 = Vec2::new(5.0, 6.0);
 
 /// Whether the safe zone is outlined. Survives rounds: it is a debug view,
 /// and somebody laying out the HUD wants it to stay on.
@@ -97,44 +97,12 @@ impl HudZone {
     /// with big squircle corners on one diagonal and tight ones on the other.
     /// The box is inset by the stroke and the drop so neither is cut off.
     fn outline(self) -> Path {
-        let size = self.size();
-        let lo = Vec2::splat(ZONE_STROKE);
-        let hi = size - Vec2::splat(ZONE_STROKE) - ZONE_DROP;
-        let lean = 0.12 * (hi.y - lo.y);
         let (big, small) = (Corner::squircle(34.0), Corner::squircle(10.0));
-        match self {
-            HudZone::Health => Path::rounded_polygon_each(
-                &[
-                    Vec2::new(lo.x + lean, lo.y),
-                    Vec2::new(hi.x, lo.y),
-                    Vec2::new(hi.x - lean, hi.y),
-                    Vec2::new(lo.x, hi.y),
-                ],
-                &[small, big, small, big],
-            ),
-            HudZone::Ammo => Path::rounded_polygon_each(
-                &[
-                    Vec2::new(lo.x, lo.y),
-                    Vec2::new(hi.x - lean, lo.y),
-                    Vec2::new(hi.x, hi.y),
-                    Vec2::new(lo.x + lean, hi.y),
-                ],
-                &[big, small, big, small],
-            ),
-        }
+        leaning_panel(self.size(), self == HudZone::Health, big, small)
     }
 
     fn style(swatch: &Swatch) -> ShapeStyle {
-        ShapeStyle {
-            fill: swatch.base,
-            highlight: swatch.highlight,
-            shadow: swatch.shadow,
-            rim: ZONE_RIM,
-            stroke: Ink::Black.on(swatch),
-            stroke_width: ZONE_STROKE,
-            drop: swatch.deep.with_alpha(0.75),
-            drop_offset: ZONE_DROP,
-        }
+        panel_style(swatch)
     }
 
     /// Drawn behind the readout rather than being it, so the text can stand
@@ -172,6 +140,47 @@ impl HudZone {
     }
 }
 
+/// Inset by the stroke and the drop so neither is cut off.
+pub(crate) fn leaning_panel(size: Vec2, leans_right: bool, big: Corner, small: Corner) -> Path {
+    let lo = Vec2::splat(ZONE_STROKE);
+    let hi = size - Vec2::splat(ZONE_STROKE) - ZONE_DROP;
+    let lean = 0.12 * (hi.y - lo.y);
+    if leans_right {
+        Path::rounded_polygon_each(
+            &[
+                Vec2::new(lo.x + lean, lo.y),
+                Vec2::new(hi.x, lo.y),
+                Vec2::new(hi.x - lean, hi.y),
+                Vec2::new(lo.x, hi.y),
+            ],
+            &[small, big, small, big],
+        )
+    } else {
+        Path::rounded_polygon_each(
+            &[
+                Vec2::new(lo.x, lo.y),
+                Vec2::new(hi.x - lean, lo.y),
+                Vec2::new(hi.x, hi.y),
+                Vec2::new(lo.x + lean, hi.y),
+            ],
+            &[big, small, big, small],
+        )
+    }
+}
+
+pub(crate) fn panel_style(swatch: &Swatch) -> ShapeStyle {
+    ShapeStyle {
+        fill: swatch.base,
+        highlight: swatch.highlight,
+        shadow: swatch.shadow,
+        rim: ZONE_RIM,
+        stroke: Ink::Black.on(swatch),
+        stroke_width: ZONE_STROKE,
+        drop: swatch.deep.with_alpha(0.75),
+        drop_offset: ZONE_DROP,
+    }
+}
+
 /// Which readout a `Text` is, so one system can write them all.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 enum HudText {
@@ -202,7 +211,8 @@ impl Plugin for HudPlugin {
                     .chain()
                     .run_if(in_state(AppMode::Play)),
             )
-            .add_systems(OnExit(AppMode::Play), despawn_the_hud);
+            .add_systems(OnExit(AppMode::Play), despawn_the_hud)
+            .add_plugins(crate::game::weapon_select_hud::WeaponSelectHudPlugin);
     }
 }
 
@@ -313,14 +323,17 @@ fn crosshair() -> impl Bundle {
     )
 }
 
-fn text(font: &Handle<Font>, kind: HudText, size: f32, alpha: f32) -> impl Bundle {
+pub(crate) fn hud_text(font: &Handle<Font>, words: String, size: f32, color: Color) -> impl Bundle {
     (
-        kind,
-        Text::new(""),
+        Text::new(words),
         TextFont { font: font.into(), font_size: bevy::text::FontSize::Px(size), ..default() },
-        TextColor(Color::srgba(1.0, 1.0, 1.0, alpha)),
+        TextColor(color),
         Pickable::IGNORE,
     )
+}
+
+fn text(font: &Handle<Font>, kind: HudText, size: f32, alpha: f32) -> impl Bundle {
+    (kind, hud_text(font, String::new(), size, Color::srgba(1.0, 1.0, 1.0, alpha)))
 }
 
 fn health_readout(font: &Handle<Font>) -> impl Bundle {

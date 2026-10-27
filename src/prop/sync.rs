@@ -206,6 +206,8 @@ mod tests {
             id: WeaponId::of(name),
             name_key: format!("weapon.names.{name}"),
             model: model.map(str::to_owned),
+            bucket: 1,
+            deploy: 0.0,
             primary: Mounted::EMPTY,
             secondary: Mounted::EMPTY,
             magazine: Magazine::BOTTOMLESS,
