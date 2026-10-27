@@ -70,6 +70,24 @@ pub struct Trigger {
     ready_in: [f32; 2],
     /// Seconds until the weapon just drawn may fire or reload.
     deploying: f32,
+    /// Seconds since either button was last pressed or held, or a weapon
+    /// drawn, for [`AutoReload`].
+    idle: f32,
+}
+
+/// Seconds without firing before [`AutoReload`] tops a short clip up.
+pub const AUTO_RELOAD_AFTER: f32 = 1.0;
+
+/// Whether this body reloads a short clip unasked once it has not fired for
+/// [`AUTO_RELOAD_AFTER`]. The player's choice, copied onto the body by the
+/// authority from their settings; an empty clip reloads either way.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AutoReload(pub bool);
+
+impl Default for AutoReload {
+    fn default() -> Self {
+        Self(true)
+    }
 }
 
 impl Trigger {
@@ -77,6 +95,7 @@ impl Trigger {
         for remaining in &mut self.ready_in {
             *remaining = (*remaining - dt).max(0.0);
         }
+        self.idle += dt;
     }
 
     fn ready(&self, button: Button) -> bool {
@@ -134,6 +153,11 @@ pub fn pull_trigger(
 
     for (shooter, equipped, mut ammo, mut trigger, input, condition) in &mut shooters {
         trigger.tick(dt);
+        // A press that fires nothing — empty, drawing, humiliated — still
+        // means the player wants to shoot rather than reload.
+        if input.attack || input.attack_held || input.alt_attack || input.alt_attack_held {
+            trigger.idle = 0.0;
+        }
         // Dropped, not queued: a click while drawing is not a shot after it.
         if !condition.may_fire() || !trigger.deployed() {
             continue;
@@ -237,16 +261,19 @@ fn begin_reload(state: &mut crate::common::weapon::AmmoState, magazine: &Magazin
 }
 
 /// Start reloads, run them down, and move the rounds across. The only thing
-/// that starts a reload. An empty clip reloads unasked; a short one does not,
-/// or the magazine size would mean nothing.
+/// that starts a reload. An empty clip reloads unasked; a short one only
+/// after [`AUTO_RELOAD_AFTER`] without firing, and only for a body whose
+/// [`AutoReload`] is on — never mid-fight, or the magazine size would mean
+/// nothing.
+#[allow(clippy::type_complexity)]
 pub fn reload_weapons(
     time: Res<Time<Fixed>>,
     catalog: Res<WeaponCatalog>,
-    mut carriers: Query<(&Equipped, &mut Ammo, &Trigger, &Inputs), With<Player>>,
+    mut carriers: Query<(&Equipped, &mut Ammo, &Trigger, &Inputs, Option<&AutoReload>), With<Player>>,
 ) {
     let dt = time.delta_secs();
 
-    for (equipped, mut ammo, trigger, input) in &mut carriers {
+    for (equipped, mut ammo, trigger, input, auto) in &mut carriers {
         if !trigger.deployed() {
             continue;
         }
@@ -256,7 +283,8 @@ pub fn reload_weapons(
 
         let mut state = *ammo.at(held);
 
-        if input.reload || state.clip == 0 {
+        let unasked = auto.is_some_and(|auto| auto.0) && trigger.idle >= AUTO_RELOAD_AFTER;
+        if input.reload || state.clip == 0 || unasked {
             begin_reload(&mut state, &weapon.magazine);
         }
 
@@ -323,6 +351,7 @@ pub fn draw(slot: Slot, equipped: &mut Equipped, ammo: &mut Ammo, trigger: &mut 
         ammo.at_mut(was).reloading = 0.0;
     }
     equipped.select(slot);
+    trigger.idle = 0.0;
     // A weapon nobody can name yet draws instantly rather than never.
     trigger.deploying = catalog.held_by(equipped).map_or(0.0, |weapon| weapon.deploy);
 }
@@ -465,6 +494,37 @@ mod tests {
         input(&mut world, shooter).attack = false;
         step(&mut world);
         assert!(shots(&mut world).is_empty(), "holding the button fired a second time");
+    }
+
+    /// Fires one of four, then waits; returns the tick, counted from the shot,
+    /// that a reload started on, if one did within two seconds.
+    fn idle_until_a_reload(auto: bool, keep_pressing: bool) -> Option<usize> {
+        let mut world = a_world(one_weapon(weapon(
+            semi(WeaponAction::Hitscan(LASER), 1),
+            Mounted::EMPTY,
+            Magazine { clip: Some(4), reserve: 8, reload: 1.0, reload_one_at_a_time: false },
+        )));
+        let shooter = a_shooter(&mut world);
+        world.entity_mut(shooter).insert(AutoReload(auto));
+        input(&mut world, shooter).attack = true;
+        step(&mut world);
+        input(&mut world, shooter).attack = false;
+        (1..=2 * crate::constants::TICK_HZ as usize).find(|_| {
+            // Held after the shot: a semi weapon fires nothing more, and the
+            // player is still not idle.
+            input(&mut world, shooter).attack_held = keep_pressing;
+            step(&mut world);
+            ammo(&world, shooter, Slot::Primary).reloading > 0.0
+        })
+    }
+
+    #[test]
+    fn a_short_clip_reloads_itself_after_a_second_without_firing() {
+        let one_second = crate::constants::TICK_HZ as usize;
+        let ticks = idle_until_a_reload(true, false).expect("never reloaded");
+        assert!((one_second..=one_second + 1).contains(&ticks), "reloaded on tick {ticks}");
+        assert_eq!(idle_until_a_reload(false, false), None, "reloaded with auto-reload off");
+        assert_eq!(idle_until_a_reload(true, true), None, "reloaded while the trigger was held");
     }
 
     /// Firing with a round in the clip cancels the reload under way, and the

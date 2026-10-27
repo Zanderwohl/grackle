@@ -19,6 +19,7 @@ use crate::common::fonts::DisplayFont;
 use crate::common::game_rules::GameRules;
 use crate::common::net::{has_authority, NetRole};
 use crate::common::player_color::PlayerColor;
+use crate::common::player_settings::{settings_of, ClientSettings, PlayerSettings};
 use crate::common::team::Team;
 use crate::game::body_mesh::body_look;
 use crate::game::damage::DamageSystems;
@@ -26,9 +27,11 @@ use crate::game::player::LocalPlayer;
 use crate::game::respawn::{HueStart, Identity, OurIdentity};
 use crate::get;
 
-#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Standing {
     pub id: PlayerId,
+    /// As the player set it, already cleaned; empty is unnamed.
+    pub name: String,
     pub team: Option<Team>,
     pub color: PlayerColor,
     /// Negative is possible: killing yourself costs one.
@@ -37,8 +40,16 @@ pub struct Standing {
 }
 
 impl Standing {
-    fn of(who: &Identity, start: &HueStart) -> Self {
-        Self { id: who.id, team: who.team, color: who.color(start), frags: 0, deaths: 0 }
+    fn of(who: &Identity, name: &str, start: &HueStart) -> Self {
+        Self { id: who.id, name: name.to_owned(), team: who.team, color: who.color(start), frags: 0, deaths: 0 }
+    }
+
+    /// What a row says: the name, or "Player {id}" for somebody unnamed.
+    pub fn display_name(&self) -> String {
+        match self.name.is_empty() {
+            true => get!("scoreboard.player", "id", self.id.0),
+            false => self.name.clone(),
+        }
     }
 
     /// The same rule a body is drawn by, so a row matches its body.
@@ -112,33 +123,41 @@ fn keep_standings(
     mut commands: Commands,
     role: Option<Res<NetRole>>,
     us: Option<Res<OurIdentity>>,
-    links: Query<&Identity>,
+    our_settings: Option<Res<PlayerSettings>>,
+    links: Query<(&Identity, Option<&ClientSettings>)>,
     start: Option<Res<HueStart>>,
     mut standings: Query<(Entity, &mut Standing)>,
 ) {
     // Made in the same command flush as the first identity.
     let Some(start) = start else { return };
-    let here: Vec<Identity> = links.iter().copied().chain(us.map(|us| us.0)).collect();
+    let unset = PlayerSettings::default();
+    let here: Vec<(Identity, &str)> = links
+        .iter()
+        .map(|(who, link)| (*who, settings_of(false, link, None, &unset).name.as_str()))
+        .chain(us.map(|us| (us.0, settings_of(true, None, our_settings.as_deref(), &unset).name.as_str())))
+        .collect();
 
     for (entity, mut standing) in &mut standings {
-        match here.iter().find(|who| who.id == standing.id) {
+        match here.iter().find(|(who, _)| who.id == standing.id) {
             None => commands.entity(entity).despawn(),
-            Some(who) => {
+            Some((who, name)) => {
                 let color = who.color(&start);
-                if standing.team != who.team || standing.color != color {
+                // Compared first: a written `Standing` is a packet.
+                if standing.team != who.team || standing.color != color || standing.name != *name {
                     standing.team = who.team;
                     standing.color = color;
+                    standing.name = (*name).to_owned();
                 }
             }
         }
     }
 
     let hosting = matches!(role.as_deref(), Some(NetRole::Listen { .. }));
-    for who in &here {
+    for (who, name) in &here {
         if standings.iter().any(|(_, standing)| standing.id == who.id) {
             continue;
         }
-        let mut standing = commands.spawn((Standing::of(who, &start), Name::new("Standing")));
+        let mut standing = commands.spawn((Standing::of(who, name, &start), Name::new("Standing")));
         if hosting {
             standing.insert(Replicate::to_clients(NetworkTarget::All));
         }
@@ -270,7 +289,7 @@ fn row(standing: &Standing, ours: bool, font: &Handle<Font>) -> impl Bundle {
             (
                 Node { min_width: Val::Px(120.0), ..default() },
                 Pickable::IGNORE,
-                children![text(get!("scoreboard.player", "id", standing.id.0))],
+                children![text(standing.display_name())],
             ),
             text(standing.frags.to_string()),
         ],
@@ -290,7 +309,7 @@ mod tests {
     use super::*;
 
     fn standing(id: u64, frags: i32, deaths: u32) -> Standing {
-        Standing { id: PlayerId(id), team: None, color: PlayerColor { hue: 0.0 }, frags, deaths }
+        Standing { id: PlayerId(id), name: String::new(), team: None, color: PlayerColor { hue: 0.0 }, frags, deaths }
     }
 
     fn died(victim: u64, killer: DamageSource) -> Died {
@@ -314,7 +333,7 @@ mod tests {
             world.write_message(death.clone());
         }
         world.run_system_once(record_frags).unwrap();
-        let mut all: Vec<Standing> = world.query::<&Standing>().iter(&world).copied().collect();
+        let mut all: Vec<Standing> = world.query::<&Standing>().iter(&world).cloned().collect();
         all.sort_by_key(|standing| standing.id);
         all
     }

@@ -124,6 +124,11 @@ frags = "Frags"
 deaths = "Deaths"
 none = "No rounds played"
 
+[editor.player]
+title = "Player"
+name = "Name"
+auto_reload = "Auto-reload"
+
 [editor.metadata]
 title = "Metadata"
 display_name = "Display name"
@@ -204,7 +209,7 @@ title = "Animation Grid"
 feet = "Front Center"
 facing = "Facing"
 teams = "Teams"
-striped = "Striped"
+striped = "Four teams, then colors"
 summary = "{ bodies } bodies, { width } m by { depth } m."
 
 [editor.features.mirror]

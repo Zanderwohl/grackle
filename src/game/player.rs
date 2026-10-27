@@ -21,7 +21,7 @@ use crate::common::class::{
 use crate::game::collision::{CollisionWorld, Touched};
 use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalog};
 use crate::game::condition::Condition;
-use crate::game::weapon::Trigger;
+use crate::game::weapon::{AutoReload, Trigger};
 use crate::tool::room::Room;
 
 /// Half-extents of the body box: the tallest class, which spawn points are
@@ -87,7 +87,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 // `Transform` and `Visibility` because a replicated body is built by
 // inserting components rather than through `spawn_player`, and without them
 // its children have nothing to inherit.
-#[require(Hitboxes, Damageable, Armor, Equipped, Ammo, Trigger, Inputs, Condition, Impulse, Transform, Visibility)]
+#[require(Hitboxes, Damageable, Armor, Equipped, Ammo, Trigger, AutoReload, Inputs, Condition, Impulse, Transform, Visibility)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,

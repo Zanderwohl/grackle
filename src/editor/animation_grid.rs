@@ -27,7 +27,8 @@ use crate::get;
 #[derive(Component, Debug)]
 pub struct AnimationGridMarker;
 
-/// What side the roster is on. Striped makes the grid a friendly-fire range; one team makes it a
+/// What side the roster is on. Striped puts one body on each team and the rest on none, each of
+/// those in a color of its own, which makes the grid a friendly-fire range; one team makes it a
 /// plain firing range.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RosterTeam {
@@ -52,10 +53,10 @@ impl RosterTeam {
     }
 
     /// By cell rather than rolled, so every viewer agrees on who may shoot whom.
-    pub fn team_for(self, cell: usize) -> Team {
+    pub fn team_for(self, cell: usize) -> Option<Team> {
         match self {
-            RosterTeam::Striped => Team::ALL[cell % Team::ALL.len()],
-            RosterTeam::One(team) => team,
+            RosterTeam::Striped => Team::ALL.get(cell).copied(),
+            RosterTeam::One(team) => Some(team),
         }
     }
 }

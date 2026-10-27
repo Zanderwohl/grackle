@@ -13,12 +13,14 @@ use std::collections::HashMap;
 use crate::common::damage::{Died, NextPlayerId, PlayerId};
 use crate::common::game_rules::{GameRules, ModeRules};
 use crate::common::player_color::lowest_free;
+use crate::common::player_settings::{settings_of, ClientSettings, PlayerSettings};
 use crate::common::net::NetRole;
 use crate::common::team::Side;
 use crate::common::weapon::WeaponCatalog;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{spawn_player, LocalPlayer, Player, Simulated, Spawn};
+use crate::game::weapon::AutoReload;
 use crate::game::respawn::{choose_spawn, next_team, placed_spawns, team_name, HueStart, Identity, OurIdentity};
 use crate::tool::room::Room;
 
@@ -37,9 +39,10 @@ impl Plugin for NetBodiesPlugin {
                         .chain()
                         .run_if(in_state(AppMode::Play)),
                     claim_our_own_body,
+                    apply_player_settings.run_if(in_state(AppMode::Play)),
                 ),
             )
-            .add_systems(OnEnter(AppMode::Play), forget_respawn_timers);
+            .add_systems(OnEnter(AppMode::Play), (forget_respawn_timers, forget_client_identities));
     }
 }
 
@@ -81,6 +84,16 @@ fn start_respawn_timers(
 
 fn forget_respawn_timers(mut timers: ResMut<RespawnTimers>) {
     timers.0.clear();
+}
+
+/// A new match is a new player for everybody, as `enter_play` makes it for the
+/// host by dropping `OurIdentity`: the next body a connection is given comes
+/// with a fresh id, team and color. Only identities are on link entities, so
+/// there is nothing else to tell apart.
+fn forget_client_identities(mut commands: Commands, links: Query<Entity, With<Identity>>) {
+    for link in &links {
+        commands.entity(link).remove::<Identity>();
+    }
 }
 
 /// Stand a body up for one client and start replicating it.
@@ -205,6 +218,29 @@ fn give_bodies_to_whoever_needs_one(
     }
 }
 
+/// Copy each player's settings onto their body, on the authority, which is
+/// where they are acted on. Compared first, so a still body is not a changed
+/// one.
+#[allow(clippy::type_complexity)]
+fn apply_player_settings(
+    role: Option<Res<NetRole>>,
+    ours: Option<Res<PlayerSettings>>,
+    links: Query<&ClientSettings>,
+    mut bodies: Query<(&mut AutoReload, Has<LocalPlayer>, Option<&ControlledBy>), With<Player>>,
+) {
+    if !role.as_deref().is_none_or(NetRole::is_authority) {
+        return;
+    }
+    let unset = PlayerSettings::default();
+    for (mut auto, local, owner) in &mut bodies {
+        let link = owner.and_then(|owner| links.get(owner.owner).ok());
+        let wanted = AutoReload(settings_of(local, link, ours.as_deref(), &unset).auto_reload);
+        if *auto != wanted {
+            *auto = wanted;
+        }
+    }
+}
+
 /// Recognize the body the server says is ours, by `Controlled` (the receiver
 /// half of `ControlledBy`). The server predicts a body only to its
 /// controller, so `LocalPlayer`, `InputMarker` and `Simulated` belong on the
@@ -249,6 +285,18 @@ mod tests {
     fn a_turn(world: &mut World) {
         world.run_system_once(give_bodies_to_whoever_needs_one).unwrap();
         world.flush();
+    }
+
+    /// The host's is dropped by `enter_play`; this is the same for a client.
+    #[test]
+    fn a_new_match_forgets_every_clients_identity() {
+        let mut world = World::new();
+        let who = Identity { id: PlayerId(4), team: None, color: 2 };
+        let link = world.spawn(who).id();
+
+        world.run_system_once(forget_client_identities).unwrap();
+        world.flush();
+        assert!(world.get::<Identity>(link).is_none(), "the client is the same player next match");
     }
 
     #[test]

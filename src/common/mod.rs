@@ -43,6 +43,7 @@ pub mod triangulate;
 pub mod mode;
 pub mod game_rules;
 pub mod player_color;
+pub mod player_settings;
 pub mod movement_rules;
 pub mod palette;
 pub mod render_layers;

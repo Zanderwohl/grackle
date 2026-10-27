@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use crate::common::damage::Damageable;
 use crate::common::hitbox::Hitboxes;
 use crate::common::class::ClassBuilds;
+use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
 use crate::game::player::PhysicsBody;
 use crate::common::skeleton::{
@@ -139,7 +140,10 @@ pub fn sync_animation_grids(
 
         let teams = teams.copied().unwrap_or_default();
         for cell in missing {
-            commands.spawn(carousel_body(grid, cell, &cells[cell], placed_at, teams, &builds));
+            let mut body = commands.spawn(carousel_body(grid, cell, &cells[cell], placed_at, &builds));
+            if let Some(team) = teams.team_for(cell) {
+                body.insert(team);
+            }
         }
     }
 }
@@ -149,15 +153,20 @@ pub fn sync_animation_grids(
 /// Compares before writing. `RosterTeam` reads as changed on every frame of a
 /// drag, and a written `Team` makes `build_body_meshes` rebuild the body.
 pub fn team_carousels(
+    mut commands: Commands,
     grids: Query<&RosterTeam, With<AnimationGridMarker>>,
-    mut bodies: Query<(&OfGrid, &mut Team), With<CarouselBody>>,
+    bodies: Query<(Entity, &OfGrid, Option<&Team>), With<CarouselBody>>,
 ) {
-    for (body, mut team) in &mut bodies {
+    for (entity, body, team) in &bodies {
         let Ok(teams) = grids.get(body.grid) else { continue };
         let wanted = teams.team_for(body.cell);
-        if *team != wanted {
-            *team = wanted;
+        if team.copied() == wanted {
+            continue;
         }
+        match wanted {
+            Some(team) => commands.entity(entity).insert(team),
+            None => commands.entity(entity).remove::<Team>(),
+        };
     }
 }
 
@@ -168,7 +177,6 @@ fn carousel_body(
     cell: usize,
     placed: &GridCell,
     at: &Transform,
-    teams: RosterTeam,
     builds: &ClassBuilds,
 ) -> impl Bundle {
     let world = at.transform_point(placed.offset);
@@ -181,8 +189,9 @@ fn carousel_body(
         CarouselBody(cell),
         OfGrid { grid, cell },
         placed.class,
-        // Per cell when striped; see `RosterTeam`.
-        teams.team_for(cell),
+        // Drawn whenever the body has no team. Rolled rather than handed out:
+        // these are not players, and take no hue a player could have had.
+        PlayerColor { hue: rand::random_range(0.0..360.0) },
         ForcedAnimation::default(),
         DisplaySpeed::default(),
         PhysicsBody::at(world),
@@ -303,14 +312,33 @@ mod tests {
             world.flush();
 
             let mut wrong: Vec<usize> = world
-                .query::<(&CarouselBody, &Team)>()
+                .query::<(&CarouselBody, Option<&Team>)>()
                 .iter(&world)
-                .filter(|(body, team)| **team != choice.team_for(body.0))
+                .filter(|(body, team)| team.copied() != choice.team_for(body.0))
                 .map(|(body, _)| body.0)
                 .collect();
             wrong.sort_unstable();
             assert!(wrong.is_empty(), "{choice:?} put cells {wrong:?} on the wrong side");
         }
+    }
+
+    #[test]
+    fn striped_is_one_body_per_team_then_colors_of_their_own() {
+        let teams: Vec<Option<Team>> = (0..6).map(|cell| RosterTeam::Striped.team_for(cell)).collect();
+        assert_eq!(teams[..4], Team::ALL.map(Some));
+        assert_eq!(teams[4..], [None, None]);
+
+        let mut world = World::new();
+        world.init_resource::<AnimationClock>();
+        world.init_resource::<ClassBuilds>();
+        world.spawn((AnimationGridMarker, Transform::IDENTITY, RosterTeam::Striped));
+        world.run_system_once(sync_animation_grids).unwrap();
+        world.flush();
+        let uncolored = world
+            .query_filtered::<(), (With<CarouselBody>, Without<PlayerColor>)>()
+            .iter(&world)
+            .count();
+        assert_eq!(uncolored, 0, "a body with no team would be drawn in the default gray");
     }
 
     #[test]

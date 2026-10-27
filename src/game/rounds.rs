@@ -67,7 +67,7 @@ fn record_the_round(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>, st
         return;
     }
     let length = started.map_or(0.0, |started| time.elapsed_secs() - started);
-    history.record(ranked(standings.iter()).into_iter().copied().collect(), length);
+    history.record(ranked(standings.iter()).into_iter().cloned().collect(), length);
 }
 
 #[cfg(test)]
@@ -77,7 +77,7 @@ mod tests {
     use crate::common::player_color::PlayerColor;
 
     fn standing(id: u64, frags: i32) -> Standing {
-        Standing { id: PlayerId(id), team: None, color: PlayerColor { hue: 0.0 }, frags, deaths: 0 }
+        Standing { id: PlayerId(id), name: String::new(), team: None, color: PlayerColor { hue: 0.0 }, frags, deaths: 0 }
     }
 
     fn app() -> App {
@@ -92,7 +92,7 @@ mod tests {
     fn play_a_round(app: &mut App, standings: &[Standing]) {
         app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
         app.update();
-        let spawned: Vec<Entity> = standings.iter().map(|standing| app.world_mut().spawn(*standing).id()).collect();
+        let spawned: Vec<Entity> = standings.iter().map(|standing| app.world_mut().spawn(standing.clone()).id()).collect();
         app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Editor);
         app.update();
         for entity in spawned {

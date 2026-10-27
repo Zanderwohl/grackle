@@ -1457,10 +1457,11 @@ animation grid, and a rule you cannot walk up to and check is a rule that
 quietly stops being true.
 
 **The animation grid does choose.** `RosterTeam` on the feature is a panel
-combo — *Striped*, or one of the four — and striped deals them round the roster
-in cell order, which turns the grid into a friendly-fire range as well as an
-animation one: shoot along a row and every fourth body refuses the hit. Pick a
-single team and it is a plain firing range again. `One(Team)` rather than four
+combo — *Striped* ("Four teams, then colors"), or one of the four. Striped
+puts the first four cells on the four teams and the rest on none, each of
+those in a `PlayerColor` rolled at random — these are not players, so they take
+no hue a player could have had. Pick a single team and it is a plain firing
+range. The grid is a testing convenience due to go. `One(Team)` rather than four
 more variants, so a fifth team is one more entry and nothing else. It goes to
 disk by name through the grid's serde, like every field of every feature —
 adding one to an existing feature is adding the field.
@@ -1547,7 +1548,8 @@ shape are not placeholders, and both live in
   `OurIdentity` — a resource — for the person at this machine, dropped by
   `enter_play` so the next match is a new player; and a component on the
   **link entity** for each connected client, which appears with the connection
-  and goes with it. Two homes rather than one because those are two genuinely
+  and goes with it, and is dropped by `forget_client_identities` on entering
+  Play so a client is a new player each match too. Two homes rather than one because those are two genuinely
   different lifetimes, and each is already exactly right — nothing has to keep
   a roster in step with who is actually here.
 
@@ -1791,10 +1793,13 @@ several writers on one number. A shot that cannot be paid for writes no message
 than dry-firing on a timer.
 
 `reload_weapons` is the only thing that *starts* a reload — asked for with `R`,
-or automatically once the clip is empty, because a weapon that needed a
+after a second without firing if the player's `AutoReload` is on (their
+`PlayerSettings`, see "Player settings" in
+[documentation/arena.md](documentation/arena.md)), or automatically once the
+clip is empty, because a weapon that needed a
 keypress to become useful again reads as broken before it reads as empty. A
-clip that is merely short does not top up, or the magazine size would mean
-nothing. Switching weapons cancels a reload rather than remembering it: a clip
+clip that is merely short does not top up while you are firing, or the
+magazine size would mean nothing. Switching weapons cancels a reload rather than remembering it: a clip
 that filled in a holster is a weapon reloading with nobody holding it. **A
 shot cancels one too**, in `pull_trigger` where the shot is paid for: firing
 with a round left is choosing to fire rather than to reload.

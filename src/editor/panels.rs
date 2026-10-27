@@ -22,6 +22,7 @@ use crate::editor::map_metadata::MapMetadata;
 use crate::editor::multicam::MulticamState;
 use crate::editor::net_menu::{network_menu, ConnectDialog};
 use crate::editor::save::{self, LoadedBlueprint};
+use crate::common::player_settings::{PlayerSettings, NAME_LIMIT};
 use crate::game::rounds::RoundHistory;
 use crate::get;
 use crate::tool::Tools;
@@ -97,7 +98,6 @@ const TOOLBAR_DEFAULT_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT * 2.0;
 const TOOLBAR_MIN_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT;
 
 enum TabKinds {
-    Empty(String),
     Tools,
     Bakes,
     Show,
@@ -106,6 +106,8 @@ enum TabKinds {
     Features,
     /// The last rounds' final standings.
     Rounds,
+    /// This machine's player: name and preferences.
+    Player,
 }
 
 /// The panels' writes, and one read, bundled because `ui` hit Bevy's
@@ -113,6 +115,7 @@ enum TabKinds {
 #[derive(SystemParam)]
 struct PanelMessages<'w> {
     rounds: Res<'w, RoundHistory>,
+    player: ResMut<'w, PlayerSettings>,
     room: MessageWriter<'w, CalculateRoomGeometry>,
     clear_room: MessageWriter<'w, ClearRoomGeometry>,
     log_ecs: MessageWriter<'w, LogECS>,
@@ -142,6 +145,11 @@ struct TabViewerAndResources<'a> {
     /// change detection bypassed.
     timeline_touched: bool,
     rounds: &'a RoundHistory,
+    /// Change detection bypassed, as the timeline's is: held for the whole
+    /// frame it would read as changed every frame, and every change is saved
+    /// and sent.
+    player: &'a mut PlayerSettings,
+    player_touched: bool,
 }
 
 impl<'a> TabViewer for TabViewerAndResources<'a> {
@@ -149,33 +157,30 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
 
     fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
         egui::Id::new(match tab {
-            TabKinds::Empty(name) => format!("empty:{}", name),
             TabKinds::Tools => "tools".to_owned(),
             TabKinds::Bakes => "bakes".to_owned(),
             TabKinds::Show => "show".to_owned(),
             TabKinds::Metadata => "metadata".to_owned(),
             TabKinds::Features => "features".to_owned(),
             TabKinds::Rounds => "rounds".to_owned(),
+            TabKinds::Player => "player".to_owned(),
         })
     }
 
     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText {
         match tab {
-            TabKinds::Empty(name) => { name.as_str().into() }
             TabKinds::Tools => { get!("tools.title").into() }
             TabKinds::Bakes => { get!("bakes.title").into() }
             TabKinds::Show => { get!("show.title").into() }
             TabKinds::Metadata => { get!("editor.metadata.title").into() }
             TabKinds::Features => { get!("editor.timeline.title").into() }
             TabKinds::Rounds => { get!("editor.rounds.title").into() }
+            TabKinds::Player => { get!("editor.player.title").into() }
         }
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
         match tab {
-            TabKinds::Empty(name) => {
-                ui.label(format!("Empty: {}", name));
-            }
             TabKinds::Tools => {
                 Tools::ui(ui, self.current_tool, self.next_tool);
             }
@@ -198,6 +203,9 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             }
             TabKinds::Rounds => {
                 rounds_panel_ui(ui, self.rounds);
+            }
+            TabKinds::Player => {
+                self.player_touched |= player_panel_ui(ui, self.player);
             }
         }
     }
@@ -257,7 +265,7 @@ impl EditorPanels {
         let default_top_tabs = vec![TabKinds::Tools,];
         let default_left_tabs = vec![TabKinds::Features, TabKinds::Bakes,];
         let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata];
-        let default_bottom_tabs = vec![TabKinds::Rounds, TabKinds::Empty("Epsilon".to_owned())];
+        let default_bottom_tabs = vec![TabKinds::Rounds, TabKinds::Player];
         
         Self {
             top_tabs: DockState::new(default_top_tabs),
@@ -343,6 +351,8 @@ impl EditorPanels {
             retarget_request: &mut retarget_request,
             timeline_touched: false,
             rounds: &messages.rounds,
+            player: messages.player.bypass_change_detection(),
+            player_touched: false,
         };
 
         panels.menu_bar_height = egui::Panel::top("menu_bar")
@@ -437,9 +447,13 @@ impl EditorPanels {
             .height();
 
         let timeline_touched = viewer.timeline_touched;
+        let player_touched = viewer.player_touched;
         drop(viewer);
         if timeline_touched {
             editor_features.set_changed();
+        }
+        if player_touched {
+            messages.player.set_changed();
         }
 
         // `set`, not `set_if_neq`: `mode_menu` never offers the mode already in force.
@@ -609,6 +623,19 @@ impl EditorPanels {
     }
 }
 
+/// Returns whether anything changed.
+fn player_panel_ui(ui: &mut egui::Ui, settings: &mut PlayerSettings) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(get!("editor.player.name"));
+        changed |= ui
+            .add(egui::TextEdit::singleline(&mut settings.name).char_limit(NAME_LIMIT))
+            .changed();
+    });
+    changed |= ui.checkbox(&mut settings.auto_reload, get!("editor.player.auto_reload")).changed();
+    changed
+}
+
 /// Newest first, the newest open.
 fn rounds_panel_ui(ui: &mut egui::Ui, history: &RoundHistory) {
     let mut any = false;
@@ -635,7 +662,7 @@ fn rounds_panel_ui(ui: &mut egui::Ui, history: &RoundHistory) {
                                 (color.green * 255.0).round() as u8,
                                 (color.blue * 255.0).round() as u8,
                             ));
-                            ui.label(get!("scoreboard.player", "id", standing.id.0));
+                            ui.label(standing.display_name());
                             ui.label(standing.frags.to_string());
                             ui.label(standing.deaths.to_string());
                             ui.end_row();

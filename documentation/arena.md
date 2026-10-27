@@ -50,11 +50,10 @@ Settings that are per-map rather than per-mode (a map that wants a lower frag
 limit) go on `MapMetadata` later as overrides; none are needed yet.
 
 **When a rule takes effect.** Rules are read live, but a player's team is fixed
-when their identity is made. The host's is made fresh each match; a client's
-lives on its link entity and lasts the connection, so a client who joined a CTF
-match keeps their side through a switch to Arena until they reconnect. Making
-every identity fresh per match would fix it and is a small change to
-`enter_play`, left until it matters.
+when their identity is made, and every identity is made fresh each match: the
+host's by `enter_play` dropping `OurIdentity`, a client's by
+`forget_client_identities` taking it off the link entity on entering Play. So
+a switch from CTF to Arena takes effect for everybody at the next round.
 
 The default template's mode is `arena`, so a new map plays free-for-all.
 
@@ -394,8 +393,8 @@ by fewer deaths and then by `PlayerId` so the order is the same on every
 machine. Each row: a swatch in the player's color, their name, their frags.
 Your own row is marked.
 
-Players have no names. A row says "Player {id}" through the lang layer until
-there is something better to say. Rows are rebuilt only when a standing
+A row says the player's name, from their settings (see "Player settings"
+below), or "Player {id}" through the lang layer for somebody unnamed. Rows are rebuilt only when a standing
 changes, comes or goes.
 
 Up in Play in modes with a frag limit. A Tab scoreboard with deaths and pings,
@@ -411,6 +410,30 @@ which are cleared only when the next round starts — so a client has them
 however the end reached it. A mode with no scoreboard leaves no round. It is
 not saved and not sent: a client that joined late has only the rounds it saw.
 
+## Player settings
+
+**What the person at a machine has chosen**, in the map editor's **Player**
+tab: a name (anything, no uniqueness, cut to 24 characters) and auto-reload
+(on by default). `PlayerSettings`
+([`player_settings.rs`](../src/common/player_settings.rs)) is a resource kept
+in `assets/user/player.toml` and saved on every change, natively only.
+
+**It is acted on by the authority.** A client sends its settings on
+connecting and on every change (`SettingsChannel`, client to server); the
+server keeps them as `ClientSettings` on the link entity, beside the
+`Identity`, cleaning the name again since a client is not trusted to.
+`settings_of` is the one answer to whose apply to whom: ours for the body
+this machine plays, the link's for a client's, the defaults for anybody who
+has not said.
+
+- **The name** goes onto the player's `Standing` in `keep_standings`, so the
+  scoreboard and the Rounds tab show it, and a rename mid-round shows at once.
+- **Auto-reload** is `AutoReload` on the body, copied by
+  `apply_player_settings`. With it on, a clip that is short reloads once
+  neither button has been pressed or held for `AUTO_RELOAD_AFTER` (one
+  second) — `Trigger::idle`, reset by any press, even one that fires nothing,
+  and by drawing a weapon. An empty clip reloads either way.
+
 ## Checklist
 
 Mode rules
@@ -418,7 +441,7 @@ Mode rules
 - [x] `GameRules` and `publish_game_rules`; default is today's behavior
 - [x] `starting_equipment` reads the mode's loadout
 - [x] The body's class is the first the mode allows
-- [ ] A client's identity made fresh each match, as the host's is
+- [x] A client's identity made fresh each match, as the host's is
 
 No teams
 - [x] `Identity.team: Option<Team>`, bodies with no `Team`
