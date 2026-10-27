@@ -53,6 +53,7 @@ point = "Point"
 point_light = "Point Light"
 spawn_point = "Spawn Point"
 prop = "Prop"
+weapon_pickup = "Weapon"
 animation_display = "Animation Display"
 animation_grid = "Animation Grid"
 move = "Move"
@@ -174,6 +175,15 @@ yaw = "Yaw"
 pitch = "Pitch"
 roll = "Roll"
 
+[editor.features.weapon_pickup]
+title = "Weapon Pickup"
+weapon = "Weapon"
+feet = "Feet"
+facing = "Facing"
+respawn = "Respawn"
+ammo = "Ammo if carried"
+style = "Style"
+
 [editor.features.animation_display]
 title = "Animation Display"
 feet = "Feet"
@@ -226,7 +236,7 @@ player = "Player { id }"
 
 [hud]
 reloading = "Reloading"
-armor = "{ points } armor"
+armor = "armor"
 
 [class.names]
 scout = "Scout"

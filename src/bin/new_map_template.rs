@@ -29,6 +29,7 @@ use grackle::common::palette::{Palette, RolePaint};
 use grackle::common::team::Team;
 use grackle::editor::mirror::{Mirror, Symmetry};
 use grackle::editor::spawn_point::SpawnPoint;
+use grackle::editor::weapon_pickup::WeaponPickup;
 
 /// Clear floor between the grid and the walls: enough to back away and see a
 /// whole row.
@@ -42,6 +43,10 @@ const LIGHT_HEIGHT_M: f32 = 4.5;
 
 /// How far each pack sits from both walls of its corner.
 const PACK_FROM_WALLS_M: f32 = 1.5;
+
+/// Weapon pickups and how far along the wall behind the spawn each lies, in meters.
+const WEAPONS_BEHIND_THE_SPAWN: [(&str, f32); 4] =
+    [("rocket_launcher", -6.0), ("flamethrower", -2.0), ("rpg", 2.0), ("pill_launcher", 6.0)];
 
 /// A team's spawn nook, butted against a side wall so the shared face opens it into the room.
 const NOOK_M: Vec3 = Vec3::new(2.0, 3.0, 2.0);
@@ -114,11 +119,21 @@ fn main() {
         ("health_pack", "back_bottom_left_corner", Vec3::new(-PACK_FROM_WALLS_M, 0.0, -PACK_FROM_WALLS_M)),
         // (-X, floor, +Z)
         ("ammo_pack", "front_bottom_left_corner", Vec3::new(PACK_FROM_WALLS_M, 0.0, -PACK_FROM_WALLS_M)),
+        // (+X, floor, -Z), behind the spawn
+        ("armor_pack", "back_bottom_right_corner", Vec3::new(-PACK_FROM_WALLS_M, 0.0, PACK_FROM_WALLS_M)),
     ];
     for (model, corner, offset) in packs {
         let mut at = PointRef::reference_with_offset(room, offset.x, offset.y, offset.z);
         at.point_key = corner.to_owned();
         timeline.apply_feature(Box::new(Prop::from_point_ref(at).with_model(model)));
+    }
+
+    // What the arena loadout does not start with, in a row along the wall behind the spawn,
+    // anchored to that wall's floor edge. Lying along the wall, so the row reads as a rack.
+    for (weapon, x) in WEAPONS_BEHIND_THE_SPAWN {
+        let mut at = PointRef::reference_with_offset(room, x, 0.0, PACK_FROM_WALLS_M);
+        at.point_key = "bottom_right_edge_center".to_owned();
+        timeline.apply_feature(Box::new(WeaponPickup::from_point_ref(at).with_weapon(weapon).with_yaw(FRAC_PI_2)));
     }
 
     // Red's nook on the +X wall, as the spawn above faces its left, and Blue's made from it by the

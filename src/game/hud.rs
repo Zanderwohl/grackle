@@ -47,6 +47,16 @@ const MARGIN_X: f32 = 24.0;
 const MARGIN_Y: f32 = 20.0;
 
 const BIG: f32 = 44.0;
+const MEDIUM: f32 = 32.0;
+
+/// Where the display font's baseline sits in a line box, in font sizes up
+/// from its bottom: cosmic-text centers the glyphs' ascent plus descent
+/// (1.036 + 0.333 for Alfa Slab One) in Bevy's default 1.2 line. A different font moves it.
+const BASELINE_ABOVE_LINE_BOTTOM: f32 = 0.25;
+const HEALTH_PADDING_BOTTOM: f32 = 8.0;
+/// From the armor number's baseline down to its label's, in pixels: a
+/// lowercase word's x-height and a few pixels clear.
+const LABEL_DROP: f32 = 16.0;
 const SMALL: f32 = 22.0;
 
 /// Logical pixels, in each zone's own box.
@@ -68,11 +78,19 @@ struct HudRoot;
 #[derive(Component)]
 struct SafeZone;
 
+/// The armor readout and its panel, hidden together while there is none.
+#[derive(Component)]
+struct ArmorReadout;
+
+/// Between the health panel and the armor one, in pixels.
+const ZONE_GAP: f32 = 6.0;
+
 /// A panel a readout sits on. The shape is fixed; its colors follow the
 /// local body's team.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 enum HudZone {
     Health,
+    Armor,
     Ammo,
 }
 
@@ -80,6 +98,7 @@ impl HudZone {
     fn size(self) -> Vec2 {
         match self {
             HudZone::Health => Vec2::new(200.0, 48.0),
+            HudZone::Armor => Vec2::new(120.0, 48.0),
             HudZone::Ammo => Vec2::new(280.0, 64.0),
         }
     }
@@ -88,7 +107,7 @@ impl HudZone {
     /// panel's bottom edge runs through the middle of the weapon name.
     fn raised(self) -> f32 {
         match self {
-            HudZone::Health => 0.0,
+            HudZone::Health | HudZone::Armor => 0.0,
             HudZone::Ammo => 2.0,
         }
     }
@@ -98,7 +117,7 @@ impl HudZone {
     /// The box is inset by the stroke and the drop so neither is cut off.
     fn outline(self) -> Path {
         let (big, small) = (Corner::squircle(34.0), Corner::squircle(10.0));
-        leaning_panel(self.size(), self == HudZone::Health, big, small)
+        leaning_panel(self.size(), self != HudZone::Ammo, big, small)
     }
 
     fn style(swatch: &Swatch) -> ShapeStyle {
@@ -174,7 +193,7 @@ pub(crate) fn panel_style(swatch: &Swatch) -> ShapeStyle {
         highlight: swatch.highlight,
         shadow: swatch.shadow,
         rim: ZONE_RIM,
-        stroke: Ink::Black.on(swatch),
+        stroke: Ink::Dark.on(swatch),
         stroke_width: ZONE_STROKE,
         drop: swatch.deep.with_alpha(0.75),
         drop_offset: ZONE_DROP,
@@ -185,7 +204,7 @@ pub(crate) fn panel_style(swatch: &Swatch) -> ShapeStyle {
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 enum HudText {
     Health,
-    /// Hidden while there is none.
+    /// Its readout and panel are hidden while there is none.
     Armor,
     WeaponName,
     Reloading,
@@ -281,7 +300,7 @@ fn safe_zone(font: &Handle<Font>) -> impl Bundle {
         // Drawn inside the box, so it is on screen when the box is the window.
         Outline::new(Val::Px(2.0), Val::Px(-2.0), Color::NONE),
         Pickable::IGNORE,
-        children![health_readout(font), weapon_readout(font)],
+        children![health_readout(font), armor_readout(font), weapon_readout(font)],
     )
 }
 
@@ -341,16 +360,59 @@ fn health_readout(font: &Handle<Font>) -> impl Bundle {
         Node {
             left: Val::Px(MARGIN_X),
             // Sits low enough that the panel cuts across the number.
-            padding: UiRect { right: Val::Px(ZONE_DROP.x), bottom: Val::Px(8.0), ..default() },
+            padding: UiRect { right: Val::Px(ZONE_DROP.x), bottom: Val::Px(HEALTH_PADDING_BOTTOM), ..default() },
             ..HudZone::Health.readout()
         },
         Pickable::IGNORE,
+        children![HudZone::Health.panel(), text(font, HudText::Health, BIG, 1.0)],
+    )
+}
+
+/// Right of the health panel, the points on the health number's baseline and
+/// what they are hanging under it, out of the flow so they move nothing.
+fn armor_readout(font: &Handle<Font>) -> impl Bundle {
+    // A line box puts its baseline this far above its bottom, so a smaller
+    // number sits that much higher to share the bigger one's baseline.
+    let lift = (BIG - MEDIUM) * BASELINE_ABOVE_LINE_BOTTOM;
+    let baseline = HEALTH_PADDING_BOTTOM + BIG * BASELINE_ABOVE_LINE_BOTTOM;
+    (
+        ArmorReadout,
+        Node {
+            left: Val::Px(MARGIN_X + HudZone::Health.size().x + ZONE_GAP),
+            padding: UiRect {
+                right: Val::Px(ZONE_DROP.x),
+                bottom: Val::Px(HEALTH_PADDING_BOTTOM + lift),
+                ..default()
+            },
+            display: Display::None,
+            ..HudZone::Armor.readout()
+        },
+        Pickable::IGNORE,
         children![
-            HudZone::Health.panel(),
-            text(font, HudText::Armor, SMALL, 0.9),
-            text(font, HudText::Health, BIG, 1.0),
+            HudZone::Armor.panel(),
+            text(font, HudText::Armor, MEDIUM, 1.0),
+            (
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    right: Val::Px(ZONE_DROP.x),
+                    bottom: Val::Px(baseline - LABEL_DROP - SMALL * BASELINE_ABOVE_LINE_BOTTOM),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                Pickable::IGNORE,
+                children![kind_label(font)],
+            ),
         ],
     )
+}
+
+/// Marks the "armor" under the points, so a change of language reaches it.
+#[derive(Component)]
+struct ArmorLabel;
+
+fn kind_label(font: &Handle<Font>) -> impl Bundle {
+    (ArmorLabel, hud_text(font, get!("hud.armor"), SMALL, Color::BLACK))
 }
 
 /// A reload notice when there is one, the loaded count large and the reserve
@@ -475,7 +537,7 @@ impl Readout {
     ) -> Self {
         let health = health.health().to_string();
         let armor = match armor.map(Armor::points) {
-            Some(points) if points > 0 => get!("hud.armor", "points", points),
+            Some(points) if points > 0 => points.to_string(),
             _ => String::new(),
         };
         let Some(weapon) = catalog.held_by(equipped) else {
@@ -517,11 +579,27 @@ fn fill_in_the_readouts(
     catalog: Res<WeaponCatalog>,
     body: Option<Single<(&Damageable, Option<&Armor>, &Equipped, &Ammo), With<LocalPlayer>>>,
     mut texts: Query<(&HudText, &mut Text, &mut Node)>,
+    mut armor_readout: Query<&mut Node, (With<ArmorReadout>, Without<HudText>)>,
+    mut armor_label: Query<&mut Text, (With<ArmorLabel>, Without<HudText>)>,
 ) {
     let readout = match body.as_deref() {
         Some((health, armor, equipped, ammo)) => Readout::of(&catalog, health, *armor, equipped, ammo),
         None => Readout::default(),
     };
+
+    // The panel goes with the number, so both are hidden from one node.
+    let display = if readout.armor.is_empty() { Display::None } else { Display::Flex };
+    for mut node in &mut armor_readout {
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    let label = get!("hud.armor");
+    for mut text in &mut armor_label {
+        if text.0 != label {
+            text.0 = label.clone();
+        }
+    }
 
     for (&kind, mut text, mut node) in &mut texts {
         if kind == HudText::Reloading {
@@ -543,12 +621,6 @@ fn fill_in_the_readouts(
         let wanted = readout.text(kind);
         if text.0 != wanted {
             text.0 = wanted.to_owned();
-        }
-        if kind == HudText::Armor {
-            let display = if wanted.is_empty() { Display::None } else { Display::Flex };
-            if node.display != display {
-                node.display = display;
-            }
         }
     }
 }
@@ -583,6 +655,25 @@ mod tests {
         armor.add(35);
         let some = Readout::of(&catalog, &health, Some(&armor), &equipped, &ammo);
         assert!(some.armor.contains("35"), "{}", some.armor);
+    }
+
+    #[test]
+    fn the_armor_panel_shows_only_while_there_is_armor() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let (catalog, equipped, ammo) = mercenary();
+        let mut world = World::new();
+        world.insert_resource(catalog);
+        let body = world.spawn((LocalPlayer, Damageable::default(), Armor::default(), equipped, ammo)).id();
+        let readout = world.spawn((ArmorReadout, Node::default())).id();
+        let shown = |world: &mut World| {
+            world.run_system_once(fill_in_the_readouts).unwrap();
+            world.get::<Node>(readout).unwrap().display != Display::None
+        };
+
+        assert!(!shown(&mut world), "shown with no armor");
+        world.get_mut::<Armor>(body).unwrap().add(50);
+        assert!(shown(&mut world), "hidden with armor");
     }
 
     /// Breaks if the lookup panics when `Equipped` arrives before the

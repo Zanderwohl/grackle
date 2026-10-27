@@ -11,14 +11,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
 use crate::common::assets::Assets as PackAssets;
-use crate::common::class::Stance;
+use crate::common::class::{Class, Stance};
 use crate::common::damage::{Armor, Damageable};
 use crate::common::hitbox::{Box3, Hitboxes};
 use crate::common::skeleton::clip::Clip;
-use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalog};
+use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalog, WeaponId};
 use crate::editor::prop::{PropMarker, PropModel};
+use crate::editor::weapon_pickup::WeaponPickupSpec;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{PhysicsBody, Player};
+use crate::game::weapon::{draw, Trigger};
 use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind, PickupSpec, PickupStyle, RoundedBox};
 use crate::prop::baked::{BakedProp, PropCache, SurfaceMaterials};
 
@@ -49,6 +51,19 @@ pub struct Pickup {
 #[derive(Component)]
 struct Restock(f32);
 
+/// A pickup that gives a weapon, stood up by [`sync_weapon_pickups`] from a
+/// [`crate::editor::weapon_pickup::WeaponPickup`]. Its [`WorldProp`] draws the
+/// weapon's own model; its trigger is a fixed sphere, since a held prop has no
+/// colliders and a pickup volume is a game rule rather than a modeler's.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GivesWeapon {
+    pub weapon: WeaponId,
+    /// Fraction of the weapon's reserve, for somebody who already has it.
+    pub ammo: f32,
+    pub respawn: f32,
+    pub style: PickupStyle,
+}
+
 /// Which feature an instance stands for. On the authority only.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct OfPropFeature(pub Entity);
@@ -77,8 +92,22 @@ struct DrawnProp {
 #[derive(Component)]
 struct WorldPropPart;
 
+/// How far a weapon's parts are lifted so its lowest point is where it
+/// stands: a held prop's origin is its grip, not its base. Measured when it is
+/// dressed.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+struct RestsOn(f32);
+
 /// The trigger a pickup with no colliders is taken through, in meters.
 const DEFAULT_PICKUP_RADIUS: f32 = 0.4;
+
+/// The trigger a weapon is taken through, in meters, centered on where it
+/// hovers.
+const WEAPON_PICKUP_RADIUS: f32 = 0.6;
+
+/// How far above where it stands a weapon's lowest point hovers, in meters,
+/// whatever its style: a weapon on the floor is lost against it.
+pub const WEAPON_HOVER: f32 = 1.0;
 
 /// How far a [`PickupStyle::Tf2`] pickup is drawn above where it stands, in
 /// meters, and how fast it turns.
@@ -97,7 +126,7 @@ impl Plugin for WorldPropPlugin {
                 Update,
                 // Not mode-gated: props are map content, standing in the
                 // editor as in a round. Authority-gated: see the module docs.
-                (sync_world_props, kit_world_props)
+                (sync_world_props, sync_weapon_pickups, kit_world_props)
                     .chain()
                     .run_if(crate::common::net::has_authority),
             )
@@ -136,7 +165,7 @@ impl Plugin for WorldPropPlugin {
 pub fn sync_world_props(
     mut commands: Commands,
     features: Query<(Entity, &PropModel, &Transform, Option<&StandsFor>), With<PropMarker>>,
-    mut instances: Query<(Entity, &mut WorldProp, &OfPropFeature)>,
+    mut instances: Query<(Entity, &mut WorldProp, &OfPropFeature), Without<GivesWeapon>>,
 ) {
     for (feature, model, placed, stands) in &features {
         // Built only when spawning or changing, not to compare every frame.
@@ -181,9 +210,62 @@ pub fn sync_world_props(
     }
 }
 
+/// One instance per weapon pickup, as [`sync_world_props`] does for props.
+/// Its model is whatever the weapon names now, so a weapon re-modeled between
+/// rounds is drawn anew; a weapon nobody defines yet stands nothing up.
+#[allow(clippy::type_complexity)]
+pub fn sync_weapon_pickups(
+    mut commands: Commands,
+    catalog: Res<WeaponCatalog>,
+    features: Query<(Entity, &WeaponPickupSpec, &Transform, Option<&StandsFor>)>,
+    mut instances: Query<(Entity, &mut WorldProp, &mut GivesWeapon, &OfPropFeature)>,
+) {
+    for (feature, spec, placed, stands) in &features {
+        let wanted = catalog.get(spec.weapon).map(|weapon| {
+            (
+                WorldProp {
+                    model: weapon.model.clone().unwrap_or_default(),
+                    at: placed.translation,
+                    rotation: placed.rotation,
+                },
+                GivesWeapon { weapon: spec.weapon, ammo: spec.ammo, respawn: spec.respawn, style: spec.style },
+            )
+        });
+        let existing = stands.and_then(|stands| instances.get_mut(stands.0).ok());
+
+        match (wanted, stands, existing) {
+            (None, Some(stands), _) => {
+                commands.entity(stands.0).try_despawn();
+                commands.entity(feature).remove::<StandsFor>();
+            }
+            (None, None, _) => {}
+            (Some(wanted), None, _) => {
+                let instance = commands.spawn((wanted, Pickup::default(), OfPropFeature(feature))).id();
+                commands.entity(feature).insert(StandsFor(instance));
+            }
+            // Gone without the feature going: put back on the round's edge.
+            (Some(_), Some(_), None) => {}
+            (Some((prop, gives)), Some(_), Some((_, mut was_prop, mut was_gives, _))) => {
+                if *was_prop != prop {
+                    *was_prop = prop;
+                }
+                if *was_gives != gives {
+                    *was_gives = gives;
+                }
+            }
+        }
+    }
+
+    for (instance, _, _, of) in &instances {
+        if features.get(of.0).is_err() {
+            commands.entity(instance).despawn();
+        }
+    }
+}
+
 /// Give an instance what its archetype says it is. Re-run when the model is
 /// re-baked, so a crate saved as a pickup between rounds becomes one.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn kit_world_props(
     mut commands: Commands,
     packs: Res<PackAssets>,
@@ -192,7 +274,7 @@ fn kit_world_props(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut clips: ResMut<Assets<Clip>>,
-    instances: Query<(Entity, &WorldProp, Option<&Kitted>, Has<Damageable>, Has<Pickup>)>,
+    instances: Query<(Entity, &WorldProp, Option<&Kitted>, Has<Damageable>, Has<Pickup>), Without<GivesWeapon>>,
 ) {
     let generation = cache.generation();
     for (entity, prop, kitted, damageable, pickup) in &instances {
@@ -237,7 +319,7 @@ fn place_world_props(mut instances: Query<(&WorldProp, &mut Transform), Changed<
 /// The model's parts as children. Compared every frame rather than keyed on
 /// arrival: the instance, the model and a re-bake each turn up on their own
 /// schedule.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn dress_world_props(
     mut commands: Commands,
     packs: Res<PackAssets>,
@@ -246,10 +328,10 @@ fn dress_world_props(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut clips: ResMut<Assets<Clip>>,
-    instances: Query<(Entity, &WorldProp, Option<&DrawnProp>, Option<&Pickup>)>,
+    instances: Query<(Entity, &WorldProp, Option<&DrawnProp>, Option<&Pickup>, Has<GivesWeapon>)>,
     mut parts: Query<&mut Visibility, With<WorldPropPart>>,
 ) {
-    for (entity, prop, drawn, pickup) in &instances {
+    for (entity, prop, drawn, pickup, weapon) in &instances {
         let visibility = match pickup.is_some_and(|pickup| pickup.taken) {
             true => Visibility::Hidden,
             false => Visibility::Inherited,
@@ -281,6 +363,18 @@ fn dress_world_props(
             cache.ensure(&prop.model, &packs, &mut meshes, &mut materials, &mut surfaces, &mut clips)
         {
             let parts = baked.parts.clone();
+            if weapon {
+                let lowest = parts
+                    .iter()
+                    .filter_map(|(mesh, _)| match meshes.get(mesh)?.attribute(Mesh::ATTRIBUTE_POSITION)? {
+                        bevy::mesh::VertexAttributeValues::Float32x3(positions) => {
+                            positions.iter().map(|p| p[1]).reduce(f32::min)
+                        }
+                        _ => None,
+                    })
+                    .fold(f32::INFINITY, f32::min);
+                commands.entity(entity).insert(RestsOn(if lowest.is_finite() { -lowest } else { 0.0 }));
+            }
             commands.entity(entity).with_children(|instance| {
                 for (mesh, material) in parts {
                     spawned.push(
@@ -308,7 +402,7 @@ fn float_pickups(
     time: Res<Time>,
     mode: Res<State<AppMode>>,
     cache: Res<PropCache>,
-    instances: Query<(&WorldProp, &DrawnProp)>,
+    instances: Query<(&WorldProp, &DrawnProp, Option<&GivesWeapon>, Option<&RestsOn>)>,
     mut parts: Query<&mut Transform, With<WorldPropPart>>,
 ) {
     // Wrapped, or an `f32` of seconds steps visibly after a day. The wrap
@@ -318,14 +412,22 @@ fn float_pickups(
     } else {
         Quat::from_rotation_y((time.elapsed_secs_wrapped() * SPIN_DEGREES_PER_SECOND).to_radians())
     };
-    for (prop, drawn) in &instances {
-        let style = cache
-            .get(&prop.model)
-            .filter(|baked| baked.archetype == Archetype::Pickup)
-            .map(|baked| baked.pickup.style);
+    for (prop, drawn, gives, rests) in &instances {
+        let lift = match (gives, rests) {
+            (Some(_), Some(rests)) => rests.0 + WEAPON_HOVER,
+            (Some(_), None) => WEAPON_HOVER,
+            (None, _) => 0.0,
+        };
+        let style = gives.map(|gives| gives.style).or_else(|| {
+            cache
+                .get(&prop.model)
+                .filter(|baked| baked.archetype == Archetype::Pickup)
+                .map(|baked| baked.pickup.style)
+        });
         let wanted = match style {
-            Some(PickupStyle::Tf2) => Transform::from_xyz(0.0, HOVER, 0.0).with_rotation(spin),
-            _ => Transform::IDENTITY,
+            Some(PickupStyle::Tf2) if gives.is_some() => Transform::from_xyz(0.0, lift, 0.0).with_rotation(spin),
+            Some(PickupStyle::Tf2) => Transform::from_xyz(0.0, lift + HOVER, 0.0).with_rotation(spin),
+            _ => Transform::from_xyz(0.0, lift, 0.0),
         };
         for part in &drawn.parts {
             // Compared first, so a still pickup is not a changed one.
@@ -423,7 +525,7 @@ fn take_pickups(
     time: Res<Time>,
     cache: Res<PropCache>,
     catalog: Res<WeaponCatalog>,
-    mut pickups: Query<(Entity, &WorldProp, &mut Pickup, Option<&mut Restock>)>,
+    mut pickups: Query<(Entity, &WorldProp, &mut Pickup, Option<&mut Restock>, Option<&GivesWeapon>)>,
     mut bodies: Query<
         (
             &PhysicsBody,
@@ -431,12 +533,14 @@ fn take_pickups(
             Option<&mut Damageable>,
             Option<&mut Armor>,
             Option<&mut Ammo>,
-            Option<&Equipped>,
+            Option<&mut Equipped>,
+            Option<&mut Trigger>,
+            Option<&Class>,
         ),
         With<Player>,
     >,
 ) {
-    for (entity, prop, mut pickup, restock) in &mut pickups {
+    for (entity, prop, mut pickup, restock, gives) in &mut pickups {
         if pickup.taken {
             match restock {
                 Some(mut restock) => {
@@ -452,19 +556,36 @@ fn take_pickups(
             continue;
         }
 
-        let Some(baked) = cache.get(&prop.model) else { continue };
-        let triggers = triggers(baked, &prop.transform());
-        for (body, stance, health, armor, ammo, equipped) in &mut bodies {
+        let (triggers, respawn) = match gives {
+            Some(gives) => (vec![weapon_trigger(&prop.transform())], gives.respawn),
+            None => {
+                let Some(baked) = cache.get(&prop.model) else { continue };
+                (triggers(baked, &prop.transform()), baked.pickup.respawn)
+            }
+        };
+        for (body, stance, health, armor, ammo, equipped, trigger, class) in &mut bodies {
             let half = stance.half_extents();
             if !triggers.iter().any(|trigger| trigger.overlaps(body.current, half)) {
                 continue;
             }
-            let ammo = ammo.zip(equipped).map(|(ammo, equipped)| (ammo, equipped));
-            if !give(&baked.pickup, health, armor, ammo, &catalog) {
+            let gained = match gives {
+                Some(gives) => {
+                    let (Some(mut ammo), Some(mut equipped), Some(mut trigger)) = (ammo, equipped, trigger) else {
+                        continue;
+                    };
+                    give_weapon(gives, &mut equipped, &mut ammo, &mut trigger, class.copied(), &catalog)
+                }
+                None => {
+                    let Some(baked) = cache.get(&prop.model) else { continue };
+                    let ammo = ammo.zip(equipped).map(|(ammo, equipped)| (ammo, equipped.into_inner() as &Equipped));
+                    give(&baked.pickup, health, armor, ammo, &catalog)
+                }
+            };
+            if !gained {
                 continue;
             }
             pickup.taken = true;
-            commands.entity(entity).insert(Restock(baked.pickup.respawn.max(0.0)));
+            commands.entity(entity).insert(Restock(respawn.max(0.0)));
             break;
         }
     }
@@ -518,6 +639,55 @@ fn give(
         // Specced, with no behavior yet: there is no flag mode.
         PickupKind::Flag => false,
     }
+}
+
+fn weapon_trigger(at: &Transform) -> RoundedBox {
+    Collider {
+        origin: [0.0, WEAPON_HOVER, 0.0],
+        shape: ColliderShape::Sphere { radius: WEAPON_PICKUP_RADIUS },
+    }
+    .rounded()
+    .placed(at)
+}
+
+/// A weapon not carried goes into a free slot — the one its class's loadout
+/// would put it in if that is free, else the first — with full ammo, and is
+/// drawn; which digit draws it later is its bucket's business. One already
+/// carried tops up its reserve and leaves the hands alone. Nothing gained, from a full reserve or no free slot, leaves the
+/// pickup where it is. Returns whether the taker got anything.
+fn give_weapon(
+    gives: &GivesWeapon,
+    equipped: &mut Mut<Equipped>,
+    ammo: &mut Mut<Ammo>,
+    trigger: &mut Trigger,
+    class: Option<Class>,
+    catalog: &WeaponCatalog,
+) -> bool {
+    let Some(weapon) = catalog.get(gives.weapon) else { return false };
+
+    if let Some(slot) = Slot::ALL.into_iter().find(|slot| equipped.get(*slot) == Some(gives.weapon)) {
+        let max = weapon.magazine.reserve;
+        // Read before writing, so a full body is not marked changed.
+        if ammo.at(slot).reserve >= max || gives.ammo <= 0.0 {
+            return false;
+        }
+        let state = ammo.at_mut(slot);
+        state.reserve = (state.reserve + share(max, gives.ammo)).min(max);
+        return true;
+    }
+
+    let free = |slot: &Slot| equipped.get(*slot).is_none();
+    let preferred = class.and_then(|class| catalog.loadout(class)).and_then(|loadout| {
+        Slot::ALL.into_iter().filter(free).find(|slot| {
+            loadout.at(*slot).is_some_and(|choices| choices.permitted.contains(&gives.weapon))
+        })
+    });
+    let Some(slot) = preferred.or_else(|| Slot::ALL.into_iter().find(free)) else { return false };
+
+    equipped.slots[slot.index()] = Some(gives.weapon);
+    *ammo.at_mut(slot) = Ammo::full(&weapon.magazine);
+    draw(slot, equipped, ammo, trigger, catalog);
+    true
 }
 
 /// `fraction` of `max`, rounded up and at least one. Rounded up only past
@@ -768,6 +938,7 @@ mod tests {
     fn rifle() -> (WeaponCatalog, Equipped) {
         let mut catalog = WeaponCatalog::default();
         catalog.insert(Weapon {
+            key: "rifle".into(),
             id: WeaponId::of("rifle"),
             name_key: "weapon.names.rifle".into(),
             model: None,
@@ -780,6 +951,174 @@ mod tests {
         let mut equipped = Equipped::default();
         equipped.slots[Slot::Primary.index()] = Some(WeaponId::of("rifle"));
         (catalog, equipped)
+    }
+
+    fn with_launcher(catalog: &mut WeaponCatalog) -> WeaponId {
+        let id = WeaponId::of("launcher");
+        catalog.insert(Weapon {
+            key: "launcher".into(),
+            id,
+            name_key: "weapon.names.launcher".into(),
+            model: Some("rocket_launcher".into()),
+            bucket: 4,
+            deploy: 0.0,
+            primary: Mounted::EMPTY,
+            secondary: Mounted::EMPTY,
+            magazine: Magazine { clip: Some(4), reserve: 20, reload: 1.0, reload_one_at_a_time: true },
+        });
+        id
+    }
+
+    fn gives(weapon: WeaponId) -> GivesWeapon {
+        GivesWeapon { weapon, ammo: 0.5, respawn: 15.0, style: PickupStyle::Tf2 }
+    }
+
+    /// Runs [`give_weapon`] on a body carrying `equipped`, returning what it
+    /// gained and how it came out.
+    fn take_weapon(
+        gives: GivesWeapon,
+        equipped: Equipped,
+        ammo: Ammo,
+        catalog: &WeaponCatalog,
+    ) -> (bool, Equipped, Ammo, Trigger) {
+        let mut world = World::new();
+        let body = world.spawn((equipped, ammo)).id();
+        let mut trigger = Trigger::default();
+        let mut query = world.query::<(&mut Equipped, &mut Ammo)>();
+        let (mut e, mut a) = query.get_mut(&mut world, body).unwrap();
+        let gained = give_weapon(&gives, &mut e, &mut a, &mut trigger, None, catalog);
+        (gained, *world.get::<Equipped>(body).unwrap(), *world.get::<Ammo>(body).unwrap(), trigger)
+    }
+
+    #[test]
+    fn a_weapon_not_carried_goes_into_a_free_slot_with_full_ammo() {
+        let (mut catalog, equipped) = rifle();
+        let launcher = with_launcher(&mut catalog);
+
+        let (gained, equipped, ammo, _) = take_weapon(gives(launcher), equipped, Ammo::default(), &catalog);
+
+        assert!(gained);
+        let slot = Slot::ALL.into_iter().find(|slot| equipped.get(*slot) == Some(launcher)).expect("not carried");
+        assert_ne!(slot, Slot::Primary, "it took the rifle's place");
+        assert_eq!((ammo.at(slot).clip, ammo.at(slot).reserve), (4, 20));
+        assert_eq!(equipped.get(Slot::Primary), Some(WeaponId::of("rifle")));
+    }
+
+    #[test]
+    fn a_weapon_already_carried_tops_up_its_reserve_and_then_is_walked_past() {
+        let (catalog, equipped) = rifle();
+        let mut ammo = Ammo::default();
+        ammo.at_mut(Slot::Primary).reserve = 10;
+
+        let (gained, equipped, ammo, _) = take_weapon(gives(WeaponId::of("rifle")), equipped, ammo, &catalog);
+        assert!(gained);
+        assert_eq!(ammo.at(Slot::Primary).reserve, 30);
+
+        let (gained, _, ammo, _) = take_weapon(gives(WeaponId::of("rifle")), equipped, ammo, &catalog);
+        assert!(gained);
+        assert_eq!(ammo.at(Slot::Primary).reserve, 40, "topped up past the reserve");
+        let (gained, _, _, _) = take_weapon(gives(WeaponId::of("rifle")), equipped, ammo, &catalog);
+        assert!(!gained, "a full reserve took it");
+    }
+
+    #[test]
+    fn nobody_with_every_slot_full_can_take_a_new_weapon() {
+        let (mut catalog, _) = rifle();
+        let launcher = with_launcher(&mut catalog);
+        let mut equipped = Equipped::default();
+        for slot in Slot::ALL {
+            equipped.slots[slot.index()] = Some(WeaponId::of("rifle"));
+        }
+
+        let (gained, after, _, _) = take_weapon(gives(launcher), equipped, Ammo::default(), &catalog);
+        assert!(!gained);
+        assert_eq!(after, equipped);
+    }
+
+    #[test]
+    fn a_new_weapon_is_drawn_and_one_already_carried_is_not() {
+        let (mut catalog, equipped) = rifle();
+        let launcher = with_launcher(&mut catalog);
+        catalog.weapons.iter_mut().find(|weapon| weapon.id == launcher).unwrap().deploy = 0.5;
+        let mut ammo = Ammo::default();
+        ammo.at_mut(Slot::Primary).reloading = 1.0;
+
+        let (_, drawn, ammo, trigger) = take_weapon(gives(launcher), equipped, ammo, &catalog);
+        assert_eq!(drawn.held(), Some(launcher));
+        assert!(!trigger.deployed(), "it was drawn without a deploy");
+        assert_eq!(ammo.at(Slot::Primary).reloading, 0.0, "the rifle went on reloading in a holster");
+
+        let mut low = ammo;
+        low.at_mut(Slot::Primary).reserve = 0;
+        let (gained, after, _, trigger) = take_weapon(gives(WeaponId::of("rifle")), drawn, low, &catalog);
+        assert!(gained);
+        assert_eq!(after.held(), Some(launcher), "topping up the rifle drew it");
+        assert!(trigger.deployed());
+    }
+
+    #[test]
+    fn a_weapon_hovers_with_its_lowest_point_at_the_hover_height_in_either_style() {
+        for style in PickupStyle::ALL {
+            let mut world = World::new();
+            world.insert_resource(Time::<()>::default());
+            world.insert_resource(State::new(AppMode::Editor));
+            world.init_resource::<PropCache>();
+            let part = world.spawn((WorldPropPart, Transform::IDENTITY)).id();
+            world.spawn((
+                WorldProp { model: "launcher".into(), at: Vec3::ZERO, rotation: Quat::IDENTITY },
+                DrawnProp { model: "launcher".into(), generation: 0, parts: vec![part] },
+                GivesWeapon { style, ..gives(WeaponId::of("launcher")) },
+                // The grip is 0.2 m above the weapon's lowest point.
+                RestsOn(0.2),
+            ));
+
+            world.run_system_once(float_pickups).unwrap();
+            assert_eq!(world.get::<Transform>(part).unwrap().translation.y, 0.2 + WEAPON_HOVER, "{style:?}");
+        }
+    }
+
+    #[test]
+    fn a_weapon_pickup_stands_up_drawn_as_its_weapon_and_goes_with_its_feature() {
+        let mut world = World::new();
+        let (mut catalog, _) = rifle();
+        let launcher = with_launcher(&mut catalog);
+        world.insert_resource(catalog);
+        let spec = crate::editor::weapon_pickup::WeaponPickupSpec {
+            weapon: launcher,
+            ammo: 0.5,
+            respawn: 15.0,
+            style: PickupStyle::Tf2,
+        };
+        let feature = world.spawn((spec, Transform::from_xyz(1.0, 0.0, 2.0))).id();
+
+        world.run_system_once(sync_weapon_pickups).unwrap();
+        world.flush();
+        let (prop, gives) = world.query::<(&WorldProp, &GivesWeapon)>().single(&world).unwrap();
+        assert_eq!(prop.model, "rocket_launcher");
+        assert_eq!(prop.at, Vec3::new(1.0, 0.0, 2.0));
+        assert_eq!(gives.weapon, launcher);
+
+        world.despawn(feature);
+        world.run_system_once(sync_weapon_pickups).unwrap();
+        world.flush();
+        assert_eq!(world.query::<&WorldProp>().iter(&world).count(), 0);
+    }
+
+    #[test]
+    fn a_pickup_of_a_weapon_nobody_defines_stands_nothing_up() {
+        let mut world = World::new();
+        world.insert_resource(WeaponCatalog::default());
+        let spec = crate::editor::weapon_pickup::WeaponPickupSpec {
+            weapon: WeaponId::of("nothing"),
+            ammo: 0.5,
+            respawn: 15.0,
+            style: PickupStyle::Tf2,
+        };
+        world.spawn((spec, Transform::IDENTITY));
+
+        world.run_system_once(sync_weapon_pickups).unwrap();
+        world.flush();
+        assert_eq!(world.query::<&WorldProp>().iter(&world).count(), 0);
     }
 
     fn give_to(spec: PickupSpec, health: &mut Damageable, ammo: &mut Ammo, equipped: &Equipped, catalog: &WeaponCatalog) -> bool {

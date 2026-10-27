@@ -18,6 +18,8 @@ use crate::common::team::Team;
 const WARM_HUE: f32 = 95.0;
 /// Where shadows lean: a cool blue-violet.
 const COOL_HUE: f32 = 275.0;
+/// An outline's lightness in [`Ink::Dark`], whatever the base's.
+const DARK_INK_LIGHTNESS: f32 = 0.24;
 
 /// One color and the tones around it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -84,6 +86,10 @@ pub enum Ink {
     White,
     /// Not pure black: a deep warm brown-black, which is what print uses.
     Black,
+    /// The base's own hue taken nearly to black, so an outline belongs to its
+    /// panel. At a fixed lightness, unlike [`Swatch::deep`], so a light cream
+    /// gets as firm an edge as a dark blue.
+    Dark,
     Highlight,
 }
 
@@ -92,6 +98,10 @@ impl Ink {
         match self {
             Ink::White => Color::oklch(0.98, 0.01, WARM_HUE),
             Ink::Black => Color::oklch(0.17, 0.015, 60.0),
+            Ink::Dark => {
+                let base = Oklcha::from(swatch.base);
+                in_gamut(Oklcha::lch(DARK_INK_LIGHTNESS, base.chroma * 0.8, lean(base.hue, COOL_HUE, 0.15)))
+            }
             Ink::Highlight => swatch.highlight,
         }
     }
@@ -127,6 +137,17 @@ mod tests {
 
     fn lightness(c: Color) -> f32 {
         Oklcha::from(c).lightness
+    }
+
+    #[test]
+    fn a_dark_outline_is_darker_than_any_panel_and_keeps_its_hue() {
+        for swatch in Team::ALL.map(Swatch::team).into_iter().chain([Swatch::neutral()]) {
+            let ink = Ink::Dark.on(&swatch);
+            assert!(lightness(ink) < lightness(swatch.shadow), "{swatch:?}");
+            let (ink, base) = (Oklcha::from(ink), Oklcha::from(swatch.base));
+            let turned = (ink.hue - base.hue + 540.0).rem_euclid(360.0) - 180.0;
+            assert!(turned.abs() < 40.0, "{swatch:?} turned {turned} degrees");
+        }
     }
 
     #[test]

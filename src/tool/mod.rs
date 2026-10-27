@@ -32,6 +32,7 @@ pub mod animation_grid;
 pub mod point_placement;
 pub mod mirror;
 pub mod prop;
+pub mod weapon_pickup;
 pub mod rotate_drag;
 pub mod retarget;
 pub mod room;
@@ -59,6 +60,7 @@ impl Plugin for ToolPlugin {
             .add_plugins(PointDragPlugin)
             .add_plugins(RotateDragPlugin)
             .add_plugins(PropPlugin)
+            .add_plugins(weapon_pickup::WeaponPickupPlugin)
             .add_plugins(MirrorPlugin)
             .add_plugins(AnimationDisplayPlugin)
             .add_plugins(AnimationGridPlugin)
@@ -89,6 +91,7 @@ pub enum Tools {
     PointLight,
     SpawnPoint,
     Prop,
+    WeaponPickup,
     AnimationDisplay,
     AnimationGrid,
     Room,
@@ -105,6 +108,7 @@ impl Tools {
             Self::PointLight => get!("tools.point_light"),
             Self::SpawnPoint => get!("tools.spawn_point"),
             Self::Prop => get!("tools.prop"),
+            Self::WeaponPickup => get!("tools.weapon_pickup"),
             Self::AnimationDisplay => get!("tools.animation_display"),
             Self::AnimationGrid => get!("tools.animation_grid"),
             Self::Room => get!("tools.room"),

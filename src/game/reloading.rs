@@ -101,6 +101,7 @@ mod tests {
         let mut catalog = WeaponCatalog::default();
         catalog.insert(Weapon {
             id,
+            key: "test".into(),
             name_key: "weapon.names.test".into(),
             model: None,
             bucket: 1,

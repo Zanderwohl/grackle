@@ -151,6 +151,7 @@ fn load_weapons(assets: &Assets, pack: &Path, catalog: &mut WeaponCatalog) {
 
         catalog.insert(Weapon {
             id,
+            key: name.clone(),
             name_key: entry.name_key,
             model: entry.model,
             bucket: entry.bucket,

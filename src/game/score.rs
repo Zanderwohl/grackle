@@ -237,7 +237,7 @@ fn fill_in_the_scoreboard(
         }
     }
     commands.entity(board).with_children(|board| {
-        for standing in ranked(&standings) {
+        for standing in ranked(standings.iter()) {
             board.spawn(row(standing, Some(standing.id) == ours, &font.0));
         }
     });

@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::weapon::{
-    Ammo, Cadence, Cost, Equipped, Magazine, Mounted, WeaponAction, WeaponCatalog,
+    Ammo, Cadence, Cost, Equipped, Magazine, Mounted, Slot, WeaponAction, WeaponCatalog,
 };
 use crate::game::condition::Condition;
 use crate::game::damage::{DamagePlugin, DamageSystems};
@@ -306,19 +306,27 @@ pub fn select_weapons(
             continue;
         }
 
-        // A reload does not continue in a holster.
-        let was = equipped.held;
-        if ammo.at(was).reloading > 0.0 {
-            ammo.at_mut(was).reloading = 0.0;
-        }
-
         // Guarded above rather than written blindly: `Equipped` is
         // replicated, so a write is a packet. Idempotence also lets a replayed
         // tick read the same input and reach the same loadout.
-        equipped.select(slot);
-        // A weapon nobody can name yet draws instantly rather than never.
-        trigger.deploying = catalog.held_by(&equipped).map_or(0.0, |weapon| weapon.deploy);
+        draw(slot, &mut equipped, &mut ammo, &mut trigger, &catalog);
     }
+}
+
+/// Take up what is in `slot` and wait out its deploy, as a switch does. An
+/// empty slot is ignored.
+pub fn draw(slot: Slot, equipped: &mut Equipped, ammo: &mut Ammo, trigger: &mut Trigger, catalog: &WeaponCatalog) {
+    if equipped.get(slot).is_none() {
+        return;
+    }
+    // A reload does not continue in a holster.
+    let was = equipped.held;
+    if ammo.at(was).reloading > 0.0 {
+        ammo.at_mut(was).reloading = 0.0;
+    }
+    equipped.select(slot);
+    // A weapon nobody can name yet draws instantly rather than never.
+    trigger.deploying = catalog.held_by(equipped).map_or(0.0, |weapon| weapon.deploy);
 }
 
 /// Log, at most once a second, that a button's action is not implemented.
@@ -345,7 +353,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
-    use crate::common::weapon::{HitscanSpec, Magazine, Slot, Weapon, WeaponId, SLOTS};
+    use crate::common::weapon::{HitscanSpec, Magazine, Weapon, WeaponId, SLOTS};
     use crate::common::weapon_file::default_catalog;
 
     /// Bevy's default 64 Hz.
@@ -386,6 +394,7 @@ mod tests {
 
     fn weapon(primary: Mounted, secondary: Mounted, magazine: Magazine) -> Weapon {
         Weapon {
+            key: String::new(),
             id: WeaponId::of("test"),
             name_key: "weapon.names.test".into(),
             model: None,
@@ -866,6 +875,7 @@ mod tests {
         };
         let mut catalog = one_weapon(weapon(free, Mounted::EMPTY, Magazine::BOTTOMLESS));
         let drawn = Weapon {
+            key: String::new(),
             id: WeaponId::of("drawn"),
             deploy: DEPLOY,
             ..weapon(free, Mounted::EMPTY, Magazine::BOTTOMLESS)

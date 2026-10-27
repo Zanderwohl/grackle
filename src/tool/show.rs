@@ -84,7 +84,7 @@ impl ShowPlugin {
                 "editor_room" | "footprint_room" => visibility.rooms,
                 "grackle_point_light" => visibility.point_lights,
                 "spawn_point" => visibility.spawn_points,
-                "prop" => visibility.props,
+                "prop" | "weapon_pickup" => visibility.props,
                 "animation_display" => visibility.animation_displays,
                 "animation_grid" => visibility.animation_grids,
                 "mirror" => visibility.mirrors,

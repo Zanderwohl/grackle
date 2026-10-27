@@ -144,64 +144,73 @@ and reflect the yaw, so a symmetrical arena gets its pickups on both halves.
 
 **The panel picks from the catalog**, a combo over `WeaponCatalog` sorted
 by display name. Not a text field: the catalog is already loaded in the
-editor, and a typed name is the thing that silently draws nothing.
+editor, and a typed name is the thing that silently draws nothing. A
+feature's panel has no world to read the catalog from, so
+`offer_the_catalog` ([`src/tool/weapon_pickup.rs`](../src/tool/weapon_pickup.rs))
+puts the names into egui's temporary data each frame and the panel reads them
+back — rather than widening `FeatureTrait::editor_ui` for one feature, or
+`EditorPanels::ui`, which is at Bevy's parameter limit. That needed the name
+on the weapon: `Weapon.key` is what `weapons.toml` calls it, `id` its hash.
+
+The **Weapon** tool places one; it is a point-placement tool like Prop's.
 
 ### In the world
 
-The authority stands one replicated **`WorldWeapon`** up per feature, the same
-carousel rule `sync_world_props` follows — `StandsFor`/`OfPropFeature` for the
-bookkeeping, and the instance follows its feature and goes with it. It carries
-the `WeaponId`, its transform, and the existing `Pickup` and `Restock`, which
-already mean "taken" and "coming back".
+The authority stands one up per feature with **`sync_weapon_pickups`**
+([`src/game/world_prop.rs`](../src/game/world_prop.rs)), the same rule
+`sync_world_props` follows — `StandsFor`/`OfPropFeature` for the bookkeeping,
+the instance following its feature and going with it. The instance is an
+ordinary **`WorldProp`** naming the weapon's model, plus a replicated
+**`GivesWeapon`** and the existing `Pickup`/`Restock`. Reusing `WorldProp`
+is what gets it placed, drawn, hidden while taken and stood back up at a
+round's edge with no new code; the cost is three filters —
+`sync_world_props` and `kit_world_props` leave `GivesWeapon` instances alone,
+or the first would despawn them as orphans and the second would strip their
+`Pickup` because a held prop is not a pickup archetype.
 
 **Drawn from the weapon's model**, baked through `PropCache` by
-`Weapon.model` — `prop::baked` stays the only baker. An id the catalog cannot
-resolve yet draws nothing and is redressed when it can: key on absence, never
-on arrival, as everything else that reads an id does. `float_pickups` gains a
-`WorldWeapon` arm, or is generalised over both.
+`Weapon.model` — `prop::baked` stays the only baker. A weapon the catalog
+cannot name stands nothing up until it can. **A weapon hovers with its lowest
+point `WEAPON_HOVER` (1 m) above where it stands**, in either style — on the
+floor it is lost against the floor. A held prop's origin is its grip, not its
+base, so the lift is `RestsOn` — how far the lowest vertex is below the
+origin, measured once when it is dressed — plus the hover. `float_pickups`
+reads the style off `GivesWeapon`, and the style only decides whether it
+turns. The editor's box is drawn at the same height, on a line down to the
+point it stands on.
 
-**The trigger is a fixed sphere**, a constant in `world_prop.rs`. A held prop
-has no colliders, and a weapon's pickup volume is a game rule, not something a
-modeler should have to author on every gun.
+**The trigger is a fixed sphere** (`WEAPON_PICKUP_RADIUS`, centered at the
+hover height). A held prop has no colliders, and a weapon's pickup volume is a game
+rule, not something a modeler should have to author on every gun.
 
 ### Taking one
 
-`take_pickups` generalises `give` over what a pickup gives:
+`take_pickups` asks `give_weapon` for a `GivesWeapon` and `give` otherwise.
 
-```rust
-enum Gift<'a> { Supply(&'a PickupSpec), Weapon { id: WeaponId, ammo: f32 } }
-```
-
-- **A weapon you do not have** is granted, with a full clip and the reserve
-  `Ammo::full` gives. Whether it is switched to is the selection work's call.
-- **A weapon you already have** tops up that weapon's reserve by `ammo`.
-- **Full on that weapon too** — walked past, untaken, like a health pack at
-  full health. A pickup that gave nothing is not spent.
+- **A weapon you do not have** goes into a free slot of `Equipped` with full
+  ammo: the slot your class's loadout would put it in if that is free, else
+  the first free one. **Which digit draws it is its bucket's business** — the
+  selector lists everything carried by bucket — so the slot is only storage.
+  **It is drawn at once**, through the same `draw` a switch goes through, so
+  it waits out its deploy and a reload in progress is put down.
+- **A weapon you already have** tops up that weapon's reserve by `ammo`, and
+  leaves your hands alone.
+- **Full on that weapon too, or no free slot** — walked past, untaken, like a
+  health pack at full health. A pickup that gave nothing is not spent.
 
 **Losing them on death needs no code**, which is the point of checking it: a
 body is a new entity each life, and its `Equipped` and `Ammo` are built by
-`starting_equipment` on spawn. What does need code is that `starting_equipment`
-reads `GameRules::loadout` when the mode has one, rather than the class's
-six-weapon sampler — otherwise you spawn already holding everything the map is
-offering.
+`starting_equipment` on spawn from `GameRules::loadout`.
 
 Dropping the held weapon on death as a temporary pickup is Quake's, and later.
 
-### What this needs from the slots work
+### Slots
 
-Three things, stated as interface so the two threads can land in either order:
-
-- **A weapon states its slot**, on `Weapon` in `weapons.toml`. Granting a
-  weapon puts it there; the loadout file stops being where slots come from.
-- **`Equipped` holds several weapons per slot**, so granting never has to
-  decide what to throw away.
-- **A grant that reports whether it was new** — something like
-  `fn grant(&mut self, id, slot) -> bool` — paired with an `Ammo` entry per
-  weapon rather than per slot, since ammo per slot stops meaning anything once
-  a slot holds two guns.
-
-Until then, a pickup can land in the 6-slot `Equipped` by the loadout's
-`permitted` lists, which is enough to test the pickup on its own.
+`Equipped` is still six slots of one weapon each, so somebody carrying six
+cannot pick up a seventh. With arena's two-weapon start and six weapons in the
+default pack that is unreachable today. When it matters, the fix is more
+slots or several weapons per slot with `Ammo` per weapon; nothing about the
+pickup changes but `give_weapon`'s choice of slot.
 
 ## Armor
 
@@ -233,7 +242,10 @@ its arm in `give` is a few lines; the default pack ships `armor_pack.gpp` next
 to the health and ammo packs. Over-max armor that decays (Quake's red armor) is
 later.
 
-The HUD shows it over the health number while there is any.
+The HUD shows it right of the health panel, on a smaller panel of its own
+(`HudZone::Armor`) leaning the same way, its number on the health number's
+baseline and the word "armor" hanging under it in black; the panel and the number are one
+node, hidden together while there is none.
 
 ## Knockback
 
@@ -359,12 +371,13 @@ No teams
 - [ ] HUD zones in the player's color when there is no team (neutral today)
 
 Weapon pickups
-- [ ] `WeaponPickup` feature: serde, save test, show/pick, mirror
-- [ ] Panel combo over the catalog
-- [ ] Authority stands `WorldWeapon`s up; replicated; drawn from the weapon's model
-- [ ] `take_pickups` gives weapons: grant, or top up, or walk past
-- [ ] An arena map in the default pack with pickups in it
-- [ ] Lands in the new slots once the slots work is in
+- [x] `WeaponPickup` feature: serde, save test, show/pick, mirror
+- [x] Panel combo over the catalog
+- [x] Authority stands them up as `WorldProp` + `GivesWeapon`; replicated; drawn from the weapon's model
+- [x] `take_pickups` gives weapons: grant, or top up, or walk past
+- [x] Pickups on the template map (an arena map of its own is still to make)
+- [x] Selected by bucket
+- [ ] More than six weapons carried
 
 Armor
 - [x] `Armor` component, replicated
@@ -372,7 +385,7 @@ Armor
 - [ ] Max per class, when health is
 - [x] Armor pickup gives it; example armor prop
 - [x] HUD readout
-- [ ] Armor packs on the template map
+- [x] Armor packs on the template map
 
 Knockback
 - [ ] Acceleration and friction in `step_player`, tuned to feel as now

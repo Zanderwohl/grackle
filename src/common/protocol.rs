@@ -82,6 +82,7 @@ impl Plugin for ProtocolPlugin {
         // take. A breakable's health is its `Damageable`, above.
         app.component::<crate::game::world_prop::WorldProp>().replicate();
         app.component::<crate::game::world_prop::Pickup>().replicate();
+        app.component::<crate::game::world_prop::GivesWeapon>().replicate();
 
         // Once. Animation phase is derived from it, so every client puts a body
         // at the same point in its cycle.

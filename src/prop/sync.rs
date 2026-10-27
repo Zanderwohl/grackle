@@ -203,6 +203,7 @@ mod tests {
 
     fn weapon(name: &str, model: Option<&str>) -> Weapon {
         Weapon {
+            key: String::new(),
             id: WeaponId::of(name),
             name_key: format!("weapon.names.{name}"),
             model: model.map(str::to_owned),

@@ -177,6 +177,10 @@ impl Magazine {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Weapon {
     pub id: WeaponId,
+    /// What `weapons.toml` calls it, which is what a map names it by; `id` is
+    /// its hash.
+    #[serde(default)]
+    pub key: String,
     /// A lang key, not display text.
     pub name_key: String,
     /// A prop name under a pack's `props/`, without the extension. A name

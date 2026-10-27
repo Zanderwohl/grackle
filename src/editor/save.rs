@@ -169,6 +169,7 @@ mod tests {
     use crate::editor::mirror::{Mirror, Symmetry};
     use crate::editor::prop::Prop;
     use crate::editor::spawn_point::SpawnPoint;
+    use crate::editor::weapon_pickup::WeaponPickup;
     use crate::tool::room::Room;
 
     /// JSON only because `serde_json::Value` is a comparable tree. Compared as values so a field
@@ -203,6 +204,7 @@ mod tests {
         timeline.apply_feature(Box::new(light));
         timeline.apply_feature(Box::new(SpawnPoint::new(3.0, 0.0, -4.0).with_yaw(1.25)));
         timeline.apply_feature(Box::new(Prop::new(2.0, 3.0, -1.0).with_rotation(Vec3::new(0.25, -1.5, 0.75))));
+        timeline.apply_feature(Box::new(WeaponPickup::new(1.0, 0.0, 5.0).with_weapon("rpg").with_yaw(0.5)));
         timeline.apply_feature(Box::new(
             AnimationDisplay::new(4.0, 0.0, -2.0).with_state(AnimationState::PushingWall).with_yaw(1.25),
         ));

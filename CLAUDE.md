@@ -896,6 +896,15 @@ entering or leaving Play forgets. `WorldPropPlugin` is added in `main.rs`
 beside `GamePlugin` rather than inside it, because it bakes models and the
 game's tests run with no asset plugins.
 
+**A weapon pickup is a map feature naming a weapon, not a model**
+([`src/editor/weapon_pickup.rs`](src/editor/weapon_pickup.rs)): the weapon
+names its own model, so the two cannot disagree. `sync_weapon_pickups` stands
+it up as a `WorldProp` of that model plus a `GivesWeapon`, hovering 1 m up by
+its lowest point, and taking one puts the weapon in a free slot, where its
+bucket decides the digit, and draws it — unless it was already carried, which
+only tops up its ammo. See "Weapon
+pickups" in [documentation/arena.md](documentation/arena.md).
+
 A placed prop's origin is where it stands on the floor. A pickup with no
 collider is taken through a small sphere, and is walked past by somebody it
 would give nothing to. A pickup's **style** is drawing only: `Tf2`
@@ -2349,8 +2358,8 @@ machine, and things happen in it.
 The core abstraction is `FeatureTrait` in
 [`src/editor/editable.rs`](src/editor/editable.rs) — a `#[typetag::serde]`
 trait object. Implementors today: `GlobalPoint`, `GracklePointLight`,
-`EditorRoom`, `FootprintRoom`, `SpawnPoint`, `Prop`, `AnimationDisplay`,
-`AnimationGrid` and `Mirror`.
+`EditorRoom`, `FootprintRoom`, `SpawnPoint`, `Prop`, `WeaponPickup`,
+`AnimationDisplay`, `AnimationGrid` and `Mirror`.
 
 A feature does not store bare coordinates. It stores `PointRef`s, which are
 per-axis absolute-or-relative references to *another feature's named point*.

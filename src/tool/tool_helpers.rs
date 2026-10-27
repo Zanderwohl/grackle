@@ -320,7 +320,7 @@ pub fn find_nearest_feature_hit(
             "editor_room" | "footprint_room" => visibility.rooms,
             "grackle_point_light" => visibility.point_lights,
             "spawn_point" => visibility.spawn_points,
-            "prop" => visibility.props,
+            "prop" | "weapon_pickup" => visibility.props,
             "animation_display" => visibility.animation_displays,
             "animation_grid" => visibility.animation_grids,
             "mirror" => visibility.mirrors,
@@ -340,7 +340,7 @@ pub fn find_nearest_feature_hit(
                     }
                 }
             }
-            "global_point" | "grackle_point_light" | "spawn_point" | "prop" | "animation_display" | "animation_grid" | "mirror" => {
+            "global_point" | "grackle_point_light" | "spawn_point" | "prop" | "weapon_pickup" | "animation_display" | "animation_grid" | "mirror" => {
                 // Both: a grid's point is between bodies, inside none.
                 for pick_box in feature.object().pick_boxes() {
                     if let Some(t) = pick_box.ray_distance(ray) {
