@@ -134,8 +134,7 @@ impl Thumbnails {
         self.props.get(name)
     }
 
-    /// How many props have a picture. Only grows, since a handle is kept
-    /// across a retake, so a change means a new picture to show.
+    /// Only grows, since a handle is kept across a retake.
     pub fn len(&self) -> usize {
         self.props.len()
     }

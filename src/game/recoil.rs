@@ -95,9 +95,8 @@ fn guess_our_shots(
     mut cooldown: Local<[f32; 2]>,
     // The replicated state last guessed from, and what our guesses left of it.
     mut guessed: Local<Option<(Slot, AmmoState, AmmoState)>>,
-    // What we last saw held, by which body, and how long it has left to draw.
-    // Started when the switch is seen rather than made, so it ends a little
-    // after the server's does.
+    // Timed from when the switch is seen, so it ends a little after the
+    // server's.
     mut drawing: Local<(Option<(Entity, Slot)>, f32)>,
     mut seen: MessageWriter<ShotSeen>,
 ) {

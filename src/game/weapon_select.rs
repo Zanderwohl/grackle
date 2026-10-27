@@ -1,19 +1,13 @@
-//! Choosing a weapon, Source-style: a digit picks a bucket and pressing it
-//! again moves along the weapons in it; the wheel steps through everything
-//! carried (drawn by [`crate::game::weapon_select_hud`]).
+//! Choosing a weapon, Source-style: a digit picks a bucket, pressing it again
+//! moves along it, and the wheel steps through everything carried.
 //!
-//! **What is chosen and what is held are two things.** Choosing moves only
-//! [`WeaponSelection::highlight`]; one switch is sent when the choice settles
-//! ([`SETTLE_SECONDS`] of quiet) or is confirmed with a left click. Sending a
-//! switch per notch would have the server draw every weapon scrolled past —
-//! restarting its deploy and cancelling reloads it never meant to touch. A
-//! right click cancels. A digit for a bucket holding one weapon is not a
-//! choice between anything, so it switches at once.
+//! Choosing moves only [`WeaponSelection::highlight`]. One switch is sent when
+//! it settles or on a left click; a switch per notch would have the server
+//! draw, and cancel the reload of, every weapon scrolled past. A bucket of one
+//! weapon switches at once.
 //!
-//! Decided here, on the machine with the keyboard, and sent as a plain
-//! [`Slot`]: "the next weapon in bucket 2" depends on what is held, and a
-//! replayed tick has to reach the same loadout from the same input, which a
-//! slot does and "next" does not.
+//! Sent as a plain [`Slot`] rather than "next in bucket 2", so a replayed tick
+//! reaches the same loadout.
 
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
@@ -25,13 +19,11 @@ use crate::game::player::{InputLatch, LocalPlayer};
 /// How long the selector stays up after the last choice.
 pub const OPEN_SECONDS: f32 = 1.5;
 
-/// Quiet after the last choice before it is sent. Shorter than
-/// [`OPEN_SECONDS`], so a choice is never left pending behind a closed
-/// selector.
+/// Quiet before a choice is sent. Shorter than [`OPEN_SECONDS`], so nothing is
+/// left pending behind a closed selector.
 pub const SETTLE_SECONDS: f32 = 0.35;
 
-/// Wheel travel in pixels that counts as one notch, for a trackpad, which
-/// reports pixels rather than lines.
+/// For a trackpad, which reports pixels rather than lines.
 const PIXELS_PER_NOTCH: f32 = 40.0;
 
 const DIGITS: [KeyCode; BUCKETS as usize] = [
@@ -46,26 +38,21 @@ const DIGITS: [KeyCode; BUCKETS as usize] = [
     KeyCode::Digit9,
 ];
 
-/// What this machine has chosen, as against what the server says is held.
-/// While the selector is open a second press moves on from here, never from
+/// What this machine has chosen. A second press moves on from here, not from
 /// `Equipped`, which is a round trip behind.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
 pub struct WeaponSelection {
     pub highlight: Option<Slot>,
     /// Seconds left showing; zero is closed.
     pub open_for: f32,
-    /// Seconds of quiet left before the highlight is sent; `None` when there
-    /// is nothing unsent.
+    /// Seconds of quiet left before the highlight is sent.
     pending: Option<f32>,
-    /// A mouse button, by [`Button`](crate::game::weapon::Button) index, that
-    /// confirmed or cancelled and is still down. It is not a shot until it is
-    /// let go.
+    /// By [`Button`](crate::game::weapon::Button) index: a click that
+    /// confirmed or cancelled, still held, is not a shot until released.
     swallowing: [bool; 2],
-    /// Sent, and not yet seen held: the server is drawing it, so a shot now
-    /// is not one the old weapon fires.
+    /// Sent and not yet seen held: the old weapon is being put away.
     sent: Option<Slot>,
-    /// The body all this was chosen for. A new one — a new round, a respawn
-    /// — starts from nothing.
+    /// A new body, from a respawn or a new round, starts from nothing.
     body: Option<Entity>,
 }
 
@@ -74,8 +61,7 @@ impl WeaponSelection {
         self.open_for > 0.0
     }
 
-    /// The mouse buttons are the selector's, or the weapon they would fire
-    /// is on its way out, so nothing should guess a shot from them.
+    /// Nothing should guess a shot from the mouse buttons.
     pub fn holds_the_buttons(&self) -> bool {
         self.pending.is_some() || self.sent.is_some() || self.swallowing.contains(&true)
     }
@@ -96,9 +82,8 @@ impl WeaponSelection {
     }
 }
 
-/// Every carried weapon as `(bucket, slot)`, in the order the selector shows
-/// them: by bucket, then by loadout slot. A weapon the catalogue cannot name
-/// yet has no bucket and is left out.
+/// Sorted by bucket, then slot. A weapon the catalogue cannot name yet is left
+/// out.
 pub fn carried(equipped: &Equipped, catalogue: &WeaponCatalogue) -> Vec<(u8, Slot)> {
     let mut order: Vec<(u8, Slot)> = Slot::ALL
         .into_iter()
@@ -108,8 +93,7 @@ pub fn carried(equipped: &Equipped, catalogue: &WeaponCatalogue) -> Vec<(u8, Slo
     order
 }
 
-/// The first weapon in `bucket`, or the one after `from` if it is in there
-/// already, wrapping.
+/// The first weapon in `bucket`, or the one after `from` if `from` is in it.
 pub fn press(order: &[(u8, Slot)], from: Option<Slot>, bucket: u8) -> Option<Slot> {
     let inside: Vec<Slot> =
         order.iter().filter(|(at, _)| *at == bucket).map(|(_, slot)| *slot).collect();
@@ -120,7 +104,7 @@ pub fn press(order: &[(u8, Slot)], from: Option<Slot>, bucket: u8) -> Option<Slo
     inside.get(next % inside.len().max(1)).copied()
 }
 
-/// `notches` along everything carried, wrapping; positive is further along.
+/// Wraps; positive is further along.
 pub fn scroll(order: &[(u8, Slot)], from: Option<Slot>, notches: i32) -> Option<Slot> {
     if order.is_empty() {
         return None;
@@ -130,12 +114,8 @@ pub fn scroll(order: &[(u8, Slot)], from: Option<Slot>, notches: i32) -> Option<
     Some(order[to].1)
 }
 
-/// Read the digits and the wheel into the highlight, and send it once it
-/// settles or is confirmed.
-///
-/// Not gated on the pause menu, for the reason `gather_aim` is not: the wheel
-/// is a `MessageReader`, so it drains first and answers the pause itself.
-/// After `gather_input`, whose mouse buttons it may take back.
+/// Not gated on the pause menu: like `gather_aim`, it drains a
+/// `MessageReader` first. After `gather_input`, whose clicks it may take back.
 pub fn choose_weapons(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -170,7 +150,6 @@ pub fn choose_weapons(
         selection.sent = None;
     }
     if !selection.is_open() {
-        // A switch never seen held is given up on with the selector.
         *selection = WeaponSelection {
             highlight: Some(equipped.held),
             swallowing: selection.swallowing,
@@ -218,7 +197,6 @@ pub fn choose_weapons(
         }
     }
 
-    // A click while a choice is pending answers the selector, not the weapon.
     if selection.pending.is_some() {
         if latch.0.attack {
             selection.send(&mut latch);
@@ -230,8 +208,7 @@ pub fn choose_weapons(
         }
     }
 
-    // `gather_input` rewrites the held flags every frame, so they are taken
-    // back every frame until the button is let go.
+    // `gather_input` rewrites the held flags every frame.
     let input = &mut latch.0;
     let buttons = [
         (&mut input.attack, &mut input.attack_held),
@@ -256,8 +233,7 @@ mod tests {
     use crate::common::weapon::WeaponId;
     use crate::common::weapon_file::default_catalogue;
 
-    /// Bucket 1 twice over, bucket 2 once and bucket 3 thrice, out of slot
-    /// order on purpose.
+    /// Out of slot order on purpose.
     fn order() -> Vec<(u8, Slot)> {
         let mut order = vec![
             (3, Slot::Melee),
@@ -325,8 +301,7 @@ mod tests {
         }
     }
 
-    /// The shipped loadout is meant to exercise cycling; a pack that stops
-    /// sharing a bucket stops testing it by hand.
+    /// Cycling can only be tried by hand if the shipped loadout shares a bucket.
     #[test]
     fn the_placeholder_class_shares_a_bucket() {
         let catalogue = default_catalogue();
@@ -337,9 +312,8 @@ mod tests {
 
     use bevy::ecs::system::RunSystemOnce;
 
-    /// A Mercenary holding something outside the first shared bucket, which
-    /// the server never changes: this machine is a round trip ahead of it.
-    /// Returns the bucket and the slots in it.
+    /// Holding something outside the first shared bucket, which nothing here
+    /// changes. Returns that bucket and its slots.
     fn a_chooser() -> (World, u8, Vec<Slot>) {
         let mut world = World::new();
         let catalogue = default_catalogue();
@@ -360,7 +334,6 @@ mod tests {
         (world, bucket, inside)
     }
 
-    /// One frame of `seconds`, with `key` newly down if given.
     fn frame(world: &mut World, seconds: f32, key: Option<KeyCode>) {
         world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(seconds));
         let mut keys = world.resource_mut::<ButtonInput<KeyCode>>();
@@ -481,8 +454,7 @@ mod tests {
         assert!(!world.resource::<WeaponSelection>().holds_the_buttons());
     }
 
-    /// A choice made for a body that has gone — a death, a new round — is
-    /// not sent to the next one.
+    /// A choice made before a death is not sent to the next body.
     #[test]
     fn a_new_body_starts_from_nothing() {
         let (mut world, bucket, _) = a_chooser();

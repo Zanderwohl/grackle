@@ -254,8 +254,8 @@ fn wanted_model<'a>(equipped: &Equipped, catalogue: &'a WeaponCatalogue) -> Want
     }
 }
 
-/// Every weapon the local body carries, not only the one in hand, so the
-/// weapon selector has a picture of each before it is first drawn.
+/// Every carried weapon, not only the one in hand: a prop is photographed when
+/// baked, and the selector shows them all.
 fn bake_what_we_carry(
     catalogue: Res<WeaponCatalogue>,
     packs: Res<PackAssets>,
@@ -472,9 +472,8 @@ pub(crate) fn perform(
         });
     }
 
-    // Stretched to the weapon's deploy time, which is gameplay. Fitted here
-    // rather than at the start, since the catalogue can arrive after the
-    // weapon; a deploy of zero has no clip to stretch.
+    // Fitted to the deploy time here, not at the start: the catalogue can
+    // arrive after the weapon.
     if let Some(playback) = performance.playing.as_mut()
         && playback.fit.is_none()
         && matches!(&playback.clip, WeaponClip::Prop(name) if name == DEPLOY)

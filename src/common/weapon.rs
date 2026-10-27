@@ -185,18 +185,16 @@ pub struct Weapon {
     /// distinct from a name that fails to load.
     #[serde(default)]
     pub model: Option<String>,
-    /// Which digit selects it, `1..=BUCKETS`. Several weapons may share one;
-    /// pressing it again moves along them.
+    /// The digit that selects it, `1..=BUCKETS`. Weapons may share one.
     pub bucket: u8,
-    /// Seconds after it is drawn before it may fire.
+    /// Seconds after being drawn before it may fire.
     pub deploy: f32,
     pub primary: Mounted,
     pub secondary: Mounted,
     pub magazine: Magazine,
 }
 
-/// Digits `1` to `9`, Source-style: a bucket is what a key selects, and is a
-/// property of the weapon, where a [`Slot`] is a place in a class's loadout.
+/// A bucket is the weapon's; a [`Slot`] is a place in a class's loadout.
 pub const BUCKETS: u8 = 9;
 
 /// More than any class needs today, because growing it later means growing a

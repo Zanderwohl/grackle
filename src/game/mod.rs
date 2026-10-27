@@ -119,8 +119,7 @@ impl Plugin for GamePlugin {
             .add_systems(RunFixedMainLoop, (
                 // A released cursor must not walk the body.
                 gather_input.run_if(pause_menu::not_paused),
-                // Ungated for the same reason as `gather_aim`: it drains the
-                // wheel.
+                // Ungated: it drains the wheel, like `gather_aim`.
                 crate::game::weapon_select::choose_weapons,
                 // Ungated: it drains motion made while paused rather than
                 // applying all of it on the frame the menu closes.

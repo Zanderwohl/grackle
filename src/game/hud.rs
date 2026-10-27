@@ -140,9 +140,7 @@ impl HudZone {
     }
 }
 
-/// A trapezoid leaning so its top sits further right (or left), with `big`
-/// corners on one diagonal and `small` on the other. The box is inset by the
-/// stroke and the drop so neither is cut off.
+/// Inset by the stroke and the drop so neither is cut off.
 pub(crate) fn leaning_panel(size: Vec2, leans_right: bool, big: Corner, small: Corner) -> Path {
     let lo = Vec2::splat(ZONE_STROKE);
     let hi = size - Vec2::splat(ZONE_STROKE) - ZONE_DROP;
@@ -170,7 +168,6 @@ pub(crate) fn leaning_panel(size: Vec2, leans_right: bool, big: Corner, small: C
     }
 }
 
-/// How every HUD panel is painted, in the colours of `swatch`.
 pub(crate) fn panel_style(swatch: &Swatch) -> ShapeStyle {
     ShapeStyle {
         fill: swatch.base,
@@ -324,7 +321,6 @@ fn crosshair() -> impl Bundle {
     )
 }
 
-/// Play-mode text in the display font, which no click lands on.
 pub(crate) fn hud_text(font: &Handle<Font>, words: String, size: f32, colour: Color) -> impl Bundle {
     (
         Text::new(words),

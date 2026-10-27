@@ -68,8 +68,7 @@ pub struct WeaponActionFired {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Trigger {
     ready_in: [f32; 2],
-    /// Seconds until the weapon just drawn may fire or reload. Zero by
-    /// default, so a body spawns ready rather than drawing.
+    /// Seconds until the weapon just drawn may fire or reload.
     deploying: f32,
 }
 
@@ -135,8 +134,7 @@ pub fn pull_trigger(
 
     for (shooter, equipped, mut ammo, mut trigger, input, condition) in &mut shooters {
         trigger.tick(dt);
-        // A press during a deploy is dropped rather than held for later, so a
-        // click made while drawing is not a shot fired after it.
+        // Dropped, not queued: a click while drawing is not a shot after it.
         if !condition.may_fire() || !trigger.deployed() {
             continue;
         }
@@ -242,8 +240,7 @@ fn begin_reload(state: &mut crate::common::weapon::AmmoState, magazine: &Magazin
 
 /// Start reloads, run them down, and move the rounds across. The only thing
 /// that starts a reload. An empty clip reloads unasked; a short one does not,
-/// or the magazine size would mean nothing. Nothing happens while the weapon
-/// is still being drawn.
+/// or the magazine size would mean nothing.
 pub fn reload_weapons(
     time: Res<Time<Fixed>>,
     catalogue: Res<WeaponCatalogue>,
@@ -293,8 +290,7 @@ pub fn reload_weapons(
     }
 }
 
-/// Act on a switch made since the last step, and start drawing what was
-/// switched to.
+/// Act on a switch made since the last step.
 pub fn select_weapons(
     time: Res<Time<Fixed>>,
     catalogue: Res<WeaponCatalogue>,

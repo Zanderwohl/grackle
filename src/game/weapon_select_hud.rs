@@ -1,12 +1,9 @@
-//! The weapon selector, Source-style: a row of buckets across the top of the
-//! screen, the open one showing a card per weapon with its picture, the rest
-//! closed down to their digit. It draws what [`WeaponSelection`] chose and
-//! picks nothing itself.
+//! The weapon selector: a row of buckets across the top, the open one a card
+//! per weapon with its thumbnail. It draws [`WeaponSelection`] and picks
+//! nothing.
 //!
-//! Rebuilt whenever what it shows changes rather than patched in place: it is
-//! a handful of nodes and changes only on a keypress or a picture arriving.
-//! Pictures come from [`Thumbnails`], whose handles are kept across a retake,
-//! so a card shows the new picture without being rebuilt.
+//! Rebuilt rather than patched when what it shows changes: a handful of nodes,
+//! changing only on input or a new picture.
 
 use bevy::prelude::*;
 
@@ -43,7 +40,6 @@ impl Plugin for WeaponSelectHudPlugin {
 #[derive(Component)]
 struct SelectorRoot;
 
-/// What the selector is showing, compared to decide whether to rebuild it.
 #[derive(Debug, Clone, PartialEq)]
 struct Shown {
     team: Option<Team>,
@@ -99,7 +95,6 @@ impl Shown {
     }
 }
 
-/// What is not highlighted sits back: darker, flat, and see-through.
 fn dimmed(swatch: &Swatch) -> ShapeStyle {
     ShapeStyle {
         fill: swatch.deep.with_alpha(0.7),
@@ -110,12 +105,11 @@ fn dimmed(swatch: &Swatch) -> ShapeStyle {
     }
 }
 
-/// What [`Shown`] is built from, compared first so it is not rebuilt, with
-/// its lang lookups, on every frame the selector is up.
+/// Compared first, so [`Shown`] and its lang lookups are not rebuilt every
+/// frame.
 type ShownFrom = (Option<Slot>, Equipped, Option<Team>, usize);
 
-/// The three panels a selector draws, made once per team: a card lit, a card
-/// dimmed, and a closed bucket.
+/// Made once per team rather than per card.
 struct Panels {
     team: Option<Team>,
     lit: Handle<ShapeMaterial>,
@@ -230,7 +224,6 @@ fn show_the_selector(
                 (panels.map(|p| p.dim.clone()), Ink::White.on(&swatch))
             };
             let mut parts = vec![panel(&mut commands, material, CARD)];
-            // On the first card only: it heads the column.
             if i == 0 {
                 parts.push(
                     commands
@@ -293,7 +286,7 @@ fn show_the_selector(
     commands.entity(root).despawn_children().add_children(&columns);
 }
 
-/// Drawn behind its box's contents, first among them so it is under them.
+/// First among its box's children, so it is under them.
 fn panel(commands: &mut Commands, material: Option<Handle<ShapeMaterial>>, size: Vec2) -> Entity {
     let mut panel = commands.spawn((
         Node {
