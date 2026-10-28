@@ -171,8 +171,13 @@ pub trait FeatureTrait: Send + Sync {
     fn footprint(&self) -> Option<&crate::editor::footprint_room::FootprintRoom> { None }
     fn footprint_mut(&mut self) -> Option<&mut crate::editor::footprint_room::FootprintRoom> { None }
 
-    /// What this feature stands in the world beyond itself, as features: a Mirror's copies.
+    /// What this feature stands in the world beyond itself, as features: a Mirror's copies, and
+    /// theirs where a copy is itself a Mirror.
     fn standing_copies(&self) -> Vec<&dyn FeatureTrait> { Vec::new() }
+
+    /// So a rebuilt copy of a Mirror can take over its predecessor's entities. A typetag trait
+    /// object has no `Any` to downcast through.
+    fn mirror_mut(&mut self) -> Option<&mut crate::editor::mirror::Mirror> { None }
 }
 
 enum RowAction {

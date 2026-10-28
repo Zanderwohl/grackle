@@ -1508,8 +1508,14 @@ and finished by symmetry.
   entity. An edit to a source is an edit to its copy — the sources are the
   Mirror's parents. A copy is not a feature: nothing references it, and
   clicking one selects the Mirror. A type joins by implementing `mirror`; one
-  that does not (the animation features, a Mirror) is listed in orange and
-  left out.
+  that does not (the animation features) is listed in orange and left out.
+- **A Mirror can mirror a Mirror**, which is how a map gets four-way
+  symmetry: a second Mirror listing the first *and* its sources copies both
+  halves. The copy of a Mirror is its copies carried across, the same
+  symmetry about its center's image (the three commute). It is rebuilt on
+  every resolve like any copy, so it takes over its predecessor's entities
+  (`Mirror::inherit_entities`, through `FeatureTrait::mirror_mut`) rather than
+  standing a second set beside them.
 - **Copies are re-applied, not respawned**, keyed by source in
   `copy_entities`, which is why `apply_to_entity` takes `&mut self`. A
   respawned spawn point rebuilds its body every frame of a drag.
@@ -1520,7 +1526,15 @@ and finished by symmetry.
   `Rotate180` keeps handedness and has no such caveat.
 - **`Side` has one writer, `assign_sides`**, which is ungated and asks every
   frame what the standing Mirrors say: originals get the first team, copies
-  the second, and anything no Mirror claims has none. Deleting a Mirror,
+  the second, and anything no Mirror claims has none. A copy of a copy takes
+  the inner Mirror's copy side carried through each Mirror around it by that
+  Mirror's `TeamMap`: by default its pair swaps and a team outside it passes
+  through, so an outer Mirror of Red and Red keeps the inner split and one of
+  Red and Blue makes a checkerboard. The inspector shows a row per team
+  arriving from a nested Mirror ("Blue becomes"), stored in `remap` only
+  where it differs from the default, which is how four quarters go on four
+  teams. Sides, not materials, are what four teams turn on: the palette
+  already paints a role per team, and spawns read the same `Side`. Deleting a Mirror,
   rolling back past it or dropping a source therefore takes the side away with
   nothing to remember. A feature has no team field of its own, deliberately —
   that would be a second writer.
