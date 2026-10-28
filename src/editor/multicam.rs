@@ -1,8 +1,11 @@
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::ecs::query::QuerySingleError;
 use bevy::post_process::bloom::Bloom;
+use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline};
 use bevy::prelude::*;
 use bevy::camera::{Viewport};
+use bevy::render::render_resource::{AsBindGroup, CompareFunction, RenderPipelineDescriptor, SpecializedMeshPipelineError};
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::Hdr;
 use bevy::window::{PrimaryWindow, WindowResized};
@@ -31,6 +34,48 @@ pub fn editor_only() -> RenderLayers {
 /// What the editor viewports draw, in both authoring modes.
 pub fn viewport_layers() -> RenderLayers {
     RenderLayers::from_layers(&[render_layers::WORLD, EDITOR_ONLY_LAYER])
+}
+
+/// What a handle is drawn with: lit like any surface, but never hidden by the
+/// map, so a handle behind a wall can still be seen to be grabbed. Picking
+/// already ignores the map; this makes the drawing agree.
+pub type HandleMaterial = ExtendedMaterial<StandardMaterial, OnTop>;
+
+pub fn on_top(base: StandardMaterial) -> HandleMaterial {
+    // Blended so it lands in the transparent pass, after everything opaque has
+    // been drawn; skipping the depth test in the opaque pass would let a wall
+    // drawn later paint over it.
+    ExtendedMaterial { base: StandardMaterial { alpha_mode: AlphaMode::Blend, ..base }, extension: OnTop::default() }
+}
+
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
+pub struct OnTop {
+    // `ExtendedMaterial` will not take an extension with no bindings.
+    #[uniform(100)]
+    unused: f32,
+}
+
+impl MaterialExtension for OnTop {
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        if let Some(depth) = descriptor.depth_stencil.as_mut() {
+            depth.depth_compare = Some(CompareFunction::Always);
+            depth.depth_write_enabled = Some(false);
+        }
+        Ok(())
+    }
 }
 
 /// How much of each window edge something else has taken, in logical pixels.
@@ -186,6 +231,7 @@ impl Default for MulticamState {
 impl Plugin for MulticamPlugin {
     fn build(&self, app: &mut App) {
         app
+            .add_plugins(MaterialPlugin::<HandleMaterial>::default())
             .insert_resource(MulticamState {
                 test_scene: self.test_scene,
                 ..Default::default()
