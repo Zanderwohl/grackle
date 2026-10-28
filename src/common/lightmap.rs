@@ -8,7 +8,8 @@
 
 use bevy::prelude::*;
 
-use crate::common::sunlight::LitSurface;
+use crate::common::sky::SkyTime;
+use crate::common::sunlight::{Daylight, LitSurface};
 use crate::common::world_surface::Face;
 
 /// Meters per lightmap texel.
@@ -20,6 +21,20 @@ pub const BASE_AMBIENT: f32 = 100.0;
 
 /// What the sun adds to a surface square on to it, in the same units.
 pub const SUN_BRIGHTNESS: f32 = 1500.0;
+
+/// What a sky color of 1 is worth, in the same units.
+pub const SKY_BRIGHTNESS: f32 = 600.0;
+
+/// Of every surface, for the bounce.
+pub const ALBEDO: f32 = 0.4;
+
+/// Sky light and bounce are smooth, so they are gathered every this many texels — a meter — and
+/// interpolated between. On the same lattice, so neighbors across a threshold share samples too.
+const AMBIENT_STEP: f32 = 4.0;
+
+pub fn daylight(toward: Vec3, sky: SkyTime) -> Daylight {
+    Daylight { toward, sun: SUN_BRIGHTNESS, sky, sky_brightness: SKY_BRIGHTNESS, albedo: ALBEDO }
+}
 
 /// Texels round a chart sampled at its face's edge, so bilinear filtering at the edge reads the
 /// edge's own light rather than a neighboring chart's.
@@ -109,22 +124,46 @@ impl Atlas {
 
     /// Light per texel, row by row from the top of the atlas. `sky` is per face: a sky face is not
     /// lightmapped, and its texels are left at the base.
-    pub fn bake(&self, faces: &[Face], sky: &[bool], surface: &LitSurface, toward: Vec3) -> Vec<Vec3> {
+    pub fn bake(&self, faces: &[Face], sky: &[bool], surface: &LitSurface, light: &Daylight) -> Vec<Vec3> {
         let mut texels = vec![Vec3::splat(BASE_AMBIENT); (self.size.x * self.size.y) as usize];
         for (index, (face, chart)) in faces.iter().zip(&self.charts).enumerate() {
             if sky[index] {
                 continue;
             }
             let normal = face.plane.normal;
-            let n_dot_l = normal.dot(toward).max(0.0);
+            let n_dot_l = normal.dot(light.toward).max(0.0);
             let outline: Vec<Vec2> = face.vertices.iter().map(|p| chart.lattice(*p)).collect();
+            let sample_at = |at: Vec2| on_plane(face, chart, inside(&outline, at));
+
+            // The gather grid: sample `k` sits at `k * AMBIENT_STEP + AMBIENT_STEP / 2`, enough
+            // of them that every texel center has one either side.
+            let half = AMBIENT_STEP / 2.0;
+            let first = chart.origin.as_vec2() + 0.5;
+            let last = first + (chart.size.as_vec2() - 1.0);
+            let k_lo = ((first - half) / AMBIENT_STEP).floor().as_ivec2();
+            let k_hi = ((last - half) / AMBIENT_STEP).floor().as_ivec2() + 1;
+            let columns = (k_hi.x - k_lo.x + 1) as usize;
+            let mut gathered = Vec::with_capacity(columns * (k_hi.y - k_lo.y + 1) as usize);
+            for ky in k_lo.y..=k_hi.y {
+                for kx in k_lo.x..=k_hi.x {
+                    let at = IVec2::new(kx, ky).as_vec2() * AMBIENT_STEP + half;
+                    gathered.push(surface.ambient(sample_at(at), normal, light));
+                }
+            }
+            let ambient = |at: Vec2| {
+                let f = (at - half) / AMBIENT_STEP - k_lo.as_vec2();
+                let (cell, t) = (f.floor(), f.fract());
+                let (x, y) = (cell.x as usize, cell.y as usize);
+                let row = |y: usize| gathered[y * columns + x].lerp(gathered[y * columns + x + 1], t.x);
+                row(y).lerp(row(y + 1), t.y)
+            };
+
             for j in 0..chart.size.y {
                 for i in 0..chart.size.x {
                     let center = chart.origin.as_vec2() + Vec2::new(i as f32, j as f32) + 0.5;
-                    let point = on_plane(face, chart, inside(&outline, center));
-                    let sun = if n_dot_l > 0.0 { surface.sun_reaching(point, normal, toward) } else { 0.0 };
+                    let sun = if n_dot_l > 0.0 { surface.sun_reaching(sample_at(center), normal, light.toward) } else { 0.0 };
                     let at = (chart.at.y + j) * self.size.x + chart.at.x + i;
-                    texels[at as usize] = Vec3::splat(BASE_AMBIENT + SUN_BRIGHTNESS * n_dot_l * sun);
+                    texels[at as usize] = BASE_AMBIENT + light.sun * n_dot_l * sun + ambient(center);
                 }
             }
         }
@@ -222,25 +261,69 @@ mod tests {
         assert_eq!(world(&a, column(&a)), world(&b, column(&b)));
     }
 
+    /// The light baked on room `index`'s floor at `(x, z)`, with the ceilings of `open` rooms sky.
+    fn floor_light(rooms: &[Room], open: &[usize], light: &Daylight, index: usize, x: f32, z: f32) -> f32 {
+        let is_sky = |room: usize, slot: RoomSlot| open.contains(&room) && slot == RoomSlot::Ceiling;
+        let surface = LitSurface::build(rooms, is_sky);
+        let faces = room_share(rooms, index);
+        let sky: Vec<bool> = faces.iter().map(|f| is_sky(index, RoomSlot::of(f.plane.normal))).collect();
+        let atlas = Atlas::of(&faces);
+        let texels = atlas.bake(&faces, &sky, &surface, light);
+        let at = faces.iter().position(|f| RoomSlot::of(f.plane.normal) == RoomSlot::Floor).unwrap();
+        let chart = &atlas.charts[at];
+        let texel = (Vec2::new(x, z) / TEXEL).floor().as_ivec2() - chart.origin;
+        let texel = chart.at + texel.as_uvec2();
+        texels[(texel.y * atlas.size.x + texel.x) as usize].x
+    }
+
+    fn day(altitude: f32, azimuth: f32) -> Daylight {
+        daylight(SunPosition { altitude, azimuth }.toward(), SkyTime::Day)
+    }
+
+    /// A courtyard open to the sky with a low room off its east side, as in `sunlight`'s tests.
+    fn courtyard() -> [Room; 2] {
+        [Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0)), Room::new(Vec3::new(4.0, 0.0, 0.0), Vec3::new(8.0, 2.0, 4.0))]
+    }
+
     #[test]
     fn a_floor_under_a_sky_is_brighter_than_one_under_a_roof() {
-        let rooms = [
-            Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0)),
-            Room::new(Vec3::new(10.0, 0.0, 0.0), Vec3::new(14.0, 3.0, 4.0)),
-        ];
-        let surface = LitSurface::build(&rooms, |index, slot| index == 0 && slot == RoomSlot::Ceiling);
-        let toward = SunPosition { altitude: 70.0, azimuth: 10.0 }.toward();
-        let floor_light = |index| {
-            let faces = room_share(&rooms, index);
-            let sky: Vec<bool> = faces.iter().map(|f| index == 0 && RoomSlot::of(f.plane.normal) == RoomSlot::Ceiling).collect();
-            let atlas = Atlas::of(&faces);
-            let texels = atlas.bake(&faces, &sky, &surface, toward);
-            let at = faces.iter().position(|f| RoomSlot::of(f.plane.normal) == RoomSlot::Floor).unwrap();
-            let chart = &atlas.charts[at];
-            let middle = chart.at + chart.size / 2;
-            texels[(middle.y * atlas.size.x + middle.x) as usize].x
-        };
-        assert!(floor_light(0) > BASE_AMBIENT + SUN_BRIGHTNESS * 0.9, "{}", floor_light(0));
-        assert_eq!(floor_light(1), BASE_AMBIENT);
+        let rooms = [Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0)), Room::new(Vec3::new(10.0, 0.0, 0.0), Vec3::new(14.0, 3.0, 4.0))];
+        let light = day(70.0, 10.0);
+        let open = floor_light(&rooms, &[0], &light, 0, 2.0, 2.0);
+        assert!(open > BASE_AMBIENT + SUN_BRIGHTNESS * 0.9, "{open}");
+        // Nothing gets into a closed room: no sun, no sky, nothing sunlit to bounce off.
+        assert_eq!(floor_light(&rooms, &[0], &light, 1, 12.0, 2.0), BASE_AMBIENT);
+    }
+
+    /// The far end of the low room sees no sun, but sees out into the sunlit courtyard: a little
+    /// from the far end, where the doorway is a small part of the view, and more near it.
+    #[test]
+    fn a_room_off_a_sunlit_courtyard_is_lit_by_it() {
+        let light = day(45.0, 270.0);
+        let deep = floor_light(&courtyard(), &[0], &light, 1, 7.5, 2.0);
+        let nearer = floor_light(&courtyard(), &[0], &light, 1, 6.5, 2.0);
+        assert!(deep > BASE_AMBIENT + 1.0, "{deep}");
+        assert!(nearer > deep, "{nearer} nearer the doorway, {deep} further in");
+        let roofed = floor_light(&courtyard(), &[], &light, 1, 7.5, 2.0);
+        assert_eq!(roofed, BASE_AMBIENT);
+    }
+
+    #[test]
+    fn a_night_sky_lights_less_than_a_day_one() {
+        let toward = SunPosition { altitude: 45.0, azimuth: 270.0 }.toward();
+        // Out of the sun, so only the sky differs.
+        let at = |sky| floor_light(&courtyard(), &[0], &daylight(toward, sky), 0, 1.0, 0.3);
+        assert!(at(SkyTime::Night) < at(SkyTime::Day), "{} {}", at(SkyTime::Night), at(SkyTime::Day));
+    }
+
+    /// One sky over two rooms whose floors meet: the light either side of the seam agrees, because
+    /// the rays do not know which room they started in.
+    #[test]
+    fn light_runs_on_across_a_threshold() {
+        let rooms = [Room::new(Vec3::ZERO, Vec3::new(3.3, 3.0, 4.0)), Room::new(Vec3::new(3.3, 0.0, 0.0), Vec3::new(7.0, 3.0, 4.0))];
+        let light = day(60.0, 0.0);
+        let left = floor_light(&rooms, &[0, 1], &light, 0, 3.2, 2.0);
+        let right = floor_light(&rooms, &[0, 1], &light, 1, 3.4, 2.0);
+        assert!((left - right).abs() / left < 0.02, "{left} against {right}");
     }
 }

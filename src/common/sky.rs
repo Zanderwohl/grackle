@@ -21,7 +21,7 @@ pub const SKYBOX: &str = "skybox";
 /// Stops per gradient, fixed so the shader's uniform is one shape.
 pub const STOPS: usize = 5;
 
-#[derive(Resource, Copy, Clone, Debug, Default, PartialEq, Eq, EnumIter, Serialize, Deserialize)]
+#[derive(Resource, Copy, Clone, Debug, Default, PartialEq, Eq, Hash, EnumIter, Serialize, Deserialize)]
 pub enum SkyTime {
     HighNoon,
     #[default]

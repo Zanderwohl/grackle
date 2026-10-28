@@ -1145,8 +1145,12 @@ stitch. It is never incremental — a skylight brightens the corridor beyond it 
 and auto-bake waits for the map to be still and for the room bake to settle.
 The room bake writes `UV_1` and keeps its faces on `BakedRoomGeometry`; both
 chart them with `Atlas::of` ([`src/common/lightmap.rs`](src/common/lightmap.rs)),
-and a rebuilt room loses its `RoomLightmap` until the next bake. The lightmap
-replaces the ambient on walls, so `GlobalAmbientLight` lights only what moves.
+and a rebuilt room loses its `RoomLightmap` until the next bake — or takes the
+last one back, matched by a hash of its faces and sky, which is what makes F5
+on an unchanged map free. Each texel is the base ambient, the sun, and sky
+light plus one bounce gathered every meter (`LitSurface::ambient`). The
+lightmap replaces the ambient on walls, so `GlobalAmbientLight` lights only
+what moves.
 
 ## What a body is drawn as
 
