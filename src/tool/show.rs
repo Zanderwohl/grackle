@@ -15,6 +15,7 @@ pub struct GizmoVisibility {
     pub animation_displays: bool,
     pub animation_grids: bool,
     pub mirrors: bool,
+    pub triggers: bool,
 }
 
 impl Default for GizmoVisibility {
@@ -28,6 +29,7 @@ impl Default for GizmoVisibility {
             animation_displays: true,
             animation_grids: true,
             mirrors: true,
+            triggers: true,
         }
     }
 }
@@ -63,6 +65,7 @@ impl ShowPlugin {
         ui.checkbox(&mut gizmo_visibility.animation_displays, get!("show.gizmos_animation_displays"));
         ui.checkbox(&mut gizmo_visibility.animation_grids, get!("show.gizmos_animation_grids"));
         ui.checkbox(&mut gizmo_visibility.mirrors, get!("show.gizmos_mirrors"));
+        ui.checkbox(&mut gizmo_visibility.triggers, get!("show.gizmos_triggers"));
     }
 
     fn draw_visible_gizmos(
@@ -72,7 +75,7 @@ impl ShowPlugin {
     ) {
         if !visibility.points && !visibility.rooms && !visibility.point_lights
             && !visibility.spawn_points && !visibility.props && !visibility.animation_displays
-            && !visibility.animation_grids && !visibility.mirrors
+            && !visibility.animation_grids && !visibility.mirrors && !visibility.triggers
         {
             return;
         }
@@ -88,6 +91,7 @@ impl ShowPlugin {
                 "animation_display" => visibility.animation_displays,
                 "animation_grid" => visibility.animation_grids,
                 "mirror" => visibility.mirrors,
+                "trigger" => visibility.triggers,
                 _ => false,
             };
             if draw {

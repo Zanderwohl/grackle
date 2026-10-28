@@ -4,8 +4,9 @@ use crate::common::csg::{self, Polygon};
 use crate::common::triangulate::triangulate;
 use bevy_egui::input::EguiWantsInput;
 use crate::common::app_mode::AppMode;
-use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline, PointRef};
+use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline, FeatureTrait, PointRef};
 use crate::editor::editor_room::EditorRoom;
+use crate::editor::trigger::EditorTrigger;
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
 use crate::tool::tool_helpers::*;
@@ -24,8 +25,9 @@ impl Plugin for RoomPlugin {
                 RoomTool::interface,
                 RoomTool::draw_gizmos,
                 RoomTool::draw_room_bounds,
-            ).chain().run_if(in_state(Tools::Room)).run_if(in_state(AppMode::Editor)))
+            ).chain().run_if(drawing_a_box).run_if(in_state(AppMode::Editor)))
             .add_systems(OnExit(Tools::Room), RoomTool::on_exit)
+            .add_systems(OnExit(Tools::Trigger), RoomTool::on_exit)
             .add_systems(Update, (
                 RoomDragState::spawn_handles_system,
                 RoomDragState::handle_dragging,
@@ -34,6 +36,11 @@ impl Plugin for RoomPlugin {
             .add_systems(OnExit(Tools::Select), RoomDragState::despawn_handles)
         ;
     }
+}
+
+/// A trigger is drawn the way a room is.
+fn drawing_a_box(tool: Res<State<Tools>>) -> bool {
+    matches!(tool.get(), Tools::Room | Tools::Trigger)
 }
 
 #[derive(Clone)]
@@ -118,8 +125,10 @@ impl RoomTool {
         mut features: ResMut<FeatureTimeline>,
         rooms: Query<&Room>,
         mut next_tool: ResMut<NextState<Tools>>,
+        current_tool: Res<State<Tools>>,
         egui: Res<EguiWantsInput>,
     ) {
+        let trigger = *current_tool.get() == Tools::Trigger;
         let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let shift_just_pressed = keys.just_pressed(KeyCode::ShiftLeft) || keys.just_pressed(KeyCode::ShiftRight);
 
@@ -177,7 +186,7 @@ impl RoomTool {
                     // The far corner is a size, measured from the first.
                     let typing = egui.wants_keyboard_input();
                     if commit_at_cursor(&mouse_input, &keys, typing) {
-                        Self::create_room(&mut tool, &mut features, &mut next_tool, FarCorner::FromMin(cursor - min), cursor);
+                        Self::create_room(&mut tool, &mut features, &mut next_tool, trigger, FarCorner::FromMin(cursor - min), cursor);
                     }
                 }
             }
@@ -238,7 +247,7 @@ impl RoomTool {
                         tool.last_min = cursor;
                         tool.mode = RoomToolMode::PlacingMax(RoomCornerMode::Normal);
                     } else {
-                        Self::create_room(&mut tool, &mut features, &mut next_tool, FarCorner::Point(pr), cursor);
+                        Self::create_room(&mut tool, &mut features, &mut next_tool, trigger, FarCorner::Point(pr), cursor);
                     }
                 }
             }
@@ -249,6 +258,7 @@ impl RoomTool {
         tool: &mut ResMut<Self>,
         features: &mut ResMut<FeatureTimeline>,
         next_tool: &mut ResMut<NextState<Tools>>,
+        trigger: bool,
         max: FarCorner,
         max_resolved: Vec3,
     ) {
@@ -257,7 +267,12 @@ impl RoomTool {
                 FarCorner::FromMin(size) => EditorRoom::from_min_and_size(min_point, size),
                 FarCorner::Point(max_point) => EditorRoom::from_point_refs(min_point, max_point),
             };
-            let id = features.apply_feature(Box::new(room));
+            let feature: Box<dyn FeatureTrait> = if trigger {
+                Box::new(EditorTrigger::from_room(room))
+            } else {
+                Box::new(room)
+            };
+            let id = features.apply_feature(feature);
             features.select(Some(id));
             if let Some(min) = tool.min_resolved {
                 tool.last_size = max_resolved - min;

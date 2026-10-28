@@ -324,6 +324,7 @@ pub fn find_nearest_feature_hit(
             "animation_display" => visibility.animation_displays,
             "animation_grid" => visibility.animation_grids,
             "mirror" => visibility.mirrors,
+            "trigger" => visibility.triggers,
             _ => false,
         };
         if !visible { continue; }
@@ -337,6 +338,17 @@ pub fn find_nearest_feature_hit(
                             best_t = t;
                             best = Some((feature_id, hit));
                         }
+                    }
+                }
+            }
+            // From outside only: a camera inside one would pick it with every click.
+            "trigger" => {
+                for pick_box in feature.object().pick_boxes() {
+                    if let Some(t) = pick_box.ray_distance(ray).filter(|t| *t > 0.0)
+                        && t < best_t
+                    {
+                        best_t = t;
+                        best = Some((feature_id, ray.origin + dir * t));
                     }
                 }
             }

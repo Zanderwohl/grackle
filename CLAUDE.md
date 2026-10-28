@@ -1042,6 +1042,10 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   in **Oklab**, on the CPU in [`src/common/sky.rs`](src/common/sky.rs) for
   previews and tests and again in `sky.wesl`; change one, change both. Sky
   slots are `NotShadowCaster`, so a sun added later can shine in through them.
+- **`pit` is a material with no file too** (`pit::PIT`,
+  [`src/material/pit.rs`](src/material/pit.rs)): one unlit black
+  `StandardMaterial`, so no light, lightmap or ambient brightens it — the
+  bottom of a pit with a kill trigger in it.
 - **A slot is picked, not typed** ([`src/material/picker.rs`](src/material/picker.rs)):
   a fixed-width button opening a searchable grid of every pack's `materials/`
   and the palette's roles. A feature's `editor_ui` gets only egui, so
@@ -1660,7 +1664,7 @@ The order inside a tick is stated as **sets, not as named systems**
 
 | Set | What is in it |
 | --- | --- |
-| `Deal` | Everything that writes `Damage`: `fire_hitscan`, `step_projectiles`, `explode`, `fire_flame`, `burn`. |
+| `Deal` | Everything that writes `Damage` or `Kill`: `fire_hitscan`, `step_projectiles`, `explode`, `fire_flame`, `burn`, `act_on_bodies_in_triggers`. |
 | `Apply` | `apply_damage`, and nothing else, ever. |
 | `Resolve` | `record_damage`, `announce_the_dead`, then `reap_the_dead`. |
 
@@ -1691,6 +1695,18 @@ hard from your own blast on the ground — writing an `Impulse` that
 `step_player` takes at the start of the step, so velocity keeps one writer; it is authority-only and not replicated,
 so a client's own rocket jump starts a round trip late. Hurting yourself is
 scaled by the mode's `self_damage` in `apply_damage`; knockback is not.
+
+### Triggers
+
+A **trigger** ([`src/editor/trigger.rs`](src/editor/trigger.rs)) is a
+room's box with an effect instead of walls: drawn by the Room tool under
+`Tools::Trigger`, anchored and dragged like a room, never asked for `rooms`,
+so it carves nothing. It stands a `TriggerVolume` up on every machine and
+the authority acts on any body whose movement box overlaps one
+([`src/game/trigger.rs`](src/game/trigger.rs)): **Hurt** deals its rate every
+half second from `DamageSource::World`, **Kill** writes a `Kill`, which
+`apply_damage` answers by emptying the pool past armor and teams — still
+the one writer of health. Invisible in a round except on `F6`.
 
 ### What a weapon is
 
@@ -2483,7 +2499,7 @@ machine, and things happen in it.
 The core abstraction is `FeatureTrait` in
 [`src/editor/editable.rs`](src/editor/editable.rs) — a `#[typetag::serde]`
 trait object. Implementors today: `GlobalPoint`, `GracklePointLight`,
-`EditorRoom`, `FootprintRoom`, `SpawnPoint`, `Prop`, `WeaponPickup`,
+`EditorRoom`, `FootprintRoom`, `EditorTrigger`, `SpawnPoint`, `Prop`, `WeaponPickup`,
 `AnimationDisplay`, `AnimationGrid` and `Mirror`.
 
 A feature does not store bare coordinates. It stores `PointRef`s, which are

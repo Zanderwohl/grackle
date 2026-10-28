@@ -87,6 +87,60 @@ impl EditorRoom {
         }
     }
 
+    /// The two corners, shared with [`crate::editor::trigger::EditorTrigger`].
+    pub fn corners_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool {
+        let mut changed = false;
+        let size = self.resolved_max - self.resolved_min;
+        ui.label(format!("Size: {}", size));
+        ui.separator();
+        if self.min.editor_ui(ui, "Min", features, prior_feature_order, retarget_request) {
+            // Before the max's widgets, which offer the min as a base.
+            self.resolve_corners(features);
+            changed = true;
+        }
+        ui.separator();
+        let own_label = get!("editor.features.room.own_min");
+        let mut from_min = self.max_base == MaxBase::OwnMin;
+        changed |= self.max.editor_ui_with_own(ui, "Max", features, prior_feature_order, retarget_request, Some(OwnBase {
+            label: &own_label,
+            point: self.resolved_min,
+            active: &mut from_min,
+        }));
+        self.max_base = if from_min { MaxBase::OwnMin } else { MaxBase::Reference };
+        if changed {
+            self.resolve_corners(features);
+        }
+        changed
+    }
+
+    pub fn draw_box(&self, gizmos: &mut Gizmos, color: Color) {
+        let min = self.resolved_min.min(self.resolved_max);
+        let max = self.resolved_min.max(self.resolved_max);
+
+        gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(max.x, min.y, min.z), color);
+        gizmos.line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, max.y, min.z), color);
+        gizmos.line(Vec3::new(max.x, max.y, min.z), Vec3::new(min.x, max.y, min.z), color);
+        gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, min.y, min.z), color);
+
+        gizmos.line(Vec3::new(min.x, min.y, max.z), Vec3::new(max.x, min.y, max.z), color);
+        gizmos.line(Vec3::new(max.x, min.y, max.z), Vec3::new(max.x, max.y, max.z), color);
+        gizmos.line(Vec3::new(max.x, max.y, max.z), Vec3::new(min.x, max.y, max.z), color);
+        gizmos.line(Vec3::new(min.x, max.y, max.z), Vec3::new(min.x, min.y, max.z), color);
+
+        gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(min.x, min.y, max.z), color);
+        gizmos.line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, min.y, max.z), color);
+        gizmos.line(Vec3::new(max.x, max.y, min.z), Vec3::new(max.x, max.y, max.z), color);
+        gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, max.y, max.z), color);
+
+        self.min.debug_gizmos(self.resolved_min, gizmos);
+        self.max.debug_gizmos(self.resolved_max, gizmos);
+    }
+
+    /// Sorted, whichever corner was drawn first.
+    pub fn bounds(&self) -> (Vec3, Vec3) {
+        (self.resolved_min.min(self.resolved_max), self.resolved_min.max(self.resolved_max))
+    }
+
     pub fn with_surfaces(mut self, surfaces: RoomSurfaces) -> Self {
         self.surfaces = surfaces;
         self
@@ -138,27 +192,7 @@ impl FeatureTrait for EditorRoom {
     }
 
     fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool {
-        let mut changed = false;
-        let size = self.resolved_max - self.resolved_min;
-        ui.label(format!("Size: {}", size));
-        ui.separator();
-        if self.min.editor_ui(ui, "Min", features, prior_feature_order, retarget_request) {
-            // Before the max's widgets, which offer the min as a base.
-            self.resolve_corners(features);
-            changed = true;
-        }
-        ui.separator();
-        let own_label = get!("editor.features.room.own_min");
-        let mut from_min = self.max_base == MaxBase::OwnMin;
-        changed |= self.max.editor_ui_with_own(ui, "Max", features, prior_feature_order, retarget_request, Some(OwnBase {
-            label: &own_label,
-            point: self.resolved_min,
-            active: &mut from_min,
-        }));
-        self.max_base = if from_min { MaxBase::OwnMin } else { MaxBase::Reference };
-        if changed {
-            self.resolve_corners(features);
-        }
+        let mut changed = self.corners_ui(ui, features, prior_feature_order, retarget_request);
         ui.separator();
         ui.label(get!("editor.features.room.materials"));
         egui::Grid::new("room_materials").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
@@ -178,27 +212,7 @@ impl FeatureTrait for EditorRoom {
     fn type_key(&self) -> &'static str { "editor_room" }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
-        let min = self.resolved_min.min(self.resolved_max);
-        let max = self.resolved_min.max(self.resolved_max);
-        let color = Color::srgb_u8(200, 200, 200);
-
-        gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(max.x, min.y, min.z), color);
-        gizmos.line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, max.y, min.z), color);
-        gizmos.line(Vec3::new(max.x, max.y, min.z), Vec3::new(min.x, max.y, min.z), color);
-        gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, min.y, min.z), color);
-
-        gizmos.line(Vec3::new(min.x, min.y, max.z), Vec3::new(max.x, min.y, max.z), color);
-        gizmos.line(Vec3::new(max.x, min.y, max.z), Vec3::new(max.x, max.y, max.z), color);
-        gizmos.line(Vec3::new(max.x, max.y, max.z), Vec3::new(min.x, max.y, max.z), color);
-        gizmos.line(Vec3::new(min.x, max.y, max.z), Vec3::new(min.x, min.y, max.z), color);
-
-        gizmos.line(Vec3::new(min.x, min.y, min.z), Vec3::new(min.x, min.y, max.z), color);
-        gizmos.line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, min.y, max.z), color);
-        gizmos.line(Vec3::new(max.x, max.y, min.z), Vec3::new(max.x, max.y, max.z), color);
-        gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, max.y, max.z), color);
-
-        self.min.debug_gizmos(self.resolved_min, gizmos);
-        self.max.debug_gizmos(self.resolved_max, gizmos);
+        self.draw_box(gizmos, Color::srgb_u8(200, 200, 200));
     }
 
     fn entity(&self) -> Option<Entity> {
