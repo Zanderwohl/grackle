@@ -72,7 +72,7 @@ pub enum Problem {
 pub struct FootprintRoom {
     /// Read for `y`.
     floor: PointRef,
-    /// Metres from the floor up to the ceiling.
+    /// Meters from the floor up to the ceiling.
     height: f32,
     /// Shared by corners, lines and region entries, and never reused, so a
     /// region naming a line cannot be handed another.
@@ -716,7 +716,7 @@ mod tests {
     #[test]
     fn crossing_slanted_loops_far_from_the_origin_still_split() {
         let mut room = FootprintRoom::new(PointRef::absolute(0.0, 0.0, 0.0), 3.0);
-        let centre = Vec2::new(143.37, 87.91);
+        let center = Vec2::new(143.37, 87.91);
         let square = |at: Vec2, turn: f32| -> Vec<(f32, f32)> {
             (0..4)
                 .map(|i| {
@@ -726,10 +726,10 @@ mod tests {
                 })
                 .collect()
         };
-        draw_loop(&mut room, &square(centre, 0.3));
-        draw_loop(&mut room, &square(centre + Vec2::new(1.7, 1.1), 0.9));
+        draw_loop(&mut room, &square(center, 0.3));
+        draw_loop(&mut room, &square(center + Vec2::new(1.7, 1.1), 0.9));
         let mut room = resolved(room);
-        for at in [centre - Vec2::new(1.0, 0.8), centre + Vec2::new(0.9, 0.6), centre + Vec2::new(2.9, 2.3)] {
+        for at in [center - Vec2::new(1.0, 0.8), center + Vec2::new(0.9, 0.6), center + Vec2::new(2.9, 2.3)] {
             assert!(room.name_region_at(at), "nothing enclosed at {at}");
         }
         let room = resolved(room);

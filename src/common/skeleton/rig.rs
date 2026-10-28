@@ -7,7 +7,7 @@
 //!
 //! A pose names only the joints it moves, so layering is composition.
 //!
-//! Plain maths over `bevy_math`: builds for wasm as-is.
+//! Plain math over `bevy_math`: builds for wasm as-is.
 
 use std::sync::OnceLock;
 
@@ -47,7 +47,7 @@ pub mod bone {
 pub enum Side {
     Left,
     Right,
-    Centre,
+    Center,
 }
 
 impl Side {
@@ -57,7 +57,7 @@ impl Side {
         } else if bone_name.ends_with(".r") {
             Side::Right
         } else {
-            Side::Centre
+            Side::Center
         }
     }
 }
@@ -66,7 +66,7 @@ impl Side {
 /// changing `height` alone scales the body.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Proportions {
-    /// Ground to crown, in metres.
+    /// Ground to crown, in meters.
     pub height: f32,
     /// Ground to the hip joint.
     pub hip_height: f32,
@@ -130,14 +130,14 @@ impl Proportions {
         belly: 1.0,
     };
 
-    /// The hip joint's height in metres: the unit of [`Pose::root_offset`].
-    pub fn hip_metres(&self) -> f32 {
+    /// The hip joint's height in meters: the unit of [`Pose::root_offset`].
+    pub fn hip_meters(&self) -> f32 {
         self.height * self.hip_height
     }
 
-    /// `arm_length` in metres: the unit of `HoldSpec::carry` and
+    /// `arm_length` in meters: the unit of `HoldSpec::carry` and
     /// `Unit::ArmLengths`.
-    pub fn arm_metres(&self) -> f32 {
+    pub fn arm_meters(&self) -> f32 {
         self.height * self.arm_length
     }
 }
@@ -252,7 +252,7 @@ impl Skeleton {
         // The offset is in hip-heights, so a crouch authored on one body is
         // the same crouch on a taller one. Applied in the root's own frame so
         // it turns with the body.
-        root.translation += root.rotation * (pose.root_offset * self.proportions.hip_metres());
+        root.translation += root.rotation * (pose.root_offset * self.proportions.hip_meters());
         root
     }
 
@@ -381,7 +381,7 @@ impl Pose {
         self.joints.clear();
     }
 
-    /// A joint only one side names blends towards rest. Slerp takes the short
+    /// A joint only one side names blends toward rest. Slerp takes the short
     /// way, since a long way round bends a knee backwards in transit.
     pub fn lerp(from: &Pose, to: &Pose, t: f32) -> Pose {
         let t = t.clamp(0.0, 1.0);
@@ -428,7 +428,7 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
     let belly = girth * p.belly;
     let chest_belly = girth * (1.0 + (p.belly - 1.0) * 0.25);
 
-    // Landmarks in rest-space metres.
+    // Landmarks in rest-space meters.
     let hip_y = h * p.hip_height;
     let shoulder_y = hip_y + h * p.torso_length;
     let head_base_y = h - h * p.head_length;
@@ -719,7 +719,7 @@ mod tests {
         );
     }
 
-    /// In metres a crouch would drop a short build through the floor.
+    /// In meters a crouch would drop a short build through the floor.
     #[test]
     fn a_root_offset_scales_with_the_body() {
         let mut pose = Pose::rest();
@@ -730,7 +730,7 @@ mod tests {
             let standing = posed(&skeleton, &Pose::rest())[bone::HEAD].tail.y;
             let crouched = posed(&skeleton, &pose)[bone::HEAD].tail.y;
             let dropped = standing - crouched;
-            let expected = proportions.hip_metres() * 0.25;
+            let expected = proportions.hip_meters() * 0.25;
             assert!((dropped - expected).abs() < 1e-4, "dropped {dropped}, expected {expected}");
         }
     }

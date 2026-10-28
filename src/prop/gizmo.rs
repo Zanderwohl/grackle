@@ -42,11 +42,11 @@ const ARROW_REACH: f32 = 1.7;
 /// no area to hit.
 const PICK_SLACK: f32 = 1.8;
 
-/// Metres. A floor so a tiny shape keeps something to grab.
+/// Meters. A floor so a tiny shape keeps something to grab.
 const MIN_GIZMO_SCALE: f32 = 0.02;
 
 /// X, Y, Z.
-const AXIS_COLOURS: [Color; 3] =
+const AXIS_COLORS: [Color; 3] =
     [Color::srgb(0.9, 0.3, 0.3), Color::srgb(0.3, 0.9, 0.3), Color::srgb(0.4, 0.5, 1.0)];
 
 /// The handle under the pointer, or being dragged.
@@ -76,8 +76,8 @@ impl Handle {
 }
 
 /// Matches the tracer that comes out of it.
-const MUZZLE_COLOUR: Color = Color::srgb(1.0, 0.85, 0.4);
-/// Metres.
+const MUZZLE_COLOR: Color = Color::srgb(1.0, 0.85, 0.4);
+/// Meters.
 const MUZZLE_MARK_RADIUS: f32 = 0.012;
 
 /// Whether the hold's handles are up instead of the selected feature's. Never
@@ -91,10 +91,10 @@ fn arrow_tip(anchor: Vec3, axis: usize, length: f32) -> Vec3 {
     anchor + Vec3::AXES[axis] * length
 }
 
-/// Grip handle size, in metres.
+/// Grip handle size, in meters.
 const GRIP_SIZE: f32 = 0.02;
 
-/// Metres from an arrow's tip that still grabs it.
+/// Meters from an arrow's tip that still grabs it.
 const GRIP_PICK_RADIUS: f32 = GRIP_SIZE * 2.0;
 
 /// Also sets how far apart the pick points are: more than twice the pick
@@ -147,7 +147,7 @@ fn draw_colliders(editor: Res<PropEditor>, mut gizmos: Gizmos) {
     if !doc.archetype.is_placed() {
         return;
     }
-    let colour = match doc.archetype.blocks() {
+    let color = match doc.archetype.blocks() {
         true => Color::srgb(1.0, 0.55, 0.1),
         // A trigger, not a wall.
         false => Color::srgb(0.3, 0.9, 0.5),
@@ -156,14 +156,14 @@ fn draw_colliders(editor: Res<PropEditor>, mut gizmos: Gizmos) {
         let at = Vec3::from_array(collider.origin);
         match collider.shape {
             ColliderShape::Box { size } => {
-                gizmos.cube(Transform::from_translation(at).with_scale(Vec3::from_array(size)), colour);
+                gizmos.cube(Transform::from_translation(at).with_scale(Vec3::from_array(size)), color);
             }
             ColliderShape::Sphere { radius } => {
-                gizmos.sphere(Isometry3d::from_translation(at), radius, colour);
+                gizmos.sphere(Isometry3d::from_translation(at), radius, color);
             }
             ColliderShape::Capsule { radius, height } => {
                 let length = (height - 2.0 * radius).max(0.0);
-                gizmos.primitive_3d(&Capsule3d::new(radius, length), Isometry3d::from_translation(at), colour);
+                gizmos.primitive_3d(&Capsule3d::new(radius, length), Isometry3d::from_translation(at), color);
             }
         }
     }
@@ -195,7 +195,7 @@ fn gizmo_scale(extents: Option<Vec3>) -> f32 {
 }
 
 /// Move one face to `local_t` along its own axis. Returns a new placement too,
-/// because a shape is centred on its origin and the far face must stay put.
+/// because a shape is centered on its origin and the far face must stay put.
 pub fn drag_face(
     shape: &Shape,
     placement: &Placement,
@@ -482,7 +482,7 @@ fn drag_the_hold(
             points.push((Handle::Muzzle(axis), muzzle.point()));
         }
     }
-    let arm = figure.map(|(skeleton, ..)| skeleton.proportions().arm_metres());
+    let arm = figure.map(|(skeleton, ..)| skeleton.proportions().arm_meters());
     let carry_rotation = quat_from_euler(Vec3::from_array(hold.carry_rotation));
     if let Some(arm) = arm {
         let chest = carry_handle(&hold, carry_rotation, arm);
@@ -597,21 +597,21 @@ fn draw_hold(
 
     for (handle, at) in points {
         let axis = handle.axis();
-        let colour = match (lit == Some(*handle), handle) {
+        let color = match (lit == Some(*handle), handle) {
             (true, _) => HIGHLIGHT,
             (false, Handle::Grip { support, .. }) if short(*support) => unreachable,
-            _ => AXIS_COLOURS[axis],
+            _ => AXIS_COLORS[axis],
         };
-        gizmos.arrow(*at, arrow_tip(*at, axis, GRIP_LENGTH), colour);
+        gizmos.arrow(*at, arrow_tip(*at, axis, GRIP_LENGTH), color);
     }
 
     // Arrows alone would read as a third grip.
     if let Some((_, at)) = points.iter().find(|(handle, _)| matches!(handle, Handle::Muzzle(_))) {
-        let colour = match lit {
+        let color = match lit {
             Some(Handle::Muzzle(_)) => HIGHLIGHT,
-            _ => MUZZLE_COLOUR,
+            _ => MUZZLE_COLOR,
         };
-        gizmos.sphere(Isometry3d::from_translation(*at), MUZZLE_MARK_RADIUS, colour);
+        gizmos.sphere(Isometry3d::from_translation(*at), MUZZLE_MARK_RADIUS, color);
     }
 
     if let Some((skeleton, pose, root, reach)) = figure {
@@ -640,18 +640,18 @@ fn draw(
     lit: Option<Handle>,
 ) {
     for (handle, local) in points {
-        let colour = match lit == Some(*handle) {
+        let color = match lit == Some(*handle) {
             true => HIGHLIGHT,
-            false => AXIS_COLOURS[handle.axis()],
+            false => AXIS_COLORS[handle.axis()],
         };
         match handle {
             Handle::Move(_) => {
-                gizmos.arrow(world(Vec3::ZERO), world(*local), colour);
+                gizmos.arrow(world(Vec3::ZERO), world(*local), color);
             }
             Handle::Face { .. } => {
                 gizmos.cube(
                     Transform::from_translation(world(*local)).with_scale(Vec3::splat(scale)),
-                    colour,
+                    color,
                 );
             }
             Handle::Grip { .. } | Handle::Carry(_) | Handle::Muzzle(_) => {}

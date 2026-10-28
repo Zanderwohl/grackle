@@ -146,7 +146,7 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
 - [ ] `build_body_meshes` rebuilds all parts on `Team`/`BodyTint` change; only
   the material differs.
 - [ ] `announce_the_dead` could filter `Changed<Damageable>`.
-- [ ] `broadcast_catalogue_changes` deep-compares the catalogue every frame; add
+- [ ] `broadcast_catalog_changes` deep-compares the catalog every frame; add
   an `is_changed` latch in front.
 - [ ] `fire_flame` traces every ray against every body; broad-phase first.
 - [ ] `retarget` builds `prior_features` twice a frame with `contains` checks;

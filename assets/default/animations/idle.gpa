@@ -7,7 +7,7 @@ note = "Sampled from `idle_pose`. A settle the body sinks into and comes back ou
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -161,7 +161,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -315,7 +315,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -469,7 +469,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -623,7 +623,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]
@@ -777,7 +777,7 @@ ease = "smoother_step"
 [[tracks]]
 combine = "replace"
 space = "body"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]

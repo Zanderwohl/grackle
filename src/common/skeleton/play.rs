@@ -160,14 +160,14 @@ pub fn key_the_channel(channel: &mut Channel, at: f32, length: f32, looping: boo
     keys.iter().position(|key| key.at == at).unwrap_or(0)
 }
 
-/// How many metres one of `unit` is on this body.
-pub fn metres_per(unit: Unit, skeleton: &Skeleton) -> f32 {
+/// How many meters one of `unit` is on this body.
+pub fn meters_per(unit: Unit, skeleton: &Skeleton) -> f32 {
     let proportions = skeleton.proportions();
     match unit {
-        Unit::Metres => 1.0,
+        Unit::Meters => 1.0,
         Unit::LegLengths => ik::leg_length(skeleton),
-        Unit::ArmLengths => proportions.arm_metres(),
-        Unit::HipHeights => proportions.hip_metres(),
+        Unit::ArmLengths => proportions.arm_meters(),
+        Unit::HipHeights => proportions.hip_meters(),
     }
 }
 
@@ -692,7 +692,7 @@ pub fn apply_masked(
                     to,
                     tip,
                     &frame,
-                    metres_per(track.unit, skeleton),
+                    meters_per(track.unit, skeleton),
                     track.combine,
                     frames.ground,
                 );
@@ -741,7 +741,7 @@ pub fn apply_masked(
                     to,
                     placed.translation,
                     &frame,
-                    metres_per(track.unit, skeleton),
+                    meters_per(track.unit, skeleton),
                     track.combine,
                     frames.ground,
                 );
@@ -785,7 +785,7 @@ fn default_pole(chain: ChainRef) -> Vec3 {
     }
 }
 
-/// Where the stack has moved each hand's grip, trigger hand first: metres
+/// Where the stack has moved each hand's grip, trigger hand first: meters
 /// from the grip, in the weapon's axes. A clip that keys no hand leaves it
 /// where the clips beneath put it, so a kick over a reload does not snap it
 /// back.
@@ -816,7 +816,7 @@ pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton
             }
             let time = track_time(track.timing, time, None);
             let Some(to) = sample_key(keys, time, clip.length, clip.looping) else { continue };
-            let scale = metres_per(track.unit, skeleton);
+            let scale = meters_per(track.unit, skeleton);
             let moved = Vec3::from_array(to.map(|axis| match axis {
                 Axis::Value(at) => at * scale,
                 Axis::Free | Axis::Ground { .. } => 0.0,
@@ -971,10 +971,10 @@ mod tests {
     #[test]
     fn a_unit_is_a_fraction_of_the_body_it_is_on() {
         let rig = default_humanoid();
-        assert_eq!(metres_per(Unit::Metres, rig), 1.0);
-        assert!((metres_per(Unit::LegLengths, rig) - ik::leg_length(rig)).abs() < 1e-6);
-        assert!(metres_per(Unit::HipHeights, rig) > 0.0);
-        assert!(metres_per(Unit::ArmLengths, rig) > 0.0);
+        assert_eq!(meters_per(Unit::Meters, rig), 1.0);
+        assert!((meters_per(Unit::LegLengths, rig) - ik::leg_length(rig)).abs() < 1e-6);
+        assert!(meters_per(Unit::HipHeights, rig) > 0.0);
+        assert!(meters_per(Unit::ArmLengths, rig) > 0.0);
     }
 
     /// One clip must land the foot on floors at different heights. The
@@ -983,7 +983,7 @@ mod tests {
     #[test]
     fn a_ground_axis_lands_on_the_floor_under_the_body() {
         let rig = default_humanoid().clone();
-        let scale = metres_per(Unit::LegLengths, &rig);
+        let scale = meters_per(Unit::LegLengths, &rig);
 
         let resting = chain_tip(&rig, &Pose::rest(), &Transform::IDENTITY, &ik::RIGHT_LEG)
             .expect("the rig has a right leg");
@@ -1046,7 +1046,7 @@ mod tests {
             tracks: vec![Track {
                 combine: Combine::Replace,
                 space: Space::Body,
-                unit: Unit::Metres,
+                unit: Unit::Meters,
                 enabled: true,
                 timing: Default::default(),
                 channel: Channel::Effector {
@@ -1233,7 +1233,7 @@ mod tests {
             tracks: vec![Track {
                 combine: Combine::Compose,
                 space: Space::Carry,
-                unit: Unit::Metres,
+                unit: Unit::Meters,
                 enabled: true,
                 timing: Default::default(),
                 channel: Channel::Weapon {
@@ -1272,7 +1272,7 @@ mod tests {
             tracks: vec![Track {
                 combine: Combine::Compose,
                 space: Space::Weapon,
-                unit: Unit::Metres,
+                unit: Unit::Meters,
                 enabled: true,
                 timing: Default::default(),
                 channel: Channel::Weapon {

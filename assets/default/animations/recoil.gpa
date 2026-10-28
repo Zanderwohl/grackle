@@ -43,7 +43,7 @@ ease = "linear"
 [[tracks]]
 combine = "compose"
 space = "carry"
-unit = "metres"
+unit = "meters"
 enabled = true
 
 [tracks.channel]

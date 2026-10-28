@@ -6,13 +6,13 @@
 //! draw, and cancel the reload of, every weapon scrolled past. A bucket of one
 //! weapon switches at once.
 //!
-//! Sent as a plain [`Slot`] rather than "next in bucket 2", so a replayed tick
-//! reaches the same loadout.
+//! Sent as a plain [`WeaponId`] rather than "next in bucket 2", so a replayed
+//! tick reaches the same loadout.
 
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 
-use crate::common::weapon::{Equipped, Slot, WeaponCatalogue, BUCKETS};
+use crate::common::weapon::{Equipped, WeaponCatalog, WeaponId, BUCKETS};
 use crate::game::pause_menu::PauseMenu;
 use crate::game::player::{InputLatch, LocalPlayer};
 
@@ -42,16 +42,16 @@ const DIGITS: [KeyCode; BUCKETS as usize] = [
 /// `Equipped`, which is a round trip behind.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
 pub struct WeaponSelection {
-    pub highlight: Option<Slot>,
+    pub highlight: Option<WeaponId>,
     /// Seconds left showing; zero is closed.
     pub open_for: f32,
     /// Seconds of quiet left before the highlight is sent.
     pending: Option<f32>,
     /// By [`Button`](crate::game::weapon::Button) index: a click that
-    /// confirmed or cancelled, still held, is not a shot until released.
+    /// confirmed or canceled, still held, is not a shot until released.
     swallowing: [bool; 2],
     /// Sent and not yet seen held: the old weapon is being put away.
-    sent: Option<Slot>,
+    sent: Option<WeaponId>,
     /// A new body, from a respawn or a new round, starts from nothing.
     body: Option<Entity>,
 }
@@ -66,8 +66,8 @@ impl WeaponSelection {
         self.pending.is_some() || self.sent.is_some() || self.swallowing.contains(&true)
     }
 
-    fn choose(&mut self, slot: Slot) {
-        self.highlight = Some(slot);
+    fn choose(&mut self, weapon: WeaponId) {
+        self.highlight = Some(weapon);
         self.open_for = OPEN_SECONDS;
     }
 
@@ -82,20 +82,19 @@ impl WeaponSelection {
     }
 }
 
-/// Sorted by bucket, then slot. A weapon the catalogue cannot name yet is left
-/// out.
-pub fn carried(equipped: &Equipped, catalogue: &WeaponCatalogue) -> Vec<(u8, Slot)> {
-    let mut order: Vec<(u8, Slot)> = Slot::ALL
-        .into_iter()
-        .filter_map(|slot| Some((catalogue.get(equipped.get(slot)?)?.bucket, slot)))
-        .collect();
-    order.sort();
+/// Sorted by bucket, then by the order they were taken. A weapon the catalog
+/// cannot name yet is left out.
+pub fn carried(equipped: &Equipped, catalog: &WeaponCatalog) -> Vec<(u8, WeaponId)> {
+    let mut order: Vec<(u8, WeaponId)> =
+        equipped.carried().iter().filter_map(|&id| Some((catalog.get(id)?.bucket, id))).collect();
+    // Stable, so a bucket keeps the carried order.
+    order.sort_by_key(|(bucket, _)| *bucket);
     order
 }
 
 /// The first weapon in `bucket`, or the one after `from` if `from` is in it.
-pub fn press(order: &[(u8, Slot)], from: Option<Slot>, bucket: u8) -> Option<Slot> {
-    let inside: Vec<Slot> =
+pub fn press<T: Copy + PartialEq>(order: &[(u8, T)], from: Option<T>, bucket: u8) -> Option<T> {
+    let inside: Vec<T> =
         order.iter().filter(|(at, _)| *at == bucket).map(|(_, slot)| *slot).collect();
     let next = match from.and_then(|from| inside.iter().position(|slot| *slot == from)) {
         Some(i) => i + 1,
@@ -105,7 +104,7 @@ pub fn press(order: &[(u8, Slot)], from: Option<Slot>, bucket: u8) -> Option<Slo
 }
 
 /// Wraps; positive is further along.
-pub fn scroll(order: &[(u8, Slot)], from: Option<Slot>, notches: i32) -> Option<Slot> {
+pub fn scroll<T: Copy + PartialEq>(order: &[(u8, T)], from: Option<T>, notches: i32) -> Option<T> {
     if order.is_empty() {
         return None;
     }
@@ -121,7 +120,7 @@ pub fn choose_weapons(
     keys: Res<ButtonInput<KeyCode>>,
     mut wheel: MessageReader<MouseWheel>,
     paused: Option<Res<PauseMenu>>,
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     ours: Option<Single<(Entity, &Equipped), With<LocalPlayer>>>,
     mut selection: ResMut<WeaponSelection>,
     mut travel: Local<f32>,
@@ -146,12 +145,12 @@ pub fn choose_weapons(
     }
     let dt = time.delta_secs();
     selection.open_for = (selection.open_for - dt).max(0.0);
-    if selection.sent == Some(equipped.held) {
+    if selection.sent.is_some() && selection.sent == equipped.held() {
         selection.sent = None;
     }
     if !selection.is_open() {
         *selection = WeaponSelection {
-            highlight: Some(equipped.held),
+            highlight: equipped.held(),
             swallowing: selection.swallowing,
             body: selection.body,
             ..default()
@@ -166,14 +165,14 @@ pub fn choose_weapons(
     let mut chosen = None;
     let mut at_once = false;
     if !pressed.is_empty() || notches != 0.0 {
-        let order = carried(equipped, &catalogue);
+        let order = carried(equipped, &catalog);
         for bucket in pressed {
             if let Some(slot) = press(&order, chosen.or(selection.highlight), bucket) {
                 chosen = Some(slot);
                 at_once = order.iter().filter(|(at, _)| *at == bucket).count() == 1;
             }
         }
-        // Wheel up is back towards bucket 1, as Source binds it.
+        // Wheel up is back toward bucket 1, as Source binds it.
         if notches != 0.0
             && let Some(slot) = scroll(&order, chosen.or(selection.highlight), -(notches as i32))
         {
@@ -202,7 +201,7 @@ pub fn choose_weapons(
             selection.send(&mut latch);
             selection.swallowing[0] = true;
         } else if latch.0.alt_attack {
-            selection.highlight = Some(equipped.held);
+            selection.highlight = equipped.held();
             selection.forget();
             selection.swallowing[1] = true;
         }
@@ -230,8 +229,8 @@ pub fn choose_weapons(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::weapon::WeaponId;
-    use crate::common::weapon_file::default_catalogue;
+    use crate::common::weapon::Slot;
+    use crate::common::weapon_file::default_catalog;
 
     /// Out of slot order on purpose.
     fn order() -> Vec<(u8, Slot)> {
@@ -288,25 +287,28 @@ mod tests {
     }
 
     #[test]
-    fn carried_weapons_are_ordered_by_bucket_then_slot() {
-        let catalogue = default_catalogue();
-        let (equipped, _) = catalogue.starting_equipment(crate::common::class::Class::Mercenary);
-        let order = carried(&equipped, &catalogue);
+    fn carried_weapons_are_ordered_by_bucket_then_as_taken() {
+        let catalog = default_catalog();
+        let (equipped, _) = catalog.starting_equipment(crate::common::class::Class::Mercenary, None);
+        let order = carried(&equipped, &catalog);
 
-        assert_eq!(order.len(), equipped.slots.iter().flatten().count());
-        assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
-        for (bucket, slot) in &order {
-            let id: WeaponId = equipped.get(*slot).unwrap();
-            assert_eq!(catalogue.get(id).unwrap().bucket, *bucket);
+        assert_eq!(order.len(), equipped.carried().len());
+        let place = |id: WeaponId| equipped.carried().iter().position(|carried| *carried == id);
+        assert!(
+            order.windows(2).all(|pair| (pair[0].0, place(pair[0].1)) < (pair[1].0, place(pair[1].1))),
+            "{order:?}"
+        );
+        for (bucket, id) in &order {
+            assert_eq!(catalog.get(*id).unwrap().bucket, *bucket);
         }
     }
 
     /// Cycling can only be tried by hand if the shipped loadout shares a bucket.
     #[test]
     fn the_placeholder_class_shares_a_bucket() {
-        let catalogue = default_catalogue();
-        let (equipped, _) = catalogue.starting_equipment(crate::common::class::Class::Mercenary);
-        let order = carried(&equipped, &catalogue);
+        let catalog = default_catalog();
+        let (equipped, _) = catalog.starting_equipment(crate::common::class::Class::Mercenary, None);
+        let order = carried(&equipped, &catalog);
         assert!(order.windows(2).any(|pair| pair[0].0 == pair[1].0), "{order:?}");
     }
 
@@ -314,17 +316,17 @@ mod tests {
 
     /// Holding something outside the first shared bucket, which nothing here
     /// changes. Returns that bucket and its slots.
-    fn a_chooser() -> (World, u8, Vec<Slot>) {
+    fn a_chooser() -> (World, u8, Vec<WeaponId>) {
         let mut world = World::new();
-        let catalogue = default_catalogue();
+        let catalog = default_catalog();
         let (mut equipped, _) =
-            catalogue.starting_equipment(crate::common::class::Class::Mercenary);
-        let order = carried(&equipped, &catalogue);
+            catalog.starting_equipment(crate::common::class::Class::Mercenary, None);
+        let order = carried(&equipped, &catalog);
         let bucket = order.windows(2).find(|pair| pair[0].0 == pair[1].0).unwrap()[0].0;
         let inside = order.iter().filter(|(at, _)| *at == bucket).map(|(_, slot)| *slot).collect();
-        equipped.held = order.iter().find(|(at, _)| *at != bucket).unwrap().1;
+        equipped.select(order.iter().find(|(at, _)| *at != bucket).unwrap().1);
 
-        world.insert_resource(catalogue);
+        world.insert_resource(catalog);
         world.init_resource::<Time>();
         world.init_resource::<WeaponSelection>();
         world.init_resource::<InputLatch>();
@@ -344,11 +346,11 @@ mod tests {
         world.run_system_once(choose_weapons).unwrap();
     }
 
-    fn sent(world: &World) -> Option<Slot> {
+    fn sent(world: &World) -> Option<WeaponId> {
         world.resource::<InputLatch>().0.select
     }
 
-    fn highlight(world: &World) -> Option<Slot> {
+    fn highlight(world: &World) -> Option<WeaponId> {
         world.resource::<WeaponSelection>().highlight
     }
 
@@ -381,9 +383,9 @@ mod tests {
     #[test]
     fn a_bucket_of_one_switches_at_once() {
         let (mut world, _, _) = a_chooser();
-        let catalogue = world.resource::<WeaponCatalogue>().clone();
-        let equipped = *world.query::<&Equipped>().single(&world).unwrap();
-        let order = carried(&equipped, &catalogue);
+        let catalog = world.resource::<WeaponCatalog>().clone();
+        let equipped = world.query::<&Equipped>().single(&world).unwrap().clone();
+        let order = carried(&equipped, &catalog);
         let (alone, slot) = *order
             .iter()
             .find(|(at, _)| order.iter().filter(|(b, _)| b == at).count() == 1)
@@ -407,7 +409,7 @@ mod tests {
             assert!(!input.attack && !input.attack_held, "the confirming click fired");
         }
         assert_eq!(sent(&world), Some(inside[0]));
-        world.query::<&mut Equipped>().single_mut(&mut world).unwrap().held = inside[0];
+        world.query::<&mut Equipped>().single_mut(&mut world).unwrap().select(inside[0]);
         frame(&mut world, 0.01, None);
         assert!(!world.resource::<WeaponSelection>().holds_the_buttons(), "never let go");
 
@@ -419,24 +421,24 @@ mod tests {
     #[test]
     fn a_right_click_cancels() {
         let (mut world, bucket, _) = a_chooser();
-        let held = world.query::<&Equipped>().single(&world).unwrap().held;
+        let held = world.query::<&Equipped>().single(&world).unwrap().held();
         frame(&mut world, 0.0, Some(DIGITS[bucket as usize - 1]));
 
         world.resource_mut::<InputLatch>().0.alt_attack = true;
         frame(&mut world, 0.01, None);
         frame(&mut world, SETTLE_SECONDS * 2.0, None);
 
-        assert_eq!(sent(&world), None, "a cancelled choice was sent");
-        assert_eq!(highlight(&world), Some(held));
-        assert!(!world.resource::<InputLatch>().0.alt_attack, "the cancelling click fired");
+        assert_eq!(sent(&world), None, "a canceled choice was sent");
+        assert_eq!(highlight(&world), held);
+        assert!(!world.resource::<InputLatch>().0.alt_attack, "the canceling click fired");
     }
 
     #[test]
     fn a_sent_switch_holds_the_buttons_until_it_is_seen_held() {
         let (mut world, _, _) = a_chooser();
-        let catalogue = world.resource::<WeaponCatalogue>().clone();
-        let equipped = *world.query::<&Equipped>().single(&world).unwrap();
-        let order = carried(&equipped, &catalogue);
+        let catalog = world.resource::<WeaponCatalog>().clone();
+        let equipped = world.query::<&Equipped>().single(&world).unwrap().clone();
+        let order = carried(&equipped, &catalog);
         let (alone, slot) = *order
             .iter()
             .find(|(at, _)| order.iter().filter(|(b, _)| b == at).count() == 1)
@@ -449,7 +451,7 @@ mod tests {
             "the weapon being put away could be guessed to fire"
         );
 
-        world.query::<&mut Equipped>().single_mut(&mut world).unwrap().held = slot;
+        world.query::<&mut Equipped>().single_mut(&mut world).unwrap().select(slot);
         frame(&mut world, 0.01, None);
         assert!(!world.resource::<WeaponSelection>().holds_the_buttons());
     }
@@ -461,12 +463,12 @@ mod tests {
         frame(&mut world, 0.0, Some(DIGITS[bucket as usize - 1]));
 
         let old = world.query_filtered::<Entity, With<LocalPlayer>>().single(&world).unwrap();
-        let equipped = *world.get::<Equipped>(old).unwrap();
+        let equipped = world.get::<Equipped>(old).unwrap().clone();
         world.despawn(old);
-        world.spawn((equipped, LocalPlayer));
+        world.spawn((equipped.clone(), LocalPlayer));
         frame(&mut world, SETTLE_SECONDS * 2.0, None);
 
         assert_eq!(sent(&world), None, "the dead body's choice reached the new one");
-        assert_eq!(highlight(&world), Some(equipped.held));
+        assert_eq!(highlight(&world), equipped.held());
     }
 }

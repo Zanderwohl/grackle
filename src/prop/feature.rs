@@ -1,7 +1,7 @@
 //! The feature list a prop is, and how it evaluates. Like the map's
 //! [`FeatureTimeline`], but a feature is an enum rather than a `typetag` trait
 //! object, because a boolean has to know what it is subtracting. See CLAUDE.md,
-//! "Modelling a prop".
+//! "Modeling a prop".
 //!
 //! A feature that consumes bodies produces one under its own id; what is left
 //! at the end is drawn. A feature naming a body that is not there is skipped
@@ -125,7 +125,7 @@ pub enum FeatureOp {
     /// About a plane, as it stood when this runs.
     Mirror {
         target: PropFeatureId,
-        /// Metres along the plane's normal.
+        /// Meters along the plane's normal.
         #[serde(default, with = "crate::prop::nice_f32::scalar")]
         offset: f32,
         /// Union with the original rather than replacing it.
@@ -154,7 +154,7 @@ pub enum FeatureOp {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum End {
-    /// Metres along the plane's normal; negative goes the other way.
+    /// Meters along the plane's normal; negative goes the other way.
     Distance {
         #[serde(with = "crate::prop::nice_f32::scalar")]
         distance: f32,
@@ -172,7 +172,7 @@ impl End {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PatternKind {
-    /// Each copy `spacing` metres further along `direction` than the last;
+    /// Each copy `spacing` meters further along `direction` than the last;
     /// negative goes back down it.
     Linear {
         #[serde(with = "crate::prop::nice_f32::scalar")]
@@ -364,7 +364,7 @@ pub struct Evaluated {
     pub planes: Vec<Datum>,
     /// Sketches, in list order, placed where their planes were.
     pub sketches: Vec<PlacedSketch>,
-    /// Metres each way of the origin the origin planes and axes are drawn.
+    /// Meters each way of the origin the origin planes and axes are drawn.
     pub origin_half: f32,
 }
 
@@ -508,7 +508,7 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
 }
 
 /// Where a revolve turns its regions: local `+Y` along the axis from its first
-/// point, local `+X` across it towards the regions — so every radius
+/// point, local `+X` across it toward the regions — so every radius
 /// [`Solid::revolve`] sees is positive — and local `Z` completing the frame.
 struct AxisFrame {
     transform: Transform,
@@ -576,8 +576,8 @@ fn plane_of(on: PlaneRef, planes: &[Datum]) -> Option<Plane> {
     }
 }
 
-/// Metres a revolve's axis may sit off its sketch's plane: the kernel's
-/// rounding, not a modelling tolerance.
+/// Meters a revolve's axis may sit off its sketch's plane: the kernel's
+/// rounding, not a modeling tolerance.
 pub(crate) const IN_PLANE: f32 = 1e-4;
 
 /// Every region a sweep names, as the sketch now stands, or a Problem naming
@@ -1160,7 +1160,7 @@ mod tests {
         }
 
         #[test]
-        fn removing_a_sweep_forgets_its_region_unless_it_was_labelled() {
+        fn removing_a_sweep_forgets_its_region_unless_it_was_labeled() {
             let mut sketch = Sketch::default();
             square(&mut sketch, 0.0, 0.04);
             square(&mut sketch, 0.1, 0.14);

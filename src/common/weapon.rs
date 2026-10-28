@@ -1,7 +1,7 @@
 //! What a weapon is, as data. The systems live in [`crate::game::weapon`].
 //!
 //! These values cross the wire, so a server can ship its own weapons. Nothing
-//! here reads a file: a client is told its catalogue by the server.
+//! here reads a file: a client is told its catalog by the server.
 //!
 //! An action is what one button does; a weapon is a pair of them. A new weapon
 //! is a row in a data file; a new kind of weapon is a [`WeaponAction`] variant
@@ -15,7 +15,7 @@ use crate::common::class::Class;
 use crate::common::flame::FlameSpec;
 use crate::common::projectile::ProjectileSpec;
 
-/// A stable FNV-1a hash of the id string, not an index into the catalogue,
+/// A stable FNV-1a hash of the id string, not an index into the catalog,
 /// so machines with differently ordered files agree on it.
 ///
 /// Written out rather than taken from a std hasher, whose output may change
@@ -45,7 +45,7 @@ pub struct HitscanSpec {
     pub range_m: f32,
     pub damage: u32,
     pub headshot_multiplier: u32,
-    /// Metres per second of corpse shove, per point of damage.
+    /// Meters per second of corpse shove, per point of damage.
     pub shove_per_damage: f32,
     #[serde(rename = "shove_radius")]
     pub shove_radius_m: f32,
@@ -80,7 +80,7 @@ pub struct ScopeSpec {
 
 /// What one mouse button does.
 ///
-/// The stubs round-trip through the data files but have no behaviour yet.
+/// The stubs round-trip through the data files but have no behavior yet.
 /// They log rather than panic, so a listen server does not drop everybody
 /// because somebody right-clicked.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
@@ -114,9 +114,23 @@ impl WeaponAction {
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Cadence {
-    Semi,
-    /// `interval` in seconds.
+    /// A shot per press. `interval`, in seconds, is the least time between
+    /// two, so clicking fast cannot outrun the weapon; a press inside it is
+    /// dropped, as one while drawing is.
+    Semi {
+        #[serde(default)]
+        interval: f32,
+    },
+    /// Shots while held, `interval` seconds apart.
     Automatic { interval: f32 },
+}
+
+impl Cadence {
+    pub fn interval(self) -> f32 {
+        match self {
+            Cadence::Semi { interval } | Cadence::Automatic { interval } => interval,
+        }
+    }
 }
 
 /// On the button rather than the weapon: a flamethrower's puff and airblast
@@ -143,7 +157,7 @@ pub struct Mounted {
 impl Mounted {
     pub const EMPTY: Self = Self {
         action: WeaponAction::None,
-        cadence: Cadence::Semi,
+        cadence: Cadence::Semi { interval: 0.0 },
         cost: Cost::Free,
     };
 }
@@ -177,11 +191,15 @@ impl Magazine {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Weapon {
     pub id: WeaponId,
+    /// What `weapons.toml` calls it, which is what a map names it by; `id` is
+    /// its hash.
+    #[serde(default)]
+    pub key: String,
     /// A lang key, not display text.
     pub name_key: String,
     /// A prop name under a pack's `props/`, without the extension. A name
-    /// rather than geometry so the catalogue stays small on the wire; each
-    /// machine builds the model from its own pack. `None` is unmodelled, kept
+    /// rather than geometry so the catalog stays small on the wire; each
+    /// machine builds the model from its own pack. `None` is unmodeled, kept
     /// distinct from a name that fails to load.
     #[serde(default)]
     pub model: Option<String>,
@@ -197,8 +215,7 @@ pub struct Weapon {
 /// A bucket is the weapon's; a [`Slot`] is a place in a class's loadout.
 pub const BUCKETS: u8 = 9;
 
-/// More than any class needs today, because growing it later means growing a
-/// replicated array.
+/// The places a class's loadout names; no bound on what a body carries.
 pub const SLOTS: usize = 6;
 
 #[derive(
@@ -226,14 +243,6 @@ impl Slot {
         Slot::Special,
     ];
 
-    pub fn index(self) -> usize {
-        self as usize
-    }
-
-    pub fn from_index(index: usize) -> Option<Self> {
-        Self::ALL.get(index).copied()
-    }
-
     pub fn name(self) -> String {
         match self {
             Slot::Primary => crate::get!("weapon.slots.primary"),
@@ -246,32 +255,56 @@ impl Slot {
     }
 }
 
-/// Ids only, never weapon numbers. The ids and the held slot are one component
-/// because replication does not promise to deliver two components in one
-/// packet.
-#[derive(
-    Component, Clone, Copy, Debug, Default, PartialEq, Reflect, Serialize, Deserialize,
-)]
+/// What a body carries, by id. The list and what is held are one component
+/// because replication does not promise to deliver two in one packet.
+#[derive(Component, Clone, Debug, Default, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct Equipped {
-    pub slots: [Option<WeaponId>; SLOTS],
-    pub held: Slot,
+    /// The class's starting weapons in loadout-slot order, then pickups in
+    /// the order they were taken. Never reordered and never holding one id
+    /// twice.
+    carried: Vec<WeaponId>,
+    /// Always one of `carried`, or nothing.
+    held: Option<WeaponId>,
 }
 
 impl Equipped {
-    pub fn held(&self) -> Option<WeaponId> {
-        self.slots[self.held.index()]
-    }
-
-    pub fn get(&self, slot: Slot) -> Option<WeaponId> {
-        self.slots[slot.index()]
-    }
-
-    /// An empty slot is ignored. Idempotent, so a replayed tick reaches the
-    /// same loadout.
-    pub fn select(&mut self, slot: Slot) {
-        if self.slots[slot.index()].is_some() {
-            self.held = slot;
+    /// Holding the first, with any repeat dropped.
+    pub fn carrying(weapons: impl IntoIterator<Item = WeaponId>) -> Self {
+        let mut equipped = Self::default();
+        for weapon in weapons {
+            equipped.add(weapon);
         }
+        equipped.held = equipped.carried.first().copied();
+        equipped
+    }
+
+    pub fn carried(&self) -> &[WeaponId] {
+        &self.carried
+    }
+
+    pub fn held(&self) -> Option<WeaponId> {
+        self.held
+    }
+
+    pub fn carries(&self, weapon: WeaponId) -> bool {
+        self.carried.contains(&weapon)
+    }
+
+    /// One not carried is ignored. Idempotent, so a replayed tick reaches the
+    /// same loadout.
+    pub fn select(&mut self, weapon: WeaponId) {
+        if self.carries(weapon) {
+            self.held = Some(weapon);
+        }
+    }
+
+    /// Returns whether it was new.
+    pub fn add(&mut self, weapon: WeaponId) -> bool {
+        if self.carries(weapon) {
+            return false;
+        }
+        self.carried.push(weapon);
+        true
     }
 }
 
@@ -286,21 +319,30 @@ pub struct AmmoState {
 }
 
 /// Separate from [`Equipped`] because ammo changes every shot and a switch is
-/// rare, and replication is change-detected per component.
-#[derive(
-    Component, Clone, Copy, Debug, Default, PartialEq, Reflect, Serialize, Deserialize,
-)]
+/// rare, and replication is change-detected per component. Keyed by weapon,
+/// not by position in `Equipped::carried`, because the two arrive in
+/// different packets.
+#[derive(Component, Clone, Debug, Default, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct Ammo {
-    pub slots: [AmmoState; SLOTS],
+    pub weapons: Vec<(WeaponId, AmmoState)>,
 }
 
 impl Ammo {
-    pub fn at(&self, slot: Slot) -> &AmmoState {
-        &self.slots[slot.index()]
+    /// `None` until a client's `Ammo` catches up with a pickup: draw blank.
+    pub fn at(&self, weapon: WeaponId) -> Option<&AmmoState> {
+        self.weapons.iter().find(|(id, _)| *id == weapon).map(|(_, state)| state)
     }
 
-    pub fn at_mut(&mut self, slot: Slot) -> &mut AmmoState {
-        &mut self.slots[slot.index()]
+    /// Makes an empty entry if there is none.
+    pub fn at_mut(&mut self, weapon: WeaponId) -> &mut AmmoState {
+        let index = match self.weapons.iter().position(|(id, _)| *id == weapon) {
+            Some(index) => index,
+            None => {
+                self.weapons.push((weapon, AmmoState::default()));
+                self.weapons.len() - 1
+            }
+        };
+        &mut self.weapons[index].1
     }
 
     pub fn full(magazine: &Magazine) -> AmmoState {
@@ -329,6 +371,12 @@ pub struct Loadout {
     /// a player's until there are items to own one by.
     #[serde(default)]
     pub hat: Option<String>,
+    /// A fresh body's health; `None` is [`DEFAULT_HEALTH`](crate::common::damage::DEFAULT_HEALTH).
+    #[serde(default)]
+    pub health: Option<u32>,
+    /// The most armor a body holds; `None` is [`DEFAULT_MAX_ARMOR`](crate::common::damage::DEFAULT_MAX_ARMOR).
+    #[serde(default)]
+    pub armor: Option<u32>,
 }
 
 impl Loadout {
@@ -352,12 +400,12 @@ impl Loadout {
 /// send it, and a `HashMap` iterates in an arbitrary order. A few dozen
 /// weapons make a scan free.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct WeaponCatalogue {
+pub struct WeaponCatalog {
     pub weapons: Vec<Weapon>,
     pub loadouts: Vec<(Class, Loadout)>,
 }
 
-impl WeaponCatalogue {
+impl WeaponCatalog {
     pub fn get(&self, id: WeaponId) -> Option<&Weapon> {
         self.weapons.iter().find(|weapon| weapon.id == id)
     }
@@ -381,7 +429,7 @@ impl WeaponCatalogue {
         }
     }
 
-    /// Resolve on every call; never cache. The ids and the catalogue arrive on
+    /// Resolve on every call; never cache. The ids and the catalog arrive on
     /// different channels.
     pub fn held_by(&self, equipped: &Equipped) -> Option<&Weapon> {
         self.get(equipped.held()?)
@@ -389,7 +437,10 @@ impl WeaponCatalogue {
 
     /// Returned together so a body cannot hold a weapon with no ammo entry.
     /// Anything missing gives empty hands rather than a panic.
-    pub fn starting_equipment(&self, class: Class) -> (Equipped, Ammo) {
+    ///
+    /// `only` is a mode's loadout: each slot gets the first of those weapons
+    /// the class permits there, else nothing. `None` is the class's defaults.
+    pub fn starting_equipment(&self, class: Class, only: Option<&[WeaponId]>) -> (Equipped, Ammo) {
         let mut equipped = Equipped::default();
         let mut ammo = Ammo::default();
 
@@ -399,17 +450,19 @@ impl WeaponCatalogue {
 
         for slot in Slot::ALL {
             let Some(choices) = loadout.at(slot) else { continue };
-            let Some(weapon) = self.get(choices.default) else { continue };
-            equipped.slots[slot.index()] = Some(weapon.id);
-            ammo.slots[slot.index()] = Ammo::full(&weapon.magazine);
+            let chosen = match only {
+                None => Some(choices.default),
+                Some(only) => only.iter().copied().find(|id| choices.permitted.contains(id)),
+            };
+            let Some(weapon) = chosen.and_then(|id| self.get(id)) else { continue };
+            if equipped.add(weapon.id) {
+                *ammo.at_mut(weapon.id) = Ammo::full(&weapon.magazine);
+            }
         }
 
-        // Not `Primary` regardless: a class with an empty primary would spawn
-        // holding nothing.
-        equipped.held = Slot::ALL
-            .into_iter()
-            .find(|slot| equipped.get(*slot).is_some())
-            .unwrap_or_default();
+        // The first carried rather than the primary's: a class with an empty
+        // primary would spawn holding nothing.
+        equipped.held = equipped.carried.first().copied();
 
         (equipped, ammo)
     }

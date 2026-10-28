@@ -37,7 +37,7 @@ const DEFAULT_STRIP: f32 = 180.0;
 /// track.
 const SPLITTER_BAND: f32 = 6.0;
 
-const PROBLEM_COLOUR: egui::Color32 = egui::Color32::from_rgb(220, 140, 60);
+const PROBLEM_COLOR: egui::Color32 = egui::Color32::from_rgb(220, 140, 60);
 
 enum AnimTab {
     Clips,
@@ -609,7 +609,7 @@ impl AnimTabs<'_> {
                 clip.tracks.push(Track {
                     combine: Combine::Replace,
                     space: Space::Body,
-                    unit: Unit::Metres,
+                    unit: Unit::Meters,
                     enabled: true,
                     timing: Default::default(),
                     channel,
@@ -692,7 +692,7 @@ impl AnimTabs<'_> {
                     ui.add(egui::Label::new(name).selectable(false).truncate());
                     if !notes.is_empty() {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.colored_label(PROBLEM_COLOUR, "⚠")
+                            ui.colored_label(PROBLEM_COLOR, "⚠")
                                 .on_hover_text(notes.join("\n"));
                         });
                     }
@@ -759,7 +759,7 @@ impl AnimTabs<'_> {
                     .selected_text(get!(unit_key(edited.unit)))
                     .show_ui(ui, |ui| {
                         for unit in [
-                            Unit::Metres,
+                            Unit::Meters,
                             Unit::LegLengths,
                             Unit::ArmLengths,
                             Unit::HipHeights,
@@ -1116,7 +1116,7 @@ impl AnimTabs<'_> {
                 ),
                 None => problem.message,
             };
-            ui.colored_label(PROBLEM_COLOUR, text);
+            ui.colored_label(PROBLEM_COLOR, text);
         }
     }
 }
@@ -1446,7 +1446,7 @@ fn space_key(space: Space) -> &'static str {
 
 fn unit_key(unit: Unit) -> &'static str {
     match unit {
-        Unit::Metres => "anim.unit.metres",
+        Unit::Meters => "anim.unit.meters",
         Unit::LegLengths => "anim.unit.leg_lengths",
         Unit::ArmLengths => "anim.unit.arm_lengths",
         Unit::HipHeights => "anim.unit.hip_heights",
@@ -1605,7 +1605,7 @@ mod tests {
                 Track {
                     combine: Combine::Replace,
                     space: Space::Body,
-                    unit: Unit::Metres,
+                    unit: Unit::Meters,
                     enabled: true,
                     timing: Default::default(),
                     channel: Channel::Weapon {
@@ -1658,7 +1658,7 @@ mod tests {
         assert_eq!(
             clip.tracks[1].channel.keys()[0].to[0],
             Axis::Value(1.0),
-            "metres were written into an angle",
+            "meters were written into an angle",
         );
     }
 

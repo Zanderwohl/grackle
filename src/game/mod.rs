@@ -24,6 +24,7 @@ pub mod body_mesh;
 pub mod collision;
 pub mod condition;
 pub mod damage;
+pub mod damage_direction;
 pub mod death;
 pub mod hat;
 pub mod held;
@@ -44,6 +45,10 @@ pub mod player;
 pub mod net_bodies;
 pub mod pause_menu;
 pub mod hud;
+pub mod pickup_beam;
+pub mod rounds;
+pub mod score;
+pub mod tab_board;
 pub mod ragdoll;
 pub mod skeleton;
 pub mod viewmodel;
@@ -60,6 +65,10 @@ impl Plugin for GamePlugin {
             .add_plugins(RagdollPlugin)
             .add_plugins(PauseMenuPlugin)
             .add_plugins(crate::game::hud::HudPlugin)
+            .add_plugins(crate::game::score::ScorePlugin)
+            .add_plugins(crate::game::rounds::RoundHistoryPlugin)
+            .add_plugins(crate::game::tab_board::TabBoardPlugin)
+            .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
 
@@ -67,16 +76,19 @@ impl Plugin for GamePlugin {
             .init_resource::<crate::common::assets::Assets>()
             // Here rather than in `WeaponPlugin` because `spawn_player` reads
             // it. On a client it is replaced by the server's on connect.
-            .init_resource::<crate::common::weapon::WeaponCatalogue>()
+            .init_resource::<crate::common::weapon::WeaponCatalog>()
             .add_systems(
                 Startup,
-                crate::common::weapon_file::load_catalogue_at_startup,
+                crate::common::weapon_file::load_catalog_at_startup,
             )
             // Bodies are rigged from it; replaced by the server's on connect.
             .init_resource::<crate::common::class::ClassBuilds>()
             .add_systems(Startup, crate::common::class_file::load_builds_at_startup)
             .init_resource::<crate::common::taunt::Taunts>()
             .add_systems(Startup, crate::common::taunt::load_taunts_at_startup)
+            .init_resource::<crate::common::game_rules::Modes>()
+            .add_systems(Startup, crate::common::game_rules::load_modes_at_startup)
+            .init_resource::<crate::common::game_rules::GameRules>()
             // A pack that ships no clips leaves bodies on the built-in poses.
             .add_systems(
                 Startup,
@@ -86,7 +98,7 @@ impl Plugin for GamePlugin {
             .init_resource::<CollisionWorld>()
             .init_resource::<MovementRules>()
             .init_resource::<NextPlayerId>()
-            // Owned by `SkeletonPlugin`, initialised here too because the
+            // Owned by `SkeletonPlugin`, initialized here too because the
             // reset writes it: without that plugin the first F5 would fail.
             .init_resource::<AnimationClock>()
             .init_resource::<InputLatch>()
@@ -200,8 +212,10 @@ fn enter_play(
     collision.rebuild(&rooms);
 
     // A new match is a new player: dropping the identity makes the next body
-    // allocate a fresh id. Dying inside a match keeps it.
+    // allocate a fresh id. Dying inside a match keeps it. A new match turns
+    // the color wheel too.
     commands.remove_resource::<OurIdentity>();
+    commands.remove_resource::<crate::game::respawn::HueStart>();
 
 
     for mut camera in &mut editor_cameras {
@@ -228,6 +242,7 @@ fn leave_play(
     }
     // Kept, the next match's first body would inherit it.
     commands.remove_resource::<OurIdentity>();
+    commands.remove_resource::<crate::game::respawn::HueStart>();
     commands.remove_resource::<crate::game::player::DeathCam>();
     commands.remove_resource::<crate::game::player::OurLastBody>();
 
@@ -428,8 +443,8 @@ mod tests {
         );
     }
 
-    /// A plane rising towards `+X` from the line `x = 0` on the floor, `degrees`
-    /// steep, as two triangles; mirrored, it rises towards `-X` instead.
+    /// A plane rising toward `+X` from the line `x = 0` on the floor, `degrees`
+    /// steep, as two triangles; mirrored, it rises toward `-X` instead.
     fn slope(degrees: f32, mirrored: bool) -> [crate::game::collision::Hull; 2] {
         use crate::game::collision::Hull;
         let s = if mirrored { -1.0 } else { 1.0 };
@@ -473,7 +488,7 @@ mod tests {
     fn a_body_walks_up_a_slope_it_can_walk() {
         let mut app = dropped_onto(slope(30.0, false), Vec3::new(1.0, 2.5, 0.0));
         let start = player_position(&mut app);
-        // Facing `-Z`; walking right is towards `+X`, up the slope.
+        // Facing `-Z`; walking right is toward `+X`, up the slope.
         app.world_mut().resource_mut::<InputLatch>().0.movement = Vec2::new(1.0, 0.0);
         tick(&mut app, 30);
         let end = player_position(&mut app);
@@ -481,16 +496,14 @@ mod tests {
         assert!(on_ground(&mut app), "walking up the slope left the ground");
     }
 
-    /// Slowly: horizontal velocity is written outright every step, so only
-    /// the fall carries from one tick to the next. Momentum is its own change.
+    /// All the way down to the floor at its foot, within the second
+    /// `dropped_onto` waits: what slides off a wall keeps its speed.
     #[test]
     fn a_body_on_a_slope_too_steep_to_stand_on_slides_off_it() {
         let mut app = dropped_onto(slope(60.0, false), Vec3::new(2.0, 5.0, 0.0));
-        assert!(!on_ground(&mut app), "a 60° slope was ground");
-        let before = player_position(&mut app);
-        tick(&mut app, 30);
         let after = player_position(&mut app);
-        assert!(after.x < before.x - 0.1 && after.y < before.y - 0.1, "stuck on a 60° slope: {before} then {after}");
+        assert!(after.x < 1.0 && after.y < PLAYER_HALF.y + 0.3, "stuck on a 60° slope at {after}");
+        assert!(on_ground(&mut app), "never reached the floor under the slope");
     }
 
     /// Breaks if each surface is slid along in turn: every slide down one
@@ -508,7 +521,7 @@ mod tests {
     }
 
     /// A body standing at `x = 3` in a room with its floor at zero, walking
-    /// towards `+X` into whatever else `rooms` adds, for two seconds.
+    /// toward `+X` into whatever else `rooms` adds, for two seconds.
     fn walked_towards(rooms: &[Room]) -> App {
         let mut all = vec![room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 4.0, 5.0))];
         all.extend_from_slice(rooms);
@@ -694,11 +707,15 @@ mod tests {
                 .single(app.world())
                 .unwrap()
         };
+        // Coasting to a stop afterward, so a walk does not carry into the next.
         let walked = |app: &mut App| {
             latch(app).0.movement = Vec2::Y;
             let from = player_position(app);
             tick(app, 16);
             latch(app).0.movement = Vec2::ZERO;
+            // Half a second stops a sprint; short enough to stay inside the
+            // wave's 1.2 s with the turn below.
+            tick(app, 40);
             (player_position(app) - from).with_y(0.0).length()
         };
         let toggle = |app: &mut App| {
@@ -739,6 +756,112 @@ mod tests {
         assert!(condition(&mut app).taunt.is_some());
         tick(&mut app, 2 * crate::constants::TICK_HZ as usize);
         assert_eq!(condition(&mut app).taunt, None, "the wave never ended by itself");
+    }
+
+    /// Rises until it stops, and returns how far above `from` it peaked.
+    fn peak_above(app: &mut App, from: f32) -> f32 {
+        let mut peak = from;
+        for _ in 0..(2 * crate::constants::TICK_HZ as usize) {
+            tick(app, 1);
+            peak = peak.max(player_position(app).y);
+        }
+        peak - from
+    }
+
+    fn our_id(app: &mut App) -> crate::common::damage::PlayerId {
+        *app.world_mut()
+            .query_filtered::<&crate::common::damage::PlayerId, With<LocalPlayer>>()
+            .single(app.world())
+            .unwrap()
+    }
+
+    /// A headless game that can set things off. The body is boxed by hand:
+    /// its boxes come from a rig, which a headless game does not build.
+    fn armed(rooms: &[Room]) -> App {
+        let mut app = headless(rooms);
+        // `explode` alone: the plugin also draws, and a headless game has no gizmos.
+        app.add_plugins(crate::game::damage::DamagePlugin)
+            .add_message::<crate::common::damage::Explosion>()
+            .add_systems(
+                FixedUpdate,
+                crate::game::explosion::explode.in_set(crate::game::damage::DamageSystems::Deal),
+            );
+        app
+    }
+
+    fn rocket_at_our_feet(app: &mut App) {
+        use crate::common::damage::{DamageSource, Explosion};
+        use crate::common::hitbox::{Box3, Hitboxes};
+        let center = player_position(app);
+        let body = app.world_mut().query_filtered::<Entity, With<LocalPlayer>>().single(app.world()).unwrap();
+        app.world_mut().entity_mut(body).insert(Hitboxes {
+            body: Box3 { center, half_extents: PLAYER_HALF },
+            head: None,
+        });
+        let feet = center - Vec3::Y * (PLAYER_HALF.y - 0.1);
+        let source = DamageSource::Player(our_id(app));
+        app.world_mut().resource_mut::<Messages<Explosion>>().write(Explosion {
+            at: feet,
+            // The shipped rocket launcher's.
+            radius: 3.0,
+            damage: 90,
+            knockback: 9.0,
+            source,
+            direct: None,
+        });
+    }
+
+    fn health(app: &mut App) -> u32 {
+        app.world_mut()
+            .query_filtered::<&crate::common::damage::Damageable, With<LocalPlayer>>()
+            .single(app.world())
+            .unwrap()
+            .health()
+    }
+
+    #[test]
+    fn a_rocket_at_your_feet_lifts_you_higher_than_a_jump() {
+        let open = [room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 30.0, 10.0))];
+
+        let mut app = headless(&open);
+        enter(&mut app);
+        tick(&mut app, 30);
+        let standing = player_position(&mut app).y;
+        latch(&mut app).0.jump = true;
+        tick(&mut app, 1);
+        latch(&mut app).0.jump = false;
+        let jumped = peak_above(&mut app, standing);
+
+        let mut app = armed(&open);
+        enter(&mut app);
+        tick(&mut app, 30);
+        let standing = player_position(&mut app).y;
+        rocket_at_our_feet(&mut app);
+        let launched = peak_above(&mut app, standing);
+
+        assert!(jumped > 0.5, "the jump reached only {jumped}");
+        assert!(launched > jumped, "a rocket at the feet reached {launched}, a jump {jumped}");
+    }
+
+    #[test]
+    fn hurting_yourself_costs_what_the_mode_says() {
+        let open = [room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 30.0, 10.0))];
+        let cost = |self_damage: f32| {
+            let mut app = armed(&open);
+            app.insert_resource(crate::common::game_rules::GameRules(crate::common::game_rules::ModeRules {
+                self_damage,
+                ..default()
+            }));
+            enter(&mut app);
+            tick(&mut app, 30);
+            let before = health(&mut app);
+            rocket_at_our_feet(&mut app);
+            tick(&mut app, 1);
+            before - health(&mut app)
+        };
+        let full = cost(1.0);
+        assert!(full > 0, "a rocket at our feet did no damage");
+        assert_eq!(cost(0.5), (full as f32 * 0.5).round() as u32);
     }
 
     /// Simulated at 64 Hz, drawn between the last two steps.
@@ -840,7 +963,7 @@ mod tests {
         );
         enter(&mut app);
 
-        // Feet where the spawn point is; the body stands centred above it.
+        // Feet where the spawn point is; the body stands centered above it.
         let position = player_position(&mut app);
         assert!((position.x - 7.0).abs() < 0.01, "spawned at {position}");
         assert!((position.z + 3.0).abs() < 0.01, "spawned at {position}");
@@ -1176,12 +1299,18 @@ mod tests {
         let mut queue = bevy::ecs::world::CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, app.world());
+            let who = crate::game::respawn::Identity {
+                id: crate::common::damage::PlayerId(99),
+                team: Some(Team::Red),
+                color: 1,
+            };
             spawn_player(
                 &mut commands,
                 spawn,
-                crate::common::damage::PlayerId(99),
-                Team::Red,
-                &crate::common::weapon::WeaponCatalogue::default(),
+                &who,
+                who.color(&crate::game::respawn::HueStart(0.0)),
+                &crate::common::game_rules::ModeRules::default(),
+                &crate::common::weapon::WeaponCatalog::default(),
             );
         }
         queue.apply(app.world_mut());
@@ -1231,7 +1360,7 @@ mod tests {
         tick(&mut app, 60);
         assert!((player_position(&mut app).y - PLAYER_HALF.y).abs() < 0.05);
 
-        // Raise the floor by two metres, the way a drag handle would.
+        // Raise the floor by two meters, the way a drag handle would.
         let mut rooms = app.world_mut().query::<&mut Room>();
         for mut room in rooms.iter_mut(app.world_mut()) {
             room.floor = 2.0;

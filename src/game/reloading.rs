@@ -9,7 +9,7 @@
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::weapon::{Ammo, Equipped, WeaponCatalogue};
+use crate::common::weapon::{Ammo, Equipped, WeaponCatalog};
 use crate::game::held::{perform_weapon_clips, HeldModel, Performance, WeaponClip};
 use crate::game::player::LocalPlayer;
 use crate::game::viewmodel::Viewmodel;
@@ -36,7 +36,7 @@ impl Plugin for ReloadingPlugin {
 const STARTED: f32 = 1e-4;
 
 pub(crate) fn perform_reloads(
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     mut bodies: Query<
         (&Equipped, &Ammo, &HeldModel, &mut Performance, &mut ReloadSeen, Has<LocalPlayer>),
         Without<Viewmodel>,
@@ -44,7 +44,7 @@ pub(crate) fn perform_reloads(
     mut views: Query<&mut Performance, With<Viewmodel>>,
 ) {
     for (equipped, ammo, held, mut performance, mut seen, ours) in &mut bodies {
-        let left = ammo.at(equipped.held).reloading;
+        let left = equipped.held().and_then(|id| ammo.at(id)).map_or(0.0, |state| state.reloading);
         let was = seen.0;
         // The reload the last shot starts waits out that shot's kick. `seen`
         // stays behind, so the rise is still seen and the reload joins partway.
@@ -54,7 +54,7 @@ pub(crate) fn perform_reloads(
         if was != left {
             seen.0 = left;
         }
-        let Some(whole) = catalogue.held_by(equipped).map(|weapon| weapon.magazine.reload) else {
+        let Some(whole) = catalog.held_by(equipped).map(|weapon| weapon.magazine.reload) else {
             continue;
         };
 
@@ -98,9 +98,10 @@ mod tests {
     /// [`RELOAD_SECONDS`] and ships no clips of its own.
     fn a_reloader(world: &mut World) -> (Entity, Entity) {
         let id = WeaponId::of("test");
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.insert(Weapon {
+        let mut catalog = WeaponCatalog::default();
+        catalog.insert(Weapon {
             id,
+            key: "test".into(),
             name_key: "weapon.names.test".into(),
             model: None,
             bucket: 1,
@@ -111,16 +112,16 @@ mod tests {
         });
         let mut loadout = Loadout::default();
         loadout.set(Slot::Primary, SlotChoices { permitted: vec![id], default: id });
-        catalogue.set_loadout(Class::Mercenary, loadout);
-        let (equipped, ammo) = catalogue.starting_equipment(Class::Mercenary);
-        world.insert_resource(catalogue);
+        catalog.set_loadout(Class::Mercenary, loadout);
+        let (equipped, ammo) = catalog.starting_equipment(Class::Mercenary, None);
+        world.insert_resource(catalog);
         let body = world.spawn((LocalPlayer, equipped, ammo, HeldModel::default())).id();
         let view = world.spawn((Viewmodel::default(), Performance::default())).id();
         (body, view)
     }
 
     fn reloading(world: &mut World, body: Entity, left: f32) {
-        world.get_mut::<Ammo>(body).unwrap().at_mut(Slot::Primary).reloading = left;
+        world.get_mut::<Ammo>(body).unwrap().at_mut(WeaponId::of("test")).reloading = left;
         world.run_system_once(perform_reloads).unwrap();
     }
 

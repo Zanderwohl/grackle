@@ -13,10 +13,12 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
-use crate::common::damage::{Damage, DamageDealt, Damageable, Died};
+use crate::common::damage::{Armor, Damage, DamageDealt, Damageable, Died};
+use crate::common::game_rules::GameRules;
 use crate::common::team::Allegiances;
 use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage, suicide};
-use crate::game::player::PlayerCamera;
+use crate::common::damage::{DamageSource, PlayerId};
+use crate::game::player::{LocalPlayer, PlayerCamera};
 
 /// How long a damage number lasts, in seconds.
 pub const DAMAGE_NUMBER_LIFETIME: f32 = 2.0;
@@ -93,39 +95,72 @@ impl Plugin for DamagePlugin {
     }
 }
 
-/// The only system that touches a health pool, and where teams are enforced
-/// (see [`crate::common::team`]).
+/// The only system that touches a health pool or [`Armor`], and where teams
+/// are enforced (see [`crate::common::team`]).
 ///
 /// A target with no [`Damageable`] is skipped: an explosion sweeps up whatever
 /// is nearby. A request at a teammate is dropped with no [`DamageDealt`], so
-/// no zero is drawn over a friend.
+/// no zero is drawn over a friend. The record is the whole hit, armor's share
+/// included: a number is what you did, not where it landed.
 pub fn apply_damage(
     mut requests: MessageReader<Damage>,
-    mut health: Query<&mut Damageable>,
+    mut health: Query<(&mut Damageable, Option<&mut Armor>)>,
     allegiances: Allegiances,
+    // Absent in tests that build no map.
+    rules: Option<Res<GameRules>>,
     mut dealt: MessageWriter<DamageDealt>,
 ) {
+    let self_damage = rules.map_or(1.0, |rules| rules.self_damage);
     for request in requests.read() {
         if !allegiances.may_hurt(request.source, request.target) {
             continue;
         }
-        let Ok(mut target) = health.get_mut(request.target) else { continue };
+        let Ok((mut target, armor)) = health.get_mut(request.target) else { continue };
+        let requested = if allegiances.is_self(request.source, request.target) {
+            (request.amount as f32 * self_damage).round() as u32
+        } else {
+            request.amount
+        };
 
+        // An emptied body's armor is not spent on it.
+        let through = match armor {
+            Some(mut armor) if target.is_alive() && armor.points() > 0 => armor.soak(requested),
+            _ => requested,
+        };
         // Written even at zero, so a debug harness can keep shooting an
         // emptied body.
-        let amount = target.apply(request.amount);
+        let amount = requested - through + target.apply(through);
         dealt.write(DamageDealt {
             target: request.target,
             source: request.source,
             amount,
             remaining: target.health(),
             point: request.point,
+            from: request.from,
         });
     }
 }
 
-fn spawn_damage_numbers(mut commands: Commands, mut hits: MessageReader<DamageDealt>) {
+/// Only for hits we dealt, as in TF2: every machine is sent every hit. Who we
+/// are is our body's id, else the host's own identity, else whose death the
+/// camera is watching, so a rocket that lands after we died still counts.
+/// Hurting ourselves draws nothing.
+fn spawn_damage_numbers(
+    mut commands: Commands,
+    mut hits: MessageReader<DamageDealt>,
+    us: Option<Single<(Entity, &PlayerId), With<LocalPlayer>>>,
+    identity: Option<Res<crate::game::respawn::OurIdentity>>,
+    death_cam: Option<Res<crate::game::player::DeathCam>>,
+) {
+    let body = us.map(|us| *us);
+    let ours = body
+        .map(|(_, &id)| id)
+        .or(identity.map(|identity| identity.0.id))
+        .or(death_cam.and_then(|cam| cam.whose));
     for hit in hits.read() {
+        if ours.is_none_or(|ours| hit.source != DamageSource::Player(ours)) || Some(hit.target) == body.map(|(entity, _)| entity) {
+            continue;
+        }
         commands.spawn((
             DamageNumber {
                 amount: hit.amount,
@@ -204,7 +239,6 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
-    use crate::common::damage::{DamageSource, PlayerId};
 
     fn a_hit(amount: u32, point: Vec3) -> DamageDealt {
         DamageDealt {
@@ -213,6 +247,7 @@ mod tests {
             amount,
             remaining: 70,
             point,
+            from: None,
         }
     }
 
@@ -228,6 +263,7 @@ mod tests {
             source: DamageSource::Player(PlayerId(1)),
             amount: 90,
             point: Vec3::Y,
+            from: None,
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -260,6 +296,7 @@ mod tests {
             source: DamageSource::Player(shooter),
             amount: 40,
             point: Vec3::ZERO,
+            from: None,
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -285,11 +322,32 @@ mod tests {
             source: DamageSource::Player(id),
             amount: 40,
             point: Vec3::ZERO,
+            from: None,
         });
 
         world.run_system_once(apply_damage).unwrap();
 
         assert_eq!(world.get::<Damageable>(me).unwrap().health(), 60);
+    }
+
+    #[test]
+    fn armor_soaks_most_of_a_hit_and_the_record_is_the_whole_hit() {
+        let mut world = World::new();
+        world.init_resource::<Messages<Damage>>();
+        world.init_resource::<Messages<DamageDealt>>();
+        let mut armor = Armor::default();
+        armor.add(50);
+        let target = world.spawn((Damageable::with_health(100), armor)).id();
+        world.write_message(Damage { target, source: DamageSource::World, amount: 30, point: Vec3::ZERO, from: None });
+
+        world.run_system_once(apply_damage).unwrap();
+
+        assert_eq!(world.get::<Armor>(target).unwrap().points(), 30);
+        assert_eq!(world.get::<Damageable>(target).unwrap().health(), 90);
+        let messages = world.resource::<Messages<DamageDealt>>();
+        let mut cursor = messages.get_cursor();
+        let dealt: Vec<DamageDealt> = cursor.read(messages).copied().collect();
+        assert_eq!((dealt[0].amount, dealt[0].remaining), (30, 90));
     }
 
     /// A target with no health is skipped, not an error.
@@ -304,6 +362,7 @@ mod tests {
             source: DamageSource::World,
             amount: 40,
             point: Vec3::ZERO,
+            from: None,
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -338,21 +397,21 @@ mod tests {
         app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
         app.update();
 
-        let centre = Vec3::new(0.0, 1.0, 0.0);
+        let center = Vec3::new(0.0, 1.0, 0.0);
         let victim = app
             .world_mut()
             .spawn((
                 Damageable::with_health(20),
                 DamageLog::default(),
                 Hitboxes {
-                    body: Box3 { centre, half_extents: Vec3::splat(0.5) },
-                    head: Some(Box3 { centre, half_extents: Vec3::splat(0.15) }),
+                    body: Box3 { center, half_extents: Vec3::splat(0.5) },
+                    head: Some(Box3 { center, half_extents: Vec3::splat(0.15) }),
                 },
                 Name::new("Bystander"),
             ))
             .id();
         app.world_mut().write_message(Explosion {
-            at: centre,
+            at: center,
             radius: 4.0,
             damage: 60,
             knockback: 10.0,
@@ -375,6 +434,7 @@ mod tests {
     fn a_hit_leaves_a_number_at_the_hit_point() {
         let mut world = World::new();
         world.init_resource::<Messages<DamageDealt>>();
+        world.spawn((LocalPlayer, PlayerId(0)));
         let point = Vec3::new(1.0, 2.0, 3.0);
         world.write_message(a_hit(30, point));
 
@@ -384,6 +444,18 @@ mod tests {
         assert_eq!(number.amount, 30);
         assert_eq!(number.at, point);
         assert_eq!(number.remaining, DAMAGE_NUMBER_LIFETIME);
+    }
+
+    #[test]
+    fn somebody_elses_hit_and_our_own_hurt_leave_no_number() {
+        let mut world = World::new();
+        world.init_resource::<Messages<DamageDealt>>();
+        let us = world.spawn((LocalPlayer, PlayerId(5))).id();
+        world.write_message(a_hit(30, Vec3::ZERO));
+        world.write_message(DamageDealt { target: us, source: DamageSource::Player(PlayerId(5)), ..a_hit(30, Vec3::ZERO) });
+
+        world.run_system_once(spawn_damage_numbers).unwrap();
+        assert_eq!(world.query::<&DamageNumber>().iter(&world).count(), 0);
     }
 
     /// A faded number is despawned.

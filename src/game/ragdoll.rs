@@ -48,6 +48,7 @@ use crate::common::damage::{falloff, PlayerId};
 use crate::common::movement_rules::MovementRules;
 use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
+use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
 use crate::game::body_mesh::BodyTint;
 use crate::game::collision::{CollisionWorld, Touched};
@@ -75,14 +76,14 @@ const DRAG: f32 = 0.02;
 /// body thrown at a floor skids; [`STICK_SPEED`] is what stops it.
 const FRICTION: f32 = 0.12;
 
-/// Below this sliding speed, in metres per second, a contact point stops.
+/// Below this sliding speed, in meters per second, a contact point stops.
 ///
-/// The solver leaks a fraction of a millimetre of sideways drift every tick,
+/// The solver leaks a fraction of a millimeter of sideways drift every tick,
 /// and kinetic friction only removes a fraction of it, so without this a
 /// corpse creeps across the room and never sleeps.
 const STICK_SPEED: f32 = 0.25;
 
-/// How far a bone is moved towards what its joint allows, per pass.
+/// How far a bone is moved toward what its joint allows, per pass.
 ///
 /// A hard projection fights the distance constraints and the limb oscillates
 /// forever, especially at hinges. Partway, the two settle; over
@@ -90,18 +91,18 @@ const STICK_SPEED: f32 = 0.25;
 /// percent.
 const LIMIT_RELAXATION: f32 = 0.5;
 
-/// How far, in metres, the furthest point may drift over [`SLEEP_AFTER`]
+/// How far, in meters, the furthest point may drift over [`SLEEP_AFTER`]
 /// before a corpse counts as settled.
 ///
 /// A distance rather than a speed: a PBD body at rest buzzes by a few
-/// millimetres a tick forever, which reads as motion when measured as speed.
+/// millimeters a tick forever, which reads as motion when measured as speed.
 const SLEEP_DRIFT: f32 = 0.02;
 
 /// Seconds it has to stay that still before it stops being simulated. A
 /// shove wakes it.
 const SLEEP_AFTER: f32 = 0.5;
 
-/// Bounds on a bone's collision sphere radius, in metres, derived from its
+/// Bounds on a bone's collision sphere radius, in meters, derived from its
 /// thickness. Floored because a point with no size tunnels; capped because a
 /// torso-sized sphere wedges in doorways.
 const POINT_RADIUS: (f32, f32) = (0.04, 0.14);
@@ -113,22 +114,22 @@ const POINT_RADIUS: (f32, f32) = (0.04, 0.14);
 /// of throwing it.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Push {
-    /// A fixed direction; the vector's length is the speed at the centre.
+    /// A fixed direction; the vector's length is the speed at the center.
     Along(Vec3),
-    /// Away from the shove's point, at this speed at the centre. A bone
-    /// exactly at the centre is left alone.
+    /// Away from the shove's point, at this speed at the center. A bone
+    /// exactly at the center is left alone.
     Outward(f32),
 }
 
 /// A body being pushed about, at a point.
 ///
-/// `push` is the speed, in metres per second, the bone at `at` is knocked to,
+/// `push` is the speed, in meters per second, the bone at `at` is knocked to,
 /// not an impulse to be divided by a mass.
 #[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RagdollShove {
     /// World space.
     pub at: Vec3,
-    /// Direction and speed at the centre.
+    /// Direction and speed at the center.
     pub push: Push,
     /// Falls off linearly to nothing at the edge.
     pub radius: f32,
@@ -218,7 +219,7 @@ impl Ragdoll {
             }
         }
 
-        // Normalised so a whole body weighs one, so the shove constants mean
+        // Normalized so a whole body weighs one, so the shove constants mean
         // the same for every build.
         let total: f32 = points.iter().map(|point| 1.0 / point.inverse_mass).sum();
         for point in &mut points {
@@ -315,7 +316,7 @@ impl Ragdoll {
             }
             let along = match push {
                 Push::Along(direction) => direction,
-                // A bone exactly at the centre is left for its neighbours to
+                // A bone exactly at the center is left for its neighbors to
                 // drag out.
                 Push::Outward(speed) => (point.at - at).normalize_or_zero() * speed,
             };
@@ -585,6 +586,7 @@ pub fn raise_ragdolls(
             Option<&SkeletonRoot>,
             Option<&BodyTint>,
             Option<&Team>,
+            Option<&PlayerColor>,
             Option<&PhysicsBody>,
             Option<&Name>,
             Option<&PlayerId>,
@@ -592,7 +594,7 @@ pub fn raise_ragdolls(
         (Added<Dying>, Without<Ragdolled>),
     >,
 ) {
-    for (entity, skeleton, pose, global, offset, tint, team, physics, name, id) in &bodies {
+    for (entity, skeleton, pose, global, offset, tint, team, player, physics, name, id) in &bodies {
         // Per-tick displacement, which is the unit the solver keeps.
         let carried = physics.map_or(Vec3::ZERO, |body| body.current - body.previous);
         let ragdoll = Ragdoll::from_body(skeleton, pose, &skeleton_root(global, offset), carried);
@@ -616,9 +618,12 @@ pub fn raise_ragdolls(
             corpse.insert(*tint);
         }
         if let Some(team) = team {
-            // Corpses keep their team colour, so a pile of them shows which way
+            // Corpses keep their team color, so a pile of them shows which way
             // a fight went.
             corpse.insert(*team);
+        }
+        if let Some(player) = player {
+            corpse.insert(*player);
         }
         if let Some(id) = id {
             corpse.insert(CorpseOf(*id));
@@ -721,7 +726,7 @@ pub fn step_ragdolls(
 /// Take away every corpse that has lain there long enough.
 ///
 /// Authority only: a corpse is replicated, so a client must not remove it,
-/// and its copy started ageing later anyway.
+/// and its copy started aging later anyway.
 pub fn retire_ragdolls(mut commands: Commands, corpses: Query<(Entity, &Ragdoll)>) {
     for (entity, corpse) in &corpses {
         if corpse.age() >= RAGDOLL_LIFETIME {
@@ -1037,7 +1042,7 @@ mod tests {
 
         let mut restless = Vec::new();
         for case in 0..40 {
-            // Deterministic: a randomised sweep that failed one run in ten
+            // Deterministic: a randomized sweep that failed one run in ten
             // would be worse than none.
             let a = case as f32 * 0.9;
             let pose = Pose::rest()
@@ -1224,7 +1229,7 @@ mod tests {
 
     /// A corpse keeps the body's tint.
     #[test]
-    fn a_corpse_keeps_the_colour_the_body_was() {
+    fn a_corpse_keeps_the_color_the_body_was() {
         let mut world = World::new();
         let tint = BodyTint(Color::srgb(0.9, 0.1, 0.1));
         a_dead_body(&mut world, tint);
@@ -1467,7 +1472,7 @@ mod tests {
         let mut corpses = app.world_mut().query::<&Ragdoll>();
         let corpse = corpses.single(app.world()).expect("no corpse");
         assert!(
-            corpse.bone_points(0).0.distance(feet + Vec3::Y * rig().proportions().hip_metres())
+            corpse.bone_points(0).0.distance(feet + Vec3::Y * rig().proportions().hip_meters())
                 < 0.05,
             "the corpse was not raised where the body was standing"
         );
@@ -1542,18 +1547,18 @@ mod tests {
         hash
     }
 
-    /// The solver's arithmetic is pinned, not merely its behaviour.
+    /// The solver's arithmetic is pinned, not merely its behavior.
     ///
     /// A corpse is replicated as a seed and every machine runs this solver
     /// from it, so a change that moved the result by one bit is a corpse that
     /// lies differently on two screens — and none of the settling tests would
-    /// notice, since a corpse that settles a millimetre to the left still
+    /// notice, since a corpse that settles a millimeter to the left still
     /// settles. The number was recorded from the solver before its working
     /// lists moved onto the stack. If a change *means* to alter the
     /// simulation, record it again; if it did not mean to, it has.
     ///
     /// **There are two numbers, one per build profile**, and that is a finding
-    /// rather than a convenience: an optimised build reaches different bits
+    /// rather than a convenience: an optimized build reaches different bits
     /// from a debug build of the very same code, measured on the solver as it
     /// stood before this test existed. So "every machine runs the same
     /// solver" holds between two builds of the same profile and target, and

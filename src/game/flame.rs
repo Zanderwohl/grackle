@@ -18,7 +18,7 @@ use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::hitscan::{aim, eye, trace_past};
 use crate::game::player::{Player, PhysicsBody};
-use crate::common::weapon::{Equipped, WeaponAction, WeaponCatalogue};
+use crate::common::weapon::{Equipped, WeaponAction, WeaponCatalog};
 use crate::game::weapon::WeaponActionFired;
 
 pub struct FlamePlugin;
@@ -81,6 +81,7 @@ pub fn fire_flame(
                 source,
                 amount: spec.damage,
                 point: hit.point,
+                from: Some(origin),
             });
 
             match alight.get_mut(hit.target) {
@@ -106,7 +107,7 @@ pub fn burn(
 
         // The damage number goes over the burning body.
         let at = boxes
-            .map(|boxes| boxes.body.centre)
+            .map(|boxes| boxes.body.center)
             .or_else(|| placed.map(|placed| placed.translation()))
             .unwrap_or_default();
 
@@ -116,6 +117,7 @@ pub fn burn(
                 source: burning.source,
                 amount: burning.damage,
                 point: at,
+                from: None,
             });
         }
 
@@ -128,8 +130,8 @@ pub fn burn(
 
 /// The cone gizmo for a flame fired from `origin` along `direction`.
 ///
-/// Bevy draws a [`Cone`] with its apex at local `+Y`, centred on the
-/// isometry. So `+Y` maps onto `-direction` and the centre goes half a range
+/// Bevy draws a [`Cone`] with its apex at local `+Y`, centered on the
+/// isometry. So `+Y` maps onto `-direction` and the center goes half a range
 /// out, putting the apex on the eye and the base at full range. Separate so a
 /// test can check the rotation.
 fn flame_cone(origin: Vec3, direction: Dir3, spec: &FlameSpec) -> (Cone, Isometry3d) {
@@ -148,11 +150,11 @@ fn flame_cone(origin: Vec3, direction: Dir3, spec: &FlameSpec) -> (Cone, Isometr
 /// shots. `Equipped` is replicated, so this works on clients.
 fn draw_flame_cone(
     mut gizmos: Gizmos,
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     shooters: Query<(&Transform, &Player, &Stance, &Equipped)>,
 ) {
     for (transform, player, stance, equipped) in &shooters {
-        let held = catalogue.held_by(equipped).map(|weapon| weapon.primary.action);
+        let held = catalog.held_by(equipped).map(|weapon| weapon.primary.action);
         let Some(WeaponAction::Flame(spec)) = held else { continue };
 
         let (cone, isometry) = flame_cone(eye(transform.translation, *stance), aim(player), &spec);
@@ -174,7 +176,7 @@ mod tests {
     use crate::constants::one_tick;
 
     use super::*;
-    use crate::common::class::body_centre_from_feet;
+    use crate::common::class::body_center_from_feet;
     use crate::common::damage::Damageable;
     use crate::common::hitbox::Box3;
     use crate::tool::room::Room;
@@ -195,26 +197,26 @@ mod tests {
 
     /// A shooter at the origin, looking down -Z.
     fn a_shooter(world: &mut World) -> Entity {
-        let centre = body_centre_from_feet(Vec3::ZERO);
+        let center = body_center_from_feet(Vec3::ZERO);
         world
             .spawn((
                 Player::default(),
                 PlayerId(1),
                 Stance::Standing,
-                PhysicsBody { previous: centre, current: centre },
+                PhysicsBody { previous: center, current: center },
             ))
             .id()
     }
 
-    /// A body `away` metres down -Z and `across` to the side, at eye height.
+    /// A body `away` meters down -Z and `across` to the side, at eye height.
     fn a_body(world: &mut World, away: f32, across: f32) -> Entity {
         let eye = crate::common::class::TALLEST_CLASS_EYE_HEIGHT;
-        let centre = Vec3::new(across, eye, -away);
+        let center = Vec3::new(across, eye, -away);
         world
             .spawn((
                 Hitboxes {
-                    body: Box3 { centre, half_extents: Vec3::new(0.4, 0.9, 0.4) },
-                    head: Some(Box3 { centre: centre + Vec3::Y * 0.8, half_extents: Vec3::splat(0.15) }),
+                    body: Box3 { center, half_extents: Vec3::new(0.4, 0.9, 0.4) },
+                    head: Some(Box3 { center: center + Vec3::Y * 0.8, half_extents: Vec3::splat(0.15) }),
                 },
                 Damageable::default(),
             ))
@@ -338,11 +340,11 @@ mod tests {
         let shooter = a_shooter(&mut world);
         // Close, and wide enough that the whole cone is inside it.
         let eye = crate::common::class::TALLEST_CLASS_EYE_HEIGHT;
-        let centre = Vec3::new(0.0, eye, -2.0);
+        let center = Vec3::new(0.0, eye, -2.0);
         world.spawn((
             Hitboxes {
-                body: Box3 { centre, half_extents: Vec3::new(3.0, 3.0, 0.4) },
-                head: Some(Box3 { centre, half_extents: Vec3::splat(0.05) }),
+                body: Box3 { center, half_extents: Vec3::new(3.0, 3.0, 0.4) },
+                head: Some(Box3 { center, half_extents: Vec3::splat(0.05) }),
             },
             Damageable::default(),
         ));
@@ -356,7 +358,7 @@ mod tests {
     fn a_body_outside_the_cone_is_not_caught() {
         let mut world = a_world();
         let shooter = a_shooter(&mut world);
-        // Five metres out and four across is about 39 degrees off the axis.
+        // Five meters out and four across is about 39 degrees off the axis.
         a_body(&mut world, 5.0, 4.0);
 
         puff(&mut world, shooter);
@@ -392,10 +394,10 @@ mod tests {
     fn a_shooter_never_catches_its_own_flame() {
         let mut world = a_world();
         let shooter = a_shooter(&mut world);
-        let centre = body_centre_from_feet(Vec3::ZERO);
+        let center = body_center_from_feet(Vec3::ZERO);
         world.entity_mut(shooter).insert(Hitboxes {
-            body: Box3 { centre, half_extents: Vec3::new(0.4, 0.9, 0.4) },
-            head: Some(Box3 { centre: centre + Vec3::Y * 0.7, half_extents: Vec3::splat(0.15) }),
+            body: Box3 { center, half_extents: Vec3::new(0.4, 0.9, 0.4) },
+            head: Some(Box3 { center: center + Vec3::Y * 0.7, half_extents: Vec3::splat(0.15) }),
         });
 
         puff(&mut world, shooter);
@@ -457,7 +459,7 @@ mod tests {
     fn an_afterburn_number_is_drawn_over_the_burning_body() {
         let mut world = a_world();
         let target = a_body(&mut world, 3.0, 0.0);
-        let chest = world.get::<Hitboxes>(target).unwrap().body.centre;
+        let chest = world.get::<Hitboxes>(target).unwrap().body.center;
         world
             .entity_mut(target)
             .insert(Burning::lit(&SPEC, DamageSource::World));

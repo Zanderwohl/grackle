@@ -875,7 +875,7 @@ fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row
     target
 }
 
-/// The verbs under the menu bar, each a [`Task`], so none is greyed out.
+/// The verbs under the menu bar, each a [`Task`], so none is grayed out.
 /// Framing is here rather than in a menu so it is one click away after losing
 /// the prop.
 fn toolbar(
@@ -1454,7 +1454,7 @@ fn feature_inspector(
         }
         _ => None,
     };
-    // What the feature is about, labelled before the document is borrowed.
+    // What the feature is about, labeled before the document is borrowed.
     let about: Option<String> = match &edited.op {
         FeatureOp::Revolve { axis, .. } => Some(pick_label(editor, build, &Pick::of_line(axis))),
         FeatureOp::Pattern { along, .. } => Some(pick_label(editor, build, &Pick::of_line(along.line()))),
@@ -1988,7 +1988,7 @@ fn fit_toolbar(ui: &mut Ui, figure: &mut ScaleFigure, frame: &mut Option<bool>) 
     }
 }
 
-/// Metres ahead of the grip a muzzle starts on a prop with no geometry.
+/// Meters ahead of the grip a muzzle starts on a prop with no geometry.
 const EMPTY_MUZZLE_REACH: f32 = 0.3;
 
 /// The middle of the bounds' `-Z` face: forward is `-Z`, so a barrel ends there.
@@ -2053,7 +2053,7 @@ fn hold(
         });
 
         section(ui, "hold_carry", get!("prop.hold.carry"), |ui| {
-            // In arm lengths, not metres. Fine speed because the useful range
+            // In arm lengths, not meters. Fine speed because the useful range
             // is under one arm.
             changed |= vec3_ui(ui, get!("prop.hold.offset"), &mut edited.carry, 0.005, "");
             changed |= degrees_ui(ui, get!("prop.inspector.rotation"), &mut edited.carry_rotation);
@@ -2062,7 +2062,7 @@ fn hold(
         // Outside the fold, so a folded section leaves the preview off.
         let mut holding = false;
         section(ui, "hold_viewmodel", get!("prop.hold.viewmodel"), |ui| {
-            // `across` is a fraction of the frustum at its depth, not metres.
+            // `across` is a fraction of the frustum at its depth, not meters.
             ui.horizontal(|ui| {
                 ui.label(get!("prop.hold.across"));
                 for (component, axis) in viewmodel.across.iter_mut().zip(["x", "y"]) {

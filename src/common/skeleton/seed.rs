@@ -104,7 +104,7 @@ pub const SEEDS: &[Seed] = &[
         headings: &[],
         note: "Sampled from `crouch_posture` with `airborne_legs`. Still: folded like a \
                crouch, legs tucked like a jump. `duck_under` folds it under the short \
-               hull afterwards, as it does for every crouched state.",
+               hull afterward, as it does for every crouched state.",
     },
     Seed {
         state: AnimationState::RunForward,
@@ -224,7 +224,7 @@ fn bake_clip(seed: Seed, heading: f32) -> Clip {
         tracks.push(Track {
             combine: Combine::Replace,
             space: Space::Body,
-            unit: Unit::Metres,
+            unit: Unit::Meters,
             enabled: true,
             timing: Default::default(),
             channel: Channel::Rotation {
@@ -341,7 +341,7 @@ fn bake_a_stride(seed: Seed, heading: f32) -> Clip {
         tracks.push(Track {
             combine: Combine::Replace,
             space: Space::Body,
-            unit: Unit::Metres,
+            unit: Unit::Meters,
             enabled: true,
             timing,
             channel: Channel::Rotation {

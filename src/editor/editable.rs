@@ -12,7 +12,7 @@ use crate::common::PointResolutionError;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
 use crate::common::movement_rules::MovementRules;
 use crate::common::palette::{publish_palette, Palette};
-use crate::editor::map_metadata::{publish_movement_rules, MapMetadata};
+use crate::editor::map_metadata::{publish_game_rules, publish_movement_rules, MapMetadata};
 use crate::editor::mirror::{assign_sides, Mirroring};
 use crate::editor::save;
 use crate::get;
@@ -29,10 +29,12 @@ impl Plugin for EditorStepsPlugin {
             .init_resource::<FeatureTimeline>()
             .init_resource::<MapMetadata>()
             .init_resource::<MovementRules>()
+            .init_resource::<crate::common::game_rules::Modes>()
+            .init_resource::<crate::common::game_rules::GameRules>()
             .add_message::<EditEvent>()
             .add_systems(Startup, load_startup_blueprint)
             .init_resource::<Palette>()
-            .add_systems(Update, (publish_movement_rules, publish_palette))
+            .add_systems(Update, (publish_movement_rules, publish_game_rules, publish_palette))
             // A round is played on the whole map. On the transition rather than `OnEnter(Play)`, so the
             // features past the bar have entities before the bake and collision rebuild run there.
             .add_systems(
@@ -46,12 +48,12 @@ impl Plugin for EditorStepsPlugin {
             // `sync_entities`, `handle_edits` and `assign_sides` are deliberately ungated so an edit lands
             // mid-match.
             .add_systems(Update, (
-                FeatureTimeline::undo_redo_shortcuts.run_if(in_state(AppMode::Editor)),
+                FeatureTimeline::undo_redo_shortcuts.run_if(in_state(AppMode::Editor)).run_if(crate::common::net::has_authority),
                 FeatureTimeline::sync_entities,
                 FeatureTimeline::handle_edits,
                 assign_sides,
                 FeatureTimeline::draw_affected_gizmos.run_if(in_state(AppMode::Editor)),
-                checkpoint_when_idle.run_if(in_state(AppMode::Editor)),
+                checkpoint_when_idle.run_if(in_state(AppMode::Editor)).run_if(crate::common::net::has_authority),
             ).chain())
         ;
     }
@@ -280,6 +282,14 @@ impl FeatureTimeline {
         self.reset_history();
     }
 
+    /// The server's newer copy, rebuilding only what differs so one edit does
+    /// not rebuild every room. Returns whether any rooms changed.
+    pub fn adopt_changes(&mut self, incoming: FeatureTimeline) -> bool {
+        let rooms = self.restore(&incoming.state());
+        self.reset_history();
+        rooms
+    }
+
     /// Undoable through the next checkpoint.
     pub fn delete_feature(&mut self, feature_id: FeatureId) {
         self.remove_feature_internal(feature_id);
@@ -503,8 +513,11 @@ impl FeatureTimeline {
         self.mark_saved();
     }
 
-    /// Rebuild only the features whose serialized form differs, and everything built on them.
-    fn restore(&mut self, target: &MapState) {
+    /// Rebuilds only the features whose serialized form differs, and what is
+    /// built on them. Returns whether any rooms changed.
+    fn restore(&mut self, target: &MapState) -> bool {
+        let has_rooms = |feature: &Feature| !feature.object.rooms().is_empty();
+        let mut rooms_touched = false;
         let mut changed: Vec<FeatureId> = Vec::new();
         let mut next: HashMap<FeatureId, Feature> = HashMap::new();
         let mut order = Vec::with_capacity(target.features.len());
@@ -523,20 +536,24 @@ impl FeatureTimeline {
             }
             match serde_json::from_str::<Feature>(text) {
                 Ok(feature) => {
-                    if let Some(old) = self.features.remove(id)
-                        && let Some(entity) = old.object.entity()
-                    {
-                        self.pending_despawns.push(entity);
+                    rooms_touched |= has_rooms(&feature);
+                    if let Some(old) = self.features.remove(id) {
+                        rooms_touched |= has_rooms(&old);
+                        if let Some(entity) = old.object.entity() {
+                            self.pending_despawns.push(entity);
+                        }
                     }
                     next.insert(*id, feature);
                     changed.push(*id);
                 }
-                // Cannot happen for a string this process wrote; losing one feature beats losing the undo.
-                Err(error) => error!("Undo could not rebuild feature {id:?}: {error}"),
+                // A string this process wrote always decodes; a server's may name a type this build lacks.
+                // Losing one feature beats losing the rest.
+                Err(error) => error!("Could not rebuild feature {id:?}: {error}"),
             }
         }
 
         for (_, feature) in self.features.drain() {
+            rooms_touched |= !feature.object.rooms().is_empty();
             if let Some(entity) = feature.object.entity() {
                 self.pending_despawns.push(entity);
             }
@@ -563,6 +580,7 @@ impl FeatureTimeline {
 
         self.dirty = self.saved.as_ref() != Some(target);
         self.checkpoint = Some(target.clone());
+        rooms_touched
     }
 
     fn forget_a_missing_bar(&mut self) {
@@ -700,7 +718,7 @@ impl FeatureTimeline {
                 let is_selected = features.selected_feature == Some(*id);
                 let is_active = i < shown;
 
-                // The trailing `Atom::grow` left-justifies the title; egui centres a stretched button's contents.
+                // The trailing `Atom::grow` left-justifies the title; egui centers a stretched button's contents.
                 let label_text = feature.type_name_with_id();
                 // Past the bar: faded rather than struck through, which reads as deleted.
                 let response = ui
@@ -1352,7 +1370,7 @@ mod tests {
     }
 
     /// Breaks if an idle Features panel reports a change: the panel marks the
-    /// timeline only on that answer, or the checkpoint serialises every frame.
+    /// timeline only on that answer, or the checkpoint serializes every frame.
     #[test]
     fn the_features_panel_left_alone_changes_nothing() {
         let mut timeline = FeatureTimeline::default();

@@ -18,7 +18,7 @@ pub enum Push {
     /// Away from its front: shot from in front.
     Back,
     Forward,
-    /// Towards its own left (`-X`).
+    /// Toward its own left (`-X`).
     Left,
     Right,
 }
@@ -166,7 +166,7 @@ mod tests {
 
     /// A hit's direction of travel, in the body's frame, picks the push.
     #[test]
-    fn a_hit_pushes_the_way_it_travelled() {
+    fn a_hit_pushes_the_way_it_traveled() {
         assert_eq!(Push::of(Vec3::Z), Push::Back, "shot from in front");
         assert_eq!(Push::of(Vec3::NEG_Z), Push::Forward, "shot from behind");
         assert_eq!(Push::of(Vec3::X), Push::Right);
@@ -224,6 +224,7 @@ mod tests {
                 amount: 10,
                 remaining: 90,
                 point: Vec3::new(0.0, 1.0, -1.0),
+                from: None,
             });
             world.run_system_once(start_flinches).unwrap();
         };
@@ -261,6 +262,7 @@ mod tests {
                 amount,
                 remaining: 50,
                 point: Vec3::new(0.0, 1.0, -1.0),
+                from: None,
             });
             world.run_system_once(start_flinches).unwrap();
             // A fresh reader per run would read every earlier hit again.
@@ -309,6 +311,7 @@ mod tests {
             amount: 90,
             remaining: 90,
             point: Vec3::new(0.0, 1.0, -1.0),
+            from: None,
         });
         world.run_system_once(start_flinches).unwrap();
         world.get_mut::<ClipStack>(body).unwrap().0[0].weight = 1.0;

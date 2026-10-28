@@ -1,4 +1,4 @@
-//! Places a [`Mirror`] at its centre. Its sources and teams are picked in its panel.
+//! Places a [`Mirror`] at its center. Its sources and teams are picked in its panel.
 
 use bevy::app::App;
 use bevy::prelude::*;

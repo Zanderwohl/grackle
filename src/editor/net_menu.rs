@@ -137,7 +137,7 @@ fn connect_dialog(
     // Read after the closure, because the closure borrows `dialog`.
     let mut open = true;
     let mut submitted = false;
-    let mut cancelled = false;
+    let mut canceled = false;
 
     egui::Window::new(title)
         .collapsible(false)
@@ -180,12 +180,12 @@ fn connect_dialog(
                     submitted = true;
                 }
                 if ui.button(get!("net.dialog.cancel")).clicked() {
-                    cancelled = true;
+                    canceled = true;
                 }
             });
         });
 
-    if cancelled || !open {
+    if canceled || !open {
         dialog.open = false;
         dialog.error = None;
         return;

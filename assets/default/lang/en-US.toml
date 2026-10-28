@@ -11,6 +11,7 @@ front = "Front"
 top = "Top"
 right = "Right"
 ui = "UI Camera"
+spectating = "Spectating { address }"
 
 [debug.viewport]
 title = "Multicam Viewport"
@@ -53,6 +54,7 @@ point = "Point"
 point_light = "Point Light"
 spawn_point = "Spawn Point"
 prop = "Prop"
+weapon_pickup = "Weapon"
 animation_display = "Animation Display"
 animation_grid = "Animation Grid"
 move = "Move"
@@ -115,6 +117,19 @@ roll_to_end = "Roll to end"
 [editor.point_ref]
 none = "None"
 
+[editor.rounds]
+title = "Rounds"
+round = "Round { number } ({ length })"
+player = "Player"
+frags = "Frags"
+deaths = "Deaths"
+none = "No rounds played"
+
+[editor.player]
+title = "Player"
+name = "Name"
+auto_reload = "Auto-reload"
+
 [editor.metadata]
 title = "Metadata"
 display_name = "Display name"
@@ -168,11 +183,20 @@ clearance = "Needs { height } m of clear headroom."
 [editor.features.prop]
 title = "Prop"
 model = "Model"
-centre = "Centre"
+center = "Center"
 rotation = "Rotation"
 yaw = "Yaw"
 pitch = "Pitch"
 roll = "Roll"
+
+[editor.features.weapon_pickup]
+title = "Weapon Pickup"
+weapon = "Weapon"
+feet = "Feet"
+facing = "Facing"
+respawn = "Respawn"
+ammo = "Ammo if carried"
+style = "Style"
 
 [editor.features.animation_display]
 title = "Animation Display"
@@ -183,15 +207,15 @@ state = "Animation"
 
 [editor.features.animation_grid]
 title = "Animation Grid"
-feet = "Front Centre"
+feet = "Front Center"
 facing = "Facing"
 teams = "Teams"
-striped = "Striped"
+striped = "Four teams, then colors"
 summary = "{ bodies } bodies, { width } m by { depth } m."
 
 [editor.features.mirror]
 title = "Mirror"
-centre = "Centre"
+center = "Center"
 symmetry = "Symmetry"
 mirror_x = "Mirror across X"
 mirror_z = "Mirror across Z"
@@ -221,8 +245,18 @@ utility = "Utility"
 gadget = "Gadget"
 special = "Special"
 
+[scoreboard]
+player = "Player { id }"
+name = "Name"
+points = "Points"
+kills = "Kills"
+assists = "Assists"
+deaths = "Deaths"
+healing = "Healing"
+
 [hud]
 reloading = "Reloading"
+armor = "armor"
 
 [class.names]
 scout = "Scout"
@@ -496,7 +530,7 @@ grip = "Grip"
 eye = "Eye"
 
 [anim.unit]
-metres = "Metres"
+meters = "Meters"
 leg_lengths = "Leg lengths"
 arm_lengths = "Arm lengths"
 hip_heights = "Hip heights"
@@ -566,6 +600,7 @@ revert = "Revert to Saved"
 [app_mode.menu]
 title = "Mode"
 server_decides = "The server decides when the match is played."
+not_while_networked = "Not while networked."
 
 [prop]
 untitled = "Untitled prop"
@@ -614,6 +649,7 @@ top_hat = "Top Hat"
 crate = "Crate"
 health_pack = "Health Pack"
 ammo_pack = "Ammo Pack"
+armor_pack = "Armor"
 
 [prop.archetype]
 held = "Held"
@@ -635,7 +671,7 @@ health = "Health"
 [prop.pickup]
 health = "Health"
 ammo = "Ammo"
-armor = "Armour"
+armor = "Armor"
 flag = "Flag"
 amount = "Amount"
 respawn = "Back after"

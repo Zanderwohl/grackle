@@ -193,7 +193,7 @@ fn frame_on_entering(
     mut cursor: ResMut<TimelineCursor>,
     mut figure: ResMut<crate::prop::figure::ScaleFigure>,
 ) {
-    // A body by default here, unlike the modelling surface, unless somebody already chose (including
+    // A body by default here, unlike the modeling surface, unless somebody already chose (including
     // "none").
     if figure.is_added() || figure.0.is_none() {
         figure.0 = Some(crate::common::class::Class::Mercenary);
@@ -249,7 +249,7 @@ fn frame_when_there_is_something_to_frame(
     anim.pending_frame = false;
 }
 
-/// The resource outlives the mode, and a posed figure would show in the modelling surface.
+/// The resource outlives the mode, and a posed figure would show in the modeling surface.
 fn stop_performing(
     mut performance: ResMut<FigurePerformance>,
     mut corrections: ResMut<crate::prop::figure::FigureCorrections>,
@@ -257,7 +257,7 @@ fn stop_performing(
 ) {
     performance.0 .0.clear();
     corrections.0 = None;
-    // Or the modelling surface would open with the geometry wherever a clip left it.
+    // Or the modeling surface would open with the geometry wherever a clip left it.
     held.0 = Transform::IDENTITY;
 }
 
@@ -549,7 +549,7 @@ impl TrackOp {
     }
 }
 
-/// Returns which track to pick afterwards. Order matters: tracks apply bottom layer first, so a
+/// Returns which track to pick afterward. Order matters: tracks apply bottom layer first, so a
 /// `Compose` above a `Replace` composes onto it and below is discarded.
 pub fn apply_track_op(clip: &mut Clip, track: usize, op: TrackOp) -> Option<usize> {
     if track >= clip.tracks.len() {
@@ -941,7 +941,7 @@ mod tests {
                 tracks: vec![Track {
                     combine: Combine::Replace,
                     space: Space::Body,
-                    unit: Unit::Metres,
+                    unit: Unit::Meters,
                     enabled: true,
                     timing: Default::default(),
                     channel: Channel::Weapon {
@@ -1141,7 +1141,7 @@ mod tests {
     /// A selection not remapped through the re-sort would hold whichever key inherited the index, so
     /// keys swap under the pointer.
     #[test]
-    fn the_selection_follows_a_key_across_its_neighbour() {
+    fn the_selection_follows_a_key_across_its_neighbor() {
         let (mut editor, anim) = editor_with_a_clip(&[0.1, 0.4, 0.9]);
         let mut selection = TimelineSelection::default();
         selection.0.insert(KeyAt { track: 0, key: 0 });

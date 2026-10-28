@@ -152,19 +152,19 @@ fn draw_hitboxes(
         return;
     }
 
-    let body_colour = Color::srgb(0.55, 0.16, 0.16);
-    let head_colour = Color::srgb(1.0, 0.25, 0.25);
+    let body_color = Color::srgb(0.55, 0.16, 0.16);
+    let head_color = Color::srgb(1.0, 0.25, 0.25);
 
     for (boxes, own_body) in &bodies {
         // `LocalPlayer`, not `Player`: replicated bodies carry `Player` too.
         if own_body.is_some() && !view.shows_own_body() {
             continue;
         }
-        let head = boxes.head.map(|head| (head, head_colour));
-        for (hitbox, colour) in [(boxes.body, body_colour)].into_iter().chain(head) {
+        let head = boxes.head.map(|head| (head, head_color));
+        for (hitbox, color) in [(boxes.body, body_color)].into_iter().chain(head) {
             gizmos.cube(
-                Transform::from_translation(hitbox.centre).with_scale(hitbox.half_extents * 2.0),
-                colour,
+                Transform::from_translation(hitbox.center).with_scale(hitbox.half_extents * 2.0),
+                color,
             );
         }
     }
@@ -198,8 +198,8 @@ mod tests {
 
         let boxes = world.get::<Hitboxes>(body).unwrap();
         assert!((boxes.body.min().y - feet.y).abs() < 1e-4, "the body box is not standing on the floor");
-        assert!((boxes.body.centre.xz() - feet.xz()).length() < 1e-4);
-        assert!(boxes.head.unwrap().centre.y > boxes.body.centre.y, "the head is not above the middle of the body");
+        assert!((boxes.body.center.xz() - feet.xz()).length() < 1e-4);
+        assert!(boxes.head.unwrap().center.y > boxes.body.center.y, "the head is not above the middle of the body");
     }
 
     /// A simulated body's stance wins over its animation.
@@ -293,9 +293,9 @@ mod tests {
 
         let boxes = world.get::<Hitboxes>(body).unwrap();
         assert!(
-            (boxes.body.centre.x - stepped.x).abs() < 1e-4,
+            (boxes.body.center.x - stepped.x).abs() < 1e-4,
             "boxed at {}, which is the drawn position, not the stepped one",
-            boxes.body.centre.x
+            boxes.body.center.x
         );
     }
 
@@ -324,8 +324,8 @@ mod tests {
     fn the_head_box_looks_where_the_body_looks() {
         let level = head_box_of(0.0, ClipStack::default(), Assets::default());
         let down = head_box_of(-1.2, ClipStack::default(), Assets::default());
-        assert!(down.centre.y < level.centre.y - 0.02, "looking down left the head box up");
-        assert!(down.centre.z < level.centre.z - 0.02, "looking down left the head box back");
+        assert!(down.center.y < level.center.y - 0.02, "looking down left the head box up");
+        assert!(down.center.z < level.center.z - 0.02, "looking down left the head box back");
     }
 
     /// A layer that moves the head moves the box.
@@ -349,9 +349,9 @@ mod tests {
         let upright = head_box_of(0.0, ClipStack::default(), Assets::default());
         let bowed = head_box_of(0.0, stack, clips);
         assert!(
-            (bowed.centre - upright.centre).length() > 0.2,
+            (bowed.center - upright.center).length() > 0.2,
             "a bow moved the head box {} m",
-            (bowed.centre - upright.centre).length(),
+            (bowed.center - upright.center).length(),
         );
     }
 }

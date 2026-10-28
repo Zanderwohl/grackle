@@ -144,7 +144,7 @@ impl BakePlugin {
     }
 
     /// A request for everything at once. With auto-bake on it is already
-    /// covered, and honouring it would stall the frame the budget exists to
+    /// covered, and honoring it would stall the frame the budget exists to
     /// protect.
     fn bake_room_geometry(
         mut events: MessageReader<CalculateRoomGeometry>,
@@ -494,10 +494,10 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_room_drops_its_walls_and_rebakes_its_neighbour() {
+    fn deleting_a_room_drops_its_walls_and_rebakes_its_neighbor() {
         let mut app = headless();
         let deleted = app.world_mut().spawn(cube_at(0.0)).id();
-        let neighbour = app.world_mut().spawn(cube_at(2.0)).id();
+        let neighbor = app.world_mut().spawn(cube_at(2.0)).id();
         settle(&mut app);
         let before = meshes(&mut app);
 
@@ -506,7 +506,7 @@ mod tests {
         let after = meshes(&mut app);
 
         assert!(!after.contains_key(&deleted), "a deleted room's walls are still standing");
-        assert_ne!(before[&neighbour], after[&neighbour], "the opening into the deleted room is still there");
+        assert_ne!(before[&neighbor], after[&neighbor], "the opening into the deleted room is still there");
     }
 
     /// Breaks if edits wait their turn behind a load-in: the room being

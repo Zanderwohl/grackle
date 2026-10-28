@@ -8,7 +8,7 @@ use strum_macros::EnumIter;
 use crate::common::skeleton::Proportions;
 use crate::get;
 
-/// Metres. The moving body, spawn clearance and the editor's spawn gizmo all
+/// Meters. The moving body, spawn clearance and the editor's spawn gizmo all
 /// read these constants, so they cannot drift apart. Must stay at least the
 /// maximum [`Class`] height; a test checks it.
 pub const TALLEST_CLASS_HEIGHT: f32 = 2.0;
@@ -58,20 +58,20 @@ impl Stance {
         Vec3::new(CLASS_RADIUS, self.height() * 0.5, CLASS_RADIUS)
     }
 
-    /// Relative to the body's centre, which is what its transform is.
+    /// Relative to the body's center, which is what its transform is.
     pub fn eye_offset(&self) -> f32 {
         self.eye_height() - self.height() * 0.5
     }
 
     /// The sign is the caller's: down keeping the feet still on the ground,
     /// up keeping the head still in the air.
-    pub fn centre_shift() -> f32 {
+    pub fn center_shift() -> f32 {
         (Stance::Standing.height() - Stance::Crouched.height()) * 0.5
     }
 }
 
-/// Spawn points mark the feet; collision works in centres.
-pub fn body_centre_from_feet(feet: Vec3) -> Vec3 {
+/// Spawn points mark the feet; collision works in centers.
+pub fn body_center_from_feet(feet: Vec3) -> Vec3 {
     feet + Vec3::Y * (TALLEST_CLASS_HEIGHT * 0.5)
 }
 
@@ -140,7 +140,7 @@ impl Class {
 
 /// What each class is built like, read from a pack's `classes.toml` by
 /// [`crate::common::class_file`]. Held by the authority and sent to clients
-/// with the weapon catalogue, so every machine builds the same rigs.
+/// with the weapon catalog, so every machine builds the same rigs.
 ///
 /// Keyed by [`Class::key`] in a `BTreeMap` so two equal tables compare equal;
 /// see [`crate::common::pack_sync`].

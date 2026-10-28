@@ -336,7 +336,7 @@ mod tests {
         world.run_system_once(decide_the_view).unwrap();
     }
 
-    /// Forced, and the preference is still there afterwards.
+    /// Forced, and the preference is still there afterward.
     #[test]
     fn humiliation_forces_third_person_and_gives_the_view_back() {
         let mut world = a_view_world(ViewMode::FirstPerson);

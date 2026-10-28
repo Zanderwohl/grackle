@@ -49,7 +49,7 @@ impl LineRef {
     }
 }
 
-/// Metres; shorter has no direction worth trusting.
+/// Meters; shorter has no direction worth trusting.
 const DEGENERATE: f32 = 1e-6;
 
 pub fn axis_name(axis: Axis) -> String {

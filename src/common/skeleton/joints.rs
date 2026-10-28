@@ -20,7 +20,7 @@ use bevy::prelude::*;
 use super::rig::bone;
 
 /// Stops in radians about the bone's local `+X`. Positive swings the tail
-/// towards local `+Z`, which the rig points at the front of the body.
+/// toward local `+Z`, which the rig points at the front of the body.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hinge {
     pub min: f32,
@@ -150,7 +150,7 @@ mod tests {
     use super::*;
     use crate::common::skeleton::rig::{humanoid, Proportions};
 
-    /// Otherwise every solve drags joints towards rest and a corpse stands up.
+    /// Otherwise every solve drags joints toward rest and a corpse stands up.
     #[test]
     fn a_cone_leaves_a_direction_it_allows_alone() {
         let limit = JointLimit::Cone { radians: 1.0 };

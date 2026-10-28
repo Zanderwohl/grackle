@@ -29,6 +29,7 @@ use grackle::common::palette::{Palette, RolePaint};
 use grackle::common::team::Team;
 use grackle::editor::mirror::{Mirror, Symmetry};
 use grackle::editor::spawn_point::SpawnPoint;
+use grackle::editor::weapon_pickup::WeaponPickup;
 
 /// Clear floor between the grid and the walls: enough to back away and see a
 /// whole row.
@@ -43,10 +44,14 @@ const LIGHT_HEIGHT_M: f32 = 4.5;
 /// How far each pack sits from both walls of its corner.
 const PACK_FROM_WALLS_M: f32 = 1.5;
 
+/// Weapon pickups and how far along the wall behind the spawn each lies, in meters.
+const WEAPONS_BEHIND_THE_SPAWN: [(&str, f32); 4] =
+    [("rocket_launcher", -6.0), ("flamethrower", -2.0), ("rpg", 2.0), ("pill_launcher", 6.0)];
+
 /// A team's spawn nook, butted against a side wall so the shared face opens it into the room.
 const NOOK_M: Vec3 = Vec3::new(2.0, 3.0, 2.0);
 
-/// The role a nook's walls name; the palette paints it in each side's colour.
+/// The role a nook's walls name; the palette paints it in each side's color.
 const SPAWN_WALLS: &str = "spawn_walls";
 
 fn main() {
@@ -58,7 +63,7 @@ fn main() {
     let grid_offset = Vec3::new(0.0, 0.0, -(grid_min.z + grid_max.z) * 0.5);
     let spawn_offset = grid_offset + Vec3::new(0.0, 0.0, grid_min.z - SPAWN_DISTANCE_M);
 
-    // Symmetric about the origin, so the floor centre everything is anchored
+    // Symmetric about the origin, so the floor center everything is anchored
     // to is where these offsets were measured from.
     let margin = Vec3::new(ROOM_MARGIN_M, 0.0, ROOM_MARGIN_M);
     let corners = [
@@ -69,7 +74,7 @@ fn main() {
     let half = corners
         .iter()
         .fold(Vec3::ZERO, |half, corner| half.max(corner.abs()))
-        // Whole metres, so the corners read as typed; rounding up only adds margin.
+        // Whole meters, so the corners read as typed; rounding up only adds margin.
         .ceil();
     let room_min = Vec3::new(-half.x, 0.0, -half.z);
     let room_max = Vec3::new(half.x, ROOM_HEIGHT_M, half.z);
@@ -85,7 +90,7 @@ fn main() {
     };
     let room = timeline.apply_feature(Box::new(EditorRoom::from_points(min, max).with_surfaces(surfaces)));
 
-    // Anchored to the floor centre so resizing the room takes the contents along.
+    // Anchored to the floor center so resizing the room takes the contents along.
     let mut light = GracklePointLight::from_point_ref(on_the_floor(room, Vec3::Y * LIGHT_HEIGHT_M));
     light.intensity = 250_000.0;
     light.radius = 3.1;
@@ -93,7 +98,7 @@ fn main() {
     light.range = (room_max - room_min).length();
     timeline.apply_feature(Box::new(light));
 
-    // Facing +Z, towards the grid.
+    // Facing +Z, toward the grid.
     timeline.apply_feature(Box::new(
         SpawnPoint::from_point_ref(on_the_floor(room, spawn_offset))
             .with_yaw(PI),
@@ -114,11 +119,21 @@ fn main() {
         ("health_pack", "back_bottom_left_corner", Vec3::new(-PACK_FROM_WALLS_M, 0.0, -PACK_FROM_WALLS_M)),
         // (-X, floor, +Z)
         ("ammo_pack", "front_bottom_left_corner", Vec3::new(PACK_FROM_WALLS_M, 0.0, -PACK_FROM_WALLS_M)),
+        // (+X, floor, -Z), behind the spawn
+        ("armor_pack", "back_bottom_right_corner", Vec3::new(-PACK_FROM_WALLS_M, 0.0, PACK_FROM_WALLS_M)),
     ];
     for (model, corner, offset) in packs {
         let mut at = PointRef::reference_with_offset(room, offset.x, offset.y, offset.z);
         at.point_key = corner.to_owned();
         timeline.apply_feature(Box::new(Prop::from_point_ref(at).with_model(model)));
+    }
+
+    // What the arena loadout does not start with, in a row along the wall behind the spawn,
+    // anchored to that wall's floor edge. Lying along the wall, so the row reads as a rack.
+    for (weapon, x) in WEAPONS_BEHIND_THE_SPAWN {
+        let mut at = PointRef::reference_with_offset(room, x, 0.0, PACK_FROM_WALLS_M);
+        at.point_key = "bottom_right_edge_center".to_owned();
+        timeline.apply_feature(Box::new(WeaponPickup::from_point_ref(at).with_weapon(weapon).with_yaw(FRAC_PI_2)));
     }
 
     // Red's nook on the +X wall, as the spawn above faces its left, and Blue's made from it by the

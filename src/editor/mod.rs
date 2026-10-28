@@ -12,5 +12,6 @@ pub mod save;
 pub mod animation_display;
 pub mod animation_grid;
 pub mod prop;
+pub mod weapon_pickup;
 pub mod spawn_point;
 pub mod mirror;

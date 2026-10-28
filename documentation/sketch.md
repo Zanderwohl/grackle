@@ -172,7 +172,7 @@ surface, and Source's history with it is not encouraging. The wire encoding
 should be designed to be parsed defensively by a client that assumes the sender
 is hostile: bounded sizes, no dynamic allocation driven by attacker-controlled
 counts, and nothing that reaches the filesystem. This is much easier to get
-right while designing the encoding than to add to it afterwards. The same goes
+right while designing the encoding than to add to it afterward. The same goes
 for the texture-graphs a map ships: a hostile graph must not be able to ask
 for an unbounded bake.
 

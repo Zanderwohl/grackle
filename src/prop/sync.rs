@@ -2,10 +2,10 @@
 //! connects, after [`crate::common::pack_sync`].
 //!
 //! The document crosses, not meshes; each machine bakes its own. The
-//! catalogue and the placed props say which models to send, so nothing
+//! catalog and the placed props say which models to send, so nothing
 //! enumerates a directory.
 //!
-//! Arrival order relative to the catalogue does not matter: an early model
+//! Arrival order relative to the catalog does not matter: an early model
 //! waits in the cache, and a late one replaces a cached failure and bumps
 //! [`PropCache::generation`].
 
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::assets::{default_packs, Assets as PackAssets};
 use crate::common::net::NetRole;
-use crate::common::weapon::WeaponCatalogue;
+use crate::common::weapon::WeaponCatalog;
 use crate::prop::baked::{PropCache, SurfaceMaterials};
 use crate::game::world_prop::WorldProp;
 use crate::prop::document;
@@ -69,11 +69,11 @@ impl Plugin for PropSyncPlugin {
 
 /// Sorted, so two calls over the same things compare equal.
 fn names_in_use<'a>(
-    catalogue: &'a WeaponCatalogue,
+    catalog: &'a WeaponCatalog,
     placed: impl Iterator<Item = &'a str>,
 ) -> Vec<String> {
-    let weapons = catalogue.weapons.iter().filter_map(|weapon| weapon.model.as_deref());
-    let hats = catalogue.loadouts.iter().filter_map(|(_, loadout)| loadout.hat.as_deref());
+    let weapons = catalog.weapons.iter().filter_map(|weapon| weapon.model.as_deref());
+    let hats = catalog.loadouts.iter().filter_map(|(_, loadout)| loadout.hat.as_deref());
     let mut named: Vec<String> = weapons.chain(hats).chain(placed).map(str::to_owned).collect();
     named.sort_unstable();
     named.dedup();
@@ -105,7 +105,7 @@ fn models_named_by(names: &[String], packs: &PackAssets) -> Vec<(String, String)
 }
 
 fn send_models_to_new_clients(
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     packs: Res<PackAssets>,
     placed: Query<&WorldProp>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
@@ -115,7 +115,7 @@ fn send_models_to_new_clients(
         return Ok(());
     }
 
-    let names = names_in_use(&catalogue, placed.iter().map(|prop| prop.model.as_str()));
+    let names = names_in_use(&catalog, placed.iter().map(|prop| prop.model.as_str()));
     let message = ModelSnapshot(models_named_by(&names, &packs));
     for client in &joined {
         info!("Sending {} models to a new client", message.0.len());
@@ -124,12 +124,12 @@ fn send_models_to_new_clients(
     Ok(())
 }
 
-/// Resends when the catalogue changes, the host saves a prop, or a placed prop
+/// Resends when the catalog changes, the host saves a prop, or a placed prop
 /// comes to name a model nobody has been sent. Gated because
 /// `models_named_by` re-reads every model off disk.
 #[allow(clippy::too_many_arguments)]
 fn broadcast_model_changes(
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     packs: Res<PackAssets>,
     placed: Query<&WorldProp>,
     moved: Query<(), Changed<WorldProp>>,
@@ -145,12 +145,12 @@ fn broadcast_model_changes(
     *saves = saved;
 
     let Some(server) = server else { return Ok(()) };
-    if !catalogue.is_changed() && !just_saved && moved.is_empty() {
+    if !catalog.is_changed() && !just_saved && moved.is_empty() {
         return Ok(());
     }
 
-    let names = names_in_use(&catalogue, placed.iter().map(|prop| prop.model.as_str()));
-    if names == last.names && !just_saved && !catalogue.is_changed() {
+    let names = names_in_use(&catalog, placed.iter().map(|prop| prop.model.as_str()));
+    if names == last.names && !just_saved && !catalog.is_changed() {
         return Ok(());
     }
     let models = models_named_by(&names, &packs);
@@ -203,6 +203,7 @@ mod tests {
 
     fn weapon(name: &str, model: Option<&str>) -> Weapon {
         Weapon {
+            key: String::new(),
             id: WeaponId::of(name),
             name_key: format!("weapon.names.{name}"),
             model: model.map(str::to_owned),
@@ -216,19 +217,19 @@ mod tests {
 
     /// Fails if unnamed or unloadable models are sent, or a shared one twice.
     #[test]
-    fn only_the_models_the_catalogue_names_are_sent() {
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.insert(weapon("launcher", Some("rocket_launcher")));
-        catalogue.insert(weapon("spare", Some("rocket_launcher")));
-        catalogue.insert(weapon("bare", None));
-        catalogue.insert(weapon("missing", Some("no_such_prop")));
+    fn only_the_models_the_catalog_names_are_sent() {
+        let mut catalog = WeaponCatalog::default();
+        catalog.insert(weapon("launcher", Some("rocket_launcher")));
+        catalog.insert(weapon("spare", Some("rocket_launcher")));
+        catalog.insert(weapon("bare", None));
+        catalog.insert(weapon("missing", Some("no_such_prop")));
 
-        let named = models_named_by(&names_in_use(&catalogue, std::iter::empty()), &PackAssets::default());
+        let named = models_named_by(&names_in_use(&catalog, std::iter::empty()), &PackAssets::default());
         let names: Vec<&str> = named.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(
             names,
             ["rocket_launcher"],
-            "the sent set should be the loadable models the catalogue names, once each",
+            "the sent set should be the loadable models the catalog names, once each",
         );
     }
 
@@ -237,13 +238,13 @@ mod tests {
     /// server stops it.
     #[test]
     fn hats_and_placed_props_are_sent_too() {
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.insert(weapon("launcher", Some("rocket_launcher")));
-        catalogue.set_loadout(
+        let mut catalog = WeaponCatalog::default();
+        catalog.insert(weapon("launcher", Some("rocket_launcher")));
+        catalog.set_loadout(
             crate::common::class::Class::Mercenary,
             crate::common::weapon::Loadout { hat: Some("top_hat".into()), ..default() },
         );
-        let names = names_in_use(&catalogue, ["crate", "crate", "health_pack"].into_iter());
+        let names = names_in_use(&catalog, ["crate", "crate", "health_pack"].into_iter());
         assert_eq!(names, ["crate", "health_pack", "rocket_launcher", "top_hat"]);
     }
 
@@ -251,10 +252,10 @@ mod tests {
     /// to a typed `PropDoc`, which would decode-fail silently on the client.
     #[test]
     fn a_model_survives_the_wire_as_text_and_would_not_as_a_document() {
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.insert(weapon("launcher", Some("rocket_launcher")));
+        let mut catalog = WeaponCatalog::default();
+        catalog.insert(weapon("launcher", Some("rocket_launcher")));
         let sent = ModelSnapshot(models_named_by(
-            &names_in_use(&catalogue, std::iter::empty()),
+            &names_in_use(&catalog, std::iter::empty()),
             &PackAssets::default(),
         ));
         assert!(!sent.0.is_empty(), "the default pack ships a model to test with");

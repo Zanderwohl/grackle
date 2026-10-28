@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::weapon::{
-    Ammo, Cadence, Cost, Equipped, Magazine, Mounted, WeaponAction, WeaponCatalogue,
+    Ammo, Cadence, Cost, Equipped, Magazine, Mounted, WeaponAction, WeaponCatalog, WeaponId,
 };
 use crate::game::condition::Condition;
 use crate::game::damage::{DamagePlugin, DamageSystems};
@@ -25,8 +25,8 @@ use crate::game::hitscan::HitscanPlugin;
 use crate::game::player::{Inputs, Player};
 use crate::game::projectile::ProjectilePlugin;
 
-/// Which half of the weapon went off. Not a [`Slot`]: a slot picks the weapon,
-/// a button picks which of its two actions.
+/// Which half of the weapon went off: a selection picks the weapon, a button
+/// picks which of its two actions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Button {
     Primary,
@@ -63,13 +63,31 @@ pub struct WeaponActionFired {
 /// Not reset by a switch, so quick-switching past a cooldown is not free.
 ///
 /// Counts down so the default, zero, may fire at once. Floors at zero, which
-/// quantises the rate to whole ticks: carrying the remainder would let an idle
+/// quantizes the rate to whole ticks: carrying the remainder would let an idle
 /// weapon fire on several consecutive ticks.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Trigger {
     ready_in: [f32; 2],
     /// Seconds until the weapon just drawn may fire or reload.
     deploying: f32,
+    /// Seconds since either button was last pressed or held, or a weapon
+    /// drawn, for [`AutoReload`].
+    idle: f32,
+}
+
+/// Seconds without firing before [`AutoReload`] tops a short clip up.
+pub const AUTO_RELOAD_AFTER: f32 = 1.0;
+
+/// Whether this body reloads a short clip unasked once it has not fired for
+/// [`AUTO_RELOAD_AFTER`]. The player's choice, copied onto the body by the
+/// authority from their settings; an empty clip reloads either way.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AutoReload(pub bool);
+
+impl Default for AutoReload {
+    fn default() -> Self {
+        Self(true)
+    }
 }
 
 impl Trigger {
@@ -77,6 +95,7 @@ impl Trigger {
         for remaining in &mut self.ready_in {
             *remaining = (*remaining - dt).max(0.0);
         }
+        self.idle += dt;
     }
 
     fn ready(&self, button: Button) -> bool {
@@ -123,7 +142,7 @@ impl Plugin for WeaponPlugin {
 /// that was also a hold is one shot, not two.
 pub fn pull_trigger(
     time: Res<Time<Fixed>>,
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     mut shooters: Query<
         (Entity, &Equipped, &mut Ammo, &mut Trigger, &Inputs, &Condition),
         With<Player>,
@@ -134,17 +153,22 @@ pub fn pull_trigger(
 
     for (shooter, equipped, mut ammo, mut trigger, input, condition) in &mut shooters {
         trigger.tick(dt);
+        // A press that fires nothing — empty, drawing, humiliated — still
+        // means the player wants to shoot rather than reload.
+        if input.attack || input.attack_held || input.alt_attack || input.alt_attack_held {
+            trigger.idle = 0.0;
+        }
         // Dropped, not queued: a click while drawing is not a shot after it.
         if !condition.may_fire() || !trigger.deployed() {
             continue;
         }
 
-        let held = equipped.held;
-        let Some(weapon) = catalogue.held_by(equipped) else { continue };
+        let Some(weapon) = catalog.held_by(equipped) else { continue };
+        let held = weapon.id;
 
         // A copy, written back only on change: `Ammo` is replicated and a `Mut`
         // deref marks it changed, which would send it 64 times a second.
-        let mut state = *ammo.at(held);
+        let mut state = ammo.at(held).copied().unwrap_or_default();
 
         for button in Button::BOTH {
             // Read, never taken: the edge was consumed in `write_client_inputs`
@@ -159,13 +183,13 @@ pub fn pull_trigger(
                 continue;
             }
 
-            let asked = match mounted.cadence {
-                // No cooldown: as fast as you can click.
-                Cadence::Semi => pressed,
-                // `pressed` too: a tap released between ticks was never held on
-                // a tick that ran.
-                Cadence::Automatic { .. } => (down || pressed) && trigger.ready(button),
-            };
+            let asked = trigger.ready(button)
+                && match mounted.cadence {
+                    Cadence::Semi { .. } => pressed,
+                    // `pressed` too: a tap released between ticks was never
+                    // held on a tick that ran.
+                    Cadence::Automatic { .. } => down || pressed,
+                };
             if !asked {
                 continue;
             }
@@ -180,14 +204,12 @@ pub fn pull_trigger(
             // `reload_weapons` because this is the one place a shot happens.
             state.reloading = 0.0;
 
-            if let Cadence::Automatic { interval } = mounted.cadence {
-                trigger.arm(button, interval);
-            }
+            trigger.arm(button, mounted.cadence.interval());
 
             fired.write(WeaponActionFired { shooter, button, action: mounted.action });
         }
 
-        if state != *ammo.at(held) {
+        if ammo.at(held) != Some(&state) {
             *ammo.at_mut(held) = state;
         }
     }
@@ -239,26 +261,30 @@ fn begin_reload(state: &mut crate::common::weapon::AmmoState, magazine: &Magazin
 }
 
 /// Start reloads, run them down, and move the rounds across. The only thing
-/// that starts a reload. An empty clip reloads unasked; a short one does not,
-/// or the magazine size would mean nothing.
+/// that starts a reload. An empty clip reloads unasked; a short one only
+/// after [`AUTO_RELOAD_AFTER`] without firing, and only for a body whose
+/// [`AutoReload`] is on — never mid-fight, or the magazine size would mean
+/// nothing.
+#[allow(clippy::type_complexity)]
 pub fn reload_weapons(
     time: Res<Time<Fixed>>,
-    catalogue: Res<WeaponCatalogue>,
-    mut carriers: Query<(&Equipped, &mut Ammo, &Trigger, &Inputs), With<Player>>,
+    catalog: Res<WeaponCatalog>,
+    mut carriers: Query<(&Equipped, &mut Ammo, &Trigger, &Inputs, Option<&AutoReload>), With<Player>>,
 ) {
     let dt = time.delta_secs();
 
-    for (equipped, mut ammo, trigger, input) in &mut carriers {
+    for (equipped, mut ammo, trigger, input, auto) in &mut carriers {
         if !trigger.deployed() {
             continue;
         }
-        let held = equipped.held;
-        let Some(weapon) = catalogue.held_by(equipped) else { continue };
+        let Some(weapon) = catalog.held_by(equipped) else { continue };
+        let held = weapon.id;
         let Some(size) = weapon.magazine.clip else { continue };
 
-        let mut state = *ammo.at(held);
+        let mut state = ammo.at(held).copied().unwrap_or_default();
 
-        if input.reload || state.clip == 0 {
+        let unasked = auto.is_some_and(|auto| auto.0) && trigger.idle >= AUTO_RELOAD_AFTER;
+        if input.reload || state.clip == 0 || unasked {
             begin_reload(&mut state, &weapon.magazine);
         }
 
@@ -284,7 +310,7 @@ pub fn reload_weapons(
             }
         }
 
-        if state != *ammo.at(held) {
+        if ammo.at(held) != Some(&state) {
             *ammo.at_mut(held) = state;
         }
     }
@@ -293,7 +319,7 @@ pub fn reload_weapons(
 /// Act on a switch made since the last step.
 pub fn select_weapons(
     time: Res<Time<Fixed>>,
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     mut carriers: Query<(&mut Equipped, &mut Ammo, &mut Trigger, &Inputs), With<Player>>,
 ) {
     let dt = time.delta_secs();
@@ -301,24 +327,33 @@ pub fn select_weapons(
     for (mut equipped, mut ammo, mut trigger, input) in &mut carriers {
         trigger.deploying = (trigger.deploying - dt).max(0.0);
 
-        let Some(slot) = input.select else { continue };
-        if equipped.held == slot || equipped.get(slot).is_none() {
+        let Some(weapon) = input.select else { continue };
+        if equipped.held() == Some(weapon) || !equipped.carries(weapon) {
             continue;
-        }
-
-        // A reload does not continue in a holster.
-        let was = equipped.held;
-        if ammo.at(was).reloading > 0.0 {
-            ammo.at_mut(was).reloading = 0.0;
         }
 
         // Guarded above rather than written blindly: `Equipped` is
         // replicated, so a write is a packet. Idempotence also lets a replayed
         // tick read the same input and reach the same loadout.
-        equipped.select(slot);
-        // A weapon nobody can name yet draws instantly rather than never.
-        trigger.deploying = catalogue.held_by(&equipped).map_or(0.0, |weapon| weapon.deploy);
+        draw(weapon, &mut equipped, &mut ammo, &mut trigger, &catalog);
     }
+}
+
+/// Take up `weapon` and wait out its deploy. One not carried is ignored.
+pub fn draw(weapon: WeaponId, equipped: &mut Equipped, ammo: &mut Ammo, trigger: &mut Trigger, catalog: &WeaponCatalog) {
+    if !equipped.carries(weapon) {
+        return;
+    }
+    // A reload does not continue in a holster.
+    if let Some(was) = equipped.held()
+        && ammo.at(was).is_some_and(|state| state.reloading > 0.0)
+    {
+        ammo.at_mut(was).reloading = 0.0;
+    }
+    equipped.select(weapon);
+    trigger.idle = 0.0;
+    // A weapon nobody can name yet draws instantly rather than never.
+    trigger.deploying = catalog.held_by(equipped).map_or(0.0, |weapon| weapon.deploy);
 }
 
 /// Log, at most once a second, that a button's action is not implemented.
@@ -345,8 +380,9 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
-    use crate::common::weapon::{HitscanSpec, Magazine, Slot, Weapon, WeaponId, SLOTS};
-    use crate::common::weapon_file::default_catalogue;
+    use crate::common::weapon::Slot;
+    use crate::common::weapon::{HitscanSpec, Magazine, Weapon, WeaponId};
+    use crate::common::weapon_file::default_catalog;
 
     /// Bevy's default 64 Hz.
 
@@ -358,10 +394,10 @@ mod tests {
         shove_radius_m: 0.4,
     };
 
-    fn a_world(catalogue: WeaponCatalogue) -> World {
+    fn a_world(catalog: WeaponCatalog) -> World {
         let mut world = World::new();
         world.init_resource::<Messages<WeaponActionFired>>();
-        world.insert_resource(catalogue);
+        world.insert_resource(catalog);
 
         let mut fixed = Time::<Fixed>::default();
         fixed.advance_by(crate::constants::one_tick());
@@ -370,22 +406,23 @@ mod tests {
     }
 
     /// One weapon, in the Mercenary's primary slot.
-    fn one_weapon(weapon: Weapon) -> WeaponCatalogue {
+    fn one_weapon(weapon: Weapon) -> WeaponCatalog {
         let id = weapon.id;
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.insert(weapon);
+        let mut catalog = WeaponCatalog::default();
+        catalog.insert(weapon);
 
         let mut loadout = crate::common::weapon::Loadout::default();
         loadout.set(
             Slot::Primary,
             crate::common::weapon::SlotChoices { permitted: vec![id], default: id },
         );
-        catalogue.set_loadout(crate::common::class::Class::Mercenary, loadout);
-        catalogue
+        catalog.set_loadout(crate::common::class::Class::Mercenary, loadout);
+        catalog
     }
 
     fn weapon(primary: Mounted, secondary: Mounted, magazine: Magazine) -> Weapon {
         Weapon {
+            key: String::new(),
             id: WeaponId::of("test"),
             name_key: "weapon.names.test".into(),
             model: None,
@@ -398,7 +435,7 @@ mod tests {
     }
 
     fn semi(action: WeaponAction, rounds: u32) -> Mounted {
-        Mounted { action, cadence: Cadence::Semi, cost: Cost::Ammo { rounds } }
+        Mounted { action, cadence: Cadence::Semi { interval: 0.0 }, cost: Cost::Ammo { rounds } }
     }
 
     fn auto(action: WeaponAction, interval: f32, rounds: u32) -> Mounted {
@@ -410,9 +447,9 @@ mod tests {
     }
 
     fn a_shooter(world: &mut World) -> Entity {
-        let catalogue = world.resource::<WeaponCatalogue>().clone();
+        let catalog = world.resource::<WeaponCatalog>().clone();
         let (equipped, ammo) =
-            catalogue.starting_equipment(crate::common::class::Class::Mercenary);
+            catalog.starting_equipment(crate::common::class::Class::Mercenary, None);
         world.spawn((Player::default(), equipped, ammo, Trigger::default())).id()
     }
 
@@ -420,8 +457,14 @@ mod tests {
         world.get_mut::<Inputs>(body).expect("body has no input")
     }
 
-    fn ammo(world: &World, body: Entity, slot: Slot) -> crate::common::weapon::AmmoState {
-        *world.get::<Ammo>(body).expect("body has no ammo").at(slot)
+    /// Of what the body is holding.
+    fn ammo(world: &World, body: Entity) -> crate::common::weapon::AmmoState {
+        let held = world.get::<Equipped>(body).and_then(Equipped::held).expect("holding nothing");
+        *world.get::<Ammo>(body).expect("body has no ammo").at(held).expect("no ammo for it")
+    }
+
+    fn second(world: &World, body: Entity) -> WeaponId {
+        world.get::<Equipped>(body).expect("carries nothing").carried()[1]
     }
 
     fn shots(world: &mut World) -> Vec<WeaponActionFired> {
@@ -460,6 +503,37 @@ mod tests {
         assert!(shots(&mut world).is_empty(), "holding the button fired a second time");
     }
 
+    /// Fires one of four, then waits; returns the tick, counted from the shot,
+    /// that a reload started on, if one did within two seconds.
+    fn idle_until_a_reload(auto: bool, keep_pressing: bool) -> Option<usize> {
+        let mut world = a_world(one_weapon(weapon(
+            semi(WeaponAction::Hitscan(LASER), 1),
+            Mounted::EMPTY,
+            Magazine { clip: Some(4), reserve: 8, reload: 1.0, reload_one_at_a_time: false },
+        )));
+        let shooter = a_shooter(&mut world);
+        world.entity_mut(shooter).insert(AutoReload(auto));
+        input(&mut world, shooter).attack = true;
+        step(&mut world);
+        input(&mut world, shooter).attack = false;
+        (1..=2 * crate::constants::TICK_HZ as usize).find(|_| {
+            // Held after the shot: a semi weapon fires nothing more, and the
+            // player is still not idle.
+            input(&mut world, shooter).attack_held = keep_pressing;
+            step(&mut world);
+            ammo(&world, shooter).reloading > 0.0
+        })
+    }
+
+    #[test]
+    fn a_short_clip_reloads_itself_after_a_second_without_firing() {
+        let one_second = crate::constants::TICK_HZ as usize;
+        let ticks = idle_until_a_reload(true, false).expect("never reloaded");
+        assert!((one_second..=one_second + 1).contains(&ticks), "reloaded on tick {ticks}");
+        assert_eq!(idle_until_a_reload(false, false), None, "reloaded with auto-reload off");
+        assert_eq!(idle_until_a_reload(true, true), None, "reloaded while the trigger was held");
+    }
+
     /// Firing with a round in the clip cancels the reload under way, and the
     /// rounds it had not yet moved stay in the reserve.
     #[test]
@@ -476,14 +550,14 @@ mod tests {
         input(&mut world, shooter).reload = true;
         step(&mut world);
         input(&mut world, shooter).reload = false;
-        assert!(ammo(&world, shooter, Slot::Primary).reloading > 0.0, "the reload never started");
+        assert!(ammo(&world, shooter).reloading > 0.0, "the reload never started");
 
         input(&mut world, shooter).attack = true;
         step(&mut world);
         assert_eq!(shots(&mut world).len(), 1, "the shot did not go off");
-        let state = ammo(&world, shooter, Slot::Primary);
+        let state = ammo(&world, shooter);
         assert_eq!(state.reloading, 0.0, "the reload carried on after the shot");
-        assert_eq!((state.clip, state.reserve), (2, 8), "rounds moved for a reload that was cancelled");
+        assert_eq!((state.clip, state.reserve), (2, 8), "rounds moved for a reload that was canceled");
     }
 
     /// A humiliated body's press goes nowhere, and costs nothing.
@@ -500,7 +574,7 @@ mod tests {
 
         step(&mut world);
         assert!(shots(&mut world).is_empty(), "a humiliated body fired");
-        assert_eq!(ammo(&world, shooter, Slot::Primary).clip, 12, "a refused shot was paid for");
+        assert_eq!(ammo(&world, shooter).clip, 12, "a refused shot was paid for");
     }
 
     /// An automatic weapon fires on its own interval while held, not per tick.
@@ -560,7 +634,7 @@ mod tests {
     /// Input lives on the body: one body firing does not fire the others.
     #[test]
     fn one_body_firing_does_not_fire_the_others() {
-        let mut world = a_world(default_catalogue());
+        let mut world = a_world(default_catalog());
         let shooting = a_shooter(&mut world);
         let idle = a_shooter(&mut world);
         input(&mut world, shooting).attack = true;
@@ -576,38 +650,37 @@ mod tests {
     /// A replayed tick reading the same switch reaches the same loadout.
     #[test]
     fn acting_on_a_switch_twice_is_the_same_as_once() {
-        let mut world = a_world(default_catalogue());
+        let mut world = a_world(default_catalog());
         let body = a_shooter(&mut world);
-        input(&mut world, body).select = Some(Slot::Secondary);
+        let next = second(&world, body);
+        input(&mut world, body).select = Some(next);
 
         world.run_system_once(select_weapons).unwrap();
         world.run_system_once(select_weapons).unwrap();
 
-        assert_eq!(world.get::<Equipped>(body).unwrap().held, Slot::Secondary);
+        assert_eq!(world.get::<Equipped>(body).unwrap().held(), Some(next));
         assert_eq!(
             input(&mut world, body).select,
-            Some(Slot::Secondary),
+            Some(next),
             "the tick's input was emptied by the system that read it"
         );
     }
 
-    /// Selecting a slot the class leaves empty keeps the current weapon. Uses
-    /// a one-weapon class, since the placeholder fills all six.
     #[test]
-    fn selecting_an_empty_slot_changes_nothing() {
+    fn selecting_a_weapon_not_carried_changes_nothing() {
         let mut world = a_world(one_weapon(weapon(
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted::EMPTY,
             Magazine::BOTTOMLESS,
         )));
         let body = a_shooter(&mut world);
-        let held = world.get::<Equipped>(body).unwrap().held;
-        assert_eq!(held, Slot::Primary, "the fixture stopped leaving slots empty");
+        let held = world.get::<Equipped>(body).unwrap().held();
+        assert_eq!(held, Some(WeaponId::of("test")));
 
-        input(&mut world, body).select = Some(Slot::Special);
+        input(&mut world, body).select = Some(WeaponId::of("nothing"));
         world.run_system_once(select_weapons).unwrap();
 
-        assert_eq!(world.get::<Equipped>(body).unwrap().held, held, "an empty slot was equipped");
+        assert_eq!(world.get::<Equipped>(body).unwrap().held(), held, "a weapon not carried was drawn");
     }
 
     /// One shared clock would let the alt-fire's cooldown eat the primary's.
@@ -640,7 +713,7 @@ mod tests {
     /// The message carries the action fired, not what is held when it is read.
     #[test]
     fn the_action_that_was_fired_is_the_one_the_message_carries() {
-        let mut world = a_world(default_catalogue());
+        let mut world = a_world(default_catalog());
         let shooter = a_shooter(&mut world);
         input(&mut world, shooter).attack = true;
 
@@ -648,7 +721,8 @@ mod tests {
         let fired = shots(&mut world);
         assert_eq!(fired.len(), 1, "{fired:?}");
 
-        world.get_mut::<Equipped>(shooter).unwrap().select(Slot::Secondary);
+        let next = second(&world, shooter);
+        world.get_mut::<Equipped>(shooter).unwrap().select(next);
 
         assert!(
             matches!(fired[0].action, WeaponAction::Hitscan(_)),
@@ -712,7 +786,7 @@ mod tests {
 
         step(&mut world);
 
-        let state = ammo(&world, shooter, Slot::Primary);
+        let state = ammo(&world, shooter);
         assert_eq!(state.reserve, 9, "a clipless weapon did not spend its reserve");
         assert_eq!(state.clip, 0, "a clipless weapon loaded a clip it does not have");
     }
@@ -732,7 +806,7 @@ mod tests {
             step(&mut world);
         }
 
-        let state = ammo(&world, shooter, Slot::Primary);
+        let state = ammo(&world, shooter);
         assert_eq!(state.reserve, 10);
         assert_eq!(state.clip, 0);
         assert_eq!(state.reloading, 0.0, "a weapon with no clip started a reload");
@@ -745,7 +819,7 @@ mod tests {
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted {
                 action: WeaponAction::Scope(crate::common::weapon::ScopeSpec { zoom: 2.0 }),
-                cadence: Cadence::Semi,
+                cadence: Cadence::Semi { interval: 0.0 },
                 cost: Cost::Free,
             },
             Magazine { clip: Some(0), reserve: 0, reload: 1.0, reload_one_at_a_time: false },
@@ -776,7 +850,7 @@ mod tests {
             step(&mut world);
             input(&mut world, shooter).attack = false;
         }
-        assert_eq!(ammo(&world, shooter, Slot::Primary).clip, 2);
+        assert_eq!(ammo(&world, shooter).clip, 2);
 
         input(&mut world, shooter).reload = true;
         step(&mut world);
@@ -785,7 +859,7 @@ mod tests {
             step(&mut world);
         }
 
-        let state = ammo(&world, shooter, Slot::Primary);
+        let state = ammo(&world, shooter);
         assert_eq!(state.clip, 4, "the clip did not fill");
         assert_eq!(state.reserve, 6, "the reserve did not pay for it");
     }
@@ -810,7 +884,7 @@ mod tests {
             step(&mut world);
         }
 
-        let state = ammo(&world, shooter, Slot::Primary);
+        let state = ammo(&world, shooter);
         assert_eq!(state.clip, 1, "the clip took more than the reserve had");
         assert_eq!(state.reserve, 0);
     }
@@ -831,7 +905,7 @@ mod tests {
         step(&mut world);
 
         assert!(
-            ammo(&world, shooter, Slot::Primary).reloading > 0.0,
+            ammo(&world, shooter).reloading > 0.0,
             "an empty weapon sat there rather than reloading"
         );
     }
@@ -839,20 +913,65 @@ mod tests {
     /// Switching weapons cancels a reload.
     #[test]
     fn switching_weapons_cancels_a_reload() {
-        let mut world = a_world(default_catalogue());
+        let mut world = a_world(default_catalog());
         let shooter = a_shooter(&mut world);
-        let held = world.get::<Equipped>(shooter).unwrap().held;
+        let held = world.get::<Equipped>(shooter).unwrap().held().unwrap();
 
         world.get_mut::<Ammo>(shooter).unwrap().at_mut(held).reloading = 5.0;
 
-        input(&mut world, shooter).select = Some(Slot::Secondary);
+        input(&mut world, shooter).select = Some(second(&world, shooter));
         world.run_system_once(select_weapons).unwrap();
 
         assert_eq!(
-            ammo(&world, shooter, held).reloading,
+            world.get::<Ammo>(shooter).unwrap().at(held).unwrap().reloading,
             0.0,
             "the holstered weapon went on reloading"
         );
+    }
+
+    /// Clicking every tick fires once per interval, not once per click.
+    #[test]
+    fn a_semi_weapon_cannot_be_clicked_faster_than_its_interval() {
+        let half_a_second = Mounted {
+            action: WeaponAction::Hitscan(LASER),
+            cadence: Cadence::Semi { interval: 0.5 },
+            cost: Cost::Free,
+        };
+        let mut world = a_world(one_weapon(weapon(half_a_second, Mounted::EMPTY, Magazine::BOTTOMLESS)));
+        let shooter = a_shooter(&mut world);
+
+        let mut fired = 0;
+        for _ in 0..crate::constants::TICK_HZ as usize {
+            input(&mut world, shooter).attack = true;
+            step(&mut world);
+            fired += shots(&mut world).len();
+        }
+        assert_eq!(fired, 2, "a second of clicking fired {fired} times");
+    }
+
+    #[test]
+    fn a_fresh_body_has_its_classs_health_and_armor_cap() {
+        let catalog = crate::common::weapon_file::default_catalog();
+        let class = crate::common::class::Class::Mercenary;
+        let expected = catalog.loadout(class).and_then(|loadout| loadout.health).expect("no health in loadouts.toml");
+        let cap = catalog.loadout(class).and_then(|loadout| loadout.armor).expect("no armor in loadouts.toml");
+
+        let mut world = World::new();
+        world.run_system_once(move |mut commands: Commands| {
+            crate::game::player::spawn_player(
+                &mut commands,
+                crate::game::player::Spawn { feet: Vec3::ZERO, yaw: 0.0, side: None },
+                &crate::game::respawn::Identity { id: crate::common::damage::PlayerId(1), team: None, color: 0 },
+                crate::common::player_color::PlayerColor::nth(0.0, 0),
+                &crate::common::game_rules::ModeRules::default(),
+                &catalog,
+            );
+        }).unwrap();
+        let health = world.query::<&crate::common::damage::Damageable>().single(&world).unwrap();
+        assert_eq!(health.max(), expected);
+        assert_eq!(health.health(), expected);
+        let armor = world.query::<&crate::common::damage::Armor>().single(&world).unwrap();
+        assert_eq!((armor.points(), armor.max()), (0, cap));
     }
 
     /// A weapon just drawn fires once its deploy has run out, and not before.
@@ -861,27 +980,28 @@ mod tests {
         const DEPLOY: f32 = 0.25;
         let free = Mounted {
             action: WeaponAction::Hitscan(LASER),
-            cadence: Cadence::Semi,
+            cadence: Cadence::Semi { interval: 0.0 },
             cost: Cost::Free,
         };
-        let mut catalogue = one_weapon(weapon(free, Mounted::EMPTY, Magazine::BOTTOMLESS));
+        let mut catalog = one_weapon(weapon(free, Mounted::EMPTY, Magazine::BOTTOMLESS));
         let drawn = Weapon {
+            key: String::new(),
             id: WeaponId::of("drawn"),
             deploy: DEPLOY,
             ..weapon(free, Mounted::EMPTY, Magazine::BOTTOMLESS)
         };
         let id = drawn.id;
-        catalogue.insert(drawn);
-        let mut loadout = catalogue.loadout(crate::common::class::Class::Mercenary).unwrap().clone();
+        catalog.insert(drawn);
+        let mut loadout = catalog.loadout(crate::common::class::Class::Mercenary).unwrap().clone();
         loadout.set(
             Slot::Secondary,
             crate::common::weapon::SlotChoices { permitted: vec![id], default: id },
         );
-        catalogue.set_loadout(crate::common::class::Class::Mercenary, loadout);
+        catalog.set_loadout(crate::common::class::Class::Mercenary, loadout);
 
-        let mut world = a_world(catalogue);
+        let mut world = a_world(catalog);
         let shooter = a_shooter(&mut world);
-        input(&mut world, shooter).select = Some(Slot::Secondary);
+        input(&mut world, shooter).select = Some(id);
 
         let mut ticks = 0;
         loop {
@@ -900,16 +1020,5 @@ mod tests {
             (expected..=expected + 1).contains(&ticks),
             "fired on tick {ticks}, deploy is {expected} ticks"
         );
-    }
-
-    /// `Slot::ALL`, `index` and `from_index` agree.
-    #[test]
-    fn every_slot_has_a_home() {
-        assert_eq!(Slot::ALL.len(), SLOTS);
-        for (index, slot) in Slot::ALL.into_iter().enumerate() {
-            assert_eq!(slot.index(), index);
-            assert_eq!(Slot::from_index(index), Some(slot));
-        }
-        assert_eq!(Slot::from_index(SLOTS), None, "a digit past the last slot found one");
     }
 }

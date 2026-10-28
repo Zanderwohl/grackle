@@ -1,25 +1,32 @@
-//! Interface colours, as against a map's paint in [`crate::common::palette`]:
+//! Interface colors, as against a map's paint in [`crate::common::palette`]:
 //! one base per team, and its highlights and shadows derived in OKLCH, where
 //! lightness is perceptual and so a "lighter" red and a "lighter" yellow look
 //! equally lighter.
 //!
-//! These are not [`Team::colour`], which is a body's base under map lighting
+//! These are not [`Team::color`], which is a body's base under map lighting
 //! and deliberately muted. Flat panels under no light want more chroma.
 //!
-//! Highlights warm towards yellow and shadows cool towards blue, the way paint
-//! and light do, rather than simply mixing with white and black, which greys a
-//! colour out.
+//! Highlights warm toward yellow and shadows cool toward blue, the way paint
+//! and light do, rather than simply mixing with white and black, which grays a
+//! color out.
 
 use bevy::prelude::*;
 
+use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
 
 /// Where highlights lean, in OKLCH degrees: a warm yellow.
 const WARM_HUE: f32 = 95.0;
 /// Where shadows lean: a cool blue-violet.
 const COOL_HUE: f32 = 275.0;
+/// [`Swatch::player`]'s, between the four teams'. Chroma is asked for high
+/// and given back by [`in_gamut`] wherever a hue cannot hold it.
+const PLAYER_LIGHTNESS: f32 = 0.62;
+const PLAYER_CHROMA: f32 = 0.17;
+/// An outline's lightness in [`Ink::Dark`], whatever the base's.
+const DARK_INK_LIGHTNESS: f32 = 0.24;
 
-/// One colour and the tones around it.
+/// One color and the tones around it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Swatch {
     pub base: Color,
@@ -72,18 +79,38 @@ impl Swatch {
         team.map_or_else(Self::neutral, Self::team)
     }
 
+    /// A player's own hue, for a mode with no teams: as light as a team's and
+    /// as saturated as the hue allows.
+    pub fn player(color: PlayerColor) -> Self {
+        Self::from_oklch(PLAYER_LIGHTNESS, PLAYER_CHROMA, color.hue)
+    }
+
+    /// What a body's HUD is painted in: its team, else its own color, else
+    /// neutral, the order [`body_look`](crate::game::body_mesh) draws it in.
+    pub fn of_body(team: Option<Team>, color: Option<PlayerColor>) -> Self {
+        match (team, color) {
+            (Some(team), _) => Self::team(team),
+            (None, Some(color)) => Self::player(color),
+            (None, None) => Self::neutral(),
+        }
+    }
+
     /// Whichever of white and [`Ink::Black`] stands out on the base.
     pub fn text(&self) -> Color {
         if Oklcha::from(self.base).lightness > 0.72 { Ink::Black.on(self) } else { Ink::White.on(self) }
     }
 }
 
-/// An outline colour.
+/// An outline color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ink {
     White,
     /// Not pure black: a deep warm brown-black, which is what print uses.
     Black,
+    /// The base's own hue taken nearly to black, so an outline belongs to its
+    /// panel. At a fixed lightness, unlike [`Swatch::deep`], so a light cream
+    /// gets as firm an edge as a dark blue.
+    Dark,
     Highlight,
 }
 
@@ -92,33 +119,37 @@ impl Ink {
         match self {
             Ink::White => Color::oklch(0.98, 0.01, WARM_HUE),
             Ink::Black => Color::oklch(0.17, 0.015, 60.0),
+            Ink::Dark => {
+                let base = Oklcha::from(swatch.base);
+                in_gamut(Oklcha::lch(DARK_INK_LIGHTNESS, base.chroma * 0.8, lean(base.hue, COOL_HUE, 0.15)))
+            }
             Ink::Highlight => swatch.highlight,
         }
     }
 }
 
-/// Turn `from` a fraction of the short way round towards `to`, in degrees.
+/// Turn `from` a fraction of the short way round toward `to`, in degrees.
 fn lean(from: f32, to: f32, amount: f32) -> f32 {
     let delta = (to - from + 540.0).rem_euclid(360.0) - 180.0;
     (from + delta * amount).rem_euclid(360.0)
 }
 
-/// Lose chroma until the colour fits in sRGB, keeping lightness and hue.
+/// Lose chroma until the color fits in sRGB, keeping lightness and hue.
 /// Clamping channels instead would shift the hue of a saturated yellow.
-fn in_gamut(colour: Oklcha) -> Color {
+fn in_gamut(color: Oklcha) -> Color {
     let fits = |c: Oklcha| {
         let rgb = Srgba::from(c);
         [rgb.red, rgb.green, rgb.blue].iter().all(|v| (-1e-4..=1.0 + 1e-4).contains(v))
     };
-    if fits(colour) {
-        return colour.into();
+    if fits(color) {
+        return color.into();
     }
-    let (mut low, mut high) = (0.0, colour.chroma);
+    let (mut low, mut high) = (0.0, color.chroma);
     for _ in 0..20 {
         let mid = (low + high) * 0.5;
-        if fits(colour.with_chroma(mid)) { low = mid } else { high = mid }
+        if fits(color.with_chroma(mid)) { low = mid } else { high = mid }
     }
-    colour.with_chroma(low).into()
+    color.with_chroma(low).into()
 }
 
 #[cfg(test)]
@@ -127,6 +158,30 @@ mod tests {
 
     fn lightness(c: Color) -> f32 {
         Oklcha::from(c).lightness
+    }
+
+    #[test]
+    fn a_dark_outline_is_darker_than_any_panel_and_keeps_its_hue() {
+        for swatch in Team::ALL.map(Swatch::team).into_iter().chain([Swatch::neutral()]) {
+            let ink = Ink::Dark.on(&swatch);
+            assert!(lightness(ink) < lightness(swatch.shadow), "{swatch:?}");
+            let (ink, base) = (Oklcha::from(ink), Oklcha::from(swatch.base));
+            let turned = (ink.hue - base.hue + 540.0).rem_euclid(360.0) - 180.0;
+            assert!(turned.abs() < 40.0, "{swatch:?} turned {turned} degrees");
+        }
+    }
+
+    #[test]
+    fn a_player_color_makes_a_whole_swatch_and_a_team_outranks_it() {
+        for index in 0..24 {
+            let color = PlayerColor::nth(0.0, index);
+            let swatch = Swatch::player(color);
+            assert!(lightness(swatch.highlight) > lightness(swatch.base), "{color:?}");
+            assert!(lightness(swatch.base) > lightness(swatch.shadow), "{color:?}");
+            assert_eq!(Swatch::of_body(None, Some(color)), swatch);
+            assert_eq!(Swatch::of_body(Some(Team::Blue), Some(color)), Swatch::team(Team::Blue));
+        }
+        assert_eq!(Swatch::of_body(None, None), Swatch::neutral());
     }
 
     #[test]

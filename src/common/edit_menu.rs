@@ -1,6 +1,6 @@
 //! The menu bar's Edit pulldown, shared by every authoring mode (as
 //! [`file_menu`] is). Each mode passes an [`EditAvailability`], and an entry
-//! that cannot be done right now is greyed out rather than ignored.
+//! that cannot be done right now is grayed out rather than ignored.
 //!
 //! [`file_menu`]: crate::common::file_menu
 

@@ -219,8 +219,8 @@ pub fn blend_by_heading(animation: &mut StateAnimation) {
     );
 }
 
-/// Halfway to its neighbour above, or fifteen degrees past the last; a duplicate at the same heading
-/// could never be blended towards. Returns the copy's index.
+/// Halfway to its neighbor above, or fifteen degrees past the last; a duplicate at the same heading
+/// could never be blended toward. Returns the copy's index.
 pub fn duplicate_variant(variants: &mut Vec<crate::common::skeleton::clip::Variant>, index: usize) -> usize {
     let Some(original) = variants.get(index).cloned() else { return index };
     let above = variants

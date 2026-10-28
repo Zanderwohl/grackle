@@ -79,7 +79,7 @@ pub fn load_named_clip(assets: &Assets, packs: &[PathBuf], name: &str) -> Option
             .and_then(|text| toml::from_str::<Clip>(&text).map_err(|error| error.to_string()));
         match parsed {
             Ok(mut clip) => {
-                clip.normalise();
+                clip.normalize();
                 found = Some(clip);
             }
             Err(why) => warn!("{}/{relative}: {why}", pack.display()),
@@ -123,8 +123,8 @@ mod tests {
     /// 1.35° upright at five headings, 1.51° crouched at three.
     const BETWEEN: f32 = 2.0_f32.to_radians();
 
-    /// A body travelling at `heading` from the way its state faces.
-    fn travelling(state: AnimationState, heading: f32) -> Vec2 {
+    /// A body traveling at `heading` from the way its state faces.
+    fn traveling(state: AnimationState, heading: f32) -> Vec2 {
         let facing = crate::common::skeleton::gait::direction_of(state);
         let (sin, cos) = heading.sin_cos();
         Vec2::new(facing.x * cos - facing.y * sin, facing.x * sin + facing.y * cos)
@@ -174,7 +174,7 @@ mod tests {
                         let at = clip.length * step as f32 / 200.0;
                         let inputs = PoseInputs {
                             speed,
-                            travel: if gait { travelling(state, heading) } else { Vec2::ZERO },
+                            travel: if gait { traveling(state, heading) } else { Vec2::ZERO },
                             ..seed::inputs_at(clip.clock, at, clip.length)
                         };
 

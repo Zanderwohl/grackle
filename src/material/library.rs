@@ -2,7 +2,7 @@
 //!
 //! A name is looked for under every pack's `materials/` the first time a room asks for it, the
 //! last pack holding it winning as for props, and baked once into a tile of [`TILE_TEXELS`] that
-//! repeats across the wall ([`crate::tool::room::MATERIAL_TILE_METRES`] per repeat): colour,
+//! repeats across the wall ([`crate::tool::room::MATERIAL_TILE_METERS`] per repeat): color,
 //! glTF-packed metallic-roughness and a normal map, each mipmapped by texture-graph's
 //! `MaterialMapper`.
 
@@ -73,7 +73,7 @@ impl MaterialLibrary {
                     .ok()?;
                 let maps = mapper.maps(baker.ctx(), &out);
                 let maps = [
-                    baked.insert(&maps.color, Sampling::Repeat, Encoding::Colour),
+                    baked.insert(&maps.color, Sampling::Repeat, Encoding::Color),
                     baked.insert(&maps.metallic_roughness, Sampling::Repeat, Encoding::Data),
                     baked.insert(&maps.normal, Sampling::Repeat, Encoding::Data),
                 ];
@@ -162,7 +162,7 @@ mod tests {
     use std::path::Path;
     use texture_graph_core::{evaluate_material, Sample, FLAT_W};
 
-    /// A material repeats across a wall, so its tile's opposite edges have to be the same colour.
+    /// A material repeats across a wall, so its tile's opposite edges have to be the same color.
     /// Checked on the CPU, which agrees with the GPU bake to within a step of sRGB.
     /// Height rising toward the bottom of the image is, on a wall, height rising toward the floor
     /// (`v` runs down the world), so the slope faces up. texture-graph writes that as `n.y < 0`.

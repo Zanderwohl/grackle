@@ -13,7 +13,7 @@ use bevy::ecs::entity::{EntityMapper, MapEntities};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Seconds of game time a hit still counts towards an assist. A guess at the
+/// Seconds of game time a hit still counts toward an assist. A guess at the
 /// right order of magnitude; ultimately a gamemode's number.
 pub const ASSIST_WINDOW: f32 = 8.0;
 
@@ -121,7 +121,64 @@ impl Damageable {
     }
 }
 
-/// Linear from 1 at the centre to 0 at `radius`. Shared by splash damage and
+/// For a class whose loadout states no `armor`, as [`DEFAULT_HEALTH`] is for
+/// health.
+pub const DEFAULT_MAX_ARMOR: u32 = 50;
+
+/// The share of each hit armor takes while it lasts, as in Quake.
+pub const ARMOR_ABSORBS: f32 = 2.0 / 3.0;
+
+/// A second pool in front of [`Damageable`]. Spent only by
+/// [`apply_damage`](crate::game::damage::apply_damage). A body starts with
+/// none.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Reflect, Serialize, Deserialize)]
+pub struct Armor {
+    points: u32,
+    max: u32,
+}
+
+impl Default for Armor {
+    fn default() -> Self {
+        Self { points: 0, max: DEFAULT_MAX_ARMOR }
+    }
+}
+
+impl Armor {
+    /// Empty, holding at most `max`.
+    pub fn with_max(max: u32) -> Self {
+        Self { points: 0, max }
+    }
+
+    pub fn points(&self) -> u32 {
+        self.points
+    }
+
+    pub fn max(&self) -> u32 {
+        self.max
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.points >= self.max
+    }
+
+    /// Returns what actually went on, capped at the maximum.
+    pub fn add(&mut self, amount: u32) -> u32 {
+        let added = amount.min(self.max - self.points.min(self.max));
+        self.points += added;
+        added
+    }
+
+    /// Takes [`ARMOR_ABSORBS`] of a hit, rounded up so a 1-point hit is not
+    /// free of armor for ever, and returns what is left for health.
+    pub fn soak(&mut self, amount: u32) -> u32 {
+        let wanted = (amount as f32 * ARMOR_ABSORBS).ceil() as u32;
+        let taken = wanted.min(self.points).min(amount);
+        self.points -= taken;
+        amount - taken
+    }
+}
+
+/// Linear from 1 at the center to 0 at `radius`. Shared by splash damage and
 /// shove so a body is never thrown further than it was hurt. A radius `<= 0`
 /// reaches nothing.
 pub fn falloff(distance: f32, radius: f32) -> f32 {
@@ -141,17 +198,21 @@ pub struct Damage {
     /// Before the clamp.
     pub amount: u32,
     pub point: Vec3,
+    /// Where it came from — a muzzle, a blast — for the victim's direction
+    /// indicator; `None` for what has no direction, like burning.
+    pub from: Option<Vec3>,
 }
 
 /// Anything that goes off writes one; only [`crate::game::explosion`] knows
-/// what splash means. [`falloff`] applies to `damage` and `knockback` alike.
+/// what splash means.
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 pub struct Explosion {
     pub at: Vec3,
     pub radius: f32,
-    /// At the centre.
+    /// At the center.
     pub damage: u32,
-    /// Metres per second of corpse shove at the centre.
+    /// Meters per second of corpse shove at the center. A living body is
+    /// pushed by the damage it takes instead; see `crate::game::explosion`.
     pub knockback: f32,
     pub source: DamageSource,
     /// The body hit squarely, which takes this amount instead of splash, not
@@ -167,6 +228,7 @@ pub struct DamageDealt {
     pub amount: u32,
     pub remaining: u32,
     pub point: Vec3,
+    pub from: Option<Vec3>,
 }
 
 /// The entity in a relayed record is the sender's and must be mapped, or a
@@ -219,6 +281,17 @@ impl DamageLog {
     }
 }
 
+/// Health given back, for the scoreboard. Whatever heals writes one; nothing
+/// reads it to change health.
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct Healed {
+    pub target: Entity,
+    /// Credited with it: the target too, for a pickup.
+    pub healer: PlayerId,
+    /// Already capped at what was missing.
+    pub amount: u32,
+}
+
 /// Carries the victim's name because the entity is gone by the time anything
 /// reads this.
 #[derive(Message, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -235,6 +308,25 @@ pub struct Died {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn armor_takes_two_thirds_until_it_runs_out() {
+        let mut armor = Armor::default();
+        armor.add(10);
+        assert_eq!(armor.soak(9), 3);
+        assert_eq!(armor.points(), 4);
+        assert_eq!(armor.soak(30), 26, "took more than it had");
+        assert_eq!(armor.points(), 0);
+        assert_eq!(armor.soak(30), 30);
+    }
+
+    #[test]
+    fn armor_fills_to_its_maximum_and_no_further() {
+        let mut armor = Armor::with_max(100);
+        assert_eq!(armor.add(70), 70);
+        assert_eq!(armor.add(70), 30);
+        assert!(armor.is_full());
+    }
 
     struct Shift;
     impl EntityMapper for Shift {
@@ -254,6 +346,7 @@ mod tests {
             amount: 30,
             remaining: 70,
             point: Vec3::new(1.0, 2.0, 3.0),
+            from: None,
         };
         hit.map_entities(&mut Shift);
         assert_eq!(hit.target, Entity::from_raw_u32(107).unwrap());

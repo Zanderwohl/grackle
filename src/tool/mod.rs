@@ -32,6 +32,7 @@ pub mod animation_grid;
 pub mod point_placement;
 pub mod mirror;
 pub mod prop;
+pub mod weapon_pickup;
 pub mod rotate_drag;
 pub mod retarget;
 pub mod room;
@@ -59,13 +60,30 @@ impl Plugin for ToolPlugin {
             .add_plugins(PointDragPlugin)
             .add_plugins(RotateDragPlugin)
             .add_plugins(PropPlugin)
+            .add_plugins(weapon_pickup::WeaponPickupPlugin)
             .add_plugins(MirrorPlugin)
             .add_plugins(AnimationDisplayPlugin)
             .add_plugins(AnimationGridPlugin)
             .add_plugins(RetargetPlugin)
             .add_plugins(RoomPlugin)
             .add_plugins(FootprintPlugin)
-            .add_plugins(FootprintDragPlugin);
+            .add_plugins(FootprintDragPlugin)
+            .add_systems(Update, spectate_while_a_client);
+    }
+}
+
+/// Every editing tool runs under a `Tools` state, so holding a client in
+/// [`Tools::Spectate`] turns them all off at once.
+fn spectate_while_a_client(
+    role: Option<Res<crate::common::net::NetRole>>,
+    tool: Res<State<Tools>>,
+    mut next: ResMut<NextState<Tools>>,
+) {
+    let client = role.is_some_and(|role| !role.is_authority());
+    match (client, *tool.get() == Tools::Spectate) {
+        (true, false) => next.set(Tools::Spectate),
+        (false, true) => next.set(Tools::Select),
+        _ => {}
     }
 }
 
@@ -89,12 +107,15 @@ pub enum Tools {
     PointLight,
     SpawnPoint,
     Prop,
+    WeaponPickup,
     AnimationDisplay,
     AnimationGrid,
     Room,
     Footprint,
     Mirror,
     Retarget,
+    /// A client's: no tool runs under it.
+    Spectate,
 }
 
 impl Tools {
@@ -105,17 +126,19 @@ impl Tools {
             Self::PointLight => get!("tools.point_light"),
             Self::SpawnPoint => get!("tools.spawn_point"),
             Self::Prop => get!("tools.prop"),
+            Self::WeaponPickup => get!("tools.weapon_pickup"),
             Self::AnimationDisplay => get!("tools.animation_display"),
             Self::AnimationGrid => get!("tools.animation_grid"),
             Self::Room => get!("tools.room"),
             Self::Footprint => get!("tools.footprint"),
             Self::Mirror => get!("tools.mirror"),
             Self::Retarget => "Retarget".into(),
+            Self::Spectate => "Spectate".into(),
         }
     }
 
     fn is_hidden(&self) -> bool {
-        matches!(self, Self::Retarget)
+        matches!(self, Self::Retarget | Self::Spectate)
     }
     
     /// `TOOLBAR_HEIGHT` in [`crate::editor::panels`] is derived from these.
@@ -148,5 +171,30 @@ impl Tools {
             }
         });
         ui.add_space(Self::ROW_PADDING);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::net::NetRole;
+
+    fn tool_with(role: NetRole, starting: Tools) -> Tools {
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin)
+            .insert_state(starting)
+            .insert_resource(role)
+            .add_systems(Update, spectate_while_a_client);
+        app.update();
+        app.update();
+        app.world().resource::<State<Tools>>().get().clone()
+    }
+
+    #[test]
+    fn a_client_only_spectates_and_a_host_gets_its_tools_back() {
+        let client = NetRole::Client { host: "example".into(), port: 1 };
+        assert_eq!(tool_with(client, Tools::Room), Tools::Spectate);
+        assert_eq!(tool_with(NetRole::Listen { port: 1 }, Tools::Room), Tools::Room);
+        assert_eq!(tool_with(NetRole::Solo, Tools::Spectate), Tools::Select);
     }
 }

@@ -6,41 +6,67 @@ use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
 use lightyear::prelude::input::native::ActionState;
 
-use crate::common::damage::{Damageable, Died, PlayerId};
+use crate::common::damage::{Armor, Damageable, Died, PlayerId, DEFAULT_HEALTH, DEFAULT_MAX_ARMOR};
 use crate::game::death::Dying;
 use crate::common::hitbox::Hitboxes;
 use crate::common::movement_rules::MovementRules;
 use crate::common::taunt::TauntTurning;
+use crate::common::game_rules::ModeRules;
 use crate::common::team::Team;
+use crate::common::player_color::PlayerColor;
+use crate::game::respawn::Identity;
 use crate::common::class::{
-    body_centre_from_feet, Stance, CLASS_HALF_EXTENTS,
+    body_center_from_feet, Stance, CLASS_HALF_EXTENTS,
 };
 use crate::game::collision::{CollisionWorld, Touched};
-use crate::common::class::Class;
-use crate::common::weapon::{Ammo, Equipped, Slot, WeaponCatalogue};
+use crate::common::weapon::{Ammo, Equipped, WeaponCatalog, WeaponId};
 use crate::game::condition::Condition;
-use crate::game::weapon::Trigger;
+use crate::game::weapon::{AutoReload, Trigger};
 use crate::tool::room::Room;
 
 /// Half-extents of the body box: the tallest class, which spawn points are
 /// checked against.
 pub const PLAYER_HALF: Vec3 = CLASS_HALF_EXTENTS;
-/// Metres per second. The gait reads speed off the ground covered, so this is
+/// Meters per second. The gait reads speed off the ground covered, so this is
 /// what makes it a walk.
 const WALK_SPEED: f32 = 2.6;
 
-/// Metres per second.
+/// Meters per second.
 const SPRINT_SPEED: f32 = 7.0;
 
-/// Metres per second. Wins over sprint.
+/// Meters per second. Wins over sprint.
 const CROUCH_SPEED: f32 = 1.2;
 const JUMP_SPEED: f32 = 7.0;
+
+// Movement with momentum, as Quake and Source write it (`PM_Friction`,
+// `PM_Accelerate`, `PM_AirAccelerate`), at Source's numbers — TF2's — turned
+// from units into meters at 0.0254 m a unit.
+
+/// Ground friction, per second: the fraction of speed lost each second above
+/// [`STOP_SPEED`].
+const FRICTION: f32 = 4.0;
+/// Below this, meters per second, friction acts as if at this speed, so a
+/// slow body stops in a moment rather than creeping on forever.
+const STOP_SPEED: f32 = 2.54;
+/// Per second, in multiples of the wished-for speed.
+const GROUND_ACCELERATE: f32 = 10.0;
+const AIR_ACCELERATE: f32 = 10.0;
+/// How fast, meters per second, the keys alone push a body in the air along
+/// any one direction. Small, so the air is mostly momentum — but measured
+/// along the wish, so turning the view while strafing keeps adding speed
+/// sideways to the motion: air strafing.
+const AIR_WISH_SPEED: f32 = 0.76;
 /// The steepest floor a body stands on, as the cosine of its tilt: about 45°,
 /// Quake's number. Anything steeper is a wall that slopes, and is slid off.
 pub const WALKABLE: f32 = 0.7;
 /// The tallest ledge a body walks up rather than being stopped by: TF2's
 /// eighteen units, a little over a stair.
 pub const STEP_HEIGHT: f32 = 0.45;
+/// An impulse carrying a body off its floor faster than this, meters per
+/// second, launches it; slower, the floor keeps it. Quake's ten units.
+const LAUNCH_SPEED: f32 = 0.25;
+/// Seconds of no ground friction after a knockback.
+const KNOCKBACK_SLIDE: f32 = 0.2;
 /// How far below its feet a body looks for a floor after each step. Has to
 /// clear the collision skin, which is where a step leaves a body standing.
 const GROUND_PROBE: f32 = 0.02;
@@ -51,7 +77,7 @@ const FIELD_OF_VIEW: f32 = std::f32::consts::FRAC_PI_2;
 /// Short of straight up and down, so the view never flips over.
 const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 
-/// The body. Its `Transform` is the centre of the collision box, not the feet
+/// The body. Its `Transform` is the center of the collision box, not the feet
 /// or the eye; [`PLAYER_HALF`] is measured from here.
 ///
 /// The required components are ones whose absence fails silently: a body
@@ -61,7 +87,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 // `Transform` and `Visibility` because a replicated body is built by
 // inserting components rather than through `spawn_player`, and without them
 // its children have nothing to inherit.
-#[require(Hitboxes, Damageable, Equipped, Ammo, Trigger, Inputs, Condition, Transform, Visibility)]
+#[require(Hitboxes, Damageable, Armor, Equipped, Ammo, Trigger, AutoReload, Inputs, Condition, Impulse, Transform, Visibility)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -76,7 +102,21 @@ pub struct Player {
     /// A taunt held the body back from the aim, so it turns back at
     /// [`CATCH_UP_DEGREES_PER_SECOND`] rather than in one tick.
     pub catching_up: bool,
+    /// Seconds left of no ground friction after a knockback, as Quake's
+    /// knockback timer: a rocket at your feet would otherwise be mostly
+    /// rubbed off before you left the floor.
+    pub sliding: f32,
 }
+
+/// Velocity, meters per second, to add to a body on its next step, and what
+/// put it there. Written by explosions; [`step_player`] is the only thing that
+/// takes it, so velocity keeps one writer.
+///
+/// Authority-only and never replicated: only the authority sets things off,
+/// and it never rolls back, so taking it in the step replays nothing. A client
+/// learns of its own launch through the replicated `Player.velocity`.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Impulse(pub Vec3);
 
 pub const CATCH_UP_DEGREES_PER_SECOND: f32 = 720.0;
 
@@ -95,6 +135,7 @@ impl Default for Player {
             ground: None,
             against_wall: false,
             catching_up: false,
+            sliding: 0.0,
         }
     }
 }
@@ -116,9 +157,9 @@ pub struct PlayerInput {
     /// Asking to duck. [`Stance`] can disagree: a body under a low ceiling
     /// cannot stand up.
     pub crouch: bool,
-    /// A weapon slot asked for since the last tick consumed it. A [`Slot`]
-    /// rather than a weapon: what a slot holds is the server's business.
-    pub select: Option<Slot>,
+    /// A weapon asked for since the last tick consumed it. By id, since a
+    /// pickup can shift its place in the list.
+    pub select: Option<WeaponId>,
     /// The trigger was pulled since the last tick consumed it. Latched, since
     /// a shot is an edge.
     pub attack: bool,
@@ -293,7 +334,7 @@ pub fn usable_spawns(spawns: &[Spawn], world: &CollisionWorld) -> Vec<Spawn> {
     spawns
         .iter()
         .copied()
-        .filter(|spawn| world.fits(body_centre_from_feet(spawn.feet), PLAYER_HALF))
+        .filter(|spawn| world.fits(body_center_from_feet(spawn.feet), PLAYER_HALF))
         .collect()
 }
 
@@ -314,7 +355,7 @@ pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
     Spawn { feet, yaw: SPAWN_YAW, side: None }
 }
 
-/// The spawn's `feet` is its own position; the body is centred above it.
+/// The spawn's `feet` is its own position; the body is centered above it.
 ///
 /// Does not mark the body [`LocalPlayer`]: a server spawns every player's body
 /// and drives none, and whose body it is is answered by `enter_play` or
@@ -322,37 +363,45 @@ pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
 pub fn spawn_player(
     commands: &mut Commands,
     spawn: Spawn,
-    id: PlayerId,
-    team: Team,
-    catalogue: &WeaponCatalogue,
+    who: &Identity,
+    color: PlayerColor,
+    rules: &ModeRules,
+    catalog: &WeaponCatalog,
 ) -> Entity {
-    let position = body_centre_from_feet(spawn.feet);
+    let position = body_center_from_feet(spawn.feet);
 
-    // Everybody is a Mercenary until classes can be picked. This decides what
-    // the body carries; a corpse's build is still read off the rig.
-    let class = Class::Mercenary;
-    let (equipped, ammo) = catalogue.starting_equipment(class);
+    // This decides what the body carries; a corpse's build is still read off
+    // the rig.
+    let class = rules.class_to_play();
+    let (equipped, ammo) = catalog.starting_equipment(class, rules.loadout.as_deref());
+    let loadout = catalog.loadout(class);
+    let health = loadout.and_then(|loadout| loadout.health).unwrap_or(DEFAULT_HEALTH);
+    let armor = loadout.and_then(|loadout| loadout.armor).unwrap_or(DEFAULT_MAX_ARMOR);
 
-    commands
-        .spawn((
-            Player { yaw: spawn.yaw, ..default() },
-            class,
-            equipped,
-            ammo,
-            // Whoever stands a body up steps it.
-            Simulated,
-            // Seeded, since the step copies aim off the input and a zero would
-            // snap the body north on its first step.
-            ActionState(PlayerInput { yaw: spawn.yaw, ..default() }),
-            id,
-            team,
-            Stance::default(),
-            PhysicsBody::at(position),
-            Transform::from_translation(position).with_rotation(Quat::from_rotation_y(spawn.yaw)),
-            Visibility::default(),
-            Name::new("Player"),
-        ))
-        .id()
+    let mut body = commands.spawn((
+        Player { yaw: spawn.yaw, ..default() },
+        class,
+        Damageable::with_health(health),
+        Armor::with_max(armor),
+        equipped,
+        ammo,
+        // Whoever stands a body up steps it.
+        Simulated,
+        // Seeded, since the step copies aim off the input and a zero would
+        // snap the body north on its first step.
+        ActionState(PlayerInput { yaw: spawn.yaw, ..default() }),
+        who.id,
+        color,
+        Stance::default(),
+        PhysicsBody::at(position),
+        Transform::from_translation(position).with_rotation(Quat::from_rotation_y(spawn.yaw)),
+        Visibility::default(),
+        Name::new("Player"),
+    ));
+    if let Some(team) = who.team {
+        body.insert(team);
+    }
+    body.id()
 }
 
 /// Hang a camera off whichever body this machine is looking out of.
@@ -565,7 +614,7 @@ pub struct DeathCam {
     pub whose: Option<PlayerId>,
 }
 
-/// Metres above the corpse's pelvis, so a body on the floor is looked down at.
+/// Meters above the corpse's pelvis, so a body on the floor is looked down at.
 const DEATH_CAM_LIFT: f32 = 0.6;
 
 /// Per second. Also damps the ragdoll's tumbling, which shakes the camera.
@@ -646,6 +695,7 @@ pub fn third_person_camera(pivot: Vec3, aim: Quat, world: &CollisionWorld) -> Ve
 /// Walk, fall, jump, and stop at walls — one fixed step.
 ///
 /// The same inputs and `dt` must give the same answer on client and server.
+#[allow(clippy::type_complexity)]
 pub fn step_player(
     time: Res<Time>,
     world: Res<CollisionWorld>,
@@ -654,7 +704,7 @@ pub fn step_player(
     // the server sends it.
     taunts: Option<Res<crate::common::taunt::Taunts>>,
     mut players: Query<
-        (&mut Player, &mut PhysicsBody, &mut Stance, &Inputs, &Condition),
+        (&mut Player, &mut PhysicsBody, &mut Stance, &Inputs, &Condition, &mut Impulse),
         With<Simulated>,
     >,
 ) {
@@ -663,12 +713,24 @@ pub fn step_player(
         return;
     }
 
-    for (mut player_slot, mut body_slot, mut stance_slot, input, condition) in &mut players {
+    for (mut player_slot, mut body_slot, mut stance_slot, input, condition, mut impulse) in &mut players {
         // Stepped on copies and written back only if different: all three are
         // replicated, and a still body would otherwise be resent every tick.
         let mut player = player_slot.clone();
         let mut body = *body_slot;
         let mut stance = *stance_slot;
+
+        player.sliding = (player.sliding - dt).max(0.0);
+        if impulse.0 != Vec3::ZERO {
+            let kick = std::mem::take(&mut impulse.0);
+            player.velocity += kick;
+            player.sliding = KNOCKBACK_SLIDE;
+            // Off the floor here, or the walk below lays the kick flat along
+            // it and the ground snap puts the body straight back.
+            if player.ground.is_some_and(|floor| player.velocity.dot(floor) > LAUNCH_SPEED) {
+                player.ground = None;
+            }
+        }
 
         // Read, never taken: `write_client_inputs` already consumed the edge,
         // and rollback replays this input.
@@ -692,6 +754,7 @@ pub fn step_player(
         let half = stance.half_extents();
         let wish = Vec3::new(input.movement.x, 0.0, -input.movement.y).normalize_or_zero();
         let wish = Quat::from_rotation_y(player.yaw) * wish;
+        let wishing = wish != Vec3::ZERO;
 
         // The animation measures ground covered; it is never told which speed.
         let speed = if rules.sprint.sprints(input.sprint) { SPRINT_SPEED } else { WALK_SPEED };
@@ -699,17 +762,25 @@ pub fn step_player(
         // A replicated, unpredicted `Condition`: the tick a taunt starts or
         // stops is a rollback, which is correct and rare.
         let speed = speed * condition.speed_factor(taunts.as_deref());
-        let walk = wish * speed;
+        let speed = if wishing { speed } else { 0.0 };
 
         // A held jump re-fires on landing, so chaining jumps needs no fresh
-        // press. On the ground the walk follows the floor and gravity does
-        // nothing, so a walkable slope is walked up and down and not slid
-        // down when standing still.
+        // press. The tick that jumps feels no friction, so a hop chained on
+        // landing keeps its speed: bunny hopping. On the ground velocity
+        // follows the floor and gravity does nothing, so a walkable slope is
+        // walked up and down and not slid down when standing still.
         let jumped = player.on_ground() && jump;
         player.velocity = match player.ground {
-            Some(_) if jump => Vec3::new(walk.x, JUMP_SPEED, walk.z),
-            Some(floor) => walk - floor * walk.dot(floor),
-            None => Vec3::new(walk.x, player.velocity.y + rules.fall() * dt, walk.z),
+            Some(floor) => {
+                let along_floor = (wish - floor * wish.dot(floor)).normalize_or_zero();
+                let coasting = if jump || player.sliding > 0.0 { player.velocity } else { friction(player.velocity, dt) };
+                let moving = accelerate(coasting, along_floor, speed, speed, GROUND_ACCELERATE, dt);
+                if jump { Vec3::new(moving.x, JUMP_SPEED, moving.z) } else { onto_floor(moving, floor) }
+            }
+            None => {
+                let moving = accelerate(player.velocity, wish, speed, speed.min(AIR_WISH_SPEED), AIR_ACCELERATE, dt);
+                Vec3::new(moving.x, player.velocity.y + rules.fall() * dt, moving.z)
+            }
         };
 
         // A room edited mid-match can enclose a body that crossed nothing,
@@ -738,8 +809,15 @@ pub fn step_player(
         // one, leaves the ground.
         let rising = jumped || (player.ground.is_none() && player.velocity.y > 0.0);
         let ground = (!rising).then(|| world.ground(position, half, GROUND_PROBE, WALKABLE)).flatten();
-        if let Some((resting, _)) = ground {
+        if let Some((resting, floor)) = ground {
             position = resting;
+            // A landing settled by the probe touched nothing in the slide, so
+            // the fall is taken off here; left in, the next tick would turn
+            // it into speed along the floor.
+            let into = player.velocity.dot(floor);
+            if into < 0.0 {
+                player.velocity -= floor * into;
+            }
         }
         player.ground = ground.map(|(_, normal)| normal);
 
@@ -750,6 +828,37 @@ pub fn step_player(
         body_slot.set_if_neq(body);
         stance_slot.set_if_neq(stance);
     }
+}
+
+/// Slow down, by [`FRICTION`] scaled by horizontal speed — a slope's rise is
+/// not speed to be rubbed off — applied to the whole of it.
+fn friction(velocity: Vec3, dt: f32) -> Vec3 {
+    let speed = Vec2::new(velocity.x, velocity.z).length();
+    if speed < 1.0e-3 {
+        return Vec3::ZERO;
+    }
+    let drop = speed.max(STOP_SPEED) * FRICTION * dt;
+    velocity * ((speed - drop).max(0.0) / speed)
+}
+
+/// Push along `direction` until the speed *along it* reaches `cap`, at most
+/// `rate × wish_speed` per second. Speed along other directions is neither
+/// added to nor taken away, which is what lets momentum carry and what makes
+/// air strafing: past `cap` in one direction, a direction at right angles to
+/// the motion still has all of `cap` to give.
+fn accelerate(velocity: Vec3, direction: Vec3, wish_speed: f32, cap: f32, rate: f32, dt: f32) -> Vec3 {
+    let short = cap - velocity.dot(direction);
+    if short <= 0.0 {
+        return velocity;
+    }
+    velocity + direction * (rate * wish_speed * dt).min(short)
+}
+
+/// Along the floor at the same speed, as Quake does: a slope neither slows a
+/// body walking up it nor speeds one walking down.
+fn onto_floor(velocity: Vec3, floor: Vec3) -> Vec3 {
+    let speed = velocity.length();
+    (velocity - floor * velocity.dot(floor)).normalize_or_zero() * speed
 }
 
 /// Duck, or stand back up if there is room.
@@ -764,7 +873,7 @@ fn change_stance(
     wants_crouch: bool,
     world: &CollisionWorld,
 ) {
-    let shift = Stance::centre_shift();
+    let shift = Stance::center_shift();
     let (wanted, movement) = match (wants_crouch, *stance) {
         (true, Stance::Standing) => (
             Stance::Crouched,
@@ -828,6 +937,60 @@ mod tests {
         }
     }
 
+    const TICK: f32 = 1.0 / crate::constants::TICK_HZ as f32;
+
+    fn run_on_the_ground(mut velocity: Vec3, direction: Vec3, ticks: usize) -> Vec3 {
+        let speed = if direction == Vec3::ZERO { 0.0 } else { SPRINT_SPEED };
+        for _ in 0..ticks {
+            velocity = accelerate(friction(velocity, TICK), direction, speed, speed, GROUND_ACCELERATE, TICK);
+        }
+        velocity
+    }
+
+    #[test]
+    fn a_run_builds_to_its_top_speed_and_no_further() {
+        let early = run_on_the_ground(Vec3::ZERO, Vec3::NEG_Z, 3);
+        assert!(early.length() < SPRINT_SPEED * 0.5, "at {early} after three ticks: no momentum");
+        let later = run_on_the_ground(Vec3::ZERO, Vec3::NEG_Z, crate::constants::TICK_HZ as usize);
+        assert!((later.length() - SPRINT_SPEED).abs() < 1e-3, "a second's run settled at {later}");
+    }
+
+    #[test]
+    fn letting_go_coasts_and_then_stops() {
+        let running = Vec3::NEG_Z * SPRINT_SPEED;
+        let coasting = run_on_the_ground(running, Vec3::ZERO, 4);
+        assert!(coasting.length() > SPRINT_SPEED * 0.5, "stopped dead at {coasting}");
+        let stopped = run_on_the_ground(running, Vec3::ZERO, crate::constants::TICK_HZ as usize);
+        assert_eq!(stopped, Vec3::ZERO, "still moving a second after letting go");
+    }
+
+    #[test]
+    fn the_air_keeps_momentum_and_strafing_through_a_turn_adds_to_it() {
+        let flying = Vec3::NEG_Z * SPRINT_SPEED;
+        let air = |v: Vec3, wish: Vec3| accelerate(v, wish, SPRINT_SPEED, SPRINT_SPEED.min(AIR_WISH_SPEED), AIR_ACCELERATE, TICK);
+
+        assert_eq!(air(flying, Vec3::ZERO), flying, "the air slowed a body with no keys down");
+        let backpedal = air(flying, Vec3::Z);
+        assert!(backpedal.length() < SPRINT_SPEED, "backpedaling in the air did nothing");
+
+        // Holding a strafe key and turning with the motion: the wish stays at
+        // right angles to where the body is going.
+        let mut v = flying;
+        for _ in 0..crate::constants::TICK_HZ as usize {
+            let sideways = Vec3::Y.cross(v).normalize();
+            v = air(v, sideways);
+        }
+        assert!(v.length() > SPRINT_SPEED * 1.2, "a second's air strafe reached only {}", v.length());
+    }
+
+    #[test]
+    fn a_slope_neither_slows_nor_speeds_a_body_along_it() {
+        let floor = Vec3::new(0.5, 1.0, 0.0).normalize();
+        let along = onto_floor(Vec3::X * 5.0, floor);
+        assert!((along.length() - 5.0).abs() < 1e-4);
+        assert!(along.dot(floor).abs() < 1e-4, "{along} is not along the floor");
+    }
+
     /// Breaks if the death cam waits to see `Dying`. `Died` comes after the
     /// despawn here, as it may on a client.
     #[test]
@@ -877,7 +1040,7 @@ mod tests {
         assert!(!world.contains_resource::<DeathCam>());
     }
 
-    /// Eased towards our own corpse, not whichever corpse is nearest.
+    /// Eased toward our own corpse, not whichever corpse is nearest.
     #[test]
     fn the_death_cam_follows_our_own_corpse() {
         use crate::common::skeleton::{rig::{humanoid, Proportions}, Pose};
@@ -1018,7 +1181,7 @@ mod tests {
     fn crouching_on_the_ground_keeps_the_feet_and_drops_the_head() {
         let world = open_room();
         let mut stance = Stance::Standing;
-        let mut body = PhysicsBody::at(body_centre_from_feet(Vec3::ZERO));
+        let mut body = PhysicsBody::at(body_center_from_feet(Vec3::ZERO));
 
         let head = body.current.y + Stance::Standing.half_extents().y;
         change_stance(&mut stance, &mut body, true, true, &world);
@@ -1050,7 +1213,7 @@ mod tests {
         );
         let lifted = body.current.y - Stance::Crouched.half_extents().y - feet;
         assert!(
-            (lifted - 2.0 * Stance::centre_shift()).abs() < 1e-5,
+            (lifted - 2.0 * Stance::center_shift()).abs() < 1e-5,
             "the feet came up by {lifted}"
         );
     }
@@ -1081,7 +1244,7 @@ mod tests {
     #[test]
     fn a_stance_change_moves_both_ends_of_the_interpolation() {
         let mut stance = Stance::Standing;
-        let mut body = PhysicsBody::at(body_centre_from_feet(Vec3::ZERO));
+        let mut body = PhysicsBody::at(body_center_from_feet(Vec3::ZERO));
 
         change_stance(&mut stance, &mut body, true, true, &open_room());
 

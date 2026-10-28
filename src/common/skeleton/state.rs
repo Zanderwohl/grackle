@@ -85,8 +85,8 @@ impl AnimationPhase {
     /// From an id every machine computes the same way (a grid cell index, a
     /// network id), never an `Entity`, whose index is local to one `World`.
     pub fn from_id(id: u64) -> AnimationPhase {
-        // SplitMix64's finaliser: integer-only, so every machine agrees, and
-        // it scatters consecutive ids rather than leaving neighbours in step.
+        // SplitMix64's finalizer: integer-only, so every machine agrees, and
+        // it scatters consecutive ids rather than leaving neighbors in step.
         let mut z = id.wrapping_add(0x9E37_79B9_7F4A_7C15);
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
@@ -119,7 +119,7 @@ pub struct BodyRequests {
     /// forward, and the difference is [`BodyRequests::wall_ahead`].
     pub running_forward: bool,
     pub running_backward: bool,
-    /// Towards the character's own left or right.
+    /// Toward the character's own left or right.
     pub strafing_left: bool,
     pub strafing_right: bool,
     /// Movement is stopped by something solid. Written by whatever ran the
@@ -704,9 +704,9 @@ mod tests {
         sorted.dedup();
         assert_eq!(sorted.len(), phases.len(), "two bodies were given the same phase");
 
-        // Neighbours land far apart rather than a step apart.
-        let neighbours = phases.windows(2).filter(|pair| (pair[1] - pair[0]).abs() < 0.1).count();
-        assert!(neighbours < 6, "{neighbours} of 59 neighbouring ids are nearly in step");
+        // Neighbors land far apart rather than a step apart.
+        let neighbors = phases.windows(2).filter(|pair| (pair[1] - pair[0]).abs() < 0.1).count();
+        assert!(neighbors < 6, "{neighbors} of 59 neighboring ids are nearly in step");
     }
 
     /// Input and collision each write one fact; neither knows the animation.

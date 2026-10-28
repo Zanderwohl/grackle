@@ -1,8 +1,8 @@
-//! Reading the weapon catalogue off disk. These are the on-disk types, which
-//! name weapons by string; [`WeaponCatalogue`](crate::common::weapon::WeaponCatalogue)
+//! Reading the weapon catalog off disk. These are the on-disk types, which
+//! name weapons by string; [`WeaponCatalog`](crate::common::weapon::WeaponCatalog)
 //! names them by hash.
 //!
-//! A client's startup catalogue is replaced by the server's on connect (see
+//! A client's startup catalog is replaced by the server's on connect (see
 //! [`crate::common::pack_sync`]).
 //!
 //! Reads go through [`AssetSource`] so wasm has one thing to replace, and are
@@ -21,13 +21,13 @@ use serde::{Deserialize, Serialize};
 use crate::common::assets::Assets;
 use crate::common::class::Class;
 use crate::common::weapon::{
-    Loadout, Magazine, Mounted, Slot, SlotChoices, Weapon, WeaponCatalogue, WeaponId, BUCKETS,
+    Loadout, Magazine, Mounted, Slot, SlotChoices, Weapon, WeaponCatalog, WeaponId, BUCKETS,
 };
 
 pub const WEAPONS_FILE: &str = "weapons.toml";
 pub const LOADOUTS_FILE: &str = "loadouts.toml";
 
-/// `BTreeMap`, not `HashMap`: the catalogue is filled in this order and
+/// `BTreeMap`, not `HashMap`: the catalog is filled in this order and
 /// compared for equality to decide whether to send it, and hash order made two
 /// reads of one file compare unequal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +61,10 @@ struct LoadoutEntry {
     /// Not checked here, as a weapon's model is not: a bad name draws nothing.
     #[serde(default)]
     hat: Option<String>,
+    #[serde(default)]
+    health: Option<u32>,
+    #[serde(default)]
+    armor: Option<u32>,
     #[serde(flatten)]
     slots: BTreeMap<Slot, SlotEntry>,
 }
@@ -73,18 +77,18 @@ struct SlotEntry {
 
 /// Lowest priority first. A missing file is normal; one that will not parse
 /// is logged.
-pub fn load_catalogue(assets: &Assets, packs: &[PathBuf]) -> WeaponCatalogue {
-    let mut catalogue = WeaponCatalogue::default();
+pub fn load_catalog(assets: &Assets, packs: &[PathBuf]) -> WeaponCatalog {
+    let mut catalog = WeaponCatalog::default();
 
     for pack in packs {
-        load_weapons(assets, pack, &mut catalogue);
+        load_weapons(assets, pack, &mut catalog);
     }
     // A separate pass, so a loadout can name a weapon from a later pack.
     for pack in packs {
-        load_loadouts(assets, pack, &mut catalogue);
+        load_loadouts(assets, pack, &mut catalog);
     }
 
-    catalogue
+    catalog
 }
 
 fn read(assets: &Assets, pack: &Path, file: &str) -> Option<String> {
@@ -105,7 +109,7 @@ fn read(assets: &Assets, pack: &Path, file: &str) -> Option<String> {
     }
 }
 
-fn load_weapons(assets: &Assets, pack: &Path, catalogue: &mut WeaponCatalogue) {
+fn load_weapons(assets: &Assets, pack: &Path, catalog: &mut WeaponCatalog) {
     let Some(text) = read(assets, pack, WEAPONS_FILE) else { return };
 
     let file: WeaponFile = match toml::from_str(&text) {
@@ -121,7 +125,7 @@ fn load_weapons(assets: &Assets, pack: &Path, catalogue: &mut WeaponCatalogue) {
 
         // A hash collision, not an override: an override reuses the name and
         // so the `name_key` would normally match.
-        if let Some(already) = catalogue.get(id) {
+        if let Some(already) = catalog.get(id) {
             if already.name_key != entry.name_key {
                 error!(
                     "{}/{WEAPONS_FILE}: {name} collides with a weapon already loaded; ignoring it",
@@ -149,8 +153,9 @@ fn load_weapons(assets: &Assets, pack: &Path, catalogue: &mut WeaponCatalogue) {
             continue;
         }
 
-        catalogue.insert(Weapon {
+        catalog.insert(Weapon {
             id,
+            key: name.clone(),
             name_key: entry.name_key,
             model: entry.model,
             bucket: entry.bucket,
@@ -162,7 +167,7 @@ fn load_weapons(assets: &Assets, pack: &Path, catalogue: &mut WeaponCatalogue) {
     }
 }
 
-fn load_loadouts(assets: &Assets, pack: &Path, catalogue: &mut WeaponCatalogue) {
+fn load_loadouts(assets: &Assets, pack: &Path, catalog: &mut WeaponCatalog) {
     let Some(text) = read(assets, pack, LOADOUTS_FILE) else { return };
 
     let file: LoadoutFile = match toml::from_str(&text) {
@@ -179,21 +184,26 @@ fn load_loadouts(assets: &Assets, pack: &Path, catalogue: &mut WeaponCatalogue) 
             continue;
         };
 
-        let mut loadout = Loadout { hat: entry.hat, ..default() };
+        let mut loadout = Loadout {
+            hat: entry.hat,
+            health: entry.health.filter(|health| *health > 0),
+            armor: entry.armor,
+            ..default()
+        };
         for (slot, entry) in entry.slots {
-            let Some(choices) = slot_choices(catalogue, &key, slot, &entry, pack) else {
+            let Some(choices) = slot_choices(catalog, &key, slot, &entry, pack) else {
                 continue;
             };
             loadout.set(slot, choices);
         }
-        catalogue.set_loadout(class, loadout);
+        catalog.set_loadout(class, loadout);
     }
 }
 
 /// Unknown permitted weapons are dropped; a default outside the permitted list
 /// drops the whole slot.
 fn slot_choices(
-    catalogue: &WeaponCatalogue,
+    catalog: &WeaponCatalog,
     class: &str,
     slot: Slot,
     entry: &SlotEntry,
@@ -202,7 +212,7 @@ fn slot_choices(
     let mut permitted = Vec::with_capacity(entry.permitted.len());
     for name in &entry.permitted {
         let id = WeaponId::of(name);
-        if catalogue.get(id).is_none() {
+        if catalog.get(id).is_none() {
             error!(
                 "{}/{LOADOUTS_FILE}: {class}'s {slot:?} may carry {name}, which no pack defines",
                 pack.display()
@@ -228,20 +238,20 @@ fn slot_choices(
 
 /// In every process and not authority-gated: a process starts `Solo` and may
 /// become a host, and a body can be handed out as soon as a round starts.
-pub fn load_catalogue_at_startup(assets: Res<Assets>, mut catalogue: ResMut<WeaponCatalogue>) {
-    let loaded = load_catalogue(&assets, &crate::common::assets::default_packs());
+pub fn load_catalog_at_startup(assets: Res<Assets>, mut catalog: ResMut<WeaponCatalog>) {
+    let loaded = load_catalog(&assets, &crate::common::assets::default_packs());
     info!(
         "Loaded {} weapons and {} class loadouts",
         loaded.weapons.len(),
         loaded.loadouts.len()
     );
-    *catalogue = loaded;
+    *catalog = loaded;
 }
 
-/// What tests should use. There is deliberately no catalogue written in
+/// What tests should use. There is deliberately no catalog written in
 /// Rust, which could drift from the files.
-pub fn default_catalogue() -> WeaponCatalogue {
-    load_catalogue(&Assets::default(), &crate::common::assets::default_packs())
+pub fn default_catalog() -> WeaponCatalog {
+    load_catalog(&Assets::default(), &crate::common::assets::default_packs())
 }
 
 #[cfg(test)]
@@ -251,18 +261,18 @@ mod tests {
     use super::*;
     use crate::common::weapon::WeaponAction;
 
-    fn the_default_pack() -> WeaponCatalogue {
-        default_catalogue()
+    fn the_default_pack() -> WeaponCatalog {
+        default_catalog()
     }
 
     /// Fails on a bad hand edit to the shipped files, which otherwise shows up
     /// only as empty hands.
     #[test]
     fn the_default_pack_loads() {
-        let catalogue = the_default_pack();
-        assert!(!catalogue.weapons.is_empty(), "no weapons loaded");
+        let catalog = the_default_pack();
+        assert!(!catalog.weapons.is_empty(), "no weapons loaded");
         assert!(
-            catalogue.loadout(Class::Mercenary).is_some(),
+            catalog.loadout(Class::Mercenary).is_some(),
             "the class everybody plays as carries nothing"
         );
     }
@@ -271,13 +281,13 @@ mod tests {
     /// placeholder class has.
     #[test]
     fn the_placeholder_class_carries_one_of_everything() {
-        let catalogue = the_default_pack();
-        let loadout = catalogue.loadout(Class::Mercenary).expect("no placeholder loadout");
+        let catalog = the_default_pack();
+        let loadout = catalog.loadout(Class::Mercenary).expect("no placeholder loadout");
 
         let mut seen: Vec<std::mem::Discriminant<WeaponAction>> = Vec::new();
         for (_, choices) in &loadout.slots {
             for id in &choices.permitted {
-                let weapon = catalogue.get(*id).expect("a permitted weapon is missing");
+                let weapon = catalog.get(*id).expect("a permitted weapon is missing");
                 for mounted in [weapon.primary, weapon.secondary] {
                     let kind = std::mem::discriminant(&mounted.action);
                     if !seen.contains(&kind) {
@@ -322,33 +332,40 @@ mod tests {
 
     #[test]
     fn the_placeholder_class_starts_with_full_clips_and_full_reserves() {
-        let catalogue = the_default_pack();
-        let (equipped, ammo) = catalogue.starting_equipment(Class::Mercenary);
+        let catalog = the_default_pack();
+        let (equipped, ammo) = catalog.starting_equipment(Class::Mercenary, None);
 
-        let mut carried = 0;
-        for slot in Slot::ALL {
-            let Some(id) = equipped.get(slot) else {
-                assert_eq!(*ammo.at(slot), Default::default(), "{slot:?} has ammo for no weapon");
-                continue;
-            };
-            carried += 1;
-            let weapon = catalogue.get(id).expect("carrying a weapon nobody defines");
-            assert_eq!(ammo.at(slot).clip, weapon.magazine.clip.unwrap_or(0));
-            assert_eq!(ammo.at(slot).reserve, weapon.magazine.reserve);
-            assert_eq!(ammo.at(slot).reloading, 0.0, "{slot:?} spawned mid-reload");
+        for &id in equipped.carried() {
+            let weapon = catalog.get(id).expect("carrying a weapon nobody defines");
+            let state = ammo.at(id).expect("carrying a weapon with no ammo");
+            assert_eq!(state.clip, weapon.magazine.clip.unwrap_or(0));
+            assert_eq!(state.reserve, weapon.magazine.reserve);
+            assert_eq!(state.reloading, 0.0, "{} spawned mid-reload", weapon.key);
         }
-        assert!(carried > 0, "the placeholder class spawned empty-handed");
+        assert_eq!(ammo.weapons.len(), equipped.carried().len(), "ammo for a weapon it does not carry");
+        assert!(!equipped.carried().is_empty(), "the placeholder class spawned empty-handed");
         assert!(equipped.held().is_some(), "it spawned holding nothing while carrying something");
+    }
+
+    #[test]
+    fn a_modes_loadout_carries_only_what_it_names() {
+        let catalog = the_default_pack();
+        let only = [WeaponId::of("medi_wrench"), WeaponId::of("nothing_called_this")];
+        let (equipped, ammo) = catalog.starting_equipment(Class::Mercenary, Some(&only));
+
+        assert_eq!(equipped.carried(), [only[0]]);
+        assert_eq!(equipped.held(), Some(only[0]));
+        assert_eq!(ammo.weapons.len(), 1, "ammo for a weapon it does not carry");
     }
 
     /// Fails if a shipped weapon is no slot's default; only defaults are
     /// carried, so it could never be held.
     #[test]
     fn every_shipped_weapon_is_on_a_digit() {
-        let catalogue = the_default_pack();
-        let loadout = catalogue.loadout(Class::Mercenary).expect("no placeholder loadout");
+        let catalog = the_default_pack();
+        let loadout = catalog.loadout(Class::Mercenary).expect("no placeholder loadout");
 
-        for weapon in &catalogue.weapons {
+        for weapon in &catalog.weapons {
             assert!(
                 loadout.slots.iter().any(|(_, choices)| choices.default == weapon.id),
                 "{} is defined but no slot starts with it, so nobody can hold it",
@@ -371,28 +388,28 @@ mod tests {
 
     #[test]
     fn a_default_outside_its_permitted_list_is_rejected() {
-        let catalogue = the_default_pack();
+        let catalog = the_default_pack();
         let entry = SlotEntry {
             permitted: vec!["laser_rifle".into()],
             default: "rocket_launcher".into(),
         };
 
         assert!(
-            slot_choices(&catalogue, "mercenary", Slot::Primary, &entry, Path::new("test"))
+            slot_choices(&catalog, "mercenary", Slot::Primary, &entry, Path::new("test"))
                 .is_none()
         );
     }
 
     #[test]
     fn a_permitted_weapon_that_does_not_exist_is_dropped() {
-        let catalogue = the_default_pack();
+        let catalog = the_default_pack();
         let entry = SlotEntry {
             permitted: vec!["laser_rifle".into(), "no_such_weapon".into()],
             default: "laser_rifle".into(),
         };
 
         let choices =
-            slot_choices(&catalogue, "mercenary", Slot::Primary, &entry, Path::new("test"))
+            slot_choices(&catalog, "mercenary", Slot::Primary, &entry, Path::new("test"))
                 .expect("the slot was dropped for one bad entry");
         assert_eq!(choices.permitted, vec![WeaponId::of("laser_rifle")]);
     }
@@ -400,14 +417,14 @@ mod tests {
     /// Fails on a hash collision between shipped weapon names.
     #[test]
     fn no_two_shipped_weapons_share_an_id() {
-        let catalogue = the_default_pack();
+        let catalog = the_default_pack();
         let text = std::fs::read_to_string("assets/default/weapons.toml").unwrap();
         let file: WeaponFile = toml::from_str(&text).unwrap();
 
         assert_eq!(
-            catalogue.weapons.len(),
+            catalog.weapons.len(),
             file.weapons.len(),
-            "a weapon in the file is missing from the catalogue, which is a collision"
+            "a weapon in the file is missing from the catalog, which is a collision"
         );
     }
 }

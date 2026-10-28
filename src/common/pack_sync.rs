@@ -1,5 +1,5 @@
-//! Handing the server's pack tables — the weapon catalogue and the class
-//! builds — to every client, so a server can ship its own and nobody else
+//! Handing the server's pack tables — the weapon catalog, the class
+//! builds, the taunts and the game modes — to every client, so a server can ship its own and nobody else
 //! needs the files. Shaped like [`crate::common::map_sync`], but with no
 //! resend interval, since nothing edits these at frame rate.
 //!
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::class::ClassBuilds;
 use crate::common::net::NetRole;
-use crate::common::weapon::WeaponCatalogue;
+use crate::common::weapon::WeaponCatalog;
 
 /// A resource the authority reads from its pack and every client adopts.
 pub trait PackTable:
@@ -32,7 +32,7 @@ pub trait PackTable:
     fn len(&self) -> usize;
 }
 
-impl PackTable for WeaponCatalogue {
+impl PackTable for WeaponCatalog {
     const WHAT: &'static str = "weapons";
     fn len(&self) -> usize {
         self.weapons.len()
@@ -41,6 +41,13 @@ impl PackTable for WeaponCatalogue {
 
 impl PackTable for crate::common::taunt::Taunts {
     const WHAT: &'static str = "taunts";
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl PackTable for crate::common::game_rules::Modes {
+    const WHAT: &'static str = "game modes";
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -57,7 +64,7 @@ impl PackTable for ClassBuilds {
 pub struct PackChannel;
 
 /// JSON bytes, not the typed value: Lightyear encodes with postcard, which
-/// refuses `deserialize_any`, and the catalogue's internally tagged enums
+/// refuses `deserialize_any`, and the catalog's internally tagged enums
 /// (`#[serde(tag = "kind")]`) need it. The failure is silent: the send
 /// succeeds and the receive errors inside Lightyear.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -79,9 +86,10 @@ impl Plugin for PackSyncPlugin {
         })
         .add_direction(NetworkDirection::ServerToClient);
 
-        sync::<WeaponCatalogue>(app);
+        sync::<WeaponCatalog>(app);
         sync::<ClassBuilds>(app);
         sync::<crate::common::taunt::Taunts>(app);
+        sync::<crate::common::game_rules::Modes>(app);
     }
 }
 
@@ -176,7 +184,7 @@ fn adopt_the_servers<T: PackTable>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::weapon_file::default_catalogue;
+    use crate::common::weapon_file::default_catalog;
 
     fn round_trip<T: PackTable + std::fmt::Debug>(table: T) {
         let sent = encode(&table).expect("would not encode");
@@ -187,27 +195,27 @@ mod tests {
     /// Fails if any part of a weapon or a build does not survive the payload.
     #[test]
     fn every_table_survives_the_round_trip() {
-        round_trip(default_catalogue());
+        round_trip(default_catalog());
         round_trip(ClassBuilds::shipped());
         round_trip(crate::common::taunt::Taunts::shipped());
     }
 
     /// Fails if the payload stops being bytes that postcard round-trips, and
-    /// pins that the typed catalogue cannot decode through postcard. See
+    /// pins that the typed catalog cannot decode through postcard. See
     /// [`Snapshot`].
     #[test]
     fn the_wire_cannot_carry_an_internally_tagged_enum() {
-        let catalogue = default_catalogue();
+        let catalog = default_catalog();
 
-        let sent = encode(&catalogue).expect("a catalogue would not encode");
+        let sent = encode(&catalog).expect("a catalog would not encode");
         let wire = postcard::to_allocvec(&sent).expect("bytes go on the wire");
-        let back: Snapshot<WeaponCatalogue> =
+        let back: Snapshot<WeaponCatalog> =
             postcard::from_bytes(&wire).expect("and come back off it");
         assert_eq!(back, sent);
 
-        let naive = postcard::to_allocvec(&catalogue).expect("postcard will encode it");
+        let naive = postcard::to_allocvec(&catalog).expect("postcard will encode it");
         assert!(
-            postcard::from_bytes::<WeaponCatalogue>(&naive).is_err(),
+            postcard::from_bytes::<WeaponCatalog>(&naive).is_err(),
             "postcard decoded an internally tagged enum; the payload could be the typed \
              value again, and this test has stopped earning its place",
         );
@@ -217,10 +225,10 @@ mod tests {
     /// which would broadcast a table repeatedly.
     #[test]
     fn only_a_change_puts_a_table_on_the_wire() {
-        let mut last = LastSent(default_catalogue());
-        assert_eq!(last.0, default_catalogue(), "loading the same files twice gave two catalogues");
+        let mut last = LastSent(default_catalog());
+        assert_eq!(last.0, default_catalog(), "loading the same files twice gave two catalogs");
         last.0.weapons.clear();
-        assert_ne!(last.0, default_catalogue(), "emptying the catalogue was not a change");
+        assert_ne!(last.0, default_catalog(), "emptying the catalog was not a change");
 
         assert_eq!(ClassBuilds::shipped(), ClassBuilds::shipped(), "two loads gave two tables");
     }

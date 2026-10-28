@@ -14,7 +14,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::damage::PlayerId;
 use crate::common::effects::Effect;
 use crate::common::net::{has_authority, is_remote_client, NetRole};
-use crate::common::weapon::{Ammo, AmmoState, Cadence, Equipped, Slot, WeaponAction, WeaponCatalogue};
+use crate::common::weapon::{Ammo, AmmoState, Cadence, Equipped, WeaponAction, WeaponCatalog, WeaponId};
 use crate::game::condition::Condition;
 use crate::game::held::{perform_weapon_clips, HeldModel, Performance, WeaponClip};
 use crate::game::player::LocalPlayer;
@@ -90,14 +90,14 @@ fn guess_our_shots(
     buttons: Res<ButtonInput<MouseButton>>,
     paused: Option<Res<crate::game::pause_menu::PauseMenu>>,
     selection: Option<Res<crate::game::weapon_select::WeaponSelection>>,
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     ours: Option<Single<(Entity, &Equipped, &Ammo, &Condition), With<LocalPlayer>>>,
     mut cooldown: Local<[f32; 2]>,
     // The replicated state last guessed from, and what our guesses left of it.
-    mut guessed: Local<Option<(Slot, AmmoState, AmmoState)>>,
+    mut guessed: Local<Option<(WeaponId, AmmoState, AmmoState)>>,
     // Timed from when the switch is seen, so it ends a little after the
     // server's.
-    mut drawing: Local<(Option<(Entity, Slot)>, f32)>,
+    mut drawing: Local<(Option<(Entity, Option<WeaponId>)>, f32)>,
     mut seen: MessageWriter<ShotSeen>,
 ) {
     for left in cooldown.iter_mut() {
@@ -112,21 +112,21 @@ fn guess_our_shots(
     {
         return;
     }
-    let Some(weapon) = catalogue.held_by(equipped) else { return };
+    let Some(weapon) = catalog.held_by(equipped) else { return };
     // A new body spawns ready; only a switch on the same body draws.
     match drawing.0 {
-        Some((was_body, was_slot)) if was_body == body && was_slot != equipped.held => {
+        Some((was_body, was_held)) if was_body == body && was_held != equipped.held() => {
             drawing.1 = weapon.deploy;
         }
         _ => {}
     }
-    drawing.0 = Some((body, equipped.held));
+    drawing.0 = Some((body, equipped.held()));
     if drawing.1 > 0.0 {
         return;
     }
-    let told = *ammo.at(equipped.held);
+    let Some(&told) = ammo.at(weapon.id) else { return };
     let mut state = match *guessed {
-        Some((slot, was, left)) if slot == equipped.held && was == told => left,
+        Some((id, was, left)) if id == weapon.id && was == told => left,
         _ => told,
     };
 
@@ -136,19 +136,18 @@ fn guess_our_shots(
             continue;
         }
         let index = button as usize;
-        let asked = match mounted.cadence {
-            Cadence::Semi => buttons.just_pressed(mouse),
-            Cadence::Automatic { .. } => buttons.pressed(mouse) && cooldown[index] <= 0.0,
-        };
+        let asked = cooldown[index] <= 0.0
+            && match mounted.cadence {
+                Cadence::Semi { .. } => buttons.just_pressed(mouse),
+                Cadence::Automatic { .. } => buttons.pressed(mouse),
+            };
         if !asked || !spend(&mut state, &weapon.magazine, mounted.cost) {
             continue;
         }
-        if let Cadence::Automatic { interval } = mounted.cadence {
-            cooldown[index] = interval;
-        }
+        cooldown[index] = mounted.cadence.interval();
         seen.write(ShotSeen { body, button });
     }
-    *guessed = Some((equipped.held, told, state));
+    *guessed = Some((weapon.id, told, state));
 }
 
 pub(crate) fn start_recoil(
@@ -188,9 +187,10 @@ mod tests {
     /// A Mercenary holding one weapon, firing `cadence` from a clip of `clip`.
     fn holding(world: &mut World, cadence: Cadence, clip: u32) -> Entity {
         let id = WeaponId::of("test");
-        let mut catalogue = WeaponCatalogue::default();
-        catalogue.insert(Weapon {
+        let mut catalog = WeaponCatalog::default();
+        catalog.insert(Weapon {
             id,
+            key: "test".into(),
             name_key: "weapon.names.test".into(),
             model: None,
             bucket: 1,
@@ -205,10 +205,10 @@ mod tests {
         });
         let mut loadout = Loadout::default();
         loadout.set(Slot::Primary, SlotChoices { permitted: vec![id], default: id });
-        catalogue.set_loadout(Class::Mercenary, loadout);
-        let (equipped, mut ammo) = catalogue.starting_equipment(Class::Mercenary);
-        ammo.at_mut(Slot::Primary).clip = clip;
-        world.insert_resource(catalogue);
+        catalog.set_loadout(Class::Mercenary, loadout);
+        let (equipped, mut ammo) = catalog.starting_equipment(Class::Mercenary, None);
+        ammo.at_mut(id).clip = clip;
+        world.insert_resource(catalog);
         world.init_resource::<Time>();
         world.init_resource::<ButtonInput<MouseButton>>();
         world.init_resource::<Messages<ShotSeen>>();
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn our_own_shot_is_guessed_from_what_we_can_see() {
         let mut world = World::new();
-        let body = holding(&mut world, Cadence::Semi, 2);
+        let body = holding(&mut world, Cadence::Semi { interval: 0.0 }, 2);
         press(&mut world);
         world.run_system_once(guess_our_shots).unwrap();
         assert_eq!(seen(&mut world), vec![ShotSeen { body, button: Button::Primary }]);
@@ -244,12 +244,12 @@ mod tests {
         world.run_system_once(guess_our_shots).unwrap();
         assert!(seen(&mut world).is_empty(), "holding the button kicked twice");
 
-        world.get_mut::<Ammo>(body).unwrap().at_mut(Slot::Primary).clip = 0;
+        world.get_mut::<Ammo>(body).unwrap().at_mut(WeaponId::of("test")).clip = 0;
         press(&mut world);
         world.run_system_once(guess_our_shots).unwrap();
         assert!(seen(&mut world).is_empty(), "an empty clip kicked");
 
-        world.get_mut::<Ammo>(body).unwrap().at_mut(Slot::Primary).clip = 2;
+        world.get_mut::<Ammo>(body).unwrap().at_mut(WeaponId::of("test")).clip = 2;
         *world.get_mut::<Condition>(body).unwrap() = Condition::HUMILIATED;
         press(&mut world);
         world.run_system_once(guess_our_shots).unwrap();
@@ -291,7 +291,7 @@ mod tests {
         }
         assert_eq!(kicks, 1, "one round kicked {kicks} times");
 
-        world.get_mut::<Ammo>(body).unwrap().at_mut(Slot::Primary).clip = 3;
+        world.get_mut::<Ammo>(body).unwrap().at_mut(WeaponId::of("test")).clip = 3;
         world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(0.2));
         world.run_system(guess).unwrap();
         assert_eq!(seen(&mut world).len(), 1, "a reloaded clip from the server was not believed");

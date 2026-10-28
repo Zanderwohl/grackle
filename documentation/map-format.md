@@ -107,7 +107,7 @@ added while rolled back.
       *before* the drag, and `undo` pushes whatever is current onto redo, so
       Ctrl+Z goes back to before the drag and redo comes back to its end.
 
-### Where wasm stands afterwards
+### Where wasm stands afterward
 
 `cargo check --lib --target wasm32-unknown-unknown` compiles every dependency
 and stops on seven errors in Grackle's own code: the UDP transport in

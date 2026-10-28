@@ -28,7 +28,7 @@ impl From<AppMode> for MatchMode {
 }
 
 /// Lossy on purpose: the server has no opinion on `AppMode::Prop`, so a client
-/// modelling a prop when the round ends goes back to the map editor.
+/// modeling a prop when the round ends goes back to the map editor.
 impl From<MatchMode> for AppMode {
     fn from(mode: MatchMode) -> Self {
         match mode.playing {
@@ -59,8 +59,21 @@ impl Plugin for MatchStatePlugin {
                 // told, and there may be no change coming.
                 tell_new_clients,
                 follow_the_server,
+                back_to_the_map_editor_when_networked,
             ),
         );
+    }
+}
+
+/// Somebody modeling a prop when they start hosting or join goes back to the
+/// map editor, as the Mode menu offers nothing else while networked.
+fn back_to_the_map_editor_when_networked(
+    role: Res<NetRole>,
+    mode: Res<State<AppMode>>,
+    mut next: ResMut<NextState<AppMode>>,
+) {
+    if role.is_online() && !mode.get().offered_networked() && !matches!(*next, NextState::Pending(_)) {
+        next.set(AppMode::Editor);
     }
 }
 

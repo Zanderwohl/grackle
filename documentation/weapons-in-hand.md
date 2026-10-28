@@ -1,14 +1,14 @@
 # Weapons in hand
 
 > **Status — none of this is built.** `Weapon.model` exists, names a prop, and
-> crosses the wire with the catalogue; nothing reads it. This is the shape the
+> crosses the wire with the catalog; nothing reads it. This is the shape the
 > work is aiming at, written down before any of it is written.
 >
 > Where this says a thing *is* a certain way, that is a decision already made.
 > Open questions are collected at the end rather than answered inline.
 >
 > See [CLAUDE.md](../CLAUDE.md) for what is in the tree, and
-> ["Modelling a prop"](../CLAUDE.md) for the prop editor these models come out
+> ["Modeling a prop"](../CLAUDE.md) for the prop editor these models come out
 > of.
 
 ## The one idea
@@ -144,7 +144,7 @@ other.
 
 ### Animations live with the weapon, and go last in the file
 
-A hold is geometry and lives on the prop; **an animation is behaviour and lives
+A hold is geometry and lives on the prop; **an animation is behavior and lives
 on the weapon**, in `weapons.toml`, where a weapon's timing already is —
 `Magazine.reload` is there now. An animation is expressed as a deviation from
 the hold, so the two stay in their own layers.
@@ -156,7 +156,7 @@ written after it, so a `[[weapons.rocket_launcher.animations]]` followed by
 frequently hand-edited has to come first, and the animations go at the bottom.
 
 Nothing enforces it. `weapons.toml` is read by code and never written by it
-(the only things this repo serialises are props and lang files), so the order
+(the only things this repo serializes are props and lang files), so the order
 is a convention a person keeps — which is exactly why it is written down here
 and in the file's own header.
 
@@ -167,7 +167,7 @@ than early.
 
 ### Models cross the wire as documents, not as meshes
 
-After the catalogue, on connect, the way `pack_sync` sends the catalogue and
+After the catalog, on connect, the way `pack_sync` sends the catalog and
 `map_sync` sends the feature timeline.
 
 - **The document, not the baked geometry.** A prop is parametric and small,
@@ -186,8 +186,8 @@ After the catalogue, on connect, the way `pack_sync` sends the catalogue and
   a client went looking in its own pack replaces the miss that search cached,
   and bodies redress because `PropCache::generation` moved — without which
   "there is no such prop" would be the answer for the rest of the match.
-- **Only the props the catalogue names**, which is enumerable from the
-  catalogue — so this needs no directory listing, and the rule in
+- **Only the props the catalog names**, which is enumerable from the
+  catalog — so this needs no directory listing, and the rule in
   [`assets.rs`](../src/common/assets.rs) survives.
 
 ### `model: None` aims an empty hand
@@ -246,10 +246,10 @@ So a prop carries a `ViewmodelSpec` of its own. Reusing the carry put the grip
 rendered perfectly, with `ViewVisibility` true, off the bottom of the screen.
 
 It is stated **across the frustum**, as a fraction of the half-extent at its own
-depth, rather than in metres sideways. A fixed view-space offset drifts towards
+depth, rather than in meters sideways. A fixed view-space offset drifts toward
 the middle of the screen as the field of view widens or the window gets wider,
 and a weapon that drifts inwards shows the cut end it is meant to be hanging off
-the edge of. Depth stays in metres: it is the one part of the framing that is
+the edge of. Depth stays in meters: it is the one part of the framing that is
 about size.
 
 ### The viewmodel is two arms, not a floating weapon
@@ -278,7 +278,7 @@ not bob with the walk cycle or drop when you crouch, because the camera does
 neither.
 
 Only **forearms and hands**. An upper arm runs back to a shoulder beside the
-camera rather than in front of it, and at a five-millimetre near plane it reads
+camera rather than in front of it, and at a five-millimeter near plane it reads
 as a slab of shoulder in the corner of the screen. A sleeve entering at the
 elbow is what a person sees down their own sights.
 
@@ -292,7 +292,7 @@ The eye comes off the **rig**, not the movement hull: that one is a flat 1.8 m
 for every class, so a Scout's arms would hang from a Heavy's shoulders. And the
 meshes and material are the body's own, from `BodyMeshCache` and
 `BodyMaterials` — a first-person forearm is that forearm seen from closer up,
-so your hands are your team's colour and alight when you are.
+so your hands are your team's color and alight when you are.
 
 ## Stages
 
@@ -304,7 +304,7 @@ Each stands alone and each is worth having on its own.
 | 2 | ~~**Split the aim.**~~ **Done.** `head_pitch` narrows `Player.pitch` to 45° up and 70° down at the one place that bends the neck. | The head stops; the aim does not. Nothing takes up the remainder until stage 3 — the arms are not aimed by pitch at all yet. |
 | 3 | ~~**The upper-body layer.**~~ **Done, bar authoring.** `HoldSpec` is on the prop, `hold_the_weapon` places the weapon from the aim and solves both arms to it. What is missing is a way to *author* a hold — every prop uses its file's values and nothing in the editor writes them. | The idea at the top of this document. |
 | 3b | ~~**Authoring a hold.**~~ **Done.** The two grips and the figure are draggable, the Hold panel carries every number, per-class overrides work, and an arm that cannot reach says so. Rotations are typed rather than dragged. | A weapon shaped unlike a rifle. |
-| 4 | ~~**Prop sync.**~~ **Done.** `prop::sync` sends every model the catalogue names, as the text its file holds. | A server can ship a weapon nobody else has. |
+| 4 | ~~**Prop sync.**~~ **Done.** `prop::sync` sends every model the catalog names, as the text its file holds. | A server can ship a weapon nobody else has. |
 | 5 | ~~**The viewmodel pipeline.**~~ **Done.** Second camera on its own layer and near plane, the weapon placed by `ViewmodelSpec`, and a pair of arms solved onto the prop's own grip frames by `grip_with`. | First person. Needs 3: the arms have to be posed before they are worth drawing close up. |
 | 6 | **Weapon animations.** Fire, reload, deploy, as parametric poses over the hold. An editor for them, someday. | |
 

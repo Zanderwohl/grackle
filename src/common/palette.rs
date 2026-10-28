@@ -1,7 +1,7 @@
 //! A map's palette: what a **role** is painted with on each side. A room slot names either a
 //! material or a role, and a role is resolved by the room's [`Side`] — which is the Mirror's
 //! answer, not the room's — so one half of a map is authored and the copy comes out in the other
-//! team's colours. See "Team-coded paint is a role" in documentation/surfaces.md.
+//! team's colors. See "Team-coded paint is a role" in documentation/surfaces.md.
 //!
 //! Part of the map's metadata, so it saves with the blueprint and reaches clients with the rest of
 //! the settings. [`publish_palette`] is the only writer of the [`Palette`] resource; nothing reads

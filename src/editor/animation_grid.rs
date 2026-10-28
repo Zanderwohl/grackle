@@ -27,7 +27,8 @@ use crate::get;
 #[derive(Component, Debug)]
 pub struct AnimationGridMarker;
 
-/// What side the roster is on. Striped makes the grid a friendly-fire range; one team makes it a
+/// What side the roster is on. Striped puts one body on each team and the rest on none, each of
+/// those in a color of its own, which makes the grid a friendly-fire range; one team makes it a
 /// plain firing range.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RosterTeam {
@@ -52,24 +53,24 @@ impl RosterTeam {
     }
 
     /// By cell rather than rolled, so every viewer agrees on who may shoot whom.
-    pub fn team_for(self, cell: usize) -> Team {
+    pub fn team_for(self, cell: usize) -> Option<Team> {
         match self {
-            RosterTeam::Striped => Team::ALL[cell % Team::ALL.len()],
-            RosterTeam::One(team) => team,
+            RosterTeam::Striped => Team::ALL.get(cell).copied(),
+            RosterTeam::One(team) => Some(team),
         }
     }
 }
 
-/// Clear floor either side of a body, on top of its own width, in metres.
+/// Clear floor either side of a body, on top of its own width, in meters.
 #[cfg(test)]
 const COLUMN_MARGIN: f32 = 0.3;
 
-/// Metres between bodies. Fixed rather than measured off the builds, which
+/// Meters between bodies. Fixed rather than measured off the builds, which
 /// are pack content the layout would otherwise have to be handed; a test
 /// checks the widest shipped build plus [`COLUMN_MARGIN`] fits.
 pub const COLUMN_SPACING: f32 = 2.33;
 
-/// Clear floor between rows, on top of the stride, in metres.
+/// Clear floor between rows, on top of the stride, in meters.
 const ROW_MARGIN: f32 = 0.4;
 
 /// Walking, running and sprinting, in leg-lengths per second. The upright gait changes shape with
@@ -153,7 +154,7 @@ pub fn order(cycle: u64) -> Vec<GridRow> {
     rows
 }
 
-/// SplitMix64's finaliser: integer-only, so every machine agrees, and it scatters consecutive seeds.
+/// SplitMix64's finalizer: integer-only, so every machine agrees, and it scatters consecutive seeds.
 fn mixed(seed: u64) -> u64 {
     let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -198,18 +199,18 @@ pub fn body_depth() -> f32 {
     })
 }
 
-/// One body per class, centred on the grid's point.
+/// One body per class, centered on the grid's point.
 pub fn cells() -> Vec<GridCell> {
     let classes: Vec<Class> = Class::iter().collect();
     let columns = COLUMN_SPACING;
-    let centre = (classes.len() as f32 - 1.0) * 0.5;
+    let center = (classes.len() as f32 - 1.0) * 0.5;
 
     classes
         .iter()
         .enumerate()
         .map(|(column, class)| GridCell {
             class: *class,
-            offset: Vec3::new((column as f32 - centre) * columns, 0.0, 0.0),
+            offset: Vec3::new((column as f32 - center) * columns, 0.0, 0.0),
         })
         .collect()
 }
@@ -581,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn neighbouring_bodies_do_not_overlap() {
+    fn neighboring_bodies_do_not_overlap() {
         let widest = Class::iter().map(body_width).fold(0.0_f32, f32::max);
         assert!(
             COLUMN_SPACING >= widest + COLUMN_MARGIN,
@@ -625,9 +626,9 @@ mod tests {
     }
 
     #[test]
-    fn the_line_is_centred_on_its_point() {
+    fn the_line_is_centered_on_its_point() {
         let places: Vec<f32> = cells().iter().map(|cell| cell.offset.x).collect();
         let mean: f32 = places.iter().sum::<f32>() / places.len() as f32;
-        assert!(mean.abs() < 1e-4, "the line is off-centre by {mean}");
+        assert!(mean.abs() < 1e-4, "the line is off-center by {mean}");
     }
 }

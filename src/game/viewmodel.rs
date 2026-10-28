@@ -23,8 +23,9 @@ use crate::common::flame::Burning;
 use crate::common::skeleton::ik::Reach;
 use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{Pose, Skeleton};
+use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
-use crate::common::weapon::{WeaponCatalogue, WeaponId};
+use crate::common::weapon::{WeaponCatalog, WeaponId};
 use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
@@ -251,13 +252,13 @@ fn perform_viewmodel_clips(
     time: Res<Time>,
     clips: Res<Assets<Clip>>,
     shared: Option<Res<SharedWeaponClips>>,
-    catalogue: Res<WeaponCatalogue>,
+    catalog: Res<WeaponCatalog>,
     held: Query<&HeldModel, With<LocalPlayer>>,
     mut views: Query<(&mut Performance, &mut ClipStack), With<Viewmodel>>,
 ) {
     let Ok(held) = held.single() else { return };
     for (mut performance, mut stack) in &mut views {
-        perform(held, &catalogue, shared.as_deref(), &mut performance, &mut stack, &clips, time.delta_secs());
+        perform(held, &catalog, shared.as_deref(), &mut performance, &mut stack, &clips, time.delta_secs());
     }
 }
 
@@ -313,7 +314,7 @@ fn played(framed: Transform, stack: &ClipStack, skeleton: &Skeleton, clips: &Ass
         ground: &ground,
         footfalls: None,
     };
-    // The pose is thrown away: the arms are solved onto the weapon afterwards.
+    // The pose is thrown away: the arms are solved onto the weapon afterward.
     let mut pose = Pose::rest();
     let mut moving = framed;
     apply_stack(stack, clips, skeleton, &mut pose, &frames, Some(&mut moving));
@@ -358,7 +359,7 @@ pub fn find_the_apparent_muzzle(
     apparent.set_if_neq(ApparentMuzzle(found()));
 }
 
-/// The body's own meshes and material, so your hands are your team's colour
+/// The body's own meshes and material, so your hands are your team's color
 /// and alight when you are.
 fn dress_the_viewmodel_arms(
     mut commands: Commands,
@@ -367,7 +368,7 @@ fn dress_the_viewmodel_arms(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     bodies: Query<
-        (Entity, &Skeleton, Option<&Team>, Option<&BodyTint>, Option<&Burning>),
+        (Entity, &Skeleton, Option<&Team>, Option<&PlayerColor>, Option<&BodyTint>, Option<&Burning>),
         With<LocalPlayer>,
     >,
     mut views: Query<&mut Viewmodel>,
@@ -388,9 +389,9 @@ fn dress_the_viewmodel_arms(
         }
 
         // No body: no arms, rather than somebody else's.
-        let Some((_, skeleton, team, tint, burning)) = body else { continue };
+        let Some((_, skeleton, team, player, tint, burning)) = body else { continue };
 
-        let material = palette.get(body_look(team, tint, burning), &mut materials);
+        let material = palette.get(body_look(team, player, tint, burning), &mut materials);
         let handles = cache.handles(skeleton, &mut meshes).clone();
 
         let mut arms = Vec::new();
@@ -905,7 +906,7 @@ mod tests {
         assert_eq!(when_placed(&world, &[part]), first, "an unchanged weapon was marked moved");
     }
 
-    /// A fixed view-space offset drifts towards the middle as the view widens,
+    /// A fixed view-space offset drifts toward the middle as the view widens,
     /// showing the weapon's cut end. Placement must be a fraction of the frustum.
     #[test]
     fn a_viewmodel_stays_where_it_was_put_however_the_view_changes() {

@@ -42,7 +42,7 @@ pub fn ray_aabb_distance(ray: &Ray3d, min: Vec3, max: Vec3) -> Option<f32> {
 /// A box turned in the world, for picking a feature by its body.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PickBox {
-    pub centre: Vec3,
+    pub center: Vec3,
     pub rotation: Quat,
     pub half_extents: Vec3,
 }
@@ -53,7 +53,7 @@ impl PickBox {
     /// every frame.
     pub fn standing_body(feet: Vec3, rotation: Quat) -> Self {
         Self {
-            centre: crate::common::class::body_centre_from_feet(feet),
+            center: crate::common::class::body_center_from_feet(feet),
             rotation,
             half_extents: crate::common::class::CLASS_HALF_EXTENTS,
         }
@@ -64,7 +64,7 @@ impl PickBox {
     pub fn ray_distance(&self, ray: &Ray3d) -> Option<f32> {
         let inverse = self.rotation.inverse();
         let local = Ray3d::new(
-            inverse * (ray.origin - self.centre),
+            inverse * (ray.origin - self.center),
             Dir3::new_unchecked((inverse * *ray.direction).normalize()),
         );
         ray_aabb_distance(&local, -self.half_extents, self.half_extents)
@@ -72,7 +72,7 @@ impl PickBox {
 
     /// As a transform on a unit cube, for `Gizmos::cube`.
     pub fn transform(&self) -> Transform {
-        Transform::from_translation(self.centre)
+        Transform::from_translation(self.center)
             .with_rotation(self.rotation)
             .with_scale(self.half_extents * 2.0)
     }
@@ -91,7 +91,7 @@ mod tests {
     }
 
     #[test]
-    fn the_distance_is_to_the_near_face_not_the_centre() {
+    fn the_distance_is_to_the_near_face_not_the_center() {
         let hit = ray_aabb_distance(&ray(Vec3::new(-5.0, 0.0, 0.0), Vec3::X), Vec3::splat(-1.0), Vec3::splat(1.0));
         assert!((hit.unwrap() - 4.0).abs() < 1e-5, "{hit:?}");
     }
@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn a_turned_box_is_hit_where_it_is_turned_to() {
         let long_along_z = PickBox {
-            centre: Vec3::ZERO,
+            center: Vec3::ZERO,
             rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
             half_extents: Vec3::new(0.1, 0.1, 2.0),
         };

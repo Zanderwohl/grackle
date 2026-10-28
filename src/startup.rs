@@ -10,8 +10,10 @@ pub struct EditorParams {
     pub net: NetRole,
     pub start_playing: bool,
     pub start_animating: bool,
-    pub start_modelling: bool,
+    pub start_modeling: bool,
     pub start_texturing: bool,
+    /// `--profile N`, 1–9; `None` is the usual player.
+    pub profile: Option<u8>,
 }
 
 impl EditorParams {
@@ -90,6 +92,13 @@ impl EditorParams {
                     .action(ArgAction::Set)
                     .help("Join a game somebody else is hosting.")
             )
+            .arg(
+                Arg::new("profile")
+                    .long("profile")
+                    .value_name("N")
+                    .value_parser(clap::value_parser!(u8).range(1..=9))
+                    .help("Play as profile N, 1-9, with its own name and settings.")
+            )
             .try_get_matches_from(args)
             // `--help` exits 0 on stdout rather than printing as a startup
             // error; everything else comes back as a string so it is testable.
@@ -122,9 +131,10 @@ impl EditorParams {
             game_id: game_id.to_owned(),
             net,
             start_playing: matches.get_flag("play"),
-            start_modelling: matches.get_flag("prop"),
+            start_modeling: matches.get_flag("prop"),
             start_animating: matches.get_flag("anim"),
             start_texturing: matches.get_flag("material"),
+            profile: matches.get_one::<u8>("profile").copied(),
         })
     }
 }
@@ -138,6 +148,14 @@ mod tests {
         let mut argv = vec!["grackle"];
         argv.extend_from_slice(args);
         EditorParams::from(argv)
+    }
+
+    #[test]
+    fn a_profile_is_one_to_nine_and_absent_by_default() {
+        assert_eq!(parse(&[]).unwrap().profile, None);
+        assert_eq!(parse(&["--profile", "3"]).unwrap().profile, Some(3));
+        assert!(parse(&["--profile", "0"]).is_err());
+        assert!(parse(&["--profile", "10"]).is_err());
     }
 
     #[test]
@@ -188,8 +206,8 @@ mod tests {
 
     #[test]
     fn the_prop_editor_is_off_unless_asked_for() {
-        assert!(!parse(&[]).unwrap().start_modelling);
-        assert!(parse(&["--prop"]).unwrap().start_modelling);
+        assert!(!parse(&[]).unwrap().start_modeling);
+        assert!(parse(&["--prop"]).unwrap().start_modeling);
         assert!(!parse(&[]).unwrap().start_animating);
         assert!(parse(&["--anim"]).unwrap().start_animating);
         assert!(!parse(&[]).unwrap().start_texturing);
@@ -199,7 +217,7 @@ mod tests {
     /// A process cannot open in two modes; silently picking one makes a flag
     /// appear to do nothing.
     #[test]
-    fn playing_and_modelling_at_once_is_refused() {
+    fn playing_and_modeling_at_once_is_refused() {
         assert!(parse(&["--play", "--prop"]).is_err());
         assert!(parse(&["--play", "--anim"]).is_err());
         assert!(parse(&["--prop", "--anim"]).is_err());

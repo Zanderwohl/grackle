@@ -14,7 +14,7 @@ use lightyear::prelude::input::native::InputPlugin;
 use lightyear::prelude::*;
 
 use crate::common::class::Stance;
-use crate::common::damage::{Damageable, PlayerId};
+use crate::common::damage::{Armor, Damageable, PlayerId};
 use crate::common::skeleton::BodyRequests;
 use crate::game::player::{PhysicsBody, Player, PlayerInput};
 
@@ -39,12 +39,15 @@ impl Plugin for ProtocolPlugin {
         // Not predicted: a wrongly guessed kill is a body that falls over and
         // stands back up.
         app.component::<Damageable>().replicate();
+        app.component::<Armor>().replicate();
+        app.component::<crate::game::score::Standing>().replicate();
 
         // With `PhysicsBody`, everything a viewer needs to draw a body somebody
         // else drives, grid bodies included.
         app.component::<crate::common::class::Class>().replicate_once();
         // Once: a new side is a new life, which is a new body.
         app.component::<crate::common::team::Team>().replicate_once();
+        app.component::<crate::common::player_color::PlayerColor>().replicate_once();
         app.component::<crate::common::skeleton::ForcedAnimation>().replicate();
         app.component::<crate::common::skeleton::gait::DisplaySpeed>().replicate();
 
@@ -79,6 +82,7 @@ impl Plugin for ProtocolPlugin {
         // take. A breakable's health is its `Damageable`, above.
         app.component::<crate::game::world_prop::WorldProp>().replicate();
         app.component::<crate::game::world_prop::Pickup>().replicate();
+        app.component::<crate::game::world_prop::GivesWeapon>().replicate();
 
         // Once. Animation phase is derived from it, so every client puts a body
         // at the same point in its cycle.

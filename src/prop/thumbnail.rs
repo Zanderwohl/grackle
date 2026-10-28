@@ -43,11 +43,11 @@ const PADDING: f32 = 0.06;
 
 /// The camera's offset from the prop, before framing decides how far. A
 /// weapon points down `-Z`, so this is its right side, barrel to the right,
-/// turned a little towards the muzzle and seen from a little above.
+/// turned a little toward the muzzle and seen from a little above.
 const SEEN_FROM: Vec3 = Vec3::new(1.0, 0.45, -0.45);
 
-/// Towards each light, in the camera's frame: `+X` right, `+Y` up, `+Z` back
-/// towards the camera.
+/// Toward each light, in the camera's frame: `+X` right, `+Y` up, `+Z` back
+/// toward the camera.
 const KEY_FROM: Vec3 = Vec3::new(-0.7, 0.8, 0.9);
 const FILL_FROM: Vec3 = Vec3::new(0.9, -0.1, 0.6);
 const BACK_FROM: Vec3 = Vec3::new(0.3, 0.7, -1.0);
@@ -68,7 +68,7 @@ const RETRY_FRAMES: u32 = 15;
 const ATTEMPTS: u32 = 40;
 
 /// Frames to wait for a picture before taking it again. A capture can be
-/// dropped outright, e.g. while the window is minimised.
+/// dropped outright, e.g. while the window is minimized.
 const CAPTURE_TIMEOUT: u32 = 120;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -103,14 +103,14 @@ pub fn frame(points: impl IntoIterator<Item = Vec3>, rotation: Quat, fov: f32, p
         return None;
     }
 
-    let centre = (above + below) / 2.0;
+    let center = (above + below) / 2.0;
     let fitted = ((above - below) / (2.0 * slope)).max_element();
-    // A point dead centre is in frame at any distance, including zero.
+    // A point dead center is in frame at any distance, including zero.
     let clearance = ((above - below).max_element() * 0.05).max(1e-3);
     let distance = fitted.max(nearest + clearance);
 
     Some(Framing {
-        translation: rotation * centre.extend(distance),
+        translation: rotation * center.extend(distance),
         near: (distance - nearest) / 2.0,
     })
 }
@@ -445,7 +445,7 @@ fn develop(
         }
     };
 
-    // Every pixel the clear colour: the pipelines were not ready yet.
+    // Every pixel the clear color: the pipelines were not ready yet.
     let first = picture.pixels().next().copied();
     if picture.pixels().all(|pixel| Some(*pixel) == first) {
         if !retake(sitting) {
@@ -497,7 +497,7 @@ mod tests {
     }
 
     fn rifle() -> Vec<Vec3> {
-        // A long thin box along -Z with a stock hanging below, off centre.
+        // A long thin box along -Z with a stock hanging below, off center.
         let mut points = Vec::new();
         for x in [-0.02, 0.03] {
             for y in [-0.05, 0.04] {

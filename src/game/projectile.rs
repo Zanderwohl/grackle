@@ -3,7 +3,7 @@
 //! [`crate::common::projectile`]; this is the part that asks the world.
 //!
 //! The move is swept against walls and hitboxes at once, nearer wins: a
-//! rocket covers half a metre a tick and a wall slab is half a metre thick, so
+//! rocket covers half a meter a tick and a wall slab is half a meter thick, so
 //! a teleport-then-overlap test would pass through it. It uses the same
 //! [`trace`] and [`CollisionWorld::ray_hit`] as hit registration.
 //!
@@ -35,12 +35,12 @@ use crate::game::weapon::WeaponActionFired;
 /// tick's motion is dropped rather than risking a tunnel.
 const MAX_CONTACTS: usize = 4;
 
-/// Metres a bounce leaves the projectile off the wall. Landing exactly on the
+/// Meters a bounce leaves the projectile off the wall. Landing exactly on the
 /// plane, the next trace in the same tick finds it at zero distance and
 /// bounces again, burning every contact.
 const SKIN: f32 = 0.002;
 
-/// Metres in front of the eye a projectile is born: outside the shooter's
+/// Meters in front of the eye a projectile is born: outside the shooter's
 /// body, and not inside a wall when firing with your face against one.
 const MUZZLE_OFFSET: f32 = 0.5;
 
@@ -89,11 +89,11 @@ impl Projectile {
 /// otherwise go off somewhere other than where it is drawn.
 #[derive(Component, Debug)]
 pub struct FromTheMuzzle {
-    /// Metres, world space, from the real position to the barrel.
+    /// Meters, world space, from the real position to the barrel.
     offset: Vec3,
-    /// Metres of flight over which the offset goes to nothing.
+    /// Meters of flight over which the offset goes to nothing.
     span: f32,
-    /// Metres flown since it was marked, summed per frame so a bounce counts.
+    /// Meters flown since it was marked, summed per frame so a bounce counts.
     flown: f32,
     /// Where it was drawn last frame, before the offset.
     last: Vec3,
@@ -310,7 +310,7 @@ pub fn step_projectiles(
             travel = projectile.velocity.normalize_or_zero() * (distance - reached).max(0.0);
         }
 
-        // Checked after the move, so a fuse ending mid-tick still travelled.
+        // Checked after the move, so a fuse ending mid-tick still traveled.
         if ending.is_none() && projectile.age >= spec.max_lifetime {
             ending = Some((Ending::Fuse, None));
         }
@@ -490,7 +490,7 @@ mod tests {
     use crate::common::net::NetRole;
 
     /// A replicated projectile never went through `launch`; without sizing from
-    /// the spec at dressing time a rocket is drawn a metre wide.
+    /// the spec at dressing time a rocket is drawn a meter wide.
     #[test]
     fn a_projectile_is_sized_from_its_spec_rather_than_its_spawn() {
         let mut app = App::new();
@@ -705,11 +705,11 @@ mod tests {
         entity
     }
 
-    fn body(world: &mut World, centre: Vec3) -> Entity {
+    fn body(world: &mut World, center: Vec3) -> Entity {
         world
             .spawn(Hitboxes {
-                body: Box3 { centre, half_extents: Vec3::new(0.4, 0.9, 0.4) },
-                head: Some(Box3 { centre: centre + Vec3::Y * 0.8, half_extents: Vec3::splat(0.15) }),
+                body: Box3 { center, half_extents: Vec3::new(0.4, 0.9, 0.4) },
+                head: Some(Box3 { center: center + Vec3::Y * 0.8, half_extents: Vec3::splat(0.15) }),
             })
             .id()
     }

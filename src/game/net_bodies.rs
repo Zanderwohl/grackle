@@ -11,13 +11,17 @@ use crate::common::app_mode::AppMode;
 use std::collections::HashMap;
 
 use crate::common::damage::{Died, NextPlayerId, PlayerId};
+use crate::common::game_rules::{GameRules, ModeRules};
+use crate::common::player_color::lowest_free;
+use crate::common::player_settings::{settings_of, ClientSettings, PlayerSettings};
 use crate::common::net::NetRole;
 use crate::common::team::Side;
-use crate::common::weapon::WeaponCatalogue;
+use crate::common::weapon::WeaponCatalog;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{spawn_player, LocalPlayer, Player, Simulated, Spawn};
-use crate::game::respawn::{choose_spawn, next_team, placed_spawns, Identity, OurIdentity};
+use crate::game::weapon::AutoReload;
+use crate::game::respawn::{choose_spawn, next_team, placed_spawns, team_name, HueStart, Identity, OurIdentity};
 use crate::tool::room::Room;
 
 /// Spawns bodies for connected clients and marks our own when it arrives.
@@ -35,9 +39,10 @@ impl Plugin for NetBodiesPlugin {
                         .chain()
                         .run_if(in_state(AppMode::Play)),
                     claim_our_own_body,
+                    apply_player_settings.run_if(in_state(AppMode::Play)),
                 ),
             )
-            .add_systems(OnEnter(AppMode::Play), forget_respawn_timers);
+            .add_systems(OnEnter(AppMode::Play), (forget_respawn_timers, forget_client_identities));
     }
 }
 
@@ -81,6 +86,16 @@ fn forget_respawn_timers(mut timers: ResMut<RespawnTimers>) {
     timers.0.clear();
 }
 
+/// A new match is a new player for everybody, as `enter_play` makes it for the
+/// host by dropping `OurIdentity`: the next body a connection is given comes
+/// with a fresh id, team and color. Only identities are on link entities, so
+/// there is nothing else to tell apart.
+fn forget_client_identities(mut commands: Commands, links: Query<Entity, With<Identity>>) {
+    for link in &links {
+        commands.entity(link).remove::<Identity>();
+    }
+}
+
 /// Stand a body up for one client and start replicating it.
 ///
 /// `PredictionTarget` replicates the `Predicted` marker to the owner only, on
@@ -90,12 +105,12 @@ fn forget_respawn_timers(mut timers: ResMut<RespawnTimers>) {
 fn spawn_body_for(
     commands: &mut Commands,
     spawn: Spawn,
-    who: Identity,
-    link: Entity,
-    peer: PeerId,
-    catalogue: &WeaponCatalogue,
+    (who, start): (Identity, HueStart),
+    (link, peer): (Entity, PeerId),
+    rules: &ModeRules,
+    catalog: &WeaponCatalog,
 ) {
-    let body = spawn_player(commands, spawn, who.id, who.team, catalogue);
+    let body = spawn_player(commands, spawn, &who, who.color(&start), rules, catalog);
     commands.entity(body).insert((
         Replicate::to_clients(NetworkTarget::All),
         PredictionTarget::to_clients(NetworkTarget::Single(peer)),
@@ -121,7 +136,9 @@ fn give_bodies_to_whoever_needs_one(
     spawns: Query<(&Transform, Option<&Side>), With<SpawnPointMarker>>,
     rooms: Query<&Room>,
     mut ids: ResMut<NextPlayerId>,
-    catalogue: Res<WeaponCatalogue>,
+    hue_start: Option<Res<HueStart>>,
+    rules: Res<GameRules>,
+    catalog: Res<WeaponCatalog>,
     timers: Option<Res<RespawnTimers>>,
 ) {
     let waiting = |who: Identity| timers.as_deref().is_some_and(|timers| timers.waiting(who.id));
@@ -133,9 +150,29 @@ fn give_bodies_to_whoever_needs_one(
     let placed = placed_spawns(&spawns);
     let rooms: Vec<Room> = rooms.iter().cloned().collect();
 
-    // Decides the next player's team. Counted from existing identities, so
-    // somebody leaving frees their side up.
+    // Decides the next player's team and color. Counted from existing
+    // identities, so somebody leaving frees their side and hue up.
     let mut here = identities.iter().count() + usize::from(us.is_some());
+    let mut hues: Vec<usize> =
+        identities.iter().chain(us.as_deref().map(|us| &us.0)).map(|who| who.color).collect();
+    let start = match hue_start {
+        Some(start) => *start,
+        None => {
+            let start = HueStart::random();
+            commands.insert_resource(start);
+            start
+        }
+    };
+    let mut meet = |ids: &mut NextPlayerId| {
+        let who = Identity {
+            id: ids.allocate(),
+            team: next_team(here, rules.teams),
+            color: lowest_free(hues.iter().copied()),
+        };
+        here += 1;
+        hues.push(who.color);
+        who
+    };
 
     if ours.is_empty() {
         // The identity outlives the body, so a respawn is the same player on
@@ -143,16 +180,15 @@ fn give_bodies_to_whoever_needs_one(
         let who = match us {
             Some(us) => us.0,
             None => {
-                let who = Identity { id: ids.allocate(), team: next_team(here) };
+                let who = meet(&mut ids);
                 commands.insert_resource(OurIdentity(who));
-                here += 1;
                 who
             }
         };
         if !waiting(who) {
             let spawn = choose_spawn(&placed, who.team, &collision, &rooms);
-            info!("Standing our own body up as {} on {}", who.id, who.team.name());
-            let body = spawn_player(&mut commands, spawn, who.id, who.team, &catalogue);
+            info!("Standing our own body up as {} on {}", who.id, team_name(who.team));
+            let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
             commands.entity(body).insert(LocalPlayer);
             if hosting {
                 commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
@@ -168,9 +204,8 @@ fn give_bodies_to_whoever_needs_one(
         let who = match identities.get(link) {
             Ok(who) => *who,
             Err(_) => {
-                let who = Identity { id: ids.allocate(), team: next_team(here) };
+                let who = meet(&mut ids);
                 commands.entity(link).insert(who);
-                here += 1;
                 who
             }
         };
@@ -178,12 +213,35 @@ fn give_bodies_to_whoever_needs_one(
             continue;
         }
         let spawn = choose_spawn(&placed, who.team, &collision, &rooms);
-        info!("Standing a client's body up as {} on {}", who.id, who.team.name());
-        spawn_body_for(&mut commands, spawn, who, link, peer.0, &catalogue);
+        info!("Standing a client's body up as {} on {}", who.id, team_name(who.team));
+        spawn_body_for(&mut commands, spawn, (who, start), (link, peer.0), &rules, &catalog);
     }
 }
 
-/// Recognise the body the server says is ours, by `Controlled` (the receiver
+/// Copy each player's settings onto their body, on the authority, which is
+/// where they are acted on. Compared first, so a still body is not a changed
+/// one.
+#[allow(clippy::type_complexity)]
+fn apply_player_settings(
+    role: Option<Res<NetRole>>,
+    ours: Option<Res<PlayerSettings>>,
+    links: Query<&ClientSettings>,
+    mut bodies: Query<(&mut AutoReload, Has<LocalPlayer>, Option<&ControlledBy>), With<Player>>,
+) {
+    if !role.as_deref().is_none_or(NetRole::is_authority) {
+        return;
+    }
+    let unset = PlayerSettings::default();
+    for (mut auto, local, owner) in &mut bodies {
+        let link = owner.and_then(|owner| links.get(owner.owner).ok());
+        let wanted = AutoReload(settings_of(local, link, ours.as_deref(), &unset).auto_reload);
+        if *auto != wanted {
+            *auto = wanted;
+        }
+    }
+}
+
+/// Recognize the body the server says is ours, by `Controlled` (the receiver
 /// half of `ControlledBy`). The server predicts a body only to its
 /// controller, so `LocalPlayer`, `InputMarker` and `Simulated` belong on the
 /// same entity.
@@ -207,6 +265,7 @@ mod tests {
 
     use super::*;
     use crate::common::damage::{Damageable, PlayerId};
+    use crate::common::player_color::PlayerColor;
     use crate::common::team::Team;
 
     fn a_map(world: &mut World) {
@@ -215,8 +274,9 @@ mod tests {
         collision.rebuild(std::slice::from_ref(&room));
         world.insert_resource(collision);
         world.init_resource::<NextPlayerId>();
-        // The real catalogue, so test bodies are armed as in a round.
-        world.insert_resource(crate::common::weapon_file::default_catalogue());
+        // The real catalog, so test bodies are armed as in a round.
+        world.insert_resource(crate::common::weapon_file::default_catalog());
+        world.init_resource::<GameRules>();
         world.spawn(room);
         world.spawn((Transform::from_xyz(2.0, 0.0, -3.0), SpawnPointMarker));
     }
@@ -225,6 +285,18 @@ mod tests {
     fn a_turn(world: &mut World) {
         world.run_system_once(give_bodies_to_whoever_needs_one).unwrap();
         world.flush();
+    }
+
+    /// The host's is dropped by `enter_play`; this is the same for a client.
+    #[test]
+    fn a_new_match_forgets_every_clients_identity() {
+        let mut world = World::new();
+        let who = Identity { id: PlayerId(4), team: None, color: 2 };
+        let link = world.spawn(who).id();
+
+        world.run_system_once(forget_client_identities).unwrap();
+        world.flush();
+        assert!(world.get::<Identity>(link).is_none(), "the client is the same player next match");
     }
 
     #[test]
@@ -252,7 +324,7 @@ mod tests {
     fn the_dead_wait_out_their_respawn_timer() {
         let mut world = World::new();
         a_map(&mut world);
-        let us = Identity { id: PlayerId(7), team: Team::Red };
+        let us = Identity { id: PlayerId(7), team: Some(Team::Red), color: 0 };
         world.insert_resource(OurIdentity(us));
         world.init_resource::<RespawnTimers>();
         world.resource_mut::<RespawnTimers>().0.insert(us.id, RESPAWN_SECONDS);
@@ -312,6 +384,37 @@ mod tests {
         a_turn(&mut world);
 
         assert_eq!(world.query_filtered::<(), With<Player>>().iter(&world).count(), 1);
+    }
+
+    #[test]
+    fn without_teams_a_body_has_no_side_but_a_color_and_the_modes_loadout() {
+        let mut world = World::new();
+        a_map(&mut world);
+        let wrench = crate::common::weapon::WeaponId::of("medi_wrench");
+        world.insert_resource(GameRules(ModeRules { teams: false, loadout: Some(vec![wrench]), ..default() }));
+
+        a_turn(&mut world);
+
+        let body = world.query_filtered::<Entity, With<Player>>().single(&world).unwrap();
+        assert!(world.get::<Team>(body).is_none(), "put on a side in a mode without teams");
+        let start = *world.resource::<HueStart>();
+        assert_eq!(world.get::<PlayerColor>(body), Some(&PlayerColor::nth(start.0, 0)));
+        assert_eq!(world.get::<crate::common::weapon::Equipped>(body).unwrap().held(), Some(wrench));
+    }
+
+    #[test]
+    fn a_new_life_keeps_its_color() {
+        let mut world = World::new();
+        a_map(&mut world);
+
+        a_turn(&mut world);
+        let body = world.query_filtered::<Entity, With<Player>>().single(&world).unwrap();
+        let first = *world.get::<PlayerColor>(body).unwrap();
+        world.despawn(body);
+        a_turn(&mut world);
+
+        let body = world.query_filtered::<Entity, With<Player>>().single(&world).unwrap();
+        assert_eq!(*world.get::<PlayerColor>(body).unwrap(), first);
     }
 
     #[test]

@@ -22,6 +22,8 @@ use crate::editor::map_metadata::MapMetadata;
 use crate::editor::multicam::MulticamState;
 use crate::editor::net_menu::{network_menu, ConnectDialog};
 use crate::editor::save::{self, LoadedBlueprint};
+use crate::common::player_settings::{PlayerSettings, NAME_LIMIT};
+use crate::game::rounds::RoundHistory;
 use crate::get;
 use crate::tool::Tools;
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
@@ -96,18 +98,24 @@ const TOOLBAR_DEFAULT_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT * 2.0;
 const TOOLBAR_MIN_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT;
 
 enum TabKinds {
-    Empty(String),
     Tools,
     Bakes,
     Show,
     Metadata,
     /// The feature list with its rollback bar, and the selected feature's editor beneath.
     Features,
+    /// The last rounds' final standings.
+    Rounds,
+    /// This machine's player: name and preferences.
+    Player,
 }
 
-/// The panels' writes, bundled because `ui` hit Bevy's sixteen-parameter limit.
+/// The panels' writes, and one read, bundled because `ui` hit Bevy's
+/// sixteen-parameter limit.
 #[derive(SystemParam)]
 struct PanelMessages<'w> {
+    rounds: Res<'w, RoundHistory>,
+    player: ResMut<'w, PlayerSettings>,
     room: MessageWriter<'w, CalculateRoomGeometry>,
     clear_room: MessageWriter<'w, ClearRoomGeometry>,
     log_ecs: MessageWriter<'w, LogECS>,
@@ -136,6 +144,15 @@ struct TabViewerAndResources<'a> {
     /// Whether the Features panel changed the timeline, which it holds with
     /// change detection bypassed.
     timeline_touched: bool,
+    /// A client watches the server's map; only its own Player settings stay
+    /// editable.
+    spectating: bool,
+    rounds: &'a RoundHistory,
+    /// Change detection bypassed, as the timeline's is: held for the whole
+    /// frame it would read as changed every frame, and every change is saved
+    /// and sent.
+    player: &'a mut PlayerSettings,
+    player_touched: bool,
 }
 
 impl<'a> TabViewer for TabViewerAndResources<'a> {
@@ -143,31 +160,33 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
 
     fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
         egui::Id::new(match tab {
-            TabKinds::Empty(name) => format!("empty:{}", name),
             TabKinds::Tools => "tools".to_owned(),
             TabKinds::Bakes => "bakes".to_owned(),
             TabKinds::Show => "show".to_owned(),
             TabKinds::Metadata => "metadata".to_owned(),
             TabKinds::Features => "features".to_owned(),
+            TabKinds::Rounds => "rounds".to_owned(),
+            TabKinds::Player => "player".to_owned(),
         })
     }
 
     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText {
         match tab {
-            TabKinds::Empty(name) => { name.as_str().into() }
             TabKinds::Tools => { get!("tools.title").into() }
             TabKinds::Bakes => { get!("bakes.title").into() }
             TabKinds::Show => { get!("show.title").into() }
             TabKinds::Metadata => { get!("editor.metadata.title").into() }
             TabKinds::Features => { get!("editor.timeline.title").into() }
+            TabKinds::Rounds => { get!("editor.rounds.title").into() }
+            TabKinds::Player => { get!("editor.player.title").into() }
         }
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
+        if self.spectating && !matches!(tab, TabKinds::Player) {
+            ui.disable();
+        }
         match tab {
-            TabKinds::Empty(name) => {
-                ui.label(format!("Empty: {}", name));
-            }
             TabKinds::Tools => {
                 Tools::ui(ui, self.current_tool, self.next_tool);
             }
@@ -188,6 +207,12 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                     self.retarget_request,
                 );
             }
+            TabKinds::Rounds => {
+                rounds_panel_ui(ui, self.rounds);
+            }
+            TabKinds::Player => {
+                self.player_touched |= player_panel_ui(ui, self.player);
+            }
         }
     }
 }
@@ -202,7 +227,7 @@ impl Plugin for EditorPanelPlugin {
             .add_systems(Startup, crate::common::assets::create_the_user_pack)
             .add_systems(EguiPrimaryContextPass, EditorPanels::ui.run_if(in_state(AppMode::Editor)))
             // Before the panel, so a chord is answered this frame.
-            .add_systems(Update, file_shortcuts.run_if(in_state(AppMode::Editor)))
+            .add_systems(Update, file_shortcuts.run_if(in_state(AppMode::Editor)).run_if(crate::common::net::has_authority))
         ;
     }
 }
@@ -246,7 +271,7 @@ impl EditorPanels {
         let default_top_tabs = vec![TabKinds::Tools,];
         let default_left_tabs = vec![TabKinds::Features, TabKinds::Bakes,];
         let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata];
-        let default_bottom_tabs = vec![TabKinds::Empty("Delta".to_owned()), TabKinds::Empty("Epsilon".to_owned())];
+        let default_bottom_tabs = vec![TabKinds::Rounds, TabKinds::Player];
         
         Self {
             top_tabs: DockState::new(default_top_tabs),
@@ -320,7 +345,7 @@ impl EditorPanels {
             next_tool: &mut *next_tool,
             // Bypassed, and marked below only if the Features panel said it
             // changed something. Borrowed mutably for the whole frame, it
-            // read as changed every frame — so the undo checkpoint serialised
+            // read as changed every frame — so the undo checkpoint serialized
             // the map on every idle frame and `map_sync`'s pre-filter never
             // filtered anything.
             editor_features: editor_features.bypass_change_detection(),
@@ -331,16 +356,23 @@ impl EditorPanels {
             pending_edits: &mut pending_edits,
             retarget_request: &mut retarget_request,
             timeline_touched: false,
+            spectating: !net_role.is_authority(),
+            rounds: &messages.rounds,
+            player: messages.player.bypass_change_detection(),
+            player_touched: false,
         };
 
         panels.menu_bar_height = egui::Panel::top("menu_bar")
             .resizable(false)
             .show(&mut viewport_ui, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
-                    file_menu(ui, &mut pending_file_op);
-                    edit_menu(ui, edit_available, &mut pending_edit);
-                    // `Editor` spelled out: this system is gated on it.
-                    mode_menu(ui, AppMode::Editor, Some(&net_role), &mut wanted_mode);
+                    // The network menu stays live, so a client can leave.
+                    ui.add_enabled_ui(net_role.is_authority(), |ui| {
+                        file_menu(ui, &mut pending_file_op);
+                        edit_menu(ui, edit_available, &mut pending_edit);
+                        // `Editor` spelled out: this system is gated on it.
+                        mode_menu(ui, AppMode::Editor, Some(&net_role), &mut wanted_mode);
+                    });
                     network_menu(
                         ui,
                         &net_role,
@@ -425,9 +457,13 @@ impl EditorPanels {
             .height();
 
         let timeline_touched = viewer.timeline_touched;
+        let player_touched = viewer.player_touched;
         drop(viewer);
         if timeline_touched {
             editor_features.set_changed();
+        }
+        if player_touched {
+            messages.player.set_changed();
         }
 
         // `set`, not `set_if_neq`: `mode_menu` never offers the mode already in force.
@@ -594,6 +630,59 @@ impl EditorPanels {
             },
             window,
         );
+    }
+}
+
+/// Returns whether anything changed.
+fn player_panel_ui(ui: &mut egui::Ui, settings: &mut PlayerSettings) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(get!("editor.player.name"));
+        changed |= ui
+            .add(egui::TextEdit::singleline(&mut settings.name).char_limit(NAME_LIMIT))
+            .changed();
+    });
+    changed |= ui.checkbox(&mut settings.auto_reload, get!("editor.player.auto_reload")).changed();
+    changed
+}
+
+/// Newest first, the newest open.
+fn rounds_panel_ui(ui: &mut egui::Ui, history: &RoundHistory) {
+    let mut any = false;
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        for (index, round) in history.rounds().enumerate() {
+            any = true;
+            let seconds = round.length.round() as u32;
+            let length = format!("{}:{:02}", seconds / 60, seconds % 60);
+            egui::CollapsingHeader::new(get!("editor.rounds.round", "number", round.number, "length", length))
+                .id_salt(("round", round.number))
+                .default_open(index == 0)
+                .show(ui, |ui| {
+                    egui::Grid::new(("round_standings", round.number)).striped(true).show(ui, |ui| {
+                        ui.label("");
+                        ui.strong(get!("editor.rounds.player"));
+                        ui.strong(get!("editor.rounds.frags"));
+                        ui.strong(get!("editor.rounds.deaths"));
+                        ui.end_row();
+                        for standing in &round.standings {
+                            let color = Srgba::from(standing.swatch());
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 2.0, egui::Color32::from_rgb(
+                                (color.red * 255.0).round() as u8,
+                                (color.green * 255.0).round() as u8,
+                                (color.blue * 255.0).round() as u8,
+                            ));
+                            ui.label(standing.display_name());
+                            ui.label(standing.frags.to_string());
+                            ui.label(standing.deaths.to_string());
+                            ui.end_row();
+                        }
+                    });
+                });
+        }
+    });
+    if !any {
+        ui.label(get!("editor.rounds.none"));
     }
 }
 

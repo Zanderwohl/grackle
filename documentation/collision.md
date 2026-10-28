@@ -12,7 +12,7 @@ Every layer between a room and a collision is an axis-aligned box:
 - **`Room` is `{ min, max }`** ([`src/tool/room.rs`](../src/tool/room.rs)).
   Openings are carved per face with `rect_subtract`, and `bake_faces`,
   `collision_slabs` and `ray_hit_from_inside` all walk the same rectangles.
-- **A wall is a `WallSlab`**, an AABB half a metre deep behind each solid
+- **A wall is a `WallSlab`**, an AABB half a meter deep behind each solid
   rectangle. `CollisionWorld` is a flat `Vec` of them, plus the placed props'
   `RoundedBox`es, searched linearly on every query.
 - **`move_and_slide` is swept one axis at a time**, which is exact for boxes
@@ -81,7 +81,7 @@ the shape of the world.
   and stop in the crease where two planes meet. Bounded at four bumps, as a
   projectile's bounces already are. Step-up for stairs is a separate pass
   after it, not a change to it.
-- **A broadphase is required, not an optimisation.** Today every query is
+- **A broadphase is required, not an optimization.** Today every query is
   linear in walls, and the ragdoll solver runs `depenetrate` per point per
   iteration per corpse. A uniform grid over static shape bounds, rebuilt with
   the map; props in their own small set because they change on a different
@@ -89,7 +89,7 @@ the shape of the world.
 - **The map is the union of its room volumes.** A room is a volume of air; the
   surface is the boundary of the union, faces pointing in. Two rooms sharing a
   wall lose it, a room crossing another's wall opens a hole in it — what the
-  rectangles do today. **One behaviour changes:** a room wholly inside another
+  rectangles do today. **One behavior changes:** a room wholly inside another
   currently keeps all six faces (`bake_engulfed_room_keeps_all_faces`), and in
   a union it disappears. Nobody builds a pillar that way on purpose; a solid
   inside a room is a hole in a footprint, or a subtractive brush later.
@@ -99,7 +99,7 @@ the shape of the world.
   entity, as now.
 - **The CSG kernel moves to `src/common/`** with `Surface` generalised, since
   the map now depends on it. Its `EPSILON` is an absolute `1e-5` m, which is
-  at the edge of `f32` precision a hundred metres from the origin. Measured on
+  at the edge of `f32` precision a hundred meters from the origin. Measured on
   the largest map before trusting it: room-local coordinates or `f64`
   internally if it is not enough. The editor's 0.1 m snap helps and must not
   be relied on.
@@ -118,12 +118,12 @@ the shape of the world.
 Hull { planes: Vec<(normal, reach)>, bounds }  // convex; Hull::triangle is flat
 RoundedBox                                     // props, kept in their own list
 
-Hit { t: f32 /* 0..1 of the move */, normal: Vec3, plane: f32 /* normal · centre */ }
+Hit { t: f32 /* 0..1 of the move */, normal: Vec3, plane: f32 /* normal · center */ }
 
-sweep(centre, half, delta)  -> Option<Hit>     // first contact of a moving box
+sweep(center, half, delta)  -> Option<Hit>     // first contact of a moving box
 ray_hit(ray, range)         -> Option<(f32, Vec3)>
-overlaps(centre, half)      -> bool            // strict: touching is not overlapping
-escapes(centre, half, skin) -> positions       // one per grown plane
+overlaps(center, half)      -> bool            // strict: touching is not overlapping
+escapes(center, half, skin) -> positions       // one per grown plane
 inside_map(point)           -> bool            // room volumes, not shapes
 ```
 
@@ -138,7 +138,7 @@ floor then rests on the same number every tick rather than one that wanders by
 a rounding. `ground` backs off *straight up* from a slope rather than along its
 normal, or a body settled onto it each tick creeps down it.
 
-`slide(centre, half, delta) -> (end, contacts)` is built on `sweep` and is what
+`slide(center, half, delta) -> (end, contacts)` is built on `sweep` and is what
 `step_player`, the camera and the ragdoll call; `fits` is `inside_map` and no
 `overlap`.
 
@@ -208,7 +208,7 @@ normal, or a body settled onto it each tick creeps down it.
 
 ### Stage 4 — shapes that are not boxes
 
-- [x] `Room` is a prism: a footprint in `x`/`z` (either winding, normalised
+- [x] `Room` is a prism: a footprint in `x`/`z` (either winding, normalized
       on construction, need not be convex) between `floor` and `ceiling`;
       `Room::new` is the four-corner box. `Room::solid` is one face per cap
       when the plan is convex — so a box is still six faces and the ragdoll's
@@ -222,7 +222,7 @@ normal, or a body settled onto it each tick creeps down it.
       and, with that stopped, lost 125 m² of surface. Two fixes, each with a
       test that fails without it: `build` keeps a node's first polygon
       outright, and each room's share is cut in coordinates relative to its
-      own corner, so precision depends on a neighbourhood's size rather than
+      own corner, so precision depends on a neighborhood's size rather than
       on where it is.
 - [ ] Footprint room: planned in [footprint-rooms.md](footprint-rooms.md),
       with three decisions open.
@@ -244,7 +244,7 @@ normal, or a body settled onto it each tick creeps down it.
 - Rays ignore props, as they always have: a crate does not stop a bullet or a
   blast. Kept for Stage 1; whether it should is a weapons question.
 - A body on a slope too steep to stand on slides off it slowly, at about
-  half a metre a second: `step_player` writes horizontal velocity outright from
+  half a meter a second: `step_player` writes horizontal velocity outright from
   the input every step, so only the fall carries between ticks. The same gap as
   knockback, and the same fix — a movement model with momentum.
 - Walls are still 0.5 m slabs behind each face, so a room separated from
@@ -253,7 +253,7 @@ normal, or a body settled onto it each tick creeps down it.
   surfaces can be thin.
 - Editor picking computes the shares of every room the ray's box test hits,
   each frame. Cheap at today's map sizes; cache it beside the bake if not.
-- Room-local cutting only moves the problem: one room a hundred metres
+- Room-local cutting only moves the problem: one room a hundred meters
   across with angled walls is as far from its own corner as the far test was
   from the origin. If that turns up, the fix is `f64` inside the kernel, not a
   bigger tolerance.

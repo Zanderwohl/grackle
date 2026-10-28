@@ -11,10 +11,10 @@ use bevy::prelude::*;
 use super::hull::{enter, Hit};
 use crate::prop::archetype::RoundedBox;
 
-pub fn sweep(shape: &RoundedBox, centre: Vec3, half: Vec3, delta: Vec3) -> Option<Hit> {
+pub fn sweep(shape: &RoundedBox, center: Vec3, half: Vec3, delta: Vec3) -> Option<Hit> {
     let core = shape.core + half;
     let r = shape.radius;
-    let from = centre - shape.centre;
+    let from = center - shape.center;
 
     let slab = |grow: Vec3| {
         let extent = core + grow;
@@ -23,7 +23,7 @@ pub fn sweep(shape: &RoundedBox, centre: Vec3, half: Vec3, delta: Vec3) -> Optio
             n[axis] = 1.0;
             [(n, extent[axis]), (-n, extent[axis])]
         });
-        enter(planes, from, delta).map(|hit| Hit { plane: hit.plane + hit.normal.dot(shape.centre), ..hit })
+        enter(planes, from, delta).map(|hit| Hit { plane: hit.plane + hit.normal.dot(shape.center), ..hit })
     };
     if r <= 0.0 {
         return slab(Vec3::ZERO);
@@ -71,7 +71,7 @@ pub fn sweep(shape: &RoundedBox, centre: Vec3, half: Vec3, delta: Vec3) -> Optio
     let normal = (reached - reached.clamp(-core, core))
         .try_normalize()
         .unwrap_or_else(|| (-delta).normalize_or_zero());
-    Some(Hit { t, normal, plane: normal.dot(centre + delta * t) })
+    Some(Hit { t, normal, plane: normal.dot(center + delta * t) })
 }
 
 fn distance_to_core(point: Vec3, core: Vec3) -> f32 {
@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn a_box_coming_in_diagonally_meets_a_sphere_at_its_corner() {
-        let sphere = RoundedBox { centre: Vec3::ZERO, core: Vec3::ZERO, radius: 1.0 };
+        let sphere = RoundedBox { center: Vec3::ZERO, core: Vec3::ZERO, radius: 1.0 };
         let half = Vec3::splat(0.5);
         let start = Vec3::new(5.0, 5.0, 0.0);
         let hit = sweep(&sphere, start, half, Vec3::new(-10.0, -10.0, 0.0)).expect("passed through");
@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn a_box_meets_a_capsule_on_its_side_at_its_radius() {
-        let pillar = RoundedBox { centre: Vec3::ZERO, core: Vec3::new(0.0, 2.0, 0.0), radius: 0.5 };
+        let pillar = RoundedBox { center: Vec3::ZERO, core: Vec3::new(0.0, 2.0, 0.0), radius: 0.5 };
         let hit = sweep(&pillar, Vec3::new(-5.0, 0.0, 0.0), Vec3::splat(0.25), Vec3::X * 10.0).unwrap();
         assert!((-5.0 + 10.0 * hit.t + 0.75).abs() < 1e-4);
         assert!(hit.normal.abs_diff_eq(Vec3::NEG_X, 1e-5));
@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn a_box_passing_a_sphere_by_misses_it() {
-        let sphere = RoundedBox { centre: Vec3::ZERO, core: Vec3::ZERO, radius: 1.0 };
+        let sphere = RoundedBox { center: Vec3::ZERO, core: Vec3::ZERO, radius: 1.0 };
         // Inside the grown bounding box's corner, outside the rounding.
         assert_eq!(sweep(&sphere, Vec3::new(-5.0, 1.3, 1.3), Vec3::splat(0.5), Vec3::X * 10.0), None);
     }

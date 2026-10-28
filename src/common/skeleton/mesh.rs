@@ -19,12 +19,12 @@ pub struct Ring {
     pub t: f32,
     /// Width and depth as a fraction of the bone's `thickness`.
     pub scale: Vec2,
-    /// Centre offset, as a fraction of `thickness`.
+    /// Center offset, as a fraction of `thickness`.
     pub offset: Vec2,
 }
 
 impl Ring {
-    /// A centred section.
+    /// A centered section.
     pub const fn at(t: f32, x: f32, z: f32) -> Ring {
         Ring { t, scale: Vec2::new(x, z), offset: Vec2::ZERO }
     }

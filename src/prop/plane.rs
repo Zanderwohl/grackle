@@ -4,7 +4,7 @@
 //! Accepted: three corners, an edge and a corner, two edges, one flat face, or
 //! one plane feature. The frame comes from pick order alone, not bounds or the
 //! longest edge, so nudging one corner cannot turn the plane's `x` through a
-//! right angle: origin at the first point, `x` towards the second (along an
+//! right angle: origin at the first point, `x` toward the second (along an
 //! edge if there is one), normal by the right-hand rule. A face's normal points
 //! out of its body, so a sketch on it extrudes outwards.
 //!
@@ -22,13 +22,13 @@ use crate::prop::reference::{Located, Pointer, EDGE_PICK_PX};
 use crate::prop::view::PropBuild;
 use crate::tool::tool_helpers::dashed_line;
 
-/// Metres. Points nearer than this to the line or plane they are tested
+/// Meters. Points nearer than this to the line or plane they are tested
 /// against are on it; the same order as picking's surface tolerance.
 const ON_PLANE: f32 = 1e-4;
 
 /// How far off the line the furthest point must be, as a fraction of the
 /// selection's reach: roughly the sine of the smallest angle accepted. Below it
-/// the plane tilts wildly when one corner moves a fraction of a millimetre.
+/// the plane tilts wildly when one corner moves a fraction of a millimeter.
 const MIN_SPREAD: f32 = 0.01;
 
 /// The drawn square's margin past what it was made from, as a fraction of its
@@ -134,7 +134,7 @@ impl PlaneRef {
     }
 }
 
-/// Metres. An origin plane's half-width on an empty prop.
+/// Meters. An origin plane's half-width on an empty prop.
 pub(crate) const MIN_ORIGIN_HALF: f32 = 0.05;
 
 /// A plane as evaluated: the plane, and the square it is drawn and picked as.
@@ -216,7 +216,7 @@ fn framing_points(located: &[Located]) -> Option<Vec<Vec3>> {
     matches!(shape, (0, 3) | (1, 1) | (2, 0)).then(|| [edges, corners].concat())
 }
 
-/// Origin at `points[0]`, `x` towards `points[1]`, normal from the point
+/// Origin at `points[0]`, `x` toward `points[1]`, normal from the point
 /// furthest off that line — furthest, so two nearly parallel edges are judged
 /// by their far ends rather than by whichever point happened to come third.
 /// Then every point has to lie on the result.
@@ -267,9 +267,9 @@ pub fn preview_corners(plane: &Plane, points: &[Vec3]) -> [Vec3; 4] {
         .iter()
         .map(flat)
         .fold((Vec2::INFINITY, Vec2::NEG_INFINITY), |(min, max), p| (min.min(p), max.max(p)));
-    let centre = (min + max) / 2.0;
+    let center = (min + max) / 2.0;
     let half = (max - min).max_element() / 2.0 * (1.0 + PREVIEW_MARGIN);
-    let at = |u: f32, v: f32| plane.origin + x * (centre.x + u * half) + y * (centre.y + v * half);
+    let at = |u: f32, v: f32| plane.origin + x * (center.x + u * half) + y * (center.y + v * half);
     [at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0)]
 }
 
@@ -310,11 +310,11 @@ fn find_the_picked_plane(editor: Res<PropEditor>, build: Res<PropBuild>, mut pic
     picked.from = Some((editor.picks().to_vec(), build.built()));
 }
 
-const PREVIEW_COLOUR: Color = Color::srgb(0.55, 0.8, 0.95);
+const PREVIEW_COLOR: Color = Color::srgb(0.55, 0.8, 0.95);
 
 fn preview_the_picked_plane(picked: Res<PickedPlane>, mut gizmos: Gizmos) {
     let (true, Some(corners)) = (picked.previewed, picked.corners) else { return };
-    draw_square(&mut gizmos, &corners, PREVIEW_COLOUR);
+    draw_square(&mut gizmos, &corners, PREVIEW_COLOR);
 }
 
 /// The plane feature whose drawn square has an edge within
@@ -335,10 +335,10 @@ pub fn plane_under<P: Fn(Vec3) -> Option<Vec2>>(planes: &[Datum], pointer: &Poin
 }
 
 /// Dashes scale with the square, so a small prop is not drawn solid.
-pub fn draw_square(gizmos: &mut Gizmos, corners: &[Vec3; 4], colour: Color) {
+pub fn draw_square(gizmos: &mut Gizmos, corners: &[Vec3; 4], color: Color) {
     let side = corners[0].distance(corners[1]);
     for i in 0..4 {
-        dashed_line(gizmos, corners[i], corners[(i + 1) % 4], colour, side / 24.0, side / 48.0);
+        dashed_line(gizmos, corners[i], corners[(i + 1) % 4], color, side / 24.0, side / 48.0);
     }
 }
 

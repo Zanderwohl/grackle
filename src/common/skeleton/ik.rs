@@ -242,13 +242,13 @@ pub fn leg_length(skeleton: &Skeleton) -> f32 {
     chain_length(skeleton, &LEFT_LEG)
 }
 
-/// Sit a body exactly under `ceiling` (metres above its feet), never above
+/// Sit a body exactly under `ceiling` (meters above its feet), never above
 /// rest. The crouch hull is one size for every build, so the duck depth is
 /// solved per build rather than authored.
 ///
 /// Raises as well as lowers, which cancels a step bob so the head stays level.
 /// Exact in one pass since the root offset is rigid; [`plant_feet`] fixes the
-/// knees afterwards.
+/// knees afterward.
 pub fn duck_under(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, ceiling: f32) {
     let mut highest = f32::MIN;
     skeleton.each_posed_bone(pose, root, |posed| {
@@ -261,7 +261,7 @@ pub fn duck_under(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, ceilin
     }
 
     // Clamped at rest, so a small body is not stretched up to the ceiling.
-    let hips = pose.root_offset.y - slack / skeleton.proportions().hip_metres();
+    let hips = pose.root_offset.y - slack / skeleton.proportions().hip_meters();
     pose.root_offset.y = hips.min(0.0);
 }
 
@@ -321,7 +321,7 @@ pub fn correct_for_state(
 }
 
 /// A state's animation before corrections. A blend lerps the two variants
-/// either side of the heading joint by joint, which is why neighbouring
+/// either side of the heading joint by joint, which is why neighboring
 /// variants must drive the same joints. Public so the animation editor plays a
 /// blend the same way.
 pub fn animation_pose(

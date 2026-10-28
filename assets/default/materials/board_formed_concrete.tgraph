@@ -734,7 +734,7 @@ TextureGraphFile(
             ),
             Layer(
                 id: 50,
-                name: "colour",
+                name: "color",
                 kind: Mix(Mix(
                     a: Some(46),
                     b: Some(47),

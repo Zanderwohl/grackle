@@ -1,0 +1,21 @@
+# What each game mode changes, keyed the way a map file names its mode
+# (`arena`, `ctf`, `pl`, `plr`, `koth`, `cp`, `sd`). A mode with no entry plays
+# by the defaults: teams, every class, each class's own loadout.
+#
+# `teams`    false puts nobody on a side; everybody is hostile to everybody.
+# `classes`  which classes may be played, by the names `classes.toml` uses.
+#            Empty or absent allows all of them.
+# `loadout`  what a body starts with, by the names `weapons.toml` uses. Each
+#            lands in the slot its class's loadout permits it in. Absent is the
+#            class's own loadout.
+# `frag_limit` the round ends when somebody reaches it, and a mode with one
+#            shows the scoreboard. Absent is no limit and no scoreboard.
+# `self_damage` what hurting yourself costs, as a fraction of what it would
+#            cost anybody else; knockback is not scaled. Absent is 1.
+
+[arena]
+teams = false
+classes = ["mercenary"]
+loadout = ["medi_wrench", "laser_rifle"]
+frag_limit = 20
+self_damage = 0.5

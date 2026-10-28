@@ -22,16 +22,16 @@ impl Plugin for SpawnPointPlugin {
     }
 }
 
-/// A ring at the feet in the side's colour, drawn always rather than only when selected, so which half
+/// A ring at the feet in the side's color, drawn always rather than only when selected, so which half
 /// of a mirrored map is whose can be read at a glance. A ring and not a tint: the preview stays green,
-/// the one colour no player is.
+/// the one color no player is.
 fn draw_spawn_sides(
     spawns: Query<(&GlobalTransform, &Side), With<SpawnPointMarker>>,
     mut gizmos: Gizmos,
 ) {
     for (placed, side) in &spawns {
         let ground = Isometry3d::new(placed.translation(), Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
-        gizmos.circle(ground, 0.6, side.0.colour());
+        gizmos.circle(ground, 0.6, side.0.color());
     }
 }
 
