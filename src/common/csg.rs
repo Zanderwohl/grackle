@@ -355,6 +355,18 @@ pub fn clip_outside<S: Copy>(polygons: Vec<Polygon<S>>, solid: &[Polygon<S>], so
     kept
 }
 
+/// `polygons` split into the parts inside `solid` and the parts outside. On
+/// its surface, a polygon facing against the solid's face there is inside and
+/// one facing the same way is outside — so the outside half is exactly
+/// [`clip_outside`] with `solid_owns_shared` false.
+pub fn partition<S: Copy>(polygons: Vec<Polygon<S>>, solid: &[Polygon<S>]) -> (Vec<Polygon<S>>, Vec<Polygon<S>>) {
+    let mut tree = Node::new(solid.to_vec());
+    let outside = tree.clip_polygons(polygons.clone());
+    tree.invert();
+    let inside = tree.clip_polygons(polygons);
+    (inside, outside)
+}
+
 /// An axis-aligned box's six faces, facing out.
 pub fn cuboid<S: Copy>(min: Vec3, max: Vec3, surface: S) -> Vec<Polygon<S>> {
     let corner = |x: bool, y: bool, z: bool| {
