@@ -1144,6 +1144,9 @@ impl FeatureTimeline {
         for id in affected {
             if let Some(feature) = features.features.get(id) {
                 feature.object.debug_gizmos(&mut gizmos);
+                for copy in feature.object.standing_copies() {
+                    copy.debug_gizmos(&mut gizmos);
+                }
             }
         }
         for selected in features.selection.iter().filter_map(|id| features.features.get(id)) {

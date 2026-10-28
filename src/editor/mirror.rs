@@ -512,9 +512,7 @@ impl FeatureTrait for Mirror {
             .fold(4.0, f32::max)
             + 1.0;
 
-        for copy in &self.copies {
-            copy.object.debug_gizmos(gizmos);
-        }
+        // The copies are drawn by whoever asks for `standing_copies`, each under its own kind's switch.
         if self.is_copy {
             return;
         }
