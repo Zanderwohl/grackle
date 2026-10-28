@@ -6,13 +6,8 @@ use std::ops::RangeInclusive;
 
 use bevy_egui::egui;
 
-/// Where the item at `at` may be moved to, in a list of `len`. `depends_on`
-/// and `dependants` are the current indices of its direct relations; indirect
-/// ones are already beyond a direct one. Always contiguous, since moving one
-/// item leaves the others' order alone.
-///
-/// Indices count the list with the item taken out, which is the index it will
-/// end up at.
+/// Direct relations are enough: an indirect one lies beyond a direct one.
+/// Indices count the list with the item taken out, which is where it lands.
 pub fn legal_range(
     len: usize,
     at: usize,
@@ -32,9 +27,8 @@ pub fn legal_range(
     low..=high.max(low)
 }
 
-/// Whether the drag in progress has been called off with Escape or the right button. Remembered in
-/// egui's memory under `list` until the drag ends, because egui goes on reporting the drag until the
-/// left button comes up, and the release must not drop it.
+/// Whether Escape or the right button has called off the drag in progress. Remembered until the drag
+/// ends, since egui reports the drag until the left button comes up.
 pub fn cancelled(ui: &egui::Ui, list: egui::Id, dragging: bool) -> bool {
     let key = list.with("reorder_cancelled");
     if !dragging {
@@ -51,9 +45,7 @@ pub fn cancelled(ui: &egui::Ui, list: egui::Id, dragging: bool) -> bool {
     cancelled
 }
 
-/// Draws where a dragged row would land and marks the rows that pin it, and
-/// returns that landing index. `rects` is every row in order, the dragged one
-/// included.
+/// Returns where the dragged row would land. `rects` includes the dragged row.
 pub fn show_the_drop<Id: PartialEq>(
     ui: &egui::Ui,
     rects: &[(Id, egui::Rect)],
@@ -107,16 +99,14 @@ pub fn show_the_drop<Id: PartialEq>(
     target
 }
 
-/// How the rollback bar was handled this frame.
 #[derive(Clone, Copy, Default)]
 pub struct BarDrag {
     pub dragging: bool,
     pub dropped: bool,
 }
 
-/// The rollback bar, under the row just drawn: faint at the bottom of the list, where it changes
-/// nothing, and bold elsewhere so a partial view is not mistaken for the whole. Its id is fixed rather
-/// than taken from where it is laid out, which is what lets a drag carry it past more than one row.
+/// Bold unless at the bottom, so a partial view is not mistaken for the whole. The id is fixed rather
+/// than taken from layout, so the drag survives the rows above it changing.
 pub fn rollback_bar(ui: &mut egui::Ui, list: egui::Id, rolled_back: bool) -> BarDrag {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::hover());
     let bar = ui
@@ -131,12 +121,9 @@ pub fn rollback_bar(ui: &mut egui::Ui, list: egui::Id, rolled_back: bool) -> Bar
     BarDrag { dragging: bar.dragged(), dropped: bar.drag_stopped() }
 }
 
-/// While the bar is dragged, draws where it would land: under the row nearest above the pointer, and
-/// never above the first, since an empty view shows nothing. Returns that row on release, and nothing
-/// if Escape or the right button called the drag off. Applied once rather than live, because each step
-/// of a roll back rebuilds what it crosses.
-///
-/// `rows` span each row and anything drawn under it before the next.
+/// Returns the row the bar was dropped under. Applied on release rather than live, because each step
+/// rebuilds what it crosses. Never above the first row: an empty view shows nothing. `rows` span each
+/// row and whatever is drawn under it.
 pub fn drop_the_bar<Id: Copy>(ui: &egui::Ui, list: egui::Id, rows: &[(Id, egui::Rect)], drag: BarDrag) -> Option<Id> {
     let active = drag.dragging || drag.dropped;
     if cancelled(ui, list.with("rollback_bar"), active) || !active {
@@ -166,7 +153,6 @@ mod tests {
 
     #[test]
     fn the_range_stops_short_of_both_relations() {
-        // Five items; the one at 2 depends on 0 and is depended on by 4.
         assert_eq!(legal_range(5, 2, [0], [4]), 1..=3);
         assert_eq!(legal_range(5, 2, [], []), 0..=4);
         assert_eq!(legal_range(5, 2, [1], [3]), 2..=2, "pinned on both sides, it can only stay");

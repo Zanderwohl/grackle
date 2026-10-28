@@ -678,7 +678,6 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session
                     }));
                 }
 
-                // Past the bar, rolling to a row brings it into view.
                 let roll_here = match at > bar_after {
                     true => get!("prop.tree.roll_forward_here"),
                     false => get!("prop.tree.roll_back_here"),

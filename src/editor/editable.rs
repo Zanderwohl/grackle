@@ -361,7 +361,6 @@ impl FeatureTimeline {
         self.forget_a_missing_bar();
     }
 
-    /// Everything that names `id` as a parent.
     pub fn dependants(&self, id: FeatureId) -> Vec<FeatureId> {
         self.feature_order
             .iter()
@@ -370,8 +369,7 @@ impl FeatureTimeline {
             .collect()
     }
 
-    /// Where a feature may be moved to (see [`reorder::legal_range`]), and what pins it there: its
-    /// parents and its dependants.
+    /// The legal range for a move, and the parents and dependants that bound it.
     pub fn reorder_bounds(&self, id: FeatureId) -> Option<(std::ops::RangeInclusive<usize>, Vec<FeatureId>)> {
         let position = |target: FeatureId| self.feature_order.iter().position(|candidate| *candidate == target);
         let at = position(id)?;
@@ -386,10 +384,8 @@ impl FeatureTimeline {
         Some((legal, parents.into_iter().chain(dependants).collect()))
     }
 
-    /// Clamped into the legal range rather than refused, so a drag stops at the last legal place. The
-    /// rollback bar stays between the same two rows: moving the feature it sits under hands it to the
-    /// row above, rather than carrying it off and showing or hiding everything it passes. Returns
-    /// whether anything moved.
+    /// Clamped rather than refused, so a drag stops at the last legal place. The bar stays between the
+    /// same two rows, so moving the feature under it does not show or hide everything it passes.
     pub fn move_to(&mut self, id: FeatureId, target: usize) -> bool {
         let Some(at) = self.feature_order.iter().position(|candidate| *candidate == id) else { return false };
         let Some((legal, _)) = self.reorder_bounds(id) else { return false };
@@ -404,8 +400,7 @@ impl FeatureTimeline {
         }
         self.feature_order.remove(at);
         self.feature_order.insert(target, id);
-        // A bar now under the last row is no bar, and `roll_back_to` keeps that to one form. It also
-        // refreshes the selection, which a feature crossing the bar changes.
+        // `roll_back_to` turns a bar under the last row into `None`.
         let bar = self.rollback.take();
         self.roll_back_to(bar);
         self.refresh_selection();
@@ -944,7 +939,6 @@ impl FeatureTimeline {
                             ui.add_sized([ui.available_width(), 0.0], label)
                         })
                         .inner;
-                    // One at a time: a row in a multiple selection does not drag.
                     let together = is_selected && selected.len() > 1;
                     let response = match together {
                         true => response,
@@ -974,7 +968,6 @@ impl FeatureTimeline {
                             }
                             return;
                         }
-                        // Past the bar, rolling to a row brings it into view.
                         let roll_here = match is_active {
                             true => get!("editor.timeline.roll_back_here"),
                             false => get!("editor.timeline.roll_forward_here"),
