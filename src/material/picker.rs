@@ -14,6 +14,7 @@ use super::gpu::{BakedTextures, BevyDevice};
 use super::library::MaterialLibrary;
 use super::sky::Sky;
 use crate::common::sky::SKYBOX;
+use super::pit::{Pit, PIT};
 use super::{FILE_EXTENSION, MATERIALS_DIR};
 use crate::common::assets::{default_packs, Assets as PackAssets};
 use crate::common::palette::Palette;
@@ -175,6 +176,7 @@ pub(super) fn publish_choices(
     device: BevyDevice,
     palette: Res<Palette>,
     sky: Res<Sky>,
+    pit: Res<Pit>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let open = ctx.data_mut(|data| data.remove_temp::<bool>(open_id())).unwrap_or(false);
@@ -221,7 +223,12 @@ pub(super) fn publish_choices(
         preview: Some(contexts.add_image(EguiTextureHandle::Weak(sky.preview.id()))),
         role: false,
     });
-    choices.extend(state.materials.iter().filter(|name| *name != SKYBOX).map(|name| Choice {
+    choices.push(Choice {
+        name: PIT.to_owned(),
+        preview: Some(contexts.add_image(EguiTextureHandle::Weak(pit.preview.id()))),
+        role: false,
+    });
+    choices.extend(state.materials.iter().filter(|name| *name != SKYBOX && *name != PIT).map(|name| Choice {
         name: name.clone(),
         preview: previews.get(name.as_str()).copied(),
         role: false,

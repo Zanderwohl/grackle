@@ -17,6 +17,7 @@ use bevy::light::NotShadowCaster;
 use bevy::pbr::Lightmap;
 
 use super::gpu::{BakedTextures, BevyDevice, Encoding, Sampling};
+use super::pit::{Pit, PIT};
 use super::sky::{Sky, SkyMaterial};
 use crate::common::sky::SKYBOX;
 use super::{FILE_EXTENSION, MATERIALS_DIR};
@@ -156,7 +157,7 @@ fn find(name: &str, packs: &PackAssets) -> Option<(Graph, PathBuf)> {
 
 /// Every frame rather than on change: a slot's material can arrive late (a bake that waited
 /// for the device) or go away (a name cleared), and there are three slots a room. A slot painted
-/// [`SKYBOX`] swaps its `StandardMaterial` for the [`Sky`].
+/// [`SKYBOX`] swaps its `StandardMaterial` for the [`Sky`]; one painted [`PIT`] takes the [`Pit`].
 #[allow(clippy::too_many_arguments)]
 pub fn paint_rooms(
     mut commands: Commands,
@@ -168,6 +169,7 @@ pub fn paint_rooms(
     device: BevyDevice,
     palette: Res<Palette>,
     sky: Res<Sky>,
+    pit: Res<Pit>,
     rooms: Query<(&RoomSurfaces, Option<&Side>)>,
     parts: Query<(Entity, &RoomSlotMesh, Option<&MeshMaterial3d<StandardMaterial>>, Has<MeshMaterial3d<SkyMaterial>>)>,
 ) {
@@ -186,9 +188,13 @@ pub fn paint_rooms(
         let mut material = |name| {
             library.ensure(name, &packs, &device, &mut baked, &mut standard).map(|entry| entry.material.clone())
         };
-        let wanted = match named.and_then(&mut material).or_else(|| material(default_material(part.slot))) {
-            Some(material) => material,
-            None => bake.material(&mut standard),
+        let wanted = if named == Some(PIT) {
+            pit.material.clone()
+        } else {
+            match named.and_then(&mut material).or_else(|| material(default_material(part.slot))) {
+                Some(material) => material,
+                None => bake.material(&mut standard),
+            }
         };
         if drawn_as_sky {
             commands

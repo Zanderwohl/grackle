@@ -13,7 +13,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
-use crate::common::damage::{Armor, Damage, DamageDealt, Damageable, Died};
+use crate::common::damage::{Armor, Damage, DamageDealt, Damageable, Died, Kill};
 use crate::common::game_rules::GameRules;
 use crate::common::team::Allegiances;
 use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage, suicide};
@@ -58,6 +58,7 @@ impl Plugin for DamagePlugin {
     fn build(&self, app: &mut App) {
         app
             .add_message::<Damage>()
+            .add_message::<Kill>()
             // Every visual reads this queue, filled locally or off the wire.
             .add_message::<crate::common::effects::Effect>()
             .add_message::<DamageDealt>()
@@ -104,6 +105,7 @@ impl Plugin for DamagePlugin {
 /// included: a number is what you did, not where it landed.
 pub fn apply_damage(
     mut requests: MessageReader<Damage>,
+    mut kills: MessageReader<Kill>,
     mut health: Query<(&mut Damageable, Option<&mut Armor>)>,
     allegiances: Allegiances,
     // Absent in tests that build no map.
@@ -137,6 +139,24 @@ pub fn apply_damage(
             remaining: target.health(),
             point: request.point,
             from: request.from,
+        });
+    }
+    // Recorded like a hit, so the kill is credited to its source rather than
+    // to whoever last hurt the body, however long ago.
+    for kill in kills.read() {
+        let Ok((mut target, _)) = health.get_mut(kill.target) else { continue };
+        if !target.is_alive() {
+            continue;
+        }
+        let left = target.health();
+        let amount = target.apply(left);
+        dealt.write(DamageDealt {
+            target: kill.target,
+            source: kill.source,
+            amount,
+            remaining: 0,
+            point: kill.point,
+            from: None,
         });
     }
 }
@@ -257,6 +277,7 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<DamageDealt>>();
+        world.init_resource::<Messages<Kill>>();
         let target = world.spawn(Damageable::with_health(12)).id();
         world.write_message(Damage {
             target,
@@ -286,6 +307,7 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<DamageDealt>>();
+        world.init_resource::<Messages<Kill>>();
         let shooter = PlayerId(1);
         world.spawn((shooter, Team::Blue));
         let ally = world
@@ -315,6 +337,7 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<DamageDealt>>();
+        world.init_resource::<Messages<Kill>>();
         let id = PlayerId(1);
         let me = world.spawn((Damageable::with_health(100), id, Team::Blue)).id();
         world.write_message(Damage {
@@ -335,6 +358,7 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<DamageDealt>>();
+        world.init_resource::<Messages<Kill>>();
         let mut armor = Armor::default();
         armor.add(50);
         let target = world.spawn((Damageable::with_health(100), armor)).id();
@@ -356,6 +380,7 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<DamageDealt>>();
+        world.init_resource::<Messages<Kill>>();
         let dressing = world.spawn(Name::new("Scenery")).id();
         world.write_message(Damage {
             target: dressing,

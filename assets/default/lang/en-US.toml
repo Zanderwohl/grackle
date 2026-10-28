@@ -59,6 +59,7 @@ animation_display = "Animation Display"
 animation_grid = "Animation Grid"
 move = "Move"
 room = "Room"
+trigger = "Trigger"
 footprint = "Footprint"
 mirror = "Mirror"
 retarget = "Retarget"
@@ -84,6 +85,7 @@ gizmos_props = "Props"
 gizmos_animation_displays = "Animation Displays"
 gizmos_animation_grids = "Animation Grids"
 gizmos_mirrors = "Mirrors"
+gizmos_triggers = "Triggers"
 
 [room.messages]
 ghost = "Room { me } is fully inside { other } and will not appear!"
@@ -157,6 +159,13 @@ materials = "Materials"
 floor = "Floor"
 walls = "Walls"
 ceiling = "Ceiling"
+
+[editor.features.trigger]
+title = "Trigger"
+effect = "Effect"
+hurt = "Hurt"
+kill = "Kill"
+per_second = "Damage per second"
 
 [editor.features.footprint_room]
 title = "Footprint Room"

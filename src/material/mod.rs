@@ -12,6 +12,7 @@
 pub mod gpu;
 pub mod library;
 pub mod picker;
+pub mod pit;
 pub mod sky;
 pub mod ui;
 
@@ -259,6 +260,7 @@ impl Plugin for MaterialEditorPlugin {
         app.insert_non_send(MaterialEditor::default())
             .init_resource::<StartInMaterialEditor>()
             .init_resource::<library::MaterialLibrary>()
+            .init_resource::<pit::Pit>()
             // Ungated: rooms are drawn in the editor and in a round alike.
             .add_systems(Update, (publish_saved_materials, library::paint_rooms).chain())
             // Ungated: it has to run in whatever mode the process started in.
