@@ -1,8 +1,8 @@
-//! A feature that stands a mirror image of other features across a plane, or a turned copy about an
-//! axis, and puts the two halves on two teams. See "Mirroring half a map" in CLAUDE.md.
+//! A feature that stands a mirror image of other features across a plane, or turned copies about an
+//! axis — one, or three for a four-way turn — and puts the original and each copy on a team. See "Mirroring half a map" in CLAUDE.md.
 
 use std::collections::BTreeMap;
-use std::f32::consts::{FRAC_PI_2, PI};
+use std::f32::consts::FRAC_PI_2;
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -14,7 +14,7 @@ use crate::common::PointResolutionError;
 use crate::editor::editable::{Feature, FeatureId, FeatureTag, FeatureTrait, PointRef};
 use crate::get;
 
-/// How the copy is made from the original. Every one keeps a room an axis-aligned box.
+/// How the copies are made from the original. Every one keeps a room an axis-aligned box.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Symmetry {
     /// Across the plane through the center facing X: east becomes west.
@@ -24,24 +24,47 @@ pub enum Symmetry {
     MirrorZ,
     /// Half a turn about the vertical through the center. Keeps handedness.
     Rotate180,
+    /// Three copies, a quarter, a half and three quarters of a turn about the vertical. Keeps
+    /// handedness.
+    Rotate90,
 }
 
 impl Symmetry {
-    pub const ALL: [Symmetry; 3] = [Symmetry::MirrorX, Symmetry::MirrorZ, Symmetry::Rotate180];
+    pub const ALL: [Symmetry; 4] = [Symmetry::MirrorX, Symmetry::MirrorZ, Symmetry::Rotate180, Symmetry::Rotate90];
 
     pub fn name(self) -> String {
         match self {
             Symmetry::MirrorX => get!("editor.features.mirror.mirror_x"),
             Symmetry::MirrorZ => get!("editor.features.mirror.mirror_z"),
             Symmetry::Rotate180 => get!("editor.features.mirror.rotate_180"),
+            Symmetry::Rotate90 => get!("editor.features.mirror.rotate_90"),
+        }
+    }
+
+    /// One per copy of each source, in the order their teams are listed after the originals'.
+    pub fn images(self) -> &'static [Motion] {
+        match self {
+            Symmetry::MirrorX => &[Motion::ReflectX],
+            Symmetry::MirrorZ => &[Motion::ReflectZ],
+            Symmetry::Rotate180 => &[Motion::Turn(2)],
+            Symmetry::Rotate90 => &[Motion::Turn(1), Motion::Turn(2), Motion::Turn(3)],
         }
     }
 }
 
-/// A [`Symmetry`] placed in the world.
+/// What takes an original to one of its copies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Motion {
+    ReflectX,
+    ReflectZ,
+    /// Quarter turns about +Y, counter-clockwise seen from above.
+    Turn(u8),
+}
+
+/// A [`Motion`] placed in the world.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mirroring {
-    pub symmetry: Symmetry,
+    pub motion: Motion,
     pub center: Vec3,
 }
 
@@ -50,11 +73,17 @@ impl Mirroring {
         self.center + self.direction(point - self.center)
     }
 
+    /// Exact rather than through a quaternion, so a room's corners land on the numbers they mirror.
     pub fn direction(&self, v: Vec3) -> Vec3 {
-        match self.symmetry {
-            Symmetry::MirrorX => Vec3::new(-v.x, v.y, v.z),
-            Symmetry::MirrorZ => Vec3::new(v.x, v.y, -v.z),
-            Symmetry::Rotate180 => Vec3::new(-v.x, v.y, -v.z),
+        match self.motion {
+            Motion::ReflectX => Vec3::new(-v.x, v.y, v.z),
+            Motion::ReflectZ => Vec3::new(v.x, v.y, -v.z),
+            Motion::Turn(quarters) => match quarters % 4 {
+                0 => v,
+                1 => Vec3::new(v.z, v.y, -v.x),
+                2 => Vec3::new(-v.x, v.y, -v.z),
+                _ => Vec3::new(-v.z, v.y, v.x),
+            },
         }
     }
 
@@ -67,8 +96,8 @@ impl Mirroring {
     /// Forward and up are kept exactly and handedness is not, so a model is turned rather than
     /// scaled inside out.
     pub fn rotation(&self, turn: Quat) -> Quat {
-        if self.symmetry == Symmetry::Rotate180 {
-            return Quat::from_rotation_y(PI) * turn;
+        if let Motion::Turn(quarters) = self.motion {
+            return Quat::from_rotation_y(f32::from(quarters) * FRAC_PI_2) * turn;
         }
         let back = self.direction(turn * Vec3::Z);
         let up = self.direction(turn * Vec3::Y);
@@ -85,24 +114,30 @@ impl Mirroring {
 /// What side a Mirror's copy of something is, by the side of what it copied.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TeamMap {
-    /// The originals' team, then the copies'.
-    pub teams: [Team; 2],
-    /// For a team arriving from a Mirror this one copies. A team not named swaps within `teams`,
-    /// or passes through if it is neither.
+    /// The originals' team, then each image's, in [`Symmetry::images`] order.
+    pub teams: Vec<Team>,
+    /// For a team arriving from a Mirror this one copies, under a two-way symmetry only. A team not
+    /// named moves round `teams` as far as the image does, or passes through if it is not there.
     pub remap: BTreeMap<Team, Team>,
 }
 
 impl TeamMap {
-    pub fn becomes(&self, team: Team) -> Team {
-        let [originals, copies] = self.teams;
-        if team == originals {
-            return copies;
+    /// `image` indexes [`Symmetry::images`].
+    pub fn becomes(&self, team: Team, image: usize) -> Team {
+        if team != self.teams[0]
+            && self.teams.len() == 2
+            && let Some(to) = self.remap.get(&team)
+        {
+            return *to;
         }
-        self.remap.get(&team).copied().unwrap_or(if team == copies { originals } else { team })
+        match self.teams.iter().position(|at| *at == team) {
+            Some(at) => self.teams[(at + image + 1) % self.teams.len()],
+            None => team,
+        }
     }
 
     fn by_default(&self, team: Team) -> Team {
-        TeamMap { teams: self.teams, remap: BTreeMap::new() }.becomes(team)
+        TeamMap { teams: self.teams.clone(), remap: BTreeMap::new() }.becomes(team, 0)
     }
 }
 
@@ -116,7 +151,10 @@ pub struct MirrorSides {
 
 /// One copy a Mirror stands, a child of the Mirror's entity so the two go together.
 #[derive(Component, Debug)]
-pub struct MirrorCopy;
+pub struct MirrorCopy {
+    /// Indexes [`Symmetry::images`], and so which team it is on.
+    pub image: usize,
+}
 
 /// Why a source has no copy, for the panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,6 +165,7 @@ enum LeftOut {
 
 struct MirroredCopy {
     source: FeatureId,
+    image: usize,
     source_entity: Option<Entity>,
     object: Box<dyn FeatureTrait>,
 }
@@ -138,8 +177,11 @@ pub struct Mirror {
     center: PointRef,
     symmetry: Symmetry,
     sources: Vec<FeatureId>,
-    /// The originals' team, then the copies'.
+    /// The originals' team, then the first copy's.
     teams: [Team; 2],
+    /// Under [`Symmetry::Rotate90`], the half and three-quarter turns'. `None` alternates `teams`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    turned_teams: Option<[Team; 2]>,
     /// See [`TeamMap::remap`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     remap: BTreeMap<Team, Team>,
@@ -154,7 +196,7 @@ pub struct Mirror {
     /// By source, so an edit re-applies the standing copy: a respawned spawn point rebuilds its body
     /// mesh every frame of a drag.
     #[serde(skip)]
-    copy_entities: Vec<(FeatureId, Entity)>,
+    copy_entities: Vec<((FeatureId, usize), Entity)>,
     /// A copy draws no plane, since no feature owns one there.
     #[serde(skip)]
     is_copy: bool,
@@ -167,6 +209,7 @@ impl Mirror {
             symmetry: Symmetry::default(),
             sources: Vec::new(),
             teams: [Team::Red, Team::Blue],
+            turned_teams: None,
             remap: BTreeMap::new(),
             resolved_center: Vec3::ZERO,
             copies: Vec::new(),
@@ -192,13 +235,33 @@ impl Mirror {
         self
     }
 
+    /// The originals' team, then each quarter turn's, for [`Symmetry::Rotate90`].
+    pub fn with_four_teams(mut self, teams: [Team; 4]) -> Self {
+        self.teams = [teams[0], teams[1]];
+        self.set_turned_teams([teams[2], teams[3]]);
+        self
+    }
+
+    fn set_turned_teams(&mut self, turned: [Team; 2]) {
+        self.turned_teams = (turned != self.teams).then_some(turned);
+    }
+
     pub fn remapping(mut self, from: Team, to: Team) -> Self {
         self.remap.insert(from, to);
         self
     }
 
+    /// The originals' team, then each image's.
+    fn teams(&self) -> Vec<Team> {
+        let mut teams = self.teams.to_vec();
+        if self.symmetry.images().len() == 3 {
+            teams.extend(self.turned_teams.unwrap_or(self.teams));
+        }
+        teams
+    }
+
     pub fn team_map(&self) -> TeamMap {
-        TeamMap { teams: self.teams, remap: self.remap.clone() }
+        TeamMap { teams: self.teams(), remap: self.remap.clone() }
     }
 
     /// The sides this Mirror's copies come out on, nested copies' copies included.
@@ -207,15 +270,19 @@ impl Mirror {
         let mut sides = Vec::new();
         for copy in &mut self.copies {
             match copy.object.mirror_mut() {
-                Some(nested) => sides.extend(nested.copy_sides().into_iter().map(|team| map.becomes(team))),
-                None => sides.push(map.becomes(map.teams[0])),
+                Some(nested) => sides.extend(nested.copy_sides().into_iter().map(|team| map.becomes(team, copy.image))),
+                None => sides.push(map.becomes(map.teams[0], copy.image)),
             }
         }
         sides
     }
 
-    /// Teams arriving from the Mirrors this one copies, other than the originals' own.
+    /// Teams arriving from the Mirrors this one copies, other than the originals' own. None under a
+    /// four-way turn, where a remap would have to be stated per quarter.
     fn arriving_teams(&mut self) -> Vec<Team> {
+        if self.teams().len() != 2 {
+            return Vec::new();
+        }
         let mut arriving = Vec::new();
         for copy in &mut self.copies {
             if let Some(nested) = copy.object.mirror_mut() {
@@ -225,8 +292,9 @@ impl Mirror {
         Team::ALL.into_iter().filter(|team| *team != self.teams[0] && arriving.contains(team)).collect()
     }
 
-    pub fn mirroring(&self) -> Mirroring {
-        Mirroring { symmetry: self.symmetry, center: self.resolved_center }
+    pub fn mirrorings(&self) -> impl Iterator<Item = Mirroring> + use<> {
+        let center = self.resolved_center;
+        self.symmetry.images().iter().map(move |motion| Mirroring { motion: *motion, center })
     }
 
     /// A copy of a Mirror is rebuilt on every resolve, so it takes over its predecessor's entities.
@@ -242,7 +310,7 @@ fn inherit_nested(copies: &mut [MirroredCopy], previous: &mut [MirroredCopy]) {
         let Some(nested) = copy.object.mirror_mut() else { continue };
         if let Some(old) = previous
             .iter_mut()
-            .find(|old| old.source == copy.source)
+            .find(|old| (old.source, old.image) == (copy.source, copy.image))
             .and_then(|old| old.object.mirror_mut())
         {
             nested.inherit_entities(old);
@@ -251,10 +319,13 @@ fn inherit_nested(copies: &mut [MirroredCopy], previous: &mut [MirroredCopy]) {
 }
 
 /// Reached only by Mirrors listing each other, which would otherwise recurse until the stack runs out.
-const MAX_NESTING: u32 = 8;
+const MAX_NESTING: usize = 8;
 
 thread_local! {
-    static NESTING: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// The sources being copied further up, so a Mirror reached again through a cycle stops there
+    /// rather than at `MAX_NESTING`: a four-way turn resolves each source once per image, so the
+    /// cost of every extra level is multiplied by three.
+    static COPYING: std::cell::RefCell<Vec<FeatureId>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Through the feature's own serde, the same way undo and saving copy one, so a new feature type is
@@ -264,15 +335,15 @@ fn mirrored_copy(
     features: &HashMap<FeatureId, Feature>,
     mirroring: &Mirroring,
 ) -> Option<Box<dyn FeatureTrait>> {
-    let depth = NESTING.get();
-    if depth >= MAX_NESTING {
+    let cyclic = COPYING.with_borrow(|copying| copying.len() >= MAX_NESTING || copying.contains(&source.id()));
+    if cyclic {
         return None;
     }
     let value = serde_json::to_value(source.object()).ok()?;
     let mut copy: Box<dyn FeatureTrait> = serde_json::from_value(value).ok()?;
-    NESTING.set(depth + 1);
+    COPYING.with_borrow_mut(|copying| copying.push(source.id()));
     copy.resolve_references(features);
-    NESTING.set(depth);
+    COPYING.with_borrow_mut(|copying| copying.pop());
     copy.mirror(mirroring).then_some(copy)
 }
 
@@ -303,25 +374,39 @@ impl FeatureTrait for Mirror {
                 }
             });
 
-        let labels = [get!("editor.features.mirror.originals_team"), get!("editor.features.mirror.copies_team")];
+        let labels = match self.symmetry {
+            Symmetry::Rotate90 => vec![
+                get!("editor.features.mirror.originals_team"),
+                get!("editor.features.mirror.quarter_turn_team"),
+                get!("editor.features.mirror.half_turn_team"),
+                get!("editor.features.mirror.three_quarter_turn_team"),
+            ],
+            _ => vec![get!("editor.features.mirror.originals_team"), get!("editor.features.mirror.copies_team")],
+        };
+        let mut teams = self.teams();
         for (slot, label) in labels.into_iter().enumerate() {
             egui::ComboBox::from_label(label)
-                .selected_text(self.teams[slot].name())
+                .selected_text(teams[slot].name())
                 .show_ui(ui, |ui| {
                     for team in Team::ALL {
-                        if ui.selectable_label(self.teams[slot] == team, team.name()).clicked()
-                            && self.teams[slot] != team
-                        {
-                            self.teams[slot] = team;
+                        if ui.selectable_label(teams[slot] == team, team.name()).clicked() && teams[slot] != team {
+                            teams[slot] = team;
                             changed = true;
                         }
                     }
                 });
         }
+        if changed {
+            self.teams = [teams[0], teams[1]];
+            // Left alone when two-way, so switching back and forth loses nothing.
+            if teams.len() == 4 {
+                self.set_turned_teams([teams[2], teams[3]]);
+            }
+        }
 
         let map = self.team_map();
         for arriving in self.arriving_teams() {
-            let current = map.becomes(arriving);
+            let current = map.becomes(arriving, 0);
             egui::ComboBox::from_label(get!("editor.features.mirror.becomes", "team", arriving.name()))
                 .selected_text(current.name())
                 .show_ui(ui, |ui| {
@@ -368,7 +453,7 @@ impl FeatureTrait for Mirror {
             changed = true;
         }
 
-        let mirroring = self.mirroring();
+        let Some(mirroring) = self.mirrorings().next() else { return changed };
         let candidates = |sources: &[FeatureId]| -> Vec<FeatureId> {
             prior_feature_order
                 .iter()
@@ -442,9 +527,13 @@ impl FeatureTrait for Mirror {
             Symmetry::MirrorZ => {
                 gizmos.rect(Isometry3d::from_translation(center), Vec2::splat(reach * 2.0), MIRROR_COLOR);
             }
-            Symmetry::Rotate180 => {
+            Symmetry::Rotate180 | Symmetry::Rotate90 => {
                 gizmos.line(center - Vec3::Y * reach, center + Vec3::Y * reach, MIRROR_COLOR);
                 gizmos.circle(Isometry3d::new(center, Quat::from_rotation_x(FRAC_PI_2)), reach, MIRROR_COLOR);
+                if self.symmetry == Symmetry::Rotate90 {
+                    gizmos.line(center - Vec3::X * reach, center + Vec3::X * reach, MIRROR_COLOR);
+                    gizmos.line(center - Vec3::Z * reach, center + Vec3::Z * reach, MIRROR_COLOR);
+                }
             }
         }
         self.center.debug_gizmos(center, gizmos);
@@ -473,8 +562,8 @@ impl FeatureTrait for Mirror {
             .insert_if_new((Transform::IDENTITY, Visibility::Inherited));
 
         let copies = &self.copies;
-        self.copy_entities.retain(|(source, child)| {
-            let kept = copies.iter().any(|copy| copy.source == *source);
+        self.copy_entities.retain(|(key, child)| {
+            let kept = copies.iter().any(|copy| (copy.source, copy.image) == *key);
             if !kept {
                 commands.entity(*child).despawn();
             }
@@ -482,11 +571,12 @@ impl FeatureTrait for Mirror {
         });
 
         for copy in &mut self.copies {
-            let child = match self.copy_entities.iter().find(|(source, _)| *source == copy.source) {
+            let key = (copy.source, copy.image);
+            let child = match self.copy_entities.iter().find(|(at, _)| *at == key) {
                 Some((_, child)) => *child,
                 None => {
-                    let child = commands.spawn((MirrorCopy, ChildOf(entity))).id();
-                    self.copy_entities.push((copy.source, child));
+                    let child = commands.spawn((MirrorCopy { image: copy.image }, ChildOf(entity))).id();
+                    self.copy_entities.push((key, child));
                     child
                 }
             };
@@ -499,7 +589,7 @@ impl FeatureTrait for Mirror {
         if let Ok(v) = self.center.resolve(features) {
             self.resolved_center = v;
         }
-        let mirroring = self.mirroring();
+        let mirrorings: Vec<Mirroring> = self.mirrorings().collect();
         let mut previous = std::mem::take(&mut self.copies);
         self.left_out.clear();
         for id in &self.sources {
@@ -513,19 +603,23 @@ impl FeatureTrait for Mirror {
                 self.left_out.push((*id, LeftOut::Missing));
                 continue;
             };
-            match mirrored_copy(source, features, &mirroring) {
-                Some(object) => self.copies.push(MirroredCopy {
+            let images: Option<Vec<_>> =
+                mirrorings.iter().map(|mirroring| mirrored_copy(source, features, mirroring)).collect();
+            match images {
+                Some(images) => self.copies.extend(images.into_iter().enumerate().map(|(image, object)| MirroredCopy {
                     source: *id,
+                    image,
                     source_entity: source.object().entity(),
                     object,
-                }),
+                })),
                 None => self.left_out.push((*id, LeftOut::NoMirrorImage)),
             }
         }
         inherit_nested(&mut self.copies, &mut previous);
     }
 
-    /// The three symmetries commute, so only the center moves.
+    /// Only the center moves: each copy is carried across on its own, and a copy is never resolved
+    /// again, so its own symmetry is not consulted.
     fn mirror(&mut self, mirroring: &Mirroring) -> bool {
         self.resolved_center = mirroring.point(self.resolved_center);
         self.center.resolved_reference = None;
@@ -594,7 +688,7 @@ pub fn assign_sides(
     mirrors: Query<(Entity, &MirrorSides, &FeatureTag)>,
     nested: Query<&MirrorSides>,
     children: Query<&Children>,
-    copies: Query<(), With<MirrorCopy>>,
+    copies: Query<&MirrorCopy>,
     sided: Query<(Entity, &Side)>,
     mut commands: Commands,
 ) {
@@ -632,21 +726,24 @@ pub fn assign_sides(
 fn claim_copies(
     mirror: Entity,
     map: &TeamMap,
-    around: &mut Vec<TeamMap>,
+    around: &mut Vec<(TeamMap, usize)>,
     nested: &Query<&MirrorSides>,
     children: &Query<&Children>,
-    copies: &Query<(), With<MirrorCopy>>,
+    copies: &Query<&MirrorCopy>,
     wanted: &mut HashMap<Entity, Team>,
 ) {
     let Ok(standing) = children.get(mirror) else { return };
-    for child in standing.iter().filter(|child| copies.contains(*child)) {
+    for (child, copy) in standing.iter().filter_map(|child| Some((child, copies.get(child).ok()?))) {
         if let Ok(inner) = nested.get(child) {
-            around.push(map.clone());
+            around.push((map.clone(), copy.image));
             claim_copies(child, &inner.map, around, nested, children, copies, wanted);
             around.pop();
             continue;
         }
-        let team = around.iter().rev().fold(map.becomes(map.teams[0]), |team, outer| outer.becomes(team));
+        let team = around
+            .iter()
+            .rev()
+            .fold(map.becomes(map.teams[0], copy.image), |team, (outer, image)| outer.becomes(team, *image));
         wanted.entry(child).or_insert(team);
     }
 }
@@ -659,22 +756,36 @@ mod tests {
     use crate::editor::editor_room::EditorRoom;
     use crate::editor::spawn_point::{SpawnPoint, SpawnPointMarker};
 
-    fn at(symmetry: Symmetry, center: Vec3) -> Mirroring {
-        Mirroring { symmetry, center }
+    fn at(motion: Motion, center: Vec3) -> Mirroring {
+        Mirroring { motion, center }
     }
 
-    /// Otherwise the two halves are not copies of each other.
+    /// Otherwise the copies are not copies of each other: two of a reflection or a half turn, four
+    /// of a quarter turn.
     #[test]
-    fn mirroring_twice_is_the_identity() {
+    fn a_motion_repeated_comes_back_to_the_start() {
         let point = Vec3::new(3.0, 1.5, -7.0);
         let turn = Quat::from_euler(EulerRot::YXZ, 0.7, 0.3, -0.2);
-        for symmetry in Symmetry::ALL {
-            let m = at(symmetry, Vec3::new(1.0, 0.0, 2.0));
-            assert!(m.point(m.point(point)).abs_diff_eq(point, 1e-5), "{symmetry:?}");
-            assert!(m.rotation(m.rotation(turn)).abs_diff_eq(turn, 1e-5) || m.rotation(m.rotation(turn)).abs_diff_eq(-turn, 1e-5), "{symmetry:?}");
-            let yaw = 0.9;
-            let back = m.yaw(m.yaw(yaw));
-            assert!((Quat::from_rotation_y(back) * Vec3::Z).abs_diff_eq(Quat::from_rotation_y(yaw) * Vec3::Z, 1e-5), "{symmetry:?}");
+        for (motion, period) in [(Motion::ReflectX, 2), (Motion::ReflectZ, 2), (Motion::Turn(2), 2), (Motion::Turn(1), 4), (Motion::Turn(3), 4)] {
+            let m = at(motion, Vec3::new(1.0, 0.0, 2.0));
+            let (mut p, mut r, mut y) = (point, turn, 0.9);
+            for _ in 0..period {
+                (p, r, y) = (m.point(p), m.rotation(r), m.yaw(y));
+            }
+            assert!(p.abs_diff_eq(point, 1e-5), "{motion:?}");
+            assert!(r.abs_diff_eq(turn, 1e-5) || r.abs_diff_eq(-turn, 1e-5), "{motion:?}");
+            assert!((Quat::from_rotation_y(y) * Vec3::Z).abs_diff_eq(Quat::from_rotation_y(0.9) * Vec3::Z, 1e-5), "{motion:?}");
+        }
+    }
+
+    /// The exact turn agrees with the quaternion every rotation is built from.
+    #[test]
+    fn a_quarter_turn_is_the_rotation_it_claims() {
+        let v = Vec3::new(3.0, 1.5, -7.0);
+        for quarters in 0..4u8 {
+            let exact = at(Motion::Turn(quarters), Vec3::ZERO).direction(v);
+            let rotated = Quat::from_rotation_y(f32::from(quarters) * FRAC_PI_2) * v;
+            assert!(exact.abs_diff_eq(rotated, 1e-5), "{quarters}: {exact} {rotated}");
         }
     }
 
@@ -684,27 +795,30 @@ mod tests {
         let east = -FRAC_PI_2;
         assert!(facing(east).abs_diff_eq(Vec3::X, 1e-5));
 
-        let x = at(Symmetry::MirrorX, Vec3::ZERO);
+        let x = at(Motion::ReflectX, Vec3::ZERO);
         assert!(facing(x.yaw(east)).abs_diff_eq(Vec3::NEG_X, 1e-5));
         assert!(facing(x.yaw(0.0)).abs_diff_eq(Vec3::NEG_Z, 1e-5), "facing along the plane is unchanged");
 
-        let z = at(Symmetry::MirrorZ, Vec3::ZERO);
+        let z = at(Motion::ReflectZ, Vec3::ZERO);
         assert!(facing(z.yaw(0.0)).abs_diff_eq(Vec3::Z, 1e-5));
         assert!(facing(z.yaw(east)).abs_diff_eq(Vec3::X, 1e-5));
 
-        let turned = at(Symmetry::Rotate180, Vec3::ZERO);
+        let turned = at(Motion::Turn(2), Vec3::ZERO);
         assert!(facing(turned.yaw(east)).abs_diff_eq(Vec3::NEG_X, 1e-5));
+
+        let quarter = at(Motion::Turn(1), Vec3::ZERO);
+        assert!(facing(quarter.yaw(east)).abs_diff_eq(Vec3::NEG_Z, 1e-5));
     }
 
     /// A prop's forward and up go where the reflection takes them, and it is still a rotation.
     #[test]
     fn a_mirrored_turn_keeps_forward_and_up() {
         let turn = Quat::from_euler(EulerRot::YXZ, 0.7, 0.3, -0.2);
-        for symmetry in [Symmetry::MirrorX, Symmetry::MirrorZ] {
-            let m = at(symmetry, Vec3::ZERO);
+        for motion in [Motion::ReflectX, Motion::ReflectZ, Motion::Turn(1), Motion::Turn(3)] {
+            let m = at(motion, Vec3::ZERO);
             let copy = m.rotation(turn);
-            assert!((copy * Vec3::NEG_Z).abs_diff_eq(m.direction(turn * Vec3::NEG_Z), 1e-5), "{symmetry:?}");
-            assert!((copy * Vec3::Y).abs_diff_eq(m.direction(turn * Vec3::Y), 1e-5), "{symmetry:?}");
+            assert!((copy * Vec3::NEG_Z).abs_diff_eq(m.direction(turn * Vec3::NEG_Z), 1e-5), "{motion:?}");
+            assert!((copy * Vec3::Y).abs_diff_eq(m.direction(turn * Vec3::Y), 1e-5), "{motion:?}");
             assert!((copy.length() - 1.0).abs() < 1e-5);
         }
     }
@@ -974,6 +1088,102 @@ mod tests {
             .iter(world)
             .any(|room| (room.bounds().0.x + 9.0).abs() < 1e-4);
         assert!(far_room, "the edit reached the copy of a copy");
+    }
+
+    fn quartered(teams: Option<[Team; 4]>) -> App {
+        let (mut timeline, room, spawn) = spawn_and_room();
+        let mut mirror = Mirror::new(PointRef::absolute(0.0, 0.0, 0.0))
+            .with_symmetry(Symmetry::Rotate90)
+            .with_sources(vec![room, spawn]);
+        if let Some(teams) = teams {
+            mirror = mirror.with_four_teams(teams);
+        }
+        timeline.apply_feature(Box::new(mirror));
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(timeline);
+        app.add_systems(Update, (FeatureTimeline::sync_entities, assign_sides).chain());
+        app.update();
+        app.update();
+        app
+    }
+
+    const QUARTERS: [Vec3; 4] =
+        [Vec3::new(4.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -4.0), Vec3::new(-4.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 4.0)];
+
+    /// Unless told otherwise the quarters alternate between the two teams, so opposite quarters
+    /// are on one side.
+    #[test]
+    fn a_quarter_turn_stands_three_copies_on_alternating_sides() {
+        let mut app = quartered(None);
+        let found = spawns(&mut app);
+        assert_eq!(found.len(), 4, "{found:?}");
+        let sides: Vec<_> = QUARTERS.iter().map(|at| side_at(&found, *at)).collect();
+        assert_eq!(sides, [Some(Team::Red), Some(Team::Blue), Some(Team::Red), Some(Team::Blue)]);
+
+        let world = app.world_mut();
+        let rooms: Vec<crate::tool::room::Room> = world.query::<&crate::tool::room::Room>().iter(world).cloned().collect();
+        assert_eq!(rooms.len(), 4);
+        assert!(rooms.iter().any(|room| room.bounds().0.abs_diff_eq(Vec3::new(-1.0, 0.0, -6.0), 1e-5)), "the quarter turn's room");
+
+        let yaw = world
+            .query_filtered::<&Transform, With<SpawnPointMarker>>()
+            .iter(world)
+            .find(|at| at.translation.abs_diff_eq(QUARTERS[1], 1e-4))
+            .map(|at| at.rotation * Vec3::NEG_Z)
+            .unwrap();
+        assert!(yaw.abs_diff_eq(Vec3::NEG_Z, 1e-5), "faces away from the axis, as the original does: {yaw}");
+    }
+
+    #[test]
+    fn a_quarter_turn_takes_four_teams_or_any_repeat_of_them() {
+        for teams in [
+            [Team::Red, Team::Blue, Team::Yellow, Team::Green],
+            [Team::Red, Team::Blue, Team::Blue, Team::Green],
+            [Team::Red, Team::Red, Team::Blue, Team::Blue],
+        ] {
+            let mut app = quartered(Some(teams));
+            let found = spawns(&mut app);
+            let sides: Vec<_> = QUARTERS.iter().map(|at| side_at(&found, *at)).collect();
+            assert_eq!(sides, teams.map(Some), "{teams:?}");
+        }
+    }
+
+    /// A two-way Mirror's file does not change, and a four-way one's turned teams come back.
+    #[test]
+    fn four_teams_survive_a_save() {
+        let alternating = Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).with_symmetry(Symmetry::Rotate90);
+        assert!(!ron::to_string(&alternating).unwrap().contains("turned_teams"));
+        let four = alternating.with_four_teams([Team::Red, Team::Blue, Team::Yellow, Team::Green]);
+        let back: Mirror = ron::from_str(&ron::to_string(&four).unwrap()).unwrap();
+        assert_eq!(back.teams(), vec![Team::Red, Team::Blue, Team::Yellow, Team::Green]);
+    }
+
+    /// A quarter-turned Mirror of a two-way one: each quarter's copy of the inner pair moves round
+    /// the outer cycle as far as its quarter does.
+    #[test]
+    fn a_quarter_turn_of_a_mirror_moves_its_sides_round() {
+        let (mut timeline, room, spawn) = spawn_and_room();
+        let inner = timeline.apply_feature(Box::new(
+            Mirror::new(PointRef::absolute(0.0, 0.0, 2.0))
+                .with_symmetry(Symmetry::MirrorZ)
+                .with_sources(vec![room, spawn])
+                .with_teams(Team::Red, Team::Blue),
+        ));
+        let mut outer = Mirror::new(PointRef::absolute(0.0, 0.0, 0.0))
+            .with_symmetry(Symmetry::Rotate90)
+            .with_sources(vec![room, spawn, inner])
+            .with_four_teams([Team::Red, Team::Blue, Team::Yellow, Team::Green]);
+        outer.resolve_references(timeline.features_map());
+        assert!(outer.arriving_teams().is_empty(), "a remap row would have to name a quarter");
+        let mut sides = outer.copy_sides();
+        sides.sort();
+        // Red's copies go Blue, Yellow, Green; the inner Blue's go Yellow, Green, Red. Two of each,
+        // for the room and the spawn.
+        let mut expected = [Team::Blue, Team::Yellow, Team::Green, Team::Yellow, Team::Green, Team::Red].repeat(2);
+        expected.sort();
+        assert_eq!(sides, expected);
     }
 
     #[test]
