@@ -22,8 +22,7 @@ pub enum Symmetry {
     MirrorX,
     /// Across the plane through the center facing Z.
     MirrorZ,
-    /// Half a turn about the vertical through the center. Keeps handedness, so the copy is the same
-    /// base turned round rather than its mirror image.
+    /// Half a turn about the vertical through the center. Keeps handedness.
     Rotate180,
 }
 
@@ -65,9 +64,8 @@ impl Mirroring {
         (a.min(b), a.max(b))
     }
 
-    /// Forward and up are carried across exactly. Under a reflection the copy's own left and right
-    /// cannot also be and stay a rotation, so that is what gives: a model is turned, never turned
-    /// inside out by a negative scale.
+    /// Forward and up are kept exactly and handedness is not, so a model is turned rather than
+    /// scaled inside out.
     pub fn rotation(&self, turn: Quat) -> Quat {
         if self.symmetry == Symmetry::Rotate180 {
             return Quat::from_rotation_y(PI) * turn;
@@ -133,8 +131,8 @@ struct MirroredCopy {
     object: Box<dyn FeatureTrait>,
 }
 
-/// Live, not a one-off duplicate: the copies are rebuilt from the sources on every resolve, so an
-/// edit to one half is an edit to both. A copy is never a feature itself, and nothing references it.
+/// The copies are rebuilt from the sources on every resolve. A copy is not a feature, and nothing
+/// references it.
 #[derive(Serialize, Deserialize)]
 pub struct Mirror {
     center: PointRef,
@@ -153,11 +151,11 @@ pub struct Mirror {
     left_out: Vec<(FeatureId, LeftOut)>,
     #[serde(skip)]
     entity: Option<Entity>,
-    /// By source, so an edit lands on the copy already standing rather than rebuilding it: a
-    /// re-spawned spawn point rebuilds its body mesh, every frame of a drag.
+    /// By source, so an edit re-applies the standing copy: a respawned spawn point rebuilds its body
+    /// mesh every frame of a drag.
     #[serde(skip)]
     copy_entities: Vec<(FeatureId, Entity)>,
-    /// A copy of a Mirror draws its copies but not a plane of its own, which no feature owns.
+    /// A copy draws no plane, since no feature owns one there.
     #[serde(skip)]
     is_copy: bool,
 }
@@ -231,8 +229,7 @@ impl Mirror {
         Mirroring { symmetry: self.symmetry, center: self.resolved_center }
     }
 
-    /// A copy of a Mirror is rebuilt on every resolve of the Mirror copying it, so it takes over the
-    /// entities its predecessor stood rather than spawning a second set beside them.
+    /// A copy of a Mirror is rebuilt on every resolve, so it takes over its predecessor's entities.
     fn inherit_entities(&mut self, previous: &mut Mirror) {
         self.entity = previous.entity;
         self.copy_entities = std::mem::take(&mut previous.copy_entities);
@@ -253,8 +250,7 @@ fn inherit_nested(copies: &mut [MirroredCopy], previous: &mut [MirroredCopy]) {
     }
 }
 
-/// Deeper than any real map nests Mirrors; reached only by Mirrors listing each other, which would
-/// otherwise copy each other until the stack runs out.
+/// Reached only by Mirrors listing each other, which would otherwise recurse until the stack runs out.
 const MAX_NESTING: u32 = 8;
 
 thread_local! {
@@ -421,7 +417,6 @@ impl FeatureTrait for Mirror {
 
     fn type_key(&self) -> &'static str { "mirror" }
 
-    /// The plane or axis, sized to reach the copies, and every copy's own gizmo.
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let center = self.resolved_center;
         let reach = self
@@ -530,8 +525,7 @@ impl FeatureTrait for Mirror {
         inherit_nested(&mut self.copies, &mut previous);
     }
 
-    /// The center moves and the symmetry stays: the three symmetries commute, so a Mirror's image
-    /// under another is the same symmetry about the image of its center.
+    /// The three symmetries commute, so only the center moves.
     fn mirror(&mut self, mirroring: &Mirroring) -> bool {
         self.resolved_center = mirroring.point(self.resolved_center);
         self.center.resolved_reference = None;
@@ -592,16 +586,10 @@ impl FeatureTrait for Mirror {
     }
 }
 
-/// The one writer of [`Side`]: a Mirror's originals get its first team and its copies its second, and
-/// anything no Mirror claims has no side. Keyed on what stands now rather than on edits, so deleting a
-/// Mirror, rolling back past it or dropping a source takes the side away with nothing to remember.
-/// Compares before it writes, since this runs every frame.
-///
-/// A copy of a Mirror is not sided itself; its copies take the inner Mirror's copy side, carried
-/// through each Mirror around it by that Mirror's [`TeamMap`].
-///
-/// Where two Mirrors claim one entity the earlier feature wins, by feature id rather than by query
-/// order, which shifts with archetypes.
+/// The one writer of [`Side`], keyed on what stands now so that deleting a Mirror, rolling back past
+/// it or dropping a source unsides with nothing to remember. Compares before it writes, since it runs
+/// every frame. Where two Mirrors claim one entity the earlier feature id wins; query order shifts
+/// with archetypes.
 pub fn assign_sides(
     mirrors: Query<(Entity, &MirrorSides, &FeatureTag)>,
     nested: Query<&MirrorSides>,
@@ -675,8 +663,7 @@ mod tests {
         Mirroring { symmetry, center }
     }
 
-    /// Doing it twice is doing nothing, for every symmetry: the property that makes the two halves
-    /// copies of each other rather than of a third thing.
+    /// Otherwise the two halves are not copies of each other.
     #[test]
     fn mirroring_twice_is_the_identity() {
         let point = Vec3::new(3.0, 1.5, -7.0);
@@ -691,8 +678,6 @@ mod tests {
         }
     }
 
-    /// A body facing the plane on one side faces it on the other; under a half turn, it faces back
-    /// the way it came.
     #[test]
     fn a_facing_is_carried_across() {
         let facing = |yaw: f32| Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
@@ -882,8 +867,7 @@ mod tests {
             .1
     }
 
-    /// Mirroring a Mirror along with its sources gives the fourth quarter, and the copy of a copy is
-    /// on the team the first Mirror's copies are, swapped by the second's pair.
+    /// By default the second Mirror's pair swaps the first's copies, giving a checkerboard.
     #[test]
     fn a_mirror_of_a_mirror_makes_four_quarters() {
         let mut app = four_ways([Team::Red, Team::Blue]);
@@ -899,7 +883,6 @@ mod tests {
         assert_eq!(world.query::<&crate::tool::room::Room>().iter(world).count(), 4);
     }
 
-    /// Remapping the team arriving from the inner Mirror puts each quarter on its own team.
     #[test]
     fn a_remap_puts_four_quarters_on_four_teams() {
         let mut app = four_ways_remapping([Team::Red, Team::Yellow], Some((Team::Blue, Team::Green)));
@@ -910,8 +893,7 @@ mod tests {
         assert_eq!(side_at(&found, Vec3::new(-4.0, 0.0, 10.0)), Some(Team::Green));
     }
 
-    /// The inspector offers a row for each team the inner Mirror's copies bring, and not the
-    /// originals' own, which the copies' team already answers.
+    /// The originals' team gets no row: the copies' team already answers it.
     #[test]
     fn a_mirror_offers_the_teams_its_nested_copies_bring() {
         let (mut timeline, room, spawn) = spawn_and_room();
@@ -940,7 +922,6 @@ mod tests {
         assert!(plain.remap.is_empty());
     }
 
-    /// A second Mirror that keeps one team on both halves leaves the first's split as it was.
     #[test]
     fn a_mirror_onto_one_team_keeps_the_inner_split() {
         let mut app = four_ways([Team::Red, Team::Red]);
@@ -959,8 +940,8 @@ mod tests {
         found
     }
 
-    /// Moving a source re-resolves the copy of the inner Mirror from scratch; what it stands is the
-    /// same entities afterwards, not a second set beside the first.
+    /// The copy of the inner Mirror is rebuilt on every resolve; without taking over its
+    /// predecessor's entities, each edit stands another set.
     #[test]
     fn an_edit_reuses_the_nested_copies() {
         let mut app = four_ways([Team::Red, Team::Blue]);
@@ -995,7 +976,6 @@ mod tests {
         assert!(far_room, "the edit reached the copy of a copy");
     }
 
-    /// Mirrors listing each other are cut off rather than copying each other forever.
     #[test]
     fn mirrors_listing_each_other_do_not_recurse_forever() {
         let mut timeline = FeatureTimeline::default();

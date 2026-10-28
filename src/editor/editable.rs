@@ -175,8 +175,8 @@ pub trait FeatureTrait: Send + Sync {
     /// theirs where a copy is itself a Mirror.
     fn standing_copies(&self) -> Vec<&dyn FeatureTrait> { Vec::new() }
 
-    /// For a Mirror copying another Mirror, which has to hand its standing entities on to the copy
-    /// that replaces it. A method rather than a downcast because a typetag trait object has no `Any`.
+    /// So a rebuilt copy of a Mirror can take over its predecessor's entities. A typetag trait
+    /// object has no `Any` to downcast through.
     fn mirror_mut(&mut self) -> Option<&mut crate::editor::mirror::Mirror> { None }
 }
 
