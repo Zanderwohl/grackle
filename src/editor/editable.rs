@@ -974,7 +974,12 @@ impl FeatureTimeline {
                             }
                             return;
                         }
-                        if !at_the_bar && menu_ui.button(get!("editor.timeline.roll_back_here")).clicked() {
+                        // Past the bar, rolling to a row brings it into view.
+                        let roll_here = match is_active {
+                            true => get!("editor.timeline.roll_back_here"),
+                            false => get!("editor.timeline.roll_forward_here"),
+                        };
+                        if !at_the_bar && menu_ui.button(roll_here).clicked() {
                             *menu.borrow_mut() = Some(RowAction::RollBackTo(Some(fid)));
                             menu_ui.close();
                         }

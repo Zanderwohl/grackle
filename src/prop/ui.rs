@@ -678,7 +678,12 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session
                     }));
                 }
 
-                if at != bar_after && ui.button(get!("prop.tree.roll_back_here")).clicked() {
+                // Past the bar, rolling to a row brings it into view.
+                let roll_here = match at > bar_after {
+                    true => get!("prop.tree.roll_forward_here"),
+                    false => get!("prop.tree.roll_back_here"),
+                };
+                if at != bar_after && ui.button(roll_here).clicked() {
                     ui.close_kind(UiKind::Menu);
                     pending = Some(Box::new(move |editor: &mut PropEditor| {
                         editor.roll_back_to(Some(id));
