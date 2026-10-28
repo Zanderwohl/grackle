@@ -133,6 +133,7 @@ impl RoomTool {
         // Escape while placing max discards the min, unless placing relatively, where it means zero offset.
         if matches!(tool.mode, RoomToolMode::PlacingMax(ref cm) if !matches!(cm, RoomCornerMode::RelativeSelected { .. }))
             && keys.just_pressed(KeyCode::Escape)
+            && !egui.wants_keyboard_input()
         {
             tool.mode = RoomToolMode::PlacingMin(RoomCornerMode::Normal);
             tool.min_point = None;

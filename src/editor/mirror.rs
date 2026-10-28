@@ -388,7 +388,7 @@ impl FeatureTrait for Mirror {
                 .show_ui(ui, |ui| {
                     for id in candidates(&self.sources) {
                         if let Some(feature) = features.get(&id)
-                            && ui.selectable_label(false, feature.type_name_with_id()).clicked()
+                            && ui.selectable_label(false, feature.label()).clicked()
                         {
                             added = Some(id);
                         }

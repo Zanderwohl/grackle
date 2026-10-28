@@ -43,13 +43,14 @@ impl RetargetPlugin {
         mut next_tool: ResMut<NextState<Tools>>,
         mut commands: Commands,
         mut edit_events: MessageWriter<EditEvent>,
+        egui: Res<bevy_egui::input::EguiWantsInput>,
     ) {
         let Some(target_feature_id) = state.target_feature else {
             next_tool.set(Tools::Select);
             return;
         };
 
-        if keys.just_pressed(KeyCode::Escape) {
+        if keys.just_pressed(KeyCode::Escape) && !egui.wants_keyboard_input() {
             next_tool.set(Tools::Select);
             return;
         }
