@@ -35,6 +35,13 @@ pub struct LibraryEntry {
     pub file: PathBuf,
 }
 
+impl LibraryEntry {
+    /// The color map, which is what a preview of it shows.
+    pub fn color_map(&self) -> AssetId<Image> {
+        self.maps[0]
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct MaterialLibrary {
     /// Made on first use: the render device does not exist while plugins build.
@@ -46,6 +53,11 @@ pub struct MaterialLibrary {
 impl MaterialLibrary {
     pub fn get(&self, name: &str) -> Option<&LibraryEntry> {
         self.entries.get(name).and_then(Option::as_ref)
+    }
+
+    /// Looked for already, whether or not it was there.
+    pub fn has_looked_for(&self, name: &str) -> bool {
+        self.entries.contains_key(name)
     }
 
     /// `None` once it is known not to exist. Also `None`, but not remembered, while there is no

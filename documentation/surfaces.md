@@ -245,7 +245,7 @@ faces for it, and the material side should not need to know it exists.
 - [ ] Geometry inputs as vertex attributes; clean/worn blend
 - [ ] `Paint` feature: a box and a material, timeline-ordered
 - [x] Roles and the palette in `MapMetadata`; a room slot's role resolved by `Side`
-- [ ] Editing the palette in the Metadata panel (the template writes one; nothing edits it yet)
+- [x] Editing the palette in the Metadata panel, undoable with the map
 - [ ] Decals anchored to features
 - [ ] Props: materials in object space, style and tint as fallback
 - [ ] Full bake to atlases, cached on disk / in IndexedDB

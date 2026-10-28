@@ -26,6 +26,8 @@ fn main() {
         ("plaster", plaster(Paint::OFF_WHITE)),
         ("plaster_red", plaster(Paint::PASTEL_RED)),
         ("plaster_blue", plaster(Paint::PASTEL_BLUE)),
+        ("plaster_yellow", plaster(Paint::PASTEL_YELLOW)),
+        ("plaster_green", plaster(Paint::PASTEL_GREEN)),
     ] {
         let path = dir.join(format!("{name}.{}", material::FILE_EXTENSION));
         material::save(&path, &graph).unwrap_or_else(|e| panic!("{e}"));
@@ -412,6 +414,9 @@ impl Paint {
     /// The spawn rooms' team colors: pale enough to read as painted plaster, not as a light.
     const PASTEL_RED: Paint = Paint { lightness: (0.78, 0.83), chroma: (0.088, 0.092), hue: 22.0 };
     const PASTEL_BLUE: Paint = Paint { lightness: (0.77, 0.82), chroma: (0.078, 0.082), hue: 245.0 };
+    /// Toward amber and away from blue, as the teams' body colors are, so the four stay apart.
+    const PASTEL_YELLOW: Paint = Paint { lightness: (0.84, 0.89), chroma: (0.088, 0.092), hue: 88.0 };
+    const PASTEL_GREEN: Paint = Paint { lightness: (0.78, 0.83), chroma: (0.078, 0.082), hue: 145.0 };
 }
 
 /// Painted plaster: broad soft variation and a gentle undulation from the trowel, and a fine

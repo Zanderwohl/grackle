@@ -174,6 +174,8 @@ fn main() {
                 sides: BTreeMap::from([
                     (Team::Red, "plaster_red".to_owned()),
                     (Team::Blue, "plaster_blue".to_owned()),
+                    (Team::Yellow, "plaster_yellow".to_owned()),
+                    (Team::Green, "plaster_green".to_owned()),
                 ]),
                 unsided: Some("plaster".to_owned()),
             },

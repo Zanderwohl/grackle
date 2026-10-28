@@ -1014,12 +1014,19 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   ([`src/common/palette.rs`](src/common/palette.rs), in `MapMetadata`)
   resolves by the room's `Side` — so a Mirror's copy comes out in the other
   team's colors with nothing on the copy saying so. A role's name shadows a
-  material of the same name. `publish_palette` is the one writer of the
+  material of the same name. The palette is edited in the Metadata panel; a
+  role's name is committed when its field is left, and a renamed or removed
+  role leaves the rooms naming it drawing plain. `publish_palette` is the one writer of the
   `Palette` resource; nothing reads `MapMetadata` for it.
 - **No palette field is skipped when empty.** It crosses the wire inside the
   settings, with postcard, which cannot read a field left out: a skipped
   field decodes as garbage after it, and `the_settings_survive_the_wire_encoding`
   is what failed.
+- **A slot is picked, not typed** ([`src/material/picker.rs`](src/material/picker.rs)):
+  a fixed-width button opening a searchable grid of every pack's `materials/`
+  and the palette's roles. A feature's `editor_ui` gets only egui, so
+  `publish_choices` leaves the choices in egui's memory, and it reads the
+  directories and bakes previews only while a picker is open.
 - **Not sent to clients.** Materials are pack content like props, but nothing
   syncs them yet; a client without the file draws that slot plain.
 
@@ -2445,7 +2452,10 @@ follows. Consequences to respect when adding a feature type:
   point-shaped.
 
 **Undo is whole-map snapshots in memory**, the prop editor's model: each
-feature's serialized form, in order. Nothing records itself —
+feature's serialized form, in order, and the map's settings (`SavedMetadata`)
+— compared rather than change-detected, since the panels hold `MapMetadata`
+mutably every frame. A snapshot taken by `adopt` cannot see the settings and
+takes them as they stand at the next checkpoint. Nothing records itself —
 `checkpoint_when_idle` takes a snapshot whenever the map has changed and the
 editor is idle (no mouse button held, no text field holding the keyboard), so
 a drag or a typed name is one step and a tool cannot forget to record its edit.

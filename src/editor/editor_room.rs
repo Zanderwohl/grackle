@@ -7,6 +7,7 @@ use crate::common::cuboid::CuboidPoint;
 use crate::common::ray::ray_intersects_aabb;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, OwnBase, PointRef};
 use crate::editor::mirror::Mirroring;
+use crate::material::picker::material_button;
 use crate::tool::room::{Room, RoomSlot, RoomSurfaces};
 use crate::get;
 
@@ -160,18 +161,13 @@ impl FeatureTrait for EditorRoom {
         }
         ui.separator();
         ui.label(get!("editor.features.room.materials"));
-        for slot in RoomSlot::ALL {
-            ui.horizontal(|ui| {
+        egui::Grid::new("room_materials").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+            for slot in RoomSlot::ALL {
                 ui.label(get!(slot.name_key()));
-                let name = self.surfaces.slot_mut(slot);
-                let mut text = name.clone().unwrap_or_default();
-                if ui.text_edit_singleline(&mut text).changed() {
-                    let text = text.trim();
-                    *name = (!text.is_empty()).then(|| text.to_owned());
-                    changed = true;
-                }
-            });
-        }
+                changed |= material_button(ui, self.surfaces.slot_mut(slot), true);
+                ui.end_row();
+            }
+        });
         changed
     }
 
