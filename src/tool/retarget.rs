@@ -97,8 +97,6 @@ impl RetargetPlugin {
                     }
 
                     feature.object_mut().resolve_references(features.features_map());
-                    let parents = feature.object().parent_ids();
-
                     if let Some(entity) = feature.object().entity() {
                         feature.object_mut().apply_to_entity(&mut commands, entity);
                         edit_events.write(EditEvent {
@@ -109,10 +107,6 @@ impl RetargetPlugin {
                     }
 
                     features.features_mut().insert(target_feature_id, feature);
-
-                    if let Some(feat) = features.features_mut().get_mut(&target_feature_id) {
-                        feat.set_parents(parents);
-                    }
                 }
 
                 features.select(Some(target_feature_id));

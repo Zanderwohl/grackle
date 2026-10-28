@@ -12,6 +12,7 @@ Blueprint(
         palette: Palette(
             roles: {},
         ),
+        sky: Day,
     ),
     next_id: 4,
     features: [
@@ -31,7 +32,6 @@ Blueprint(
                     ),
                 ),
             },
-            parents: [],
         ),
         Feature(
             id: FeatureId(
@@ -58,11 +58,6 @@ Blueprint(
                     ),
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 0,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -83,11 +78,6 @@ Blueprint(
                     yaw: 0.0,
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 1,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -110,11 +100,6 @@ Blueprint(
                     range: 20.0,
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 1,
-                ),
-            ],
         ),
     ],
 )
