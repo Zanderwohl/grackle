@@ -20,7 +20,9 @@ use bevy::pbr::Lightmap;
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::tasks::{block_on, futures::check_ready, AsyncComputeTaskPool, Task};
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::tasks::block_on;
+use bevy::tasks::{futures::check_ready, AsyncComputeTaskPool, Task};
 
 use crate::common::app_mode::AppMode;
 use crate::common::lightmap::{daylight, Atlas};
@@ -69,10 +71,16 @@ impl SunBake {
         self.running.is_some()
     }
 
-    /// Lands every room of a bake, as one replacement for the whole map's light.
+    /// Lands every room of a bake, as one replacement for the whole map's light. A room whose
+    /// layout is the one already lit is written into the same image, so its `Lightmap` never
+    /// changes: Bevy reads a new handle only by a removal and an insertion, a frame unlit.
     fn land(&mut self, hash: u64, baked: Vec<BakedLight>, images: &mut Assets<Image>) {
         for room in baked {
-            let image = images.add(lightmap_image(room.atlas.size, &room.light));
+            let new = lightmap_image(room.atlas.size, &room.light);
+            let image = match self.lit.get(&room.room).filter(|old| old.faces_hash == room.faces_hash) {
+                Some(old) if images.insert(&old.image, new.clone()).is_ok() => old.image.clone(),
+                _ => images.add(new),
+            };
             self.lit.insert(
                 room.room,
                 RoomLight { faces_hash: room.faces_hash, atlas: room.atlas, light: room.light, image },
@@ -107,49 +115,74 @@ struct BakedLight {
     light: Vec<Vec3>,
 }
 
+/// What the light depends on, cheap enough to take every frame: rooms by their faces' hash and
+/// which of their slots are sky. Turned into a [`Job`] only when there is something to bake.
+struct Snapshot {
+    /// The `BakedRoomGeometry`, its `Room`, its faces' hash, and whether each slot is sky.
+    rooms: Vec<(Entity, Entity, u64, [bool; 3])>,
+    light: Daylight,
+    hash: u64,
+}
+
+impl Snapshot {
+    fn take(
+        bakes: &Query<(Entity, &BakedRoomGeometry)>,
+        paint: &Query<(Option<&RoomSurfaces>, Option<&Side>)>,
+        palette: &Palette,
+        sun: &SunPosition,
+        sky: SkyTime,
+    ) -> Snapshot {
+        let toward = sun.toward();
+        let mut rooms: Vec<(Entity, Entity, u64, [bool; 3])> = bakes
+            .iter()
+            .map(|(entity, baked)| {
+                let (surfaces, side) = paint.get(baked.room).unwrap_or((None, None));
+                let is_sky = RoomSlot::ALL.map(|slot| {
+                    surfaces.and_then(|surfaces| palette.paint(surfaces, slot, side.copied())) == Some(SKYBOX)
+                });
+                (entity, baked.room, baked.faces_hash, is_sky)
+            })
+            .collect();
+        // By what the rooms are, not by entity, which a client adopting a map renumbers.
+        rooms.sort_by_key(|room| (room.2, room.3));
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        toward.to_array().map(f32::to_bits).hash(&mut hasher);
+        sky.hash(&mut hasher);
+        for (_, _, faces_hash, is_sky) in &rooms {
+            (faces_hash, is_sky).hash(&mut hasher);
+        }
+        Snapshot { rooms, light: daylight(toward, sky), hash: hasher.finish() }
+    }
+
+    fn job(&self, bakes: &Query<(Entity, &BakedRoomGeometry)>) -> Job {
+        let rooms = self
+            .rooms
+            .iter()
+            .filter_map(|(entity, room, faces_hash, is_sky)| {
+                let (_, baked) = bakes.get(*entity).ok()?;
+                let sky = baked
+                    .faces
+                    .iter()
+                    .map(|face| {
+                        let slot = RoomSlot::of(face.plane.normal);
+                        is_sky[RoomSlot::ALL.iter().position(|s| *s == slot).expect("every slot is in ALL")]
+                    })
+                    .collect();
+                Some((*room, baked.faces.clone(), sky, *faces_hash))
+            })
+            .collect();
+        Job { rooms, light: self.light }
+    }
+}
+
 /// Everything a bake reads, copied out of the world so it can run elsewhere.
 struct Job {
     /// By `Room` entity: the room's faces, which are sky, and its faces' hash.
     rooms: Vec<(Entity, Vec<Face>, Vec<bool>, u64)>,
     light: Daylight,
-    hash: u64,
 }
 
 impl Job {
-    fn gather(
-        bakes: &Query<&BakedRoomGeometry>,
-        paint: &Query<(Option<&RoomSurfaces>, Option<&Side>)>,
-        palette: &Palette,
-        sun: &SunPosition,
-        sky: SkyTime,
-    ) -> Job {
-        let toward = sun.toward();
-        let mut rooms: Vec<(Entity, Vec<Face>, Vec<bool>, u64)> = bakes
-            .iter()
-            .map(|baked| {
-                let (surfaces, side) = paint.get(baked.room).unwrap_or((None, None));
-                let is_sky: Vec<bool> = baked
-                    .faces
-                    .iter()
-                    .map(|face| {
-                        let slot = RoomSlot::of(face.plane.normal);
-                        surfaces.and_then(|surfaces| palette.paint(surfaces, slot, side.copied())) == Some(SKYBOX)
-                    })
-                    .collect();
-                (baked.room, baked.faces.clone(), is_sky, baked.faces_hash)
-            })
-            .collect();
-        // By what the rooms are, not by entity, which a client adopting a map renumbers.
-        rooms.sort_by_key(|room| room.3);
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        toward.to_array().map(f32::to_bits).hash(&mut hasher);
-        sky.hash(&mut hasher);
-        for (_, _, is_sky, faces_hash) in &rooms {
-            (faces_hash, is_sky).hash(&mut hasher);
-        }
-        Job { rooms, light: daylight(toward, sky), hash: hasher.finish() }
-    }
-
     fn run(self) -> Vec<BakedLight> {
         let started = Instant::now();
         let faces: Vec<Face> = self.rooms.iter().flat_map(|(_, faces, _, _)| faces.iter().cloned()).collect();
@@ -186,7 +219,8 @@ fn lightmap_image(size: UVec2, light: &[Vec3]) -> Image {
         TextureDimension::D2,
         data,
         TextureFormat::Rgba16Float,
-        RenderAssetUsages::default(),
+        // `RoomLight::light` is the CPU copy.
+        RenderAssetUsages::RENDER_WORLD,
     );
     image.sampler = ImageSampler::linear();
     image
@@ -220,7 +254,7 @@ fn auto_bake_sunlight(
     mut state: ResMut<SunBake>,
     rooms: Res<RoomBake>,
     time: Res<Time<Real>>,
-    bakes: Query<&BakedRoomGeometry>,
+    bakes: Query<(Entity, &BakedRoomGeometry)>,
     paint: Query<(Option<&RoomSurfaces>, Option<&Side>)>,
     palette: Res<Palette>,
     sun: Res<SunPosition>,
@@ -236,35 +270,39 @@ fn auto_bake_sunlight(
 
     if let Some((hash, task)) = &mut state.running {
         let hash = *hash;
-        let Some(baked) = check_ready(task) else { return };
-        state.running = None;
-        state.land(hash, baked, &mut images);
+        if let Some(baked) = check_ready(task) {
+            state.running = None;
+            state.land(hash, baked, &mut images);
+        }
     }
 
     // Half a map's rooms rebuilt is a map with holes in it, and light would pour through them.
     if !rooms.is_settled() || !(state.asked || state.auto) {
         return;
     }
-    let job = Job::gather(&bakes, &paint, &palette, &sun, *sky);
-    let asked = std::mem::take(&mut state.asked);
-    if !asked {
-        if state.baked == Some(job.hash) {
-            state.pending = None;
-            return;
-        }
-        let now = time.elapsed_secs();
-        match state.pending {
-            Some((hash, since)) if hash == job.hash && now - since >= SETTLE_SECONDS => {}
-            Some((hash, _)) if hash == job.hash => return,
-            _ => {
-                state.pending = Some((job.hash, now));
-                return;
-            }
-        }
+    let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky);
+    // A press is answered by a bake of the map as it stands, which one already landed may be.
+    if state.baked == Some(snapshot.hash) {
+        state.pending = None;
+        state.asked = false;
+        return;
     }
+    // Seen while a bake runs too, so the map's stillness is counted from the change.
+    let now = time.elapsed_secs();
+    let since = match state.pending {
+        Some((hash, since)) if hash == snapshot.hash => since,
+        _ => {
+            state.pending = Some((snapshot.hash, now));
+            now
+        }
+    };
+    if state.running.is_some() || (!state.asked && now - since < SETTLE_SECONDS) {
+        return;
+    }
+    state.asked = false;
     state.pending = None;
-    let hash = job.hash;
-    state.running = Some((hash, AsyncComputeTaskPool::get().spawn(async move { job.run() })));
+    let job = snapshot.job(&bakes);
+    state.running = Some((snapshot.hash, AsyncComputeTaskPool::get().spawn(async move { job.run() })));
 }
 
 /// A round is never played in stale light. A map unchanged since its last bake needs nothing: its
@@ -273,21 +311,23 @@ fn auto_bake_sunlight(
 #[allow(clippy::too_many_arguments)]
 fn bake_sunlight_for_the_round(
     mut state: ResMut<SunBake>,
-    bakes: Query<&BakedRoomGeometry>,
+    bakes: Query<(Entity, &BakedRoomGeometry)>,
     paint: Query<(Option<&RoomSurfaces>, Option<&Side>)>,
     palette: Res<Palette>,
     sun: Res<SunPosition>,
     sky: Res<SkyTime>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let job = Job::gather(&bakes, &paint, &palette, &sun, *sky);
-    if state.baked == Some(job.hash) {
+    let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky);
+    if state.baked == Some(snapshot.hash) {
         return;
     }
-    let hash = job.hash;
+    let hash = snapshot.hash;
     let baked = match state.running.take() {
+        // On wasm the pool runs its tasks on this thread, so waiting for one would never end.
+        #[cfg(not(target_arch = "wasm32"))]
         Some((running, task)) if running == hash => block_on(task),
-        _ => job.run(),
+        _ => snapshot.job(&bakes).run(),
     };
     state.pending = None;
     state.land(hash, baked, &mut images);
@@ -347,7 +387,7 @@ impl Plugin for SunBakePlugin {
             // Ungated, as the room bake is: the map can change during a round.
             .add_systems(
                 Update,
-                (carry_light_over, auto_bake_sunlight, attach_lightmaps).chain().after(BakePlugin::auto_bake_rooms),
+                (auto_bake_sunlight, carry_light_over, attach_lightmaps).chain().after(BakePlugin::auto_bake_rooms),
             )
             .add_systems(
                 OnEnter(AppMode::Play),
@@ -398,6 +438,10 @@ mod tests {
         app.world().resource::<SunBake>().lit.values().map(|light| light.image.id()).collect()
     }
 
+    fn light(app: &App) -> Vec<Vec<Vec3>> {
+        app.world().resource::<SunBake>().lit.values().map(|light| light.light.clone()).collect()
+    }
+
     /// Slots drawn with a lightmap right now.
     fn lit_slots(app: &mut App) -> usize {
         app.world_mut().query_filtered::<(), (With<RoomSlotMesh>, With<Lightmap>)>().iter(app.world()).count()
@@ -419,12 +463,13 @@ mod tests {
         enter(&mut app, AppMode::Play);
         assert_eq!(lightmaps(&app), first, "an unchanged map was baked again");
 
+        let before = light(&app);
         enter(&mut app, AppMode::Editor);
         app.world_mut().resource_mut::<SunPosition>().altitude = 20.0;
         enter(&mut app, AppMode::Play);
-        let moved = lightmaps(&app);
-        assert_eq!(moved.len(), 1);
-        assert_ne!(moved, first, "the sun moved and the light did not");
+        assert_ne!(light(&app), before, "the sun moved and the light did not");
+        // Written into the image already drawn, so no slot loses its lightmap to a new handle.
+        assert_eq!(lightmaps(&app), first);
     }
 
     /// With the sun's auto-bake off nothing will replace it, and a reshaped room still keeps the
@@ -456,15 +501,17 @@ mod tests {
         let mut app = headless();
         enter(&mut app, AppMode::Play);
         enter(&mut app, AppMode::Editor);
-        let first = lightmaps(&app);
+        let first = light(&app);
+        let slots = lit_slots(&mut app);
+        assert!(slots > 0, "nothing was lit to begin with");
         app.world_mut().resource_mut::<SunBake>().set_auto(true);
         app.world_mut().resource_mut::<SunPosition>().azimuth = 300.0;
 
         let started = std::time::Instant::now();
-        while lightmaps(&app) == first {
+        while light(&app) == first {
             assert!(started.elapsed().as_secs() < 10, "the bake never landed");
             app.update();
-            assert_eq!(lightmaps(&app).len(), 1, "the light went away before its replacement came");
+            assert_eq!(lit_slots(&mut app), slots, "a slot lost its light before the replacement came");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }

@@ -190,8 +190,9 @@ Adding or removing a `Lightmap` does not re-specialize a mesh's pipeline: only
 a changed mesh or material does, and a mismatch is a wgpu validation error that
 stops the frame. And a lightmap's image is read only when the component first
 arrives. So `attach_lightmaps` marks the material changed whenever it adds or
-removes one, and swaps an image as a removal one frame and an insertion the
-next.
+removes one, and a bake that lands on a room whose layout is unchanged writes
+into the image already drawn rather than handing it a new one — Bevy writes a
+same-sized image into its existing texture — so no slot goes a frame unlit.
 
 ## Checklist
 
