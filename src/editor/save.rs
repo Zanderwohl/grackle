@@ -271,18 +271,21 @@ mod tests {
         assert!(text.contains("0.05") && !text.contains("0.0500000"), "{text}");
     }
 
-    /// Checks only what a new map must provide: a room, a light, and a spawn with headroom. Do not pin
-    /// coordinates here.
+    /// Checks only what a new map and the demo scene must provide: a room, a light, and a spawn with
+    /// headroom. Do not pin coordinates here.
     #[test]
     fn a_new_map_can_be_stood_in_lit_and_spawned_into() {
+        for name in ["new", "demo"] {
+            let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
+            can_be_stood_in_lit_and_spawned_into(&path);
+        }
+    }
+
+    fn can_be_stood_in_lit_and_spawned_into(path: &Path) {
         use crate::common::class::{body_center_from_feet, CLASS_HALF_EXTENTS};
         use crate::game::collision::CollisionWorld;
 
-        let path = PathBuf::from(format!(
-            "assets/default/blueprints/new.{}",
-            MAP_BLUEPRINT_EXTENSION
-        ));
-        let loaded = load(&path).expect("the shipped template must load");
+        let loaded = load(path).unwrap_or_else(|e| panic!("{path:?} must load: {e}"));
 
         let rooms: Vec<Room> = loaded
             .timeline
@@ -290,14 +293,14 @@ mod tests {
             .filter_map(|(_, f)| f.object().drag_handle_bounds())
             .map(|(min, max)| Room::new(min, max))
             .collect();
-        assert!(!rooms.is_empty(), "the template has no room to stand in");
+        assert!(!rooms.is_empty(), "{path:?} has no room to stand in");
 
         let lights = loaded
             .timeline
             .active_features()
             .filter(|(_, f)| f.object().type_key() == "grackle_point_light")
             .count();
-        assert!(lights > 0, "the template has no light to see by");
+        assert!(lights > 0, "{path:?} has no light to see by");
 
         let spawns: Vec<Vec3> = loaded
             .timeline
@@ -305,7 +308,7 @@ mod tests {
             .filter(|(_, f)| f.object().type_key() == "spawn_point")
             .map(|(_, f)| f.object().get_point("").unwrap())
             .collect();
-        assert!(!spawns.is_empty(), "the template has no spawn point");
+        assert!(!spawns.is_empty(), "{path:?} has no spawn point");
 
         let mut world = CollisionWorld::default();
         world.rebuild(&rooms);
@@ -313,7 +316,7 @@ mod tests {
             spawns
                 .iter()
                 .any(|feet| world.fits(body_center_from_feet(*feet), CLASS_HALF_EXTENTS)),
-            "no spawn point in the template has room to stand: {spawns:?}"
+            "no spawn point in {path:?} has room to stand: {spawns:?}"
         );
     }
 }

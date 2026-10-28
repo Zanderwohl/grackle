@@ -592,6 +592,7 @@ new = "New"
 save = "Save"
 save_as = "Save As"
 open = "Open"
+demo_scene = "Demo Scene"
 quit = "Quit"
 
 [edit.menu]
@@ -897,7 +898,7 @@ no_mirror_plane = "mirrors about a plane that is not there"
 axis_crosses = "turns a region about an axis that crosses it"
 
 [editor.material_picker]
-plain = "Plain"
+plain = "Default"
 search = "Search"
 role = "Role"
 role_named = "{ name } (role)"

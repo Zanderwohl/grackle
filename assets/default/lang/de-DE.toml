@@ -131,7 +131,7 @@ yellow = "Gelb"
 green = "Grün"
 
 [editor.material_picker]
-plain = "Schlicht"
+plain = "Standard"
 search = "Suchen"
 role = "Rolle"
 role_named = "{ name } (Rolle)"

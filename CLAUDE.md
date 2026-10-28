@@ -83,7 +83,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/material/` | The material editor: texture-graph's panels as an authoring mode. See "Editing a material". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the blueprint a new map starts from), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map and demo-scene blueprints), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`. |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 | `cache/` | Gitignored, derived from the packs: `thumbnail/props/{name}.png`. Safe to delete. |
@@ -113,23 +113,26 @@ ceiling *is* a slab the body overlaps. Unusable spawns are skipped with a
 warning, and a map with none falls back to the largest room rather than
 refusing to start.
 
-The new-map template (`assets/default/blueprints/new.gmb`) ships one, anchored
-to the room's `bottom_plane_center` rather than placed at absolute coordinates,
-so resizing the room takes the spawn with it. Most of what is in the template
-is taste and will change; what a new map has to *provide* is a room, a light,
-and a spawn point with headroom, which is what the test at the bottom of
-[`save.rs`](src/editor/save.rs) checks. Don't pin its coordinates there.
+The new-map template (`assets/default/blueprints/new.gmb`), which the editor
+opens to and File → New loads, is the smallest map that plays: a point at the
+origin, a 16×4×16 m room pinned to it, a neutral spawn on the room's
+`bottom_plane_center` — so resizing the room takes the spawn with it — and a
+light half a meter under its `top_plane_center`, each named. What a new map has to
+*provide* is a room, a light, and a spawn point with headroom, which is what
+the test at the bottom of [`save.rs`](src/editor/save.rs) checks, of this and
+the demo scene alike. Don't pin coordinates there.
 
-The template is text and diffs like it. Still, don't edit it by saving over it
-from the editor — it is written by
+**File → Demo Scene** (`demo.gmb`, map editor only) is the busy one: an
+animation grid, which is why its room is 24 m square, pickups, and a spawn
+nook on each side wall, Red's authored and Blue's made by a Mirror, with walls
+naming the `spawn_walls` role — the smallest map that exercises sides,
+mirroring and the palette at once. Both open untitled, so a save asks where.
+
+Both are text and diff like it. Still, don't edit them by saving over them
+from the editor — they are written by
 `cargo run --bin new_map_template`
 ([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the
-repo root, and that file is where its contents are reviewable. It currently
-also ships an animation grid, which is why the room is 24 m square: the grid is
-a testing convenience rather than something a new map owes you. It also ships
-a spawn nook on each side wall, Red's authored and Blue's made by a Mirror,
-with walls naming the `spawn_walls` role — the smallest map that exercises
-sides, mirroring and the palette at once.
+repo root, and that file is where their contents are reviewable.
 
 Choice is uniform random among the spawns on the body's own side — a spawn's
 `Side`, from a Mirror (see "Mirroring half a map") — falling back to spawns
@@ -973,8 +976,11 @@ rooms paint with them — see "Materials on rooms".
 ## Materials on rooms
 
 A room names a material per **slot** — floor, walls, ceiling — as
-`RoomSurfaces` on its feature, copied onto its entity. `None` draws the plain
-default, as does a name with no file behind it. The material editor's own
+`RoomSurfaces` on its feature, copied onto its entity. `None` draws the
+slot's default (`default_material`): a grid ruled on every meter, `grid_gray`
+on floors, `orange` on walls and `grid_light` on ceilings. So does a name with
+no file behind it; plain white only if the default is missing too. All of
+them are one graph, `grid` in `default_materials`. The material editor's own
 GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
 [`gpu.rs`](src/material/gpu.rs)).
 
@@ -1016,8 +1022,12 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   team's colors with nothing on the copy saying so. A role's name shadows a
   material of the same name. The palette is edited in the Metadata panel; a
   role's name is committed when its field is left, and a renamed or removed
-  role leaves the rooms naming it drawing plain. `publish_palette` is the one writer of the
+  role leaves the rooms naming it drawing the default. `publish_palette` is the one writer of the
   `Palette` resource; nothing reads `MapMetadata` for it.
+- **Every map has `team_grid`** (`palette::TEAM_GRID`), a built-in role that
+  paints the grid in each team's color and orange unsided, so a map with no
+  art pass still shows whose room is whose. A map role of the same name
+  shadows it; `Palette::every_role` is what the picker lists.
 - **No palette field is skipped when empty.** It crosses the wire inside the
   settings, with postcard, which cannot read a field left out: a skipped
   field decodes as garbage after it, and `the_settings_survive_the_wire_encoding`
@@ -1028,7 +1038,7 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   `publish_choices` leaves the choices in egui's memory, and it reads the
   directories and bakes previews only while a picker is open.
 - **Not sent to clients.** Materials are pack content like props, but nothing
-  syncs them yet; a client without the file draws that slot plain.
+  syncs them yet; a client without the file draws that slot as the default.
 
 ## Thumbnails
 

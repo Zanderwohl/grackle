@@ -41,7 +41,7 @@ fn open_id() -> egui::Id {
     egui::Id::new("material_picker_open")
 }
 
-/// A button naming `current`, `None` being plain. True when a choice was made. A role resolves
+/// A button naming `current`, `None` being the default material. True when a choice was made. A role resolves
 /// only to a material, so the palette's own pickers leave roles out.
 pub fn material_button(ui: &mut egui::Ui, current: &mut Option<String>, offer_roles: bool) -> bool {
     let plain = get!("editor.material_picker.plain");
@@ -202,8 +202,7 @@ pub(super) fn publish_choices(
     }
 
     let mut choices: Vec<Choice> = palette
-        .roles
-        .iter()
+        .every_role()
         .map(|(name, paint)| Choice {
             name: name.clone(),
             preview: paint

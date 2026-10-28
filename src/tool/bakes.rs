@@ -84,7 +84,7 @@ impl RoomBake {
         self.auto = auto;
     }
 
-    /// What a slot with no material of its own is drawn with.
+    /// What a slot is drawn with when not even the default material can be baked.
     pub fn material(&mut self, materials: &mut Assets<StandardMaterial>) -> Handle<StandardMaterial> {
         self.material
             .get_or_insert_with(|| materials.add(StandardMaterial {

@@ -28,6 +28,13 @@ fn main() {
         ("plaster_blue", plaster(Paint::PASTEL_BLUE)),
         ("plaster_yellow", plaster(Paint::PASTEL_YELLOW)),
         ("plaster_green", plaster(Paint::PASTEL_GREEN)),
+        ("orange", grid(GridPaint::ORANGE)),
+        ("grid_gray", grid(GridPaint::GRAY)),
+        ("grid_light", grid(GridPaint::LIGHT)),
+        ("grid_red", grid(GridPaint::RED)),
+        ("grid_blue", grid(GridPaint::BLUE)),
+        ("grid_yellow", grid(GridPaint::YELLOW)),
+        ("grid_green", grid(GridPaint::GREEN)),
     ] {
         let path = dir.join(format!("{name}.{}", material::FILE_EXTENSION));
         material::save(&path, &graph).unwrap_or_else(|e| panic!("{e}"));
@@ -438,6 +445,72 @@ fn plaster(paint: Paint) -> Graph {
     let skim = g.add_layer("skim", tiling_fbm(33, 3, 3)).unwrap();
     let broad = scaled(&mut g, "broad", skim, 0.0, 0.5);
     let height = mix(&mut g, "height", fine, broad, BlendMode::Add);
+    let normal = normal_of(&mut g, height, 0.003 * NOISE);
+    finish(g, Output {
+        color: Some(color),
+        roughness: ScalarInput::Layer(roughness),
+        metallic: ScalarInput::Const(0.0),
+        normal: Some(normal),
+    })
+}
+
+/// A grid's paint in Oklch: the shaded and bright ends its trowel swings between, and the stripe.
+struct GridPaint {
+    lightness: (f32, f32),
+    chroma: f32,
+    hue: f32,
+    stripe_lightness: f32,
+    stripe_chroma: f32,
+}
+
+impl GridPaint {
+    const fn new(lightness: (f32, f32), chroma: f32, hue: f32, stripe_lightness: f32, stripe_chroma: f32) -> Self {
+        Self { lightness, chroma, hue, stripe_lightness, stripe_chroma }
+    }
+
+    /// Creamy orange: what walls with no material draw.
+    const ORANGE: GridPaint = GridPaint::new((0.76, 0.82), 0.108, 64.0, 0.92, 0.12);
+    /// The orange's lightness with no color, a touch warm: floors.
+    const GRAY: GridPaint = GridPaint::new((0.76, 0.82), 0.004, 70.0, 0.92, 0.006);
+    /// Ceilings.
+    const LIGHT: GridPaint = GridPaint::new((0.88, 0.92), 0.004, 70.0, 0.98, 0.006);
+    const RED: GridPaint = GridPaint::new((0.74, 0.80), 0.105, 24.0, 0.90, 0.10);
+    const BLUE: GridPaint = GridPaint::new((0.74, 0.80), 0.090, 245.0, 0.91, 0.08);
+    /// Lighter than the rest: a yellow as dark as the orange reads as olive.
+    const YELLOW: GridPaint = GridPaint::new((0.84, 0.88), 0.110, 95.0, 0.95, 0.12);
+    const GREEN: GridPaint = GridPaint::new((0.76, 0.82), 0.100, 145.0, 0.92, 0.10);
+}
+
+/// Matte paint ruled with a brighter stripe on every meter, so distances read at a glance: the
+/// defaults a room draws before anybody paints it, and `team_grid`'s colors.
+///
+/// A tile is two meters, so lines at `u` and `v` frequency 2 fall on whole meters of the world.
+fn grid(paint: GridPaint) -> Graph {
+    let mut g = empty();
+    let u = coordinate(&mut g, Axis::U);
+    let v = coordinate(&mut g, Axis::V);
+    // A triangle wave falls by 2 per cycle away from its peak, so 0.97 is 1.5 cm either side of the
+    // line; the ramp's width softens the edge over a couple of texels.
+    let across_u = wave(&mut g, "across u", u, WaveShape::Triangle, 2.0, 0.25);
+    let across_v = wave(&mut g, "across v", v, WaveShape::Triangle, 2.0, 0.25);
+    let line_u = remap(&mut g, "line u", across_u, 0.966, 0.974);
+    let line_v = remap(&mut g, "line v", across_v, 0.966, 0.974);
+    let lines = pick(&mut g, "lines", line_u, line_v, MinMaxMode::Max);
+
+    let trowel = g.add_layer("trowel", tiling_fbm(40, 2, 5)).unwrap();
+    let (shaded, bright) = noisy_pair(
+        oklcha(paint.lightness.0, paint.chroma, paint.hue - 2.0, 1.0),
+        oklcha(paint.lightness.1, paint.chroma, paint.hue + 2.0, 1.0),
+    );
+    let base = mapped(&mut g, "paint", trowel, &[(0.25, shaded), (0.75, bright)]);
+    let stripe = solid(&mut g, "stripe", oklcha(paint.stripe_lightness, paint.stripe_chroma, paint.hue + 10.0, 1.0));
+    let color = blend(&mut g, "color", base, stripe, lines);
+
+    let sheen = g.add_layer("sheen", tiling_fbm(42, 4, 3)).unwrap();
+    let (smooth, rough) = noisy(0.70, 0.85);
+    let roughness = scaled(&mut g, "roughness", sheen, smooth, rough);
+    let peel = g.add_layer("peel", tiling_fbm(41, 64, 2)).unwrap();
+    let height = scaled(&mut g, "height", peel, 0.0, 0.5);
     let normal = normal_of(&mut g, height, 0.003 * NOISE);
     finish(g, Output {
         color: Some(color),

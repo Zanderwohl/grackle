@@ -630,8 +630,9 @@ impl RoomSlot {
 }
 
 /// The material each of a room's slots takes, by name under a pack's
-/// `materials/`, or a role the map's palette resolves. `None` is the plain
-/// default, which is also what a name with no file behind it draws as. Copied
+/// `materials/`, or a role the map's palette resolves. `None` is
+/// [`DEFAULT_MATERIAL`](crate::material::library::DEFAULT_MATERIAL), which is also what a name
+/// with no file behind it draws as. Copied
 /// onto the room's entity from its feature.
 #[derive(Component, serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct RoomSurfaces {

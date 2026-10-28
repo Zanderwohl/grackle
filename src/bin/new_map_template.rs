@@ -1,12 +1,13 @@
 //! Writes `assets/default/blueprints/new.gmb`, the map you get on opening the
-//! editor. Generated here rather than saved from the editor so its contents
-//! are reviewable as code. Run from the repo root:
+//! editor or from File → New, and `demo.gmb`, File → Demo Scene. Generated
+//! here rather than saved from the editor so their contents are reviewable as
+//! code. Run from the repo root:
 //!
 //! ```text
 //! cargo run --bin new_map_template
 //! ```
 //!
-//! What a new map must provide is asserted by
+//! What either must provide is asserted by
 //! `a_new_map_can_be_stood_in_lit_and_spawned_into` in
 //! [`grackle::editor::save`], which deliberately pins no coordinates.
 
@@ -55,6 +56,32 @@ const NOOK_M: Vec3 = Vec3::new(2.0, 3.0, 2.0);
 const SPAWN_WALLS: &str = "spawn_walls";
 
 fn main() {
+    write("new", &new_map(), &MapMetadata::default());
+    let (demo, metadata) = demo_scene();
+    write("demo", &demo, &metadata);
+}
+
+/// A point at the origin, a room off it, a spawn on its floor and a light under its ceiling.
+fn new_map() -> FeatureTimeline {
+    let mut timeline = FeatureTimeline::default();
+    let origin = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+    let room = timeline.apply_feature(Box::new(EditorRoom::from_point_refs(
+        PointRef::reference(origin),
+        PointRef::absolute(16.0, 4.0, 16.0),
+    )));
+    let spawn = timeline.apply_feature(Box::new(SpawnPoint::from_point_ref(on_the_floor(room, Vec3::ZERO))));
+    let mut under_the_ceiling = PointRef::reference_with_offset(room, 0.0, -0.5, 0.0);
+    under_the_ceiling.point_key = "top_plane_center".to_owned();
+    let mut light = GracklePointLight::from_point_ref(under_the_ceiling);
+    light.intensity = 1_000_000.0;
+    let light = timeline.apply_feature(Box::new(light));
+    for (id, name) in [(origin, "Map Origin"), (room, "Starter Room"), (spawn, "Spawn Point"), (light, "Starter Light")] {
+        timeline.rename(id, name);
+    }
+    timeline
+}
+
+fn demo_scene() -> (FeatureTimeline, MapMetadata) {
     let mut timeline = FeatureTimeline::default();
 
     // The room is sized to hold the grid, since the roster and its states grow.
@@ -182,10 +209,14 @@ fn main() {
         )]),
     };
 
+    (timeline, metadata)
+}
+
+fn write(name: &str, timeline: &FeatureTimeline, metadata: &MapMetadata) {
     let path = PathBuf::from(format!(
-        "assets/default/blueprints/new.{MAP_BLUEPRINT_EXTENSION}"
+        "assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"
     ));
-    match save::save(&path, &timeline, &metadata) {
+    match save::save(&path, timeline, metadata) {
         Ok(()) => println!("Wrote {}", path.display()),
         Err(error) => {
             eprintln!("Could not write {}: {error}", path.display());
