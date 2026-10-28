@@ -2508,7 +2508,9 @@ undo step (`replace_as_edit`), and the map knows whether it matches its file
 bar.
 
 **The Features panel is the feature list**, with a rollback bar drawn in it:
-drag it up to see the map as it stood partway through, or roll back from a
+drag it past any number of rows and let go to see the map as it stood
+partway through — applied once on release, not live, since each step rebuilds
+what it crosses; Escape or the right button calls it off — or roll back from a
 row's menu. The bar is `rollback: Option<FeatureId>` — the last feature shown,
 by id, so edits above it cannot move it — and it is **view state**: not saved,
 not sent, not an undo step. Adding a feature while rolled back inserts it at

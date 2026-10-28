@@ -897,7 +897,7 @@ impl FeatureTimeline {
         let shown = features.shown_len();
         let rolled_back = features.rollback.is_some();
         let mut rows: Vec<(FeatureId, egui::Rect)> = Vec::new();
-        let mut bar_dragged = false;
+        let mut bar = reorder::BarDrag::default();
         // Rebuilt every frame, so no drag state can go stale.
         let mut dragging: Option<FeatureId> = None;
         let mut dropped = false;
@@ -994,30 +994,13 @@ impl FeatureTimeline {
                     });
                 }
 
-                // Faint at the bottom, where it changes nothing; bold elsewhere so a partial map is not mistaken
-                // for the whole one.
                 if at_the_bar {
-                    let (rect, bar) =
-                        ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::drag());
-                    let bar = bar.on_hover_cursor(egui::CursorIcon::ResizeVertical);
-                    let lit = rolled_back || bar.hovered() || bar.dragged();
-                    let stroke = match lit {
-                        true => egui::Stroke::new(3.0, ui.visuals().selection.stroke.color),
-                        false => egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
-                    };
-                    ui.painter().hline(rect.x_range(), rect.center().y, stroke);
-                    bar_dragged = bar.dragged();
+                    bar = reorder::rollback_bar(ui, ui.id(), rolled_back);
                 }
             }
 
-            // Live while dragging. Never above the first feature: an empty world says nothing.
-            if bar_dragged
-                && let Some(pointer) = ui.ctx().pointer_interact_pos()
-            {
-                let above = rows.iter().take_while(|(_, rect)| rect.center().y < pointer.y).count();
-                if let Some((anchor, _)) = rows.get(above.max(1) - 1) {
-                    *pending.borrow_mut() = Some(RowAction::RollBackTo(Some(*anchor)));
-                }
+            if let Some(anchor) = reorder::drop_the_bar(ui, ui.id(), &rows, bar) {
+                *pending.borrow_mut() = Some(RowAction::RollBackTo(Some(anchor)));
             }
 
             // After every row has reported its rect.
@@ -1684,14 +1667,27 @@ mod tests {
         assert_eq!(timeline.feature_order(), &[d, a, b, c, room]);
     }
 
-    /// Presses on row `from`, drags to `to` rows down (fractions land inside a row), sends `interrupt`
+    #[derive(Clone, Copy)]
+    enum Grab {
+        Row(usize),
+        /// The rollback bar, under this row.
+        Bar(usize),
+    }
+
+    /// Presses on `from`, drags to `to` rows down (fractions land inside a row), sends `interrupt`
     /// mid-drag and lets go. Rows are found by egui's own spacing.
-    fn drag_in_the_panel(timeline: &mut FeatureTimeline, from: usize, to: f32, interrupt: Vec<egui::Event>) {
+    fn drag_in_the_panel(timeline: &mut FeatureTimeline, from: impl Into<Grab>, to: f32, interrupt: Vec<egui::Event>) {
         let ctx = egui::Context::default();
         let spacing = ctx.global_style().spacing.clone();
-        let row = |at: f32| egui::pos2(100.0, (at + 0.5) * (spacing.interact_size.y + spacing.item_spacing.y));
+        let pitch = spacing.interact_size.y + spacing.item_spacing.y;
+        let row = |at: f32| egui::pos2(100.0, (at + 0.5) * pitch);
         let button = |pos, button, pressed| egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE };
-        let (start, end) = (row(from as f32), row(to));
+        let start = match from.into() {
+            Grab::Row(at) => row(at as f32),
+            // The bar is 8 points tall and starts a row's spacing below it.
+            Grab::Bar(under) => egui::pos2(100.0, (under + 1) as f32 * pitch + 4.0),
+        };
+        let end = row(to);
         let frames = vec![
             vec![],
             vec![egui::Event::PointerMoved(start), button(start, egui::PointerButton::Primary, true)],
@@ -1712,6 +1708,36 @@ mod tests {
             });
             output.textures_delta.clear();
         }
+    }
+
+    impl From<usize> for Grab {
+        fn from(at: usize) -> Self {
+            Grab::Row(at)
+        }
+    }
+
+    #[test]
+    fn the_bar_drags_past_several_rows_and_lands_once() {
+        let (mut timeline, [a, _, c, _]) = four_points();
+        drag_in_the_panel(&mut timeline, Grab::Bar(3), 0.3, vec![]);
+        assert_eq!(timeline.rollback(), Some(a), "rolled back three rows in one drag");
+
+        // Rows under the bar sit its height lower, hence aiming deep into the row.
+        drag_in_the_panel(&mut timeline, Grab::Bar(0), 2.9, vec![]);
+        assert_eq!(timeline.rollback(), Some(c), "rolled forward two");
+
+        drag_in_the_panel(&mut timeline, Grab::Bar(2), 9.0, vec![]);
+        assert_eq!(timeline.rollback(), None, "past the last row is the whole map");
+
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        drag_in_the_panel(&mut timeline, Grab::Bar(3), 0.3, vec![escape]);
+        assert_eq!(timeline.rollback(), None, "a called-off drag, or one applied live, moved the bar");
     }
 
     #[test]

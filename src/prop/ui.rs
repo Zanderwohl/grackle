@@ -548,7 +548,9 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session
     let bar_after = rollback
         .and_then(|id| entries.iter().position(|row| row.id == id))
         .unwrap_or(entries.len().saturating_sub(1));
-    let mut bar_dragged = false;
+    let mut bar = reorder::BarDrag::default();
+    // Each row with the operand lines under it, for where the bar lands.
+    let mut spans: Vec<(PropFeatureId, egui::Rect)> = Vec::new();
     // An open sketch stops the view without moving the bar; rows past it are
     // unevaluated, so drawn like rows past the bar.
     let peeked_after = editor.peek().and_then(|id| entries.iter().position(|row| row.id == id));
@@ -749,8 +751,9 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session
 
             // What this feature ate, listed under it. The rows stay in document
             // order, which reordering needs.
+            let mut span = response.rect;
             for (operand, operand_name) in &row.operands {
-                ui.horizontal(|ui| {
+                let line = ui.horizontal(|ui| {
                     if past_the_bar {
                         ui.multiply_opacity(0.4);
                     }
@@ -761,36 +764,19 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session
                         select = Some((*operand, RowClick::Only));
                     }
                 });
+                span = span.union(line.response.rect);
             }
+            spans.push((id, span));
 
-            // Bold whenever not at the end, so a partial view is not mistaken
-            // for the whole prop.
             if at == bar_after {
-                let (rect, bar) =
-                    ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::drag());
-                let bar = bar.on_hover_cursor(egui::CursorIcon::ResizeVertical);
-                let lit = rollback.is_some() || bar.hovered() || bar.dragged();
-                let stroke = match lit {
-                    true => egui::Stroke::new(3.0, ui.visuals().selection.stroke.color),
-                    false => egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
-                };
-                ui.painter().hline(rect.x_range(), rect.center().y, stroke);
-                bar_dragged = bar.dragged();
+                bar = reorder::rollback_bar(ui, ui.id(), rollback.is_some());
             }
         }
 
-        // Applied live while dragging. Never above the first feature: an empty
-        // viewport shows nothing useful.
-        if bar_dragged
-            && let Some(pointer) = ui.ctx().pointer_interact_pos()
-        {
-            let above = rects.iter().take_while(|(_, rect)| rect.center().y < pointer.y).count();
-            if let Some((anchor, _)) = rects.get(above.max(1) - 1) {
-                let anchor = *anchor;
-                pending = Some(Box::new(move |editor: &mut PropEditor| {
-                    editor.roll_back_to(Some(anchor));
-                }));
-            }
+        if let Some(anchor) = reorder::drop_the_bar(ui, ui.id(), &spans, bar) {
+            pending = Some(Box::new(move |editor: &mut PropEditor| {
+                editor.roll_back_to(Some(anchor));
+            }));
         }
 
         // After every row has reported its rect.

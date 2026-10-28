@@ -107,6 +107,59 @@ pub fn show_the_drop<Id: PartialEq>(
     target
 }
 
+/// How the rollback bar was handled this frame.
+#[derive(Clone, Copy, Default)]
+pub struct BarDrag {
+    pub dragging: bool,
+    pub dropped: bool,
+}
+
+/// The rollback bar, under the row just drawn: faint at the bottom of the list, where it changes
+/// nothing, and bold elsewhere so a partial view is not mistaken for the whole. Its id is fixed rather
+/// than taken from where it is laid out, which is what lets a drag carry it past more than one row.
+pub fn rollback_bar(ui: &mut egui::Ui, list: egui::Id, rolled_back: bool) -> BarDrag {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::hover());
+    let bar = ui
+        .interact(rect, list.with("rollback_bar"), egui::Sense::drag())
+        .on_hover_cursor(egui::CursorIcon::ResizeVertical);
+    let lit = rolled_back || bar.hovered() || bar.dragged();
+    let stroke = match lit {
+        true => egui::Stroke::new(3.0, ui.visuals().selection.stroke.color),
+        false => egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
+    };
+    ui.painter().hline(rect.x_range(), rect.center().y, stroke);
+    BarDrag { dragging: bar.dragged(), dropped: bar.drag_stopped() }
+}
+
+/// While the bar is dragged, draws where it would land: under the row nearest above the pointer, and
+/// never above the first, since an empty view shows nothing. Returns that row on release, and nothing
+/// if Escape or the right button called the drag off. Applied once rather than live, because each step
+/// of a roll back rebuilds what it crosses.
+///
+/// `rows` span each row and anything drawn under it before the next.
+pub fn drop_the_bar<Id: Copy>(ui: &egui::Ui, list: egui::Id, rows: &[(Id, egui::Rect)], drag: BarDrag) -> Option<Id> {
+    let active = drag.dragging || drag.dropped;
+    if cancelled(ui, list.with("rollback_bar"), active) || !active {
+        return None;
+    }
+    let pointer = ui.ctx().pointer_interact_pos()?.y;
+    let above = rows.iter().take_while(|(_, rect)| rect.center().y < pointer).count();
+    let at = above.max(1) - 1;
+    let (anchor, rect) = rows.get(at)?;
+
+    let line = match rows.get(at + 1) {
+        Some((_, next)) => (rect.bottom() + next.top()) / 2.0,
+        None => rect.bottom() + ui.spacing().item_spacing.y,
+    };
+    ui.painter().hline(
+        rect.x_range(),
+        line,
+        egui::Stroke::new(3.0, ui.visuals().selection.stroke.color),
+    );
+
+    drag.dropped.then_some(*anchor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
