@@ -1,8 +1,8 @@
 //! The menu bar's File pulldown, shared by every authoring mode so the entries
 //! cannot drift between them (as with [`mode_menu`]).
 //!
-//! This produces a [`FileAction`] and nothing else; each editor answers all
-//! five for whatever it is editing.
+//! This produces a [`FileAction`] and nothing else; each editor answers the
+//! five it is offered for whatever it is editing.
 //!
 //! [`mode_menu`]: crate::common::app_mode::mode_menu
 
@@ -14,13 +14,15 @@ use bevy_egui::egui::UiKind;
 use crate::common::shortcuts::{Chord, EditorChords};
 use crate::get;
 
-/// What the File menu was asked for. Every mode answers all five.
+/// What the File menu was asked for. Every mode answers all but `DemoScene`,
+/// which only the map editor offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileAction {
     New,
     Save,
     SaveAs,
     Open,
+    DemoScene,
     Quit,
 }
 
@@ -30,6 +32,7 @@ pub const ALL: &[FileAction] = &[
     FileAction::Save,
     FileAction::SaveAs,
     FileAction::Open,
+    FileAction::DemoScene,
     FileAction::Quit,
 ];
 
@@ -40,6 +43,7 @@ impl FileAction {
             FileAction::Save => "file.menu.save",
             FileAction::SaveAs => "file.menu.save_as",
             FileAction::Open => "file.menu.open",
+            FileAction::DemoScene => "file.menu.demo_scene",
             FileAction::Quit => "file.menu.quit",
         }
     }
@@ -67,19 +71,24 @@ impl FileAction {
             FileAction::New => Some(Chord::NEW),
             FileAction::Save => Some(Chord::SAVE),
             FileAction::SaveAs => Some(Chord::SAVE_AS),
-            FileAction::Open | FileAction::Quit => None,
+            FileAction::Open | FileAction::DemoScene | FileAction::Quit => None,
         }
     }
 }
 
 /// `request` rather than a return value, so a caller drawing several menus
-/// can answer them after the borrow on its document is dropped.
-pub fn file_menu(ui: &mut egui::Ui, request: &mut Option<FileAction>) {
+/// can answer them after the borrow on its document is dropped. `demo_scene`
+/// offers [`FileAction::DemoScene`], which only the map editor has.
+pub fn file_menu(ui: &mut egui::Ui, demo_scene: bool, request: &mut Option<FileAction>) {
     ui.menu_button(get!("file.menu.title"), |ui| {
         for action in ALL {
-            // Quit throws work away without asking, so it gets the gap.
-            if *action == FileAction::Quit {
-                ui.separator();
+            match action {
+                FileAction::DemoScene if !demo_scene => continue,
+                // Quit throws work away without asking, so it gets the gap.
+                FileAction::DemoScene | FileAction::Quit => {
+                    ui.separator();
+                }
+                _ => {}
             }
             let mut button = egui::Button::new(get!(action.name_key()));
             if let Some(chord) = action.chord() {
@@ -125,7 +134,7 @@ mod tests {
                 "{action:?} is offered more than once",
             );
         }
-        assert_eq!(ALL.len(), 5, "an action was added without being offered");
+        assert_eq!(ALL.len(), 6, "an action was added without being offered");
     }
 
     /// A missing key renders as `<key>` rather than failing. Read from the file

@@ -1173,7 +1173,7 @@ fn panels(
         .show(&mut viewport_ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 // `mode_menu` names `AppMode::Animation` outright: this system is gated on it.
-                file_menu(ui, &mut tabs.file);
+                file_menu(ui, false, &mut tabs.file);
                 let available = edit_availability(tabs.anim.source, tabs.editor, tabs.body);
                 edit_menu(ui, available, &mut tabs.edit);
                 mode_menu(ui, AppMode::Animation, role.as_deref(), tabs.mode);
@@ -1353,7 +1353,7 @@ fn handle_files(
                 }
                 Some(FileAction::Save) => save_the_body_clips(body, &BodyClips::default_pack()),
                 Some(FileAction::SaveAs) => files.body.ask_where_to_save(),
-                Some(FileAction::Quit) | None => {}
+                Some(FileAction::DemoScene | FileAction::Quit) | None => {}
             }
         }
     }

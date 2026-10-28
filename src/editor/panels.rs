@@ -371,7 +371,7 @@ impl EditorPanels {
                 egui::MenuBar::new().ui(ui, |ui| {
                     // The network menu stays live, so a client can leave.
                     ui.add_enabled_ui(net_role.is_authority(), |ui| {
-                        file_menu(ui, &mut pending_file_op);
+                        file_menu(ui, true, &mut pending_file_op);
                         edit_menu(ui, edit_available, &mut pending_edit);
                         // `Editor` spelled out: this system is gated on it.
                         mode_menu(ui, AppMode::Editor, Some(&net_role), &mut wanted_mode);
@@ -502,17 +502,16 @@ impl EditorPanels {
 
         if let Some(op) = pending_file_op {
             match op {
-                FileAction::New => {
+                // Both are untitled, so a save asks where rather than writing over the shipped file.
+                FileAction::New | FileAction::DemoScene => {
+                    let name = if op == FileAction::New { "new" } else { "demo" };
                     let template = PathBuf::from(format!(
-                        "assets/default/blueprints/new.{}", MAP_BLUEPRINT_EXTENSION
+                        "assets/default/{BLUEPRINTS_DIR}/{name}.{MAP_BLUEPRINT_EXTENSION}"
                     ));
                     match save::load(&template) {
                         Ok(loaded) => {
                             info!("New from template {:?}", template);
-                            loaded_blueprint = Some(LoadedBlueprint {
-                                timeline: loaded.timeline,
-                                metadata: MapMetadata::default(),
-                            });
+                            loaded_blueprint = Some(loaded);
                             current_file.path = None;
                         }
                         Err(e) => error!("New failed: {}", e),

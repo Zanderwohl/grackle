@@ -1648,34 +1648,36 @@ mod tests {
     #[test]
     fn deleting_several_is_one_undo_step() {
         let (mut timeline, [a, b, c, d]) = four_points();
-        timeline.checkpoint();
+        let mut metadata = MapMetadata::default();
+        timeline.checkpoint(&metadata);
         timeline.click_row(b, egui::Modifiers::NONE);
         timeline.click_row(d, command());
         timeline.delete_features(&timeline.selection().to_vec());
         assert_eq!(timeline.feature_order(), &[a, c]);
         assert!(timeline.selection().is_empty());
         assert_eq!(timeline.selected_feature(), None);
-        timeline.checkpoint();
+        timeline.checkpoint(&metadata);
 
-        timeline.undo();
+        timeline.undo(&mut metadata);
         assert_eq!(timeline.feature_order(), &[a, b, c, d]);
-        timeline.redo();
+        timeline.redo(&mut metadata);
         assert_eq!(timeline.feature_order(), &[a, c]);
     }
 
     #[test]
     fn a_blank_name_keeps_the_old_one_and_a_rename_is_undoable() {
         let (mut timeline, [a, ..]) = four_points();
+        let mut metadata = MapMetadata::default();
         let original = timeline.get_feature(&a).unwrap().label();
-        timeline.checkpoint();
+        timeline.checkpoint(&metadata);
         timeline.rename(a, "   ");
         assert_eq!(timeline.get_feature(&a).unwrap().label(), original);
         timeline.rename(a, "  Spawn corner ");
         assert_eq!(timeline.get_feature(&a).unwrap().label(), "Spawn corner");
-        timeline.checkpoint();
-        timeline.undo();
+        timeline.checkpoint(&metadata);
+        timeline.undo(&mut metadata);
         assert_eq!(timeline.get_feature(&a).unwrap().label(), original);
-        timeline.redo();
+        timeline.redo(&mut metadata);
         assert_eq!(timeline.get_feature(&a).unwrap().label(), "Spawn corner");
     }
 

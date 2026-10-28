@@ -8,6 +8,7 @@
 //! `MapMetadata` for it.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -28,16 +29,41 @@ pub struct Palette {
 pub struct RolePaint {
     #[serde(default)]
     pub sides: BTreeMap<Team, String>,
-    /// For a room no Mirror claims, or a side the role does not name. `None` draws plain.
+    /// For a room no Mirror claims, or a side the role does not name. `None` draws the slot's default.
     #[serde(default)]
     pub unsided: Option<String>,
 }
 
+/// Roles every map has without saying so, so a map with no art pass can still show whose side a
+/// room is on. A map's own role of the same name shadows one.
+static BUILT_IN: LazyLock<BTreeMap<String, RolePaint>> = LazyLock::new(|| {
+    BTreeMap::from([(
+        TEAM_GRID.to_owned(),
+        RolePaint {
+            sides: BTreeMap::from([
+                (Team::Red, "grid_red".to_owned()),
+                (Team::Blue, "grid_blue".to_owned()),
+                (Team::Yellow, "grid_yellow".to_owned()),
+                (Team::Green, "grid_green".to_owned()),
+            ]),
+            unsided: Some("orange".to_owned()),
+        },
+    )])
+});
+
+/// The default grid in each team's color.
+pub const TEAM_GRID: &str = "team_grid";
+
 impl Palette {
+    /// The map's roles, then the built-in ones it does not shadow.
+    pub fn every_role(&self) -> impl Iterator<Item = (&String, &RolePaint)> {
+        self.roles.iter().chain(BUILT_IN.iter().filter(|(name, _)| !self.roles.contains_key(*name)))
+    }
+
     /// The material a slot naming `name` is painted with on `side`: the name itself unless it is a
-    /// role. `None` for a role with nothing for this side, which draws plain.
+    /// role. `None` for a role with nothing for this side, which draws the slot's default.
     pub fn resolve<'a>(&'a self, name: &'a str, side: Option<Side>) -> Option<&'a str> {
-        let Some(role) = self.roles.get(name) else { return Some(name) };
+        let Some(role) = self.roles.get(name).or_else(|| BUILT_IN.get(name)) else { return Some(name) };
         side.and_then(|Side(team)| role.sides.get(&team))
             .or(role.unsided.as_ref())
             .map(String::as_str)
@@ -81,6 +107,19 @@ mod tests {
         let palette = spawn_walls();
         assert_eq!(palette.resolve("spawn_walls", Some(Side(Team::Green))), Some("plaster"));
         assert_eq!(palette.resolve("spawn_walls", None), Some("plaster"));
+    }
+
+    /// On a map that never mentions it, and shadowed by a map role of the same name.
+    #[test]
+    fn every_map_has_the_team_grid() {
+        let mut palette = Palette::default();
+        assert_eq!(palette.resolve(TEAM_GRID, Some(Side(Team::Yellow))), Some("grid_yellow"));
+        assert_eq!(palette.resolve(TEAM_GRID, None), Some("orange"));
+        assert_eq!(palette.every_role().filter(|(name, _)| *name == TEAM_GRID).count(), 1);
+
+        palette.roles.insert(TEAM_GRID.into(), RolePaint { sides: BTreeMap::new(), unsided: Some("concrete".into()) });
+        assert_eq!(palette.resolve(TEAM_GRID, Some(Side(Team::Yellow))), Some("concrete"));
+        assert_eq!(palette.every_role().filter(|(name, _)| *name == TEAM_GRID).count(), 1);
     }
 
     #[test]

@@ -77,7 +77,7 @@ fn panels(
     let mut requests = Requests::default();
     egui::Panel::top("material_menu_bar").resizable(false).show(&mut window_ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            file_menu(ui, &mut requests.file);
+            file_menu(ui, false, &mut requests.file);
             edit_menu(ui, edit_availability(&material), &mut requests.edit);
             // This system is gated on `AppMode::Material`.
             mode_menu(ui, AppMode::Material, role.as_deref(), &mut requests.mode);

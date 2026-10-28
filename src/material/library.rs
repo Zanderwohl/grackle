@@ -18,10 +18,21 @@ use super::{FILE_EXTENSION, MATERIALS_DIR};
 use crate::common::assets::{default_packs, Assets as PackAssets};
 use crate::tool::bakes::{RoomBake, RoomSlotMesh};
 use crate::common::palette::Palette;
+use crate::tool::room::RoomSlot;
 use crate::common::team::Side;
 use crate::tool::room::RoomSurfaces;
 
 pub const TILE_TEXELS: u32 = 512;
+
+/// What a slot with no material, or one naming nothing that exists, is drawn with. Plain white only
+/// if this is missing too.
+pub fn default_material(slot: RoomSlot) -> &'static str {
+    match slot {
+        RoomSlot::Floor => "grid_gray",
+        RoomSlot::Walls => "orange",
+        RoomSlot::Ceiling => "grid_light",
+    }
+}
 
 /// texture-graph's normals are +Y down the image (`n.y = -dh/drow`, DirectX's way) and Bevy's
 /// bitangent points up it, so they are flipped. Unflipped, every bump is lit from the wrong side;
@@ -103,7 +114,7 @@ impl MaterialLibrary {
                 Some(LibraryEntry { material, maps, file })
             });
             if entry.is_none() {
-                warn!("No material named {name}; drawing its surfaces plain");
+                warn!("No material named {name}; drawing its surfaces as the default");
             }
             self.entries.insert(name.to_owned(), entry);
         }
@@ -156,10 +167,11 @@ pub fn paint_rooms(
         let named = rooms.get(part.room).ok().and_then(|(surfaces, side)| {
             palette.resolve(surfaces.of(part.slot)?, side.copied())
         });
-        let wanted = match named
-            .and_then(|name| library.ensure(name, &packs, &device, &mut baked, &mut standard))
-        {
-            Some(entry) => entry.material.clone(),
+        let mut material = |name| {
+            library.ensure(name, &packs, &device, &mut baked, &mut standard).map(|entry| entry.material.clone())
+        };
+        let wanted = match named.and_then(&mut material).or_else(|| material(default_material(part.slot))) {
+            Some(material) => material,
             None => bake.material(&mut standard),
         };
         if drawn.0 != wanted {

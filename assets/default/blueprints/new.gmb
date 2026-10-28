@@ -10,33 +10,24 @@ Blueprint(
             gravity: 20.0,
         ),
         palette: Palette(
-            roles: {
-                "spawn_walls": RolePaint(
-                    sides: {
-                        Red: "plaster_red",
-                        Blue: "plaster_blue",
-                        Yellow: "plaster_yellow",
-                        Green: "plaster_green",
-                    },
-                    unsided: Some("plaster"),
-                ),
-            },
+            roles: {},
         ),
     ),
-    next_id: 17,
+    next_id: 4,
     features: [
         Feature(
             id: FeatureId(
                 _id: 0,
             ),
+            name: Some("Map Origin"),
             object: {
                 "global_point": GlobalPoint(
                     location: PointRef(
                         reference: None,
                         point_key: "",
-                        x: Absolute(-16.0),
+                        x: Absolute(0.0),
                         y: Absolute(0.0),
-                        z: Absolute(-7.0),
+                        z: Absolute(0.0),
                     ),
                 ),
             },
@@ -46,23 +37,7 @@ Blueprint(
             id: FeatureId(
                 _id: 1,
             ),
-            object: {
-                "global_point": GlobalPoint(
-                    location: PointRef(
-                        reference: None,
-                        point_key: "",
-                        x: Absolute(16.0),
-                        y: Absolute(6.0),
-                        z: Absolute(7.0),
-                    ),
-                ),
-            },
-            parents: [],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 2,
-            ),
+            name: Some("Starter Room"),
             object: {
                 "editor_room": EditorRoom(
                     min: PointRef(
@@ -75,18 +50,11 @@ Blueprint(
                         z: Relative(0.0),
                     ),
                     max: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 1,
-                        )),
+                        reference: None,
                         point_key: "",
-                        x: Relative(0.0),
-                        y: Relative(0.0),
-                        z: Relative(0.0),
-                    ),
-                    surfaces: RoomSurfaces(
-                        floor: Some("tread_plate"),
-                        walls: Some("board_formed_concrete"),
-                        ceiling: Some("plaster"),
+                        x: Absolute(16.0),
+                        y: Absolute(4.0),
+                        z: Absolute(16.0),
                     ),
                 ),
             },
@@ -94,6 +62,28 @@ Blueprint(
                 FeatureId(
                     _id: 0,
                 ),
+            ],
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 2,
+            ),
+            name: Some("Spawn Point"),
+            object: {
+                "spawn_point": SpawnPoint(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 1,
+                        )),
+                        point_key: "bottom_plane_center",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(0.0),
+                    ),
+                    yaw: 0.0,
+                ),
+            },
+            parents: [
                 FeatureId(
                     _id: 1,
                 ),
@@ -103,392 +93,26 @@ Blueprint(
             id: FeatureId(
                 _id: 3,
             ),
+            name: Some("Starter Light"),
             object: {
                 "grackle_point_light": GracklePointLight(
                     location: PointRef(
                         reference: Some(FeatureId(
-                            _id: 2,
+                            _id: 1,
                         )),
-                        point_key: "bottom_plane_center",
+                        point_key: "top_plane_center",
                         x: Relative(0.0),
-                        y: Relative(4.5),
+                        y: Relative(-0.5),
                         z: Relative(0.0),
                     ),
-                    intensity: 250000.0,
-                    radius: 3.1,
-                    range: 35.44009,
+                    intensity: 1000000.0,
+                    radius: 0.1,
+                    range: 20.0,
                 ),
             },
             parents: [
                 FeatureId(
-                    _id: 2,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 4,
-            ),
-            object: {
-                "spawn_point": SpawnPoint(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 2,
-                        )),
-                        point_key: "bottom_plane_center",
-                        x: Relative(0.0),
-                        y: Relative(0.0),
-                        z: Relative(-3.4506116),
-                    ),
-                    yaw: 3.1415927,
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 5,
-            ),
-            object: {
-                "animation_grid": AnimationGrid(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 2,
-                        )),
-                        point_key: "bottom_plane_center",
-                        x: Relative(0.0),
-                        y: Relative(0.0),
-                        z: Relative(-0.0),
-                    ),
-                    yaw: 0.0,
-                    teams: Striped,
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 6,
-            ),
-            object: {
-                "prop": Prop(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 2,
-                        )),
-                        point_key: "back_bottom_left_corner",
-                        x: Relative(-1.5),
-                        y: Relative(0.0),
-                        z: Relative(-1.5),
-                    ),
-                    rotation: Vec3(0.0, 0.0, 0.0),
-                    model: "health_pack",
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 7,
-            ),
-            object: {
-                "prop": Prop(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 2,
-                        )),
-                        point_key: "front_bottom_left_corner",
-                        x: Relative(1.5),
-                        y: Relative(0.0),
-                        z: Relative(-1.5),
-                    ),
-                    rotation: Vec3(0.0, 0.0, 0.0),
-                    model: "ammo_pack",
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 8,
-            ),
-            object: {
-                "prop": Prop(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 2,
-                        )),
-                        point_key: "back_bottom_right_corner",
-                        x: Relative(-1.5),
-                        y: Relative(0.0),
-                        z: Relative(1.5),
-                    ),
-                    rotation: Vec3(0.0, 0.0, 0.0),
-                    model: "armor_pack",
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 9,
-            ),
-            object: {
-                "weapon_pickup": WeaponPickup(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 2,
-                        )),
-                        point_key: "bottom_right_edge_center",
-                        x: Relative(-6.0),
-                        y: Relative(0.0),
-                        z: Relative(1.5),
-                    ),
-                    yaw: 1.5707964,
-                    weapon: "rocket_launcher",
-                    respawn: 15.0,
-                    ammo: 0.5,
-                    style: tf2,
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 10,
-            ),
-            object: {
-                "weapon_pickup": WeaponPickup(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 2,
-                        )),
-                        point_key: "bottom_right_edge_center",
-                        x: Relative(-2.0),
-                        y: Relative(0.0),
-                        z: Relative(1.5),
-                    ),
-                    yaw: 1.5707964,
-                    weapon: "flamethrower",
-                    respawn: 15.0,
-                    ammo: 0.5,
-                    style: tf2,
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 11,
-            ),
-            object: {
-                "weapon_pickup": WeaponPickup(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 2,
-                        )),
-                        point_key: "bottom_right_edge_center",
-                        x: Relative(2.0),
-                        y: Relative(0.0),
-                        z: Relative(1.5),
-                    ),
-                    yaw: 1.5707964,
-                    weapon: "rpg",
-                    respawn: 15.0,
-                    ammo: 0.5,
-                    style: tf2,
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 12,
-            ),
-            object: {
-                "weapon_pickup": WeaponPickup(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 2,
-                        )),
-                        point_key: "bottom_right_edge_center",
-                        x: Relative(6.0),
-                        y: Relative(0.0),
-                        z: Relative(1.5),
-                    ),
-                    yaw: 1.5707964,
-                    weapon: "pill_launcher",
-                    respawn: 15.0,
-                    ammo: 0.5,
-                    style: tf2,
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 13,
-            ),
-            object: {
-                "editor_room": EditorRoom(
-                    min: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 2,
-                        )),
-                        point_key: "back_bottom_edge_center",
-                        x: Relative(0.0),
-                        y: Relative(0.0),
-                        z: Relative(-1.0),
-                    ),
-                    max: PointRef(
-                        reference: None,
-                        point_key: "",
-                        x: Relative(2.0),
-                        y: Relative(3.0),
-                        z: Relative(2.0),
-                    ),
-                    max_base: OwnMin,
-                    surfaces: RoomSurfaces(
-                        floor: Some("tread_plate"),
-                        walls: Some("spawn_walls"),
-                        ceiling: Some("plaster"),
-                    ),
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 14,
-            ),
-            object: {
-                "spawn_point": SpawnPoint(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 13,
-                        )),
-                        point_key: "bottom_plane_center",
-                        x: Relative(0.0),
-                        y: Relative(0.0),
-                        z: Relative(0.0),
-                    ),
-                    yaw: 1.5707964,
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 13,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 15,
-            ),
-            object: {
-                "grackle_point_light": GracklePointLight(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 13,
-                        )),
-                        point_key: "bottom_plane_center",
-                        x: Relative(0.0),
-                        y: Relative(2.6),
-                        z: Relative(0.0),
-                    ),
-                    intensity: 40000.0,
-                    radius: 0.3,
-                    range: 8.0,
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 13,
-                ),
-            ],
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 16,
-            ),
-            object: {
-                "mirror": Mirror(
-                    center: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 2,
-                        )),
-                        point_key: "bottom_plane_center",
-                        x: Relative(0.0),
-                        y: Relative(0.0),
-                        z: Relative(0.0),
-                    ),
-                    symmetry: MirrorX,
-                    sources: [
-                        FeatureId(
-                            _id: 13,
-                        ),
-                        FeatureId(
-                            _id: 14,
-                        ),
-                        FeatureId(
-                            _id: 15,
-                        ),
-                    ],
-                    teams: (Red, Blue),
-                ),
-            },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-                FeatureId(
-                    _id: 13,
-                ),
-                FeatureId(
-                    _id: 14,
-                ),
-                FeatureId(
-                    _id: 15,
+                    _id: 1,
                 ),
             ],
         ),
