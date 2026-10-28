@@ -510,8 +510,11 @@ impl FeatureTimeline {
         if self.selection_anchor.is_some_and(|id| !self.features.contains_key(&id)) {
             self.selection_anchor = self.selected_feature;
         }
-        self.selection_affected =
-            (!self.selection.is_empty()).then(|| self.with_descendants(self.selection.iter().copied()));
+        self.selection_affected = (!self.selection.is_empty()).then(|| {
+            let mut affected = self.with_descendants(self.selection.iter().copied());
+            affected.retain(|id| shown.contains(id));
+            affected
+        });
     }
 
     /// In list order, which is parents first: a feature can only name features above it.
@@ -1994,6 +1997,20 @@ mod tests {
         timeline.click_row(min, shift());
         assert_eq!(timeline.selection(), &[room, max, min]);
         assert_eq!(timeline.selection_affected(), Some(&[min, max, room][..]));
+    }
+
+    #[test]
+    fn a_selection_reaches_nothing_past_the_rollback_bar() {
+        let mut timeline = FeatureTimeline::default();
+        let min = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        let max = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 1.0, 1.0)));
+        let room = timeline.apply_feature(Box::new(crate::editor::editor_room::EditorRoom::from_points(min, max)));
+        timeline.click_row(min, egui::Modifiers::NONE);
+        assert_eq!(timeline.selection_affected(), Some(&[min, room][..]));
+        timeline.roll_back_to(Some(max));
+        assert_eq!(timeline.selection_affected(), Some(&[min][..]));
+        timeline.roll_back_to(None);
+        assert_eq!(timeline.selection_affected(), Some(&[min, room][..]));
     }
 
     /// The panel can be hidden while the field has focus; coming back must not leave a stuck field.
