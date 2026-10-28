@@ -12,6 +12,7 @@
 pub mod gpu;
 pub mod library;
 pub mod picker;
+pub mod sky;
 pub mod ui;
 
 use std::path::{Path, PathBuf};
@@ -264,7 +265,7 @@ impl Plugin for MaterialEditorPlugin {
             .add_systems(Update, start_in_the_material_editor)
             .add_systems(Update, picker::publish_choices.run_if(in_state(AppMode::Editor)))
             .add_systems(OnEnter(AppMode::Material), (switch_the_viewports_off, share_bevys_gpu))
-            .add_plugins((gpu::MaterialGpuPlugin, ui::MaterialUiPlugin));
+            .add_plugins((gpu::MaterialGpuPlugin, ui::MaterialUiPlugin, sky::SkyPlugin));
     }
 }
 

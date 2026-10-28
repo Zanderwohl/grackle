@@ -140,6 +140,7 @@ authors = "Authors"
 movement = "Movement"
 sprint = "Sprint"
 gravity = "Gravity"
+sky = "Sky"
 
 [editor.features.global_point]
 title = "Global Point"
@@ -357,6 +358,12 @@ plr = "Payload Race"
 koth = "King of the Hill"
 cp = "Capture Points"
 sd = "Special Delivery"
+
+[sky]
+high_noon = "High noon"
+day = "Day"
+evening = "Evening"
+night = "Night"
 
 [movement.sprint]
 always = "Sprint Always"

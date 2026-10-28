@@ -12,6 +12,8 @@ use bevy_egui::{egui, EguiContexts, EguiTextureHandle};
 
 use super::gpu::{BakedTextures, BevyDevice};
 use super::library::MaterialLibrary;
+use super::sky::Sky;
+use crate::common::sky::SKYBOX;
 use super::{FILE_EXTENSION, MATERIALS_DIR};
 use crate::common::assets::{default_packs, Assets as PackAssets};
 use crate::common::palette::Palette;
@@ -172,6 +174,7 @@ pub(super) fn publish_choices(
     packs: Res<PackAssets>,
     device: BevyDevice,
     palette: Res<Palette>,
+    sky: Res<Sky>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let open = ctx.data_mut(|data| data.remove_temp::<bool>(open_id())).unwrap_or(false);
@@ -213,7 +216,12 @@ pub(super) fn publish_choices(
             role: true,
         })
         .collect();
-    choices.extend(state.materials.iter().map(|name| Choice {
+    choices.push(Choice {
+        name: SKYBOX.to_owned(),
+        preview: Some(contexts.add_image(EguiTextureHandle::Weak(sky.preview.id()))),
+        role: false,
+    });
+    choices.extend(state.materials.iter().filter(|name| *name != SKYBOX).map(|name| Choice {
         name: name.clone(),
         preview: previews.get(name.as_str()).copied(),
         role: false,

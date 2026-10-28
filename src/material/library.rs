@@ -13,7 +13,11 @@ use bevy::prelude::*;
 use texture_graph_core::{EvalCtx, Graph};
 use texture_graph_gpu::{Baker, MaterialMapper};
 
+use bevy::light::NotShadowCaster;
+
 use super::gpu::{BakedTextures, BevyDevice, Encoding, Sampling};
+use super::sky::{Sky, SkyMaterial};
+use crate::common::sky::SKYBOX;
 use super::{FILE_EXTENSION, MATERIALS_DIR};
 use crate::common::assets::{default_packs, Assets as PackAssets};
 use crate::tool::bakes::{RoomBake, RoomSlotMesh};
@@ -150,9 +154,11 @@ fn find(name: &str, packs: &PackAssets) -> Option<(Graph, PathBuf)> {
 }
 
 /// Every frame rather than on change: a slot's material can arrive late (a bake that waited
-/// for the device) or go away (a name cleared), and there are three slots a room.
+/// for the device) or go away (a name cleared), and there are three slots a room. A slot painted
+/// [`SKYBOX`] swaps its `StandardMaterial` for the [`Sky`].
 #[allow(clippy::too_many_arguments)]
 pub fn paint_rooms(
+    mut commands: Commands,
     mut library: ResMut<MaterialLibrary>,
     mut baked: ResMut<BakedTextures>,
     mut standard: ResMut<Assets<StandardMaterial>>,
@@ -160,13 +166,23 @@ pub fn paint_rooms(
     packs: Res<PackAssets>,
     device: BevyDevice,
     palette: Res<Palette>,
+    sky: Res<Sky>,
     rooms: Query<(&RoomSurfaces, Option<&Side>)>,
-    mut parts: Query<(&RoomSlotMesh, &mut MeshMaterial3d<StandardMaterial>)>,
+    parts: Query<(Entity, &RoomSlotMesh, Option<&MeshMaterial3d<StandardMaterial>>, Has<MeshMaterial3d<SkyMaterial>>)>,
 ) {
-    for (part, mut drawn) in &mut parts {
+    for (entity, part, drawn, drawn_as_sky) in &parts {
         let named = rooms.get(part.room).ok().and_then(|(surfaces, side)| {
             palette.resolve(surfaces.of(part.slot)?, side.copied())
         });
+        if named == Some(SKYBOX) {
+            if !drawn_as_sky {
+                commands
+                    .entity(entity)
+                    .remove::<MeshMaterial3d<StandardMaterial>>()
+                    .insert((MeshMaterial3d(sky.material.clone()), NotShadowCaster));
+            }
+            continue;
+        }
         let mut material = |name| {
             library.ensure(name, &packs, &device, &mut baked, &mut standard).map(|entry| entry.material.clone())
         };
@@ -174,8 +190,13 @@ pub fn paint_rooms(
             Some(material) => material,
             None => bake.material(&mut standard),
         };
-        if drawn.0 != wanted {
-            drawn.0 = wanted;
+        if drawn_as_sky {
+            commands
+                .entity(entity)
+                .remove::<(MeshMaterial3d<SkyMaterial>, NotShadowCaster)>()
+                .insert(MeshMaterial3d(wanted));
+        } else if drawn.is_none_or(|drawn| drawn.0 != wanted) {
+            commands.entity(entity).insert(MeshMaterial3d(wanted));
         }
     }
 }

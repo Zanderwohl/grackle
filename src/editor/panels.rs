@@ -13,6 +13,7 @@ use strum::IntoEnumIterator;
 use strum_macros::Display;
 use crate::common::mode::GameMode;
 use crate::common::movement_rules::SprintPolicy;
+use crate::common::sky::SkyTime;
 use crate::common::shortcuts::chords;
 use crate::common::net::{NetRequest, NetRole};
 use crate::common::net_transport::NetStatus;
@@ -720,6 +721,17 @@ fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata) {
                             }
                         });
                 });
+                ui.end_row();
+
+                ui.label(get!("editor.metadata.sky"));
+                egui::ComboBox::from_id_salt("editor_map_sky")
+                    .selected_text(format!("{}", meta.sky))
+                    .width(ui.available_width())
+                    .show_ui(ui, |ui| {
+                        for sky in SkyTime::iter() {
+                            ui.selectable_value(&mut meta.sky, sky, format!("{}", sky));
+                        }
+                    });
                 ui.end_row();
 
                 ui.label(get!("editor.metadata.authors"));

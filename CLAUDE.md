@@ -1032,6 +1032,16 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   settings, with postcard, which cannot read a field left out: a skipped
   field decodes as garbage after it, and `the_settings_survive_the_wire_encoding`
   is what failed.
+- **`skybox` is a material with no file** (`sky::SKYBOX`, shadowing a pack
+  material of that name): the slot stays a wall — it collides and hides what
+  is behind it — but is drawn by `SkyMaterial`
+  ([`src/material/sky.rs`](src/material/sky.rs)), colored by the direction
+  from the eye alone, so it reads as sky at infinite distance. There is no sky
+  anywhere else, and from outside the map every surface is a back face. The
+  gradient is the map's `SkyTime` (Metadata panel), stops by elevation mixed
+  in **Oklab**, on the CPU in [`src/common/sky.rs`](src/common/sky.rs) for
+  previews and tests and again in `sky.wesl`; change one, change both. Sky
+  slots are `NotShadowCaster`, so a sun added later can shine in through them.
 - **A slot is picked, not typed** ([`src/material/picker.rs`](src/material/picker.rs)):
   a fixed-width button opening a searchable grid of every pack's `materials/`
   and the palette's roles. A feature's `editor_ui` gets only egui, so

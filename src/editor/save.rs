@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::mode::GameMode;
 use crate::common::movement_rules::MovementRules;
+use crate::common::sky::SkyTime;
 use crate::common::palette::Palette;
 use crate::constants::{MAP_BACKUP_EXTENSION, MAP_BLUEPRINT_EXTENSION};
 use crate::editor::editable::{Feature, FeatureId, FeatureTimeline};
@@ -45,6 +46,8 @@ pub struct SavedMetadata {
     /// out.
     #[serde(default)]
     palette: Palette,
+    #[serde(default)]
+    sky: SkyTime,
 }
 
 impl SavedMetadata {
@@ -55,6 +58,7 @@ impl SavedMetadata {
             game_mode: metadata.game_mode.prefix().to_owned(),
             movement: metadata.movement,
             palette: metadata.palette.clone(),
+            sky: metadata.sky,
         }
     }
 
@@ -67,6 +71,7 @@ impl SavedMetadata {
         metadata.game_mode = GameMode::try_from(self.game_mode.as_str()).unwrap_or(GameMode::Arena);
         metadata.movement = self.movement;
         metadata.palette = self.palette;
+        metadata.sky = self.sky;
         metadata.normalize_authors_ui_text();
         metadata
     }
@@ -235,6 +240,7 @@ mod tests {
         metadata.authors = vec!["somebody".into(), "somebody, else".into()];
         metadata.game_mode = GameMode::CTF;
         metadata.movement = MovementRules { sprint: SprintPolicy::Enabled, gravity: 9.81 };
+        metadata.sky = SkyTime::Evening;
 
         let text = to_text(&timeline, &metadata).unwrap();
         let loaded = parse(&text).unwrap();
@@ -261,6 +267,7 @@ mod tests {
         assert_eq!(metadata.display_name, None);
         assert_eq!(metadata.game_mode, GameMode::KOTH);
         assert_eq!(metadata.movement, MovementRules::default());
+        assert_eq!(metadata.sky, SkyTime::Day);
     }
 
     #[test]

@@ -100,6 +100,7 @@ authors = "Autoren"
 movement = "Bewegung"
 sprint = "Sprinten"
 gravity = "Schwerkraft"
+sky = "Himmel"
 
 [editor.features.global_point]
 title = "Globaler Punkt"
@@ -141,3 +142,9 @@ title = "Palette"
 unsided = "Keine Seite"
 add = "Hinzufügen"
 new_role = "Rolle"
+
+[sky]
+high_noon = "Mittag"
+day = "Tag"
+evening = "Abend"
+night = "Nacht"
