@@ -751,16 +751,26 @@ mod tests {
 
     #[test]
     fn a_mirrored_footprint_is_the_same_room_reflected() {
-        let mut room = FootprintRoom::new(PointRef::absolute(0.0, 0.0, 0.0), 3.0);
-        draw_loop(&mut room, &[(1.0, 0.0), (4.0, 0.0), (1.0, 3.0)]);
-        let mut room = resolved(room);
-        room.name_region_at(Vec2::new(1.5, 0.5));
-        let mut room = resolved(room);
+        let triangle = || {
+            let mut room = FootprintRoom::new(PointRef::absolute(0.0, 0.0, 0.0), 3.0);
+            draw_loop(&mut room, &[(1.0, 0.0), (4.0, 0.0), (1.0, 3.0)]);
+            let mut room = resolved(room);
+            room.name_region_at(Vec2::new(1.5, 0.5));
+            resolved(room)
+        };
+        let mut room = triangle();
         let mirror = crate::editor::mirror::Mirror::new(PointRef::absolute(0.0, 0.0, 0.0));
-        assert!(room.mirror(&mirror.mirroring()));
+        assert!(room.mirror(&mirror.mirrorings().next().unwrap()));
         let mirrored = &room.rooms()[0];
         assert!((mirrored.volume() - 4.5 * 3.0).abs() < 1e-4, "inside out after mirroring");
         assert!(mirrored.bounds().1.x <= 0.0 || mirrored.bounds().0.z < 0.0, "not reflected: {:?}", mirrored.bounds());
+
+        let mut turned = triangle();
+        let quarter = crate::editor::mirror::Mirroring { motion: crate::editor::mirror::Motion::Turn(1), center: Vec3::ZERO };
+        assert!(turned.mirror(&quarter));
+        let turned = &turned.rooms()[0];
+        assert!((turned.volume() - 4.5 * 3.0).abs() < 1e-4, "inside out after turning");
+        assert!(turned.bounds().1.z <= 0.0, "not turned: {:?}", turned.bounds());
     }
 
     /// The point a corner names, moved, moves the wall.

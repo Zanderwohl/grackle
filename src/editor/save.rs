@@ -223,6 +223,12 @@ mod tests {
                 .with_sources(vec![room, min])
                 .with_teams(Team::Yellow, Team::Green),
         ));
+        timeline.apply_feature(Box::new(
+            Mirror::new(PointRef::absolute(1.0, 0.0, 1.0))
+                .with_symmetry(Symmetry::Rotate90)
+                .with_sources(vec![room])
+                .with_four_teams([Team::Red, Team::Blue, Team::Blue, Team::Green]),
+        ));
 
         let mut footprint = FootprintRoom::new(PointRef::reference_with_offset(min, 0.0, 0.5, 0.0), 2.75);
         let a = footprint.add_corner(PointRef::reference_with_offset(max, 1.0, 0.0, 0.0));
