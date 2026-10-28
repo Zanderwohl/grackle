@@ -173,12 +173,14 @@ on the checklist.
 - **The surface is still real.** It writes its own depth, so it hides what is
   behind it; that is the illusion. It still collides like any wall — a sky
   ceiling is a ceiling you cannot jump through.
-- **One sky per map**, in `MapMetadata`, named like any material. It is a
-  texture-graph baked to a cubemap — texture-graph already samples cube faces
-  (`cube_sample`) — and cached like every other bake. A sky paint holds no
-  graph of its own, so changing the sky changes every sky surface at once.
+- **One sky per map**, in `MapMetadata`, and the slot names it as `skybox`.
+  Built as a `SkyTime` (high noon, day, evening, night): a gradient by
+  elevation mixed in Oklab, computed in the shader rather than baked, so it
+  costs no texture. A texture-graph sky baked to a cubemap is the later
+  version — texture-graph already samples cube faces (`cube_sample`) — and
+  samples by the same direction.
 - **Sky is unlit.** It receives no lighting, AO or geometry inputs, and casts
-  no shadow on itself. A sun derived from the sky is a later question.
+  no shadow, which is what lets the sun in: see [sun.md](sun.md).
 - **Sky is never team-coded by itself.** A role may resolve to sky on one side
   and to a roof on the other, so it is just one more entry in the palette.
 - **Every camera sees it the same way**, because the direction comes from
@@ -251,6 +253,8 @@ faces for it, and the material side should not need to know it exists.
 - [ ] Full bake to atlases, cached on disk / in IndexedDB
 - [ ] Non-blocking bake on wasm, flat color until ready
 - [ ] Binary blueprint encoding for `map_sync`, parsed defensively
-- [ ] Sky: the map's sky graph baked to a cubemap; a sky material sampled by view direction, unlit
+- [x] Sky: a material sampled by view direction, unlit, from the map's `SkyTime`
+- [ ] Sky: the map's sky as a texture-graph baked to a cubemap
+- [ ] Sun through sky surfaces: see [sun.md](sun.md)
 - [ ] Sky: projectiles and tracers lost against a sky surface
 - [ ] Later, not this version: polygon rooms, displacements and their blend weight
