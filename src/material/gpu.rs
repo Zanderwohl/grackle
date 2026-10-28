@@ -9,9 +9,14 @@
 //!
 //! An id with no asset behind it gets no asset events, so nothing in Bevy removes our entries;
 //! [`swap_in_baked_textures`] does, when one is removed from [`BakedTextures`].
+//!
+//! Bakes submit from the main world while the render world runs on its own thread, and wgpu
+//! refuses to configure a surface while another thread is submitting — it waits for the queue to
+//! empty and fails if it did not stay empty. So every bake goes through [`submitting`], which the
+//! render world shuts while it prepares the windows.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 
 use bevy::asset::uuid::Uuid;
 use bevy::platform::collections::HashSet;
@@ -22,6 +27,7 @@ use bevy::render::render_asset::{prepare_assets, RenderAssets};
 use bevy::render::render_resource::{Sampler, TextureDescriptor};
 use bevy::render::renderer::{RenderAdapter, RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
+use bevy::render::view::{create_surfaces, prepare_windows};
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy_egui::egui;
 use bevy_egui::{EguiContexts, EguiTextureHandle};
@@ -139,6 +145,48 @@ impl BevyDevice<'_> {
     }
 }
 
+struct GateState {
+    configuring: bool,
+    submitting: usize,
+}
+
+static GATE: (Mutex<GateState>, Condvar) =
+    (Mutex::new(GateState { configuring: false, submitting: 0 }), Condvar::new());
+
+/// Runs `f`, which submits on Bevy's queue, outside any surface configuration. Blocks for at most
+/// the render world's window preparation.
+pub fn submitting<R>(f: impl FnOnce() -> R) -> R {
+    let (lock, signal) = &GATE;
+    {
+        let state = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = signal.wait_while(state, |s| s.configuring).unwrap_or_else(|e| e.into_inner());
+        state.submitting += 1;
+    }
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            let (lock, signal) = &GATE;
+            lock.lock().unwrap_or_else(|e| e.into_inner()).submitting -= 1;
+            signal.notify_all();
+        }
+    }
+    let _done = Done;
+    f()
+}
+
+fn shut_the_gate() {
+    let (lock, signal) = &GATE;
+    let state = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let mut state = signal.wait_while(state, |s| s.submitting > 0).unwrap_or_else(|e| e.into_inner());
+    state.configuring = true;
+}
+
+fn open_the_gate() {
+    let (lock, signal) = &GATE;
+    lock.lock().unwrap_or_else(|e| e.into_inner()).configuring = false;
+    signal.notify_all();
+}
+
 /// Puts each baked texture into `RenderAssets<GpuImage>` under its invented id, after Bevy's own
 /// image preparation and before bevy_egui builds bind groups, and takes freed ones out.
 fn swap_in_baked_textures(
@@ -217,6 +265,13 @@ impl Plugin for MaterialGpuPlugin {
                 swap_in_baked_textures
                     .in_set(RenderSystems::PrepareAssets)
                     .after(prepare_assets::<GpuImage>),
+            );
+            render_app.add_systems(
+                Render,
+                (
+                    shut_the_gate.before(create_surfaces).before(prepare_windows),
+                    open_the_gate.after(prepare_windows),
+                ),
             );
         }
     }
