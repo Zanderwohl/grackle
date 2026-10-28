@@ -1,6 +1,7 @@
 //! A feature that stands a mirror image of other features across a plane, or a turned copy about an
 //! axis, and puts the two halves on two teams. See "Mirroring half a map" in CLAUDE.md.
 
+use std::collections::BTreeMap;
 use std::f32::consts::{FRAC_PI_2, PI};
 
 use bevy::platform::collections::HashMap;
@@ -83,11 +84,34 @@ impl Mirroring {
     }
 }
 
+/// What side a Mirror's copy of something is, by the side of what it copied.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TeamMap {
+    /// The originals' team, then the copies'.
+    pub teams: [Team; 2],
+    /// For a team arriving from a Mirror this one copies. A team not named swaps within `teams`,
+    /// or passes through if it is neither.
+    pub remap: BTreeMap<Team, Team>,
+}
+
+impl TeamMap {
+    pub fn becomes(&self, team: Team) -> Team {
+        let [originals, copies] = self.teams;
+        if team == originals {
+            return copies;
+        }
+        self.remap.get(&team).copied().unwrap_or(if team == copies { originals } else { team })
+    }
+
+    fn by_default(&self, team: Team) -> Team {
+        TeamMap { teams: self.teams, remap: BTreeMap::new() }.becomes(team)
+    }
+}
+
 /// On a Mirror's entity: what [`assign_sides`] reads.
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct MirrorSides {
-    /// The originals' team, then the copies'.
-    pub teams: [Team; 2],
+    pub map: TeamMap,
     /// The originals' entities. The copies are this entity's [`MirrorCopy`] children.
     pub sources: Vec<Entity>,
 }
@@ -118,6 +142,9 @@ pub struct Mirror {
     sources: Vec<FeatureId>,
     /// The originals' team, then the copies'.
     teams: [Team; 2],
+    /// See [`TeamMap::remap`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    remap: BTreeMap<Team, Team>,
     #[serde(skip)]
     resolved_center: Vec3,
     #[serde(skip)]
@@ -142,6 +169,7 @@ impl Mirror {
             symmetry: Symmetry::default(),
             sources: Vec::new(),
             teams: [Team::Red, Team::Blue],
+            remap: BTreeMap::new(),
             resolved_center: Vec3::ZERO,
             copies: Vec::new(),
             left_out: Vec::new(),
@@ -164,6 +192,39 @@ impl Mirror {
     pub fn with_teams(mut self, originals: Team, copies: Team) -> Self {
         self.teams = [originals, copies];
         self
+    }
+
+    pub fn remapping(mut self, from: Team, to: Team) -> Self {
+        self.remap.insert(from, to);
+        self
+    }
+
+    pub fn team_map(&self) -> TeamMap {
+        TeamMap { teams: self.teams, remap: self.remap.clone() }
+    }
+
+    /// The sides this Mirror's copies come out on, nested copies' copies included.
+    fn copy_sides(&mut self) -> Vec<Team> {
+        let map = self.team_map();
+        let mut sides = Vec::new();
+        for copy in &mut self.copies {
+            match copy.object.mirror_mut() {
+                Some(nested) => sides.extend(nested.copy_sides().into_iter().map(|team| map.becomes(team))),
+                None => sides.push(map.becomes(map.teams[0])),
+            }
+        }
+        sides
+    }
+
+    /// Teams arriving from the Mirrors this one copies, other than the originals' own.
+    fn arriving_teams(&mut self) -> Vec<Team> {
+        let mut arriving = Vec::new();
+        for copy in &mut self.copies {
+            if let Some(nested) = copy.object.mirror_mut() {
+                arriving.extend(nested.copy_sides());
+            }
+        }
+        Team::ALL.into_iter().filter(|team| *team != self.teams[0] && arriving.contains(team)).collect()
     }
 
     pub fn mirroring(&self) -> Mirroring {
@@ -256,6 +317,25 @@ impl FeatureTrait for Mirror {
                             && self.teams[slot] != team
                         {
                             self.teams[slot] = team;
+                            changed = true;
+                        }
+                    }
+                });
+        }
+
+        let map = self.team_map();
+        for arriving in self.arriving_teams() {
+            let current = map.becomes(arriving);
+            egui::ComboBox::from_label(get!("editor.features.mirror.becomes", "team", arriving.name()))
+                .selected_text(current.name())
+                .show_ui(ui, |ui| {
+                    for team in Team::ALL {
+                        if ui.selectable_label(current == team, team.name()).clicked() && current != team {
+                            if team == map.by_default(arriving) {
+                                self.remap.remove(&arriving);
+                            } else {
+                                self.remap.insert(arriving, team);
+                            }
                             changed = true;
                         }
                     }
@@ -392,7 +472,7 @@ impl FeatureTrait for Mirror {
         commands
             .entity(entity)
             .insert(MirrorSides {
-                teams: self.teams,
+                map: self.team_map(),
                 sources: self.copies.iter().filter_map(|copy| copy.source_entity).collect(),
             })
             .insert_if_new((Transform::IDENTITY, Visibility::Inherited));
@@ -517,9 +597,8 @@ impl FeatureTrait for Mirror {
 /// Mirror, rolling back past it or dropping a source takes the side away with nothing to remember.
 /// Compares before it writes, since this runs every frame.
 ///
-/// A copy of a Mirror is not sided itself; its copies take the inner Mirror's second team, swapped by
-/// each Mirror around it for its own pair. So under a Mirror of Red and Blue, a Blue copy comes out
-/// Red, and a team not in the pair is carried across unchanged.
+/// A copy of a Mirror is not sided itself; its copies take the inner Mirror's copy side, carried
+/// through each Mirror around it by that Mirror's [`TeamMap`].
 ///
 /// Where two Mirrors claim one entity the earlier feature wins, by feature id rather than by query
 /// order, which shifts with archetypes.
@@ -540,10 +619,10 @@ pub fn assign_sides(
     for (entity, mirror, _) in ordered {
         for source in &mirror.sources {
             if !nested.contains(*source) {
-                wanted.entry(*source).or_insert(mirror.teams[0]);
+                wanted.entry(*source).or_insert(mirror.map.teams[0]);
             }
         }
-        claim_copies(entity, mirror.teams, &mut Vec::new(), &nested, &children, &copies, &mut wanted);
+        claim_copies(entity, &mirror.map, &mut Vec::new(), &nested, &children, &copies, &mut wanted);
     }
 
     for (entity, side) in &sided {
@@ -564,8 +643,8 @@ pub fn assign_sides(
 
 fn claim_copies(
     mirror: Entity,
-    teams: [Team; 2],
-    around: &mut Vec<[Team; 2]>,
+    map: &TeamMap,
+    around: &mut Vec<TeamMap>,
     nested: &Query<&MirrorSides>,
     children: &Query<&Children>,
     copies: &Query<(), With<MirrorCopy>>,
@@ -574,23 +653,13 @@ fn claim_copies(
     let Ok(standing) = children.get(mirror) else { return };
     for child in standing.iter().filter(|child| copies.contains(*child)) {
         if let Ok(inner) = nested.get(child) {
-            around.push(teams);
-            claim_copies(child, inner.teams, around, nested, children, copies, wanted);
+            around.push(map.clone());
+            claim_copies(child, &inner.map, around, nested, children, copies, wanted);
             around.pop();
             continue;
         }
-        let team = around.iter().rev().fold(teams[1], |team, pair| swapped(team, *pair));
+        let team = around.iter().rev().fold(map.becomes(map.teams[0]), |team, outer| outer.becomes(team));
         wanted.entry(child).or_insert(team);
-    }
-}
-
-fn swapped(team: Team, pair: [Team; 2]) -> Team {
-    if team == pair[0] {
-        pair[1]
-    } else if team == pair[1] {
-        pair[0]
-    } else {
-        team
     }
 }
 
@@ -768,6 +837,10 @@ mod tests {
     }
 
     fn four_ways(second: [Team; 2]) -> App {
+        four_ways_remapping(second, None)
+    }
+
+    fn four_ways_remapping(second: [Team; 2], remap: Option<(Team, Team)>) -> App {
         let (mut timeline, room, spawn) = spawn_and_room();
         let across_x = timeline.apply_feature(Box::new(
             Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).with_sources(vec![room, spawn]),
@@ -778,6 +851,10 @@ mod tests {
                 .with_sources(vec![room, spawn, across_x])
                 .with_teams(second[0], second[1]),
         ));
+        if let Some((from, to)) = remap {
+            let outer = *timeline.feature_order().last().unwrap();
+            timeline.features_mut().get_mut(&outer).unwrap().object_mut().mirror_mut().unwrap().remap.insert(from, to);
+        }
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -820,6 +897,47 @@ mod tests {
 
         let world = app.world_mut();
         assert_eq!(world.query::<&crate::tool::room::Room>().iter(world).count(), 4);
+    }
+
+    /// Remapping the team arriving from the inner Mirror puts each quarter on its own team.
+    #[test]
+    fn a_remap_puts_four_quarters_on_four_teams() {
+        let mut app = four_ways_remapping([Team::Red, Team::Yellow], Some((Team::Blue, Team::Green)));
+        let found = spawns(&mut app);
+        assert_eq!(side_at(&found, Vec3::new(4.0, 0.0, 0.0)), Some(Team::Red));
+        assert_eq!(side_at(&found, Vec3::new(-4.0, 0.0, 0.0)), Some(Team::Blue));
+        assert_eq!(side_at(&found, Vec3::new(4.0, 0.0, 10.0)), Some(Team::Yellow));
+        assert_eq!(side_at(&found, Vec3::new(-4.0, 0.0, 10.0)), Some(Team::Green));
+    }
+
+    /// The inspector offers a row for each team the inner Mirror's copies bring, and not the
+    /// originals' own, which the copies' team already answers.
+    #[test]
+    fn a_mirror_offers_the_teams_its_nested_copies_bring() {
+        let (mut timeline, room, spawn) = spawn_and_room();
+        let inner = timeline.apply_feature(Box::new(
+            Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).with_sources(vec![room, spawn]),
+        ));
+        let mut outer = Mirror::new(PointRef::absolute(0.0, 0.0, 5.0))
+            .with_symmetry(Symmetry::MirrorZ)
+            .with_sources(vec![room, inner])
+            .with_teams(Team::Red, Team::Yellow)
+            .remapping(Team::Blue, Team::Green);
+        outer.resolve_references(timeline.features_map());
+        assert_eq!(outer.arriving_teams(), vec![Team::Blue]);
+        let mut sides = outer.copy_sides();
+        sides.sort();
+        assert_eq!(sides, vec![Team::Yellow, Team::Green, Team::Green]);
+    }
+
+    #[test]
+    fn a_remap_survives_a_save() {
+        let mirror = Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).remapping(Team::Blue, Team::Green);
+        let text = ron::to_string(&mirror).unwrap();
+        let back: Mirror = ron::from_str(&text).unwrap();
+        assert_eq!(back.remap, mirror.remap);
+        let plain: Mirror = ron::from_str(&ron::to_string(&Mirror::new(PointRef::absolute(0.0, 0.0, 0.0))).unwrap()).unwrap();
+        assert!(plain.remap.is_empty());
     }
 
     /// A second Mirror that keeps one team on both halves leaves the first's split as it was.

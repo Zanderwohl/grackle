@@ -1527,9 +1527,14 @@ and finished by symmetry.
 - **`Side` has one writer, `assign_sides`**, which is ungated and asks every
   frame what the standing Mirrors say: originals get the first team, copies
   the second, and anything no Mirror claims has none. A copy of a copy takes
-  the inner Mirror's second team swapped by each Mirror around it (its pair
-  swaps; a team outside it passes through), so an outer Mirror of Red and Red
-  keeps the inner split and one of Red and Blue makes a checkerboard. Deleting a Mirror,
+  the inner Mirror's copy side carried through each Mirror around it by that
+  Mirror's `TeamMap`: by default its pair swaps and a team outside it passes
+  through, so an outer Mirror of Red and Red keeps the inner split and one of
+  Red and Blue makes a checkerboard. The inspector shows a row per team
+  arriving from a nested Mirror ("Blue becomes"), stored in `remap` only
+  where it differs from the default, which is how four quarters go on four
+  teams. Sides, not materials, are what four teams turn on: the palette
+  already paints a role per team, and spawns read the same `Side`. Deleting a Mirror,
   rolling back past it or dropping a source therefore takes the side away with
   nothing to remember. A feature has no team field of its own, deliberately —
   that would be a second writer.
