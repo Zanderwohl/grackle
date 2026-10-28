@@ -36,15 +36,11 @@ pub fn viewport_layers() -> RenderLayers {
     RenderLayers::from_layers(&[render_layers::WORLD, EDITOR_ONLY_LAYER])
 }
 
-/// What a handle is drawn with: lit like any surface, but never hidden by the
-/// map, so a handle behind a wall can still be seen to be grabbed. Picking
-/// already ignores the map; this makes the drawing agree.
+/// Drawn over the map, since a handle behind a wall can still be picked.
 pub type HandleMaterial = ExtendedMaterial<StandardMaterial, OnTop>;
 
 pub fn on_top(base: StandardMaterial) -> HandleMaterial {
-    // Blended so it lands in the transparent pass, after everything opaque has
-    // been drawn; skipping the depth test in the opaque pass would let a wall
-    // drawn later paint over it.
+    // Blended so it draws after every opaque wall; in the opaque pass a later wall paints over it.
     ExtendedMaterial { base: StandardMaterial { alpha_mode: AlphaMode::Blend, ..base }, extension: OnTop::default() }
 }
 
