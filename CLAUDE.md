@@ -1531,25 +1531,30 @@ re-inserting a `Skeleton`, one component along.
 
 A **Mirror** ([`src/editor/mirror.rs`](src/editor/mirror.rs)) is a feature
 holding a center (a `PointRef`, so it can ride on a room), a `Symmetry` —
-mirror across X, mirror across Z, or rotate 180° about Y — a list of source
-features and two teams. The workflow it serves is a CTF map built as one half
-and finished by symmetry.
+mirror across X, mirror across Z, rotate 180° about Y, or rotate 90° about Y
+four ways — a list of source features and a team per half or quarter. The
+workflow it serves is a CTF map built as one half (or quarter) and finished
+by symmetry.
 
 - **The copies are live.** Every resolve clones each source through its own
   serde, resolves it, and calls `FeatureTrait::mirror` to carry its resolved
   geometry across; the copies stand as `MirrorCopy` children of the Mirror's
-  entity. An edit to a source is an edit to its copy — the sources are the
+  entity. A `Symmetry` is a list of `Motion`s, one copy each (`images`) — a
+  reflection or a whole number of quarter turns, computed exactly so a room's
+  corners stay on round numbers — and a `MirrorCopy` carries which image it
+  is. An edit to a source is an edit to its copy — the sources are the
   Mirror's parents. A copy is not a feature: nothing references it, and
   clicking one selects the Mirror. A type joins by implementing `mirror`; one
   that does not (the animation features) is listed in orange and left out.
 - **A Mirror can mirror a Mirror**, which is how a map gets four-way
   symmetry: a second Mirror listing the first *and* its sources copies both
-  halves. The copy of a Mirror is its copies carried across, the same
-  symmetry about its center's image (the three commute). It is rebuilt on
+  halves. The copy of a Mirror is its copies carried across one by one; a
+  copy is never resolved again, so its own symmetry (which a quarter turn
+  would change) is never asked. It is rebuilt on
   every resolve like any copy, so it takes over its predecessor's entities
   (`Mirror::inherit_entities`, through `FeatureTrait::mirror_mut`) rather than
   standing a second set beside them.
-- **Copies are re-applied, not respawned**, keyed by source in
+- **Copies are re-applied, not respawned**, keyed by source and image in
   `copy_entities`, which is why `apply_to_entity` takes `&mut self`. A
   respawned spawn point rebuilds its body every frame of a drag.
 - **A mirror carries forward and up, and gives up handedness.** A rotation
@@ -1559,14 +1564,20 @@ and finished by symmetry.
   `Rotate180` keeps handedness and has no such caveat.
 - **`Side` has one writer, `assign_sides`**, which is ungated and asks every
   frame what the standing Mirrors say: originals get the first team, copies
-  the second, and anything no Mirror claims has none. A copy of a copy takes
+  the second, and anything no Mirror claims has none. A four-way turn has
+  four teams: `teams` for the originals and the quarter turn, `turned_teams`
+  for the half and three-quarter turns — absent, and not written, when they
+  alternate the first two, so a two-way Mirror's file is unchanged. Any
+  repeat is allowed: Red, Blue, Blue, Green is three teams. A copy of a copy takes
   the inner Mirror's copy side carried through each Mirror around it by that
   Mirror's `TeamMap`: by default its pair swaps and a team outside it passes
   through, so an outer Mirror of Red and Red keeps the inner split and one of
-  Red and Blue makes a checkerboard. The inspector shows a row per team
+  Red and Blue makes a checkerboard; under a four-way turn a team on the
+  cycle moves round it as far as that quarter does. The inspector shows a row per team
   arriving from a nested Mirror ("Blue becomes"), stored in `remap` only
   where it differs from the default, which is how four quarters go on four
-  teams. Sides, not materials, are what four teams turn on: the palette
+  teams — a two-way Mirror only, since a four-way one would need a remap per
+  quarter. Sides, not materials, are what four teams turn on: the palette
   already paints a role per team, and spawns read the same `Side`. Deleting a Mirror,
   rolling back past it or dropping a source therefore takes the side away with
   nothing to remember. A feature has no team field of its own, deliberately —
