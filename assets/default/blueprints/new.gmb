@@ -15,6 +15,8 @@ Blueprint(
                     sides: {
                         Red: "plaster_red",
                         Blue: "plaster_blue",
+                        Yellow: "plaster_yellow",
+                        Green: "plaster_green",
                     },
                     unsided: Some("plaster"),
                 ),

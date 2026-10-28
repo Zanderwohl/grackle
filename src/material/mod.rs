@@ -11,6 +11,7 @@
 
 pub mod gpu;
 pub mod library;
+pub mod picker;
 pub mod ui;
 
 use std::path::{Path, PathBuf};
@@ -261,6 +262,7 @@ impl Plugin for MaterialEditorPlugin {
             .add_systems(Update, (publish_saved_materials, library::paint_rooms).chain())
             // Ungated: it has to run in whatever mode the process started in.
             .add_systems(Update, start_in_the_material_editor)
+            .add_systems(Update, picker::publish_choices.run_if(in_state(AppMode::Editor)))
             .add_systems(OnEnter(AppMode::Material), (switch_the_viewports_off, share_bevys_gpu))
             .add_plugins((gpu::MaterialGpuPlugin, ui::MaterialUiPlugin));
     }

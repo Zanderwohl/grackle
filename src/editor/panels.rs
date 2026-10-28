@@ -19,6 +19,9 @@ use crate::common::net_transport::NetStatus;
 use crate::constants::{BLUEPRINTS_DIR, MAP_BLUEPRINT_EXTENSION};
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::map_metadata::MapMetadata;
+use crate::common::palette::{Palette, RolePaint};
+use crate::common::team::Team;
+use crate::material::picker::material_button;
 use crate::editor::multicam::MulticamState;
 use crate::editor::net_menu::{network_menu, ConnectDialog};
 use crate::editor::save::{self, LoadedBlueprint};
@@ -479,7 +482,7 @@ impl EditorPanels {
                         Ok(()) => {
                             info!("Saved to {:?}", path);
                             current_file.path = Some(path);
-                            editor_features.mark_saved();
+                            editor_features.mark_saved(&map_metadata);
                         }
                         Err(e) => error!("Save failed: {}", e),
                     }
@@ -519,7 +522,7 @@ impl EditorPanels {
                     Some(path) => match save::save(&path, &editor_features, &map_metadata) {
                         Ok(()) => {
                             info!("Saved to {:?}", path);
-                            editor_features.mark_saved();
+                            editor_features.mark_saved(&map_metadata);
                         }
                         Err(e) => error!("Save failed: {}", e),
                     },
@@ -551,15 +554,14 @@ impl EditorPanels {
 
         // Revert is one undo step: only the features that differ from the file are rebuilt.
         match pending_edit {
-            Some(EditAction::Undo) => editor_features.undo(),
-            Some(EditAction::Redo) => editor_features.redo(),
+            Some(EditAction::Undo) => editor_features.undo(&mut map_metadata),
+            Some(EditAction::Redo) => editor_features.redo(&mut map_metadata),
             Some(EditAction::Revert) => {
                 if let Some(path) = current_file.path.clone() {
                     match save::load(&path) {
                         Ok(loaded) => {
                             info!("Reverted to {:?}", path);
-                            editor_features.replace_as_edit(loaded.timeline);
-                            *map_metadata = loaded.metadata;
+                            editor_features.replace_as_edit(loaded.timeline, &loaded.metadata, &mut map_metadata);
                             current_file.deferred_room_bake = 2;
                         }
                         Err(e) => error!("Revert failed: {}", e),
@@ -766,7 +768,74 @@ fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata) {
                 );
                 ui.end_row();
             });
+
+        ui.add_space(8.0);
+        ui.heading(get!("editor.metadata.palette.title"));
+        palette_ui(ui, &mut meta.palette);
     });
+}
+
+/// A role's name is committed when its field is left: renamed per keystroke, the role would move
+/// through the sorted list under the cursor and lose the field's focus.
+fn palette_ui(ui: &mut egui::Ui, palette: &mut Palette) {
+    let mut rename = None;
+    let mut remove = None;
+    for (name, paint) in palette.roles.iter_mut() {
+        ui.push_id(name, |ui| {
+            ui.separator();
+            ui.horizontal(|ui| {
+                let buffer = ui.id().with("name");
+                let mut text = ui.data(|data| data.get_temp::<String>(buffer)).unwrap_or_else(|| name.clone());
+                let field = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 30.0));
+                if field.lost_focus() {
+                    ui.data_mut(|data| data.remove_temp::<String>(buffer));
+                    let text = text.trim();
+                    if !text.is_empty() && text != name {
+                        rename = Some((name.clone(), text.to_owned()));
+                    }
+                } else if field.has_focus() {
+                    ui.data_mut(|data| data.insert_temp(buffer, text));
+                }
+                if ui.button("×").clicked() {
+                    remove = Some(name.clone());
+                }
+            });
+            egui::Grid::new("sides").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+                for team in Team::ALL {
+                    ui.label(team.name());
+                    let mut material = paint.sides.get(&team).cloned();
+                    if material_button(ui, &mut material, false) {
+                        match material {
+                            Some(material) => paint.sides.insert(team, material),
+                            None => paint.sides.remove(&team),
+                        };
+                    }
+                    ui.end_row();
+                }
+                ui.label(get!("editor.metadata.palette.unsided"));
+                material_button(ui, &mut paint.unsided, false);
+                ui.end_row();
+            });
+        });
+    }
+    if let Some(name) = remove {
+        palette.roles.remove(&name);
+    }
+    if let Some((from, to)) = rename
+        && !palette.roles.contains_key(&to)
+        && let Some(paint) = palette.roles.remove(&from)
+    {
+        palette.roles.insert(to, paint);
+    }
+    ui.separator();
+    if ui.button(get!("editor.metadata.palette.add")).clicked() {
+        let base = get!("editor.metadata.palette.new_role");
+        let name = std::iter::once(base.clone())
+            .chain((2..).map(|n| format!("{base} {n}")))
+            .find(|name| !palette.roles.contains_key(name))
+            .expect("an unbounded sequence of names has a free one");
+        palette.roles.insert(name, RolePaint::default());
+    }
 }
 
 
