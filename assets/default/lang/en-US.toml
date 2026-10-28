@@ -69,7 +69,6 @@ room_geometry = "Room Geometry"
 auto_rooms = "Auto-bake Rooms"
 sunlight = "Sunlight"
 auto_sunlight = "Auto-bake Sunlight"
-baking_sunlight = "Baking sunlight"
 
 [show]
 title = "Show/Hide"

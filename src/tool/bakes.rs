@@ -143,7 +143,6 @@ impl BakePlugin {
                 }
                 if baking_sun {
                     ui.spinner();
-                    ui.label(get!("bakes.baking_sunlight"));
                 }
             });
             if ui.button("Log ECS").clicked() {
