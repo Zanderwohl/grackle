@@ -7,6 +7,7 @@ use crate::common::app_mode::AppMode;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::footprint_room::FootprintRoom;
 use crate::editor::input::CurrentMouseInput;
+use crate::editor::multicam::{on_top, HandleMaterial};
 use crate::prop::sketch::SketchId;
 use crate::tool::tool_helpers::{closest_param_on_axis, snap_vec3};
 use crate::tool::Tools;
@@ -43,8 +44,8 @@ pub enum FootprintHandle {
 #[derive(Resource, Default)]
 pub struct FootprintDragState {
     mesh: Option<Handle<Mesh>>,
-    idle: Option<Handle<StandardMaterial>>,
-    highlight: Option<Handle<StandardMaterial>>,
+    idle: Option<Handle<HandleMaterial>>,
+    highlight: Option<Handle<HandleMaterial>>,
     /// The footprint and the corners its handles were made for: a corner
     /// added or taken away is a new set of handles.
     tracked: Option<(FeatureId, Vec<SketchId>)>,
@@ -75,21 +76,21 @@ impl FootprintDragState {
         self.grabbed.is_some()
     }
 
-    fn ensure_assets(&mut self, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+    fn ensure_assets(&mut self, meshes: &mut Assets<Mesh>, materials: &mut Assets<HandleMaterial>) {
         if self.mesh.is_some() {
             return;
         }
         self.mesh = Some(meshes.add(Cuboid::new(0.25, 0.25, 0.25)));
-        self.idle = Some(materials.add(StandardMaterial {
+        self.idle = Some(materials.add(on_top(StandardMaterial {
             base_color: Color::srgb_u8(230, 220, 160),
             emissive: LinearRgba::rgb(0.3, 0.25, 0.1),
             ..default()
-        }));
-        self.highlight = Some(materials.add(StandardMaterial {
+        })));
+        self.highlight = Some(materials.add(on_top(StandardMaterial {
             base_color: Color::srgb_u8(255, 255, 220),
             emissive: LinearRgba::rgb(0.45, 0.4, 0.25),
             ..default()
-        }));
+        })));
     }
 
     fn spawn_handles(
@@ -98,7 +99,7 @@ impl FootprintDragState {
         handles: Query<Entity, With<FootprintHandle>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
-        mut materials: ResMut<Assets<StandardMaterial>>,
+        mut materials: ResMut<Assets<HandleMaterial>>,
     ) {
         let selected = features.selected_feature().and_then(|id| {
             let footprint = features.get_feature(&id)?.object().footprint()?;
@@ -148,7 +149,7 @@ impl FootprintDragState {
     }
 
     fn drag(
-        mut handles: Query<(Entity, &FootprintHandle, &mut MeshMaterial3d<StandardMaterial>)>,
+        mut handles: Query<(Entity, &FootprintHandle, &mut MeshMaterial3d<HandleMaterial>)>,
         mut ray_cast: MeshRayCast,
         mouse_input: Res<CurrentMouseInput>,
         mut commands: Commands,
@@ -240,10 +241,10 @@ impl FootprintDragState {
 /// not already the one wanted: this runs every frame, and a written material
 /// is re-extracted for rendering.
 fn paint(
-    handles: &mut Query<(Entity, &FootprintHandle, &mut MeshMaterial3d<StandardMaterial>)>,
+    handles: &mut Query<(Entity, &FootprintHandle, &mut MeshMaterial3d<HandleMaterial>)>,
     highlighted: Option<Entity>,
-    idle: &Handle<StandardMaterial>,
-    highlight: &Handle<StandardMaterial>,
+    idle: &Handle<HandleMaterial>,
+    highlight: &Handle<HandleMaterial>,
 ) {
     for (entity, _, mut material) in handles.iter_mut() {
         let wanted = if highlighted == Some(entity) { highlight } else { idle };

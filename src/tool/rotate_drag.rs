@@ -16,6 +16,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::rotation::euler_axis_world;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
+use crate::editor::multicam::{on_top, HandleMaterial};
 use crate::tool::point_drag::PointDragState;
 use crate::tool::tool_helpers::angle_on_plane;
 use crate::tool::Tools;
@@ -66,8 +67,8 @@ pub struct RotateDragState {
     tracked_feature: Option<FeatureId>,
     tracked_axes: Vec<u8>,
     ring_mesh: Option<Handle<Mesh>>,
-    materials: [Option<Handle<StandardMaterial>>; 3],
-    highlight_materials: [Option<Handle<StandardMaterial>>; 3],
+    materials: [Option<Handle<HandleMaterial>>; 3],
+    highlight_materials: [Option<Handle<HandleMaterial>>; 3],
     grab: Option<RingGrab>,
 }
 
@@ -79,7 +80,7 @@ impl RotateDragState {
     fn ensure_assets(
         &mut self,
         meshes: &mut Assets<Mesh>,
-        materials: &mut Assets<StandardMaterial>,
+        materials: &mut Assets<HandleMaterial>,
     ) {
         if self.ring_mesh.is_some() {
             return;
@@ -112,16 +113,16 @@ impl RotateDragState {
         ];
 
         for i in 0..3 {
-            self.materials[i] = Some(materials.add(StandardMaterial {
+            self.materials[i] = Some(materials.add(on_top(StandardMaterial {
                 base_color: colors[i],
                 emissive: emissive[i],
                 ..default()
-            }));
-            self.highlight_materials[i] = Some(materials.add(StandardMaterial {
+            })));
+            self.highlight_materials[i] = Some(materials.add(on_top(StandardMaterial {
                 base_color: highlight_colors[i],
                 emissive: highlight_emissive[i],
                 ..default()
-            }));
+            })));
         }
     }
 
@@ -137,7 +138,7 @@ impl RotateDragState {
         rings: Query<Entity, With<RotateDragRing>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
-        mut materials: ResMut<Assets<StandardMaterial>>,
+        mut materials: ResMut<Assets<HandleMaterial>>,
     ) {
         let selected = features.selected_feature();
         let axes = Self::axes_for(&features, selected);
@@ -204,7 +205,7 @@ impl RotateDragState {
     }
 
     fn handle_ring_drag(
-        mut parts: Query<(&RotateDragRingPart, &mut MeshMaterial3d<StandardMaterial>)>,
+        mut parts: Query<(&RotateDragRingPart, &mut MeshMaterial3d<HandleMaterial>)>,
         mut ray_cast: MeshRayCast,
         mouse_input: Res<CurrentMouseInput>,
         point_drag: Res<PointDragState>,
@@ -310,7 +311,7 @@ impl RotateDragState {
     /// wanted — this runs every frame the pointer is over a viewport, and an
     /// unconditional write re-extracts every ring for rendering for nothing.
     fn paint(
-        parts: &mut Query<(&RotateDragRingPart, &mut MeshMaterial3d<StandardMaterial>)>,
+        parts: &mut Query<(&RotateDragRingPart, &mut MeshMaterial3d<HandleMaterial>)>,
         highlighted: Option<u8>,
         state: &RotateDragState,
     ) {
@@ -392,11 +393,11 @@ mod tests {
     #[test]
     fn hovering_the_same_ring_again_writes_nothing() {
         let mut world = World::new();
-        let mut materials = Assets::<StandardMaterial>::default();
+        let mut materials = Assets::<HandleMaterial>::default();
         let mut state = RotateDragState::default();
         for i in 0..3 {
-            state.materials[i] = Some(materials.add(StandardMaterial::default()));
-            state.highlight_materials[i] = Some(materials.add(StandardMaterial::default()));
+            state.materials[i] = Some(materials.add(on_top(StandardMaterial::default())));
+            state.highlight_materials[i] = Some(materials.add(on_top(StandardMaterial::default())));
         }
         let parts: Vec<Entity> = (0u8..3)
             .map(|axis| world.spawn((
@@ -408,13 +409,13 @@ mod tests {
 
         let mut schedule = Schedule::default();
         schedule.add_systems(|
-            mut parts: Query<(&RotateDragRingPart, &mut MeshMaterial3d<StandardMaterial>)>,
+            mut parts: Query<(&RotateDragRingPart, &mut MeshMaterial3d<HandleMaterial>)>,
             state: Res<RotateDragState>,
         | RotateDragState::paint(&mut parts, Some(2), &state));
 
         schedule.run(&mut world);
         let lit = world.resource::<RotateDragState>().highlight_materials[2].clone().unwrap();
-        assert_eq!(world.get::<MeshMaterial3d<StandardMaterial>>(parts[2]).unwrap().0, lit);
+        assert_eq!(world.get::<MeshMaterial3d<HandleMaterial>>(parts[2]).unwrap().0, lit);
 
         let archetypes: Vec<_> = parts.iter().map(|e| world.entity(*e).archetype().id()).collect();
         world.clear_trackers();
@@ -422,7 +423,7 @@ mod tests {
         for (part, archetype) in parts.iter().zip(archetypes) {
             let entity = world.entity(*part);
             assert_eq!(entity.archetype().id(), archetype);
-            assert!(!entity.get_ref::<MeshMaterial3d<StandardMaterial>>().unwrap().is_changed());
+            assert!(!entity.get_ref::<MeshMaterial3d<HandleMaterial>>().unwrap().is_changed());
         }
     }
 }

@@ -8,7 +8,7 @@ use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline, FeatureTrai
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::trigger::EditorTrigger;
 use crate::editor::input::CurrentMouseInput;
-use crate::editor::multicam::Multicam;
+use crate::editor::multicam::{on_top, HandleMaterial, Multicam};
 use crate::tool::tool_helpers::*;
 use crate::tool::Tools;
 
@@ -378,8 +378,8 @@ impl HandleAxis {
 #[derive(Resource, Default)]
 pub struct RoomDragState {
     handle_mesh: Option<Handle<Mesh>>,
-    idle_material: Option<Handle<StandardMaterial>>,
-    highlight_material: Option<Handle<StandardMaterial>>,
+    idle_material: Option<Handle<HandleMaterial>>,
+    highlight_material: Option<Handle<HandleMaterial>>,
     tracked_feature: Option<FeatureId>,
     grabbed_handle: Option<HandleAxis>,
     grab_offset: Option<f32>,
@@ -393,20 +393,20 @@ impl RoomDragState {
     fn ensure_assets(
         &mut self,
         meshes: &mut Assets<Mesh>,
-        materials: &mut Assets<StandardMaterial>,
+        materials: &mut Assets<HandleMaterial>,
     ) {
         if self.handle_mesh.is_none() {
             self.handle_mesh = Some(meshes.add(Cuboid::new(0.3, 0.3, 0.3)));
-            self.idle_material = Some(materials.add(StandardMaterial {
+            self.idle_material = Some(materials.add(on_top(StandardMaterial {
                 base_color: Color::srgb_u8(180, 230, 180),
                 emissive: LinearRgba::rgb(0.2, 0.3, 0.2),
                 ..Default::default()
-            }));
-            self.highlight_material = Some(materials.add(StandardMaterial {
+            })));
+            self.highlight_material = Some(materials.add(on_top(StandardMaterial {
                 base_color: Color::srgb_u8(220, 255, 255),
                 emissive: LinearRgba::rgb(0.3, 0.4, 0.4),
                 ..Default::default()
-            }));
+            })));
         }
     }
 
@@ -416,7 +416,7 @@ impl RoomDragState {
         handles: Query<Entity, With<RoomDragHandle>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
-        mut materials: ResMut<Assets<StandardMaterial>>,
+        mut materials: ResMut<Assets<HandleMaterial>>,
     ) {
         let current_feature = features.selected_feature();
 
@@ -473,7 +473,7 @@ impl RoomDragState {
     }
 
     fn handle_dragging(
-        mut handles: Query<(Entity, &RoomDragHandle, &mut MeshMaterial3d<StandardMaterial>)>,
+        mut handles: Query<(Entity, &RoomDragHandle, &mut MeshMaterial3d<HandleMaterial>)>,
         mut ray_cast: MeshRayCast,
         mouse_input: Res<CurrentMouseInput>,
         mut commands: Commands,
@@ -585,10 +585,10 @@ impl RoomDragState {
     /// frame the pointer is over a viewport, and an unconditional write is a
     /// changed component on every handle, each re-extracted for rendering.
     fn paint(
-        handles: &mut Query<(Entity, &RoomDragHandle, &mut MeshMaterial3d<StandardMaterial>)>,
+        handles: &mut Query<(Entity, &RoomDragHandle, &mut MeshMaterial3d<HandleMaterial>)>,
         highlighted: Option<Entity>,
-        idle: &Handle<StandardMaterial>,
-        highlight: &Handle<StandardMaterial>,
+        idle: &Handle<HandleMaterial>,
+        highlight: &Handle<HandleMaterial>,
     ) {
         for (entity, _, mut material) in handles.iter_mut() {
             let wanted = if highlighted == Some(entity) { highlight } else { idle };
@@ -700,9 +700,9 @@ mod drag_handle_tests {
     #[test]
     fn hovering_the_same_handle_again_writes_nothing() {
         let mut world = World::new();
-        let mut materials = Assets::<StandardMaterial>::default();
-        let idle = materials.add(StandardMaterial::default());
-        let lit = materials.add(StandardMaterial::default());
+        let mut materials = Assets::<HandleMaterial>::default();
+        let idle = materials.add(on_top(StandardMaterial::default()));
+        let lit = materials.add(on_top(StandardMaterial::default()));
         let handles: Vec<Entity> = HandleAxis::face_centers(Vec3::ZERO, Vec3::ONE)
             .into_iter()
             .map(|(_, axis)| world.spawn((RoomDragHandle { axis }, MeshMaterial3d(idle.clone()))).id())
@@ -712,12 +712,12 @@ mod drag_handle_tests {
         let mut schedule = Schedule::default();
         let (i, l) = (idle.clone(), lit.clone());
         schedule.add_systems(move |
-            mut handles: Query<(Entity, &RoomDragHandle, &mut MeshMaterial3d<StandardMaterial>)>,
+            mut handles: Query<(Entity, &RoomDragHandle, &mut MeshMaterial3d<HandleMaterial>)>,
         | RoomDragState::paint(&mut handles, Some(hovered), &i, &l));
 
         schedule.run(&mut world);
-        assert_eq!(world.get::<MeshMaterial3d<StandardMaterial>>(hovered).unwrap().0, lit);
-        assert_eq!(world.get::<MeshMaterial3d<StandardMaterial>>(handles[0]).unwrap().0, idle);
+        assert_eq!(world.get::<MeshMaterial3d<HandleMaterial>>(hovered).unwrap().0, lit);
+        assert_eq!(world.get::<MeshMaterial3d<HandleMaterial>>(handles[0]).unwrap().0, idle);
 
         let archetypes: Vec<_> = handles.iter().map(|e| world.entity(*e).archetype().id()).collect();
         world.clear_trackers();
@@ -725,7 +725,7 @@ mod drag_handle_tests {
         for (handle, archetype) in handles.iter().zip(archetypes) {
             let entity = world.entity(*handle);
             assert_eq!(entity.archetype().id(), archetype);
-            assert!(!entity.get_ref::<MeshMaterial3d<StandardMaterial>>().unwrap().is_changed());
+            assert!(!entity.get_ref::<MeshMaterial3d<HandleMaterial>>().unwrap().is_changed());
         }
     }
 }

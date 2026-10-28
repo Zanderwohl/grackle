@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
+use crate::editor::multicam::{on_top, HandleMaterial};
 use crate::tool::rotate_drag::RotateDragState;
 use crate::tool::tool_helpers::closest_param_on_axis;
 use crate::tool::Tools;
@@ -41,8 +42,8 @@ pub struct PointDragState {
     tracked_feature: Option<FeatureId>,
     shaft_mesh: Option<Handle<Mesh>>,
     head_mesh: Option<Handle<Mesh>>,
-    materials: [Option<Handle<StandardMaterial>>; 3],
-    highlight_materials: [Option<Handle<StandardMaterial>>; 3],
+    materials: [Option<Handle<HandleMaterial>>; 3],
+    highlight_materials: [Option<Handle<HandleMaterial>>; 3],
     grabbed_axis: Option<u8>,
     grab_offset: Option<f32>,
 }
@@ -76,7 +77,7 @@ impl PointDragState {
     fn ensure_assets(
         &mut self,
         meshes: &mut Assets<Mesh>,
-        materials: &mut Assets<StandardMaterial>,
+        materials: &mut Assets<HandleMaterial>,
     ) {
         if self.shaft_mesh.is_some() {
             return;
@@ -106,16 +107,16 @@ impl PointDragState {
         ];
 
         for i in 0..3 {
-            self.materials[i] = Some(materials.add(StandardMaterial {
+            self.materials[i] = Some(materials.add(on_top(StandardMaterial {
                 base_color: colors[i],
                 emissive: emissive[i],
                 ..default()
-            }));
-            self.highlight_materials[i] = Some(materials.add(StandardMaterial {
+            })));
+            self.highlight_materials[i] = Some(materials.add(on_top(StandardMaterial {
                 base_color: highlight_colors[i],
                 emissive: highlight_emissive[i],
                 ..default()
-            }));
+            })));
         }
     }
 
@@ -125,7 +126,7 @@ impl PointDragState {
         arrows: Query<Entity, With<PointDragArrow>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
-        mut materials: ResMut<Assets<StandardMaterial>>,
+        mut materials: ResMut<Assets<HandleMaterial>>,
     ) {
         let current = features.selected_feature();
 
@@ -198,7 +199,7 @@ impl PointDragState {
     }
 
     fn handle_arrow_drag(
-        mut parts: Query<(&PointDragArrowPart, &mut MeshMaterial3d<StandardMaterial>)>,
+        mut parts: Query<(&PointDragArrowPart, &mut MeshMaterial3d<HandleMaterial>)>,
         mut ray_cast: MeshRayCast,
         mouse_input: Res<CurrentMouseInput>,
         rotate_drag: Res<RotateDragState>,
@@ -303,7 +304,7 @@ impl PointDragState {
     /// an unconditional write is a changed component on every arrow mesh, so
     /// every one of them re-extracted for rendering for nothing.
     fn paint(
-        parts: &mut Query<(&PointDragArrowPart, &mut MeshMaterial3d<StandardMaterial>)>,
+        parts: &mut Query<(&PointDragArrowPart, &mut MeshMaterial3d<HandleMaterial>)>,
         highlighted: Option<u8>,
         state: &PointDragState,
     ) {
@@ -344,11 +345,11 @@ mod tests {
     #[test]
     fn hovering_the_same_arrow_again_writes_nothing() {
         let mut world = World::new();
-        let mut materials = Assets::<StandardMaterial>::default();
+        let mut materials = Assets::<HandleMaterial>::default();
         let mut state = PointDragState::default();
         for i in 0..3 {
-            state.materials[i] = Some(materials.add(StandardMaterial::default()));
-            state.highlight_materials[i] = Some(materials.add(StandardMaterial::default()));
+            state.materials[i] = Some(materials.add(on_top(StandardMaterial::default())));
+            state.highlight_materials[i] = Some(materials.add(on_top(StandardMaterial::default())));
         }
         let parts: Vec<Entity> = (0u8..3)
             .map(|axis| world.spawn((
@@ -360,7 +361,7 @@ mod tests {
 
         let mut schedule = Schedule::default();
         schedule.add_systems(|
-            mut parts: Query<(&PointDragArrowPart, &mut MeshMaterial3d<StandardMaterial>)>,
+            mut parts: Query<(&PointDragArrowPart, &mut MeshMaterial3d<HandleMaterial>)>,
             state: Res<PointDragState>,
         | PointDragState::paint(&mut parts, Some(1), &state));
 
@@ -368,8 +369,8 @@ mod tests {
         let state = world.resource::<PointDragState>();
         let lit = state.highlight_materials[1].clone().unwrap();
         let idle = state.materials[0].clone().unwrap();
-        assert_eq!(world.get::<MeshMaterial3d<StandardMaterial>>(parts[1]).unwrap().0, lit);
-        assert_eq!(world.get::<MeshMaterial3d<StandardMaterial>>(parts[0]).unwrap().0, idle);
+        assert_eq!(world.get::<MeshMaterial3d<HandleMaterial>>(parts[1]).unwrap().0, lit);
+        assert_eq!(world.get::<MeshMaterial3d<HandleMaterial>>(parts[0]).unwrap().0, idle);
 
         let archetypes: Vec<_> = parts.iter().map(|e| world.entity(*e).archetype().id()).collect();
         world.clear_trackers();
@@ -377,7 +378,7 @@ mod tests {
         for (part, archetype) in parts.iter().zip(archetypes) {
             let entity = world.entity(*part);
             assert_eq!(entity.archetype().id(), archetype);
-            assert!(!entity.get_ref::<MeshMaterial3d<StandardMaterial>>().unwrap().is_changed());
+            assert!(!entity.get_ref::<MeshMaterial3d<HandleMaterial>>().unwrap().is_changed());
         }
     }
 }
