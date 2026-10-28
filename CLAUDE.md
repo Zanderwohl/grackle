@@ -2517,6 +2517,17 @@ always played on the whole map**: the Editor → Play transition rolls to the
 end and runs `sync_entities` there, before `OnEnter(Play)` bakes and builds
 collision, so the rooms past the bar have entities in time.
 
+**Rows drag to reorder**, one at a time — a row in a multiple selection does
+not drag — and stop against what the feature names and what names it
+(`FeatureTimeline::reorder_bounds`). Escape or the right button calls a drag
+off. The range, the drop line and the cancel are
+[`src/common/reorder.rs`](src/common/reorder.rs), shared with the prop
+editor's list so the two cannot disagree. The bar stays between the same two
+rows: dragging the feature it sits under hands it to the row above rather than
+carrying it off. A feature's parents are always asked of it
+(`Feature::parents` calls `parent_ids`) and never stored, so no edit can leave
+them stale.
+
 ## Save format
 
 `.gmb` is pretty RON: the map's metadata, the next id, and every feature in

@@ -49,6 +49,7 @@ pub mod palette;
 pub mod sky;
 pub mod render_layers;
 pub mod shortcuts;
+pub mod reorder;
 
 #[derive(Debug)]
 pub enum PointResolutionError {

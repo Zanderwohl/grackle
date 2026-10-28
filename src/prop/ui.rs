@@ -36,6 +36,7 @@ use crate::prop::sketch::{Sketch, SketchId};
 use crate::prop::sketch_edit::{sketch_of, sketch_of_mut, SketchPick, SketchSession, SketchTool};
 use crate::common::class::Class;
 use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
+use crate::common::reorder;
 use crate::common::shortcuts::chords;
 use crate::prop::feature::{BooleanOp, End, FeatureOp, PatternKind, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
@@ -793,9 +794,12 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session
         }
 
         // After every row has reported its rect.
-        if let Some(at) = dragging {
+        let cancelled = reorder::cancelled(ui, ui.id(), dragging.is_some());
+        if let Some(at) = dragging
+            && !cancelled
+        {
             let row = &entries[at];
-            let target = show_the_drop(ui, &rects, row);
+            let target = reorder::show_the_drop(ui, &rects, &row.id, &row.pins, &row.legal);
             if dropped {
                 let id = row.id;
                 pending = Some(Box::new(move |editor: &mut PropEditor| {
@@ -824,55 +828,6 @@ enum RowClick {
     Only,
     /// Ctrl/Cmd held.
     Toggle,
-}
-
-/// Draws where a dragged feature would land and marks what pins it. The legal
-/// range is one contiguous span (`PropDoc::legal_range`), so clamping is enough.
-fn show_the_drop(ui: &egui::Ui, rects: &[(PropFeatureId, egui::Rect)], row: &Row) -> usize {
-    let others: Vec<egui::Rect> = rects
-        .iter()
-        .filter(|(id, _)| *id != row.id)
-        .map(|(_, rect)| *rect)
-        .collect();
-    if others.is_empty() {
-        return 0;
-    }
-
-    let pointer = ui
-        .ctx()
-        .pointer_interact_pos()
-        .map(|pointer| pointer.y)
-        .unwrap_or(f32::NEG_INFINITY);
-    // Midpoints rather than edges, so the line flips to the next gap when the
-    // pointer is more than half way into a row.
-    let wanted = others.iter().take_while(|rect| rect.center().y < pointer).count();
-    let target = wanted.clamp(*row.legal.start(), *row.legal.end());
-
-    let painter = ui.painter();
-    for (id, rect) in rects {
-        if row.pins.contains(id) {
-            // A bar rather than an outline, so it does not clash with the
-            // selection highlight.
-            painter.rect_filled(
-                egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
-                0.0,
-                ui.visuals().warn_fg_color,
-            );
-        }
-    }
-
-    let line = match others.get(target) {
-        Some(rect) => rect.top(),
-        // Past the last row, where a feature with no dependants may go.
-        None => others.last().expect("checked non-empty above").bottom(),
-    };
-    painter.hline(
-        others[0].x_range(),
-        line,
-        egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
-    );
-
-    target
 }
 
 /// The verbs under the menu bar, each a [`Task`], so none is grayed out.
