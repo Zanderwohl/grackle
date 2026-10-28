@@ -282,10 +282,8 @@ impl FeatureTimeline {
         self.reset_history();
     }
 
-    /// A newer copy of the map in hand, from the server: only features whose
-    /// serialized form differs are rebuilt, as an undo does, so moving one
-    /// thing does not rebuild every room. No history either way. Returns
-    /// whether a feature with rooms came, went or changed.
+    /// The server's newer copy, rebuilding only what differs so one edit does
+    /// not rebuild every room. Returns whether any rooms changed.
     pub fn adopt_changes(&mut self, incoming: FeatureTimeline) -> bool {
         let rooms = self.restore(&incoming.state());
         self.reset_history();
@@ -515,8 +513,8 @@ impl FeatureTimeline {
         self.mark_saved();
     }
 
-    /// Rebuild only the features whose serialized form differs, and everything built on them. Returns
-    /// whether a feature with rooms came, went or changed.
+    /// Rebuilds only the features whose serialized form differs, and what is
+    /// built on them. Returns whether any rooms changed.
     fn restore(&mut self, target: &MapState) -> bool {
         let has_rooms = |feature: &Feature| !feature.object.rooms().is_empty();
         let mut rooms_touched = false;

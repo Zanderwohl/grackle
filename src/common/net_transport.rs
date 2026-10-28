@@ -277,9 +277,8 @@ fn report_status(
     status.set_if_neq(next);
 }
 
-/// A link that failed is nothing to be connected to: going solo takes the
-/// spectating, the read-only editor and Disconnect away with it, and
-/// [`NetStatus::Failed`] still says what happened.
+/// Going solo clears the spectating and Disconnect; [`NetStatus::Failed`]
+/// still says why.
 fn drop_a_failed_link(status: Res<NetStatus>, role: Res<NetRole>, mut requests: MessageWriter<NetRequest>) {
     if matches!(*status, NetStatus::Failed(_)) && role.is_online() {
         requests.write(NetRequest::GoSolo);

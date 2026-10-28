@@ -114,8 +114,7 @@ pub enum Tools {
     Footprint,
     Mirror,
     Retarget,
-    /// Forced on a client, which only watches the server's map: no tool runs
-    /// under it, so nothing local can drift from what the server sends.
+    /// A client's: no tool runs under it.
     Spectate,
 }
 

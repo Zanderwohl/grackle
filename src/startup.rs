@@ -92,7 +92,6 @@ impl EditorParams {
                     .action(ArgAction::Set)
                     .help("Join a game somebody else is hosting.")
             )
-            // So two copies on one machine can be two players.
             .arg(
                 Arg::new("profile")
                     .long("profile")
