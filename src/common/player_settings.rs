@@ -1,6 +1,8 @@
 //! What the person at this machine has chosen about how they play: a name and
 //! whether to reload unasked. Edited in the map editor's Player tab, kept in
 //! the user pack, and sent to the server, which is where it is acted on.
+//! `--profile N` keeps a second set in a file of its own, so two copies on one
+//! machine can be two players.
 //!
 //! The server keeps a client's as a [`ClientSettings`] on its link entity,
 //! beside its `Identity`, and its own as the [`PlayerSettings`] resource.
@@ -67,11 +69,21 @@ pub fn settings_of<'a>(
 /// Reliable and ordered, so the latest change is the one that stands.
 pub struct SettingsChannel;
 
-pub struct PlayerSettingsPlugin;
+/// Which settings file this process reads and writes: `None` is the usual
+/// player, `Some(1..=9)` a profile.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Profile(pub Option<u8>);
+
+#[derive(Default)]
+pub struct PlayerSettingsPlugin {
+    pub profile: Option<u8>,
+}
 
 impl Plugin for PlayerSettingsPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(load())
+        let profile = Profile(self.profile);
+        app.insert_resource(profile)
+            .insert_resource(load(profile))
             .add_systems(Update, save_on_change.run_if(resource_changed::<PlayerSettings>));
     }
 }
@@ -91,18 +103,22 @@ impl Plugin for PlayerSettingsSyncPlugin {
     }
 }
 
-fn path() -> std::path::PathBuf {
-    Path::new(USER_PACK).join(SETTINGS_FILE)
+fn path(profile: Profile) -> std::path::PathBuf {
+    let file = match profile.0 {
+        None => SETTINGS_FILE.to_owned(),
+        Some(n) => format!("player-{n}.toml"),
+    };
+    Path::new(USER_PACK).join(file)
 }
 
 /// Defaults if there is no file or it will not read, which is a first run
 /// rather than an error worth stopping for.
-fn load() -> PlayerSettings {
+fn load(profile: Profile) -> PlayerSettings {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Ok(text) = std::fs::read_to_string(path()) {
+    if let Ok(text) = std::fs::read_to_string(path(profile)) {
         match toml::from_str::<PlayerSettings>(&text) {
             Ok(settings) => return settings.cleaned(),
-            Err(e) => warn!("{} will not read, so the defaults stand: {e}", path().display()),
+            Err(e) => warn!("{} will not read, so the defaults stand: {e}", path(profile).display()),
         }
     }
     PlayerSettings::default()
@@ -110,7 +126,7 @@ fn load() -> PlayerSettings {
 
 /// On every change: a name is typed a letter at a time, and the file is a few
 /// bytes.
-fn save_on_change(settings: Res<PlayerSettings>) {
+fn save_on_change(settings: Res<PlayerSettings>, profile: Res<Profile>) {
     if settings.is_added() {
         return;
     }
@@ -120,8 +136,8 @@ fn save_on_change(settings: Res<PlayerSettings>) {
             Ok(text) => text,
             Err(e) => return warn!("Could not write the player settings: {e}"),
         };
-        if let Err(e) = std::fs::write(path(), text) {
-            warn!("Could not save {}: {e}", path().display());
+        if let Err(e) = std::fs::write(path(*profile), text) {
+            warn!("Could not save {}: {e}", path(*profile).display());
         }
     }
 }
@@ -154,6 +170,13 @@ fn take_client_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_profile_has_its_own_file() {
+        assert!(path(Profile(None)).ends_with("player.toml"));
+        assert!(path(Profile(Some(2))).ends_with("player-2.toml"));
+        assert_ne!(path(Profile(Some(2))), path(Profile(Some(3))));
+    }
 
     #[test]
     fn a_name_loses_its_control_characters() {

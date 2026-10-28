@@ -449,6 +449,8 @@ tab: a name (anything, no uniqueness, cut to 24 characters) and auto-reload
 (on by default). `PlayerSettings`
 ([`player_settings.rs`](../src/common/player_settings.rs)) is a resource kept
 in `assets/user/player.toml` and saved on every change, natively only.
+`--profile N` (1–9) reads and writes `assets/user/player-N.toml` instead,
+so two copies on one machine can join as two named players.
 
 **It is acted on by the authority.** A client sends its settings on
 connecting and on every change (`SettingsChannel`, client to server); the

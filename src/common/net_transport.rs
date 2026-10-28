@@ -12,7 +12,7 @@ use lightyear::prediction::prelude::PredictionManager;
 use lightyear::prelude::server::{NetcodeConfig as ServerNetcodeConfig, NetcodeServer, ServerUdpIo, Start, Started};
 use lightyear::prelude::*;
 
-use crate::common::net::NetRole;
+use crate::common::net::{NetRequest, NetRole};
 use crate::constants::{one_tick, DEV_PRIVATE_KEY, NETCODE_PROTOCOL_ID, TICK_HZ};
 
 /// The link entity: our listen server or our client. A marker, so teardown
@@ -83,6 +83,7 @@ impl Plugin for NetTransportPlugin {
                 (
                     open_link_for_role.run_if(resource_changed::<NetRole>),
                     report_status,
+                    drop_a_failed_link,
                     // Keyed on lacking `Replicate` rather than on `Added`, and
                     // gated rather than returning early, so whatever was
                     // standing before somebody picked Host is sent too.
@@ -111,7 +112,10 @@ fn open_link_for_role(
     for entity in &existing {
         commands.entity(entity).despawn();
     }
-    *status = NetStatus::Offline;
+    // Going solo because the link failed keeps saying why.
+    if !(*role == NetRole::Solo && matches!(*status, NetStatus::Failed(_))) {
+        *status = NetStatus::Offline;
+    }
 
     match &*role {
         NetRole::Solo => {}
@@ -239,15 +243,29 @@ fn report_status(
     status.set_if_neq(next);
 }
 
+/// A link that failed is nothing to be connected to: going solo takes the
+/// spectating, the read-only editor and Disconnect away with it, and
+/// [`NetStatus::Failed`] still says what happened.
+fn drop_a_failed_link(status: Res<NetStatus>, role: Res<NetRole>, mut requests: MessageWriter<NetRequest>) {
+    if matches!(*status, NetStatus::Failed(_)) && role.is_online() {
+        requests.write(NetRequest::GoSolo);
+    }
+}
+
 /// Blocking DNS on the main thread: native only and once per menu click.
 /// WebTransport resolves its own URLs, so the browser will not come here.
+///
+/// IPv4 first: a listen server binds IPv4 only, and macOS resolves
+/// `localhost` to `::1` first, which times out against it.
 fn resolve(host: &str, port: u16) -> Result<SocketAddr, String> {
     use std::net::ToSocketAddrs;
 
-    (host, port)
-        .to_socket_addrs()
-        .map_err(|error| error.to_string())?
-        .next()
+    let addresses: Vec<SocketAddr> = (host, port).to_socket_addrs().map_err(|error| error.to_string())?.collect();
+    addresses
+        .iter()
+        .find(|address| address.is_ipv4())
+        .or(addresses.first())
+        .copied()
         .ok_or_else(|| format!("{host} resolved to no addresses"))
 }
 
@@ -263,6 +281,28 @@ mod tests {
     #[test]
     fn a_hostname_that_does_not_is_an_error_rather_than_a_panic() {
         assert!(resolve("this-host-does-not-exist.invalid", 27100).is_err());
+    }
+
+    #[test]
+    fn a_failed_link_goes_solo_once() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<Messages<NetRequest>>();
+        world.insert_resource(NetStatus::Failed("timed out".into()));
+        world.insert_resource(NetRole::Client { host: "example".into(), port: 1 });
+        world.run_system_once(drop_a_failed_link).unwrap();
+        let sent = |world: &World| world.resource::<Messages<NetRequest>>().len();
+        assert_eq!(sent(&world), 1);
+        assert!(matches!(world.resource::<Messages<NetRequest>>().iter_current_update_messages().next(), Some(NetRequest::GoSolo)));
+
+        *world.resource_mut::<NetRole>() = NetRole::Solo;
+        world.run_system_once(drop_a_failed_link).unwrap();
+        assert_eq!(sent(&world), 1, "already solo, and asked again");
+    }
+
+    #[test]
+    fn localhost_resolves_to_ipv4_where_the_listen_server_is() {
+        assert!(resolve("localhost", 27100).unwrap().is_ipv4());
     }
 
     /// Losing the port would connect to the right machine on the wrong port.

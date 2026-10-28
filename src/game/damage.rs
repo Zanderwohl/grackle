@@ -17,7 +17,8 @@ use crate::common::damage::{Armor, Damage, DamageDealt, Damageable, Died};
 use crate::common::game_rules::GameRules;
 use crate::common::team::Allegiances;
 use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage, suicide};
-use crate::game::player::PlayerCamera;
+use crate::common::damage::{DamageSource, PlayerId};
+use crate::game::player::{LocalPlayer, PlayerCamera};
 
 /// How long a damage number lasts, in seconds.
 pub const DAMAGE_NUMBER_LIFETIME: f32 = 2.0;
@@ -140,8 +141,24 @@ pub fn apply_damage(
     }
 }
 
-fn spawn_damage_numbers(mut commands: Commands, mut hits: MessageReader<DamageDealt>) {
+/// Only for hits we dealt, as in TF2: every machine is sent every hit. Our id
+/// is remembered past our body, so a rocket that lands after we died still
+/// counts, and hurting ourselves draws nothing.
+fn spawn_damage_numbers(
+    mut commands: Commands,
+    mut hits: MessageReader<DamageDealt>,
+    us: Option<Single<(Entity, &PlayerId), With<LocalPlayer>>>,
+    mut ours: Local<Option<PlayerId>>,
+) {
+    let body = us.map(|us| {
+        let (body, &id) = *us;
+        *ours = Some(id);
+        body
+    });
     for hit in hits.read() {
+        if (*ours).is_none_or(|ours| hit.source != DamageSource::Player(ours)) || Some(hit.target) == body {
+            continue;
+        }
         commands.spawn((
             DamageNumber {
                 amount: hit.amount,
@@ -220,7 +237,6 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
-    use crate::common::damage::{DamageSource, PlayerId};
 
     fn a_hit(amount: u32, point: Vec3) -> DamageDealt {
         DamageDealt {
@@ -416,6 +432,7 @@ mod tests {
     fn a_hit_leaves_a_number_at_the_hit_point() {
         let mut world = World::new();
         world.init_resource::<Messages<DamageDealt>>();
+        world.spawn((LocalPlayer, PlayerId(0)));
         let point = Vec3::new(1.0, 2.0, 3.0);
         world.write_message(a_hit(30, point));
 
@@ -425,6 +442,18 @@ mod tests {
         assert_eq!(number.amount, 30);
         assert_eq!(number.at, point);
         assert_eq!(number.remaining, DAMAGE_NUMBER_LIFETIME);
+    }
+
+    #[test]
+    fn somebody_elses_hit_and_our_own_hurt_leave_no_number() {
+        let mut world = World::new();
+        world.init_resource::<Messages<DamageDealt>>();
+        let us = world.spawn((LocalPlayer, PlayerId(5))).id();
+        world.write_message(a_hit(30, Vec3::ZERO));
+        world.write_message(DamageDealt { target: us, source: DamageSource::Player(PlayerId(5)), ..a_hit(30, Vec3::ZERO) });
+
+        world.run_system_once(spawn_damage_numbers).unwrap();
+        assert_eq!(world.query::<&DamageNumber>().iter(&world).count(), 0);
     }
 
     /// A faded number is despawned.

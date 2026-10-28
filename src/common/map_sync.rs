@@ -256,7 +256,7 @@ fn adopt_the_servers_map(
                 .into_iter()
                 .map(|feature| (feature.id(), feature))
                 .collect();
-            timeline.adopt(FeatureTimeline::from_parts(
+            timeline.adopt_changes(FeatureTimeline::from_parts(
                 features,
                 incoming.order,
                 // No history: a client must not undo the server's map.
@@ -397,6 +397,47 @@ mod tests {
             !after.iter().any(|entity| before.contains(entity)),
             "the old map's rooms are still standing in the world"
         );
+    }
+
+    /// A client handed the map again after one edit keeps every room the edit
+    /// did not touch; rebuilding them all flickers the whole map.
+    #[test]
+    fn adopting_a_newer_copy_rebuilds_only_what_changed() {
+        let mut app = App::new();
+        app.init_resource::<FeatureTimeline>();
+        app.add_systems(Update, FeatureTimeline::sync_entities);
+
+        let room = |at: f32| {
+            Box::new(EditorRoom::from_point_refs(
+                PointRef::absolute(at, 0.0, at),
+                PointRef::absolute(at + 2.0, 3.0, at + 2.0),
+            ))
+        };
+        let mut server = FeatureTimeline::default();
+        server.apply_feature(room(0.0));
+        server.apply_feature(room(10.0));
+        let copy = |server: &FeatureTimeline| {
+            let bytes = encode(server).unwrap();
+            let incoming: Incoming = serde_json::from_slice(&bytes).unwrap();
+            let features = incoming.features.into_iter().map(|feature| (feature.id(), feature)).collect();
+            FeatureTimeline::from_parts(features, incoming.order, incoming.id_counter)
+        };
+        app.world_mut().resource_mut::<FeatureTimeline>().adopt_changes(copy(&server));
+        app.update();
+        let rooms = |app: &mut App| -> Vec<Entity> {
+            app.world_mut().query_filtered::<Entity, With<crate::tool::room::Room>>().iter(app.world()).collect()
+        };
+        let before = rooms(&mut app);
+        assert_eq!(before.len(), 2);
+
+        let moved = server.feature_order()[1];
+        server.delete_feature(moved);
+        server.apply_feature(room(20.0));
+        app.world_mut().resource_mut::<FeatureTimeline>().adopt_changes(copy(&server));
+        app.update();
+        let after = rooms(&mut app);
+        assert_eq!(after.len(), 2);
+        assert_eq!(after.iter().filter(|entity| before.contains(entity)).count(), 1, "the untouched room was rebuilt");
     }
 
     /// Fails if a feature's server-side entity crosses the wire;

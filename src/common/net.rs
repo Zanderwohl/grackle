@@ -20,11 +20,6 @@ pub enum NetRole {
 }
 
 impl NetRole {
-    /// Hosting or joined: anything but a closed game.
-    pub fn is_networked(&self) -> bool {
-        !matches!(self, NetRole::Solo)
-    }
-
     /// Whether this process decides what happened. Anything that resolves damage,
     /// death or pickups belongs behind this, not behind `AppMode::Play` alone.
     pub fn is_authority(&self) -> bool {

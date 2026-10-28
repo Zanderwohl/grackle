@@ -70,7 +70,7 @@ impl AppMode {
     /// the map editor and Play are offered, for now; `None` is no network
     /// layer, a closed game.
     pub fn selectable_from(self, current: AppMode, role: Option<&NetRole>) -> bool {
-        if self == current || (role.is_some_and(NetRole::is_networked) && !self.offered_networked()) {
+        if self == current || (role.is_some_and(NetRole::is_online) && !self.offered_networked()) {
             return false;
         }
         if self == AppMode::Play || current == AppMode::Play {
@@ -119,7 +119,7 @@ pub fn mode_menu(
             }
             // Distinguishes why from "you are already here".
             if !enabled && mode != current {
-                let why = match role.is_some_and(NetRole::is_networked) && !mode.offered_networked() {
+                let why = match role.is_some_and(NetRole::is_online) && !mode.offered_networked() {
                     true => get!("app_mode.menu.not_while_networked"),
                     false => get!("app_mode.menu.server_decides"),
                 };

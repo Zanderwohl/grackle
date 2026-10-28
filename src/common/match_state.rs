@@ -72,7 +72,7 @@ fn back_to_the_map_editor_when_networked(
     mode: Res<State<AppMode>>,
     mut next: ResMut<NextState<AppMode>>,
 ) {
-    if role.is_networked() && !mode.get().offered_networked() && !matches!(*next, NextState::Pending(_)) {
+    if role.is_online() && !mode.get().offered_networked() && !matches!(*next, NextState::Pending(_)) {
         next.set(AppMode::Editor);
     }
 }

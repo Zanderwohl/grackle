@@ -282,6 +282,14 @@ impl FeatureTimeline {
         self.reset_history();
     }
 
+    /// A newer copy of the map in hand, from the server: only features whose
+    /// serialized form differs are rebuilt, as an undo does, so moving one
+    /// thing does not rebuild every room. No history either way.
+    pub fn adopt_changes(&mut self, incoming: FeatureTimeline) {
+        self.restore(&incoming.state());
+        self.reset_history();
+    }
+
     /// Undoable through the next checkpoint.
     pub fn delete_feature(&mut self, feature_id: FeatureId) {
         self.remove_feature_internal(feature_id);

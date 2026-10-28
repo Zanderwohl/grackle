@@ -1910,7 +1910,9 @@ way of the one thing this editor exists to make fast.
 `--serve [PORT]` is a **listen server, not a dedicated one**: the window still
 opens, the editor is still there, and the host is a player. That is what makes
 between-round editing testable with somebody else standing in the map.
-`--connect HOST[:PORT]` joins one. The two conflict at the clap level. Bare
+`--connect HOST[:PORT]` joins one. The two conflict at the clap level.
+`--profile N` (1–9) plays with `assets/user/player-N.toml` rather than the
+usual player settings, so two copies on one machine are two players. Bare
 `--serve` takes `DEFAULT_PORT`. The same two choices are in the `Multiplayer`
 menu, which opens the connect dialog in
 [`src/editor/net_menu.rs`](src/editor/net_menu.rs) — a floating
@@ -2301,6 +2303,9 @@ anybody can work in.
   alongside the incoming spawns. Skip it and the client stands in two maps at
   once with a `CollisionWorld` built from both — which looks like a working
   sync. The file-open path in `panels.rs` goes through the same function.
+  A client handed a newer copy uses `adopt_changes` instead, which rebuilds
+  only the features whose serialized form differs, as an undo does —
+  adopting every resend wholesale rebuilt every room for each moved grid.
 - **Re-bake room geometry after adopting.** The features have no entities until
   `sync_entities` has run, so a bake fired in the same frame bakes nothing;
   `CalculateRoomGeometry` is written and read a frame later, which is what
@@ -2384,7 +2389,12 @@ will stop agreeing.
 `NetStatus` is what the link is *doing*, as against what `NetRole` asked for.
 Keep them apart: a role changes the instant a menu item is picked, whereas a
 connection is attempted, takes time, and may fail. A UI reading the role would
-cheerfully say "Connected" about a host that never answered.
+cheerfully say "Connected" about a host that never answered. A link that **fails** — a
+connect that times out, a server that goes away — asks to go solo
+(`drop_a_failed_link`), so the spectating label, the read-only editor and
+Disconnect go with it, and the status keeps the failure's reason. Hosts are
+resolved IPv4 first, because a listen server binds IPv4 and macOS resolves
+`localhost` to `::1` first.
 
 `DEV_PRIVATE_KEY` is compiled into the binary, so anyone with the game can mint
 a token for any client id. That is the right trade for a LAN listen server with

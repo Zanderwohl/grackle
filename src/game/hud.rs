@@ -94,6 +94,10 @@ pub struct WindowSafeZone;
 /// Logical pixels.
 pub const WINDOW_MARGIN: f32 = 20.0;
 
+/// Hidden while we have no body: the crosshair and each readout with its panel.
+#[derive(Component)]
+struct ForTheLiving;
+
 /// The armor readout and its panel, hidden together while there is none.
 #[derive(Component)]
 struct ArmorReadout;
@@ -355,6 +359,7 @@ fn crosshair() -> impl Bundle {
     let centered = Val::Px(-CROSSHAIR_THICKNESS * 0.5);
 
     (
+        ForTheLiving,
         Node {
             position_type: PositionType::Absolute,
             width: Val::Percent(100.0),
@@ -391,6 +396,7 @@ fn text(font: &Handle<Font>, kind: HudText, size: f32, alpha: f32) -> impl Bundl
 
 fn health_readout(font: &Handle<Font>) -> impl Bundle {
     (
+        ForTheLiving,
         Node {
             left: Val::Px(MARGIN_X),
             // Sits low enough that the panel cuts across the number.
@@ -411,6 +417,7 @@ fn armor_readout(font: &Handle<Font>) -> impl Bundle {
     let baseline = HEALTH_PADDING_BOTTOM + BIG * BASELINE_ABOVE_LINE_BOTTOM;
     (
         ArmorReadout,
+        ForTheLiving,
         Node {
             left: Val::Px(MARGIN_X + HudZone::Health.size().x + ZONE_GAP),
             padding: UiRect {
@@ -454,6 +461,7 @@ fn kind_label(font: &Handle<Font>) -> impl Bundle {
 /// it pushes nothing the panel is lined up against.
 fn weapon_readout(font: &Handle<Font>) -> impl Bundle {
     (
+        ForTheLiving,
         Node {
             right: Val::Px(MARGIN_X),
             row_gap: Val::Px(2.0),
@@ -626,7 +634,13 @@ fn fill_in_the_readouts(
     mut texts: Query<(&HudText, &mut Text, &mut Node)>,
     mut armor_readout: Query<&mut Node, (With<ArmorReadout>, Without<HudText>)>,
     mut armor_label: Query<&mut Text, (With<ArmorLabel>, Without<HudText>)>,
+    mut living: Query<&mut Visibility, With<ForTheLiving>>,
 ) {
+    let shown = if body.is_some() { Visibility::Inherited } else { Visibility::Hidden };
+    for mut visibility in &mut living {
+        visibility.set_if_neq(shown);
+    }
+
     let readout = match body.as_deref() {
         Some((health, armor, equipped, ammo)) => Readout::of(&catalog, health, *armor, equipped, ammo),
         None => Readout::default(),
