@@ -130,6 +130,9 @@ pub struct Mirror {
     /// re-spawned spawn point rebuilds its body mesh, every frame of a drag.
     #[serde(skip)]
     copy_entities: Vec<(FeatureId, Entity)>,
+    /// A copy of a Mirror draws its copies but not a plane of its own, which no feature owns.
+    #[serde(skip)]
+    is_copy: bool,
 }
 
 impl Mirror {
@@ -144,6 +147,7 @@ impl Mirror {
             left_out: Vec::new(),
             entity: None,
             copy_entities: Vec::new(),
+            is_copy: false,
         }
     }
 
@@ -188,6 +192,14 @@ fn inherit_nested(copies: &mut [MirroredCopy], previous: &mut [MirroredCopy]) {
     }
 }
 
+/// Deeper than any real map nests Mirrors; reached only by Mirrors listing each other, which would
+/// otherwise copy each other until the stack runs out.
+const MAX_NESTING: u32 = 8;
+
+thread_local! {
+    static NESTING: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// Through the feature's own serde, the same way undo and saving copy one, so a new feature type is
 /// copyable the day it is written.
 fn mirrored_copy(
@@ -195,9 +207,15 @@ fn mirrored_copy(
     features: &HashMap<FeatureId, Feature>,
     mirroring: &Mirroring,
 ) -> Option<Box<dyn FeatureTrait>> {
+    let depth = NESTING.get();
+    if depth >= MAX_NESTING {
+        return None;
+    }
     let value = serde_json::to_value(source.object()).ok()?;
     let mut copy: Box<dyn FeatureTrait> = serde_json::from_value(value).ok()?;
+    NESTING.set(depth + 1);
     copy.resolve_references(features);
+    NESTING.set(depth);
     copy.mirror(mirroring).then_some(copy)
 }
 
@@ -334,6 +352,13 @@ impl FeatureTrait for Mirror {
             .fold(4.0, f32::max)
             + 1.0;
 
+        for copy in &self.copies {
+            copy.object.debug_gizmos(gizmos);
+        }
+        if self.is_copy {
+            return;
+        }
+
         gizmos.sphere(Isometry3d::from_translation(center), 0.2, MIRROR_COLOR);
         match self.symmetry {
             Symmetry::MirrorX => {
@@ -348,10 +373,6 @@ impl FeatureTrait for Mirror {
             }
         }
         self.center.debug_gizmos(center, gizmos);
-
-        for copy in &self.copies {
-            copy.object.debug_gizmos(gizmos);
-        }
     }
 
     fn entity(&self) -> Option<Entity> {
@@ -434,6 +455,7 @@ impl FeatureTrait for Mirror {
     fn mirror(&mut self, mirroring: &Mirroring) -> bool {
         self.resolved_center = mirroring.point(self.resolved_center);
         self.center.resolved_reference = None;
+        self.is_copy = true;
         self.copies.retain_mut(|copy| copy.object.mirror(mirroring));
         true
     }
@@ -809,15 +831,22 @@ mod tests {
         assert_eq!(side_at(&found, Vec3::new(-4.0, 0.0, 10.0)), Some(Team::Blue));
     }
 
-    /// Editing a source re-resolves the copy of the inner Mirror from scratch; its copies are the
+    fn standing(app: &mut App) -> Vec<Entity> {
+        let world = app.world_mut();
+        let mut found: Vec<Entity> = world
+            .query_filtered::<Entity, Or<(With<MirrorCopy>, With<SpawnPointMarker>, With<crate::tool::room::Room>)>>()
+            .iter(world)
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// Moving a source re-resolves the copy of the inner Mirror from scratch; what it stands is the
     /// same entities afterwards, not a second set beside the first.
     #[test]
     fn an_edit_reuses_the_nested_copies() {
         let mut app = four_ways([Team::Red, Team::Blue]);
-        let before: Vec<Entity> = {
-            let world = app.world_mut();
-            world.query_filtered::<Entity, With<SpawnPointMarker>>().iter(world).collect()
-        };
+        let before = standing(&mut app);
         let reapply = |mut timeline: ResMut<FeatureTimeline>, mut commands: Commands| {
             for id in timeline.feature_order().to_vec() {
                 let mut feature = timeline.features_mut().remove(&id).unwrap();
@@ -829,15 +858,36 @@ mod tests {
             }
         };
         app.add_systems(PostUpdate, reapply);
-        for _ in 0..3 {
+        for step in 0..3 {
+            {
+                let mut timeline = app.world_mut().resource_mut::<FeatureTimeline>();
+                let room = timeline.feature_order()[0];
+                let corner = timeline.features_mut().get_mut(&room).unwrap().object_mut().get_point_ref_mut("max").unwrap();
+                assert!(corner.drag_axis(0, 7.0 + step as f32));
+            }
             app.update();
         }
+        assert_eq!(before, standing(&mut app));
+
         let world = app.world_mut();
-        let mut after: Vec<Entity> =
-            world.query_filtered::<Entity, With<SpawnPointMarker>>().iter(world).collect();
-        let mut before = before;
-        before.sort();
-        after.sort();
-        assert_eq!(before, after);
+        let far_room = world
+            .query::<&crate::tool::room::Room>()
+            .iter(world)
+            .any(|room| (room.bounds().0.x + 9.0).abs() < 1e-4);
+        assert!(far_room, "the edit reached the copy of a copy");
+    }
+
+    /// Mirrors listing each other are cut off rather than copying each other forever.
+    #[test]
+    fn mirrors_listing_each_other_do_not_recurse_forever() {
+        let mut timeline = FeatureTimeline::default();
+        let first = timeline.apply_feature(Box::new(Mirror::new(PointRef::absolute(0.0, 0.0, 0.0))));
+        let second = timeline.apply_feature(Box::new(
+            Mirror::new(PointRef::absolute(0.0, 0.0, 5.0)).with_sources(vec![first]),
+        ));
+        let mut cyclic = Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).with_sources(vec![second]);
+        cyclic.resolve_references(timeline.features_map());
+        timeline.features_mut().get_mut(&first).unwrap().object_mut().mirror_mut().unwrap().sources = vec![second];
+        cyclic.resolve_references(timeline.features_map());
     }
 }
