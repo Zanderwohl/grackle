@@ -433,7 +433,7 @@ impl FeatureTrait for Mirror {
                 }
                 let name = features
                     .get(id)
-                    .map(Feature::type_name_with_id)
+                    .map(Feature::label)
                     .unwrap_or_else(|| id.to_string());
                 let text = match self.left_out.iter().find(|(left, _)| left == id) {
                     None => egui::RichText::new(name),
