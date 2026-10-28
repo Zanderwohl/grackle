@@ -22,6 +22,7 @@ Blueprint(
                 ),
             },
         ),
+        sky: Day,
     ),
     next_id: 17,
     features: [
@@ -40,7 +41,6 @@ Blueprint(
                     ),
                 ),
             },
-            parents: [],
         ),
         Feature(
             id: FeatureId(
@@ -57,7 +57,6 @@ Blueprint(
                     ),
                 ),
             },
-            parents: [],
         ),
         Feature(
             id: FeatureId(
@@ -90,14 +89,6 @@ Blueprint(
                     ),
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 0,
-                ),
-                FeatureId(
-                    _id: 1,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -119,11 +110,6 @@ Blueprint(
                     range: 35.44009,
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -143,11 +129,6 @@ Blueprint(
                     yaw: 3.1415927,
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -168,11 +149,6 @@ Blueprint(
                     teams: Striped,
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -193,11 +169,6 @@ Blueprint(
                     model: "health_pack",
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -218,11 +189,6 @@ Blueprint(
                     model: "ammo_pack",
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -243,11 +209,6 @@ Blueprint(
                     model: "armor_pack",
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -271,11 +232,6 @@ Blueprint(
                     style: tf2,
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -299,11 +255,6 @@ Blueprint(
                     style: tf2,
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -327,11 +278,6 @@ Blueprint(
                     style: tf2,
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -355,11 +301,6 @@ Blueprint(
                     style: tf2,
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -391,11 +332,6 @@ Blueprint(
                     ),
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -415,11 +351,6 @@ Blueprint(
                     yaw: 1.5707964,
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 13,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -441,11 +372,6 @@ Blueprint(
                     range: 8.0,
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 13,
-                ),
-            ],
         ),
         Feature(
             id: FeatureId(
@@ -477,20 +403,6 @@ Blueprint(
                     teams: (Red, Blue),
                 ),
             },
-            parents: [
-                FeatureId(
-                    _id: 2,
-                ),
-                FeatureId(
-                    _id: 13,
-                ),
-                FeatureId(
-                    _id: 14,
-                ),
-                FeatureId(
-                    _id: 15,
-                ),
-            ],
         ),
     ],
 )

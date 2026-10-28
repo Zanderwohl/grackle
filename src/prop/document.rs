@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::common::reorder;
 use crate::common::skeleton::clip::ClipSet;
 use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Axis, Evaluated, FeatureOp, PropFeature, PropFeatureId};
@@ -235,35 +236,13 @@ impl PropDoc {
             .collect()
     }
 
-    /// Where a feature may be moved to. Always contiguous, since moving one
-    /// item leaves the others' order alone. Direct relations are enough: an
-    /// indirect operand is already above a direct one.
-    ///
-    /// Indices count the list with this feature taken out, which is the index
-    /// it will end up at.
+    /// Where a feature may be moved to; see [`reorder::legal_range`].
     pub fn legal_range(&self, id: PropFeatureId) -> Option<std::ops::RangeInclusive<usize>> {
         let at = self.index_of(id)?;
         let feature = self.feature(id)?;
-
-        let without = |i: usize| if i < at { i } else { i - 1 };
-
-        let mut low = 0;
-        for operand in feature.op.depends_on() {
-            if let Some(index) = self.index_of(operand) {
-                low = low.max(without(index) + 1);
-            }
-        }
-
-        let mut high = self.features.len().saturating_sub(1);
-        for dependant in self.dependants(id) {
-            if let Some(index) = self.index_of(dependant) {
-                high = high.min(without(index));
-            }
-        }
-
-        // An out-of-order document would give an inverted range, and `clamp`
-        // panics on one.
-        Some(low..=high.max(low))
+        let depends_on = feature.op.depends_on().into_iter().filter_map(|operand| self.index_of(operand));
+        let dependants = self.dependants(id).into_iter().filter_map(|dependant| self.index_of(dependant));
+        Some(reorder::legal_range(self.features.len(), at, depends_on, dependants))
     }
 
     /// Clamped into [`Self::legal_range`] rather than refused, so a drag stops

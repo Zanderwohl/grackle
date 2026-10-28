@@ -52,6 +52,7 @@ pub mod sunlight;
 pub mod lightmap;
 pub mod render_layers;
 pub mod shortcuts;
+pub mod reorder;
 
 #[derive(Debug)]
 pub enum PointResolutionError {

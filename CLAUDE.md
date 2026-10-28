@@ -2536,7 +2536,9 @@ undo step (`replace_as_edit`), and the map knows whether it matches its file
 bar.
 
 **The Features panel is the feature list**, with a rollback bar drawn in it:
-drag it up to see the map as it stood partway through, or roll back from a
+drag it past any number of rows and let go to see the map as it stood
+partway through — applied once on release, not live, since each step rebuilds
+what it crosses; Escape or the right button calls it off — or roll back from a
 row's menu. The bar is `rollback: Option<FeatureId>` — the last feature shown,
 by id, so edits above it cannot move it — and it is **view state**: not saved,
 not sent, not an undo step. Adding a feature while rolled back inserts it at
@@ -2544,6 +2546,17 @@ the bar (`apply_feature`); it used to delete everything past it. **A round is
 always played on the whole map**: the Editor → Play transition rolls to the
 end and runs `sync_entities` there, before `OnEnter(Play)` bakes and builds
 collision, so the rooms past the bar have entities in time.
+
+**Rows drag to reorder**, one at a time — a row in a multiple selection does
+not drag — and stop against what the feature names and what names it
+(`FeatureTimeline::reorder_bounds`). Escape or the right button calls a drag
+off. The range, the drop line and the cancel are
+[`src/common/reorder.rs`](src/common/reorder.rs), shared with the prop
+editor's list so the two cannot disagree. The bar stays between the same two
+rows: dragging the feature it sits under hands it to the row above rather than
+carrying it off. A feature's parents are always asked of it
+(`Feature::parents` calls `parent_ids`) and never stored, so no edit can leave
+them stale.
 
 ## Save format
 

@@ -7,6 +7,7 @@ use bevy_egui::egui;
 use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
 use crate::common::app_mode::AppMode;
+use crate::common::reorder;
 use crate::common::shortcuts::chords;
 use crate::common::PointResolutionError;
 use crate::constants::MAP_BLUEPRINT_EXTENSION;
@@ -188,6 +189,7 @@ enum RowAction {
     Delete(FeatureId),
     DeleteSelection,
     RollBackTo(Option<FeatureId>),
+    Move(FeatureId, usize),
 }
 
 #[derive(Message)]
@@ -360,6 +362,52 @@ impl FeatureTimeline {
         self.forget_a_missing_bar();
     }
 
+    pub fn dependants(&self, id: FeatureId) -> Vec<FeatureId> {
+        self.feature_order
+            .iter()
+            .copied()
+            .filter(|candidate| self.features.get(candidate).is_some_and(|f| f.parents().contains(&id)))
+            .collect()
+    }
+
+    /// The legal range for a move, and the parents and dependants that bound it.
+    pub fn reorder_bounds(&self, id: FeatureId) -> Option<(std::ops::RangeInclusive<usize>, Vec<FeatureId>)> {
+        let position = |target: FeatureId| self.feature_order.iter().position(|candidate| *candidate == target);
+        let at = position(id)?;
+        let parents = self.features.get(&id)?.parents();
+        let dependants = self.dependants(id);
+        let legal = reorder::legal_range(
+            self.feature_order.len(),
+            at,
+            parents.iter().copied().filter_map(position),
+            dependants.iter().copied().filter_map(position),
+        );
+        Some((legal, parents.into_iter().chain(dependants).collect()))
+    }
+
+    /// Clamped rather than refused, so a drag stops at the last legal place. The bar stays between the
+    /// same two rows, so moving the feature under it does not show or hide everything it passes.
+    pub fn move_to(&mut self, id: FeatureId, target: usize) -> bool {
+        let Some(at) = self.feature_order.iter().position(|candidate| *candidate == id) else { return false };
+        let Some((legal, _)) = self.reorder_bounds(id) else { return false };
+        let target = target.clamp(*legal.start(), *legal.end());
+        if target == at {
+            return false;
+        }
+        if self.rollback == Some(id) {
+            // Never above the first row; with nothing above, the one below takes it.
+            let neighbor = if at > 0 { at - 1 } else { at + 1 };
+            self.rollback = self.feature_order.get(neighbor).copied();
+        }
+        self.feature_order.remove(at);
+        self.feature_order.insert(target, id);
+        // `roll_back_to` turns a bar under the last row into `None`.
+        let bar = self.rollback.take();
+        self.roll_back_to(bar);
+        self.refresh_selection();
+        true
+    }
+
     pub fn id_counter(&self) -> u64 {
         self.id_counter
     }
@@ -474,7 +522,7 @@ impl FeatureTimeline {
             .copied()
             .filter(|id| {
                 reached.contains(id)
-                    || self.features.get(id).is_some_and(|feature| feature.parents.iter().any(|p| reached.contains(p)))
+                    || self.features.get(id).is_some_and(|feature| feature.parents().iter().any(|p| reached.contains(p)))
                         && reached.insert(*id)
             })
             .collect()
@@ -514,13 +562,11 @@ impl FeatureTimeline {
 
     /// Add at the rollback bar and move the bar past it, or at the end with no bar.
     pub fn apply_feature(&mut self, feature_object: Box<dyn FeatureTrait>) -> FeatureId {
-        let parents = feature_object.parent_ids();
         let new_id = self.next_id();
         let new_feature = Feature {
             id: new_id,
             name: None,
             object: feature_object,
-            parents,
         };
         self.features.insert(new_feature.id, new_feature);
         let at = self.shown_len();
@@ -813,7 +859,6 @@ impl FeatureTimeline {
                                 *retarget_out = Some((selected_id, label));
                             }
                             if edited {
-                                feature.parents = feature.object().parent_ids().to_vec();
                                 entity_for_event = feature.object().entity();
                                 was_edited = true;
                                 edited_id = Some(selected_id);
@@ -848,7 +893,10 @@ impl FeatureTimeline {
         let shown = features.shown_len();
         let rolled_back = features.rollback.is_some();
         let mut rows: Vec<(FeatureId, egui::Rect)> = Vec::new();
-        let mut bar_dragged = false;
+        let mut bar = reorder::BarDrag::default();
+        // Rebuilt every frame, so no drag state can go stale.
+        let mut dragging: Option<FeatureId> = None;
+        let mut dropped = false;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (i, id) in features.feature_order.iter().enumerate() {
@@ -892,14 +940,26 @@ impl FeatureTimeline {
                             ui.add_sized([ui.available_width(), 0.0], label)
                         })
                         .inner;
+                    let together = is_selected && selected.len() > 1;
+                    let response = match together {
+                        true => response,
+                        false => response.interact(egui::Sense::click_and_drag()),
+                    };
                     rows.push((*id, response.rect));
                     if response.clicked() && is_active {
                         clicked = Some((*id, ui.input(|input| input.modifiers)));
                     }
+                    // `dragged` stays true for the row the drag began on after the pointer leaves it.
+                    if response.dragged() {
+                        dragging = Some(*id);
+                    }
+                    if response.drag_stopped() {
+                        dragging = Some(*id);
+                        dropped = true;
+                    }
 
                     let fid = *id;
                     let menu = pending.clone();
-                    let together = is_selected && selected.len() > 1;
                     let count = selected.len();
                     response.context_menu(move |menu_ui| {
                         if together {
@@ -909,7 +969,11 @@ impl FeatureTimeline {
                             }
                             return;
                         }
-                        if !at_the_bar && menu_ui.button(get!("editor.timeline.roll_back_here")).clicked() {
+                        let roll_here = match is_active {
+                            true => get!("editor.timeline.roll_back_here"),
+                            false => get!("editor.timeline.roll_forward_here"),
+                        };
+                        if !at_the_bar && menu_ui.button(roll_here).clicked() {
                             *menu.borrow_mut() = Some(RowAction::RollBackTo(Some(fid)));
                             menu_ui.close();
                         }
@@ -929,29 +993,24 @@ impl FeatureTimeline {
                     });
                 }
 
-                // Faint at the bottom, where it changes nothing; bold elsewhere so a partial map is not mistaken
-                // for the whole one.
                 if at_the_bar {
-                    let (rect, bar) =
-                        ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::drag());
-                    let bar = bar.on_hover_cursor(egui::CursorIcon::ResizeVertical);
-                    let lit = rolled_back || bar.hovered() || bar.dragged();
-                    let stroke = match lit {
-                        true => egui::Stroke::new(3.0, ui.visuals().selection.stroke.color),
-                        false => egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
-                    };
-                    ui.painter().hline(rect.x_range(), rect.center().y, stroke);
-                    bar_dragged = bar.dragged();
+                    bar = reorder::rollback_bar(ui, ui.id(), rolled_back);
                 }
             }
 
-            // Live while dragging. Never above the first feature: an empty world says nothing.
-            if bar_dragged
-                && let Some(pointer) = ui.ctx().pointer_interact_pos()
+            if let Some(anchor) = reorder::drop_the_bar(ui, ui.id(), &rows, bar) {
+                *pending.borrow_mut() = Some(RowAction::RollBackTo(Some(anchor)));
+            }
+
+            // After every row has reported its rect.
+            let cancelled = reorder::cancelled(ui, ui.id(), dragging.is_some());
+            if let Some(id) = dragging
+                && !cancelled
+                && let Some((legal, pins)) = features.reorder_bounds(id)
             {
-                let above = rows.iter().take_while(|(_, rect)| rect.center().y < pointer.y).count();
-                if let Some((anchor, _)) = rows.get(above.max(1) - 1) {
-                    *pending.borrow_mut() = Some(RowAction::RollBackTo(Some(*anchor)));
+                let target = reorder::show_the_drop(ui, &rows, &id, &pins, &legal);
+                if dropped {
+                    *pending.borrow_mut() = Some(RowAction::Move(id, target));
                 }
             }
 
@@ -994,6 +1053,9 @@ impl FeatureTimeline {
                 features.delete_features(&ids);
             }
             Some(RowAction::RollBackTo(at)) => features.roll_back_to(at),
+            Some(RowAction::Move(id, target)) => {
+                features.move_to(id, target);
+            }
             None => {}
         }
 
@@ -1115,13 +1177,9 @@ pub struct Feature {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     object: Box<dyn FeatureTrait>,
-    parents: Vec<FeatureId>,
 }
 
 impl Feature {
-    pub fn new(id: FeatureId, object: Box<dyn FeatureTrait>, parents: Vec<FeatureId>) -> Self {
-        Self { id, name: None, object, parents }
-    }
 
     pub fn label(&self) -> String {
         self.name.clone().unwrap_or_else(|| self.type_name_with_id())
@@ -1151,12 +1209,9 @@ impl Feature {
         format!("{} {}", self.object.type_name(), self.id)
     }
 
-    pub fn parents(&self) -> &[FeatureId] {
-        &self.parents
-    }
-
-    pub fn set_parents(&mut self, parents: Vec<FeatureId>) {
-        self.parents = parents;
+    /// Asked of the feature every time rather than cached, so no edit can leave it stale.
+    pub fn parents(&self) -> Vec<FeatureId> {
+        self.object.parent_ids()
     }
 }
 
@@ -1589,6 +1644,185 @@ mod tests {
         }
         assert!(events.is_empty());
         assert_eq!(timeline.selected_feature, Some(a));
+    }
+
+    #[test]
+    fn a_dragged_feature_stops_against_what_it_names_and_what_names_it() {
+        use crate::editor::editor_room::EditorRoom;
+        let (mut timeline, [a, b, c, d]) = four_points();
+        let room = timeline.apply_feature(Box::new(EditorRoom::from_points(b, c)));
+
+        assert!(timeline.move_to(room, 0));
+        assert_eq!(timeline.feature_order(), &[a, b, c, room, d], "stopped just under its last corner");
+        assert!(!timeline.move_to(room, 1), "already as high as it can go");
+
+        assert!(timeline.move_to(b, 4));
+        assert_eq!(timeline.feature_order(), &[a, c, b, room, d], "stopped just above its room");
+        assert!(timeline.move_to(c, 4));
+        assert_eq!(timeline.feature_order(), &[a, b, c, room, d]);
+        assert!(!timeline.move_to(c, 4), "already as low as it can go");
+
+        assert!(timeline.move_to(d, 0), "nothing pins an unrelated feature");
+        assert_eq!(timeline.feature_order(), &[d, a, b, c, room]);
+    }
+
+    #[derive(Clone, Copy)]
+    enum Grab {
+        Row(usize),
+        /// The rollback bar, under this row.
+        Bar(usize),
+    }
+
+    /// Presses on `from`, drags to `to` rows down (fractions land inside a row), sends `interrupt`
+    /// mid-drag and lets go. Rows are found by egui's own spacing.
+    fn drag_in_the_panel(timeline: &mut FeatureTimeline, from: impl Into<Grab>, to: f32, interrupt: Vec<egui::Event>) {
+        let ctx = egui::Context::default();
+        let spacing = ctx.global_style().spacing.clone();
+        let pitch = spacing.interact_size.y + spacing.item_spacing.y;
+        let row = |at: f32| egui::pos2(100.0, (at + 0.5) * pitch);
+        let button = |pos, button, pressed| egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE };
+        let start = match from.into() {
+            Grab::Row(at) => row(at as f32),
+            // The bar is 8 points tall and starts a row's spacing below it.
+            Grab::Bar(under) => egui::pos2(100.0, (under + 1) as f32 * pitch + 4.0),
+        };
+        let end = row(to);
+        let frames = vec![
+            vec![],
+            vec![egui::Event::PointerMoved(start), button(start, egui::PointerButton::Primary, true)],
+            vec![egui::Event::PointerMoved(start + egui::vec2(0.0, 10.0))],
+            vec![egui::Event::PointerMoved(end)],
+            interrupt,
+            vec![button(end, egui::PointerButton::Primary, false)],
+            vec![],
+        ];
+        for events in frames {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 600.0))),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                FeatureTimeline::ui(ui, timeline, &mut Vec::new(), &mut None);
+            });
+            output.textures_delta.clear();
+        }
+    }
+
+    impl From<usize> for Grab {
+        fn from(at: usize) -> Self {
+            Grab::Row(at)
+        }
+    }
+
+    #[test]
+    fn the_bar_drags_past_several_rows_and_lands_once() {
+        let (mut timeline, [a, _, c, _]) = four_points();
+        drag_in_the_panel(&mut timeline, Grab::Bar(3), 0.3, vec![]);
+        assert_eq!(timeline.rollback(), Some(a), "rolled back three rows in one drag");
+
+        // Rows under the bar sit its height lower, hence aiming deep into the row.
+        drag_in_the_panel(&mut timeline, Grab::Bar(0), 2.9, vec![]);
+        assert_eq!(timeline.rollback(), Some(c), "rolled forward two");
+
+        drag_in_the_panel(&mut timeline, Grab::Bar(2), 9.0, vec![]);
+        assert_eq!(timeline.rollback(), None, "past the last row is the whole map");
+
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        drag_in_the_panel(&mut timeline, Grab::Bar(3), 0.3, vec![escape]);
+        assert_eq!(timeline.rollback(), None, "a called-off drag, or one applied live, moved the bar");
+    }
+
+    #[test]
+    fn drag_in_the_panel_lands_where_it_is_let_go() {
+        let (mut timeline, [a, b, c, d]) = four_points();
+        // Past the middle of the last row: after it.
+        drag_in_the_panel(&mut timeline, 0, 3.3, vec![]);
+        assert_eq!(timeline.feature_order(), &[b, c, d, a]);
+        // Just past the middle of the first row: between it and the second.
+        drag_in_the_panel(&mut timeline, 3, 0.6, vec![]);
+        assert_eq!(timeline.feature_order(), &[b, a, c, d]);
+    }
+
+    #[test]
+    fn a_row_in_a_multiple_selection_does_not_drag() {
+        let (mut timeline, [a, b, c, d]) = four_points();
+        timeline.select(Some(a));
+        timeline.toggle_selected(b);
+        drag_in_the_panel(&mut timeline, 0, 3.3, vec![]);
+        assert_eq!(timeline.feature_order(), &[a, b, c, d]);
+
+        drag_in_the_panel(&mut timeline, 2, -0.5, vec![]);
+        assert_eq!(timeline.feature_order(), &[c, a, b, d], "a row outside the selection still drags");
+    }
+
+    #[test]
+    fn escape_or_the_right_button_calls_off_a_drag() {
+        let (mut timeline, ids) = four_points();
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        drag_in_the_panel(&mut timeline, 0, 3.3, vec![escape]);
+        assert_eq!(timeline.feature_order(), &ids);
+
+        let at = egui::pos2(100.0, 50.0);
+        let right = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        drag_in_the_panel(&mut timeline, 0, 3.3, vec![right(true), right(false)]);
+        assert_eq!(timeline.feature_order(), &ids);
+
+        drag_in_the_panel(&mut timeline, 0, 3.3, vec![]);
+        assert_eq!(timeline.feature_order()[3], ids[0], "a cancel outlived its drag");
+    }
+
+    #[test]
+    fn moving_the_feature_under_the_bar_leaves_the_bar_where_it_was() {
+        let (mut timeline, [a, b, c, d]) = four_points();
+        timeline.roll_back_to(Some(c));
+        assert!(timeline.move_to(c, 0));
+        assert_eq!(timeline.feature_order(), &[c, a, b, d]);
+        assert_eq!(timeline.rollback(), Some(b), "the bar went with the row");
+        assert_eq!(timeline.shown_len(), 3);
+
+        // Under the first row there is nothing above to hand it to.
+        timeline.roll_back_to(Some(c));
+        assert!(timeline.move_to(c, 3));
+        assert_eq!(timeline.rollback(), Some(a));
+        assert_eq!(timeline.shown_len(), 1);
+    }
+
+    #[test]
+    fn a_move_never_leaves_the_bar_under_the_last_row() {
+        let (mut timeline, [a, b, c, d]) = four_points();
+        timeline.roll_back_to(Some(c));
+        assert!(timeline.move_to(d, 0), "the one row past the bar came above it");
+        assert_eq!(timeline.feature_order(), &[d, a, b, c]);
+        assert_eq!(timeline.rollback(), None);
+    }
+
+    #[test]
+    fn a_reorder_is_one_undo_step() {
+        let (mut timeline, [a, b, c, d]) = four_points();
+        timeline.checkpoint(&MapMetadata::default());
+        timeline.move_to(a, 3);
+        timeline.checkpoint(&MapMetadata::default());
+        assert!(timeline.is_dirty());
+        timeline.undo(&mut MapMetadata::default());
+        assert_eq!(timeline.feature_order(), &[a, b, c, d]);
     }
 
     #[test]
