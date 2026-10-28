@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::mode::GameMode;
 use crate::common::movement_rules::MovementRules;
-use crate::common::sky::SkyTime;
+use crate::common::sky::{SkyTime, SunPosition};
 use crate::common::palette::Palette;
 use crate::constants::{MAP_BACKUP_EXTENSION, MAP_BLUEPRINT_EXTENSION};
 use crate::editor::editable::{Feature, FeatureId, FeatureTimeline};
@@ -48,6 +48,8 @@ pub struct SavedMetadata {
     palette: Palette,
     #[serde(default)]
     sky: SkyTime,
+    #[serde(default)]
+    sun: SunPosition,
 }
 
 impl SavedMetadata {
@@ -59,6 +61,7 @@ impl SavedMetadata {
             movement: metadata.movement,
             palette: metadata.palette.clone(),
             sky: metadata.sky,
+            sun: metadata.sun,
         }
     }
 
@@ -72,6 +75,7 @@ impl SavedMetadata {
         metadata.movement = self.movement;
         metadata.palette = self.palette;
         metadata.sky = self.sky;
+        metadata.sun = self.sun;
         metadata.normalize_authors_ui_text();
         metadata
     }
@@ -241,6 +245,7 @@ mod tests {
         metadata.game_mode = GameMode::CTF;
         metadata.movement = MovementRules { sprint: SprintPolicy::Enabled, gravity: 9.81 };
         metadata.sky = SkyTime::Evening;
+        metadata.sun = SunPosition { altitude: 12.5, azimuth: 270.0 };
 
         let text = to_text(&timeline, &metadata).unwrap();
         let loaded = parse(&text).unwrap();
@@ -268,6 +273,7 @@ mod tests {
         assert_eq!(metadata.game_mode, GameMode::KOTH);
         assert_eq!(metadata.movement, MovementRules::default());
         assert_eq!(metadata.sky, SkyTime::Day);
+        assert_eq!(metadata.sun, SunPosition::default());
     }
 
     #[test]

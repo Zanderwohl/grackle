@@ -734,6 +734,14 @@ fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata) {
                     });
                 ui.end_row();
 
+                ui.label(get!("editor.metadata.sun_altitude"));
+                ui.add(egui::DragValue::new(&mut meta.sun.altitude).range(0.0..=90.0).speed(0.5).suffix("°"));
+                ui.end_row();
+
+                ui.label(get!("editor.metadata.sun_azimuth"));
+                ui.add(egui::DragValue::new(&mut meta.sun.azimuth).range(0.0..=360.0).speed(1.0).suffix("°"));
+                ui.end_row();
+
                 ui.label(get!("editor.metadata.authors"));
                 ui.vertical(|ui| {
                     let r = ui.add(

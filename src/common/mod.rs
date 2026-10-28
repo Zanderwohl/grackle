@@ -45,8 +45,10 @@ pub mod game_rules;
 pub mod player_color;
 pub mod player_settings;
 pub mod movement_rules;
+pub mod grid;
 pub mod palette;
 pub mod sky;
+pub mod sunlight;
 pub mod render_layers;
 pub mod shortcuts;
 

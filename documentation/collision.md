@@ -149,7 +149,7 @@ normal, or a body settled onto it each tick creeps down it.
 - [x] `src/game/collision/`: `Hull` (`hull.rs`) with grown planes and bevels;
       `sweep`, `ray`, `overlaps`, `escapes`; `Hull::triangle`. Rounded-box
       sweep in `rounded.rs`. Unit tested shape by shape.
-- [x] Uniform-grid broadphase over static bounds (`grid.rs`), answering in
+- [x] Uniform-grid broadphase over static bounds (`common/grid.rs`), answering in
       index order so "first overlapped" is unchanged.
 - [x] `CollisionWorld` holds hulls; `rebuild` turns today's `WallSlab`s into
       box hulls, so the geometry is identical and only the code is new.

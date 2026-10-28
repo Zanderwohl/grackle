@@ -4,7 +4,7 @@ use crate::common::game_rules::{GameRules, Modes};
 use crate::common::mode::GameMode;
 use crate::common::movement_rules::MovementRules;
 use crate::common::palette::Palette;
-use crate::common::sky::SkyTime;
+use crate::common::sky::{SkyTime, SunPosition};
 
 /// Strongly typed map metadata, written at the top of a blueprint.
 #[derive(Resource, Debug, Clone)]
@@ -16,6 +16,7 @@ pub struct MapMetadata {
     pub movement: MovementRules,
     pub palette: Palette,
     pub sky: SkyTime,
+    pub sun: SunPosition,
     /// The panel's comma-separated authors text, refreshed when `authors` is replaced from disk.
     authors_ui_text: String,
     authors_ui_synced_from: Vec<String>,
@@ -32,6 +33,7 @@ impl Default for MapMetadata {
             movement: MovementRules::default(),
             palette: Palette::default(),
             sky: SkyTime::default(),
+            sun: SunPosition::default(),
             authors_ui_text,
             authors_ui_synced_from: vec!["anonymous".to_string()],
         }

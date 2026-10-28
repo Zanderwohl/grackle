@@ -2,7 +2,6 @@
 //! See `documentation/collision.md`.
 
 mod contact;
-mod grid;
 pub mod hull;
 mod rounded;
 
@@ -11,7 +10,7 @@ use bevy::prelude::*;
 use crate::common::world_surface::{self, Face};
 use crate::prop::archetype::RoundedBox;
 use crate::tool::room::Room;
-use grid::Grid;
+use crate::common::grid::Grid;
 pub use contact::{Touched, MOST_TOUCHED};
 pub use hull::{onto_plane, Hit, Hull};
 

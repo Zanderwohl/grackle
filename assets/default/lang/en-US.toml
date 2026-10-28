@@ -141,6 +141,8 @@ movement = "Movement"
 sprint = "Sprint"
 gravity = "Gravity"
 sky = "Sky"
+sun_altitude = "Sun altitude"
+sun_azimuth = "Sun azimuth"
 
 [editor.features.global_point]
 title = "Global Point"

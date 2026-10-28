@@ -171,9 +171,8 @@ pub fn paint_rooms(
     parts: Query<(Entity, &RoomSlotMesh, Option<&MeshMaterial3d<StandardMaterial>>, Has<MeshMaterial3d<SkyMaterial>>)>,
 ) {
     for (entity, part, drawn, drawn_as_sky) in &parts {
-        let named = rooms.get(part.room).ok().and_then(|(surfaces, side)| {
-            palette.resolve(surfaces.of(part.slot)?, side.copied())
-        });
+        let named =
+            rooms.get(part.room).ok().and_then(|(surfaces, side)| palette.paint(surfaces, part.slot, side.copied()));
         if named == Some(SKYBOX) {
             if !drawn_as_sky {
                 commands

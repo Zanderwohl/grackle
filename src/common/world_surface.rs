@@ -150,21 +150,25 @@ pub fn ray_from_inside<'a>(faces: impl IntoIterator<Item = &'a Face>, ray: &Ray3
     let direction = Vec3::from(ray.direction);
     let mut best: Option<(f32, Vec3)> = None;
     for face in faces {
-        let normal = face.plane.normal;
-        let closing = normal.dot(direction);
-        if closing >= 0.0 {
-            continue;
-        }
-        let t = (face.plane.w - normal.dot(ray.origin)) / closing;
-        if t < 0.0 || best.is_some_and(|(best_t, _)| t >= best_t) {
-            continue;
-        }
-        let hit = ray.origin + direction * t;
-        if contains(face, hit) {
-            best = Some((t, hit));
+        if let Some(t) = meets(face, ray.origin, direction)
+            && best.is_none_or(|(best_t, _)| t < best_t)
+        {
+            best = Some((t, ray.origin + direction * t));
         }
     }
     best
+}
+
+/// How far along `direction` from `origin` the ray meets `face` from the side it faces. Edges
+/// count as face.
+pub fn meets(face: &Face, origin: Vec3, direction: Vec3) -> Option<f32> {
+    let normal = face.plane.normal;
+    let closing = normal.dot(direction);
+    if closing >= 0.0 {
+        return None;
+    }
+    let t = (face.plane.w - normal.dot(origin)) / closing;
+    (t >= 0.0 && contains(face, origin + direction * t)).then_some(t)
 }
 
 /// For a point already in the face's plane. Convex and wound

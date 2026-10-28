@@ -118,7 +118,7 @@ to the map's base ambient, which looks unfinished rather than wrong.
 ### When it runs
 
 Any change to a room's shape, a sky assignment, the sky time or the sun's
-heading can change light anywhere: open a skylight and a room down the corridor
+position can change light anywhere: open a skylight and a room down the corridor
 gets brighter. So there is no incremental sun bake; a change invalidates the
 whole map.
 
@@ -128,7 +128,7 @@ whole map.
   until the map has been still for a moment rather than baking every frame of
   a drag, and is **off if the bake is slow**, decided by measuring it.
 - **The result is a cache** keyed by a hash of what it read — faces, sky
-  assignments, sky time, heading, base ambient, the bake's own version — under
+  assignments, sky time, sun position, base ambient, the bake's own version — under
   `cache/lightmap/`, like thumbnails. A client handed a map the host already
   baked finds it on disk instead of baking it again. Never authoritative,
   never sent, safe to delete.
@@ -140,14 +140,14 @@ it.
 
 ### The sun is a map setting
 
-Its **elevation and color come from `SkyTime`**: high noon nearly overhead,
-day at about 50°, evening low and orange (long shafts through windows), night a
-dim blue moon. Its **heading** is a new map setting, in degrees, because which
-way the shafts fall is a mapper's decision.
+**Altitude and azimuth** are map settings of their own (`SunPosition`), not
+derived from `SkyTime`: matching the sun to the sky is the mapper's call, and
+skies will grow beyond four presets. So is fairness — a low sun lights the
+two halves of a mirrored map differently, and the mapper decides whether that
+matters for their mode.
 
-A low sun on a mirrored map lights the two halves differently, which is a
-fairness question for CTF. Nothing enforces anything: high noon puts the sun
-near the zenith, and that is the default to suggest for symmetric maps.
+Azimuth is degrees clockwise from north (`-Z`) seen from above, so 90° is
+east (`+X`); altitude is degrees above the horizon.
 
 ### Things that move
 
@@ -174,12 +174,13 @@ whether it can be seen.
 
 ## Checklist
 
-- [ ] One function resolving a face to its material name, shared by `paint_rooms` and the bake; "is sky" from it
-- [ ] A ray accelerator over the map's faces, shared by the bake and the per-body sun ray (the collision `Grid` moved to `common`)
-- [ ] Sun direction and color per `SkyTime`; a sun heading in the map settings
+- [x] One function resolving a slot to its material name (`Palette::paint`), shared by `paint_rooms` and the bake
+- [x] A ray accelerator over the map's faces (`sunlight::LitSurface`, on the collision `Grid`, now in `common`)
+- [x] Sun altitude and azimuth in the map settings
 - [ ] Base ambient as a map setting, replacing `main.rs`'s fixed `GlobalAmbientLight`
 - [ ] Charting: faces onto a world-aligned lattice, packed per room, padded; `UV_1` written by `bake_one`
-- [ ] Sun visibility per texel, supersampled, soft edge
+- [x] Sun visibility per point, across the sun's disc (`LitSurface::sun_reaching`)
+- [ ] Sun visibility per texel, supersampled
 - [ ] Sky gather and one bounce at 1 m, combined onto the sun lattice
 - [ ] Lightmap images per room, `Lightmap` on each slot mesh, removed when a room is rebaked
 - [ ] The sun bake in `BakeSystems::All`, after rooms; a Bakes-panel checkbox for auto, debounced

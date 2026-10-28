@@ -8,7 +8,7 @@ use bevy::prelude::*;
 
 /// Meters. About a body's width a few times over: a body's query touches a
 /// handful of cells, and a 24 m floor slab sits in a few dozen.
-const CELL: f32 = 4.0;
+pub const CELL: f32 = 4.0;
 
 /// A query or a shape spanning more cells than this is answered by scanning
 /// everything, which is never worse than having no grid.

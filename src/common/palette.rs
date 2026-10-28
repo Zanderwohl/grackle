@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::team::{Side, Team};
 use crate::editor::map_metadata::MapMetadata;
+use crate::tool::room::{RoomSlot, RoomSurfaces};
 
 /// Keyed by role name. A slot's name is looked up here first, so a role shadows a material of the
 /// same name.
@@ -67,6 +68,12 @@ impl Palette {
         side.and_then(|Side(team)| role.sides.get(&team))
             .or(role.unsided.as_ref())
             .map(String::as_str)
+    }
+
+    /// What a room's slot is painted with. The one resolution: drawing it and baking its light
+    /// both ask this.
+    pub fn paint<'a>(&'a self, surfaces: &'a RoomSurfaces, slot: RoomSlot, side: Option<Side>) -> Option<&'a str> {
+        self.resolve(surfaces.of(slot)?, side)
     }
 }
 

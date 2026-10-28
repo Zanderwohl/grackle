@@ -99,10 +99,36 @@ impl Display for SkyTime {
     }
 }
 
+/// Where the sun is, set by the mapper and not derived from the [`SkyTime`]: which way light falls
+/// on a map is theirs to choose.
+#[derive(Resource, Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SunPosition {
+    /// Degrees above the horizon.
+    pub altitude: f32,
+    /// Degrees clockwise from north (`-Z`) seen from above, so 90 is east (`+X`).
+    pub azimuth: f32,
+}
+
+impl Default for SunPosition {
+    fn default() -> Self {
+        Self { altitude: 50.0, azimuth: 135.0 }
+    }
+}
+
+impl SunPosition {
+    /// Unit, from the ground toward the sun.
+    pub fn toward(self) -> Vec3 {
+        let (altitude, azimuth) = (self.altitude.to_radians(), self.azimuth.to_radians());
+        Vec3::new(azimuth.sin() * altitude.cos(), altitude.sin(), -azimuth.cos() * altitude.cos())
+    }
+}
+
 /// Ungated, as [`publish_palette`](crate::common::palette::publish_palette) is.
-pub fn publish_sky(metadata: Res<MapMetadata>, mut sky: ResMut<SkyTime>) {
+pub fn publish_sky(metadata: Res<MapMetadata>, mut sky: ResMut<SkyTime>, mut sun: ResMut<SunPosition>) {
     if metadata.is_changed() {
         sky.set_if_neq(metadata.sky);
+        sun.set_if_neq(metadata.sun);
     }
 }
 
@@ -135,6 +161,16 @@ mod tests {
                 assert!(close, "{sky:?} at {elevation} is {drawn:?}, authored {authored:?}");
             }
         }
+    }
+
+    #[test]
+    fn the_sun_is_where_its_angles_say() {
+        let east = SunPosition { altitude: 0.0, azimuth: 90.0 }.toward();
+        assert!(east.abs_diff_eq(Vec3::X, 1e-6), "{east}");
+        let north = SunPosition { altitude: 0.0, azimuth: 0.0 }.toward();
+        assert!(north.abs_diff_eq(Vec3::NEG_Z, 1e-6), "{north}");
+        let overhead = SunPosition { altitude: 90.0, azimuth: 200.0 }.toward();
+        assert!(overhead.abs_diff_eq(Vec3::Y, 1e-6), "{overhead}");
     }
 
     /// Mixed in sRGB, salmon into purple sags through a duller brown; in Oklab the midpoint keeps
