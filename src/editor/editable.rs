@@ -48,12 +48,12 @@ impl Plugin for EditorStepsPlugin {
             // `sync_entities`, `handle_edits` and `assign_sides` are deliberately ungated so an edit lands
             // mid-match.
             .add_systems(Update, (
-                FeatureTimeline::undo_redo_shortcuts.run_if(in_state(AppMode::Editor)),
+                FeatureTimeline::undo_redo_shortcuts.run_if(in_state(AppMode::Editor)).run_if(crate::common::net::has_authority),
                 FeatureTimeline::sync_entities,
                 FeatureTimeline::handle_edits,
                 assign_sides,
                 FeatureTimeline::draw_affected_gizmos.run_if(in_state(AppMode::Editor)),
-                checkpoint_when_idle.run_if(in_state(AppMode::Editor)),
+                checkpoint_when_idle.run_if(in_state(AppMode::Editor)).run_if(crate::common::net::has_authority),
             ).chain())
         ;
     }

@@ -201,10 +201,31 @@ impl Plugin for MulticamPlugin {
                 Self::set_camera_viewports.run_if(crate::common::app_mode::showing_the_viewports),
             )
             .add_systems(Update, Self::debug_boxes.run_if(in_state(AppMode::Editor)))
+            .add_systems(Update, label_spectating.run_if(resource_changed::<crate::common::net::NetRole>))
             // After transform propagation, so gizmos use this frame's global transforms.
             .add_systems(PostUpdate, Self::draw_camera_gizmos.after(TransformSystems::Propagate).run_if(in_state(AppMode::Editor)))
             .add_systems(EguiPrimaryContextPass, Self::debug_window.run_if(in_state(AppMode::Editor)))
         ;
+    }
+}
+
+/// Top right of each viewport, up only on a client.
+#[derive(Component)]
+struct SpectatingLabel;
+
+fn label_spectating(
+    role: Res<crate::common::net::NetRole>,
+    mut labels: Query<(&mut Text, &mut Node), With<SpectatingLabel>>,
+) {
+    let (words, display) = match &*role {
+        crate::common::net::NetRole::Client { host, port } => {
+            (get!("viewport.spectating", "address", format!("{host}:{port}")), Display::Flex)
+        }
+        _ => (String::new(), Display::None),
+    };
+    for (mut text, mut node) in &mut labels {
+        text.0 = words.clone();
+        node.display = display;
     }
 }
 
@@ -291,6 +312,17 @@ impl MulticamPlugin {
                                 ..Default::default()
                             },
                             Text::new(camera_name),
+                        ));
+                        parent.spawn((
+                            SpectatingLabel,
+                            Node {
+                                position_type: PositionType::Absolute,
+                                top: Val::Px(12.),
+                                right: Val::Px(12.),
+                                display: Display::None,
+                                ..Default::default()
+                            },
+                            Text::default(),
                         ));
                     });
         }

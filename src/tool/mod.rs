@@ -67,7 +67,23 @@ impl Plugin for ToolPlugin {
             .add_plugins(RetargetPlugin)
             .add_plugins(RoomPlugin)
             .add_plugins(FootprintPlugin)
-            .add_plugins(FootprintDragPlugin);
+            .add_plugins(FootprintDragPlugin)
+            .add_systems(Update, spectate_while_a_client);
+    }
+}
+
+/// Every editing tool runs under a `Tools` state, so holding a client in
+/// [`Tools::Spectate`] turns them all off at once.
+fn spectate_while_a_client(
+    role: Option<Res<crate::common::net::NetRole>>,
+    tool: Res<State<Tools>>,
+    mut next: ResMut<NextState<Tools>>,
+) {
+    let client = role.is_some_and(|role| !role.is_authority());
+    match (client, *tool.get() == Tools::Spectate) {
+        (true, false) => next.set(Tools::Spectate),
+        (false, true) => next.set(Tools::Select),
+        _ => {}
     }
 }
 
@@ -98,6 +114,9 @@ pub enum Tools {
     Footprint,
     Mirror,
     Retarget,
+    /// Forced on a client, which only watches the server's map: no tool runs
+    /// under it, so nothing local can drift from what the server sends.
+    Spectate,
 }
 
 impl Tools {
@@ -115,11 +134,12 @@ impl Tools {
             Self::Footprint => get!("tools.footprint"),
             Self::Mirror => get!("tools.mirror"),
             Self::Retarget => "Retarget".into(),
+            Self::Spectate => "Spectate".into(),
         }
     }
 
     fn is_hidden(&self) -> bool {
-        matches!(self, Self::Retarget)
+        matches!(self, Self::Retarget | Self::Spectate)
     }
     
     /// `TOOLBAR_HEIGHT` in [`crate::editor::panels`] is derived from these.
@@ -152,5 +172,30 @@ impl Tools {
             }
         });
         ui.add_space(Self::ROW_PADDING);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::net::NetRole;
+
+    fn tool_with(role: NetRole, starting: Tools) -> Tools {
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin)
+            .insert_state(starting)
+            .insert_resource(role)
+            .add_systems(Update, spectate_while_a_client);
+        app.update();
+        app.update();
+        app.world().resource::<State<Tools>>().get().clone()
+    }
+
+    #[test]
+    fn a_client_only_spectates_and_a_host_gets_its_tools_back() {
+        let client = NetRole::Client { host: "example".into(), port: 1 };
+        assert_eq!(tool_with(client, Tools::Room), Tools::Spectate);
+        assert_eq!(tool_with(NetRole::Listen { port: 1 }, Tools::Room), Tools::Room);
+        assert_eq!(tool_with(NetRole::Solo, Tools::Spectate), Tools::Select);
     }
 }

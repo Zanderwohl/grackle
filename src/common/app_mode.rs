@@ -66,16 +66,21 @@ impl AppMode {
 
     /// The current mode is never selectable: `NextState::set` runs the
     /// transition even for the same state, and re-entering Play restarts the
-    /// round. Entering or leaving Play needs authority; swapping between
-    /// authoring modes is local.
-    pub fn selectable_from(self, current: AppMode, authority: bool) -> bool {
-        if self == current {
+    /// round. Entering or leaving Play needs authority. While networked only
+    /// the map editor and Play are offered, for now; `None` is no network
+    /// layer, a closed game.
+    pub fn selectable_from(self, current: AppMode, role: Option<&NetRole>) -> bool {
+        if self == current || (role.is_some_and(NetRole::is_networked) && !self.offered_networked()) {
             return false;
         }
         if self == AppMode::Play || current == AppMode::Play {
-            return authority;
+            return role.is_none_or(NetRole::is_authority);
         }
         true
+    }
+
+    pub fn offered_networked(self) -> bool {
+        matches!(self, AppMode::Editor | AppMode::Play)
     }
 }
 
@@ -104,20 +109,21 @@ pub fn mode_menu(
     role: Option<&NetRole>,
     request: &mut Option<AppMode>,
 ) {
-    // No network layer is a closed game, which is its own authority.
-    let authority = role.is_none_or(|role| role.is_authority());
-
     ui.menu_button(get!("app_mode.menu.title"), |ui| {
         for mode in AppMode::iter() {
-            let enabled = mode.selectable_from(current, authority);
+            let enabled = mode.selectable_from(current, role);
             let entry = ui.add_enabled(enabled, egui::Button::new(mode.name()));
             if entry.clicked() {
                 ui.close_kind(UiKind::Menu);
                 *request = Some(mode);
             }
-            // Distinguishes "the server decides" from "you are already here".
+            // Distinguishes why from "you are already here".
             if !enabled && mode != current {
-                entry.on_disabled_hover_text(get!("app_mode.menu.server_decides"));
+                let why = match role.is_some_and(NetRole::is_networked) && !mode.offered_networked() {
+                    true => get!("app_mode.menu.not_while_networked"),
+                    false => get!("app_mode.menu.server_decides"),
+                };
+                entry.on_disabled_hover_text(why);
             }
         }
     });
@@ -163,7 +169,7 @@ mod tests {
     #[test]
     fn the_mode_you_are_in_is_never_offered() {
         for mode in AppMode::iter() {
-            assert!(!mode.selectable_from(mode, true), "{mode:?} offered itself");
+            assert!(!mode.selectable_from(mode, None), "{mode:?} offered itself");
         }
     }
 
@@ -196,20 +202,34 @@ mod tests {
     }
 
     #[test]
-    fn a_client_can_still_swap_between_the_authoring_modes() {
-        assert!(AppMode::Prop.selectable_from(AppMode::Editor, false));
-        assert!(AppMode::Editor.selectable_from(AppMode::Prop, false));
+    fn networked_only_the_map_editor_and_play_are_offered() {
+        let host = NetRole::Listen { port: 1 };
+        let client = NetRole::Client { host: "example".into(), port: 1 };
+        for role in [&host, &client] {
+            for mode in [AppMode::Prop, AppMode::Animation, AppMode::Material] {
+                assert!(!mode.selectable_from(AppMode::Editor, Some(role)), "{mode:?} offered to {role:?}");
+            }
+            // A host that was modeling when it started hosting can still get back.
+            assert!(AppMode::Editor.selectable_from(AppMode::Prop, Some(role)));
+        }
+        assert!(AppMode::Play.selectable_from(AppMode::Editor, Some(&host)));
+        assert!(AppMode::Prop.selectable_from(AppMode::Editor, Some(&NetRole::Solo)));
+        assert!(AppMode::Prop.selectable_from(AppMode::Editor, None));
     }
 
     /// Both halves: a client that could leave a round would walk out of the
     /// one everybody else is playing.
     #[test]
     fn only_the_authority_starts_or_ends_a_round() {
+        let host = NetRole::Listen { port: 1 };
+        let client = NetRole::Client { host: "example".into(), port: 1 };
+        assert!(AppMode::Play.selectable_from(AppMode::Editor, Some(&host)));
+        assert!(!AppMode::Play.selectable_from(AppMode::Editor, Some(&client)));
+        assert!(AppMode::Editor.selectable_from(AppMode::Play, Some(&host)));
+        assert!(!AppMode::Editor.selectable_from(AppMode::Play, Some(&client)));
         for authoring in [AppMode::Editor, AppMode::Prop, AppMode::Animation] {
-            assert!(AppMode::Play.selectable_from(authoring, true));
-            assert!(!AppMode::Play.selectable_from(authoring, false));
-            assert!(authoring.selectable_from(AppMode::Play, true));
-            assert!(!authoring.selectable_from(AppMode::Play, false));
+            assert!(AppMode::Play.selectable_from(authoring, None));
+            assert!(authoring.selectable_from(AppMode::Play, None));
         }
     }
 }

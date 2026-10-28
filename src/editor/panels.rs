@@ -144,6 +144,9 @@ struct TabViewerAndResources<'a> {
     /// Whether the Features panel changed the timeline, which it holds with
     /// change detection bypassed.
     timeline_touched: bool,
+    /// A client watches the server's map; only its own Player settings stay
+    /// editable.
+    spectating: bool,
     rounds: &'a RoundHistory,
     /// Change detection bypassed, as the timeline's is: held for the whole
     /// frame it would read as changed every frame, and every change is saved
@@ -180,6 +183,9 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
+        if self.spectating && !matches!(tab, TabKinds::Player) {
+            ui.disable();
+        }
         match tab {
             TabKinds::Tools => {
                 Tools::ui(ui, self.current_tool, self.next_tool);
@@ -221,7 +227,7 @@ impl Plugin for EditorPanelPlugin {
             .add_systems(Startup, crate::common::assets::create_the_user_pack)
             .add_systems(EguiPrimaryContextPass, EditorPanels::ui.run_if(in_state(AppMode::Editor)))
             // Before the panel, so a chord is answered this frame.
-            .add_systems(Update, file_shortcuts.run_if(in_state(AppMode::Editor)))
+            .add_systems(Update, file_shortcuts.run_if(in_state(AppMode::Editor)).run_if(crate::common::net::has_authority))
         ;
     }
 }
@@ -350,6 +356,7 @@ impl EditorPanels {
             pending_edits: &mut pending_edits,
             retarget_request: &mut retarget_request,
             timeline_touched: false,
+            spectating: !net_role.is_authority(),
             rounds: &messages.rounds,
             player: messages.player.bypass_change_detection(),
             player_touched: false,
@@ -359,10 +366,13 @@ impl EditorPanels {
             .resizable(false)
             .show(&mut viewport_ui, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
-                    file_menu(ui, &mut pending_file_op);
-                    edit_menu(ui, edit_available, &mut pending_edit);
-                    // `Editor` spelled out: this system is gated on it.
-                    mode_menu(ui, AppMode::Editor, Some(&net_role), &mut wanted_mode);
+                    // The network menu stays live, so a client can leave.
+                    ui.add_enabled_ui(net_role.is_authority(), |ui| {
+                        file_menu(ui, &mut pending_file_op);
+                        edit_menu(ui, edit_available, &mut pending_edit);
+                        // `Editor` spelled out: this system is gated on it.
+                        mode_menu(ui, AppMode::Editor, Some(&net_role), &mut wanted_mode);
+                    });
                     network_menu(
                         ui,
                         &net_role,

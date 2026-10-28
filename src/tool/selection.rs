@@ -19,7 +19,7 @@ impl Plugin for SelectionPlugin {
             .init_resource::<SelectionState>()
             .add_systems(Update, (
                 Self::select.run_if(in_state(Tools::Select)),
-                Self::draw_hover,
+                Self::draw_hover.run_if(not(in_state(Tools::Spectate))),
             ).chain().run_if(in_state(AppMode::Editor)))
         ;
     }

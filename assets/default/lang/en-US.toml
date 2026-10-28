@@ -11,6 +11,7 @@ front = "Front"
 top = "Top"
 right = "Right"
 ui = "UI Camera"
+spectating = "Spectating { address }"
 
 [debug.viewport]
 title = "Multicam Viewport"
@@ -599,6 +600,7 @@ revert = "Revert to Saved"
 [app_mode.menu]
 title = "Mode"
 server_decides = "The server decides when the match is played."
+not_while_networked = "Not while networked."
 
 [prop]
 untitled = "Untitled prop"

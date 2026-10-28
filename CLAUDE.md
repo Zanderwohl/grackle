@@ -199,7 +199,10 @@ be tested: you are never offered the mode you are in — `NextState::set` runs
 the transition even for the same state, and `OnEnter(Play)` tears the match
 down — and **starting *or* ending a round needs authority**, which is why the
 clause names `Play` on either side rather than asking whether it is a change.
-Swapping between the two authoring modes is local and needs nothing.
+Swapping between the two authoring modes is local and needs nothing — but
+**while networked, host or client, only the map editor and Play are offered**,
+for now, and `back_to_the_map_editor_when_networked` takes anybody already in
+another mode back to the map editor.
 
 Ask **`AppMode::is_authoring()`** rather than matching `Editor` wherever the
 question is really "is the match running" — same rule as `NetRole::is_authority`.
@@ -2310,6 +2313,14 @@ anybody can work in.
   own map back would despawn the entities it is replicating.
 - No history crosses: undo is a fact about whoever made the edits, and a client
   that could undo the server's map would be editing a map it does not own.
+- **A client is read-only in the editor.** Nothing sends its edits upstream,
+  so an edit it made would stand only until the server next sent the map —
+  and into a round, where its walls would disagree with the server's.
+  `spectate_while_a_client` holds it in the hidden `Tools::Spectate`, under
+  which no tool runs; its panels are disabled but for Player, the File, Edit
+  and Mode menus are grayed out but for Multiplayer, its save and undo chords
+  do nothing, and each viewport says *Spectating host:port* top right.
+  Editing between rounds as a client is the feature this stands in for.
 
 **Edits reach clients by sending the whole map again**, not by sending the
 edit. `broadcast_map_changes` re-encodes the timeline, compares it with the
