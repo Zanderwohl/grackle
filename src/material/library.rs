@@ -16,7 +16,7 @@ use texture_graph_gpu::{Baker, MaterialMapper};
 use bevy::light::NotShadowCaster;
 use bevy::pbr::Lightmap;
 
-use super::gpu::{BakedTextures, BevyDevice, Encoding, Sampling};
+use super::gpu::{submitting, BakedTextures, BevyDevice, Encoding, Sampling};
 use super::pit::{Pit, PIT};
 use super::sky::{Sky, SkyMaterial};
 use crate::common::sky::SKYBOX;
@@ -96,11 +96,13 @@ impl MaterialLibrary {
             }
             let (baker, mapper) = self.baker.as_mut()?;
             let entry = find(name, packs).and_then(|(graph, file)| {
-                let out = baker
-                    .bake_output(&graph, (TILE_TEXELS, TILE_TEXELS), &EvalCtx::default(), false)
-                    .map_err(|e| error!("Baking material {name}: {e}"))
-                    .ok()?;
-                let maps = mapper.maps(baker.ctx(), &out);
+                let maps = submitting(|| {
+                    let out = baker
+                        .bake_output(&graph, (TILE_TEXELS, TILE_TEXELS), &EvalCtx::default(), false)
+                        .map_err(|e| error!("Baking material {name}: {e}"))
+                        .ok()?;
+                    Some(mapper.maps(baker.ctx(), &out))
+                })?;
                 let maps = [
                     baked.insert(&maps.color, Sampling::Repeat, Encoding::Color),
                     baked.insert(&maps.metallic_roughness, Sampling::Repeat, Encoding::Data),
