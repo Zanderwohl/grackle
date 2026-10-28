@@ -195,6 +195,7 @@ mod tests {
             ..Default::default()
         };
         let room = timeline.apply_feature(Box::new(EditorRoom::from_points(min, max).with_surfaces(surfaces)));
+        timeline.rename(room, "Main hall");
         timeline.apply_feature(Box::new(EditorRoom::from_min_and_size(
             PointRef::reference_with_offset(max, 1.0, 0.0, 1.0),
             Vec3::new(4.0, 3.0, 5.0),

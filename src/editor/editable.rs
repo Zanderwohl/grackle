@@ -107,7 +107,7 @@ pub trait FeatureTrait: Send + Sync {
     fn type_name(&self) -> String;
     fn type_key(&self) -> &'static str;
     fn debug_gizmos(&self, gizmos: &mut Gizmos);
-    /// Drawn on top of `debug_gizmos` while this feature is the one selected.
+    /// Drawn on top of `debug_gizmos` while this feature is selected.
     fn selected_gizmos(&self, _gizmos: &mut Gizmos) {}
     /// Points of this feature's own that the point ref under `point_ref_key`
     /// may be measured from, by key — which no other feature can name.
@@ -171,7 +171,9 @@ pub trait FeatureTrait: Send + Sync {
 }
 
 enum RowAction {
+    Rename(FeatureId),
     Delete(FeatureId),
+    DeleteSelection,
     RollBackTo(Option<FeatureId>),
 }
 
@@ -193,13 +195,20 @@ pub struct FeatureTimeline {
     features: HashMap<FeatureId, Feature>,
     feature_order: Vec<FeatureId>,
     id_counter: u64,
+    /// The primary: what the inspector edits and the tools act on.
     selected_feature: Option<FeatureId>,
-    /// The selected feature and all its descendants, parents before dependants.
+    /// Everything selected, the primary included, in pick order.
+    selection: Vec<FeatureId>,
+    /// Where a Shift-click range is measured from.
+    selection_anchor: Option<FeatureId>,
+    /// The selection and all its descendants, parents before dependants.
     selection_affected: Option<Vec<FeatureId>>,
     /// The rollback bar: the last feature shown, `None` for the whole map. An id rather than a count, so
     /// an edit above it cannot move it. View state: not saved, not sent, not in undo snapshots.
     rollback: Option<FeatureId>,
     pending_despawns: Vec<Entity>,
+    /// The row being renamed in the Features panel. View state, like the bar.
+    renaming: Option<Renaming>,
     /// Whole-map snapshots, oldest first. In memory only.
     undo: Vec<MapState>,
     redo: Vec<MapState>,
@@ -209,6 +218,14 @@ pub struct FeatureTimeline {
     saved: Option<MapState>,
     /// Kept rather than computed, because computing it means serializing the map.
     dirty: bool,
+}
+
+struct Renaming {
+    id: FeatureId,
+    typed: String,
+    /// Once focused, any frame without focus ends the rename, which catches focus lost while the panel was
+    /// hidden.
+    had_focus: bool,
 }
 
 /// JSON because it is the fastest encoding `typetag` gives; these never reach a file.
@@ -234,9 +251,12 @@ impl Default for FeatureTimeline {
             feature_order: vec![],
             id_counter: 0,
             selected_feature: None,
+            selection: vec![],
+            selection_anchor: None,
             selection_affected: None,
             rollback: None,
             pending_despawns: vec![],
+            renaming: None,
             undo: vec![],
             redo: vec![],
             checkpoint: None,
@@ -295,6 +315,25 @@ impl FeatureTimeline {
         self.remove_feature_internal(feature_id);
     }
 
+    /// A blank or unchanged name changes nothing and returns false.
+    pub fn rename(&mut self, id: FeatureId, name: &str) -> bool {
+        let name = name.trim();
+        let Some(feature) = self.features.get_mut(&id) else { return false };
+        if name.is_empty() || feature.label() == name {
+            return false;
+        }
+        feature.name = Some(name.to_owned());
+        true
+    }
+
+    /// One undo step, as long as it lands between two checkpoints.
+    pub fn delete_features(&mut self, feature_ids: &[FeatureId]) {
+        for id in feature_ids {
+            self.unlink_feature(*id);
+        }
+        self.forget_a_missing_bar();
+    }
+
     pub fn id_counter(&self) -> u64 {
         self.id_counter
     }
@@ -319,17 +358,11 @@ impl FeatureTimeline {
             return;
         }
         self.rollback = at;
-        self.deselect_past_the_bar();
+        self.refresh_selection();
     }
 
-    /// A selection past the bar has no entity to edit against.
-    fn deselect_past_the_bar(&mut self) {
-        let shown = self.shown_len();
-        if let Some(selected) = self.selected_feature
-            && self.feature_order.iter().position(|id| *id == selected).is_none_or(|at| at >= shown)
-        {
-            self.select(None);
-        }
+    fn is_shown(&self, id: FeatureId) -> bool {
+        self.feature_order.iter().position(|candidate| *candidate == id).is_some_and(|at| at < self.shown_len())
     }
 
     pub fn next_id(&mut self) -> FeatureId {
@@ -338,28 +371,87 @@ impl FeatureTimeline {
         id
     }
     
+    /// Select exactly this one, or nothing.
     pub fn select(&mut self, selection: Option<FeatureId>) {
+        self.selection = selection.into_iter().collect();
         self.selected_feature = selection;
-        self.selection_affected = selection.map(|root| {
-            let mut result = vec![root];
-            let mut visited: HashSet<FeatureId> = HashSet::from([root]);
-            let mut queue = vec![root];
+        self.selection_anchor = selection;
+        self.refresh_selection();
+    }
 
-            while !queue.is_empty() {
-                let parent_set: HashSet<FeatureId> = queue.drain(..).collect();
-
-                let children: Vec<FeatureId> = self.features.iter()
-                    .filter(|(_, feature)| feature.parents.iter().any(|p| parent_set.contains(p)))
-                    .map(|(id, _)| *id)
-                    .filter(|id| visited.insert(*id))
-                    .collect();
-
-                result.extend(&children);
-                queue = children;
+    pub fn toggle_selected(&mut self, id: FeatureId) {
+        if let Some(at) = self.selection.iter().position(|candidate| *candidate == id) {
+            self.selection.remove(at);
+            if self.selected_feature == Some(id) {
+                self.selected_feature = self.selection.last().copied();
             }
+        } else {
+            self.selection.push(id);
+            self.selected_feature = Some(id);
+        }
+        self.selection_anchor = Some(id);
+        self.refresh_selection();
+    }
 
-            result
-        });
+    /// The anchor stays, so successive Shift-clicks measure from the same row.
+    pub fn select_range_to(&mut self, id: FeatureId) {
+        let Some(anchor) = self.selection_anchor.or(self.selected_feature).filter(|a| self.is_shown(*a)) else {
+            self.select(Some(id));
+            return;
+        };
+        let position = |target: FeatureId| self.feature_order.iter().position(|candidate| *candidate == target);
+        let (Some(from), Some(to)) = (position(anchor), position(id)) else { return };
+        let mut range: Vec<FeatureId> = self.feature_order[from.min(to)..=from.max(to)].to_vec();
+        if to < from {
+            range.reverse();
+        }
+        self.selection = range;
+        self.selected_feature = Some(id);
+        self.selection_anchor = Some(anchor);
+        self.refresh_selection();
+    }
+
+    fn click_row(&mut self, id: FeatureId, modifiers: egui::Modifiers) {
+        if modifiers.shift {
+            self.select_range_to(id);
+        } else if modifiers.command || modifiers.ctrl || modifiers.mac_cmd {
+            self.toggle_selected(id);
+        } else if self.selection == [id] {
+            self.select(None);
+        } else {
+            self.select(Some(id));
+        }
+    }
+
+    pub fn selection(&self) -> &[FeatureId] {
+        &self.selection
+    }
+
+    fn refresh_selection(&mut self) {
+        let shown: HashSet<FeatureId> = self.feature_order[..self.shown_len()].iter().copied().collect();
+        self.selection.retain(|id| shown.contains(id));
+        if self.selected_feature.is_none_or(|id| !self.selection.contains(&id)) {
+            self.selected_feature = self.selection.last().copied();
+        }
+        if self.selection_anchor.is_some_and(|id| !self.features.contains_key(&id)) {
+            self.selection_anchor = self.selected_feature;
+        }
+        self.selection_affected =
+            (!self.selection.is_empty()).then(|| self.with_descendants(self.selection.iter().copied()));
+    }
+
+    /// In list order, which is parents first: a feature can only name features above it.
+    fn with_descendants(&self, roots: impl IntoIterator<Item = FeatureId>) -> Vec<FeatureId> {
+        let mut reached: HashSet<FeatureId> = roots.into_iter().collect();
+        self.feature_order
+            .iter()
+            .copied()
+            .filter(|id| {
+                reached.contains(id)
+                    || self.features.get(id).is_some_and(|feature| feature.parents.iter().any(|p| reached.contains(p)))
+                        && reached.insert(*id)
+            })
+            .collect()
     }
 
     pub fn selection_affected(&self) -> Option<&[FeatureId]> {
@@ -400,6 +492,7 @@ impl FeatureTimeline {
         let new_id = self.next_id();
         let new_feature = Feature {
             id: new_id,
+            name: None,
             object: feature_object,
             parents,
         };
@@ -575,8 +668,6 @@ impl FeatureTimeline {
         }
 
         self.forget_a_missing_bar();
-        let selected = self.selected_feature.filter(|id| self.features.contains_key(id));
-        self.select(selected);
 
         self.dirty = self.saved.as_ref() != Some(target);
         self.checkpoint = Some(target.clone());
@@ -587,7 +678,8 @@ impl FeatureTimeline {
         if self.rollback.is_some_and(|id| !self.features.contains_key(&id)) {
             self.rollback = None;
         }
-        self.deselect_past_the_bar();
+        // A selection past the bar has no entity to edit against.
+        self.refresh_selection();
     }
 
     fn queue_refresh_for_feature_and_descendants(&mut self, root: FeatureId) {
@@ -616,6 +708,12 @@ impl FeatureTimeline {
     }
 
     fn remove_feature_internal(&mut self, feature_id: FeatureId) {
+        self.unlink_feature(feature_id);
+        self.forget_a_missing_bar();
+    }
+
+    /// The caller must call `forget_a_missing_bar` after.
+    fn unlink_feature(&mut self, feature_id: FeatureId) {
         // Rebuilt rather than left standing on a parent that is gone: a Mirror would keep the copy.
         self.queue_refresh_for_feature_and_descendants(feature_id);
         if let Some(order_index) = self.feature_order.iter().position(|id| *id == feature_id) {
@@ -627,14 +725,6 @@ impl FeatureTimeline {
                 self.pending_despawns.push(entity);
             }
         }
-
-        if self.selected_feature == Some(feature_id) {
-            self.select(None);
-        } else if self.selected_feature.is_some() {
-            self.select(self.selected_feature);
-        }
-
-        self.forget_a_missing_bar();
     }
     
     /// The Features panel. Says whether it changed the timeline, because the
@@ -672,7 +762,7 @@ impl FeatureTimeline {
                             let mut retarget_request: Option<String> = None;
                             // Padded here rather than in each `editor_ui`, so every feature type's panel looks the same.
                             let edited = feature_editor_frame(ui, |ui| {
-                                ui.heading(feature.type_name_with_id());
+                                ui.heading(feature.label());
                                 ui.add_space(FEATURE_EDITOR_PADDING * 0.5);
                                 feature.object_mut().editor_ui(ui, &features.features, &prior_order, &mut retarget_request)
                             });
@@ -705,8 +795,13 @@ impl FeatureTimeline {
         }
 
         let mut selection_changed = false;
-        let mut next_selected = features.selected_feature;
+        let mut clicked: Option<(FeatureId, egui::Modifiers)> = None;
+        let mut cleared = false;
+        // Taken out so a row can edit it while the loop borrows the timeline.
+        let mut renaming = features.renaming.take().filter(|rename| features.features.contains_key(&rename.id));
+        let mut renamed: Option<(FeatureId, Option<String>)> = None;
         let pending: Rc<RefCell<Option<RowAction>>> = Rc::new(RefCell::new(None));
+        let selected: HashSet<FeatureId> = features.selection.iter().copied().collect();
         let shown = features.shown_len();
         let rolled_back = features.rollback.is_some();
         let mut rows: Vec<(FeatureId, egui::Rect)> = Vec::new();
@@ -715,48 +810,81 @@ impl FeatureTimeline {
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (i, id) in features.feature_order.iter().enumerate() {
                 let feature = features.get_feature(id).unwrap();
-                let is_selected = features.selected_feature == Some(*id);
+                let is_selected = selected.contains(id);
                 let is_active = i < shown;
 
-                // The trailing `Atom::grow` left-justifies the title; egui centers a stretched button's contents.
-                let label_text = feature.type_name_with_id();
-                // Past the bar: faded rather than struck through, which reads as deleted.
-                let response = ui
-                    .scope(|ui| {
-                        if !is_active {
-                            ui.multiply_opacity(0.4);
-                        }
-                        let label = egui::Button::selectable(
-                            is_selected && is_active,
-                            (label_text, egui::Atom::grow()),
-                        );
-                        ui.add_sized([ui.available_width(), 0.0], label)
-                    })
-                    .inner;
-                rows.push((*id, response.rect));
-                if response.clicked() && is_active {
-                    next_selected = Some(if is_selected { None } else { Some(*id) }).flatten();
-                    selection_changed = true;
-                }
-
-                let fid = *id;
-                let menu = pending.clone();
                 let at_the_bar = i + 1 == shown;
-                response.context_menu(move |menu_ui| {
-                    if !at_the_bar && menu_ui.button(get!("editor.timeline.roll_back_here")).clicked() {
-                        *menu.borrow_mut() = Some(RowAction::RollBackTo(Some(fid)));
-                        menu_ui.close();
+                if let Some(rename) = renaming.as_mut().filter(|rename| rename.id == *id) {
+                    let output = egui::TextEdit::singleline(&mut rename.typed)
+                        .desired_width(ui.available_width())
+                        .show(ui);
+                    let response = output.response;
+                    if response.has_focus() {
+                        rename.had_focus = true;
+                    } else if rename.had_focus {
+                        // egui drops focus on Escape itself, so a loss with Escape down is a cancel.
+                        let cancelled = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                        renamed = Some((rename.id, (!cancelled).then(|| rename.typed.clone())));
+                    } else {
+                        response.request_focus();
+                        let mut state = output.state;
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::select_all(&output.galley)));
+                        state.store(ui.ctx(), response.id);
                     }
-                    if rolled_back && menu_ui.button(get!("editor.timeline.roll_to_end")).clicked() {
-                        *menu.borrow_mut() = Some(RowAction::RollBackTo(None));
-                        menu_ui.close();
+                    rows.push((*id, response.rect));
+                } else {
+                    // The trailing `Atom::grow` left-justifies the title; egui centers a stretched button's contents.
+                    let label_text = feature.label();
+                    // Past the bar: faded rather than struck through, which reads as deleted.
+                    let response = ui
+                        .scope(|ui| {
+                            if !is_active {
+                                ui.multiply_opacity(0.4);
+                            }
+                            let label = egui::Button::selectable(
+                                is_selected && is_active,
+                                (label_text, egui::Atom::grow()),
+                            )
+                            .truncate();
+                            ui.add_sized([ui.available_width(), 0.0], label)
+                        })
+                        .inner;
+                    rows.push((*id, response.rect));
+                    if response.clicked() && is_active {
+                        clicked = Some((*id, ui.input(|input| input.modifiers)));
                     }
-                    menu_ui.separator();
-                    if menu_ui.button(get!("editor.timeline.delete")).clicked() {
-                        *menu.borrow_mut() = Some(RowAction::Delete(fid));
-                        menu_ui.close();
-                    }
-                });
+
+                    let fid = *id;
+                    let menu = pending.clone();
+                    let together = is_selected && selected.len() > 1;
+                    let count = selected.len();
+                    response.context_menu(move |menu_ui| {
+                        if together {
+                            if menu_ui.button(get!("editor.timeline.delete_selected", "count", count)).clicked() {
+                                *menu.borrow_mut() = Some(RowAction::DeleteSelection);
+                                menu_ui.close();
+                            }
+                            return;
+                        }
+                        if !at_the_bar && menu_ui.button(get!("editor.timeline.roll_back_here")).clicked() {
+                            *menu.borrow_mut() = Some(RowAction::RollBackTo(Some(fid)));
+                            menu_ui.close();
+                        }
+                        if rolled_back && menu_ui.button(get!("editor.timeline.roll_to_end")).clicked() {
+                            *menu.borrow_mut() = Some(RowAction::RollBackTo(None));
+                            menu_ui.close();
+                        }
+                        if menu_ui.button(get!("editor.timeline.rename")).clicked() {
+                            *menu.borrow_mut() = Some(RowAction::Rename(fid));
+                            menu_ui.close();
+                        }
+                        menu_ui.separator();
+                        if menu_ui.button(get!("editor.timeline.delete")).clicked() {
+                            *menu.borrow_mut() = Some(RowAction::Delete(fid));
+                            menu_ui.close();
+                        }
+                    });
+                }
 
                 // Faint at the bottom, where it changes nothing; bold elsewhere so a partial map is not mistaken
                 // for the whole one.
@@ -788,20 +916,40 @@ impl FeatureTimeline {
             if remaining.y > 0.0 {
                 let response = ui.allocate_response(remaining, egui::Sense::click());
                 if response.clicked() {
-                    next_selected = None;
-                    selection_changed = true;
+                    cleared = true;
                 }
             }
         });
 
-        if selection_changed {
-            features.select(next_selected);
+        features.renaming = renaming;
+        let mut acted = false;
+        if let Some((id, typed)) = renamed {
+            features.renaming = None;
+            if let Some(typed) = typed {
+                acted = features.rename(id, &typed);
+            }
+        }
+
+        if let Some((id, modifiers)) = clicked {
+            features.click_row(id, modifiers);
+            selection_changed = true;
+        } else if cleared {
+            features.select(None);
+            selection_changed = true;
         }
 
         let row_action = pending.borrow_mut().take();
-        let acted = row_action.is_some();
+        acted |= row_action.is_some();
         match row_action {
+            Some(RowAction::Rename(id)) => {
+                let typed = features.features.get(&id).map(Feature::label).unwrap_or_default();
+                features.renaming = Some(Renaming { id, typed, had_focus: false });
+            }
             Some(RowAction::Delete(id)) => features.delete_feature(id),
+            Some(RowAction::DeleteSelection) => {
+                let ids = features.selection.clone();
+                features.delete_features(&ids);
+            }
             Some(RowAction::RollBackTo(at)) => features.roll_back_to(at),
             None => {}
         }
@@ -866,13 +1014,10 @@ impl FeatureTimeline {
         mut edit_events: MessageReader<EditEvent>,
         mut commands: Commands,
     ) {
-        if edit_events.read().next().is_none() { return; }
-        edit_events.clear();
-
-        let affected = match &features.selection_affected {
-            Some(ids) => ids.clone(),
-            None => return,
-        };
+        // Not the whole selection: the rest of it was not edited.
+        let edited: Vec<FeatureId> = edit_events.read().map(|event| event.feature_id).collect();
+        if edited.is_empty() { return; }
+        let affected = features.with_descendants(edited);
 
         for id in &affected {
             if let Some(mut feature) = features.features.remove(id) {
@@ -892,7 +1037,7 @@ impl FeatureTimeline {
                 feature.object.debug_gizmos(&mut gizmos);
             }
         }
-        if let Some(selected) = features.selected_feature.and_then(|id| features.features.get(&id)) {
+        for selected in features.selection.iter().filter_map(|id| features.features.get(id)) {
             selected.object.selected_gizmos(&mut gizmos);
         }
     }
@@ -922,13 +1067,20 @@ impl std::fmt::Display for FeatureId {
 #[derive(Serialize, Deserialize)]
 pub struct Feature {
     id: FeatureId,
+    /// What the mapper called it; `None` shows the type and id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     object: Box<dyn FeatureTrait>,
     parents: Vec<FeatureId>,
 }
 
 impl Feature {
     pub fn new(id: FeatureId, object: Box<dyn FeatureTrait>, parents: Vec<FeatureId>) -> Self {
-        Self { id, object, parents }
+        Self { id, name: None, object, parents }
+    }
+
+    pub fn label(&self) -> String {
+        self.name.clone().unwrap_or_else(|| self.type_name_with_id())
     }
 
     pub fn id(&self) -> FeatureId {
@@ -1117,7 +1269,7 @@ impl PointRef {
             Some(own) if own_active => own.label.to_string(),
             _ => self.reference
                 .and_then(|id| features.get(&id))
-                .map(|a| a.type_name_with_id())
+                .map(|a| a.label())
                 .unwrap_or_else(|| get!("editor.point_ref.none")),
         };
 
@@ -1140,7 +1292,7 @@ impl PointRef {
                 for &id in prior_feature_order {
                     if let Some(feature) = features.get(&id) {
                         let is_selected = self.reference == Some(id);
-                        if ui.selectable_label(is_selected, feature.type_name_with_id()).clicked() && !is_selected {
+                        if ui.selectable_label(is_selected, feature.label()).clicked() && !is_selected {
                             target = Some(Target::Feature(id));
                         }
                     }
@@ -1404,6 +1556,178 @@ mod tests {
         timeline.undo();
         assert_eq!(x_of(&timeline, a), Some(1.0));
         assert_eq!(timeline.feature_order(), &[a]);
+    }
+
+    fn four_points() -> (FeatureTimeline, [FeatureId; 4]) {
+        let mut timeline = FeatureTimeline::default();
+        let ids = [0.0, 1.0, 2.0, 3.0].map(|x| timeline.apply_feature(Box::new(GlobalPoint::new(x, 0.0, 0.0))));
+        (timeline, ids)
+    }
+
+    fn shift() -> egui::Modifiers {
+        egui::Modifiers { shift: true, ..Default::default() }
+    }
+
+    fn command() -> egui::Modifiers {
+        egui::Modifiers { command: true, ..Default::default() }
+    }
+
+    #[test]
+    fn shift_takes_a_range_from_the_anchor_and_command_toggles_one() {
+        let (mut timeline, [a, b, c, d]) = four_points();
+        timeline.click_row(b, egui::Modifiers::NONE);
+        timeline.click_row(d, shift());
+        assert_eq!(timeline.selection(), &[b, c, d]);
+        assert_eq!(timeline.selected_feature(), Some(d));
+
+        timeline.click_row(a, shift());
+        assert_eq!(timeline.selection(), &[b, a], "a second range is measured from the same anchor");
+
+        timeline.click_row(d, command());
+        assert_eq!(timeline.selection(), &[b, a, d]);
+        timeline.click_row(d, command());
+        assert_eq!(timeline.selection(), &[b, a]);
+        assert_eq!(timeline.selected_feature(), Some(a), "the primary falls back to the last pick");
+
+        timeline.click_row(c, egui::Modifiers::NONE);
+        assert_eq!(timeline.selection(), &[c]);
+        timeline.click_row(c, egui::Modifiers::NONE);
+        assert!(timeline.selection().is_empty());
+    }
+
+    #[test]
+    fn a_range_stops_at_the_rollback_bar() {
+        let (mut timeline, [a, b, _, d]) = four_points();
+        timeline.click_row(a, egui::Modifiers::NONE);
+        timeline.click_row(d, shift());
+        timeline.roll_back_to(Some(b));
+        assert_eq!(timeline.selection(), &[a, b]);
+    }
+
+    #[test]
+    fn deleting_several_is_one_undo_step() {
+        let (mut timeline, [a, b, c, d]) = four_points();
+        timeline.checkpoint();
+        timeline.click_row(b, egui::Modifiers::NONE);
+        timeline.click_row(d, command());
+        timeline.delete_features(&timeline.selection().to_vec());
+        assert_eq!(timeline.feature_order(), &[a, c]);
+        assert!(timeline.selection().is_empty());
+        assert_eq!(timeline.selected_feature(), None);
+        timeline.checkpoint();
+
+        timeline.undo();
+        assert_eq!(timeline.feature_order(), &[a, b, c, d]);
+        timeline.redo();
+        assert_eq!(timeline.feature_order(), &[a, c]);
+    }
+
+    #[test]
+    fn a_blank_name_keeps_the_old_one_and_a_rename_is_undoable() {
+        let (mut timeline, [a, ..]) = four_points();
+        let original = timeline.get_feature(&a).unwrap().label();
+        timeline.checkpoint();
+        timeline.rename(a, "   ");
+        assert_eq!(timeline.get_feature(&a).unwrap().label(), original);
+        timeline.rename(a, "  Spawn corner ");
+        assert_eq!(timeline.get_feature(&a).unwrap().label(), "Spawn corner");
+        timeline.checkpoint();
+        timeline.undo();
+        assert_eq!(timeline.get_feature(&a).unwrap().label(), original);
+        timeline.redo();
+        assert_eq!(timeline.get_feature(&a).unwrap().label(), "Spawn corner");
+    }
+
+    /// `key: None` clicks away instead.
+    fn rename_in_the_panel(timeline: &mut FeatureTimeline, id: FeatureId, text: &str, key: Option<egui::Key>) {
+        timeline.renaming = Some(Renaming { id, typed: timeline.get_feature(&id).unwrap().label(), had_focus: false });
+        let ctx = egui::Context::default();
+        let press = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let click_away = [
+            egui::Event::PointerMoved(egui::pos2(5.0, 590.0)),
+            egui::Event::PointerButton {
+                pos: egui::pos2(5.0, 590.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: egui::pos2(5.0, 590.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        let frames: Vec<Vec<egui::Event>> = vec![
+            vec![],
+            vec![egui::Event::Text(text.to_owned())],
+            match key {
+                Some(key) => vec![press(key)],
+                None => click_away.to_vec(),
+            },
+            vec![],
+        ];
+        for events in frames {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 600.0))),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                FeatureTimeline::ui(ui, timeline, &mut Vec::new(), &mut None);
+            });
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn enter_and_clicking_away_save_a_rename_and_escape_reverts_it() {
+        let (mut timeline, [a, b, c, _]) = four_points();
+        let original = |timeline: &FeatureTimeline, id| timeline.get_feature(&id).unwrap().type_name_with_id();
+
+        rename_in_the_panel(&mut timeline, a, "Entered", Some(egui::Key::Enter));
+        assert_eq!(timeline.get_feature(&a).unwrap().label(), "Entered");
+        assert!(timeline.renaming.is_none());
+
+        rename_in_the_panel(&mut timeline, b, "Escaped", Some(egui::Key::Escape));
+        assert_eq!(timeline.get_feature(&b).unwrap().label(), original(&timeline, b));
+        assert!(timeline.renaming.is_none());
+
+        rename_in_the_panel(&mut timeline, c, "Clicked away", None);
+        assert_eq!(timeline.get_feature(&c).unwrap().label(), "Clicked away");
+        assert!(timeline.renaming.is_none());
+    }
+
+    #[test]
+    fn what_a_selection_reaches_is_listed_parents_first() {
+        let mut timeline = FeatureTimeline::default();
+        let min = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        let max = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 1.0, 1.0)));
+        let room = timeline.apply_feature(Box::new(crate::editor::editor_room::EditorRoom::from_points(min, max)));
+        timeline.click_row(room, egui::Modifiers::NONE);
+        timeline.click_row(min, shift());
+        assert_eq!(timeline.selection(), &[room, max, min]);
+        assert_eq!(timeline.selection_affected(), Some(&[min, max, room][..]));
+    }
+
+    /// The panel can be hidden while the field has focus; coming back must not leave a stuck field.
+    #[test]
+    fn a_rename_that_lost_focus_unseen_is_saved_when_next_drawn() {
+        let (mut timeline, [a, ..]) = four_points();
+        timeline.renaming = Some(Renaming { id: a, typed: "Unseen".into(), had_focus: true });
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            FeatureTimeline::ui(ui, &mut timeline, &mut Vec::new(), &mut None);
+        });
+        output.textures_delta.clear();
+        assert!(timeline.renaming.is_none());
+        assert_eq!(timeline.get_feature(&a).unwrap().label(), "Unseen");
     }
 
     /// An untouched feature keeps its entity; a changed one is respawned.

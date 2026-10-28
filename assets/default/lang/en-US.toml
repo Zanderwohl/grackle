@@ -111,8 +111,10 @@ active = "Snap to grid"
 [editor.timeline]
 title = "Features"
 delete = "Delete"
+delete_selected = "Delete { count } features"
 roll_back_here = "Roll back to here"
 roll_to_end = "Roll to end"
+rename = "Rename"
 
 [editor.point_ref]
 none = "None"
