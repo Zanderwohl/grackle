@@ -65,9 +65,11 @@ fn main() {
             EguiPlugin::default(),
             Shape2dPlugin::default(),
         ))
+        // Lightmapped walls carry their own ambient, so this lights only what moves.
         .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
-            brightness: 100.0,
+            brightness: grackle::common::lightmap::BASE_AMBIENT,
+            affects_lightmapped_meshes: false,
             ..default()
         })
         .add_plugins((

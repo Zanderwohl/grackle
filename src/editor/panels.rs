@@ -31,6 +31,7 @@ use crate::game::rounds::RoundHistory;
 use crate::get;
 use crate::tool::Tools;
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
+use crate::tool::sun_bake::{BakeSunlight, SunBake};
 use crate::tool::retarget::RetargetState;
 use crate::tool::show::{ShowPlugin, GizmoVisibility};
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
@@ -124,6 +125,8 @@ struct PanelMessages<'w> {
     clear_room: MessageWriter<'w, ClearRoomGeometry>,
     log_ecs: MessageWriter<'w, LogECS>,
     room_bake: ResMut<'w, RoomBake>,
+    sun_bake: ResMut<'w, SunBake>,
+    sunlight: MessageWriter<'w, BakeSunlight>,
     edits: MessageWriter<'w, EditEvent>,
     net: MessageWriter<'w, NetRequest>,
     exit: MessageWriter<'w, AppExit>,
@@ -195,7 +198,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 Tools::ui(ui, self.current_tool, self.next_tool);
             }
             TabKinds::Bakes => {
-                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto);
+                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun);
             }
             TabKinds::Show => {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
@@ -328,7 +331,7 @@ impl EditorPanels {
 
         map_metadata.sync_authors_ui_buffer_from_authors();
         
-        let mut bake_commands = BakeCommands { auto: messages.room_bake.auto(), ..default() };
+        let mut bake_commands = BakeCommands { auto: messages.room_bake.auto(), auto_sun: messages.sun_bake.auto(), ..default() };
         let mut pending_edits = PendingEditEvents::default();
         let mut retarget_request: Option<(FeatureId, String)> = None;
         let mut loaded_blueprint: Option<LoadedBlueprint> = None;
@@ -587,6 +590,12 @@ impl EditorPanels {
 
         if bake_commands.auto != messages.room_bake.auto() {
             messages.room_bake.set_auto(bake_commands.auto);
+        }
+        if bake_commands.auto_sun != messages.sun_bake.auto() {
+            messages.sun_bake.set_auto(bake_commands.auto_sun);
+        }
+        if bake_commands.bake_sunlight {
+            messages.sunlight.write(BakeSunlight);
         }
         if bake_commands.calculate_room_geometry {
             messages.room.write(CalculateRoomGeometry);

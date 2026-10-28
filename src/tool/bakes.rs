@@ -9,6 +9,7 @@ use bevy_egui::egui;
 use crate::editor::editable::FeatureTag;
 use crate::get;
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, Room, RoomSlot};
+use crate::tool::sun_bake::RoomLightmap;
 
 #[derive(Message)]
 pub struct LogECS;
@@ -76,6 +77,11 @@ impl RoomBake {
         self.auto
     }
 
+    /// Nothing waiting: every room's mesh is of the room as it stands.
+    pub fn is_settled(&self) -> bool {
+        self.queue.is_empty()
+    }
+
     pub fn set_auto(&mut self, auto: bool) {
         if auto && !self.auto {
             // Rooms changed while it was off; every room reads as new.
@@ -114,8 +120,8 @@ fn touches(a: &Room, b: &Room) -> bool {
 }
 
 impl BakePlugin {
-    pub fn ui(ui: &mut egui::Ui, auto: bool) -> BakeCommands {
-        let mut commands = BakeCommands { auto, ..default() };
+    pub fn ui(ui: &mut egui::Ui, auto: bool, auto_sun: bool) -> BakeCommands {
+        let mut commands = BakeCommands { auto, auto_sun, ..default() };
         ui.vertical(|ui| {
             ui.checkbox(&mut commands.auto, get!("bakes.auto_rooms"));
             ui.horizontal(|ui| {
@@ -127,6 +133,10 @@ impl BakePlugin {
                     commands.clear_room_geometry = true;
                 }
             });
+            ui.checkbox(&mut commands.auto_sun, get!("bakes.auto_sunlight"));
+            if ui.add_enabled(!auto_sun, egui::Button::new(get!("bakes.sunlight"))).clicked() {
+                commands.bake_sunlight = true;
+            }
             if ui.button("Log ECS").clicked() {
                 commands.log_ecs = true;
             }
@@ -162,7 +172,7 @@ impl BakePlugin {
         bake_rooms(&mut bake, &rooms, &existing_bakes, &mut commands, &mut meshes, &mut materials);
     }
 
-    fn auto_bake_rooms(
+    pub(crate) fn auto_bake_rooms(
         mut bake: ResMut<RoomBake>,
         rooms: Query<(Entity, &Room)>,
         bakes: Query<(Entity, &BakedRoomGeometry)>,
@@ -220,7 +230,7 @@ impl BakePlugin {
     /// client adopting the server's map enters Play the same frame, and the
     /// bake request it wrote is read a frame later. Collision does not need
     /// these meshes, so a missed bake is an invisible map, not a fall.
-    fn bake_everything_for_the_round(
+    pub(crate) fn bake_everything_for_the_round(
         mut bake: ResMut<RoomBake>,
         rooms: Query<(Entity, &Room)>,
         existing_bakes: Query<Entity, With<BakedRoomGeometry>>,
@@ -317,16 +327,20 @@ fn bake_one(
 ) {
     let rooms: Vec<Room> = all.iter().map(|(_, r)| (*r).clone()).collect();
     let index = all.iter().position(|(e, _)| *e == entity).expect("a room is baked against a list it is in");
+    let faces = world_surface::room_share(&rooms, index);
+    let slots = world_surface::slot_meshes(&faces);
+    let geometry = BakedRoomGeometry { room: entity, faces };
     let mut baked = match existing {
         Some(baked) => {
             let mut baked = commands.entity(baked);
-            baked.despawn_children();
+            // Its charts moved with its faces, so the old light is noise on the new UVs.
+            baked.despawn_children().remove::<RoomLightmap>().insert(geometry);
             baked
         }
-        None => commands.spawn((BakedRoomGeometry { room: entity }, Transform::default(), Visibility::default())),
+        None => commands.spawn((geometry, Transform::default(), Visibility::default())),
     };
     baked.with_children(|parts| {
-        for (slot, mesh) in world_surface::slot_meshes(&world_surface::room_share(&rooms, index)) {
+        for (slot, mesh) in slots {
             // The default until `paint_rooms` finds the slot's own material.
             parts.spawn((RoomSlotMesh { room: entity, slot }, Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.clone())));
         }
@@ -337,7 +351,9 @@ fn bake_one(
 /// [`RoomSlotMesh`] each.
 #[derive(Component)]
 pub struct BakedRoomGeometry {
-    room: Entity,
+    pub room: Entity,
+    /// What its meshes were built from, kept for the sun bake, which charts them the same way.
+    pub faces: Vec<world_surface::Face>,
 }
 
 /// One slot of a room's baked walls, so it can take its own material.
@@ -544,6 +560,8 @@ mod tests {
 #[derive(Default)]
 pub struct BakeCommands {
     pub auto: bool,
+    pub auto_sun: bool,
+    pub bake_sunlight: bool,
     pub calculate_room_geometry: bool,
     pub clear_room_geometry: bool,
     pub log_ecs: bool,

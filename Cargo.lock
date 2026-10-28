@@ -4327,6 +4327,7 @@ dependencies = [
  "clap",
  "egui_dock",
  "getrandom 0.3.3",
+ "half",
  "lazy_static",
  "lightyear",
  "objc2 0.6.4",

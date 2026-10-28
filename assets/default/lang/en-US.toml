@@ -67,6 +67,8 @@ retarget = "Retarget"
 title = "Bake Operations"
 room_geometry = "Room Geometry"
 auto_rooms = "Auto-bake Rooms"
+sunlight = "Sunlight"
+auto_sunlight = "Auto-bake Sunlight"
 
 [show]
 title = "Show/Hide"

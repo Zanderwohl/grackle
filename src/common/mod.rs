@@ -49,6 +49,7 @@ pub mod grid;
 pub mod palette;
 pub mod sky;
 pub mod sunlight;
+pub mod lightmap;
 pub mod render_layers;
 pub mod shortcuts;
 

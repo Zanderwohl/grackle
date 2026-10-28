@@ -14,6 +14,7 @@ use texture_graph_core::{EvalCtx, Graph};
 use texture_graph_gpu::{Baker, MaterialMapper};
 
 use bevy::light::NotShadowCaster;
+use bevy::pbr::Lightmap;
 
 use super::gpu::{BakedTextures, BevyDevice, Encoding, Sampling};
 use super::sky::{Sky, SkyMaterial};
@@ -177,7 +178,7 @@ pub fn paint_rooms(
             if !drawn_as_sky {
                 commands
                     .entity(entity)
-                    .remove::<MeshMaterial3d<StandardMaterial>>()
+                    .remove::<(MeshMaterial3d<StandardMaterial>, Lightmap)>()
                     .insert((MeshMaterial3d(sky.material.clone()), NotShadowCaster));
             }
             continue;

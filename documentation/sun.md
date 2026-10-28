@@ -172,19 +172,28 @@ As [surfaces.md](surfaces.md) says of every bake: nothing gameplay-related reads
 a baked texel. Whether a body is in the sun decides how it is drawn, never
 whether it can be seen.
 
+### Two things Bevy 0.20 does not do
+
+Adding or removing a `Lightmap` does not re-specialize a mesh's pipeline: only
+a changed mesh or material does, and a mismatch is a wgpu validation error that
+stops the frame. And a lightmap's image is read only when the component first
+arrives. So `attach_lightmaps` marks the material changed whenever it adds or
+removes one, and swaps an image as a removal one frame and an insertion the
+next.
+
 ## Checklist
 
 - [x] One function resolving a slot to its material name (`Palette::paint`), shared by `paint_rooms` and the bake
 - [x] A ray accelerator over the map's faces (`sunlight::LitSurface`, on the collision `Grid`, now in `common`)
 - [x] Sun altitude and azimuth in the map settings
 - [ ] Base ambient as a map setting, replacing `main.rs`'s fixed `GlobalAmbientLight`
-- [ ] Charting: faces onto a world-aligned lattice, packed per room, padded; `UV_1` written by `bake_one`
+- [x] Charting: faces onto a lattice fixed by their plane, packed per room, padded; `UV_1` written by `bake_one` (`common/lightmap.rs`)
 - [x] Sun visibility per point, across the sun's disc (`LitSurface::sun_reaching`)
-- [ ] Sun visibility per texel, supersampled
+- [x] Sun visibility per texel, at its center; supersample if edges step
 - [ ] Sky gather and one bounce at 1 m, combined onto the sun lattice
-- [ ] Lightmap images per room, `Lightmap` on each slot mesh, removed when a room is rebaked
-- [ ] The sun bake in `BakeSystems::All`, after rooms; a Bakes-panel checkbox for auto, debounced
-- [ ] Measure it on the demo scene; decide auto-bake's default from the number
+- [x] Lightmap images per room, `Lightmap` on each slot mesh, removed when a room is rebaked (`tool/sun_bake.rs`)
+- [x] The sun bake in `BakeSystems::All`, after rooms; a Bakes-panel checkbox for auto, debounced
+- [x] Measure it on the demo scene: 3 rooms, 34 583 texels, 240 ms in a debug build, so auto-bake is on
 - [ ] Off the main thread natively, chunked per frame on wasm
 - [ ] Cache under `cache/lightmap/` by content hash
 - [ ] `DirectionalLight` on a `SUNLIT` layer; bodies join it by a ray from the chest

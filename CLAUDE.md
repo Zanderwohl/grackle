@@ -1097,8 +1097,8 @@ and `reset_for_play`/`enter_play` are ordered `.after` it, so a round is set up
 against a world that has been rebuilt rather than one that is about to be.
 
 It is a **set, not a list of named systems**, for the same reason
-`DamageSystems` is one: rooms are the only thing baked today, and a second kind
-— navmesh, lightmap, material atlases — joins by naming
+`DamageSystems` is one: rooms and then sunlight are baked today, and another
+kind — navmesh, material atlases — joins by naming
 the set. Name the systems instead and the ordering lives somewhere that does
 not know about them, and forgetting one produces no error, just a round that
 starts before its world is finished.
@@ -1134,6 +1134,19 @@ With it on, `CalculateRoomGeometry` is ignored (it would stall the frame the
 budget protects) and the panel's Bake is grayed out; Clear forgets what was
 seen, so it is a rebuild from scratch. Entering Play still bakes everything at
 once.
+
+**Sunlight is the second bake** ([`src/tool/sun_bake.rs`](src/tool/sun_bake.rs),
+[documentation/sun.md](documentation/sun.md)): a lightmap per room, the light
+that comes in through `skybox` surfaces plus the base ambient, ordered after
+the room bake in `BakeSystems::All`. A texel is sunlit when the first face
+toward the sun is sky ([`src/common/sunlight.rs`](src/common/sunlight.rs)),
+cast against the whole map, so light crosses thresholds with nothing to
+stitch. It is never incremental — a skylight brightens the corridor beyond it —
+and auto-bake waits for the map to be still and for the room bake to settle.
+The room bake writes `UV_1` and keeps its faces on `BakedRoomGeometry`; both
+chart them with `Atlas::of` ([`src/common/lightmap.rs`](src/common/lightmap.rs)),
+and a rebuilt room loses its `RoomLightmap` until the next bake. The lightmap
+replaces the ambient on walls, so `GlobalAmbientLight` lights only what moves.
 
 ## What a body is drawn as
 

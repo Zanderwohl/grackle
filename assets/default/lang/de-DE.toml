@@ -48,6 +48,8 @@ retarget = "Neu verankern"
 title = "Bake-Vorgänge"
 room_geometry = "Raumgeometrie"
 auto_rooms = "Räume automatisch backen"
+sunlight = "Sonnenlicht"
+auto_sunlight = "Sonnenlicht automatisch backen"
 
 [show]
 title = "Ein-/Ausblenden"

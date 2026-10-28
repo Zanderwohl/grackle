@@ -39,6 +39,11 @@ impl LitSurface {
                 faces.push(face);
             }
         }
+        Self::from_faces(faces, sky)
+    }
+
+    /// Faces already cut, as the room bake leaves them, and whether each is sky.
+    pub fn from_faces(faces: Vec<Face>, sky: Vec<bool>) -> Self {
         let bounds: Vec<(Vec3, Vec3)> = faces.iter().map(face_bounds).collect();
         let (min, max) = bounds.iter().fold((Vec3::INFINITY, Vec3::NEG_INFINITY), |(lo, hi), (a, b)| (lo.min(*a), hi.max(*b)));
         let reach = if faces.is_empty() { 0.0 } else { (max - min).length() + 1.0 };

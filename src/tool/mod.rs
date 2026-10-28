@@ -40,6 +40,7 @@ pub mod footprint;
 pub mod footprint_drag;
 pub mod movement;
 pub mod bakes;
+pub mod sun_bake;
 pub mod show;
 pub mod tool_helpers;
 
@@ -52,6 +53,7 @@ impl Plugin for ToolPlugin {
             .init_state::<Tools>()
             .add_plugins(ShowPlugin)
             .add_plugins(BakePlugin)
+            .add_plugins(sun_bake::SunBakePlugin)
             .add_plugins(MovementPlugin)
             .add_plugins(SelectionPlugin)
             .add_plugins(PointPlugin)

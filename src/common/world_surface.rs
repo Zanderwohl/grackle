@@ -18,6 +18,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
 use crate::common::csg::{self, Polygon};
+use crate::common::lightmap::Atlas;
 use crate::tool::room::{Room, RoomSlot, MATERIAL_TILE_METERS};
 
 /// A piece of the map's surface. Walls are made of nothing yet.
@@ -85,14 +86,16 @@ fn precedes(a: &Room, a_index: usize, b: &Room, b_index: usize) -> bool {
 /// material's normal map. UVs are world-space in material tiles
 /// ([`MATERIAL_TILE_METERS`]) across the face's two widest axes, so a material
 /// runs on across neighboring walls instead of stretching with the room, and
-/// `v` runs down a wall, as image rows do.
-pub fn mesh(faces: &[Face]) -> Mesh {
+/// `v` runs down a wall, as image rows do. `UV_1` is `lightmap_uv` of a face's index in `faces` and
+/// a vertex.
+pub fn mesh(faces: &[Face], lightmap_uv: impl Fn(usize, Vec3) -> Vec2) -> Mesh {
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut uvs: Vec<[f32; 2]> = Vec::new();
+    let mut lightmap_uvs: Vec<[f32; 2]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
-    for face in faces {
+    for (index, face) in faces.iter().enumerate() {
         let normal = face.plane.normal;
         let flat = normal.abs();
         let uv = |p: Vec3| -> [f32; 2] {
@@ -110,6 +113,7 @@ pub fn mesh(faces: &[Face]) -> Mesh {
             positions.push(vertex.to_array());
             normals.push(normal.to_array());
             uvs.push(uv(*vertex));
+            lightmap_uvs.push(lightmap_uv(index, *vertex).to_array());
         }
         for i in 1..face.vertices.len() as u32 - 1 {
             indices.extend_from_slice(&[base, base + i, base + i + 1]);
@@ -121,6 +125,7 @@ pub fn mesh(faces: &[Face]) -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, lightmap_uvs)
         .with_inserted_indices(Indices::U32(indices));
     if !empty {
         // Planar convex faces with distinct UVs always have tangents.
@@ -131,14 +136,17 @@ pub fn mesh(faces: &[Face]) -> Mesh {
 
 /// [`mesh`] once per [`RoomSlot`], each slot sorted by its faces' inward
 /// normals, so each can take its own material. A slot with no faces left —
-/// every one opened up by a neighbor — is left out.
+/// every one opened up by a neighbor — is left out. `UV_1` is into one
+/// [`Atlas`] of all of `faces`, which every slot shares.
 pub fn slot_meshes(faces: &[Face]) -> Vec<(RoomSlot, Mesh)> {
+    let atlas = Atlas::of(faces);
     RoomSlot::ALL
         .into_iter()
         .filter_map(|slot| {
-            let mine: Vec<Face> =
-                faces.iter().filter(|face| RoomSlot::of(face.plane.normal) == slot).cloned().collect();
-            (!mine.is_empty()).then(|| (slot, mesh(&mine)))
+            let mine: Vec<usize> =
+                (0..faces.len()).filter(|&index| RoomSlot::of(faces[index].plane.normal) == slot).collect();
+            let shown: Vec<Face> = mine.iter().map(|&index| faces[index].clone()).collect();
+            (!mine.is_empty()).then(|| (slot, mesh(&shown, |index, point| atlas.uv(mine[index], point))))
         })
         .collect()
 }
@@ -443,7 +451,7 @@ mod tests {
             Room::new(Vec3::ZERO, Vec3::splat(10.0)),
             Room::new(Vec3::new(10.0, 2.0, 2.0), Vec3::new(20.0, 8.0, 8.0)),
         ];
-        let mesh = mesh(&room_share(&rooms, 0));
+        let mesh = mesh(&room_share(&rooms, 0), |_, _| Vec2::ZERO);
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!() };
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else { panic!() };
         let Some(Indices::U32(indices)) = mesh.indices() else { panic!() };
@@ -457,7 +465,7 @@ mod tests {
     #[test]
     fn the_mesh_has_a_triangle_pair_per_quad() {
         let rooms = [Room::new(Vec3::ZERO, Vec3::new(10.0, 3.0, 10.0))];
-        let mesh = mesh(&room_share(&rooms, 0));
+        let mesh = mesh(&room_share(&rooms, 0), |_, _| Vec2::ZERO);
         let Some(Indices::U32(indices)) = mesh.indices() else { panic!() };
         assert_eq!(indices.len() / 3, 12);
     }
