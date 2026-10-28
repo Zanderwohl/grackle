@@ -141,22 +141,24 @@ pub fn apply_damage(
     }
 }
 
-/// Only for hits we dealt, as in TF2: every machine is sent every hit. Our id
-/// is remembered past our body, so a rocket that lands after we died still
-/// counts, and hurting ourselves draws nothing.
+/// Only for hits we dealt, as in TF2: every machine is sent every hit. Who we
+/// are is our body's id, else the host's own identity, else whose death the
+/// camera is watching, so a rocket that lands after we died still counts.
+/// Hurting ourselves draws nothing.
 fn spawn_damage_numbers(
     mut commands: Commands,
     mut hits: MessageReader<DamageDealt>,
     us: Option<Single<(Entity, &PlayerId), With<LocalPlayer>>>,
-    mut ours: Local<Option<PlayerId>>,
+    identity: Option<Res<crate::game::respawn::OurIdentity>>,
+    death_cam: Option<Res<crate::game::player::DeathCam>>,
 ) {
-    let body = us.map(|us| {
-        let (body, &id) = *us;
-        *ours = Some(id);
-        body
-    });
+    let body = us.map(|us| *us);
+    let ours = body
+        .map(|(_, &id)| id)
+        .or(identity.map(|identity| identity.0.id))
+        .or(death_cam.and_then(|cam| cam.whose));
     for hit in hits.read() {
-        if (*ours).is_none_or(|ours| hit.source != DamageSource::Player(ours)) || Some(hit.target) == body {
+        if ours.is_none_or(|ours| hit.source != DamageSource::Player(ours)) || Some(hit.target) == body.map(|(entity, _)| entity) {
             continue;
         }
         commands.spawn((

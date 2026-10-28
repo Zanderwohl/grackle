@@ -746,6 +746,26 @@ mod tests {
         assert!(shown(&mut world), "hidden with armor");
     }
 
+    /// The panels and crosshair would otherwise stand empty over the death cam.
+    #[test]
+    fn the_readouts_and_crosshair_hide_while_we_have_no_body() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let (catalog, equipped, ammo) = mercenary();
+        let mut world = World::new();
+        world.insert_resource(catalog);
+        let body = world.spawn((LocalPlayer, Damageable::default(), equipped, ammo)).id();
+        let panel = world.spawn((ForTheLiving, Visibility::Inherited)).id();
+        let visibility = |world: &mut World| {
+            world.run_system_once(fill_in_the_readouts).unwrap();
+            *world.get::<Visibility>(panel).unwrap()
+        };
+
+        assert_eq!(visibility(&mut world), Visibility::Inherited);
+        world.despawn(body);
+        assert_eq!(visibility(&mut world), Visibility::Hidden);
+    }
+
     /// Breaks if the lookup panics when `Equipped` arrives before the
     /// catalog, which is the ordinary order on a client.
     #[test]

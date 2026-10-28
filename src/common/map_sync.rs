@@ -256,7 +256,7 @@ fn adopt_the_servers_map(
                 .into_iter()
                 .map(|feature| (feature.id(), feature))
                 .collect();
-            timeline.adopt_changes(FeatureTimeline::from_parts(
+            let rooms_touched = timeline.adopt_changes(FeatureTimeline::from_parts(
                 features,
                 incoming.order,
                 // No history: a client must not undo the server's map.
@@ -265,8 +265,11 @@ fn adopt_the_servers_map(
             // Read a frame later, after `sync_entities` has given the features
             // entities; a bake this frame would bake nothing. This covers a map
             // arriving mid-round; `BakeSystems::All` covers one arriving as Play
-            // starts, so joining bakes twice.
-            bake.write(CalculateRoomGeometry);
+            // starts, so joining bakes twice. Only when rooms changed: with
+            // auto-bake off this bakes every room.
+            if rooms_touched {
+                bake.write(CalculateRoomGeometry);
+            }
         }
     }
 }

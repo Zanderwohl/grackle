@@ -284,10 +284,12 @@ impl FeatureTimeline {
 
     /// A newer copy of the map in hand, from the server: only features whose
     /// serialized form differs are rebuilt, as an undo does, so moving one
-    /// thing does not rebuild every room. No history either way.
-    pub fn adopt_changes(&mut self, incoming: FeatureTimeline) {
-        self.restore(&incoming.state());
+    /// thing does not rebuild every room. No history either way. Returns
+    /// whether a feature with rooms came, went or changed.
+    pub fn adopt_changes(&mut self, incoming: FeatureTimeline) -> bool {
+        let rooms = self.restore(&incoming.state());
         self.reset_history();
+        rooms
     }
 
     /// Undoable through the next checkpoint.
@@ -513,8 +515,11 @@ impl FeatureTimeline {
         self.mark_saved();
     }
 
-    /// Rebuild only the features whose serialized form differs, and everything built on them.
-    fn restore(&mut self, target: &MapState) {
+    /// Rebuild only the features whose serialized form differs, and everything built on them. Returns
+    /// whether a feature with rooms came, went or changed.
+    fn restore(&mut self, target: &MapState) -> bool {
+        let has_rooms = |feature: &Feature| !feature.object.rooms().is_empty();
+        let mut rooms_touched = false;
         let mut changed: Vec<FeatureId> = Vec::new();
         let mut next: HashMap<FeatureId, Feature> = HashMap::new();
         let mut order = Vec::with_capacity(target.features.len());
@@ -533,20 +538,24 @@ impl FeatureTimeline {
             }
             match serde_json::from_str::<Feature>(text) {
                 Ok(feature) => {
-                    if let Some(old) = self.features.remove(id)
-                        && let Some(entity) = old.object.entity()
-                    {
-                        self.pending_despawns.push(entity);
+                    rooms_touched |= has_rooms(&feature);
+                    if let Some(old) = self.features.remove(id) {
+                        rooms_touched |= has_rooms(&old);
+                        if let Some(entity) = old.object.entity() {
+                            self.pending_despawns.push(entity);
+                        }
                     }
                     next.insert(*id, feature);
                     changed.push(*id);
                 }
-                // Cannot happen for a string this process wrote; losing one feature beats losing the undo.
-                Err(error) => error!("Undo could not rebuild feature {id:?}: {error}"),
+                // A string this process wrote always decodes; a server's may name a type this build lacks.
+                // Losing one feature beats losing the rest.
+                Err(error) => error!("Could not rebuild feature {id:?}: {error}"),
             }
         }
 
         for (_, feature) in self.features.drain() {
+            rooms_touched |= !feature.object.rooms().is_empty();
             if let Some(entity) = feature.object.entity() {
                 self.pending_despawns.push(entity);
             }
@@ -573,6 +582,7 @@ impl FeatureTimeline {
 
         self.dirty = self.saved.as_ref() != Some(target);
         self.checkpoint = Some(target.clone());
+        rooms_touched
     }
 
     fn forget_a_missing_bar(&mut self) {
