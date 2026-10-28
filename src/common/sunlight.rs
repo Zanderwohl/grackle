@@ -5,6 +5,7 @@
 use bevy::prelude::*;
 
 use crate::common::grid::{Grid, CELL};
+use crate::common::sky::SkyTime;
 use crate::common::world_surface::{self, Face};
 use crate::tool::room::{Room, RoomSlot};
 
@@ -18,6 +19,24 @@ const SUN_RADIUS: f32 = 0.02;
 
 /// Rays per point, across the sun's disc.
 const SUN_RAYS: usize = 8;
+
+/// Rays per point across the hemisphere, for sky light and bounce.
+const GATHER_RAYS: usize = 64;
+
+/// What lights the map from outside, in lightmap units: a lightmap texel is the irradiance over π,
+/// so that a value is what `GlobalAmbientLight::brightness` would be for the same look.
+#[derive(Clone, Copy, Debug)]
+pub struct Daylight {
+    /// Unit, toward the sun.
+    pub toward: Vec3,
+    /// On a surface square on to the sun.
+    pub sun: f32,
+    pub sky: SkyTime,
+    /// What a sky color of 1 is worth.
+    pub sky_brightness: f32,
+    /// Of every surface, for the one bounce: nothing reads a material's own color.
+    pub albedo: f32,
+}
 
 /// The map's surface as faces that know whether they are sky, indexed for rays.
 pub struct LitSurface {
@@ -95,6 +114,36 @@ impl LitSurface {
             })
             .count();
         lit as f32 / SUN_RAYS as f32
+    }
+
+    /// Sky light and one bounce of sunlight onto a point: the average, over cosine-weighted rays
+    /// across its hemisphere, of the sky's color where a ray escapes and of the sunlit surface
+    /// where it does not. The surface a ray hits is lit by the sun alone, through one ray at the
+    /// sun's center: that is the one bounce, and it stops there.
+    pub fn ambient(&self, point: Vec3, normal: Vec3, light: &Daylight) -> Vec3 {
+        let origin = point + normal * LIFT;
+        let (u, v) = normal.any_orthonormal_pair();
+        let total: Vec3 = (0..GATHER_RAYS)
+            .map(|i| {
+                // A disc lifted onto the hemisphere is cosine-weighted, so the plain average is
+                // irradiance over π.
+                let (x, y) = sunflower(i, GATHER_RAYS);
+                let direction = (u * x + v * y + normal * (1.0 - x * x - y * y).max(0.0).sqrt()).normalize();
+                let Some((face, t)) = self.first_hit(origin, direction) else { return Vec3::ZERO };
+                if self.sky[face] {
+                    return light.sky.color_at(direction.y).to_vec3() * light.sky_brightness;
+                }
+                let bounced = &self.faces[face];
+                let facing = bounced.plane.normal.dot(light.toward);
+                if facing <= 0.0 {
+                    return Vec3::ZERO;
+                }
+                let at = origin + direction * t + bounced.plane.normal * LIFT;
+                let sunlit = self.first_hit(at, light.toward).is_some_and(|(face, _)| self.sky[face]);
+                if sunlit { Vec3::splat(light.sun * facing * light.albedo) } else { Vec3::ZERO }
+            })
+            .sum();
+        total / GATHER_RAYS as f32
     }
 }
 

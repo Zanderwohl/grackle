@@ -123,7 +123,9 @@ gets brighter. So there is no incremental sun bake; a change invalidates the
 whole map.
 
 - **Entering Play always bakes**, in `BakeSystems::All`, after the room bake. A
-  round is never played with stale light.
+  round is never played with stale light. Entering Play rebuilds every room, so
+  a map unchanged since its last bake takes that bake back, matched room by
+  room on a hash of its faces and sky, rather than paying for it again.
 - **Auto-bake in the editor** is its own checkbox in the Bakes panel, waits
   until the map has been still for a moment rather than baking every frame of
   a drag, and is **off if the bake is slow**, decided by measuring it.
@@ -190,10 +192,11 @@ next.
 - [x] Charting: faces onto a lattice fixed by their plane, packed per room, padded; `UV_1` written by `bake_one` (`common/lightmap.rs`)
 - [x] Sun visibility per point, across the sun's disc (`LitSurface::sun_reaching`)
 - [x] Sun visibility per texel, at its center; supersample if edges step
-- [ ] Sky gather and one bounce at 1 m, combined onto the sun lattice
+- [x] Sky gather and one bounce at 1 m, combined onto the sun lattice (`LitSurface::ambient`)
+- [x] Entering Play on an unchanged map reuses the last bake rather than baking again
 - [x] Lightmap images per room, `Lightmap` on each slot mesh, removed when a room is rebaked (`tool/sun_bake.rs`)
 - [x] The sun bake in `BakeSystems::All`, after rooms; a Bakes-panel checkbox for auto, debounced
-- [x] Measure it on the demo scene: 3 rooms, 34 583 texels, 240 ms in a debug build, so auto-bake is on
+- [x] Measure it on the demo scene: 3 rooms, 34 583 texels, 240 ms in a debug build with the sun alone and 740 ms with sky and bounce, so auto-bake is on
 - [ ] Off the main thread natively, chunked per frame on wasm
 - [ ] Cache under `cache/lightmap/` by content hash
 - [ ] `DirectionalLight` on a `SUNLIT` layer; bodies join it by a ray from the chest
