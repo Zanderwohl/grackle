@@ -3,13 +3,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
 
+use crate::common::lightmap;
 use crate::common::world_surface;
 use crate::common::app_mode::AppMode;
 use bevy_egui::egui;
 use crate::editor::editable::FeatureTag;
 use crate::get;
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, Room, RoomSlot};
-use crate::tool::sun_bake::RoomLightmap;
 
 #[derive(Message)]
 pub struct LogECS;
@@ -120,7 +120,7 @@ fn touches(a: &Room, b: &Room) -> bool {
 }
 
 impl BakePlugin {
-    pub fn ui(ui: &mut egui::Ui, auto: bool, auto_sun: bool) -> BakeCommands {
+    pub fn ui(ui: &mut egui::Ui, auto: bool, auto_sun: bool, baking_sun: bool) -> BakeCommands {
         let mut commands = BakeCommands { auto, auto_sun, ..default() };
         ui.vertical(|ui| {
             ui.checkbox(&mut commands.auto, get!("bakes.auto_rooms"));
@@ -134,9 +134,18 @@ impl BakePlugin {
                 }
             });
             ui.checkbox(&mut commands.auto_sun, get!("bakes.auto_sunlight"));
-            if ui.add_enabled(!auto_sun, egui::Button::new(get!("bakes.sunlight"))).clicked() {
-                commands.bake_sunlight = true;
-            }
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!auto_sun, egui::Button::new(get!("bakes.sunlight"))).clicked() {
+                    commands.bake_sunlight = true;
+                }
+                if ui.small_button("x").clicked() {
+                    commands.clear_sunlight = true;
+                }
+                if baking_sun {
+                    ui.spinner();
+                    ui.label(get!("bakes.baking_sunlight"));
+                }
+            });
             if ui.button("Log ECS").clicked() {
                 commands.log_ecs = true;
             }
@@ -329,12 +338,11 @@ fn bake_one(
     let index = all.iter().position(|(e, _)| *e == entity).expect("a room is baked against a list it is in");
     let faces = world_surface::room_share(&rooms, index);
     let slots = world_surface::slot_meshes(&faces);
-    let geometry = BakedRoomGeometry { room: entity, faces };
+    let geometry = BakedRoomGeometry { room: entity, faces_hash: lightmap::faces_hash(&faces), faces };
     let mut baked = match existing {
         Some(baked) => {
             let mut baked = commands.entity(baked);
-            // Its charts moved with its faces, so the old light is noise on the new UVs.
-            baked.despawn_children().remove::<RoomLightmap>().insert(geometry);
+            baked.despawn_children().insert(geometry);
             baked
         }
         None => commands.spawn((geometry, Transform::default(), Visibility::default())),
@@ -354,6 +362,8 @@ pub struct BakedRoomGeometry {
     pub room: Entity,
     /// What its meshes were built from, kept for the sun bake, which charts them the same way.
     pub faces: Vec<world_surface::Face>,
+    /// [`lightmap::faces_hash`] of `faces`: which lightmap layout its meshes' `UV_1` is.
+    pub faces_hash: u64,
 }
 
 /// One slot of a room's baked walls, so it can take its own material.
@@ -562,6 +572,7 @@ pub struct BakeCommands {
     pub auto: bool,
     pub auto_sun: bool,
     pub bake_sunlight: bool,
+    pub clear_sunlight: bool,
     pub calculate_room_geometry: bool,
     pub clear_room_geometry: bool,
     pub log_ecs: bool,

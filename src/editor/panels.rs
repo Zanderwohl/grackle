@@ -31,7 +31,7 @@ use crate::game::rounds::RoundHistory;
 use crate::get;
 use crate::tool::Tools;
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
-use crate::tool::sun_bake::{BakeSunlight, SunBake};
+use crate::tool::sun_bake::{BakeSunlight, ClearSunlight, SunBake};
 use crate::tool::retarget::RetargetState;
 use crate::tool::show::{ShowPlugin, GizmoVisibility};
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
@@ -127,6 +127,7 @@ struct PanelMessages<'w> {
     room_bake: ResMut<'w, RoomBake>,
     sun_bake: ResMut<'w, SunBake>,
     sunlight: MessageWriter<'w, BakeSunlight>,
+    clear_sunlight: MessageWriter<'w, ClearSunlight>,
     edits: MessageWriter<'w, EditEvent>,
     net: MessageWriter<'w, NetRequest>,
     exit: MessageWriter<'w, AppExit>,
@@ -145,6 +146,7 @@ struct TabViewerAndResources<'a> {
     map_metadata: &'a mut MapMetadata,
     multicam_state: &'a mut MulticamState,
     bake_commands: &'a mut BakeCommands,
+    baking_sun: bool,
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
     retarget_request: &'a mut Option<(FeatureId, String)>,
@@ -198,7 +200,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 Tools::ui(ui, self.current_tool, self.next_tool);
             }
             TabKinds::Bakes => {
-                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun);
+                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.baking_sun);
             }
             TabKinds::Show => {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
@@ -359,6 +361,7 @@ impl EditorPanels {
             map_metadata: &mut *map_metadata,
             multicam_state: &mut *multicam_state,
             bake_commands: &mut bake_commands,
+            baking_sun: messages.sun_bake.is_baking(),
             gizmo_visibility: &mut *gizmo_visibility,
             pending_edits: &mut pending_edits,
             retarget_request: &mut retarget_request,
@@ -596,6 +599,9 @@ impl EditorPanels {
         }
         if bake_commands.bake_sunlight {
             messages.sunlight.write(BakeSunlight);
+        }
+        if bake_commands.clear_sunlight {
+            messages.clear_sunlight.write(ClearSunlight);
         }
         if bake_commands.calculate_room_geometry {
             messages.room.write(CalculateRoomGeometry);

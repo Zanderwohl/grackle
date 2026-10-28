@@ -111,9 +111,17 @@ A room's chart layout depends only on its own faces, so `bake_one` writes
 `UV_1` as it builds the mesh, without knowing about the sun. What lands in the
 atlas depends on every room, so it is the second bake.
 
-A room rebaked by the room bake **loses its `Lightmap`** until the sun bake
-catches up: its UVs moved, and an old atlas on new UVs is noise. It falls back
-to the map's base ambient, which looks unfinished rather than wrong.
+### Light is replaced, never dropped
+
+A room's light is kept by its **`Room` entity**, which outlives every rebuild
+of its meshes, not on the mesh entities the room bake throws away. When a room
+is rebuilt its UVs move, so the light it had is **carried onto the new layout**
+(`Atlas::carry_over`): charts in one plane share a lattice, so each texel is
+copied from the old chart in the same plane, or the nearest parallel one — a
+dragged wall keeps its light — with no rays, the frame the room changes. Only
+surface with nothing parallel before starts at the base. It stays until a bake
+lands, and only the Bakes panel's clear takes it away. Clearing the rooms does
+not: rebuilt, they come back lit.
 
 ### When it runs
 
@@ -135,10 +143,12 @@ whole map.
   baked finds it on disk instead of baking it again. Never authoritative,
   never sent, safe to delete.
 
-Natively it runs on the `AsyncComputeTaskPool` so the editor stays usable. On
-wasm there are no threads, so it is chunked across frames like the room bake.
-That is why the work is a plain function over faces with nothing held across
-it.
+It runs on the `AsyncComputeTaskPool`, one bake at a time, from a copy of the
+faces (`Job`), so the editor stays usable; a change made while one runs is baked
+after it lands. Entering Play waits only when the light is stale — for the bake
+already running if it is of this map, otherwise for its own. On wasm the pool
+runs a task on the main thread in one go, so there it still hitches: chunking
+it across frames is left to do.
 
 ### The sun is a map setting
 
@@ -193,11 +203,12 @@ next.
 - [x] Sun visibility per point, across the sun's disc (`LitSurface::sun_reaching`)
 - [x] Sun visibility per texel, at its center; supersample if edges step
 - [x] Sky gather and one bounce at 1 m, combined onto the sun lattice (`LitSurface::ambient`)
-- [x] Entering Play on an unchanged map reuses the last bake rather than baking again
+- [x] Entering Play on an unchanged map reuses the last bake rather than baking again (light is kept by room)
 - [x] Lightmap images per room, `Lightmap` on each slot mesh, removed when a room is rebaked (`tool/sun_bake.rs`)
 - [x] The sun bake in `BakeSystems::All`, after rooms; a Bakes-panel checkbox for auto, debounced
 - [x] Measure it on the demo scene: 3 rooms, 34 583 texels, 240 ms in a debug build with the sun alone and 740 ms with sky and bounce, so auto-bake is on
-- [ ] Off the main thread natively, chunked per frame on wasm
+- [x] Off the main thread, on the async compute pool; light kept and carried over until a bake replaces it; a clear beside the Sunlight button
+- [ ] Chunked across frames on wasm, where the pool runs a task in one go
 - [ ] Cache under `cache/lightmap/` by content hash
 - [ ] `DirectionalLight` on a `SUNLIT` layer; bodies join it by a ray from the chest
 - [ ] Ambient grid per room, sampled per body into a `MeshTag`

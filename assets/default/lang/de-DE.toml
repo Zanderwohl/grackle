@@ -50,6 +50,7 @@ room_geometry = "Raumgeometrie"
 auto_rooms = "Räume automatisch backen"
 sunlight = "Sonnenlicht"
 auto_sunlight = "Sonnenlicht automatisch backen"
+baking_sunlight = "Sonnenlicht wird gebacken"
 
 [show]
 title = "Ein-/Ausblenden"

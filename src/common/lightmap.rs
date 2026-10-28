@@ -59,6 +59,9 @@ fn axes(normal: Vec3) -> (Vec3, Vec3) {
 pub struct Chart {
     u: Vec3,
     v: Vec3,
+    /// The face's plane, which is what decides its lattice.
+    normal: Vec3,
+    w: f32,
     /// The lattice square at the chart's first texel.
     origin: IVec2,
     pub size: UVec2,
@@ -86,7 +89,15 @@ impl Atlas {
             .iter()
             .map(|face| {
                 let (u, v) = axes(face.plane.normal);
-                let mut chart = Chart { u, v, origin: IVec2::ZERO, size: UVec2::ZERO, at: UVec2::ZERO };
+                let mut chart = Chart {
+                    u,
+                    v,
+                    normal: face.plane.normal,
+                    w: face.plane.w,
+                    origin: IVec2::ZERO,
+                    size: UVec2::ZERO,
+                    at: UVec2::ZERO,
+                };
                 let (lo, hi) = face.vertices.iter().map(|p| chart.lattice(*p)).fold(
                     (Vec2::INFINITY, Vec2::NEG_INFINITY),
                     |(lo, hi), p| (lo.min(p), hi.max(p)),
@@ -169,6 +180,58 @@ impl Atlas {
         }
         texels
     }
+}
+
+impl Atlas {
+    /// `old`'s light, baked for an earlier shape of the room, laid onto this atlas without casting a
+    /// ray: so an edit leaves the light it had until a bake replaces it. Charts in one plane share
+    /// a lattice, so a texel is copied from the old chart in the same plane where there is one, else
+    /// from the nearest parallel one — a dragged wall keeps its light — and clamped onto that
+    /// chart's edge where it runs past it. Surface with nothing parallel before is the base.
+    pub fn carry_over(&self, old: &Atlas, old_light: &[Vec3]) -> Vec<Vec3> {
+        let mut light = vec![Vec3::splat(BASE_AMBIENT); (self.size.x * self.size.y) as usize];
+        for chart in &self.charts {
+            let mut parallel: Vec<&Chart> =
+                old.charts.iter().filter(|other| other.normal.dot(chart.normal) > 0.999).collect();
+            if parallel.is_empty() {
+                continue;
+            }
+            parallel.sort_by(|a, b| (a.w - chart.w).abs().total_cmp(&(b.w - chart.w).abs()));
+            let nearest = (parallel[0].w - chart.w).abs();
+            parallel.retain(|other| (other.w - chart.w).abs() <= nearest + 1e-3);
+            for j in 0..chart.size.y {
+                for i in 0..chart.size.x {
+                    let at = chart.origin + IVec2::new(i as i32, j as i32);
+                    let (from, offset) = parallel
+                        .iter()
+                        .map(|other| {
+                            let offset = (at - other.origin).clamp(IVec2::ZERO, other.size.as_ivec2() - 1);
+                            (*other, offset, (at - other.origin - offset).length_squared())
+                        })
+                        .min_by_key(|(_, _, off_by)| *off_by)
+                        .map(|(other, offset, _)| (other, offset.as_uvec2()))
+                        .expect("there is a parallel chart");
+                    let source = (from.at.y + offset.y) * old.size.x + from.at.x + offset.x;
+                    let target = (chart.at.y + j) * self.size.x + chart.at.x + i;
+                    light[target as usize] = old_light[source as usize];
+                }
+            }
+        }
+        light
+    }
+}
+
+/// What a room's faces are, for telling whether a layout or a bake is still theirs.
+pub fn faces_hash(faces: &[Face]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for face in faces {
+        face.vertices.len().hash(&mut hasher);
+        for vertex in &face.vertices {
+            vertex.to_array().map(f32::to_bits).hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }
 
 /// The point of `face`'s plane at lattice coordinates `at`. The lattice axes need not lie in the
@@ -325,5 +388,40 @@ mod tests {
         let left = floor_light(&rooms, &[0, 1], &light, 0, 3.2, 2.0);
         let right = floor_light(&rooms, &[0, 1], &light, 1, 3.4, 2.0);
         assert!((left - right).abs() / left < 0.02, "{left} against {right}");
+    }
+
+    /// A room is made a meter longer. Nothing is baked again: the floor keeps its light where it
+    /// was, and the wall that moved keeps the light the old one had at the same height.
+    #[test]
+    fn a_reshaped_room_carries_its_light_over() {
+        let light = day(40.0, 250.0);
+        let bake = |room: Room| {
+            let rooms = [room];
+            let faces = room_share(&rooms, 0);
+            let sky: Vec<bool> = faces.iter().map(|f| RoomSlot::of(f.plane.normal) == RoomSlot::Ceiling).collect();
+            let surface = LitSurface::build(&rooms, |_, slot| slot == RoomSlot::Ceiling);
+            let atlas = Atlas::of(&faces);
+            let texels = atlas.bake(&faces, &sky, &surface, &light);
+            (faces, atlas, texels)
+        };
+        let at = |faces: &[Face], atlas: &Atlas, texels: &[Vec3], normal: Vec3, point: Vec3| {
+            let index = faces.iter().position(|f| f.plane.normal.abs_diff_eq(normal, 1e-5)).unwrap();
+            let chart = &atlas.charts[index];
+            let texel = chart.at + (chart.lattice(point).floor().as_ivec2() - chart.origin).as_uvec2();
+            texels[(texel.y * atlas.size.x + texel.x) as usize]
+        };
+
+        let (old_faces, old_atlas, old_light) = bake(Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0)));
+        let (faces, atlas, _) = bake(Room::new(Vec3::ZERO, Vec3::new(5.0, 3.0, 4.0)));
+        let carried = atlas.carry_over(&old_atlas, &old_light);
+
+        let floor = Vec3::new(1.1, 0.0, 2.1);
+        assert_eq!(at(&faces, &atlas, &carried, Vec3::Y, floor), at(&old_faces, &old_atlas, &old_light, Vec3::Y, floor));
+        let (was, now) = (Vec3::new(4.0, 1.1, 2.1), Vec3::new(5.0, 1.1, 2.1));
+        assert_eq!(
+            at(&faces, &atlas, &carried, Vec3::NEG_X, now),
+            at(&old_faces, &old_atlas, &old_light, Vec3::NEG_X, was),
+            "the wall that moved lost its light"
+        );
     }
 }

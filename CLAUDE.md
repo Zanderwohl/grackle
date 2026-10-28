@@ -1145,9 +1145,12 @@ stitch. It is never incremental — a skylight brightens the corridor beyond it 
 and auto-bake waits for the map to be still and for the room bake to settle.
 The room bake writes `UV_1` and keeps its faces on `BakedRoomGeometry`; both
 chart them with `Atlas::of` ([`src/common/lightmap.rs`](src/common/lightmap.rs)),
-and a rebuilt room loses its `RoomLightmap` until the next bake — or takes the
-last one back, matched by a hash of its faces and sky, which is what makes F5
-on an unchanged map free. Each texel is the base ambient, the sun, and sky
+and **light is replaced, never dropped**: `SunBake` keeps it by `Room` entity,
+which outlives every rebuild of its meshes, and a rebuilt room has its old light
+carried onto its new layout (`Atlas::carry_over`) until a bake lands — so F5 on
+an unchanged map is free. Only the clear beside the Sunlight button forgets it.
+The bake runs on the async compute pool from a copy of the faces; entering Play
+waits only when the light is stale. Each texel is the base ambient, the sun, and sky
 light plus one bounce gathered every meter (`LitSurface::ambient`). The
 lightmap replaces the ambient on walls, so `GlobalAmbientLight` lights only
 what moves.
