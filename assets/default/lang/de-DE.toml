@@ -130,3 +130,14 @@ blue = "Blau"
 yellow = "Gelb"
 green = "Grün"
 
+[editor.material_picker]
+plain = "Schlicht"
+search = "Suchen"
+role = "Rolle"
+role_named = "{ name } (Rolle)"
+
+[editor.metadata.palette]
+title = "Palette"
+unsided = "Keine Seite"
+add = "Hinzufügen"
+new_role = "Rolle"

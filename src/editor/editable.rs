@@ -15,6 +15,7 @@ use crate::common::palette::{publish_palette, Palette};
 use crate::editor::map_metadata::{publish_game_rules, publish_movement_rules, MapMetadata};
 use crate::editor::mirror::{assign_sides, Mirroring};
 use crate::editor::save;
+use crate::editor::save::SavedMetadata;
 use crate::get;
 
 lazy_static! {
@@ -62,17 +63,21 @@ impl Plugin for EditorStepsPlugin {
 /// Idle is no mouse button held and no text field holding the keyboard, so a drag or a typed name is
 /// one step. Through `bypass_change_detection`, or this system's own write would read as a change
 /// next frame and it would checkpoint forever.
+///
+/// The settings are compared rather than change-detected: the panels hold `MapMetadata` mutably every
+/// frame, so it always reads as changed.
 fn checkpoint_when_idle(
     mut features: ResMut<FeatureTimeline>,
+    metadata: Res<MapMetadata>,
     mouse: Res<ButtonInput<MouseButton>>,
     egui: Res<bevy_egui::input::EguiWantsInput>,
     mut pending: Local<bool>,
 ) {
-    *pending |= features.is_changed();
+    *pending |= features.is_changed() || features.settings_changed(&metadata);
     let idle = mouse.get_pressed().next().is_none() && !egui.wants_keyboard_input();
     if *pending && idle {
         *pending = false;
-        features.bypass_change_detection().checkpoint();
+        features.bypass_change_detection().checkpoint(&metadata);
     }
 }
 
@@ -218,13 +223,26 @@ fn serialize_feature(feature: &Feature) -> String {
 
 const UNDO_DEPTH: usize = 200;
 
-/// Every feature's serialized form, in order. Serialized because a feature is a trait object, and so
-/// a restore can compare strings and rebuild only what differs. Stable because everything cached
-/// from the world is `#[serde(skip)]`.
+/// Every feature's serialized form, in order, and the map's settings. Serialized because a feature is
+/// a trait object, and so a restore can compare strings and rebuild only what differs. Stable because
+/// everything cached from the world is `#[serde(skip)]`.
 #[derive(Clone, PartialEq, Debug)]
 struct MapState {
     features: Vec<(FeatureId, String)>,
     id_counter: u64,
+    /// `None` in a snapshot taken without the settings in reach — adopting a map — until the next
+    /// checkpoint fills it in.
+    settings: Option<SavedMetadata>,
+}
+
+/// Written only when it differs, so an undo that left the settings alone does not rebuild the panel's
+/// text buffers.
+fn restore_settings(target: &MapState, metadata: &mut MapMetadata) {
+    if let Some(settings) = &target.settings
+        && *settings != SavedMetadata::of(metadata)
+    {
+        *metadata = settings.clone().into_metadata();
+    }
 }
 
 impl Default for FeatureTimeline {
@@ -285,7 +303,7 @@ impl FeatureTimeline {
     /// The server's newer copy, rebuilding only what differs so one edit does
     /// not rebuild every room. Returns whether any rooms changed.
     pub fn adopt_changes(&mut self, incoming: FeatureTimeline) -> bool {
-        let rooms = self.restore(&incoming.state());
+        let rooms = self.restore(&incoming.state(None));
         self.reset_history();
         rooms
     }
@@ -417,7 +435,7 @@ impl FeatureTimeline {
         self.features.get(id)
     }
 
-    fn state(&self) -> MapState {
+    fn state(&self, metadata: Option<&MapMetadata>) -> MapState {
         MapState {
             features: self
                 .feature_order
@@ -426,19 +444,33 @@ impl FeatureTimeline {
                 .map(|feature| (feature.id, serialize_feature(feature)))
                 .collect(),
             id_counter: self.id_counter,
+            settings: metadata.map(SavedMetadata::of),
         }
     }
 
     /// Record one undo step if the map changed since the last checkpoint. Called when idle, not by each
     /// edit, so no tool can forget to record itself.
-    pub fn checkpoint(&mut self) {
-        let now = self.state();
+    pub fn checkpoint(&mut self, metadata: &MapMetadata) {
+        let now = self.state(Some(metadata));
+        for snapshot in [&mut self.checkpoint, &mut self.saved].into_iter().flatten() {
+            if snapshot.settings.is_none() {
+                snapshot.settings.clone_from(&now.settings);
+            }
+        }
         match self.checkpoint.take() {
             Some(before) if before != now => self.push_undo(before),
             _ => {}
         }
         self.dirty = self.saved.as_ref() != Some(&now);
         self.checkpoint = Some(now);
+    }
+
+    /// Whether the settings differ from the last checkpoint's, which is what makes an edit to them one.
+    pub fn settings_changed(&self, metadata: &MapMetadata) -> bool {
+        self.checkpoint
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.settings.as_ref())
+            .is_some_and(|settings| *settings != SavedMetadata::of(metadata))
     }
 
     /// The one place history grows, so the one place it is capped at [`UNDO_DEPTH`].
@@ -455,14 +487,14 @@ impl FeatureTimeline {
     pub fn reset_history(&mut self) {
         self.undo.clear();
         self.redo.clear();
-        let now = self.state();
+        let now = self.state(None);
         self.checkpoint = Some(now.clone());
         self.saved = Some(now);
         self.dirty = false;
     }
 
-    pub fn mark_saved(&mut self) {
-        let now = self.state();
+    pub fn mark_saved(&mut self, metadata: &MapMetadata) {
+        let now = self.state(Some(metadata));
         self.checkpoint = Some(now.clone());
         self.saved = Some(now);
         self.dirty = false;
@@ -481,36 +513,39 @@ impl FeatureTimeline {
         !self.redo.is_empty()
     }
 
-    pub fn undo(&mut self) {
+    pub fn undo(&mut self, metadata: &mut MapMetadata) {
         // An edit not yet checkpointed is the one this undo takes back.
-        self.checkpoint();
+        self.checkpoint(metadata);
         let Some(previous) = self.undo.pop() else { return };
         if let Some(current) = self.checkpoint.take() {
             self.redo.push(current);
         }
         self.restore(&previous);
+        restore_settings(&previous, metadata);
     }
 
-    pub fn redo(&mut self) {
-        self.checkpoint();
+    pub fn redo(&mut self, metadata: &mut MapMetadata) {
+        self.checkpoint(metadata);
         let Some(next) = self.redo.pop() else { return };
         if let Some(current) = self.checkpoint.take() {
             self.undo.push(current);
         }
         self.restore(&next);
+        restore_settings(&next, metadata);
     }
 
     /// One undo step, as reverting to the file is. Leaves the map clean.
-    pub fn replace_as_edit(&mut self, incoming: FeatureTimeline) {
-        self.checkpoint();
-        let target = incoming.state();
+    pub fn replace_as_edit(&mut self, incoming: FeatureTimeline, settings: &MapMetadata, metadata: &mut MapMetadata) {
+        self.checkpoint(metadata);
+        let target = incoming.state(Some(settings));
         if let Some(current) = self.checkpoint.take()
             && current != target
         {
             self.push_undo(current);
         }
         self.restore(&target);
-        self.mark_saved();
+        restore_settings(&target, metadata);
+        self.mark_saved(metadata);
     }
 
     /// Rebuilds only the features whose serialized form differs, and what is
@@ -813,12 +848,13 @@ impl FeatureTimeline {
         keys: Res<ButtonInput<KeyCode>>,
         egui: Res<bevy_egui::input::EguiWantsInput>,
         mut features: ResMut<FeatureTimeline>,
+        mut metadata: ResMut<MapMetadata>,
     ) {
         let chords = chords(&keys, egui.wants_keyboard_input());
         if chords.redo {
-            features.redo();
+            features.redo(&mut metadata);
         } else if chords.undo {
-            features.undo();
+            features.undo(&mut metadata);
         }
     }
 
@@ -1354,18 +1390,18 @@ mod tests {
     fn undo_and_redo_walk_whole_map_checkpoints() {
         let mut timeline = FeatureTimeline::default();
         let a = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
-        timeline.checkpoint();
+        timeline.checkpoint(&MapMetadata::default());
         move_to_x(&mut timeline, a, 2.0);
         move_to_x(&mut timeline, a, 3.0);
-        timeline.checkpoint();
+        timeline.checkpoint(&MapMetadata::default());
         move_to_x(&mut timeline, a, 4.0);
 
-        timeline.undo();
+        timeline.undo(&mut MapMetadata::default());
         assert_eq!(x_of(&timeline, a), Some(3.0), "the unrecorded edit is what undo takes back");
-        timeline.undo();
+        timeline.undo(&mut MapMetadata::default());
         assert_eq!(x_of(&timeline, a), Some(1.0), "a whole gesture is one step");
-        timeline.redo();
-        timeline.redo();
+        timeline.redo(&mut MapMetadata::default());
+        timeline.redo(&mut MapMetadata::default());
         assert_eq!(x_of(&timeline, a), Some(4.0));
     }
 
@@ -1399,9 +1435,9 @@ mod tests {
     fn deleting_is_undone_by_the_same_mechanism() {
         let mut timeline = FeatureTimeline::default();
         let a = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
-        timeline.checkpoint();
+        timeline.checkpoint(&MapMetadata::default());
         timeline.delete_feature(a);
-        timeline.undo();
+        timeline.undo(&mut MapMetadata::default());
         assert_eq!(x_of(&timeline, a), Some(1.0));
         assert_eq!(timeline.feature_order(), &[a]);
     }
@@ -1415,9 +1451,9 @@ mod tests {
         for id in [still, moved] {
             timeline.features_mut().get_mut(&id).unwrap().object_mut().set_entity(Some(Entity::PLACEHOLDER));
         }
-        timeline.checkpoint();
+        timeline.checkpoint(&MapMetadata::default());
         move_to_x(&mut timeline, moved, 5.0);
-        timeline.undo();
+        timeline.undo(&mut MapMetadata::default());
 
         let entity = |id| timeline.get_feature(&id).unwrap().object().entity();
         assert_eq!(entity(still), Some(Entity::PLACEHOLDER), "an unchanged feature was rebuilt");
@@ -1429,7 +1465,7 @@ mod tests {
     fn reverting_is_one_undoable_step() {
         let mut timeline = FeatureTimeline::default();
         let a = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
-        timeline.mark_saved();
+        timeline.mark_saved(&MapMetadata::default());
         let on_disk = crate::editor::save::parse(
             &crate::editor::save::to_text(&timeline, &Default::default()).unwrap(),
         )
@@ -1437,14 +1473,14 @@ mod tests {
         .timeline;
 
         move_to_x(&mut timeline, a, 9.0);
-        timeline.checkpoint();
+        timeline.checkpoint(&MapMetadata::default());
         assert!(timeline.is_dirty());
 
-        timeline.replace_as_edit(on_disk);
+        timeline.replace_as_edit(on_disk, &MapMetadata::default(), &mut MapMetadata::default());
         assert_eq!(x_of(&timeline, a), Some(1.0));
         assert!(!timeline.is_dirty());
 
-        timeline.undo();
+        timeline.undo(&mut MapMetadata::default());
         assert_eq!(x_of(&timeline, a), Some(9.0));
         assert!(timeline.is_dirty());
     }
@@ -1484,9 +1520,9 @@ mod tests {
         let mut timeline = FeatureTimeline::default();
         let a = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
         timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
-        timeline.mark_saved();
+        timeline.mark_saved(&MapMetadata::default());
         timeline.roll_back_to(Some(a));
-        timeline.checkpoint();
+        timeline.checkpoint(&MapMetadata::default());
         assert!(!timeline.can_undo() && !timeline.is_dirty());
 
         let text = crate::editor::save::to_text(&timeline, &Default::default()).unwrap();
@@ -1523,7 +1559,7 @@ mod tests {
     fn the_history_is_bounded() {
         let mut timeline = FeatureTimeline::default();
         let a = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
-        timeline.mark_saved();
+        timeline.mark_saved(&MapMetadata::default());
         let on_disk = || {
             let mut saved = FeatureTimeline::default();
             saved.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
@@ -1531,8 +1567,8 @@ mod tests {
         };
         for step in 0..UNDO_DEPTH * 2 {
             move_to_x(&mut timeline, a, step as f32 + 1.0);
-            timeline.checkpoint();
-            timeline.replace_as_edit(on_disk());
+            timeline.checkpoint(&MapMetadata::default());
+            timeline.replace_as_edit(on_disk(), &MapMetadata::default(), &mut MapMetadata::default());
         }
         assert_eq!(timeline.undo.len(), UNDO_DEPTH);
     }
@@ -1541,14 +1577,44 @@ mod tests {
     fn adopting_a_map_forgets_the_history() {
         let mut timeline = FeatureTimeline::default();
         let a = timeline.apply_feature(Box::new(GlobalPoint::new(1.0, 0.0, 0.0)));
-        timeline.checkpoint();
+        timeline.checkpoint(&MapMetadata::default());
         move_to_x(&mut timeline, a, 2.0);
-        timeline.checkpoint();
+        timeline.checkpoint(&MapMetadata::default());
         assert!(timeline.can_undo());
 
         timeline.adopt(FeatureTimeline::default());
         assert!(!timeline.can_undo() && !timeline.can_redo());
         assert!(!timeline.is_dirty());
+    }
+
+    /// The settings are part of the map's history, so a palette entry added is one step like a feature.
+    #[test]
+    fn palette_edits_are_undone_with_the_map() {
+        let mut timeline = FeatureTimeline::default();
+        let mut metadata = MapMetadata::default();
+        timeline.mark_saved(&metadata);
+        metadata.palette.roles.insert("trim".into(), Default::default());
+        assert!(timeline.settings_changed(&metadata));
+        timeline.checkpoint(&metadata);
+        assert!(timeline.is_dirty());
+
+        timeline.undo(&mut metadata);
+        assert!(metadata.palette.roles.is_empty());
+        assert!(!timeline.is_dirty());
+        timeline.redo(&mut metadata);
+        assert!(metadata.palette.roles.contains_key("trim"));
+    }
+
+    /// A map adopted without its settings in reach takes them as they stand at the next checkpoint,
+    /// rather than recording them as an edit undo would take back.
+    #[test]
+    fn the_settings_an_adopted_map_arrives_with_are_no_edit() {
+        let mut timeline = FeatureTimeline::default();
+        let mut metadata = MapMetadata::default();
+        timeline.adopt(FeatureTimeline::default());
+        metadata.palette.roles.insert("trim".into(), Default::default());
+        timeline.checkpoint(&metadata);
+        assert!(!timeline.can_undo() && !timeline.is_dirty());
     }
 
     /// `f32::clamp` panics on inverted bounds, so a short panel would crash the editor.

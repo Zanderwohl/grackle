@@ -950,14 +950,14 @@ mod tests {
         let (room, ids) = a_square_room();
         let mut timeline = FeatureTimeline::default();
         let id = timeline.apply_feature(Box::new(room));
-        timeline.checkpoint();
+        timeline.checkpoint(&crate::editor::map_metadata::MapMetadata::default());
 
         let edit = |timeline: &mut FeatureTimeline, change: &dyn Fn(&mut FootprintRoom)| {
             let mut feature = timeline.features_mut().remove(&id).unwrap();
             change(feature.object_mut().footprint_mut().unwrap());
             feature.object_mut().resolve_references(timeline.features_map());
             timeline.features_mut().insert(id, feature);
-            timeline.checkpoint();
+            timeline.checkpoint(&crate::editor::map_metadata::MapMetadata::default());
         };
         let x_of = |timeline: &FeatureTimeline| {
             timeline.get_feature(&id).unwrap().object().get_point_ref(&format!("corner#{}", ids[2].0)).unwrap().x.value()
@@ -970,11 +970,11 @@ mod tests {
         });
         assert_eq!(x_of(&timeline), 9.0);
 
-        timeline.undo();
+        timeline.undo(&mut crate::editor::map_metadata::MapMetadata::default());
         assert_eq!(x_of(&timeline), 6.0, "the drag was not one step");
         let lines = timeline.get_feature(&id).unwrap().object().footprint().unwrap().lines().len();
         assert_eq!(lines, 8, "undoing the drag took the pillar too");
-        timeline.undo();
+        timeline.undo(&mut crate::editor::map_metadata::MapMetadata::default());
         let lines = timeline.get_feature(&id).unwrap().object().footprint().unwrap().lines().len();
         assert_eq!(lines, 4, "the pillar was not one step");
     }
