@@ -166,6 +166,26 @@ impl Mirror {
         Mirroring { symmetry: self.symmetry, center: self.resolved_center }
     }
 
+    /// A copy of a Mirror is rebuilt on every resolve of the Mirror copying it, so it takes over the
+    /// entities its predecessor stood rather than spawning a second set beside them.
+    fn inherit_entities(&mut self, previous: &mut Mirror) {
+        self.entity = previous.entity;
+        self.copy_entities = std::mem::take(&mut previous.copy_entities);
+        inherit_nested(&mut self.copies, &mut previous.copies);
+    }
+}
+
+fn inherit_nested(copies: &mut [MirroredCopy], previous: &mut [MirroredCopy]) {
+    for copy in copies {
+        let Some(nested) = copy.object.mirror_mut() else { continue };
+        if let Some(old) = previous
+            .iter_mut()
+            .find(|old| old.source == copy.source)
+            .and_then(|old| old.object.mirror_mut())
+        {
+            nested.inherit_entities(old);
+        }
+    }
 }
 
 /// Through the feature's own serde, the same way undo and saving copy one, so a new feature type is
@@ -340,8 +360,10 @@ impl FeatureTrait for Mirror {
 
     /// The copies are children, so they went with the entity.
     fn set_entity(&mut self, entity: Option<Entity>) {
+        if self.entity != entity {
+            self.copy_entities.clear();
+        }
         self.entity = entity;
-        self.copy_entities.clear();
     }
 
     fn apply_to_entity(&mut self, commands: &mut Commands, entity: Entity) {
@@ -382,7 +404,7 @@ impl FeatureTrait for Mirror {
             self.resolved_center = v;
         }
         let mirroring = self.mirroring();
-        self.copies.clear();
+        let mut previous = std::mem::take(&mut self.copies);
         self.left_out.clear();
         for id in &self.sources {
             // A duplicated id would share its copy's entity with the first.
@@ -404,6 +426,20 @@ impl FeatureTrait for Mirror {
                 None => self.left_out.push((*id, LeftOut::NoMirrorImage)),
             }
         }
+        inherit_nested(&mut self.copies, &mut previous);
+    }
+
+    /// The center moves and the symmetry stays: the three symmetries commute, so a Mirror's image
+    /// under another is the same symmetry about the image of its center.
+    fn mirror(&mut self, mirroring: &Mirroring) -> bool {
+        self.resolved_center = mirroring.point(self.resolved_center);
+        self.center.resolved_reference = None;
+        self.copies.retain_mut(|copy| copy.object.mirror(mirroring));
+        true
+    }
+
+    fn mirror_mut(&mut self) -> Option<&mut Mirror> {
+        Some(self)
     }
 
     /// The sources too: an edit to one is an edit to its copy, which is how it reaches here.
@@ -426,7 +462,10 @@ impl FeatureTrait for Mirror {
     }
 
     fn standing_copies(&self) -> Vec<&dyn FeatureTrait> {
-        self.copies.iter().map(|copy| &*copy.object).collect()
+        self.copies
+            .iter()
+            .flat_map(|copy| std::iter::once(&*copy.object).chain(copy.object.standing_copies()))
+            .collect()
     }
 
     /// Clicking a copy selects the Mirror, which is what edits it.
@@ -456,10 +495,16 @@ impl FeatureTrait for Mirror {
 /// Mirror, rolling back past it or dropping a source takes the side away with nothing to remember.
 /// Compares before it writes, since this runs every frame.
 ///
+/// A copy of a Mirror is not sided itself; its copies take the inner Mirror's second team, swapped by
+/// each Mirror around it for its own pair. So under a Mirror of Red and Blue, a Blue copy comes out
+/// Red, and a team not in the pair is carried across unchanged.
+///
 /// Where two Mirrors claim one entity the earlier feature wins, by feature id rather than by query
 /// order, which shifts with archetypes.
 pub fn assign_sides(
-    mirrors: Query<(&MirrorSides, Option<&Children>, &FeatureTag)>,
+    mirrors: Query<(Entity, &MirrorSides, &FeatureTag)>,
+    nested: Query<&MirrorSides>,
+    children: Query<&Children>,
     copies: Query<(), With<MirrorCopy>>,
     sided: Query<(Entity, &Side)>,
     mut commands: Commands,
@@ -470,16 +515,13 @@ pub fn assign_sides(
     let mut ordered: Vec<_> = mirrors.iter().collect();
     ordered.sort_by_key(|(_, _, tag)| tag.feature_id);
     let mut wanted: HashMap<Entity, Team> = HashMap::new();
-    for (mirror, children, _) in ordered {
+    for (entity, mirror, _) in ordered {
         for source in &mirror.sources {
-            wanted.entry(*source).or_insert(mirror.teams[0]);
-        }
-        let children: &[Entity] = children.map_or(&[], |children| children);
-        for child in children {
-            if copies.contains(*child) {
-                wanted.entry(*child).or_insert(mirror.teams[1]);
+            if !nested.contains(*source) {
+                wanted.entry(*source).or_insert(mirror.teams[0]);
             }
         }
+        claim_copies(entity, mirror.teams, &mut Vec::new(), &nested, &children, &copies, &mut wanted);
     }
 
     for (entity, side) in &sided {
@@ -498,10 +540,43 @@ pub fn assign_sides(
     }
 }
 
+fn claim_copies(
+    mirror: Entity,
+    teams: [Team; 2],
+    around: &mut Vec<[Team; 2]>,
+    nested: &Query<&MirrorSides>,
+    children: &Query<&Children>,
+    copies: &Query<(), With<MirrorCopy>>,
+    wanted: &mut HashMap<Entity, Team>,
+) {
+    let Ok(standing) = children.get(mirror) else { return };
+    for child in standing.iter().filter(|child| copies.contains(*child)) {
+        if let Ok(inner) = nested.get(child) {
+            around.push(teams);
+            claim_copies(child, inner.teams, around, nested, children, copies, wanted);
+            around.pop();
+            continue;
+        }
+        let team = around.iter().rev().fold(teams[1], |team, pair| swapped(team, *pair));
+        wanted.entry(child).or_insert(team);
+    }
+}
+
+fn swapped(team: Team, pair: [Team; 2]) -> Team {
+    if team == pair[0] {
+        pair[1]
+    } else if team == pair[1] {
+        pair[0]
+    } else {
+        team
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::editor::editable::FeatureTimeline;
+    use crate::editor::animation_display::AnimationDisplay;
     use crate::editor::editor_room::EditorRoom;
     use crate::editor::spawn_point::{SpawnPoint, SpawnPointMarker};
 
@@ -659,14 +734,110 @@ mod tests {
         assert_eq!(mirror.standing_copies().len(), 1);
     }
 
-    /// A Mirror is not something a Mirror can copy, and is said to be left out rather than dropped.
+    /// A type with no mirror image is said to be left out rather than dropped.
     #[test]
     fn what_cannot_be_mirrored_is_left_out() {
         let mut timeline = FeatureTimeline::default();
-        let inner = timeline.apply_feature(Box::new(Mirror::new(PointRef::absolute(0.0, 0.0, 0.0))));
-        let mut outer = Mirror::new(PointRef::absolute(1.0, 0.0, 0.0)).with_sources(vec![inner]);
-        outer.resolve_references(timeline.features_map());
-        assert!(outer.standing_copies().is_empty());
-        assert_eq!(outer.left_out, vec![(inner, LeftOut::NoMirrorImage)]);
+        let display = timeline.apply_feature(Box::new(AnimationDisplay::new(1.0, 0.0, 0.0)));
+        let mut mirror = Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).with_sources(vec![display]);
+        mirror.resolve_references(timeline.features_map());
+        assert!(mirror.standing_copies().is_empty());
+        assert_eq!(mirror.left_out, vec![(display, LeftOut::NoMirrorImage)]);
+    }
+
+    fn four_ways(second: [Team; 2]) -> App {
+        let (mut timeline, room, spawn) = spawn_and_room();
+        let across_x = timeline.apply_feature(Box::new(
+            Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).with_sources(vec![room, spawn]),
+        ));
+        timeline.apply_feature(Box::new(
+            Mirror::new(PointRef::absolute(0.0, 0.0, 5.0))
+                .with_symmetry(Symmetry::MirrorZ)
+                .with_sources(vec![room, spawn, across_x])
+                .with_teams(second[0], second[1]),
+        ));
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(timeline);
+        app.add_systems(Update, (FeatureTimeline::sync_entities, assign_sides).chain());
+        app.update();
+        app.update();
+        app
+    }
+
+    fn spawns(app: &mut App) -> Vec<(Vec3, Option<Team>)> {
+        let world = app.world_mut();
+        world
+            .query_filtered::<(&Transform, Option<&Side>), With<SpawnPointMarker>>()
+            .iter(world)
+            .map(|(at, side)| (at.translation, side.map(|s| s.0)))
+            .collect()
+    }
+
+    fn side_at(spawns: &[(Vec3, Option<Team>)], at: Vec3) -> Option<Team> {
+        spawns
+            .iter()
+            .find(|(here, _)| here.abs_diff_eq(at, 1e-4))
+            .unwrap_or_else(|| panic!("nothing at {at}: {spawns:?}"))
+            .1
+    }
+
+    /// Mirroring a Mirror along with its sources gives the fourth quarter, and the copy of a copy is
+    /// on the team the first Mirror's copies are, swapped by the second's pair.
+    #[test]
+    fn a_mirror_of_a_mirror_makes_four_quarters() {
+        let mut app = four_ways([Team::Red, Team::Blue]);
+        app.update();
+        let found = spawns(&mut app);
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert_eq!(side_at(&found, Vec3::new(4.0, 0.0, 0.0)), Some(Team::Red));
+        assert_eq!(side_at(&found, Vec3::new(-4.0, 0.0, 0.0)), Some(Team::Blue));
+        assert_eq!(side_at(&found, Vec3::new(4.0, 0.0, 10.0)), Some(Team::Blue));
+        assert_eq!(side_at(&found, Vec3::new(-4.0, 0.0, 10.0)), Some(Team::Red));
+
+        let world = app.world_mut();
+        assert_eq!(world.query::<&crate::tool::room::Room>().iter(world).count(), 4);
+    }
+
+    /// A second Mirror that keeps one team on both halves leaves the first's split as it was.
+    #[test]
+    fn a_mirror_onto_one_team_keeps_the_inner_split() {
+        let mut app = four_ways([Team::Red, Team::Red]);
+        let found = spawns(&mut app);
+        assert_eq!(side_at(&found, Vec3::new(4.0, 0.0, 10.0)), Some(Team::Red));
+        assert_eq!(side_at(&found, Vec3::new(-4.0, 0.0, 10.0)), Some(Team::Blue));
+    }
+
+    /// Editing a source re-resolves the copy of the inner Mirror from scratch; its copies are the
+    /// same entities afterwards, not a second set beside the first.
+    #[test]
+    fn an_edit_reuses_the_nested_copies() {
+        let mut app = four_ways([Team::Red, Team::Blue]);
+        let before: Vec<Entity> = {
+            let world = app.world_mut();
+            world.query_filtered::<Entity, With<SpawnPointMarker>>().iter(world).collect()
+        };
+        let reapply = |mut timeline: ResMut<FeatureTimeline>, mut commands: Commands| {
+            for id in timeline.feature_order().to_vec() {
+                let mut feature = timeline.features_mut().remove(&id).unwrap();
+                feature.object_mut().resolve_references(timeline.features_map());
+                if let Some(entity) = feature.object().entity() {
+                    feature.object_mut().apply_to_entity(&mut commands, entity);
+                }
+                timeline.features_mut().insert(id, feature);
+            }
+        };
+        app.add_systems(PostUpdate, reapply);
+        for _ in 0..3 {
+            app.update();
+        }
+        let world = app.world_mut();
+        let mut after: Vec<Entity> =
+            world.query_filtered::<Entity, With<SpawnPointMarker>>().iter(world).collect();
+        let mut before = before;
+        before.sort();
+        after.sort();
+        assert_eq!(before, after);
     }
 }
