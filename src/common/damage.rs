@@ -203,6 +203,16 @@ pub struct Damage {
     pub from: Option<Vec3>,
 }
 
+/// A request to empty a health pool outright: no armor, no team rule, no
+/// self-damage scaling. Answered by the same
+/// [`crate::game::damage::apply_damage`], so health still has one writer.
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct Kill {
+    pub target: Entity,
+    pub source: DamageSource,
+    pub point: Vec3,
+}
+
 /// Anything that goes off writes one; only [`crate::game::explosion`] knows
 /// what splash means.
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
