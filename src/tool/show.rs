@@ -16,6 +16,7 @@ pub struct GizmoVisibility {
     pub animation_grids: bool,
     pub mirrors: bool,
     pub triggers: bool,
+    pub blocks: bool,
 }
 
 impl Default for GizmoVisibility {
@@ -30,6 +31,7 @@ impl Default for GizmoVisibility {
             animation_grids: true,
             mirrors: true,
             triggers: true,
+            blocks: true,
         }
     }
 }
@@ -47,6 +49,7 @@ impl GizmoVisibility {
             "animation_grid" => self.animation_grids,
             "mirror" => self.mirrors,
             "trigger" => self.triggers,
+            "block" => self.blocks,
             _ => false,
         }
     }
@@ -84,6 +87,7 @@ impl ShowPlugin {
         ui.checkbox(&mut gizmo_visibility.animation_grids, get!("show.gizmos_animation_grids"));
         ui.checkbox(&mut gizmo_visibility.mirrors, get!("show.gizmos_mirrors"));
         ui.checkbox(&mut gizmo_visibility.triggers, get!("show.gizmos_triggers"));
+        ui.checkbox(&mut gizmo_visibility.blocks, get!("show.gizmos_blocks"));
     }
 
     fn draw_visible_gizmos(
@@ -93,14 +97,14 @@ impl ShowPlugin {
     ) {
         if !visibility.points && !visibility.rooms && !visibility.point_lights
             && !visibility.spawn_points && !visibility.props && !visibility.animation_displays
-            && !visibility.animation_grids && !visibility.mirrors && !visibility.triggers
+            && !visibility.animation_grids && !visibility.mirrors && !visibility.triggers && !visibility.blocks
         {
             return;
         }
 
         for (_id, feature) in feature.active_features() {
             let object = feature.object();
-            for drawn in std::iter::once(object).chain(object.standing_copies()) {
+            for drawn in std::iter::once(object).chain(object.standing_copies().into_iter().map(|copy| copy.object)) {
                 if visibility.shows(drawn.type_key()) {
                     drawn.debug_gizmos(&mut gizmos);
                 }

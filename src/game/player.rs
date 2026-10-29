@@ -22,6 +22,7 @@ use crate::game::collision::{CollisionWorld, Touched};
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalog, WeaponId};
 use crate::game::condition::Condition;
 use crate::game::weapon::{AutoReload, Trigger};
+use crate::common::world_surface::Fill;
 use crate::tool::room::Room;
 
 /// Half-extents of the body box: the tallest class, which spawn points are
@@ -338,16 +339,38 @@ pub fn usable_spawns(spawns: &[Spawn], world: &CollisionWorld) -> Vec<Spawn> {
         .collect()
 }
 
-/// Stand the player up in the largest room on the map.
-///
-/// The fallback for a map with no usable spawn point. Largest by volume is a
-/// crude guess at the main space, and beats refusing to start.
-pub fn fallback_spawn(rooms: &[Room]) -> Spawn {
-    let largest = rooms.iter().max_by(|a, b| a.volume().total_cmp(&b.volume()));
+/// For a map with no usable spawn point: somewhere a body fits in the largest
+/// room, a crude guess at the main space. A block may stand on a room's
+/// middle, so each room is searched outward from it, then the next largest.
+pub fn fallback_spawn(world: &CollisionWorld) -> Spawn {
+    /// Meters between the floor points tried.
+    const STEP: f32 = 0.5;
+    /// Bounds the search on a map where nothing fits, which runs per respawn.
+    const MOST_ROOMS: usize = 4;
+    const MOST_POINTS: usize = 4096;
 
-    let feet = match largest {
-        Some(room) => room.floor_point(),
-        None => {
+    let mut rooms: Vec<&Room> = world.volumes().iter().filter(|volume| volume.fill == Fill::Air).map(|volume| &volume.shape).collect();
+    rooms.sort_by(|a, b| b.volume().total_cmp(&a.volume()));
+
+    let fits = |feet: &Vec3| world.fits(body_center_from_feet(*feet), PLAYER_HALF);
+    let found = rooms.iter().take(MOST_ROOMS).find_map(|room| {
+        let middle = room.floor_point();
+        let (min, max) = room.bounds();
+        let (columns, rows) = (((max.x - min.x) / STEP) as i32, ((max.z - min.z) / STEP) as i32);
+        let mut points: Vec<Vec3> = (0..=columns)
+            .flat_map(|i| (0..=rows).map(move |j| Vec3::new(min.x + i as f32 * STEP, room.floor, min.z + j as f32 * STEP)))
+            .collect();
+        points.sort_by(|a, b| a.distance_squared(middle).total_cmp(&b.distance_squared(middle)));
+        std::iter::once(middle).chain(points).take(MOST_POINTS).find(fits)
+    });
+
+    let feet = match (found, rooms.first()) {
+        (Some(feet), _) => feet,
+        (None, Some(room)) => {
+            warn!("Nowhere in any room to stand; spawning in the middle of the largest");
+            room.floor_point()
+        }
+        (None, None) => {
             warn!("No rooms on the map; spawning at the origin");
             Vec3::ZERO
         }
@@ -925,6 +948,22 @@ mod tests {
 
     use super::*;
     use crate::tool::room::Room;
+
+    /// Breaks if the fallback stands a body in the room's middle whatever is
+    /// there.
+    #[test]
+    fn the_fallback_spawn_steps_off_a_block_in_the_middle() {
+        use crate::common::world_surface::Volume;
+        let mut world = CollisionWorld::default();
+        world.rebuild_volumes(&[
+            Volume::air(Room::new(Vec3::new(-2.0, 0.0, -2.0), Vec3::new(2.0, 3.0, 2.0))),
+            Volume::air(Room::new(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 3.0, 10.0))),
+            Volume::solid(Room::new(Vec3::new(-4.0, 0.0, -4.0), Vec3::new(4.0, 3.0, 4.0))),
+        ]);
+        let spawn = fallback_spawn(&world);
+        assert!(world.fits(body_center_from_feet(spawn.feet), PLAYER_HALF), "stood at {}", spawn.feet);
+        assert!(spawn.feet.x.abs().max(spawn.feet.z.abs()) < 5.0, "went further than the block's edge: {}", spawn.feet);
+    }
 
     fn a_death(id: PlayerId) -> crate::common::damage::Died {
         crate::common::damage::Died {

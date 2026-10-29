@@ -18,7 +18,7 @@ use crate::game::player::{
     ViewPreference,
 };
 use crate::tool::bakes::BakeSystems;
-use crate::tool::room::Room;
+use crate::tool::room::{Block, MapVolumes, Room, VolumeOrder};
 
 pub mod body_mesh;
 pub mod collision;
@@ -204,14 +204,14 @@ fn toggle_mode(
 fn enter_play(
     mut commands: Commands,
     mut collision: ResMut<CollisionWorld>,
-    rooms: Query<&Room>,
+    volumes: MapVolumes,
     mut editor_cameras: Query<&mut Camera, With<Multicam>>,
     window: Query<Entity, With<PrimaryWindow>>,
 ) {
-    let rooms: Vec<Room> = rooms.iter().cloned().collect();
     // First: `give_bodies_to_whoever_needs_one` asks it where a body can stand
     // on the next Update.
-    collision.rebuild(&rooms);
+    let volumes = volumes.volumes();
+    collision.rebuild_volumes(&volumes);
 
     // A new match is a new player: dropping the identity makes the next body
     // allocate a fresh id. Dying inside a match keeps it. A new match turns
@@ -225,7 +225,7 @@ fn enter_play(
     }
 
     set_cursor_captured(&mut commands, &window, true);
-    info!("Playing {} room(s); F5 to go back to editing", rooms.len());
+    info!("Playing {} volume(s); F5 to go back to editing", volumes.len());
 }
 
 fn leave_play(
@@ -272,18 +272,18 @@ pub(crate) fn set_cursor_captured(
 
 pub(crate) fn rebuild_collision_when_rooms_change(
     mut collision: ResMut<CollisionWorld>,
-    changed: Query<(), Changed<Room>>,
-    mut removed: RemovedComponents<Room>,
-    rooms: Query<&Room>,
+    changed: Query<(), Or<(Changed<Room>, Changed<Block>, Changed<VolumeOrder>)>>,
+    mut removed_rooms: RemovedComponents<Room>,
+    mut removed_blocks: RemovedComponents<Block>,
+    volumes: MapVolumes,
 ) {
     // Drained either way, or a removal seen on a frame with a change is seen
     // again next frame.
-    let removed = removed.read().count() > 0;
+    let removed = removed_rooms.read().count() + removed_blocks.read().count() > 0;
     if changed.is_empty() && !removed {
         return;
     }
-    let rooms: Vec<Room> = rooms.iter().cloned().collect();
-    collision.rebuild(&rooms);
+    collision.rebuild_volumes(&volumes.volumes());
 }
 
 #[cfg(test)]

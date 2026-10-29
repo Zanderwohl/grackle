@@ -111,7 +111,8 @@ Usability is decided by `CollisionWorld::fits` — the body box must be in the
 map and touching no wall. There is no separate notion of "headroom": a low
 ceiling *is* a slab the body overlaps. Unusable spawns are skipped with a
 warning, and a map with none falls back to the largest room rather than
-refusing to start.
+refusing to start — to somewhere in it a body fits, since a block may stand
+on its middle.
 
 The new-map template (`assets/default/blueprints/new.gmb`), which the editor
 opens to and File → New loads, is the smallest map that plays: a point at the
@@ -1325,7 +1326,8 @@ the union of the rooms, faces pointing into the air, cut with the CSG kernel.
 Each room's share is its own walls clipped against every room touching it, so
 auto-bake still rebuilds one room at a time. Collision
 ([`src/game/collision/`](src/game/collision/mod.rs)) stands each face out into
-the solid behind it as a hull, straight from the rooms rather than from the
+the solid behind it as a hull — never further than that solid goes, or a thin
+floor or block would wall off the air beyond it — straight from the rooms rather than from the
 baked meshes, so an edit lands without waiting for a bake — and an opening you
 can see through is an opening you can walk and shoot through. Because it is a
 union, a room wholly inside another adds nothing, and a room's wall inside
@@ -1345,6 +1347,18 @@ operations, and they are not interchangeable:
   onto a standing player encloses it having crossed nothing. It prefers escapes
   that land inside a room over shorter ones that do not, because the short way
   out of a floor is downwards, through the map.
+
+**A `Block` is solid where a room is air**
+([`src/editor/block.rs`](src/editor/block.rs),
+[documentation/blocks.md](documentation/blocks.md)): the map is a sequence of
+volumes in timeline order, and a point is air when the last volume containing
+it is a room, so a block cuts the rooms before it and a room after it tunnels
+back through. It cannot leak — only a room makes air. Where faces coincide the
+later volume owns the face. Anything building from the surface asks
+`MapVolumes` for the volumes in order, never `Query<&Room>`, whose order is
+archetype order; a volume's place is its `VolumeOrder`, a Mirror copy's being
+its source's. `Block` is never a `Room`: everything asking for `&Room` means
+air.
 
 A `Room` is a prism — a floor plan, not necessarily convex and possibly with
 holes, between two heights — and a box is the four-corner case. `EditorRoom`
@@ -2510,7 +2524,7 @@ machine, and things happen in it.
 The core abstraction is `FeatureTrait` in
 [`src/editor/editable.rs`](src/editor/editable.rs) — a `#[typetag::serde]`
 trait object. Implementors today: `GlobalPoint`, `GracklePointLight`,
-`EditorRoom`, `FootprintRoom`, `EditorTrigger`, `SpawnPoint`, `Prop`, `WeaponPickup`,
+`EditorRoom`, `FootprintRoom`, `EditorTrigger`, `EditorBlock`, `SpawnPoint`, `Prop`, `WeaponPickup`,
 `AnimationDisplay`, `AnimationGrid` and `Mirror`.
 
 A feature does not store bare coordinates. It stores `PointRef`s, which are

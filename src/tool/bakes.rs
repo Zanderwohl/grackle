@@ -9,7 +9,8 @@ use crate::common::app_mode::AppMode;
 use bevy_egui::egui;
 use crate::editor::editable::FeatureTag;
 use crate::get;
-use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, Room, RoomSlot};
+use crate::common::world_surface::Volume;
+use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, MapVolumes, Room, RoomSlot, VolumeOrder};
 
 #[derive(Message)]
 pub struct LogECS;
@@ -46,18 +47,18 @@ impl Plugin for BakePlugin {
     }
 }
 
-/// Room meshes rebuilt as the map changes, a few a frame.
+/// Room and block meshes rebuilt as the map changes, a few a frame.
 ///
-/// A room's mesh depends on every room touching it, since each cuts holes in
-/// the other. So a room whose box changed is queued with whatever touched its
-/// old box and whatever touches its new one. The old box is the one seen last
-/// frame rather than the one its mesh was baked from, which a room dragged
-/// before its first bake does not have.
+/// A volume's mesh depends on every volume touching it, since each cuts the
+/// other. So a volume whose box or place changed is queued with whatever
+/// touched its old box and whatever touches its new one. The old box is the
+/// one seen last frame rather than the one its mesh was baked from, which a
+/// room dragged before its first bake does not have.
 #[derive(Resource)]
 pub struct RoomBake {
     auto: bool,
     queue: VecDeque<Entity>,
-    seen: HashMap<Entity, Room>,
+    seen: HashMap<Entity, (Volume, VolumeOrder)>,
     material: Option<Handle<StandardMaterial>>,
 }
 
@@ -114,7 +115,8 @@ impl RoomBake {
 
 /// Inclusive, because a shared wall is an opening too. Engulfing counts,
 /// which `clip_rect` would reject: a few spare rebakes, never a missed one.
-fn touches(a: &Room, b: &Room) -> bool {
+fn touches(a: &Volume, b: &Volume) -> bool {
+    let (a, b) = (&a.shape, &b.shape);
     let ((a_min, a_max), (b_min, b_max)) = (a.bounds(), b.bounds());
     a_min.cmple(b_max).all() && b_min.cmple(a_max).all()
 }
@@ -167,7 +169,7 @@ impl BakePlugin {
     fn bake_room_geometry(
         mut events: MessageReader<CalculateRoomGeometry>,
         mut bake: ResMut<RoomBake>,
-        rooms: Query<(Entity, &Room)>,
+        rooms: MapVolumes,
         existing_bakes: Query<Entity, With<BakedRoomGeometry>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
@@ -182,7 +184,7 @@ impl BakePlugin {
 
     pub(crate) fn auto_bake_rooms(
         mut bake: ResMut<RoomBake>,
-        rooms: Query<(Entity, &Room)>,
+        volumes: MapVolumes,
         bakes: Query<(Entity, &BakedRoomGeometry)>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
@@ -192,26 +194,35 @@ impl BakePlugin {
 
         // Cheap, and outside the budget: a deleted room's walls vanish at once.
         for (entity, baked) in &bakes {
-            if !rooms.contains(baked.room) {
+            if !volumes.contains(baked.room) {
                 commands.entity(entity).despawn();
             }
         }
 
-        let all: Vec<(Entity, &Room)> = rooms.iter().collect();
-        let touching = |b: &Room| all.iter().filter(|(_, r)| touches(r, b)).map(|(e, _)| *e).collect::<Vec<_>>();
+        let unchanged = bake.seen.len() == volumes.entities().count()
+            && volumes.each().all(|(entity, shape, fill, order)| {
+                bake.seen.get(&entity).is_some_and(|(seen, seen_order)| seen.fill == fill && seen.shape == *shape && order == Some(seen_order))
+            });
+        if unchanged && bake.queue.is_empty() { return; }
+
+        let placed = volumes.placed();
+        let touching = |b: &Volume| placed.iter().filter(|(_, v, _)| touches(v, b)).map(|(_, _, e)| *e).collect::<Vec<_>>();
         let mut urgent = Vec::new();
-        for (entity, room) in &all {
+        // Queued in the order the query walks them, so a map loads in the order it was built; only
+        // the shares need the map's order.
+        let by_entity: HashMap<Entity, &(VolumeOrder, Volume, Entity)> = placed.iter().map(|item| (item.2, item)).collect();
+        for (order, volume, entity) in volumes.entities().map(|entity| by_entity[&entity]) {
             match bake.seen.get(entity) {
-                Some(old) if old == *room => continue,
-                Some(old) => urgent.extend(touching(old)),
+                Some((old, old_order)) if old == volume && old_order == order => continue,
+                Some((old, _)) => urgent.extend(touching(old)),
                 None => {}
             }
             urgent.push(*entity);
-            urgent.extend(touching(room));
+            urgent.extend(touching(volume));
         }
-        let gone: Vec<Room> = bake.seen.iter()
-            .filter(|(entity, _)| !rooms.contains(**entity))
-            .map(|(_, room)| room.clone())
+        let gone: Vec<Volume> = bake.seen.iter()
+            .filter(|(entity, _)| !volumes.contains(**entity))
+            .map(|(_, (volume, _))| volume.clone())
             .collect();
         for old in &gone {
             urgent.extend(touching(old));
@@ -219,17 +230,18 @@ impl BakePlugin {
         // Only on a change: rebuilding it every idle frame is a map's worth of clones for nothing.
         if !urgent.is_empty() || !gone.is_empty() {
             bake.jump_the_queue(urgent);
-            bake.seen = all.iter().map(|(e, r)| (*e, (*r).clone())).collect();
+            bake.seen = placed.iter().map(|(order, volume, entity)| (*entity, (volume.clone(), order.clone()))).collect();
         }
 
         if bake.queue.is_empty() { return; }
         let material = bake.material(&mut materials);
         let existing: HashMap<Entity, Entity> = bakes.iter().map(|(bake, baked)| (baked.room, bake)).collect();
+        let (entities, volumes): (Vec<Entity>, Vec<Volume>) = placed.into_iter().map(|(_, volume, entity)| (entity, volume)).unzip();
         let mut done = 0;
         while done < ROOMS_PER_FRAME {
             let Some(entity) = bake.queue.pop_front() else { break };
-            if !rooms.contains(entity) { continue; }
-            bake_one(entity, &all, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);
+            let Some(index) = entities.iter().position(|e| *e == entity) else { continue };
+            bake_one(index, &entities, &volumes, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);
             done += 1;
         }
     }
@@ -240,7 +252,7 @@ impl BakePlugin {
     /// these meshes, so a missed bake is an invisible map, not a fall.
     pub(crate) fn bake_everything_for_the_round(
         mut bake: ResMut<RoomBake>,
-        rooms: Query<(Entity, &Room)>,
+        rooms: MapVolumes,
         existing_bakes: Query<Entity, With<BakedRoomGeometry>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
@@ -297,11 +309,11 @@ impl BakePlugin {
     }
 }
 
-/// Build one mesh per room, its share of the map's surface, all in
+/// Build one mesh per room and block, its share of the map's surface, all in
 /// this frame. Shared by the editor's bake and the round-start bake.
 fn bake_rooms(
     bake: &mut RoomBake,
-    rooms: &Query<(Entity, &Room)>,
+    volumes: &MapVolumes,
     existing_bakes: &Query<Entity, With<BakedRoomGeometry>>,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -312,30 +324,30 @@ fn bake_rooms(
     }
 
     let material = bake.material(materials);
-    let all: Vec<(Entity, &Room)> = rooms.iter().collect();
-
-    for (entity, _) in &all {
-        bake_one(*entity, &all, None, &material, commands, meshes);
-    }
-
+    let placed = volumes.placed();
     bake.queue.clear();
-    bake.seen = all.iter().map(|(e, r)| (*e, (*r).clone())).collect();
-    info!("Baked geometry for {} room(s)", all.len());
+    bake.seen = placed.iter().map(|(order, volume, entity)| (*entity, (volume.clone(), order.clone()))).collect();
+    let (entities, volumes): (Vec<Entity>, Vec<Volume>) = placed.into_iter().map(|(_, volume, entity)| (entity, volume)).unzip();
+
+    for index in 0..entities.len() {
+        bake_one(index, &entities, &volumes, None, &material, commands, meshes);
+    }
+    info!("Baked geometry for {} volume(s)", entities.len());
 }
 
-/// One room's walls against every other room in `all`, rebuilt on `existing`
-/// if it already has a bake.
+/// `volumes[index]`'s share against every other volume, in order, rebuilt on
+/// `existing` if it already has a bake.
 fn bake_one(
-    entity: Entity,
-    all: &[(Entity, &Room)],
+    index: usize,
+    entities: &[Entity],
+    volumes: &[Volume],
     existing: Option<Entity>,
     material: &Handle<StandardMaterial>,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
 ) {
-    let rooms: Vec<Room> = all.iter().map(|(_, r)| (*r).clone()).collect();
-    let index = all.iter().position(|(e, _)| *e == entity).expect("a room is baked against a list it is in");
-    let faces = world_surface::room_share(&rooms, index);
+    let entity = entities[index];
+    let faces = world_surface::share(volumes, index);
     let slots = world_surface::slot_meshes(&faces);
     let geometry = BakedRoomGeometry { room: entity, faces_hash: lightmap::faces_hash(&faces), faces };
     let mut baked = match existing {
@@ -354,10 +366,11 @@ fn bake_one(
     });
 }
 
-/// One room's walls, rebuilt in place when that room is rebaked. Its children are a
+/// One room's or block's walls, rebuilt in place when it is rebaked. Its children are a
 /// [`RoomSlotMesh`] each.
 #[derive(Component)]
 pub struct BakedRoomGeometry {
+    /// The `Room` or `Block` entity.
     pub room: Entity,
     /// What its meshes were built from, kept for the sun bake, which charts them the same way.
     pub faces: Vec<world_surface::Face>,

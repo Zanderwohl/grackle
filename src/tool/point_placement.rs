@@ -12,7 +12,7 @@ use crate::common::app_mode::AppMode;
 use crate::editor::editable::{FeatureId, FeatureTimeline, FeatureTrait, PointRef};
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
-use crate::tool::room::Room;
+use crate::tool::room::MapVolumes;
 use crate::tool::tool_helpers::*;
 use crate::tool::Tools;
 
@@ -102,7 +102,7 @@ impl<F: PlaceablePoint> PointPlacementTool<F> {
         mouse_input: Res<CurrentMouseInput>,
         keys: Res<ButtonInput<KeyCode>>,
         mut features: ResMut<FeatureTimeline>,
-        rooms: Query<&Room>,
+        rooms: MapVolumes,
         mut next_tool: ResMut<NextState<Tools>>,
         egui: Res<EguiWantsInput>,
     ) {

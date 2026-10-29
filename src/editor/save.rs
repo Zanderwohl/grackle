@@ -180,6 +180,7 @@ mod tests {
     use crate::editor::spawn_point::SpawnPoint;
     use crate::editor::weapon_pickup::WeaponPickup;
     use crate::editor::trigger::EditorTrigger;
+    use crate::editor::block::EditorBlock;
     use crate::common::trigger::TriggerEffect;
     use crate::tool::room::Room;
 
@@ -226,6 +227,10 @@ mod tests {
             EditorTrigger::from_room(EditorRoom::from_point_refs(PointRef::absolute(0.0, -9.0, 0.0), PointRef::absolute(9.0, -8.0, 9.0)))
                 .with_effect(TriggerEffect::Kill),
         ));
+        timeline.apply_feature(Box::new(EditorBlock::from_room(EditorRoom::from_min_and_size(
+            PointRef::reference_with_offset(min, 1.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.5, 2.0),
+        ))));
         timeline.apply_feature(Box::new(
             AnimationDisplay::new(4.0, 0.0, -2.0).with_state(AnimationState::PushingWall).with_yaw(1.25),
         ));

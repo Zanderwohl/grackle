@@ -141,6 +141,10 @@ impl EditorRoom {
         (self.resolved_min.min(self.resolved_max), self.resolved_min.max(self.resolved_max))
     }
 
+    pub fn surfaces(&self) -> &RoomSurfaces {
+        &self.surfaces
+    }
+
     pub fn with_surfaces(mut self, surfaces: RoomSurfaces) -> Self {
         self.surfaces = surfaces;
         self

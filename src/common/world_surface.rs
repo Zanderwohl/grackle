@@ -1,15 +1,13 @@
-//! The map's surface: the boundary of the union of its rooms, faces pointing
-//! into the air. What is drawn, what is collided with and what a pick lands on
-//! are all this, so an opening you can see through is one you can walk and
-//! shoot through. See `documentation/collision.md`.
+//! The map's surface: the boundary of its air, faces pointing into it. What is
+//! drawn, what is collided with and what a pick lands on are all this, so an
+//! opening you can see through is one you can walk and shoot through. See
+//! `documentation/collision.md` and `documentation/blocks.md`.
 //!
-//! Each room's share is its own walls with whatever other rooms open up
-//! clipped away, so one room can be rebuilt without the rest. Two rooms
-//! sharing a wall lose it; a room crossing another's wall cuts a hole in it; a
-//! room wholly inside another adds nothing. Where two rooms' faces coincide
-//! facing the same way — floors at one height, overlapping — exactly one
-//! keeps it, by an order on the rooms that does not depend on which is being
-//! rebuilt.
+//! The map is a sequence of [`Volume`]s, rooms of air and blocks of solid,
+//! and a point is air when the last volume containing it is a room. Each
+//! volume's share is its own boundary cut where the air does not change across
+//! it, so one can be rebuilt without the rest. Where two volumes' faces
+//! coincide, the later one owns the face.
 
 use std::cmp::Ordering;
 
@@ -24,39 +22,122 @@ use crate::tool::room::{Room, RoomSlot, MATERIAL_TILE_METERS};
 /// A piece of the map's surface. Walls are made of nothing yet.
 pub type Face = Polygon<()>;
 
-/// The share of the surface that belongs to `rooms[index]`, facing into it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fill {
+    Air,
+    Solid,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Volume {
+    pub shape: Room,
+    pub fill: Fill,
+}
+
+impl Volume {
+    pub fn air(shape: Room) -> Self {
+        Self { shape, fill: Fill::Air }
+    }
+
+    pub fn solid(shape: Room) -> Self {
+        Self { shape, fill: Fill::Solid }
+    }
+}
+
+/// Outside every volume is solid.
+pub fn is_air(volumes: &[Volume], point: Vec3) -> bool {
+    volumes.iter().rev().find(|volume| volume.shape.contains(point)).is_some_and(|volume| volume.fill == Fill::Air)
+}
+
+/// The share of the surface that belongs to `volumes[index]`, facing into the
+/// air: the parts of its boundary on no later volume, where the last earlier
+/// writer outside it has the other fill.
 ///
-/// Cut in coordinates relative to the room's own corner, so the kernel's
+/// Cut in coordinates relative to the volume's own corner, so the kernel's
 /// tolerance is measured against the size of a neighborhood rather than the
 /// distance from the origin.
-pub fn room_share(rooms: &[Room], index: usize) -> Vec<Face> {
-    let room = &rooms[index];
-    let origin = room.bounds().0;
-    let mut faces = room.translated(-origin).solid(());
+pub fn share(volumes: &[Volume], index: usize) -> Vec<Face> {
+    let volume = &volumes[index];
+    let origin = volume.shape.bounds().0;
+    let local = |other: &Volume| other.shape.translated(-origin).solid(());
+    let mut faces = volume.shape.translated(-origin).solid(());
 
-    for (other_index, other) in rooms.iter().enumerate() {
-        if other_index == index || !touching(room, other) {
-            continue;
-        }
-        let owns_shared = precedes(other, other_index, room, index);
-        faces = csg::clip_outside(faces, &other.translated(-origin).solid(()), owns_shared);
+    // A later volume is the last writer on and inside its own boundary.
+    for later in volumes[index + 1..].iter().filter(|other| touching(&volume.shape, &other.shape)) {
+        faces = csg::clip_outside(faces, &local(later), true);
         if faces.is_empty() {
-            break;
+            return faces;
         }
     }
 
-    faces
-        .into_iter()
+    // What lies just outside each piece, from void onwards in order.
+    let (mut outside_air, mut outside_solid) = (Vec::new(), faces);
+    for earlier in volumes[..index].iter().filter(|other| touching(&volume.shape, &other.shape)) {
+        let solid = local(earlier);
+        let (air_in, air_out) = csg::partition(std::mem::take(&mut outside_air), &solid);
+        let (solid_in, solid_out) = csg::partition(std::mem::take(&mut outside_solid), &solid);
+        (outside_air, outside_solid) = (air_out, solid_out);
+        match earlier.fill {
+            Fill::Air => outside_air.extend(air_in.into_iter().chain(solid_in)),
+            Fill::Solid => outside_solid.extend(air_in.into_iter().chain(solid_in)),
+        }
+    }
+
+    let (kept, faces_out_of_it) = match volume.fill {
+        Fill::Air => (outside_solid, false),
+        Fill::Solid => (outside_air, true),
+    };
+    kept.into_iter()
         .map(|mut face| {
-            face.flip();
+            if !faces_out_of_it {
+                face.flip();
+            }
             face.translated(origin)
         })
         .collect()
 }
 
-/// Every room's share, in room order.
+pub fn of_volumes(volumes: &[Volume]) -> Vec<Face> {
+    (0..volumes.len()).flat_map(|index| share(volumes, index)).collect()
+}
+
+/// Volumes at one place — a footprint's rooms, or rooms with no place — go by
+/// box: the lower box, then the earlier in `items`, is later and keeps a face
+/// two of them share, whatever order they arrived in.
+pub fn sort_by_place<K: Ord, T>(items: &mut Vec<(K, Volume, T)>) {
+    let key = |volume: &Volume| {
+        let (min, max) = volume.shape.bounds();
+        [min.x, min.y, min.z, max.x, max.y, max.z]
+    };
+    let mut indexed: Vec<(usize, (K, Volume, T))> = items.drain(..).enumerate().collect();
+    indexed.sort_by(|(a_index, (a_place, a, _)), (b_index, (b_place, b, _))| {
+        let by_box = key(a)
+            .iter()
+            .zip(key(b))
+            .map(|(x, y)| x.total_cmp(&y))
+            .find(|order| *order != Ordering::Equal)
+            .unwrap_or(Ordering::Equal);
+        a_place.cmp(b_place).then_with(|| by_box.then(a_index.cmp(b_index)).reverse())
+    });
+    items.extend(indexed.into_iter().map(|(_, item)| item));
+}
+
+/// With each one's index in `rooms`.
+pub fn in_box_order(rooms: &[Room]) -> (Vec<Volume>, Vec<usize>) {
+    let mut items: Vec<((), Volume, usize)> =
+        rooms.iter().enumerate().map(|(index, room)| ((), Volume::air(room.clone()), index)).collect();
+    sort_by_place(&mut items);
+    items.into_iter().map(|(_, volume, index)| (volume, index)).unzip()
+}
+
+pub fn room_share(rooms: &[Room], index: usize) -> Vec<Face> {
+    let (volumes, order) = in_box_order(rooms);
+    let at = order.iter().position(|&i| i == index).expect("every room is in the order");
+    share(&volumes, at)
+}
+
 pub fn of_rooms(rooms: &[Room]) -> Vec<Face> {
-    (0..rooms.len()).flat_map(|index| room_share(rooms, index)).collect()
+    of_volumes(&in_box_order(rooms).0)
 }
 
 /// Overlapping or meeting, faces and edges included: a room meeting this one
@@ -64,22 +145,6 @@ pub fn of_rooms(rooms: &[Room]) -> Vec<Face> {
 fn touching(a: &Room, b: &Room) -> bool {
     let ((a_min, a_max), (b_min, b_max)) = (a.bounds(), b.bounds());
     (0..3).all(|axis| a_min[axis] <= b_max[axis] && b_min[axis] <= a_max[axis])
-}
-
-/// Which of two rooms keeps a face they share facing the same way: the lower
-/// bounding box, then the lower index for two with the same box.
-fn precedes(a: &Room, a_index: usize, b: &Room, b_index: usize) -> bool {
-    let key = |room: &Room| {
-        let (min, max) = room.bounds();
-        [min.x, min.y, min.z, max.x, max.y, max.z]
-    };
-    let by_box = key(a)
-        .iter()
-        .zip(key(b))
-        .map(|(x, y)| x.total_cmp(&y))
-        .find(|order| *order != Ordering::Equal)
-        .unwrap_or(Ordering::Equal);
-    by_box.then(a_index.cmp(&b_index)) == Ordering::Less
 }
 
 /// Flat-shaded triangles, normals into the room, with mikktspace tangents for a
@@ -347,6 +412,85 @@ mod tests {
         let room = Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0));
         let surface = of_rooms(&[room.clone(), room]);
         assert!((total_area(&surface) - (32.0 + 48.0)).abs() < 1e-3);
+    }
+
+    fn hall() -> Room {
+        Room::new(Vec3::ZERO, Vec3::new(10.0, 3.0, 10.0))
+    }
+
+    /// The air the surface encloses. Faces point into it, so the signed volume
+    /// is negative; a surface with a gap in it measures nothing sensible.
+    fn air_volume(faces: &[Face]) -> f32 {
+        -csg::signed_volume_x6(faces) / 6.0
+    }
+
+    #[test]
+    fn a_block_on_the_floor_has_no_floor_under_it_and_no_bottom() {
+        let volumes = [Volume::air(hall()), Volume::solid(Room::new(Vec3::new(4.0, 0.0, 4.0), Vec3::new(6.0, 1.0, 6.0)))];
+        let room = share(&volumes, 0);
+        assert!((area_facing(&room, Vec3::Y) - 96.0).abs() < 1e-3, "floor {}", area_facing(&room, Vec3::Y));
+        let block = share(&volumes, 1);
+        assert!((area_facing(&block, Vec3::Y) - 4.0).abs() < 1e-3, "the top does not face up out of the block");
+        assert!(area_facing(&block, Vec3::NEG_Y) < 1e-3, "the block kept its bottom");
+        assert!((total_area(&block) - 12.0).abs() < 1e-3);
+        assert!((air_volume(&of_volumes(&volumes)) - 296.0).abs() < 1e-2);
+    }
+
+    #[test]
+    fn a_block_through_a_wall_is_sealed_at_the_wall() {
+        let volumes = [Volume::air(hall()), Volume::solid(Room::new(Vec3::new(8.0, 0.0, 4.0), Vec3::new(12.0, 3.0, 6.0)))];
+        let surface = of_volumes(&volumes);
+        assert!(surface.iter().flat_map(|face| &face.vertices).all(|v| v.x <= 10.0 + 1e-4), "a face outside the hall");
+        assert!((area_facing(&share(&volumes, 1), Vec3::NEG_X) - 6.0).abs() < 1e-3);
+        assert!((air_volume(&surface) - (300.0 - 12.0)).abs() < 1e-2);
+        assert!(!is_air(&volumes, Vec3::new(9.0, 1.0, 5.0)));
+        assert!(is_air(&volumes, Vec3::new(7.0, 1.0, 5.0)));
+    }
+
+    #[test]
+    fn a_room_after_a_block_tunnels_through_it() {
+        let wall = Room::new(Vec3::new(0.0, 0.0, 4.0), Vec3::new(10.0, 3.0, 6.0));
+        let door = Room::new(Vec3::new(2.0, 0.0, 3.0), Vec3::new(3.0, 2.0, 7.0));
+        let walled = [Volume::air(hall()), Volume::solid(wall.clone())];
+        let (t, _) = ray_from_inside(&of_volumes(&walled), &ray(Vec3::new(2.5, 1.0, 1.0), Vec3::Z)).unwrap();
+        assert!((t - 3.0).abs() < 1e-4, "the wall is not there: {t}");
+
+        let volumes = [Volume::air(hall()), Volume::solid(wall), Volume::air(door)];
+        let surface = of_volumes(&volumes);
+        let (t, _) = ray_from_inside(&surface, &ray(Vec3::new(2.5, 1.0, 1.0), Vec3::Z)).unwrap();
+        assert!((t - 9.0).abs() < 1e-4, "the doorway is shut: {t}");
+        let (t, _) = ray_from_inside(&surface, &ray(Vec3::new(5.0, 1.0, 1.0), Vec3::Z)).unwrap();
+        assert!((t - 3.0).abs() < 1e-4, "the wall beside the doorway is gone: {t}");
+        assert!((air_volume(&surface) - (300.0 - 60.0 + 4.0)).abs() < 1e-2);
+        assert!(is_air(&volumes, Vec3::new(2.5, 1.0, 5.0)));
+        assert!(!is_air(&volumes, Vec3::new(2.5, 2.5, 5.0)), "air above the doorway");
+    }
+
+    #[test]
+    fn a_block_before_every_room_is_nothing() {
+        let block = Volume::solid(Room::new(Vec3::splat(2.0), Vec3::splat(5.0)));
+        let volumes = [block, Volume::air(hall())];
+        assert!(share(&volumes, 0).is_empty());
+        assert!((total_area(&share(&volumes, 1)) - 320.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_block_filling_its_room_leaves_no_surface() {
+        let room = Room::new(Vec3::ZERO, Vec3::splat(4.0));
+        assert!(of_volumes(&[Volume::air(room.clone()), Volume::solid(room)]).is_empty());
+        let bigger = Room::new(Vec3::splat(-1.0), Vec3::splat(5.0));
+        assert!(of_volumes(&[Volume::air(Room::new(Vec3::ZERO, Vec3::splat(4.0))), Volume::solid(bigger)]).is_empty());
+    }
+
+    /// Three of the block's faces coincide with the hall's, all facing the
+    /// same way: neither keeps them.
+    #[test]
+    fn a_block_flush_in_a_corner_shows_two_faces() {
+        let volumes = [Volume::air(hall()), Volume::solid(Room::new(Vec3::new(8.0, 0.0, 8.0), Vec3::new(10.0, 3.0, 10.0)))];
+        assert!((total_area(&share(&volumes, 1)) - 12.0).abs() < 1e-3);
+        let surface = of_volumes(&volumes);
+        assert!((total_area(&surface) - (96.0 + 96.0 + 108.0 + 12.0)).abs() < 1e-3, "area {}", total_area(&surface));
+        assert!((air_volume(&surface) - 288.0).abs() < 1e-2);
     }
 
     /// `f32` spacing is about 1.5e-5 m here; the kernel's tolerance is 1e-5.

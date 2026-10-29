@@ -7,7 +7,7 @@ mod rounded;
 
 use bevy::prelude::*;
 
-use crate::common::world_surface::{self, Face};
+use crate::common::world_surface::{self, Face, Volume};
 use crate::prop::archetype::RoundedBox;
 use crate::tool::room::Room;
 use crate::common::grid::Grid;
@@ -28,26 +28,101 @@ const SKIN: f32 = 0.001;
 pub struct CollisionWorld {
     hulls: Vec<Hull>,
     grid: Grid,
-    /// The rooms' volumes. [`CollisionWorld::depenetrate`] needs them to tell
-    /// which way out of a wall is into the level.
-    interiors: Vec<Room>,
+    /// The map's rooms and blocks, in order. [`CollisionWorld::depenetrate`]
+    /// needs them to tell which way out of a wall is into the level.
+    volumes: Vec<Volume>,
     /// Placed props that block movement. Kept apart from `hulls` because they
     /// are rebuilt on a different trigger: rooms change with the map, props
     /// with what the authority has standing.
     pub props: Vec<RoundedBox>,
 }
 
+fn face_bounds(face: &Face) -> (Vec3, Vec3) {
+    let min = face.vertices.iter().copied().fold(Vec3::INFINITY, Vec3::min);
+    let max = face.vertices.iter().copied().fold(Vec3::NEG_INFINITY, Vec3::max);
+    (min, max)
+}
+
+/// The prism a face sweeps back, without its back plane: (outward normal,
+/// reach), the face's own plane first.
+fn prism(face: &Face) -> Vec<(Vec3, f32)> {
+    let n = face.plane.normal;
+    let count = face.vertices.len();
+    let mut planes = vec![(n, n.dot(face.vertices[0]))];
+    planes.extend((0..count).filter_map(|i| {
+        let (a, b) = (face.vertices[i], face.vertices[(i + 1) % count]);
+        let out = (b - a).cross(n).try_normalize()?;
+        Some((out, out.dot(a)))
+    }));
+    planes
+}
+
+/// How far behind the face the nearest part of `other` inside its `prism`
+/// lies, at most `depth`: every face bounds air, so the solid ends there.
+/// Strictly inside, by `INSIDE`, or a neighbor sharing an edge or a plane
+/// would thin a slab to nothing.
+fn depth_behind(prism: &[(Vec3, f32)], other: &Face, depth: f32) -> f32 {
+    const INSIDE: f32 = 1.0e-4;
+    let (n, front) = prism[0];
+    let mut kept = other.vertices.clone();
+    for (normal, reach) in prism.iter().copied().chain([(-n, depth - front)]) {
+        kept = clip(&kept, normal, reach - INSIDE);
+        if kept.is_empty() {
+            return depth;
+        }
+    }
+    kept.iter().map(|v| front - n.dot(*v)).fold(depth, f32::min)
+}
+
+/// The part of a convex polygon where `normal · x <= reach`.
+fn clip(polygon: &[Vec3], normal: Vec3, reach: f32) -> Vec<Vec3> {
+    let mut kept = Vec::with_capacity(polygon.len() + 1);
+    for (i, &a) in polygon.iter().enumerate() {
+        let b = polygon[(i + 1) % polygon.len()];
+        let (da, db) = (normal.dot(a) - reach, normal.dot(b) - reach);
+        if da <= 0.0 {
+            kept.push(a);
+        }
+        if (da < 0.0) != (db < 0.0) && da != db {
+            kept.push(a + (b - a) * (da / (da - db)));
+        }
+    }
+    kept
+}
+
 impl CollisionWorld {
-    /// The rooms' volumes, and the surface they make — the same one that is
-    /// drawn — as the walls.
-    pub fn rebuild(&mut self, rooms: &[Room]) {
-        self.interiors = rooms.to_vec();
-        self.set_surface(&world_surface::of_rooms(rooms));
+    /// The walls are the same surface that is drawn.
+    pub fn rebuild_volumes(&mut self, volumes: &[Volume]) {
+        self.volumes = volumes.to_vec();
+        self.set_surface(&world_surface::of_volumes(volumes));
     }
 
-    /// Each face of the surface stood out into the solid behind it as a hull.
+    pub fn rebuild(&mut self, rooms: &[Room]) {
+        self.rebuild_volumes(&world_surface::in_box_order(rooms).0);
+    }
+
+    /// Each face of the surface stood out into the solid behind it as a hull,
+    /// never further than that solid goes: a slab through a thin block or a
+    /// thin floor would stand out into the air on its far side.
     pub fn set_surface(&mut self, faces: &[Face]) {
-        self.set_hulls(faces.iter().map(|face| Hull::slab(&face.vertices, face.plane.normal, WALL_THICKNESS)).collect());
+        let grid = Grid::build(faces.iter().map(face_bounds));
+        let hulls = faces
+            .iter()
+            .enumerate()
+            .map(|(index, face)| {
+                let (min, max) = face_bounds(face);
+                let behind = -face.plane.normal * WALL_THICKNESS;
+                let others = grid.near(min.min(min + behind), max.max(max + behind)).into_iter().filter(|other| *other as usize != index);
+                let prism = prism(face);
+                let depth = others.fold(WALL_THICKNESS, |depth, other| depth.min(depth_behind(&prism, &faces[other as usize], depth)));
+                Hull::slab(&face.vertices, face.plane.normal, depth)
+            })
+            .collect();
+        self.set_hulls(hulls);
+    }
+
+    pub fn volumes(&self) -> &[Volume] {
+        &self.volumes
     }
 
     /// Replace the static world, leaving the room interiors as they were.
@@ -153,7 +228,7 @@ impl CollisionWorld {
     }
 
     pub fn inside_map(&self, point: Vec3) -> bool {
-        self.interiors.iter().any(|room| room.contains(point))
+        world_surface::is_air(&self.volumes, point)
     }
 
     /// Whether a body stands clear: in the map and touching no wall. A low
@@ -346,6 +421,33 @@ mod tests {
 
         assert!(touched_on(&touched, Vec3::Y));
         assert!((end.y - HALF.y).abs() < 0.01, "landed at {}", end.y);
+    }
+
+    /// Breaks if a slab stands out further than the solid behind it: the
+    /// near face's slab would reach 0.3 m past the far face of the block.
+    #[test]
+    fn a_thin_blocks_walls_stand_no_further_than_the_block() {
+        let mut world = CollisionWorld::default();
+        world.rebuild_volumes(&[
+            Volume::air(Room::new(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 4.0, 5.0))),
+            Volume::solid(Room::new(Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.2, 4.0, 5.0))),
+        ]);
+        let ray = Ray3d::new(Vec3::new(-2.0, 1.0, 0.0), Dir3::X);
+        assert!((world.ray_distance(&ray, 10.0).unwrap() - 2.0).abs() < 1e-3, "the block is not there");
+        assert!(world.fits(Vec3::new(0.2 + HALF.x + 0.01, HALF.y + 0.01, 0.0), HALF), "beyond the block is walled");
+        assert!(world.fits(Vec3::new(-HALF.x - 0.01, HALF.y + 0.01, 0.0), HALF), "before the block is walled");
+    }
+
+    /// The same for rooms: a floor 0.2 m thick between two stacked rooms.
+    #[test]
+    fn a_thin_floor_does_not_stand_up_into_the_room_above() {
+        let mut world = CollisionWorld::default();
+        world.rebuild(&[
+            Room::new(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 3.0, 5.0)),
+            Room::new(Vec3::new(-5.0, 3.2, -5.0), Vec3::new(5.0, 6.2, 5.0)),
+        ]);
+        assert!(world.fits(Vec3::new(0.0, 3.2 + HALF.y + 0.01, 0.0), HALF));
+        assert!(world.fits(Vec3::new(0.0, 3.0 - HALF.y - 0.01, 0.0), HALF));
     }
 
     /// Breaks if the test stops being swept: the body lands past the slab,

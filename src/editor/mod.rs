@@ -16,3 +16,5 @@ pub mod weapon_pickup;
 pub mod spawn_point;
 pub mod mirror;
 pub mod trigger;
+pub mod block;
+pub mod volume_order;

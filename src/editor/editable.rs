@@ -57,6 +57,7 @@ impl Plugin for EditorStepsPlugin {
                 FeatureTimeline::sync_entities,
                 FeatureTimeline::handle_edits,
                 assign_sides,
+                crate::editor::volume_order::place_volumes,
                 FeatureTimeline::draw_affected_gizmos.run_if(in_state(AppMode::Editor)),
                 checkpoint_when_idle.run_if(in_state(AppMode::Editor)).run_if(crate::common::net::has_authority),
             ).chain())
@@ -181,6 +182,11 @@ pub trait FeatureTrait: Send + Sync {
     /// Asked by picking, which works from features rather than entities.
     fn rooms(&self) -> Vec<crate::tool::room::Room> { Vec::new() }
 
+    /// Its rooms and blocks, for the same picking.
+    fn volumes(&self) -> Vec<crate::common::world_surface::Volume> {
+        self.rooms().into_iter().map(crate::common::world_surface::Volume::air).collect()
+    }
+
     /// The footprint this feature is, for the tools that edit a footprint's
     /// own drawing. Two methods rather than a downcast because a typetag
     /// trait object has no `Any`.
@@ -189,7 +195,7 @@ pub trait FeatureTrait: Send + Sync {
 
     /// What this feature stands in the world beyond itself, as features: a Mirror's copies, and
     /// theirs where a copy is itself a Mirror.
-    fn standing_copies(&self) -> Vec<&dyn FeatureTrait> { Vec::new() }
+    fn standing_copies(&self) -> Vec<crate::editor::mirror::StandingCopy<'_>> { Vec::new() }
 
     /// So a rebuilt copy of a Mirror can take over its predecessor's entities. A typetag trait
     /// object has no `Any` to downcast through.
@@ -1165,7 +1171,7 @@ impl FeatureTimeline {
             if let Some(feature) = features.features.get(id) {
                 feature.object.debug_gizmos(&mut gizmos);
                 for copy in feature.object.standing_copies() {
-                    copy.debug_gizmos(&mut gizmos);
+                    copy.object.debug_gizmos(&mut gizmos);
                 }
             }
         }

@@ -12,7 +12,6 @@ use crate::common::team::{Side, Team};
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{fallback_spawn, usable_spawns, Spawn};
-use crate::tool::room::Room;
 
 /// Who somebody is, kept across deaths so a respawn is the same player on the
 /// same team. Never on a body: in [`OurIdentity`] for this machine (dropped
@@ -70,7 +69,7 @@ pub fn team_name(team: Option<Team>) -> String {
 /// Where to put a body: a usable spawn point on its team's side uniformly at
 /// random, else the largest room. With no team, any spawn. The one choice for
 /// first spawns and respawns alike.
-pub fn choose_spawn(placed: &[Spawn], team: Option<Team>, collision: &CollisionWorld, rooms: &[Room]) -> Spawn {
+pub fn choose_spawn(placed: &[Spawn], team: Option<Team>, collision: &CollisionWorld) -> Spawn {
     // Sides are chosen before headroom, so a team whose own spawns are all
     // blocked falls back to the largest room rather than into the enemy base.
     let pool = preferred(placed, team);
@@ -88,7 +87,7 @@ pub fn choose_spawn(placed: &[Spawn], team: Option<Team>, collision: &CollisionW
         Some(spawn) => *spawn,
         None => {
             warn!("No usable spawn point for {}; falling back to the largest room", team_name(team));
-            fallback_spawn(rooms)
+            fallback_spawn(collision)
         }
     }
 }
