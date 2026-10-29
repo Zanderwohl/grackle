@@ -2,7 +2,7 @@ use bevy::app::App;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use strum_macros::{Display, EnumIter};
-use crate::common::toolbar::{self, Joins};
+use crate::common::toolbar::{self, Joins, Segment};
 use crate::get;
 use crate::tool::animation_display::AnimationDisplayPlugin;
 use crate::tool::animation_grid::AnimationGridPlugin;
@@ -164,20 +164,18 @@ impl Tools {
                         }
                     }
                     ToolGroup::Split(id, tools) => {
-                        let labels: Vec<String> = tools.iter().map(Tools::name).collect();
                         let active = tools.iter().position(|tool| tool == current);
-                        if let Some(index) = toolbar::split_button(ui, id, &labels, active, Joins::NONE) {
+                        let label = |index: usize| tools[index].name();
+                        if let Some(index) = toolbar::split_button(ui, id, tools.len(), label, active, Joins::NONE) {
                             chosen = Some(tools[index].clone());
                         }
                     }
-                    ToolGroup::Cluster(tools) => toolbar::cluster(ui, |ui| {
-                        for (index, tool) in tools.iter().enumerate() {
-                            let joins = Joins::in_run(index, tools.len());
-                            if toolbar::button(ui, tool.name(), current == tool, joins).clicked() {
-                                chosen = Some(tool.clone());
-                            }
+                    ToolGroup::Cluster(tools) => {
+                        let segments = tools.iter().map(|tool| Segment::new(tool.name()).selected(current == tool));
+                        if let Some(index) = toolbar::clicked(&toolbar::joined(ui, segments)) {
+                            chosen = Some(tools[index].clone());
                         }
-                    }),
+                    }
                 }
             }
         });

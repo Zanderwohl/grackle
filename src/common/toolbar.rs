@@ -17,7 +17,6 @@ const SEAM: f32 = 1.0;
 const ARROW_WIDTH: f32 = 16.0;
 
 pub const PLACEHOLDER_ICON: &str = "□";
-const ARROW: &str = "⏷";
 
 /// Which of a button's sides it shares with a neighbor. A shared side is
 /// squared off; the rest keep the theme's rounding.
@@ -95,32 +94,76 @@ pub fn button_enabled(
     )
 }
 
-/// One button standing for a family of tools, with a narrow arrow beside it
-/// listing the rest. The button is the last one used — first `labels[0]`, and
+/// One button of a [`joined`] run.
+pub struct Segment {
+    pub label: String,
+    pub selected: bool,
+    pub enabled: bool,
+}
+
+impl Segment {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self { label: label.into(), selected: false, enabled: true }
+    }
+
+    pub fn selected(self, selected: bool) -> Self {
+        Self { selected, ..self }
+    }
+
+    pub fn enabled(self, enabled: bool) -> Self {
+        Self { enabled, ..self }
+    }
+}
+
+/// A [`cluster`] of `segments`, each joined to its neighbors.
+pub fn joined(ui: &mut Ui, segments: impl IntoIterator<Item = Segment>) -> Vec<egui::Response> {
+    let segments: Vec<Segment> = segments.into_iter().collect();
+    let len = segments.len();
+    cluster(ui, |ui| {
+        segments
+            .into_iter()
+            .enumerate()
+            .map(|(index, segment)| {
+                button_enabled(ui, segment.enabled, segment.label, segment.selected, Joins::in_run(index, len))
+            })
+            .collect()
+    })
+}
+
+/// Which of `responses` was clicked.
+pub fn clicked(responses: &[egui::Response]) -> Option<usize> {
+    responses.iter().position(egui::Response::clicked)
+}
+
+/// One button standing for a family of `len` tools, with a narrow arrow beside
+/// it listing the rest. The button is the last one used — first index 0, and
 /// whichever is `active` while one is — and picking from the list makes that
-/// one the button. Returns the index clicked, from either half.
+/// one the button. Returns the index clicked, from either half. `label` is
+/// asked only for what is drawn.
 ///
-/// `id_salt` must be unique in the `Ui`: the last-used choice is kept under it.
+/// `id_salt` must be unique across the whole context, not only the `Ui`: the
+/// last-used choice is kept under it, so moving the toolbar does not forget it.
 pub fn split_button(
     ui: &mut Ui,
     id_salt: &str,
-    labels: &[String],
+    len: usize,
+    label: impl Fn(usize) -> String,
     active: Option<usize>,
     joins: Joins,
 ) -> Option<usize> {
-    if labels.is_empty() {
+    if len == 0 {
         return None;
     }
-    let id = ui.make_persistent_id(id_salt);
+    let id = egui::Id::new(("toolbar_split", id_salt));
     let remembered = ui.data(|data| data.get_temp::<usize>(id));
-    let shown = active.or(remembered).filter(|&index| index < labels.len()).unwrap_or(0);
+    let shown = shown(active, remembered, len);
     if active.is_some() && active != remembered {
         ui.data_mut(|data| data.insert_temp(id, shown));
     }
 
     let mut chosen = None;
     cluster(ui, |ui| {
-        let main = button(ui, labels[shown].clone(), active.is_some(), Joins { left: joins.left, right: true });
+        let main = button(ui, label(shown), active.is_some(), Joins { left: joins.left, right: true });
         if main.clicked() {
             chosen = Some(shown);
         }
@@ -129,21 +172,20 @@ pub fn split_button(
         let popup_id = id.with("list");
         let open = Popup::is_id_open(ui.ctx(), popup_id);
         let arrow = ui.add(
-            egui::Button::new(ARROW)
+            egui::Button::new("")
                 .selected(active.is_some() || open)
                 .min_size(egui::vec2(ARROW_WIDTH, BUTTON_HEIGHT))
                 .corner_radius(Joins { left: true, right: joins.right }.corners(rounded)),
         );
+        paint_arrow(ui, &arrow);
         Popup::menu(&arrow)
             .id(popup_id)
             .anchor(main.rect.union(arrow.rect))
             .align(RectAlign::BOTTOM_START)
             .show(|ui| {
-                for (index, label) in labels.iter().enumerate() {
-                    if ui
-                        .add(egui::Button::new((PLACEHOLDER_ICON, label.as_str())).selected(active == Some(index)))
-                        .clicked()
-                    {
+                for index in 0..len {
+                    let entry = egui::Button::new((PLACEHOLDER_ICON, label(index))).selected(active == Some(index));
+                    if ui.add(entry).clicked() {
                         chosen = Some(index);
                     }
                 }
@@ -154,6 +196,23 @@ pub fn split_button(
         ui.data_mut(|data| data.insert_temp(id, index));
     }
     chosen
+}
+
+fn shown(active: Option<usize>, remembered: Option<usize>, len: usize) -> usize {
+    active.or(remembered).filter(|&index| index < len).unwrap_or(0)
+}
+
+/// Painted rather than a glyph, so it does not depend on what fonts a pack ships.
+fn paint_arrow(ui: &Ui, arrow: &egui::Response) {
+    let color = ui.style().interact(arrow).fg_stroke.color;
+    let center = arrow.rect.center();
+    let half = ARROW_WIDTH * 0.2;
+    let points = vec![
+        center + egui::vec2(-half, -half * 0.5),
+        center + egui::vec2(half, -half * 0.5),
+        center + egui::vec2(0.0, half * 0.5),
+    ];
+    ui.painter().add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
 }
 
 #[cfg(test)]
@@ -172,5 +231,28 @@ mod tests {
     fn a_shared_edge_is_square_and_the_rest_keep_their_rounding() {
         let corners = Joins::LEFT.corners(CornerRadius::same(4));
         assert_eq!((corners.nw, corners.sw, corners.ne, corners.se), (0, 0, 4, 4));
+    }
+
+    #[test]
+    fn a_split_button_shows_the_active_one_then_the_last_used_then_the_first() {
+        assert_eq!(shown(None, None, 3), 0);
+        assert_eq!(shown(None, Some(2), 3), 2);
+        assert_eq!(shown(Some(1), Some(2), 3), 1);
+        assert_eq!(shown(None, Some(5), 3), 0);
+    }
+
+    #[test]
+    fn a_split_button_remembers_the_one_that_was_active() {
+        let ctx = egui::Context::default();
+        let frame = |active: Option<usize>| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                split_button(ui, "test", 3, |index| index.to_string(), active, Joins::NONE);
+            });
+            output.textures_delta.clear();
+        };
+        frame(Some(2));
+        frame(None);
+        let id = egui::Id::new(("toolbar_split", "test"));
+        assert_eq!(ctx.data(|data| data.get_temp::<usize>(id)), Some(2));
     }
 }
