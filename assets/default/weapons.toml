@@ -91,6 +91,31 @@ magazine = { clip = 4, reserve = 16, reload = 0.6, reload_one_at_a_time = true }
 primary = { cadence = { kind = "semi", interval = 0.6 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 23.0, gravity_factor = 1.0, air_resistance = 0.1, spin_rate = 12.0, max_bounces = 2, restitution = 0.45, max_lifetime = 2.3, explodes_at_last_bounce = true, explodes_at_lifetime_end = true, explosion_radius = 3.4, damage_direct_hit = 100, damage_splash = 60, knockback = 10.0, radius = 0.14 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
+# Weak and quick, for finishing what something else started. Eight in the
+# clip, thirty-two in all. No headshot bonus: that is the laser rifle's.
+[weapons.pistol]
+name_key = "weapon.names.pistol"
+bucket = 2
+deploy = 0.35
+model = "pistol"
+magazine = { clip = 8, reserve = 24, reload = 1.1 }
+primary = { cadence = { kind = "semi", interval = 0.33 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 120.0, damage = 15, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.35 } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
+
+# Nine pellets in a fixed 3×3 square that is a meter wide at thirty meters,
+# seven apiece, so 63 at point blank and less the further the square opens past
+# a body. `reload` is per shell. `kill_shove` throws the body back off its feet,
+# but only on the shot that kills it: meters per second along the aim, `lift`
+# straight up on top, over `radius` meters around the hit.
+[weapons.shotgun]
+name_key = "weapon.names.shotgun"
+bucket = 1
+deploy = 0.5
+model = "shotgun"
+magazine = { clip = 6, reserve = 32, reload = 0.625, reload_one_at_a_time = true }
+primary = { cadence = { kind = "semi", interval = 0.625 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 100.0, damage = 7, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.3, pellets = { across = 3, spread = 30.0 }, kill_shove = { speed = 10.0, lift = 3.0, radius = 1.2 } } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
+
 # No clip: the whole supply is loaded, and it never reloads.
 [weapons.flamethrower]
 name_key = "weapon.names.flamethrower"

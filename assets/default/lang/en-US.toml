@@ -258,6 +258,8 @@ pill_launcher = "Pill Launcher"
 rpg = "RPG"
 flamethrower = "Flamethrower"
 medi_wrench = "Medi-Wrench"
+pistol = "Pistol"
+shotgun = "Shotgun"
 
 [weapon.slots]
 primary = "Primary"

@@ -29,6 +29,7 @@ pub fn suicide(
                 amount: SUICIDE_DAMAGE,
                 point: placed.translation(),
                 from: None,
+                kill_shove: None,
             });
         }
     }

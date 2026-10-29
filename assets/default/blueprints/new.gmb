@@ -13,6 +13,10 @@ Blueprint(
             roles: {},
         ),
         sky: Day,
+        sun: SunPosition(
+            altitude: 50.0,
+            azimuth: 135.0,
+        ),
     ),
     next_id: 4,
     features: [

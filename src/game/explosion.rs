@@ -85,7 +85,7 @@ pub fn explode(
         if let Some((target, worth)) = blast.direct
             && !bodies.contains(target)
         {
-            damage.write(Damage { target, source: blast.source, amount: worth, point: blast.at, from: Some(blast.at) });
+            damage.write(Damage { target, source: blast.source, amount: worth, point: blast.at, from: Some(blast.at), kill_shove: None });
         }
 
         for (entity, boxes, impulse, stance, player) in &mut bodies {
@@ -124,6 +124,7 @@ pub fn explode(
                 // where it struck.
                 point: if direct.is_some() { blast.at } else { center },
                 from: Some(blast.at),
+                kill_shove: None,
             });
         }
 

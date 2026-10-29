@@ -111,7 +111,7 @@ mod tests {
             magazine: Magazine { clip: Some(4), reserve: 8, reload: RELOAD_SECONDS, reload_one_at_a_time: false },
         });
         let mut loadout = Loadout::default();
-        loadout.set(Slot::Primary, SlotChoices { permitted: vec![id], default: id });
+        loadout.set(Slot::Primary, SlotChoices { permitted: vec![id], default: Some(id) });
         catalog.set_loadout(Class::Mercenary, loadout);
         let (equipped, ammo) = catalog.starting_equipment(Class::Mercenary, None);
         world.insert_resource(catalog);

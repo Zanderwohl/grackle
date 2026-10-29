@@ -204,7 +204,7 @@ mod tests {
             magazine: Magazine { clip: Some(4), reserve: 8, reload: 1.0, reload_one_at_a_time: false },
         });
         let mut loadout = Loadout::default();
-        loadout.set(Slot::Primary, SlotChoices { permitted: vec![id], default: id });
+        loadout.set(Slot::Primary, SlotChoices { permitted: vec![id], default: Some(id) });
         catalog.set_loadout(Class::Mercenary, loadout);
         let (equipped, mut ammo) = catalog.starting_equipment(Class::Mercenary, None);
         ammo.at_mut(id).clip = clip;

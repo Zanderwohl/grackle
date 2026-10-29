@@ -23,8 +23,12 @@ Blueprint(
             },
         ),
         sky: Day,
+        sun: SunPosition(
+            altitude: 50.0,
+            azimuth: 135.0,
+        ),
     ),
-    next_id: 17,
+    next_id: 19,
     features: [
         Feature(
             id: FeatureId(
@@ -221,6 +225,29 @@ Blueprint(
                             _id: 2,
                         )),
                         point_key: "bottom_right_edge_center",
+                        x: Relative(-10.0),
+                        y: Relative(0.0),
+                        z: Relative(1.5),
+                    ),
+                    yaw: 1.5707964,
+                    weapon: "shotgun",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 10,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 2,
+                        )),
+                        point_key: "bottom_right_edge_center",
                         x: Relative(-6.0),
                         y: Relative(0.0),
                         z: Relative(1.5),
@@ -235,7 +262,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 10,
+                _id: 11,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -258,7 +285,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 11,
+                _id: 12,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -281,7 +308,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 12,
+                _id: 13,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -304,7 +331,30 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 13,
+                _id: 14,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 2,
+                        )),
+                        point_key: "bottom_right_edge_center",
+                        x: Relative(10.0),
+                        y: Relative(0.0),
+                        z: Relative(1.5),
+                    ),
+                    yaw: 1.5707964,
+                    weapon: "pistol",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 15,
             ),
             object: {
                 "editor_room": EditorRoom(
@@ -335,13 +385,13 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 14,
+                _id: 16,
             ),
             object: {
                 "spawn_point": SpawnPoint(
                     location: PointRef(
                         reference: Some(FeatureId(
-                            _id: 13,
+                            _id: 15,
                         )),
                         point_key: "bottom_plane_center",
                         x: Relative(0.0),
@@ -354,13 +404,13 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 15,
+                _id: 17,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
                     location: PointRef(
                         reference: Some(FeatureId(
-                            _id: 13,
+                            _id: 15,
                         )),
                         point_key: "bottom_plane_center",
                         x: Relative(0.0),
@@ -375,7 +425,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 16,
+                _id: 18,
             ),
             object: {
                 "mirror": Mirror(
@@ -391,13 +441,13 @@ Blueprint(
                     symmetry: MirrorX,
                     sources: [
                         FeatureId(
-                            _id: 13,
-                        ),
-                        FeatureId(
-                            _id: 14,
-                        ),
-                        FeatureId(
                             _id: 15,
+                        ),
+                        FeatureId(
+                            _id: 16,
+                        ),
+                        FeatureId(
+                            _id: 17,
                         ),
                     ],
                     teams: (Red, Blue),

@@ -49,6 +49,53 @@ pub struct HitscanSpec {
     pub shove_per_damage: f32,
     #[serde(rename = "shove_radius")]
     pub shove_radius_m: f32,
+    /// `None` is one bullet down the aim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pellets: Option<PelletGrid>,
+    /// Thrown at the body only by the shot that kills it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kill_shove: Option<KillShoveSpec>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+pub struct KillShoveSpec {
+    /// Meters per second along the aim, at the hit.
+    pub speed: f32,
+    /// Up on top of `speed`, in meters per second, so the body leaves the floor
+    /// rather than sliding along it.
+    #[serde(default)]
+    pub lift: f32,
+    /// Wide enough to take in most of the body, so it goes as one.
+    #[serde(rename = "radius")]
+    pub radius_m: f32,
+}
+
+/// A square of pellets, the same every shot: an RNG spread cannot be
+/// reconciled, and a fixed pattern is one a player can learn.
+#[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+pub struct PelletGrid {
+    /// Pellets along each side, so 3 is nine.
+    pub across: u32,
+    /// Meters traveled per meter of pattern width, corner pellet to corner
+    /// pellet: 30 is a square one meter wide at thirty meters.
+    pub spread: f32,
+}
+
+impl PelletGrid {
+    /// Each pellet's offset from the aim, in meters across per meter ahead.
+    pub fn offsets(&self) -> Vec<Vec2> {
+        let across = self.across.max(1);
+        let width = if across > 1 && self.spread > 0.0 { 1.0 / self.spread } else { 0.0 };
+        let step = if across > 1 { width / (across - 1) as f32 } else { 0.0 };
+        let start = -width / 2.0;
+        (0..across)
+            .flat_map(|row| {
+                (0..across).map(move |column| {
+                    Vec2::new(start + column as f32 * step, start + row as f32 * step)
+                })
+            })
+            .collect()
+    }
 }
 
 /// Stub.
@@ -358,8 +405,9 @@ impl Ammo {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SlotChoices {
     pub permitted: Vec<WeaponId>,
-    /// Validated at load to be one of `permitted`.
-    pub default: WeaponId,
+    /// Validated at load to be one of `permitted`. `None` starts the slot
+    /// empty, while a mode's loadout may still fill it.
+    pub default: Option<WeaponId>,
 }
 
 /// A list rather than a `HashMap`, whose iteration order would make equal
@@ -451,7 +499,7 @@ impl WeaponCatalog {
         for slot in Slot::ALL {
             let Some(choices) = loadout.at(slot) else { continue };
             let chosen = match only {
-                None => Some(choices.default),
+                None => choices.default,
                 Some(only) => only.iter().copied().find(|id| choices.permitted.contains(id)),
             };
             let Some(weapon) = chosen.and_then(|id| self.get(id)) else { continue };
