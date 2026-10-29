@@ -103,6 +103,10 @@ impl FeatureTrait for GracklePointLight {
         vec![("".into(), self.resolved_location)]
     }
 
+    fn point_refs(&self) -> Vec<&PointRef> {
+        vec![&self.location]
+    }
+
     fn get_point_ref(&self, _key: &str) -> Option<&PointRef> {
         Some(&self.location)
     }

@@ -56,7 +56,7 @@ pub mod shortcuts;
 pub mod reorder;
 pub mod trigger;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointResolutionError {
     NoSuchPoint,
     NoSuchReferent,
