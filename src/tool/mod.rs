@@ -24,6 +24,7 @@ use crate::tool::selection::SelectionPlugin;
 use crate::tool::show::ShowPlugin;
 
 pub mod selection;
+pub mod bake_progress;
 pub mod point;
 pub mod spawn_point;
 pub mod point_light;
