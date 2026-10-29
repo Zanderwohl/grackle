@@ -1,7 +1,6 @@
-//! Solid where a room is air: a box that cuts the rooms before it in the
-//! map's order (`documentation/blocks.md`). Its box is a room's — corners,
-//! handles, anchoring, materials — but it stands up a [`Block`], never a
-//! [`Room`], so it is never asked for `rooms`.
+//! A box of solid that cuts the rooms before it in the map's order
+//! (`documentation/blocks.md`). It stands up a [`Block`], never a [`Room`],
+//! so it is never asked for `rooms`.
 //!
 //! [`Room`]: crate::tool::room::Room
 

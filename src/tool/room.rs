@@ -952,8 +952,7 @@ pub struct Block(pub Room);
 
 /// Where a room or block stands in the map's order: the place of the feature
 /// it comes from, then which Mirror image of it, innermost first. Compared as a
-/// list, so an original comes before its copies. A volume without one comes
-/// first.
+/// list, so an original comes before its copies.
 #[derive(Component, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VolumeOrder(pub Vec<u32>);
 
@@ -965,8 +964,7 @@ pub struct MapVolumes<'w, 's> {
 }
 
 impl MapVolumes<'_, '_> {
-    /// In the map's order, as [`world_surface::share`] wants them, with their places.
-    /// A volume not yet placed goes last rather than vanishing under the rest.
+    /// In the map's order. A volume not yet placed goes last rather than vanishing under the rest.
     pub fn placed(&self) -> Vec<(VolumeOrder, Volume, Entity)> {
         let order = |order: Option<&VolumeOrder>| order.cloned().unwrap_or_else(|| VolumeOrder(vec![u32::MAX]));
         let rooms = self.rooms.iter().map(|(entity, room, place)| (order(place), Volume::air(room.clone()), entity));

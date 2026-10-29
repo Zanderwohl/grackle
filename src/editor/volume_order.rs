@@ -14,7 +14,6 @@ pub fn place(position: usize, images: &[usize]) -> VolumeOrder {
     VolumeOrder(std::iter::once(position).chain(images.iter().copied()).map(|n| n as u32).collect())
 }
 
-/// Each feature's place in the timeline, by id.
 pub fn positions(timeline: &FeatureTimeline) -> HashMap<FeatureId, usize> {
     timeline.feature_order().iter().enumerate().map(|(position, id)| (*id, position)).collect()
 }

@@ -339,12 +339,9 @@ pub fn usable_spawns(spawns: &[Spawn], world: &CollisionWorld) -> Vec<Spawn> {
         .collect()
 }
 
-/// Stand the player up in the largest room on the map, somewhere a body fits.
-///
-/// The fallback for a map with no usable spawn point. Largest by volume is a
-/// crude guess at the main space, and beats refusing to start. A block may
-/// stand on a room's middle, so each room is searched outward from it, then
-/// the next largest; a map with nowhere to stand gets the largest's middle.
+/// For a map with no usable spawn point: somewhere a body fits in the largest
+/// room, a crude guess at the main space. A block may stand on a room's
+/// middle, so each room is searched outward from it, then the next largest.
 pub fn fallback_spawn(world: &CollisionWorld) -> Spawn {
     /// Meters between the floor points tried.
     const STEP: f32 = 0.5;

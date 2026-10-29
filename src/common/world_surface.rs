@@ -28,7 +28,6 @@ pub enum Fill {
     Solid,
 }
 
-/// A prism of air or of solid, at its place in the map's order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Volume {
     pub shape: Room,
@@ -45,8 +44,7 @@ impl Volume {
     }
 }
 
-/// Whether `point` is air: the last volume containing it is a room. Outside
-/// every volume is solid.
+/// Outside every volume is solid.
 pub fn is_air(volumes: &[Volume], point: Vec3) -> bool {
     volumes.iter().rev().find(|volume| volume.shape.contains(point)).is_some_and(|volume| volume.fill == Fill::Air)
 }
@@ -99,15 +97,13 @@ pub fn share(volumes: &[Volume], index: usize) -> Vec<Face> {
         .collect()
 }
 
-/// Every volume's share, in order.
 pub fn of_volumes(volumes: &[Volume]) -> Vec<Face> {
     (0..volumes.len()).flat_map(|index| share(volumes, index)).collect()
 }
 
-/// Sorted by `place`, the map's order. Volumes at one place — a footprint's
-/// rooms, or rooms handed in with no place at all — go by box: the lower box,
-/// then the earlier in `items`, is later and so keeps a face two of them share,
-/// whatever order they arrived in.
+/// Volumes at one place — a footprint's rooms, or rooms with no place — go by
+/// box: the lower box, then the earlier in `items`, is later and keeps a face
+/// two of them share, whatever order they arrived in.
 pub fn sort_by_place<K: Ord, T>(items: &mut Vec<(K, Volume, T)>) {
     let key = |volume: &Volume| {
         let (min, max) = volume.shape.bounds();
@@ -126,7 +122,7 @@ pub fn sort_by_place<K: Ord, T>(items: &mut Vec<(K, Volume, T)>) {
     items.extend(indexed.into_iter().map(|(_, item)| item));
 }
 
-/// A map of rooms alone, ordered by box, with each one's index in `rooms`.
+/// With each one's index in `rooms`.
 pub fn in_box_order(rooms: &[Room]) -> (Vec<Volume>, Vec<usize>) {
     let mut items: Vec<((), Volume, usize)> =
         rooms.iter().enumerate().map(|(index, room)| ((), Volume::air(room.clone()), index)).collect();
@@ -134,14 +130,12 @@ pub fn in_box_order(rooms: &[Room]) -> (Vec<Volume>, Vec<usize>) {
     items.into_iter().map(|(_, volume, index)| (volume, index)).unzip()
 }
 
-/// The share of `rooms[index]` in a map of rooms alone.
 pub fn room_share(rooms: &[Room], index: usize) -> Vec<Face> {
     let (volumes, order) = in_box_order(rooms);
     let at = order.iter().position(|&i| i == index).expect("every room is in the order");
     share(&volumes, at)
 }
 
-/// Every room's share, in a map of rooms alone.
 pub fn of_rooms(rooms: &[Room]) -> Vec<Face> {
     of_volumes(&in_box_order(rooms).0)
 }

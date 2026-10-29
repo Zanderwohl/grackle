@@ -43,8 +43,8 @@ fn face_bounds(face: &Face) -> (Vec3, Vec3) {
     (min, max)
 }
 
-/// The prism a face sweeps back, but for its back: its own plane and one
-/// through each edge, as (outward normal, reach).
+/// The prism a face sweeps back, without its back plane: (outward normal,
+/// reach), the face's own plane first.
 fn prism(face: &Face) -> Vec<(Vec3, f32)> {
     let n = face.plane.normal;
     let count = face.vertices.len();
@@ -57,11 +57,10 @@ fn prism(face: &Face) -> Vec<(Vec3, f32)> {
     planes
 }
 
-/// How far behind `face` the nearest part of `other` is, if any of it is
-/// strictly inside the face's `prism` swept back `depth` deep; else `depth`.
-/// Every face bounds air, so the solid behind `face` ends there. Strictly,
-/// by `INSIDE`: a neighbor sharing an edge or a plane is on the prism, not
-/// in it, and would thin a slab to nothing.
+/// How far behind the face the nearest part of `other` inside its `prism`
+/// lies, at most `depth`: every face bounds air, so the solid ends there.
+/// Strictly inside, by `INSIDE`, or a neighbor sharing an edge or a plane
+/// would thin a slab to nothing.
 fn depth_behind(prism: &[(Vec3, f32)], other: &Face, depth: f32) -> f32 {
     const INSIDE: f32 = 1.0e-4;
     let (n, front) = prism[0];
@@ -92,14 +91,12 @@ fn clip(polygon: &[Vec3], normal: Vec3, reach: f32) -> Vec<Vec3> {
 }
 
 impl CollisionWorld {
-    /// The map's volumes, and the surface they make — the same one that is
-    /// drawn — as the walls.
+    /// The walls are the same surface that is drawn.
     pub fn rebuild_volumes(&mut self, volumes: &[Volume]) {
         self.volumes = volumes.to_vec();
         self.set_surface(&world_surface::of_volumes(volumes));
     }
 
-    /// A map of rooms alone.
     pub fn rebuild(&mut self, rooms: &[Room]) {
         self.rebuild_volumes(&world_surface::in_box_order(rooms).0);
     }
@@ -124,7 +121,6 @@ impl CollisionWorld {
         self.set_hulls(hulls);
     }
 
-    /// The map's rooms and blocks, in order.
     pub fn volumes(&self) -> &[Volume] {
         &self.volumes
     }
