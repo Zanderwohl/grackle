@@ -38,6 +38,7 @@ use crate::common::class::Class;
 use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
 use crate::common::reorder;
 use crate::common::shortcuts::chords;
+use crate::common::toolbar::{self, Joins};
 use crate::prop::feature::{BooleanOp, End, FeatureOp, PatternKind, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
 use crate::prop::camera::ViewmodelPreview;
@@ -328,18 +329,20 @@ fn panels(
                 }
             });
             ui.separator();
-            ui.horizontal_wrapped(|ui| {
+            toolbar::row(ui, |ui| {
                 // First and identical in every workspace, so it does not move.
                 // A sketch being edited is neither, and picking either leaves it.
                 let sketching = tabs.session.editing().is_some();
-                for (candidate, key) in
-                    [(Workspace::Model, "prop.workspace.model"), (Workspace::Fit, "prop.workspace.fit")]
-                {
-                    if ui.selectable_label(!sketching && workspace == candidate, get!(key)).clicked() {
-                        tabs.session.leave();
-                        tabs.requests.workspace = Some(candidate);
+                let workspaces = [(Workspace::Model, "prop.workspace.model"), (Workspace::Fit, "prop.workspace.fit")];
+                toolbar::cluster(ui, |ui| {
+                    for (index, (candidate, key)) in workspaces.into_iter().enumerate() {
+                        let joins = Joins::in_run(index, workspaces.len());
+                        if toolbar::button(ui, get!(key), !sketching && workspace == candidate, joins).clicked() {
+                            tabs.session.leave();
+                            tabs.requests.workspace = Some(candidate);
+                        }
                     }
-                }
+                });
                 ui.separator();
                 match (sketching, workspace) {
                     (true, _) => sketch_toolbar(ui, tabs.editor, tabs.session, &mut tabs.requests.frame),
@@ -832,78 +835,59 @@ fn toolbar(
     active: Option<Task>,
 ) {
     let mut added: Option<FeatureOp> = None;
-    let chose = |ui: &mut Ui, tool: Tool, requests: &mut PropRequests| tool_button(ui, tool, active, requests);
 
-    ui.horizontal_wrapped(|ui| {
-        ui.menu_button(get!("prop.add.solid"), |ui| {
-            let shapes = [
-                Shape::Box { size: [0.1, 0.1, 0.3] },
-                Shape::Prism { sides: 8, radius: 0.04, height: 0.4 },
-                Shape::Cone { sides: 8, radius: 0.05, height: 0.1 },
-                Shape::Sphere { sides: 8, rings: 5, radius: 0.04 },
-                Shape::Wedge { size: [0.1, 0.1, 0.2] },
-            ];
-            for shape in shapes {
-                if ui.button(shape.name()).clicked() {
-                    ui.close_kind(UiKind::Menu);
-                    added = Some(FeatureOp::Primitive {
-                        shape,
-                        placement: Placement::default(),
-                        surface: Surface::default(),
-                    });
-                }
-            }
+    let shapes = [
+        Shape::Box { size: [0.1, 0.1, 0.3] },
+        Shape::Prism { sides: 8, radius: 0.04, height: 0.4 },
+        Shape::Cone { sides: 8, radius: 0.05, height: 0.1 },
+        Shape::Sphere { sides: 8, rings: 5, radius: 0.04 },
+        Shape::Wedge { size: [0.1, 0.1, 0.2] },
+    ];
+    let names: Vec<String> = shapes.iter().map(Shape::name).collect();
+    if let Some(index) = toolbar::split_button(ui, "prop_solid", &names, None, Joins::NONE) {
+        added = Some(FeatureOp::Primitive {
+            shape: shapes[index].clone(),
+            placement: Placement::default(),
+            surface: Surface::default(),
         });
-        ui.menu_button(get!("prop.add.sweep"), |ui| {
-            chose(ui, Tool::Extrude, requests);
-            chose(ui, Tool::Revolve, requests);
-        });
+    }
+    tool_family(ui, "prop_sweep", &[Tool::Extrude, Tool::Revolve], active, requests);
 
-        ui.separator();
+    ui.separator();
 
-        ui.menu_button(get!("prop.add.combine"), |ui| {
-            for op in BooleanOp::ALL {
-                chose(ui, Tool::Combine(op), requests);
-            }
-        });
-        chose(ui, Tool::Mirror, requests);
-        ui.menu_button(get!("prop.features.pattern"), |ui| {
-            chose(ui, Tool::LinearPattern, requests);
-            chose(ui, Tool::RadialPattern, requests);
-        });
+    tool_family(ui, "prop_combine", &BooleanOp::ALL.map(Tool::Combine), active, requests);
+    tool_button(ui, Tool::Mirror, active, requests, Joins::NONE);
+    tool_family(ui, "prop_pattern", &[Tool::LinearPattern, Tool::RadialPattern], active, requests);
 
-        ui.separator();
+    ui.separator();
 
-        let plane_tool = chose(ui, Tool::Plane, requests);
+    toolbar::cluster(ui, |ui| {
+        let plane_tool = tool_button(ui, Tool::Plane, active, requests, Joins::RIGHT);
         requests.preview_plane |= plane_tool.hovered() && plane_through_picks(editor, plane).is_some();
-        chose(ui, Tool::Sketch, requests);
+        tool_button(ui, Tool::Sketch, active, requests, Joins::LEFT);
+    });
 
+    ui.separator();
+
+    let framable = build.evaluated.bounds_of_bodies(&editor.picked_bodies(&build.evaluated)).is_some();
+    frame_buttons(ui, Some(framable), &mut requests.frame);
+
+    if let Some(task) = active {
         ui.separator();
-
-        if ui.button(get!("prop.menu.frame")).clicked() {
-            requests.frame = Some(false);
-        }
-        let framable = build.evaluated.bounds_of_bodies(&editor.picked_bodies(&build.evaluated)).is_some();
-        if ui
-            .add_enabled(framable, egui::Button::new(get!("prop.menu.frame_selected")))
-            .clicked()
-        {
-            requests.frame = Some(true);
-        }
-
-        if let Some(task) = active {
-            ui.separator();
-            let filled = fill(task, editor.picks(), editor.doc(), &build.evaluated);
-            ui.label(egui::RichText::new(task.name()).strong());
-            ui.label(egui::RichText::new(prompt(task, &filled, &build.evaluated)).color(ui.visuals().warn_fg_color));
-            if is_ready(task, &filled, &build.evaluated) && ui.button(get!("prop.tool.done")).clicked() {
+        let filled = fill(task, editor.picks(), editor.doc(), &build.evaluated);
+        ui.label(egui::RichText::new(task.name()).strong());
+        ui.label(egui::RichText::new(prompt(task, &filled, &build.evaluated)).color(ui.visuals().warn_fg_color));
+        let ready = is_ready(task, &filled, &build.evaluated);
+        toolbar::cluster(ui, |ui| {
+            if ready && toolbar::button(ui, get!("prop.tool.done"), false, Joins::RIGHT).clicked() {
                 requests.confirm = true;
             }
-            if ui.button(get!("prop.tool.cancel")).clicked() {
+            let joins = if ready { Joins::LEFT } else { Joins::NONE };
+            if toolbar::button(ui, get!("prop.tool.cancel"), false, joins).clicked() {
                 requests.cancel = true;
             }
-        }
-    });
+        });
+    }
 
     if let Some(op) = added {
         requests.put_down = true;
@@ -913,36 +897,66 @@ fn toolbar(
 }
 
 /// Lit while its tool is waiting on picks; clicking it then puts it down.
-fn tool_button(ui: &mut Ui, tool: Tool, active: Option<Task>, requests: &mut PropRequests) -> egui::Response {
-    let task = Task::Make(tool);
-    let up = active == Some(task);
-    let button = ui.selectable_label(up, tool.name());
+fn tool_button(ui: &mut Ui, tool: Tool, active: Option<Task>, requests: &mut PropRequests, joins: Joins) -> egui::Response {
+    let up = active == Some(Task::Make(tool));
+    let button = toolbar::button(ui, tool.name(), up, joins);
     if button.clicked() {
-        ui.close_kind(UiKind::Menu);
-        match up {
-            true => requests.cancel = true,
-            false => requests.task = Some(task),
-        }
+        choose_tool(tool, active, requests);
     }
     button
 }
 
+fn tool_family(ui: &mut Ui, id: &str, tools: &[Tool], active: Option<Task>, requests: &mut PropRequests) {
+    let names: Vec<String> = tools.iter().map(|tool| tool.name()).collect();
+    let up = tools.iter().position(|tool| active == Some(Task::Make(*tool)));
+    if let Some(index) = toolbar::split_button(ui, id, &names, up, Joins::NONE) {
+        choose_tool(tools[index], active, requests);
+    }
+}
+
+fn choose_tool(tool: Tool, active: Option<Task>, requests: &mut PropRequests) {
+    let task = Task::Make(tool);
+    match active == Some(task) {
+        true => requests.cancel = true,
+        false => requests.task = Some(task),
+    }
+}
+
+/// `framable` is whether the selection can be framed; `None` leaves Frame
+/// Selected out.
+fn frame_buttons(ui: &mut Ui, framable: Option<bool>, frame: &mut Option<bool>) {
+    toolbar::cluster(ui, |ui| {
+        let joins = if framable.is_some() { Joins::RIGHT } else { Joins::NONE };
+        if toolbar::button(ui, get!("prop.menu.frame"), false, joins).clicked() {
+            *frame = Some(false);
+        }
+        if let Some(framable) = framable
+            && toolbar::button_enabled(ui, framable, get!("prop.menu.frame_selected"), false, Joins::LEFT).clicked()
+        {
+            *frame = Some(true);
+        }
+    });
+}
+
 fn sketch_toolbar(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSession, frame: &mut Option<bool>) {
     let Some(id) = session.editing() else { return };
-    if ui.button(get!("prop.sketch.finish")).clicked() {
+    if toolbar::button(ui, get!("prop.sketch.finish"), false, Joins::NONE).clicked() {
         session.leave();
         return;
     }
     ui.separator();
-    for (tool, key) in [
+    let tools = [
         (SketchTool::Select, "prop.sketch.select"),
         (SketchTool::Line, "prop.sketch.line"),
         (SketchTool::Erase, "prop.sketch.erase"),
-    ] {
-        if ui.selectable_label(session.tool() == tool, get!(key)).clicked() {
-            session.set_tool(tool);
+    ];
+    toolbar::cluster(ui, |ui| {
+        for (index, (tool, key)) in tools.into_iter().enumerate() {
+            if toolbar::button(ui, get!(key), session.tool() == tool, Joins::in_run(index, tools.len())).clicked() {
+                session.set_tool(tool);
+            }
         }
-    }
+    });
     ui.separator();
 
     let lines: Vec<SketchId> = session
@@ -956,24 +970,26 @@ fn sketch_toolbar(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSess
     let all_construction = sketch_of(editor.doc(), id).is_some_and(|sketch| {
         sketch.entities.iter().filter(|entity| lines.contains(&entity.id())).all(|entity| entity.construction())
     });
-    if ui.add_enabled(!lines.is_empty(), egui::Button::new(get!("prop.sketch.construction"))).clicked() {
-        editor.edit(|doc| {
-            if let Some(sketch) = sketch_of_mut(doc, id) {
-                for line in &lines {
-                    sketch.set_construction(*line, !all_construction);
+    toolbar::cluster(ui, |ui| {
+        let construction = get!("prop.sketch.construction");
+        if toolbar::button_enabled(ui, !lines.is_empty(), construction, false, Joins::RIGHT).clicked() {
+            editor.edit(|doc| {
+                if let Some(sketch) = sketch_of_mut(doc, id) {
+                    for line in &lines {
+                        sketch.set_construction(*line, !all_construction);
+                    }
                 }
-            }
-        });
-    }
-    if ui.add_enabled(!session.picks.is_empty(), egui::Button::new(get!("prop.sketch.delete"))).clicked() {
-        let ids: Vec<SketchId> = session.picks.iter().map(|pick| pick.id()).collect();
-        editor.edit(|doc| sketch_of_mut(doc, id).map(|sketch| sketch.remove(&ids)));
-        session.picks.clear();
-    }
+            });
+        }
+        let delete = get!("prop.sketch.delete");
+        if toolbar::button_enabled(ui, !session.picks.is_empty(), delete, false, Joins::LEFT).clicked() {
+            let ids: Vec<SketchId> = session.picks.iter().map(|pick| pick.id()).collect();
+            editor.edit(|doc| sketch_of_mut(doc, id).map(|sketch| sketch.remove(&ids)));
+            session.picks.clear();
+        }
+    });
     ui.separator();
-    if ui.button(get!("prop.menu.frame")).clicked() {
-        *frame = Some(false);
-    }
+    frame_buttons(ui, None, frame);
 }
 
 /// A point's numbers are editable, which is how a corner is put somewhere exact.
@@ -1928,9 +1944,7 @@ fn fit_toolbar(ui: &mut Ui, figure: &mut ScaleFigure, frame: &mut Option<bool>) 
             }
         });
     ui.separator();
-    if ui.button(get!("prop.menu.frame")).clicked() {
-        *frame = Some(false);
-    }
+    frame_buttons(ui, None, frame);
 }
 
 /// Meters ahead of the grip a muzzle starts on a prop with no geometry.

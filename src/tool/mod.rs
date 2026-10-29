@@ -1,8 +1,8 @@
 use bevy::app::App;
 use bevy::prelude::*;
 use bevy_egui::egui;
-use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter};
+use crate::common::toolbar::{self, Joins};
 use crate::get;
 use crate::tool::animation_display::AnimationDisplayPlugin;
 use crate::tool::animation_grid::AnimationGridPlugin;
@@ -143,47 +143,72 @@ impl Tools {
         }
     }
 
+    #[cfg(test)]
     fn is_hidden(&self) -> bool {
         matches!(self, Self::Retarget | Self::Spectate)
     }
-    
-    /// `TOOLBAR_HEIGHT` in [`crate::editor::panels`] is derived from these.
-    pub const BUTTON_HEIGHT: f32 = 28.0;
-    pub const BUTTON_MIN_WIDTH: f32 = 72.0;
-    pub const ROW_PADDING: f32 = 6.0;
 
     pub fn ui(
         ui: &mut egui::Ui,
         current_tool: &State<Self>,
         next_tool: &mut NextState<Self>,
     ) {
-        ui.add_space(Self::ROW_PADDING);
-        // Wrapped, not a `Grid`, so a narrow panel does not hide buttons.
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            for item in Self::iter() {
-                if item.is_hidden() { continue; }
-                let size = egui::vec2(Self::BUTTON_MIN_WIDTH, Self::BUTTON_HEIGHT);
-                if current_tool.eq(&item) {
-                    ui.scope(|ui| {
-                        ui.disable();
-                        let _ = ui.add(egui::Button::new(item.name()).min_size(size));
-                    });
-                } else {
-                    if ui.add(egui::Button::new(item.name()).min_size(size)).clicked() {
-                        next_tool.set(item);
+        let current = current_tool.get();
+        let mut chosen = None;
+        toolbar::row(ui, |ui| {
+            for group in TOOLBAR {
+                match group {
+                    ToolGroup::One(tool) => {
+                        if toolbar::button(ui, tool.name(), current == tool, Joins::NONE).clicked() {
+                            chosen = Some(tool.clone());
+                        }
                     }
+                    ToolGroup::Split(id, tools) => {
+                        let labels: Vec<String> = tools.iter().map(Tools::name).collect();
+                        let active = tools.iter().position(|tool| tool == current);
+                        if let Some(index) = toolbar::split_button(ui, id, &labels, active, Joins::NONE) {
+                            chosen = Some(tools[index].clone());
+                        }
+                    }
+                    ToolGroup::Cluster(tools) => toolbar::cluster(ui, |ui| {
+                        for (index, tool) in tools.iter().enumerate() {
+                            let joins = Joins::in_run(index, tools.len());
+                            if toolbar::button(ui, tool.name(), current == tool, joins).clicked() {
+                                chosen = Some(tool.clone());
+                            }
+                        }
+                    }),
                 }
             }
         });
-        ui.add_space(Self::ROW_PADDING);
+        if let Some(tool) = chosen.filter(|tool| tool != current) {
+            next_tool.set(tool);
+        }
     }
 }
+
+enum ToolGroup {
+    One(Tools),
+    /// The id keeps which one was last used.
+    Split(&'static str, &'static [Tools]),
+    Cluster(&'static [Tools]),
+}
+
+/// Every tool but the hidden ones, once each.
+const TOOLBAR: &[ToolGroup] = &[
+    ToolGroup::One(Tools::Select),
+    ToolGroup::Split("points", &[Tools::Point, Tools::PointLight, Tools::SpawnPoint]),
+    ToolGroup::Split("props", &[Tools::Prop, Tools::WeaponPickup]),
+    ToolGroup::Cluster(&[Tools::Room, Tools::Block, Tools::Trigger, Tools::Footprint]),
+    ToolGroup::One(Tools::Mirror),
+    ToolGroup::Split("animation", &[Tools::AnimationDisplay, Tools::AnimationGrid]),
+];
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::common::net::NetRole;
+    use strum::IntoEnumIterator;
 
     fn tool_with(role: NetRole, starting: Tools) -> Tools {
         let mut app = App::new();
@@ -202,5 +227,20 @@ mod tests {
         assert_eq!(tool_with(client, Tools::Room), Tools::Spectate);
         assert_eq!(tool_with(NetRole::Listen { port: 1 }, Tools::Room), Tools::Room);
         assert_eq!(tool_with(NetRole::Solo, Tools::Spectate), Tools::Select);
+    }
+
+    #[test]
+    fn every_tool_is_on_the_toolbar_once() {
+        let mut shown = Vec::new();
+        for group in TOOLBAR {
+            match group {
+                ToolGroup::One(tool) => shown.push(tool.clone()),
+                ToolGroup::Split(_, tools) | ToolGroup::Cluster(tools) => shown.extend(tools.iter().cloned()),
+            }
+        }
+        for tool in Tools::iter() {
+            let count = shown.iter().filter(|shown| **shown == tool).count();
+            assert_eq!(count, usize::from(!tool.is_hidden()), "{tool:?}");
+        }
     }
 }
