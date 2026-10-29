@@ -50,6 +50,7 @@ impl FeatureTrait for EditorBlock {
         get!("editor.features.block.title")
     }
 
+    fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::Block) }
     fn type_key(&self) -> &'static str { "block" }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {

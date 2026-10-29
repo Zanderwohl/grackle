@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <mask id="edges">
+      <rect x="0" y="0" width="24" height="24" fill="#ffffff" />
+      <g fill="none" stroke="#000000" stroke-width="1.5" stroke-linecap="round"><polyline points="3.77,7.25 12,12 20.23,7.25" /><line x1="12" y1="12" x2="12" y2="21.5" /></g>
+    </mask>
+  </defs>
+  <polygon fill="#ffffff" stroke="#ffffff" stroke-width="1.75" stroke-linejoin="round" points="12,2.5 20.23,7.25 20.23,16.75 12,21.5 3.77,16.75 3.77,7.25" mask="url(#edges)" />
+</svg>

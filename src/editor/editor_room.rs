@@ -207,6 +207,7 @@ impl FeatureTrait for EditorRoom {
         get!("editor.features.room.title")
     }
 
+    fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::Room) }
     fn type_key(&self) -> &'static str { "editor_room" }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {

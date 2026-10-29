@@ -93,6 +93,7 @@ impl FeatureTrait for AnimationDisplay {
         get!("editor.features.animation_display.title")
     }
 
+    fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::AnimationDisplay) }
     fn type_key(&self) -> &'static str { "animation_display" }
 
     /// The point and facing only; the body is drawn by the skeleton systems.

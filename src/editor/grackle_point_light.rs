@@ -53,6 +53,7 @@ impl FeatureTrait for GracklePointLight {
         get!("editor.features.grackle_point_light.title")
     }
 
+    fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::PointLight) }
     fn type_key(&self) -> &'static str { "grackle_point_light" }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {

@@ -75,6 +75,7 @@ impl FeatureTrait for EditorTrigger {
         get!("editor.features.trigger.title")
     }
 
+    fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::Trigger) }
     fn type_key(&self) -> &'static str { "trigger" }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {

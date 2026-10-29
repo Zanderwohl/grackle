@@ -295,6 +295,16 @@ mod tests {
         }
     }
 
+    /// One without a tool draws the fallback hammer in the feature list.
+    #[test]
+    fn every_feature_type_names_the_tool_that_makes_it() {
+        let timeline = one_of_every_feature();
+        for id in timeline.feature_order() {
+            let feature = timeline.get_feature(id).unwrap();
+            assert!(feature.object().tool().is_some(), "{} names no tool", feature.object().type_key());
+        }
+    }
+
     /// A wrongly skipped field fails here.
     #[test]
     fn every_feature_type_survives_a_save_and_load() {

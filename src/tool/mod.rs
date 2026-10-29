@@ -1,8 +1,9 @@
 use bevy::app::App;
 use bevy::prelude::*;
 use bevy_egui::egui;
-use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter};
+use crate::common::icons;
+use crate::common::toolbar::{self, Joins, Segment};
 use crate::get;
 use crate::tool::animation_display::AnimationDisplayPlugin;
 use crate::tool::animation_grid::AnimationGridPlugin;
@@ -143,47 +144,91 @@ impl Tools {
         }
     }
 
+    /// Named for the picture, not the tool: see `documentation/icons.md`.
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Self::Select => "cursor",
+            Self::Point => "axes",
+            Self::PointLight => "light_bulb",
+            Self::SpawnPoint => "t_pose",
+            Self::Prop => "mug",
+            Self::WeaponPickup => "rifle",
+            Self::AnimationDisplay => "runner",
+            Self::AnimationGrid => "two_runners",
+            Self::Room => "cube_hollow",
+            Self::Block => "cube_solid",
+            Self::Trigger => "cube_exclamation",
+            Self::Footprint => "double_pennant",
+            Self::Mirror => "square_mirrored",
+            Self::Retarget => icons::FALLBACK,
+            Self::Spectate => icons::FALLBACK,
+        }
+    }
+
+    #[cfg(test)]
     fn is_hidden(&self) -> bool {
         matches!(self, Self::Retarget | Self::Spectate)
     }
-    
-    /// `TOOLBAR_HEIGHT` in [`crate::editor::panels`] is derived from these.
-    pub const BUTTON_HEIGHT: f32 = 28.0;
-    pub const BUTTON_MIN_WIDTH: f32 = 72.0;
-    pub const ROW_PADDING: f32 = 6.0;
 
     pub fn ui(
         ui: &mut egui::Ui,
         current_tool: &State<Self>,
         next_tool: &mut NextState<Self>,
     ) {
-        ui.add_space(Self::ROW_PADDING);
-        // Wrapped, not a `Grid`, so a narrow panel does not hide buttons.
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            for item in Self::iter() {
-                if item.is_hidden() { continue; }
-                let size = egui::vec2(Self::BUTTON_MIN_WIDTH, Self::BUTTON_HEIGHT);
-                if current_tool.eq(&item) {
-                    ui.scope(|ui| {
-                        ui.disable();
-                        let _ = ui.add(egui::Button::new(item.name()).min_size(size));
-                    });
-                } else {
-                    if ui.add(egui::Button::new(item.name()).min_size(size)).clicked() {
-                        next_tool.set(item);
+        let current = current_tool.get();
+        let mut chosen = None;
+        toolbar::row(ui, |ui| {
+            for group in TOOLBAR {
+                match group {
+                    ToolGroup::One(tool) => {
+                        if toolbar::button(ui, tool.icon(), tool.name(), current == tool, Joins::NONE).clicked() {
+                            chosen = Some(tool.clone());
+                        }
+                    }
+                    ToolGroup::Split(id, tools) => {
+                        let active = tools.iter().position(|tool| tool == current);
+                        let label = |index: usize| (tools[index].icon(), tools[index].name());
+                        if let Some(index) = toolbar::split_button(ui, id, tools.len(), label, active, Joins::NONE) {
+                            chosen = Some(tools[index].clone());
+                        }
+                    }
+                    ToolGroup::Cluster(tools) => {
+                        let segments = tools.iter().map(|tool| Segment::new(tool.icon(), tool.name()).selected(current == tool));
+                        if let Some(index) = toolbar::clicked(&toolbar::joined(ui, segments)) {
+                            chosen = Some(tools[index].clone());
+                        }
                     }
                 }
             }
         });
-        ui.add_space(Self::ROW_PADDING);
+        if let Some(tool) = chosen.filter(|tool| tool != current) {
+            next_tool.set(tool);
+        }
     }
 }
+
+enum ToolGroup {
+    One(Tools),
+    /// The id keeps which one was last used.
+    Split(&'static str, &'static [Tools]),
+    Cluster(&'static [Tools]),
+}
+
+/// Every tool but the hidden ones, once each.
+const TOOLBAR: &[ToolGroup] = &[
+    ToolGroup::One(Tools::Select),
+    ToolGroup::Split("points", &[Tools::Point, Tools::PointLight, Tools::SpawnPoint]),
+    ToolGroup::Split("props", &[Tools::Prop, Tools::WeaponPickup]),
+    ToolGroup::Cluster(&[Tools::Room, Tools::Block, Tools::Trigger, Tools::Footprint]),
+    ToolGroup::One(Tools::Mirror),
+    ToolGroup::Split("animation", &[Tools::AnimationDisplay, Tools::AnimationGrid]),
+];
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::common::net::NetRole;
+    use strum::IntoEnumIterator;
 
     fn tool_with(role: NetRole, starting: Tools) -> Tools {
         let mut app = App::new();
@@ -202,5 +247,20 @@ mod tests {
         assert_eq!(tool_with(client, Tools::Room), Tools::Spectate);
         assert_eq!(tool_with(NetRole::Listen { port: 1 }, Tools::Room), Tools::Room);
         assert_eq!(tool_with(NetRole::Solo, Tools::Spectate), Tools::Select);
+    }
+
+    #[test]
+    fn every_tool_is_on_the_toolbar_once() {
+        let mut shown = Vec::new();
+        for group in TOOLBAR {
+            match group {
+                ToolGroup::One(tool) => shown.push(tool.clone()),
+                ToolGroup::Split(_, tools) | ToolGroup::Cluster(tools) => shown.extend(tools.iter().cloned()),
+            }
+        }
+        for tool in Tools::iter() {
+            let count = shown.iter().filter(|shown| **shown == tool).count();
+            assert_eq!(count, usize::from(!tool.is_hidden()), "{tool:?}");
+        }
     }
 }

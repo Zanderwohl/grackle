@@ -37,6 +37,7 @@ impl FeatureTrait for GlobalPoint {
         get!("editor.features.global_point.title")
     }
 
+    fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::Point) }
     fn type_key(&self) -> &'static str { "global_point" }
 
     

@@ -13,7 +13,6 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::assets::Assets;
-use crate::common::lang::default_packs;
 
 const UI_FONT: &str = "fonts/JetBrains_Mono/static/JetBrainsMono-Regular.ttf";
 const DISPLAY_FONT: &str = "fonts/Alfa_Slab_One/AlfaSlabOne-Regular.ttf";
@@ -54,16 +53,8 @@ impl Plugin for FontsPlugin {
     }
 }
 
-/// Highest priority last, so a pack overriding a font wins.
 fn read_from_packs(assets: &Assets, relative: &str) -> Option<Vec<u8>> {
-    let mut found = None;
-    for pack in default_packs() {
-        match assets.read(&pack, relative) {
-            Ok(bytes) => found = Some(bytes),
-            Err(crate::common::assets::AssetError::NotFound(_)) => {}
-            Err(e) => error!("{e}"),
-        }
-    }
+    let found = assets.read_from_packs(relative);
     if found.is_none() {
         warn!("No pack has {relative}; using the built-in font");
     }

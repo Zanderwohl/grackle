@@ -749,11 +749,6 @@ repaint_eaten = "Already used by a later feature."
 delete = "🗑 Delete"
 delete_breaks = "{ count } other features build on this one"
 
-[prop.add]
-solid = "Solid"
-sweep = "Sweep"
-combine = "Combine"
-
 [prop.shapes]
 box = "Box"
 prism = "Prism"

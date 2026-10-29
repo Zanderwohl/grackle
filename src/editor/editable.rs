@@ -7,6 +7,7 @@ use bevy_egui::egui;
 use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
 use crate::common::app_mode::AppMode;
+use crate::common::icons;
 use crate::common::reorder;
 use crate::common::shortcuts::chords;
 use crate::common::PointResolutionError;
@@ -116,6 +117,8 @@ pub trait FeatureTrait: Send + Sync {
     fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool;
     fn type_name(&self) -> String;
     fn type_key(&self) -> &'static str;
+    /// The tool that makes this kind of feature, whose icon its row shows.
+    fn tool(&self) -> Option<crate::tool::Tools> { None }
     fn debug_gizmos(&self, gizmos: &mut Gizmos);
     /// Drawn on top of `debug_gizmos` while this feature is selected.
     fn selected_gizmos(&self, _gizmos: &mut Gizmos) {}
@@ -932,9 +935,13 @@ impl FeatureTimeline {
 
                 let at_the_bar = i + 1 == shown;
                 if let Some(rename) = renaming.as_mut().filter(|rename| rename.id == *id) {
-                    let output = egui::TextEdit::singleline(&mut rename.typed)
-                        .desired_width(ui.available_width())
-                        .show(ui);
+                    // Indented past the icon slot, so the name does not jump when editing starts.
+                    let output = ui
+                        .horizontal(|ui| {
+                            ui.add_space(icons::ICON_SIZE + ui.spacing().icon_spacing);
+                            egui::TextEdit::singleline(&mut rename.typed).desired_width(ui.available_width()).show(ui)
+                        })
+                        .inner;
                     let response = output.response;
                     if response.has_focus() {
                         rename.had_focus = true;
@@ -963,8 +970,9 @@ impl FeatureTimeline {
                             }
                             let label = egui::Button::selectable(
                                 is_selected && is_active,
-                                (label_text, egui::Atom::grow()),
+                                (icons::atom(ui.ctx(), feature.icon()), label_text, egui::Atom::grow()),
                             )
+                            .image_tint_follows_text_color(true)
                             .truncate();
                             ui.add_sized([ui.available_width(), 0.0], label)
                         })
@@ -1218,6 +1226,10 @@ impl Feature {
     }
 
     /// It stands where it last resolved.
+    pub fn icon(&self) -> &'static str {
+        self.object().tool().map_or(icons::FALLBACK, |tool| tool.icon())
+    }
+
     pub fn is_broken(&self) -> bool {
         self.object.point_refs().iter().any(|point| point.unresolved.is_some())
     }

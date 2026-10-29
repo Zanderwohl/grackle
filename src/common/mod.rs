@@ -54,6 +54,8 @@ pub mod lightmap;
 pub mod render_layers;
 pub mod shortcuts;
 pub mod reorder;
+pub mod toolbar;
+pub mod icons;
 pub mod trigger;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

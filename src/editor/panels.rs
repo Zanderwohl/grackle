@@ -15,6 +15,7 @@ use crate::common::mode::GameMode;
 use crate::common::movement_rules::SprintPolicy;
 use crate::common::sky::SkyTime;
 use crate::common::shortcuts::chords;
+use crate::common::toolbar;
 use crate::common::net::{NetRequest, NetRole};
 use crate::common::net_transport::NetStatus;
 use crate::constants::{BLUEPRINTS_DIR, MAP_BLUEPRINT_EXTENSION};
@@ -98,7 +99,7 @@ impl Default for CurrentFilePath {
 /// A top panel sizes to its contents and a `DockArea` asks for almost nothing, so the default is
 /// stated as the tab bar plus two rows of buttons.
 const TAB_BAR_HEIGHT: f32 = 26.0;
-const TOOLBAR_ROW_HEIGHT: f32 = Tools::BUTTON_HEIGHT + Tools::ROW_PADDING * 2.0;
+const TOOLBAR_ROW_HEIGHT: f32 = toolbar::BUTTON_HEIGHT + toolbar::ROW_PADDING * 2.0;
 const TOOLBAR_DEFAULT_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT * 2.0;
 const TOOLBAR_MIN_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT;
 
