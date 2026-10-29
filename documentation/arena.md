@@ -35,7 +35,7 @@ teams = false
 classes = ["mercenary"]
 # Each lands in the slot the class's loadout permits it in, until weapons
 # state their own slot.
-loadout = ["medi_wrench", "laser_rifle"]
+loadout = ["pistol"]
 frag_limit = 20
 # Planned, with the feature that reads it:
 # self_damage = 0.5      # fraction of your own damage you take

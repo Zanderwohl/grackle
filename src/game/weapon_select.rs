@@ -435,7 +435,9 @@ mod tests {
 
     #[test]
     fn a_sent_switch_holds_the_buttons_until_it_is_seen_held() {
-        let (mut world, _, _) = a_chooser();
+        let (mut world, _, inside) = a_chooser();
+        // Holding a weapon from the shared bucket, so the lone one is a switch.
+        world.query::<&mut Equipped>().single_mut(&mut world).unwrap().select(inside[0]);
         let catalog = world.resource::<WeaponCatalog>().clone();
         let equipped = world.query::<&Equipped>().single(&world).unwrap().clone();
         let order = carried(&equipped, &catalog);

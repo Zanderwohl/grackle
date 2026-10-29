@@ -19,6 +19,7 @@ use crate::common::team::Allegiances;
 use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage, suicide};
 use crate::common::damage::{DamageSource, PlayerId};
 use crate::game::player::{LocalPlayer, PlayerCamera};
+use crate::game::ragdoll::{Push, RagdollShove};
 
 /// How long a damage number lasts, in seconds.
 pub const DAMAGE_NUMBER_LIFETIME: f32 = 2.0;
@@ -63,6 +64,8 @@ impl Plugin for DamagePlugin {
             .add_message::<crate::common::effects::Effect>()
             .add_message::<DamageDealt>()
             .add_message::<Died>()
+            // Also `RagdollPlugin`'s; `apply_damage` throws kill shoves.
+            .add_message::<RagdollShove>()
             // A body reaped before its log is written is a kill credited to
             // nobody. Authority only: `Damageable` is replicated, and a client
             // resolving damage itself would disagree with the server. Not
@@ -111,6 +114,7 @@ pub fn apply_damage(
     // Absent in tests that build no map.
     rules: Option<Res<GameRules>>,
     mut dealt: MessageWriter<DamageDealt>,
+    mut shoves: MessageWriter<RagdollShove>,
 ) {
     let self_damage = rules.map_or(1.0, |rules| rules.self_damage);
     for request in requests.read() {
@@ -124,6 +128,7 @@ pub fn apply_damage(
             request.amount
         };
 
+        let was_alive = target.is_alive();
         // An emptied body's armor is not spent on it.
         let through = match armor {
             Some(mut armor) if target.is_alive() && armor.points() > 0 => armor.soak(requested),
@@ -140,6 +145,17 @@ pub fn apply_damage(
             point: request.point,
             from: request.from,
         });
+        // Lands on the corpse `raise_ragdolls` stands up later this tick.
+        if let Some(shove) = request.kill_shove
+            && was_alive
+            && !target.is_alive()
+        {
+            shoves.write(RagdollShove {
+                at: request.point,
+                push: Push::Along(shove.velocity),
+                radius: shove.radius,
+            });
+        }
     }
     // Recorded like a hit, so the kill is credited to its source rather than
     // to whoever last hurt the body, however long ago.
@@ -271,6 +287,40 @@ mod tests {
         }
     }
 
+    fn shoves_after(health: u32, amounts: &[u32]) -> Vec<RagdollShove> {
+        let mut world = World::new();
+        world.init_resource::<Messages<Damage>>();
+        world.init_resource::<Messages<DamageDealt>>();
+        world.init_resource::<Messages<Kill>>();
+        world.init_resource::<Messages<RagdollShove>>();
+        let target = world.spawn(Damageable::with_health(health)).id();
+        for &amount in amounts {
+            world.write_message(Damage {
+                target,
+                source: DamageSource::Player(PlayerId(1)),
+                amount,
+                point: Vec3::Y,
+                from: None,
+                kill_shove: Some(crate::common::damage::KillShove { velocity: Vec3::NEG_Z * 10.0, radius: 1.0 }),
+            });
+        }
+        world.run_system_once(apply_damage).unwrap();
+        let messages = world.resource::<Messages<RagdollShove>>();
+        let mut cursor = messages.get_cursor();
+        cursor.read(messages).copied().collect()
+    }
+
+    /// Breaks if a kill shove is thrown by a hit that did not kill.
+    #[test]
+    fn a_kill_shove_is_thrown_by_the_hit_that_kills_and_no_other() {
+        assert!(shoves_after(100, &[30]).is_empty(), "a hit that left the body standing threw it");
+
+        let thrown = shoves_after(100, &[60, 60, 60]);
+        assert_eq!(thrown.len(), 1, "{thrown:?}");
+        assert_eq!(thrown[0].push, Push::Along(Vec3::NEG_Z * 10.0));
+        assert_eq!(thrown[0].at, Vec3::Y);
+    }
+
     /// Overkill is recorded as what actually came off, not what was swung.
     #[test]
     fn a_request_takes_health_off_and_records_what_it_took() {
@@ -278,6 +328,7 @@ mod tests {
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<DamageDealt>>();
         world.init_resource::<Messages<Kill>>();
+        world.init_resource::<Messages<RagdollShove>>();
         let target = world.spawn(Damageable::with_health(12)).id();
         world.write_message(Damage {
             target,
@@ -285,6 +336,7 @@ mod tests {
             amount: 90,
             point: Vec3::Y,
             from: None,
+            kill_shove: None,
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -308,6 +360,7 @@ mod tests {
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<DamageDealt>>();
         world.init_resource::<Messages<Kill>>();
+        world.init_resource::<Messages<RagdollShove>>();
         let shooter = PlayerId(1);
         world.spawn((shooter, Team::Blue));
         let ally = world
@@ -319,6 +372,7 @@ mod tests {
             amount: 40,
             point: Vec3::ZERO,
             from: None,
+            kill_shove: None,
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -338,6 +392,7 @@ mod tests {
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<DamageDealt>>();
         world.init_resource::<Messages<Kill>>();
+        world.init_resource::<Messages<RagdollShove>>();
         let id = PlayerId(1);
         let me = world.spawn((Damageable::with_health(100), id, Team::Blue)).id();
         world.write_message(Damage {
@@ -346,6 +401,7 @@ mod tests {
             amount: 40,
             point: Vec3::ZERO,
             from: None,
+            kill_shove: None,
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -359,10 +415,11 @@ mod tests {
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<DamageDealt>>();
         world.init_resource::<Messages<Kill>>();
+        world.init_resource::<Messages<RagdollShove>>();
         let mut armor = Armor::default();
         armor.add(50);
         let target = world.spawn((Damageable::with_health(100), armor)).id();
-        world.write_message(Damage { target, source: DamageSource::World, amount: 30, point: Vec3::ZERO, from: None });
+        world.write_message(Damage { target, source: DamageSource::World, amount: 30, point: Vec3::ZERO, from: None, kill_shove: None });
 
         world.run_system_once(apply_damage).unwrap();
 
@@ -381,6 +438,7 @@ mod tests {
         world.init_resource::<Messages<Damage>>();
         world.init_resource::<Messages<DamageDealt>>();
         world.init_resource::<Messages<Kill>>();
+        world.init_resource::<Messages<RagdollShove>>();
         let dressing = world.spawn(Name::new("Scenery")).id();
         world.write_message(Damage {
             target: dressing,
@@ -388,6 +446,7 @@ mod tests {
             amount: 40,
             point: Vec3::ZERO,
             from: None,
+            kill_shove: None,
         });
 
         world.run_system_once(apply_damage).unwrap();

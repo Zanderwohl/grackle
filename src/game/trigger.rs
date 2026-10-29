@@ -94,7 +94,7 @@ fn act_on_bodies_in_triggers(
             None => 0,
         };
         if amount > 0 {
-            damage.write(Damage { target: body, source: DamageSource::World, amount, point: center, from: None });
+            damage.write(Damage { target: body, source: DamageSource::World, amount, point: center, from: None, kill_shove: None });
         }
     }
 }

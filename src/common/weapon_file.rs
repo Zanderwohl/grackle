@@ -72,7 +72,9 @@ struct LoadoutEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SlotEntry {
     permitted: Vec<String>,
-    default: String,
+    /// Absent starts the slot empty.
+    #[serde(default)]
+    default: Option<String>,
 }
 
 /// Lowest priority first. A missing file is normal; one that will not parse
@@ -222,13 +224,14 @@ fn slot_choices(
         permitted.push(id);
     }
 
-    let default = WeaponId::of(&entry.default);
-    if !permitted.contains(&default) {
+    let default = entry.default.as_deref().map(WeaponId::of);
+    if let (Some(name), Some(id)) = (&entry.default, default)
+        && !permitted.contains(&id)
+    {
         error!(
-            "{}/{LOADOUTS_FILE}: {class}'s {slot:?} starts with {}, which it may not carry; \
+            "{}/{LOADOUTS_FILE}: {class}'s {slot:?} starts with {name}, which it may not carry; \
              dropping the slot",
             pack.display(),
-            entry.default
         );
         return None;
     }
@@ -305,6 +308,8 @@ mod tests {
                 headshot_multiplier: 0,
                 shove_per_damage: 0.0,
                 shove_radius_m: 0.0,
+                pellets: None,
+                kill_shove: None,
             }),
             WeaponAction::Projectile(crate::common::projectile::ProjectileSpec::ROCKET),
             WeaponAction::Flame(crate::common::flame::FlameSpec::FLAMETHROWER),
@@ -358,8 +363,9 @@ mod tests {
         assert_eq!(ammo.weapons.len(), 1, "ammo for a weapon it does not carry");
     }
 
-    /// Fails if a shipped weapon is no slot's default; only defaults are
-    /// carried, so it could never be held.
+    /// Fails if a shipped weapon is permitted in no slot, so no mode's
+    /// loadout can start a body with it. A pickup can still hand one out, but
+    /// only on a map that places it.
     #[test]
     fn every_shipped_weapon_is_on_a_digit() {
         let catalog = the_default_pack();
@@ -367,8 +373,8 @@ mod tests {
 
         for weapon in &catalog.weapons {
             assert!(
-                loadout.slots.iter().any(|(_, choices)| choices.default == weapon.id),
-                "{} is defined but no slot starts with it, so nobody can hold it",
+                loadout.slots.iter().any(|(_, choices)| choices.permitted.contains(&weapon.id)),
+                "{} is defined but no slot permits it, so no loadout can start with it",
                 weapon.name_key
             );
         }
@@ -391,7 +397,7 @@ mod tests {
         let catalog = the_default_pack();
         let entry = SlotEntry {
             permitted: vec!["laser_rifle".into()],
-            default: "rocket_launcher".into(),
+            default: Some("rocket_launcher".into()),
         };
 
         assert!(
@@ -405,7 +411,7 @@ mod tests {
         let catalog = the_default_pack();
         let entry = SlotEntry {
             permitted: vec!["laser_rifle".into(), "no_such_weapon".into()],
-            default: "laser_rifle".into(),
+            default: Some("laser_rifle".into()),
         };
 
         let choices =

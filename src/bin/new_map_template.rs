@@ -46,8 +46,14 @@ const LIGHT_HEIGHT_M: f32 = 4.5;
 const PACK_FROM_WALLS_M: f32 = 1.5;
 
 /// Weapon pickups and how far along the wall behind the spawn each lies, in meters.
-const WEAPONS_BEHIND_THE_SPAWN: [(&str, f32); 4] =
-    [("rocket_launcher", -6.0), ("flamethrower", -2.0), ("rpg", 2.0), ("pill_launcher", 6.0)];
+const WEAPONS_BEHIND_THE_SPAWN: [(&str, f32); 6] = [
+    ("shotgun", -10.0),
+    ("rocket_launcher", -6.0),
+    ("flamethrower", -2.0),
+    ("rpg", 2.0),
+    ("pill_launcher", 6.0),
+    ("pistol", 10.0),
+];
 
 /// A team's spawn nook, butted against a side wall so the shared face opens it into the room.
 const NOOK_M: Vec3 = Vec3::new(2.0, 3.0, 2.0);

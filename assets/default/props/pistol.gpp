@@ -1,0 +1,1029 @@
+name_key = "weapon.names.pistol"
+next_id = 12
+
+[[features]]
+id = 0
+name = "Grip"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.032,
+    0.12,
+    0.05,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.11,
+    -0.055,
+]
+rotation = [
+    0.21,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.12,
+    0.12,
+    0.13,
+]
+
+[[features]]
+id = 1
+name = "Frame"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.028,
+    0.024,
+    0.16,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.181,
+    -0.09,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.12,
+    0.12,
+    0.13,
+]
+
+[[features]]
+id = 2
+name = "Slide body"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.03,
+    0.036,
+    0.2,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.211,
+    -0.093,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.17,
+    0.18,
+    0.2,
+]
+
+[[features]]
+id = 3
+name = "Bore"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 10
+radius = 0.0065
+height = 0.3
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.212,
+    -0.093,
+]
+rotation = [
+    -1.5707964,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.17,
+    0.18,
+    0.2,
+]
+
+[[features]]
+id = 4
+name = "Slide"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "subtract"
+target = 2
+tool = 3
+
+[[features]]
+id = 5
+name = "Guard"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.01,
+    0.032,
+    0.058,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.156,
+    -0.105,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.12,
+    0.12,
+    0.13,
+]
+
+[[features]]
+id = 6
+name = "Guard opening"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.02,
+    0.024,
+    0.044,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.16,
+    -0.107,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.12,
+    0.12,
+    0.13,
+]
+
+[[features]]
+id = 7
+name = "Trigger guard"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "subtract"
+target = 5
+tool = 6
+
+[[features]]
+id = 8
+name = "Trigger"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.006,
+    0.02,
+    0.007,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.16,
+    -0.098,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.3,
+    0.32,
+    0.34,
+]
+
+[[features]]
+id = 9
+name = "Front sight"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.005,
+    0.008,
+    0.008,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.233,
+    -0.186,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.17,
+    0.18,
+    0.2,
+]
+
+[[features]]
+id = 10
+name = "Rear sight"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.024,
+    0.008,
+    0.008,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.233,
+    -0.004,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.17,
+    0.18,
+    0.2,
+]
+
+[[features]]
+id = 11
+name = "Magazine base"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.036,
+    0.012,
+    0.056,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.048,
+    -0.042,
+]
+rotation = [
+    0.21,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.12,
+    0.12,
+    0.13,
+]
+
+[hold]
+grip = [
+    0.021,
+    0.07,
+    -0.001,
+]
+grip_rotation = [
+    -1.5707964,
+    1.3962634,
+    -1.279,
+]
+support = [
+    -0.03,
+    0.062,
+    -0.006,
+]
+support_rotation = [
+    -1.5707964,
+    -1.3962634,
+    1.279,
+]
+two_handed = true
+carry = [
+    0.03,
+    -0.16,
+    -0.5,
+]
+carry_rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[viewmodel]
+across = [
+    0.42,
+    -1.25,
+]
+depth = 0.3
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[muzzle]
+at = [
+    0.0,
+    0.212,
+    -0.195,
+]
+
+[animations.clips.deploy]
+name_key = "anim.clips.deploy"
+length = 0.35
+clock = "seconds"
+looping = false
+note = "Composed onto the carry rather than replacing it, so the hold stays the one description of where this is held."
+
+[[animations.clips.deploy.tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips.deploy.tracks.channel]
+channel = "weapon"
+
+[[animations.clips.deploy.tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    -0.71,
+    0.35,
+]
+ease = "cubic_out"
+
+[[animations.clips.deploy.tracks.channel.keys]]
+at = 0.35
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.deploy.tracks]]
+combine = "compose"
+space = "carry"
+unit = "meters"
+enabled = true
+
+[animations.clips.deploy.tracks.channel]
+channel = "weapon_rotation"
+
+[[animations.clips.deploy.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.9,
+    "free",
+    "free",
+]
+ease = "cubic_out"
+
+[[animations.clips.deploy.tracks.channel.keys]]
+at = 0.35
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "linear"
+
+[animations.clips.fire]
+name_key = "anim.clips.fire"
+length = 0.22
+clock = "seconds"
+looping = false
+note = "The pistol's kick in first person: a sharp flip of the muzzle that is over before the next shot can be."
+
+[[animations.clips.fire.tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips.fire.tracks.channel]
+channel = "weapon"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.03
+to = [
+    "free",
+    0.02,
+    0.06,
+]
+ease = "cubic_out"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.22
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.fire.tracks]]
+combine = "compose"
+space = "carry"
+unit = "meters"
+enabled = true
+
+[animations.clips.fire.tracks.channel]
+channel = "weapon_rotation"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "linear"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.03
+to = [
+    0.22,
+    "free",
+    "free",
+]
+ease = "cubic_out"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.22
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "linear"
+
+[animations.clips.recoil]
+name_key = "anim.clips.recoil"
+length = 0.26
+clock = "seconds"
+looping = false
+note = "The pistol's kick in third person: the same flip, a little slower to settle so it reads across a room."
+
+[[animations.clips.recoil.tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips.recoil.tracks.channel]
+channel = "weapon"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.03
+to = [
+    "free",
+    0.02,
+    0.06,
+]
+ease = "cubic_out"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.26
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.recoil.tracks]]
+combine = "compose"
+space = "carry"
+unit = "meters"
+enabled = true
+
+[animations.clips.recoil.tracks.channel]
+channel = "weapon_rotation"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "linear"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.03
+to = [
+    0.22,
+    "free",
+    "free",
+]
+ease = "cubic_out"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.26
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "linear"
+
+[animations.clips.reload]
+name_key = "anim.clips.reload"
+length = 1.0
+clock = "seconds"
+looping = false
+note = "The pistol's magazine change: it tips and rolls to show the well while the support hand drops away for a fresh magazine, seats it with a jolt at 60 % and takes its place on the grip again. Fitted to the reload time."
+
+[[animations.clips.reload.tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips.reload.tracks.channel]
+channel = "weapon"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.2
+to = [
+    "free",
+    -0.12,
+    0.08,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.58
+to = [
+    "free",
+    -0.12,
+    0.08,
+]
+ease = "cubic_out"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.62
+to = [
+    "free",
+    -0.09,
+    0.08,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.7
+to = [
+    "free",
+    -0.12,
+    0.08,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 1.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks]]
+combine = "compose"
+space = "carry"
+unit = "meters"
+enabled = true
+
+[animations.clips.reload.tracks.channel]
+channel = "weapon_rotation"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    "free",
+    0.0,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.2
+to = [
+    0.25,
+    "free",
+    0.45,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.75
+to = [
+    0.25,
+    "free",
+    0.45,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 1.0
+to = [
+    0.0,
+    "free",
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks]]
+combine = "replace"
+space = "grip"
+unit = "meters"
+enabled = true
+
+[animations.clips.reload.tracks.channel]
+channel = "effector"
+chain = "left_arm"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.15
+to = [
+    -0.03,
+    -0.04,
+    0.02,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.35
+to = [
+    -0.06,
+    -0.16,
+    0.05,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.52
+to = [
+    -0.01,
+    -0.07,
+    0.0,
+]
+ease = "cubic_out"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.6
+to = [
+    -0.01,
+    -0.035,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.7
+to = [
+    -0.01,
+    -0.035,
+    0.0,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.9
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[animations.clips.body_reload]
+name_key = "anim.clips.body_reload"
+length = 1.0
+clock = "seconds"
+looping = false
+note = "The pistol's magazine change: it tips and rolls to show the well while the support hand drops away for a fresh magazine, seats it with a jolt at 60 % and takes its place on the grip again. Fitted to the reload time."
+
+[[animations.clips.body_reload.tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips.body_reload.tracks.channel]
+channel = "weapon"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.2
+to = [
+    "free",
+    -0.12,
+    0.08,
+]
+ease = "linear"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.58
+to = [
+    "free",
+    -0.12,
+    0.08,
+]
+ease = "cubic_out"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.62
+to = [
+    "free",
+    -0.09,
+    0.08,
+]
+ease = "smoother_step"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.7
+to = [
+    "free",
+    -0.12,
+    0.08,
+]
+ease = "smoother_step"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 1.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.body_reload.tracks]]
+combine = "compose"
+space = "carry"
+unit = "meters"
+enabled = true
+
+[animations.clips.body_reload.tracks.channel]
+channel = "weapon_rotation"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    "free",
+    0.0,
+]
+ease = "smoother_step"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.2
+to = [
+    0.25,
+    "free",
+    0.45,
+]
+ease = "linear"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.75
+to = [
+    0.25,
+    "free",
+    0.45,
+]
+ease = "smoother_step"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 1.0
+to = [
+    0.0,
+    "free",
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.body_reload.tracks]]
+combine = "replace"
+space = "grip"
+unit = "meters"
+enabled = true
+
+[animations.clips.body_reload.tracks.channel]
+channel = "effector"
+chain = "left_arm"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.15
+to = [
+    -0.03,
+    -0.04,
+    0.02,
+]
+ease = "smoother_step"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.35
+to = [
+    -0.06,
+    -0.16,
+    0.05,
+]
+ease = "smoother_step"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.52
+to = [
+    -0.01,
+    -0.07,
+    0.0,
+]
+ease = "cubic_out"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.6
+to = [
+    -0.01,
+    -0.035,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.7
+to = [
+    -0.01,
+    -0.035,
+    0.0,
+]
+ease = "smoother_step"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.9
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"

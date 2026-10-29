@@ -1439,7 +1439,10 @@ other. The `Push` is the one thing they cannot share: a bullet is
 point. Write a blast as a directed shove and it slides every corpse in the
 room the same way instead of throwing them off it. A weapon writes a shove for
 *every* hit it lands and never asks whether anything died; the shot that happens to be fatal lands on a corpse
-raised earlier in the same tick. Its units are honest: `push` is a speed at
+raised earlier in the same tick. A shove only the *fatal* hit should throw
+(the shotgun's `kill_shove`) rides on the `Damage` request instead, and
+`apply_damage` throws it, since that is the one place a hit is known to kill.
+Its units are honest: `push` is a speed at
 the center, not momentum to be divided by a mass. Mass is real — a bone's own
 volume — and what it decides is how much of the body a shove drags with it,
 not how fast the bone that was hit leaves, because a rocket that flings a
@@ -1748,10 +1751,12 @@ on its entry in `loadouts.toml` (absent are `DEFAULT_HEALTH` and
 (`Primary`, `Secondary`, `Melee`, `Utility`, `Gadget`, `Special`). A class that
 uses three leaves three empty. Slots decide what a body *spawns* with; what
 it carries afterward is unbounded (see below). Nobody picks a class yet, so `Class::Mercenary`
-is the placeholder everybody plays as — deliberately a sampler, carrying one of
-every kind of action, so the whole table is reachable by walking up to it and
-clicking. `the_placeholder_class_carries_one_of_everything` is what fails when
-a new variant is wired to nothing. It decides what a body *carries* and nothing
+is the placeholder everybody plays as — deliberately a sampler, *permitting* one
+of every kind of action, so the whole table is reachable through a mode's
+loadout or a pickup. A slot with no `default` spawns empty; the Mercenary
+starts with no rifle and no wrench.
+`the_placeholder_class_carries_one_of_everything` is what fails when a new
+variant is wired to nothing. It decides what a body *carries* and nothing
 else: the rig is still built from `Proportions::DEFAULT` and a corpse's build
 is still read off the rig, because keying a *corpse* on a class is the bug
 that replicated every corpse in the game correctly except a player's.
