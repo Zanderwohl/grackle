@@ -24,6 +24,7 @@
 //! | [`camera`] | Orbiting, panning and zooming in those viewports. |
 //! | [`gizmo`] | Moving and sizing the selected feature by dragging it. |
 //! | [`tool`] | What each tool needs picked, and asking for whatever is missing. |
+//! | [`picker`] | Choosing a prop by name, from its picture. |
 //! | [`sync`] | Handing every weapon's model to whoever connects. |
 //! | [`thumbnail`] | Photographing a prop, and keeping the picture on disk. |
 //! | [`ui`] | The panels. |
@@ -50,6 +51,7 @@ pub mod gizmo;
 pub mod hold;
 pub mod line;
 pub mod nice_f32;
+pub mod picker;
 pub mod plane;
 pub mod profile;
 pub mod reference;
@@ -88,7 +90,8 @@ impl Plugin for PropEditorPlugin {
             .add_systems(Startup, load_the_example_prop)
             // Ungated: the save happens here but what must notice it is a
             // body in a round.
-            .add_systems(Update, (start_in_the_prop_editor, publish_the_saved_prop));
+            .add_systems(Update, (start_in_the_prop_editor, publish_the_saved_prop))
+            .add_systems(Update, picker::publish_prop_choices.run_if(in_state(AppMode::Editor)));
     }
 }
 

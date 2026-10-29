@@ -125,6 +125,9 @@ pub struct Thumbnails {
     looked_at: HashMap<String, u64>,
     /// Cached pictures being read off the frame, with the bake they are for.
     reading: Vec<(Request, u64, Task<Option<Image>>)>,
+    /// Pictures asked for without a bake; `false` once the disk had none fresh.
+    unbaked: HashMap<String, bool>,
+    unbaked_reading: Vec<(String, Task<Option<Image>>)>,
     queue: VecDeque<Request>,
     sitting: Option<Sitting>,
 }
@@ -137,6 +140,22 @@ impl Thumbnails {
     /// Only grows, since a handle is kept across a retake.
     pub fn len(&self) -> usize {
         self.props.len()
+    }
+
+    /// Reads the cached picture of `source` without baking it. `false` once the
+    /// disk is known to have none fresh, when only a bake will get one.
+    pub fn look_on_disk(&mut self, name: &str, source: PathBuf) -> bool {
+        if self.props.contains_key(name) {
+            return true;
+        }
+        if let Some(found) = self.unbaked.get(name) {
+            return *found;
+        }
+        self.unbaked.insert(name.to_owned(), true);
+        let entry = CacheEntry { picture: cache_path(PROPS_DIR, name), source };
+        let task = IoTaskPool::get().spawn(async move { disk::read(&entry) });
+        self.unbaked_reading.push((name.to_owned(), task));
+        true
     }
 
     fn keep(&mut self, name: &str, image: Image, images: &mut Assets<Image>) {
@@ -313,6 +332,21 @@ fn finish_reading(mut thumbnails: ResMut<Thumbnails>, mut images: ResMut<Assets<
         false
     });
     thumbnails.reading.append(&mut reading);
+
+    let mut reading = std::mem::take(&mut thumbnails.unbaked_reading);
+    reading.retain_mut(|(name, task)| {
+        let Some(read) = check_ready(task) else { return true };
+        match read {
+            // A bake that landed meanwhile has a picture of its own.
+            Some(image) if !thumbnails.props.contains_key(name) => thumbnails.keep(name, image, &mut images),
+            Some(_) => {}
+            None => {
+                thumbnails.unbaked.insert(name.clone(), false);
+            }
+        }
+        false
+    });
+    thumbnails.unbaked_reading.append(&mut reading);
 }
 
 fn photograph(

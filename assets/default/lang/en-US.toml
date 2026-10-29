@@ -200,6 +200,7 @@ clearance = "Needs { height } m of clear headroom."
 [editor.features.prop]
 title = "Prop"
 model = "Model"
+stand_in = "Stand-in"
 center = "Center"
 rotation = "Rotation"
 yaw = "Yaw"
@@ -646,6 +647,7 @@ view = "View"
 
 [prop.workspace]
 model = "Model"
+stand_in = "Stand-in"
 fit = "Fit"
 
 [prop.panels]
@@ -925,9 +927,11 @@ missing_line = "names a line that is not there"
 no_mirror_plane = "mirrors about a plane that is not there"
 axis_crosses = "turns a region about an axis that crosses it"
 
+[editor.picker]
+search = "Search"
+
 [editor.material_picker]
 plain = "Default"
-search = "Search"
 role = "Role"
 role_named = "{ name } (role)"
 

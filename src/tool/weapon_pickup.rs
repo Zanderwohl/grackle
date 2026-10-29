@@ -1,12 +1,14 @@
 //! Places [`WeaponPickup`] features, and hands their panel the catalog.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
+use bevy_egui::EguiPrimaryContextPass;
 
 use crate::common::app_mode::AppMode;
 use crate::common::weapon::WeaponCatalog;
 use crate::editor::editable::{FeatureTrait, PointRef};
-use crate::editor::weapon_pickup::{self, WeaponChoices, WeaponPickup};
+use crate::common::picker::Choice;
+use crate::editor::weapon_pickup::{self, WeaponPickup, WEAPONS};
+use crate::prop::picker::PropPreviews;
 use crate::get;
 use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
 use crate::tool::Tools;
@@ -23,19 +25,34 @@ impl Plugin for WeaponPickupPlugin {
     }
 }
 
-/// Once, and again whenever the catalog changes, as when a server's arrives:
-/// egui's temporary data outlives the frame. Unordered against the panels, so
-/// at worst a panel lists the previous catalog for a frame.
-fn offer_the_catalog(mut contexts: EguiContexts, catalog: Res<WeaponCatalog>, mut offered: Local<bool>) {
-    if *offered && !catalog.is_changed() {
+/// Again whenever the catalog changes or a picture arrives, since the button
+/// names its weapon whether or not it is open; models are only pictured while
+/// it is.
+fn offer_the_catalog(
+    mut previews: PropPreviews,
+    catalog: Res<WeaponCatalog>,
+    mut offered: Local<Option<usize>>,
+) {
+    let Some(ctx) = previews.ctx() else { return };
+    if WEAPONS.take_open(ctx) {
+        previews.want_pictures(catalog.weapons.iter().filter_map(|weapon| weapon.model.as_deref()));
+    }
+    if *offered == Some(previews.pictures()) && !catalog.is_changed() {
         return;
     }
-    let Ok(ctx) = contexts.ctx_mut() else { return };
-    *offered = true;
-    let mut choices: Vec<(String, String)> =
-        catalog.weapons.iter().map(|weapon| (weapon.key.clone(), get!(weapon.name_key))).collect();
-    choices.sort_by(|a, b| a.1.cmp(&b.1));
-    ctx.data_mut(|data| data.insert_temp(WeaponChoices::id(), WeaponChoices(choices)));
+    *offered = Some(previews.pictures());
+    let mut choices: Vec<Choice> = catalog
+        .weapons
+        .iter()
+        .map(|weapon| Choice {
+            label: get!(weapon.name_key),
+            preview: weapon.model.as_deref().and_then(|model| previews.picture(model)),
+            ..Choice::named(weapon.key.clone())
+        })
+        .collect();
+    choices.sort_by(|a, b| a.label.cmp(&b.label));
+    let Some(ctx) = previews.ctx() else { return };
+    WEAPONS.publish(ctx, choices);
 }
 
 impl PlaceablePoint for WeaponPickup {
