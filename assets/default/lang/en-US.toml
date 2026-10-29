@@ -77,6 +77,16 @@ surface = "The map's surface"
 copy = "{ name }, copy { image }"
 unnamed = "Unnamed volume"
 
+[bakes.kind]
+rooms = "Rooms"
+sunlight = "Sunlight"
+
+[bakes.progress]
+status = "Step { step }/{ steps }: { completed }/{ scheduled } { doing }"
+status_idle = "Step { step }/{ steps }: { completed }/{ scheduled }"
+step = "Step"
+overall = "Overall"
+
 [show]
 title = "Show/Hide"
 cameras = "Cameras"

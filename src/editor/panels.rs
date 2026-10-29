@@ -31,6 +31,8 @@ use crate::common::player_settings::{PlayerSettings, NAME_LIMIT};
 use crate::game::rounds::RoundHistory;
 use crate::get;
 use crate::tool::Tools;
+use crate::tool::bake_job::BakeProgress;
+use crate::tool::bake_progress::{self, Step};
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
 use crate::tool::sun_bake::{BakeSunlight, ClearSunlight, SunBake};
 use crate::tool::retarget::RetargetState;
@@ -99,6 +101,7 @@ impl Default for CurrentFilePath {
 /// A top panel sizes to its contents and a `DockArea` asks for almost nothing, so the default is
 /// stated as the tab bar plus two rows of buttons.
 const TAB_BAR_HEIGHT: f32 = 26.0;
+const MENU_BAR_PROGRESS_WIDTH: f32 = 120.0;
 const TOOLBAR_ROW_HEIGHT: f32 = toolbar::BUTTON_HEIGHT + toolbar::ROW_PADDING * 2.0;
 const TOOLBAR_DEFAULT_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT * 2.0;
 const TOOLBAR_MIN_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT;
@@ -127,6 +130,7 @@ struct PanelMessages<'w> {
     log_ecs: MessageWriter<'w, LogECS>,
     room_bake: ResMut<'w, RoomBake>,
     sun_bake: ResMut<'w, SunBake>,
+    bake_progress: Res<'w, BakeProgress>,
     sunlight: MessageWriter<'w, BakeSunlight>,
     clear_sunlight: MessageWriter<'w, ClearSunlight>,
     edits: MessageWriter<'w, EditEvent>,
@@ -147,7 +151,7 @@ struct TabViewerAndResources<'a> {
     map_metadata: &'a mut MapMetadata,
     multicam_state: &'a mut MulticamState,
     bake_commands: &'a mut BakeCommands,
-    baking_sun: bool,
+    bake_progress: &'a BakeProgress,
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
     retarget_request: &'a mut Option<(FeatureId, String)>,
@@ -201,7 +205,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 Tools::ui(ui, self.current_tool, self.next_tool);
             }
             TabKinds::Bakes => {
-                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.baking_sun);
+                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.bake_progress);
             }
             TabKinds::Show => {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
@@ -362,7 +366,7 @@ impl EditorPanels {
             map_metadata: &mut *map_metadata,
             multicam_state: &mut *multicam_state,
             bake_commands: &mut bake_commands,
-            baking_sun: messages.sun_bake.is_baking(),
+            bake_progress: &messages.bake_progress,
             gizmo_visibility: &mut *gizmo_visibility,
             pending_edits: &mut pending_edits,
             retarget_request: &mut retarget_request,
@@ -394,6 +398,12 @@ impl EditorPanels {
                     if dirty {
                         ui.separator();
                         ui.label("*");
+                    }
+                    if let Some(step) = Step::current(&messages.bake_progress) {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            bake_progress::bar(ui, step.within(), MENU_BAR_PROGRESS_WIDTH);
+                            ui.add(egui::Label::new(step.line()).truncate());
+                        });
                     }
                 });
             })
