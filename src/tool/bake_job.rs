@@ -37,12 +37,11 @@ pub enum BakeKind {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BakeState {
-    /// What is baked is of the map as it stands.
     #[default]
     UpToDate,
     /// Out of date, with auto-bake off and nobody asking.
     Stale,
-    /// Will bake once the map has been still long enough, or once what it is built from settles.
+    /// Will bake once the map has been still long enough and what it reads has settled.
     Waiting,
     Baking,
 }
@@ -54,12 +53,12 @@ pub struct BakeStatus {
     /// Of the bake running, or else of the last one; equal to `scheduled` once it is done.
     pub completed: usize,
     pub scheduled: usize,
-    /// The item being worked on, for display. Empty when nothing is.
+    /// For display. Empty when idle.
     pub doing: String,
 }
 
 impl BakeStatus {
-    /// From 0 to 1. A bake of nothing is done.
+    /// A bake of nothing is done.
     pub fn fraction(&self) -> f32 {
         if self.scheduled == 0 { 1.0 } else { self.completed as f32 / self.scheduled as f32 }
     }
@@ -93,10 +92,10 @@ pub trait BakeJob: Send + 'static {
     /// Items done, and items in all.
     fn progress(&self) -> (usize, usize);
 
-    /// The item [`BakeJob::step`] will do next, for display.
+    /// The next item, for display.
     fn doing(&self) -> String;
 
-    /// Does one item. Never called once every item is done.
+    /// Never called once every item is done.
     fn step(&mut self);
 
     fn finish(self) -> Self::Output;
@@ -166,9 +165,9 @@ fn spawn<J: BakeJob>(hash: u64, mut job: J) -> Running<J> {
     Running { hash, task }
 }
 
-/// A bake of the whole map in the background, keyed by a hash of what it reads. At most one runs
-/// at a time; a change made while it runs is baked after it lands. Whatever was baked last stays
-/// up until the next one replaces it, which is the owner's to keep.
+/// A bake of the whole map in the background, keyed by a hash of what it reads. One runs at a
+/// time; a change made while it runs is baked after it lands. Keeping the last result up until
+/// then is the owner's job.
 pub struct BackgroundBake<J: BakeJob> {
     auto: bool,
     /// What the last bake to land was of.
@@ -212,7 +211,7 @@ impl<J: BakeJob> BackgroundBake<J> {
         self.running.is_some()
     }
 
-    /// Whether a change would be baked, so whether [`BackgroundBake::update`] needs telling.
+    /// Whether a change would be baked, and so whether [`BackgroundBake::update`] needs calling.
     pub fn would_bake(&self) -> bool {
         self.auto || self.asked
     }
@@ -222,7 +221,7 @@ impl<J: BakeJob> BackgroundBake<J> {
         self.asked = true;
     }
 
-    /// Forgets what was baked and drops any bake running, so the next one starts from nothing.
+    /// Forgets what was baked and drops any bake running.
     pub fn forget(&mut self) {
         *self = Self::new(self.auto);
     }
@@ -250,8 +249,8 @@ impl<J: BakeJob> BackgroundBake<J> {
         (self.completed, self.scheduled, self.doing) = (progress.completed, progress.scheduled, progress.doing);
     }
 
-    /// Reads how far the bake has got, and takes it back if it has finished — or, on wasm, sends a
-    /// chunk that has finished out again. Returns what a bake that finished made.
+    /// Reads the bake's progress and returns its output once it finishes. On wasm, sends an
+    /// unfinished chunk out again.
     pub fn poll(&mut self) -> Option<J::Output> {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(progress) = self.running.as_ref()?.progress.try_iter().last() {
@@ -301,8 +300,8 @@ impl<J: BakeJob> BackgroundBake<J> {
         self.running = Some(spawn(hash, job));
     }
 
-    /// For a round about to start: nothing if the map is already baked, otherwise the bake,
-    /// finished now. A bake already running of this map is waited for rather than begun again.
+    /// Finishes a bake of `hash` now, or returns `None` if it is already baked. A bake of it
+    /// already running is waited for rather than begun again.
     pub fn for_the_round(&mut self, hash: u64, job: impl FnOnce() -> J) -> Option<J::Output> {
         self.current = Some(hash);
         if self.baked == Some(hash) {
@@ -392,7 +391,7 @@ mod tests {
         move || Count { done: 0, items }
     }
 
-    /// Polls until a bake lands, returning every status seen on the way.
+    /// With every status seen on the way.
     fn until_landed(bake: &mut BackgroundBake<Count>) -> (usize, Vec<BakeStatus>) {
         let started = std::time::Instant::now();
         let mut seen = Vec::new();

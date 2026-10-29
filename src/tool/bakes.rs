@@ -60,7 +60,7 @@ impl Plugin for BakePlugin {
 pub struct RoomBake {
     auto: bool,
     queue: VecDeque<Entity>,
-    /// Rebuilt since the queue was last empty: with the queue, the progress of the load-in.
+    /// Rebuilt since the queue was last empty.
     batch_done: usize,
     /// Auto-bake is off and a volume has changed since the last bake.
     stale: bool,
@@ -274,7 +274,7 @@ impl BakePlugin {
         let mut done = 0;
         while done < ROOMS_PER_FRAME {
             let Some(entity) = bake.queue.pop_front() else { break };
-            // A volume deleted since it was queued is done with, so it counts toward the batch.
+            // A volume deleted since it was queued still counts as done.
             bake.batch_done += 1;
             let Some(index) = entities.iter().position(|e| *e == entity) else { continue };
             bake_one(index, &entities, &volumes, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);

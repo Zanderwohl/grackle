@@ -303,8 +303,8 @@ fn auto_bake_sunlight(
     if let Some(baked) = state.bake.poll() {
         state.land(baked, &mut images);
     }
-    // Half a map's rooms rebuilt is a map with holes in it, and light would pour through them. With
-    // nothing to bake, the snapshot is only for telling stale from up to date, so only on a change.
+    // Half-rebuilt rooms leave holes for light to come through. With nothing to bake, a snapshot
+    // only tells stale from up to date, so it is taken only on a change.
     if !rooms.is_settled() || !(state.bake.would_bake() || inputs_changed) {
         return;
     }
