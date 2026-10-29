@@ -4372,6 +4372,7 @@ dependencies = [
  "bevy_egui",
  "bevy_vector_shapes",
  "clap",
+ "crossbeam-channel",
  "egui_dock",
  "egui_extras",
  "getrandom 0.3.3",

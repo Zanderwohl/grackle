@@ -41,6 +41,7 @@ pub mod footprint;
 pub mod footprint_drag;
 pub mod movement;
 pub mod bakes;
+pub mod bake_job;
 pub mod sun_bake;
 pub mod show;
 pub mod tool_helpers;

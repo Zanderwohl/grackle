@@ -20,6 +20,7 @@ debug = false
 [dependencies]
 bevy = "0.20.0"
 bevy_vector_shapes = "0.14.0"
+crossbeam-channel = "0.5.15"
 
 bevy_egui = "0.43.1"
 egui_dock = "0.21.1"

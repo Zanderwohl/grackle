@@ -72,6 +72,11 @@ auto_rooms = "Auto-bake Rooms"
 sunlight = "Sunlight"
 auto_sunlight = "Auto-bake Sunlight"
 
+[bakes.doing]
+surface = "The map's surface"
+copy = "{ name }, copy { image }"
+unnamed = "Unnamed volume"
+
 [show]
 title = "Show/Hide"
 cameras = "Cameras"

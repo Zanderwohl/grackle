@@ -158,8 +158,9 @@ mappers will ask for it by name.
 
 ### What is baked, and when
 
-`NavBake` is the third member of `BakeSystems::All`, after rooms. It follows
-the sun bake's model exactly:
+`NavBake` is the third member of `BakeSystems::All`, after rooms. It is a
+`BakeJob` run by `BackgroundBake` ([`src/tool/bake_job.rs`](../src/tool/bake_job.rs)),
+as the sun is, and reports as `BakeKind::Nav`:
 
 - The input is a snapshot (faces, volumes, solid props, triggers, pickups,
   spawns, `MovementRules`), hashed. The job runs on the async compute pool
@@ -273,8 +274,10 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
 - [ ] Floor faces → lattice cells → `fits` → cells (`common/nav.rs`), Kill
       volumes excluded, Hurt rates kept
 - [ ] Walk and step links; reachability from spawns prunes the rest
-- [ ] `NavBake` in `BakeSystems::All` after rooms, async, hash-keyed, kept
-      until replaced, auto-bake debounced
+- [x] A shared runner and progress report for background bakes
+      (`BackgroundBake`, `BakeProgress`), with the sun moved onto it
+- [ ] `NavBake` as a `BakeJob` in `BakeSystems::All`, reporting as
+      `BakeKind::Nav`; the old graph kept until replaced
 - [ ] Nav panel with Bake and Cells and links overlay (floor mesh,
       `editor_only`)
 - [ ] Tests: a lone room is one connected set; a 0.4 m lip is a step and a

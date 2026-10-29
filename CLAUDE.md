@@ -1170,6 +1170,21 @@ light plus one bounce gathered every meter (`LitSurface::ambient`). The
 lightmap replaces the ambient on walls, so `GlobalAmbientLight` lights only
 what moves.
 
+**Every bake reports the same way**
+([`src/tool/bake_job.rs`](src/tool/bake_job.rs)): a `BakeStatus` per
+`BakeKind` in the `BakeProgress` resource — a state (up to date, stale,
+waiting, baking), whether auto-bake is on, items completed of items
+scheduled, and what it is working on — written by the bake itself each frame,
+so a panel draws any bake without knowing which it is. A bake of the whole
+map in the background is a `BakeJob` run by `BackgroundBake`, which owns the
+hash, the settle delay, the one-at-a-time rule and the wait at round start.
+The job is stepped an item at a time: on native straight through, sending its
+progress back over a channel every `CHUNK`; on wasm, where the pool runs a
+task in one go on the main thread, in chunks of `CHUNK` sent out again each
+frame, which is what spreads it across frames. Rooms are not a
+`BakeJob`: they are incremental and build meshes on the main thread, and
+report their queue instead.
+
 ## What a body is drawn as
 
 Three volumes, and they are kept apart on purpose — the movement hull, the

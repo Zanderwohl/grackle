@@ -956,6 +956,9 @@ pub struct Block(pub Room);
 #[derive(Component, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VolumeOrder(pub Vec<u32>);
 
+/// A volume not yet placed goes last rather than vanishing under the rest.
+static UNPLACED: std::sync::LazyLock<VolumeOrder> = std::sync::LazyLock::new(|| VolumeOrder(vec![u32::MAX]));
+
 /// Every room and block standing, for whatever builds from the surface.
 #[derive(SystemParam)]
 pub struct MapVolumes<'w, 's> {
@@ -964,9 +967,9 @@ pub struct MapVolumes<'w, 's> {
 }
 
 impl MapVolumes<'_, '_> {
-    /// In the map's order. A volume not yet placed goes last rather than vanishing under the rest.
+    /// In the map's order.
     pub fn placed(&self) -> Vec<(VolumeOrder, Volume, Entity)> {
-        let order = |order: Option<&VolumeOrder>| order.cloned().unwrap_or_else(|| VolumeOrder(vec![u32::MAX]));
+        let order = |order: Option<&VolumeOrder>| order.unwrap_or(&UNPLACED).clone();
         let rooms = self.rooms.iter().map(|(entity, room, place)| (order(place), Volume::air(room.clone()), entity));
         let blocks = self.blocks.iter().map(|(entity, block, place)| (order(place), Volume::solid(block.0.clone()), entity));
         let mut all: Vec<_> = rooms.chain(blocks).collect();
@@ -984,9 +987,10 @@ impl MapVolumes<'_, '_> {
 
     /// Borrowed, in the order the queries walk them: for asking whether
     /// anything changed without cloning the map.
-    pub fn each(&self) -> impl Iterator<Item = (Entity, &Room, Fill, Option<&VolumeOrder>)> + '_ {
-        let rooms = self.rooms.iter().map(|(entity, room, order)| (entity, room, Fill::Air, order));
-        rooms.chain(self.blocks.iter().map(|(entity, block, order)| (entity, &block.0, Fill::Solid, order)))
+    /// Each with its place, as [`MapVolumes::placed`] gives it.
+    pub fn each(&self) -> impl Iterator<Item = (Entity, &Room, Fill, &VolumeOrder)> + '_ {
+        let rooms = self.rooms.iter().map(|(entity, room, order)| (entity, room, Fill::Air, order.unwrap_or(&UNPLACED)));
+        rooms.chain(self.blocks.iter().map(|(entity, block, order)| (entity, &block.0, Fill::Solid, order.unwrap_or(&UNPLACED))))
     }
 
     /// In the order the queries walk them, which is not the map's.
