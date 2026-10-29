@@ -1,25 +1,19 @@
-//! The toolbar widgets both editors are built from, so a tool looks and sizes
-//! the same whichever editor it is in.
-//!
-//! Every button carries an icon slot. There are no icons yet, so each draws
-//! [`PLACEHOLDER_ICON`]; the room it takes is the point.
+//! Toolbar widgets shared by both editors. Every button has an icon slot;
+//! there are no icons yet, so each draws [`PLACEHOLDER_ICON`].
 
 use bevy_egui::egui::{self, CornerRadius, Popup, RectAlign, Ui};
 
 pub const BUTTON_HEIGHT: f32 = 28.0;
 pub const BUTTON_MIN_WIDTH: f32 = 72.0;
 pub const ROW_PADDING: f32 = 6.0;
-/// Between unrelated controls in a row.
 const GAP: f32 = 6.0;
-/// Between buttons that share an edge: a hairline, so two idle buttons still
-/// read as two.
+/// A hairline, so two idle joined buttons still read as two.
 const SEAM: f32 = 1.0;
 const ARROW_WIDTH: f32 = 16.0;
 
 pub const PLACEHOLDER_ICON: &str = "□";
 
-/// Which of a button's sides it shares with a neighbor. A shared side is
-/// squared off; the rest keep the theme's rounding.
+/// Which sides a button shares with a neighbor; those are squared off.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Joins {
     pub left: bool,
@@ -47,8 +41,7 @@ impl Joins {
     }
 }
 
-/// A row of toolbar controls that wraps when the panel is narrow. Every
-/// widget in it is [`BUTTON_HEIGHT`] tall, combo boxes included.
+/// Wraps when narrow. Every widget in it is [`BUTTON_HEIGHT`] tall, combo boxes included.
 pub fn row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.add_space(ROW_PADDING);
     let inner = ui
@@ -62,8 +55,7 @@ pub fn row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     inner
 }
 
-/// Buttons that share edges. Each states its own [`Joins`] — usually
-/// [`Joins::in_run`] — and the cluster never wraps partway through.
+/// Never wraps partway through. Each button states its own [`Joins`].
 pub fn cluster<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = SEAM;
@@ -72,7 +64,6 @@ pub fn cluster<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     .inner
 }
 
-/// A tool: lit while `selected`.
 pub fn button(ui: &mut Ui, label: impl Into<String>, selected: bool, joins: Joins) -> egui::Response {
     button_enabled(ui, true, label, selected, joins)
 }
@@ -94,7 +85,6 @@ pub fn button_enabled(
     )
 }
 
-/// One button of a [`joined`] run.
 pub struct Segment {
     pub label: String,
     pub selected: bool,
@@ -115,7 +105,6 @@ impl Segment {
     }
 }
 
-/// A [`cluster`] of `segments`, each joined to its neighbors.
 pub fn joined(ui: &mut Ui, segments: impl IntoIterator<Item = Segment>) -> Vec<egui::Response> {
     let segments: Vec<Segment> = segments.into_iter().collect();
     let len = segments.len();
@@ -130,19 +119,16 @@ pub fn joined(ui: &mut Ui, segments: impl IntoIterator<Item = Segment>) -> Vec<e
     })
 }
 
-/// Which of `responses` was clicked.
 pub fn clicked(responses: &[egui::Response]) -> Option<usize> {
     responses.iter().position(egui::Response::clicked)
 }
 
-/// One button standing for a family of `len` tools, with a narrow arrow beside
-/// it listing the rest. The button is the last one used — first index 0, and
-/// whichever is `active` while one is — and picking from the list makes that
-/// one the button. Returns the index clicked, from either half. `label` is
-/// asked only for what is drawn.
+/// A family of `len` tools behind one button showing the last used (index 0
+/// at first, `active` while one is), with an arrow listing the rest. Returns
+/// the index clicked. `label` is asked only for what is drawn.
 ///
-/// `id_salt` must be unique across the whole context, not only the `Ui`: the
-/// last-used choice is kept under it, so moving the toolbar does not forget it.
+/// `id_salt` must be unique across the context: the last-used choice is kept
+/// under it rather than under the `Ui`'s id, so moving the toolbar keeps it.
 pub fn split_button(
     ui: &mut Ui,
     id_salt: &str,
@@ -202,7 +188,7 @@ fn shown(active: Option<usize>, remembered: Option<usize>, len: usize) -> usize 
     active.or(remembered).filter(|&index| index < len).unwrap_or(0)
 }
 
-/// Painted rather than a glyph, so it does not depend on what fonts a pack ships.
+/// Painted, not a glyph, so it does not depend on a pack's fonts.
 fn paint_arrow(ui: &Ui, arrow: &egui::Response) {
     let color = ui.style().interact(arrow).fg_stroke.color;
     let center = arrow.rect.center();
