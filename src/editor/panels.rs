@@ -151,7 +151,6 @@ struct TabViewerAndResources<'a> {
     map_metadata: &'a mut MapMetadata,
     multicam_state: &'a mut MulticamState,
     bake_commands: &'a mut BakeCommands,
-    baking_sun: bool,
     bake_progress: &'a BakeProgress,
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
@@ -206,7 +205,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 Tools::ui(ui, self.current_tool, self.next_tool);
             }
             TabKinds::Bakes => {
-                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.baking_sun, self.bake_progress);
+                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.bake_progress);
             }
             TabKinds::Show => {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
@@ -367,7 +366,6 @@ impl EditorPanels {
             map_metadata: &mut *map_metadata,
             multicam_state: &mut *multicam_state,
             bake_commands: &mut bake_commands,
-            baking_sun: messages.sun_bake.is_baking(),
             bake_progress: &messages.bake_progress,
             gizmo_visibility: &mut *gizmo_visibility,
             pending_edits: &mut pending_edits,
@@ -403,8 +401,8 @@ impl EditorPanels {
                     }
                     if let Some(step) = Step::current(&messages.bake_progress) {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            bake_progress::bar(ui, step.within(), Some(MENU_BAR_PROGRESS_WIDTH));
-                            ui.label(step.line());
+                            bake_progress::bar(ui, step.within(), MENU_BAR_PROGRESS_WIDTH);
+                            ui.add(egui::Label::new(step.line()).truncate());
                         });
                     }
                 });

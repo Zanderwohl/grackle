@@ -83,6 +83,7 @@ sunlight = "Sunlight"
 
 [bakes.progress]
 status = "Step { step }/{ steps }: { completed }/{ scheduled } { doing }"
+status_idle = "Step { step }/{ steps }: { completed }/{ scheduled }"
 step = "Step"
 overall = "Overall"
 

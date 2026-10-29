@@ -10,7 +10,7 @@ use bevy_egui::egui;
 use crate::editor::editable::FeatureTag;
 use crate::get;
 use crate::common::world_surface::Volume;
-use crate::tool::bake_progress::{self, Step};
+use crate::tool::bake_progress;
 use crate::tool::bake_job::{self, BakeKind, BakeProgress, BakeState, BakeStatus, VolumeLabels};
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, MapVolumes, Room, RoomSlot, VolumeOrder};
 
@@ -153,7 +153,7 @@ fn touches(a: &Volume, b: &Volume) -> bool {
 }
 
 impl BakePlugin {
-    pub fn ui(ui: &mut egui::Ui, auto: bool, auto_sun: bool, baking_sun: bool, progress: &BakeProgress) -> BakeCommands {
+    pub fn ui(ui: &mut egui::Ui, auto: bool, auto_sun: bool, progress: &BakeProgress) -> BakeCommands {
         let mut commands = BakeCommands { auto, auto_sun, ..default() };
         ui.vertical(|ui| {
             ui.checkbox(&mut commands.auto, get!("bakes.auto_rooms"));
@@ -174,17 +174,11 @@ impl BakePlugin {
                 if ui.small_button("x").clicked() {
                     commands.clear_sunlight = true;
                 }
-                if baking_sun {
-                    ui.spinner();
-                }
             });
             if ui.button("Log ECS").clicked() {
                 commands.log_ecs = true;
             }
-            if Step::current(progress).is_some() {
-                ui.separator();
-                bake_progress::section(ui, progress);
-            }
+            bake_progress::section(ui, progress);
         });
         commands
     }
