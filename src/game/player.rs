@@ -739,118 +739,140 @@ pub fn step_player(
     for (mut player_slot, mut body_slot, mut stance_slot, input, condition, mut impulse) in &mut players {
         // Stepped on copies and written back only if different: all three are
         // replicated, and a still body would otherwise be resent every tick.
-        let mut player = player_slot.clone();
-        let mut body = *body_slot;
-        let mut stance = *stance_slot;
-
-        player.sliding = (player.sliding - dt).max(0.0);
-        if impulse.0 != Vec3::ZERO {
-            let kick = std::mem::take(&mut impulse.0);
-            player.velocity += kick;
-            player.sliding = KNOCKBACK_SLIDE;
-            // Off the floor here, or the walk below lays the kick flat along
-            // it and the ground snap puts the body straight back.
-            if player.ground.is_some_and(|floor| player.velocity.dot(floor) > LAUNCH_SPEED) {
-                player.ground = None;
-            }
-        }
-
-        // Read, never taken: `write_client_inputs` already consumed the edge,
-        // and rollback replays this input.
-        let jump = input.jump;
-
-        // The view is aimed from the latch and never held back. Movement below
-        // is from the body's yaw, so a held body walks the way it faces.
-        let turning = condition.turning(taunts.as_deref());
-        let aim = (input.yaw, input.pitch);
-        (player.yaw, player.pitch) = match turning {
-            TauntTurning::Free if player.catching_up => TauntTurning::AtMost(CATCH_UP_DEGREES_PER_SECOND),
-            turning => turning,
-        }
-        .follow((player.yaw, player.pitch), aim, dt);
-        player.catching_up = match turning {
-            TauntTurning::Free => (player.yaw, player.pitch) != aim,
-            _ => true,
-        };
-        let crouch = input.crouch && condition.may_crouch();
-        change_stance(&mut stance, &mut body, player.on_ground(), crouch, &world);
-        let half = stance.half_extents();
-        let wish = Vec3::new(input.movement.x, 0.0, -input.movement.y).normalize_or_zero();
-        let wish = Quat::from_rotation_y(player.yaw) * wish;
-        let wishing = wish != Vec3::ZERO;
-
-        // The animation measures ground covered; it is never told which speed.
-        let speed = if rules.sprint.sprints(input.sprint) { SPRINT_SPEED } else { WALK_SPEED };
-        let speed = if stance == Stance::Crouched { CROUCH_SPEED } else { speed };
-        // A replicated, unpredicted `Condition`: the tick a taunt starts or
-        // stops is a rollback, which is correct and rare.
-        let speed = speed * condition.speed_factor(taunts.as_deref());
-        let speed = if wishing { speed } else { 0.0 };
-
-        // A held jump re-fires on landing, so chaining jumps needs no fresh
-        // press. The tick that jumps feels no friction, so a hop chained on
-        // landing keeps its speed: bunny hopping. On the ground velocity
-        // follows the floor and gravity does nothing, so a walkable slope is
-        // walked up and down and not slid down when standing still.
-        let jumped = player.on_ground() && jump;
-        player.velocity = match player.ground {
-            Some(floor) => {
-                let along_floor = (wish - floor * wish.dot(floor)).normalize_or_zero();
-                let coasting = if jump || player.sliding > 0.0 { player.velocity } else { friction(player.velocity, dt) };
-                let moving = accelerate(coasting, along_floor, speed, speed, GROUND_ACCELERATE, dt);
-                if jump { Vec3::new(moving.x, JUMP_SPEED, moving.z) } else { onto_floor(moving, floor) }
-            }
-            None => {
-                let moving = accelerate(player.velocity, wish, speed, speed.min(AIR_WISH_SPEED), AIR_ACCELERATE, dt);
-                Vec3::new(moving.x, player.velocity.y + rules.fall() * dt, moving.z)
-            }
-        };
-
-        // A room edited mid-match can enclose a body that crossed nothing,
-        // which a sweep cannot see.
-        let start = world.depenetrate(body.current, half);
-        let delta = player.velocity * dt;
-        let (mut position, mut touched) = world.slide(start, half, delta);
-
-        // A stair is a wall too low to be one. Taken only if it gets further,
-        // so pressing into a real wall does not hop on the spot.
-        let walled = |touched: &Touched| touched.iter().any(|n| n.y.abs() < WALKABLE);
-        if player.on_ground() && !jumped && walled(&touched) {
-            if let Some((stepped, over)) = world.step_up(start, half, delta, STEP_HEIGHT, WALKABLE) {
-                let level = |p: Vec3| Vec2::new(p.x - start.x, p.z - start.z).length();
-                if level(stepped) > level(position) + 1.0e-4 {
-                    (position, touched) = (stepped, over);
-                }
-            }
-        }
-
-        player.velocity = touched.clip(player.velocity);
-        player.against_wall = walled(&touched);
-        // Settled onto a floor found within the probe, so a body that ended a
-        // fall just short of one does not stand on air.
-        // Walking up a slope rises too; only a jump, or still going up after
-        // one, leaves the ground.
-        let rising = jumped || (player.ground.is_none() && player.velocity.y > 0.0);
-        let ground = (!rising).then(|| world.ground(position, half, GROUND_PROBE, WALKABLE)).flatten();
-        if let Some((resting, floor)) = ground {
-            position = resting;
-            // A landing settled by the probe touched nothing in the slide, so
-            // the fall is taken off here; left in, the next tick would turn
-            // it into speed along the floor.
-            let into = player.velocity.dot(floor);
-            if into < 0.0 {
-                player.velocity -= floor * into;
-            }
-        }
-        player.ground = ground.map(|(_, normal)| normal);
-
-        body.previous = body.current;
-        body.current = position;
-
-        player_slot.set_if_neq(player);
-        body_slot.set_if_neq(body);
-        stance_slot.set_if_neq(stance);
+        let mut mover = Mover { player: player_slot.clone(), body: *body_slot, stance: *stance_slot };
+        let kick = std::mem::take(&mut impulse.0);
+        step(&mut mover, kick, input, condition, taunts.as_deref(), &world, &rules, dt);
+        player_slot.set_if_neq(mover.player);
+        body_slot.set_if_neq(mover.body);
+        stance_slot.set_if_neq(mover.stance);
     }
+}
+
+/// What [`step`] moves: everything about a body that one tick changes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mover {
+    pub player: Player,
+    pub body: PhysicsBody,
+    pub stance: Stance,
+}
+
+/// One body's tick, as [`step_player`] runs it, for anything that needs to know where an input
+/// takes a body without a world to run it in: a bot's planning, or the nav bake's jump links.
+/// `kick` is the knockback taken this tick.
+#[allow(clippy::too_many_arguments)]
+pub fn step(
+    mover: &mut Mover,
+    kick: Vec3,
+    input: &PlayerInput,
+    condition: &Condition,
+    taunts: Option<&crate::common::taunt::Taunts>,
+    world: &CollisionWorld,
+    rules: &MovementRules,
+    dt: f32,
+) {
+    let Mover { player, body, stance } = mover;
+    player.sliding = (player.sliding - dt).max(0.0);
+    if kick != Vec3::ZERO {
+        player.velocity += kick;
+        player.sliding = KNOCKBACK_SLIDE;
+        // Off the floor here, or the walk below lays the kick flat along
+        // it and the ground snap puts the body straight back.
+        if player.ground.is_some_and(|floor| player.velocity.dot(floor) > LAUNCH_SPEED) {
+            player.ground = None;
+        }
+    }
+
+    // Read, never taken: `write_client_inputs` already consumed the edge,
+    // and rollback replays this input.
+    let jump = input.jump;
+
+    // The view is aimed from the latch and never held back. Movement below
+    // is from the body's yaw, so a held body walks the way it faces.
+    let turning = condition.turning(taunts);
+    let aim = (input.yaw, input.pitch);
+    (player.yaw, player.pitch) = match turning {
+        TauntTurning::Free if player.catching_up => TauntTurning::AtMost(CATCH_UP_DEGREES_PER_SECOND),
+        turning => turning,
+    }
+    .follow((player.yaw, player.pitch), aim, dt);
+    player.catching_up = match turning {
+        TauntTurning::Free => (player.yaw, player.pitch) != aim,
+        _ => true,
+    };
+    let crouch = input.crouch && condition.may_crouch();
+    change_stance(stance, body, player.on_ground(), crouch, world);
+    let half = stance.half_extents();
+    let wish = Vec3::new(input.movement.x, 0.0, -input.movement.y).normalize_or_zero();
+    let wish = Quat::from_rotation_y(player.yaw) * wish;
+    let wishing = wish != Vec3::ZERO;
+
+    // The animation measures ground covered; it is never told which speed.
+    let speed = if rules.sprint.sprints(input.sprint) { SPRINT_SPEED } else { WALK_SPEED };
+    let speed = if *stance == Stance::Crouched { CROUCH_SPEED } else { speed };
+    // A replicated, unpredicted `Condition`: the tick a taunt starts or
+    // stops is a rollback, which is correct and rare.
+    let speed = speed * condition.speed_factor(taunts);
+    let speed = if wishing { speed } else { 0.0 };
+
+    // A held jump re-fires on landing, so chaining jumps needs no fresh
+    // press. The tick that jumps feels no friction, so a hop chained on
+    // landing keeps its speed: bunny hopping. On the ground velocity
+    // follows the floor and gravity does nothing, so a walkable slope is
+    // walked up and down and not slid down when standing still.
+    let jumped = player.on_ground() && jump;
+    player.velocity = match player.ground {
+        Some(floor) => {
+            let along_floor = (wish - floor * wish.dot(floor)).normalize_or_zero();
+            let coasting = if jump || player.sliding > 0.0 { player.velocity } else { friction(player.velocity, dt) };
+            let moving = accelerate(coasting, along_floor, speed, speed, GROUND_ACCELERATE, dt);
+            if jump { Vec3::new(moving.x, JUMP_SPEED, moving.z) } else { onto_floor(moving, floor) }
+        }
+        None => {
+            let moving = accelerate(player.velocity, wish, speed, speed.min(AIR_WISH_SPEED), AIR_ACCELERATE, dt);
+            Vec3::new(moving.x, player.velocity.y + rules.fall() * dt, moving.z)
+        }
+    };
+
+    // A room edited mid-match can enclose a body that crossed nothing,
+    // which a sweep cannot see.
+    let start = world.depenetrate(body.current, half);
+    let delta = player.velocity * dt;
+    let (mut position, mut touched) = world.slide(start, half, delta);
+
+    // A stair is a wall too low to be one. Taken only if it gets further,
+    // so pressing into a real wall does not hop on the spot.
+    let walled = |touched: &Touched| touched.iter().any(|n| n.y.abs() < WALKABLE);
+    if player.on_ground() && !jumped && walled(&touched) {
+        if let Some((stepped, over)) = world.step_up(start, half, delta, STEP_HEIGHT, WALKABLE) {
+            let level = |p: Vec3| Vec2::new(p.x - start.x, p.z - start.z).length();
+            if level(stepped) > level(position) + 1.0e-4 {
+                (position, touched) = (stepped, over);
+            }
+        }
+    }
+
+    player.velocity = touched.clip(player.velocity);
+    player.against_wall = walled(&touched);
+    // Settled onto a floor found within the probe, so a body that ended a
+    // fall just short of one does not stand on air.
+    // Walking up a slope rises too; only a jump, or still going up after
+    // one, leaves the ground.
+    let rising = jumped || (player.ground.is_none() && player.velocity.y > 0.0);
+    let ground = (!rising).then(|| world.ground(position, half, GROUND_PROBE, WALKABLE)).flatten();
+    if let Some((resting, floor)) = ground {
+        position = resting;
+        // A landing settled by the probe touched nothing in the slide, so
+        // the fall is taken off here; left in, the next tick would turn
+        // it into speed along the floor.
+        let into = player.velocity.dot(floor);
+        if into < 0.0 {
+            player.velocity -= floor * into;
+        }
+    }
+    player.ground = ground.map(|(_, normal)| normal);
+
+    body.previous = body.current;
+    body.current = position;
 }
 
 /// Slow down, by [`FRICTION`] scaled by horizontal speed — a slope's rise is
@@ -1020,6 +1042,37 @@ mod tests {
             v = air(v, sideways);
         }
         assert!(v.length() > SPRINT_SPEED * 1.2, "a second's air strafe reached only {}", v.length());
+    }
+
+    /// Breaks if the system stops being a thin wrapper round `step`: the nav bake and bots would
+    /// then plan with physics the game does not run.
+    #[test]
+    fn the_system_and_the_pure_step_move_a_body_alike() {
+        let start = body_center_from_feet(Vec3::new(0.0, 0.0, 5.0));
+        let input = PlayerInput { movement: Vec2::Y, jump: true, yaw: 0.3, ..default() };
+        let kick = Vec3::new(2.0, 4.0, 0.0);
+
+        let mut world = World::new();
+        world.insert_resource(open_room());
+        world.insert_resource(MovementRules::default());
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_secs_f32(TICK));
+        world.insert_resource(time);
+        let body = world
+            .spawn((Player::default(), PhysicsBody::at(start), Stance::Standing, ActionState(input.clone()), Impulse(kick), Simulated))
+            .id();
+
+        let collision = open_room();
+        let rules = MovementRules::default();
+        let mut mover = Mover { player: Player::default(), body: PhysicsBody::at(start), stance: Stance::Standing };
+        for tick in 0..40 {
+            world.run_system_once(step_player).unwrap();
+            step(&mut mover, if tick == 0 { kick } else { Vec3::ZERO }, &input, &Condition::default(), None, &collision, &rules, TICK);
+        }
+
+        assert_eq!(world.get::<Player>(body).unwrap(), &mover.player);
+        assert_eq!(world.get::<PhysicsBody>(body).unwrap(), &mover.body);
+        assert!(mover.body.current.distance(start) > 1.0, "the body never went anywhere");
     }
 
     #[test]

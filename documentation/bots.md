@@ -269,7 +269,7 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
 ## Checklist
 
 ### Stage 1: cells and walking
-- [ ] Pull `step_player`'s body out into a pure `step`, with the system
+- [x] Pull `step_player`'s body out into a pure `step`, with the system
       calling it; a test that the system and the function agree
 - [ ] Floor faces → lattice cells → `fits` → cells (`common/nav.rs`), Kill
       volumes excluded, Hurt rates kept
