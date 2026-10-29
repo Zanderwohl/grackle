@@ -90,6 +90,11 @@ impl Standing {
         self.points().max(0) as u32
     }
 
+    /// The frags the HUD shows, floored at zero as `shown_points` is.
+    pub fn shown_frags(&self) -> u32 {
+        self.frags.max(0) as u32
+    }
+
     /// What a row says: the name, or "Player {id}" for somebody unnamed.
     pub fn display_name(&self) -> String {
         match self.name.is_empty() {
@@ -386,7 +391,7 @@ fn row(standing: &Standing, ours: bool, font: &Handle<Font>) -> impl Bundle {
                 Pickable::IGNORE,
                 children![text(standing.display_name())],
             ),
-            text(standing.frags.to_string()),
+            text(standing.shown_frags().to_string()),
         ],
     )
 }
@@ -456,6 +461,7 @@ mod tests {
     fn killing_yourself_or_dying_to_the_map_costs_a_frag() {
         let all = after(&[died(2, DamageSource::Player(PlayerId(2))), died(2, DamageSource::World)]);
         assert_eq!((all[2].frags, all[2].deaths), (-2, 2));
+        assert_eq!(all[2].shown_frags(), 0);
     }
 
     #[test]
