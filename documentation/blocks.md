@@ -106,10 +106,13 @@ checklist; the checklist is the source of truth for what is done.
 ### Stage 3 — collision
 
 - [x] `CollisionWorld` keeps the volumes, and `inside_map` is `is_air`.
-- [ ] Spawn fallback: the largest room's `floor_point` may be in a block;
-      take a room point that is air.
-- [ ] Wall slabs no deeper than the solid behind them: a 0.5 m slab behind
-      one side of a 0.2 m block stands 0.3 m out of the other.
+- [x] Spawn fallback: `fallback_spawn` reads the rooms off `CollisionWorld`
+      and searches each, largest first, outward from its `floor_point` on a
+      half-meter grid for somewhere a body `fits`.
+- [x] Wall slabs no deeper than the solid behind them (`depth_behind`): a
+      slab stops at the nearest face strictly inside the prism its face
+      sweeps back. This was a rooms bug too — a 0.2 m floor between stacked
+      rooms stood 0.3 m up into the room above.
 
 ### Stage 4 — light
 

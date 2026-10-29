@@ -22,7 +22,6 @@ use crate::game::collision::CollisionWorld;
 use crate::game::player::{spawn_player, LocalPlayer, Player, Simulated, Spawn};
 use crate::game::weapon::AutoReload;
 use crate::game::respawn::{choose_spawn, next_team, placed_spawns, team_name, HueStart, Identity, OurIdentity};
-use crate::tool::room::Room;
 
 /// Spawns bodies for connected clients and marks our own when it arrives.
 pub struct NetBodiesPlugin;
@@ -134,7 +133,6 @@ fn give_bodies_to_whoever_needs_one(
     us: Option<Res<OurIdentity>>,
     collision: Res<CollisionWorld>,
     spawns: Query<(&Transform, Option<&Side>), With<SpawnPointMarker>>,
-    rooms: Query<&Room>,
     mut ids: ResMut<NextPlayerId>,
     hue_start: Option<Res<HueStart>>,
     rules: Res<GameRules>,
@@ -148,7 +146,6 @@ fn give_bodies_to_whoever_needs_one(
     let hosting = matches!(role.as_deref(), Some(NetRole::Listen { .. }));
 
     let placed = placed_spawns(&spawns);
-    let rooms: Vec<Room> = rooms.iter().cloned().collect();
 
     // Decides the next player's team and color. Counted from existing
     // identities, so somebody leaving frees their side and hue up.
@@ -186,7 +183,7 @@ fn give_bodies_to_whoever_needs_one(
             }
         };
         if !waiting(who) {
-            let spawn = choose_spawn(&placed, who.team, &collision, &rooms);
+            let spawn = choose_spawn(&placed, who.team, &collision);
             info!("Standing our own body up as {} on {}", who.id, team_name(who.team));
             let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
             commands.entity(body).insert(LocalPlayer);
@@ -212,7 +209,7 @@ fn give_bodies_to_whoever_needs_one(
         if waiting(who) {
             continue;
         }
-        let spawn = choose_spawn(&placed, who.team, &collision, &rooms);
+        let spawn = choose_spawn(&placed, who.team, &collision);
         info!("Standing a client's body up as {} on {}", who.id, team_name(who.team));
         spawn_body_for(&mut commands, spawn, (who, start), (link, peer.0), &rules, &catalog);
     }
@@ -267,6 +264,7 @@ mod tests {
     use crate::common::damage::{Damageable, PlayerId};
     use crate::common::player_color::PlayerColor;
     use crate::common::team::Team;
+    use crate::tool::room::Room;
 
     fn a_map(world: &mut World) {
         let room = Room::new(Vec3::new(-8.0, 0.0, -8.0), Vec3::new(8.0, 6.0, 8.0));
