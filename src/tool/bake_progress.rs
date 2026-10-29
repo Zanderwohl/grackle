@@ -1,12 +1,10 @@
-//! Drawing [`BakeProgress`]: which bake of all of them is running, and how far it and the whole
-//! lot have got. A step is one bake, in [`BakeKind`] order.
+//! Drawing [`BakeProgress`]. A step is one bake, in [`BakeKind`] order.
 
 use bevy_egui::egui;
 
 use crate::get;
 use crate::tool::bake_job::{BakeKind, BakeProgress, BakeState, BakeStatus};
 
-/// The bake running, and where it stands among all of them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Step<'a> {
     /// 1-based.
@@ -17,7 +15,7 @@ pub struct Step<'a> {
 }
 
 impl<'a> Step<'a> {
-    /// `None` when nothing is baking. Statuses come in [`BakeKind`] order.
+    /// `None` when nothing is baking.
     pub fn of(statuses: &[(BakeKind, &'a BakeStatus)]) -> Option<Self> {
         Self::find(statuses.iter().copied(), statuses.len())
     }
@@ -33,7 +31,7 @@ impl<'a> Step<'a> {
             .map(|(index, (kind, status))| Step { step: index + 1, steps, kind, status })
     }
 
-    /// From 0 to 1, counting every bake before this one as done.
+    /// Counts every bake before this one as done.
     pub fn overall(&self) -> f32 {
         ((self.step - 1) as f32 + self.status.fraction()) / self.steps as f32
     }
@@ -76,14 +74,12 @@ pub fn bar(ui: &mut egui::Ui, fraction: f32, width: f32) -> egui::Response {
     ui.add(egui::ProgressBar::new(fraction.clamp(0.0, 1.0)).show_percentage().desired_width(width))
 }
 
-/// For the Bakes panel: what is baking, the status line, and both bars. Nothing when idle.
 pub fn section(ui: &mut egui::Ui, progress: &BakeProgress) {
     let Some(step) = Step::current(progress) else { return };
     ui.separator();
     ui.strong(kind_name(step.kind));
     ui.label(step.line());
-    // Rows rather than a `Grid`: a grid sizes its columns from last frame, and a bar filling
-    // the column feeds its own width back into that.
+    // Not a `Grid`: it sizes columns from last frame, so a bar filling one widens it.
     for (label, fraction) in [(get!("bakes.progress.step"), step.within()), (get!("bakes.progress.overall"), step.overall())] {
         ui.horizontal(|ui| {
             ui.label(label);
