@@ -69,6 +69,19 @@ impl Assets {
     pub fn read(&self, pack: &Path, relative: &str) -> Result<Vec<u8>, AssetError> {
         self.0.read(pack, relative)
     }
+
+    /// The highest-priority pack's copy, so a pack overriding a file wins.
+    pub fn read_from_packs(&self, relative: &str) -> Option<Vec<u8>> {
+        let mut found = None;
+        for pack in crate::common::lang::default_packs() {
+            match self.read(&pack, relative) {
+                Ok(bytes) => found = Some(bytes),
+                Err(AssetError::NotFound(_)) => {}
+                Err(e) => error!("{e}"),
+            }
+        }
+        found
+    }
 }
 
 /// Where somebody's own unsorted work goes: a pack like any other, last so it

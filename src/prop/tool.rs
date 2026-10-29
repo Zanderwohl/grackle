@@ -116,6 +116,22 @@ impl Tool {
             Tool::Sketch => get!("prop.features.sketch"),
         }
     }
+
+    /// Named for the picture, not the tool: see `documentation/icons.md`.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Tool::Extrude => "square_arrow",
+            Tool::Revolve => "axis_arrow_around",
+            Tool::Combine(BooleanOp::Union) => "venn_union",
+            Tool::Combine(BooleanOp::Subtract) => "venn_subtract",
+            Tool::Combine(BooleanOp::Intersect) => "venn_intersect",
+            Tool::Mirror => "square_mirrored",
+            Tool::LinearPattern => "two_squares",
+            Tool::RadialPattern => "squares_in_circle",
+            Tool::Plane => "ground_square",
+            Tool::Sketch => "pencil",
+        }
+    }
 }
 
 #[derive(Resource, Default)]

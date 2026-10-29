@@ -1,7 +1,9 @@
-//! Toolbar widgets shared by both editors. Every button has an icon slot;
-//! there are no icons yet, so each draws [`PLACEHOLDER_ICON`].
+//! Toolbar widgets shared by both editors. Every button names an icon; see
+//! [`crate::common::icons`] for where it comes from and what stands in for it.
 
 use bevy_egui::egui::{self, CornerRadius, Popup, RectAlign, Ui};
+
+use crate::common::icons;
 
 pub const BUTTON_HEIGHT: f32 = 28.0;
 pub const BUTTON_MIN_WIDTH: f32 = 72.0;
@@ -11,7 +13,6 @@ const GAP: f32 = 6.0;
 const SEAM: f32 = 1.0;
 const ARROW_WIDTH: f32 = 16.0;
 
-pub const PLACEHOLDER_ICON: &str = "□";
 
 /// Which sides a button shares with a neighbor; those are squared off.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -64,36 +65,40 @@ pub fn cluster<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     .inner
 }
 
-pub fn button(ui: &mut Ui, label: impl Into<String>, selected: bool, joins: Joins) -> egui::Response {
-    button_enabled(ui, true, label, selected, joins)
+fn labeled(ui: &Ui, icon_name: &str, label: String) -> egui::Button<'static> {
+    egui::Button::new((icons::atom(ui.ctx(), icon_name), label)).image_tint_follows_text_color(true)
+}
+
+pub fn button(ui: &mut Ui, icon: &str, label: impl Into<String>, selected: bool, joins: Joins) -> egui::Response {
+    button_enabled(ui, true, icon, label, selected, joins)
 }
 
 pub fn button_enabled(
     ui: &mut Ui,
     enabled: bool,
+    icon: &str,
     label: impl Into<String>,
     selected: bool,
     joins: Joins,
 ) -> egui::Response {
     let rounded = ui.visuals().widgets.inactive.corner_radius;
-    ui.add_enabled(
-        enabled,
-        egui::Button::new((PLACEHOLDER_ICON, label.into()))
-            .selected(selected)
-            .min_size(egui::vec2(BUTTON_MIN_WIDTH, BUTTON_HEIGHT))
-            .corner_radius(joins.corners(rounded)),
-    )
+    let button = labeled(ui, icon, label.into())
+        .selected(selected)
+        .min_size(egui::vec2(BUTTON_MIN_WIDTH, BUTTON_HEIGHT))
+        .corner_radius(joins.corners(rounded));
+    ui.add_enabled(enabled, button)
 }
 
 pub struct Segment {
+    pub icon: &'static str,
     pub label: String,
     pub selected: bool,
     pub enabled: bool,
 }
 
 impl Segment {
-    pub fn new(label: impl Into<String>) -> Self {
-        Self { label: label.into(), selected: false, enabled: true }
+    pub fn new(icon: &'static str, label: impl Into<String>) -> Self {
+        Self { icon, label: label.into(), selected: false, enabled: true }
     }
 
     pub fn selected(self, selected: bool) -> Self {
@@ -113,7 +118,8 @@ pub fn joined(ui: &mut Ui, segments: impl IntoIterator<Item = Segment>) -> Vec<e
             .into_iter()
             .enumerate()
             .map(|(index, segment)| {
-                button_enabled(ui, segment.enabled, segment.label, segment.selected, Joins::in_run(index, len))
+                let joins = Joins::in_run(index, len);
+                button_enabled(ui, segment.enabled, segment.icon, segment.label, segment.selected, joins)
             })
             .collect()
     })
@@ -125,7 +131,8 @@ pub fn clicked(responses: &[egui::Response]) -> Option<usize> {
 
 /// A family of `len` tools behind one button showing the last used (index 0
 /// at first, `active` while one is), with an arrow listing the rest. Returns
-/// the index clicked. `label` is asked only for what is drawn.
+/// the index clicked. `entry` gives an icon and a label, and is asked only for
+/// what is drawn.
 ///
 /// `id_salt` must be unique across the context: the last-used choice is kept
 /// under it rather than under the `Ui`'s id, so moving the toolbar keeps it.
@@ -133,7 +140,7 @@ pub fn split_button(
     ui: &mut Ui,
     id_salt: &str,
     len: usize,
-    label: impl Fn(usize) -> String,
+    entry: impl Fn(usize) -> (&'static str, String),
     active: Option<usize>,
     joins: Joins,
 ) -> Option<usize> {
@@ -149,7 +156,8 @@ pub fn split_button(
 
     let mut chosen = None;
     cluster(ui, |ui| {
-        let main = button(ui, label(shown), active.is_some(), Joins { left: joins.left, right: true });
+        let (icon, label) = entry(shown);
+        let main = button(ui, icon, label, active.is_some(), Joins { left: joins.left, right: true });
         if main.clicked() {
             chosen = Some(shown);
         }
@@ -170,8 +178,8 @@ pub fn split_button(
             .align(RectAlign::BOTTOM_START)
             .show(|ui| {
                 for index in 0..len {
-                    let entry = egui::Button::new((PLACEHOLDER_ICON, label(index))).selected(active == Some(index));
-                    if ui.add(entry).clicked() {
+                    let (icon, label) = entry(index);
+                    if ui.add(labeled(ui, icon, label).selected(active == Some(index))).clicked() {
                         chosen = Some(index);
                     }
                 }
@@ -232,7 +240,7 @@ mod tests {
         let ctx = egui::Context::default();
         let frame = |active: Option<usize>| {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                split_button(ui, "test", 3, |index| index.to_string(), active, Joins::NONE);
+                split_button(ui, "test", 3, |index| ("test", index.to_string()), active, Joins::NONE);
             });
             output.textures_delta.clear();
         };

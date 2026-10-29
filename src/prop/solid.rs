@@ -455,6 +455,17 @@ impl Shape {
         }
     }
 
+    /// Named for the picture, not the tool: see `documentation/icons.md`.
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Shape::Box { .. } => "cube_hollow",
+            Shape::Prism { .. } => "triangular_prism",
+            Shape::Cone { .. } => "cone",
+            Shape::Sphere { .. } => "sphere_shine",
+            Shape::Wedge { .. } => "wedge",
+        }
+    }
+
     /// Where the size handles go, in the shape's own space. An n-gon's is its
     /// circumradius, the typed number, not the distance to its flats.
     pub fn half_extents(&self) -> Vec3 {

@@ -462,6 +462,7 @@ impl FeatureTrait for FootprintRoom {
         get!("editor.features.footprint_room.title")
     }
 
+    fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::Footprint) }
     fn type_key(&self) -> &'static str {
         "footprint_room"
     }

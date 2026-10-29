@@ -57,6 +57,7 @@ texture-graph-editor = { git = "https://github.com/Zanderwohl/texture-graph", br
 # Bevy's own version, named so the material editor can hand texture-graph the
 # wgpu types it bakes with. Must match what `cargo tree -i wgpu` shows.
 wgpu = "30.0.1"
+egui_extras = { version = "0.36.1", default-features = false, features = ["svg"] }
 
 # Only used from tests: the encoding Lightyear puts messages on the wire in. A
 # message carrying an internally tagged enum fails to *decode* at the far end

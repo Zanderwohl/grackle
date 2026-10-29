@@ -162,6 +162,7 @@ impl FeatureTrait for WeaponPickup {
         get!("editor.features.weapon_pickup.title")
     }
 
+    fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::WeaponPickup) }
     fn type_key(&self) -> &'static str {
         "weapon_pickup"
     }

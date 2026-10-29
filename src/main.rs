@@ -89,7 +89,7 @@ fn main() {
             GamePlugin,
             (WorldPropPlugin, ThumbnailPlugin),
             SkeletonPlugin,
-            (PerfPlugin, FontsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
+            (PerfPlugin, FontsPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))
         .run();
 }

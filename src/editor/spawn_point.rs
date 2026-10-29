@@ -78,6 +78,7 @@ impl FeatureTrait for SpawnPoint {
         get!("editor.features.spawn_point.title")
     }
 
+    fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::SpawnPoint) }
     fn type_key(&self) -> &'static str { "spawn_point" }
 
     /// The feet, the eye and the facing. The body is a rig on the entity and drawn separately.

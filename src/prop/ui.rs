@@ -38,6 +38,7 @@ use crate::common::class::Class;
 use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
 use crate::common::reorder;
 use crate::common::shortcuts::chords;
+use crate::common::icons;
 use crate::common::toolbar::{self, Joins, Segment};
 use crate::prop::feature::{BooleanOp, End, FeatureOp, PatternKind, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
@@ -333,10 +334,13 @@ fn panels(
                 // First and identical in every workspace, so it does not move.
                 // A sketch being edited is neither, and picking either leaves it.
                 let sketching = tabs.session.editing().is_some();
-                let workspaces = [(Workspace::Model, "prop.workspace.model"), (Workspace::Fit, "prop.workspace.fit")];
+                let workspaces = [
+                    (Workspace::Model, icons::FALLBACK, "prop.workspace.model"),
+                    (Workspace::Fit, icons::FALLBACK, "prop.workspace.fit"),
+                ];
                 let segments = workspaces
                     .iter()
-                    .map(|(candidate, key)| Segment::new(get!(key)).selected(!sketching && workspace == *candidate));
+                    .map(|(candidate, icon, key)| Segment::new(icon, get!(key)).selected(!sketching && workspace == *candidate));
                 if let Some(index) = toolbar::clicked(&toolbar::joined(ui, segments)) {
                     tabs.session.leave();
                     tabs.requests.workspace = Some(workspaces[index].0);
@@ -841,7 +845,7 @@ fn toolbar(
         Shape::Sphere { sides: 8, rings: 5, radius: 0.04 },
         Shape::Wedge { size: [0.1, 0.1, 0.2] },
     ];
-    let shape_name = |index: usize| shapes[index].name();
+    let shape_name = |index: usize| (shapes[index].icon(), shapes[index].name());
     if let Some(index) = toolbar::split_button(ui, "prop_solid", shapes.len(), shape_name, None, Joins::NONE) {
         added = Some(FeatureOp::Primitive {
             shape: shapes[index].clone(),
@@ -869,8 +873,8 @@ fn toolbar(
 
     let framable = build.evaluated.bounds_of_bodies(&editor.picked_bodies(&build.evaluated)).is_some();
     let frames = [
-        Segment::new(get!("prop.menu.frame")),
-        Segment::new(get!("prop.menu.frame_selected")).enabled(framable),
+        Segment::new("film_camera", get!("prop.menu.frame")),
+        Segment::new("film_camera", get!("prop.menu.frame_selected")).enabled(framable),
     ];
     match toolbar::clicked(&toolbar::joined(ui, frames)) {
         Some(0) => requests.frame = Some(false),
@@ -884,8 +888,8 @@ fn toolbar(
         ui.label(egui::RichText::new(task.name()).strong());
         ui.label(egui::RichText::new(prompt(task, &filled, &build.evaluated)).color(ui.visuals().warn_fg_color));
         let ready = is_ready(task, &filled, &build.evaluated);
-        let done = ready.then(|| Segment::new(get!("prop.tool.done")));
-        let segments: Vec<Segment> = done.into_iter().chain([Segment::new(get!("prop.tool.cancel"))]).collect();
+        let done = ready.then(|| Segment::new("check_mark", get!("prop.tool.done")));
+        let segments: Vec<Segment> = done.into_iter().chain([Segment::new("trash_can", get!("prop.tool.cancel"))]).collect();
         let last = segments.len() - 1;
         match toolbar::clicked(&toolbar::joined(ui, segments)) {
             Some(index) if index == last => requests.cancel = true,
@@ -904,7 +908,7 @@ fn toolbar(
 /// Lit while its tool is waiting on picks; clicking it then puts it down.
 fn tool_button(ui: &mut Ui, tool: Tool, active: Option<Task>, requests: &mut PropRequests, joins: Joins) -> egui::Response {
     let up = active == Some(Task::Make(tool));
-    let button = toolbar::button(ui, tool.name(), up, joins);
+    let button = toolbar::button(ui, tool.icon(), tool.name(), up, joins);
     if button.clicked() {
         choose_tool(tool, active, requests);
     }
@@ -913,7 +917,7 @@ fn tool_button(ui: &mut Ui, tool: Tool, active: Option<Task>, requests: &mut Pro
 
 fn tool_family(ui: &mut Ui, id: &str, tools: &[Tool], active: Option<Task>, requests: &mut PropRequests) {
     let up = tools.iter().position(|tool| active == Some(Task::Make(*tool)));
-    if let Some(index) = toolbar::split_button(ui, id, tools.len(), |index| tools[index].name(), up, Joins::NONE) {
+    if let Some(index) = toolbar::split_button(ui, id, tools.len(), |index| (tools[index].icon(), tools[index].name()), up, Joins::NONE) {
         choose_tool(tools[index], active, requests);
     }
 }
@@ -927,24 +931,24 @@ fn choose_tool(tool: Tool, active: Option<Task>, requests: &mut PropRequests) {
 }
 
 fn frame_button(ui: &mut Ui, frame: &mut Option<bool>) {
-    if toolbar::button(ui, get!("prop.menu.frame"), false, Joins::NONE).clicked() {
+    if toolbar::button(ui, "film_camera", get!("prop.menu.frame"), false, Joins::NONE).clicked() {
         *frame = Some(false);
     }
 }
 
 fn sketch_toolbar(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSession, frame: &mut Option<bool>) {
     let Some(id) = session.editing() else { return };
-    if toolbar::button(ui, get!("prop.sketch.finish"), false, Joins::NONE).clicked() {
+    if toolbar::button(ui, "check_mark", get!("prop.sketch.finish"), false, Joins::NONE).clicked() {
         session.leave();
         return;
     }
     ui.separator();
     let tools = [
-        (SketchTool::Select, "prop.sketch.select"),
-        (SketchTool::Line, "prop.sketch.line"),
-        (SketchTool::Erase, "prop.sketch.erase"),
+        (SketchTool::Select, "cursor", "prop.sketch.select"),
+        (SketchTool::Line, "diagonal_line", "prop.sketch.line"),
+        (SketchTool::Erase, "eraser", "prop.sketch.erase"),
     ];
-    let segments = tools.iter().map(|(tool, key)| Segment::new(get!(key)).selected(session.tool() == *tool));
+    let segments = tools.iter().map(|(tool, icon, key)| Segment::new(icon, get!(key)).selected(session.tool() == *tool));
     if let Some(index) = toolbar::clicked(&toolbar::joined(ui, segments)) {
         session.set_tool(tools[index].0);
     }
@@ -962,8 +966,8 @@ fn sketch_toolbar(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSess
         sketch.entities.iter().filter(|entity| lines.contains(&entity.id())).all(|entity| entity.construction())
     });
     let edits = [
-        Segment::new(get!("prop.sketch.construction")).enabled(!lines.is_empty()),
-        Segment::new(get!("prop.sketch.delete")).enabled(!session.picks.is_empty()),
+        Segment::new("hammer", get!("prop.sketch.construction")).enabled(!lines.is_empty()),
+        Segment::new("trash_can", get!("prop.sketch.delete")).enabled(!session.picks.is_empty()),
     ];
     match toolbar::clicked(&toolbar::joined(ui, edits)) {
         Some(0) => editor.edit(|doc| {

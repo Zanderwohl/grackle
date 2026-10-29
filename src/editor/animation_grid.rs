@@ -306,6 +306,7 @@ impl FeatureTrait for AnimationGrid {
         get!("editor.features.animation_grid.title")
     }
 
+    fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::AnimationGrid) }
     fn type_key(&self) -> &'static str { "animation_grid" }
 
     /// The point, the facing, and the floor it will cover; the bodies draw themselves.

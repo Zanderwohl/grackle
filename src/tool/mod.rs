@@ -2,6 +2,7 @@ use bevy::app::App;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use strum_macros::{Display, EnumIter};
+use crate::common::icons;
 use crate::common::toolbar::{self, Joins, Segment};
 use crate::get;
 use crate::tool::animation_display::AnimationDisplayPlugin;
@@ -143,6 +144,27 @@ impl Tools {
         }
     }
 
+    /// Named for the picture, not the tool: see `documentation/icons.md`.
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Self::Select => "cursor",
+            Self::Point => "axes",
+            Self::PointLight => "light_bulb",
+            Self::SpawnPoint => "t_pose",
+            Self::Prop => "mug",
+            Self::WeaponPickup => "rifle",
+            Self::AnimationDisplay => "runner",
+            Self::AnimationGrid => "two_runners",
+            Self::Room => "cube_hollow",
+            Self::Block => "cube_solid",
+            Self::Trigger => "cube_exclamation",
+            Self::Footprint => "double_pennant",
+            Self::Mirror => "square_mirrored",
+            Self::Retarget => icons::FALLBACK,
+            Self::Spectate => icons::FALLBACK,
+        }
+    }
+
     #[cfg(test)]
     fn is_hidden(&self) -> bool {
         matches!(self, Self::Retarget | Self::Spectate)
@@ -159,19 +181,19 @@ impl Tools {
             for group in TOOLBAR {
                 match group {
                     ToolGroup::One(tool) => {
-                        if toolbar::button(ui, tool.name(), current == tool, Joins::NONE).clicked() {
+                        if toolbar::button(ui, tool.icon(), tool.name(), current == tool, Joins::NONE).clicked() {
                             chosen = Some(tool.clone());
                         }
                     }
                     ToolGroup::Split(id, tools) => {
                         let active = tools.iter().position(|tool| tool == current);
-                        let label = |index: usize| tools[index].name();
+                        let label = |index: usize| (tools[index].icon(), tools[index].name());
                         if let Some(index) = toolbar::split_button(ui, id, tools.len(), label, active, Joins::NONE) {
                             chosen = Some(tools[index].clone());
                         }
                     }
                     ToolGroup::Cluster(tools) => {
-                        let segments = tools.iter().map(|tool| Segment::new(tool.name()).selected(current == tool));
+                        let segments = tools.iter().map(|tool| Segment::new(tool.icon(), tool.name()).selected(current == tool));
                         if let Some(index) = toolbar::clicked(&toolbar::joined(ui, segments)) {
                             chosen = Some(tools[index].clone());
                         }

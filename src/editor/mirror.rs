@@ -539,6 +539,7 @@ impl FeatureTrait for Mirror {
         get!("editor.features.mirror.title")
     }
 
+    fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::Mirror) }
     fn type_key(&self) -> &'static str { "mirror" }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {

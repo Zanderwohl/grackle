@@ -96,6 +96,7 @@ impl FeatureTrait for Prop {
         get!("editor.features.prop.title")
     }
 
+    fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::Prop) }
     fn type_key(&self) -> &'static str { "prop" }
 
     /// The stub out of the front face tells a yaw of 0 from 180.
