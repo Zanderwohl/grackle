@@ -348,12 +348,15 @@ pub fn usable_spawns(spawns: &[Spawn], world: &CollisionWorld) -> Vec<Spawn> {
 pub fn fallback_spawn(world: &CollisionWorld) -> Spawn {
     /// Meters between the floor points tried.
     const STEP: f32 = 0.5;
+    /// Bounds the search on a map where nothing fits, which runs per respawn.
+    const MOST_ROOMS: usize = 4;
+    const MOST_POINTS: usize = 4096;
 
     let mut rooms: Vec<&Room> = world.volumes().iter().filter(|volume| volume.fill == Fill::Air).map(|volume| &volume.shape).collect();
     rooms.sort_by(|a, b| b.volume().total_cmp(&a.volume()));
 
     let fits = |feet: &Vec3| world.fits(body_center_from_feet(*feet), PLAYER_HALF);
-    let found = rooms.iter().find_map(|room| {
+    let found = rooms.iter().take(MOST_ROOMS).find_map(|room| {
         let middle = room.floor_point();
         let (min, max) = room.bounds();
         let (columns, rows) = (((max.x - min.x) / STEP) as i32, ((max.z - min.z) / STEP) as i32);
@@ -361,7 +364,7 @@ pub fn fallback_spawn(world: &CollisionWorld) -> Spawn {
             .flat_map(|i| (0..=rows).map(move |j| Vec3::new(min.x + i as f32 * STEP, room.floor, min.z + j as f32 * STEP)))
             .collect();
         points.sort_by(|a, b| a.distance_squared(middle).total_cmp(&b.distance_squared(middle)));
-        std::iter::once(middle).chain(points).find(fits)
+        std::iter::once(middle).chain(points).take(MOST_POINTS).find(fits)
     });
 
     let feet = match (found, rooms.first()) {

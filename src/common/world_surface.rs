@@ -126,7 +126,8 @@ pub fn sort_by_place<K: Ord, T>(items: &mut Vec<(K, Volume, T)>) {
     items.extend(indexed.into_iter().map(|(_, item)| item));
 }
 
-fn in_box_order(rooms: &[Room]) -> (Vec<Volume>, Vec<usize>) {
+/// A map of rooms alone, ordered by box, with each one's index in `rooms`.
+pub fn in_box_order(rooms: &[Room]) -> (Vec<Volume>, Vec<usize>) {
     let mut items: Vec<((), Volume, usize)> =
         rooms.iter().enumerate().map(|(index, room)| ((), Volume::air(room.clone()), index)).collect();
     sort_by_place(&mut items);

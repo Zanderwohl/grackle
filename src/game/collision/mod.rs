@@ -43,24 +43,30 @@ fn face_bounds(face: &Face) -> (Vec3, Vec3) {
     (min, max)
 }
 
-/// How far behind `face` the nearest part of `other` is, if any of it is
-/// strictly inside the prism `face` sweeps back `depth` deep; else `depth`.
-/// Every face bounds air, so the solid behind `face` ends there. Strictly,
-/// by `INSIDE`: a neighbor sharing an edge or a plane is on the prism, not
-/// in it, and would thin a slab to nothing.
-fn depth_behind(face: &Face, other: &Face, depth: f32) -> f32 {
-    const INSIDE: f32 = 1.0e-4;
+/// The prism a face sweeps back, but for its back: its own plane and one
+/// through each edge, as (outward normal, reach).
+fn prism(face: &Face) -> Vec<(Vec3, f32)> {
     let n = face.plane.normal;
-    let front = n.dot(face.vertices[0]);
-    let mut planes = vec![(n, front), (-n, depth - front)];
     let count = face.vertices.len();
+    let mut planes = vec![(n, n.dot(face.vertices[0]))];
     planes.extend((0..count).filter_map(|i| {
         let (a, b) = (face.vertices[i], face.vertices[(i + 1) % count]);
         let out = (b - a).cross(n).try_normalize()?;
         Some((out, out.dot(a)))
     }));
+    planes
+}
+
+/// How far behind `face` the nearest part of `other` is, if any of it is
+/// strictly inside the face's `prism` swept back `depth` deep; else `depth`.
+/// Every face bounds air, so the solid behind `face` ends there. Strictly,
+/// by `INSIDE`: a neighbor sharing an edge or a plane is on the prism, not
+/// in it, and would thin a slab to nothing.
+fn depth_behind(prism: &[(Vec3, f32)], other: &Face, depth: f32) -> f32 {
+    const INSIDE: f32 = 1.0e-4;
+    let (n, front) = prism[0];
     let mut kept = other.vertices.clone();
-    for (normal, reach) in planes {
+    for (normal, reach) in prism.iter().copied().chain([(-n, depth - front)]) {
         kept = clip(&kept, normal, reach - INSIDE);
         if kept.is_empty() {
             return depth;
@@ -95,9 +101,7 @@ impl CollisionWorld {
 
     /// A map of rooms alone.
     pub fn rebuild(&mut self, rooms: &[Room]) {
-        let mut volumes: Vec<((), Volume, ())> = rooms.iter().map(|room| ((), Volume::air(room.clone()), ())).collect();
-        world_surface::sort_by_place(&mut volumes);
-        self.rebuild_volumes(&volumes.into_iter().map(|(_, volume, _)| volume).collect::<Vec<_>>());
+        self.rebuild_volumes(&world_surface::in_box_order(rooms).0);
     }
 
     /// Each face of the surface stood out into the solid behind it as a hull,
@@ -112,7 +116,8 @@ impl CollisionWorld {
                 let (min, max) = face_bounds(face);
                 let behind = -face.plane.normal * WALL_THICKNESS;
                 let others = grid.near(min.min(min + behind), max.max(max + behind)).into_iter().filter(|other| *other as usize != index);
-                let depth = others.fold(WALL_THICKNESS, |depth, other| depth.min(depth_behind(face, &faces[other as usize], depth)));
+                let prism = prism(face);
+                let depth = others.fold(WALL_THICKNESS, |depth, other| depth.min(depth_behind(&prism, &faces[other as usize], depth)));
                 Hull::slab(&face.vertices, face.plane.normal, depth)
             })
             .collect();

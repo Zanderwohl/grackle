@@ -19,6 +19,19 @@ pub fn positions(timeline: &FeatureTimeline) -> HashMap<FeatureId, usize> {
     timeline.feature_order().iter().enumerate().map(|(position, id)| (*id, position)).collect()
 }
 
+/// Each place's timeline position replaced by its rank among the places
+/// given, so an edit to a feature that is no volume moves no volume.
+pub fn ranked(places: &mut [VolumeOrder]) {
+    let mut firsts: Vec<u32> = places.iter().filter_map(|place| place.0.first().copied()).collect();
+    firsts.sort_unstable();
+    firsts.dedup();
+    for place in places {
+        if let Some(first) = place.0.first_mut() {
+            *first = firsts.binary_search(first).unwrap_or_default() as u32;
+        }
+    }
+}
+
 /// Every frame, writing only what moved: a written order is a changed one, and
 /// a changed one is rebaked.
 pub fn place_volumes(
@@ -30,6 +43,7 @@ pub fn place_volumes(
     mut commands: Commands,
 ) {
     let positions = positions(&timeline);
+    let mut placed = Vec::new();
     for (entity, current) in &volumes {
         let mut images = Vec::new();
         let mut source = None;
@@ -48,7 +62,11 @@ pub fn place_volumes(
             at = parent.parent();
         }
         let Some(position) = source.or(feature).and_then(|id| positions.get(&id)) else { continue };
-        let order = place(*position, &images);
+        placed.push((entity, current, place(*position, &images)));
+    }
+    let mut orders: Vec<VolumeOrder> = placed.iter().map(|(_, _, order)| order.clone()).collect();
+    ranked(&mut orders);
+    for ((entity, current, _), order) in placed.into_iter().zip(orders) {
         if current != Some(&order) {
             commands.entity(entity).insert(order);
         }

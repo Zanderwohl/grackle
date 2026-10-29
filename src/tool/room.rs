@@ -1,7 +1,7 @@
 use bevy::app::App;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use crate::common::world_surface::{self, Volume};
+use crate::common::world_surface::{self, Fill, Volume};
 use crate::common::csg::{self, Polygon};
 use crate::common::triangulate::triangulate;
 use bevy_egui::input::EguiWantsInput;
@@ -966,9 +966,11 @@ pub struct MapVolumes<'w, 's> {
 
 impl MapVolumes<'_, '_> {
     /// In the map's order, as [`world_surface::share`] wants them, with their places.
+    /// A volume not yet placed goes last rather than vanishing under the rest.
     pub fn placed(&self) -> Vec<(VolumeOrder, Volume, Entity)> {
-        let rooms = self.rooms.iter().map(|(entity, room, order)| (order.cloned().unwrap_or_default(), Volume::air(room.clone()), entity));
-        let blocks = self.blocks.iter().map(|(entity, block, order)| (order.cloned().unwrap_or_default(), Volume::solid(block.0.clone()), entity));
+        let order = |order: Option<&VolumeOrder>| order.cloned().unwrap_or_else(|| VolumeOrder(vec![u32::MAX]));
+        let rooms = self.rooms.iter().map(|(entity, room, place)| (order(place), Volume::air(room.clone()), entity));
+        let blocks = self.blocks.iter().map(|(entity, block, place)| (order(place), Volume::solid(block.0.clone()), entity));
         let mut all: Vec<_> = rooms.chain(blocks).collect();
         world_surface::sort_by_place(&mut all);
         all
@@ -980,6 +982,13 @@ impl MapVolumes<'_, '_> {
 
     pub fn volumes(&self) -> Vec<Volume> {
         self.ordered().into_iter().map(|(_, volume)| volume).collect()
+    }
+
+    /// Borrowed, in the order the queries walk them: for asking whether
+    /// anything changed without cloning the map.
+    pub fn each(&self) -> impl Iterator<Item = (Entity, &Room, Fill, Option<&VolumeOrder>)> + '_ {
+        let rooms = self.rooms.iter().map(|(entity, room, order)| (entity, room, Fill::Air, order));
+        rooms.chain(self.blocks.iter().map(|(entity, block, order)| (entity, &block.0, Fill::Solid, order)))
     }
 
     /// In the order the queries walk them, which is not the map's.

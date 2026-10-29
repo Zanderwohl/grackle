@@ -199,6 +199,12 @@ impl BakePlugin {
             }
         }
 
+        let unchanged = bake.seen.len() == volumes.entities().count()
+            && volumes.each().all(|(entity, shape, fill, order)| {
+                bake.seen.get(&entity).is_some_and(|(seen, seen_order)| seen.fill == fill && seen.shape == *shape && order == Some(seen_order))
+            });
+        if unchanged && bake.queue.is_empty() { return; }
+
         let placed = volumes.placed();
         let touching = |b: &Volume| placed.iter().filter(|(_, v, _)| touches(v, b)).map(|(_, _, e)| *e).collect::<Vec<_>>();
         let mut urgent = Vec::new();

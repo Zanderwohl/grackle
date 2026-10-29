@@ -209,6 +209,49 @@ mod tests {
         assert_eq!(places, vec![VolumeOrder(vec![1]), VolumeOrder(vec![1, 0])]);
     }
 
+    /// Breaks if the entities' order (bakes, collision) and the copies' own
+    /// (picking) disagree for a copy of a copy.
+    #[test]
+    fn a_mirror_of_a_mirror_places_its_copies_as_picking_does() {
+        use crate::editor::volume_order::{place, positions, ranked};
+        let mut timeline = FeatureTimeline::default();
+        timeline.apply_feature(Box::new(boxed(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 3.0, 10.0))));
+        let block = timeline.apply_feature(Box::new(EditorBlock::from_room(boxed(Vec3::new(2.0, 0.0, 3.0), Vec3::new(4.0, 1.0, 5.0)))));
+        let across_x = timeline.apply_feature(Box::new(
+            Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).with_symmetry(Symmetry::MirrorX).with_sources(vec![block]),
+        ));
+        timeline.apply_feature(Box::new(
+            Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).with_symmetry(Symmetry::MirrorZ).with_sources(vec![block, across_x]),
+        ));
+        let mut app = standing(timeline);
+
+        let key = |volume: &Room| { let min = volume.bounds().0; (min.x as i32, min.z as i32) };
+        let world = app.world_mut();
+        let mut entities: Vec<((i32, i32), VolumeOrder)> =
+            world.query::<(&Block, &VolumeOrder)>().iter(world).map(|(block, order)| (key(&block.0), order.clone())).collect();
+        entities.sort();
+
+        let timeline = app.world().resource::<FeatureTimeline>();
+        let positions = positions(timeline);
+        let mut picked: Vec<((i32, i32), VolumeOrder)> = Vec::new();
+        for (id, feature) in timeline.active_features() {
+            for volume in feature.object().volumes() {
+                picked.push((key(&volume.shape), place(positions[&id], &[])));
+            }
+            for copy in feature.object().standing_copies() {
+                for volume in copy.object.volumes() {
+                    picked.push((key(&volume.shape), place(positions[&copy.source], &copy.images)));
+                }
+            }
+        }
+        let mut orders: Vec<VolumeOrder> = picked.iter().map(|(_, order)| order.clone()).collect();
+        ranked(&mut orders);
+        let mut picked: Vec<_> = picked.into_iter().map(|(at, _)| at).zip(orders).filter(|(at, _)| *at != (-10, -10)).collect();
+        picked.sort();
+        assert_eq!(entities.len(), 4, "{entities:?}");
+        assert_eq!(entities, picked);
+    }
+
     /// Breaks if a block answers `rooms`: it would be air.
     #[test]
     fn a_block_is_no_room() {
