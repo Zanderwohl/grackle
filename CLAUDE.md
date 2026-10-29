@@ -1050,7 +1050,11 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   a fixed-width button opening a searchable grid of every pack's `materials/`
   and the palette's roles. A feature's `editor_ui` gets only egui, so
   `publish_choices` leaves the choices in egui's memory, and it reads the
-  directories and bakes previews only while a picker is open.
+  directories and bakes previews only while a picker is open. The widget is
+  [`src/common/picker.rs`](src/common/picker.rs), one `PickerKind` per thing
+  picked: a `Prop`'s model ([`src/prop/picker.rs`](src/prop/picker.rs), every
+  pack's `props/` as thumbnails, badged with the archetype) and a weapon
+  pickup's weapon (pictured by its model) use it too.
 - **Not sent to clients.** Materials are pack content like props, but nothing
   syncs them yet; a client without the file draws that slot as the default.
 
@@ -1073,7 +1077,9 @@ Pictures are cached at `cache/thumbnail/props/{name}.png`, with a
 `{name}.source` beside each naming the file it was taken of. One is reused
 only while it is of **the file the prop was baked from** and no older than it,
 so a deleted override does not leave its picture behind. Saving in the prop
-editor re-bakes, so it re-photographs. A model the server sent has no file and
+editor re-bakes, so it re-photographs. A picker asks `Thumbnails::look_on_disk`
+first and bakes only on a miss, so browsing a pack does not keep every prop's
+meshes alive. A model the server sent has no file and
 is photographed into memory only. Reading and writing run on the IO pool, and
 the cache is native-only. Lighting or framing changes do not invalidate it:
 delete `cache/` after touching either.

@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use serde::{Deserialize, Serialize};
 
+use crate::common::picker::{picker_button, PickerKind};
 use crate::common::weapon::WeaponId;
 use crate::common::PointResolutionError;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
@@ -24,18 +25,10 @@ pub const BOX: Vec3 = Vec3::new(0.25, 0.25, 0.8);
 const DEFAULT_RESPAWN: f32 = 15.0;
 const DEFAULT_AMMO: f32 = 0.5;
 
-/// The weapons the panel offers, by catalog name with their display names.
-/// Put into egui's temporary data by
+/// The catalog's weapons, by name, pictured by their models. Published by
 /// [`crate::tool::weapon_pickup`], because a feature's panel has no world to
 /// read the catalog from.
-#[derive(Clone, Default)]
-pub struct WeaponChoices(pub Vec<(String, String)>);
-
-impl WeaponChoices {
-    pub fn id() -> egui::Id {
-        egui::Id::new("weapon_pickup_choices")
-    }
-}
+pub const WEAPONS: PickerKind = PickerKind::new("weapon");
 
 /// On the feature's entity, where `crate::game::world_prop` reads it.
 #[derive(Component, Clone, Debug, PartialEq)]
@@ -98,23 +91,13 @@ impl FeatureTrait for WeaponPickup {
     ) -> bool {
         let mut changed = false;
 
-        let choices = ui.ctx().data(|data| data.get_temp::<WeaponChoices>(WeaponChoices::id())).unwrap_or_default();
-        let shown = choices
-            .0
-            .iter()
-            .find(|(name, _)| *name == self.weapon)
-            .map(|(_, display)| display.clone())
-            .unwrap_or_else(|| self.weapon.clone());
-        egui::ComboBox::from_label(get!("editor.features.weapon_pickup.weapon"))
-            .selected_text(shown)
-            .show_ui(ui, |ui| {
-                for (name, display) in &choices.0 {
-                    if ui.selectable_label(self.weapon == *name, display).clicked() && self.weapon != *name {
-                        self.weapon = name.clone();
-                        changed = true;
-                    }
-                }
-            });
+        ui.horizontal(|ui| {
+            ui.label(get!("editor.features.weapon_pickup.weapon"));
+            if let Some(Some(pick)) = picker_button(ui, WEAPONS, Some(&self.weapon), None) {
+                changed |= pick != self.weapon;
+                self.weapon = pick;
+            }
+        });
 
         let label = get!("editor.features.weapon_pickup.feet");
         changed |= self.location.editor_ui(ui, &label, features, prior_feature_order, retarget_request);
