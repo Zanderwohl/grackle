@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::ray::ray_intersects_aabb;
 use crate::common::PointResolutionError;
-use crate::editor::editable::{Feature, FeatureId, FeatureTrait, PointRef};
+use crate::editor::editable::{Feature, FeatureId, FeatureTrait, PointRef, BROKEN};
 use crate::editor::mirror::Mirroring;
 use crate::get;
 use crate::prop::region::{arrange, Arrangement, Note, Region};
@@ -408,7 +408,7 @@ impl FeatureTrait for FootprintRoom {
     fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool {
         let mut changed = false;
         for problem in &self.problems {
-            ui.colored_label(egui::Color32::ORANGE, self.problem_text(problem));
+            ui.colored_label(BROKEN, self.problem_text(problem));
         }
         ui.horizontal(|ui| {
             ui.label(get!("editor.features.footprint_room.height"));
@@ -555,6 +555,10 @@ impl FeatureTrait for FootprintRoom {
             .into_iter()
             .filter_map(|(key, _)| self.get_point(&key).ok().map(|v| (key, v)))
             .collect()
+    }
+
+    fn point_refs(&self) -> Vec<&PointRef> {
+        std::iter::once(&self.floor).chain(self.corners.iter().map(|corner| &corner.at)).collect()
     }
 
     fn get_point_ref(&self, key: &str) -> Option<&PointRef> {

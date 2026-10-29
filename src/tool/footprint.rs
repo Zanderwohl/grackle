@@ -148,6 +148,18 @@ impl FootprintTool {
         tool.hovered_point = None;
     }
 
+    /// What a corner may be measured from. Drawing onto a footprint, only what
+    /// stands before it: a corner on the footprint itself, on anything after
+    /// it, or on a Mirror's copy of it, is a cycle. A new one goes in at the
+    /// bar, after everything shown.
+    fn pickable(&self, features: &FeatureTimeline) -> Vec<FeatureId> {
+        let active = features.active_features().map(|(id, _)| id);
+        match self.target {
+            Some(target) => active.take_while(|id| *id != target).collect(),
+            None => active.collect(),
+        }
+    }
+
     /// Between drawings, whatever footprint is selected is what the next one
     /// goes onto.
     fn aim_at_selection(&mut self, features: &FeatureTimeline) {
@@ -226,15 +238,12 @@ impl FootprintTool {
         let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
 
         // With Shift, a feature's point under the pointer; with none there,
-        // Shift changes nothing and the click goes on the grid. The footprint
-        // being drawn onto is left out: a corner measured from its own
-        // footprint is a cycle, and its corners are snapped to anyway.
-        let target = tool.target;
+        // Shift changes nothing and the click goes on the grid.
+        let pickable = tool.pickable(&features);
         tool.hovered_point = mouse_input
             .world_pos
             .filter(|_| shift_held)
-            .and_then(|ray| find_hovered_point(&ray, &features, PICK_RADIUS))
-            .filter(|(feature, ..)| Some(*feature) != target);
+            .and_then(|ray| find_hovered_point_filtered(&ray, &features, PICK_RADIUS, &pickable));
         let placed = match tool.hovered_point.clone() {
             Some((feature, key, at)) => (mouse_input.released == Some(MouseButton::Left)).then(|| {
                 let mut point = PointRef::reference(feature);
@@ -306,7 +315,7 @@ impl FootprintTool {
         let closing = Color::srgb_u8(100, 255, 100);
 
         if let Some(ray) = mouse_input.world_pos.filter(|_| tool.hovered_point.is_some()) {
-            draw_picking_gizmos(&mut gizmos, &ray, &features, &tool.hovered_point);
+            draw_picking_gizmos_filtered(&mut gizmos, &ray, &features, &tool.hovered_point, &tool.pickable(&features));
         }
         for (_, at) in &tool.target_corners {
             gizmos.sphere(Isometry3d::from_translation(*at), 0.08, drawn);
@@ -426,5 +435,23 @@ mod tests {
     #[test]
     fn two_corners_are_not_a_room() {
         assert!(drawn(&[(0.0, 0.0), (4.0, 0.0)]).finish(3.0, &HashMap::new()).is_none());
+    }
+
+    /// A corner on anything at or after the footprint it is drawn onto, a Mirror copying it
+    /// included, would be a cycle.
+    #[test]
+    fn drawing_onto_a_footprint_offers_only_what_stands_before_it() {
+        use crate::editor::global_point::GlobalPoint;
+        use crate::editor::mirror::Mirror;
+
+        let mut timeline = FeatureTimeline::default();
+        let before = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        let footprint = timeline.apply_feature(Box::new(FootprintRoom::new(PointRef::absolute(0.0, 0.0, 0.0), 3.0)));
+        timeline.apply_feature(Box::new(Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).with_sources(vec![footprint])));
+
+        let mut tool = FootprintTool::default();
+        assert_eq!(tool.pickable(&timeline).len(), 3, "a new footprint goes in after everything");
+        tool.target = Some(footprint);
+        assert_eq!(tool.pickable(&timeline), vec![before]);
     }
 }

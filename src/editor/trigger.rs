@@ -126,6 +126,10 @@ impl FeatureTrait for EditorTrigger {
         Some(self.volume.bounds())
     }
 
+    fn point_refs(&self) -> Vec<&PointRef> {
+        self.volume.point_refs()
+    }
+
     fn get_point_ref(&self, key: &str) -> Option<&PointRef> {
         self.volume.get_point_ref(key)
     }

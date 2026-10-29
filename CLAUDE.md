@@ -2535,8 +2535,17 @@ follows. Consequences to respect when adding a feature type:
   still go wrong is a field that does not round-trip: anything the world can
   recompute (a resolved position, the entity) must be `#[serde(skip)]`, and
   anything that is the map must not be. Add the new type to
-  `every_feature_type_survives_a_save_and_load` at the bottom of
-  [`save.rs`](src/editor/save.rs); that is the test that notices.
+  `one_of_every_feature` at the bottom of [`save.rs`](src/editor/save.rs);
+  `every_feature_type_survives_a_save_and_load` is the test that notices.
+- **List every `PointRef` in `point_refs`.** A point that stops resolving —
+  its feature deleted, or a Mirror's copy gone — leaves its feature where it
+  was, and `PointRef::unresolved` is the only sign: it turns the row orange
+  in the Features panel and puts a line under the point in the inspector. One
+  left out is a failure nobody sees; `every_point_ref_is_listed` counts them
+  against the serialized form.
+- **A Mirror offers its copies' points** as `{source}@{image}/{key}`, so a
+  feature after it can stand on a copy's corner. A key naming a copy that no
+  longer stands does not resolve.
 - To make it visible and clickable, also add arms in
   [`show.rs`](src/tool/show.rs) (`GizmoVisibility` plus both matches),
   [`tool_helpers.rs`](src/tool/tool_helpers.rs) (`find_nearest_feature_hit`),

@@ -129,6 +129,16 @@ pub trait FeatureTrait: Send + Sync {
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>);
     fn parent_ids(&self) -> Vec<FeatureId>;
     fn available_point_keys(&self) -> Vec<(String, String)>;
+
+    /// What [`Self::available_point_keys`] calls `key`, without building the whole list: the
+    /// inspector asks every frame, and only builds the list while its dropdown is open.
+    fn point_label(&self, key: &str) -> Option<String> {
+        self.available_point_keys().into_iter().find(|(k, _)| k == key).map(|(_, label)| label)
+    }
+
+    fn point_count(&self) -> usize {
+        self.available_point_keys().len()
+    }
     /// Point-like objects always return their location; volumetric ones test the ray against their AABB
     /// first.
     fn reference_points_for_ray(&self, ray: &Ray3d) -> Vec<(String, Vec3)>;
@@ -143,6 +153,10 @@ pub trait FeatureTrait: Send + Sync {
 
     /// Resolved bounds of a room-like object, for placing drag handles.
     fn drag_handle_bounds(&self) -> Option<(Vec3, Vec3)> { None }
+
+    /// Every `PointRef` this feature resolves, so one that stopped resolving is reported.
+    /// `every_point_ref_is_listed` checks it against the serialized form.
+    fn point_refs(&self) -> Vec<&PointRef> { Vec::new() }
 
     fn get_point_ref(&self, _key: &str) -> Option<&PointRef> { None }
 
@@ -752,18 +766,23 @@ impl FeatureTimeline {
         }
         // Resolved now rather than by `sync_entities`, or a gizmo or the panel would read the origin for a
         // frame.
-        for id in self.feature_order.clone() {
-            if let Some(mut feature) = self.features.remove(&id) {
-                feature.object.resolve_references(&self.features);
-                self.features.insert(id, feature);
-            }
-        }
+        self.resolve_all();
 
         self.forget_a_missing_bar();
 
         self.dirty = self.saved.as_ref() != Some(target);
         self.checkpoint = Some(target.clone());
         rooms_touched
+    }
+
+    /// Every feature, in order, so each resolves against parents already resolved.
+    pub(crate) fn resolve_all(&mut self) {
+        for id in self.feature_order.clone() {
+            if let Some(mut feature) = self.features.remove(&id) {
+                feature.object.resolve_references(&self.features);
+                self.features.insert(id, feature);
+            }
+        }
     }
 
     fn forget_a_missing_bar(&mut self) {
@@ -928,7 +947,10 @@ impl FeatureTimeline {
                     rows.push((*id, response.rect));
                 } else {
                     // The trailing `Atom::grow` left-justifies the title; egui centers a stretched button's contents.
-                    let label_text = feature.label();
+                    let mut label_text = egui::RichText::new(feature.label());
+                    if feature.is_broken() {
+                        label_text = label_text.color(BROKEN);
+                    }
                     // Past the bar: faded rather than struck through, which reads as deleted.
                     let response = ui
                         .scope(|ui| {
@@ -1191,6 +1213,11 @@ impl Feature {
         self.name.clone().unwrap_or_else(|| self.type_name_with_id())
     }
 
+    /// A point of it no longer resolves, so it stands where it last did.
+    pub fn is_broken(&self) -> bool {
+        self.object.point_refs().iter().any(|point| point.unresolved.is_some())
+    }
+
     pub fn id(&self) -> FeatureId {
         self.id
     }
@@ -1271,6 +1298,10 @@ pub struct PointRef {
     pub z: AxisRef,
     #[serde(skip)]
     pub(crate) resolved_reference: Option<Vec3>,
+    /// Why the last resolve failed. A failed resolve leaves its feature where it was, so this is
+    /// the only sign.
+    #[serde(skip)]
+    pub(crate) unresolved: Option<PointResolutionError>,
 }
 
 impl PointRef {
@@ -1282,6 +1313,7 @@ impl PointRef {
             y: AxisRef::Absolute(y),
             z: AxisRef::Absolute(z),
             resolved_reference: None,
+            unresolved: None,
         }
     }
 
@@ -1297,10 +1329,34 @@ impl PointRef {
             y: AxisRef::Relative(dy),
             z: AxisRef::Relative(dz),
             resolved_reference: None,
+            unresolved: None,
         }
     }
 
+    /// Records a failure in [`Self::unresolved`], and a reference to a feature that is gone even
+    /// when every axis is absolute and so still resolves.
     pub fn resolve(&mut self, features: &HashMap<FeatureId, Feature>) -> Result<Vec3, PointResolutionError> {
+        let result = self.resolve_against(features);
+        self.unresolved = match &result {
+            Err(error) => Some(*error),
+            Ok(_) if self.reference.is_some_and(|id| !features.contains_key(&id)) => Some(PointResolutionError::NoSuchReferent),
+            Ok(_) => None,
+        };
+        result
+    }
+
+    /// Against a base that is not a feature's point, such as a room's own min, which cannot fail.
+    pub fn resolve_from(&mut self, base: Vec3) -> Vec3 {
+        self.resolved_reference = Some(base);
+        self.unresolved = None;
+        Vec3::new(
+            self.x.resolve_with_base(Some(base.x)).unwrap_or(base.x),
+            self.y.resolve_with_base(Some(base.y)).unwrap_or(base.y),
+            self.z.resolve_with_base(Some(base.z)).unwrap_or(base.z),
+        )
+    }
+
+    fn resolve_against(&mut self, features: &HashMap<FeatureId, Feature>) -> Result<Vec3, PointResolutionError> {
         let base = self.reference
             .and_then(|id| features.get(&id))
             .map(|a| a.object.get_point(&self.point_key))
@@ -1368,6 +1424,9 @@ impl PointRef {
                 *retarget_request = Some(label.to_string());
             }
         });
+        if let Some(error) = self.unresolved {
+            ui.colored_label(BROKEN, unresolved_text(error));
+        }
 
         let own_active = own.as_ref().is_some_and(|own| *own.active);
         let ref_label = match &own {
@@ -1405,6 +1464,13 @@ impl PointRef {
             });
 
         if let Some(target) = target {
+            // A key is a point of one feature: "min" means nothing to a spawn, nor a Mirror's copy
+            // to a room.
+            if let Target::Feature(id) = target
+                && features.get(&id).is_some_and(|feature| feature.object.get_point(&self.point_key).is_err())
+            {
+                self.point_key.clear();
+            }
             let old_base = self.resolved_reference.unwrap_or(Vec3::ZERO);
             let new_base = match target {
                 Target::Absolute => None,
@@ -1446,12 +1512,15 @@ impl PointRef {
         // Only when a reference is set and it has several keys.
         if let Some(ref_id) = self.reference {
             if let Some(ref_feature) = features.get(&ref_id) {
-                let keys = ref_feature.object.available_point_keys();
-                if keys.len() > 1 {
-                    let current_display = keys.iter()
-                        .find(|(k, _)| k == &self.point_key)
-                        .map(|(_, d)| d.as_str())
-                        .unwrap_or("Default");
+                if ref_feature.object.point_count() > 1 {
+                    // A key the feature resolves without listing it (a footprint's "") is not missing.
+                    let current_display = match ref_feature.object.point_label(&self.point_key) {
+                        Some(display) => egui::RichText::new(display),
+                        None if ref_feature.object.get_point(&self.point_key).is_ok() => {
+                            egui::RichText::new(get!("editor.point_ref.default"))
+                        }
+                        None => egui::RichText::new(get!("editor.point_ref.missing_point")).color(BROKEN),
+                    };
 
                     let mut new_key = self.point_key.clone();
                     let mut key_changed = false;
@@ -1460,7 +1529,7 @@ impl PointRef {
                         .selected_text(current_display)
                         .width(ui.available_width())
                         .show_ui(ui, |ui| {
-                            for (key, display) in &keys {
+                            for (key, display) in &ref_feature.object.available_point_keys() {
                                 if ui.selectable_label(&self.point_key == key, display).clicked() && &self.point_key != key {
                                     new_key = key.clone();
                                     key_changed = true;
@@ -1518,6 +1587,17 @@ impl PointRef {
 }
 
 const FEATURE_LIST_MIN_HEIGHT: f32 = 96.0;
+
+/// A feature with a point that no longer resolves, as the prop editor draws a broken feature.
+pub(crate) const BROKEN: egui::Color32 = egui::Color32::from_rgb(230, 130, 80);
+
+fn unresolved_text(error: PointResolutionError) -> String {
+    match error {
+        PointResolutionError::NoSuchReferent => get!("editor.point_ref.missing_feature"),
+        PointResolutionError::NoSuchPoint => get!("editor.point_ref.missing_point"),
+        PointResolutionError::PropagatedError | PointResolutionError::Other => get!("editor.point_ref.unresolved"),
+    }
+}
 const FEATURE_EDITOR_MIN_HEIGHT: f32 = 120.0;
 
 /// Half, but never below the list's own minimum.

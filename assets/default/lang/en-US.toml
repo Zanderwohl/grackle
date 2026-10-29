@@ -123,6 +123,10 @@ rename = "Rename"
 
 [editor.point_ref]
 none = "None"
+default = "Default"
+missing_point = "Missing point"
+missing_feature = "Missing feature"
+unresolved = "Does not resolve"
 
 [editor.rounds]
 title = "Rounds"
@@ -251,6 +255,8 @@ add_all = "Add all above"
 missing = "missing"
 no_mirror_image = "cannot be mirrored"
 drop = "x"
+copy_point = "{ source } (copy): { point }"
+nth_copy_point = "{ source } (copy { n }): { point }"
 
 [weapon.names]
 laser_rifle = "Laser Rifle"
