@@ -165,7 +165,7 @@ enum LeftOut {
 
 struct MirroredCopy {
     source: FeatureId,
-    /// The source's, as it stood at the resolve, for the point dropdown.
+    /// The source's, for the point dropdown.
     label: String,
     image: usize,
     source_entity: Option<Entity>,
@@ -299,9 +299,7 @@ impl Mirror {
         self.symmetry.images().iter().map(move |motion| Mirroring { motion: *motion, center })
     }
 
-    /// A copy's point is named on the Mirror as `{source}@{image}/{key}`: by source and image rather
-    /// than place in the list, so reordering the sources renames nothing. A nested Mirror's copy
-    /// answers the rest of the key the same way.
+    /// By source and image rather than place in the list, so reordering the sources renames nothing.
     fn copy_point_key(copy: &MirroredCopy, key: &str) -> String {
         format!("{}@{}/{key}", copy.source, copy.image)
     }
@@ -377,7 +375,7 @@ const MIRROR_COLOR: Color = Color::srgb(0.9, 0.35, 0.9);
 
 #[typetag::serde(name = "mirror")]
 impl FeatureTrait for Mirror {
-    /// A key naming a copy that no longer stands is an error, not the center.
+    /// An unknown key is an error, so a reference to a removed copy is reported.
     fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError> {
         if key.is_empty() {
             return Ok(self.resolved_center);
@@ -1260,8 +1258,7 @@ mod tests {
         cyclic.resolve_references(timeline.features_map());
     }
 
-    /// A point placed on a copy's corner follows the copy when the source moves, and a key naming
-    /// a copy that is gone does not quietly fall back to the center.
+    /// A point on a copy's corner follows the source, and one on a removed copy does not resolve.
     #[test]
     fn a_point_can_stand_on_a_copy() {
         use crate::editor::global_point::GlobalPoint;

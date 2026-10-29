@@ -130,8 +130,7 @@ pub trait FeatureTrait: Send + Sync {
     fn parent_ids(&self) -> Vec<FeatureId>;
     fn available_point_keys(&self) -> Vec<(String, String)>;
 
-    /// What [`Self::available_point_keys`] calls `key`, without building the whole list: the
-    /// inspector asks every frame, and only builds the list while its dropdown is open.
+    /// Without building the whole list, which the inspector would otherwise do every frame.
     fn point_label(&self, key: &str) -> Option<String> {
         self.available_point_keys().into_iter().find(|(k, _)| k == key).map(|(_, label)| label)
     }
@@ -154,8 +153,7 @@ pub trait FeatureTrait: Send + Sync {
     /// Resolved bounds of a room-like object, for placing drag handles.
     fn drag_handle_bounds(&self) -> Option<(Vec3, Vec3)> { None }
 
-    /// Every `PointRef` this feature resolves, so one that stopped resolving is reported.
-    /// `every_point_ref_is_listed` checks it against the serialized form.
+    /// So one that stops resolving is reported. `every_point_ref_is_listed` checks it.
     fn point_refs(&self) -> Vec<&PointRef> { Vec::new() }
 
     fn get_point_ref(&self, _key: &str) -> Option<&PointRef> { None }
@@ -775,7 +773,7 @@ impl FeatureTimeline {
         rooms_touched
     }
 
-    /// Every feature, in order, so each resolves against parents already resolved.
+    /// In order, so each feature resolves against parents already resolved.
     pub(crate) fn resolve_all(&mut self) {
         for id in self.feature_order.clone() {
             if let Some(mut feature) = self.features.remove(&id) {
@@ -1213,7 +1211,7 @@ impl Feature {
         self.name.clone().unwrap_or_else(|| self.type_name_with_id())
     }
 
-    /// A point of it no longer resolves, so it stands where it last did.
+    /// It stands where it last resolved.
     pub fn is_broken(&self) -> bool {
         self.object.point_refs().iter().any(|point| point.unresolved.is_some())
     }
@@ -1298,8 +1296,7 @@ pub struct PointRef {
     pub z: AxisRef,
     #[serde(skip)]
     pub(crate) resolved_reference: Option<Vec3>,
-    /// Why the last resolve failed. A failed resolve leaves its feature where it was, so this is
-    /// the only sign.
+    /// A failed resolve leaves its feature where it was, so this is the only sign.
     #[serde(skip)]
     pub(crate) unresolved: Option<PointResolutionError>,
 }
@@ -1333,8 +1330,7 @@ impl PointRef {
         }
     }
 
-    /// Records a failure in [`Self::unresolved`], and a reference to a feature that is gone even
-    /// when every axis is absolute and so still resolves.
+    /// A reference to a deleted feature is recorded as unresolved even when every axis is absolute.
     pub fn resolve(&mut self, features: &HashMap<FeatureId, Feature>) -> Result<Vec3, PointResolutionError> {
         let result = self.resolve_against(features);
         self.unresolved = match &result {
@@ -1345,7 +1341,7 @@ impl PointRef {
         result
     }
 
-    /// Against a base that is not a feature's point, such as a room's own min, which cannot fail.
+    /// For a base that is not a feature's point, such as a room's own min.
     pub fn resolve_from(&mut self, base: Vec3) -> Vec3 {
         self.resolved_reference = Some(base);
         self.unresolved = None;
@@ -1464,8 +1460,7 @@ impl PointRef {
             });
 
         if let Some(target) = target {
-            // A key is a point of one feature: "min" means nothing to a spawn, nor a Mirror's copy
-            // to a room.
+            // A key belongs to one feature: "min" means nothing to a spawn.
             if let Target::Feature(id) = target
                 && features.get(&id).is_some_and(|feature| feature.object.get_point(&self.point_key).is_err())
             {
@@ -1588,7 +1583,7 @@ impl PointRef {
 
 const FEATURE_LIST_MIN_HEIGHT: f32 = 96.0;
 
-/// A feature with a point that no longer resolves, as the prop editor draws a broken feature.
+/// The prop editor's color for a broken feature.
 pub(crate) const BROKEN: egui::Color32 = egui::Color32::from_rgb(230, 130, 80);
 
 fn unresolved_text(error: PointResolutionError) -> String {

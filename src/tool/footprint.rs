@@ -148,10 +148,8 @@ impl FootprintTool {
         tool.hovered_point = None;
     }
 
-    /// What a corner may be measured from. Drawing onto a footprint, only what
-    /// stands before it: a corner on the footprint itself, on anything after
-    /// it, or on a Mirror's copy of it, is a cycle. A new one goes in at the
-    /// bar, after everything shown.
+    /// Drawing onto a footprint, only what stands before it: a corner on it,
+    /// after it, or on a Mirror's copy of it would be a cycle.
     fn pickable(&self, features: &FeatureTimeline) -> Vec<FeatureId> {
         let active = features.active_features().map(|(id, _)| id);
         match self.target {
@@ -437,8 +435,7 @@ mod tests {
         assert!(drawn(&[(0.0, 0.0), (4.0, 0.0)]).finish(3.0, &HashMap::new()).is_none());
     }
 
-    /// A corner on anything at or after the footprint it is drawn onto, a Mirror copying it
-    /// included, would be a cycle.
+    /// A corner on anything at or after the footprint, a Mirror copying it included, is a cycle.
     #[test]
     fn drawing_onto_a_footprint_offers_only_what_stands_before_it() {
         use crate::editor::global_point::GlobalPoint;

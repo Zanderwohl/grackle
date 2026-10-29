@@ -278,7 +278,6 @@ mod tests {
         }
     }
 
-    /// The shipped maps reference nothing that is not there.
     #[test]
     fn no_shipped_map_has_a_point_that_does_not_resolve() {
         for name in ["new", "demo"] {
