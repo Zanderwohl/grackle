@@ -16,6 +16,6 @@
 [arena]
 teams = false
 classes = ["mercenary"]
-loadout = ["medi_wrench", "laser_rifle"]
+loadout = ["pistol"]
 frag_limit = 20
 self_damage = 0.5

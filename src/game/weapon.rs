@@ -392,6 +392,8 @@ mod tests {
         headshot_multiplier: 3,
         shove_per_damage: 0.15,
         shove_radius_m: 0.4,
+        pellets: None,
+        kill_shove: None,
     };
 
     fn a_world(catalog: WeaponCatalog) -> World {
@@ -414,7 +416,7 @@ mod tests {
         let mut loadout = crate::common::weapon::Loadout::default();
         loadout.set(
             Slot::Primary,
-            crate::common::weapon::SlotChoices { permitted: vec![id], default: id },
+            crate::common::weapon::SlotChoices { permitted: vec![id], default: Some(id) },
         );
         catalog.set_loadout(crate::common::class::Class::Mercenary, loadout);
         catalog
@@ -713,8 +715,10 @@ mod tests {
     /// The message carries the action fired, not what is held when it is read.
     #[test]
     fn the_action_that_was_fired_is_the_one_the_message_carries() {
-        let mut world = a_world(default_catalog());
+        let catalog = default_catalog();
+        let mut world = a_world(catalog.clone());
         let shooter = a_shooter(&mut world);
+        let held = catalog.held_by(world.get::<Equipped>(shooter).unwrap()).unwrap().primary.action;
         input(&mut world, shooter).attack = true;
 
         step(&mut world);
@@ -724,11 +728,7 @@ mod tests {
         let next = second(&world, shooter);
         world.get_mut::<Equipped>(shooter).unwrap().select(next);
 
-        assert!(
-            matches!(fired[0].action, WeaponAction::Hitscan(_)),
-            "the shot changed when the weapon did: {:?}",
-            fired[0].action
-        );
+        assert_eq!(fired[0].action, held, "the shot changed when the weapon did");
     }
 
     /// A button with `WeaponAction::None` writes nothing.
@@ -995,7 +995,7 @@ mod tests {
         let mut loadout = catalog.loadout(crate::common::class::Class::Mercenary).unwrap().clone();
         loadout.set(
             Slot::Secondary,
-            crate::common::weapon::SlotChoices { permitted: vec![id], default: id },
+            crate::common::weapon::SlotChoices { permitted: vec![id], default: Some(id) },
         );
         catalog.set_loadout(crate::common::class::Class::Mercenary, loadout);
 

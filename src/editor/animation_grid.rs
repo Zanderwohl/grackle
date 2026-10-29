@@ -397,6 +397,10 @@ impl FeatureTrait for AnimationGrid {
         true
     }
 
+    fn point_refs(&self) -> Vec<&PointRef> {
+        vec![&self.location]
+    }
+
     fn get_point_ref(&self, _key: &str) -> Option<&PointRef> {
         Some(&self.location)
     }

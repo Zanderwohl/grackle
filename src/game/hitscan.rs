@@ -13,7 +13,7 @@ use bevy::transform::TransformSystems;
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::effects::Effect;
-use crate::common::damage::{Damage, DamageSource, PlayerId};
+use crate::common::damage::{Damage, DamageSource, KillShove, PlayerId};
 use crate::common::hitbox::Hitboxes;
 use crate::common::hitscan::{trace, Hit, HitZone};
 use crate::game::collision::CollisionWorld;
@@ -70,8 +70,11 @@ impl Plugin for HitscanPlugin {
 /// From yaw and pitch rather than the camera, because in third person the
 /// camera is not at the eye.
 pub(crate) fn aim(player: &Player) -> Dir3 {
-    let looking = Quat::from_rotation_y(player.yaw) * Quat::from_rotation_x(player.pitch);
-    Dir3::new(looking * Vec3::NEG_Z).unwrap_or(Dir3::NEG_Z)
+    Dir3::new(looking(player) * Vec3::NEG_Z).unwrap_or(Dir3::NEG_Z)
+}
+
+fn looking(player: &Player) -> Quat {
+    Quat::from_rotation_y(player.yaw) * Quat::from_rotation_x(player.pitch)
 }
 
 /// Where the eye is, given a body's center. Takes a center because the laser
@@ -102,7 +105,8 @@ fn damage_for(zone: HitZone, spec: &HitscanSpec) -> u32 {
     }
 }
 
-/// One shot per [`WeaponActionFired`] carrying a hitscan action.
+/// One shot per [`WeaponActionFired`] carrying a hitscan action, of one ray
+/// or of a [`PelletGrid`](crate::common::weapon::PelletGrid)'s.
 pub fn fire_hitscan(
     mut fired: MessageReader<WeaponActionFired>,
     world: Res<CollisionWorld>,
@@ -120,39 +124,64 @@ pub fn fire_hitscan(
 
         // The step's position, not `Transform`, which is interpolated at
         // frame rate and differs per machine.
-        let ray = Ray3d::new(eye(body.current, *stance), aim(player));
-        let range = world.ray_distance(&ray, spec.range_m).unwrap_or(spec.range_m);
-
-        let hit = trace_past(&ray, range, shot.shooter, &targets);
-
-        // Before the `continue`: a miss still draws a tracer.
-        effects.write(Effect::Tracer {
-            from: ray.origin,
-            to: hit.map_or(ray.origin + *ray.direction * range, |hit| hit.point),
-            hit: hit.is_some(),
-            by: id.copied(),
+        let origin = eye(body.current, *stance);
+        let looking = looking(player);
+        let offsets = spec.pellets.map_or_else(|| vec![Vec2::ZERO], |grid| grid.offsets());
+        let source = id.map_or(DamageSource::World, |id| DamageSource::Player(*id));
+        // Along the aim rather than any one pellet, so a fatal blast throws a
+        // body straight back whichever pellets landed.
+        let kill_shove = spec.kill_shove.map(|shove| KillShove {
+            velocity: looking * Vec3::NEG_Z * shove.speed + Vec3::Y * shove.lift,
+            radius: shove.radius_m,
         });
 
-        let Some(hit) = hit else { continue };
+        // One `Damage` per body per shot, not per pellet, so a blast at point
+        // blank is one number and one flinch.
+        let mut dealt: Vec<Damage> = Vec::new();
 
-        let worth = damage_for(hit.zone, &spec);
-        damage.write(Damage {
-            target: hit.target,
-            source: id.map_or(DamageSource::World, |id| DamageSource::Player(*id)),
-            amount: worth,
-            point: hit.point,
-            from: Some(ray.origin),
-        });
+        for offset in offsets {
+            let direction =
+                Dir3::new(looking * Vec3::new(offset.x, offset.y, -1.0)).unwrap_or(Dir3::NEG_Z);
+            let ray = Ray3d::new(origin, direction);
+            let range = world.ray_distance(&ray, spec.range_m).unwrap_or(spec.range_m);
 
-        // Written for every hit, fatal or not. Scaled by what the shot was
-        // worth rather than what it took off, so a killing shot shoves as hard
-        // as any other. The radius is tight so the hit bone moves and the
-        // joints drag the rest.
-        shoves.write(RagdollShove {
-            at: hit.point,
-            push: Push::Along(*ray.direction * (worth as f32 * spec.shove_per_damage)),
-            radius: spec.shove_radius_m,
-        });
+            let hit = trace_past(&ray, range, shot.shooter, &targets);
+
+            // Before the `continue`: a miss still draws a tracer.
+            effects.write(Effect::Tracer {
+                from: ray.origin,
+                to: hit.map_or(ray.origin + *ray.direction * range, |hit| hit.point),
+                hit: hit.is_some(),
+                by: id.copied(),
+            });
+
+            let Some(hit) = hit else { continue };
+
+            let worth = damage_for(hit.zone, &spec);
+            match dealt.iter_mut().find(|asked| asked.target == hit.target) {
+                Some(asked) => asked.amount += worth,
+                None => dealt.push(Damage {
+                    target: hit.target,
+                    source,
+                    amount: worth,
+                    point: hit.point,
+                    from: Some(ray.origin),
+                    kill_shove,
+                }),
+            }
+
+            // Written for every hit, fatal or not. Scaled by what the pellet
+            // was worth rather than what it took off, so a killing shot shoves
+            // as hard as any other. The radius is tight so the hit bone moves
+            // and the joints drag the rest.
+            shoves.write(RagdollShove {
+                at: hit.point,
+                push: Push::Along(*ray.direction * (worth as f32 * spec.shove_per_damage)),
+                radius: spec.shove_radius_m,
+            });
+        }
+
+        damage.write_batch(dealt);
     }
 }
 
@@ -311,6 +340,8 @@ mod tests {
         headshot_multiplier: 3,
         shove_per_damage: 0.15,
         shove_radius_m: 0.4,
+        pellets: None,
+        kill_shove: None,
     };
 
     fn fire(world: &mut World, shooter: Entity) {
@@ -463,6 +494,73 @@ mod tests {
         fire(&mut world, shooter);
         let asked = asked_for(&mut world);
         assert!(asked.iter().all(|hit| hit.target != shooter), "{asked:?}");
+    }
+
+    const SHOTGUN: HitscanSpec = HitscanSpec {
+        range_m: 100.0,
+        damage: 7,
+        headshot_multiplier: 1,
+        shove_per_damage: 0.15,
+        shove_radius_m: 0.3,
+        pellets: Some(crate::common::weapon::PelletGrid { across: 3, spread: 30.0 }),
+        kill_shove: None,
+    };
+
+    /// Breaks if the pattern stops being a square of the stated width, or
+    /// picks up any randomness.
+    #[test]
+    fn a_pellet_grid_is_a_square_as_wide_as_its_spread_says() {
+        let grid = SHOTGUN.pellets.unwrap();
+        let offsets = grid.offsets();
+        assert_eq!(offsets.len(), 9);
+        assert!(offsets.contains(&Vec2::ZERO), "no pellet down the aim: {offsets:?}");
+
+        let width = |axis: fn(Vec2) -> f32| {
+            let values = offsets.iter().map(|offset| axis(*offset));
+            values.clone().fold(f32::MIN, f32::max) - values.fold(f32::MAX, f32::min)
+        };
+        assert!((width(|v| v.x) - 1.0 / 30.0).abs() < 1e-6);
+        assert!((width(|v| v.y) - 1.0 / 30.0).abs() < 1e-6);
+        assert_eq!(offsets, grid.offsets());
+    }
+
+    #[test]
+    fn a_single_pellet_grid_is_one_bullet_down_the_aim() {
+        let grid = crate::common::weapon::PelletGrid { across: 1, spread: 30.0 };
+        assert_eq!(grid.offsets(), vec![Vec2::ZERO]);
+    }
+
+    /// Breaks if each pellet becomes its own `Damage`, which would put nine
+    /// numbers and nine flinches on one body for one shot.
+    #[test]
+    fn every_pellet_that_lands_on_one_body_is_one_damage() {
+        let (mut world, shooter, target) = a_shooter_and_a_target(target_boxes(5.0));
+        fire_action(&mut world, shooter, WeaponAction::Hitscan(SHOTGUN));
+
+        let asked = asked_for(&mut world);
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert_eq!(asked[0].target, target);
+        // At five meters the square is 17 cm wide, inside the body box.
+        assert_eq!(asked[0].amount, 9 * SHOTGUN.damage);
+
+        let tracers = effects_of(&mut world)
+            .into_iter()
+            .filter(|effect| matches!(effect, Effect::Tracer { .. }))
+            .count();
+        assert_eq!(tracers, 9, "one tracer per pellet");
+    }
+
+    /// Breaks if the pellets all go down the aim.
+    #[test]
+    fn far_enough_away_some_pellets_miss() {
+        // At sixty meters the square is two meters wide; the body box is 0.8.
+        let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(60.0));
+        fire_action(&mut world, shooter, WeaponAction::Hitscan(SHOTGUN));
+
+        let asked = asked_for(&mut world);
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert!(asked[0].amount < 9 * SHOTGUN.damage, "every pellet landed: {asked:?}");
+        assert!(asked[0].amount >= SHOTGUN.damage, "nothing landed: {asked:?}");
     }
 
     /// Breaks if the pitch sign is backwards.

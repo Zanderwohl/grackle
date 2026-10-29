@@ -32,6 +32,7 @@ pub mod net_transport;
 pub mod protocol;
 // `pub` because the `editor` binary wires `PerfPlugin` up from outside the library.
 pub mod perf;
+pub mod picker;
 pub(crate) mod painter;
 pub(crate) mod ray;
 pub mod item;
@@ -55,7 +56,7 @@ pub mod shortcuts;
 pub mod reorder;
 pub mod trigger;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointResolutionError {
     NoSuchPoint,
     NoSuchReferent,

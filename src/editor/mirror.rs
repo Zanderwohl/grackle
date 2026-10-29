@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::team::{Side, Team};
 use crate::common::PointResolutionError;
-use crate::editor::editable::{Feature, FeatureId, FeatureTag, FeatureTrait, PointRef};
+use crate::editor::editable::{Feature, FeatureId, FeatureTag, FeatureTrait, PointRef, BROKEN};
 use crate::get;
 
 /// How the copies are made from the original. Every one keeps a room an axis-aligned box.
@@ -175,6 +175,8 @@ enum LeftOut {
 
 struct MirroredCopy {
     source: FeatureId,
+    /// The source's, for the point dropdown.
+    label: String,
     image: usize,
     source_entity: Option<Entity>,
     object: Box<dyn FeatureTrait>,
@@ -307,6 +309,28 @@ impl Mirror {
         self.symmetry.images().iter().map(move |motion| Mirroring { motion: *motion, center })
     }
 
+    /// By source and image rather than place in the list, so reordering the sources renames nothing.
+    fn copy_point_key(copy: &MirroredCopy, key: &str) -> String {
+        format!("{}@{}/{key}", copy.source, copy.image)
+    }
+
+    fn copy_point_label(&self, copy: &MirroredCopy, point: &str) -> String {
+        if self.symmetry.images().len() > 1 {
+            get!("editor.features.mirror.nth_copy_point", "source", copy.label, "n", copy.image + 1, "point", point)
+        } else {
+            get!("editor.features.mirror.copy_point", "source", copy.label, "point", point)
+        }
+    }
+
+    fn copy_for_key<'a>(&self, key: &'a str) -> Option<(&MirroredCopy, &'a str)> {
+        let (copy, rest) = key.split_once('/')?;
+        let (source, image) = copy.split_once('@')?;
+        let source = FeatureId::from_raw(source.parse().ok()?);
+        let image: usize = image.parse().ok()?;
+        let copy = self.copies.iter().find(|copy| copy.source == source && copy.image == image)?;
+        Some((copy, rest))
+    }
+
     /// A copy of a Mirror is rebuilt on every resolve, so it takes over its predecessor's entities.
     fn inherit_entities(&mut self, previous: &mut Mirror) {
         self.entity = previous.entity;
@@ -361,8 +385,13 @@ const MIRROR_COLOR: Color = Color::srgb(0.9, 0.35, 0.9);
 
 #[typetag::serde(name = "mirror")]
 impl FeatureTrait for Mirror {
-    fn get_point(&self, _key: &str) -> Result<Vec3, PointResolutionError> {
-        Ok(self.resolved_center)
+    /// An unknown key is an error, so a reference to a removed copy is reported.
+    fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError> {
+        if key.is_empty() {
+            return Ok(self.resolved_center);
+        }
+        let (copy, rest) = self.copy_for_key(key).ok_or(PointResolutionError::NoSuchPoint)?;
+        copy.object.get_point(rest)
     }
 
     fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool {
@@ -443,7 +472,7 @@ impl FeatureTrait for Mirror {
                 }
                 let name = features
                     .get(id)
-                    .map(Feature::type_name_with_id)
+                    .map(Feature::label)
                     .unwrap_or_else(|| id.to_string());
                 let text = match self.left_out.iter().find(|(left, _)| left == id) {
                     None => egui::RichText::new(name),
@@ -452,7 +481,7 @@ impl FeatureTrait for Mirror {
                             LeftOut::Missing => get!("editor.features.mirror.missing"),
                             LeftOut::NoMirrorImage => get!("editor.features.mirror.no_mirror_image"),
                         };
-                        egui::RichText::new(format!("{name} ({why})")).color(egui::Color32::from_rgb(230, 130, 80))
+                        egui::RichText::new(format!("{name} ({why})")).color(BROKEN)
                     }
                 };
                 ui.label(text);
@@ -522,9 +551,7 @@ impl FeatureTrait for Mirror {
             .fold(4.0, f32::max)
             + 1.0;
 
-        for copy in &self.copies {
-            copy.object.debug_gizmos(gizmos);
-        }
+        // The copies are drawn by whoever asks for `standing_copies`, each under its own kind's switch.
         if self.is_copy {
             return;
         }
@@ -618,6 +645,7 @@ impl FeatureTrait for Mirror {
             match images {
                 Some(images) => self.copies.extend(images.into_iter().enumerate().map(|(image, object)| MirroredCopy {
                     source: *id,
+                    label: source.label(),
                     image,
                     source_entity: source.object().entity(),
                     object,
@@ -654,11 +682,38 @@ impl FeatureTrait for Mirror {
     }
 
     fn available_point_keys(&self) -> Vec<(String, String)> {
-        vec![("".into(), get!("editor.features.mirror.center"))]
+        let mut keys = vec![("".into(), get!("editor.features.mirror.center"))];
+        for copy in &self.copies {
+            for (key, point) in copy.object.available_point_keys() {
+                keys.push((Self::copy_point_key(copy, &key), self.copy_point_label(copy, &point)));
+            }
+        }
+        keys
     }
 
-    fn reference_points_for_ray(&self, _ray: &Ray3d) -> Vec<(String, Vec3)> {
-        vec![("".into(), self.resolved_center)]
+    fn point_label(&self, key: &str) -> Option<String> {
+        if key.is_empty() {
+            return Some(get!("editor.features.mirror.center"));
+        }
+        let (copy, rest) = self.copy_for_key(key)?;
+        Some(self.copy_point_label(copy, &copy.object.point_label(rest)?))
+    }
+
+    fn point_count(&self) -> usize {
+        1 + self.copies.iter().map(|copy| copy.object.point_count()).sum::<usize>()
+    }
+
+    fn reference_points_for_ray(&self, ray: &Ray3d) -> Vec<(String, Vec3)> {
+        let mut points = vec![("".into(), self.resolved_center)];
+        for copy in &self.copies {
+            points.extend(
+                copy.object
+                    .reference_points_for_ray(ray)
+                    .into_iter()
+                    .map(|(key, at)| (Self::copy_point_key(copy, &key), at)),
+            );
+        }
+        points
     }
 
     fn standing_copies(&self) -> Vec<StandingCopy<'_>> {
@@ -678,6 +733,10 @@ impl FeatureTrait for Mirror {
     /// Clicking a copy selects the Mirror, which is what edits it.
     fn pick_boxes(&self) -> Vec<crate::common::ray::PickBox> {
         self.copies.iter().flat_map(|copy| copy.object.pick_boxes()).collect()
+    }
+
+    fn point_refs(&self) -> Vec<&PointRef> {
+        vec![&self.center]
     }
 
     fn get_point_ref(&self, _key: &str) -> Option<&PointRef> {
@@ -1214,5 +1273,50 @@ mod tests {
         cyclic.resolve_references(timeline.features_map());
         timeline.features_mut().get_mut(&first).unwrap().object_mut().mirror_mut().unwrap().sources = vec![second];
         cyclic.resolve_references(timeline.features_map());
+    }
+
+    /// A point on a copy's corner follows the source, and one on a removed copy does not resolve.
+    #[test]
+    fn a_point_can_stand_on_a_copy() {
+        use crate::editor::global_point::GlobalPoint;
+
+        let mut timeline = FeatureTimeline::default();
+        let room = timeline.apply_feature(Box::new(EditorRoom::from_point_refs(
+            PointRef::absolute(2.0, 0.0, -1.0),
+            PointRef::absolute(6.0, 3.0, 1.0),
+        )));
+        let mirror = timeline.apply_feature(Box::new(Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).with_sources(vec![room])));
+        timeline.resolve_all();
+
+        let ray = Ray3d::new(Vec3::new(-4.0, 10.0, 0.0), Dir3::NEG_Y);
+        let offered = timeline.get_feature(&mirror).unwrap().object().reference_points_for_ray(&ray);
+        let (key, at) = offered.iter().find(|(key, _)| key.ends_with("/min")).expect("the copy's min is offered");
+        assert!(at.abs_diff_eq(Vec3::new(-6.0, 0.0, -1.0), 1e-5), "{at}");
+        assert!(
+            timeline.get_feature(&mirror).unwrap().object().available_point_keys().iter().any(|(k, _)| k == key),
+            "the panel can name what was picked"
+        );
+
+        let mut on_copy = PointRef::reference_with_offset(mirror, 0.0, 1.0, 0.0);
+        on_copy.point_key = key.clone();
+        let point = timeline.apply_feature(Box::new(GlobalPoint::from_point_ref(on_copy)));
+        timeline.resolve_all();
+        let point_at = |timeline: &FeatureTimeline| timeline.get_feature(&point).unwrap().get_point("").unwrap();
+        assert!(point_at(&timeline).abs_diff_eq(Vec3::new(-6.0, 1.0, -1.0), 1e-5));
+
+        *timeline.features_mut().get_mut(&room).unwrap().object_mut().get_point_ref_mut("max").unwrap() =
+            PointRef::absolute(9.0, 3.0, 1.0);
+        timeline.resolve_all();
+        assert!(point_at(&timeline).abs_diff_eq(Vec3::new(-9.0, 1.0, -1.0), 1e-5), "{}", point_at(&timeline));
+
+        let mirror_object = timeline.get_feature(&mirror).unwrap().object();
+        let listed = mirror_object.available_point_keys();
+        assert_eq!(mirror_object.point_count(), listed.len());
+        for (key, label) in &listed {
+            assert_eq!(mirror_object.point_label(key).as_ref(), Some(label), "{key}");
+        }
+
+        let gone = key.replacen("@0/", "@2/", 1);
+        assert!(matches!(timeline.get_feature(&mirror).unwrap().get_point(&gone), Err(PointResolutionError::NoSuchPoint)));
     }
 }

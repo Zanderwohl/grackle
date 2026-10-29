@@ -114,6 +114,10 @@ impl FeatureTrait for EditorBlock {
         self.volume.get_point_ref_mut(key)
     }
 
+    fn point_refs(&self) -> Vec<&PointRef> {
+        self.volume.point_refs()
+    }
+
     fn own_bases(&self, point_ref_key: &str) -> Vec<(String, Vec3)> {
         self.volume.own_bases(point_ref_key)
     }

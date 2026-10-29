@@ -125,6 +125,10 @@ rename = "Rename"
 
 [editor.point_ref]
 none = "None"
+default = "Default"
+missing_point = "Missing point"
+missing_feature = "Missing feature"
+unresolved = "Does not resolve"
 
 [editor.rounds]
 title = "Rounds"
@@ -205,6 +209,7 @@ clearance = "Needs { height } m of clear headroom."
 [editor.features.prop]
 title = "Prop"
 model = "Model"
+stand_in = "Stand-in"
 center = "Center"
 rotation = "Rotation"
 yaw = "Yaw"
@@ -255,6 +260,8 @@ add_all = "Add all above"
 missing = "missing"
 no_mirror_image = "cannot be mirrored"
 drop = "x"
+copy_point = "{ source } (copy): { point }"
+nth_copy_point = "{ source } (copy { n }): { point }"
 
 [weapon.names]
 laser_rifle = "Laser Rifle"
@@ -263,6 +270,8 @@ pill_launcher = "Pill Launcher"
 rpg = "RPG"
 flamethrower = "Flamethrower"
 medi_wrench = "Medi-Wrench"
+pistol = "Pistol"
+shotgun = "Shotgun"
 
 [weapon.slots]
 primary = "Primary"
@@ -649,6 +658,7 @@ view = "View"
 
 [prop.workspace]
 model = "Model"
+stand_in = "Stand-in"
 fit = "Fit"
 
 [prop.panels]
@@ -928,9 +938,11 @@ missing_line = "names a line that is not there"
 no_mirror_plane = "mirrors about a plane that is not there"
 axis_crosses = "turns a region about an axis that crosses it"
 
+[editor.picker]
+search = "Search"
+
 [editor.material_picker]
 plain = "Default"
-search = "Search"
 role = "Role"
 role_named = "{ name } (role)"
 

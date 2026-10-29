@@ -8,6 +8,7 @@ use crate::common::PointResolutionError;
 use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::editor::mirror::Mirroring;
 use crate::get;
+use crate::prop::picker::prop_button;
 
 /// Edge length of the stand-in box, in meters. Exactly half a meter so mappers can count them.
 pub const PROP_SIZE: f32 = 0.5;
@@ -49,7 +50,12 @@ impl FeatureTrait for Prop {
         let mut changed = false;
         ui.horizontal(|ui| {
             ui.label(get!("editor.features.prop.model"));
-            changed |= ui.text_edit_singleline(&mut self.model).changed();
+            let current = (!self.model.is_empty()).then_some(self.model.as_str());
+            if let Some(pick) = prop_button(ui, current, &get!("editor.features.prop.stand_in")) {
+                let pick = pick.unwrap_or_default();
+                changed |= pick != self.model;
+                self.model = pick;
+            }
         });
         let label = get!("editor.features.prop.center");
         changed |= self.location.editor_ui(ui, &label, features, prior_feature_order, retarget_request);
@@ -166,6 +172,10 @@ impl FeatureTrait for Prop {
         }
         self.rotation[axis as usize] = radians;
         true
+    }
+
+    fn point_refs(&self) -> Vec<&PointRef> {
+        vec![&self.location]
     }
 
     fn get_point_ref(&self, _key: &str) -> Option<&PointRef> {

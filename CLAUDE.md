@@ -1051,7 +1051,11 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   a fixed-width button opening a searchable grid of every pack's `materials/`
   and the palette's roles. A feature's `editor_ui` gets only egui, so
   `publish_choices` leaves the choices in egui's memory, and it reads the
-  directories and bakes previews only while a picker is open.
+  directories and bakes previews only while a picker is open. The widget is
+  [`src/common/picker.rs`](src/common/picker.rs), one `PickerKind` per thing
+  picked: a `Prop`'s model ([`src/prop/picker.rs`](src/prop/picker.rs), every
+  pack's `props/` as thumbnails, badged with the archetype) and a weapon
+  pickup's weapon (pictured by its model) use it too.
 - **Not sent to clients.** Materials are pack content like props, but nothing
   syncs them yet; a client without the file draws that slot as the default.
 
@@ -1074,7 +1078,9 @@ Pictures are cached at `cache/thumbnail/props/{name}.png`, with a
 `{name}.source` beside each naming the file it was taken of. One is reused
 only while it is of **the file the prop was baked from** and no older than it,
 so a deleted override does not leave its picture behind. Saving in the prop
-editor re-bakes, so it re-photographs. A model the server sent has no file and
+editor re-bakes, so it re-photographs. A picker asks `Thumbnails::look_on_disk`
+first and bakes only on a miss, so browsing a pack does not keep every prop's
+meshes alive. A model the server sent has no file and
 is photographed into memory only. Reading and writing run on the IO pool, and
 the cache is native-only. Lighting or framing changes do not invalidate it:
 delete `cache/` after touching either.
@@ -1453,7 +1459,10 @@ other. The `Push` is the one thing they cannot share: a bullet is
 point. Write a blast as a directed shove and it slides every corpse in the
 room the same way instead of throwing them off it. A weapon writes a shove for
 *every* hit it lands and never asks whether anything died; the shot that happens to be fatal lands on a corpse
-raised earlier in the same tick. Its units are honest: `push` is a speed at
+raised earlier in the same tick. A shove only the *fatal* hit should throw
+(the shotgun's `kill_shove`) rides on the `Damage` request instead, and
+`apply_damage` throws it, since that is the one place a hit is known to kill.
+Its units are honest: `push` is a speed at
 the center, not momentum to be divided by a mass. Mass is real — a bone's own
 volume — and what it decides is how much of the body a shove drags with it,
 not how fast the bone that was hit leaves, because a rocket that flings a
@@ -1762,10 +1771,12 @@ on its entry in `loadouts.toml` (absent are `DEFAULT_HEALTH` and
 (`Primary`, `Secondary`, `Melee`, `Utility`, `Gadget`, `Special`). A class that
 uses three leaves three empty. Slots decide what a body *spawns* with; what
 it carries afterward is unbounded (see below). Nobody picks a class yet, so `Class::Mercenary`
-is the placeholder everybody plays as — deliberately a sampler, carrying one of
-every kind of action, so the whole table is reachable by walking up to it and
-clicking. `the_placeholder_class_carries_one_of_everything` is what fails when
-a new variant is wired to nothing. It decides what a body *carries* and nothing
+is the placeholder everybody plays as — deliberately a sampler, *permitting* one
+of every kind of action, so the whole table is reachable through a mode's
+loadout or a pickup. A slot with no `default` spawns empty; the Mercenary
+starts with no rifle and no wrench.
+`the_placeholder_class_carries_one_of_everything` is what fails when a new
+variant is wired to nothing. It decides what a body *carries* and nothing
 else: the rig is still built from `Proportions::DEFAULT` and a corpse's build
 is still read off the rig, because keying a *corpse* on a class is the bug
 that replicated every corpse in the game correctly except a player's.
@@ -2538,8 +2549,17 @@ follows. Consequences to respect when adding a feature type:
   still go wrong is a field that does not round-trip: anything the world can
   recompute (a resolved position, the entity) must be `#[serde(skip)]`, and
   anything that is the map must not be. Add the new type to
-  `every_feature_type_survives_a_save_and_load` at the bottom of
-  [`save.rs`](src/editor/save.rs); that is the test that notices.
+  `one_of_every_feature` at the bottom of [`save.rs`](src/editor/save.rs);
+  `every_feature_type_survives_a_save_and_load` is the test that notices.
+- **List every `PointRef` in `point_refs`.** A point that stops resolving —
+  its feature deleted, or a Mirror's copy gone — leaves its feature where it
+  was, and `PointRef::unresolved` is the only sign: it turns the row orange
+  in the Features panel and puts a line under the point in the inspector. One
+  left out is a failure nobody sees; `every_point_ref_is_listed` counts them
+  against the serialized form.
+- **A Mirror offers its copies' points** as `{source}@{image}/{key}`, so a
+  feature after it can stand on a copy's corner. A key naming a copy that no
+  longer stands does not resolve.
 - To make it visible and clickable, also add arms in
   [`show.rs`](src/tool/show.rs) (`GizmoVisibility` plus both matches),
   [`tool_helpers.rs`](src/tool/tool_helpers.rs) (`find_nearest_feature_hit`),

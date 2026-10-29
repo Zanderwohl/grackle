@@ -167,13 +167,7 @@ impl EditorRoom {
                 }
             }
             MaxBase::OwnMin => {
-                let base = self.resolved_min;
-                self.max.resolved_reference = Some(base);
-                self.resolved_max = Vec3::new(
-                    self.max.x.resolve_with_base(Some(base.x)).unwrap_or(base.x),
-                    self.max.y.resolve_with_base(Some(base.y)).unwrap_or(base.y),
-                    self.max.z.resolve_with_base(Some(base.z)).unwrap_or(base.z),
-                );
+                self.resolved_max = self.max.resolve_from(self.resolved_min);
             }
         }
     }
@@ -285,6 +279,10 @@ impl FeatureTrait for EditorRoom {
             ("top_left_edge_center".into(), "Top Left Edge".into()),
             ("top_right_edge_center".into(), "Top Right Edge".into()),
         ]
+    }
+
+    fn point_refs(&self) -> Vec<&PointRef> {
+        vec![&self.min, &self.max]
     }
 
     fn get_point_ref(&self, key: &str) -> Option<&PointRef> {

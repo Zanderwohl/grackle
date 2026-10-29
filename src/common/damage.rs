@@ -201,6 +201,17 @@ pub struct Damage {
     /// Where it came from — a muzzle, a blast — for the victim's direction
     /// indicator; `None` for what has no direction, like burning.
     pub from: Option<Vec3>,
+    /// Thrown at the corpse only if this is the hit that kills, at `point`.
+    pub kill_shove: Option<KillShove>,
+}
+
+/// A weapon cannot know whether a hit is fatal, only `apply_damage` can, so
+/// the shove rides on the request and is thrown there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KillShove {
+    /// Meters per second at `point`, as [`RagdollShove`](crate::game::ragdoll::RagdollShove)'s.
+    pub velocity: Vec3,
+    pub radius: f32,
 }
 
 /// A request to empty a health pool outright: no armor, no team rule, no

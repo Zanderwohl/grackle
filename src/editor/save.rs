@@ -195,10 +195,8 @@ mod tests {
             .collect()
     }
 
-    /// One of every feature type, each with a non-default field. A new feature type joins this test;
-    /// a wrongly skipped field fails here.
-    #[test]
-    fn every_feature_type_survives_a_save_and_load() {
+    /// One of every feature type, each with a non-default field. A new feature type joins here.
+    fn one_of_every_feature() -> FeatureTimeline {
         let mut timeline = FeatureTimeline::default();
         let min = timeline.apply_feature(Box::new(GlobalPoint::new(-2.0, 0.0, -2.0)));
         let max = timeline.apply_feature(Box::new(GlobalPoint::new(2.0, 3.0, 2.0)));
@@ -262,6 +260,45 @@ mod tests {
         footprint.resolve_references(timeline.features_map());
         assert!(footprint.name_region_at(bevy::math::Vec2::new(5.0, 3.0)), "the triangle encloses nothing there");
         timeline.apply_feature(Box::new(footprint));
+        timeline
+    }
+
+    /// A `PointRef` a feature does not list is one whose failure nobody sees.
+    #[test]
+    fn every_point_ref_is_listed() {
+        fn count(value: &serde_json::Value) -> usize {
+            match value {
+                serde_json::Value::Object(map) => {
+                    usize::from(map.contains_key("point_key")) + map.values().map(count).sum::<usize>()
+                }
+                serde_json::Value::Array(items) => items.iter().map(count).sum(),
+                _ => 0,
+            }
+        }
+        let timeline = one_of_every_feature();
+        for id in timeline.feature_order() {
+            let feature = timeline.get_feature(id).unwrap();
+            let value = serde_json::to_value(feature.object()).unwrap();
+            assert_eq!(feature.object().point_refs().len(), count(&value), "{}: {value}", feature.type_name());
+        }
+    }
+
+    #[test]
+    fn no_shipped_map_has_a_point_that_does_not_resolve() {
+        for name in ["new", "demo"] {
+            let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
+            let mut timeline = load(&path).unwrap().timeline;
+            timeline.resolve_all();
+            for (_, feature) in timeline.active_features() {
+                assert!(!feature.is_broken(), "{name}: {}", feature.label());
+            }
+        }
+    }
+
+    /// A wrongly skipped field fails here.
+    #[test]
+    fn every_feature_type_survives_a_save_and_load() {
+        let timeline = one_of_every_feature();
 
         let mut metadata = MapMetadata::default();
         metadata.display_name = Some("2 Fort".into());

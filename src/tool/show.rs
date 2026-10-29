@@ -36,6 +36,25 @@ impl Default for GizmoVisibility {
     }
 }
 
+impl GizmoVisibility {
+    /// By `type_key`, so a Mirror's copy answers to its own kind's switch rather than the Mirror's.
+    fn shows(&self, type_key: &str) -> bool {
+        match type_key {
+            "global_point" => self.points,
+            "editor_room" | "footprint_room" => self.rooms,
+            "grackle_point_light" => self.point_lights,
+            "spawn_point" => self.spawn_points,
+            "prop" | "weapon_pickup" => self.props,
+            "animation_display" => self.animation_displays,
+            "animation_grid" => self.animation_grids,
+            "mirror" => self.mirrors,
+            "trigger" => self.triggers,
+            "block" => self.blocks,
+            _ => false,
+        }
+    }
+}
+
 pub struct ShowPlugin;
 
 impl Plugin for ShowPlugin {
@@ -84,22 +103,11 @@ impl ShowPlugin {
         }
 
         for (_id, feature) in feature.active_features() {
-            let key = feature.object().type_key();
-            let draw = match key {
-                "global_point" => visibility.points,
-                "editor_room" | "footprint_room" => visibility.rooms,
-                "grackle_point_light" => visibility.point_lights,
-                "spawn_point" => visibility.spawn_points,
-                "prop" | "weapon_pickup" => visibility.props,
-                "animation_display" => visibility.animation_displays,
-                "animation_grid" => visibility.animation_grids,
-                "mirror" => visibility.mirrors,
-                "trigger" => visibility.triggers,
-                "block" => visibility.blocks,
-                _ => false,
-            };
-            if draw {
-                feature.object().debug_gizmos(&mut gizmos);
+            let object = feature.object();
+            for drawn in std::iter::once(object).chain(object.standing_copies().into_iter().map(|copy| copy.object)) {
+                if visibility.shows(drawn.type_key()) {
+                    drawn.debug_gizmos(&mut gizmos);
+                }
             }
         }
     }
