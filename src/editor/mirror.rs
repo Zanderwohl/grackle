@@ -152,8 +152,18 @@ pub struct MirrorSides {
 /// One copy a Mirror stands, a child of the Mirror's entity so the two go together.
 #[derive(Component, Debug)]
 pub struct MirrorCopy {
+    /// What it is a copy of, which is where it stands in the map's order.
+    pub source: FeatureId,
     /// Indexes [`Symmetry::images`], and so which team it is on.
     pub image: usize,
+}
+
+/// A copy standing, with the feature it was copied from and the Mirror images
+/// it went through, innermost first — what puts it in the map's order.
+pub struct StandingCopy<'a> {
+    pub source: FeatureId,
+    pub images: Vec<usize>,
+    pub object: &'a dyn FeatureTrait,
 }
 
 /// Why a source has no copy, for the panel.
@@ -575,7 +585,7 @@ impl FeatureTrait for Mirror {
             let child = match self.copy_entities.iter().find(|(at, _)| *at == key) {
                 Some((_, child)) => *child,
                 None => {
-                    let child = commands.spawn((MirrorCopy { image: copy.image }, ChildOf(entity))).id();
+                    let child = commands.spawn((MirrorCopy { source: copy.source, image: copy.image }, ChildOf(entity))).id();
                     self.copy_entities.push((key, child));
                     child
                 }
@@ -651,10 +661,17 @@ impl FeatureTrait for Mirror {
         vec![("".into(), self.resolved_center)]
     }
 
-    fn standing_copies(&self) -> Vec<&dyn FeatureTrait> {
+    fn standing_copies(&self) -> Vec<StandingCopy<'_>> {
         self.copies
             .iter()
-            .flat_map(|copy| std::iter::once(&*copy.object).chain(copy.object.standing_copies()))
+            .flat_map(|copy| {
+                let own = StandingCopy { source: copy.source, images: vec![copy.image], object: &*copy.object };
+                let nested = copy.object.standing_copies().into_iter().map(|mut inner| {
+                    inner.images.push(copy.image);
+                    inner
+                });
+                std::iter::once(own).chain(nested)
+            })
             .collect()
     }
 

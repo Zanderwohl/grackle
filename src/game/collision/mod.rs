@@ -7,7 +7,7 @@ mod rounded;
 
 use bevy::prelude::*;
 
-use crate::common::world_surface::{self, Face};
+use crate::common::world_surface::{self, Face, Volume};
 use crate::prop::archetype::RoundedBox;
 use crate::tool::room::Room;
 use crate::common::grid::Grid;
@@ -28,9 +28,9 @@ const SKIN: f32 = 0.001;
 pub struct CollisionWorld {
     hulls: Vec<Hull>,
     grid: Grid,
-    /// The rooms' volumes. [`CollisionWorld::depenetrate`] needs them to tell
-    /// which way out of a wall is into the level.
-    interiors: Vec<Room>,
+    /// The map's rooms and blocks, in order. [`CollisionWorld::depenetrate`]
+    /// needs them to tell which way out of a wall is into the level.
+    volumes: Vec<Volume>,
     /// Placed props that block movement. Kept apart from `hulls` because they
     /// are rebuilt on a different trigger: rooms change with the map, props
     /// with what the authority has standing.
@@ -38,11 +38,18 @@ pub struct CollisionWorld {
 }
 
 impl CollisionWorld {
-    /// The rooms' volumes, and the surface they make — the same one that is
+    /// The map's volumes, and the surface they make — the same one that is
     /// drawn — as the walls.
+    pub fn rebuild_volumes(&mut self, volumes: &[Volume]) {
+        self.volumes = volumes.to_vec();
+        self.set_surface(&world_surface::of_volumes(volumes));
+    }
+
+    /// A map of rooms alone.
     pub fn rebuild(&mut self, rooms: &[Room]) {
-        self.interiors = rooms.to_vec();
-        self.set_surface(&world_surface::of_rooms(rooms));
+        let mut volumes: Vec<((), Volume, ())> = rooms.iter().map(|room| ((), Volume::air(room.clone()), ())).collect();
+        world_surface::sort_by_place(&mut volumes);
+        self.rebuild_volumes(&volumes.into_iter().map(|(_, volume, _)| volume).collect::<Vec<_>>());
     }
 
     /// Each face of the surface stood out into the solid behind it as a hull.
@@ -153,7 +160,7 @@ impl CollisionWorld {
     }
 
     pub fn inside_map(&self, point: Vec3) -> bool {
-        self.interiors.iter().any(|room| room.contains(point))
+        world_surface::is_air(&self.volumes, point)
     }
 
     /// Whether a body stands clear: in the map and touching no wall. A low

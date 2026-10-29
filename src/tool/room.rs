@@ -1,5 +1,7 @@
 use bevy::app::App;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use crate::common::world_surface::{self, Volume};
 use crate::common::csg::{self, Polygon};
 use crate::common::triangulate::triangulate;
 use bevy_egui::input::EguiWantsInput;
@@ -7,6 +9,7 @@ use crate::common::app_mode::AppMode;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline, FeatureTrait, PointRef};
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::trigger::EditorTrigger;
+use crate::editor::block::EditorBlock;
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::{on_top, HandleMaterial, Multicam};
 use crate::tool::tool_helpers::*;
@@ -28,6 +31,7 @@ impl Plugin for RoomPlugin {
             ).chain().run_if(drawing_a_box).run_if(in_state(AppMode::Editor)))
             .add_systems(OnExit(Tools::Room), RoomTool::on_exit)
             .add_systems(OnExit(Tools::Trigger), RoomTool::on_exit)
+            .add_systems(OnExit(Tools::Block), RoomTool::on_exit)
             .add_systems(Update, (
                 RoomDragState::spawn_handles_system,
                 RoomDragState::handle_dragging,
@@ -38,9 +42,9 @@ impl Plugin for RoomPlugin {
     }
 }
 
-/// A trigger is drawn the way a room is.
+/// A trigger and a block are drawn the way a room is.
 fn drawing_a_box(tool: Res<State<Tools>>) -> bool {
-    matches!(tool.get(), Tools::Room | Tools::Trigger)
+    matches!(tool.get(), Tools::Room | Tools::Trigger | Tools::Block)
 }
 
 #[derive(Clone)]
@@ -123,12 +127,12 @@ impl RoomTool {
         mouse_input: Res<CurrentMouseInput>,
         keys: Res<ButtonInput<KeyCode>>,
         mut features: ResMut<FeatureTimeline>,
-        rooms: Query<&Room>,
+        rooms: MapVolumes,
         mut next_tool: ResMut<NextState<Tools>>,
         current_tool: Res<State<Tools>>,
         egui: Res<EguiWantsInput>,
     ) {
-        let trigger = *current_tool.get() == Tools::Trigger;
+        let drawing = current_tool.get().clone();
         let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let shift_just_pressed = keys.just_pressed(KeyCode::ShiftLeft) || keys.just_pressed(KeyCode::ShiftRight);
 
@@ -186,7 +190,7 @@ impl RoomTool {
                     // The far corner is a size, measured from the first.
                     let typing = egui.wants_keyboard_input();
                     if commit_at_cursor(&mouse_input, &keys, typing) {
-                        Self::create_room(&mut tool, &mut features, &mut next_tool, trigger, FarCorner::FromMin(cursor - min), cursor);
+                        Self::create_room(&mut tool, &mut features, &mut next_tool, &drawing, FarCorner::FromMin(cursor - min), cursor);
                     }
                 }
             }
@@ -247,7 +251,7 @@ impl RoomTool {
                         tool.last_min = cursor;
                         tool.mode = RoomToolMode::PlacingMax(RoomCornerMode::Normal);
                     } else {
-                        Self::create_room(&mut tool, &mut features, &mut next_tool, trigger, FarCorner::Point(pr), cursor);
+                        Self::create_room(&mut tool, &mut features, &mut next_tool, &drawing, FarCorner::Point(pr), cursor);
                     }
                 }
             }
@@ -258,7 +262,7 @@ impl RoomTool {
         tool: &mut ResMut<Self>,
         features: &mut ResMut<FeatureTimeline>,
         next_tool: &mut ResMut<NextState<Tools>>,
-        trigger: bool,
+        drawing: &Tools,
         max: FarCorner,
         max_resolved: Vec3,
     ) {
@@ -267,10 +271,10 @@ impl RoomTool {
                 FarCorner::FromMin(size) => EditorRoom::from_min_and_size(min_point, size),
                 FarCorner::Point(max_point) => EditorRoom::from_point_refs(min_point, max_point),
             };
-            let feature: Box<dyn FeatureTrait> = if trigger {
-                Box::new(EditorTrigger::from_room(room))
-            } else {
-                Box::new(room)
+            let feature: Box<dyn FeatureTrait> = match drawing {
+                Tools::Trigger => Box::new(EditorTrigger::from_room(room)),
+                Tools::Block => Box::new(EditorBlock::from_room(room)),
+                _ => Box::new(room),
             };
             let id = features.apply_feature(feature);
             features.select(Some(id));
@@ -938,6 +942,54 @@ fn on_edge(points: &[Vec2], q: Vec2) -> bool {
         let t = (q - a).dot(along) / along.length_squared().max(f32::MIN_POSITIVE);
         (0.0..=1.0).contains(&t) && (a + along * t).distance(q) <= ON_THE_EDGE
     })
+}
+
+/// A volume of solid: a prism cutting the rooms before it in the map's order
+/// (`documentation/blocks.md`). Never a [`Room`], since everything asking for
+/// `&Room` means air.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct Block(pub Room);
+
+/// Where a room or block stands in the map's order: the place of the feature
+/// it comes from, then which Mirror image of it, innermost first. Compared as a
+/// list, so an original comes before its copies. A volume without one comes
+/// first.
+#[derive(Component, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VolumeOrder(pub Vec<u32>);
+
+/// Every room and block standing, for whatever builds from the surface.
+#[derive(SystemParam)]
+pub struct MapVolumes<'w, 's> {
+    rooms: Query<'w, 's, (Entity, &'static Room, Option<&'static VolumeOrder>)>,
+    blocks: Query<'w, 's, (Entity, &'static Block, Option<&'static VolumeOrder>)>,
+}
+
+impl MapVolumes<'_, '_> {
+    /// In the map's order, as [`world_surface::share`] wants them, with their places.
+    pub fn placed(&self) -> Vec<(VolumeOrder, Volume, Entity)> {
+        let rooms = self.rooms.iter().map(|(entity, room, order)| (order.cloned().unwrap_or_default(), Volume::air(room.clone()), entity));
+        let blocks = self.blocks.iter().map(|(entity, block, order)| (order.cloned().unwrap_or_default(), Volume::solid(block.0.clone()), entity));
+        let mut all: Vec<_> = rooms.chain(blocks).collect();
+        world_surface::sort_by_place(&mut all);
+        all
+    }
+
+    pub fn ordered(&self) -> Vec<(Entity, Volume)> {
+        self.placed().into_iter().map(|(_, volume, entity)| (entity, volume)).collect()
+    }
+
+    pub fn volumes(&self) -> Vec<Volume> {
+        self.ordered().into_iter().map(|(_, volume)| volume).collect()
+    }
+
+    /// In the order the queries walk them, which is not the map's.
+    pub fn entities(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.rooms.iter().map(|(entity, ..)| entity).chain(self.blocks.iter().map(|(entity, ..)| entity))
+    }
+
+    pub fn contains(&self, entity: Entity) -> bool {
+        self.rooms.contains(entity) || self.blocks.contains(entity)
+    }
 }
 
 #[derive(Message)]

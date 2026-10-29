@@ -15,7 +15,7 @@ use crate::prop::sketch::SketchId;
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
 use crate::prop::sketch_edit::hatch;
-use crate::tool::room::Room;
+use crate::tool::room::MapVolumes;
 use crate::tool::tool_helpers::*;
 use crate::tool::Tools;
 
@@ -175,7 +175,7 @@ impl FootprintTool {
         &self,
         mouse_input: &CurrentMouseInput,
         cameras: &Query<(Entity, &Multicam)>,
-        rooms: &Query<&Room>,
+        rooms: &MapVolumes,
     ) -> Option<Vec3> {
         let Some(floor) = self.draft.floor().or(self.target_floor) else {
             let start = Vec3::ZERO;
@@ -205,7 +205,7 @@ impl FootprintTool {
         mouse_input: Res<CurrentMouseInput>,
         keys: Res<ButtonInput<KeyCode>>,
         mut features: ResMut<FeatureTimeline>,
-        rooms: Query<&Room>,
+        rooms: MapVolumes,
         mut next_tool: ResMut<NextState<Tools>>,
         egui: Res<EguiWantsInput>,
         mut commands: Commands,

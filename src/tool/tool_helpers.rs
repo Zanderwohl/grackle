@@ -4,7 +4,9 @@ use crate::common::world_surface;
 use crate::editor::editable::{FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::{CameraAxis, Multicam};
-use crate::tool::room::Room;
+use crate::common::world_surface::Volume;
+use crate::editor::volume_order::place;
+use crate::tool::room::{MapVolumes, VolumeOrder};
 use crate::tool::show::GizmoVisibility;
 
 pub const PICK_RADIUS: f32 = 0.1;
@@ -91,7 +93,7 @@ pub fn compute_cursor(
     last_position: Vec3,
     snap: bool,
     snap_granularity: f32,
-    rooms: &Query<&Room>,
+    volumes: &MapVolumes,
 ) -> Option<Vec3> {
     let camera_entity = mouse_input.in_camera?;
     let world_pos = mouse_input.world_pos?;
@@ -99,7 +101,8 @@ pub fn compute_cursor(
 
     let cursor = match multicam.axis {
         CameraAxis::None => {
-            return cursor_from_room_faces(&world_pos, rooms, snap, snap_granularity);
+            return nearest_wall(&volumes.volumes(), &world_pos)
+                .map(|(_, pos)| if snap { snap_vec3(pos, snap_granularity) } else { pos });
         }
         CameraAxis::X => Vec3::new(last_position.x, world_pos.origin.y, world_pos.origin.z),
         CameraAxis::Y => Vec3::new(world_pos.origin.x, last_position.y, world_pos.origin.z),
@@ -109,35 +112,22 @@ pub fn compute_cursor(
     Some(if snap { snap_vec3(cursor, snap_granularity) } else { cursor })
 }
 
-/// Where the ray first meets solid wall from inside any room, snapped, so a
-/// cursor goes through a doorway.
-fn cursor_from_room_faces(
-    ray: &Ray3d,
-    rooms: &Query<&Room>,
-    snap: bool,
-    snap_granularity: f32,
-) -> Option<Vec3> {
-    let rooms: Vec<Room> = rooms.iter().cloned().collect();
-    nearest_wall(&rooms, ray)
-        .map(|(_, pos)| if snap { snap_vec3(pos, snap_granularity) } else { pos })
-}
-
-/// The nearest solid wall `ray` meets from inside any of `rooms`, each room
-/// carved by all the others.
-fn nearest_wall(rooms: &[Room], ray: &Ray3d) -> Option<(f32, Vec3)> {
-    (0..rooms.len())
-        .filter_map(|index| room_wall_hit(rooms, index, ray))
+/// The nearest solid wall `ray` meets from the air, so a cursor goes through
+/// a doorway.
+fn nearest_wall(volumes: &[Volume], ray: &Ray3d) -> Option<(f32, Vec3)> {
+    (0..volumes.len())
+        .filter_map(|index| wall_hit(volumes, index, ray))
         .min_by(|(a, _), (b, _)| a.total_cmp(b))
 }
 
-/// Where `ray` meets `rooms[index]`'s share of the surface from inside it. A
-/// room's share lies on its box, so a box the ray misses is not carved at all.
-fn room_wall_hit(rooms: &[Room], index: usize, ray: &Ray3d) -> Option<(f32, Vec3)> {
-    let (min, max) = rooms[index].bounds();
+/// Where `ray` meets `volumes[index]`'s share of the surface from the air. A
+/// share lies on its volume's box, so a box the ray misses is not cut at all.
+fn wall_hit(volumes: &[Volume], index: usize, ray: &Ray3d) -> Option<(f32, Vec3)> {
+    let (min, max) = volumes[index].shape.bounds();
     if !ray_intersects_aabb(ray, min, max) {
         return None;
     }
-    world_surface::ray_from_inside(&world_surface::room_share(rooms, index), ray)
+    world_surface::ray_from_inside(&world_surface::share(volumes, index), ray)
 }
 
 /// Find the closest reference point to the mouse ray within `pick_radius`.
@@ -302,16 +292,21 @@ pub fn find_nearest_feature_hit(
     let mut best_t = f32::MAX;
     let mut best: Option<(FeatureId, Vec3)> = None;
 
-    // Hidden rooms too: they still carve openings into their neighbors. A
-    // Mirror's copies are unpickable, but they carve.
-    let (owners, rooms): (Vec<Option<FeatureId>>, Vec<Room>) = features
-        .active_features()
-        .flat_map(|(id, feature)| {
-            let own = feature.object().rooms().into_iter().map(move |room| (Some(id), room));
-            let copies = feature.object().standing_copies().into_iter().flat_map(|copy| copy.rooms()).map(|room| (None, room));
-            own.chain(copies).collect::<Vec<_>>()
-        })
-        .unzip();
+    // Hidden volumes too: they still cut their neighbors. A Mirror's copies
+    // are unpickable, but they cut, at their source's place.
+    let positions = crate::editor::volume_order::positions(features);
+    let mut placed: Vec<(VolumeOrder, Volume, Option<FeatureId>)> = Vec::new();
+    for (id, feature) in features.active_features() {
+        let at = |source: FeatureId| positions.get(&source).copied().unwrap_or(0);
+        let own = place(at(id), &[]);
+        placed.extend(feature.object().volumes().into_iter().map(|volume| (own.clone(), volume, Some(id))));
+        for copy in feature.object().standing_copies() {
+            let order = place(at(copy.source), &copy.images);
+            placed.extend(copy.object.volumes().into_iter().map(|volume| (order.clone(), volume, None)));
+        }
+    }
+    world_surface::sort_by_place(&mut placed);
+    let (volumes, owners): (Vec<Volume>, Vec<Option<FeatureId>>) = placed.into_iter().map(|(_, volume, owner)| (volume, owner)).unzip();
 
     for (feature_id, feature) in features.active_features() {
         let key = feature.object().type_key();
@@ -325,15 +320,16 @@ pub fn find_nearest_feature_hit(
             "animation_grid" => visibility.animation_grids,
             "mirror" => visibility.mirrors,
             "trigger" => visibility.triggers,
+            "block" => visibility.blocks,
             _ => false,
         };
         if !visible { continue; }
 
         match key {
-            "editor_room" | "footprint_room" => {
+            "editor_room" | "footprint_room" | "block" => {
                 let own = owners.iter().enumerate().filter(|(_, owner)| **owner == Some(feature_id));
                 for (index, _) in own {
-                    if let Some((t, hit)) = room_wall_hit(&rooms, index, ray) {
+                    if let Some((t, hit)) = wall_hit(&volumes, index, ray) {
                         if t < best_t {
                             best_t = t;
                             best = Some((feature_id, hit));

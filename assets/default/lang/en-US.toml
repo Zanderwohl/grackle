@@ -60,6 +60,7 @@ animation_grid = "Animation Grid"
 move = "Move"
 room = "Room"
 trigger = "Trigger"
+block = "Block"
 footprint = "Footprint"
 mirror = "Mirror"
 retarget = "Retarget"
@@ -86,6 +87,7 @@ gizmos_animation_displays = "Animation Displays"
 gizmos_animation_grids = "Animation Grids"
 gizmos_mirrors = "Mirrors"
 gizmos_triggers = "Triggers"
+gizmos_blocks = "Blocks"
 
 [room.messages]
 ghost = "Room { me } is fully inside { other } and will not appear!"
@@ -159,6 +161,9 @@ materials = "Materials"
 floor = "Floor"
 walls = "Walls"
 ceiling = "Ceiling"
+
+[editor.features.block]
+title = "Block"
 
 [editor.features.trigger]
 title = "Trigger"

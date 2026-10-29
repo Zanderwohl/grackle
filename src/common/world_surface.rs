@@ -104,26 +104,33 @@ pub fn of_volumes(volumes: &[Volume]) -> Vec<Face> {
     (0..volumes.len()).flat_map(|index| share(volumes, index)).collect()
 }
 
-/// Rooms alone, in an order of their boxes so that which room keeps a face two
-/// share does not depend on the order they are handed in: the lower box, then
-/// the lower index, is later and so keeps it.
-fn in_box_order(rooms: &[Room]) -> (Vec<Volume>, Vec<usize>) {
-    let key = |room: &Room| {
-        let (min, max) = room.bounds();
+/// Sorted by `place`, the map's order. Volumes at one place — a footprint's
+/// rooms, or rooms handed in with no place at all — go by box: the lower box,
+/// then the earlier in `items`, is later and so keeps a face two of them share,
+/// whatever order they arrived in.
+pub fn sort_by_place<K: Ord, T>(items: &mut Vec<(K, Volume, T)>) {
+    let key = |volume: &Volume| {
+        let (min, max) = volume.shape.bounds();
         [min.x, min.y, min.z, max.x, max.y, max.z]
     };
-    let mut order: Vec<usize> = (0..rooms.len()).collect();
-    order.sort_by(|&a, &b| {
-        let by_box = key(&rooms[a])
+    let mut indexed: Vec<(usize, (K, Volume, T))> = items.drain(..).enumerate().collect();
+    indexed.sort_by(|(a_index, (a_place, a, _)), (b_index, (b_place, b, _))| {
+        let by_box = key(a)
             .iter()
-            .zip(key(&rooms[b]))
+            .zip(key(b))
             .map(|(x, y)| x.total_cmp(&y))
             .find(|order| *order != Ordering::Equal)
             .unwrap_or(Ordering::Equal);
-        by_box.then(a.cmp(&b)).reverse()
+        a_place.cmp(b_place).then_with(|| by_box.then(a_index.cmp(b_index)).reverse())
     });
-    let volumes = order.iter().map(|&index| Volume::air(rooms[index].clone())).collect();
-    (volumes, order)
+    items.extend(indexed.into_iter().map(|(_, item)| item));
+}
+
+fn in_box_order(rooms: &[Room]) -> (Vec<Volume>, Vec<usize>) {
+    let mut items: Vec<((), Volume, usize)> =
+        rooms.iter().enumerate().map(|(index, room)| ((), Volume::air(room.clone()), index)).collect();
+    sort_by_place(&mut items);
+    items.into_iter().map(|(_, volume, index)| (volume, index)).unzip()
 }
 
 /// The share of `rooms[index]` in a map of rooms alone.

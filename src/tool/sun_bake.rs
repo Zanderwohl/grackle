@@ -32,7 +32,7 @@ use crate::common::sunlight::{Daylight, LitSurface};
 use crate::common::team::Side;
 use crate::common::world_surface::Face;
 use crate::tool::bakes::{BakePlugin, BakeSystems, BakedRoomGeometry, RoomBake, RoomSlotMesh};
-use crate::tool::room::{Room, RoomSlot, RoomSurfaces};
+use crate::tool::room::{Block, Room, RoomSlot, RoomSurfaces};
 
 /// How long the map has to be left alone before auto-bake bakes it, so a drag is one bake.
 const SETTLE_SECONDS: f32 = 0.5;
@@ -231,7 +231,7 @@ fn lightmap_image(size: UVec2, light: &[Vec3]) -> Image {
 fn carry_light_over(
     mut state: ResMut<SunBake>,
     bakes: Query<&BakedRoomGeometry>,
-    rooms: Query<(), With<Room>>,
+    rooms: Query<(), Or<(With<Room>, With<Block>)>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     state.lit.retain(|room, _| rooms.contains(*room));

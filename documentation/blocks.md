@@ -84,21 +84,28 @@ checklist; the checklist is the source of truth for what is done.
 
 ### Stage 2 — a feature, in order
 
-- [ ] A timeline place on every volume entity; reordering re-queues what the
-      moved feature touches, as an edit does.
-- [ ] `EditorBlock` feature standing up a `Block` component, drawn by the
-      Room tool under its own `Tools` state as triggers are; gizmos, handles,
-      `show.rs`, `find_nearest_feature_hit`, `mirror`, the save test.
-- [ ] The bake, auto-bake, collision rebuild, picking and the sun gather
-      rooms and blocks in timeline order and call `share`; the box-key
-      wrappers go.
-- [ ] A block's share is baked onto its own entity, with `RoomSurfaces` and
-      a `Side`, so it takes materials and palette roles; `RoomSlot::of`
-      already sorts a block's top as floor.
+- [x] `VolumeOrder` on every room and block entity, written by
+      `place_volumes` ([`volume_order.rs`](../src/editor/volume_order.rs))
+      only when it moves; a copy is keyed by its source's place and the
+      images it went through (`MirrorCopy::source`). Auto-bake compares the
+      place as well as the shape, so a reorder rebakes what it touches.
+- [x] `EditorBlock` ([`block.rs`](../src/editor/block.rs)) standing up a
+      `Block` and `RoomSurfaces`, drawn by the Room tool under `Tools::Block`;
+      gizmos and their toggle, handles, picking, `mirror`, the save test.
+- [x] `MapVolumes` gathers rooms and blocks in order for the bake,
+      auto-bake, collision and the cursor; picking orders features' own
+      `volumes()` and their `standing_copies` by the same key. `room_share`,
+      `of_rooms` and `CollisionWorld::rebuild` stay for rooms-only callers
+      and tests.
+- [x] A block's share is baked onto its own `BakedRoomGeometry`, painted by
+      `paint_rooms` from its `RoomSurfaces` and `Side`.
+- [x] Tests: a doorway after a wall-block opens it in collision and picking,
+      and moved before the wall does not; a mirrored block's copy stands at
+      its source's place.
 
 ### Stage 3 — collision
 
-- [ ] `CollisionWorld` keeps the volumes, and `inside_map` is `is_air`.
+- [x] `CollisionWorld` keeps the volumes, and `inside_map` is `is_air`.
 - [ ] Spawn fallback: the largest room's `floor_point` may be in a block;
       take a room point that is air.
 - [ ] Wall slabs no deeper than the solid behind them: a 0.5 m slab behind
@@ -106,10 +113,17 @@ checklist; the checklist is the source of truth for what is done.
 
 ### Stage 4 — light
 
-- [ ] The sun bake keys light by the share's entity rather than by `Room`,
-      so a block gets a lightmap and casts its shadow.
+Mostly free with stage 2.
+
+- [x] The sun bake keeps light for a block's entity as for a room's: it
+      already worked from `BakedRoomGeometry`, and only its pruning asked
+      for `Room`.
+- [ ] Seen lit in the app: a block's lightmap, and its shadow on the floor.
 
 ### Open
+
+- Not yet seen in the running editor: drawing a block, its handles, its
+  materials, playing against one.
 
 - A block touching a room's wall from outside, flush, owns that patch of
   wall by the later-wins rule and paints it with its own material. Correct
