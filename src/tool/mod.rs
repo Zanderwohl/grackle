@@ -44,6 +44,7 @@ pub mod movement;
 pub mod bakes;
 pub mod bake_job;
 pub mod sun_bake;
+pub mod nav_bake;
 pub mod show;
 pub mod tool_helpers;
 
@@ -57,6 +58,7 @@ impl Plugin for ToolPlugin {
             .add_plugins(ShowPlugin)
             .add_plugins(BakePlugin)
             .add_plugins(sun_bake::SunBakePlugin)
+            .add_plugins(nav_bake::NavBakePlugin)
             .add_plugins(MovementPlugin)
             .add_plugins(SelectionPlugin)
             .add_plugins(PointPlugin)

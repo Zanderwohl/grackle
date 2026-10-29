@@ -76,10 +76,14 @@ auto_sunlight = "Auto-bake Sunlight"
 surface = "The map's surface"
 copy = "{ name }, copy { image }"
 unnamed = "Unnamed volume"
+floors = "Floors"
+links = "Moves between floors"
+reach = "What can be reached"
 
 [bakes.kind]
 rooms = "Rooms"
 sunlight = "Sunlight"
+nav = "Nav graph"
 
 [bakes.progress]
 status = "Step { step }/{ steps }: { completed }/{ scheduled } { doing }"

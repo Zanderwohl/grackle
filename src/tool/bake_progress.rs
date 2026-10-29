@@ -67,6 +67,7 @@ pub fn kind_name(kind: BakeKind) -> String {
     match kind {
         BakeKind::Rooms => get!("bakes.kind.rooms"),
         BakeKind::Sunlight => get!("bakes.kind.sunlight"),
+        BakeKind::Nav => get!("bakes.kind.nav"),
     }
 }
 

@@ -91,10 +91,13 @@ fn clip(polygon: &[Vec3], normal: Vec3, reach: f32) -> Vec<Vec3> {
 }
 
 impl CollisionWorld {
-    /// The walls are the same surface that is drawn.
-    pub fn rebuild_volumes(&mut self, volumes: &[Volume]) {
+    /// The walls are the same surface that is drawn, which is returned for whatever else is
+    /// built from it.
+    pub fn rebuild_volumes(&mut self, volumes: &[Volume]) -> Vec<Face> {
         self.volumes = volumes.to_vec();
-        self.set_surface(&world_surface::of_volumes(volumes));
+        let faces = world_surface::of_volumes(volumes);
+        self.set_surface(&faces);
+        faces
     }
 
     pub fn rebuild(&mut self, rooms: &[Room]) {

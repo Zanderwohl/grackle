@@ -33,6 +33,7 @@ pub const SETTLE_SECONDS: f32 = 0.5;
 pub enum BakeKind {
     Rooms,
     Sunlight,
+    Nav,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

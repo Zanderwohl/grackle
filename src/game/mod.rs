@@ -33,6 +33,7 @@ pub mod explosion;
 pub mod flame;
 pub mod flinch;
 pub mod hitscan;
+pub mod nav;
 pub mod projectile;
 pub mod recoil;
 pub mod reloading;

@@ -37,6 +37,12 @@ const SPRINT_SPEED: f32 = 7.0;
 
 /// Meters per second. Wins over sprint.
 const CROUCH_SPEED: f32 = 1.2;
+
+/// The fastest a body goes on the ground under `rules` with the sprint key held, in meters per
+/// second.
+pub fn running_speed(rules: &MovementRules) -> f32 {
+    if rules.sprint.sprints(true) { SPRINT_SPEED } else { WALK_SPEED }
+}
 const JUMP_SPEED: f32 = 7.0;
 
 // Movement with momentum, as Quake and Source write it (`PM_Friction`,

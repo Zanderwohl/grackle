@@ -271,12 +271,13 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
 ### Stage 1: cells and walking
 - [x] Pull `step_player`'s body out into a pure `step`, with the system
       calling it; a test that the system and the function agree
-- [ ] Floor faces → lattice cells → `fits` → cells (`common/nav.rs`), Kill
+- [x] Floor faces → lattice cells → `fits` → cells (`game/nav.rs`), Kill
       volumes excluded, Hurt rates kept
-- [ ] Walk and step links; reachability from spawns prunes the rest
+- [x] Walk and step links, reaching two columns since a body is wider than
+      one; reachability from spawns prunes the rest
 - [x] A shared runner and progress report for background bakes
       (`BackgroundBake`, `BakeProgress`), with the sun moved onto it
-- [ ] `NavBake` as a `BakeJob` in `BakeSystems::All`, reporting as
+- [x] `NavBake` as a `BakeJob` in `BakeSystems::All`, reporting as
       `BakeKind::Nav`; the old graph kept until replaced
 - [ ] Nav panel with Bake and Cells and links overlay (floor mesh,
       `editor_only`)

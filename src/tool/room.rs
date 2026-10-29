@@ -985,9 +985,9 @@ impl MapVolumes<'_, '_> {
         self.ordered().into_iter().map(|(_, volume)| volume).collect()
     }
 
-    /// Borrowed, in the order the queries walk them: for asking whether
-    /// anything changed without cloning the map.
-    /// Each with its place, as [`MapVolumes::placed`] gives it.
+    /// Borrowed, in the order the queries walk them, each with its place as
+    /// [`MapVolumes::placed`] gives it: for asking whether anything changed
+    /// without cloning the map.
     pub fn each(&self) -> impl Iterator<Item = (Entity, &Room, Fill, &VolumeOrder)> + '_ {
         let rooms = self.rooms.iter().map(|(entity, room, order)| (entity, room, Fill::Air, order.unwrap_or(&UNPLACED)));
         rooms.chain(self.blocks.iter().map(|(entity, block, order)| (entity, &block.0, Fill::Solid, order.unwrap_or(&UNPLACED))))
