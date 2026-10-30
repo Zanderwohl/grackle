@@ -50,6 +50,8 @@ pub mod pickup_beam;
 pub mod rounds;
 pub mod score;
 pub mod tab_board;
+pub mod team_choice;
+pub mod team_picker;
 pub mod trigger;
 pub mod ragdoll;
 pub mod skeleton;
@@ -70,6 +72,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::game::score::ScorePlugin)
             .add_plugins(crate::game::rounds::RoundHistoryPlugin)
             .add_plugins(crate::game::tab_board::TabBoardPlugin)
+            .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .add_plugins(crate::game::trigger::TriggerPlugin)
             .init_state::<AppMode>()
@@ -115,8 +118,7 @@ impl Plugin for GamePlugin {
             .add_systems(Update, (toggle_mode, start_in_play))
             .add_systems(Update, (
                 toggle_view,
-                // Ungated: on a client the body arrives from the server some
-                // time after the round starts.
+                // Before any body: the team picker is drawn on the view.
                 spawn_the_view,
                 start_the_death_cam,
             ).run_if(in_state(AppMode::Play)))
@@ -325,10 +327,17 @@ mod tests {
         app
     }
 
+    /// Into Play and onto a team, as the picker would: the first frame meets
+    /// us, the second seats us and stands the body up.
     fn enter(app: &mut App) {
         app.world_mut()
             .resource_mut::<NextState<AppMode>>()
             .set(AppMode::Play);
+        app.update();
+        app.world_mut().write_message(crate::game::team_choice::ChooseTeam {
+            choice: crate::game::team_choice::TeamChoice::Random,
+            from: crate::game::respawn::Seat::Choosing,
+        });
         app.update();
     }
 
@@ -1304,7 +1313,7 @@ mod tests {
             let mut commands = Commands::new(&mut queue, app.world());
             let who = crate::game::respawn::Identity {
                 id: crate::common::damage::PlayerId(99),
-                team: Some(Team::Red),
+                seat: crate::game::respawn::Seat::Playing(Some(Team::Red)),
                 color: 1,
             };
             spawn_player(

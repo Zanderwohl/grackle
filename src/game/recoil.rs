@@ -88,7 +88,7 @@ fn see_shots(
 fn guess_our_shots(
     time: Res<Time>,
     buttons: Res<ButtonInput<MouseButton>>,
-    paused: Option<Res<crate::game::pause_menu::PauseMenu>>,
+    paused: Option<Res<crate::game::pause_menu::MouseHeld>>,
     selection: Option<Res<crate::game::weapon_select::WeaponSelection>>,
     catalog: Res<WeaponCatalog>,
     ours: Option<Single<(Entity, &Equipped, &Ammo, &Condition), With<LocalPlayer>>>,
@@ -106,7 +106,7 @@ fn guess_our_shots(
     drawing.1 = (drawing.1 - time.delta_secs()).max(0.0);
     let Some(ours) = ours else { return };
     let (body, equipped, ammo, condition) = ours.into_inner();
-    if paused.is_some_and(|menu| menu.open)
+    if paused.is_some_and(|held| held.any())
         || selection.is_some_and(|selection| selection.holds_the_buttons())
         || !condition.may_fire()
     {

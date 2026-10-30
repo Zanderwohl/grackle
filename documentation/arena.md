@@ -64,8 +64,9 @@ something to read rather than something to rediscover.
 ## No teams
 
 **`Identity.team` becomes `Option<Team>`**, and so does a body's `Team`
-component (absent rather than an `Option` field). `next_team` asks
-`GameRules::teams`: Red/Blue alternating as now, or `None`.
+component (absent rather than an `Option` field). The team picker offers
+only "Free for All" when `GameRules::teams` is off, which seats a player on
+`None`.
 
 The damage rule needs no change. `hostile` already reads `None` as hostile to
 everybody — that is what a crate is — and the self exception is on `PlayerId`,
