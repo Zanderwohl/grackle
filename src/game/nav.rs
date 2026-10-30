@@ -2,8 +2,8 @@
 //! documentation/bots.md.
 //!
 //! Every upward face of the map's surface is a floor, since every face bounds air. Cells are
-//! sampled on a lattice in `x` and `z` and kept where [`CollisionWorld::fits`] holds, so a cell and
-//! a spawn point agree about where a body fits. Walks are found by moving the body box with the
+//! sampled on a lattice in `x` and `z` and kept where [`CollisionWorld::fits`] holds for a standing
+//! body, or else for a crouched one, so a cell and a spawn point agree about where a body fits. Walks are found by moving the body box with the
 //! same collision calls the step uses; drops and jumps by running the step itself.
 
 use std::cmp::Reverse;
@@ -21,7 +21,7 @@ use crate::game::collision::CollisionWorld;
 use crate::game::condition::Condition;
 use crate::game::nav_field::{Field, Fields};
 use crate::game::player::{
-    running_speed, step, Mover, PhysicsBody, Player, PlayerInput, PLAYER_HALF, STEP_HEIGHT, WALKABLE,
+    running_speed, step, Mover, PhysicsBody, Player, PlayerInput, CROUCH_SPEED, PLAYER_HALF, STEP_HEIGHT, WALKABLE,
 };
 
 /// Meters between cells along `x` and `z`.
@@ -45,12 +45,27 @@ pub struct Cell {
     pub column: IVec2,
     /// Damage per second from Hurt triggers the body would stand in.
     pub hurt: u32,
+    /// Only a crouched body fits here: a vent, or under a low ceiling.
+    pub crouched: bool,
+}
+
+impl Cell {
+    pub fn stance(&self) -> Stance {
+        if self.crouched { Stance::Crouched } else { Stance::Standing }
+    }
+}
+
+/// Where a body of `stance` standing on `feet` has its center, lifted clear of the floor.
+pub(crate) fn center_on(feet: Vec3, stance: Stance) -> Vec3 {
+    feet + Vec3::Y * (LIFT + stance.half_extents().y)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LinkKind {
     Walk,
     Step,
+    /// Walked crouched: into or out of a crouch-only cell, or under a lintel too low to walk under.
+    Crouch,
     /// Running off an edge. One way.
     Drop,
     Jump,
@@ -165,11 +180,9 @@ pub fn floor_cells(world: &CollisionWorld, faces: &[Face], triggers: &[TriggerVo
         .filter_map(|(column, y)| {
             let at = column_center(column);
             let feet = Vec3::new(at.x, y, at.y);
-            let center = body_center_from_feet(feet + Vec3::Y * LIFT);
-            if !world.fits(center, PLAYER_HALF) {
-                return None;
-            }
-            let standing_in = triggers.iter().filter(|trigger| trigger.overlaps(center, PLAYER_HALF));
+            let stance = [Stance::Standing, Stance::Crouched].into_iter().find(|stance| world.fits(center_on(feet, *stance), stance.half_extents()))?;
+            let (center, half) = (center_on(feet, stance), stance.half_extents());
+            let standing_in = triggers.iter().filter(|trigger| trigger.overlaps(center, half));
             let mut hurt = 0;
             for trigger in standing_in {
                 match trigger.effect {
@@ -177,7 +190,7 @@ pub fn floor_cells(world: &CollisionWorld, faces: &[Face], triggers: &[TriggerVo
                     TriggerEffect::Hurt { per_second } => hurt += per_second,
                 }
             }
-            Some(Cell { feet, column, hurt })
+            Some(Cell { feet, column, hurt, crouched: stance == Stance::Crouched })
         })
         .collect();
     // By place, so the same map numbers its cells the same way every time.
@@ -201,22 +214,32 @@ fn walks(world: &CollisionWorld, from: &Cell, to: &Cell) -> Option<LinkKind> {
     if rise.abs() > STEP_HEIGHT + SAME_FLOOR {
         return None;
     }
-    let start = body_center_from_feet(from.feet + Vec3::Y * LIFT);
+    // Standing where both ends allow it, and crouched otherwise or where standing is stopped, as
+    // under a lintel between two rooms a body stands in.
+    let standing = !from.crouched && !to.crouched && walks_as(world, from, to, Stance::Standing);
+    if standing {
+        return Some(if rise.abs() > SAME_FLOOR { LinkKind::Step } else { LinkKind::Walk });
+    }
+    walks_as(world, from, to, Stance::Crouched).then_some(LinkKind::Crouch)
+}
+
+/// Whether a body of `stance` moved from `from` toward `to` ends on it.
+fn walks_as(world: &CollisionWorld, from: &Cell, to: &Cell, stance: Stance) -> bool {
+    let half = stance.half_extents();
+    let start = center_on(from.feet, stance);
     let across = Vec3::new(to.feet.x - from.feet.x, 0.0, to.feet.z - from.feet.z);
     let level = |p: Vec3| Vec2::new(p.x - to.feet.x, p.z - to.feet.z).length();
-    let (mut end, _) = world.slide(start, PLAYER_HALF, across);
+    let (mut end, _) = world.slide(start, half, across);
     if level(end) > ARRIVED {
-        end = world.step_up(start, PLAYER_HALF, across, STEP_HEIGHT, WALKABLE)?.0;
+        let Some((stepped, _)) = world.step_up(start, half, across, STEP_HEIGHT, WALKABLE) else { return false };
+        end = stepped;
         if level(end) > ARRIVED {
-            return None;
+            return false;
         }
     }
-    let (resting, _) = world.ground(end, PLAYER_HALF, STEP_HEIGHT + LIFT + SAME_FLOOR, WALKABLE)?;
-    let landed = resting.y - PLAYER_HALF.y;
-    if (landed - to.feet.y).abs() > SAME_FLOOR + LIFT {
-        return None;
-    }
-    Some(if rise.abs() > SAME_FLOOR { LinkKind::Step } else { LinkKind::Walk })
+    let Some((resting, _)) = world.ground(end, half, STEP_HEIGHT + LIFT + SAME_FLOOR, WALKABLE) else { return false };
+    let landed = resting.y - half.y;
+    (landed - to.feet.y).abs() <= SAME_FLOOR + LIFT
 }
 
 /// Columns either way a walk link may reach. Two, not one: a body is wider than [`SPACING`], so a
@@ -237,6 +260,7 @@ pub fn walk_links(world: &CollisionWorld, cells: &[Cell], columns: &HashMap<IVec
                 let target = &cells[to as usize];
                 if let Some(kind) = walks(world, from, target) {
                     let meters = Vec2::new(target.feet.x - from.feet.x, target.feet.z - from.feet.z).length();
+                    let speed = if kind == LinkKind::Crouch { CROUCH_SPEED } else { speed };
                     links.push(Link { to, kind, seconds: meters / speed, leap: None });
                 }
             }
@@ -334,6 +358,10 @@ pub fn leap_links(
     id: CellId,
 ) -> Vec<Link> {
     let from = &cells[id as usize];
+    // A leap is simulated standing; out of a vent there is nothing to run up or jump with.
+    if from.crouched {
+        return Vec::new();
+    }
     let speed = running_speed(rules);
     let mut links: Vec<Link> = Vec::new();
     for heading in 0..8 {
@@ -351,7 +379,7 @@ pub fn leap_links(
         ];
         for (kind, leap) in tries {
             let Some((landed, ticks)) = fly(world, triggers, rules, from.feet, leap) else { continue };
-            let Some(to) = cell_near(cells, columns, landed) else { continue };
+            let Some(to) = cell_near(cells, columns, landed).filter(|to| !cells[*to as usize].crouched) else { continue };
             let seconds = ticks as f32 * TICK;
             let known = walking[id as usize].iter().chain(&links).any(|link| link.to == to);
             if to == id || known || walks_within(walking, id, to, seconds + LEAP_SAVES) {
@@ -511,6 +539,24 @@ mod tests {
 
     fn room(min: Vec3, max: Vec3) -> Volume {
         Volume::air(Room::new(min, max))
+    }
+
+    /// Breaks if a space only a crouched body fits is left off the graph or walked standing: a
+    /// 1.7 m vent between two rooms has crouch-only cells, is entered by crouch links, and is the
+    /// way from one room to the other.
+    #[test]
+    fn a_vent_is_crouched_through() {
+        let graph = bake(
+            &[room(Vec3::ZERO, Vec3::new(6.0, 3.0, 4.0)), room(Vec3::new(6.0, 0.0, 1.0), Vec3::new(12.0, 1.7, 3.0)), room(Vec3::new(12.0, 0.0, 0.0), Vec3::new(18.0, 3.0, 4.0))],
+            &[],
+            &[Vec3::new(1.25, 0.0, 2.25)],
+        );
+        let inside = graph.cell_at(Vec3::new(9.25, 0.0, 2.25)).expect("no cell in the vent");
+        assert!(graph.cells()[inside as usize].crouched, "a cell under 1.7 m reads as standing room");
+        assert!(graph.cells().iter().filter(|cell| cell.feet.x < 5.0 || cell.feet.x > 13.0).all(|cell| !cell.crouched), "a cell with headroom reads as crouch-only");
+        let (from, to) = (graph.cell_at(Vec3::new(1.25, 0.0, 2.25)).unwrap(), graph.cell_at(Vec3::new(16.75, 0.0, 2.25)).unwrap());
+        let path = graph.path(from, to, |_, _| 0.0).expect("no way through the vent");
+        assert!(path.iter().any(|link| link.kind == LinkKind::Crouch), "the way through the vent has no crouch in it");
     }
 
     /// Breaks if a path does not join its ends link to link, or one is found where none exists.

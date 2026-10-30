@@ -32,6 +32,9 @@ const ARRIVED_HEIGHT: f32 = 0.6;
 const STUCK_SECONDS: f32 = 1.5;
 /// Meters closer to the next cell that count as progress.
 const PROGRESS: f32 = 0.1;
+/// Meters ahead within which a crouch on the route is ducked for. A duck takes a fifth of a second
+/// before the box shrinks, so ducking only on arrival walks the bot into the lintel first.
+const CROUCH_AHEAD: f32 = 1.5;
 
 /// A bot's place in the match, alive or not. Holds the
 /// [`Identity`](crate::game::respawn::Identity) once it has been given one,
@@ -257,7 +260,10 @@ fn follow(route: &mut BotRoute, graph: &NavGraph, feet: Vec3, dt: f32) -> Option
         }
     }
     let yaw = aim_at(feet, toward).0;
-    Some(PlayerInput { movement: Vec2::Y, yaw, ..default() })
+    let low = |link: &Link| link.kind == LinkKind::Crouch || cells[link.to as usize].crouched;
+    let crouch = route.ahead().iter().take_while(|link| (cells[link.to as usize].feet - feet).length() <= CROUCH_AHEAD).any(low)
+        || graph.cell_at(feet).is_some_and(|here| cells[here as usize].crouched);
+    Some(PlayerInput { movement: Vec2::Y, yaw, crouch, ..default() })
 }
 
 /// The cell a bot's route is heading for next, if it has one.
@@ -290,7 +296,7 @@ pub fn steer_bots(
             (input.yaw, input.pitch) = (yaw, pitch);
         }
         input.sprint |= intent.sprint;
-        input.crouch = intent.crouch && !leaping;
+        input.crouch = (input.crouch || intent.crouch) && !leaping;
         input.attack = intent.fire;
         input.attack_held = intent.fire;
         input.alt_attack = intent.alt_fire;
@@ -567,6 +573,41 @@ mod tests {
                 assert!(wrong.extra(&graph, link.to, link) >= 0.0);
             }
         }
+    }
+
+    /// Breaks if a bot walks into a vent standing: it must duck ahead of the crouch links and come
+    /// out the far side, driving `step` with nothing but what [`follow`] says.
+    #[test]
+    fn a_bot_crouches_through_a_vent() {
+        let volumes = [
+            Volume::air(Room::new(Vec3::ZERO, Vec3::new(6.0, 3.0, 4.0))),
+            Volume::air(Room::new(Vec3::new(6.0, 0.0, 1.0), Vec3::new(12.0, 1.7, 3.0))),
+            Volume::air(Room::new(Vec3::new(12.0, 0.0, 0.0), Vec3::new(18.0, 3.0, 4.0))),
+        ];
+        let mut world = CollisionWorld::default();
+        let faces = world.rebuild_volumes(&volumes);
+        let rules = MovementRules::default();
+        let start = Vec3::new(2.25, 0.0, 2.25);
+        let graph = nav::graph(&world, &faces, &[], &rules, &[start]);
+        let goal = Vec3::new(16.25, 0.0, 2.25);
+        let arrived = graph.cells()[graph.cell_at(goal).unwrap() as usize].feet;
+
+        let mut mover = Mover { player: Player { ground: Some(Vec3::Y), ..default() }, body: PhysicsBody::at(crate::common::class::body_center_from_feet(start)), stance: Stance::Standing };
+        let mut route = BotRoute::default();
+        let mut crouched = false;
+        let dt = nav::TICK;
+        for _ in 0..(20.0 / dt) as usize {
+            let feet = feet_of(&mover.body, mover.stance);
+            if reached(feet, arrived) {
+                assert!(crouched, "the bot came through the vent without ever crouching");
+                return;
+            }
+            plan(&mut route, &graph, 0, feet, Some(goal), &RouteCosts::default());
+            let input = follow(&mut route, &graph, feet, dt).unwrap_or_default();
+            crouched |= mover.stance == Stance::Crouched;
+            step(&mut mover, Vec3::ZERO, &input, &Condition::default(), None, &world, &rules, dt);
+        }
+        panic!("the bot never came out of the vent; it is at {}", feet_of(&mover.body, mover.stance));
     }
 
     /// Breaks if a bot cannot follow a route the graph gives it: across a room, up a ledge by its

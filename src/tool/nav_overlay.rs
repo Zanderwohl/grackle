@@ -34,11 +34,13 @@ const CELL_SIZE: f32 = 0.8;
 const ARROWHEAD: f32 = 0.2;
 
 const CELL: Color = Color::srgb(0.2, 0.6, 0.9);
+const CROUCHED_CELL: Color = Color::srgb(0.55, 0.3, 0.95);
 const HURT_CELL: Color = Color::srgb(1.0, 0.45, 0.1);
 const WALK: Color = Color::srgb(0.85, 0.9, 0.95);
 const STEP: Color = Color::srgb(1.0, 0.85, 0.2);
 const DROP: Color = Color::srgb(0.9, 0.3, 0.9);
 const JUMP: Color = Color::srgb(0.3, 0.95, 0.4);
+const CROUCH: Color = Color::srgb(0.7, 0.5, 1.0);
 
 /// Share of routes at which the traffic scale is full.
 const TRAFFIC_FULL: f32 = 0.5;
@@ -348,6 +350,7 @@ fn link_mesh(graph: &NavGraph) -> Mesh {
                 LinkKind::Step => STEP,
                 LinkKind::Drop => DROP,
                 LinkKind::Jump => JUMP,
+                LinkKind::Crouch => CROUCH,
             }
             .to_linear()
             .to_f32_array();
@@ -444,7 +447,10 @@ fn draw_nav_overlay(
     if let Some(colors) = probed.and_then(|probed| probe_colors(graph, probed, overlay.body)) {
         meshes.push(cell_mesh(graph, |id| colors[id as usize]));
     } else if overlay.shown == Shown::CellsAndLinks {
-        meshes.push(cell_mesh(graph, |id| if graph.cells()[id as usize].hurt > 0 { HURT_CELL } else { CELL }));
+        meshes.push(cell_mesh(graph, |id| {
+            let cell = &graph.cells()[id as usize];
+            if cell.hurt > 0 { HURT_CELL } else if cell.crouched { CROUCHED_CELL } else { CELL }
+        }));
         meshes.push(link_mesh(graph));
     } else if let Some(pinned) = baseline.of(&overlay).filter(|_| overlay.against_baseline) {
         let full = overlay.saturation();

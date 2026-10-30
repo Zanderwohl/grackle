@@ -60,7 +60,10 @@ body carries a `BotIntent` (where to go and look, which buttons) that
 `steer_bots` turns into its `Inputs` each tick, the component a keyboard fills,
 so nothing downstream can tell a bot from a person. Routes come from
 `NavGraph::path`, with a caller's extra cost per link, and a drop or jump is
-replayed from the input the bake found it with (`src/game/bot.rs`). The
+replayed from the input the bake found it with (`src/game/bot.rs`). A cell
+only a crouched body fits is on the graph, marked `crouched`, reached by
+`Crouch` links and sampled crouched by every field; a bot ducks 1.5 m ahead of
+one, since the duck takes a fifth of a second before the box shrinks. The
 **Round** tab, right of Metadata, holds the server's `RoundSettings`
 ([`src/common/round_settings.rs`](src/common/round_settings.rs)) — not the
 map's, so neither saved nor sent: **slots**, the host and bots included, which

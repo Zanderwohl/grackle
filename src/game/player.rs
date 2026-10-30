@@ -36,7 +36,7 @@ const WALK_SPEED: f32 = 2.6;
 const SPRINT_SPEED: f32 = 7.0;
 
 /// Meters per second. Wins over sprint.
-const CROUCH_SPEED: f32 = 1.2;
+pub const CROUCH_SPEED: f32 = 1.2;
 
 /// Seconds for a full duck, down or up. A tap turns back partway rather than finishing.
 pub const DUCK_SECONDS: f32 = 0.2;

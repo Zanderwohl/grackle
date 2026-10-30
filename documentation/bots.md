@@ -391,7 +391,11 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
 - [x] Feet sight and exposure; traffic between spawns and pickups; watch
 - [x] Ratings and the map's statistics in the Bakes panel; Traffic and Rating
       overlays
-- [ ] Crouched fields: rework
+- [x] Crouching: a cell only a crouched body fits is kept and marked
+      crouch-only, walks into it or under a lintel too low to stand under are
+      `Crouch` links at crouch speed, its viewpoint sees and is seen and is
+      thrown as a crouched body in every row, and bots duck 1.5 m ahead of a
+      crouch on their route; drawn violet in Cells and links
 - [ ] Leaps that pass through a pickup's sphere, so a pickup over a pit (the
       BFG on Halls) can be planned for
 - [ ] Chunked across frames on wasm (the jobs already step in batches; check
@@ -411,7 +415,8 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
       placeholder goal
 - [x] Slots and "fill empty slots with bots" in a Round tab, kept true
       through a round as people come and go
-- [ ] A bot count per team
+- [ ] A bot count per team: deferred until a mode other than arena; bots fill
+      every team as people do, by alternating
 - [x] Planning with a cost from the fields: `RouteCosts` weighs exposure,
       knockback danger and Hurt by the time spent in them, and each seat
       rolls its own temperament so bots are neither alike nor risk-averse

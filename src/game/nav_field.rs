@@ -11,14 +11,14 @@ use std::collections::{BinaryHeap, HashMap};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::common::class::{body_center_from_feet, Stance, CROUCH_EYE_HEIGHT, TALLEST_CLASS_EYE_HEIGHT};
+use crate::common::class::{Stance, CROUCH_EYE_HEIGHT, TALLEST_CLASS_EYE_HEIGHT};
 use crate::common::movement_rules::MovementRules;
 use crate::common::trigger::{TriggerEffect, TriggerVolume};
 use crate::game::collision::CollisionWorld;
 use crate::game::condition::Condition;
 use crate::game::explosion::push_speed;
-use crate::game::nav::{cell_near, CellId, NavGraph, LIFT, MOST_TICKS, SAME_FLOOR, SPACING, TICK};
-use crate::game::player::{step, Mover, PhysicsBody, Player, PlayerInput, PLAYER_HALF, STEP_HEIGHT};
+use crate::game::nav::{cell_near, center_on, CellId, NavGraph, MOST_TICKS, SAME_FLOOR, SPACING, TICK};
+use crate::game::player::{step, Duck, Mover, PhysicsBody, Player, PlayerInput, STEP_HEIGHT};
 
 /// Columns per side of the square one viewpoint stands for.
 pub const SIGHT_STRIDE: i32 = 2;
@@ -102,6 +102,9 @@ pub struct Sightlines {
     pub viewpoint_of: Vec<u32>,
     /// Where each viewpoint's feet are.
     pub viewpoints: Vec<Vec3>,
+    /// Per viewpoint, whether only a crouched body fits there, so its eye and body are crouched in
+    /// every row.
+    pub low: Vec<bool>,
     /// Standing eye to standing body.
     pub standing: Vec<Vec<Seen>>,
     /// Crouched eye to standing body.
@@ -159,6 +162,7 @@ impl Fields {
 /// and the traffic between them and the spawns, a search or a set of routes at a time.
 pub struct FieldBake {
     viewpoints: Vec<Vec3>,
+    low: Vec<bool>,
     viewpoint_of: Vec<u32>,
     knockback: Vec<f32>,
     pickups: Vec<Pickup>,
@@ -179,12 +183,13 @@ pub struct FieldBake {
 
 impl FieldBake {
     pub fn new(graph: &NavGraph, pickups: Vec<Pickup>, spawns: Vec<Vec3>) -> Self {
-        let (viewpoints, viewpoint_of) = viewpoints(graph);
+        let (viewpoints, low, viewpoint_of) = viewpoints(graph);
         let mut ends: Vec<CellId> = spawns.iter().chain(pickups.iter().map(|pickup| &pickup.feet)).filter_map(|feet| graph.cell_at(*feet)).collect();
         ends.sort_unstable();
         ends.dedup();
         FieldBake {
             viewpoints,
+            low,
             viewpoint_of,
             knockback: Vec::new(),
             pickups,
@@ -216,8 +221,8 @@ impl FieldBake {
         if self.knockback.len() < self.viewpoints.len() {
             let end = (self.knockback.len() + KNOCKBACK_BATCH).min(self.viewpoints.len());
             for viewpoint in self.knockback.len()..end {
-                let feet = self.viewpoints[viewpoint];
-                let thrown = (0..KNOCKBACK_HEADINGS).filter(|heading| !thrown_clear(world, graph, triggers, rules, feet, *heading)).count();
+                let (feet, stance) = (self.viewpoints[viewpoint], if self.low[viewpoint] { Stance::Crouched } else { Stance::Standing });
+                let thrown = (0..KNOCKBACK_HEADINGS).filter(|heading| !thrown_clear(world, graph, triggers, rules, feet, stance, *heading)).count();
                 self.knockback.push(thrown as f32 / KNOCKBACK_HEADINGS as f32);
             }
         } else if self.links.is_none() {
@@ -305,14 +310,14 @@ pub struct SightBake {
 
 impl SightBake {
     pub fn new(graph: &NavGraph) -> Self {
-        let (viewpoints, viewpoint_of) = viewpoints(graph);
+        let (viewpoints, low, viewpoint_of) = viewpoints(graph);
         let mut area = vec![0.0; viewpoints.len()];
         for &viewpoint in &viewpoint_of {
             area[viewpoint as usize] += SPACING * SPACING;
         }
         let rows = vec![Vec::new(); viewpoints.len()];
         SightBake {
-            sightlines: Sightlines { viewpoint_of, viewpoints, standing: rows.clone(), crouched_eye: rows.clone(), crouched_body: rows },
+            sightlines: Sightlines { viewpoint_of, viewpoints, low, standing: rows.clone(), crouched_eye: rows.clone(), crouched_body: rows },
             area,
             rows_done: 0,
         }
@@ -341,27 +346,35 @@ impl SightBake {
     /// whichever end it is cast from.
     fn sight_row(&mut self, world: &CollisionWorld, a: usize) {
         let lines = &mut self.sightlines;
+        let low = &lines.low;
+        // A viewpoint only a crouched body fits is crouched however the row asks for it.
+        let eye = |viewpoint: usize, crouching: bool| {
+            lines.viewpoints[viewpoint] + Vec3::Y * if crouching || low[viewpoint] { CROUCH_EYE_HEIGHT } else { TALLEST_CLASS_EYE_HEIGHT }
+        };
+        let body = |viewpoint: usize, crouching: bool| if crouching || low[viewpoint] { &CROUCHED_BODY } else { &STANDING_BODY };
         let here = lines.viewpoints[a];
-        let (eye, crouched_eye) = (here + Vec3::Y * TALLEST_CLASS_EYE_HEIGHT, here + Vec3::Y * CROUCH_EYE_HEIGHT);
+        let mut found: [Vec<(usize, usize, u8, bool)>; 3] = Default::default();
         for b in a + 1..lines.viewpoints.len() {
             let there = lines.viewpoints[b];
             if here.distance_squared(there) > SIGHT_RANGE * SIGHT_RANGE {
                 continue;
             }
-            let (their_eye, their_crouched_eye) = (there + Vec3::Y * TALLEST_CLASS_EYE_HEIGHT, there + Vec3::Y * CROUCH_EYE_HEIGHT);
             let feet = |eye: Vec3, feet: Vec3| clear(world, eye, feet + Vec3::Y * FEET);
-            let pairs = [
-                (&mut lines.standing, seen(world, eye, there, &STANDING_BODY), seen(world, their_eye, here, &STANDING_BODY), feet(eye, there), feet(their_eye, here)),
-                (&mut lines.crouched_eye, seen(world, crouched_eye, there, &STANDING_BODY), seen(world, their_crouched_eye, here, &STANDING_BODY), false, false),
-                (&mut lines.crouched_body, seen(world, eye, there, &CROUCHED_BODY), seen(world, their_eye, here, &CROUCHED_BODY), false, false),
-            ];
-            for (rows, forward, back, forward_feet, back_feet) in pairs {
-                if forward > 0 || forward_feet {
-                    rows[a].push(Seen { viewpoint: b as u32, samples: forward, feet: forward_feet });
+            // Standing eye to standing body, crouched eye to standing body, standing eye to crouched body.
+            for (row, (eye_crouched, body_crouched)) in [(false, false), (true, false), (false, true)].into_iter().enumerate() {
+                let with_feet = row == 0;
+                for (from, to) in [(a, b), (b, a)] {
+                    let samples = seen(world, eye(from, eye_crouched), lines.viewpoints[to], body(to, body_crouched));
+                    let feet = with_feet && feet(eye(from, eye_crouched), lines.viewpoints[to]);
+                    if samples > 0 || feet {
+                        found[row].push((from, to, samples, feet));
+                    }
                 }
-                if back > 0 || back_feet {
-                    rows[b].push(Seen { viewpoint: a as u32, samples: back, feet: back_feet });
-                }
+            }
+        }
+        for (rows, found) in [&mut lines.standing, &mut lines.crouched_eye, &mut lines.crouched_body].into_iter().zip(found) {
+            for (from, to, samples, feet) in found {
+                rows[from].push(Seen { viewpoint: to as u32, samples, feet });
             }
         }
     }
@@ -440,7 +453,7 @@ pub fn bake(world: &CollisionWorld, graph: &NavGraph, triggers: &[TriggerVolume]
 /// a map turned or mirrored on the meter grid is sampled the same way turned. Three cells in an L,
 /// two on a diagonal, or cells across a step stand on the cell nearest that middle instead, since
 /// the middle may be in whatever wall took the rest, or inside the step.
-fn viewpoints(graph: &NavGraph) -> (Vec<Vec3>, Vec<u32>) {
+fn viewpoints(graph: &NavGraph) -> (Vec<Vec3>, Vec<bool>, Vec<u32>) {
     let mut squares: HashMap<IVec2, Vec<u32>> = HashMap::new();
     let mut members: Vec<Vec<CellId>> = Vec::new();
     let cells = graph.cells();
@@ -449,7 +462,11 @@ fn viewpoints(graph: &NavGraph) -> (Vec<Vec3>, Vec<u32>) {
         .enumerate()
         .map(|(id, cell)| {
             let square = squares.entry(cell.column.div_euclid(IVec2::splat(SIGHT_STRIDE))).or_default();
-            let near = square.iter().copied().find(|viewpoint| (cells[members[*viewpoint as usize][0] as usize].feet.y - cell.feet.y).abs() <= STEP_HEIGHT);
+            // Crouched and standing cells are apart, since the two see from different heights.
+            let near = square.iter().copied().find(|viewpoint| {
+                let first = &cells[members[*viewpoint as usize][0] as usize];
+                first.crouched == cell.crouched && (first.feet.y - cell.feet.y).abs() <= STEP_HEIGHT
+            });
             let viewpoint = near.unwrap_or_else(|| {
                 members.push(Vec::new());
                 square.push(members.len() as u32 - 1);
@@ -470,7 +487,8 @@ fn viewpoints(graph: &NavGraph) -> (Vec<Vec3>, Vec<u32>) {
             if whole { middle } else { feet.min_by(|a, b| a.distance_squared(middle).total_cmp(&b.distance_squared(middle))).expect("never empty") }
         })
         .collect();
-    (viewpoints, viewpoint_of)
+    let low = members.iter().map(|held| cells[held[0] as usize].crouched).collect();
+    (viewpoints, low, viewpoint_of)
 }
 
 /// How many of the samples up a body standing at `feet` an eye sees.
@@ -483,29 +501,33 @@ fn clear(world: &CollisionWorld, from: Vec3, to: Vec3) -> bool {
     world.segment_clear(from, to)
 }
 
-/// Whether a rocket's push along `heading` (of [`KNOCKBACK_HEADINGS`]) leaves a body standing on
+/// Whether a rocket's push along `heading` (of [`KNOCKBACK_HEADINGS`]) leaves a body of `stance` on
 /// `feet` at rest on the graph, having touched no Kill trigger and come to rest in no Hurt one.
-fn thrown_clear(world: &CollisionWorld, graph: &NavGraph, triggers: &[TriggerVolume], rules: &MovementRules, feet: Vec3, heading: usize) -> bool {
+#[allow(clippy::too_many_arguments)]
+fn thrown_clear(world: &CollisionWorld, graph: &NavGraph, triggers: &[TriggerVolume], rules: &MovementRules, feet: Vec3, stance: Stance, heading: usize) -> bool {
     let yaw = heading as f32 * std::f32::consts::TAU / KNOCKBACK_HEADINGS as f32;
     let out = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
     let kick = (out + Vec3::Y * KNOCKBACK_LIFT).normalize() * push_speed(KNOCKBACK_DAMAGE);
+    let crouched = stance == Stance::Crouched;
+    let duck = Duck { amount: if crouched { 1.0 } else { 0.0 }, feet: 0.0 };
     let mut mover = Mover {
-        player: Player { ground: Some(Vec3::Y), ..default() },
-        body: PhysicsBody::at(body_center_from_feet(feet + Vec3::Y * LIFT)),
-        stance: Stance::Standing,
+        player: Player { ground: Some(Vec3::Y), duck, duck_before: duck, ..default() },
+        body: PhysicsBody::at(center_on(feet, stance)),
+        stance,
     };
-    let (condition, input) = (Condition::default(), PlayerInput::default());
-    let touching = |center: Vec3, effect: fn(&TriggerEffect) -> bool| triggers.iter().any(|trigger| effect(&trigger.effect) && trigger.overlaps(center, PLAYER_HALF));
+    // Held, or a crouched body thrown out from under its ceiling would stand up as it lands.
+    let (condition, input) = (Condition::default(), PlayerInput { crouch: crouched, ..default() });
+    let touching = |center: Vec3, half: Vec3, effect: fn(&TriggerEffect) -> bool| triggers.iter().any(|trigger| effect(&trigger.effect) && trigger.overlaps(center, half));
     for tick in 0..MOST_TICKS {
         step(&mut mover, if tick == 0 { kick } else { Vec3::ZERO }, &input, &condition, None, world, rules, TICK);
-        let center = mover.body.current;
-        if touching(center, |effect| *effect == TriggerEffect::Kill) {
+        let (center, half) = (mover.body.current, mover.stance.half_extents());
+        if touching(center, half, |effect| *effect == TriggerEffect::Kill) {
             return false;
         }
         let velocity = mover.player.velocity;
         if tick > 0 && mover.player.on_ground() && Vec2::new(velocity.x, velocity.z).length() < AT_REST {
-            let resting = center - Vec3::Y * PLAYER_HALF.y;
-            return !touching(center, |effect| matches!(effect, TriggerEffect::Hurt { .. })) && cell_near(graph.cells(), graph.columns(), resting).is_some();
+            let resting = center - Vec3::Y * half.y;
+            return !touching(center, half, |effect| matches!(effect, TriggerEffect::Hurt { .. })) && cell_near(graph.cells(), graph.columns(), resting).is_some();
         }
     }
     false
@@ -657,6 +679,20 @@ mod tests {
         let far = at(&graph, Vec3::new(10.75, 0.0, 1.25), Field::Distance(0));
         assert_eq!(near, 0.0);
         assert!(far > 1.0 && far < 3.0, "9.5 m at running speed took {far} s");
+    }
+
+    /// Breaks if a crouch-only viewpoint looks out from where a standing eye would be, inside the
+    /// vent's ceiling: crouched in a 1.7 m vent, it sees down the vent into the room beyond.
+    #[test]
+    fn a_crouched_viewpoint_sees_from_under_its_ceiling() {
+        let volumes = [room(Vec3::ZERO, Vec3::new(6.0, 1.7, 2.0)), room(Vec3::new(6.0, 0.0, -1.0), Vec3::new(12.0, 3.0, 3.0))];
+        let graph = baked(&volumes, &[], Vec::new());
+        let lines = &graph.fields().sightlines;
+        let viewpoint = |feet| lines.viewpoint_of[graph.cell_at(feet).unwrap() as usize] as usize;
+        let (vent, room) = (viewpoint(Vec3::new(1.25, 0.0, 1.25)), viewpoint(Vec3::new(10.25, 0.0, 1.25)));
+        assert!(lines.low[vent], "the vent's viewpoint is not crouched");
+        assert!(lines.standing[vent].iter().any(|seen| seen.viewpoint as usize == room), "the vent cannot see out of its own end");
+        assert!(lines.standing[room].iter().any(|seen| seen.viewpoint as usize == vent), "the room cannot see into the vent");
     }
 
     /// Breaks if a viewpoint stands on whichever cell of its square came first: the same map turned
