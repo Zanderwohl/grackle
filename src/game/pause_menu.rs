@@ -13,9 +13,8 @@ pub struct PauseMenu {
     pub open: bool,
 }
 
-/// Which menus have the mouse. Each menu writes only its own flag; the cursor
-/// and every `not_paused` check read them together, and neither menu rebuilds
-/// because the other changed.
+/// Which menus have the mouse. Each writes only its own flag, so neither
+/// rebuilds because the other changed.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct MouseHeld {
     pub pause: bool,

@@ -25,9 +25,8 @@ use crate::get;
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct TeamPicker {
     pub wanted: bool,
-    /// The seat a choice was asked from. The picker stays up until that seat
-    /// is left, so a refusal leaves it showing the new offer rather than
-    /// closing on nothing.
+    /// The picker stays up until this seat is left, so a refusal leaves it
+    /// showing the new offer.
     pub asked_from: Option<Seat>,
 }
 
@@ -103,10 +102,9 @@ fn put_it_down(mut picker: ResMut<TeamPicker>, mut held: ResMut<MouseHeld>) {
     held.team_picker = false;
 }
 
-/// With no body and no death to watch, the view looks out from behind a spawn
-/// point. A [`DeathCam`] with nobody's corpse, so the next body takes it down
-/// as it does after a death. Not while [`OurLastBody`] is held: that is a
-/// death cam about to start.
+/// With no body and no death to watch, the view orbits a spawn point: a
+/// [`DeathCam`] of nobody's, so the next body takes it down. Not while
+/// [`OurLastBody`] is held, as a death cam is about to start.
 fn overlook_while_choosing(
     mut commands: Commands,
     ours: Query<(), With<LocalPlayer>>,
@@ -145,8 +143,8 @@ fn rows(offer: &TeamOptions) -> Vec<(TeamChoice, String, Swatch, bool)> {
     rows
 }
 
-/// Rebuilt whole only when a row would change, so a hover in progress is not
-/// reset by an offer that leaves every row as it was.
+/// Rebuilt only when a row would change, so an unrelated offer does not
+/// reset a hover.
 fn show_or_hide(
     mut commands: Commands,
     held: Res<MouseHeld>,

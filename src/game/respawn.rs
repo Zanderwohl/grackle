@@ -37,8 +37,7 @@ impl Identity {
     }
 }
 
-/// Where somebody stands in the match. A player who is choosing has no body
-/// and is owed none: the team picker is up for them, and they count as dead.
+/// A player who is choosing has no body and is owed none; they count as dead.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Seat {
     #[default]

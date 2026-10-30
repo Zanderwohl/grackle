@@ -46,9 +46,8 @@ pub enum TeamChoice {
 #[derive(Message, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChooseTeam {
     pub choice: TeamChoice,
-    /// The seat it was asked from. A request from a seat already left — a
-    /// second click before the answer — is dropped, so it cannot become a
-    /// switch that kills you.
+    /// A request from a seat already left is dropped, so a second click
+    /// before the answer cannot become a switch that kills you.
     pub from: Seat,
 }
 
@@ -102,7 +101,6 @@ pub fn may_join(team: Team, tallies: &[TeamTally]) -> bool {
     tallies.iter().all(|other| once_joined <= other.players + MOST_AHEAD)
 }
 
-/// Fewest players, then fewest points, then a coin.
 pub fn random_team(candidates: &[TeamTally], rng: &mut impl rand::Rng) -> Option<Team> {
     let fewest = candidates.iter().map(|tally| (tally.players, tally.points)).min()?;
     let tied: Vec<Team> = candidates
@@ -161,9 +159,8 @@ impl Plugin for TeamChoicePlugin {
             .add_systems(
                 Update,
                 // Before the bodies, so a first choice is stood up that frame.
-                // Not gated on Play: outside it requests are drained and
-                // dropped, so one made as a round ends is not answered in the
-                // next.
+                // Ungated by Play so requests outside it are drained, not
+                // answered next round.
                 (seat_whoever_chose, offer_teams.run_if(in_state(AppMode::Play)).run_if(offers_may_have_changed))
                     .chain()
                     .before(crate::game::net_bodies::give_bodies_to_whoever_needs_one)
@@ -172,7 +169,7 @@ impl Plugin for TeamChoicePlugin {
     }
 }
 
-/// Somebody sitting at the table: this machine's player or a client's link.
+/// This machine's player, or a client's link.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Chair {
     Ours,
@@ -194,8 +191,8 @@ fn tallies_without(teams: &[Team], here: &[(Chair, Identity)], who: PlayerId, po
     tally(teams, others)
 }
 
-/// Answered one at a time, each against the seats the last one left, so two
-/// people joining in one frame cannot both squeeze onto a full team.
+/// One request at a time, each against the seats the last left, so two joins
+/// in one frame cannot both fill the same team.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn seat_whoever_chose(
     mode: Res<State<AppMode>>,
@@ -249,8 +246,6 @@ pub(crate) fn seat_whoever_chose(
     }
 }
 
-/// Whether any input to an offer has moved: a seat, a player arriving or
-/// leaving, points, the spawn points' sides, or the mode.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn offers_may_have_changed(
     us: Option<Res<OurIdentity>>,
@@ -272,8 +267,7 @@ fn offers_may_have_changed(
         || !gone_spawns.is_empty()
 }
 
-/// What a client is offered, on its link; written only when it changes,
-/// which is what puts it on the wire.
+/// On a client's link, written only on change, which is what sends it.
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct Offer(pub TeamOptions);
 
