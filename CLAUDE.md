@@ -54,7 +54,24 @@ There is a player body that walks, falls and jumps in `src/game/`, but it is
 still a prototype for feeling out room sizes: it has health and can shoot, and
 that is the whole of it.
 
-There are no bots. The nav graph they will walk — walks, steps, drops and jumps, the last two found by running the movement step — is baked (`src/game/nav.rs`,
+Bots can move but not think. A bot is a `BotSeat` holding an `Identity` the way
+a client's link does, served a body by `give_bodies_to_whoever_needs_one`; the
+body carries a `BotIntent` (where to go and look, which buttons) that
+`steer_bots` turns into its `Inputs` each tick, the component a keyboard fills,
+so nothing downstream can tell a bot from a person. Routes come from
+`NavGraph::path`, with a caller's extra cost per link, and a drop or jump is
+replayed from the input the bake found it with (`src/game/bot.rs`). The
+**Round** tab, right of Metadata, holds the server's `RoundSettings`
+([`src/common/round_settings.rs`](src/common/round_settings.rs)) — not the
+map's, so neither saved nor sent: **slots**, the host and bots included, which
+caps the clients a server takes from when it starts listening, and **fill empty
+slots with bots**, which `fill_empty_slots` keeps true through a round as
+people come and go, with seats marked `FillsASlot`. **A bot never keeps
+anybody out**: the cap counts people only, so a slot a bot fills is open, and
+somebody joining takes a filler's seat and body in the same frame, before
+`give_bodies_to_whoever_needs_one` stands theirs up. `B` seats a bot by hand
+(counted against the slots) and `Shift+B` retires the newest; until there is a
+brain they `Roam` between random cells. The nav graph they walk — walks, steps, drops and jumps, the last two found by running the movement step — is baked (`src/game/nav.rs`,
 the third bake), with knockback, pickup distance, traffic and, as a fourth bake,
 sightlines on it (`src/game/nav_field.rs`), rated into kinds of place — cramped,
 precarious, an ambush — for the map's statistics (`src/game/nav_rating.rs`); all

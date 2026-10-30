@@ -453,6 +453,48 @@ impl NavGraph {
     pub fn cell_at(&self, feet: Vec3) -> Option<CellId> {
         cell_near(&self.cells, &self.columns, feet)
     }
+
+    /// The cheapest way from `from` to `to` along the links, or `None` if there is none. Each link
+    /// costs its seconds plus whatever `extra` says entering it costs on top, in seconds and never
+    /// negative, which is where a caller weighs exposure, danger or anything a round has learned.
+    ///
+    /// Dijkstra, stopping at `to`: a graph of a few thousand cells is searched in well under a
+    /// millisecond, and a heuristic would have to know the fastest a leap can cover ground.
+    pub fn path(&self, from: CellId, to: CellId, extra: impl Fn(CellId, &Link) -> f32) -> Option<Vec<Link>> {
+        let count = self.cells.len();
+        if from as usize >= count || to as usize >= count {
+            return None;
+        }
+        let mut seconds = vec![f32::INFINITY; count];
+        let mut came_by: Vec<Option<(CellId, usize)>> = vec![None; count];
+        seconds[from as usize] = 0.0;
+        let mut queue = BinaryHeap::from([Reverse((0u32, from))]);
+        while let Some(Reverse((_, at))) = queue.pop() {
+            if at == to {
+                break;
+            }
+            let cost = seconds[at as usize];
+            for (index, link) in self.links(at).iter().enumerate() {
+                let next = cost + link.seconds + extra(link.to, link).max(0.0);
+                if next < seconds[link.to as usize] {
+                    seconds[link.to as usize] = next;
+                    came_by[link.to as usize] = Some((at, index));
+                    queue.push(Reverse(((next * 1000.0) as u32, link.to)));
+                }
+            }
+        }
+        if !seconds[to as usize].is_finite() {
+            return None;
+        }
+        let mut path = Vec::new();
+        let mut at = to;
+        while let Some((before, index)) = came_by[at as usize] {
+            path.push(self.links(before)[index]);
+            at = before;
+        }
+        path.reverse();
+        Some(path)
+    }
 }
 
 #[cfg(test)]
@@ -469,6 +511,35 @@ mod tests {
 
     fn room(min: Vec3, max: Vec3) -> Volume {
         Volume::air(Room::new(min, max))
+    }
+
+    /// Breaks if a path does not join its ends link to link, or one is found where none exists.
+    #[test]
+    fn a_path_runs_link_to_link_from_one_end_to_the_other() {
+        let graph = bake(&[room(Vec3::ZERO, Vec3::new(12.0, 3.0, 4.0)), room(Vec3::new(20.0, 0.0, 0.0), Vec3::new(24.0, 3.0, 4.0))], &[], &[]);
+        let (from, to) = (graph.cell_at(Vec3::new(0.75, 0.0, 0.75)).unwrap(), graph.cell_at(Vec3::new(11.25, 0.0, 3.25)).unwrap());
+        let path = graph.path(from, to, |_, _| 0.0).expect("no path across one room");
+        let mut at = from;
+        for link in &path {
+            assert!(graph.links(at).contains(link), "a step of the path is not a link out of where it stands");
+            at = link.to;
+        }
+        assert_eq!(at, to);
+        let sealed = graph.cell_at(Vec3::new(21.25, 0.0, 1.25)).unwrap();
+        assert!(graph.path(from, sealed, |_, _| 0.0).is_none(), "a path into a sealed room");
+    }
+
+    /// Breaks if the caller's cost is ignored: a pillar splits a room, and making one side dear
+    /// sends the path round the other.
+    #[test]
+    fn a_dear_side_of_a_pillar_sends_the_path_round_the_other() {
+        let graph = bake(&[room(Vec3::ZERO, Vec3::new(12.0, 3.0, 9.0)), Volume::solid(Room::new(Vec3::new(4.0, 0.0, 3.0), Vec3::new(8.0, 3.0, 6.0)))], &[], &[]);
+        let (from, to) = (graph.cell_at(Vec3::new(0.75, 0.0, 4.25)).unwrap(), graph.cell_at(Vec3::new(11.25, 0.0, 4.25)).unwrap());
+        let side = |path: &[Link]| path.iter().map(|link| graph.cells()[link.to as usize].feet.z).fold(4.5, |far: f32, z| if (z - 4.5).abs() > (far - 4.5).abs() { z } else { far });
+        let north_dear = graph.path(from, to, |cell, _| if graph.cells()[cell as usize].feet.z < 3.0 { 10.0 } else { 0.0 }).unwrap();
+        let south_dear = graph.path(from, to, |cell, _| if graph.cells()[cell as usize].feet.z > 6.0 { 10.0 } else { 0.0 }).unwrap();
+        assert!(side(&north_dear) > 6.0, "with the low side dear the path still went low");
+        assert!(side(&south_dear) < 3.0, "with the high side dear the path still went high");
     }
 
     fn reached_from(graph: &NavGraph, start: CellId) -> usize {

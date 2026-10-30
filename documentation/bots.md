@@ -398,12 +398,22 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
       the batch sizes against a frame once there is a wasm build)
 
 ### Stage 4: the bot's interface
-- [ ] `NavGraph` query API (`cell_at`, `neighbors`, `field`, `path` with a
-      caller cost, `distance_to`)
-- [ ] A bot body: an entity holding an `Identity` that
-      `give_bodies_to_whoever_needs_one` serves like a client's link
-- [ ] Follow a path by writing `Inputs`, replaying a link's input sequence
-      across jumps
+- [x] `NavGraph` query API: `cell_at`, `links`, `field` (pickup distance is
+      `Field::Distance`), and `path` with a caller's extra cost per link
+- [x] A bot body: a `BotSeat` holding an `Identity` that
+      `give_bodies_to_whoever_needs_one` serves like a client's link, and
+      whose despawn retires the body
+- [x] `BotIntent` on the body (goal, look-at, buttons), written into `Inputs`
+      by `steer_bots` before the step, following the route and replaying a
+      link's input across drops and jumps; replanned when the goal or graph
+      changes or the bot stops closing on its next cell
+- [x] `B` / `Shift+B` to seat and retire bots in a round; `Roam` as a
+      placeholder goal
+- [x] Slots and "fill empty slots with bots" in a Round tab, kept true
+      through a round as people come and go
+- [ ] A bot count per team
+- [ ] Planning with a cost from the fields (exposure, danger) rather than
+      time alone
 
 ### Later
 - [ ] Rocket-jump links

@@ -209,6 +209,11 @@ missing_point = "Missing point"
 missing_feature = "Missing feature"
 unresolved = "Does not resolve"
 
+[editor.round]
+title = "Round"
+slots = "Slots"
+fill_with_bots = "Fill empty slots with bots"
+
 [editor.rounds]
 title = "Rounds"
 round = "Round { number } ({ length })"

@@ -76,7 +76,7 @@ fn main() {
             EditorInputPlugin,
             NetPlugin,
             NetTransportPlugin,
-            NetBodiesPlugin,
+            (NetBodiesPlugin, grackle::game::bot::BotPlugin),
             NetMenuPlugin,
             MulticamPlugin {
                 test_scene: false,
