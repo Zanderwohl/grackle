@@ -95,6 +95,12 @@ status_idle = "Step { step }/{ steps }: { completed }/{ scheduled }"
 step = "Step"
 overall = "Overall"
 
+[round_prep]
+title = "Baking for the round"
+done = "Done"
+waiting = "Waiting"
+cancel = "Cancel"
+
 [nav]
 title = "Nav graph"
 auto = "Auto-bake Nav graph"

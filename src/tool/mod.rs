@@ -46,6 +46,7 @@ pub mod bake_job;
 pub mod sun_bake;
 pub mod nav_bake;
 pub mod nav_cache;
+pub mod round_prep;
 pub mod nav_overlay;
 pub mod show;
 pub mod tool_helpers;

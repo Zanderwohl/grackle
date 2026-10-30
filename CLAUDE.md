@@ -1137,6 +1137,15 @@ as it was before the edit. Joining a round therefore bakes twice — once on
 adoption, once entering Play — which is the right trade: the message covers a
 map arriving mid-round, the set covers one arriving as the round starts.
 
+**A round asked for with its bakes behind waits in the editor**
+([`src/tool/round_prep.rs`](src/tool/round_prep.rs)): `F5`, the Mode menu or
+`--play` while rooms, sunlight or the nav graph are stale is held back before
+`StateTransition`, the bakes are asked for, and a modal shows each one's
+progress until they land and the round starts — or Cancel or `Escape` drops
+it. Entering Play then finds nothing to do, so the frame never freezes. Only
+on the authority, and only in the editor binary: a client follows the
+server's mode, and without the plugin entering Play still bakes, blocked.
+
 The actual work is the free function `bake_rooms`, called by both paths, so
 that "somebody pressed the button" and "a round is starting" cannot bake
 slightly differently.

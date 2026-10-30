@@ -81,7 +81,7 @@ fn main() {
             MulticamPlugin {
                 test_scene: false,
             },
-            EditorPanelPlugin,
+            (EditorPanelPlugin, grackle::tool::round_prep::RoundPrepPlugin),
             EditorStepsPlugin,
             ToolPlugin,
             PropEditorPlugin,
