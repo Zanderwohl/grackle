@@ -23,6 +23,10 @@ pub const EDITOR_ONLY: usize = 2;
 /// it. See [`crate::prop::thumbnail`].
 pub const THUMBNAIL: usize = 3;
 
+/// Gizmos, which the editor viewports and the play camera draw and the
+/// forward camera does not.
+pub const GIZMOS: usize = 4;
+
 /// The editor's 2D shape painter and the egui camera.
 pub const PAINTER: usize = 31;
 
@@ -32,7 +36,7 @@ mod tests {
 
     #[test]
     fn no_two_features_share_a_layer() {
-        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, PAINTER];
+        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, PAINTER];
         for (i, a) in all.iter().enumerate() {
             for b in &all[i + 1..] {
                 assert_ne!(a, b, "two features claim layer {a}");

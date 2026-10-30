@@ -1,6 +1,8 @@
 //! A style (how light comes off a surface) and a tint (its color), kept
 //! apart so red plastic and red-painted metal differ. A style is a few
-//! `StandardMaterial` numbers, not a texture.
+//! `StandardMaterial` numbers, not a texture — except
+//! [`Style::ForwardCamera`], which in the viewmodel shows what is ahead; see
+//! [`crate::game::forward_camera`].
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -17,16 +19,20 @@ pub enum Style {
     Metal,
     Plastic,
     Wood,
+    /// Glass everywhere but the viewmodel, where it is the forward camera's
+    /// view, tinted.
+    ForwardCamera,
 }
 
 impl Style {
-    pub const ALL: [Style; 3] = [Style::Metal, Style::Plastic, Style::Wood];
+    pub const ALL: [Style; 4] = [Style::Metal, Style::Plastic, Style::Wood, Style::ForwardCamera];
 
     pub fn name(self) -> String {
         match self {
             Style::Metal => get!("prop.styles.metal"),
             Style::Plastic => get!("prop.styles.plastic"),
             Style::Wood => get!("prop.styles.wood"),
+            Style::ForwardCamera => get!("prop.styles.forward_camera"),
         }
     }
 
@@ -51,6 +57,13 @@ impl Style {
                 metallic: 0.0,
                 perceptual_roughness: 0.85,
                 reflectance: 0.15,
+                ..default()
+            },
+            Style::ForwardCamera => StandardMaterial {
+                base_color,
+                metallic: 0.0,
+                perceptual_roughness: 0.05,
+                reflectance: 0.6,
                 ..default()
             },
         }

@@ -760,6 +760,7 @@ wedge = "Wedge"
 metal = "Metal"
 plastic = "Plastic"
 wood = "Wood"
+forward_camera = "Forward camera"
 
 [prop.boolean]
 union = "Union"
