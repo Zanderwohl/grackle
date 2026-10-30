@@ -40,7 +40,8 @@ pub struct NavBake {
 
 impl Default for NavBake {
     fn default() -> Self {
-        Self { graph: NavGraph::default(), generation: 0, snapshot: None, bake: BackgroundBake::new(true) }
+        // Off: about ten seconds on Halls in a debug build, too much to redo on every still moment.
+        Self { graph: NavGraph::default(), generation: 0, snapshot: None, bake: BackgroundBake::new(false) }
     }
 }
 
@@ -314,7 +315,6 @@ mod tests {
         app.init_asset::<StandardMaterial>();
         app.add_plugins((GamePlugin, BakePlugin, NavBakePlugin));
         app.world_mut().resource_mut::<RoomBake>().set_auto(false);
-        app.world_mut().resource_mut::<NavBake>().set_auto(false);
         app.world_mut().spawn(Room::new(Vec3::ZERO, Vec3::new(6.0, 3.0, 6.0)));
         app.update();
         app

@@ -177,8 +177,10 @@ as the sun is, and reports as `BakeKind::Nav`:
   standing still.
 - Never incremental. Visibility is global: a wall changes sightlines across
   the whole map.
-- Auto-bake is on, debounced, waiting for the map to be still, like the sun's.
-  Entering Play waits only if the graph is stale.
+- Auto-bake is off by default: Halls takes under ten seconds in a debug
+  build, too long to redo whenever the map goes still. Turned on, it is
+  debounced like the sun's. Entering Play bakes, and waits, only if the graph
+  is stale.
 
 Cells and links are cheap (seconds at most in a debug build). Visibility is
 not: about 3 800 cells is about 7 M ordered pairs before the range cap. So
