@@ -100,8 +100,26 @@ title = "Nav graph"
 auto = "Auto-bake Nav graph"
 bake = "Nav graph"
 summary = "{ cells } cells, { links } links"
-crouched = "Crouched"
 probe = "Probe"
+
+[nav.body]
+standing = "Standing"
+crouched = "Crouched"
+feet = "Feet"
+
+[nav.rating]
+cramped = "Cramped"
+open = "Open"
+precarious = "Precarious"
+busy = "Busy"
+gauntlet = "Gauntlet"
+vantage = "Vantage"
+ambush = "Ambush"
+
+[nav.statistics]
+title = "Statistics"
+floor = "Floor"
+rise = "Rise"
 
 [nav.overlay]
 off = "Off"
@@ -113,7 +131,9 @@ advantage = "Advantage"
 cover = "Cover nearby"
 danger = "Danger"
 height = "Height"
+traffic = "Traffic"
 distance = "Distance to"
+rating = "Rating"
 
 [nav.saturation]
 area = "Full at"

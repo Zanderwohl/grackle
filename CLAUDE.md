@@ -55,9 +55,10 @@ still a prototype for feeling out room sizes: it has health and can shoot, and
 that is the whole of it.
 
 There are no bots. The nav graph they will walk — walks, steps, drops and jumps, the last two found by running the movement step — is baked (`src/game/nav.rs`,
-the third bake), with knockback, pickup distance and, as a fourth bake, sightlines
-on it (`src/game/nav_field.rs`); all of it is drawn over the floor from its section
-of the Bakes panel. The plan is [documentation/bots.md](documentation/bots.md).
+the third bake), with knockback, pickup distance, traffic and, as a fourth bake,
+sightlines on it (`src/game/nav_field.rs`), rated into kinds of place — cramped,
+precarious, an ambush — for the map's statistics (`src/game/nav_rating.rs`); all
+of it is drawn over the floor from its section of the Bakes panel. The plan is [documentation/bots.md](documentation/bots.md).
 
 There is a prop editor, which models the things a map and a class refer to.
 It is a third `AppMode` and the frontier next to it: the geometry it builds is

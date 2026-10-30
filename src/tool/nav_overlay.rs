@@ -20,7 +20,8 @@ use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::editor_only;
 use crate::game::collision::CollisionWorld;
 use crate::game::nav::{CellId, LinkKind, NavGraph, SPACING};
-use crate::game::nav_field::Field;
+use crate::game::nav_field::{self, Field};
+use crate::game::nav_rating::{MapStatistics, Rating};
 use crate::get;
 use crate::tool::nav_bake::{BakeNav, ClearNav, NavBake};
 
@@ -39,6 +40,9 @@ const STEP: Color = Color::srgb(1.0, 0.85, 0.2);
 const DROP: Color = Color::srgb(0.9, 0.3, 0.9);
 const JUMP: Color = Color::srgb(0.3, 0.95, 0.4);
 
+/// Share of routes at which the traffic scale is full.
+const TRAFFIC_FULL: f32 = 0.5;
+
 /// The low end of every single-hue scale.
 const DARK: Color = Color::srgb(0.06, 0.06, 0.08);
 /// A field not baked yet, or a cell the baseline did not have.
@@ -48,6 +52,8 @@ const SEEN: Color = Color::srgb(1.0, 0.15, 0.1);
 const PEEK: Color = Color::srgb(0.2, 0.9, 1.0);
 const HIGH: Color = Color::srgb(0.35, 0.5, 1.0);
 const NEAR: Color = Color::srgb(1.0, 0.9, 0.2);
+const BUSY: Color = Color::srgb(0.95, 0.5, 1.0);
+const RATED: Color = Color::srgb(1.0, 1.0, 0.85);
 const MORE: Color = Color::srgb(0.25, 0.55, 1.0);
 const LESS: Color = Color::srgb(1.0, 0.55, 0.1);
 const PROBED: Color = Color::WHITE;
@@ -66,12 +72,61 @@ pub enum Shown {
     Cover,
     Danger,
     Height,
+    Traffic,
     /// Seconds to the pickup at this index.
     Distance(usize),
+    Rating(Rating),
+}
+
+/// Whose eye and what of the body the sightline overlays and the probe are of.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Body {
+    #[default]
+    Standing,
+    /// A crouched eye for sight, a crouched body for exposure.
+    Crouched,
+    /// The floor at a standing body's feet: where splash lands.
+    Feet,
+}
+
+impl Body {
+    const ALL: [Body; 3] = [Body::Standing, Body::Crouched, Body::Feet];
+
+    fn label(self) -> String {
+        match self {
+            Body::Standing => get!("nav.body.standing"),
+            Body::Crouched => get!("nav.body.crouched"),
+            Body::Feet => get!("nav.body.feet"),
+        }
+    }
+
+    fn sight(self) -> Field {
+        match self {
+            Body::Standing => Field::Sight,
+            Body::Crouched => Field::CrouchedSight,
+            Body::Feet => Field::FeetSight,
+        }
+    }
+
+    fn exposure(self) -> Field {
+        match self {
+            Body::Standing => Field::Exposure,
+            Body::Crouched => Field::CrouchedExposure,
+            Body::Feet => Field::FeetExposure,
+        }
+    }
+
+    fn advantage(self) -> Field {
+        match self {
+            Body::Standing => Field::Advantage,
+            Body::Crouched => Field::CrouchedAdvantage,
+            Body::Feet => Field::FeetAdvantage,
+        }
+    }
 }
 
 impl Shown {
-    const LISTED: [Shown; 9] = [
+    const LISTED: [Shown; 10] = [
         Shown::Off,
         Shown::CellsAndLinks,
         Shown::Sight,
@@ -81,6 +136,7 @@ impl Shown {
         Shown::Cover,
         Shown::Danger,
         Shown::Height,
+        Shown::Traffic,
     ];
 
     fn label(self) -> String {
@@ -94,21 +150,22 @@ impl Shown {
             Shown::Cover => get!("nav.overlay.cover"),
             Shown::Danger => get!("nav.overlay.danger"),
             Shown::Height => get!("nav.overlay.height"),
+            Shown::Traffic => get!("nav.overlay.traffic"),
             Shown::Distance(_) => get!("nav.overlay.distance"),
+            Shown::Rating(_) => get!("nav.overlay.rating"),
         }
     }
 
     /// A single number per cell, which is what a baseline can be taken of.
     fn scalar(self) -> bool {
-        !matches!(self, Shown::Off | Shown::CellsAndLinks | Shown::SightExposure)
+        !matches!(self, Shown::Off | Shown::CellsAndLinks | Shown::SightExposure | Shown::Rating(_))
     }
 }
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct NavOverlay {
     pub shown: Shown,
-    /// Sight, exposure and advantage at the crouched eye and body.
-    pub crouched: bool,
+    pub body: Body,
     /// Square meters at which a sightline scale is full.
     pub area: f32,
     /// Seconds at which a distance scale is empty.
@@ -127,7 +184,7 @@ impl Default for NavOverlay {
     fn default() -> Self {
         NavOverlay {
             shown: Shown::Off,
-            crouched: false,
+            body: Body::Standing,
             area: 300.0,
             seconds: 10.0,
             height: 4.0,
@@ -144,23 +201,22 @@ impl NavOverlay {
             Shown::Distance(_) => self.seconds,
             Shown::Height => self.height,
             Shown::Danger => 1.0,
+            Shown::Traffic => TRAFFIC_FULL,
             _ => self.area,
         }
     }
 
     /// The number a scalar overlay draws, `None` where it is not baked.
     fn value(&self, graph: &NavGraph, id: CellId) -> Option<f32> {
-        let field = match (self.shown, self.crouched) {
-            (Shown::Sight, false) => Field::Sight,
-            (Shown::Sight, true) => Field::CrouchedSight,
-            (Shown::Exposure, false) => Field::Exposure,
-            (Shown::Exposure, true) => Field::CrouchedExposure,
-            (Shown::Advantage, false) => Field::Advantage,
-            (Shown::Advantage, true) => Field::CrouchedAdvantage,
-            (Shown::Cover, _) => Field::Cover,
-            (Shown::Danger, _) => Field::Knockback,
-            (Shown::Height, _) => Field::Height,
-            (Shown::Distance(pickup), _) => Field::Distance(pickup),
+        let field = match self.shown {
+            Shown::Sight => self.body.sight(),
+            Shown::Exposure => self.body.exposure(),
+            Shown::Advantage => self.body.advantage(),
+            Shown::Cover => Field::Cover,
+            Shown::Danger => Field::Knockback,
+            Shown::Height => Field::Height,
+            Shown::Traffic => Field::Traffic,
+            Shown::Distance(pickup) => Field::Distance(pickup),
             _ => return None,
         };
         graph.field(id, field)
@@ -169,19 +225,20 @@ impl NavOverlay {
     fn color(&self, graph: &NavGraph, id: CellId) -> Color {
         let full = self.saturation();
         let share = |value: f32| (value / full).clamp(0.0, 1.0);
-        let sight = |crouched: bool| graph.field(id, if crouched { Field::CrouchedSight } else { Field::Sight });
-        let exposure = |crouched: bool| graph.field(id, if crouched { Field::CrouchedExposure } else { Field::Exposure });
+        let (sight, exposure) = (graph.field(id, self.body.sight()), graph.field(id, self.body.exposure()));
         let drawn = match self.shown {
             Shown::Off | Shown::CellsAndLinks => None,
             Shown::Sight => self.value(graph, id).map(|value| ramp(share(value), SEES)),
             Shown::Exposure => self.value(graph, id).map(|value| ramp(share(value), SEEN)),
-            Shown::SightExposure => sight(self.crouched).zip(exposure(self.crouched)).map(|(sight, exposure)| bivariate(share(sight), share(exposure))),
+            Shown::SightExposure => sight.zip(exposure).map(|(sight, exposure)| bivariate(share(sight), share(exposure))),
             Shown::Advantage => self.value(graph, id).map(|value| diverging(value / full, SEES, SEEN)),
-            Shown::Cover => sight(false).zip(self.value(graph, id)).map(|(sight, cover)| ramp(share(sight) * (1.0 - share(cover)), PEEK)),
+            Shown::Cover => graph.field(id, Field::Sight).zip(self.value(graph, id)).map(|(sight, cover)| ramp(share(sight) * (1.0 - share(cover)), PEEK)),
             Shown::Danger if graph.cells()[id as usize].hurt > 0 => Some(HURT_CELL),
             Shown::Danger => self.value(graph, id).map(|value| ramp(share(value), SEEN)),
             Shown::Height => self.value(graph, id).map(|value| ramp(share(value), HIGH)),
+            Shown::Traffic => self.value(graph, id).map(|value| ramp(share(value), BUSY)),
             Shown::Distance(_) => self.value(graph, id).filter(|value| value.is_finite()).map(|value| ramp(1.0 - share(value), NEAR)),
+            Shown::Rating(rating) => rating.holds(graph, id).map(|holds| if holds { RATED } else { DARK }),
         };
         drawn.unwrap_or(UNKNOWN)
     }
@@ -212,7 +269,7 @@ fn cell_key(graph: &NavGraph, id: CellId) -> (IVec2, i32) {
 /// One overlay's numbers as they stood when pinned.
 #[derive(Resource, Default)]
 pub struct NavBaseline {
-    pinned: Option<(Shown, bool, HashMap<(IVec2, i32), f32>)>,
+    pinned: Option<(Shown, Body, HashMap<(IVec2, i32), f32>)>,
     /// Bumped on every pin and clear, for what draws it.
     version: u64,
 }
@@ -220,7 +277,7 @@ pub struct NavBaseline {
 impl NavBaseline {
     fn pin(&mut self, graph: &NavGraph, overlay: &NavOverlay) {
         let values = (0..graph.cells().len() as CellId).filter_map(|id| Some((cell_key(graph, id), overlay.value(graph, id)?))).collect();
-        self.pinned = Some((overlay.shown, overlay.crouched, values));
+        self.pinned = Some((overlay.shown, overlay.body, values));
         self.version += 1;
     }
 
@@ -231,8 +288,8 @@ impl NavBaseline {
 
     /// The pinned numbers, if they are of what `overlay` draws.
     fn of(&self, overlay: &NavOverlay) -> Option<&HashMap<(IVec2, i32), f32>> {
-        let (shown, crouched, values) = self.pinned.as_ref()?;
-        (*shown == overlay.shown && *crouched == overlay.crouched).then_some(values)
+        let (shown, body, values) = self.pinned.as_ref()?;
+        (*shown == overlay.shown && *body == overlay.body).then_some(values)
     }
 }
 
@@ -316,16 +373,20 @@ fn link_mesh(graph: &NavGraph) -> Mesh {
 
 /// The probed cell in white, what it sees in green, what sees it in red, both in yellow, from the
 /// sightlines the bake stored. `None` until they are baked.
-fn probe_colors(graph: &NavGraph, probed: CellId, crouched: bool) -> Option<Vec<Color>> {
+fn probe_colors(graph: &NavGraph, probed: CellId, body: Body) -> Option<Vec<Color>> {
     let lines = &graph.fields().sightlines;
     let here = *lines.viewpoint_of.get(probed as usize)? as usize;
-    let (sees, seen_by) = if crouched { (&lines.crouched_eye, &lines.crouched_body) } else { (&lines.standing, &lines.standing) };
+    let (sees, seen_by) = match body {
+        Body::Crouched => (&lines.crouched_eye, &lines.crouched_body),
+        Body::Standing | Body::Feet => (&lines.standing, &lines.standing),
+    };
+    let counts = |seen: &&nav_field::Seen| if body == Body::Feet { seen.feet } else { seen.samples > 0 };
     let mut by_viewpoint = vec![(false, false); lines.viewpoints.len()];
-    for &(seen, _) in &sees[here] {
-        by_viewpoint[seen as usize].0 = true;
+    for seen in sees[here].iter().filter(counts) {
+        by_viewpoint[seen.viewpoint as usize].0 = true;
     }
     for (eye, row) in seen_by.iter().enumerate() {
-        if row.iter().any(|(body, _)| *body as usize == here) {
+        if row.iter().filter(counts).any(|seen| seen.viewpoint as usize == here) {
             by_viewpoint[eye].1 = true;
         }
     }
@@ -380,7 +441,7 @@ fn draw_nav_overlay(
         return;
     }
     let mut meshes = Vec::new();
-    if let Some(colors) = probed.and_then(|probed| probe_colors(graph, probed, overlay.crouched)) {
+    if let Some(colors) = probed.and_then(|probed| probe_colors(graph, probed, overlay.body)) {
         meshes.push(cell_mesh(graph, |id| colors[id as usize]));
     } else if overlay.shown == Shown::CellsAndLinks {
         meshes.push(cell_mesh(graph, |id| if graph.cells()[id as usize].hurt > 0 { HURT_CELL } else { CELL }));
@@ -447,6 +508,7 @@ pub struct NavCommands {
     pickups: Vec<String>,
     cells: usize,
     links: usize,
+    statistics: MapStatistics,
 }
 
 /// The nav section's reads and writes, bundled to stay inside the panels' parameter limit.
@@ -474,6 +536,7 @@ impl NavPanel<'_> {
             pickups: graph.fields().pickups.iter().map(|pickup| pickup.label.clone()).collect(),
             cells: graph.cells().len(),
             links,
+            statistics: self.nav.statistics().clone(),
         }
     }
 
@@ -524,7 +587,25 @@ pub fn section(ui: &mut egui::Ui, commands: &mut NavCommands) {
                 });
             });
         }
-        ui.checkbox(&mut overlay.crouched, get!("nav.crouched"));
+        ui.horizontal(|ui| {
+            let picked = match overlay.shown {
+                Shown::Rating(rating) => rating,
+                _ => Rating::Cramped,
+            };
+            if ui.radio(matches!(overlay.shown, Shown::Rating(_)), Shown::Rating(picked).label()).clicked() {
+                overlay.shown = Shown::Rating(picked);
+            }
+            egui::ComboBox::from_id_salt("nav_rating").selected_text(picked.label()).show_ui(ui, |ui| {
+                for rating in Rating::ALL {
+                    ui.selectable_value(&mut overlay.shown, Shown::Rating(rating), rating.label());
+                }
+            });
+        });
+        ui.horizontal(|ui| {
+            for body in Body::ALL {
+                ui.radio_value(&mut overlay.body, body, body.label());
+            }
+        });
         egui::Grid::new("nav_saturation").num_columns(2).show(ui, |ui| {
             ui.label(get!("nav.saturation.area"));
             ui.add(egui::DragValue::new(&mut overlay.area).range(1.0..=10_000.0).suffix(" m²"));
@@ -557,6 +638,25 @@ pub fn section(ui: &mut egui::Ui, commands: &mut NavCommands) {
             }
         });
         ui.label(get!("nav.summary", "cells", commands.cells, "links", commands.links));
+        statistics(ui, &commands.statistics);
+    });
+}
+
+fn statistics(ui: &mut egui::Ui, statistics: &MapStatistics) {
+    egui::CollapsingHeader::new(get!("nav.statistics.title")).id_salt("nav_statistics").show(ui, |ui| {
+        egui::Grid::new("nav_statistics_grid").num_columns(2).show(ui, |ui| {
+            ui.label(get!("nav.statistics.floor"));
+            ui.label(format!("{:.0} m²", statistics.floor));
+            ui.end_row();
+            ui.label(get!("nav.statistics.rise"));
+            ui.label(format!("{:.1} m", statistics.rise));
+            ui.end_row();
+            for (rating, share) in Rating::ALL.iter().zip(&statistics.shares) {
+                ui.label(rating.label());
+                ui.label(share.map_or_else(|| "–".to_string(), |share| format!("{:.0}%", share * 100.0)));
+                ui.end_row();
+            }
+        });
     });
 }
 
@@ -587,7 +687,7 @@ mod tests {
         let faces = world.rebuild_volumes(volumes);
         let rules = MovementRules::default();
         let mut graph = nav::graph(&world, &faces, &[], &rules, &[]);
-        let fields = nav_field::bake(&world, &graph, &[], &rules, Vec::new());
+        let fields = nav_field::bake(&world, &graph, &[], &rules, Vec::new(), Vec::new());
         graph.set_fields(fields);
         graph
     }
@@ -679,7 +779,7 @@ mod tests {
         ];
         let graph = graph_of(&volumes);
         let probed = graph.cell_at(Vec3::new(1.25, 0.0, 3.25)).unwrap();
-        let colors = probe_colors(&graph, probed, false).unwrap();
+        let colors = probe_colors(&graph, probed, Body::Standing).unwrap();
         let color = |feet| colors[graph.cell_at(feet).unwrap() as usize];
         assert_eq!(color(Vec3::new(1.25, 0.0, 3.25)), PROBED);
         assert_eq!(color(Vec3::new(10.75, 0.0, 3.25)), DARK, "a cell behind the pillar is lit");

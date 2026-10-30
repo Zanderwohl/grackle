@@ -21,6 +21,7 @@ use crate::game::world_prop::{self, GivesWeapon, WorldProp};
 use crate::game::collision::CollisionWorld;
 use crate::game::nav::{self, Cell, CellId, Link, NavGraph};
 use crate::game::nav_field::{FieldBake, Pickup, Sight, SightBake};
+use crate::game::nav_rating::MapStatistics;
 use crate::game::player::running_speed;
 use crate::get;
 use crate::prop::archetype::RoundedBox;
@@ -50,6 +51,8 @@ pub struct NavBake {
     snapshot: Option<Snapshot>,
     bake: BackgroundBake<Job>,
     sight: BackgroundBake<SightJob>,
+    /// Of `graph`, kept rather than worked out each frame the panel is up.
+    statistics: MapStatistics,
 }
 
 impl Default for NavBake {
@@ -66,6 +69,7 @@ impl Default for NavBake {
             bake: BackgroundBake::new(false),
             // On: it follows the graph rather than the map.
             sight: BackgroundBake::new(true),
+            statistics: MapStatistics::default(),
         }
     }
 }
@@ -79,12 +83,17 @@ impl NavBake {
         self.generation
     }
 
+    pub fn statistics(&self) -> &MapStatistics {
+        &self.statistics
+    }
+
     fn replace(&mut self, hash: Option<u64>, (graph, volumes): (NavGraph, Vec<Volume>)) {
         self.graph = graph;
         self.built_from = volumes;
         self.built_hash = hash;
         self.generation += 1;
         self.built += 1;
+        self.statistics = MapStatistics::of(&self.graph);
     }
 
     /// A bake that just landed, which is also written to the cache.
@@ -122,6 +131,7 @@ impl NavBake {
         fields.add_sight(sight);
         self.graph.set_fields(fields);
         self.generation += 1;
+        self.statistics = MapStatistics::of(&self.graph);
         if let Some(hash) = self.built_hash {
             nav_cache::write(hash, self.graph.clone());
         }
@@ -316,7 +326,7 @@ impl BakeJob for Job {
             links.extend(leaps);
         }
         let graph = NavGraph::reachable(cells, links, &self.snapshot.spawns);
-        self.fields = Some(FieldBake::new(&graph, self.snapshot.pickups.clone()));
+        self.fields = Some(FieldBake::new(&graph, self.snapshot.pickups.clone(), self.snapshot.spawns.clone()));
         self.graph = Some(graph);
     }
 
@@ -370,7 +380,7 @@ impl BakeJob for SightJob {
             self.world = Some(world);
             return;
         };
-        self.cast = self.bake.step(world, &self.graph);
+        self.cast = self.bake.step(world);
     }
 
     fn finish(self) -> (u64, Sight) {
@@ -520,17 +530,17 @@ mod tests {
         app.update();
         let snapshot = app
             .world_mut()
-            .run_system_once(|volumes: MapVolumes, triggers: Query<&TriggerVolume>, spawns: Query<&Transform, With<SpawnPointMarker>>| Snapshot {
+            .run_system_once(|volumes: MapVolumes, triggers: Query<&TriggerVolume>, spawns: Query<&Transform, With<SpawnPointMarker>>, pickups: Query<(&Transform, &WeaponPickupSpec)>| Snapshot {
                 volumes: volumes.volumes(),
                 props: Vec::new(),
                 triggers: triggers.iter().copied().collect(),
                 spawns: spawns.iter().map(|placed| placed.translation).collect(),
-                pickups: Vec::new(),
+                pickups: pickups.iter().map(|(placed, spec)| Pickup { label: format!("{:?}", spec.weapon), feet: placed.translation }).collect(),
                 rules: MovementRules::default(),
                 hash: 0,
             })
             .unwrap();
-        println!("{} volume(s), {} trigger(s), {} spawn(s)", snapshot.volumes.len(), snapshot.triggers.len(), snapshot.spawns.len());
+        println!("{} volume(s), {} trigger(s), {} spawn(s), {} weapon pickup(s)", snapshot.volumes.len(), snapshot.triggers.len(), snapshot.spawns.len(), snapshot.pickups.len());
 
         fn timed<J: BakeJob>(mut job: J) -> J::Output {
             let mut stage = job.doing();
@@ -558,6 +568,9 @@ mod tests {
         let pairs: usize = lines.standing.iter().map(Vec::len).sum();
         println!("{} cell(s), {} viewpoint(s), {} visible ordered pair(s)", graph.cells().len(), lines.viewpoints.len(), pairs);
         let bytes = postcard::to_allocvec(&graph).unwrap();
+        if let Ok(out) = std::env::var("NAV_OUT") {
+            std::fs::write(out, &bytes).unwrap();
+        }
         let reading = std::time::Instant::now();
         let _: NavGraph = postcard::from_bytes(&bytes).unwrap();
         println!("cached as {:.1} MB, read back in {:.2} s", bytes.len() as f32 / 1.0e6, reading.elapsed().as_secs_f32());

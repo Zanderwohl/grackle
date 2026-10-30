@@ -1,6 +1,7 @@
 //! The nav bake on disk: `cache/nav/{hash}.bin`, the graph and, once they land, its sightlines, as
 //! postcard. Keyed by a hash of everything the bake reads, so an unchanged map opens with its graph
-//! rather than baking it again. Derived and safe to delete; native only, like the thumbnails.
+//! rather than baking it again. Derived and safe to delete; native only, like the thumbnails, and
+//! never under test.
 //!
 //! The key is of the map, not of the code: after changing how something is baked, bump [`FORMAT`]
 //! or delete `cache/nav/`.
@@ -10,13 +11,17 @@ use serde::{Deserialize, Serialize};
 use crate::game::nav::NavGraph;
 
 /// Folded into every key.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
+
+pub fn stable_hash(text: &str) -> u64 {
+    fnv(&format!("{FORMAT}:{text}"))
+}
 
 /// FNV-1a, 64 bits. Fixed, unlike `DefaultHasher`, whose output may change with the toolchain and
 /// would quietly turn every file into a miss.
-pub fn stable_hash(text: &str) -> u64 {
+fn fnv(text: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in format!("{FORMAT}:{text}").bytes() {
+    for byte in text.bytes() {
         hash ^= byte as u64;
         hash = hash.wrapping_mul(0x0100_0000_01b3);
     }
@@ -29,7 +34,7 @@ struct Cached {
     graph: NavGraph,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", test)))]
 mod disk {
     use std::path::PathBuf;
 
@@ -76,7 +81,8 @@ mod disk {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+/// Tests bake small rooms that would otherwise be read back from the real cache by the next run.
+#[cfg(any(target_arch = "wasm32", test))]
 mod disk {
     use super::*;
 
@@ -104,7 +110,7 @@ mod tests {
     /// "1:grackle" is fixed arithmetic, whatever the toolchain.
     #[test]
     fn the_key_is_the_same_on_every_build() {
-        assert_eq!(stable_hash("grackle"), 0xb17f_e6b2_dd3c_1ffb);
+        assert_eq!(fnv("1:grackle"), 0xb17f_e6b2_dd3c_1ffb);
     }
 
     /// Breaks if anything the bake produces fails to round-trip, the columns most of all.
@@ -115,7 +121,7 @@ mod tests {
         let rules = MovementRules::default();
         let mut graph = nav::graph(&world, &faces, &[], &rules, &[]);
         let pickup = nav_field::Pickup { label: "rocket".into(), feet: Vec3::new(1.25, 0.0, 1.25) };
-        graph.set_fields(nav_field::bake(&world, &graph, &[], &rules, vec![pickup]));
+        graph.set_fields(nav_field::bake(&world, &graph, &[], &rules, vec![pickup], Vec::new()));
 
         let bytes = postcard::to_allocvec(&Cached { hash: 7, graph: graph.clone() }).unwrap();
         let back = postcard::from_bytes::<Cached>(&bytes).unwrap().graph;
@@ -127,3 +133,4 @@ mod tests {
         assert_eq!(back.cell_at(Vec3::new(3.25, 0.0, 2.25)), graph.cell_at(Vec3::new(3.25, 0.0, 2.25)), "the columns were not rebuilt");
     }
 }
+

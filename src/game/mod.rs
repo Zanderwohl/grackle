@@ -35,6 +35,7 @@ pub mod flinch;
 pub mod hitscan;
 pub mod nav;
 pub mod nav_field;
+pub mod nav_rating;
 pub mod projectile;
 pub mod recoil;
 pub mod reloading;

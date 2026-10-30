@@ -136,6 +136,17 @@ asymmetry is where high ground comes from.
 - **Cover nearby**: the lowest exposure among the cells reachable within
   about 1.5 s. A cell with high sight next to one with low exposure is a peek
   spot, which is what "hugging corners" means as a number.
+- **Feet sight and feet exposure**: the same areas for the floor 10 cm above
+  a standing body's feet, from a standing eye. That is where a rocket is put,
+  so in a splash game this, not the body, is what high ground buys. On Halls
+  sight and exposure correlate at 0.996 and advantage was mostly knees hidden
+  by 1 m ledges, which is why feet are sampled on their own.
+- **Traffic**: the share of routes between every two spawns and pickups that
+  pass within `ROUTE_SLACK` (0.25 s) of their shortest by going through the
+  cell. A band rather than one shortest path: on a grid there are many
+  equally short ones, and picking one draws a line wherever ties broke.
+- **Watch**: the floor a standing eye sees, each square weighted by its
+  traffic. High watch with low exposure off the routes is an ambush.
 
 Rays go against `CollisionWorld::ray_distance`, the same test hitscan uses,
 so a sightline the overlay shows is a shot the game allows. Solid props
@@ -176,7 +187,7 @@ as the sun is, and reports as `BakeKind::Nav`:
   keyed by a fixed FNV-1a hash of the snapshot: written when the graph lands
   and again when its sightlines do, and read back whenever the map matches,
   so an unchanged map opens with its graph instead of baking it again.
-  Halls is 1.8 MB and reads in 0.04 s. The key is of the map, not the code:
+  Halls is 2.3 MB and reads in 0.07 s. The key is of the map, not the code:
   after changing how something is baked, bump `nav_cache::FORMAT` or delete
   `cache/nav/`.
 - **The old graph is kept until a new one lands.** Bots and the overlay use
@@ -195,23 +206,29 @@ graph**: cells, links, knockback and pickup distances. Then **Sightlines**
 fitted onto it when it finishes, unless the graph was replaced meanwhile. A
 round waits only for the first. The overlay shows each as it is ready.
 
-Measured on Halls in a debug build (3 128 cells; `time_the_nav_bake` in
+Measured on Halls in a debug build (2 784 cells; `time_the_nav_bake` in
 `src/tool/nav_bake.rs` reports each stage for any map):
 
 | Stage | Seconds |
 | --- | --- |
 | Surface, floors, walks | 0.4 |
-| Drops and jumps | 3.7 |
+| Drops and jumps | 4.6 |
 | Knockback | 2.3 |
-| **Nav graph in all** | **6.4** |
-| Sightlines | 18.5 |
-| Cover, height and the rest | 0.6 |
+| **Nav graph in all** | **7.5** |
+| Sightlines | 19.9 |
+| Cover, height and the rest | 0.5 |
 
 Sightlines and knockback are cast between **viewpoints**, one per 1 m square
-(`SIGHT_STRIDE` columns) at each floor height, 1 000 on Halls; each cell reads
-its viewpoint's. Eighteen rays per pair in range: standing eye to a standing
-body, crouched eye to a standing body and standing eye to a crouched body,
-three samples a body, both ways. Each ray walks the collision grid along
+(`SIGHT_STRIDE` columns) at each floor height, about 900 on Halls; each cell
+reads its viewpoint's. A viewpoint stands at the **middle of its cells**, not
+on one of them: standing on whichever cell came first sampled a turned copy of
+the same room from another corner, and Halls' four quarters disagreed by up to
+45 m² of exposure on matching spots. An L of three cells stands on its corner
+cell, since the middle may be in the wall that took the fourth.
+`a_map_turned_a_quarter_bakes_the_same_turned` holds it to one grazing sample.
+Twenty rays per pair in range: standing eye to a standing body, crouched eye
+to a standing body and standing eye to a crouched body, three samples a body,
+and standing eye to the feet, both ways. Each ray walks the collision grid along
 itself and stops at the first wall (`CollisionWorld::segment_clear`); asking
 the grid for every wall in a 40 m ray's bounding box was 103 s.
 
@@ -246,10 +263,12 @@ One overlay at a time, picked from the nav graph's section of the **Bakes** pane
 | Advantage | Diverging: green positive, red negative |
 | Cover nearby | Peek spots bright |
 | Danger | Knockback and hurt, red |
+| Traffic | Share of routes, full at half of them |
 | Distance to … | One pickup's field, picked from a list |
+| Rating … | The cells one rating holds for, picked from a list (see below) |
 
-The section also holds the Bake button, a crouched toggle for the visibility
-overlays, and the saturation for each scale: square meters for sightlines,
+The section also holds the Bake button, a Standing / Crouched / Feet choice
+for the visibility overlays and the probe, and the saturation for each scale: square meters for sightlines,
 seconds for distance, meters for height. Saturation is a fixed number, not a
 percentile, for the reason given under "Fields". `F7` shows the overlay to the
 play camera during a round.
@@ -263,6 +282,26 @@ Two tools beside the overlays:
 - **Baseline**: pin the current bake, then show the *difference* from it.
   "This wall cut exposure in the courtyard by 40%" as a color, rather than
   something to spot by flicking between two screenshots.
+
+### Map statistics
+
+A **rating** is a kind of place, read off a cell's fields by a threshold in
+the field's own units (`src/game/nav_rating.rs`). Ratings are derived, not
+baked, so retuning one needs no bake. The Bakes panel's Statistics lists the
+floor area, the rise from lowest floor to highest, and the share of the floor
+each rating holds for:
+
+| Rating | Holds where |
+| --- | --- |
+| Cramped | sight and exposure both under 60 m² |
+| Open | exposure over 200 m² |
+| Precarious | knockback throws a body somewhere bad on 2 of 8 headings, or it stands in a Hurt trigger |
+| Busy | on at least a fifth of the routes |
+| Gauntlet | busy and open: a crossing under fire |
+| Vantage | sees the feet on 20 m² more floor than sees its own |
+| Ambush | not busy, exposure under 80 m², watch at least 10 m² |
+
+The thresholds are first guesses tuned against Halls.
 
 ### What the bot will read
 
@@ -346,6 +385,14 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
       gives the high cell more sight than exposure against the low one; a
       cell beside a pit edge has knockback danger and one in the middle of a
       room has none
+- [x] Viewpoints at the middle of their square, so a symmetric map bakes
+      symmetric
+- [x] Feet sight and exposure; traffic between spawns and pickups; watch
+- [x] Ratings and the map's statistics in the Bakes panel; Traffic and Rating
+      overlays
+- [ ] Crouched fields: rework
+- [ ] Leaps that pass through a pickup's sphere, so a pickup over a pit (the
+      BFG on Halls) can be planned for
 - [ ] Chunked across frames on wasm (the jobs already step in batches; check
       the batch sizes against a frame once there is a wasm build)
 

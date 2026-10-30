@@ -2,7 +2,7 @@
 //! and is seen, and how far it is from each pickup. Stored in absolute units, never normalized to
 //! the map. See "Fields, baked per cell" in documentation/bots.md.
 //!
-//! Sightlines and knockback are worked out per **viewpoint**, one cell standing for each square of
+//! Sightlines and knockback are worked out per **viewpoint**, one for each square of
 //! [`SIGHT_STRIDE`] columns at each floor height, and every cell reads its viewpoint's.
 
 use std::cmp::Reverse;
@@ -17,7 +17,7 @@ use crate::common::trigger::{TriggerEffect, TriggerVolume};
 use crate::game::collision::CollisionWorld;
 use crate::game::condition::Condition;
 use crate::game::explosion::push_speed;
-use crate::game::nav::{cell_near, Cell, CellId, NavGraph, LIFT, MOST_TICKS, SPACING, TICK};
+use crate::game::nav::{cell_near, CellId, NavGraph, LIFT, MOST_TICKS, SPACING, TICK};
 use crate::game::player::{step, Mover, PhysicsBody, Player, PlayerInput, PLAYER_HALF, STEP_HEIGHT};
 
 /// Columns per side of the square one viewpoint stands for.
@@ -27,6 +27,8 @@ pub const SIGHT_RANGE: f32 = 40.0;
 /// Heights above the feet sampled for how much of a body is seen: head, chest and knees.
 const STANDING_BODY: [f32; 3] = [1.6, 1.1, 0.5];
 const CROUCHED_BODY: [f32; 3] = [0.85, 0.6, 0.3];
+/// Height above the feet, in meters, of the floor a rocket is put at for splash.
+const FEET: f32 = 0.1;
 /// Splash a rocket deals a body about a meter from it: the push every cell is tested against.
 const KNOCKBACK_DAMAGE: u32 = 50;
 /// Upward share of the push, since a blast at the feet throws up as well as out.
@@ -36,6 +38,8 @@ const KNOCKBACK_HEADINGS: usize = 8;
 const AT_REST: f32 = 0.3;
 /// Seconds of travel within which a cell's lowest exposure counts as its cover.
 pub const COVER_SECONDS: f32 = 1.5;
+/// Seconds over the shortest route within which a cell counts as on it.
+pub const ROUTE_SLACK: f32 = 0.25;
 
 const KNOCKBACK_BATCH: usize = 32;
 const SIGHT_BATCH: usize = 8;
@@ -52,6 +56,16 @@ pub enum Field {
     CrouchedSight,
     CrouchedExposure,
     CrouchedAdvantage,
+    /// Square meters of floor where this standing eye sees the floor at a standing body's feet:
+    /// where it can put a rocket.
+    FeetSight,
+    /// Square meters of floor from which the floor at these feet is seen.
+    FeetExposure,
+    FeetAdvantage,
+    /// The share of routes between spawns and pickups that pass within [`ROUTE_SLACK`] of here.
+    Traffic,
+    /// Square meters of floor this standing eye sees, each weighted by its traffic.
+    Watch,
     /// The lowest exposure within [`COVER_SECONDS`] of travel, in square meters.
     Cover,
     /// The fraction of headings a rocket's push throws a body into a Kill or Hurt trigger or off
@@ -71,19 +85,29 @@ pub struct Pickup {
     pub feet: Vec3,
 }
 
-/// Which viewpoints see which, kept for the probe. Each row lists the viewpoints an eye sees a
-/// body at, and how many of the three samples on it.
+/// One viewpoint in another's row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Seen {
+    pub viewpoint: u32,
+    /// How many of the three body samples.
+    pub samples: u8,
+    /// The floor at the feet. Only in [`Sightlines::standing`].
+    pub feet: bool,
+}
+
+/// Which viewpoints see which, kept for the probe. Each row lists what one eye sees.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Sightlines {
     /// Per cell.
     pub viewpoint_of: Vec<u32>,
-    pub viewpoints: Vec<CellId>,
+    /// Where each viewpoint's feet are.
+    pub viewpoints: Vec<Vec3>,
     /// Standing eye to standing body.
-    pub standing: Vec<Vec<(u32, u8)>>,
+    pub standing: Vec<Vec<Seen>>,
     /// Crouched eye to standing body.
-    pub crouched_eye: Vec<Vec<(u32, u8)>>,
+    pub crouched_eye: Vec<Vec<Seen>>,
     /// Standing eye to crouched body.
-    pub crouched_body: Vec<Vec<(u32, u8)>>,
+    pub crouched_body: Vec<Vec<Seen>>,
 }
 
 /// Per cell. A field not baked yet is empty.
@@ -96,6 +120,10 @@ pub struct Fields {
     pub crouched_exposure: Vec<f32>,
     pub cover: Vec<f32>,
     pub height: Vec<f32>,
+    pub feet_sight: Vec<f32>,
+    pub feet_exposure: Vec<f32>,
+    pub traffic: Vec<f32>,
+    pub watch: Vec<f32>,
     pub pickups: Vec<Pickup>,
     /// Per pickup, then per cell; infinite where the pickup cannot be reached.
     pub distances: Vec<Vec<f32>>,
@@ -113,6 +141,11 @@ impl Fields {
             Field::CrouchedSight => at(&self.crouched_sight),
             Field::CrouchedExposure => at(&self.crouched_exposure),
             Field::CrouchedAdvantage => Some(at(&self.crouched_sight)? - at(&self.crouched_exposure)?),
+            Field::FeetSight => at(&self.feet_sight),
+            Field::FeetExposure => at(&self.feet_exposure),
+            Field::FeetAdvantage => Some(at(&self.feet_sight)? - at(&self.feet_exposure)?),
+            Field::Traffic => at(&self.traffic),
+            Field::Watch => at(&self.watch),
             Field::Cover => at(&self.cover),
             Field::Knockback => at(&self.knockback),
             Field::Height => at(&self.height),
@@ -122,18 +155,20 @@ impl Fields {
     }
 }
 
-/// The first stage: knockback per viewpoint, a batch at a time, then the distance to each pickup.
+/// The first stage: knockback per viewpoint, a batch at a time, then the distance to each pickup
+/// and the traffic between them and the spawns.
 pub struct FieldBake {
-    viewpoints: Vec<CellId>,
+    viewpoints: Vec<Vec3>,
     viewpoint_of: Vec<u32>,
     knockback: Vec<f32>,
     pickups: Vec<Pickup>,
+    spawns: Vec<Vec3>,
 }
 
 impl FieldBake {
-    pub fn new(graph: &NavGraph, pickups: Vec<Pickup>) -> Self {
+    pub fn new(graph: &NavGraph, pickups: Vec<Pickup>, spawns: Vec<Vec3>) -> Self {
         let (viewpoints, viewpoint_of) = viewpoints(graph);
-        FieldBake { viewpoints, viewpoint_of, knockback: Vec::new(), pickups }
+        FieldBake { viewpoints, viewpoint_of, knockback: Vec::new(), pickups, spawns }
     }
 
     /// Items: the knockback batches, and the last pass.
@@ -145,7 +180,7 @@ impl FieldBake {
     pub fn step(&mut self, world: &CollisionWorld, graph: &NavGraph, triggers: &[TriggerVolume], rules: &MovementRules) -> bool {
         let end = (self.knockback.len() + KNOCKBACK_BATCH).min(self.viewpoints.len());
         for viewpoint in self.knockback.len()..end {
-            let feet = graph.cells()[self.viewpoints[viewpoint] as usize].feet;
+            let feet = self.viewpoints[viewpoint];
             let thrown = (0..KNOCKBACK_HEADINGS).filter(|heading| !thrown_clear(world, graph, triggers, rules, feet, *heading)).count();
             self.knockback.push(thrown as f32 / KNOCKBACK_HEADINGS as f32);
         }
@@ -155,7 +190,8 @@ impl FieldBake {
     pub fn finish(self, graph: &NavGraph) -> Fields {
         let knockback = self.viewpoint_of.iter().map(|viewpoint| self.knockback[*viewpoint as usize]).collect();
         let distances = self.pickups.iter().map(|pickup| distances_to(graph, pickup.feet)).collect();
-        Fields { knockback, pickups: self.pickups, distances, ..default() }
+        let ends: Vec<Vec3> = self.spawns.iter().copied().chain(self.pickups.iter().map(|pickup| pickup.feet)).collect();
+        Fields { knockback, traffic: traffic(graph, &ends), pickups: self.pickups, distances, ..default() }
     }
 }
 
@@ -168,14 +204,18 @@ pub struct Sight {
     pub crouched_exposure: Vec<f32>,
     pub cover: Vec<f32>,
     pub height: Vec<f32>,
+    pub feet_sight: Vec<f32>,
+    pub feet_exposure: Vec<f32>,
+    pub watch: Vec<f32>,
     pub sightlines: Sightlines,
 }
 
 impl Fields {
     pub fn add_sight(&mut self, sight: Sight) {
-        let Sight { sight, exposure, crouched_sight, crouched_exposure, cover, height, sightlines } = sight;
+        let Sight { sight, exposure, crouched_sight, crouched_exposure, cover, height, feet_sight, feet_exposure, watch, sightlines } = sight;
         (self.sight, self.exposure, self.crouched_sight, self.crouched_exposure) = (sight, exposure, crouched_sight, crouched_exposure);
         (self.cover, self.height, self.sightlines) = (cover, height, sightlines);
+        (self.feet_sight, self.feet_exposure, self.watch) = (feet_sight, feet_exposure, watch);
     }
 
     pub fn has_sight(&self) -> bool {
@@ -216,10 +256,10 @@ impl SightBake {
     }
 
     /// One batch. True once only [`SightBake::finish`] is left.
-    pub fn step(&mut self, world: &CollisionWorld, graph: &NavGraph) -> bool {
+    pub fn step(&mut self, world: &CollisionWorld) -> bool {
         let end = (self.rows_done + SIGHT_BATCH).min(self.count());
         for from in self.rows_done..end {
-            self.sight_row(world, graph.cells(), from);
+            self.sight_row(world, from);
         }
         self.rows_done = end;
         self.rows_done == self.count()
@@ -227,57 +267,68 @@ impl SightBake {
 
     /// Every pair of this viewpoint with a later one, both ways, since a segment is clear or not
     /// whichever end it is cast from.
-    fn sight_row(&mut self, world: &CollisionWorld, cells: &[Cell], a: usize) {
+    fn sight_row(&mut self, world: &CollisionWorld, a: usize) {
         let lines = &mut self.sightlines;
-        let feet = |viewpoint: usize| cells[lines.viewpoints[viewpoint] as usize].feet;
-        let here = feet(a);
+        let here = lines.viewpoints[a];
         let (eye, crouched_eye) = (here + Vec3::Y * TALLEST_CLASS_EYE_HEIGHT, here + Vec3::Y * CROUCH_EYE_HEIGHT);
         for b in a + 1..lines.viewpoints.len() {
-            let there = feet(b);
+            let there = lines.viewpoints[b];
             if here.distance_squared(there) > SIGHT_RANGE * SIGHT_RANGE {
                 continue;
             }
             let (their_eye, their_crouched_eye) = (there + Vec3::Y * TALLEST_CLASS_EYE_HEIGHT, there + Vec3::Y * CROUCH_EYE_HEIGHT);
+            let feet = |eye: Vec3, feet: Vec3| clear(world, eye, feet + Vec3::Y * FEET);
             let pairs = [
-                (&mut lines.standing, seen(world, eye, there, &STANDING_BODY), seen(world, their_eye, here, &STANDING_BODY)),
-                (&mut lines.crouched_eye, seen(world, crouched_eye, there, &STANDING_BODY), seen(world, their_crouched_eye, here, &STANDING_BODY)),
-                (&mut lines.crouched_body, seen(world, eye, there, &CROUCHED_BODY), seen(world, their_eye, here, &CROUCHED_BODY)),
+                (&mut lines.standing, seen(world, eye, there, &STANDING_BODY), seen(world, their_eye, here, &STANDING_BODY), feet(eye, there), feet(their_eye, here)),
+                (&mut lines.crouched_eye, seen(world, crouched_eye, there, &STANDING_BODY), seen(world, their_crouched_eye, here, &STANDING_BODY), false, false),
+                (&mut lines.crouched_body, seen(world, eye, there, &CROUCHED_BODY), seen(world, their_eye, here, &CROUCHED_BODY), false, false),
             ];
-            for (rows, forward, back) in pairs {
-                if forward > 0 {
-                    rows[a].push((b as u32, forward));
+            for (rows, forward, back, forward_feet, back_feet) in pairs {
+                if forward > 0 || forward_feet {
+                    rows[a].push(Seen { viewpoint: b as u32, samples: forward, feet: forward_feet });
                 }
-                if back > 0 {
-                    rows[b].push((a as u32, back));
+                if back > 0 || back_feet {
+                    rows[b].push(Seen { viewpoint: a as u32, samples: back, feet: back_feet });
                 }
             }
         }
     }
 
     pub fn finish(self, graph: &NavGraph) -> Sight {
-        let cells = graph.cells();
         let count = self.count();
         let SightBake { sightlines, area, .. } = self;
-        let share = |rows: &Vec<Vec<(u32, u8)>>| {
+        let share = |rows: &Vec<Vec<Seen>>, weight: &dyn Fn(&Seen) -> f32| {
             let (mut sees, mut seen) = (vec![0.0; count], vec![0.0; count]);
             for (eye, row) in rows.iter().enumerate() {
-                for &(body, samples) in row {
-                    let fraction = samples as f32 / STANDING_BODY.len() as f32;
-                    sees[eye] += area[body as usize] * fraction;
-                    seen[body as usize] += area[eye] * fraction;
+                for glimpse in row {
+                    let (body, weight) = (glimpse.viewpoint as usize, weight(glimpse));
+                    sees[eye] += area[body] * weight;
+                    seen[body] += area[eye] * weight;
                 }
             }
             (sees, seen)
         };
-        let (sight, exposure) = share(&sightlines.standing);
-        let (crouched_sight, _) = share(&sightlines.crouched_eye);
-        let (_, crouched_exposure) = share(&sightlines.crouched_body);
+        let samples = |glimpse: &Seen| glimpse.samples as f32 / STANDING_BODY.len() as f32;
+        let (sight, exposure) = share(&sightlines.standing, &samples);
+        let (crouched_sight, _) = share(&sightlines.crouched_eye, &samples);
+        let (_, crouched_exposure) = share(&sightlines.crouched_body, &samples);
+        let (feet_sight, feet_exposure) = share(&sightlines.standing, &|glimpse| f32::from(u8::from(glimpse.feet)));
 
-        let feet = |viewpoint: usize| cells[sightlines.viewpoints[viewpoint] as usize].feet.y;
+        // Each viewpoint's traffic is its cells' mean, so a square half off the route counts half.
+        let mut traffic = vec![(0.0, 0usize); count];
+        for (cell, viewpoint) in sightlines.viewpoint_of.iter().enumerate() {
+            let entry = &mut traffic[*viewpoint as usize];
+            *entry = (entry.0 + graph.fields().traffic.get(cell).copied().unwrap_or(0.0), entry.1 + 1);
+        }
+        let traffic: Vec<f32> = traffic.into_iter().map(|(sum, cells)| sum / cells.max(1) as f32).collect();
+        let (watch, _) = share(&sightlines.standing, &|glimpse| samples(glimpse) * traffic[glimpse.viewpoint as usize]);
+
+        let feet = |viewpoint: usize| sightlines.viewpoints[viewpoint].y;
         let mut lowest_viewer: Vec<f32> = (0..count).map(feet).collect();
         for (eye, row) in sightlines.standing.iter().enumerate() {
-            for &(body, _) in row {
-                lowest_viewer[body as usize] = lowest_viewer[body as usize].min(feet(eye));
+            for glimpse in row.iter().filter(|glimpse| glimpse.samples > 0) {
+                let body = glimpse.viewpoint as usize;
+                lowest_viewer[body] = lowest_viewer[body].min(feet(eye));
             }
         }
         let height: Vec<f32> = (0..count).map(|viewpoint| feet(viewpoint) - lowest_viewer[viewpoint]).collect();
@@ -292,38 +343,58 @@ impl SightBake {
             crouched_exposure: per_cell(&crouched_exposure),
             cover,
             height: per_cell(&height),
+            feet_sight: per_cell(&feet_sight),
+            feet_exposure: per_cell(&feet_exposure),
+            watch: per_cell(&watch),
             sightlines,
         }
     }
 }
 
 /// Both stages at once, for tests and tools.
-pub fn bake(world: &CollisionWorld, graph: &NavGraph, triggers: &[TriggerVolume], rules: &MovementRules, pickups: Vec<Pickup>) -> Fields {
-    let mut first = FieldBake::new(graph, pickups);
+pub fn bake(world: &CollisionWorld, graph: &NavGraph, triggers: &[TriggerVolume], rules: &MovementRules, pickups: Vec<Pickup>, spawns: Vec<Vec3>) -> Fields {
+    let mut first = FieldBake::new(graph, pickups, spawns);
     while !first.step(world, graph, triggers, rules) {}
-    let mut fields = first.finish(graph);
-    let mut second = SightBake::new(graph);
-    while !second.step(world, graph) {}
-    fields.add_sight(second.finish(graph));
+    let mut graph = graph.clone();
+    graph.set_fields(first.finish(&graph));
+    let mut second = SightBake::new(&graph);
+    while !second.step(world) {}
+    let mut fields = graph.fields().clone();
+    fields.add_sight(second.finish(&graph));
     fields
 }
 
-/// The first cell of each square at each floor height stands for the rest of it.
-fn viewpoints(graph: &NavGraph) -> (Vec<CellId>, Vec<u32>) {
+/// One viewpoint per square at each floor height, standing at the middle of the cells it holds, so
+/// a map turned or mirrored on the meter grid is sampled the same way turned. Three cells in an L
+/// or two on a diagonal stand on the cell nearest that middle instead, since the middle may be
+/// in whatever wall took the rest.
+fn viewpoints(graph: &NavGraph) -> (Vec<Vec3>, Vec<u32>) {
     let mut squares: HashMap<IVec2, Vec<u32>> = HashMap::new();
-    let mut viewpoints: Vec<CellId> = Vec::new();
+    let mut members: Vec<Vec<CellId>> = Vec::new();
     let cells = graph.cells();
     let viewpoint_of = cells
         .iter()
         .enumerate()
         .map(|(id, cell)| {
             let square = squares.entry(cell.column.div_euclid(IVec2::splat(SIGHT_STRIDE))).or_default();
-            let near = square.iter().copied().find(|viewpoint| (cells[viewpoints[*viewpoint as usize] as usize].feet.y - cell.feet.y).abs() <= STEP_HEIGHT);
-            near.unwrap_or_else(|| {
-                viewpoints.push(id as CellId);
-                square.push(viewpoints.len() as u32 - 1);
-                viewpoints.len() as u32 - 1
-            })
+            let near = square.iter().copied().find(|viewpoint| (cells[members[*viewpoint as usize][0] as usize].feet.y - cell.feet.y).abs() <= STEP_HEIGHT);
+            let viewpoint = near.unwrap_or_else(|| {
+                members.push(Vec::new());
+                square.push(members.len() as u32 - 1);
+                members.len() as u32 - 1
+            });
+            members[viewpoint as usize].push(id as CellId);
+            viewpoint
+        })
+        .collect();
+    let viewpoints = members
+        .iter()
+        .map(|held| {
+            let feet = held.iter().map(|id| cells[*id as usize].feet);
+            let middle = feet.clone().sum::<Vec3>() / held.len() as f32;
+            let spread = held.iter().map(|id| cells[*id as usize].column).fold(IVec2::ZERO, |most, column| most.max((column - cells[held[0] as usize].column).abs()));
+            let whole = held.len() == 4 || held.len() == 1 || spread.min_element() == 0;
+            if whole { middle } else { feet.min_by(|a, b| a.distance_squared(middle).total_cmp(&b.distance_squared(middle))).expect("never empty") }
         })
         .collect();
     (viewpoints, viewpoint_of)
@@ -404,28 +475,75 @@ fn cover(graph: &NavGraph, exposure: &[f32]) -> Vec<f32> {
 
 /// Seconds from every cell to the one under `feet`, over the links followed forwards.
 fn distances_to(graph: &NavGraph, feet: Vec3) -> Vec<f32> {
-    let cells = graph.cells();
-    let mut seconds = vec![f32::INFINITY; cells.len()];
-    let Some(target) = graph.cell_at(feet) else { return seconds };
-    let mut into: Vec<Vec<(CellId, f32)>> = vec![Vec::new(); cells.len()];
-    for from in 0..cells.len() as CellId {
+    match graph.cell_at(feet) {
+        Some(target) => travel(&links_into(graph), target),
+        None => vec![f32::INFINITY; graph.cells().len()],
+    }
+}
+
+/// Per cell, the links that lead into it, as `(from, seconds)`.
+fn links_into(graph: &NavGraph) -> Vec<Vec<(CellId, f32)>> {
+    let mut into = vec![Vec::new(); graph.cells().len()];
+    for from in 0..graph.cells().len() as CellId {
         for link in graph.links(from) {
             into[link.to as usize].push((from, link.seconds));
         }
     }
-    seconds[target as usize] = 0.0;
-    let mut queue = BinaryHeap::from([Reverse((0u32, target))]);
+    into
+}
+
+/// Per cell, the links that lead out of it, as `(to, seconds)`.
+fn links_out(graph: &NavGraph) -> Vec<Vec<(CellId, f32)>> {
+    (0..graph.cells().len() as CellId).map(|from| graph.links(from).iter().map(|link| (link.to, link.seconds)).collect()).collect()
+}
+
+/// Seconds between `start` and every cell along `links`: from it over [`links_out`], to it over
+/// [`links_into`].
+fn travel(links: &[Vec<(CellId, f32)>], start: CellId) -> Vec<f32> {
+    let mut seconds = vec![f32::INFINITY; links.len()];
+    seconds[start as usize] = 0.0;
+    let mut queue = BinaryHeap::from([Reverse((0u32, start))]);
     while let Some(Reverse((_, at))) = queue.pop() {
         let cost = seconds[at as usize];
-        for &(from, time) in &into[at as usize] {
+        for &(next_cell, time) in &links[at as usize] {
             let next = cost + time;
-            if next < seconds[from as usize] {
-                seconds[from as usize] = next;
-                queue.push(Reverse(((next * 1000.0) as u32, from)));
+            if next < seconds[next_cell as usize] {
+                seconds[next_cell as usize] = next;
+                queue.push(Reverse(((next * 1000.0) as u32, next_cell)));
             }
         }
     }
     seconds
+}
+
+/// Per cell, the share of routes between every two of `ends` that come within [`ROUTE_SLACK`] of
+/// their shortest by passing through it. A band rather than one shortest path, which on a grid is
+/// one of many equally short and would draw a line wherever ties happened to break.
+fn traffic(graph: &NavGraph, ends: &[Vec3]) -> Vec<f32> {
+    let count = graph.cells().len();
+    let mut ends: Vec<CellId> = ends.iter().filter_map(|feet| graph.cell_at(*feet)).collect();
+    ends.sort_unstable();
+    ends.dedup();
+    let (out, into) = (links_out(graph), links_into(graph));
+    let from: Vec<Vec<f32>> = ends.iter().map(|end| travel(&out, *end)).collect();
+    let to: Vec<Vec<f32>> = ends.iter().map(|end| travel(&into, *end)).collect();
+    let mut on = vec![0u32; count];
+    let mut routes = 0u32;
+    for (a, from) in from.iter().enumerate() {
+        for (b, to) in to.iter().enumerate() {
+            let shortest = from[ends[b] as usize];
+            if a == b || !shortest.is_finite() {
+                continue;
+            }
+            routes += 1;
+            for cell in 0..count {
+                if from[cell] + to[cell] <= shortest + ROUTE_SLACK {
+                    on[cell] += 1;
+                }
+            }
+        }
+    }
+    on.into_iter().map(|on| if routes == 0 { 0.0 } else { on as f32 / routes as f32 }).collect()
 }
 
 #[cfg(test)]
@@ -444,7 +562,7 @@ mod tests {
         let faces = world.rebuild_volumes(volumes);
         let rules = MovementRules::default();
         let mut graph = nav::graph(&world, &faces, triggers, &rules, &[]);
-        let fields = bake(&world, &graph, triggers, &rules, pickups);
+        let fields = bake(&world, &graph, triggers, &rules, pickups, Vec::new());
         graph.set_fields(fields);
         graph
     }
@@ -463,7 +581,7 @@ mod tests {
         let sees = |graph: &NavGraph| {
             let lines = &graph.fields().sightlines;
             let viewpoint = |feet| lines.viewpoint_of[graph.cell_at(feet).unwrap() as usize];
-            lines.standing[viewpoint(a) as usize].iter().any(|(seen, _)| *seen == viewpoint(b))
+            lines.standing[viewpoint(a) as usize].iter().any(|seen| seen.viewpoint == viewpoint(b))
         };
         assert!(sees(&baked(&open, &[], Vec::new())), "two cells in an open room cannot see each other");
         assert!(!sees(&baked(&pillar, &[], Vec::new())), "two cells see each other through a pillar");
@@ -479,7 +597,7 @@ mod tests {
         let (high_feet, low_feet) = (Vec3::new(27.25, 3.0, 2.25), Vec3::new(7.25, 0.0, 2.25));
         let viewpoint = |feet| lines.viewpoint_of[graph.cell_at(feet).unwrap() as usize] as usize;
         let (high, low) = (viewpoint(high_feet), viewpoint(low_feet));
-        let samples = |eye: usize, body: usize| lines.standing[eye].iter().find(|(seen, _)| *seen as usize == body).map_or(0, |(_, n)| *n);
+        let samples = |eye: usize, body: usize| lines.standing[eye].iter().find(|seen| seen.viewpoint as usize == body).map_or(0, |seen| seen.samples);
         assert!(samples(high, low) > samples(low, high), "the ledge sees {} of the low body, and is seen {}", samples(high, low), samples(low, high));
         assert!(at(&graph, high_feet, Field::Height) > 2.0);
     }
@@ -504,6 +622,65 @@ mod tests {
         let far = at(&graph, Vec3::new(10.75, 0.0, 1.25), Field::Distance(0));
         assert_eq!(near, 0.0);
         assert!(far > 1.0 && far < 3.0, "9.5 m at running speed took {far} s");
+    }
+
+    /// Breaks if a viewpoint stands on whichever cell of its square came first: the same map turned
+    /// a quarter is then sampled from other corners, and agrees with itself only roughly.
+    #[test]
+    fn a_map_turned_a_quarter_bakes_the_same_turned() {
+        let boxes = [(Vec3::new(-8.0, 0.0, -3.0), Vec3::new(8.0, 4.0, 3.0)), (Vec3::new(3.0, 0.0, 3.0), Vec3::new(7.0, 4.0, 9.0))];
+        let pillar = (Vec3::new(-2.0, 0.0, -1.0), Vec3::new(-1.0, 4.0, 1.0));
+        let turn = |(min, max): (Vec3, Vec3)| {
+            let (a, b) = (Vec3::new(min.z, min.y, -min.x), Vec3::new(max.z, max.y, -max.x));
+            (a.min(b), a.max(b))
+        };
+        let volumes = |turned: bool| {
+            let place = |corners| if turned { turn(corners) } else { corners };
+            let mut volumes: Vec<Volume> = boxes.iter().map(|corners| { let (min, max) = place(*corners); room(min, max) }).collect();
+            let (min, max) = place(pillar);
+            volumes.push(Volume::solid(Room::new(min, max)));
+            volumes
+        };
+        let (plain, turned) = (baked(&volumes(false), &[], Vec::new()), baked(&volumes(true), &[], Vec::new()));
+        // A sightline grazing a corner exactly can fall either way in floating point: one sample
+        // of one square.
+        let one_sample = (SIGHT_STRIDE as f32 * SPACING).powi(2) / STANDING_BODY.len() as f32 + 1e-3;
+        for (id, cell) in plain.cells().iter().enumerate() {
+            let feet = cell.feet;
+            let other = turned.cell_at(Vec3::new(feet.z, feet.y, -feet.x)).expect("the turned map has no cell there");
+            for field in [Field::Exposure, Field::Sight, Field::FeetSight, Field::Knockback] {
+                let (a, b) = (plain.field(id as CellId, field).unwrap(), turned.field(other, field).unwrap());
+                assert!((a - b).abs() <= one_sample, "{field:?} at {feet}: {a} turned is {b}");
+            }
+        }
+    }
+
+    /// Breaks if feet are sampled as part of the body: a waist-high wall hides the floor at the
+    /// feet behind it and not the head.
+    #[test]
+    fn a_waist_high_wall_hides_the_feet_and_not_the_head() {
+        let volumes = [room(Vec3::ZERO, Vec3::new(12.0, 4.0, 4.0)), Volume::solid(Room::new(Vec3::new(8.0, 0.0, 0.0), Vec3::new(8.5, 1.0, 4.0)))];
+        let graph = baked(&volumes, &[], Vec::new());
+        let lines = &graph.fields().sightlines;
+        let viewpoint = |feet| lines.viewpoint_of[graph.cell_at(feet).unwrap() as usize];
+        let (eye, behind) = (viewpoint(Vec3::new(1.25, 0.0, 2.25)), viewpoint(Vec3::new(9.25, 0.0, 2.25)));
+        let seen = lines.standing[eye as usize].iter().find(|seen| seen.viewpoint == behind).expect("the head behind the wall is not seen");
+        assert!(!seen.feet, "the feet behind a 1 m wall are seen");
+        assert!(at(&graph, Vec3::new(1.25, 0.0, 2.25), Field::FeetSight) < at(&graph, Vec3::new(1.25, 0.0, 2.25), Field::Sight));
+    }
+
+    /// Breaks if traffic is not the routes between ends: a corridor between two pickups carries all
+    /// of it and a room off to the side none.
+    #[test]
+    fn a_corridor_between_pickups_is_busy_and_a_side_room_is_not() {
+        let volumes = [room(Vec3::ZERO, Vec3::new(20.0, 3.0, 2.0)), room(Vec3::new(8.0, 0.0, 2.0), Vec3::new(12.0, 3.0, 8.0))];
+        let pickups = vec![
+            Pickup { label: "west".into(), feet: Vec3::new(0.75, 0.0, 0.75) },
+            Pickup { label: "east".into(), feet: Vec3::new(19.25, 0.0, 0.75) },
+        ];
+        let graph = baked(&volumes, &[], pickups);
+        assert!(at(&graph, Vec3::new(5.25, 0.0, 0.75), Field::Traffic) > 0.99);
+        assert_eq!(at(&graph, Vec3::new(10.25, 0.0, 7.25), Field::Traffic), 0.0);
     }
 
     /// Breaks if cover is not the lowest exposure nearby: behind a pillar is cover for the cells
