@@ -412,8 +412,12 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
 - [x] Slots and "fill empty slots with bots" in a Round tab, kept true
       through a round as people come and go
 - [ ] A bot count per team
-- [ ] Planning with a cost from the fields (exposure, danger) rather than
-      time alone
+- [x] Planning with a cost from the fields: `RouteCosts` weighs exposure,
+      knockback danger and Hurt by the time spent in them, and each seat
+      rolls its own temperament so bots are neither alike nor risk-averse
+- [x] Misjudgment: each bot is wrong by its own amount about whole 4 m
+      stretches of floor, safer or riskier than baked, differently each life
+- [x] `F8` draws each bot's route in its color
 
 ### Later
 - [ ] Rocket-jump links

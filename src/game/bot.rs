@@ -16,7 +16,11 @@ use crate::common::round_settings::RoundSettings;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::Connected;
 use crate::common::weapon::WeaponId;
+use crate::common::player_color::PlayerColor;
+use crate::common::swatch::Swatch;
+use crate::common::team::Team;
 use crate::game::nav::{CellId, Link, LinkKind, NavGraph};
+use crate::game::nav_field::Field;
 use crate::game::player::{step_player, Inputs, PhysicsBody, Player, PlayerInput};
 use crate::tool::nav_bake::NavBake;
 
@@ -52,6 +56,79 @@ pub struct BotIntent {
     pub alt_fire: bool,
     pub reload: bool,
     pub select: Option<WeaponId>,
+}
+
+/// How a bot weighs a route beyond the time it takes. Each link costs its seconds, and on top its
+/// seconds again for every weighted unit of how exposed, how dangerous and how hurtful the cell it
+/// enters is: time spent there is what is paid for, so risk is priced rather than forbidden, and a
+/// dangerous way that saves enough time is still taken. Skill and temperament are these weights,
+/// not a different pathfinder. A field not baked yet costs nothing.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct RouteCosts {
+    /// Per 100 m² of exposure: at 1, a cell seen from 100 m² of floor costs its time twice over.
+    pub exposure: f32,
+    /// Per share of knockback headings that throw a body somewhere it dies.
+    pub danger: f32,
+    /// Per 10 damage a second from a Hurt trigger.
+    pub hurt: f32,
+    /// How wrong the bot can be about a stretch of floor, 0 to 1. At 1 a stretch may read as safe
+    /// however dangerous it is, or as twice as risky, and dear even where nothing threatens.
+    pub misjudgment: f32,
+    /// Which stretches it is wrong about, and which way. Rolled again each life.
+    pub beliefs: u64,
+}
+
+impl Default for RouteCosts {
+    fn default() -> Self {
+        RouteCosts { exposure: 0.5, danger: 4.0, hurt: 2.0, misjudgment: 0.0, beliefs: 0 }
+    }
+}
+
+/// The range each weight of a [`RouteCosts::temperament`] is scaled by: some bots barely mind.
+const TEMPERAMENT: std::ops::Range<f32> = 0.1..1.5;
+/// The most misjudgment a temperament rolls.
+const MOST_MISJUDGMENT: f32 = 0.8;
+/// Meters across a stretch of floor misjudged as one, so a mistake covers a corridor or a ledge
+/// rather than averaging away cell by cell along a route.
+const MISJUDGED_STRETCH: f32 = 4.0;
+/// At full misjudgment, how much of a safe stretch's own time it may be thought to cost on top.
+const PHANTOM_RISK: f32 = 1.0;
+
+impl RouteCosts {
+    /// The defaults, each scaled at random within [`TEMPERAMENT`], so bots are not all equally
+    /// careful and none is perfectly so. Rolled once per seat and kept across its lives.
+    pub fn temperament() -> Self {
+        let base = RouteCosts::default();
+        let roll = |weight: f32| weight * rand::random_range(TEMPERAMENT);
+        RouteCosts {
+            exposure: roll(base.exposure),
+            danger: roll(base.danger),
+            hurt: roll(base.hurt),
+            misjudgment: rand::random_range(0.0..MOST_MISJUDGMENT),
+            beliefs: rand::random(),
+        }
+    }
+
+    /// Seconds on top of `link`'s own for entering `cell` by it, as this bot sees it.
+    pub fn extra(&self, graph: &NavGraph, cell: CellId, link: &Link) -> f32 {
+        let field = |field| graph.field(cell, field).unwrap_or(0.0);
+        let hurt = graph.cells()[cell as usize].hurt as f32;
+        let risk = link.seconds * (self.exposure * field(Field::Exposure) / 100.0 + self.danger * field(Field::Knockback) + self.hurt * hurt / 10.0);
+        let wrong = self.misjudgment * self.belief(graph.cells()[cell as usize].feet);
+        (risk * (1.0 + wrong) + link.seconds * PHANTOM_RISK * wrong.max(0.0)).max(0.0)
+    }
+
+    /// How wrong this bot is about the stretch of floor at `feet`, -1 to 1: the same for every cell
+    /// in a [`MISJUDGED_STRETCH`] square at one height.
+    fn belief(&self, feet: Vec3) -> f32 {
+        let stretch = (feet / MISJUDGED_STRETCH).floor().as_ivec3();
+        // SplitMix64 over the beliefs and the stretch, so a mistake is the same every replan.
+        let mut hash = self.beliefs ^ (stretch.x as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (stretch.y as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f) ^ (stretch.z as u64).wrapping_mul(0x1656_67b1_9e37_79f9);
+        hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        hash ^= hash >> 31;
+        (hash >> 11) as f32 / (1u64 << 53) as f32 * 2.0 - 1.0
+    }
 }
 
 /// How a bot is getting to its goal: the route planned and how far along it is. [`steer_bots`]'s
@@ -114,7 +191,7 @@ fn movement_toward(direction: Vec2, yaw: f32) -> Vec2 {
 }
 
 /// Plans `route` to `goal` from `feet` if what it was planned for has changed.
-fn plan(route: &mut BotRoute, graph: &NavGraph, generation: u64, feet: Vec3, goal: Option<Vec3>) {
+fn plan(route: &mut BotRoute, graph: &NavGraph, generation: u64, feet: Vec3, goal: Option<Vec3>, costs: &RouteCosts) {
     let Some(goal) = goal else {
         route.forget();
         return;
@@ -126,7 +203,7 @@ fn plan(route: &mut BotRoute, graph: &NavGraph, generation: u64, feet: Vec3, goa
     route.planned = Some((goal, generation));
     let (Some(from), Some(to)) = (graph.cell_at(feet), graph.cell_at(goal)) else { return };
     route.from = Some(from);
-    route.links = graph.path(from, to, |_, _| 0.0).unwrap_or_default();
+    route.links = graph.path(from, to, |cell, link| costs.extra(graph, cell, link)).unwrap_or_default();
     route.closest = f32::INFINITY;
 }
 
@@ -193,13 +270,13 @@ pub fn heading_for(route: &BotRoute) -> Option<CellId> {
 pub fn steer_bots(
     time: Res<Time>,
     nav: Option<Res<NavBake>>,
-    mut bots: Query<(&PhysicsBody, &Stance, &Player, &BotIntent, &mut BotRoute, &mut Inputs), With<BotOf>>,
+    mut bots: Query<(&PhysicsBody, &Stance, &Player, &BotIntent, Option<&RouteCosts>, &mut BotRoute, &mut Inputs), With<BotOf>>,
 ) {
     let dt = time.delta_secs();
-    for (body, stance, player, intent, mut route, mut inputs) in &mut bots {
+    for (body, stance, player, intent, costs, mut route, mut inputs) in &mut bots {
         let feet = feet_of(body, *stance);
         let walking = nav.as_deref().and_then(|nav| {
-            plan(&mut route, nav.graph(), nav.generation(), feet, intent.goal);
+            plan(&mut route, nav.graph(), nav.generation(), feet, intent.goal, &costs.copied().unwrap_or_default());
             follow(&mut route, nav.graph(), feet, dt)
         });
         let mut input = walking.unwrap_or(PlayerInput { yaw: player.yaw, pitch: player.pitch, ..default() });
@@ -229,6 +306,40 @@ fn retire_bots(mut commands: Commands, bodies: Query<(Entity, &BotOf)>, seats: Q
     for (body, seat) in &bodies {
         if !seats.contains(seat.0) {
             commands.entity(body).despawn();
+        }
+    }
+}
+
+/// Whether each bot's route is drawn over the floor. `F8` toggles it; off by default, a debug view.
+#[derive(Resource, Default, Debug)]
+pub struct ShowBotRoutes(pub bool);
+
+fn toggle_bot_routes(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowBotRoutes>) {
+    if keys.just_pressed(KeyCode::F8) {
+        show.0 = !show.0;
+    }
+}
+
+/// Meters above the floor a route is drawn, so it does not fight the floor for depth.
+const ROUTE_LIFT: f32 = 0.1;
+
+/// From each bot's feet through the cells it has yet to reach, to a ring at its goal, in the
+/// bot's own color. Routes live on the authority, so a client draws none.
+fn draw_bot_routes(
+    show: Res<ShowBotRoutes>,
+    nav: Option<Res<NavBake>>,
+    mut gizmos: Gizmos,
+    bots: Query<(&PhysicsBody, &Stance, &BotRoute, &BotIntent, Option<&Team>, Option<&PlayerColor>), With<BotOf>>,
+) {
+    let (true, Some(nav)) = (show.0, nav) else { return };
+    let cells = nav.graph().cells();
+    for (body, stance, route, intent, team, color) in &bots {
+        let color = Swatch::of_body(team.copied(), color.copied()).base;
+        let lift = Vec3::Y * ROUTE_LIFT;
+        let points = std::iter::once(feet_of(body, *stance)).chain(route.ahead().iter().map(|link| cells[link.to as usize].feet)).map(|feet| feet + lift);
+        gizmos.linestrip(points, color);
+        if let Some(goal) = intent.goal {
+            gizmos.circle(Isometry3d::new(goal + lift, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), ARRIVED, color);
         }
     }
 }
@@ -304,6 +415,8 @@ pub struct BotPlugin;
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RoundSettings>()
+            .init_resource::<ShowBotRoutes>()
+            .add_systems(Update, (toggle_bot_routes, draw_bot_routes).chain().run_if(in_state(AppMode::Play)))
             .add_systems(FixedPreUpdate, steer_bots.run_if(has_authority).run_if(in_state(AppMode::Play)))
             .add_systems(FixedUpdate, retire_bots.before(step_player).run_if(has_authority))
             .add_systems(Update, (seat_bots_from_the_keyboard, fill_empty_slots, roam).chain().run_if(has_authority).run_if(in_state(AppMode::Play)));
@@ -400,6 +513,62 @@ mod tests {
         assert_eq!(count(&mut world), (0, 1), "the fillers stayed with filling off, or the hand-seated bot went");
     }
 
+    /// Breaks if a route ignores what its cells are like. Along a 40 m lip over a kill floor, plain
+    /// time keeps to the lip; weighing danger walks in past the push's reach, about 7 m, and back.
+    #[test]
+    fn weighing_danger_keeps_a_route_off_the_lip_of_a_pit() {
+        use crate::common::trigger::{TriggerEffect, TriggerVolume};
+        use crate::game::nav_field;
+        let volumes = [
+            Volume::air(Room::new(Vec3::new(0.0, 0.0, -4.0), Vec3::new(40.0, 4.0, 8.0))),
+            Volume::air(Room::new(Vec3::new(0.0, -6.0, 8.0), Vec3::new(40.0, 4.0, 12.0))),
+        ];
+        let kill = TriggerVolume { min: Vec3::new(0.0, -6.0, 8.0), max: Vec3::new(40.0, -5.0, 12.0), effect: TriggerEffect::Kill };
+        let mut world = CollisionWorld::default();
+        let faces = world.rebuild_volumes(&volumes);
+        let rules = MovementRules::default();
+        let mut graph = nav::graph(&world, &faces, &[kill], &rules, &[]);
+        graph.set_fields(nav_field::bake(&world, &graph, &[kill], &rules, Vec::new(), Vec::new()));
+
+        let (from, to) = (graph.cell_at(Vec3::new(0.75, 0.0, 7.25)).unwrap(), graph.cell_at(Vec3::new(39.25, 0.0, 7.25)).unwrap());
+        let inmost = |costs: RouteCosts| {
+            let path = graph.path(from, to, |cell, link| costs.extra(&graph, cell, link)).unwrap();
+            path.iter().map(|link| graph.cells()[link.to as usize].feet.z).fold(f32::INFINITY, f32::min)
+        };
+        let careless = RouteCosts { exposure: 0.0, danger: 0.0, hurt: 0.0, ..default() };
+        assert!(inmost(careless) > 6.5, "with no weights the route still left the lip, to {}", inmost(careless));
+        assert!(inmost(RouteCosts::default()) < 1.0, "weighing danger, the route came no further in than {}", inmost(RouteCosts::default()));
+
+        // Misjudging, some bots take the lip for safe and some take the safe ground for dangerous.
+        let routes: Vec<f32> = (0..24).map(|beliefs| inmost(RouteCosts { misjudgment: 1.0, beliefs, ..default() })).collect();
+        assert!(routes.iter().any(|z| *z > 3.0), "no misjudging bot kept near the lip: {routes:?}");
+        assert!(routes.iter().any(|z| *z < 1.0), "every misjudging bot kept near the lip: {routes:?}");
+    }
+
+    /// Breaks if a mistake is not the same across a stretch and between plans, or a bot that
+    /// misjudges nothing is wrong anyway.
+    #[test]
+    fn a_misjudgment_holds_across_a_stretch_and_only_with_misjudgment() {
+        let wrong = RouteCosts { misjudgment: 1.0, beliefs: 7, ..default() };
+        let at = Vec3::new(1.0, 0.0, 1.0);
+        assert_eq!(wrong.belief(at), wrong.belief(at + Vec3::new(2.5, 0.0, 2.5)), "one stretch, two beliefs");
+        let beliefs: Vec<f32> = (0..64).map(|x| wrong.belief(Vec3::new(x as f32 * MISJUDGED_STRETCH, 0.0, 0.0))).collect();
+        assert!(beliefs.iter().all(|belief| (-1.0..=1.0).contains(belief)));
+        assert!(beliefs.iter().any(|belief| *belief > 0.5) && beliefs.iter().any(|belief| *belief < -0.5), "beliefs do not spread both ways: {beliefs:?}");
+
+        let volumes = [Volume::air(Room::new(Vec3::ZERO, Vec3::new(8.0, 3.0, 8.0)))];
+        let mut world = CollisionWorld::default();
+        let faces = world.rebuild_volumes(&volumes);
+        let graph = nav::graph(&world, &faces, &[], &MovementRules::default(), &[]);
+        let sound = RouteCosts { beliefs: 7, ..default() };
+        for cell in 0..graph.cells().len() as CellId {
+            for link in graph.links(cell) {
+                assert_eq!(sound.extra(&graph, link.to, link), RouteCosts::default().extra(&graph, link.to, link), "a bot with no misjudgment was wrong");
+                assert!(wrong.extra(&graph, link.to, link) >= 0.0);
+            }
+        }
+    }
+
     /// Breaks if a bot cannot follow a route the graph gives it: across a room, up a ledge by its
     /// jump, it must arrive by driving `step` with nothing but what [`follow`] says.
     #[test]
@@ -424,7 +593,7 @@ mod tests {
             if reached(feet, graph.cells()[graph.cell_at(goal).unwrap() as usize].feet) {
                 return;
             }
-            plan(&mut route, &graph, 0, feet, Some(goal));
+            plan(&mut route, &graph, 0, feet, Some(goal), &RouteCosts::default());
             let input = follow(&mut route, &graph, feet, dt).unwrap_or_default();
             step(&mut mover, Vec3::ZERO, &input, &Condition::default(), None, &world, &rules, dt);
         }

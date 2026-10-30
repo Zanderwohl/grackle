@@ -20,7 +20,7 @@ use crate::common::weapon::WeaponCatalog;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{spawn_player, LocalPlayer, Player, Simulated, Spawn};
-use crate::game::bot::{BotIntent, BotOf, BotRoute, BotSeat, Roam};
+use crate::game::bot::{BotIntent, BotOf, BotRoute, BotSeat, Roam, RouteCosts};
 use crate::game::weapon::AutoReload;
 use crate::game::respawn::{choose_spawn, next_team, placed_spawns, team_name, HueStart, Identity, OurIdentity};
 
@@ -141,7 +141,7 @@ fn give_bodies_to_whoever_needs_one(
     rules: Res<GameRules>,
     catalog: Res<WeaponCatalog>,
     timers: Option<Res<RespawnTimers>>,
-    (seats, driven): (Query<Entity, With<BotSeat>>, Query<&BotOf, With<Player>>),
+    (seats, driven): (Query<(Entity, Option<&RouteCosts>), With<BotSeat>>, Query<&BotOf, With<Player>>),
 ) {
     let waiting = |who: Identity| timers.as_deref().is_some_and(|timers| timers.waiting(who.id));
     if !role.as_deref().is_none_or(NetRole::is_authority) {
@@ -218,10 +218,18 @@ fn give_bodies_to_whoever_needs_one(
         spawn_body_for(&mut commands, spawn, (who, start), (link, peer.0), &rules, &catalog);
     }
 
-    for seat in &seats {
+    for (seat, temperament) in &seats {
         if driven.iter().any(|of| of.0 == seat) {
             continue;
         }
+        // On the seat, like the identity, so a bot keeps its temperament across lives.
+        let costs = temperament.copied().unwrap_or_else(|| {
+            let rolled = RouteCosts::temperament();
+            commands.entity(seat).insert(rolled);
+            rolled
+        });
+        // Wrong about different places each life.
+        let costs = RouteCosts { beliefs: rand::random(), ..costs };
         // On the seat, as a client's is on its link.
         let who = match identities.get(seat) {
             Ok(who) => *who,
@@ -237,7 +245,7 @@ fn give_bodies_to_whoever_needs_one(
         let spawn = choose_spawn(&placed, who.team, &collision);
         info!("Standing a bot's body up as {} on {}", who.id, team_name(who.team));
         let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
-        commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), Roam, Name::new("Bot")));
+        commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), costs, Roam, Name::new("Bot")));
         if hosting {
             commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
         }
@@ -369,6 +377,10 @@ mod tests {
         let second = bots(&mut world);
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].2, who.id, "a bot came back as somebody else");
+        let temperament = world.get::<crate::game::bot::RouteCosts>(seat).copied();
+        assert!(temperament.is_some(), "the seat holds no temperament");
+        let reborn = world.get::<crate::game::bot::RouteCosts>(second[0].0).copied().unwrap();
+        assert_eq!(crate::game::bot::RouteCosts { beliefs: 0, ..reborn }, crate::game::bot::RouteCosts { beliefs: 0, ..temperament.unwrap() }, "a bot came back with a different temperament");
     }
 
     /// Dead, nobody is owed a body until the timer runs out.

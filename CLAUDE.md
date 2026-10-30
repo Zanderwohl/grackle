@@ -71,7 +71,15 @@ anybody out**: the cap counts people only, so a slot a bot fills is open, and
 somebody joining takes a filler's seat and body in the same frame, before
 `give_bodies_to_whoever_needs_one` stands theirs up. `B` seats a bot by hand
 (counted against the slots) and `Shift+B` retires the newest; until there is a
-brain they `Roam` between random cells. The nav graph they walk — walks, steps, drops and jumps, the last two found by running the movement step — is baked (`src/game/nav.rs`,
+brain they `Roam` between random cells. A route is weighed by `RouteCosts` —
+seconds of travel, plus that time again per weighted unit of exposure,
+knockback danger and Hurt in the cells entered — so risk is priced, not
+forbidden. Each seat rolls its own temperament (every weight scaled by 0.1 to
+1.5) and keeps it across lives, so bots are neither alike nor perfect. A
+temperament also has a **misjudgment**, 0 to 0.8: each 4 m stretch of floor
+reads to the bot as safer or riskier than the bake says, even dear where
+nothing threatens, by a hash of the stretch and the bot's `beliefs`, which are
+rolled again each life. `F8` draws each bot's route in its color. The nav graph they walk — walks, steps, drops and jumps, the last two found by running the movement step — is baked (`src/game/nav.rs`,
 the third bake), with knockback, pickup distance, traffic and, as a fourth bake,
 sightlines on it (`src/game/nav_field.rs`), rated into kinds of place — cramped,
 precarious, an ambush — for the map's statistics (`src/game/nav_rating.rs`); all
@@ -376,8 +384,9 @@ between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body
 its hitboxes are hidden from inside your own head, nobody else's are),
 **`F4`** toggles the hitbox gizmos and the debug laser aimed at them, and
 **`F6`** toggles the bone gizmos and the pickups' trigger volumes
-(green, dim while one restocks), and **`F7`** shows the nav overlay picked in
-the Bakes panel. All three are off by default: they are debug
+(green, dim while one restocks), **`F7`** shows the nav overlay picked in
+the Bakes panel, and **`F8`** draws each bot's route over the floor in its
+color. All four are off by default: they are debug
 views, and now that bodies have geometry none is what a player sees. `F3`
 is the perf overlay in both modes.
 
