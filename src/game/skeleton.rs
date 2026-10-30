@@ -21,7 +21,7 @@ use crate::common::app_mode::{showing_the_world, AppMode};
 use crate::common::class::Stance;
 use crate::common::damage::PlayerId;
 use crate::common::class::{Class, ClassBuilds};
-use crate::common::skeleton::ik::finish_pose;
+use crate::common::skeleton::ik::ducked_pose;
 use crate::common::skeleton::play::{ClipStack, Layer, Regions};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary};
 use crate::common::skeleton::rig::bone;
@@ -183,10 +183,22 @@ fn equip_new_bodies(
 /// Keep the rig's feet on the bottom of the hull as the hull changes height.
 ///
 /// The offset changes with stance because ducking halves the box. On the tick
-/// beside the step, so the crouch and its drawing land together.
-pub fn follow_stance(mut bodies: Query<(&Stance, &mut SkeletonRoot), Changed<Stance>>) {
+/// beside the step, so the crouch and its drawing land together. A player's is
+/// [`follow_ducks`].
+pub fn follow_stance(mut bodies: Query<(&Stance, &mut SkeletonRoot), (Changed<Stance>, Without<Player>)>) {
     for (stance, mut root) in &mut bodies {
         root.0 = Vec3::NEG_Y * stance.half_extents().y;
+    }
+}
+
+/// A player's rig stands where its duck draws the feet, between the last two steps.
+pub fn follow_ducks(fixed: Res<Time<Fixed>>, mut bodies: Query<(&Stance, &Player, &mut SkeletonRoot)>) {
+    let overstep = fixed.overstep_fraction();
+    for (stance, player, mut root) in &mut bodies {
+        let offset = Vec3::Y * player.drawn_duck(overstep).feet_from_center(*stance);
+        if root.0 != offset {
+            root.0 = offset;
+        }
     }
 }
 
@@ -430,6 +442,7 @@ fn phase_bodies_by_id(
 /// after this and edits the pose it left.
 fn advance_animators(
     time: Res<Time>,
+    fixed: Res<Time<Fixed>>,
     clock: Res<AnimationClock>,
     // Absent: every state is a Rust function.
     library: Option<Res<ClipLibrary>>,
@@ -444,13 +457,15 @@ fn advance_animators(
         Option<&AnimationPhase>,
         Option<&Gait>,
         Option<&ClipStack>,
+        Option<&Player>,
     )>,
 ) {
     let dt = time.delta_secs();
     let clips = library.as_deref();
-    for (skeleton, mut animator, mut pose, global, offset, requests, forced, phase, gait, stack) in
+    for (skeleton, mut animator, mut pose, global, offset, requests, forced, phase, gait, stack, player) in
         &mut bodies
     {
+        let crouch = player.map(|player| player.drawn_duck(fixed.overstep_fraction()).amount);
         match forced {
             // Being shown rather than driven: requests, if any, are ignored.
             Some(ForcedAnimation(state)) => animator.force(*state, dt),
@@ -469,7 +484,7 @@ fn advance_animators(
             travel: gait.travel(),
         };
         let root = skeleton_root(global, offset);
-        *pose = animator_pose(skeleton, &animator, &inputs, &root, clips);
+        *pose = animator_pose(skeleton, &animator, &inputs, &root, clips, crouch);
 
         if let Some(stack) = stack {
             let still = AnimationState::from_requests(&BodyRequests {
@@ -478,7 +493,7 @@ fn advance_animators(
                 ..default()
             });
             stand_where_claimed(skeleton, &mut pose, stack, || {
-                finish_pose(skeleton, still, &inputs, &root, clips)
+                ducked_pose(skeleton, still, &inputs, &root, clips, crouch)
             });
         }
     }

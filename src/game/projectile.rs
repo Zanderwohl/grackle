@@ -200,7 +200,7 @@ pub fn fire_projectiles(
         let Ok((body, player, stance, id)) = shooters.get(shot.shooter) else { continue };
 
         let direction = crate::game::hitscan::aim(player);
-        let muzzle = crate::game::hitscan::eye(body.current, *stance) + *direction * MUZZLE_OFFSET;
+        let muzzle = crate::game::hitscan::eye(body.current, *stance, player.duck) + *direction * MUZZLE_OFFSET;
         launch(&mut commands, spec, muzzle, direction, id.copied(), Some(shot.shooter));
     }
 }

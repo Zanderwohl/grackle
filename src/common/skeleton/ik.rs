@@ -15,7 +15,7 @@ use crate::common::skeleton::gait::FootOffset;
 use crate::common::skeleton::interpolation::Interpolation;
 use crate::common::skeleton::rig::{bone, Pose, Skeleton};
 use crate::common::skeleton::clip::{Clip, StateAnimation};
-use crate::common::skeleton::play::{apply, Frames};
+use crate::common::skeleton::play::{apply, Frames, Regions};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary, PoseInputs, SkeletonAnimator};
 
 /// How far from straight and from folded a limb is kept, since both leave the
@@ -266,21 +266,66 @@ pub fn duck_under(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, ceilin
 }
 
 /// The pose during a state transition. Blends the finished poses, since a
-/// crouch is only a crouch after `duck_under`.
+/// crouch is only a crouch after `duck_under`. `crouch` is as [`ducked_pose`].
 pub fn animator_pose(
     skeleton: &Skeleton,
     animator: &SkeletonAnimator,
     inputs: &PoseInputs,
     root: &Transform,
     clips: Option<&ClipLibrary>,
+    crouch: Option<f32>,
 ) -> Pose {
-    let arriving = finish_pose(skeleton, animator.state(), inputs, root, clips);
+    let arriving = ducked_pose(skeleton, animator.state(), inputs, root, clips, crouch);
     if animator.blend() >= 1.0 || animator.previous() == animator.state() {
         return arriving;
     }
 
-    let leaving = finish_pose(skeleton, animator.previous(), inputs, root, clips);
+    let leaving = ducked_pose(skeleton, animator.previous(), inputs, root, clips, crouch);
     Pose::lerp(&leaving, &arriving, Interpolation::SmoothStep.ease(animator.blend()))
+}
+
+/// `state` done `crouch` of the way from standing to crouched, 0 to 1. `None` takes the state as
+/// it is, for a body with no duck of its own, whose state alone says whether it is crouched.
+pub fn ducked_pose(
+    skeleton: &Skeleton,
+    state: AnimationState,
+    inputs: &PoseInputs,
+    root: &Transform,
+    clips: Option<&ClipLibrary>,
+    crouch: Option<f32>,
+) -> Pose {
+    let finish = |state| finish_pose(skeleton, state, inputs, root, clips);
+    let crouch = match crouch {
+        None => return finish(state),
+        Some(crouch) if crouch <= 0.0 => return finish(state.upright()),
+        Some(crouch) if crouch >= 1.0 => return finish(state.ducked()),
+        Some(crouch) => crouch,
+    };
+    let (upright, ducked) = (state.upright(), state.ducked());
+    let (standing, crouched) = (finish(upright), finish(ducked));
+    let mut pose = Pose::lerp(&standing, &crouched, crouch);
+    // A squat, then a hunch: the hips go down with the duck and the body above them leans in
+    // late, so the head drops rather than swinging forward on its way down.
+    let lean = crouch * crouch;
+    for name in skeleton.bones().iter().map(|bone| bone.name) {
+        if !matches!(Regions::of_bone(name), Regions::LEGS | Regions::NONE) {
+            pose.set(name, standing.joint(name).slerp(crouched.joint(name), lean));
+        }
+    }
+    // Blended knees do not follow blended hips down, and the feet sink through the floor.
+    if upright.plants_feet() && ducked.plants_feet() {
+        let feet = |state: AnimationState| state.foot_offsets(inputs);
+        let offsets = std::array::from_fn(|side| {
+            let (from, to) = (feet(upright)[side], feet(ducked)[side]);
+            FootOffset {
+                ahead: from.ahead.lerp(to.ahead, crouch),
+                across: from.across.lerp(to.across, crouch),
+                lift: from.lift.lerp(to.lift, crouch),
+            }
+        });
+        plant_feet(skeleton, &mut pose, root, offsets);
+    }
+    pose
 }
 
 /// A state's pose plus its corrections. Shared by drawing and hitboxes, which
@@ -391,6 +436,30 @@ fn aim(along: Vec3, hinge: Vec3) -> Quat {
 mod tests {
     use super::*;
     use crate::common::skeleton::rig::{humanoid, Proportions};
+
+    /// Breaks if a duck blends knees without replanting them, so the feet sink through the floor
+    /// halfway down, or the body leans in as early as the hips drop and the head swings forward.
+    #[test]
+    fn a_duck_squats_with_the_feet_on_the_floor_and_hunches_late() {
+        use super::super::rig::bone;
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let root = Transform::IDENTITY;
+        let inputs = PoseInputs::default();
+        let at = |crouch: f32, name: &str| {
+            let pose = ducked_pose(&skeleton, AnimationState::Idle, &inputs, &root, None, Some(crouch));
+            skeleton.posed_bones(&pose, &root)[skeleton.index_of(name).unwrap()]
+        };
+        let ankle = at(0.0, bone::FOOT_L).head.y;
+        for step in 1..10 {
+            let crouch = step as f32 / 10.0;
+            let sunk = ankle - at(crouch, bone::FOOT_L).head.y;
+            assert!(sunk.abs() < 0.01, "{crouch} of the way down the ankle is {sunk} m off the floor");
+        }
+        let (head, halfway, down) = (at(0.0, bone::HEAD).tail, at(0.5, bone::HEAD).tail, at(1.0, bone::HEAD).tail);
+        let forward = |head: Vec3| -head.z;
+        assert!(forward(halfway) < forward(down) * 0.35, "halfway down the head is {} of the way forward", forward(halfway) / forward(down));
+        assert!(halfway.y < head.y - (head.y - down.y) * 0.35, "halfway down the head has hardly dropped");
+    }
 
     fn tip_of(skeleton: &Skeleton, pose: &Pose, root: &Transform, name: &str) -> Vec3 {
         skeleton

@@ -19,9 +19,9 @@ bone = "chest"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    1.0141699,
-    -0.13711984,
-    -0.16111068,
+    0.34868702,
+    -0.030926676,
+    -0.09030041,
 ]
 ease = "linear"
 
@@ -38,7 +38,7 @@ bone = "neck"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.714,
+    -0.245,
     0.0,
     0.0,
 ]
@@ -281,61 +281,61 @@ channel = "root"
 at = 0.0
 to = [
     0.0,
-    -0.7,
+    -0.45,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.03125
+at = 0.027083334
 to = [
     0.0,
-    -0.7011418,
+    -0.45086035,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.06458333
+at = 0.055208333
 to = [
     0.0,
-    -0.70467466,
+    -0.45346737,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.094791666
+at = 0.0875
 to = [
     0.0,
-    -0.7094416,
+    -0.45819014,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.1625
+at = 0.15520833
 to = [
     0.0,
-    -0.72180986,
+    -0.47055835,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.19479166
+at = 0.18541667
 to = [
     0.0,
-    -0.72653264,
+    -0.47532532,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.22291666
+at = 0.21875
 to = [
     0.0,
-    -0.7291396,
+    -0.47885817,
     0.0,
 ]
 ease = "linear"
@@ -344,7 +344,7 @@ ease = "linear"
 at = 0.25
 to = [
     0.0,
-    -0.72999996,
+    -0.48,
     0.0,
 ]
 ease = "linear"
@@ -353,7 +353,7 @@ ease = "linear"
 at = 0.28125
 to = [
     0.0,
-    -0.7288582,
+    -0.47885817,
     0.0,
 ]
 ease = "linear"
@@ -362,7 +362,7 @@ ease = "linear"
 at = 0.31354168
 to = [
     0.0,
-    -0.72546685,
+    -0.47546685,
     0.0,
 ]
 ease = "linear"
@@ -371,7 +371,7 @@ ease = "linear"
 at = 0.34375
 to = [
     0.0,
-    -0.72074026,
+    -0.47074023,
     0.0,
 ]
 ease = "linear"
@@ -380,7 +380,7 @@ ease = "linear"
 at = 0.41458333
 to = [
     0.0,
-    -0.7078426,
+    -0.45784262,
     0.0,
 ]
 ease = "linear"
@@ -389,7 +389,7 @@ ease = "linear"
 at = 0.45
 to = [
     0.0,
-    -0.7028647,
+    -0.45286474,
     0.0,
 ]
 ease = "linear"
@@ -398,7 +398,7 @@ ease = "linear"
 at = 0.48333332
 to = [
     0.0,
-    -0.70032775,
+    -0.45032778,
     0.0,
 ]
 ease = "linear"
@@ -407,7 +407,7 @@ ease = "linear"
 at = 0.51666665
 to = [
     0.0,
-    -0.70032775,
+    -0.45032778,
     0.0,
 ]
 ease = "linear"
@@ -416,7 +416,7 @@ ease = "linear"
 at = 0.54375
 to = [
     0.0,
-    -0.70221037,
+    -0.4522104,
     0.0,
 ]
 ease = "linear"
@@ -425,7 +425,7 @@ ease = "linear"
 at = 0.571875
 to = [
     0.0,
-    -0.70571357,
+    -0.45571357,
     0.0,
 ]
 ease = "linear"
@@ -434,7 +434,7 @@ ease = "linear"
 at = 0.659375
 to = [
     0.0,
-    -0.72127986,
+    -0.4712799,
     0.0,
 ]
 ease = "linear"
@@ -443,7 +443,7 @@ ease = "linear"
 at = 0.690625
 to = [
     0.0,
-    -0.72601485,
+    -0.47601482,
     0.0,
 ]
 ease = "linear"
@@ -452,7 +452,7 @@ ease = "linear"
 at = 0.72083336
 to = [
     0.0,
-    -0.72900367,
+    -0.4790037,
     0.0,
 ]
 ease = "linear"
@@ -461,61 +461,61 @@ ease = "linear"
 at = 0.75
 to = [
     0.0,
-    -0.72999996,
+    -0.48,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.77708334
+at = 0.78125
 to = [
     0.0,
-    -0.7291396,
+    -0.47885817,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.8052083
+at = 0.81458336
 to = [
     0.0,
-    -0.72653264,
+    -0.4753253,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.8375
+at = 0.84479165
 to = [
     0.0,
-    -0.72180986,
+    -0.47055835,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.90520835
+at = 0.9125
 to = [
     0.0,
-    -0.7094416,
+    -0.4581901,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.93541664
+at = 0.9447917
 to = [
     0.0,
-    -0.70467466,
+    -0.45346737,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.96875
+at = 0.97291666
 to = [
     0.0,
-    -0.7011418,
+    -0.45086038,
     0.0,
 ]
 ease = "linear"
@@ -541,7 +541,7 @@ bone = "chest"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    1.02,
+    0.35,
     0.0,
     0.0,
 ]
@@ -560,7 +560,7 @@ bone = "neck"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.714,
+    -0.245,
     0.0,
     0.0,
 ]
@@ -785,61 +785,61 @@ channel = "root"
 at = 0.0
 to = [
     0.0,
-    -0.7,
+    -0.45,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.03125
+at = 0.027083334
 to = [
     0.0,
-    -0.7011418,
+    -0.45086035,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.06458333
+at = 0.055208333
 to = [
     0.0,
-    -0.70467466,
+    -0.45346737,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.094791666
+at = 0.0875
 to = [
     0.0,
-    -0.7094416,
+    -0.45819014,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.1625
+at = 0.15520833
 to = [
     0.0,
-    -0.72180986,
+    -0.47055835,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.19479166
+at = 0.18541667
 to = [
     0.0,
-    -0.72653264,
+    -0.47532532,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.22291666
+at = 0.21875
 to = [
     0.0,
-    -0.7291396,
+    -0.47885817,
     0.0,
 ]
 ease = "linear"
@@ -848,7 +848,7 @@ ease = "linear"
 at = 0.25
 to = [
     0.0,
-    -0.72999996,
+    -0.48,
     0.0,
 ]
 ease = "linear"
@@ -857,7 +857,7 @@ ease = "linear"
 at = 0.28125
 to = [
     0.0,
-    -0.7288582,
+    -0.47885817,
     0.0,
 ]
 ease = "linear"
@@ -866,7 +866,7 @@ ease = "linear"
 at = 0.31354168
 to = [
     0.0,
-    -0.72546685,
+    -0.47546685,
     0.0,
 ]
 ease = "linear"
@@ -875,7 +875,7 @@ ease = "linear"
 at = 0.34375
 to = [
     0.0,
-    -0.72074026,
+    -0.47074023,
     0.0,
 ]
 ease = "linear"
@@ -884,7 +884,7 @@ ease = "linear"
 at = 0.41458333
 to = [
     0.0,
-    -0.7078426,
+    -0.45784262,
     0.0,
 ]
 ease = "linear"
@@ -893,7 +893,7 @@ ease = "linear"
 at = 0.45
 to = [
     0.0,
-    -0.7028647,
+    -0.45286474,
     0.0,
 ]
 ease = "linear"
@@ -902,7 +902,7 @@ ease = "linear"
 at = 0.48333332
 to = [
     0.0,
-    -0.70032775,
+    -0.45032778,
     0.0,
 ]
 ease = "linear"
@@ -911,7 +911,7 @@ ease = "linear"
 at = 0.51666665
 to = [
     0.0,
-    -0.70032775,
+    -0.45032778,
     0.0,
 ]
 ease = "linear"
@@ -920,7 +920,7 @@ ease = "linear"
 at = 0.54375
 to = [
     0.0,
-    -0.70221037,
+    -0.4522104,
     0.0,
 ]
 ease = "linear"
@@ -929,7 +929,7 @@ ease = "linear"
 at = 0.571875
 to = [
     0.0,
-    -0.70571357,
+    -0.45571357,
     0.0,
 ]
 ease = "linear"
@@ -938,7 +938,7 @@ ease = "linear"
 at = 0.659375
 to = [
     0.0,
-    -0.72127986,
+    -0.4712799,
     0.0,
 ]
 ease = "linear"
@@ -947,7 +947,7 @@ ease = "linear"
 at = 0.690625
 to = [
     0.0,
-    -0.72601485,
+    -0.47601482,
     0.0,
 ]
 ease = "linear"
@@ -956,7 +956,7 @@ ease = "linear"
 at = 0.72083336
 to = [
     0.0,
-    -0.72900367,
+    -0.4790037,
     0.0,
 ]
 ease = "linear"
@@ -965,61 +965,61 @@ ease = "linear"
 at = 0.75
 to = [
     0.0,
-    -0.72999996,
+    -0.48,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.77708334
+at = 0.78125
 to = [
     0.0,
-    -0.7291396,
+    -0.47885817,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.8052083
+at = 0.81458336
 to = [
     0.0,
-    -0.72653264,
+    -0.4753253,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.8375
+at = 0.84479165
 to = [
     0.0,
-    -0.72180986,
+    -0.47055835,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.90520835
+at = 0.9125
 to = [
     0.0,
-    -0.7094416,
+    -0.4581901,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.93541664
+at = 0.9447917
 to = [
     0.0,
-    -0.70467466,
+    -0.45346737,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.96875
+at = 0.97291666
 to = [
     0.0,
-    -0.7011418,
+    -0.45086038,
     0.0,
 ]
 ease = "linear"
@@ -1045,9 +1045,9 @@ bone = "chest"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    1.0141699,
-    0.13711984,
-    0.16111068,
+    0.34868702,
+    0.030926676,
+    0.09030041,
 ]
 ease = "linear"
 
@@ -1064,7 +1064,7 @@ bone = "neck"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.714,
+    -0.245,
     0.0,
     0.0,
 ]
@@ -1298,61 +1298,61 @@ channel = "root"
 at = 0.0
 to = [
     0.0,
-    -0.7,
+    -0.45,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.03125
+at = 0.027083334
 to = [
     0.0,
-    -0.7011418,
+    -0.45086035,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.06458333
+at = 0.055208333
 to = [
     0.0,
-    -0.70467466,
+    -0.45346737,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.094791666
+at = 0.0875
 to = [
     0.0,
-    -0.7094416,
+    -0.45819014,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.1625
+at = 0.15520833
 to = [
     0.0,
-    -0.72180986,
+    -0.47055835,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.19479166
+at = 0.18541667
 to = [
     0.0,
-    -0.72653264,
+    -0.47532532,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.22291666
+at = 0.21875
 to = [
     0.0,
-    -0.7291396,
+    -0.47885817,
     0.0,
 ]
 ease = "linear"
@@ -1361,7 +1361,7 @@ ease = "linear"
 at = 0.25
 to = [
     0.0,
-    -0.72999996,
+    -0.48,
     0.0,
 ]
 ease = "linear"
@@ -1370,7 +1370,7 @@ ease = "linear"
 at = 0.28125
 to = [
     0.0,
-    -0.7288582,
+    -0.47885817,
     0.0,
 ]
 ease = "linear"
@@ -1379,7 +1379,7 @@ ease = "linear"
 at = 0.31354168
 to = [
     0.0,
-    -0.72546685,
+    -0.47546685,
     0.0,
 ]
 ease = "linear"
@@ -1388,7 +1388,7 @@ ease = "linear"
 at = 0.34375
 to = [
     0.0,
-    -0.72074026,
+    -0.47074023,
     0.0,
 ]
 ease = "linear"
@@ -1397,7 +1397,7 @@ ease = "linear"
 at = 0.41458333
 to = [
     0.0,
-    -0.7078426,
+    -0.45784262,
     0.0,
 ]
 ease = "linear"
@@ -1406,7 +1406,7 @@ ease = "linear"
 at = 0.45
 to = [
     0.0,
-    -0.7028647,
+    -0.45286474,
     0.0,
 ]
 ease = "linear"
@@ -1415,7 +1415,7 @@ ease = "linear"
 at = 0.48333332
 to = [
     0.0,
-    -0.70032775,
+    -0.45032778,
     0.0,
 ]
 ease = "linear"
@@ -1424,7 +1424,7 @@ ease = "linear"
 at = 0.51666665
 to = [
     0.0,
-    -0.70032775,
+    -0.45032778,
     0.0,
 ]
 ease = "linear"
@@ -1433,7 +1433,7 @@ ease = "linear"
 at = 0.54375
 to = [
     0.0,
-    -0.70221037,
+    -0.4522104,
     0.0,
 ]
 ease = "linear"
@@ -1442,7 +1442,7 @@ ease = "linear"
 at = 0.571875
 to = [
     0.0,
-    -0.70571357,
+    -0.45571357,
     0.0,
 ]
 ease = "linear"
@@ -1451,7 +1451,7 @@ ease = "linear"
 at = 0.659375
 to = [
     0.0,
-    -0.72127986,
+    -0.4712799,
     0.0,
 ]
 ease = "linear"
@@ -1460,7 +1460,7 @@ ease = "linear"
 at = 0.690625
 to = [
     0.0,
-    -0.72601485,
+    -0.47601482,
     0.0,
 ]
 ease = "linear"
@@ -1469,7 +1469,7 @@ ease = "linear"
 at = 0.72083336
 to = [
     0.0,
-    -0.72900367,
+    -0.4790037,
     0.0,
 ]
 ease = "linear"
@@ -1478,61 +1478,61 @@ ease = "linear"
 at = 0.75
 to = [
     0.0,
-    -0.72999996,
+    -0.48,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.77708334
+at = 0.78125
 to = [
     0.0,
-    -0.7291396,
+    -0.47885817,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.8052083
+at = 0.81458336
 to = [
     0.0,
-    -0.72653264,
+    -0.4753253,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.8375
+at = 0.84479165
 to = [
     0.0,
-    -0.72180986,
+    -0.47055835,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.90520835
+at = 0.9125
 to = [
     0.0,
-    -0.7094416,
+    -0.4581901,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.93541664
+at = 0.9447917
 to = [
     0.0,
-    -0.70467466,
+    -0.45346737,
     0.0,
 ]
 ease = "linear"
 
 [[blend.tracks.channel.keys]]
-at = 0.96875
+at = 0.97291666
 to = [
     0.0,
-    -0.7011418,
+    -0.45086038,
     0.0,
 ]
 ease = "linear"

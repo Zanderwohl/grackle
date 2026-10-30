@@ -26,7 +26,7 @@ pub const SIGHT_STRIDE: i32 = 2;
 pub const SIGHT_RANGE: f32 = 40.0;
 /// Heights above the feet sampled for how much of a body is seen: head, chest and knees.
 const STANDING_BODY: [f32; 3] = [1.6, 1.1, 0.5];
-const CROUCHED_BODY: [f32; 3] = [0.85, 0.6, 0.3];
+const CROUCHED_BODY: [f32; 3] = [1.2, 0.85, 0.4];
 /// Height above the feet, in meters, of the floor a rocket is put at for splash.
 const FEET: f32 = 0.1;
 /// Splash a rocket deals a body about a meter from it: the push every cell is tested against.

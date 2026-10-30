@@ -161,7 +161,8 @@ impl Plugin for GamePlugin {
             // `interpolate_bodies` is not gated on Play: a replicated display
             // body in an editor animation grid would otherwise sit at the
             // origin until a round starts.
-            .add_systems(RunFixedMainLoop, interpolate_bodies
+            .add_systems(RunFixedMainLoop, (interpolate_bodies, crate::game::skeleton::follow_ducks)
+                .chain()
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop))
             .add_systems(RunFixedMainLoop, (face_bodies, follow_our_corpse, place_camera)
                 .chain()

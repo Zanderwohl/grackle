@@ -25,7 +25,7 @@ fixed here. The checklist is at the bottom.
   result until a new one lands.
 - Movement: `STEP_HEIGHT` 0.45 m, `WALKABLE` 0.7, `JUMP_SPEED` 7 m/s,
   sprint 7 m/s, gravity per map (`MovementRules`). The body box is
-  0.7 × 2.0 × 0.7 m, with the eye at 1.8 m standing and 0.88 m crouched.
+  0.7 × 2.0 × 0.7 m, with the eye at 1.8 m standing and 1.2 m crouched.
 - `step_player` has its physics written inline in the system. Nothing outside
   the fixed loop can ask "where would this input take this body".
 - The test map is `arena_halls.gmb` (user pack). It is one authored quarter

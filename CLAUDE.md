@@ -1732,6 +1732,18 @@ Anything that hurts several bodies at once from a single origin wants that
 last one. Splash reaches anything with `Hitboxes` — being shootable and being
 catchable in a blast are deliberately the same property.
 
+**A crouch is TF2's proportions**: a 1.5 m box under a 2.0 m one, the eye at
+1.2 m, a squat with the chest leaned 20° rather than a body folded double.
+**A duck takes `DUCK_SECONDS`** (0.2 s), as in Source: `Player.duck` moves at a
+steady rate toward the key, so a tap turns back partway, and the eye, the
+pose (each state blended with its crouched counterpart, `ducked_pose`: the
+hips drop with the feet replanted and the torso leans in late) and the
+head box follow it. The box is `Stance` and changes when the duck finishes on
+the ground, keeping the feet, but at once in the air, keeping the head — the
+crouch-jump; `Duck::feet` draws the feet catching up rather than jumping with
+the box. Shots leave from the same eased eye. Both ends of the duck ride in the
+replicated `Player`, so every machine draws it between steps.
+
 **Movement has momentum**: Quake's friction and acceleration at TF2's numbers,
 with air strafing and chained hops kept (see "Momentum" in
 [documentation/arena.md](documentation/arena.md)). **A blast pushes living

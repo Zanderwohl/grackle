@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::game::nav::NavGraph;
 
 /// Folded into every key.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 
 pub fn stable_hash(text: &str) -> u64 {
     fnv(&format!("{FORMAT}:{text}"))
