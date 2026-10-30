@@ -1,4 +1,5 @@
-//! The nav graph drawn over the floor for mappers, and the Nav panel that picks what is drawn.
+//! The nav graph drawn over the floor for mappers, and the Bakes panel section that picks what is
+//! drawn.
 //! See "The overlays" in documentation/bots.md.
 
 use bevy::asset::RenderAssetUsages;
@@ -142,7 +143,7 @@ fn draw_nav_overlay(
     }
 }
 
-/// What the Nav panel asked for this frame.
+/// What the nav section asked for this frame.
 pub struct NavCommands {
     pub auto: bool,
     pub overlay: NavOverlay,
@@ -152,7 +153,7 @@ pub struct NavCommands {
     links: usize,
 }
 
-/// The Nav panel's reads and writes, bundled to stay inside the panels' parameter limit.
+/// The nav section's reads and writes, bundled to stay inside the panels' parameter limit.
 #[derive(SystemParam)]
 pub struct NavPanel<'w> {
     nav: ResMut<'w, NavBake>,
@@ -184,7 +185,10 @@ impl NavPanel<'_> {
     }
 }
 
-pub fn ui(ui: &mut egui::Ui, commands: &mut NavCommands) {
+/// The nav graph's part of the Bakes panel.
+pub fn section(ui: &mut egui::Ui, commands: &mut NavCommands) {
+    ui.separator();
+    ui.strong(get!("nav.title"));
     ui.vertical(|ui| {
         for overlay in NavOverlay::ALL {
             ui.radio_value(&mut commands.overlay, overlay, overlay.label());

@@ -55,7 +55,7 @@ still a prototype for feeling out room sizes: it has health and can shoot, and
 that is the whole of it.
 
 There are no bots. The nav graph they will walk is baked (`src/game/nav.rs`,
-the third bake) and drawn over the floor from the **Nav** panel; the
+the third bake) and drawn over the floor from its section of the Bakes panel; the
 sightline, exposure and danger fields to bake onto it are planned in
 [documentation/bots.md](documentation/bots.md).
 

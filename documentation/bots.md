@@ -200,7 +200,7 @@ thousands of cells redrawn as lines every frame is the wrong tool, and a mesh
 can be swapped when a bake lands. The play camera gets a copy on a debug key
 for tuning bots. The editor is where it lives.
 
-One overlay at a time, picked from a **Nav** panel (an `egui_dock` tab):
+One overlay at a time, picked from the nav graph's section of the **Bakes** panel:
 
 | Overlay | Shows |
 | --- | --- |
@@ -214,7 +214,7 @@ One overlay at a time, picked from a **Nav** panel (an `egui_dock` tab):
 | Danger | Knockback and hurt, red |
 | Distance to … | One pickup's field, picked from a list |
 
-The panel also holds the Bake button, the stage the bake is at, a crouched
+The section also holds the Bake button, the stage the bake is at, a crouched
 toggle for the visibility overlays, and the saturation for each scale.
 Saturation is a fixed number in m², not a percentile, for the reason given
 under "Fields".
@@ -279,7 +279,7 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
       (`BackgroundBake`, `BakeProgress`), with the sun moved onto it
 - [x] `NavBake` as a `BakeJob` in `BakeSystems::All`, reporting as
       `BakeKind::Nav`; the old graph kept until replaced
-- [x] Nav panel with Bake and Cells and links overlay (floor mesh,
+- [x] Nav section in the Bakes panel with Bake and Cells and links overlay (floor mesh,
       `editor_only`; `tool/nav_overlay.rs`). Two-column walks are not drawn
       on a flat floor, since they repeat two short ones
 - [x] Tests: a lone room is one connected set; a 0.4 m lip is a step and a

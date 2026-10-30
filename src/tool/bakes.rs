@@ -10,6 +10,7 @@ use bevy_egui::egui;
 use crate::editor::editable::FeatureTag;
 use crate::get;
 use crate::common::world_surface::Volume;
+use crate::tool::nav_overlay::{self, NavCommands};
 use crate::tool::bake_progress;
 use crate::tool::bake_job::{self, BakeKind, BakeProgress, BakeState, BakeStatus, VolumeLabels};
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, MapVolumes, Room, RoomSlot, VolumeOrder};
@@ -153,7 +154,7 @@ fn touches(a: &Volume, b: &Volume) -> bool {
 }
 
 impl BakePlugin {
-    pub fn ui(ui: &mut egui::Ui, auto: bool, auto_sun: bool, progress: &BakeProgress) -> BakeCommands {
+    pub fn ui(ui: &mut egui::Ui, auto: bool, auto_sun: bool, nav: &mut NavCommands, progress: &BakeProgress) -> BakeCommands {
         let mut commands = BakeCommands { auto, auto_sun, ..default() };
         ui.vertical(|ui| {
             ui.checkbox(&mut commands.auto, get!("bakes.auto_rooms"));
@@ -175,6 +176,8 @@ impl BakePlugin {
                     commands.clear_sunlight = true;
                 }
             });
+            nav_overlay::section(ui, nav);
+            ui.separator();
             if ui.button("Log ECS").clicked() {
                 commands.log_ecs = true;
             }

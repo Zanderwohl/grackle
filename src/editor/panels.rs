@@ -35,7 +35,7 @@ use crate::tool::bake_job::BakeProgress;
 use crate::tool::bake_progress::{self, Step};
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
 use crate::tool::sun_bake::{BakeSunlight, ClearSunlight, SunBake};
-use crate::tool::nav_overlay::{self, NavCommands, NavPanel};
+use crate::tool::nav_overlay::{NavCommands, NavPanel};
 use crate::tool::retarget::RetargetState;
 use crate::tool::show::{ShowPlugin, GizmoVisibility};
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
@@ -110,8 +110,6 @@ const TOOLBAR_MIN_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT;
 enum TabKinds {
     Tools,
     Bakes,
-    /// The nav graph: its bake and what is drawn of it.
-    Nav,
     Show,
     Metadata,
     /// The feature list with its rollback bar, and the selected feature's editor beneath.
@@ -181,7 +179,6 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
         egui::Id::new(match tab {
             TabKinds::Tools => "tools".to_owned(),
             TabKinds::Bakes => "bakes".to_owned(),
-            TabKinds::Nav => "nav".to_owned(),
             TabKinds::Show => "show".to_owned(),
             TabKinds::Metadata => "metadata".to_owned(),
             TabKinds::Features => "features".to_owned(),
@@ -194,7 +191,6 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
         match tab {
             TabKinds::Tools => { get!("tools.title").into() }
             TabKinds::Bakes => { get!("bakes.title").into() }
-            TabKinds::Nav => { get!("nav.title").into() }
             TabKinds::Show => { get!("show.title").into() }
             TabKinds::Metadata => { get!("editor.metadata.title").into() }
             TabKinds::Features => { get!("editor.timeline.title").into() }
@@ -212,10 +208,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 Tools::ui(ui, self.current_tool, self.next_tool);
             }
             TabKinds::Bakes => {
-                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.bake_progress);
-            }
-            TabKinds::Nav => {
-                nav_overlay::ui(ui, self.nav_commands);
+                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.nav_commands, self.bake_progress);
             }
             TabKinds::Show => {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
@@ -293,7 +286,7 @@ impl Default for EditorPanels {
 impl EditorPanels {
     pub fn new() -> Self {
         let default_top_tabs = vec![TabKinds::Tools,];
-        let default_left_tabs = vec![TabKinds::Features, TabKinds::Bakes, TabKinds::Nav];
+        let default_left_tabs = vec![TabKinds::Features, TabKinds::Bakes,];
         let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata];
         let default_bottom_tabs = vec![TabKinds::Rounds, TabKinds::Player];
         

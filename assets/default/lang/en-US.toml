@@ -92,7 +92,7 @@ step = "Step"
 overall = "Overall"
 
 [nav]
-title = "Nav"
+title = "Nav graph"
 auto = "Auto-bake Nav graph"
 bake = "Nav graph"
 summary = "{ cells } cells, { links } links"
