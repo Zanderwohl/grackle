@@ -279,9 +279,10 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
       (`BackgroundBake`, `BakeProgress`), with the sun moved onto it
 - [x] `NavBake` as a `BakeJob` in `BakeSystems::All`, reporting as
       `BakeKind::Nav`; the old graph kept until replaced
-- [ ] Nav panel with Bake and Cells and links overlay (floor mesh,
-      `editor_only`)
-- [ ] Tests: a lone room is one connected set; a 0.4 m lip is a step and a
+- [x] Nav panel with Bake and Cells and links overlay (floor mesh,
+      `editor_only`; `tool/nav_overlay.rs`). Two-column walks are not drawn
+      on a flat floor, since they repeat two short ones
+- [x] Tests: a lone room is one connected set; a 0.4 m lip is a step and a
       1 m lip is not; a Kill volume has no cells; a cell under a low ceiling
       is not one; floors across a threshold link
 

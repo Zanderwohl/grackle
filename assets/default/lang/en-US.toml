@@ -91,6 +91,16 @@ status_idle = "Step { step }/{ steps }: { completed }/{ scheduled }"
 step = "Step"
 overall = "Overall"
 
+[nav]
+title = "Nav"
+auto = "Auto-bake Nav graph"
+bake = "Nav graph"
+summary = "{ cells } cells, { links } links"
+
+[nav.overlay]
+off = "Off"
+cells_and_links = "Cells and links"
+
 [show]
 title = "Show/Hide"
 cameras = "Cameras"

@@ -30,6 +30,8 @@ const LINK_BATCH: usize = 256;
 #[derive(Resource)]
 pub struct NavBake {
     graph: NavGraph,
+    /// Bumped whenever `graph` is replaced, for what draws it.
+    generation: u64,
     /// What the map was when last looked at; taken again only on a change.
     snapshot: Option<Snapshot>,
     bake: BackgroundBake<Job>,
@@ -37,13 +39,22 @@ pub struct NavBake {
 
 impl Default for NavBake {
     fn default() -> Self {
-        Self { graph: NavGraph::default(), snapshot: None, bake: BackgroundBake::new(true) }
+        Self { graph: NavGraph::default(), generation: 0, snapshot: None, bake: BackgroundBake::new(true) }
     }
 }
 
 impl NavBake {
     pub fn graph(&self) -> &NavGraph {
         &self.graph
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn replace(&mut self, graph: NavGraph) {
+        self.graph = graph;
+        self.generation += 1;
     }
 
     pub fn auto(&self) -> bool {
@@ -200,7 +211,7 @@ fn auto_bake_nav(
 ) {
     let state = &mut *state;
     if clears.read().count() > 0 {
-        state.graph = NavGraph::default();
+        state.replace(NavGraph::default());
         state.bake.forget();
         info!("Cleared the nav graph");
     }
@@ -208,7 +219,7 @@ fn auto_bake_nav(
         state.bake.ask();
     }
     if let Some(graph) = state.bake.poll() {
-        state.graph = graph;
+        state.replace(graph);
     }
     let props_moved = state.snapshot.as_ref().is_some_and(|seen| seen.props != inputs.collision.props);
     if inputs.changed_since_last_frame() || props_moved || state.snapshot.is_none() {
@@ -222,7 +233,7 @@ fn auto_bake_nav(
 fn bake_nav_for_the_round(mut state: ResMut<NavBake>, inputs: NavInputs) {
     let snapshot = inputs.snapshot();
     if let Some(graph) = state.bake.for_the_round(snapshot.hash, || snapshot.job()) {
-        state.graph = graph;
+        state.replace(graph);
     }
     state.snapshot = Some(snapshot);
 }

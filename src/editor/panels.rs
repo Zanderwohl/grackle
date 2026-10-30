@@ -35,6 +35,7 @@ use crate::tool::bake_job::BakeProgress;
 use crate::tool::bake_progress::{self, Step};
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
 use crate::tool::sun_bake::{BakeSunlight, ClearSunlight, SunBake};
+use crate::tool::nav_overlay::{self, NavCommands, NavPanel};
 use crate::tool::retarget::RetargetState;
 use crate::tool::show::{ShowPlugin, GizmoVisibility};
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
@@ -109,6 +110,8 @@ const TOOLBAR_MIN_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT;
 enum TabKinds {
     Tools,
     Bakes,
+    /// The nav graph: its bake and what is drawn of it.
+    Nav,
     Show,
     Metadata,
     /// The feature list with its rollback bar, and the selected feature's editor beneath.
@@ -131,6 +134,7 @@ struct PanelMessages<'w> {
     room_bake: ResMut<'w, RoomBake>,
     sun_bake: ResMut<'w, SunBake>,
     bake_progress: Res<'w, BakeProgress>,
+    nav: NavPanel<'w>,
     sunlight: MessageWriter<'w, BakeSunlight>,
     clear_sunlight: MessageWriter<'w, ClearSunlight>,
     edits: MessageWriter<'w, EditEvent>,
@@ -152,6 +156,7 @@ struct TabViewerAndResources<'a> {
     multicam_state: &'a mut MulticamState,
     bake_commands: &'a mut BakeCommands,
     bake_progress: &'a BakeProgress,
+    nav_commands: &'a mut NavCommands,
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
     retarget_request: &'a mut Option<(FeatureId, String)>,
@@ -176,6 +181,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
         egui::Id::new(match tab {
             TabKinds::Tools => "tools".to_owned(),
             TabKinds::Bakes => "bakes".to_owned(),
+            TabKinds::Nav => "nav".to_owned(),
             TabKinds::Show => "show".to_owned(),
             TabKinds::Metadata => "metadata".to_owned(),
             TabKinds::Features => "features".to_owned(),
@@ -188,6 +194,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
         match tab {
             TabKinds::Tools => { get!("tools.title").into() }
             TabKinds::Bakes => { get!("bakes.title").into() }
+            TabKinds::Nav => { get!("nav.title").into() }
             TabKinds::Show => { get!("show.title").into() }
             TabKinds::Metadata => { get!("editor.metadata.title").into() }
             TabKinds::Features => { get!("editor.timeline.title").into() }
@@ -206,6 +213,9 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             }
             TabKinds::Bakes => {
                 *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.bake_progress);
+            }
+            TabKinds::Nav => {
+                nav_overlay::ui(ui, self.nav_commands);
             }
             TabKinds::Show => {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
@@ -283,7 +293,7 @@ impl Default for EditorPanels {
 impl EditorPanels {
     pub fn new() -> Self {
         let default_top_tabs = vec![TabKinds::Tools,];
-        let default_left_tabs = vec![TabKinds::Features, TabKinds::Bakes,];
+        let default_left_tabs = vec![TabKinds::Features, TabKinds::Bakes, TabKinds::Nav];
         let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata];
         let default_bottom_tabs = vec![TabKinds::Rounds, TabKinds::Player];
         
@@ -339,6 +349,7 @@ impl EditorPanels {
         map_metadata.sync_authors_ui_buffer_from_authors();
         
         let mut bake_commands = BakeCommands { auto: messages.room_bake.auto(), auto_sun: messages.sun_bake.auto(), ..default() };
+        let mut nav_commands = messages.nav.commands();
         let mut pending_edits = PendingEditEvents::default();
         let mut retarget_request: Option<(FeatureId, String)> = None;
         let mut loaded_blueprint: Option<LoadedBlueprint> = None;
@@ -367,6 +378,7 @@ impl EditorPanels {
             multicam_state: &mut *multicam_state,
             bake_commands: &mut bake_commands,
             bake_progress: &messages.bake_progress,
+            nav_commands: &mut nav_commands,
             gizmo_visibility: &mut *gizmo_visibility,
             pending_edits: &mut pending_edits,
             retarget_request: &mut retarget_request,
@@ -620,6 +632,7 @@ impl EditorPanels {
         if bake_commands.clear_room_geometry {
             messages.clear_room.write(ClearRoomGeometry);
         }
+        messages.nav.apply(&nav_commands);
         if bake_commands.log_ecs {
             messages.log_ecs.write(LogECS);
         }

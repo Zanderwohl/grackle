@@ -54,9 +54,10 @@ There is a player body that walks, falls and jumps in `src/game/`, but it is
 still a prototype for feeling out room sizes: it has health and can shoot, and
 that is the whole of it.
 
-There are no bots. The nav graph they will walk, and the sightline, exposure
-and danger fields baked onto it (drawn over the floor for mappers first), are
-planned in [documentation/bots.md](documentation/bots.md).
+There are no bots. The nav graph they will walk is baked (`src/game/nav.rs`,
+the third bake) and drawn over the floor from the **Nav** panel; the
+sightline, exposure and danger fields to bake onto it are planned in
+[documentation/bots.md](documentation/bots.md).
 
 There is a prop editor, which models the things a map and a class refer to.
 It is a third `AppMode` and the frontier next to it: the geometry it builds is
