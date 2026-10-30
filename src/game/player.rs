@@ -1,11 +1,13 @@
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::camera::Hdr;
 use bevy::input::mouse::MouseMotion;
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
 use lightyear::prelude::input::native::ActionState;
 
+use crate::common::render_layers;
 use crate::common::damage::{Armor, Damageable, Died, PlayerId, DEFAULT_HEALTH, DEFAULT_MAX_ARMOR};
 use crate::game::death::Dying;
 use crate::common::hitbox::Hitboxes;
@@ -449,6 +451,7 @@ pub fn spawn_the_view(
             fov: FIELD_OF_VIEW,
             ..default()
         }),
+        RenderLayers::from_layers(&[render_layers::WORLD, render_layers::GIZMOS]),
         Transform::default(),
         Name::new("View"),
         children![crate::game::hud::hud_camera()],

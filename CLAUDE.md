@@ -467,6 +467,24 @@ grip and a red painted barrel are obviously different objects. A style is four
 numbers on a `StandardMaterial`, not a texture — the right fidelity for
 flat-shaded polygons and the only one that costs a browser nothing.
 
+**Forward camera** is the one style that is not: in the viewmodel a lens of
+it shows a square from the middle of the play view, rendered by a camera
+under the play camera and drawn through `LensMaterial`, which bulges the
+middle as a convex lens would, darkens the rim and splits it a little by
+color ([`src/game/forward_camera.rs`](src/game/forward_camera.rs),
+`lens.wesl`). It is live **only in the viewmodel** — `swap_in_the_lenses`
+replaces the copied material there; everywhere else it is glass, because
+someone else's scope showing your view is wrong and a lens in the world could
+be seen by the camera writing the texture it samples. The baker gives each
+connected piece of such a part UVs across the whole view as the viewmodel's
+eye sees it, and the camera only renders while a live lens is on screen in
+first person. It renders linear into `Rgba16Float` with no tonemapping, since
+the viewmodel camera tonemaps the lens with everything else, and it does not
+draw `render_layers::GIZMOS` — gizmos live there, drawn by the editor
+viewports and the play camera — or a debug overlay from the eye would sit in
+the lens. `ForwardCameraPlugin` is added in
+`main.rs`, as `WorldPropPlugin` is, since the game's tests have no renderer.
+
 The mode itself ([`view.rs`](src/prop/view.rs)) does three reversible things
 on the way in: the world is **hidden rather than unloaded** (a prop is
 centimeters across and a map is tens of meters, so leaving it in puts the prop

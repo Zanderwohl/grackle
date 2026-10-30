@@ -201,7 +201,7 @@ fn give_the_view_its_own_camera(
 /// A second copy of the held weapon, in front of the eye rather than in the
 /// body's hand. Compared against `HeldModel::showing`, since the model may
 /// still be in flight.
-fn dress_the_viewmodel(
+pub fn dress_the_viewmodel(
     mut commands: Commands,
     held: Query<&HeldModel, With<LocalPlayer>>,
     // Copied off the body's own parts rather than a second cache lookup that
