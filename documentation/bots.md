@@ -106,6 +106,13 @@ will say so rather than the plan.
 Each link stores its kind, its travel time (simulated, not distance), and the
 input sequence that makes it, so a bot replays it rather than re-deriving it.
 
+Leaps (drops and jumps) are tried from a cell along each of the eight headings
+in which it has no walking neighbor: a drop at running speed, a standing jump
+and a running jump. A leap that lands where walking gets in no more than half
+a second longer is not kept, or every running jump across a flat floor would
+be a link. They are found in a second pass, after every walk, since that
+comparison needs them all.
+
 ### Fields, baked per cell
 
 All fields are stored in **absolute units**, never normalized to the map.
@@ -287,10 +294,11 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
       is not one; floors across a threshold link
 
 ### Stage 2: jumps and drops
-- [ ] Drop links by simulating off edges with `step`
-- [ ] Jump links by simulating from edge cells; each link stores its input
+- [x] Drop links by simulating off edges with `step`
+- [x] Jump links by simulating from edge cells; each link stores its input
       sequence
-- [ ] Tests: a 1 m ledge is jumpable up and droppable down; a gap wider than
+- [x] Drops and jumps drawn in the Cells and links overlay, one-way as arrows
+- [x] Tests: a 1 m ledge is jumpable up and droppable down; a gap wider than
       a jump has no link; a drop into a Kill volume has no link
 
 ### Stage 3: fields and the mapper's overlays

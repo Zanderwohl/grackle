@@ -25,6 +25,7 @@ use crate::tool::bakes::BakeSystems;
 use crate::tool::room::{Block, MapVolumes, Room, VolumeOrder};
 
 /// Cells linked per item, so progress moves while the links, the bulk of the work, are found.
+/// Walks and leaps are separate passes of batches, since a leap is kept only if walking is slower.
 const LINK_BATCH: usize = 256;
 
 #[derive(Resource)]
@@ -91,7 +92,7 @@ struct Snapshot {
 
 impl Snapshot {
     fn job(&self) -> Job {
-        Job { snapshot: self.clone(), world: None, faces: Vec::new(), cells: None, found: None, links: Vec::new(), graph: None }
+        Job { snapshot: self.clone(), world: None, faces: Vec::new(), cells: None, found: None, links: Vec::new(), leaps: Vec::new(), graph: None }
     }
 }
 
@@ -135,8 +136,8 @@ impl NavInputs<'_, '_> {
     }
 }
 
-/// Items: the surface, the cells, a batch of links per [`LINK_BATCH`] cells, then pruning to what
-/// a spawn can reach. Until the cells are found their number is not known, so one batch is
+/// Items: the surface, the cells, a batch of walks and then of leaps per [`LINK_BATCH`] cells,
+/// then pruning to what a spawn can reach. Until the cells are found their number is not known, so one batch is
 /// assumed and `scheduled` grows once.
 struct Job {
     snapshot: Snapshot,
@@ -146,6 +147,7 @@ struct Job {
     /// How many cells were found, kept once they are handed to the graph.
     found: Option<usize>,
     links: Vec<Vec<Link>>,
+    leaps: Vec<Vec<Link>>,
     graph: Option<NavGraph>,
 }
 
@@ -154,9 +156,13 @@ impl BakeJob for Job {
 
     fn progress(&self) -> (usize, usize) {
         let batches = self.found.map_or(1, |found| found.div_ceil(LINK_BATCH));
-        let linked = if self.graph.is_some() { batches } else { self.links.len().div_ceil(LINK_BATCH) };
+        let linked = if self.graph.is_some() {
+            2 * batches
+        } else {
+            self.links.len().div_ceil(LINK_BATCH) + self.leaps.len().div_ceil(LINK_BATCH)
+        };
         let completed = usize::from(self.world.is_some()) + usize::from(self.found.is_some()) + linked + usize::from(self.graph.is_some());
-        (completed, 3 + batches)
+        (completed, 3 + 2 * batches)
     }
 
     fn doing(&self) -> String {
@@ -164,6 +170,7 @@ impl BakeJob for Job {
             (None, _) => get!("bakes.doing.surface"),
             (Some(_), None) if self.found.is_none() => get!("bakes.doing.floors"),
             (Some(_), Some((cells, _))) if self.links.len() < cells.len() => get!("bakes.doing.links"),
+            (Some(_), Some((cells, _))) if self.leaps.len() < cells.len() => get!("bakes.doing.leaps"),
             _ => get!("bakes.doing.reach"),
         }
     }
@@ -191,8 +198,20 @@ impl BakeJob for Job {
             }
             return;
         }
+        if self.leaps.len() < cells.len() {
+            let end = (self.leaps.len() + LINK_BATCH).min(cells.len());
+            for id in self.leaps.len()..end {
+                let snapshot = &self.snapshot;
+                self.leaps.push(nav::leap_links(world, cells, columns, &self.links, &snapshot.triggers, &snapshot.rules, id as CellId));
+            }
+            return;
+        }
         let (cells, _) = self.cells.take().expect("found above");
-        self.graph = Some(NavGraph::reachable(cells, std::mem::take(&mut self.links), &self.snapshot.spawns));
+        let mut links = std::mem::take(&mut self.links);
+        for (links, leaps) in links.iter_mut().zip(std::mem::take(&mut self.leaps)) {
+            links.extend(leaps);
+        }
+        self.graph = Some(NavGraph::reachable(cells, links, &self.snapshot.spawns));
     }
 
     fn finish(self) -> NavGraph {

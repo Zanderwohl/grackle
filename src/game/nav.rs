@@ -3,18 +3,24 @@
 //!
 //! Every upward face of the map's surface is a floor, since every face bounds air. Cells are
 //! sampled on a lattice in `x` and `z` and kept where [`CollisionWorld::fits`] holds, so a cell and
-//! a spawn point agree about where a body fits. Links are found by moving the body box with the
-//! same collision calls the step uses.
+//! a spawn point agree about where a body fits. Walks are found by moving the body box with the
+//! same collision calls the step uses; drops and jumps by running the step itself.
 
-use std::collections::{HashMap, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 
 use bevy::prelude::*;
 
-use crate::common::class::body_center_from_feet;
+use crate::common::class::{body_center_from_feet, Stance};
 use crate::common::trigger::{TriggerEffect, TriggerVolume};
+use crate::common::movement_rules::MovementRules;
 use crate::common::world_surface::Face;
+use crate::constants::TICK_HZ;
 use crate::game::collision::CollisionWorld;
-use crate::game::player::{PLAYER_HALF, STEP_HEIGHT, WALKABLE};
+use crate::game::condition::Condition;
+use crate::game::player::{
+    running_speed, step, Mover, PhysicsBody, Player, PlayerInput, PLAYER_HALF, STEP_HEIGHT, WALKABLE,
+};
 
 /// Meters between cells along `x` and `z`.
 pub const SPACING: f32 = 0.5;
@@ -43,14 +49,37 @@ pub struct Cell {
 pub enum LinkKind {
     Walk,
     Step,
+    /// Running off an edge. One way.
+    Drop,
+    Jump,
+}
+
+/// The input that makes a drop or a jump, for a bot to replay rather than re-derive: run along
+/// `yaw` with sprint held for `ticks`, jumping on the first if `jump`, having arrived at
+/// `run_up`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Leap {
+    pub yaw: f32,
+    /// Meters per second along `yaw` at the start.
+    pub run_up: f32,
+    pub jump: bool,
+    pub ticks: u32,
+}
+
+impl Leap {
+    pub fn input(&self, tick: u32) -> PlayerInput {
+        PlayerInput { movement: Vec2::Y, sprint: true, jump: self.jump && tick == 0, yaw: self.yaw, ..default() }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Link {
     pub to: CellId,
     pub kind: LinkKind,
-    /// At running speed.
+    /// At running speed; simulated for a leap.
     pub seconds: f32,
+    /// For a drop or a jump.
+    pub leap: Option<Leap>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -184,12 +213,146 @@ pub fn walk_links(world: &CollisionWorld, cells: &[Cell], columns: &HashMap<IVec
                 let target = &cells[to as usize];
                 if let Some(kind) = walks(world, from, target) {
                     let meters = Vec2::new(target.feet.x - from.feet.x, target.feet.z - from.feet.z).length();
-                    links.push(Link { to, kind, seconds: meters / speed });
+                    links.push(Link { to, kind, seconds: meters / speed, leap: None });
                 }
             }
         }
     }
     links
+}
+
+fn cell_near(cells: &[Cell], columns: &HashMap<IVec2, Vec<CellId>>, feet: Vec3) -> Option<CellId> {
+    let column = column_of(feet.x, feet.z);
+    let nearby = (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| column + IVec2::new(dx, dz)));
+    nearby
+        .filter_map(|column| columns.get(&column))
+        .flatten()
+        .copied()
+        .filter(|id| (cells[*id as usize].feet.y - feet.y).abs() <= STEP_HEIGHT)
+        .min_by(|a, b| {
+            let distance = |id: &CellId| cells[*id as usize].feet.distance_squared(feet);
+            distance(a).total_cmp(&distance(b))
+        })
+}
+
+const TICK: f32 = 1.0 / TICK_HZ as f32;
+/// Ticks a leap may take before it is given up as a fall out of the map.
+const MOST_TICKS: u32 = 3 * TICK_HZ as u32;
+/// Ticks a drop may run along the floor before it is given up as a run into a wall.
+const RUN_TICKS: u32 = TICK_HZ as u32 / 4;
+/// Seconds a leap must save over walking to the same cell to be worth a link; a running jump
+/// across a flat floor is a walk.
+const LEAP_SAVES: f32 = 0.5;
+
+/// Where a body standing on `feet` lands after `leap`'s input, and how many ticks it took. `None`
+/// if it never left the floor, never landed, or touched a Kill trigger.
+fn fly(world: &CollisionWorld, triggers: &[TriggerVolume], rules: &MovementRules, feet: Vec3, leap: Leap) -> Option<(Vec3, u32)> {
+    let heading = Quat::from_rotation_y(leap.yaw) * Vec3::NEG_Z;
+    let mut mover = Mover {
+        player: Player { velocity: heading * leap.run_up, yaw: leap.yaw, ground: Some(Vec3::Y), ..default() },
+        body: PhysicsBody::at(body_center_from_feet(feet + Vec3::Y * LIFT)),
+        stance: Stance::Standing,
+    };
+    let condition = Condition::default();
+    let mut airborne = false;
+    for tick in 0..MOST_TICKS {
+        step(&mut mover, Vec3::ZERO, &leap.input(tick), &condition, None, world, rules, TICK);
+        let center = mover.body.current;
+        let killed = triggers.iter().any(|trigger| trigger.effect == TriggerEffect::Kill && trigger.overlaps(center, PLAYER_HALF));
+        if killed {
+            return None;
+        }
+        if !mover.player.on_ground() {
+            airborne = true;
+        } else if airborne {
+            return Some((center - Vec3::Y * PLAYER_HALF.y, tick + 1));
+        } else if tick >= RUN_TICKS {
+            return None;
+        }
+    }
+    None
+}
+
+/// Whether walking links get from `from` to `to` within `budget` seconds.
+fn walks_within(links: &[Vec<Link>], from: CellId, to: CellId, budget: f32) -> bool {
+    let millis = |seconds: f32| (seconds * 1000.0) as u32;
+    let budget = millis(budget);
+    let mut best: HashMap<CellId, u32> = HashMap::from([(from, 0)]);
+    let mut queue = BinaryHeap::from([Reverse((0, from))]);
+    while let Some(Reverse((cost, at))) = queue.pop() {
+        if at == to {
+            return true;
+        }
+        if best.get(&at).is_some_and(|known| *known < cost) {
+            continue;
+        }
+        for link in links[at as usize].iter().filter(|link| link.leap.is_none()) {
+            let next = cost + millis(link.seconds);
+            if next <= budget && best.get(&link.to).is_none_or(|known| next < *known) {
+                best.insert(link.to, next);
+                queue.push(Reverse((next, link.to)));
+            }
+        }
+    }
+    false
+}
+
+/// The drops and jumps out of `id`, tried along each of the eight headings in which it has no
+/// walking neighbor. `walking` is every cell's walk links, which decide both the headings and
+/// whether a leap is quicker than walking.
+pub fn leap_links(
+    world: &CollisionWorld,
+    cells: &[Cell],
+    columns: &HashMap<IVec2, Vec<CellId>>,
+    walking: &[Vec<Link>],
+    triggers: &[TriggerVolume],
+    rules: &MovementRules,
+    id: CellId,
+) -> Vec<Link> {
+    let from = &cells[id as usize];
+    let speed = running_speed(rules);
+    let mut links: Vec<Link> = Vec::new();
+    for heading in 0..8 {
+        let yaw = heading as f32 * std::f32::consts::FRAC_PI_4;
+        let ahead = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
+        let neighbor = from.column + IVec2::new(ahead.x.round() as i32, ahead.z.round() as i32);
+        let walked = walking[id as usize].iter().any(|link| cells[link.to as usize].column == neighbor);
+        if walked {
+            continue;
+        }
+        let tries = [
+            (LinkKind::Drop, Leap { yaw, run_up: speed, jump: false, ticks: 0 }),
+            (LinkKind::Jump, Leap { yaw, run_up: 0.0, jump: true, ticks: 0 }),
+            (LinkKind::Jump, Leap { yaw, run_up: speed, jump: true, ticks: 0 }),
+        ];
+        for (kind, leap) in tries {
+            let Some((landed, ticks)) = fly(world, triggers, rules, from.feet, leap) else { continue };
+            let Some(to) = cell_near(cells, columns, landed) else { continue };
+            let seconds = ticks as f32 * TICK;
+            let known = walking[id as usize].iter().chain(&links).any(|link| link.to == to);
+            if to == id || known || walks_within(walking, id, to, seconds + LEAP_SAVES) {
+                continue;
+            }
+            links.push(Link { to, kind, seconds, leap: Some(Leap { ticks, ..leap }) });
+        }
+    }
+    links
+}
+
+/// The whole graph at once, for tests and tools; the bake runs the same pieces in steps.
+pub fn graph(world: &CollisionWorld, faces: &[Face], triggers: &[TriggerVolume], rules: &MovementRules, starts: &[Vec3]) -> NavGraph {
+    let cells = floor_cells(world, faces, triggers);
+    let columns = columns(&cells);
+    let speed = running_speed(rules);
+    let walking: Vec<Vec<Link>> = (0..cells.len() as CellId).map(|id| walk_links(world, &cells, &columns, id, speed)).collect();
+    let links = (0..cells.len() as CellId)
+        .map(|id| {
+            let mut links = walking[id as usize].clone();
+            links.extend(leap_links(world, &cells, &columns, &walking, triggers, rules, id));
+            links
+        })
+        .collect();
+    NavGraph::reachable(cells, links, starts)
 }
 
 impl NavGraph {
@@ -244,17 +407,7 @@ impl NavGraph {
     /// The cell whose floor is nearest under `feet`, in its own column or a neighbor's, within a
     /// step's height.
     pub fn cell_at(&self, feet: Vec3) -> Option<CellId> {
-        let column = column_of(feet.x, feet.z);
-        let nearby = (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| column + IVec2::new(dx, dz)));
-        nearby
-            .filter_map(|column| self.columns.get(&column))
-            .flatten()
-            .copied()
-            .filter(|id| (self.cells[*id as usize].feet.y - feet.y).abs() <= STEP_HEIGHT)
-            .min_by(|a, b| {
-                let distance = |id: &CellId| self.cells[*id as usize].feet.distance_squared(feet);
-                distance(a).total_cmp(&distance(b))
-            })
+        cell_near(&self.cells, &self.columns, feet)
     }
 }
 
@@ -264,15 +417,10 @@ mod tests {
     use crate::common::world_surface::Volume;
     use crate::tool::room::Room;
 
-    const SPEED: f32 = 7.0;
-
     fn bake(volumes: &[Volume], triggers: &[TriggerVolume], starts: &[Vec3]) -> NavGraph {
         let mut world = CollisionWorld::default();
         let faces = world.rebuild_volumes(volumes);
-        let cells = floor_cells(&world, &faces, triggers);
-        let columns = columns(&cells);
-        let links = (0..cells.len() as CellId).map(|id| walk_links(&world, &cells, &columns, id, SPEED)).collect();
-        NavGraph::reachable(cells, links, starts)
+        graph(&world, &faces, triggers, &MovementRules::default(), starts)
     }
 
     fn room(min: Vec3, max: Vec3) -> Volume {
@@ -304,15 +452,21 @@ mod tests {
         assert!(corner.is_some_and(|id| graph.cells()[id as usize].feet.x > 0.35), "a cell with its body in the wall");
     }
 
+    /// Four meters of headroom, so a jump up the ledge clears the lower room's ceiling.
     fn ledge(height: f32) -> NavGraph {
-        bake(&[room(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0)), room(Vec3::new(4.0, height, 0.0), Vec3::new(8.0, 3.0 + height, 4.0))], &[], &[])
+        bake(&[room(Vec3::ZERO, Vec3::new(4.0, 4.0, 4.0)), room(Vec3::new(4.0, height, 0.0), Vec3::new(8.0, 4.0 + height, 4.0))], &[], &[])
+    }
+
+    /// Kinds of link from a cell matching `from` to a cell matching `to`.
+    fn kinds_between(graph: &NavGraph, from: impl Fn(&Cell) -> bool, to: impl Fn(&Cell) -> bool) -> Vec<LinkKind> {
+        (0..graph.cells().len() as CellId)
+            .filter(|id| from(&graph.cells()[*id as usize]))
+            .flat_map(|id| graph.links(id).iter().filter(|link| to(&graph.cells()[link.to as usize])).map(|link| link.kind))
+            .collect()
     }
 
     fn crosses(graph: &NavGraph) -> bool {
-        (0..graph.cells().len() as CellId).any(|id| {
-            let low = graph.cells()[id as usize].feet.y < 0.1;
-            graph.links(id).iter().any(|link| low && graph.cells()[link.to as usize].feet.y > 0.1)
-        })
+        kinds_between(graph, |c| c.feet.y < 0.1, |c| c.feet.y > 0.1).iter().any(|kind| matches!(kind, LinkKind::Walk | LinkKind::Step))
     }
 
     #[test]
@@ -329,6 +483,48 @@ mod tests {
             }
         }
         assert!(!crosses(&ledge(1.0)), "a 1 m ledge was walked up");
+    }
+
+    #[test]
+    fn a_meter_ledge_is_jumped_up_and_dropped_down() {
+        let graph = ledge(1.0);
+        let up = kinds_between(&graph, |c| c.feet.y < 0.1, |c| c.feet.y > 0.9);
+        let down = kinds_between(&graph, |c| c.feet.y > 0.9, |c| c.feet.y < 0.1);
+        assert!(up.contains(&LinkKind::Jump), "no jump up a 1 m ledge: {up:?}");
+        assert!(down.contains(&LinkKind::Drop), "no drop off a 1 m ledge: {down:?}");
+        for id in 0..graph.cells().len() as CellId {
+            for link in graph.links(id) {
+                assert_eq!(link.leap.is_some(), matches!(link.kind, LinkKind::Drop | LinkKind::Jump));
+            }
+        }
+    }
+
+    /// Two floors at 0 either side of a pit `gap` wide and 5 m deep.
+    fn pit(gap: f32, triggers: &[TriggerVolume]) -> NavGraph {
+        let volumes = [
+            room(Vec3::ZERO, Vec3::new(4.0, 4.0, 4.0)),
+            room(Vec3::new(4.0, -5.0, 0.0), Vec3::new(4.0 + gap, 4.0, 4.0)),
+            room(Vec3::new(4.0 + gap, 0.0, 0.0), Vec3::new(8.0 + gap, 4.0, 4.0)),
+        ];
+        bake(&volumes, triggers, &[])
+    }
+
+    #[test]
+    fn a_narrow_gap_is_jumped_and_a_wide_one_is_not() {
+        let across = |gap: f32| kinds_between(&pit(gap, &[]), |c| c.feet.y > -0.1 && c.feet.x < 4.0, move |c| c.feet.y > -0.1 && c.feet.x > 4.0 + gap);
+        assert!(across(2.0).contains(&LinkKind::Jump), "no jump across a 2 m gap");
+        assert!(across(8.0).is_empty(), "a link across an 8 m gap");
+        let into = kinds_between(&pit(8.0, &[]), |c| c.feet.y > -0.1, |c| c.feet.y < -4.0);
+        assert!(into.contains(&LinkKind::Drop), "no drop into the pit");
+    }
+
+    #[test]
+    fn a_drop_through_a_kill_trigger_has_no_link() {
+        // In the air above the pit's floor, clear of a body standing on it.
+        let kill = TriggerVolume { min: Vec3::new(4.0, -2.5, 0.0), max: Vec3::new(12.0, -1.5, 4.0), effect: TriggerEffect::Kill };
+        let graph = pit(8.0, &[kill]);
+        assert!(graph.cells().iter().any(|c| c.feet.y < -4.0), "the pit's floor lost its cells");
+        assert!(kinds_between(&graph, |c| c.feet.y > -0.1, |c| c.feet.y < -4.0).is_empty(), "a drop through a kill trigger");
     }
 
     #[test]

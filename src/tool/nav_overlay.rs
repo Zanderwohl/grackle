@@ -24,6 +24,10 @@ const CELL: Color = Color::srgb(0.2, 0.6, 0.9);
 const HURT_CELL: Color = Color::srgb(1.0, 0.45, 0.1);
 const WALK: Color = Color::srgb(0.85, 0.9, 0.95);
 const STEP: Color = Color::srgb(1.0, 0.85, 0.2);
+const DROP: Color = Color::srgb(0.9, 0.3, 0.9);
+const JUMP: Color = Color::srgb(0.3, 0.95, 0.4);
+/// Meters, the length of each stroke of a one-way link's arrowhead.
+const ARROWHEAD: f32 = 0.2;
 
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum NavOverlay {
@@ -71,8 +75,9 @@ fn cell_mesh(graph: &NavGraph) -> Mesh {
         .with_inserted_indices(Indices::U32(indices))
 }
 
-/// A line per pair of linked cells, drawn once whichever way it was found. On a flat floor a link
-/// two columns long only repeats two short ones, so those are left out unless they are steps.
+/// A line per pair of linked cells, drawn once whichever way it was found, with an arrowhead at the
+/// far end if it goes only one way. On a flat floor a walk two columns long only repeats two short
+/// ones, so those are left out.
 fn link_mesh(graph: &NavGraph) -> Mesh {
     let cells = graph.cells();
     let mut positions = Vec::new();
@@ -91,12 +96,21 @@ fn link_mesh(graph: &NavGraph) -> Mesh {
             let color = match link.kind {
                 LinkKind::Walk => WALK,
                 LinkKind::Step => STEP,
+                LinkKind::Drop => DROP,
+                LinkKind::Jump => JUMP,
             }
             .to_linear()
             .to_f32_array();
-            for feet in [cell.feet, to.feet] {
-                positions.push((feet + Vec3::Y * LINK_LIFT).to_array());
-                colors.push(color);
+            let (start, end) = (cell.feet + Vec3::Y * LINK_LIFT, to.feet + Vec3::Y * LINK_LIFT);
+            let mut segments = vec![(start, end)];
+            if !reverse {
+                let back = (start - end).normalize_or_zero() * ARROWHEAD;
+                let side = back.cross(Vec3::Y).normalize_or_zero() * ARROWHEAD * 0.5;
+                segments.extend([(end, end + back + side), (end, end + back - side)]);
+            }
+            for (a, b) in segments {
+                positions.extend([a.to_array(), b.to_array()]);
+                colors.extend([color, color]);
             }
         }
     }
@@ -222,18 +236,22 @@ mod tests {
     use super::*;
     use crate::common::world_surface::Volume;
     use crate::game::collision::CollisionWorld;
-    use crate::game::nav::{self, CellId};
+    use crate::common::movement_rules::MovementRules;
+    use crate::game::nav;
     use crate::tool::room::Room;
 
     fn graph_of(rooms: &[Room]) -> NavGraph {
         let mut world = CollisionWorld::default();
         let volumes: Vec<Volume> = rooms.iter().cloned().map(Volume::air).collect();
         let faces = world.rebuild_volumes(&volumes);
-        let cells = nav::floor_cells(&world, &faces, &[]);
-        let columns = nav::columns(&cells);
-        let links = (0..cells.len()).map(|id| nav::walk_links(&world, &cells, &columns, id as CellId, 7.0)).collect();
-        let start = cells[0].feet;
-        NavGraph::reachable(cells, links, &[start])
+        nav::graph(&world, &faces, &[], &MovementRules::default(), &[])
+    }
+
+    fn colors(mesh: &Mesh) -> &[[f32; 4]] {
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else {
+            panic!("no colors");
+        };
+        colors
     }
 
     fn vertex_count(mesh: &Mesh) -> usize {
@@ -268,11 +286,20 @@ mod tests {
             Room::new(Vec3::ZERO, Vec3::new(3.0, 3.0, 3.0)),
             Room::new(Vec3::new(3.0, 0.4, 0.0), Vec3::new(6.0, 3.4, 3.0)),
         ]);
-        let mesh = link_mesh(&graph);
-        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else {
-            panic!("no colors");
-        };
         let step = STEP.to_linear().to_f32_array();
-        assert!(colors.contains(&step), "no step link drawn across a 0.4 m lip");
+        assert!(colors(&link_mesh(&graph)).contains(&step), "no step link drawn across a 0.4 m lip");
+    }
+
+    /// Breaks if a one-way drop loses its arrowhead: a line and two strokes.
+    #[test]
+    fn a_drop_is_an_arrow() {
+        let graph = graph_of(&[
+            Room::new(Vec3::ZERO, Vec3::new(3.0, 4.0, 3.0)),
+            Room::new(Vec3::new(3.0, -1.5, 0.0), Vec3::new(6.0, 4.0, 3.0)),
+        ]);
+        let drop = DROP.to_linear().to_f32_array();
+        let drops = colors(&link_mesh(&graph)).iter().filter(|color| **color == drop).count();
+        assert!(drops > 0, "no drop drawn off a 1.5 m ledge");
+        assert_eq!(drops % 6, 0, "a drop drawn without its arrowhead");
     }
 }

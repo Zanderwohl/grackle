@@ -77,7 +77,8 @@ surface = "The map's surface"
 copy = "{ name }, copy { image }"
 unnamed = "Unnamed volume"
 floors = "Floors"
-links = "Moves between floors"
+links = "Walks"
+leaps = "Drops and jumps"
 reach = "What can be reached"
 
 [bakes.kind]
