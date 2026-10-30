@@ -158,6 +158,11 @@ fn self_splash(blast: &Explosion, body: &Box3) -> u32 {
     (blast.damage as f32 * share).round() as u32
 }
 
+/// How fast a blast dealing `amount` throws a standing body, in meters per second.
+pub fn push_speed(amount: u32) -> f32 {
+    (KNOCKBACK_PER_DAMAGE * amount as f32).min(MAX_KNOCKBACK)
+}
+
 /// The push one blast gives a body it dealt `amount` to, before any scaling of
 /// that damage: what a hit costs and how far it throws are separate questions.
 fn knockback(at: Vec3, center: Vec3, amount: u32, mine: bool, crouched: bool, grounded: bool) -> Vec3 {

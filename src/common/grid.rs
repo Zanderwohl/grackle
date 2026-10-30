@@ -51,6 +51,37 @@ impl Grid {
         found.dedup();
         found
     }
+
+    /// Calls `hit` with the shapes in each cell the segment crosses, nearest cell first, and stops
+    /// at the first that answers true. A shape in several cells is offered once per cell. Cheaper
+    /// than [`Grid::near`] for a long segment, whose box covers cells the segment never enters.
+    pub fn any_along(&self, from: Vec3, to: Vec3, mut hit: impl FnMut(u32) -> bool) -> bool {
+        if self.everywhere.iter().any(|shape| hit(*shape)) {
+            return true;
+        }
+        let (Some((start, _)), Some((end, _))) = (span(from, from), span(to, to)) else {
+            return (0..self.len).any(hit);
+        };
+        let delta = to - from;
+        let step = IVec3::select(delta.cmpne(Vec3::ZERO), delta.signum().as_ivec3(), IVec3::ZERO);
+        // Fractions of the segment, per axis: to the next cell boundary, and across one cell.
+        let moving = delta.cmpne(Vec3::ZERO);
+        let across = Vec3::select(moving, CELL / delta.abs(), Vec3::INFINITY);
+        let boundary = (start + step.max(IVec3::ZERO)).as_vec3() * CELL;
+        let mut next = Vec3::select(moving, (boundary - from) / delta, Vec3::INFINITY);
+        let mut cell = start;
+        loop {
+            if self.cells.get(&cell).is_some_and(|shapes| shapes.iter().any(|shape| hit(*shape))) {
+                return true;
+            }
+            let axis = next.min_position();
+            if cell == end || next[axis] > 1.0 {
+                return false;
+            }
+            cell[axis] += step[axis];
+            next[axis] += across[axis];
+        }
+    }
 }
 
 fn span(min: Vec3, max: Vec3) -> Option<(IVec3, IVec3)> {
@@ -90,6 +121,27 @@ mod tests {
             (Vec3::new(-2.0, -2.0, -2.0), Vec3::new(0.0, 0.0, 0.0)),
         ].into_iter());
         assert_eq!(grid.near(Vec3::splat(-0.5), Vec3::splat(0.5)), vec![0, 2]);
+    }
+
+    /// Breaks if a segment skips a cell it crosses, or reports a shape it never reaches.
+    #[test]
+    fn a_segment_meets_only_what_lies_along_it() {
+        let grid = Grid::build([
+            (Vec3::new(10.0, 0.0, 10.0), Vec3::new(11.0, 1.0, 11.0)),
+            (Vec3::new(10.0, 0.0, -10.0), Vec3::new(11.0, 1.0, -9.0)),
+        ].into_iter());
+        let met = |from: Vec3, to: Vec3| {
+            let mut met = Vec::new();
+            grid.any_along(from, to, |shape| {
+                met.push(shape);
+                false
+            });
+            met
+        };
+        assert_eq!(met(Vec3::new(0.5, 0.5, 0.5), Vec3::new(20.5, 0.5, 20.5)), vec![0]);
+        assert_eq!(met(Vec3::new(20.5, 0.5, -20.5), Vec3::new(0.5, 0.5, 0.5)), vec![1]);
+        assert!(met(Vec3::new(0.5, 0.5, 0.5), Vec3::new(0.5, 0.5, 20.5)).is_empty());
+        assert!(met(Vec3::new(10.5, 0.5, 10.5), Vec3::new(10.5, 0.5, 10.5)) == vec![0]);
     }
 
     #[test]

@@ -1,5 +1,7 @@
-//! The third bake: the nav graph ([`crate::game::nav`]), in the background, kept until a new one
-//! replaces it. See documentation/bots.md.
+//! The third and fourth bakes: the nav graph ([`crate::game::nav`]) with its knockback and pickup
+//! fields, then its sightlines ([`crate::game::nav_field::SightBake`]), each in the background and
+//! kept until a new one replaces it. Sightlines are a bake of their own because they are most of
+//! the time, and a round waits only for the first. See documentation/bots.md.
 //!
 //! Built from the map's volumes rather than from the collision world standing now: entering Play
 //! puts rooms past the rollback bar in before the collision world is rebuilt, and the bake for the
@@ -14,9 +16,13 @@ use crate::common::app_mode::AppMode;
 use crate::common::movement_rules::MovementRules;
 use crate::common::trigger::TriggerVolume;
 use crate::common::world_surface::{Face, Volume};
+use crate::common::weapon::WeaponCatalog;
 use crate::editor::spawn_point::SpawnPointMarker;
+use crate::editor::weapon_pickup::WeaponPickupSpec;
+use crate::game::world_prop::{self, GivesWeapon, WorldProp};
 use crate::game::collision::CollisionWorld;
 use crate::game::nav::{self, Cell, CellId, Link, NavGraph};
+use crate::game::nav_field::{FieldBake, Pickup, Sight, SightBake};
 use crate::game::player::running_speed;
 use crate::get;
 use crate::prop::archetype::RoundedBox;
@@ -31,17 +37,31 @@ const LINK_BATCH: usize = 256;
 #[derive(Resource)]
 pub struct NavBake {
     graph: NavGraph,
-    /// Bumped whenever `graph` is replaced, for what draws it.
+    /// Bumped whenever `graph` or its fields change, for what draws it.
     generation: u64,
+    /// Bumped whenever `graph` is replaced: what the sightlines are a bake of.
+    built: u64,
+    /// What `graph` was built from, for the sightlines to be cast against.
+    built_from: Vec<Volume>,
     /// What the map was when last looked at; taken again only on a change.
     snapshot: Option<Snapshot>,
     bake: BackgroundBake<Job>,
+    sight: BackgroundBake<SightJob>,
 }
 
 impl Default for NavBake {
     fn default() -> Self {
-        // Off: about ten seconds on Halls in a debug build, too much to redo on every still moment.
-        Self { graph: NavGraph::default(), generation: 0, snapshot: None, bake: BackgroundBake::new(false) }
+        Self {
+            graph: NavGraph::default(),
+            generation: 0,
+            built: 0,
+            built_from: Vec::new(),
+            snapshot: None,
+            // Off: several seconds on Halls in a debug build, too much to redo on every still moment.
+            bake: BackgroundBake::new(false),
+            // On: it follows the graph rather than the map.
+            sight: BackgroundBake::new(true),
+        }
     }
 }
 
@@ -54,8 +74,21 @@ impl NavBake {
         self.generation
     }
 
-    fn replace(&mut self, graph: NavGraph) {
+    fn replace(&mut self, (graph, volumes): (NavGraph, Vec<Volume>)) {
         self.graph = graph;
+        self.built_from = volumes;
+        self.generation += 1;
+        self.built += 1;
+    }
+
+    /// Dropped if the graph was replaced while the sightlines were cast.
+    fn add_sight(&mut self, (of, sight): (u64, Sight)) {
+        if of != self.built {
+            return;
+        }
+        let mut fields = self.graph.fields().clone();
+        fields.add_sight(sight);
+        self.graph.set_fields(fields);
         self.generation += 1;
     }
 
@@ -68,7 +101,7 @@ impl NavBake {
     }
 
     pub fn is_baking(&self) -> bool {
-        self.bake.is_baking()
+        self.bake.is_baking() || self.sight.is_baking()
     }
 }
 
@@ -87,13 +120,14 @@ struct Snapshot {
     props: Vec<RoundedBox>,
     triggers: Vec<TriggerVolume>,
     spawns: Vec<Vec3>,
+    pickups: Vec<Pickup>,
     rules: MovementRules,
     hash: u64,
 }
 
 impl Snapshot {
     fn job(&self) -> Job {
-        Job { snapshot: self.clone(), world: None, faces: Vec::new(), cells: None, found: None, links: Vec::new(), leaps: Vec::new(), graph: None }
+        Job { snapshot: self.clone(), world: None, faces: Vec::new(), cells: None, found: None, links: Vec::new(), leaps: Vec::new(), graph: None, fields: None, fielded: false }
     }
 }
 
@@ -110,6 +144,9 @@ struct NavInputs<'w, 's> {
     removed_blocks: RemovedComponents<'w, 's, Block>,
     removed_triggers: RemovedComponents<'w, 's, TriggerVolume>,
     removed_spawns: RemovedComponents<'w, 's, SpawnPointMarker>,
+    weapon_pickups: Query<'w, 's, (&'static Transform, &'static WeaponPickupSpec)>,
+    prop_pickups: Query<'w, 's, &'static WorldProp, (With<world_prop::Pickup>, Without<GivesWeapon>)>,
+    catalog: Option<Res<'w, WeaponCatalog>>,
 }
 
 impl NavInputs<'_, '_> {
@@ -122,6 +159,23 @@ impl NavInputs<'_, '_> {
         removed > 0 || !self.edited.is_empty() || !self.moved_spawns.is_empty() || self.rules.is_changed()
     }
 
+    /// Compared rather than change-detected, like props: placed pickups are stood up again by
+    /// systems that do not mark them.
+    fn pickups(&self) -> Vec<Pickup> {
+        let weapon = |spec: &WeaponPickupSpec| {
+            let weapon = self.catalog.as_ref().and_then(|catalog| catalog.get(spec.weapon));
+            weapon.map_or_else(|| format!("{:?}", spec.weapon), |weapon| get!(&weapon.name_key))
+        };
+        let mut pickups: Vec<Pickup> = self
+            .weapon_pickups
+            .iter()
+            .map(|(placed, spec)| Pickup { label: weapon(spec), feet: placed.translation })
+            .chain(self.prop_pickups.iter().map(|prop| Pickup { label: prop.model.clone(), feet: prop.at }))
+            .collect();
+        pickups.sort_by(|a, b| a.label.cmp(&b.label).then(a.feet.to_array().partial_cmp(&b.feet.to_array()).unwrap_or(std::cmp::Ordering::Equal)));
+        pickups
+    }
+
     fn snapshot(&self) -> Snapshot {
         let volumes = self.volumes.volumes();
         // Props are rebuilt every tick without change detection, so they are compared instead.
@@ -132,13 +186,14 @@ impl NavInputs<'_, '_> {
         let rules = *self.rules;
         // Debug writes an `f32` as its shortest exact decimal, so equal inputs hash equal.
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        format!("{volumes:?}{props:?}{triggers:?}{spawns:?}{rules:?}").hash(&mut hasher);
-        Snapshot { volumes, props, triggers, spawns, rules, hash: hasher.finish() }
+        let pickups = self.pickups();
+        format!("{volumes:?}{props:?}{triggers:?}{spawns:?}{pickups:?}{rules:?}").hash(&mut hasher);
+        Snapshot { volumes, props, triggers, spawns, pickups, rules, hash: hasher.finish() }
     }
 }
 
 /// Items: the surface, the cells, a batch of walks and then of leaps per [`LINK_BATCH`] cells,
-/// then pruning to what a spawn can reach. Until the cells are found their number is not known, so one batch is
+/// pruning to what a spawn can reach, then the fields' batches. Until the cells are found their number is not known, so one batch is
 /// assumed and `scheduled` grows once.
 struct Job {
     snapshot: Snapshot,
@@ -150,10 +205,13 @@ struct Job {
     links: Vec<Vec<Link>>,
     leaps: Vec<Vec<Link>>,
     graph: Option<NavGraph>,
+    fields: Option<FieldBake>,
+    /// Every field batch is done; only [`FieldBake::finish`] is left.
+    fielded: bool,
 }
 
 impl BakeJob for Job {
-    type Output = NavGraph;
+    type Output = (NavGraph, Vec<Volume>);
 
     fn progress(&self) -> (usize, usize) {
         let batches = self.found.map_or(1, |found| found.div_ceil(LINK_BATCH));
@@ -162,8 +220,13 @@ impl BakeJob for Job {
         } else {
             self.links.len().div_ceil(LINK_BATCH) + self.leaps.len().div_ceil(LINK_BATCH)
         };
-        let completed = usize::from(self.world.is_some()) + usize::from(self.found.is_some()) + linked + usize::from(self.graph.is_some());
-        (completed, 3 + 2 * batches)
+        let (fielded, fields) = match &self.fields {
+            Some(fields) if self.fielded => (fields.progress().1, fields.progress().1),
+            Some(fields) => fields.progress(),
+            None => (0, 1),
+        };
+        let completed = usize::from(self.world.is_some()) + usize::from(self.found.is_some()) + linked + usize::from(self.graph.is_some()) + fielded;
+        (completed, 3 + 2 * batches + fields)
     }
 
     fn doing(&self) -> String {
@@ -172,11 +235,17 @@ impl BakeJob for Job {
             (Some(_), None) if self.found.is_none() => get!("bakes.doing.floors"),
             (Some(_), Some((cells, _))) if self.links.len() < cells.len() => get!("bakes.doing.links"),
             (Some(_), Some((cells, _))) if self.leaps.len() < cells.len() => get!("bakes.doing.leaps"),
-            _ => get!("bakes.doing.reach"),
+            _ if self.fields.is_none() => get!("bakes.doing.reach"),
+            _ => get!("bakes.doing.knockback"),
         }
     }
 
     fn step(&mut self) {
+        if let (Some(graph), Some(world), Some(fields)) = (&self.graph, &self.world, &mut self.fields) {
+            let snapshot = &self.snapshot;
+            self.fielded = fields.step(world, graph, &snapshot.triggers, &snapshot.rules);
+            return;
+        }
         let Some(world) = &self.world else {
             let mut world = CollisionWorld::default();
             self.faces = world.rebuild_volumes(&self.snapshot.volumes);
@@ -212,13 +281,66 @@ impl BakeJob for Job {
         for (links, leaps) in links.iter_mut().zip(std::mem::take(&mut self.leaps)) {
             links.extend(leaps);
         }
-        self.graph = Some(NavGraph::reachable(cells, links, &self.snapshot.spawns));
+        let graph = NavGraph::reachable(cells, links, &self.snapshot.spawns);
+        self.fields = Some(FieldBake::new(&graph, self.snapshot.pickups.clone()));
+        self.graph = Some(graph);
     }
 
-    fn finish(self) -> NavGraph {
-        let graph = self.graph.unwrap_or_default();
+    fn finish(self) -> (NavGraph, Vec<Volume>) {
+        let mut graph = self.graph.unwrap_or_default();
+        if let Some(fields) = self.fields {
+            let fields = fields.finish(&graph);
+            graph.set_fields(fields);
+        }
         info!("Baked the nav graph: {} cell(s)", graph.cells().len());
-        graph
+        (graph, self.snapshot.volumes)
+    }
+}
+
+/// Items: the surface, then the sightlines' batches.
+struct SightJob {
+    /// Which graph, as [`NavBake::built`] counts them.
+    of: u64,
+    volumes: Vec<Volume>,
+    world: Option<CollisionWorld>,
+    graph: NavGraph,
+    bake: SightBake,
+    /// Only [`SightBake::finish`] is left.
+    cast: bool,
+}
+
+impl SightJob {
+    fn new(of: u64, volumes: Vec<Volume>, graph: NavGraph) -> Self {
+        let bake = SightBake::new(&graph);
+        SightJob { of, volumes, world: None, graph, bake, cast: false }
+    }
+}
+
+impl BakeJob for SightJob {
+    type Output = (u64, Sight);
+
+    fn progress(&self) -> (usize, usize) {
+        let (cast, rows) = self.bake.progress();
+        let cast = if self.cast { rows } else { cast };
+        (usize::from(self.world.is_some()) + cast, 1 + rows)
+    }
+
+    fn doing(&self) -> String {
+        if self.world.is_none() { get!("bakes.doing.surface") } else { get!("bakes.doing.sight") }
+    }
+
+    fn step(&mut self) {
+        let Some(world) = &self.world else {
+            let mut world = CollisionWorld::default();
+            world.rebuild_volumes(&self.volumes);
+            self.world = Some(world);
+            return;
+        };
+        self.cast = self.bake.step(world, &self.graph);
+    }
+
+    fn finish(self) -> (u64, Sight) {
+        (self.of, self.bake.finish(&self.graph))
     }
 }
 
@@ -231,8 +353,9 @@ fn auto_bake_nav(
 ) {
     let state = &mut *state;
     if clears.read().count() > 0 {
-        state.replace(NavGraph::default());
+        state.replace((NavGraph::default(), Vec::new()));
         state.bake.forget();
+        state.sight.forget();
         info!("Cleared the nav graph");
     }
     if requests.read().count() > 0 {
@@ -241,12 +364,18 @@ fn auto_bake_nav(
     if let Some(graph) = state.bake.poll() {
         state.replace(graph);
     }
-    let props_moved = state.snapshot.as_ref().is_some_and(|seen| seen.props != inputs.collision.props);
-    if inputs.changed_since_last_frame() || props_moved || state.snapshot.is_none() {
+    let moved = state.snapshot.as_ref().is_some_and(|seen| seen.props != inputs.collision.props || seen.pickups != inputs.pickups());
+    if inputs.changed_since_last_frame() || moved || state.snapshot.is_none() {
         state.snapshot = Some(inputs.snapshot());
     }
     let snapshot = state.snapshot.as_ref().expect("taken above");
     state.bake.update(snapshot.hash, true, time.elapsed_secs(), || snapshot.job());
+
+    if let Some(sight) = state.sight.poll() {
+        state.add_sight(sight);
+    }
+    let NavBake { graph, built, built_from, sight, .. } = state;
+    sight.update(*built, true, time.elapsed_secs(), || SightJob::new(*built, built_from.clone(), graph.clone()));
 }
 
 /// A round never starts on a stale graph: bots will walk it.
@@ -260,6 +389,7 @@ fn bake_nav_for_the_round(mut state: ResMut<NavBake>, inputs: NavInputs) {
 
 fn report_nav(state: Res<NavBake>, mut progress: ResMut<BakeProgress>) {
     bake_job::report(&mut progress, BakeKind::Nav, state.bake.status());
+    bake_job::report(&mut progress, BakeKind::Sight, state.sight.status());
 }
 
 pub struct NavBakePlugin;
@@ -282,7 +412,7 @@ mod tests {
     use crate::tool::bakes::{BakePlugin, RoomBake};
 
     fn snapshot_of(volumes: Vec<Volume>) -> Snapshot {
-        Snapshot { volumes, props: Vec::new(), triggers: Vec::new(), spawns: Vec::new(), rules: MovementRules::default(), hash: 0 }
+        Snapshot { volumes, props: Vec::new(), triggers: Vec::new(), spawns: Vec::new(), pickups: Vec::new(), rules: MovementRules::default(), hash: 0 }
     }
 
     /// Breaks if a bar drawn from this job could run backwards or stop short.
@@ -298,7 +428,7 @@ mod tests {
             last = now;
         }
         assert!(last.1 > 4, "a 20 m room was linked in one batch: {last:?}");
-        assert!(!job.finish().cells().is_empty());
+        assert!(!job.finish().0.cells().is_empty());
     }
 
     fn headless() -> App {
@@ -331,5 +461,63 @@ mod tests {
         let status = app.world().resource::<BakeProgress>().get(BakeKind::Nav).cloned().unwrap();
         assert_eq!(status.state, bake_job::BakeState::UpToDate);
         assert_eq!(status.completed, status.scheduled);
+    }
+
+    /// Times each stage of the bake on a real map:
+    /// `NAV_MAP=path/to/map.gmb cargo test --lib time_the_nav_bake -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn time_the_nav_bake() {
+        use bevy::ecs::system::RunSystemOnce;
+        use crate::editor::editable::FeatureTimeline;
+        use crate::editor::volume_order::place_volumes;
+
+        let path = std::env::var("NAV_MAP").expect("NAV_MAP names the map to time");
+        let loaded = crate::editor::save::load(std::path::Path::new(&path)).expect("the map loads");
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(loaded.timeline);
+        app.add_systems(Update, (FeatureTimeline::sync_entities, place_volumes).chain());
+        app.update();
+        app.update();
+        let snapshot = app
+            .world_mut()
+            .run_system_once(|volumes: MapVolumes, triggers: Query<&TriggerVolume>, spawns: Query<&Transform, With<SpawnPointMarker>>| Snapshot {
+                volumes: volumes.volumes(),
+                props: Vec::new(),
+                triggers: triggers.iter().copied().collect(),
+                spawns: spawns.iter().map(|placed| placed.translation).collect(),
+                pickups: Vec::new(),
+                rules: MovementRules::default(),
+                hash: 0,
+            })
+            .unwrap();
+        println!("{} volume(s), {} trigger(s), {} spawn(s)", snapshot.volumes.len(), snapshot.triggers.len(), snapshot.spawns.len());
+
+        fn timed<J: BakeJob>(mut job: J) -> J::Output {
+            let mut stage = job.doing();
+            let (mut started, whole) = (std::time::Instant::now(), std::time::Instant::now());
+            while !job.is_done() {
+                job.step();
+                let doing = job.doing();
+                if doing != stage || job.is_done() {
+                    println!("{stage:>24}: {:.2} s", started.elapsed().as_secs_f32());
+                    (stage, started) = (doing, std::time::Instant::now());
+                }
+            }
+            let finished = std::time::Instant::now();
+            let output = job.finish();
+            println!("{:>24}: {:.2} s", "finishing", finished.elapsed().as_secs_f32());
+            println!("{:>24}: {:.2} s", "in all", whole.elapsed().as_secs_f32());
+            output
+        }
+        let (mut graph, volumes) = timed(snapshot.job());
+        let (_, sight) = timed(SightJob::new(0, volumes, graph.clone()));
+        let mut fields = graph.fields().clone();
+        fields.add_sight(sight);
+        graph.set_fields(fields);
+        let lines = &graph.fields().sightlines;
+        let pairs: usize = lines.standing.iter().map(Vec::len).sum();
+        println!("{} cell(s), {} viewpoint(s), {} visible ordered pair(s)", graph.cells().len(), lines.viewpoints.len(), pairs);
     }
 }

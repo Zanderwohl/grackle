@@ -182,13 +182,31 @@ as the sun is, and reports as `BakeKind::Nav`:
   debounced like the sun's. Entering Play bakes, and waits, only if the graph
   is stale.
 
-Cells and links are cheap (seconds at most in a debug build). Visibility is
-not: about 3 800 cells is about 7 M ordered pairs before the range cap. So
-the bake **lands in two stages**. First cells, links, danger and pickup
-fields. Then visibility. The overlay shows the first stage as soon as it is
-ready and fills in sightlines after. Visibility at 1 m spacing (about 950
-cells), interpolated onto the 0.5 m cells, is the fallback if 0.5 m is too
-slow. That is measured before it is decided.
+The bake **lands in two stages**, and they are two bakes. First the **Nav
+graph**: cells, links, knockback and pickup distances. Then **Sightlines**
+(`BakeKind::Sight`), which starts on its own whenever a new graph lands and is
+fitted onto it when it finishes, unless the graph was replaced meanwhile. A
+round waits only for the first. The overlay shows each as it is ready.
+
+Measured on Halls in a debug build (3 128 cells; `time_the_nav_bake` in
+`src/tool/nav_bake.rs` reports each stage for any map):
+
+| Stage | Seconds |
+| --- | --- |
+| Surface, floors, walks | 0.4 |
+| Drops and jumps | 3.7 |
+| Knockback | 2.3 |
+| **Nav graph in all** | **6.4** |
+| Sightlines | 18.5 |
+| Cover, height and the rest | 0.6 |
+
+Sightlines and knockback are cast between **viewpoints**, one per 1 m square
+(`SIGHT_STRIDE` columns) at each floor height, 1 000 on Halls; each cell reads
+its viewpoint's. Eighteen rays per pair in range: standing eye to a standing
+body, crouched eye to a standing body and standing eye to a crouched body,
+three samples a body, both ways. Each ray walks the collision grid along
+itself and stops at the first wall (`CollisionWorld::segment_clear`); asking
+the grid for every wall in a 40 m ray's bounding box was 103 s.
 
 Do not use Halls' symmetry. Pickups are authored per quarter and mappers
 break symmetry on purpose. The general bake is the only one.
@@ -223,10 +241,11 @@ One overlay at a time, picked from the nav graph's section of the **Bakes** pane
 | Danger | Knockback and hurt, red |
 | Distance to … | One pickup's field, picked from a list |
 
-The section also holds the Bake button, the stage the bake is at, a crouched
-toggle for the visibility overlays, and the saturation for each scale.
-Saturation is a fixed number in m², not a percentile, for the reason given
-under "Fields".
+The section also holds the Bake button, a crouched toggle for the visibility
+overlays, and the saturation for each scale: square meters for sightlines,
+seconds for distance, meters for height. Saturation is a fixed number, not a
+percentile, for the reason given under "Fields". `F7` shows the overlay to the
+play camera during a round.
 
 Two tools beside the overlays:
 
@@ -304,21 +323,23 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
       a jump has no link; a drop into a Kill volume has no link
 
 ### Stage 3: fields and the mapper's overlays
-- [ ] Knockback danger, Hurt danger
-- [ ] Pickup distance fields (travel time)
-- [ ] Visibility stage: sight, exposure, advantage, crouched variants;
-      measured on Halls at 0.5 m and 1 m before choosing
-- [ ] Cover nearby
-- [ ] Overlays: Sight, Exposure, Sight × exposure (bivariate), Advantage,
-      Cover, Danger, Distance to…; fixed saturation per scale
-- [ ] Probe: who sees this cell, what it sees
-- [ ] Baseline: pin a bake, show the difference
-- [ ] Debug key to show the current overlay in Play
-- [ ] Tests: a pillar between two cells hides them from each other; a ledge
+- [x] Knockback danger, Hurt danger
+- [x] Pickup distance fields (travel time)
+- [x] Visibility stage: sight, exposure, advantage, crouched variants;
+      measured on Halls: 1 m viewpoints, 18.5 s
+- [x] Sightlines as a bake of their own, so a round waits only for the graph
+- [x] Cover nearby, height
+- [x] Overlays: Sight, Exposure, Sight × exposure (bivariate), Advantage,
+      Cover, Danger, Height, Distance to…; fixed saturation per scale
+- [x] Probe: who sees this cell, what it sees
+- [x] Baseline: pin a bake, show the difference
+- [x] Debug key to show the current overlay in Play (`F7`)
+- [x] Tests: a pillar between two cells hides them from each other; a ledge
       gives the high cell more sight than exposure against the low one; a
       cell beside a pit edge has knockback danger and one in the middle of a
       room has none
-- [ ] Chunked across frames on wasm
+- [ ] Chunked across frames on wasm (the jobs already step in batches; check
+      the batch sizes against a frame once there is a wasm build)
 
 ### Stage 4: the bot's interface
 - [ ] `NavGraph` query API (`cell_at`, `neighbors`, `field`, `path` with a

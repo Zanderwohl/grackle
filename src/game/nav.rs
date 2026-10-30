@@ -18,6 +18,7 @@ use crate::common::world_surface::Face;
 use crate::constants::TICK_HZ;
 use crate::game::collision::CollisionWorld;
 use crate::game::condition::Condition;
+use crate::game::nav_field::{Field, Fields};
 use crate::game::player::{
     running_speed, step, Mover, PhysicsBody, Player, PlayerInput, PLAYER_HALF, STEP_HEIGHT, WALKABLE,
 };
@@ -26,7 +27,7 @@ use crate::game::player::{
 pub const SPACING: f32 = 0.5;
 
 /// Feet are tested this far above the floor, so the body box is clear of the floor's own slab.
-const LIFT: f32 = 0.02;
+pub(crate) const LIFT: f32 = 0.02;
 
 /// Two samples in one column nearer than this, in meters, are one floor split by the kernel.
 const SAME_FLOOR: f32 = 0.05;
@@ -87,6 +88,7 @@ pub struct NavGraph {
     cells: Vec<Cell>,
     links: Vec<Vec<Link>>,
     columns: HashMap<IVec2, Vec<CellId>>,
+    fields: Fields,
 }
 
 fn column_of(x: f32, z: f32) -> IVec2 {
@@ -221,7 +223,7 @@ pub fn walk_links(world: &CollisionWorld, cells: &[Cell], columns: &HashMap<IVec
     links
 }
 
-fn cell_near(cells: &[Cell], columns: &HashMap<IVec2, Vec<CellId>>, feet: Vec3) -> Option<CellId> {
+pub(crate) fn cell_near(cells: &[Cell], columns: &HashMap<IVec2, Vec<CellId>>, feet: Vec3) -> Option<CellId> {
     let column = column_of(feet.x, feet.z);
     let nearby = (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| column + IVec2::new(dx, dz)));
     nearby
@@ -235,9 +237,9 @@ fn cell_near(cells: &[Cell], columns: &HashMap<IVec2, Vec<CellId>>, feet: Vec3) 
         })
 }
 
-const TICK: f32 = 1.0 / TICK_HZ as f32;
+pub(crate) const TICK: f32 = 1.0 / TICK_HZ as f32;
 /// Ticks a leap may take before it is given up as a fall out of the map.
-const MOST_TICKS: u32 = 3 * TICK_HZ as u32;
+pub(crate) const MOST_TICKS: u32 = 3 * TICK_HZ as u32;
 /// Ticks a drop may run along the floor before it is given up as a run into a wall.
 const RUN_TICKS: u32 = TICK_HZ as u32 / 4;
 /// Seconds a leap must save over walking to the same cell to be worth a link; a running jump
@@ -359,7 +361,7 @@ impl NavGraph {
     /// Keeps only what can be reached from a cell under one of `starts`; with no starts, keeps
     /// everything. Cell ids are renumbered.
     pub fn reachable(cells: Vec<Cell>, links: Vec<Vec<Link>>, starts: &[Vec3]) -> NavGraph {
-        let everything = NavGraph { columns: columns(&cells), cells, links };
+        let everything = NavGraph { columns: columns(&cells), cells, links, fields: Fields::default() };
         if starts.is_empty() {
             return everything;
         }
@@ -393,7 +395,7 @@ impl NavGraph {
             .filter(|(_, kept)| **kept)
             .map(|(links, _)| links.into_iter().filter_map(|link| Some(Link { to: renumbered[link.to as usize]?, ..link })).collect())
             .collect();
-        NavGraph { columns: columns(&cells), cells, links }
+        NavGraph { columns: columns(&cells), cells, links, fields: Fields::default() }
     }
 
     pub fn cells(&self) -> &[Cell] {
@@ -402,6 +404,26 @@ impl NavGraph {
 
     pub fn links(&self, id: CellId) -> &[Link] {
         &self.links[id as usize]
+    }
+
+    pub fn columns(&self) -> &HashMap<IVec2, Vec<CellId>> {
+        &self.columns
+    }
+
+    pub fn fields(&self) -> &Fields {
+        &self.fields
+    }
+
+    pub fn set_fields(&mut self, fields: Fields) {
+        self.fields = fields;
+    }
+
+    /// `None` until the field is baked.
+    pub fn field(&self, id: CellId, field: Field) -> Option<f32> {
+        match field {
+            Field::Hurt => Some(self.cells.get(id as usize)?.hurt as f32),
+            field => self.fields.get(id, field),
+        }
     }
 
     /// The cell whose floor is nearest under `feet`, in its own column or a neighbor's, within a

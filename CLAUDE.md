@@ -55,9 +55,9 @@ still a prototype for feeling out room sizes: it has health and can shoot, and
 that is the whole of it.
 
 There are no bots. The nav graph they will walk — walks, steps, drops and jumps, the last two found by running the movement step — is baked (`src/game/nav.rs`,
-the third bake) and drawn over the floor from its section of the Bakes panel; the
-sightline, exposure and danger fields to bake onto it are planned in
-[documentation/bots.md](documentation/bots.md).
+the third bake), with knockback, pickup distance and, as a fourth bake, sightlines
+on it (`src/game/nav_field.rs`); all of it is drawn over the floor from its section
+of the Bakes panel. The plan is [documentation/bots.md](documentation/bots.md).
 
 There is a prop editor, which models the things a map and a class refer to.
 It is a third `AppMode` and the frontier next to it: the geometry it builds is
@@ -358,8 +358,9 @@ between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body
 its hitboxes are hidden from inside your own head, nobody else's are),
 **`F4`** toggles the hitbox gizmos and the debug laser aimed at them, and
 **`F6`** toggles the bone gizmos and the pickups' trigger volumes
-(green, dim while one restocks). Both are off by default: they are debug
-views, and now that bodies have geometry neither is what a player sees. `F3`
+(green, dim while one restocks), and **`F7`** shows the nav overlay picked in
+the Bakes panel. All three are off by default: they are debug
+views, and now that bodies have geometry none is what a player sees. `F3`
 is the perf overlay in both modes.
 
 Weapons are drawn by **bucket** on **`1`–`9`** and the **wheel** (see
