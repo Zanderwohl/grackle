@@ -346,7 +346,7 @@ lowest-order one, the same way the viewmodel and HUD cameras already set
 `ClearColorConfig::None`. Let each clear and every view but the top one is
 blank, with no error.
 
-Three more keys while playing: **`F`** swaps between first and third person
+Four more keys while playing: **`.`** brings the team picker back (see "Teams"), **`F`** swaps between first and third person
 (`ViewPreference` in [`src/game/player.rs`](src/game/player.rs), which a
 condition can override; `ViewMode` is what is drawn, and the camera swings
 between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body and
@@ -1534,13 +1534,34 @@ The HUD is painted with `Swatch::of_body`: team, else player color, else
 neutral. See
 [documentation/arena.md](documentation/arena.md).
 
-Otherwise the player does not choose: `next_team` in
-[`src/game/respawn.rs`](src/game/respawn.rs) alternates Red and Blue as people
-turn up, because there is no lobby and nothing that could balance. Alternating
-rather than a constant so that **two people on one map are on different
-sides** — with everybody on one team the rule above is unreachable outside the
-animation grid, and a rule you cannot walk up to and check is a rule that
-quietly stops being true.
+Otherwise **the player chooses**
+([`src/game/team_choice.rs`](src/game/team_choice.rs)). Everybody enters a
+match `Seat::Choosing` — on their `Identity`, with no body and no claim to one,
+so they count as dead — behind the **team picker**
+([`src/game/team_picker.rs`](src/game/team_picker.rs)): Random, each team in
+play, and Spectate, which is offered and never open yet. A mode without teams
+offers "Free for All", which is Random into no team. `.` brings it back
+mid-match. The teams in play are the `Side`s the spawn points are on, or Red
+and Blue on a map with fewer than two.
+
+- **The authority decides and offers.** A team is open if, once joined, it is
+  no more than `MOST_AHEAD` players ahead of any other; your own team never
+  is. Random is the fewest players, then the fewest points, then a coin, and
+  never your own team. Offers are per player, since leaving a team counts
+  before joining one, and a client's goes out only when it changes (`Offer`
+  on its link).
+- **A request names the seat it was asked from** and is dropped if that seat
+  is already gone, so a second click on Random cannot become a switch.
+- **Switching with a body kills it**, a `Kill` credited to yourself — a point
+  off, and the respawn timer starts on the new team.
+- **The picker holds the mouse through `MouseHeld`**, beside the pause menu's
+  flag, so every `not_paused` check and the one cursor writer cover it too
+  without either menu rebuilding on the other's change. A choice closes the
+  picker only once the seat it was asked from is left, so a refusal leaves it
+  up showing the new offer. Before any body,
+  the view looks out from behind a spawn point (`overlook_while_choosing`, a
+  `DeathCam` of nobody's), which is why `spawn_the_view` no longer waits for
+  a body.
 
 **The animation grid does choose.** `RosterTeam` on the feature is a panel
 combo — *Striped* ("Four teams, then colors"), or one of the four. Striped
@@ -1649,7 +1670,7 @@ shape are not placeholders, and both live in
 [`src/game/respawn.rs`](src/game/respawn.rs):
 
 - **Your identity outlives your body.** `Identity` is a `PlayerId` and a
-  `Team`, and every body somebody is given carries the *same* one. This is the
+  `Seat`, and every body somebody is given carries the *same* one. This is the
   opposite of what `F5` does, deliberately: a new match is a new player, a new
   life is not. A fresh id per death shows a scoreboard one player per life, and
   a fresh team is being put on the other side for dying.
@@ -2252,7 +2273,7 @@ guarantees is only that being alive is the resting state.
 
 | Moment | What happens |
 | --- | --- |
-| Anybody has no body | `give_bodies_to_whoever_needs_one`, once any respawn timer is out, wearing the `Identity` they already had |
+| Anybody seated has no body | `give_bodies_to_whoever_needs_one`, once any respawn timer is out, wearing the `Identity` they already had |
 | Client's body reaches it | `claim_our_own_body` marks it `LocalPlayer` + `InputMarker` |
 | Client disconnects | `ControlledBy { lifetime: SessionBased }` despawns it on the server; the despawn replicates |
 | Round ends | the server's `leave_play` despawns every body; a client's despawns none, because they are not its to despawn |

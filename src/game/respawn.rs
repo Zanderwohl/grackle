@@ -5,6 +5,7 @@
 
 use bevy::prelude::*;
 use rand::seq::IndexedRandom;
+use serde::{Deserialize, Serialize};
 
 use crate::common::damage::PlayerId;
 use crate::common::player_color::PlayerColor;
@@ -19,16 +20,39 @@ use crate::game::player::{fallback_spawn, usable_spawns, Spawn};
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Identity {
     pub id: PlayerId,
-    /// `None` in a mode without teams.
-    pub team: Option<Team>,
+    pub seat: Seat,
     /// Which hue on the wheel, for [`PlayerColor::nth`]. An index rather than
     /// the hue, so a new match's [`HueStart`] turns everybody's together.
     pub color: usize,
 }
 
 impl Identity {
+    /// `None` while choosing, or in a mode without teams.
+    pub fn team(&self) -> Option<Team> {
+        self.seat.team()
+    }
+
     pub fn color(&self, start: &HueStart) -> PlayerColor {
         PlayerColor::nth(start.0, self.color)
+    }
+}
+
+/// Where somebody stands in the match. A player who is choosing has no body
+/// and is owed none: the team picker is up for them, and they count as dead.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Seat {
+    #[default]
+    Choosing,
+    /// `None` in a mode without teams.
+    Playing(Option<Team>),
+}
+
+impl Seat {
+    pub fn team(self) -> Option<Team> {
+        match self {
+            Seat::Choosing => None,
+            Seat::Playing(team) => team,
+        }
     }
 }
 
@@ -47,19 +71,6 @@ impl HueStart {
 /// which learns who it is from the body the server hands it.
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct OurIdentity(pub Identity);
-
-/// Alternates, a placeholder, so two people on one map are on different
-/// sides and friendly fire can be checked by hand. Nobody, in a mode without
-/// teams.
-pub fn next_team(already_here: usize, teams: bool) -> Option<Team> {
-    if !teams {
-        return None;
-    }
-    match already_here % 2 {
-        0 => Some(Team::Red),
-        _ => Some(Team::Blue),
-    }
-}
 
 /// For the log.
 pub fn team_name(team: Option<Team>) -> String {
@@ -123,18 +134,6 @@ pub fn placed_spawns(spawns: &Query<(&Transform, Option<&Side>), With<SpawnPoint
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_second_player_is_put_on_the_other_side() {
-        assert_eq!(next_team(0, true), Some(Team::Red));
-        assert_eq!(next_team(1, true), Some(Team::Blue));
-    }
-
-    #[test]
-    fn without_teams_nobody_is_on_a_side() {
-        assert_eq!(next_team(0, false), None);
-        assert_eq!(next_team(1, false), None);
-    }
 
     #[test]
     fn a_team_spawns_on_its_own_side_when_it_has_one() {

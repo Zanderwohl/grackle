@@ -21,7 +21,7 @@ use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{spawn_player, LocalPlayer, Player, Simulated, Spawn};
 use crate::game::weapon::AutoReload;
-use crate::game::respawn::{choose_spawn, next_team, placed_spawns, team_name, HueStart, Identity, OurIdentity};
+use crate::game::respawn::{choose_spawn, placed_spawns, team_name, HueStart, Identity, OurIdentity, Seat};
 
 /// Spawns bodies for connected clients and marks our own when it arrives.
 pub struct NetBodiesPlugin;
@@ -122,8 +122,8 @@ fn spawn_body_for(
 ///
 /// Keyed on absence, so joining, round start and death are one case with no
 /// queue. A player who died is not owed one until their [`RespawnTimers`]
-/// entry runs out.
-fn give_bodies_to_whoever_needs_one(
+/// entry runs out, and one still choosing a team is owed none at all.
+pub(crate) fn give_bodies_to_whoever_needs_one(
     mut commands: Commands,
     role: Option<Res<NetRole>>,
     links: Query<(Entity, &RemoteId), (With<ClientOf>, With<Connected>)>,
@@ -147,9 +147,8 @@ fn give_bodies_to_whoever_needs_one(
 
     let placed = placed_spawns(&spawns);
 
-    // Decides the next player's team and color. Counted from existing
-    // identities, so somebody leaving frees their side and hue up.
-    let mut here = identities.iter().count() + usize::from(us.is_some());
+    // Decides the next player's color. Counted from existing identities, so
+    // somebody leaving frees their hue up. A team is theirs to choose.
     let mut hues: Vec<usize> =
         identities.iter().chain(us.as_deref().map(|us| &us.0)).map(|who| who.color).collect();
     let start = match hue_start {
@@ -161,12 +160,7 @@ fn give_bodies_to_whoever_needs_one(
         }
     };
     let mut meet = |ids: &mut NextPlayerId| {
-        let who = Identity {
-            id: ids.allocate(),
-            team: next_team(here, rules.teams),
-            color: lowest_free(hues.iter().copied()),
-        };
-        here += 1;
+        let who = Identity { id: ids.allocate(), seat: Seat::Choosing, color: lowest_free(hues.iter().copied()) };
         hues.push(who.color);
         who
     };
@@ -182,9 +176,9 @@ fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
-        if !waiting(who) {
-            let spawn = choose_spawn(&placed, who.team, &collision);
-            info!("Standing our own body up as {} on {}", who.id, team_name(who.team));
+        if !waiting(who) && who.seat != Seat::Choosing {
+            let spawn = choose_spawn(&placed, who.team(), &collision);
+            info!("Standing our own body up as {} on {}", who.id, team_name(who.team()));
             let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
             commands.entity(body).insert(LocalPlayer);
             if hosting {
@@ -206,11 +200,11 @@ fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
-        if waiting(who) {
+        if waiting(who) || who.seat == Seat::Choosing {
             continue;
         }
-        let spawn = choose_spawn(&placed, who.team, &collision);
-        info!("Standing a client's body up as {} on {}", who.id, team_name(who.team));
+        let spawn = choose_spawn(&placed, who.team(), &collision);
+        info!("Standing a client's body up as {} on {}", who.id, team_name(who.team()));
         spawn_body_for(&mut commands, spawn, (who, start), (link, peer.0), &rules, &catalog);
     }
 }
@@ -285,11 +279,17 @@ mod tests {
         world.flush();
     }
 
+    /// Meets us, then takes a seat, as the picker would.
+    fn sit_down(world: &mut World, seat: Seat) {
+        a_turn(world);
+        world.resource_mut::<OurIdentity>().0.seat = seat;
+    }
+
     /// The host's is dropped by `enter_play`; this is the same for a client.
     #[test]
     fn a_new_match_forgets_every_clients_identity() {
         let mut world = World::new();
-        let who = Identity { id: PlayerId(4), team: None, color: 2 };
+        let who = Identity { id: PlayerId(4), seat: Seat::Playing(None), color: 2 };
         let link = world.spawn(who).id();
 
         world.run_system_once(forget_client_identities).unwrap();
@@ -298,9 +298,22 @@ mod tests {
     }
 
     #[test]
+    fn nobody_choosing_a_team_is_given_a_body() {
+        let mut world = World::new();
+        a_map(&mut world);
+
+        for _ in 0..3 {
+            a_turn(&mut world);
+        }
+        assert_eq!(world.resource::<OurIdentity>().0.seat, Seat::Choosing);
+        assert_eq!(world.query_filtered::<(), With<Player>>().iter(&world).count(), 0);
+    }
+
+    #[test]
     fn whoever_has_no_body_gets_one() {
         let mut world = World::new();
         a_map(&mut world);
+        sit_down(&mut world, Seat::Playing(Some(Team::Red)));
 
         a_turn(&mut world);
 
@@ -322,7 +335,7 @@ mod tests {
     fn the_dead_wait_out_their_respawn_timer() {
         let mut world = World::new();
         a_map(&mut world);
-        let us = Identity { id: PlayerId(7), team: Some(Team::Red), color: 0 };
+        let us = Identity { id: PlayerId(7), seat: Seat::Playing(Some(Team::Red)), color: 0 };
         world.insert_resource(OurIdentity(us));
         world.init_resource::<RespawnTimers>();
         world.resource_mut::<RespawnTimers>().0.insert(us.id, RESPAWN_SECONDS);
@@ -340,6 +353,7 @@ mod tests {
     fn a_new_life_keeps_the_same_identity() {
         let mut world = World::new();
         a_map(&mut world);
+        sit_down(&mut world, Seat::Playing(Some(Team::Red)));
 
         let mut lives = Vec::new();
         for _ in 0..3 {
@@ -361,6 +375,7 @@ mod tests {
     fn a_living_body_is_not_joined_by_another() {
         let mut world = World::new();
         a_map(&mut world);
+        sit_down(&mut world, Seat::Playing(Some(Team::Red)));
 
         for _ in 0..4 {
             a_turn(&mut world);
@@ -375,6 +390,7 @@ mod tests {
     fn a_body_at_zero_health_is_still_a_body() {
         let mut world = World::new();
         a_map(&mut world);
+        sit_down(&mut world, Seat::Playing(Some(Team::Red)));
         a_turn(&mut world);
 
         let body = world.query_filtered::<Entity, With<Player>>().single(&world).unwrap();
@@ -390,6 +406,7 @@ mod tests {
         a_map(&mut world);
         let wrench = crate::common::weapon::WeaponId::of("medi_wrench");
         world.insert_resource(GameRules(ModeRules { teams: false, loadout: Some(vec![wrench]), ..default() }));
+        sit_down(&mut world, Seat::Playing(None));
 
         a_turn(&mut world);
 
@@ -404,6 +421,7 @@ mod tests {
     fn a_new_life_keeps_its_color() {
         let mut world = World::new();
         a_map(&mut world);
+        sit_down(&mut world, Seat::Playing(Some(Team::Red)));
 
         a_turn(&mut world);
         let body = world.query_filtered::<Entity, With<Player>>().single(&world).unwrap();
@@ -419,6 +437,7 @@ mod tests {
     fn a_map_without_a_spawn_point_still_puts_you_somewhere() {
         let mut world = World::new();
         a_map(&mut world);
+        sit_down(&mut world, Seat::Playing(Some(Team::Red)));
         let marker = world
             .query_filtered::<Entity, With<SpawnPointMarker>>()
             .single(&world)

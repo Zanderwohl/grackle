@@ -961,7 +961,7 @@ mod tests {
             crate::game::player::spawn_player(
                 &mut commands,
                 crate::game::player::Spawn { feet: Vec3::ZERO, yaw: 0.0, side: None },
-                &crate::game::respawn::Identity { id: crate::common::damage::PlayerId(1), team: None, color: 0 },
+                &crate::game::respawn::Identity { id: crate::common::damage::PlayerId(1), seat: crate::game::respawn::Seat::Playing(None), color: 0 },
                 crate::common::player_color::PlayerColor::nth(0.0, 0),
                 &crate::common::game_rules::ModeRules::default(),
                 &catalog,
