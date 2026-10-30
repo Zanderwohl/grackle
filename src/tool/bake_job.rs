@@ -223,6 +223,19 @@ impl<J: BakeJob> BackgroundBake<J> {
         self.asked = true;
     }
 
+    /// What the last bake to land was of.
+    pub fn baked(&self) -> Option<u64> {
+        self.baked
+    }
+
+    /// Takes `hash` as baked, by some other means than a bake: read back from a cache.
+    pub fn adopt(&mut self, hash: u64) {
+        self.baked = Some(hash);
+        self.current = Some(hash);
+        self.pending = None;
+        self.asked = false;
+    }
+
     /// Forgets what was baked and drops any bake running.
     pub fn forget(&mut self) {
         *self = Self::new(self.auto);

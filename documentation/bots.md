@@ -172,6 +172,13 @@ as the sun is, and reports as `BakeKind::Nav`:
 - The input is a snapshot (faces, volumes, solid props, triggers, pickups,
   spawns, `MovementRules`), hashed. The job runs on the async compute pool
   from the copy.
+- **Cached on disk** at `cache/nav/{hash}.bin` (`src/tool/nav_cache.rs`),
+  keyed by a fixed FNV-1a hash of the snapshot: written when the graph lands
+  and again when its sightlines do, and read back whenever the map matches,
+  so an unchanged map opens with its graph instead of baking it again.
+  Halls is 1.8 MB and reads in 0.04 s. The key is of the map, not the code:
+  after changing how something is baked, bump `nav_cache::FORMAT` or delete
+  `cache/nav/`.
 - **The old graph is kept until a new one lands.** Bots and the overlay use
   stale data rather than none, and an edit between rounds never leaves a bot
   standing still.
@@ -328,6 +335,7 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
 - [x] Visibility stage: sight, exposure, advantage, crouched variants;
       measured on Halls: 1 m viewpoints, 18.5 s
 - [x] Sightlines as a bake of their own, so a round waits only for the graph
+- [x] Cached on disk by a hash of the map, graph and sightlines both
 - [x] Cover nearby, height
 - [x] Overlays: Sight, Exposure, Sight × exposure (bivariate), Advantage,
       Cover, Danger, Height, Distance to…; fixed saturation per scale

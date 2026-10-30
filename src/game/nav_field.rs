@@ -9,6 +9,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::common::class::{body_center_from_feet, Stance, CROUCH_EYE_HEIGHT, TALLEST_CLASS_EYE_HEIGHT};
 use crate::common::movement_rules::MovementRules;
@@ -64,7 +65,7 @@ pub enum Field {
     Distance(usize),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Pickup {
     pub label: String,
     pub feet: Vec3,
@@ -72,7 +73,7 @@ pub struct Pickup {
 
 /// Which viewpoints see which, kept for the probe. Each row lists the viewpoints an eye sees a
 /// body at, and how many of the three samples on it.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Sightlines {
     /// Per cell.
     pub viewpoint_of: Vec<u32>,
@@ -86,7 +87,7 @@ pub struct Sightlines {
 }
 
 /// Per cell. A field not baked yet is empty.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Fields {
     pub knockback: Vec<f32>,
     pub sight: Vec<f32>,

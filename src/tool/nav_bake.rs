@@ -7,8 +7,6 @@
 //! puts rooms past the rollback bar in before the collision world is rebuilt, and the bake for the
 //! round runs between the two.
 
-use std::hash::{Hash, Hasher};
-
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -28,6 +26,7 @@ use crate::get;
 use crate::prop::archetype::RoundedBox;
 use crate::tool::bake_job::{self, BackgroundBake, BakeJob, BakeKind, BakeProgress};
 use crate::tool::bakes::BakeSystems;
+use crate::tool::nav_cache;
 use crate::tool::room::{Block, MapVolumes, Room, VolumeOrder};
 
 /// Cells linked per item, so progress moves while the links, the bulk of the work, are found.
@@ -43,6 +42,10 @@ pub struct NavBake {
     built: u64,
     /// What `graph` was built from, for the sightlines to be cast against.
     built_from: Vec<Volume>,
+    /// The snapshot hash `graph` is a bake of, which names its cache file.
+    built_hash: Option<u64>,
+    /// The last hash looked for in the cache, so a miss is not read again every frame.
+    looked_up: Option<u64>,
     /// What the map was when last looked at; taken again only on a change.
     snapshot: Option<Snapshot>,
     bake: BackgroundBake<Job>,
@@ -56,6 +59,8 @@ impl Default for NavBake {
             generation: 0,
             built: 0,
             built_from: Vec::new(),
+            built_hash: None,
+            looked_up: None,
             snapshot: None,
             // Off: several seconds on Halls in a debug build, too much to redo on every still moment.
             bake: BackgroundBake::new(false),
@@ -74,11 +79,38 @@ impl NavBake {
         self.generation
     }
 
-    fn replace(&mut self, (graph, volumes): (NavGraph, Vec<Volume>)) {
+    fn replace(&mut self, hash: Option<u64>, (graph, volumes): (NavGraph, Vec<Volume>)) {
         self.graph = graph;
         self.built_from = volumes;
+        self.built_hash = hash;
         self.generation += 1;
         self.built += 1;
+    }
+
+    /// A bake that just landed, which is also written to the cache.
+    fn landed(&mut self, hash: Option<u64>, built: (NavGraph, Vec<Volume>)) {
+        if let Some(hash) = hash {
+            nav_cache::write(hash, built.0.clone());
+        }
+        self.replace(hash, built);
+    }
+
+    /// Takes the graph of `snapshot` from the cache, sightlines and all if they were written.
+    /// Looked for once per hash.
+    fn take_from_cache(&mut self, snapshot: &Snapshot) -> bool {
+        if self.bake.baked() == Some(snapshot.hash) || self.looked_up == Some(snapshot.hash) {
+            return false;
+        }
+        self.looked_up = Some(snapshot.hash);
+        let Some(graph) = nav_cache::read(snapshot.hash) else { return false };
+        let sighted = graph.fields().has_sight();
+        info!("Read the nav graph from the cache: {} cell(s){}", graph.cells().len(), if sighted { ", with sightlines" } else { "" });
+        self.replace(Some(snapshot.hash), (graph, snapshot.volumes.clone()));
+        self.bake.adopt(snapshot.hash);
+        if sighted {
+            self.sight.adopt(self.built);
+        }
+        true
     }
 
     /// Dropped if the graph was replaced while the sightlines were cast.
@@ -90,6 +122,9 @@ impl NavBake {
         fields.add_sight(sight);
         self.graph.set_fields(fields);
         self.generation += 1;
+        if let Some(hash) = self.built_hash {
+            nav_cache::write(hash, self.graph.clone());
+        }
     }
 
     pub fn auto(&self) -> bool {
@@ -184,11 +219,10 @@ impl NavInputs<'_, '_> {
         let mut spawns: Vec<Vec3> = self.spawns.iter().map(|placed| placed.translation).collect();
         spawns.sort_by(|a, b| a.to_array().partial_cmp(&b.to_array()).unwrap_or(std::cmp::Ordering::Equal));
         let rules = *self.rules;
-        // Debug writes an `f32` as its shortest exact decimal, so equal inputs hash equal.
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
         let pickups = self.pickups();
-        format!("{volumes:?}{props:?}{triggers:?}{spawns:?}{pickups:?}{rules:?}").hash(&mut hasher);
-        Snapshot { volumes, props, triggers, spawns, pickups, rules, hash: hasher.finish() }
+        // Debug writes an `f32` as its shortest exact decimal, so equal inputs hash equal.
+        let hash = nav_cache::stable_hash(&format!("{volumes:?}{props:?}{triggers:?}{spawns:?}{pickups:?}{rules:?}"));
+        Snapshot { volumes, props, triggers, spawns, pickups, rules, hash }
     }
 }
 
@@ -353,7 +387,7 @@ fn auto_bake_nav(
 ) {
     let state = &mut *state;
     if clears.read().count() > 0 {
-        state.replace((NavGraph::default(), Vec::new()));
+        state.replace(None, (NavGraph::default(), Vec::new()));
         state.bake.forget();
         state.sight.forget();
         info!("Cleared the nav graph");
@@ -361,14 +395,17 @@ fn auto_bake_nav(
     if requests.read().count() > 0 {
         state.bake.ask();
     }
-    if let Some(graph) = state.bake.poll() {
-        state.replace(graph);
+    if let Some(built) = state.bake.poll() {
+        let hash = state.bake.baked();
+        state.landed(hash, built);
     }
     let moved = state.snapshot.as_ref().is_some_and(|seen| seen.props != inputs.collision.props || seen.pickups != inputs.pickups());
     if inputs.changed_since_last_frame() || moved || state.snapshot.is_none() {
         state.snapshot = Some(inputs.snapshot());
     }
-    let snapshot = state.snapshot.as_ref().expect("taken above");
+    let snapshot = state.snapshot.take().expect("taken above");
+    state.take_from_cache(&snapshot);
+    let snapshot = state.snapshot.insert(snapshot);
     state.bake.update(snapshot.hash, true, time.elapsed_secs(), || snapshot.job());
 
     if let Some(sight) = state.sight.poll() {
@@ -381,8 +418,9 @@ fn auto_bake_nav(
 /// A round never starts on a stale graph: bots will walk it.
 fn bake_nav_for_the_round(mut state: ResMut<NavBake>, inputs: NavInputs) {
     let snapshot = inputs.snapshot();
-    if let Some(graph) = state.bake.for_the_round(snapshot.hash, || snapshot.job()) {
-        state.replace(graph);
+    state.take_from_cache(&snapshot);
+    if let Some(built) = state.bake.for_the_round(snapshot.hash, || snapshot.job()) {
+        state.landed(Some(snapshot.hash), built);
     }
     state.snapshot = Some(snapshot);
 }
@@ -519,5 +557,9 @@ mod tests {
         let lines = &graph.fields().sightlines;
         let pairs: usize = lines.standing.iter().map(Vec::len).sum();
         println!("{} cell(s), {} viewpoint(s), {} visible ordered pair(s)", graph.cells().len(), lines.viewpoints.len(), pairs);
+        let bytes = postcard::to_allocvec(&graph).unwrap();
+        let reading = std::time::Instant::now();
+        let _: NavGraph = postcard::from_bytes(&bytes).unwrap();
+        println!("cached as {:.1} MB, read back in {:.2} s", bytes.len() as f32 / 1.0e6, reading.elapsed().as_secs_f32());
     }
 }

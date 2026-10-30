@@ -10,6 +10,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::common::class::{body_center_from_feet, Stance};
 use crate::common::trigger::{TriggerEffect, TriggerVolume};
@@ -37,7 +38,7 @@ const ARRIVED: f32 = 0.05;
 
 pub type CellId = u32;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
     pub feet: Vec3,
     /// Which lattice square, in units of [`SPACING`].
@@ -46,7 +47,7 @@ pub struct Cell {
     pub hurt: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LinkKind {
     Walk,
     Step,
@@ -58,7 +59,7 @@ pub enum LinkKind {
 /// The input that makes a drop or a jump, for a bot to replay rather than re-derive: run along
 /// `yaw` with sprint held for `ticks`, jumping on the first if `jump`, having arrived at
 /// `run_up`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Leap {
     pub yaw: f32,
     /// Meters per second along `yaw` at the start.
@@ -73,7 +74,7 @@ impl Leap {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Link {
     pub to: CellId,
     pub kind: LinkKind,
@@ -83,12 +84,33 @@ pub struct Link {
     pub leap: Option<Leap>,
 }
 
-#[derive(Clone, Debug, Default)]
+/// Its serde leaves out the columns, which [`NavGraph::columns`] rebuilds from the cells.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(from = "Stored", into = "Stored")]
 pub struct NavGraph {
     cells: Vec<Cell>,
     links: Vec<Vec<Link>>,
     columns: HashMap<IVec2, Vec<CellId>>,
     fields: Fields,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Stored {
+    cells: Vec<Cell>,
+    links: Vec<Vec<Link>>,
+    fields: Fields,
+}
+
+impl From<Stored> for NavGraph {
+    fn from(Stored { cells, links, fields }: Stored) -> Self {
+        NavGraph { columns: columns(&cells), cells, links, fields }
+    }
+}
+
+impl From<NavGraph> for Stored {
+    fn from(NavGraph { cells, links, fields, .. }: NavGraph) -> Self {
+        Stored { cells, links, fields }
+    }
 }
 
 fn column_of(x: f32, z: f32) -> IVec2 {

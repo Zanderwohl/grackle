@@ -91,7 +91,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map and demo-scene blueprints), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`. |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
-| `cache/` | Gitignored, derived from the packs: `thumbnail/props/{name}.png`. Safe to delete. |
+| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`. Safe to delete. |
 
 ## Spawn points and class metrics
 
