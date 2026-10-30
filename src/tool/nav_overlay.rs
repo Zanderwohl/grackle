@@ -653,7 +653,7 @@ fn statistics(ui: &mut egui::Ui, statistics: &MapStatistics) {
             ui.end_row();
             for (rating, share) in Rating::ALL.iter().zip(&statistics.shares) {
                 ui.label(rating.label());
-                ui.label(share.map_or_else(|| "–".to_string(), |share| format!("{:.0}%", share * 100.0)));
+                ui.label(share.map_or_else(|| get!("nav.statistics.unbaked"), |share| format!("{:.0}%", share * 100.0)));
                 ui.end_row();
             }
         });

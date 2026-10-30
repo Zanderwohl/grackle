@@ -223,8 +223,9 @@ Sightlines and knockback are cast between **viewpoints**, one per 1 m square
 reads its viewpoint's. A viewpoint stands at the **middle of its cells**, not
 on one of them: standing on whichever cell came first sampled a turned copy of
 the same room from another corner, and Halls' four quarters disagreed by up to
-45 m² of exposure on matching spots. An L of three cells stands on its corner
-cell, since the middle may be in the wall that took the fourth.
+45 m² of exposure on matching spots. An L of three cells, or a square across a
+step, stands on the cell nearest the middle, since the middle may be in the
+wall that took the fourth or inside the step.
 `a_map_turned_a_quarter_bakes_the_same_turned` holds it to one grazing sample.
 Twenty rays per pair in range: standing eye to a standing body, crouched eye
 to a standing body and standing eye to a crouched body, three samples a body,

@@ -255,6 +255,7 @@ fn clear_tracers(mut commands: Commands, tracers: Query<Entity, With<Tracer>>) {
 fn draw_debug_laser(
     mut gizmos: Gizmos,
     world: Res<CollisionWorld>,
+    fixed: Res<Time<Fixed>>,
     shooters: Query<(Entity, &Transform, &Player, &Stance)>,
     targets: Query<(Entity, &Hitboxes)>,
 ) {
@@ -263,7 +264,7 @@ fn draw_debug_laser(
     let head_color = Color::srgb(1.0, 0.15, 0.15);
 
     for (shooter, transform, player, stance) in &shooters {
-        let ray = Ray3d::new(eye(transform.translation, *stance, player.duck), aim(player));
+        let ray = Ray3d::new(eye(transform.translation, *stance, player.drawn_duck(fixed.overstep_fraction())), aim(player));
 
         let range = world.ray_distance(&ray, LASER_RANGE).unwrap_or(LASER_RANGE);
 

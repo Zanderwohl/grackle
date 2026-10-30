@@ -120,6 +120,7 @@ ambush = "Ambush"
 title = "Statistics"
 floor = "Floor"
 rise = "Rise"
+unbaked = "–"
 
 [nav.overlay]
 off = "Off"

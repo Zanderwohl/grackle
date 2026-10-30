@@ -17,7 +17,7 @@ use crate::common::trigger::{TriggerEffect, TriggerVolume};
 use crate::game::collision::CollisionWorld;
 use crate::game::condition::Condition;
 use crate::game::explosion::push_speed;
-use crate::game::nav::{cell_near, CellId, NavGraph, LIFT, MOST_TICKS, SPACING, TICK};
+use crate::game::nav::{cell_near, CellId, NavGraph, LIFT, MOST_TICKS, SAME_FLOOR, SPACING, TICK};
 use crate::game::player::{step, Mover, PhysicsBody, Player, PlayerInput, PLAYER_HALF, STEP_HEIGHT};
 
 /// Columns per side of the square one viewpoint stands for.
@@ -156,42 +156,114 @@ impl Fields {
 }
 
 /// The first stage: knockback per viewpoint, a batch at a time, then the distance to each pickup
-/// and the traffic between them and the spawns.
+/// and the traffic between them and the spawns, a search or a set of routes at a time.
 pub struct FieldBake {
     viewpoints: Vec<Vec3>,
     viewpoint_of: Vec<u32>,
     knockback: Vec<f32>,
     pickups: Vec<Pickup>,
-    spawns: Vec<Vec3>,
+    /// The cells routes run between: spawns and pickups, once each.
+    ends: Vec<CellId>,
+    /// Out of each cell and into it, as `(cell, seconds)`, built once for every search.
+    links: Option<(Vec<Vec<(CellId, f32)>>, Vec<Vec<(CellId, f32)>>)>,
+    distances: Vec<Vec<f32>>,
+    /// Per end, seconds from it and to it.
+    from: Vec<Vec<f32>>,
+    to: Vec<Vec<f32>>,
+    /// Per cell, the routes that pass within [`ROUTE_SLACK`] of it.
+    on: Vec<u32>,
+    routes: u32,
+    /// Ends whose routes are counted.
+    routed: usize,
 }
 
 impl FieldBake {
     pub fn new(graph: &NavGraph, pickups: Vec<Pickup>, spawns: Vec<Vec3>) -> Self {
         let (viewpoints, viewpoint_of) = viewpoints(graph);
-        FieldBake { viewpoints, viewpoint_of, knockback: Vec::new(), pickups, spawns }
-    }
-
-    /// Items: the knockback batches, and the last pass.
-    pub fn progress(&self) -> (usize, usize) {
-        (self.knockback.len().div_ceil(KNOCKBACK_BATCH), self.viewpoints.len().div_ceil(KNOCKBACK_BATCH) + 1)
-    }
-
-    /// One batch. True once only [`FieldBake::finish`] is left.
-    pub fn step(&mut self, world: &CollisionWorld, graph: &NavGraph, triggers: &[TriggerVolume], rules: &MovementRules) -> bool {
-        let end = (self.knockback.len() + KNOCKBACK_BATCH).min(self.viewpoints.len());
-        for viewpoint in self.knockback.len()..end {
-            let feet = self.viewpoints[viewpoint];
-            let thrown = (0..KNOCKBACK_HEADINGS).filter(|heading| !thrown_clear(world, graph, triggers, rules, feet, *heading)).count();
-            self.knockback.push(thrown as f32 / KNOCKBACK_HEADINGS as f32);
+        let mut ends: Vec<CellId> = spawns.iter().chain(pickups.iter().map(|pickup| &pickup.feet)).filter_map(|feet| graph.cell_at(*feet)).collect();
+        ends.sort_unstable();
+        ends.dedup();
+        FieldBake {
+            viewpoints,
+            viewpoint_of,
+            knockback: Vec::new(),
+            pickups,
+            ends,
+            links: None,
+            distances: Vec::new(),
+            from: Vec::new(),
+            to: Vec::new(),
+            on: vec![0; graph.cells().len()],
+            routes: 0,
+            routed: 0,
         }
-        self.knockback.len() == self.viewpoints.len()
     }
 
-    pub fn finish(self, graph: &NavGraph) -> Fields {
+    /// Items: the knockback batches, the links, a search per pickup, two per end, the routes from
+    /// each end, and the last pass.
+    pub fn progress(&self) -> (usize, usize) {
+        let completed = self.knockback.len().div_ceil(KNOCKBACK_BATCH)
+            + usize::from(self.links.is_some())
+            + self.distances.len()
+            + self.from.len()
+            + self.routed;
+        let scheduled = self.viewpoints.len().div_ceil(KNOCKBACK_BATCH) + 1 + self.pickups.len() + 2 * self.ends.len() + 1;
+        (completed, scheduled)
+    }
+
+    /// One item. True once only [`FieldBake::finish`] is left.
+    pub fn step(&mut self, world: &CollisionWorld, graph: &NavGraph, triggers: &[TriggerVolume], rules: &MovementRules) -> bool {
+        if self.knockback.len() < self.viewpoints.len() {
+            let end = (self.knockback.len() + KNOCKBACK_BATCH).min(self.viewpoints.len());
+            for viewpoint in self.knockback.len()..end {
+                let feet = self.viewpoints[viewpoint];
+                let thrown = (0..KNOCKBACK_HEADINGS).filter(|heading| !thrown_clear(world, graph, triggers, rules, feet, *heading)).count();
+                self.knockback.push(thrown as f32 / KNOCKBACK_HEADINGS as f32);
+            }
+        } else if self.links.is_none() {
+            self.links = Some((links_out(graph), links_into(graph)));
+        } else if let Some((out, into)) = &self.links {
+            if self.distances.len() < self.pickups.len() {
+                let distance = match graph.cell_at(self.pickups[self.distances.len()].feet) {
+                    Some(target) => travel(into, target),
+                    None => vec![f32::INFINITY; graph.cells().len()],
+                };
+                self.distances.push(distance);
+            } else if self.from.len() < self.ends.len() {
+                let end = self.ends[self.from.len()];
+                self.from.push(travel(out, end));
+                self.to.push(travel(into, end));
+            } else if self.routed < self.ends.len() {
+                self.count_routes_from(self.routed);
+                self.routed += 1;
+            }
+        }
+        self.knockback.len() == self.viewpoints.len() && self.links.is_some() && self.distances.len() == self.pickups.len() && self.routed == self.ends.len()
+    }
+
+    /// The routes from end `a` to every other: a band rather than one shortest path, which on a
+    /// grid is one of many equally short and would draw a line wherever ties happened to break.
+    fn count_routes_from(&mut self, a: usize) {
+        let from = &self.from[a];
+        for (b, to) in self.to.iter().enumerate() {
+            let shortest = from[self.ends[b] as usize];
+            if a == b || !shortest.is_finite() {
+                continue;
+            }
+            self.routes += 1;
+            for (cell, on) in self.on.iter_mut().enumerate() {
+                if from[cell] + to[cell] <= shortest + ROUTE_SLACK {
+                    *on += 1;
+                }
+            }
+        }
+    }
+
+    pub fn finish(self) -> Fields {
         let knockback = self.viewpoint_of.iter().map(|viewpoint| self.knockback[*viewpoint as usize]).collect();
-        let distances = self.pickups.iter().map(|pickup| distances_to(graph, pickup.feet)).collect();
-        let ends: Vec<Vec3> = self.spawns.iter().copied().chain(self.pickups.iter().map(|pickup| pickup.feet)).collect();
-        Fields { knockback, traffic: traffic(graph, &ends), pickups: self.pickups, distances, ..default() }
+        let routes = self.routes;
+        let traffic = self.on.into_iter().map(|on| if routes == 0 { 0.0 } else { on as f32 / routes as f32 }).collect();
+        Fields { knockback, traffic, pickups: self.pickups, distances: self.distances, ..default() }
     }
 }
 
@@ -356,7 +428,7 @@ pub fn bake(world: &CollisionWorld, graph: &NavGraph, triggers: &[TriggerVolume]
     let mut first = FieldBake::new(graph, pickups, spawns);
     while !first.step(world, graph, triggers, rules) {}
     let mut graph = graph.clone();
-    graph.set_fields(first.finish(&graph));
+    graph.set_fields(first.finish());
     let mut second = SightBake::new(&graph);
     while !second.step(world) {}
     let mut fields = graph.fields().clone();
@@ -365,9 +437,9 @@ pub fn bake(world: &CollisionWorld, graph: &NavGraph, triggers: &[TriggerVolume]
 }
 
 /// One viewpoint per square at each floor height, standing at the middle of the cells it holds, so
-/// a map turned or mirrored on the meter grid is sampled the same way turned. Three cells in an L
-/// or two on a diagonal stand on the cell nearest that middle instead, since the middle may be
-/// in whatever wall took the rest.
+/// a map turned or mirrored on the meter grid is sampled the same way turned. Three cells in an L,
+/// two on a diagonal, or cells across a step stand on the cell nearest that middle instead, since
+/// the middle may be in whatever wall took the rest, or inside the step.
 fn viewpoints(graph: &NavGraph) -> (Vec<Vec3>, Vec<u32>) {
     let mut squares: HashMap<IVec2, Vec<u32>> = HashMap::new();
     let mut members: Vec<Vec<CellId>> = Vec::new();
@@ -393,7 +465,8 @@ fn viewpoints(graph: &NavGraph) -> (Vec<Vec3>, Vec<u32>) {
             let feet = held.iter().map(|id| cells[*id as usize].feet);
             let middle = feet.clone().sum::<Vec3>() / held.len() as f32;
             let spread = held.iter().map(|id| cells[*id as usize].column).fold(IVec2::ZERO, |most, column| most.max((column - cells[held[0] as usize].column).abs()));
-            let whole = held.len() == 4 || held.len() == 1 || spread.min_element() == 0;
+            let level = held.iter().all(|id| (cells[*id as usize].feet.y - cells[held[0] as usize].feet.y).abs() <= SAME_FLOOR);
+            let whole = level && (held.len() == 4 || held.len() == 1 || spread.min_element() == 0);
             if whole { middle } else { feet.min_by(|a, b| a.distance_squared(middle).total_cmp(&b.distance_squared(middle))).expect("never empty") }
         })
         .collect();
@@ -473,14 +546,6 @@ fn cover(graph: &NavGraph, exposure: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-/// Seconds from every cell to the one under `feet`, over the links followed forwards.
-fn distances_to(graph: &NavGraph, feet: Vec3) -> Vec<f32> {
-    match graph.cell_at(feet) {
-        Some(target) => travel(&links_into(graph), target),
-        None => vec![f32::INFINITY; graph.cells().len()],
-    }
-}
-
 /// Per cell, the links that lead into it, as `(from, seconds)`.
 fn links_into(graph: &NavGraph) -> Vec<Vec<(CellId, f32)>> {
     let mut into = vec![Vec::new(); graph.cells().len()];
@@ -514,36 +579,6 @@ fn travel(links: &[Vec<(CellId, f32)>], start: CellId) -> Vec<f32> {
         }
     }
     seconds
-}
-
-/// Per cell, the share of routes between every two of `ends` that come within [`ROUTE_SLACK`] of
-/// their shortest by passing through it. A band rather than one shortest path, which on a grid is
-/// one of many equally short and would draw a line wherever ties happened to break.
-fn traffic(graph: &NavGraph, ends: &[Vec3]) -> Vec<f32> {
-    let count = graph.cells().len();
-    let mut ends: Vec<CellId> = ends.iter().filter_map(|feet| graph.cell_at(*feet)).collect();
-    ends.sort_unstable();
-    ends.dedup();
-    let (out, into) = (links_out(graph), links_into(graph));
-    let from: Vec<Vec<f32>> = ends.iter().map(|end| travel(&out, *end)).collect();
-    let to: Vec<Vec<f32>> = ends.iter().map(|end| travel(&into, *end)).collect();
-    let mut on = vec![0u32; count];
-    let mut routes = 0u32;
-    for (a, from) in from.iter().enumerate() {
-        for (b, to) in to.iter().enumerate() {
-            let shortest = from[ends[b] as usize];
-            if a == b || !shortest.is_finite() {
-                continue;
-            }
-            routes += 1;
-            for cell in 0..count {
-                if from[cell] + to[cell] <= shortest + ROUTE_SLACK {
-                    on[cell] += 1;
-                }
-            }
-        }
-    }
-    on.into_iter().map(|on| if routes == 0 { 0.0 } else { on as f32 / routes as f32 }).collect()
 }
 
 #[cfg(test)]

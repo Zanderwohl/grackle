@@ -1,7 +1,6 @@
 //! The nav bake on disk: `cache/nav/{hash}.bin`, the graph and, once they land, its sightlines, as
 //! postcard. Keyed by a hash of everything the bake reads, so an unchanged map opens with its graph
-//! rather than baking it again. Derived and safe to delete; native only, like the thumbnails, and
-//! never under test.
+//! rather than baking it again. Derived and safe to delete; native only, like the thumbnails.
 //!
 //! The key is of the map, not of the code: after changing how something is baked, bump [`FORMAT`]
 //! or delete `cache/nav/`.
@@ -11,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::game::nav::NavGraph;
 
 /// Folded into every key.
-pub const FORMAT: u32 = 3;
+pub const FORMAT: u32 = 4;
 
 pub fn stable_hash(text: &str) -> u64 {
     fnv(&format!("{FORMAT}:{text}"))
@@ -34,7 +33,7 @@ struct Cached {
     graph: NavGraph,
 }
 
-#[cfg(not(any(target_arch = "wasm32", test)))]
+#[cfg(not(target_arch = "wasm32"))]
 mod disk {
     use std::path::PathBuf;
 
@@ -43,10 +42,18 @@ mod disk {
 
     use super::*;
 
-    const DIR: &str = "cache/nav";
+    /// Tests bake small rooms that the next run would otherwise read back from the real cache,
+    /// so each test process has a directory of its own.
+    fn dir() -> PathBuf {
+        if cfg!(test) {
+            std::env::temp_dir().join(format!("grackle-nav-cache-{}", std::process::id()))
+        } else {
+            PathBuf::from("cache/nav")
+        }
+    }
 
     fn path(hash: u64) -> PathBuf {
-        PathBuf::from(format!("{DIR}/{hash:016x}.bin"))
+        dir().join(format!("{hash:016x}.bin"))
     }
 
     /// `None` on a miss, or a file that does not decode: one left half-written, or from an older
@@ -63,26 +70,33 @@ mod disk {
         }
     }
 
-    /// On the IO pool, through a temporary file renamed into place, so a reader never sees half.
+    /// On the IO pool.
     pub fn write(hash: u64, graph: NavGraph) {
         IoTaskPool::get()
             .spawn(async move {
-                let written = postcard::to_allocvec(&Cached { hash, graph }).map_err(|e| e.to_string()).and_then(|bytes| {
-                    let (path, partial) = (path(hash), path(hash).with_extension("partial"));
-                    std::fs::create_dir_all(DIR).map_err(|e| e.to_string())?;
-                    std::fs::write(&partial, bytes).map_err(|e| e.to_string())?;
-                    std::fs::rename(&partial, &path).map_err(|e| e.to_string())
-                });
-                if let Err(e) = written {
+                if let Err(e) = store(hash, graph) {
                     warn!("Could not cache the nav graph: {e}");
                 }
             })
             .detach();
     }
+
+    /// Through a temporary file renamed into place, so a reader never sees half.
+    pub(super) fn store(hash: u64, graph: NavGraph) -> Result<(), String> {
+        let bytes = postcard::to_allocvec(&Cached { hash, graph }).map_err(|e| e.to_string())?;
+        let (path, partial) = (path(hash), path(hash).with_extension("partial"));
+        std::fs::create_dir_all(dir()).map_err(|e| e.to_string())?;
+        std::fs::write(&partial, bytes).map_err(|e| e.to_string())?;
+        std::fs::rename(&partial, &path).map_err(|e| e.to_string())
+    }
+
+    #[cfg(test)]
+    pub(super) fn spoil(hash: u64) {
+        std::fs::write(path(hash), b"not postcard").unwrap();
+    }
 }
 
-/// Tests bake small rooms that would otherwise be read back from the real cache by the next run.
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(target_arch = "wasm32")]
 mod disk {
     use super::*;
 
@@ -111,6 +125,21 @@ mod tests {
     #[test]
     fn the_key_is_the_same_on_every_build() {
         assert_eq!(fnv("1:grackle"), 0xb17f_e6b2_dd3c_1ffb);
+    }
+
+    /// Breaks if a stored graph does not read back under its hash, or a spoiled file is not a miss.
+    #[test]
+    fn the_cache_reads_back_what_it_stored() {
+        let mut world = CollisionWorld::default();
+        let faces = world.rebuild_volumes(&[Volume::air(Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0)))]);
+        let graph = nav::graph(&world, &faces, &[], &MovementRules::default(), &[]);
+        let hash = 0x5eed;
+        assert!(read(hash).is_none());
+        disk::store(hash, graph.clone()).unwrap();
+        assert_eq!(read(hash).map(|back| back.cells().to_vec()), Some(graph.cells().to_vec()));
+        assert!(read(hash + 1).is_none(), "another hash read this file");
+        disk::spoil(hash);
+        assert!(read(hash).is_none(), "a spoiled file read as a graph");
     }
 
     /// Breaks if anything the bake produces fails to round-trip, the columns most of all.

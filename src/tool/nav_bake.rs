@@ -333,7 +333,7 @@ impl BakeJob for Job {
     fn finish(self) -> (NavGraph, Vec<Volume>) {
         let mut graph = self.graph.unwrap_or_default();
         if let Some(fields) = self.fields {
-            let fields = fields.finish(&graph);
+            let fields = fields.finish();
             graph.set_fields(fields);
         }
         info!("Baked the nav graph: {} cell(s)", graph.cells().len());

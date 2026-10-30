@@ -31,7 +31,7 @@ pub const SPACING: f32 = 0.5;
 pub(crate) const LIFT: f32 = 0.02;
 
 /// Two samples in one column nearer than this, in meters, are one floor split by the kernel.
-const SAME_FLOOR: f32 = 0.05;
+pub(crate) const SAME_FLOOR: f32 = 0.05;
 
 /// How far a move may end from the cell it was aimed at, in meters, and still reach it.
 const ARRIVED: f32 = 0.05;
