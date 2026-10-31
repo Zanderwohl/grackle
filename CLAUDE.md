@@ -114,7 +114,8 @@ and passed on only after its `BotMind`'s reaction time. `think` reads them, and
 `fight` ([`src/game/bot_fight.rs`](src/game/bot_fight.rs)) shoots only at what they
 have in sight: aim turning at a rate with an error that settles as it tracks,
 rockets led and put at the feet, fire held without a clear ray, the weapon by
-range, and a strafe onto floor the graph has. `steer_bots` adds the strafe across
+range, a strafe onto floor the graph has, and an airblast at a rocket it sees
+coming, tried for and timed by its rolled `Reflexes`, so it often misses. `steer_bots` adds the strafe across
 the look.
 
 There is a prop editor, which models the things a map and a class refer to.

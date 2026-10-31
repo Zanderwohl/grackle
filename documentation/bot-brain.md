@@ -189,7 +189,13 @@ a strafe one way or standing to aim, each about 0.9 to 2 s, strafing 30 to
 0.35 s after it finds a target, onto floor the graph has and that does not
 hurt — a reversal takes a fifth of a second, so shorter legs read as jitter.
 Out of a fight it turns onto each link the way its aim does rather than
-snapping onto it. Out of a fight it tops up a
+snapping onto it. Holding an airblast that reflects, it meets a
+hostile projectile it sees coming within its blast radius (`Reflexes`): it
+tries for 15 to 85 % of them, after its reaction time, pressing when the
+projectile is 60 % of the gust's reach away, early or late by up to 0.04 to
+0.35 s — a sharp bot reflects nearly every 20 m/s rocket it tries for, a
+sloppy one about three in five, and on average a bot about two in five of
+those it sees. It does not turn to meet one. Out of a fight it tops up a
 clip less than half full.
 
 ### Stage 8: seeing what a bot thinks

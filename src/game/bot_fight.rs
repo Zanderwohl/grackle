@@ -15,11 +15,13 @@ use crate::common::projectile::ProjectileSpec;
 use crate::common::rotation::wrap_angle;
 use crate::common::weapon::{Ammo, Equipped, HitscanSpec, Mounted, WeaponAction, WeaponCatalog, WeaponId};
 use crate::game::bot::{aim_at, BotIntent, BotOf};
-use crate::game::bot_sense::{look, BotMind, BotSenses, Sense};
+use crate::game::bot_sense::{in_view, look, BotMind, BotSenses, Sense};
 use crate::game::bot_think::think;
 use crate::game::collision::CollisionWorld;
 use crate::game::death::Dying;
 use crate::game::player::{PhysicsBody, Player};
+use crate::game::projectile::Projectile;
+use crate::common::team::Allegiances;
 use crate::tool::nav_bake::NavBake;
 
 /// Meters a body is wide, for how much of a pellet pattern lands on it and how close an aim
@@ -153,6 +155,72 @@ impl Footwork {
     }
 }
 
+/// How a bot meets a projectile coming at it with an airblast in hand, rolled per seat inside its
+/// [`BotMind`]. Each projectile it sees coming is judged once: whether to try, and how early or
+/// late to press. Too early and the gust is spent before the rocket is in it; too late and the
+/// rocket lands first.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reflexes {
+    /// The chance it tries at all, 0 to 1.
+    pub attempt: f32,
+    /// Seconds its press may come early or late by, at most.
+    pub timing: f32,
+}
+
+impl Default for Reflexes {
+    fn default() -> Self {
+        Reflexes { attempt: 0.5, timing: 0.15 }
+    }
+}
+
+const ATTEMPT: std::ops::Range<f32> = 0.15..0.85;
+const TIMING: std::ops::Range<f32> = 0.04..0.35;
+/// The share of an airblast's range a bot means to meet a projectile at: inside the reach, with
+/// room for a tick's lag before it is pressed.
+const REFLECT_AT: f32 = 0.6;
+
+impl Reflexes {
+    pub fn temperament() -> Self {
+        Reflexes { attempt: rand::random_range(ATTEMPT), timing: rand::random_range(TIMING) }
+    }
+
+    /// Judges a projectile first seen at `now`: whether it is tried for, and seconds early, a
+    /// difference of two rolls so a small error is likelier than a large one.
+    pub fn judge(&self, projectile: Entity, now: f32) -> Incoming {
+        let early = (rand::random::<f32>() - rand::random::<f32>()) * self.timing;
+        Incoming { projectile, seen_at: now, tries: rand::random::<f32>() < self.attempt, early }
+    }
+}
+
+/// A projectile coming at a bot, as it judged it when it first saw it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Incoming {
+    pub projectile: Entity,
+    pub seen_at: f32,
+    pub tries: bool,
+    /// Seconds before the right moment it presses; negative is late.
+    pub early: f32,
+}
+
+/// Seconds until a projectile at `at` moving at `velocity` reaches `eye`, and how fast it closes,
+/// if it is coming within `near` meters of it.
+pub fn arriving(eye: Vec3, at: Vec3, velocity: Vec3, near: f32) -> Option<(f32, f32)> {
+    let offset = at - eye;
+    let distance = offset.length();
+    let closing = -velocity.dot(offset) / distance.max(1e-3);
+    if closing <= 1.0 {
+        return None;
+    }
+    let soonest = (-offset.dot(velocity) / velocity.length_squared().max(1e-6)).max(0.0);
+    ((offset + velocity * soonest).length() <= near).then_some((distance / closing, closing))
+}
+
+/// Whether a bot that judged a projectile `early` presses now, `seconds` before it arrives
+/// closing at `closing`, with an airblast reaching `range`.
+pub fn presses(seconds: f32, closing: f32, range: f32, early: f32) -> bool {
+    seconds <= REFLECT_AT * range / closing + early
+}
+
 /// Kept between ticks, so the aim turns at a rate and its error settles.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct BotAim {
@@ -171,6 +239,8 @@ pub struct BotAim {
     strafe_for: f32,
     /// The side of the last strafing leg, for whether the next goes back or on.
     last_side: f32,
+    /// The projectile it is meeting with an airblast, or deciding not to.
+    incoming: Option<Incoming>,
 }
 
 /// Turns `(yaw, pitch)` toward `(to_yaw, to_pitch)` by at most `step` radians, the short way.
@@ -307,6 +377,8 @@ pub fn fight(
     nav: Option<Res<NavBake>>,
     bodies: Query<(&PhysicsBody, &Stance, &Player, &Hitboxes), Without<Dying>>,
     mut bots: Query<(Entity, &BotSenses, &BotMind, Option<(&Equipped, &Ammo)>, &mut BotIntent, &mut BotAim), With<BotOf>>,
+    projectiles: Query<(Entity, &Projectile, &PhysicsBody)>,
+    allegiances: Allegiances,
 ) {
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
@@ -315,6 +387,31 @@ pub fn fight(
         let Ok((body, stance, player, _)) = bodies.get(bot) else { continue };
         let eye = body.current + Vec3::Y * player.duck.eye_from_center(*stance);
         let skill = mind.aim;
+        let airblast = arms.zip(catalog.as_deref()).and_then(|((equipped, _), catalog)| match catalog.get(equipped.held()?)?.secondary.action {
+            WeaponAction::Airblast(spec) if spec.reflect => Some(spec),
+            _ => None,
+        });
+        let reflecting = airblast.is_some_and(|spec| {
+            let coming = |entity: Entity| {
+                let (_, projectile, at) = projectiles.get(entity).ok()?;
+                let hostile = projectile.shooter != Some(bot) && allegiances.may_hurt(projectile.source(), bot);
+                hostile.then(|| arriving(eye, at.current, projectile.velocity, projectile.spec.explosion_radius.max(1.0)))?
+            };
+            if aim.incoming.is_some_and(|incoming| coming(incoming.projectile).is_none()) {
+                aim.incoming = None;
+            }
+            if aim.incoming.is_none() {
+                let seen = projectiles
+                    .iter()
+                    .filter(|(entity, _, at)| coming(*entity).is_some() && in_view(eye, player.yaw, player.pitch, at.current) && world.segment_clear(eye, at.current))
+                    .min_by(|a, b| eye.distance_squared(a.2.current).total_cmp(&eye.distance_squared(b.2.current)));
+                aim.incoming = seen.map(|(entity, ..)| mind.reflexes.judge(entity, now));
+            }
+            aim.incoming.is_some_and(|incoming| {
+                let ready = incoming.tries && now - incoming.seen_at >= mind.reaction;
+                ready && coming(incoming.projectile).is_some_and(|(seconds, closing)| presses(seconds, closing, spec.range, incoming.early))
+            })
+        });
 
         let wanted = |entity: Entity, how: Sense| -> Option<f32> {
             let (them, _, their, _) = bodies.get(entity).ok()?;
@@ -358,6 +455,7 @@ pub fn fight(
                 equipped.held().and_then(|held| Some((catalog.as_deref()?.get(held)?.magazine.clip?, ammo.at(held)?))).is_some_and(|(clip, state)| state.clip * 2 < clip && state.reserve > 0)
             });
             (aim.yaw, aim.pitch) = (player.yaw, player.pitch);
+            intent.alt_fire = reflecting;
             continue;
         };
         intent.reload = false;
@@ -400,8 +498,8 @@ pub fn fight(
         let ready = choice.is_some_and(|(.., holding)| holding);
         let lands = ready && would_land(&world, eye, (aim.yaw, aim.pitch), point, tolerance(&action, distance), splash_of(&action));
         let alt = choice.is_some_and(|(_, alt, ..)| alt);
-        intent.fire = lands && !alt;
-        intent.alt_fire = lands && alt;
+        intent.fire = lands && !alt && !reflecting;
+        intent.alt_fire = (lands && alt) || reflecting;
 
         aim.strafe_for -= dt;
         if aim.strafe_for <= 0.0 {
@@ -651,6 +749,53 @@ mod tests {
         // Aimed past the pillar's edge at somebody beyond, but the pillar is in the blast.
         let point = Vec3::new(6.0, 1.0, -10.0);
         assert!(!would_land(&world, eye, aim_at(eye, Vec3::new(1.5, 1.6, -2.0)), point, 1.0, 3.0));
+    }
+
+    /// The share of rockets a bot with these reflexes meets inside the gust: a 20 m/s rocket seen
+    /// 20 m out, its press acted on a tick later, with a 5 m airblast. Caught is in reach and not
+    /// yet against the body.
+    fn reflected(reflexes: Reflexes) -> f32 {
+        let (eye, dt, range, speed) = (Vec3::ZERO, 1.0 / 64.0, 5.0, 20.0);
+        let velocity = Vec3::Z * speed;
+        let tries = 4000;
+        let caught = (0..tries)
+            .filter(|_| {
+                let incoming = reflexes.judge(Entity::PLACEHOLDER, 0.0);
+                if !incoming.tries {
+                    return false;
+                }
+                (0..64).find_map(|tick| {
+                    let now = tick as f32 * dt;
+                    let at = Vec3::NEG_Z * (20.0 - speed * now);
+                    let (seconds, closing) = arriving(eye, at, velocity, 1.0)?;
+                    let pressed = now >= BotMind::default().reaction && presses(seconds, closing, range, incoming.early);
+                    pressed.then(|| (20.0 - speed * (now + dt)).clamp(-1.0, 20.0))
+                })
+                .is_some_and(|distance| distance > 0.6 && distance <= range + 0.42)
+            })
+            .count();
+        caught as f32 / tries as f32
+    }
+
+    /// Breaks if a quick bot stops reflecting nearly every rocket, or a sloppy one stops missing
+    /// a good share, or one that rarely tries reflects often.
+    #[test]
+    fn reflexes_decide_how_often_a_rocket_comes_back() {
+        let sharp = reflected(Reflexes { attempt: 1.0, timing: TIMING.start });
+        let sloppy = reflected(Reflexes { attempt: 1.0, timing: TIMING.end });
+        let reluctant = reflected(Reflexes { attempt: ATTEMPT.start, timing: TIMING.start });
+        assert!(sharp > 0.95, "sharp {sharp}");
+        assert!((0.3..0.75).contains(&sloppy), "sloppy {sloppy}");
+        assert!(reluctant < 0.25, "reluctant {reluctant}");
+    }
+
+    /// Breaks if a rocket passing wide or going away reads as coming.
+    #[test]
+    fn only_a_projectile_coming_close_is_arriving() {
+        let eye = Vec3::ZERO;
+        assert!(arriving(eye, Vec3::NEG_Z * 10.0, Vec3::Z * 20.0, 1.0).is_some_and(|(seconds, _)| (seconds - 0.5).abs() < 1e-4));
+        assert!(arriving(eye, Vec3::new(3.0, 0.0, -10.0), Vec3::Z * 20.0, 1.0).is_none(), "passes 3 m wide");
+        assert!(arriving(eye, Vec3::NEG_Z * 10.0, Vec3::NEG_Z * 20.0, 1.0).is_none(), "going away");
     }
 
     /// Breaks if legs get short enough to jitter, or footwork stops standing still or always

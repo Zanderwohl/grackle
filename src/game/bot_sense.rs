@@ -14,7 +14,7 @@ use crate::common::player_color::PlayerColor;
 use crate::common::swatch::Swatch;
 use crate::common::team::{hostile, Team};
 use crate::game::bot::{BotOf, ShowBots};
-use crate::game::bot_fight::{Aim, Footwork};
+use crate::game::bot_fight::{Aim, Footwork, Reflexes};
 use crate::game::bot_think::Drives;
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
@@ -50,17 +50,18 @@ pub struct BotMind {
     pub drives: Drives,
     pub aim: Aim,
     pub footwork: Footwork,
+    pub reflexes: Reflexes,
 }
 
 impl Default for BotMind {
     fn default() -> Self {
-        BotMind { reaction: 0.3, drives: Drives::default(), aim: Aim::default(), footwork: Footwork::default() }
+        BotMind { reaction: 0.3, drives: Drives::default(), aim: Aim::default(), footwork: Footwork::default(), reflexes: Reflexes::default() }
     }
 }
 
 impl BotMind {
     pub fn temperament() -> Self {
-        BotMind { reaction: rand::random_range(REACTION), drives: Drives::temperament(), aim: Aim::temperament(), footwork: Footwork::temperament() }
+        BotMind { reaction: rand::random_range(REACTION), drives: Drives::temperament(), aim: Aim::temperament(), footwork: Footwork::temperament(), reflexes: Reflexes::temperament() }
     }
 }
 
