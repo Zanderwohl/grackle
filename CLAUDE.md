@@ -336,6 +336,11 @@ a trapezoid just inside it pointing at the damage's source — the `from` a
 `Damage` carries: a muzzle, a blast, your own rocket — kept as a fixed point
 in the world so it tracks as you turn, one per source, wider with damage up
 to 200.
+Inside it too is the **name tag** ([`src/game/name_tag.rs`](src/game/name_tag.rs)):
+whoever the crosshair is on, bots included, named on a leaning panel in their
+color as wide as the name, centered under their feet on screen or over their
+head when there is no room below. Each stays up half a second after the
+crosshair leaves, so several can be up at once.
 
 **The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
 calls the same `grip_with` that puts a body's hands on a weapon, so a grip

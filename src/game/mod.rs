@@ -51,6 +51,7 @@ pub mod player;
 pub mod net_bodies;
 pub mod pause_menu;
 pub mod hud;
+pub mod name_tag;
 pub mod pickup_beam;
 pub mod rounds;
 pub mod score;
@@ -80,6 +81,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::game::tab_board::TabBoardPlugin)
             .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
+            .add_plugins(crate::game::name_tag::NameTagPlugin)
             .add_plugins(crate::game::trigger::TriggerPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
