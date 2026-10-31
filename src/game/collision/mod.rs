@@ -91,10 +91,13 @@ fn clip(polygon: &[Vec3], normal: Vec3, reach: f32) -> Vec<Vec3> {
 }
 
 impl CollisionWorld {
-    /// The walls are the same surface that is drawn.
-    pub fn rebuild_volumes(&mut self, volumes: &[Volume]) {
+    /// The walls are the same surface that is drawn, which is returned for whatever else is
+    /// built from it.
+    pub fn rebuild_volumes(&mut self, volumes: &[Volume]) -> Vec<Face> {
         self.volumes = volumes.to_vec();
-        self.set_surface(&world_surface::of_volumes(volumes));
+        let faces = world_surface::of_volumes(volumes);
+        self.set_surface(&faces);
+        faces
     }
 
     pub fn rebuild(&mut self, rooms: &[Room]) {
@@ -245,6 +248,14 @@ impl CollisionWorld {
         self.ray_hit(ray, range).map(|(distance, _)| distance)
     }
 
+    /// Whether no wall crosses the segment, as [`CollisionWorld::ray_distance`] would answer it;
+    /// stops at the first wall met rather than finding the nearest.
+    pub fn segment_clear(&self, from: Vec3, to: Vec3) -> bool {
+        let Ok((direction, length)) = Dir3::new_and_length(to - from) else { return true };
+        let ray = Ray3d::new(from, direction);
+        !self.grid.any_along(from, to, |index| self.hulls[index as usize].ray(&ray, length).is_some())
+    }
+
     /// The first wall along the ray, as a distance and the normal of the face
     /// crossed. The crossed face, not the nearest: a bounce off the wrong
     /// normal goes through the floor.
@@ -325,6 +336,30 @@ mod tests {
     }
 
     const HALF: Vec3 = Vec3::new(0.35, 0.9, 0.35);
+
+    /// Breaks if the walk along the grid misses a wall the ray test finds, or finds one it does not.
+    #[test]
+    fn a_clear_segment_is_one_the_ray_test_finds_clear() {
+        let mut world = CollisionWorld::default();
+        world.rebuild(&[
+            Room::new(Vec3::new(-12.0, 0.0, -12.0), Vec3::new(0.0, 4.0, 12.0)),
+            Room::new(Vec3::new(0.0, 1.0, -3.0), Vec3::new(9.0, 3.0, 3.0)),
+            Room::new(Vec3::new(9.0, -2.0, -12.0), Vec3::new(21.0, 6.0, 12.0)),
+        ]);
+        let points: Vec<Vec3> = (0..6)
+            .flat_map(|x| (0..3).flat_map(move |y| (0..5).map(move |z| Vec3::new(-11.0 + x as f32 * 6.3, 0.3 + y as f32 * 1.7, -11.0 + z as f32 * 5.4))))
+            .collect();
+        let mut clear = 0;
+        for &from in &points {
+            for &to in &points {
+                let Ok((direction, length)) = Dir3::new_and_length(to - from) else { continue };
+                let expected = world.ray_distance(&Ray3d::new(from, direction), length).is_none();
+                assert_eq!(world.segment_clear(from, to), expected, "{from} to {to}");
+                clear += usize::from(expected);
+            }
+        }
+        assert!(clear > 100, "too few clear segments to have tested anything: {clear}");
+    }
 
     /// Whether something facing along `axis`, either way, was touched.
     fn touched_on(touched: &Touched, axis: Vec3) -> bool {

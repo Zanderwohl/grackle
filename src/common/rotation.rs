@@ -58,7 +58,7 @@ pub fn from_aim_and_spin(axis: Vec3, aim: Vec3, spin: f32) -> Quat {
 }
 
 /// Into `(-π, π]`, so a spin reads as the short way round.
-fn wrap_angle(angle: f32) -> f32 {
+pub fn wrap_angle(angle: f32) -> f32 {
     let wrapped = (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
     if wrapped <= -std::f32::consts::PI { wrapped + std::f32::consts::TAU } else { wrapped }
 }

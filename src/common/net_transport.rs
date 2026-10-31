@@ -110,6 +110,7 @@ fn open_link_for_role(
     role: Res<NetRole>,
     existing: Query<Entity, With<NetLink>>,
     mut status: ResMut<NetStatus>,
+    round: Option<Res<crate::common::round_settings::RoundSettings>>,
 ) {
     for entity in &existing {
         commands.entity(entity).despawn();
@@ -131,6 +132,7 @@ fn open_link_for_role(
                     NetcodeServer::new(ServerNetcodeConfig {
                         protocol_id: NETCODE_PROTOCOL_ID,
                         private_key: DEV_PRIVATE_KEY,
+                        max_clients: round.as_deref().copied().unwrap_or_default().most_clients(),
                         ..default()
                     }),
                     ServerUdpIo::default(),

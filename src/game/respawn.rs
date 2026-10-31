@@ -37,21 +37,28 @@ impl Identity {
     }
 }
 
-/// A player who is choosing has no body and is owed none; they count as dead.
+/// Only a player who is playing is owed a body or has a standing; whoever
+/// is choosing counts as dead.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Seat {
     #[default]
     Choosing,
     /// `None` in a mode without teams.
     Playing(Option<Team>),
+    /// Watching: on no team, and counted in no balance. See [`crate::game::spectate`].
+    Spectating,
 }
 
 impl Seat {
     pub fn team(self) -> Option<Team> {
         match self {
-            Seat::Choosing => None,
+            Seat::Choosing | Seat::Spectating => None,
             Seat::Playing(team) => team,
         }
+    }
+
+    pub fn is_playing(self) -> bool {
+        matches!(self, Seat::Playing(_))
     }
 }
 

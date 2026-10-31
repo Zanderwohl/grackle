@@ -1,6 +1,7 @@
 pub mod app_mode;
 pub mod assets;
 pub mod class;
+pub mod round_settings;
 pub mod clip_file;
 pub mod dock;
 pub mod edit_menu;

@@ -221,6 +221,32 @@ impl AnimationState {
         }
     }
 
+    /// The same thing done standing up.
+    pub fn upright(&self) -> AnimationState {
+        match self {
+            AnimationState::Crouch => AnimationState::Idle,
+            AnimationState::CrouchWalk => AnimationState::RunForward,
+            AnimationState::CrouchWalkBackward => AnimationState::RunBackward,
+            AnimationState::CrouchStrafeLeft => AnimationState::StrafeLeft,
+            AnimationState::CrouchStrafeRight => AnimationState::StrafeRight,
+            AnimationState::CrouchAirborne => AnimationState::Airborne,
+            other => *other,
+        }
+    }
+
+    /// The same thing done crouched. A wall stops a crouched body the way standing still does.
+    pub fn ducked(&self) -> AnimationState {
+        match self {
+            AnimationState::Idle | AnimationState::PushingWall => AnimationState::Crouch,
+            AnimationState::RunForward => AnimationState::CrouchWalk,
+            AnimationState::RunBackward => AnimationState::CrouchWalkBackward,
+            AnimationState::StrafeLeft => AnimationState::CrouchStrafeLeft,
+            AnimationState::StrafeRight => AnimationState::CrouchStrafeRight,
+            AnimationState::Airborne => AnimationState::CrouchAirborne,
+            other => *other,
+        }
+    }
+
     /// Whether this state has to fit inside the crouched hull. How far a body
     /// folds is worked out per build by
     /// [`crate::common::skeleton::ik::duck_under`].

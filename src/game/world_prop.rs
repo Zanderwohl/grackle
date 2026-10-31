@@ -99,11 +99,11 @@ struct WorldPropPart;
 struct RestsOn(f32);
 
 /// The trigger a pickup with no colliders is taken through, in meters.
-const DEFAULT_PICKUP_RADIUS: f32 = 0.4;
+pub const DEFAULT_PICKUP_RADIUS: f32 = 0.4;
 
 /// The trigger a weapon is taken through, in meters, centered on where it
 /// hovers.
-const WEAPON_PICKUP_RADIUS: f32 = 0.6;
+pub const WEAPON_PICKUP_RADIUS: f32 = 0.6;
 
 /// How far above where it stands a weapon's lowest point hovers, in meters,
 /// whatever its style: a weapon on the floor is lost against it.

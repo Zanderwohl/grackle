@@ -15,13 +15,19 @@ use crate::common::game_rules::{GameRules, ModeRules};
 use crate::common::player_color::lowest_free;
 use crate::common::player_settings::{settings_of, ClientSettings, PlayerSettings};
 use crate::common::net::NetRole;
-use crate::common::team::Side;
+use crate::common::team::{Side, Team};
 use crate::common::weapon::WeaponCatalog;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{spawn_player, LocalPlayer, Player, Simulated, Spawn};
+use crate::game::bot::{BotIntent, BotOf, BotRoute, BotSeat, RouteCosts};
+use crate::game::bot_sense::{BotMind, BotSenses};
+use crate::game::bot_fight::BotAim;
+use crate::game::bot_think::BotThought;
 use crate::game::weapon::AutoReload;
 use crate::game::respawn::{choose_spawn, placed_spawns, team_name, HueStart, Identity, OurIdentity, Seat};
+use crate::game::score::Standing;
+use crate::game::team_choice::{seat_for_a_bot, teams_in_play};
 
 /// Spawns bodies for connected clients and marks our own when it arrives.
 pub struct NetBodiesPlugin;
@@ -36,6 +42,8 @@ impl Plugin for NetBodiesPlugin {
                 (
                     (start_respawn_timers, give_bodies_to_whoever_needs_one)
                         .chain()
+                        // A filler steps aside before somebody joining is given a body.
+                        .after(crate::game::bot::fill_empty_slots)
                         .run_if(in_state(AppMode::Play)),
                     claim_our_own_body,
                     apply_player_settings.run_if(in_state(AppMode::Play)),
@@ -138,6 +146,8 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
     rules: Res<GameRules>,
     catalog: Res<WeaponCatalog>,
     timers: Option<Res<RespawnTimers>>,
+    (seats, driven): (Query<(Entity, Option<&RouteCosts>, Option<&BotMind>), With<BotSeat>>, Query<&BotOf, With<Player>>),
+    standings: Query<&Standing>,
 ) {
     let waiting = |who: Identity| timers.as_deref().is_some_and(|timers| timers.waiting(who.id));
     if !role.as_deref().is_none_or(NetRole::is_authority) {
@@ -165,6 +175,8 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         who
     };
 
+    let our_identity = us.as_deref().map(|us| us.0);
+
     if ours.is_empty() {
         // The identity outlives the body, so a respawn is the same player on
         // the same team. `enter_play` drops it for a new match.
@@ -176,7 +188,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
-        if !waiting(who) && who.seat != Seat::Choosing {
+        if !waiting(who) && who.seat.is_playing() {
             let spawn = choose_spawn(&placed, who.team(), &collision);
             info!("Standing our own body up as {} on {}", who.id, team_name(who.team()));
             let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
@@ -200,12 +212,63 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
-        if waiting(who) || who.seat == Seat::Choosing {
+        if waiting(who) || !who.seat.is_playing() {
             continue;
         }
         let spawn = choose_spawn(&placed, who.team(), &collision);
         info!("Standing a client's body up as {} on {}", who.id, team_name(who.team()));
         spawn_body_for(&mut commands, spawn, (who, start), (link, peer.0), &rules, &catalog);
+    }
+
+    // Everybody seated, the points and the teams in play, worked out only once a bot needs a seat.
+    let mut seating: Option<(Vec<Identity>, std::collections::HashMap<PlayerId, i32>, Vec<Team>)> = None;
+    for (seat, temperament, mind) in &seats {
+        if driven.iter().any(|of| of.0 == seat) {
+            continue;
+        }
+        // On the seat, like the identity, so a bot keeps its temperament across lives.
+        let costs = temperament.copied().unwrap_or_else(|| {
+            let rolled = RouteCosts::temperament();
+            commands.entity(seat).insert(rolled);
+            rolled
+        });
+        let mind = mind.copied().unwrap_or_else(|| {
+            let rolled = BotMind::temperament();
+            commands.entity(seat).insert(rolled);
+            rolled
+        });
+        // Wrong about different places each life.
+        let costs = RouteCosts { beliefs: rand::random(), ..costs };
+        // On the seat, as a client's is on its link. A bot has no picker: it takes the seat
+        // Random would give a person.
+        let mut who = identities.get(seat).copied().unwrap_or_else(|_| meet(&mut ids));
+        if who.seat == Seat::Choosing {
+            let (seated, points, teams) = seating.get_or_insert_with(|| {
+                let seated = identities.iter().copied().chain(our_identity).collect();
+                let points = standings.iter().map(|standing| (standing.id, standing.points())).collect();
+                (seated, points, teams_in_play(placed.iter().map(|spawn| spawn.side)))
+            });
+            let others = seated.iter().copied().filter(|other| other.id != who.id);
+            if let Some(taken) = seat_for_a_bot(teams, others, points, !rules.teams) {
+                who.seat = taken;
+            }
+            // Counted at once, so two bots seated in one pass do not both take the side the
+            // other has not joined yet.
+            seated.retain(|other| other.id != who.id);
+            seated.push(who);
+            commands.entity(seat).insert(who);
+        }
+        // Refused a seat, a bot waits choosing, as a person would, rather than playing for nobody.
+        if waiting(who) || who.seat == Seat::Choosing {
+            continue;
+        }
+        let spawn = choose_spawn(&placed, who.team(), &collision);
+        info!("Standing a bot's body up as {} on {}", who.id, team_name(who.team()));
+        let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
+        commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), costs, mind, BotSenses::default(), BotThought::default(), BotAim::default(), Name::new("Bot")));
+        if hosting {
+            commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
+        }
     }
 }
 
@@ -328,6 +391,38 @@ mod tests {
             "not put on the spawn point: {}",
             placed.translation
         );
+    }
+
+    /// Breaks if a bot is served differently from a person: a seat gets a body it drives, the
+    /// identity stays on the seat across a death, and the seat going takes the body with it.
+    #[test]
+    fn a_bot_seat_is_served_a_body_like_a_client() {
+        use crate::game::bot::{BotOf, BotSeat};
+        let mut world = World::new();
+        a_map(&mut world);
+        // The host has chosen Red, so the bot, which has no picker, takes the other side.
+        // Seated after, or the bot is seated beside nobody and tosses a coin.
+        sit_down(&mut world, Seat::Playing(Some(Team::Red)));
+        let seat = world.spawn(BotSeat).id();
+        a_turn(&mut world);
+        let bots = |world: &mut World| world.query_filtered::<(Entity, &BotOf, &PlayerId), (With<Player>, With<Simulated>)>().iter(world).map(|(body, of, id)| (body, of.0, *id)).collect::<Vec<_>>();
+        let first = bots(&mut world);
+        assert_eq!(first.len(), 1, "the seat was not given exactly one body");
+        assert_eq!(first[0].1, seat);
+        let who = *world.get::<Identity>(seat).expect("the identity is not on the seat");
+        assert_eq!(first[0].2, who.id);
+        assert_eq!(who.seat, Seat::Playing(Some(Team::Blue)), "the bot did not take the open side");
+        assert_eq!(world.query_filtered::<(), (With<Player>, With<LocalPlayer>)>().iter(&world).count(), 1, "the bot took the host's place");
+
+        world.despawn(first[0].0);
+        a_turn(&mut world);
+        let second = bots(&mut world);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].2, who.id, "a bot came back as somebody else");
+        let temperament = world.get::<crate::game::bot::RouteCosts>(seat).copied();
+        assert!(temperament.is_some(), "the seat holds no temperament");
+        let reborn = world.get::<crate::game::bot::RouteCosts>(second[0].0).copied().unwrap();
+        assert_eq!(crate::game::bot::RouteCosts { beliefs: 0, ..reborn }, crate::game::bot::RouteCosts { beliefs: 0, ..temperament.unwrap() }, "a bot came back with a different temperament");
     }
 
     /// Dead, nobody is owed a body until the timer runs out.

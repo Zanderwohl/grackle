@@ -17,7 +17,7 @@ bone = "chest"
 [[tracks.channel.keys]]
 at = 0.0
 to = [
-    1.02,
+    0.35,
     0.0,
     0.0,
 ]
@@ -36,7 +36,7 @@ bone = "neck"
 [[tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.612,
+    -0.21000001,
     0.0,
     0.0,
 ]
@@ -131,7 +131,7 @@ channel = "root"
 at = 0.0
 to = [
     0.0,
-    -0.7,
+    -0.45,
     0.0,
 ]
 ease = "smoother_step"

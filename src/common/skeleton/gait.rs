@@ -188,10 +188,10 @@ const CROUCH_HALF_STRIDE: f32 = 0.26;
 /// How far the hips drop to crouch, in hip-heights. Deep enough for the drawn
 /// body to fit the crouched collision box
 /// (`a_crouched_body_fits_under_its_own_ceiling`).
-pub const CROUCH_DEPTH: f32 = 0.70;
+pub const CROUCH_DEPTH: f32 = 0.45;
 
 /// How far the chest folds forward while crouched, in radians.
-pub const CROUCH_LEAN: f32 = 1.02;
+pub const CROUCH_LEAN: f32 = 0.35;
 
 /// A body's stride phase and measured velocity, accumulated from ground
 /// covered. Not replicated: each machine advances it from the replicated

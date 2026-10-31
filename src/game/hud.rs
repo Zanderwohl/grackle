@@ -46,7 +46,7 @@ pub const HUD_CAMERA_ORDER: isize = VIEWMODEL_CAMERA_ORDER + 1;
 const SAFE_ZONE_ASPECT: f32 = 4.0 / 3.0;
 /// Logical pixels in from the safe zone's edges.
 const MARGIN_X: f32 = 24.0;
-const MARGIN_Y: f32 = 20.0;
+pub(crate) const MARGIN_Y: f32 = 20.0;
 
 const BIG: f32 = 44.0;
 const MEDIUM: f32 = 32.0;
@@ -83,7 +83,7 @@ struct HudRoot;
 pub struct GameHud;
 
 #[derive(Component)]
-struct SafeZone;
+pub(crate) struct SafeZone;
 
 /// The whole window less [`WINDOW_MARGIN`] all round, unlike [`SafeZone`]: for
 /// what belongs at the screen's edges rather than near the crosshair, the
@@ -277,16 +277,11 @@ pub fn hud_camera() -> impl Bundle {
     )
 }
 
-/// Put the HUD up once there is a body for it to describe. Keyed on
-/// `Added<LocalPlayer>` because a client's body arrives from the server.
-/// No camera target: the HUD camera is `IsDefaultUiCamera`.
-fn spawn_the_hud(
-    mut commands: Commands,
-    bodies: Query<Entity, Added<LocalPlayer>>,
-    existing: Query<(), With<HudRoot>>,
-    font: Res<DisplayFont>,
-) {
-    if bodies.is_empty() || !existing.is_empty() {
+/// Put the HUD up as soon as a round is being played, with or without a body:
+/// its readouts hide without one of ours, and a spectator's name tags hang in
+/// it. No camera target: the HUD camera is `IsDefaultUiCamera`.
+fn spawn_the_hud(mut commands: Commands, existing: Query<(), With<HudRoot>>, font: Res<DisplayFont>) {
+    if !existing.is_empty() {
         return;
     }
 

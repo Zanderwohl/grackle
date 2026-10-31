@@ -18,7 +18,7 @@ use crate::common::team::Team;
 use crate::common::player_color::PlayerColor;
 use crate::game::respawn::Identity;
 use crate::common::class::{
-    body_center_from_feet, Stance, CLASS_HALF_EXTENTS,
+    body_center_from_feet, Stance, CLASS_HALF_EXTENTS, CROUCH_EYE_HEIGHT, TALLEST_CLASS_EYE_HEIGHT,
 };
 use crate::game::collision::{CollisionWorld, Touched};
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalog, WeaponId};
@@ -38,7 +38,16 @@ const WALK_SPEED: f32 = 2.6;
 const SPRINT_SPEED: f32 = 7.0;
 
 /// Meters per second. Wins over sprint.
-const CROUCH_SPEED: f32 = 1.2;
+pub const CROUCH_SPEED: f32 = 1.2;
+
+/// Seconds for a full duck, down or up. A tap turns back partway rather than finishing.
+pub const DUCK_SECONDS: f32 = 0.2;
+
+/// The fastest a body goes on the ground under `rules` with the sprint key held, in meters per
+/// second.
+pub fn running_speed(rules: &MovementRules) -> f32 {
+    if rules.sprint.sprints(true) { SPRINT_SPEED } else { WALK_SPEED }
+}
 const JUMP_SPEED: f32 = 7.0;
 
 // Movement with momentum, as Quake and Source write it (`PM_Friction`,
@@ -109,6 +118,38 @@ pub struct Player {
     /// knockback timer: a rocket at your feet would otherwise be mostly
     /// rubbed off before you left the floor.
     pub sliding: f32,
+    /// How far down the body is, this step and the one before, to draw between.
+    pub duck: Duck,
+    pub duck_before: Duck,
+}
+
+/// How far down a body is, moving at a steady rate toward what it asked for. The eye, the pose
+/// and the head box follow it; the box only follows [`Stance`], which on the ground changes
+/// when a duck finishes and in the air at once.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect, Serialize, Deserialize)]
+pub struct Duck {
+    /// 0 standing to 1 crouched.
+    pub amount: f32,
+    /// Meters the drawn feet sit above the bottom of the box. A box that changes height in the
+    /// air keeps its head, so the feet jump; this takes the jump out of the drawing and lets it
+    /// catch up as the duck does.
+    pub feet: f32,
+}
+
+impl Duck {
+    pub fn lerp(self, to: Duck, t: f32) -> Duck {
+        Duck { amount: self.amount.lerp(to.amount, t), feet: self.feet.lerp(to.feet, t) }
+    }
+
+    /// Where the rig's feet go, from the center of a body's box.
+    pub fn feet_from_center(self, stance: Stance) -> f32 {
+        self.feet - stance.half_extents().y
+    }
+
+    /// Where the eye is, from the center of a body's box.
+    pub fn eye_from_center(self, stance: Stance) -> f32 {
+        self.feet_from_center(stance) + TALLEST_CLASS_EYE_HEIGHT.lerp(CROUCH_EYE_HEIGHT, self.amount)
+    }
 }
 
 /// Velocity, meters per second, to add to a body on its next step, and what
@@ -127,6 +168,11 @@ impl Player {
     pub fn on_ground(&self) -> bool {
         self.ground.is_some()
     }
+
+    /// Between the last two steps, as `interpolate_bodies` draws the box.
+    pub fn drawn_duck(&self, overstep: f32) -> Duck {
+        self.duck_before.lerp(self.duck, overstep)
+    }
 }
 
 impl Default for Player {
@@ -139,6 +185,8 @@ impl Default for Player {
             against_wall: false,
             catching_up: false,
             sliding: 0.0,
+            duck: Duck::default(),
+            duck_before: Duck::default(),
         }
     }
 }
@@ -235,6 +283,14 @@ pub struct Simulated;
 /// would drive every body in the world.
 #[derive(Component, Default, Debug)]
 pub struct LocalPlayer;
+
+/// The body a spectator is looking out of. Hidden from inside like our own,
+/// and never alongside a [`LocalPlayer`].
+#[derive(Component, Default, Debug)]
+pub struct Watched;
+
+/// The body the view is inside: ours, or the one a spectator watches.
+pub type Viewed = Or<(With<LocalPlayer>, With<Watched>)>;
 
 /// Where the body is at fixed-step boundaries, so rendering can draw between
 ///
@@ -598,18 +654,40 @@ pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut preference: ResMut<ViewP
 ///
 /// Runs after `interpolate_bodies`; earlier, it sits a frame behind the body.
 ///
-/// With no body, it orbits the [`DeathCam`] instead, still aimed by the latch.
+/// With no body, it looks out of the [`Watched`] one, aimed as that body
+/// aims but eased onto it (see [`WATCHED_EASE`]), or else orbits the
+/// [`DeathCam`], still aimed by the latch.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn place_camera(
+    time: Res<Time>,
+    mut eased: Local<Option<WatchedAim>>,
     pull: Res<CameraPull>,
     world: Res<CollisionWorld>,
     latch: Res<InputLatch>,
     death_cam: Option<Res<DeathCam>>,
-    body: Option<Single<(&Transform, &Stance), (With<LocalPlayer>, Without<PlayerCamera>)>>,
+    fixed: Res<Time<Fixed>>,
+    body: Option<Single<(&Transform, &Stance, &Player), (With<LocalPlayer>, Without<PlayerCamera>)>>,
+    watched: Option<Single<(Entity, &Transform, &Stance, &Player), (With<Watched>, Without<LocalPlayer>, Without<PlayerCamera>)>>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
+    if let (None, Some(watched)) = (&body, watched) {
+        let (whom, transform, stance, player) = watched.into_inner();
+        let eye = transform.translation + Vec3::Y * player.drawn_duck(fixed.overstep_fraction()).eye_from_center(*stance);
+        let aim = eased.get_or_insert(WatchedAim { whom, yaw: player.yaw, pitch: player.pitch }).ease(whom, player.yaw, player.pitch, time.delta_secs());
+        let aim = Quat::from_rotation_y(aim.0) * Quat::from_rotation_x(aim.1);
+        for mut camera in &mut cameras {
+            camera.translation = eye;
+            camera.rotation = aim;
+        }
+        return;
+    }
+    *eased = None;
     let pivot = match (body, death_cam) {
         // Ducking lowers the eye and the third-person pivot with it.
-        (Some(body), _) => body.0.translation + Vec3::Y * body.1.eye_offset(),
+        (Some(body), _) => {
+            let (transform, stance, player) = body.into_inner();
+            transform.translation + Vec3::Y * player.drawn_duck(fixed.overstep_fraction()).eye_from_center(*stance)
+        }
         (None, Some(dead)) => dead.pivot,
         (None, None) => return,
     };
@@ -621,6 +699,34 @@ pub fn place_camera(
     for mut camera in &mut cameras {
         camera.translation = placed.translation;
         camera.rotation = placed.rotation;
+    }
+}
+
+/// Seconds: the time constant the watched view eases onto its body's aim with. Turning steadily,
+/// the view trails by the turn rate times this; a snap is 95% closed in three of it. A bot's aim
+/// jumps a quarter turn in a tick, which read as a cut; a rate limit instead trails every snap by
+/// a fixed time and leaves small jitter alone.
+pub const WATCHED_EASE: f32 = 0.1;
+
+/// Where the watched view is looking, eased in yaw and pitch rather than slerped, so a quick turn
+/// never rolls the horizon.
+#[derive(Clone, Copy, Debug)]
+pub struct WatchedAim {
+    whom: Entity,
+    yaw: f32,
+    pitch: f32,
+}
+
+impl WatchedAim {
+    /// Eases toward `yaw` and `pitch` over `seconds`, and cuts straight there for a new body.
+    fn ease(&mut self, whom: Entity, yaw: f32, pitch: f32, seconds: f32) -> (f32, f32) {
+        if whom != self.whom {
+            *self = WatchedAim { whom, yaw, pitch };
+        }
+        let share = 1.0 - (-seconds / WATCHED_EASE).exp();
+        self.yaw += crate::common::rotation::wrap_angle(yaw - self.yaw) * share;
+        self.pitch += (pitch - self.pitch) * share;
+        (self.yaw, self.pitch)
     }
 }
 
@@ -657,11 +763,11 @@ pub fn start_the_death_cam(
     mut deaths: MessageReader<Died>,
     last: Option<ResMut<OurLastBody>>,
     death_cam: Option<Res<DeathCam>>,
-    ours: Option<Single<(&Transform, &Stance, Option<&PlayerId>, Has<Dying>), With<LocalPlayer>>>,
+    ours: Option<Single<(&Transform, &Stance, &Player, Option<&PlayerId>, Has<Dying>), With<LocalPlayer>>>,
 ) {
     let seen = ours.map(|ours| {
-        let (body, stance, id, dying) = ours.into_inner();
-        let cam = DeathCam { pivot: body.translation + Vec3::Y * stance.eye_offset(), whose: id.copied() };
+        let (body, stance, player, id, dying) = ours.into_inner();
+        let cam = DeathCam { pivot: body.translation + Vec3::Y * player.duck.eye_from_center(*stance), whose: id.copied() };
         (cam, dying)
     });
     let mut last = match (last, seen) {
@@ -736,118 +842,140 @@ pub fn step_player(
     for (mut player_slot, mut body_slot, mut stance_slot, input, condition, mut impulse) in &mut players {
         // Stepped on copies and written back only if different: all three are
         // replicated, and a still body would otherwise be resent every tick.
-        let mut player = player_slot.clone();
-        let mut body = *body_slot;
-        let mut stance = *stance_slot;
-
-        player.sliding = (player.sliding - dt).max(0.0);
-        if impulse.0 != Vec3::ZERO {
-            let kick = std::mem::take(&mut impulse.0);
-            player.velocity += kick;
-            player.sliding = KNOCKBACK_SLIDE;
-            // Off the floor here, or the walk below lays the kick flat along
-            // it and the ground snap puts the body straight back.
-            if player.ground.is_some_and(|floor| player.velocity.dot(floor) > LAUNCH_SPEED) {
-                player.ground = None;
-            }
-        }
-
-        // Read, never taken: `write_client_inputs` already consumed the edge,
-        // and rollback replays this input.
-        let jump = input.jump;
-
-        // The view is aimed from the latch and never held back. Movement below
-        // is from the body's yaw, so a held body walks the way it faces.
-        let turning = condition.turning(taunts.as_deref());
-        let aim = (input.yaw, input.pitch);
-        (player.yaw, player.pitch) = match turning {
-            TauntTurning::Free if player.catching_up => TauntTurning::AtMost(CATCH_UP_DEGREES_PER_SECOND),
-            turning => turning,
-        }
-        .follow((player.yaw, player.pitch), aim, dt);
-        player.catching_up = match turning {
-            TauntTurning::Free => (player.yaw, player.pitch) != aim,
-            _ => true,
-        };
-        let crouch = input.crouch && condition.may_crouch();
-        change_stance(&mut stance, &mut body, player.on_ground(), crouch, &world);
-        let half = stance.half_extents();
-        let wish = Vec3::new(input.movement.x, 0.0, -input.movement.y).normalize_or_zero();
-        let wish = Quat::from_rotation_y(player.yaw) * wish;
-        let wishing = wish != Vec3::ZERO;
-
-        // The animation measures ground covered; it is never told which speed.
-        let speed = if rules.sprint.sprints(input.sprint) { SPRINT_SPEED } else { WALK_SPEED };
-        let speed = if stance == Stance::Crouched { CROUCH_SPEED } else { speed };
-        // A replicated, unpredicted `Condition`: the tick a taunt starts or
-        // stops is a rollback, which is correct and rare.
-        let speed = speed * condition.speed_factor(taunts.as_deref());
-        let speed = if wishing { speed } else { 0.0 };
-
-        // A held jump re-fires on landing, so chaining jumps needs no fresh
-        // press. The tick that jumps feels no friction, so a hop chained on
-        // landing keeps its speed: bunny hopping. On the ground velocity
-        // follows the floor and gravity does nothing, so a walkable slope is
-        // walked up and down and not slid down when standing still.
-        let jumped = player.on_ground() && jump;
-        player.velocity = match player.ground {
-            Some(floor) => {
-                let along_floor = (wish - floor * wish.dot(floor)).normalize_or_zero();
-                let coasting = if jump || player.sliding > 0.0 { player.velocity } else { friction(player.velocity, dt) };
-                let moving = accelerate(coasting, along_floor, speed, speed, GROUND_ACCELERATE, dt);
-                if jump { Vec3::new(moving.x, JUMP_SPEED, moving.z) } else { onto_floor(moving, floor) }
-            }
-            None => {
-                let moving = accelerate(player.velocity, wish, speed, speed.min(AIR_WISH_SPEED), AIR_ACCELERATE, dt);
-                Vec3::new(moving.x, player.velocity.y + rules.fall() * dt, moving.z)
-            }
-        };
-
-        // A room edited mid-match can enclose a body that crossed nothing,
-        // which a sweep cannot see.
-        let start = world.depenetrate(body.current, half);
-        let delta = player.velocity * dt;
-        let (mut position, mut touched) = world.slide(start, half, delta);
-
-        // A stair is a wall too low to be one. Taken only if it gets further,
-        // so pressing into a real wall does not hop on the spot.
-        let walled = |touched: &Touched| touched.iter().any(|n| n.y.abs() < WALKABLE);
-        if player.on_ground() && !jumped && walled(&touched) {
-            if let Some((stepped, over)) = world.step_up(start, half, delta, STEP_HEIGHT, WALKABLE) {
-                let level = |p: Vec3| Vec2::new(p.x - start.x, p.z - start.z).length();
-                if level(stepped) > level(position) + 1.0e-4 {
-                    (position, touched) = (stepped, over);
-                }
-            }
-        }
-
-        player.velocity = touched.clip(player.velocity);
-        player.against_wall = walled(&touched);
-        // Settled onto a floor found within the probe, so a body that ended a
-        // fall just short of one does not stand on air.
-        // Walking up a slope rises too; only a jump, or still going up after
-        // one, leaves the ground.
-        let rising = jumped || (player.ground.is_none() && player.velocity.y > 0.0);
-        let ground = (!rising).then(|| world.ground(position, half, GROUND_PROBE, WALKABLE)).flatten();
-        if let Some((resting, floor)) = ground {
-            position = resting;
-            // A landing settled by the probe touched nothing in the slide, so
-            // the fall is taken off here; left in, the next tick would turn
-            // it into speed along the floor.
-            let into = player.velocity.dot(floor);
-            if into < 0.0 {
-                player.velocity -= floor * into;
-            }
-        }
-        player.ground = ground.map(|(_, normal)| normal);
-
-        body.previous = body.current;
-        body.current = position;
-
-        player_slot.set_if_neq(player);
-        body_slot.set_if_neq(body);
-        stance_slot.set_if_neq(stance);
+        let mut mover = Mover { player: player_slot.clone(), body: *body_slot, stance: *stance_slot };
+        let kick = std::mem::take(&mut impulse.0);
+        step(&mut mover, kick, input, condition, taunts.as_deref(), &world, &rules, dt);
+        player_slot.set_if_neq(mover.player);
+        body_slot.set_if_neq(mover.body);
+        stance_slot.set_if_neq(mover.stance);
     }
+}
+
+/// What [`step`] moves: everything about a body that one tick changes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mover {
+    pub player: Player,
+    pub body: PhysicsBody,
+    pub stance: Stance,
+}
+
+/// One body's tick, as [`step_player`] runs it, for anything that needs to know where an input
+/// takes a body without a world to run it in: a bot's planning, or the nav bake's jump links.
+/// `kick` is the knockback taken this tick.
+#[allow(clippy::too_many_arguments)]
+pub fn step(
+    mover: &mut Mover,
+    kick: Vec3,
+    input: &PlayerInput,
+    condition: &Condition,
+    taunts: Option<&crate::common::taunt::Taunts>,
+    world: &CollisionWorld,
+    rules: &MovementRules,
+    dt: f32,
+) {
+    let Mover { player, body, stance } = mover;
+    player.sliding = (player.sliding - dt).max(0.0);
+    if kick != Vec3::ZERO {
+        player.velocity += kick;
+        player.sliding = KNOCKBACK_SLIDE;
+        // Off the floor here, or the walk below lays the kick flat along
+        // it and the ground snap puts the body straight back.
+        if player.ground.is_some_and(|floor| player.velocity.dot(floor) > LAUNCH_SPEED) {
+            player.ground = None;
+        }
+    }
+
+    // Read, never taken: `write_client_inputs` already consumed the edge,
+    // and rollback replays this input.
+    let jump = input.jump;
+
+    // The view is aimed from the latch and never held back. Movement below
+    // is from the body's yaw, so a held body walks the way it faces.
+    let turning = condition.turning(taunts);
+    let aim = (input.yaw, input.pitch);
+    (player.yaw, player.pitch) = match turning {
+        TauntTurning::Free if player.catching_up => TauntTurning::AtMost(CATCH_UP_DEGREES_PER_SECOND),
+        turning => turning,
+    }
+    .follow((player.yaw, player.pitch), aim, dt);
+    player.catching_up = match turning {
+        TauntTurning::Free => (player.yaw, player.pitch) != aim,
+        _ => true,
+    };
+    let crouch = input.crouch && condition.may_crouch();
+    duck(player, stance, body, crouch, world, dt);
+    let half = stance.half_extents();
+    let wish = Vec3::new(input.movement.x, 0.0, -input.movement.y).normalize_or_zero();
+    let wish = Quat::from_rotation_y(player.yaw) * wish;
+    let wishing = wish != Vec3::ZERO;
+
+    // The animation measures ground covered; it is never told which speed.
+    let speed = if rules.sprint.sprints(input.sprint) { SPRINT_SPEED } else { WALK_SPEED };
+    let speed = if *stance == Stance::Crouched { CROUCH_SPEED } else { speed.lerp(CROUCH_SPEED, player.duck.amount) };
+    // A replicated, unpredicted `Condition`: the tick a taunt starts or
+    // stops is a rollback, which is correct and rare.
+    let speed = speed * condition.speed_factor(taunts);
+    let speed = if wishing { speed } else { 0.0 };
+
+    // A held jump re-fires on landing, so chaining jumps needs no fresh
+    // press. The tick that jumps feels no friction, so a hop chained on
+    // landing keeps its speed: bunny hopping. On the ground velocity
+    // follows the floor and gravity does nothing, so a walkable slope is
+    // walked up and down and not slid down when standing still.
+    let jumped = player.on_ground() && jump;
+    player.velocity = match player.ground {
+        Some(floor) => {
+            let along_floor = (wish - floor * wish.dot(floor)).normalize_or_zero();
+            let coasting = if jump || player.sliding > 0.0 { player.velocity } else { friction(player.velocity, dt) };
+            let moving = accelerate(coasting, along_floor, speed, speed, GROUND_ACCELERATE, dt);
+            if jump { Vec3::new(moving.x, JUMP_SPEED, moving.z) } else { onto_floor(moving, floor) }
+        }
+        None => {
+            let moving = accelerate(player.velocity, wish, speed, speed.min(AIR_WISH_SPEED), AIR_ACCELERATE, dt);
+            Vec3::new(moving.x, player.velocity.y + rules.fall() * dt, moving.z)
+        }
+    };
+
+    // A room edited mid-match can enclose a body that crossed nothing,
+    // which a sweep cannot see.
+    let start = world.depenetrate(body.current, half);
+    let delta = player.velocity * dt;
+    let (mut position, mut touched) = world.slide(start, half, delta);
+
+    // A stair is a wall too low to be one. Taken only if it gets further,
+    // so pressing into a real wall does not hop on the spot.
+    let walled = |touched: &Touched| touched.iter().any(|n| n.y.abs() < WALKABLE);
+    if player.on_ground() && !jumped && walled(&touched) {
+        if let Some((stepped, over)) = world.step_up(start, half, delta, STEP_HEIGHT, WALKABLE) {
+            let level = |p: Vec3| Vec2::new(p.x - start.x, p.z - start.z).length();
+            if level(stepped) > level(position) + 1.0e-4 {
+                (position, touched) = (stepped, over);
+            }
+        }
+    }
+
+    player.velocity = touched.clip(player.velocity);
+    player.against_wall = walled(&touched);
+    // Settled onto a floor found within the probe, so a body that ended a
+    // fall just short of one does not stand on air.
+    // Walking up a slope rises too; only a jump, or still going up after
+    // one, leaves the ground.
+    let rising = jumped || (player.ground.is_none() && player.velocity.y > 0.0);
+    let ground = (!rising).then(|| world.ground(position, half, GROUND_PROBE, WALKABLE)).flatten();
+    if let Some((resting, floor)) = ground {
+        position = resting;
+        // A landing settled by the probe touched nothing in the slide, so
+        // the fall is taken off here; left in, the next tick would turn
+        // it into speed along the floor.
+        let into = player.velocity.dot(floor);
+        if into < 0.0 {
+            player.velocity -= floor * into;
+        }
+    }
+    player.ground = ground.map(|(_, normal)| normal);
+
+    body.previous = body.current;
+    body.current = position;
 }
 
 /// Slow down, by [`FRICTION`] scaled by horizontal speed — a slope's rise is
@@ -881,40 +1009,58 @@ fn onto_floor(velocity: Vec3, floor: Vec3) -> Vec3 {
     (velocity - floor * velocity.dot(floor)).normalize_or_zero() * speed
 }
 
-/// Duck, or stand back up if there is room.
+/// Move the duck a step toward `wants_crouch`, and change the box when it is time.
 ///
-/// On the ground the feet stay and the head drops; in the air the head stays
-/// and the feet come up, which is the crouch-jump. Standing up waits until
-/// there is room, rather than standing into the ceiling and being depenetrated.
-fn change_stance(
-    stance: &mut Stance,
-    body: &mut PhysicsBody,
-    on_ground: bool,
-    wants_crouch: bool,
-    world: &CollisionWorld,
-) {
+/// On the ground the box changes when the duck finishes, keeping the feet, and standing up goes
+/// only as far as there is room to finish. In the air it changes at once, keeping the head and
+/// lifting the feet, which is the crouch-jump; the drawn feet catch up at the duck's rate.
+fn duck(player: &mut Player, stance: &mut Stance, body: &mut PhysicsBody, wants_crouch: bool, world: &CollisionWorld, dt: f32) {
+    player.duck_before = player.duck;
     let shift = Stance::center_shift();
-    let (wanted, movement) = match (wants_crouch, *stance) {
-        (true, Stance::Standing) => (
-            Stance::Crouched,
-            if on_ground { -shift } else { shift },
-        ),
-        (false, Stance::Crouched) => (
-            Stance::Standing,
-            if on_ground { shift } else { -shift },
-        ),
-        _ => return,
+    let change = |stance: &mut Stance, body: &mut PhysicsBody, to: Stance, center: f32| {
+        // Both ends, so the change is not drawn as a slide.
+        body.current.y += center;
+        body.previous.y += center;
+        *stance = to;
     };
+    let fits_standing = |center: Vec3| world.fits(center, Stance::Standing.half_extents());
 
-    let moved = body.current + Vec3::Y * movement;
-    if wanted == Stance::Standing && !world.fits(moved, Stance::Standing.half_extents()) {
-        return;
+    if !player.on_ground() {
+        match (wants_crouch, *stance) {
+            // Both ends of the duck as of the box, or the frame drawn between them has the feet
+            // where neither step put them.
+            (true, Stance::Standing) => {
+                change(stance, body, Stance::Crouched, shift);
+                player.duck.feet -= 2.0 * shift;
+                player.duck_before.feet -= 2.0 * shift;
+            }
+            (false, Stance::Crouched) if fits_standing(body.current - Vec3::Y * shift) => {
+                change(stance, body, Stance::Standing, -shift);
+                player.duck.feet += 2.0 * shift;
+                player.duck_before.feet += 2.0 * shift;
+            }
+            _ => {}
+        }
     }
 
-    // Both ends, so the change is not drawn as a slide through the floor.
-    body.current = moved;
-    body.previous += Vec3::Y * movement;
-    *stance = wanted;
+    let rate = dt / DUCK_SECONDS;
+    let down = if player.on_ground() { wants_crouch } else { *stance == Stance::Crouched };
+    let room = *stance == Stance::Standing || !player.on_ground() || fits_standing(body.current + Vec3::Y * shift);
+    let amount = &mut player.duck.amount;
+    if down {
+        *amount = (*amount + rate).min(1.0);
+    } else if room {
+        *amount = (*amount - rate).max(0.0);
+    }
+    if player.on_ground() {
+        match *stance {
+            Stance::Standing if player.duck.amount >= 1.0 => change(stance, body, Stance::Crouched, -shift),
+            Stance::Crouched if player.duck.amount <= 0.0 => change(stance, body, Stance::Standing, shift),
+            _ => {}
+        }
+    }
+    let feet = &mut player.duck.feet;
+    *feet = feet.signum() * (feet.abs() - 2.0 * shift * rate).max(0.0);
 }
 
 /// Draw the body between its last two fixed positions.
@@ -938,10 +1084,32 @@ pub fn interpolate_bodies(
 }
 
 #[cfg(test)]
+mod watched_aim_tests {
+    use super::*;
+
+    /// Breaks if the watched view snaps with the body, never arrives, turns the long way round,
+    /// or swings across from the last body watched instead of cutting.
+    #[test]
+    fn the_watched_view_eases_onto_its_aim_and_cuts_to_a_new_body() {
+        let (one, two) = (Entity::from_raw_u32(1).unwrap(), Entity::from_raw_u32(2).unwrap());
+        let mut aim = WatchedAim { whom: one, yaw: 3.0, pitch: 0.0 };
+        let (yaw, _) = aim.ease(one, -3.0, 0.0, WATCHED_EASE);
+        // From 3 to -3 the short way is up through pi, not down through zero.
+        assert!(yaw > 3.0, "turned the long way round: {yaw}");
+        let gap = std::f32::consts::TAU - 6.0;
+        assert!((yaw - 3.0 - gap * (1.0 - (-1.0f32).exp())).abs() < 1e-4, "one time constant did not close 63% of the turn");
+        for _ in 0..100 {
+            aim.ease(one, -3.0, 0.5, WATCHED_EASE);
+        }
+        let (yaw, pitch) = aim.ease(one, -3.0, 0.5, WATCHED_EASE);
+        assert!((yaw.rem_euclid(std::f32::consts::TAU) - (-3.0f32).rem_euclid(std::f32::consts::TAU)).abs() < 1e-3 && (pitch - 0.5).abs() < 1e-3);
+        assert_eq!(aim.ease(two, 1.0, -0.2, 0.0), (1.0, -0.2), "swung across to a new body");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
-
-    use crate::common::class::TALLEST_CLASS_EYE_HEIGHT;
 
     use super::*;
     use crate::tool::room::Room;
@@ -1019,6 +1187,37 @@ mod tests {
         assert!(v.length() > SPRINT_SPEED * 1.2, "a second's air strafe reached only {}", v.length());
     }
 
+    /// Breaks if the system stops being a thin wrapper round `step`: the nav bake and bots would
+    /// then plan with physics the game does not run.
+    #[test]
+    fn the_system_and_the_pure_step_move_a_body_alike() {
+        let start = body_center_from_feet(Vec3::new(0.0, 0.0, 5.0));
+        let input = PlayerInput { movement: Vec2::Y, jump: true, yaw: 0.3, ..default() };
+        let kick = Vec3::new(2.0, 4.0, 0.0);
+
+        let mut world = World::new();
+        world.insert_resource(open_room());
+        world.insert_resource(MovementRules::default());
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_secs_f32(TICK));
+        world.insert_resource(time);
+        let body = world
+            .spawn((Player::default(), PhysicsBody::at(start), Stance::Standing, ActionState(input.clone()), Impulse(kick), Simulated))
+            .id();
+
+        let collision = open_room();
+        let rules = MovementRules::default();
+        let mut mover = Mover { player: Player::default(), body: PhysicsBody::at(start), stance: Stance::Standing };
+        for tick in 0..40 {
+            world.run_system_once(step_player).unwrap();
+            step(&mut mover, if tick == 0 { kick } else { Vec3::ZERO }, &input, &Condition::default(), None, &collision, &rules, TICK);
+        }
+
+        assert_eq!(world.get::<Player>(body).unwrap(), &mover.player);
+        assert_eq!(world.get::<PhysicsBody>(body).unwrap(), &mover.body);
+        assert!(mover.body.current.distance(start) > 1.0, "the body never went anywhere");
+    }
+
     #[test]
     fn a_slope_neither_slows_nor_speeds_a_body_along_it() {
         let floor = Vec3::new(0.5, 1.0, 0.0).normalize();
@@ -1035,7 +1234,7 @@ mod tests {
         world.init_resource::<Messages<Died>>();
         let start = world.register_system(start_the_death_cam);
         let body = world
-            .spawn((LocalPlayer, Transform::from_xyz(1.0, 1.0, 0.0), Stance::default(), PlayerId(5)))
+            .spawn((LocalPlayer, Transform::from_xyz(1.0, 1.0, 0.0), Stance::default(), Player::default(), PlayerId(5)))
             .id();
 
         world.run_system(start).unwrap();
@@ -1162,6 +1361,8 @@ mod tests {
     fn first_person_puts_the_camera_at_the_eye() {
         let mut app = App::new();
         app.init_resource::<CameraPull>();
+        app.init_resource::<Time>();
+        app.init_resource::<Time<Fixed>>();
         app.init_resource::<InputLatch>();
         app.insert_resource(open_room());
         let body = Vec3::new(0.0, 1.0, 0.0);
@@ -1192,6 +1393,8 @@ mod tests {
     fn the_view_is_aimed_by_the_latch_not_by_the_body() {
         let mut app = App::new();
         app.init_resource::<CameraPull>();
+        app.init_resource::<Time>();
+        app.init_resource::<Time<Fixed>>();
         app.insert_resource(open_room());
         let yaw = 1.1;
         app.insert_resource(InputLatch(PlayerInput { yaw, ..default() }));
@@ -1212,79 +1415,130 @@ mod tests {
         );
     }
 
-    /// Crouching on the ground keeps the feet and drops the head.
+    /// Ducks for `ticks`, standing on a floor if `on_ground`; returns the eye's height each tick.
+    fn ducking(world: &CollisionWorld, player: &mut Player, stance: &mut Stance, body: &mut PhysicsBody, on_ground: bool, wants: bool, ticks: usize) -> Vec<f32> {
+        player.ground = on_ground.then_some(Vec3::Y);
+        (0..ticks)
+            .map(|_| {
+                duck(player, stance, body, wants, world, TICK);
+                body.current.y + player.duck.eye_from_center(*stance)
+            })
+            .collect()
+    }
+
+    fn standing_at(feet: Vec3) -> (Player, Stance, PhysicsBody) {
+        (Player::default(), Stance::Standing, PhysicsBody::at(body_center_from_feet(feet)))
+    }
+
+    /// Breaks if the box changes before the duck finishes on the ground, or the feet move.
     #[test]
-    fn crouching_on_the_ground_keeps_the_feet_and_drops_the_head() {
+    fn a_duck_on_the_ground_takes_its_time_and_keeps_the_feet() {
         let world = open_room();
-        let mut stance = Stance::Standing;
-        let mut body = PhysicsBody::at(body_center_from_feet(Vec3::ZERO));
+        let (mut player, mut stance, mut body) = standing_at(Vec3::ZERO);
+        let half = (DUCK_SECONDS / TICK / 2.0) as usize;
+        ducking(&world, &mut player, &mut stance, &mut body, true, true, half);
+        assert_eq!(stance, Stance::Standing, "the box changed halfway down");
+        assert!((player.duck.amount - 0.5).abs() < 0.1);
 
-        let head = body.current.y + Stance::Standing.half_extents().y;
-        change_stance(&mut stance, &mut body, true, true, &world);
-
+        ducking(&world, &mut player, &mut stance, &mut body, true, true, half + 2);
         assert_eq!(stance, Stance::Crouched);
-        let feet = body.current.y - Stance::Crouched.half_extents().y;
+        assert_eq!(player.duck.amount, 1.0);
+        let feet = body.current.y + player.duck.feet_from_center(stance);
         assert!(feet.abs() < 1e-5, "the feet moved to {feet}");
-        assert!(
-            body.current.y + Stance::Crouched.half_extents().y < head - 0.5,
-            "the head barely moved"
-        );
     }
 
-    /// Crouching in the air keeps the head and lifts the feet.
+    /// Breaks if a tap runs the whole duck: let go partway and it turns back from there.
     #[test]
-    fn crouching_in_the_air_keeps_the_head_and_lifts_the_feet() {
+    fn a_tap_turns_back_partway() {
         let world = open_room();
-        let mut stance = Stance::Standing;
-        let mut body = PhysicsBody::at(Vec3::new(0.0, 3.0, 0.0));
-
-        let head = body.current.y + Stance::Standing.half_extents().y;
-        let feet = body.current.y - Stance::Standing.half_extents().y;
-        change_stance(&mut stance, &mut body, false, true, &world);
-
-        assert_eq!(stance, Stance::Crouched);
-        assert!(
-            (body.current.y + Stance::Crouched.half_extents().y - head).abs() < 1e-5,
-            "the head moved"
-        );
-        let lifted = body.current.y - Stance::Crouched.half_extents().y - feet;
-        assert!(
-            (lifted - 2.0 * Stance::center_shift()).abs() < 1e-5,
-            "the feet came up by {lifted}"
-        );
+        let (mut player, mut stance, mut body) = standing_at(Vec3::ZERO);
+        ducking(&world, &mut player, &mut stance, &mut body, true, true, 3);
+        let deepest = player.duck.amount;
+        let up = ducking(&world, &mut player, &mut stance, &mut body, true, false, 3);
+        assert!(deepest < 0.5);
+        assert_eq!(player.duck.amount, 0.0, "a three-tick tap took more than three ticks to undo");
+        assert_eq!(stance, Stance::Standing);
+        assert!((up[2] - body_center_from_feet(Vec3::ZERO).y - Stance::Standing.eye_offset()).abs() < 1e-5);
     }
 
-    /// A body under a low ceiling stays crouched.
+    /// Breaks if the eye jumps anywhere in a duck down and back up: the change of box included.
     #[test]
-    fn a_body_under_a_low_ceiling_cannot_stand_up() {
-        let world = world(&[Room::new(
-            Vec3::new(-5.0, 0.0, -5.0),
-            Vec3::new(5.0, Stance::Crouched.height() + 0.2, 5.0),
-        )]);
+    fn the_eye_moves_at_a_steady_rate() {
+        let world = open_room();
+        let (mut player, mut stance, mut body) = standing_at(Vec3::ZERO);
+        let start = body.current.y + player.duck.eye_from_center(stance);
+        let mut eyes = vec![start];
+        eyes.extend(ducking(&world, &mut player, &mut stance, &mut body, true, true, 20));
+        eyes.extend(ducking(&world, &mut player, &mut stance, &mut body, true, false, 20));
+        let most = (TALLEST_CLASS_EYE_HEIGHT - CROUCH_EYE_HEIGHT) * TICK / DUCK_SECONDS + 1e-4;
+        for pair in eyes.windows(2) {
+            assert!((pair[1] - pair[0]).abs() <= most, "the eye jumped {} in a tick", pair[1] - pair[0]);
+        }
+        assert!((eyes.last().unwrap() - start).abs() < 1e-5);
+    }
+
+    /// Breaks if a crouch-jump waits for the duck, or draws the feet jumping up with the box.
+    #[test]
+    fn a_duck_in_the_air_changes_the_box_at_once_and_draws_the_feet_catching_up() {
+        let world = open_room();
+        let (mut player, mut stance, mut body) = standing_at(Vec3::new(0.0, 2.0, 0.0));
+        let head = body.current.y + Stance::Standing.half_extents().y;
+        ducking(&world, &mut player, &mut stance, &mut body, false, true, 1);
+        assert_eq!(stance, Stance::Crouched);
+        assert!((body.current.y + Stance::Crouched.half_extents().y - head).abs() < 1e-5, "the head moved");
+        let drawn_feet = body.current.y + player.duck.feet_from_center(stance);
+        assert!(drawn_feet < 2.0 + 2.0 * Stance::center_shift() * 0.2, "the drawn feet jumped up to {drawn_feet}");
+
+        ducking(&world, &mut player, &mut stance, &mut body, false, true, 20);
+        assert_eq!(player.duck.feet, 0.0, "the drawn feet never caught up with the box");
+    }
+
+    /// Breaks if a box changing in the air is drawn for a frame with the feet where neither step
+    /// put them: the eye flickers by the change of box.
+    #[test]
+    fn a_duck_in_the_air_draws_no_jump_between_steps() {
+        let world = open_room();
+        let (mut player, mut stance, mut body) = standing_at(Vec3::new(0.0, 2.0, 0.0));
+        player.ground = None;
+        let drawn = |player: &Player, stance: Stance, body: &PhysicsBody, overstep: f32| {
+            body.previous.lerp(body.current, overstep).y + player.drawn_duck(overstep).eye_from_center(stance)
+        };
+        let before = drawn(&player, stance, &body, 1.0);
+        body.previous = body.current;
+        duck(&mut player, &mut stance, &mut body, true, &world, TICK);
+        assert_eq!(stance, Stance::Crouched);
+        for overstep in [0.0, 0.5, 1.0] {
+            let eye = drawn(&player, stance, &body, overstep);
+            assert!((eye - before).abs() < 0.05, "drawn {overstep} of the way through the tick, the eye is {} off", eye - before);
+        }
+    }
+
+    /// Breaks if a body stands into a ceiling, or never stands once out from under it.
+    #[test]
+    fn a_body_under_a_low_ceiling_stays_down() {
+        let low = world(&[Room::new(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, Stance::Crouched.height() + 0.2, 5.0))]);
+        let mut player = Player { duck: Duck { amount: 1.0, feet: 0.0 }, ..default() };
         let mut stance = Stance::Crouched;
         let mut body = PhysicsBody::at(Vec3::Y * Stance::Crouched.half_extents().y);
-        let was = body.current;
-
-        change_stance(&mut stance, &mut body, true, false, &world);
-
+        ducking(&low, &mut player, &mut stance, &mut body, true, false, 30);
         assert_eq!(stance, Stance::Crouched, "stood up into the ceiling");
-        assert_eq!(body.current, was);
+        assert_eq!(player.duck.amount, 1.0, "rose under a ceiling it cannot stand under");
 
-        let mut stance = Stance::Crouched;
-        change_stance(&mut stance, &mut body, true, false, &open_room());
+        ducking(&open_room(), &mut player, &mut stance, &mut body, true, false, 30);
         assert_eq!(stance, Stance::Standing);
     }
 
-    /// A stance change moves both ends of the interpolation, or a crouch draws
-    /// as a slide into the floor.
+    /// Breaks if a change of box moves only one end of the interpolation, which draws as a slide.
     #[test]
     fn a_stance_change_moves_both_ends_of_the_interpolation() {
-        let mut stance = Stance::Standing;
-        let mut body = PhysicsBody::at(body_center_from_feet(Vec3::ZERO));
-
-        change_stance(&mut stance, &mut body, true, true, &open_room());
-
-        assert_eq!(body.current, body.previous);
+        let world = open_room();
+        let (mut player, mut stance, mut body) = standing_at(Vec3::ZERO);
+        for _ in 0..30 {
+            body.previous = body.current;
+            ducking(&world, &mut player, &mut stance, &mut body, true, true, 1);
+            assert_eq!(body.current, body.previous);
+        }
+        assert_eq!(stance, Stance::Crouched);
     }
 
     /// `F` swaps, and swaps back.

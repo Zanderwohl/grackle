@@ -13,13 +13,13 @@ use crate::common::app_mode::showing_the_world;
 use bevy::transform::TransformSystems;
 
 use crate::common::class::Stance;
-use crate::common::hitbox::{hitboxes, Hitboxes};
+use crate::common::hitbox::{hitboxes, Box3, Hitboxes};
 use crate::common::skeleton::state::ClipLibrary;
 use crate::common::skeleton::{
     animator_pose, AnimationClock, AnimationPhase, Gait, PoseInputs, Skeleton, SkeletonAnimator,
 };
 use crate::common::skeleton::clip::Clip;
-use crate::common::skeleton::ik::finish_pose;
+use crate::common::skeleton::ik::ducked_pose;
 use crate::common::skeleton::play::{apply_stack, ClipStack, Frames, Layer};
 use crate::common::skeleton::state::{AnimationState, BodyRequests};
 use crate::game::player::{step_player, LocalPlayer, PhysicsBody, Player, ViewMode};
@@ -91,7 +91,10 @@ pub fn update_hitboxes(
                 global.compute_transform().with_translation(physics.current),
             );
         }
-        let root = skeleton_root(&placed, offset);
+        // A player's duck as of this step, not as drawn.
+        let ducked = player.zip(stance).map(|(player, stance)| SkeletonRoot(Vec3::Y * player.duck.feet_from_center(*stance)));
+        let root = skeleton_root(&placed, ducked.as_ref().or(offset));
+        let crouch = player.map(|player| player.duck.amount);
 
         let clips = library.as_deref();
         let gait = gait.copied().unwrap_or_default();
@@ -101,7 +104,10 @@ pub fn update_hitboxes(
             speed: gait.speed(),
             travel: gait.travel(),
         };
-        let mut pose = animator_pose(skeleton, animator, &inputs, &root, clips);
+        let mut pose = animator_pose(skeleton, animator, &inputs, &root, clips, crouch);
+        // The body box is the hull, wherever a duck draws the feet: blasts and shots are measured
+        // from where the body is, not from where it is drawn catching up.
+        let hull = physics.zip(stance).map(|(physics, stance)| Box3 { center: physics.current, half_extents: stance.half_extents() });
         if let Some(stack) = stack {
             let still = AnimationState::from_requests(&BodyRequests {
                 crouching: requests.is_some_and(|requests| requests.crouching),
@@ -109,7 +115,7 @@ pub fn update_hitboxes(
                 ..default()
             });
             stand_where_claimed(skeleton, &mut pose, stack, || {
-                finish_pose(skeleton, still, &inputs, &root, clips)
+                ducked_pose(skeleton, still, &inputs, &root, clips, crouch)
             });
         }
         let pitch = player.map_or(0.0, |player| player.pitch);
@@ -139,6 +145,9 @@ pub fn update_hitboxes(
         });
 
         *boxes = hitboxes(skeleton, &pose, &root, stance);
+        if let Some(hull) = hull {
+            boxes.body = hull;
+        }
     }
 }
 

@@ -41,7 +41,7 @@ const SLIDE_SECONDS: f32 = 0.1;
 const PICKER_LAYER: i32 = 10;
 const CLOSED_ALPHA: f32 = 0.35;
 /// Radians, looking down at the spawn point while choosing.
-const OVERLOOK_PITCH: f32 = -0.25;
+pub(crate) const OVERLOOK_PITCH: f32 = -0.25;
 
 #[derive(Component)]
 struct PickerRoot;
@@ -104,9 +104,12 @@ fn put_it_down(mut picker: ResMut<TeamPicker>, mut held: ResMut<MouseHeld>) {
 
 /// With no body and no death to watch, the view orbits a spawn point: a
 /// [`DeathCam`] of nobody's, so the next body takes it down. Not while
-/// [`OurLastBody`] is held, as a death cam is about to start.
+/// [`OurLastBody`] is held, as a death cam is about to start. A spectator's
+/// view is [`crate::game::spectate`]'s.
+#[allow(clippy::too_many_arguments)]
 fn overlook_while_choosing(
     mut commands: Commands,
+    offer: Res<TeamOptions>,
     ours: Query<(), With<LocalPlayer>>,
     death_cam: Option<Res<DeathCam>>,
     last: Option<Res<OurLastBody>>,
@@ -114,7 +117,7 @@ fn overlook_while_choosing(
     collision: Res<CollisionWorld>,
     mut latch: ResMut<InputLatch>,
 ) {
-    if !ours.is_empty() || death_cam.is_some() || last.is_some() {
+    if !ours.is_empty() || death_cam.is_some() || last.is_some() || offer.seat == Seat::Spectating {
         return;
     }
     // A client's map can arrive after the round starts.
@@ -123,9 +126,14 @@ fn overlook_while_choosing(
         None if collision.volumes().is_empty() => return,
         None => fallback_spawn(&collision),
     };
-    commands.insert_resource(DeathCam { pivot: spawn.feet + Vec3::Y * Stance::Standing.eye_height(), whose: None });
+    commands.insert_resource(overlook(spawn.feet));
     latch.0.yaw = spawn.yaw;
     latch.0.pitch = OVERLOOK_PITCH;
+}
+
+/// Orbiting a spawn point at a standing eye over its `feet`.
+pub(crate) fn overlook(feet: Vec3) -> DeathCam {
+    DeathCam { pivot: feet + Vec3::Y * Stance::Standing.eye_height(), whose: None }
 }
 
 fn rows(offer: &TeamOptions) -> Vec<(TeamChoice, String, Swatch, bool)> {
@@ -139,7 +147,7 @@ fn rows(offer: &TeamOptions) -> Vec<(TeamChoice, String, Swatch, bool)> {
         }
         false => rows.push((TeamChoice::Random, get!("team.picker.free_for_all"), Swatch::neutral(), offer.random)),
     }
-    rows.push((TeamChoice::Spectate, get!("team.picker.spectate"), Swatch::neutral(), false));
+    rows.push((TeamChoice::Spectate, get!("team.picker.spectate"), Swatch::neutral(), offer.spectate));
     rows
 }
 
@@ -243,9 +251,9 @@ mod tests {
 
     #[test]
     fn free_for_all_offers_one_way_in_and_spectating() {
-        let offer = TeamOptions { seat: Seat::Choosing, teams: false, open: Vec::new(), random: true };
+        let offer = TeamOptions { seat: Seat::Choosing, teams: false, open: Vec::new(), random: true, spectate: true };
         let shown: Vec<_> = rows(&offer).into_iter().map(|(choice, _, _, open)| (choice, open)).collect();
-        assert_eq!(shown, vec![(TeamChoice::Random, true), (TeamChoice::Spectate, false)]);
+        assert_eq!(shown, vec![(TeamChoice::Random, true), (TeamChoice::Spectate, true)]);
     }
 
     #[test]
@@ -255,6 +263,7 @@ mod tests {
             teams: true,
             open: vec![(Team::Red, false), (Team::Blue, true)],
             random: true,
+            spectate: false,
         };
         let shown: Vec<_> = rows(&offer).into_iter().map(|(choice, _, _, open)| (choice, open)).collect();
         assert_eq!(

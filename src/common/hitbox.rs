@@ -155,8 +155,9 @@ mod tests {
         let up = hitboxes(&skeleton, &standing, &root, Stance::Standing).head.unwrap();
         let down = hitboxes(&skeleton, &ducked, &root, Stance::Crouched).head.unwrap();
 
+        let drop = Stance::Standing.height() - Stance::Crouched.height();
         assert!(
-            up.center.y - down.center.y > 0.5,
+            up.center.y - down.center.y > drop * 0.8,
             "ducking moved the head box by {:.2} m",
             up.center.y - down.center.y
         );

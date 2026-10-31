@@ -54,6 +54,69 @@ There is a player body that walks, falls and jumps in `src/game/`, but it is
 still a prototype for feeling out room sizes: it has health and can shoot, and
 that is the whole of it.
 
+Bots move, choose where to go, and fight. A bot is a `BotSeat` holding an `Identity` the way
+a client's link does, served a body by `give_bodies_to_whoever_needs_one`. It
+has no picker, so it takes the seat Random would give a person
+(`team_choice::seat_for_a_bot`), and bots count in the balance people choose
+against; the
+body carries a `BotIntent` (where to go and look, which buttons) that
+`steer_bots` turns into its `Inputs` each tick, the component a keyboard fills,
+so nothing downstream can tell a bot from a person. Routes come from
+`NavGraph::path`, with a caller's extra cost per link, and a drop or jump is
+replayed from the input the bake found it with (`src/game/bot.rs`). A cell
+only a crouched body fits is on the graph, marked `crouched`, reached by
+`Crouch` links and sampled crouched by every field; a bot ducks 1.5 m ahead of
+one, since the duck takes a fifth of a second before the box shrinks. A
+leap that passes through a pickup's sphere is kept as a link that `grabs` it
+when no cell takes it standing, and **rocket jumps** are baked for the
+catalog's flat rocket by firing it straight down on a jump from a standstill
+(`own_blast` is `explode`'s rule for one's own blast, without entities, and the
+shot is flown by `projectile::advance`, which `step_projectiles` runs too); a
+bot takes one only while it carries that launcher loaded and the jump would
+not kill it, unless its temperament's **shortsightedness** (a chance per plan,
+0 to 0.1) forgets to ask, and sets off from a standstill within 10 cm of the
+start with the launcher drawn. A `Goal` is a place or a pickup. The
+**Round** tab, right of Metadata, holds the server's `RoundSettings`
+([`src/common/round_settings.rs`](src/common/round_settings.rs)) — not the
+map's, so neither saved nor sent: **slots**, the host and bots included, which
+caps the clients a server takes from when it starts listening, and **fill empty
+slots with bots**, which `fill_empty_slots` keeps true through a round as
+people come and go, with seats marked `FillsASlot`. **A bot never keeps
+anybody out**: the cap counts people only, so a slot a bot fills is open, and
+somebody joining takes a filler's seat and body in the same frame, before
+`give_bodies_to_whoever_needs_one` stands theirs up. `B` seats a bot by hand
+(counted against the slots) and `Shift+B` retires the newest. What a bot goes
+for is `think`'s ([`src/game/bot_think.rs`](src/game/bot_think.rs)), the one
+writer of `BotIntent::goal`: health, armor, arms, a hunt, cover, an ambush or a
+roam, each scored by its temperament's `Drives`, the one it has getting a
+commitment bonus, and shown with its score and the runner-up on its `F8` tag. A route is weighed by `RouteCosts` —
+seconds of travel, plus that time again per weighted unit of exposure,
+knockback danger and Hurt in the cells entered — so risk is priced, not
+forbidden. Each seat rolls its own temperament (every weight scaled by 0.1 to
+1.5) and keeps it across lives, so bots are neither alike nor perfect. A
+temperament also has a **misjudgment**, 0 to 0.8: each 4 m stretch of floor
+reads to the bot as safer or riskier than the bake says, even dear where
+nothing threatens, by a hash of the stretch and the bot's `beliefs`, which are
+rolled again each life. `F8` draws each bot's route in its color, its view,
+and a line to each enemy it knows of: solid while seen, dashed when only hurt
+by them, fading as it forgets. The nav graph they walk — walks, steps, drops and jumps, the last two found by running the movement step — is baked (`src/game/nav.rs`,
+the third bake), with knockback, pickup distance, traffic and, as a fourth bake,
+sightlines on it (`src/game/nav_field.rs`), rated into kinds of place — cramped,
+precarious, an ambush — for the map's statistics (`src/game/nav_rating.rs`); all
+of it is drawn over the floor from its section of the Bakes panel. The plan is
+[documentation/bots.md](documentation/bots.md). The brain — senses with a 90°
+view, goals scored by utility with a commitment bonus, and aim with human
+limits — is planned in [documentation/bot-brain.md](documentation/bot-brain.md).
+Its senses are built (`src/game/bot_sense.rs`): **a bot never reads where an
+enemy is**, only its `BotSenses` — who is in its 90° view with a clear ray to
+them, what it heard (`Effect`s) and which way a hit came from — remembered for a few seconds
+and passed on only after its `BotMind`'s reaction time. `think` reads them, and
+`fight` ([`src/game/bot_fight.rs`](src/game/bot_fight.rs)) shoots only at what they
+have in sight: aim turning at a rate with an error that settles as it tracks,
+rockets led and put at the feet, fire held without a clear ray, the weapon by
+range, and a strafe onto floor the graph has. `steer_bots` adds the strafe across
+the look.
+
 There is a prop editor, which models the things a map and a class refer to.
 It is a third `AppMode` and the frontier next to it: the geometry it builds is
 correct and nothing yet *holds* one — a weapon names its model and no system
@@ -86,7 +149,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map and demo-scene blueprints), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`. |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
-| `cache/` | Gitignored, derived from the packs: `thumbnail/props/{name}.png`. Safe to delete. |
+| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`. Safe to delete. |
 
 ## Spawn points and class metrics
 
@@ -281,6 +344,13 @@ a trapezoid just inside it pointing at the damage's source — the `from` a
 `Damage` carries: a muzzle, a blast, your own rocket — kept as a fixed point
 in the world so it tracks as you turn, one per source, wider with damage up
 to 200.
+Inside it too is the **name tag** ([`src/game/name_tag.rs`](src/game/name_tag.rs)):
+whoever the crosshair is on, bots included, named on a leaning panel in their
+color as wide as the name, centered under their feet on screen or over their
+head when there is no room below. While `F8` is on, every bot's tag is up, its
+goal on a second line — spectating too, which is why the HUD goes up with the
+round rather than with a body: without one its crosshair and readouts hide. Each stays up half a second after the
+crosshair leaves, so several can be up at once.
 
 **The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
 calls the same `grip_with` that puts a body's hands on a weapon, so a grip
@@ -353,8 +423,10 @@ between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body
 its hitboxes are hidden from inside your own head, nobody else's are),
 **`F4`** toggles the hitbox gizmos and the debug laser aimed at them, and
 **`F6`** toggles the bone gizmos and the pickups' trigger volumes
-(green, dim while one restocks). Both are off by default: they are debug
-views, and now that bodies have geometry neither is what a player sees. `F3`
+(green, dim while one restocks), **`F7`** shows the nav overlay picked in
+the Bakes panel, and **`F8`** draws each bot's route over the floor, its view
+and what it senses, in its color, and puts its name tag up with its goal. All four are off by default: they are debug
+views, and now that bodies have geometry none is what a player sees. `F3`
 is the perf overlay in both modes.
 
 Weapons are drawn by **bucket** on **`1`–`9`** and the **wheel** (see
@@ -484,6 +556,20 @@ draw `render_layers::GIZMOS` — gizmos live there, drawn by the editor
 viewports and the play camera — or a debug overlay from the eye would sit in
 the lens. `ForwardCameraPlugin` is added in
 `main.rs`, as `WorldPropPlugin` is, since the game's tests have no renderer.
+
+**The lens is drawn once at startup, out of sight.** Bevy compiles a pipeline
+the first time something draws with it, and on macOS and wasm it does so
+synchronously, on the frame: the first scoped weapon picked up was half a
+second of frozen screen. `warm_up_the_lens` stands up a camera set up as the
+forward camera is, on `render_layers::WARM_UP`, drawing a lens triangle whose
+corners are all one point, and `end_the_warm_up` takes both down a few frames
+after the shader loads. It has to match what it warms: the warm-up mesh is laid
+out as a baked lens is (`the_warm_up_lens_is_laid_out_like_the_scope_glass`),
+and its camera is HDR, perspective and default MSAA like the viewmodel camera,
+since those are the view's half of the pipeline key. Nothing else needed it —
+the world's materials, the sky and weapon models are all drawn by the editor's
+HDR perspective viewport, or by a pickup on the map, before any round — but a
+material that first appears mid-round would, and it joins the same way.
 
 The mode itself ([`view.rs`](src/prop/view.rs)) does three reversible things
 on the way in: the world is **hidden rather than unloaded** (a prop is
@@ -1148,6 +1234,15 @@ as it was before the edit. Joining a round therefore bakes twice — once on
 adoption, once entering Play — which is the right trade: the message covers a
 map arriving mid-round, the set covers one arriving as the round starts.
 
+**A round asked for with its bakes behind waits in the editor**
+([`src/tool/round_prep.rs`](src/tool/round_prep.rs)): `F5`, the Mode menu or
+`--play` while rooms, sunlight or the nav graph are stale is held back before
+`StateTransition`, the bakes are asked for, and a modal shows each one's
+progress until they land and the round starts — or Cancel or `Escape` drops
+it. Entering Play then finds nothing to do, so the frame never freezes. Only
+on the authority, and only in the editor binary: a client follows the
+server's mode, and without the plugin entering Play still bakes, blocked.
+
 The actual work is the free function `bake_rooms`, called by both paths, so
 that "somebody pressed the button" and "a round is starting" cannot bake
 slightly differently.
@@ -1183,6 +1278,21 @@ waits only when the light is stale. Each texel is the base ambient, the sun, and
 light plus one bounce gathered every meter (`LitSurface::ambient`). The
 lightmap replaces the ambient on walls, so `GlobalAmbientLight` lights only
 what moves.
+
+**Every bake reports the same way**
+([`src/tool/bake_job.rs`](src/tool/bake_job.rs)): a `BakeStatus` per
+`BakeKind` in the `BakeProgress` resource — a state (up to date, stale,
+waiting, baking), whether auto-bake is on, items completed of items
+scheduled, and what it is working on — written by the bake itself each frame,
+so a panel draws any bake without knowing which it is. A bake of the whole
+map in the background is a `BakeJob` run by `BackgroundBake`, which owns the
+hash, the settle delay, the one-at-a-time rule and the wait at round start.
+The job is stepped an item at a time: on native straight through, sending its
+progress back over a channel every `CHUNK`; on wasm, where the pool runs a
+task in one go on the main thread, in chunks of `CHUNK` sent out again each
+frame, which is what spreads it across frames. Rooms are not a
+`BakeJob`: they are incremental and build meshes on the main thread, and
+report their queue instead.
 
 ## What a body is drawn as
 
@@ -1557,7 +1667,7 @@ Otherwise **the player chooses**
 match `Seat::Choosing` — on their `Identity`, with no body and no claim to one,
 so they count as dead — behind the **team picker**
 ([`src/game/team_picker.rs`](src/game/team_picker.rs)): Random, each team in
-play, and Spectate, which is offered and never open yet. A mode without teams
+play, and Spectate (see below). A mode without teams
 offers "Free for All", which is Random into no team. `.` brings it back
 mid-match. The teams in play are the `Side`s the spawn points are on, or Red
 and Blue on a map with fewer than two.
@@ -1580,6 +1690,41 @@ and Blue on a map with fewer than two.
   the view looks out from behind a spawn point (`overlook_while_choosing`, a
   `DeathCam` of nobody's), which is why `spawn_the_view` no longer waits for
   a body.
+
+**Spectating is a seat**, `Seat::Spectating`
+([`src/game/spectate.rs`](src/game/spectate.rs)): on no team, owed no body,
+with no `Standing` — so on neither scoreboard nor the Rounds tab — and
+counted in no team's balance, since a tally counts only teams. Only
+`Seat::Playing` is owed a body or a standing (`Seat::is_playing`); ask that
+rather than comparing against `Choosing`. Choosing it with a body kills the
+body like any switch, and choosing a team from `.` ends it. A client reads
+its seat off the server's `TeamOptions`, so the view below runs on every
+machine from what it is told.
+
+- **The view is a list, not cameras**: every spawn point (by entity), then
+  every living body's eye (by `PlayerId`), stepped with the left button and
+  back with the right, wrapping. `SpectatorView` holds the *target*, so a
+  death or a join rebuilds the list without moving the view; a target that
+  goes is replaced by whatever took its place in the list.
+- **A spawn is a `DeathCam`** of nobody's, framed by the same `overlook` the
+  picker uses. **An eye is `Watched`** on that body: `place_camera` looks out
+  of it at its eye, aimed by its replicated `Player.yaw`/`pitch`, ahead of
+  any `DeathCam`, eased onto that aim in yaw and pitch over `WATCHED_EASE`
+  (a bot's aim jumps a quarter turn in a tick), cutting to a new body rather
+  than swinging; `decide_the_view` cuts to first person; and its body and
+  held weapon are hidden from inside as our own are. The viewmodel, its arms,
+  kicks and reloads follow `Viewed` — ours or the watched body — so a
+  spectator sees what that player sees; the apparent muzzle stays ours. Their
+  name is on a name-tag panel at the bottom middle of the safe zone, with the
+  goal under it for a bot (`name_whoever_is_watched`). With `F8` on, a
+  watched bot's every want and its pull is a table top right of the window
+  safe zone, alphabetical, the chosen one bright
+  ([`src/game/pull_table.rs`](src/game/pull_table.rs)).
+- **Nothing else reads the clicks.** With no body the latch's edges are
+  consumed by `write_client_inputs` with nothing to fire, and `watch`
+  ignores clicks while `MouseHeld`, so the click that closes the picker
+  does not also step the view. `watch` drops `OurLastBody` too: chosen, not
+  died, so there is no corpse to watch.
 
 **The animation grid does choose.** `RosterTeam` on the feature is a panel
 combo — *Striped* ("Four teams, then colors"), or one of the four. Striped
@@ -1730,6 +1875,14 @@ The order inside a tick is stated as **sets, not as named systems**
 | `Apply` | `apply_damage`, and nothing else, ever. |
 | `Resolve` | `record_damage`, `announce_the_dead`, then `reap_the_dead`. |
 
+**A shot leaves after the move**: `pull_trigger` runs after `step_player`, a
+projectile is launched, flown its first tick and set off in the tick it is
+fired (`fire_projectiles` and `step_projectiles` chained, `explode` after
+them and after `update_hitboxes`), and the blast's push is taken on the next
+move. The nav bake's rocket jumps are worked out in that order, so it is not
+tidiness. A body's box for blasts and shots is its hull, wherever a duck
+draws the feet.
+
 A new damage source joins `Deal` and says nothing about what happens after it.
 Before the sets, `DamagePlugin` had to name every weapon so it could order
 itself after them, and forgetting one produced no error — just the occasional
@@ -1748,6 +1901,18 @@ there are superimposed rather than merely close and six hits read as one.
 Anything that hurts several bodies at once from a single origin wants that
 last one. Splash reaches anything with `Hitboxes` — being shootable and being
 catchable in a blast are deliberately the same property.
+
+**A crouch is TF2's proportions**: a 1.5 m box under a 2.0 m one, the eye at
+1.2 m, a squat with the chest leaned 20° rather than a body folded double.
+**A duck takes `DUCK_SECONDS`** (0.2 s), as in Source: `Player.duck` moves at a
+steady rate toward the key, so a tap turns back partway, and the eye, the
+pose (each state blended with its crouched counterpart, `ducked_pose`: the
+hips drop with the feet replanted and the torso leans in late) and the
+head box follow it. The box is `Stance` and changes when the duck finishes on
+the ground, keeping the feet, but at once in the air, keeping the head — the
+crouch-jump; `Duck::feet` draws the feet catching up rather than jumping with
+the box. Shots leave from the same eased eye. Both ends of the duck ride in the
+replicated `Player`, so every machine draws it between steps.
 
 **Movement has momentum**: Quake's friction and acceleration at TF2's numbers,
 with air strafing and chained hops kept (see "Momentum" in

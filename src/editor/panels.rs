@@ -31,8 +31,12 @@ use crate::common::player_settings::{PlayerSettings, NAME_LIMIT};
 use crate::game::rounds::RoundHistory;
 use crate::get;
 use crate::tool::Tools;
+use crate::tool::bake_job::BakeProgress;
+use crate::common::round_settings::{RoundSettings, MOST_SLOTS};
+use crate::tool::bake_progress::{self, Step};
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
 use crate::tool::sun_bake::{BakeSunlight, ClearSunlight, SunBake};
+use crate::tool::nav_overlay::{NavCommands, NavPanel};
 use crate::tool::retarget::RetargetState;
 use crate::tool::show::{ShowPlugin, GizmoVisibility};
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
@@ -99,6 +103,7 @@ impl Default for CurrentFilePath {
 /// A top panel sizes to its contents and a `DockArea` asks for almost nothing, so the default is
 /// stated as the tab bar plus two rows of buttons.
 const TAB_BAR_HEIGHT: f32 = 26.0;
+const MENU_BAR_PROGRESS_WIDTH: f32 = 120.0;
 const TOOLBAR_ROW_HEIGHT: f32 = toolbar::BUTTON_HEIGHT + toolbar::ROW_PADDING * 2.0;
 const TOOLBAR_DEFAULT_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT * 2.0;
 const TOOLBAR_MIN_HEIGHT: f32 = TAB_BAR_HEIGHT + TOOLBAR_ROW_HEIGHT;
@@ -108,6 +113,8 @@ enum TabKinds {
     Bakes,
     Show,
     Metadata,
+    /// How the server runs a round: slots, and bots to fill them.
+    Round,
     /// The feature list with its rollback bar, and the selected feature's editor beneath.
     Features,
     /// The last rounds' final standings.
@@ -121,12 +128,15 @@ enum TabKinds {
 #[derive(SystemParam)]
 struct PanelMessages<'w> {
     rounds: Res<'w, RoundHistory>,
+    round: ResMut<'w, RoundSettings>,
     player: ResMut<'w, PlayerSettings>,
     room: MessageWriter<'w, CalculateRoomGeometry>,
     clear_room: MessageWriter<'w, ClearRoomGeometry>,
     log_ecs: MessageWriter<'w, LogECS>,
     room_bake: ResMut<'w, RoomBake>,
     sun_bake: ResMut<'w, SunBake>,
+    bake_progress: Res<'w, BakeProgress>,
+    nav: NavPanel<'w>,
     sunlight: MessageWriter<'w, BakeSunlight>,
     clear_sunlight: MessageWriter<'w, ClearSunlight>,
     edits: MessageWriter<'w, EditEvent>,
@@ -147,7 +157,8 @@ struct TabViewerAndResources<'a> {
     map_metadata: &'a mut MapMetadata,
     multicam_state: &'a mut MulticamState,
     bake_commands: &'a mut BakeCommands,
-    baking_sun: bool,
+    bake_progress: &'a BakeProgress,
+    nav_commands: &'a mut NavCommands,
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
     retarget_request: &'a mut Option<(FeatureId, String)>,
@@ -158,6 +169,7 @@ struct TabViewerAndResources<'a> {
     /// editable.
     spectating: bool,
     rounds: &'a RoundHistory,
+    round: &'a mut RoundSettings,
     /// Change detection bypassed, as the timeline's is: held for the whole
     /// frame it would read as changed every frame, and every change is saved
     /// and sent.
@@ -174,6 +186,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Bakes => "bakes".to_owned(),
             TabKinds::Show => "show".to_owned(),
             TabKinds::Metadata => "metadata".to_owned(),
+            TabKinds::Round => "round".to_owned(),
             TabKinds::Features => "features".to_owned(),
             TabKinds::Rounds => "rounds".to_owned(),
             TabKinds::Player => "player".to_owned(),
@@ -186,6 +199,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Bakes => { get!("bakes.title").into() }
             TabKinds::Show => { get!("show.title").into() }
             TabKinds::Metadata => { get!("editor.metadata.title").into() }
+            TabKinds::Round => { get!("editor.round.title").into() }
             TabKinds::Features => { get!("editor.timeline.title").into() }
             TabKinds::Rounds => { get!("editor.rounds.title").into() }
             TabKinds::Player => { get!("editor.player.title").into() }
@@ -201,13 +215,16 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 Tools::ui(ui, self.current_tool, self.next_tool);
             }
             TabKinds::Bakes => {
-                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.baking_sun);
+                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.nav_commands, self.bake_progress);
             }
             TabKinds::Show => {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
             }
             TabKinds::Metadata => {
                 map_metadata_panel_ui(ui, self.map_metadata);
+            }
+            TabKinds::Round => {
+                round_panel_ui(ui, self.round);
             }
             TabKinds::Features => {
                 self.timeline_touched |= FeatureTimeline::ui(
@@ -232,6 +249,7 @@ impl Plugin for EditorPanelPlugin {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<EditorPanels>()
+            .init_resource::<RoundSettings>()
             .init_resource::<CurrentFilePath>()
             .add_systems(Startup, EditorPanels::set_multicam_size)
             .add_systems(Startup, crate::common::assets::create_the_user_pack)
@@ -280,7 +298,7 @@ impl EditorPanels {
     pub fn new() -> Self {
         let default_top_tabs = vec![TabKinds::Tools,];
         let default_left_tabs = vec![TabKinds::Features, TabKinds::Bakes,];
-        let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata];
+        let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata, TabKinds::Round];
         let default_bottom_tabs = vec![TabKinds::Rounds, TabKinds::Player];
         
         Self {
@@ -335,6 +353,7 @@ impl EditorPanels {
         map_metadata.sync_authors_ui_buffer_from_authors();
         
         let mut bake_commands = BakeCommands { auto: messages.room_bake.auto(), auto_sun: messages.sun_bake.auto(), ..default() };
+        let mut nav_commands = messages.nav.commands();
         let mut pending_edits = PendingEditEvents::default();
         let mut retarget_request: Option<(FeatureId, String)> = None;
         let mut loaded_blueprint: Option<LoadedBlueprint> = None;
@@ -362,13 +381,17 @@ impl EditorPanels {
             map_metadata: &mut *map_metadata,
             multicam_state: &mut *multicam_state,
             bake_commands: &mut bake_commands,
-            baking_sun: messages.sun_bake.is_baking(),
+            bake_progress: &messages.bake_progress,
+            nav_commands: &mut nav_commands,
             gizmo_visibility: &mut *gizmo_visibility,
             pending_edits: &mut pending_edits,
             retarget_request: &mut retarget_request,
             timeline_touched: false,
             spectating: !net_role.is_authority(),
             rounds: &messages.rounds,
+            // Through `bypass_change_detection`, as `player` is: held every frame, it would read as
+            // changed every frame.
+            round: messages.round.bypass_change_detection(),
             player: messages.player.bypass_change_detection(),
             player_touched: false,
         };
@@ -394,6 +417,12 @@ impl EditorPanels {
                     if dirty {
                         ui.separator();
                         ui.label("*");
+                    }
+                    if let Some(step) = Step::current(&messages.bake_progress) {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            bake_progress::bar(ui, step.within(), MENU_BAR_PROGRESS_WIDTH);
+                            ui.add(egui::Label::new(step.line()).truncate());
+                        });
                     }
                 });
             })
@@ -610,6 +639,7 @@ impl EditorPanels {
         if bake_commands.clear_room_geometry {
             messages.clear_room.write(ClearRoomGeometry);
         }
+        messages.nav.apply(&nav_commands);
         if bake_commands.log_ecs {
             messages.log_ecs.write(LogECS);
         }
@@ -662,6 +692,15 @@ fn player_panel_ui(ui: &mut egui::Ui, settings: &mut PlayerSettings) -> bool {
     });
     changed |= ui.checkbox(&mut settings.auto_reload, get!("editor.player.auto_reload")).changed();
     changed
+}
+
+fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
+    egui::Grid::new("round_settings").num_columns(2).show(ui, |ui| {
+        ui.label(get!("editor.round.slots"));
+        ui.add(egui::DragValue::new(&mut settings.slots).range(1..=MOST_SLOTS));
+        ui.end_row();
+    });
+    ui.checkbox(&mut settings.fill_with_bots, get!("editor.round.fill_with_bots"));
 }
 
 /// Newest first, the newest open.

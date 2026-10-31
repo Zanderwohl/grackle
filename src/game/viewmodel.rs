@@ -30,7 +30,7 @@ use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
 use crate::game::held::{perform, HeldModel, HeldPart, Performance, SharedWeaponClips};
-use crate::game::player::{place_camera, LocalPlayer, PlayerCamera, ViewMode, PLAY_CAMERA_ORDER};
+use crate::game::player::{place_camera, LocalPlayer, PlayerCamera, ViewMode, Viewed, PLAY_CAMERA_ORDER};
 use crate::prop::hold::grip_hands;
 
 pub const VIEWMODEL_LAYER: usize = crate::common::render_layers::VIEWMODEL;
@@ -203,7 +203,7 @@ fn give_the_view_its_own_camera(
 /// still be in flight.
 pub fn dress_the_viewmodel(
     mut commands: Commands,
-    held: Query<&HeldModel, With<LocalPlayer>>,
+    held: Query<&HeldModel, Viewed>,
     // Copied off the body's own parts rather than a second cache lookup that
     // could disagree.
     drawn: Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>), With<HeldPart>>,
@@ -253,7 +253,7 @@ fn perform_viewmodel_clips(
     clips: Res<Assets<Clip>>,
     shared: Option<Res<SharedWeaponClips>>,
     catalog: Res<WeaponCatalog>,
-    held: Query<&HeldModel, With<LocalPlayer>>,
+    held: Query<&HeldModel, Viewed>,
     mut views: Query<(&mut Performance, &mut ClipStack), With<Viewmodel>>,
 ) {
     let Ok(held) = held.single() else { return };
@@ -267,7 +267,7 @@ fn perform_viewmodel_clips(
 /// `Space::Carry` is the framed weapon and `Space::Eye` the camera.
 fn place_the_viewmodel(
     clips: Res<Assets<Clip>>,
-    held: Query<(&HeldModel, &Skeleton), With<LocalPlayer>>,
+    held: Query<(&HeldModel, &Skeleton), Viewed>,
     mut views: Query<(&mut Viewmodel, &ClipStack)>,
     cameras: Query<(&Camera, &Projection, &Children, &ChildOf), With<ViewmodelCamera>>,
     mut parts: Query<&mut Transform, With<ViewmodelPart>>,
@@ -369,7 +369,7 @@ fn dress_the_viewmodel_arms(
     mut materials: ResMut<Assets<StandardMaterial>>,
     bodies: Query<
         (Entity, &Skeleton, Option<&Team>, Option<&PlayerColor>, Option<&BodyTint>, Option<&Burning>),
-        With<LocalPlayer>,
+        Viewed,
     >,
     mut views: Query<&mut Viewmodel>,
     cameras: Query<Entity, With<ViewmodelCamera>>,
@@ -429,7 +429,7 @@ fn dress_the_viewmodel_arms(
 /// no support grip, so usually only one arm is drawn. Solved only when the rig,
 /// held model or frustum changes.
 fn place_the_viewmodel_arms(
-    bodies: Query<(Entity, Ref<Skeleton>, Ref<HeldModel>), With<LocalPlayer>>,
+    bodies: Query<(Entity, Ref<Skeleton>, Ref<HeldModel>), Viewed>,
     cameras: Query<(&Camera, &Projection, &Children, &ChildOf), With<ViewmodelCamera>>,
     mut views: Query<&mut Viewmodel>,
     mut parts: Query<(&ViewmodelArm, &mut Transform, &mut Visibility)>,
@@ -796,6 +796,18 @@ mod tests {
             })
             .collect();
         (body, camera, arms)
+    }
+
+    /// Breaks if a spectator looking out of somebody is given no viewmodel.
+    #[test]
+    fn a_watched_body_is_given_the_viewmodel() {
+        let mut world = World::new();
+        let (body, _, _) = a_viewmodel_with_arms(&mut world);
+        world.entity_mut(body).remove::<LocalPlayer>().insert(crate::game::player::Watched);
+
+        world.run_system_once(place_the_viewmodel_arms).unwrap();
+        let placed = world.query::<&Viewmodel>().single(&world).unwrap().arms_placed_for;
+        assert_eq!(placed.map(|key| key.body), Some(body));
     }
 
     fn when_placed(world: &World, arms: &[Entity]) -> Vec<Tick> {

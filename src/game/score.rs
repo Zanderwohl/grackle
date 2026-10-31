@@ -24,7 +24,7 @@ use crate::common::team::Team;
 use crate::game::body_mesh::body_look;
 use crate::game::damage::DamageSystems;
 use crate::game::player::LocalPlayer;
-use crate::game::respawn::{HueStart, Identity, OurIdentity, Seat};
+use crate::game::respawn::{HueStart, Identity, OurIdentity};
 use crate::get;
 
 #[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -202,12 +202,12 @@ fn keep_standings(
     // Made in the same command flush as the first identity.
     let Some(start) = start else { return };
     let unset = PlayerSettings::default();
-    // Nobody still choosing a team is in the round yet.
+    // Nobody choosing a team or watching is in the round.
     let here: Vec<(Identity, &str)> = links
         .iter()
         .map(|(who, link)| (*who, settings_of(false, link, None, &unset).name.as_str()))
         .chain(us.map(|us| (us.0, settings_of(true, None, our_settings.as_deref(), &unset).name.as_str())))
-        .filter(|(who, _)| who.seat != Seat::Choosing)
+        .filter(|(who, _)| who.seat.is_playing())
         .collect();
 
     for (entity, mut standing) in &mut standings {

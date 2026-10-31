@@ -72,6 +72,86 @@ auto_rooms = "Auto-bake Rooms"
 sunlight = "Sunlight"
 auto_sunlight = "Auto-bake Sunlight"
 
+[bakes.doing]
+surface = "The map's surface"
+copy = "{ name }, copy { image }"
+unnamed = "Unnamed volume"
+floors = "Floors"
+links = "Walks"
+leaps = "Drops and jumps"
+reach = "What can be reached"
+knockback = "Knockback"
+routes = "Pickups and traffic"
+sight = "Sightlines"
+
+[bakes.kind]
+rooms = "Rooms"
+sunlight = "Sunlight"
+nav = "Nav graph"
+sight = "Sightlines"
+
+[bakes.progress]
+status = "Step { step }/{ steps }: { completed }/{ scheduled } { doing }"
+status_idle = "Step { step }/{ steps }: { completed }/{ scheduled }"
+step = "Step"
+overall = "Overall"
+
+[round_prep]
+title = "Baking for the round"
+done = "Done"
+waiting = "Waiting"
+cancel = "Cancel"
+
+[nav]
+title = "Nav graph"
+auto = "Auto-bake Nav graph"
+bake = "Nav graph"
+summary = "{ cells } cells, { links } links"
+probe = "Probe"
+
+[nav.body]
+standing = "Standing"
+crouched = "Crouched"
+feet = "Feet"
+
+[nav.rating]
+cramped = "Cramped"
+open = "Open"
+precarious = "Precarious"
+busy = "Busy"
+gauntlet = "Gauntlet"
+vantage = "Vantage"
+ambush = "Ambush"
+
+[nav.statistics]
+title = "Statistics"
+floor = "Floor"
+rise = "Rise"
+unbaked = "–"
+
+[nav.overlay]
+off = "Off"
+cells_and_links = "Cells and links"
+sight = "Sight"
+exposure = "Exposure"
+sight_exposure = "Sight × exposure"
+advantage = "Advantage"
+cover = "Cover nearby"
+danger = "Danger"
+height = "Height"
+traffic = "Traffic"
+distance = "Distance to"
+rating = "Rating"
+
+[nav.saturation]
+area = "Full at"
+seconds = "Far at"
+height = "High at"
+
+[nav.baseline]
+pin = "Pin baseline"
+difference = "Difference"
+
 [show]
 title = "Show/Hide"
 cameras = "Cameras"
@@ -129,6 +209,11 @@ default = "Default"
 missing_point = "Missing point"
 missing_feature = "Missing feature"
 unresolved = "Does not resolve"
+
+[editor.round]
+title = "Round"
+slots = "Slots"
+fill_with_bots = "Fill empty slots with bots"
 
 [editor.rounds]
 title = "Rounds"
@@ -280,6 +365,23 @@ melee = "Melee"
 utility = "Utility"
 gadget = "Gadget"
 special = "Special"
+
+[bot.want]
+health = "Health"
+armor = "Armor"
+arms = "Arms"
+hunt = "Hunt"
+cover = "Cover"
+ambush = "Ambush"
+roam = "Roam"
+
+[bot.pull]
+none = "–"
+
+[bot.thought]
+none = "Nothing"
+alone = "{ want } { score }"
+over = "{ want } { score } over { other } { against }"
 
 [scoreboard]
 player = "Player { id }"

@@ -24,10 +24,10 @@ pub const CLASS_HALF_EXTENTS: Vec3 =
 
 /// Both the gap a body fits through only by ducking and the height of the
 /// shootable box.
-pub const CROUCH_HEIGHT: f32 = 1.1;
+pub const CROUCH_HEIGHT: f32 = 1.5;
 
 /// From the feet.
-pub const CROUCH_EYE_HEIGHT: f32 = 0.88;
+pub const CROUCH_EYE_HEIGHT: f32 = 1.2;
 
 /// What the body is, not what it asked for (that is
 /// [`crate::common::skeleton::BodyRequests`]): under a low ceiling a body stays

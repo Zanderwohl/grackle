@@ -10,6 +10,9 @@ use bevy_egui::egui;
 use crate::editor::editable::FeatureTag;
 use crate::get;
 use crate::common::world_surface::Volume;
+use crate::tool::nav_overlay::{self, NavCommands};
+use crate::tool::bake_progress;
+use crate::tool::bake_job::{self, BakeKind, BakeProgress, BakeState, BakeStatus, VolumeLabels};
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, MapVolumes, Room, RoomSlot, VolumeOrder};
 
 #[derive(Message)]
@@ -32,12 +35,13 @@ impl Plugin for BakePlugin {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<RoomBake>()
+            .init_resource::<BakeProgress>()
             .add_message::<CalculateRoomGeometry>()
             .add_message::<ClearRoomGeometry>()
             .add_message::<LogECS>()
             .add_systems(Update, (Self::post_startup, Self::clear_room_geometry, Self::log_ecs).run_if(in_state(AppMode::Editor)))
             // Ungated: the map can be edited during a round.
-            .add_systems(Update, (Self::bake_room_geometry, Self::auto_bake_rooms).chain())
+            .add_systems(Update, (Self::bake_room_geometry, Self::auto_bake_rooms, Self::report_rooms).chain())
             .configure_sets(OnEnter(AppMode::Play), BakeSystems::All)
             .add_systems(
                 OnEnter(AppMode::Play),
@@ -58,6 +62,10 @@ impl Plugin for BakePlugin {
 pub struct RoomBake {
     auto: bool,
     queue: VecDeque<Entity>,
+    /// Rebuilt since the queue was last empty.
+    batch_done: usize,
+    /// Auto-bake is off and a volume has changed since the last bake.
+    stale: bool,
     seen: HashMap<Entity, (Volume, VolumeOrder)>,
     material: Option<Handle<StandardMaterial>>,
 }
@@ -67,6 +75,8 @@ impl Default for RoomBake {
         Self {
             auto: true,
             queue: VecDeque::new(),
+            batch_done: 0,
+            stale: false,
             seen: HashMap::new(),
             material: None,
         }
@@ -91,6 +101,25 @@ impl RoomBake {
         self.auto = auto;
     }
 
+    /// `doing` names the volume rebuilt next.
+    pub fn status(&self, labels: &VolumeLabels) -> BakeStatus {
+        // The queue only drains with auto-bake on; switched off partway, what is left is stale.
+        let state = if self.auto && !self.queue.is_empty() {
+            BakeState::Baking
+        } else if self.stale || !self.queue.is_empty() {
+            BakeState::Stale
+        } else {
+            BakeState::UpToDate
+        };
+        BakeStatus {
+            state,
+            auto: self.auto,
+            completed: self.batch_done,
+            scheduled: self.batch_done + self.queue.len(),
+            doing: self.queue.front().map(|room| labels.label(*room)).unwrap_or_default(),
+        }
+    }
+
     /// What a slot is drawn with when not even the default material can be baked.
     pub fn material(&mut self, materials: &mut Assets<StandardMaterial>) -> Handle<StandardMaterial> {
         self.material
@@ -106,6 +135,9 @@ impl RoomBake {
     fn jump_the_queue(&mut self, urgent: Vec<Entity>) {
         let mut set = HashSet::new();
         let urgent: Vec<Entity> = urgent.into_iter().filter(|e| set.insert(*e)).collect();
+        if self.queue.is_empty() && !urgent.is_empty() {
+            self.batch_done = 0;
+        }
         self.queue.retain(|e| !set.contains(e));
         for entity in urgent.into_iter().rev() {
             self.queue.push_front(entity);
@@ -122,7 +154,7 @@ fn touches(a: &Volume, b: &Volume) -> bool {
 }
 
 impl BakePlugin {
-    pub fn ui(ui: &mut egui::Ui, auto: bool, auto_sun: bool, baking_sun: bool) -> BakeCommands {
+    pub fn ui(ui: &mut egui::Ui, auto: bool, auto_sun: bool, nav: &mut NavCommands, progress: &BakeProgress) -> BakeCommands {
         let mut commands = BakeCommands { auto, auto_sun, ..default() };
         ui.vertical(|ui| {
             ui.checkbox(&mut commands.auto, get!("bakes.auto_rooms"));
@@ -143,13 +175,13 @@ impl BakePlugin {
                 if ui.small_button("x").clicked() {
                     commands.clear_sunlight = true;
                 }
-                if baking_sun {
-                    ui.spinner();
-                }
             });
+            nav_overlay::section(ui, nav);
+            ui.separator();
             if ui.button("Log ECS").clicked() {
                 commands.log_ecs = true;
             }
+            bake_progress::section(ui, progress);
         });
         commands
     }
@@ -190,7 +222,15 @@ impl BakePlugin {
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
     ) {
-        if !bake.auto { return; }
+        let unchanged = bake.seen.len() == volumes.entities().count()
+            && volumes.each().all(|(entity, shape, fill, order)| {
+                bake.seen.get(&entity).is_some_and(|(seen, seen_order)| seen.fill == fill && seen.shape == *shape && seen_order == order)
+            });
+        if !bake.auto {
+            bake.stale = !unchanged;
+            return;
+        }
+        bake.stale = false;
 
         // Cheap, and outside the budget: a deleted room's walls vanish at once.
         for (entity, baked) in &bakes {
@@ -199,10 +239,6 @@ impl BakePlugin {
             }
         }
 
-        let unchanged = bake.seen.len() == volumes.entities().count()
-            && volumes.each().all(|(entity, shape, fill, order)| {
-                bake.seen.get(&entity).is_some_and(|(seen, seen_order)| seen.fill == fill && seen.shape == *shape && order == Some(seen_order))
-            });
         if unchanged && bake.queue.is_empty() { return; }
 
         let placed = volumes.placed();
@@ -240,6 +276,8 @@ impl BakePlugin {
         let mut done = 0;
         while done < ROOMS_PER_FRAME {
             let Some(entity) = bake.queue.pop_front() else { break };
+            // A volume deleted since it was queued still counts as done.
+            bake.batch_done += 1;
             let Some(index) = entities.iter().position(|e| *e == entity) else { continue };
             bake_one(index, &entities, &volumes, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);
             done += 1;
@@ -261,6 +299,10 @@ impl BakePlugin {
         bake_rooms(&mut bake, &rooms, &existing_bakes, &mut commands, &mut meshes, &mut materials);
     }
 
+    fn report_rooms(bake: Res<RoomBake>, labels: VolumeLabels, mut progress: ResMut<BakeProgress>) {
+        bake_job::report(&mut progress, BakeKind::Rooms, bake.status(&labels));
+    }
+
     /// Clearing forgets what auto-bake has seen, so with it on this is a
     /// rebuild from scratch.
     fn clear_room_geometry(
@@ -273,6 +315,7 @@ impl BakePlugin {
         events.clear();
 
         bake.queue.clear();
+        bake.batch_done = 0;
         bake.seen.clear();
         let count = existing_bakes.iter().count();
         for entity in &existing_bakes {
@@ -326,6 +369,8 @@ fn bake_rooms(
     let material = bake.material(materials);
     let placed = volumes.placed();
     bake.queue.clear();
+    bake.batch_done = placed.len();
+    bake.stale = false;
     bake.seen = placed.iter().map(|(order, volume, entity)| (*entity, (volume.clone(), order.clone()))).collect();
     let (entities, volumes): (Vec<Entity>, Vec<Volume>) = placed.into_iter().map(|(_, volume, entity)| (entity, volume)).unzip();
 
@@ -506,6 +551,42 @@ mod tests {
         assert_eq!(baked(&mut app), ROOMS_PER_FRAME);
         settle(&mut app);
         assert_eq!(baked(&mut app), count);
+    }
+
+    fn rooms_status(app: &App) -> BakeStatus {
+        app.world().resource::<BakeProgress>().get(BakeKind::Rooms).cloned().expect("the room bake reports")
+    }
+
+    #[test]
+    fn a_load_in_reports_how_far_it_has_got() {
+        let mut app = headless();
+        let count = ROOMS_PER_FRAME * 2 + 1;
+        for i in 0..count {
+            app.world_mut().spawn(cube_at(i as f32 * 10.0));
+        }
+        app.update();
+        let status = rooms_status(&app);
+        assert_eq!((status.state, status.completed, status.scheduled), (BakeState::Baking, ROOMS_PER_FRAME, count));
+        assert!(!status.doing.is_empty());
+        settle(&mut app);
+        let status = rooms_status(&app);
+        assert_eq!((status.state, status.completed, status.scheduled), (BakeState::UpToDate, count, count));
+        assert!(status.doing.is_empty());
+    }
+
+    #[test]
+    fn with_auto_bake_off_a_moved_room_is_stale_until_baked() {
+        let mut app = headless_with_a_room();
+        app.world_mut().write_message(CalculateRoomGeometry);
+        app.update();
+        assert_eq!(rooms_status(&app).state, BakeState::UpToDate);
+        let room = app.world_mut().query_filtered::<Entity, With<Room>>().single(app.world()).unwrap();
+        *app.world_mut().get_mut::<Room>(room).unwrap() = cube_at(3.0);
+        app.update();
+        assert_eq!(rooms_status(&app).state, BakeState::Stale);
+        app.world_mut().write_message(CalculateRoomGeometry);
+        app.update();
+        assert_eq!(rooms_status(&app).state, BakeState::UpToDate);
     }
 
     /// Breaks if a move is taken to affect only the room moved: the room it

@@ -19,7 +19,7 @@ use crate::common::skeleton::rig::Proportions;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
-use crate::game::player::{LocalPlayer, ViewMode};
+use crate::game::player::{LocalPlayer, Player, ViewMode, Watched};
 use crate::game::skeleton::SkeletonRoot;
 
 /// A body that has had its parts built, holding them so they can be rebuilt.
@@ -293,23 +293,21 @@ fn pose_body_meshes(
     }
 }
 
-/// Hide the body the camera is inside, and nobody else's. `LocalPlayer`, not
-/// `Player`: replicated bodies carry `Player` too, and hiding them all reads
-/// as the other players never having arrived.
+/// Hide the body the camera is inside — ours, or the one a spectator is
+/// [`Watched`] — and nobody else's. Every body is visited, so one no longer
+/// watched is shown again.
 pub(crate) fn hide_own_body(
     view: Res<ViewMode>,
-    players: Query<&Children, With<LocalPlayer>>,
+    players: Query<(&Children, Has<LocalPlayer>, Has<Watched>), With<Player>>,
     mut parts: Query<&mut Visibility, With<FirstPersonHidden>>,
 ) {
-    let wanted = if view.shows_own_body() {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
-    };
-
     // The body's children rather than `BodyMesh.parts`, so a hat and anything
     // else carrying the marker are covered. Held parts are `show_held_weapons`'s.
-    for children in &players {
+    for (children, ours, watched) in &players {
+        let wanted = match (ours || watched) && !view.shows_own_body() {
+            true => Visibility::Hidden,
+            false => Visibility::Inherited,
+        };
         for child in children.iter() {
             let Ok(mut visibility) = parts.get_mut(child) else { continue };
             // Assigned only on change, so parts are not dirtied every frame.

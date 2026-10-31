@@ -1,0 +1,454 @@
+# Bots: where a body can go, and what each spot is worth
+
+Bots need to know where they can stand, how to get from one place to another,
+and what each place is worth: what you can see from it, who can see you, what
+is there to pick up, and whether a blast there throws you into a pit. Mappers
+need the same answers, drawn over the floor, so they can see what a wall they
+just placed did to cover and sightlines, and build hot zones on purpose.
+
+This plan covers the **nav graph and the fields baked onto it**, plus the
+overlays that show them. The bot itself (the brain, aim, the loop that turns
+fields into `PlayerInput`) comes after; only the interface it will read is
+fixed here. The checklist is at the bottom.
+
+## Where it starts (October 2026)
+
+- No bot, nav or pathing code exists.
+- `world_surface::of_volumes` is the boundary of the map's air: convex
+  polygons facing into it. `CollisionWorld` stands each one out as a hull,
+  and `fits(center, half)` answers "can a body stand here" (walls, low
+  ceilings and solid props).
+- `lightmap::Atlas` charts faces onto a lattice fixed by each face's plane,
+  so floors meeting at a threshold sample the same points.
+- `BakeSystems::All` holds the room bake and the sun bake. The sun bake runs
+  on the async compute pool, keyed by a hash of the faces, and keeps the old
+  result until a new one lands.
+- Movement: `STEP_HEIGHT` 0.45 m, `WALKABLE` 0.7, `JUMP_SPEED` 7 m/s,
+  sprint 7 m/s, gravity per map (`MovementRules`). The body box is
+  0.7 × 2.0 × 0.7 m, with the eye at 1.8 m standing and 1.2 m crouched.
+- `step_player` has its physics written inline in the system. Nothing outside
+  the fixed loop can ask "where would this input take this body".
+- The test map is `arena_halls.gmb` (user pack). It is one authored quarter
+  turned four ways. It has a BFG platform ringed by a 5.7 m gap over an 8 m
+  drop to a Kill trigger, a sunken area 1 m deep, a 0.4 m lip, weapon
+  alcoves at −1 m, and health in each quarter.
+
+## Decisions
+
+### Floor cells, not navmesh polygons
+
+The graph is a set of **cells**, each a point on a floor with a body's worth
+of room above it, and **links** between them. There is no polygon navmesh.
+
+Everything this plan bakes is a number per spot, and everything a bot does
+with it is "which neighbor is better". A cell lattice carries that directly.
+A polygon navmesh would need a second structure to hold the fields anyway,
+and its polygons are too coarse for a sightline gradient across a room.
+
+At 0.5 m spacing Halls is about 3 800 cells. A cell is a few dozen bytes plus
+its links, so memory is not a concern at arena scale. If long paths on a big
+map ever get slow, regions (connected groups of cells) can be layered on top
+for hierarchical search. The cells stay the truth.
+
+### Cells come from the surface, not from voxels
+
+Recast voxelizes a triangle soup to find which surfaces are floors and to
+discard the outside of the level. Neither problem exists here. The surface is
+exact and every face of it bounds air, so **every face with
+`normal.y >= WALKABLE` is a floor someone can stand on**, and there is no
+outside to leak into.
+
+A cell is a point on such a face, on the face's plane lattice
+(`lightmap`'s charting, at nav spacing), where
+`fits(body_center_from_feet(point), PLAYER_HALF)` holds. That one test is
+the agent-radius erosion and the headroom check together, and it is the same
+test spawn points use, so a cell and a spawn cannot disagree about whether a
+body fits. The BSP pieces of a floor are sampled through rather than used as
+cells: their shape is wherever the kernel happened to cut.
+
+Floors are flat today. When displacements arrive, a sloped face is just
+another face with `normal.y >= WALKABLE` and needs no new code here. That is
+the rule from CLAUDE.md: consume faces and normals, never a room's box.
+
+A cell whose body box overlaps a **Kill** trigger is not a cell. One that
+overlaps a **Hurt** trigger is a cell carrying that damage rate. Cells no
+spawn point can reach are dropped after linking. A sealed room, or the floor
+of a pit, is not somewhere a bot plans to be.
+
+### Links are what the physics allows, found by running the physics
+
+| Link | Found by | Notes |
+| --- | --- | --- |
+| Walk | `slide` between lattice neighbors on one level | |
+| Step | `step_up` (≤ `STEP_HEIGHT`) | Halls' 0.4 m lip |
+| Drop | Walk off an edge, simulate the fall | One way. Lands on a cell or in a Kill volume (then no link) |
+| Jump | Simulate a jump from edge cells, a few headings and run-ups | Halls' 1 m divot, up |
+| Rocket jump | As a jump, with an `Impulse` at takeoff | Later. Halls' BFG needs it |
+
+Jumps and drops must be **simulated with the real step**, not with a
+ballistic formula. A second description of how a body moves is one that
+drifts from the first, and a bot that plans a jump it then cannot make walks
+into the pit. So the first piece of work is to pull the body of
+`step_player` out into a pure function:
+
+```rust
+fn step(body: &mut Mover, input: &PlayerInput, world: &CollisionWorld, rules: &MovementRules, dt: f32)
+```
+
+The system calls it, the baker calls it, and later the bot's own lookahead
+calls it. Its determinism is what prediction already depends on, so the bake
+inherits it for free.
+
+By that arithmetic, Halls' gap is about 0.8 m too wide for a sprinting jump
+from rest. That is the right answer: the BFG should cost something. The bake
+will say so rather than the plan.
+
+Each link stores its kind, its travel time (simulated, not distance), and the
+input sequence that makes it, so a bot replays it rather than re-deriving it.
+
+Leaps (drops and jumps) are tried from a cell along each of the eight headings
+in which it has no walking neighbor: a drop at running speed, a standing jump
+and a running jump. A leap that lands where walking gets in no more than half
+a second longer is not kept, or every running jump across a flat floor would
+be a link. They are found in a second pass, after every walk, since that
+comparison needs them all.
+
+### Fields, baked per cell
+
+All fields are stored in **absolute units**, never normalized to the map.
+Normalized, placing one wall recolors every cell in the map, and the overlay
+stops answering "what did this wall do".
+
+**Visibility** is the expensive one. For cell pairs within range, cast rays
+from A's eye to sample points on B's body (head, chest, knees). Visibility is
+symmetric for two eyes at the same height but not for eye-to-body, and that
+asymmetry is where high ground comes from.
+
+- **Sight**: the floor area (m²) whose standing bodies I can see from here,
+  weighted by how much of each body.
+- **Exposure**: the floor area (m²) from which my body can be seen, weighted
+  by how much of it.
+- **Advantage**: sight − exposure. High ground is not a separate input. It
+  falls out here, because from above you see whole bodies while they see your
+  head.
+- **Crouched variants** of sight and exposure, at the crouched eye and box.
+  A ledge that hides you crouched but not standing is a peek spot.
+- **Cover nearby**: the lowest exposure among the cells reachable within
+  about 1.5 s. A cell with high sight next to one with low exposure is a peek
+  spot, which is what "hugging corners" means as a number.
+- **Feet sight and feet exposure**: the same areas for the floor 10 cm above
+  a standing body's feet, from a standing eye. That is where a rocket is put,
+  so in a splash game this, not the body, is what high ground buys. On Halls
+  sight and exposure correlate at 0.996 and advantage was mostly knees hidden
+  by 1 m ledges, which is why feet are sampled on their own.
+- **Traffic**: the share of routes between every two spawns and pickups that
+  pass within `ROUTE_SLACK` (0.25 s) of their shortest by going through the
+  cell. A band rather than one shortest path: on a grid there are many
+  equally short ones, and picking one draws a line wherever ties broke.
+- **Watch**: the floor a standing eye sees, each square weighted by its
+  traffic. High watch with low exposure off the routes is an ambush.
+
+Rays go against `CollisionWorld::ray_distance`, the same test hitscan uses,
+so a sightline the overlay shows is a shot the game allows. Solid props
+block sight. Pickups and bodies do not.
+
+Range: rays beyond a cap (start at 40 m) are not cast. Long-range exposure
+mattering less than short-range is a weighting question (see "Open
+questions").
+
+**Danger**:
+- **Knockback**: from each cell, give the body a blast's push (a typical
+  rocket's `knockback`, in 8 directions) and simulate with `step` until it
+  lands. Danger is the fraction of directions that end in a Kill volume, a
+  Hurt volume, or a fall to no cell. The ring around Halls' BFG platform
+  lights up here.
+- **Hurt**: the trigger's damage rate, for cells inside one.
+
+**Pickups**: one shortest-path distance field per pickup, in travel time over
+the links, so "go to the rocket launcher" is reading which neighbor is
+closer. Pickups are map features and do not move. Whether one is *worth*
+going for (taken, restock time, what the bot needs) is decided at runtime,
+not baked.
+
+**Height**: the cell's height above the lowest cell that can see it. This is
+mostly redundant with advantage and is cheap. Keep it for the overlay, where
+mappers will ask for it by name.
+
+### What is baked, and when
+
+`NavBake` is the third member of `BakeSystems::All`, after rooms. It is a
+`BakeJob` run by `BackgroundBake` ([`src/tool/bake_job.rs`](../src/tool/bake_job.rs)),
+as the sun is, and reports as `BakeKind::Nav`:
+
+- The input is a snapshot (faces, volumes, solid props, triggers, pickups,
+  spawns, `MovementRules`), hashed. The job runs on the async compute pool
+  from the copy.
+- **Cached on disk** at `cache/nav/{hash}.bin` (`src/tool/nav_cache.rs`),
+  keyed by a fixed FNV-1a hash of the snapshot: written when the graph lands
+  and again when its sightlines do, and read back whenever the map matches,
+  so an unchanged map opens with its graph instead of baking it again.
+  Halls is 2.3 MB and reads in 0.07 s. The key is of the map, not the code:
+  after changing how something is baked, bump `nav_cache::FORMAT` or delete
+  `cache/nav/`.
+- **The old graph is kept until a new one lands.** Bots and the overlay use
+  stale data rather than none, and an edit between rounds never leaves a bot
+  standing still.
+- Never incremental. Visibility is global: a wall changes sightlines across
+  the whole map.
+- Auto-bake is off by default: Halls takes under ten seconds in a debug
+  build, too long to redo whenever the map goes still. Turned on, it is
+  debounced like the sun's. Entering Play bakes, and waits, only if the graph
+  is stale.
+
+The bake **lands in two stages**, and they are two bakes. First the **Nav
+graph**: cells, links, knockback and pickup distances. Then **Sightlines**
+(`BakeKind::Sight`), which starts on its own whenever a new graph lands and is
+fitted onto it when it finishes, unless the graph was replaced meanwhile. A
+round waits only for the first. The overlay shows each as it is ready.
+
+Measured on Halls in a debug build (2 928 cells, the BFG platform among them now
+that rocket jumps reach it; `time_the_nav_bake` in
+`src/tool/nav_bake.rs` reports each stage for any map):
+
+| Stage | Seconds |
+| --- | --- |
+| Surface, floors, walks | 0.4 |
+| Drops, jumps and rocket jumps | 10.1 |
+| Knockback | 2.4 |
+| **Nav graph in all** | **13.0** |
+| Sightlines | 21.0 |
+| Cover, height and the rest | 0.5 |
+
+Sightlines and knockback are cast between **viewpoints**, one per 1 m square
+(`SIGHT_STRIDE` columns) at each floor height, about 900 on Halls; each cell
+reads its viewpoint's. A viewpoint stands at the **middle of its cells**, not
+on one of them: standing on whichever cell came first sampled a turned copy of
+the same room from another corner, and Halls' four quarters disagreed by up to
+45 m² of exposure on matching spots. An L of three cells, or a square across a
+step, stands on the cell nearest the middle, since the middle may be in the
+wall that took the fourth or inside the step.
+`a_map_turned_a_quarter_bakes_the_same_turned` holds it to one grazing sample.
+Twenty rays per pair in range: standing eye to a standing body, crouched eye
+to a standing body and standing eye to a crouched body, three samples a body,
+and standing eye to the feet, both ways. Each ray walks the collision grid along
+itself and stops at the first wall (`CollisionWorld::segment_clear`); asking
+the grid for every wall in a 40 m ray's bounding box was 103 s.
+
+Do not use Halls' symmetry. Pickups are authored per quarter and mappers
+break symmetry on purpose. The general bake is the only one.
+
+Bots run on the authority, so the graph is built there. Clients build their
+own copy only to draw the overlay. Nothing about it crosses the wire: every
+machine has the map.
+
+### The overlays
+
+The overlays are the **mapper's tool first**. A wall placed while an overlay
+is up should visibly change the floor around it within the debounce. That
+loop is the feature.
+
+Drawn as a **mesh** over the floor cells (a quad per cell, vertex-colored,
+lifted a few millimeters, on `multicam::editor_only()`), not as gizmos:
+thousands of cells redrawn as lines every frame is the wrong tool, and a mesh
+can be swapped when a bake lands. The play camera gets a copy on a debug key
+for tuning bots. The editor is where it lives.
+
+One overlay at a time, picked from the nav graph's section of the **Bakes** panel:
+
+| Overlay | Shows |
+| --- | --- |
+| Off | |
+| Cells and links | Walkable cells, links colored by kind, one-way drops as arrows |
+| Sight | Single hue, dark to bright |
+| Exposure | Single hue, dark to bright |
+| **Sight × exposure** | Bivariate: green = sees a lot and is seen little, red = sees little and is seen a lot, yellow = sees and is seen (contested), dark = sees and is seen little (hidden) |
+| Advantage | Diverging: green positive, red negative |
+| Cover nearby | Peek spots bright |
+| Danger | Knockback and hurt, red |
+| Traffic | Share of routes, full at half of them |
+| Distance to … | One pickup's field, picked from a list |
+| Rating … | The cells one rating holds for, picked from a list (see below) |
+
+The section also holds the Bake button, a Standing / Crouched / Feet choice
+for the visibility overlays and the probe, and the saturation for each scale: square meters for sightlines,
+seconds for distance, meters for height. Saturation is a fixed number, not a
+percentile, for the reason given under "Fields". `F7` shows the overlay to the
+play camera during a round.
+
+Two tools beside the overlays:
+
+- **Probe**: hover a cell to light up every cell that can see it (red) and
+  every cell it can see (green), from what the bake stored. This answers
+  "who can see me here", which is the question a mapper is actually asking
+  when they look at an exposure number.
+- **Baseline**: pin the current bake, then show the *difference* from it.
+  "This wall cut exposure in the courtyard by 40%" as a color, rather than
+  something to spot by flicking between two screenshots.
+
+### Map statistics
+
+A **rating** is a kind of place, read off a cell's fields by a threshold in
+the field's own units (`src/game/nav_rating.rs`). Ratings are derived, not
+baked, so retuning one needs no bake. The Bakes panel's Statistics lists the
+floor area, the rise from lowest floor to highest, and the share of the floor
+each rating holds for:
+
+| Rating | Holds where |
+| --- | --- |
+| Cramped | sight and exposure both under 60 m² |
+| Open | exposure over 200 m² |
+| Precarious | knockback throws a body somewhere bad on 2 of 8 headings, or it stands in a Hurt trigger |
+| Busy | on at least a fifth of the routes |
+| Gauntlet | busy and open: a crossing under fire |
+| Vantage | sees the feet on 20 m² more floor than sees its own |
+| Ambush | not busy, exposure under 80 m², watch at least 10 m² |
+
+The thresholds are first guesses tuned against Halls.
+
+### What the bot will read
+
+So the bot does not reach into the graph's layout, it gets a narrow
+interface:
+
+- `NavGraph::cell_at(feet) -> Option<CellId>`
+- `neighbors(cell) -> links`, each with kind, time and input sequence
+- `field(cell, Field) -> f32`, where `Field` is the enum the overlays are
+  drawn from, so a bot and a mapper see the same numbers
+- `path(from, to, cost)` with a caller-supplied cost per cell, so skill is
+  weights (distance × (1 + exposure × w) + danger …), not a different
+  pathfinder
+- `distance_to(pickup, cell)` from the baked fields
+
+Runtime costs that change during a round (where enemies were last seen or
+heard, a breakable that broke, a prop that moved) are the bot's to add on
+top. They are not baked.
+
+### Wasm
+
+Pure Rust over `CollisionWorld`, no threads assumed. The async compute pool
+runs a task in one go on wasm, so the bake must be chunkable across frames,
+as the sun bake must. Write the visibility stage as an iterator over cell
+ranges from the start, so chunking is a scheduler change and not a rewrite.
+
+## Open questions
+
+- **Exposure weighting by range.** Being seen from 35 m by a rocket launcher
+  is not being seen from 8 m by a shotgun. Start unweighted. Add range bands
+  if the overlay reads wrong on Halls.
+- **Cell spacing**: 0.5 m everywhere, or finer near edges? Decide on Halls'
+  numbers.
+- **Bunny-hop links.** Probably never baked: they depend on speed carried in,
+  which a cell does not have. A high-skill bot can find them at runtime.
+- **Breakables.** Bake as standing and let the bot cost them at runtime, or
+  bake both states? Standing for now.
+
+## Checklist
+
+### Stage 1: cells and walking
+- [x] Pull `step_player`'s body out into a pure `step`, with the system
+      calling it; a test that the system and the function agree
+- [x] Floor faces → lattice cells → `fits` → cells (`game/nav.rs`), Kill
+      volumes excluded, Hurt rates kept
+- [x] Walk and step links, reaching two columns since a body is wider than
+      one; reachability from spawns prunes the rest
+- [x] A shared runner and progress report for background bakes
+      (`BackgroundBake`, `BakeProgress`), with the sun moved onto it
+- [x] `NavBake` as a `BakeJob` in `BakeSystems::All`, reporting as
+      `BakeKind::Nav`; the old graph kept until replaced
+- [x] Nav section in the Bakes panel with Bake and Cells and links overlay (floor mesh,
+      `editor_only`; `tool/nav_overlay.rs`). Two-column walks are not drawn
+      on a flat floor, since they repeat two short ones
+- [x] Tests: a lone room is one connected set; a 0.4 m lip is a step and a
+      1 m lip is not; a Kill volume has no cells; a cell under a low ceiling
+      is not one; floors across a threshold link
+
+### Stage 2: jumps and drops
+- [x] Drop links by simulating off edges with `step`
+- [x] Jump links by simulating from edge cells; each link stores its input
+      sequence
+- [x] Drops and jumps drawn in the Cells and links overlay, one-way as arrows
+- [x] Tests: a 1 m ledge is jumpable up and droppable down; a gap wider than
+      a jump has no link; a drop into a Kill volume has no link
+
+### Stage 3: fields and the mapper's overlays
+- [x] Knockback danger, Hurt danger
+- [x] Pickup distance fields (travel time)
+- [x] Visibility stage: sight, exposure, advantage, crouched variants;
+      measured on Halls: 1 m viewpoints, 18.5 s
+- [x] Sightlines as a bake of their own, so a round waits only for the graph
+- [x] Cached on disk by a hash of the map, graph and sightlines both
+- [x] Cover nearby, height
+- [x] Overlays: Sight, Exposure, Sight × exposure (bivariate), Advantage,
+      Cover, Danger, Height, Distance to…; fixed saturation per scale
+- [x] Probe: who sees this cell, what it sees
+- [x] Baseline: pin a bake, show the difference
+- [x] Debug key to show the current overlay in Play (`F7`)
+- [x] Tests: a pillar between two cells hides them from each other; a ledge
+      gives the high cell more sight than exposure against the low one; a
+      cell beside a pit edge has knockback danger and one in the middle of a
+      room has none
+- [x] Viewpoints at the middle of their square, so a symmetric map bakes
+      symmetric
+- [x] Feet sight and exposure; traffic between spawns and pickups; watch
+- [x] Ratings and the map's statistics in the Bakes panel; Traffic and Rating
+      overlays
+- [x] Crouching: a cell only a crouched body fits is kept and marked
+      crouch-only, walks into it or under a lintel too low to stand under are
+      `Crouch` links at crouch speed, its viewpoint sees and is seen and is
+      thrown as a crouched body in every row, and bots duck 1.5 m ahead of a
+      crouch on their route; drawn violet in Cells and links
+- [x] Leaps that pass through a pickup's sphere (its `Reach`): kept however
+      they land when no cell takes that pickup standing, so a pickup hung
+      over a gap is a goal; `NavGraph::path_to_pickup` and the pickup distance
+      fields end at a grab as well as at the cell under a pickup
+- [x] Rocket jumps (`LinkKind::RocketJump`), baked for the catalog's
+      hardest-throwing flat rocket: from a standstill, running 0, 3 or 6
+      ticks, then jumping, crouching and firing straight down. The shot is
+      fired, flown and set off as a round does it, in the round's order: the
+      move, then the shot from `projectile::muzzle`, its flight by
+      `projectile::advance`, its blast by `own_blast` from `explode`'s rules,
+      and the push on the next move. One whose blast misses its jumper is
+      not kept. Tried where there is floor a meter ahead and none two meters
+      ahead, from the cells of each 1 m square furthest along the heading,
+      ties kept, so the starts turn and mirror with the map. Halls' BFG
+      platform, past a 5.7 m gap no jump crosses, is reached this way.
+      `a_baked_rocket_jump_lands_in_a_round_where_the_bake_said` runs one
+      through `pull_trigger`, `fire_projectiles`, `step_projectiles` and
+      `explode`.
+- [x] Bots on rocket jumps: one is routed by only while the bot carries that
+      launcher loaded and the jump would not kill it, unless it is
+      shortsighted (a chance per plan, 0 to 0.1 by temperament, of not
+      asking); self-damage is priced; the launcher is drawn four links ahead
+      and beats an intent's weapon; the last meter is crouch-walked to within
+      10 cm of the start, and the bot sets off standing still with the
+      launcher ready
+- [ ] Chunked across frames on wasm (the jobs already step in batches; check
+      the batch sizes against a frame once there is a wasm build)
+
+### Stage 4: the bot's interface
+- [x] `NavGraph` query API: `cell_at`, `links`, `field` (pickup distance is
+      `Field::Distance`), and `path` with a caller's extra cost per link
+- [x] A bot body: a `BotSeat` holding an `Identity` that
+      `give_bodies_to_whoever_needs_one` serves like a client's link, and
+      whose despawn retires the body
+- [x] `BotIntent` on the body (goal, look-at, buttons), written into `Inputs`
+      by `steer_bots` before the step, following the route and replaying a
+      link's input across drops and jumps; replanned when the goal or graph
+      changes or the bot stops closing on its next cell
+- [x] `B` / `Shift+B` to seat and retire bots in a round; `Roam` as a
+      placeholder goal
+- [x] Slots and "fill empty slots with bots" in a Round tab, kept true
+      through a round as people come and go
+- [ ] A bot count per team: deferred until a mode other than arena; bots fill
+      every team as people do, by alternating
+- [x] Planning with a cost from the fields: `RouteCosts` weighs exposure,
+      knockback danger and Hurt by the time spent in them, and each seat
+      rolls its own temperament so bots are neither alike nor risk-averse
+- [x] Misjudgment: each bot is wrong by its own amount about whole 4 m
+      stretches of floor, safer or riskier than baked, differently each life
+- [x] `F8` draws each bot's route in its color
+
+### Later
+- [ ] Rocket jumps aimed off the vertical, and from a run, for distance
+- [ ] The brain: senses with a 90° view, utility-scored goals, aim and skill;
+      planned in [bot-brain.md](bot-brain.md)
