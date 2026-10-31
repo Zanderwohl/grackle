@@ -17,7 +17,7 @@ use crate::common::net::{has_authority, is_remote_client, NetRole};
 use crate::common::weapon::{Ammo, AmmoState, Cadence, Equipped, WeaponAction, WeaponCatalog, WeaponId};
 use crate::game::condition::Condition;
 use crate::game::held::{perform_weapon_clips, HeldModel, Performance, WeaponClip};
-use crate::game::player::LocalPlayer;
+use crate::game::player::{LocalPlayer, Watched};
 use crate::game::viewmodel::Viewmodel;
 use crate::game::weapon::{pull_trigger, spend, Button, WeaponActionFired};
 
@@ -152,11 +152,11 @@ fn guess_our_shots(
 
 pub(crate) fn start_recoil(
     mut seen: MessageReader<ShotSeen>,
-    mut bodies: Query<(&mut Performance, Option<&HeldModel>, Has<LocalPlayer>), Without<Viewmodel>>,
+    mut bodies: Query<(&mut Performance, Option<&HeldModel>, Has<LocalPlayer>, Has<Watched>), Without<Viewmodel>>,
     mut views: Query<&mut Performance, With<Viewmodel>>,
 ) {
     for shot in seen.read() {
-        let Ok((mut performance, held, ours)) = bodies.get_mut(shot.body) else { continue };
+        let Ok((mut performance, held, ours, watched)) = bodies.get_mut(shot.body) else { continue };
         let (body, view) = match shot.button {
             Button::Primary => ("recoil", "fire"),
             Button::Secondary => ("alt_recoil", "alt_fire"),
@@ -166,7 +166,7 @@ pub(crate) fn start_recoil(
             false => WeaponClip::Recoil,
         };
         performance.start(own_or_shared(body));
-        if !ours {
+        if !ours && !watched {
             continue;
         }
         for mut viewmodel in &mut views {

@@ -210,10 +210,10 @@ mod tests {
 
         let ours = app
             .world_mut()
-            .spawn((default_humanoid().clone(), Pose::rest(), Class::Mercenary, LocalPlayer))
+            .spawn((default_humanoid().clone(), Pose::rest(), Class::Mercenary, crate::game::player::Player::default(), LocalPlayer))
             .id();
         let theirs =
-            app.world_mut().spawn((default_humanoid().clone(), Pose::rest(), Class::Mercenary)).id();
+            app.world_mut().spawn((default_humanoid().clone(), Pose::rest(), Class::Mercenary, crate::game::player::Player::default())).id();
         app.update();
         app.update();
 

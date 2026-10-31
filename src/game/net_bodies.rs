@@ -186,7 +186,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
-        if !waiting(who) && who.seat != Seat::Choosing {
+        if !waiting(who) && who.seat.is_playing() {
             let spawn = choose_spawn(&placed, who.team(), &collision);
             info!("Standing our own body up as {} on {}", who.id, team_name(who.team()));
             let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
@@ -210,7 +210,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
-        if waiting(who) || who.seat == Seat::Choosing {
+        if waiting(who) || !who.seat.is_playing() {
             continue;
         }
         let spawn = choose_spawn(&placed, who.team(), &collision);
@@ -385,10 +385,10 @@ mod tests {
         use crate::game::bot::{BotOf, BotSeat};
         let mut world = World::new();
         a_map(&mut world);
-        let seat = world.spawn(BotSeat).id();
-
         // The host has chosen Red, so the bot, which has no picker, takes the other side.
+        // Seated after, or the bot is seated beside nobody and tosses a coin.
         sit_down(&mut world, Seat::Playing(Some(Team::Red)));
+        let seat = world.spawn(BotSeat).id();
         a_turn(&mut world);
         let bots = |world: &mut World| world.query_filtered::<(Entity, &BotOf, &PlayerId), (With<Player>, With<Simulated>)>().iter(world).map(|(body, of, id)| (body, of.0, *id)).collect::<Vec<_>>();
         let first = bots(&mut world);

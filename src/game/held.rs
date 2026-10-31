@@ -679,11 +679,11 @@ fn held_visibility(
 fn show_held_weapons(
     view: Res<ViewMode>,
     taunts: Option<Res<Taunts>>,
-    bodies: Query<(&HeldModel, Has<LocalPlayer>, Option<&Condition>)>,
+    bodies: Query<(&HeldModel, Has<LocalPlayer>, Has<crate::game::player::Watched>, Option<&Condition>)>,
     mut parts: Query<&mut Visibility, With<HeldPart>>,
 ) {
-    for (held, ours, condition) in &bodies {
-        let wanted = held_visibility(ours, *view, condition.copied(), taunts.as_deref());
+    for (held, ours, watched, condition) in &bodies {
+        let wanted = held_visibility(ours || watched, *view, condition.copied(), taunts.as_deref());
         for part in &held.parts {
             let Ok(mut visibility) = parts.get_mut(*part) else { continue };
             // Assigned only on change, so parts are not dirtied every frame.

@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalog};
 use crate::game::held::{perform_weapon_clips, HeldModel, Performance, WeaponClip};
-use crate::game::player::LocalPlayer;
+use crate::game::player::{LocalPlayer, Watched};
 use crate::game::viewmodel::Viewmodel;
 
 /// Seconds of reload left last frame, to tell a start from a countdown.
@@ -38,12 +38,13 @@ const STARTED: f32 = 1e-4;
 pub(crate) fn perform_reloads(
     catalog: Res<WeaponCatalog>,
     mut bodies: Query<
-        (&Equipped, &Ammo, &HeldModel, &mut Performance, &mut ReloadSeen, Has<LocalPlayer>),
+        (&Equipped, &Ammo, &HeldModel, &mut Performance, &mut ReloadSeen, Has<LocalPlayer>, Has<Watched>),
         Without<Viewmodel>,
     >,
     mut views: Query<&mut Performance, With<Viewmodel>>,
 ) {
-    for (equipped, ammo, held, mut performance, mut seen, ours) in &mut bodies {
+    for (equipped, ammo, held, mut performance, mut seen, ours, watched) in &mut bodies {
+        let ours = ours || watched;
         let left = equipped.held().and_then(|id| ammo.at(id)).map_or(0.0, |state| state.reloading);
         let was = seen.0;
         // The reload the last shot starts waits out that shot's kick. `seen`

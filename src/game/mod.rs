@@ -53,6 +53,7 @@ pub mod hud;
 pub mod pickup_beam;
 pub mod rounds;
 pub mod score;
+pub mod spectate;
 pub mod tab_board;
 pub mod team_choice;
 pub mod team_picker;
@@ -76,7 +77,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::game::score::ScorePlugin)
             .add_plugins(crate::game::rounds::RoundHistoryPlugin)
             .add_plugins(crate::game::tab_board::TabBoardPlugin)
-            .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin))
+            .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .add_plugins(crate::game::trigger::TriggerPlugin)
             .init_state::<AppMode>()
