@@ -56,7 +56,9 @@ being visible in one place.
   within earshot gives a position, rough by distance, and no identity. It is
   what makes a bot turn round.
 - **Being hurt** gives the direction the damage came from (`Damage::from`),
-  as the damage indicator shows a player.
+  as the damage indicator shows a player, and no distance: the bot guesses
+  its attacker is 10 m that way, or at the first wall if nearer. A hit from
+  somebody already in sight tells it nothing new.
 - **Memory**: each enemy noticed is remembered with where and when, and
   forgotten after a few seconds unseen. A bot that loses sight of somebody
   goes to where they were, not to where they are.
@@ -117,9 +119,9 @@ campers and brawlers come out of one system with different numbers.
 
 ## Open questions
 
-- **Pickup stock.** Does a bot know whether a pickup is in stock, or only
-  what it last saw? Players learn timers; start with "knows", and revisit if
-  bots look clairvoyant arriving at respawns.
+- **Pickup stock.** Decided for now: a bot knows whether a pickup is in
+  stock. Players learn timers; revisit if bots look clairvoyant arriving at
+  respawns.
 - **Teamwork.** Nothing here coordinates bots on a team. Spreading out and
   focusing fire are later work.
 - **Difficulty.** A preset that scales the temperament ranges, so a server
@@ -159,4 +161,5 @@ campers and brawlers come out of one system with different numbers.
 ### Stage 8: seeing what a bot thinks
 - [x] `F8` also draws each bot's view and a line to each enemy it senses:
       solid while seen, dashed when only hurt by them, fading as it forgets
-- [ ] Noises heard, and the goal's name over its head
+- [x] Every bot's name tag up while `F8` is on, its goal on a second line
+- [ ] Noises heard, and a goal's score against the runner-up

@@ -106,7 +106,7 @@ view, goals scored by utility with a commitment bonus, and aim with human
 limits — is planned in [documentation/bot-brain.md](documentation/bot-brain.md).
 Its senses are built (`src/game/bot_sense.rs`): **a bot never reads where an
 enemy is**, only its `BotSenses` — who is in its 90° view with a clear ray to
-them, what it heard (`Effect`s) and who hurt it — remembered for a few seconds
+them, what it heard (`Effect`s) and which way a hit came from — remembered for a few seconds
 and passed on only after its `BotMind`'s reaction time. Nothing yet acts on them.
 
 There is a prop editor, which models the things a map and a class refer to.
@@ -339,7 +339,9 @@ to 200.
 Inside it too is the **name tag** ([`src/game/name_tag.rs`](src/game/name_tag.rs)):
 whoever the crosshair is on, bots included, named on a leaning panel in their
 color as wide as the name, centered under their feet on screen or over their
-head when there is no room below. Each stays up half a second after the
+head when there is no room below. While `F8` is on, every bot's tag is up, its
+goal on a second line — spectating too, which is why the HUD goes up with the
+round rather than with a body: without one its crosshair and readouts hide. Each stays up half a second after the
 crosshair leaves, so several can be up at once.
 
 **The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
@@ -415,7 +417,7 @@ its hitboxes are hidden from inside your own head, nobody else's are),
 **`F6`** toggles the bone gizmos and the pickups' trigger volumes
 (green, dim while one restocks), **`F7`** shows the nav overlay picked in
 the Bakes panel, and **`F8`** draws each bot's route over the floor, its view
-and what it senses, in its color. All four are off by default: they are debug
+and what it senses, in its color, and puts its name tag up with its goal. All four are off by default: they are debug
 views, and now that bodies have geometry none is what a player sees. `F3`
 is the perf overlay in both modes.
 
@@ -1702,7 +1704,9 @@ machine from what it is told.
   any `DeathCam`; `decide_the_view` cuts to first person; and its body and
   held weapon are hidden from inside as our own are. The viewmodel, its arms,
   kicks and reloads follow `Viewed` — ours or the watched body — so a
-  spectator sees what that player sees; the apparent muzzle stays ours.
+  spectator sees what that player sees; the apparent muzzle stays ours. Their
+  name is on a name-tag panel at the bottom middle of the safe zone, with the
+  goal under it for a bot (`name_whoever_is_watched`).
 - **Nothing else reads the clicks.** With no body the latch's edges are
   consumed by `write_client_inputs` with nothing to fire, and `watch`
   ignores clicks while `MouseHeld`, so the click that closes the picker

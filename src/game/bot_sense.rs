@@ -35,6 +35,9 @@ pub const HEARS_BLASTS: f32 = 40.0;
 /// Seconds an enemy is remembered unseen, and a noise at all.
 pub const REMEMBERS: f32 = 4.0;
 pub const REMEMBERS_NOISES: f32 = 3.0;
+/// Meters along the direction a hit came from that a bot guesses its attacker is, unless a wall
+/// is nearer. A hit gives a direction, not a distance.
+const HURT_GUESS: f32 = 10.0;
 /// Seconds between noticing something and acting on it, the range a temperament rolls in.
 const REACTION: std::ops::Range<f32> = 0.2..0.4;
 
@@ -63,7 +66,8 @@ impl BotMind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sense {
     Seen,
-    /// Hit by them: where the damage came from, which for a blast is the blast.
+    /// Hit by them: only the direction the damage came from, which for a blast is the blast, as
+    /// the damage indicator shows a player.
     Hurt,
 }
 
@@ -216,7 +220,13 @@ pub fn sense(
                 continue;
             }
             let Some((attacker, ..)) = bodies.iter().find(|(_, who, ..)| **who == from) else { continue };
-            senses.notice(from, attacker, hit.from.unwrap_or(hit.point), Sense::Hurt, now);
+            // Seen, it already knows better than a direction.
+            if senses.known.iter().any(|known| known.who == from && known.in_sight) {
+                continue;
+            }
+            let Ok(toward) = Dir3::new(hit.from.unwrap_or(hit.point) - eye) else { continue };
+            let reach = world.ray_distance(&Ray3d::new(eye, toward), HURT_GUESS).unwrap_or(HURT_GUESS);
+            senses.notice(from, attacker, eye + *toward * reach, Sense::Hurt, now);
         }
     }
 }
@@ -407,6 +417,58 @@ mod tests {
                 assert!(!in_view(eye, yaw, pitch, corner(1.02)), "outside the corner at {yaw}, {pitch}");
             }
         }
+    }
+
+    /// Breaks if a bot follows somebody it has lost sight of: seen in the open, then moved
+    /// behind a pillar, they are remembered where they were last seen.
+    #[test]
+    fn a_lost_enemy_is_remembered_where_it_was_last_seen() {
+        let mut world = a_world(&[open()]);
+        let mut collision = CollisionWorld::default();
+        collision.rebuild_volumes(&[
+            crate::common::world_surface::Volume::air(open()),
+            crate::common::world_surface::Volume::solid(Room::new(Vec3::new(-2.0, 0.0, -6.0), Vec3::new(2.0, 6.0, -5.0))),
+        ]);
+        world.insert_resource(collision);
+        let bot = a_bot(&mut world, Vec3::ZERO, 0.0);
+        let enemy = a_body(&mut world, Vec3::new(5.0, 0.0, -10.0), 0.0, 2);
+        world.run_system_once(sense).unwrap();
+        let first = world.get::<PhysicsBody>(enemy).unwrap().current;
+        assert_eq!(seen(&world, bot), vec![PlayerId(2)]);
+
+        let hidden = crate::common::class::body_center_from_feet(Vec3::new(0.0, 0.0, -10.0));
+        world.entity_mut(enemy).insert((
+            PhysicsBody::at(hidden),
+            Hitboxes { body: Box3 { center: hidden, half_extents: Stance::Standing.half_extents() }, head: Some(Box3 { center: hidden + Vec3::Y * 0.7, half_extents: Vec3::splat(0.15) }) },
+        ));
+        world.run_system_once(sense).unwrap();
+        let known = world.get::<BotSenses>(bot).unwrap().known[0];
+        assert!(!known.in_sight, "the bot saw through the pillar");
+        assert_eq!(known.at, first, "the bot knows where its enemy went");
+    }
+
+    /// Breaks if being hit tells a bot where its attacker is rather than which way: shot from far
+    /// behind, it knows the direction and guesses the distance.
+    #[test]
+    fn a_hit_gives_a_direction_and_not_a_place() {
+        let mut world = a_world(&[open()]);
+        let bot = a_bot(&mut world, Vec3::ZERO, 0.0);
+        let shooter = a_body(&mut world, Vec3::new(0.0, 0.0, 18.0), 0.0, 2);
+        let muzzle = world.get::<PhysicsBody>(shooter).unwrap().current;
+        world.write_message(DamageDealt {
+            target: bot,
+            source: DamageSource::Player(PlayerId(2)),
+            amount: 10,
+            remaining: 90,
+            point: Vec3::new(0.0, 1.0, 0.0),
+            from: Some(muzzle),
+        });
+        world.run_system_once(sense).unwrap();
+        let known = world.get::<BotSenses>(bot).unwrap().known[0];
+        assert_eq!(known.how, Sense::Hurt);
+        let eye = world.get::<PhysicsBody>(bot).unwrap().current + Vec3::Y * Player::default().duck.eye_from_center(Stance::Standing);
+        assert!((known.at - eye).normalize().dot((muzzle - eye).normalize()) > 0.999, "it does not know the direction");
+        assert!((known.at.distance(eye) - HURT_GUESS).abs() < 1e-3, "it knows the distance");
     }
 
     /// Breaks if a teammate is treated as an enemy.

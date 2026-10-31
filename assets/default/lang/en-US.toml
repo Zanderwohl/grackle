@@ -366,6 +366,11 @@ utility = "Utility"
 gadget = "Gadget"
 special = "Special"
 
+[bot.goal]
+none = "No goal"
+place = "A place"
+pickup = "Pickup: { what }"
+
 [scoreboard]
 player = "Player { id }"
 name = "Name"
