@@ -15,7 +15,7 @@ use crate::common::game_rules::{GameRules, ModeRules};
 use crate::common::player_color::lowest_free;
 use crate::common::player_settings::{settings_of, ClientSettings, PlayerSettings};
 use crate::common::net::NetRole;
-use crate::common::team::Side;
+use crate::common::team::{Side, Team};
 use crate::common::weapon::WeaponCatalog;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
@@ -172,8 +172,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         who
     };
 
-    // Everybody with a seat, for a bot to take one beside.
-    let mut seated: Vec<Identity> = identities.iter().copied().chain(us.as_deref().map(|us| us.0)).collect();
+    let our_identity = us.as_deref().map(|us| us.0);
 
     if ours.is_empty() {
         // The identity outlives the body, so a respawn is the same player on
@@ -218,10 +217,8 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         spawn_body_for(&mut commands, spawn, (who, start), (link, peer.0), &rules, &catalog);
     }
 
-    // Taken as bots are seated this pass, so two bots seated together are not both counted
-    // as the team the other has not joined yet.
-    let points: std::collections::HashMap<PlayerId, i32> = standings.iter().map(|standing| (standing.id, standing.points())).collect();
-    let teams = teams_in_play(placed.iter().map(|spawn| spawn.side));
+    // Everybody seated, the points and the teams in play, worked out only once a bot needs a seat.
+    let mut seating: Option<(Vec<Identity>, std::collections::HashMap<PlayerId, i32>, Vec<Team>)> = None;
     for (seat, temperament) in &seats {
         if driven.iter().any(|of| of.0 == seat) {
             continue;
@@ -238,13 +235,23 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         // Random would give a person.
         let mut who = identities.get(seat).copied().unwrap_or_else(|_| meet(&mut ids));
         if who.seat == Seat::Choosing {
+            let (seated, points, teams) = seating.get_or_insert_with(|| {
+                let seated = identities.iter().copied().chain(our_identity).collect();
+                let points = standings.iter().map(|standing| (standing.id, standing.points())).collect();
+                (seated, points, teams_in_play(placed.iter().map(|spawn| spawn.side)))
+            });
             let others = seated.iter().copied().filter(|other| other.id != who.id);
-            who.seat = seat_for_a_bot(&teams, others, &points, !rules.teams);
+            if let Some(taken) = seat_for_a_bot(teams, others, points, !rules.teams) {
+                who.seat = taken;
+            }
+            // Counted at once, so two bots seated in one pass do not both take the side the
+            // other has not joined yet.
             seated.retain(|other| other.id != who.id);
             seated.push(who);
             commands.entity(seat).insert(who);
         }
-        if waiting(who) {
+        // Refused a seat, a bot waits choosing, as a person would, rather than playing for nobody.
+        if waiting(who) || who.seat == Seat::Choosing {
             continue;
         }
         let spawn = choose_spawn(&placed, who.team(), &collision);

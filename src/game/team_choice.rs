@@ -199,10 +199,11 @@ fn tallies_without(teams: &[Team], here: &[(Chair, Identity)], bots: &[Identity]
 }
 
 /// Where a bot sits: wherever Random would put a person, among everybody else already seated.
-pub fn seat_for_a_bot(teams: &[Team], others: impl IntoIterator<Item = Identity>, points: &HashMap<PlayerId, i32>, free_for_all: bool) -> Seat {
+/// `None` where Random would refuse a person.
+pub fn seat_for_a_bot(teams: &[Team], others: impl IntoIterator<Item = Identity>, points: &HashMap<PlayerId, i32>, free_for_all: bool) -> Option<Seat> {
     let tallies = tally(teams, others.into_iter().map(|other| (other.team(), points.get(&other.id).copied().unwrap_or(0))));
     let offered = options(Seat::Choosing, !free_for_all, &tallies);
-    decide(TeamChoice::Random, &offered, &tallies, &mut rand::rng()).unwrap_or(Seat::Playing(None))
+    decide(TeamChoice::Random, &offered, &tallies, &mut rand::rng()).ok()
 }
 
 /// One request at a time, each against the seats the last left, so two joins
@@ -399,7 +400,6 @@ mod tests {
         assert!(may_join(Team::Blue, &counts));
     }
 
-    /// Breaks if leaving your own team is not counted before joining another.
     /// Breaks if bots are left out of the count, so a person joins the team the bots already fill.
     #[test]
     fn bots_are_counted_when_choosing() {
@@ -408,9 +408,10 @@ mod tests {
         let here = [(Chair::Ours, me)];
         let counts = tallies_without(&[Team::Red, Team::Blue], &here, &[bot], me.id, &HashMap::new());
         assert_eq!(counts.iter().find(|tally| tally.team == Team::Red).unwrap().players, 1);
-        assert_eq!(seat_for_a_bot(&[Team::Red, Team::Blue], [bot], &HashMap::new(), false), Seat::Playing(Some(Team::Blue)));
+        assert_eq!(seat_for_a_bot(&[Team::Red, Team::Blue], [bot], &HashMap::new(), false), Some(Seat::Playing(Some(Team::Blue))));
     }
 
+    /// Breaks if leaving your own team is not counted before joining another.
     #[test]
     fn whoever_is_choosing_is_not_counted() {
         let me = Identity { id: PlayerId(1), seat: Seat::Playing(Some(Team::Blue)), color: 0 };

@@ -22,6 +22,8 @@ use crate::game::weapon::Trigger;
 use crate::common::player_color::PlayerColor;
 use crate::common::swatch::Swatch;
 use crate::common::team::Team;
+use crate::game::respawn::{Identity, OurIdentity};
+use std::collections::HashMap;
 use crate::game::nav::{CellId, Leap, Link, LinkKind, NavGraph};
 use crate::game::nav_field::Field;
 use crate::game::player::{step_player, Inputs, PhysicsBody, Player, PlayerInput};
@@ -500,23 +502,41 @@ pub struct FillsASlot;
 /// A filler never keeps anybody out: the server's cap counts people only, and somebody joining
 /// takes a filler's seat and body away in the same frame, before
 /// `give_bodies_to_whoever_needs_one` stands theirs up.
+#[allow(clippy::type_complexity)]
 pub(crate) fn fill_empty_slots(
     mut commands: Commands,
     settings: Res<RoundSettings>,
     clients: Query<(), (With<ClientOf>, With<Connected>)>,
-    seats: Query<(Entity, Has<FillsASlot>), With<BotSeat>>,
+    seats: Query<(Entity, Has<FillsASlot>, Option<&Identity>), With<BotSeat>>,
+    identities: Query<&Identity>,
+    us: Option<Res<OurIdentity>>,
     bodies: Query<(Entity, &BotOf)>,
 ) {
     // The host is always playing: the authority is a solo game or a listen server.
     let people = 1 + clients.iter().count();
-    let by_hand = seats.iter().filter(|(_, fills)| !fills).count();
-    let mut fillers: Vec<Entity> = seats.iter().filter(|(_, fills)| *fills).map(|(seat, _)| seat).collect();
+    let by_hand = seats.iter().filter(|(_, fills, _)| !fills).count();
+    let mut fillers: Vec<(Entity, Option<Team>)> = seats.iter().filter(|(_, fills, _)| *fills).map(|(seat, _, who)| (seat, who.and_then(Identity::team))).collect();
     let wanted = settings.bots_to_fill(people, by_hand);
-    fillers.sort();
     for _ in fillers.len()..wanted {
         commands.spawn((BotSeat, FillsASlot, Name::new("Bot seat")));
     }
-    for seat in fillers.iter().skip(wanted) {
+    // From the team furthest ahead, so the seats the balance rule filled stay balanced; a filler
+    // not yet on a team first, and the newest among equals.
+    let mut players: HashMap<Team, usize> = HashMap::new();
+    for team in identities.iter().chain(us.as_deref().map(|us| &us.0)).filter_map(Identity::team) {
+        *players.entry(team).or_default() += 1;
+    }
+    let mut retired = Vec::new();
+    while fillers.len() > wanted {
+        let ahead = |team: Option<Team>| team.map_or(usize::MAX, |team| players.get(&team).copied().unwrap_or(0));
+        let index = (0..fillers.len()).max_by_key(|index| (ahead(fillers[*index].1), fillers[*index].0)).expect("more than wanted");
+        let (seat, team) = fillers.swap_remove(index);
+        if let Some(team) = team {
+            *players.entry(team).or_default() -= 1;
+        }
+        retired.push(seat);
+    }
+    for seat in &retired {
         commands.entity(*seat).despawn();
         for (body, _) in bodies.iter().filter(|(_, of)| of.0 == *seat) {
             commands.entity(body).despawn();
@@ -920,6 +940,28 @@ mod tests {
             step(&mut mover, Vec3::ZERO, &input, &Condition::default(), None, &world, &rules, dt);
         }
         panic!("the bot never came out of the vent; it is at {}", feet_of(&mover.body, mover.stance));
+    }
+
+    /// Breaks if a filler is retired by age rather than by team: with Red a player ahead, the
+    /// filler that goes when somebody joins is a Red one, however old.
+    #[test]
+    fn a_joiner_retires_a_filler_from_the_team_furthest_ahead() {
+        use crate::common::damage::PlayerId;
+        use crate::game::respawn::Seat;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.insert_resource(RoundSettings { slots: 4, fill_with_bots: true });
+        let on = |id, team| Identity { id: PlayerId(id), seat: Seat::Playing(Some(team)), color: 0 };
+        world.insert_resource(OurIdentity(on(1, Team::Blue)));
+        world.spawn((BotSeat, FillsASlot, on(2, Team::Red)));
+        world.spawn((BotSeat, FillsASlot, on(3, Team::Red)));
+        let blue = world.spawn((BotSeat, FillsASlot, on(4, Team::Blue))).id();
+        world.spawn((ClientOf, lightyear::prelude::RemoteId(lightyear::prelude::PeerId::Entity(1)), Connected));
+        world.run_system_once(fill_empty_slots).unwrap();
+        world.flush();
+        let reds = world.query_filtered::<&Identity, With<BotSeat>>().iter(&world).filter(|who| who.team() == Some(Team::Red)).count();
+        assert_eq!(reds, 1, "a Blue filler went while Red was ahead");
+        assert!(world.get_entity(blue).is_ok());
     }
 
     /// Breaks if a bot cannot follow a route the graph gives it: across a room, up a ledge by its
