@@ -54,7 +54,7 @@ There is a player body that walks, falls and jumps in `src/game/`, but it is
 still a prototype for feeling out room sizes: it has health and can shoot, and
 that is the whole of it.
 
-Bots can move but not think. A bot is a `BotSeat` holding an `Identity` the way
+Bots move and choose where to go, but do not fight. A bot is a `BotSeat` holding an `Identity` the way
 a client's link does, served a body by `give_bodies_to_whoever_needs_one`. It
 has no picker, so it takes the seat Random would give a person
 (`team_choice::seat_for_a_bot`), and bots count in the balance people choose
@@ -85,8 +85,11 @@ people come and go, with seats marked `FillsASlot`. **A bot never keeps
 anybody out**: the cap counts people only, so a slot a bot fills is open, and
 somebody joining takes a filler's seat and body in the same frame, before
 `give_bodies_to_whoever_needs_one` stands theirs up. `B` seats a bot by hand
-(counted against the slots) and `Shift+B` retires the newest; until there is a
-brain they `Roam` between random cells. A route is weighed by `RouteCosts` —
+(counted against the slots) and `Shift+B` retires the newest. What a bot goes
+for is `think`'s ([`src/game/bot_think.rs`](src/game/bot_think.rs)), the one
+writer of `BotIntent::goal`: health, armor, arms, a hunt, cover, an ambush or a
+roam, each scored by its temperament's `Drives`, the one it has getting a
+commitment bonus, and shown with its score and the runner-up on its `F8` tag. A route is weighed by `RouteCosts` —
 seconds of travel, plus that time again per weighted unit of exposure,
 knockback danger and Hurt in the cells entered — so risk is priced, not
 forbidden. Each seat rolls its own temperament (every weight scaled by 0.1 to
@@ -107,7 +110,8 @@ limits — is planned in [documentation/bot-brain.md](documentation/bot-brain.md
 Its senses are built (`src/game/bot_sense.rs`): **a bot never reads where an
 enemy is**, only its `BotSenses` — who is in its 90° view with a clear ray to
 them, what it heard (`Effect`s) and which way a hit came from — remembered for a few seconds
-and passed on only after its `BotMind`'s reaction time. Nothing yet acts on them.
+and passed on only after its `BotMind`'s reaction time. `think` reads them; nothing
+aims or fires yet.
 
 There is a prop editor, which models the things a map and a class refer to.
 It is a third `AppMode` and the frontier next to it: the geometry it builds is
@@ -1701,12 +1705,17 @@ machine from what it is told.
 - **A spawn is a `DeathCam`** of nobody's, framed by the same `overlook` the
   picker uses. **An eye is `Watched`** on that body: `place_camera` looks out
   of it at its eye, aimed by its replicated `Player.yaw`/`pitch`, ahead of
-  any `DeathCam`; `decide_the_view` cuts to first person; and its body and
+  any `DeathCam`, eased onto that aim in yaw and pitch over `WATCHED_EASE`
+  (a bot's aim jumps a quarter turn in a tick), cutting to a new body rather
+  than swinging; `decide_the_view` cuts to first person; and its body and
   held weapon are hidden from inside as our own are. The viewmodel, its arms,
   kicks and reloads follow `Viewed` — ours or the watched body — so a
   spectator sees what that player sees; the apparent muzzle stays ours. Their
   name is on a name-tag panel at the bottom middle of the safe zone, with the
-  goal under it for a bot (`name_whoever_is_watched`).
+  goal under it for a bot (`name_whoever_is_watched`). With `F8` on, a
+  watched bot's every want and its pull is a table top right of the window
+  safe zone, alphabetical, the chosen one bright
+  ([`src/game/pull_table.rs`](src/game/pull_table.rs)).
 - **Nothing else reads the clicks.** With no body the latch's edges are
   consumed by `write_client_inputs` with nothing to fire, and `watch`
   ignores clicks while `MouseHeld`, so the click that closes the picker

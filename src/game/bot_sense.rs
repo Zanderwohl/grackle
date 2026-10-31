@@ -14,6 +14,7 @@ use crate::common::player_color::PlayerColor;
 use crate::common::swatch::Swatch;
 use crate::common::team::{hostile, Team};
 use crate::game::bot::{BotOf, ShowBots};
+use crate::game::bot_think::Drives;
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::death::Dying;
@@ -48,17 +49,18 @@ pub struct BotMind {
     /// Seconds between noticing an enemy and acting on it. A bot that fires the frame somebody
     /// rounds a corner reads as a cheat whatever its aim.
     pub reaction: f32,
+    pub drives: Drives,
 }
 
 impl Default for BotMind {
     fn default() -> Self {
-        BotMind { reaction: 0.3 }
+        BotMind { reaction: 0.3, drives: Drives::default() }
     }
 }
 
 impl BotMind {
     pub fn temperament() -> Self {
-        BotMind { reaction: rand::random_range(REACTION) }
+        BotMind { reaction: rand::random_range(REACTION), drives: Drives::temperament() }
     }
 }
 
@@ -140,7 +142,7 @@ pub fn in_view(eye: Vec3, yaw: f32, pitch: f32, target: Vec3) -> bool {
         return false;
     }
     let across = (-to.x).atan2(-to.z);
-    let turned = (across - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    let turned = crate::common::rotation::wrap_angle(across - yaw);
     let up = to.y.atan2(to.xz().length());
     turned.abs() <= HALF_VIEW && (up - pitch).abs() <= HALF_VIEW_VERTICAL
 }
@@ -487,7 +489,7 @@ mod tests {
     /// after the reaction time, and gone from memory a few seconds after it was last seen.
     #[test]
     fn noticing_waits_for_the_reaction_and_memory_fades() {
-        let mind = BotMind { reaction: 0.3 };
+        let mind = BotMind { reaction: 0.3, ..default() };
         let mut senses = BotSenses::default();
         senses.notice(PlayerId(2), Entity::PLACEHOLDER, Vec3::ZERO, Sense::Seen, 10.0);
         assert_eq!(senses.noticed(10.1, &mind).count(), 0, "noticed before the reaction time");

@@ -366,10 +366,22 @@ utility = "Utility"
 gadget = "Gadget"
 special = "Special"
 
-[bot.goal]
-none = "No goal"
-place = "A place"
-pickup = "Pickup: { what }"
+[bot.want]
+health = "Health"
+armor = "Armor"
+arms = "Arms"
+hunt = "Hunt"
+cover = "Cover"
+ambush = "Ambush"
+roam = "Roam"
+
+[bot.pull]
+none = "–"
+
+[bot.thought]
+none = "Nothing"
+alone = "{ want } { score }"
+over = "{ want } { score } over { other } { against }"
 
 [scoreboard]
 player = "Player { id }"

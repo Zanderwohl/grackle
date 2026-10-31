@@ -25,14 +25,13 @@ use crate::common::player_color::PlayerColor;
 use crate::common::swatch::Swatch;
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, ShapeMaterial};
-use crate::game::bot::{BotIntent, BotOf, Goal, ShowBots};
+use crate::game::bot::{BotOf, ShowBots};
+use crate::game::bot_think::BotThought;
 use crate::game::collision::CollisionWorld;
-use crate::game::nav_field::Pickup;
 use crate::game::death::Dying;
 use crate::game::hud::{hud_text, leaning_panel, panel_style, SafeZone, WindowSafeZone, MARGIN_Y, WINDOW_MARGIN, ZONE_DROP, ZONE_STROKE};
 use crate::game::player::{LocalPlayer, PhysicsBody, Player, PlayerCamera, Viewed, Watched};
 use crate::game::score::Standing;
-use crate::tool::nav_bake::NavBake;
 use crate::get;
 
 /// Meters.
@@ -222,14 +221,23 @@ fn name_of<'a>(id: PlayerId, standings: impl IntoIterator<Item = &'a Standing>) 
         .map_or_else(|| get!("scoreboard.player", "id", id.0), Standing::display_name)
 }
 
-fn goal_name(goal: Option<Goal>, pickups: &[Pickup]) -> String {
-    match goal {
-        None => get!("bot.goal.none"),
-        Some(Goal::Place(_)) => get!("bot.goal.place"),
-        Some(Goal::Pickup(index)) => match pickups.get(index as usize) {
-            Some(pickup) => get!("bot.goal.pickup", "what", pickup.label),
-            None => get!("bot.goal.place"),
-        },
+/// What a bot wants, scored, and the different want that came closest.
+fn thought_line(thought: &BotThought) -> String {
+    let score = |score: f32| format!("{score:.2}");
+    match (thought.chosen, thought.runner_up) {
+        (None, _) => get!("bot.thought.none"),
+        (Some(chosen), None) => get!("bot.thought.alone", "want", chosen.want.name(), "score", score(chosen.score)),
+        (Some(chosen), Some(other)) => get!(
+            "bot.thought.over",
+            "want",
+            chosen.want.name(),
+            "score",
+            score(chosen.score),
+            "other",
+            other.want.name(),
+            "against",
+            score(other.score)
+        ),
     }
 }
 
@@ -305,22 +313,20 @@ fn place_the_tags(
     people: Query<Person, People>,
     standings: Query<&Standing>,
     show: Res<ShowBots>,
-    intents: Query<&BotIntent>,
-    nav: Option<Res<NavBake>>,
+    thoughts: Query<&BotThought>,
     mut tags: Query<(&mut NameTag, &mut Node, &mut Visibility, &ComputedNode, &Children)>,
     mut plates: Plates,
 ) {
     let (Some(camera), Some(zone)) = (camera, zone) else { return };
     let (camera, eye) = camera.into_inner();
     let zone = zone.size() * zone.inverse_scale_factor();
-    let pickups = nav.as_deref().map_or(&[][..], |nav| &nav.graph().fields().pickups[..]);
 
     for (mut tag, mut node, mut visibility, computed, children) in &mut tags {
         let Ok((&id, drawn, boxes, physics, team, color)) = people.get(tag.body) else { continue };
 
         let name = name_of(id, &standings);
         let swatch = Swatch::of_body(team.copied(), color.copied());
-        let goal = intents.get(tag.body).ok().filter(|_| show.0).map(|intent| goal_name(intent.goal, pickups));
+        let goal = thoughts.get(tag.body).ok().filter(|_| show.0).map(thought_line);
         let size = computed.size() * computed.inverse_scale_factor();
         if !plates.fill(children, &name, goal, swatch, size, &mut tag.drawn) {
             visibility.set_if_neq(Visibility::Hidden);
@@ -355,9 +361,8 @@ fn name_whoever_is_watched(
     font: Res<DisplayFont>,
     zone: Option<Single<Entity, With<SafeZone>>>,
     watched: Option<Single<(Entity, &PlayerId, Option<&Team>, Option<&PlayerColor>), (With<Watched>, Without<Dying>)>>,
-    intents: Query<&BotIntent>,
+    thoughts: Query<&BotThought>,
     standings: Query<&Standing>,
-    nav: Option<Res<NavBake>>,
     mut banners: Query<(&mut Visibility, &Children), With<WatchedBanner>>,
     mut plate: Query<(&mut WatchedPlate, &ComputedNode, &Children)>,
     mut plates: Plates,
@@ -372,8 +377,7 @@ fn name_whoever_is_watched(
         return;
     };
     let Some((mut drawn, computed, lines)) = children.first().and_then(|inner| plate.get_mut(*inner).ok()) else { return };
-    let pickups = nav.as_deref().map_or(&[][..], |nav| &nav.graph().fields().pickups[..]);
-    let goal = intents.get(body).ok().map(|intent| goal_name(intent.goal, pickups));
+    let goal = thoughts.get(body).ok().map(thought_line);
     let size = computed.size() * computed.inverse_scale_factor();
     let swatch = Swatch::of_body(team.copied(), color.copied());
     let ready = plates.fill(lines, &name_of(id, &standings), goal, swatch, size, &mut drawn.drawn);
@@ -416,14 +420,6 @@ mod tests {
         assert!(!tag.age(false, LINGER * 0.6), "it outstayed its linger");
     }
 
-    /// Breaks if a pickup goal stops naming its pickup, or one the bake no longer has panics.
-    #[test]
-    fn a_goal_names_its_pickup() {
-        let pickups = [Pickup::weapon("rocket_launcher".into(), Vec3::ZERO)];
-        assert_eq!(goal_name(Some(Goal::Pickup(0)), &pickups), get!("bot.goal.pickup", "what", "rocket_launcher"));
-        assert_eq!(goal_name(Some(Goal::Pickup(5)), &pickups), get!("bot.goal.place"));
-        assert_eq!(goal_name(None, &pickups), get!("bot.goal.none"));
-    }
 
     /// Breaks if a spectator is not told who they are watching, or which goal a watched bot has:
     /// the banner goes up in the safe zone and is filled with the watched body's name and goal.
@@ -433,14 +429,14 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<DisplayFont>();
         world.spawn(SafeZone);
-        world.spawn((Watched, PlayerId(7), BotIntent { goal: Some(Goal::Place(Vec3::ZERO)), ..default() }));
+        world.spawn((Watched, PlayerId(7), BotThought::default()));
         world.run_system_once(name_whoever_is_watched).unwrap();
         world.run_system_once(name_whoever_is_watched).unwrap();
 
         let mut lines = world.query::<(&Text, &Node, Has<NameTagGoal>)>();
         let lines: Vec<(String, Display, bool)> = lines.iter(&world).map(|(text, node, goal)| (text.0.clone(), node.display, goal)).collect();
         assert!(lines.contains(&(get!("scoreboard.player", "id", 7), Display::Flex, false)), "{lines:?}");
-        assert!(lines.contains(&(get!("bot.goal.place"), Display::Flex, true)), "{lines:?}");
+        assert!(lines.contains(&(get!("bot.thought.none"), Display::Flex, true)), "{lines:?}");
     }
 
     #[test]

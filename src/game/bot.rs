@@ -283,6 +283,11 @@ fn plan(route: &mut BotRoute, graph: &NavGraph, generation: u64, feet: Vec3, goa
     route.closest = f32::INFINITY;
 }
 
+#[cfg(test)]
+pub(crate) fn plan_for_test(route: &mut BotRoute, graph: &NavGraph, feet: Vec3, goal: Goal) {
+    plan(route, graph, 0, feet, Some(goal), &RouteCosts::default(), &Gear::default());
+}
+
 /// Meters per second under which a bot counts as standing still, to set off a rocket jump from.
 const STILL: f32 = 0.5;
 /// Meters from a rocket jump's start within which a bot crouch-walks the rest of the way, and
@@ -544,46 +549,6 @@ pub(crate) fn fill_empty_slots(
     }
 }
 
-/// One roaming goal in this many is a pickup rather than a place.
-const ROAM_TO_PICKUPS: u32 = 4;
-
-/// Seconds a roaming bot with no way to its goal waits before picking another. A bot stranded
-/// where nothing leads out would otherwise search the whole graph every tick.
-const ROAM_RETRY: f32 = 1.0;
-
-/// A placeholder until there is a brain: wanders from one random cell to another.
-#[derive(Component, Default, Debug)]
-pub struct Roam {
-    /// Seconds until a goal with no way to it is given up for another.
-    retry_in: f32,
-}
-
-fn roam(time: Res<Time>, nav: Option<Res<NavBake>>, mut bots: Query<(&BotRoute, &mut BotIntent, &mut Roam)>) {
-    let Some(nav) = nav else { return };
-    let cells = nav.graph().cells();
-    if cells.is_empty() {
-        return;
-    }
-    for (route, mut intent, mut roam) in &mut bots {
-        roam.retry_in = (roam.retry_in - time.delta_secs()).max(0.0);
-        if route.is_lost() && roam.retry_in > 0.0 {
-            continue;
-        }
-        if intent.goal.is_none() || route.is_done() {
-            if route.is_lost() {
-                roam.retry_in = ROAM_RETRY;
-            }
-            // Now and then a pickup, so the leaps only a pickup is worth get taken.
-            let pickups = nav.graph().fields().pickups.len();
-            intent.goal = Some(if pickups > 0 && rand::random_range(0..ROAM_TO_PICKUPS) == 0 {
-                Goal::Pickup(rand::random_range(0..pickups) as u16)
-            } else {
-                Goal::Place(cells[rand::random_range(0..cells.len())].feet)
-            });
-        }
-    }
-}
-
 /// A debug key until bots can be added from a menu: `B` seats a bot, `Shift+B` retires the newest.
 fn seat_bots_from_the_keyboard(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, seats: Query<Entity, With<BotSeat>>) {
     if !keys.just_pressed(KeyCode::KeyB) {
@@ -607,7 +572,7 @@ impl Plugin for BotPlugin {
             .add_systems(Update, (toggle_bot_routes, draw_bot_routes).chain().run_if(in_state(AppMode::Play)))
             .add_systems(FixedPreUpdate, steer_bots.run_if(has_authority).run_if(in_state(AppMode::Play)))
             .add_systems(FixedUpdate, retire_bots.before(step_player).run_if(has_authority))
-            .add_systems(Update, (seat_bots_from_the_keyboard, fill_empty_slots, roam).chain().run_if(has_authority).run_if(in_state(AppMode::Play)));
+            .add_systems(Update, (seat_bots_from_the_keyboard, fill_empty_slots).chain().run_if(has_authority).run_if(in_state(AppMode::Play)));
     }
 }
 
@@ -826,32 +791,6 @@ mod tests {
             }
         }
         panic!("the bot never took the pickup; it is at {}", feet_of(&mover.body, mover.stance));
-    }
-
-    /// Breaks if a goal with no way to it is rerolled every frame, so a stranded bot searches the
-    /// whole graph every tick: it waits [`ROAM_RETRY`] first.
-    #[test]
-    fn a_stranded_bot_waits_before_picking_another_goal() {
-        use bevy::ecs::system::RunSystemOnce;
-        let volumes = [Volume::air(Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0))), Volume::air(Room::new(Vec3::new(20.0, 0.0, 0.0), Vec3::new(24.0, 3.0, 4.0)))];
-        let mut world_collision = CollisionWorld::default();
-        let faces = world_collision.rebuild_volumes(&volumes);
-        let graph = nav::graph(&world_collision, &faces, &[], &MovementRules::default(), &[]);
-        let sealed = Goal::Place(Vec3::new(22.25, 0.0, 2.25));
-
-        let mut world = World::new();
-        world.insert_resource(NavBake::holding(graph.clone()));
-        world.init_resource::<Time>();
-        let mut route = BotRoute::default();
-        plan(&mut route, &graph, 0, Vec3::new(1.25, 0.0, 1.25), Some(sealed), &RouteCosts::default(), &Gear::default());
-        assert!(route.is_lost());
-        let bot = world.spawn((route, BotIntent { goal: Some(sealed), ..default() }, Roam::default())).id();
-        world.run_system_once(roam).unwrap();
-        let rerolled = world.get::<BotIntent>(bot).unwrap().goal;
-        assert_ne!(rerolled, Some(sealed), "a goal with no way to it was kept");
-        world.get_mut::<BotIntent>(bot).unwrap().goal = Some(sealed);
-        world.run_system_once(roam).unwrap();
-        assert_eq!(world.get::<BotIntent>(bot).unwrap().goal, Some(sealed), "a stranded bot picked again before waiting");
     }
 
     /// Breaks if a brain's weapon choice beats the route's: at a rocket jump's start the bot asks

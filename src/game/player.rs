@@ -655,28 +655,33 @@ pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut preference: ResMut<ViewP
 /// Runs after `interpolate_bodies`; earlier, it sits a frame behind the body.
 ///
 /// With no body, it looks out of the [`Watched`] one, aimed as that body
-/// aims, or else orbits the [`DeathCam`], still aimed by the latch.
+/// aims but eased onto it (see [`WATCHED_EASE`]), or else orbits the
+/// [`DeathCam`], still aimed by the latch.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn place_camera(
+    time: Res<Time>,
+    mut eased: Local<Option<WatchedAim>>,
     pull: Res<CameraPull>,
     world: Res<CollisionWorld>,
     latch: Res<InputLatch>,
     death_cam: Option<Res<DeathCam>>,
     fixed: Res<Time<Fixed>>,
     body: Option<Single<(&Transform, &Stance, &Player), (With<LocalPlayer>, Without<PlayerCamera>)>>,
-    watched: Option<Single<(&Transform, &Stance, &Player), (With<Watched>, Without<LocalPlayer>, Without<PlayerCamera>)>>,
+    watched: Option<Single<(Entity, &Transform, &Stance, &Player), (With<Watched>, Without<LocalPlayer>, Without<PlayerCamera>)>>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
     if let (None, Some(watched)) = (&body, watched) {
-        let (transform, stance, player) = watched.into_inner();
+        let (whom, transform, stance, player) = watched.into_inner();
         let eye = transform.translation + Vec3::Y * player.drawn_duck(fixed.overstep_fraction()).eye_from_center(*stance);
-        let aim = Quat::from_rotation_y(player.yaw) * Quat::from_rotation_x(player.pitch);
+        let aim = eased.get_or_insert(WatchedAim { whom, yaw: player.yaw, pitch: player.pitch }).ease(whom, player.yaw, player.pitch, time.delta_secs());
+        let aim = Quat::from_rotation_y(aim.0) * Quat::from_rotation_x(aim.1);
         for mut camera in &mut cameras {
             camera.translation = eye;
             camera.rotation = aim;
         }
         return;
     }
+    *eased = None;
     let pivot = match (body, death_cam) {
         // Ducking lowers the eye and the third-person pivot with it.
         (Some(body), _) => {
@@ -694,6 +699,34 @@ pub fn place_camera(
     for mut camera in &mut cameras {
         camera.translation = placed.translation;
         camera.rotation = placed.rotation;
+    }
+}
+
+/// Seconds: the time constant the watched view eases onto its body's aim with. Turning steadily,
+/// the view trails by the turn rate times this; a snap is 95% closed in three of it. A bot's aim
+/// jumps a quarter turn in a tick, which read as a cut; a rate limit instead trails every snap by
+/// a fixed time and leaves small jitter alone.
+pub const WATCHED_EASE: f32 = 0.1;
+
+/// Where the watched view is looking, eased in yaw and pitch rather than slerped, so a quick turn
+/// never rolls the horizon.
+#[derive(Clone, Copy, Debug)]
+pub struct WatchedAim {
+    whom: Entity,
+    yaw: f32,
+    pitch: f32,
+}
+
+impl WatchedAim {
+    /// Eases toward `yaw` and `pitch` over `seconds`, and cuts straight there for a new body.
+    fn ease(&mut self, whom: Entity, yaw: f32, pitch: f32, seconds: f32) -> (f32, f32) {
+        if whom != self.whom {
+            *self = WatchedAim { whom, yaw, pitch };
+        }
+        let share = 1.0 - (-seconds / WATCHED_EASE).exp();
+        self.yaw += crate::common::rotation::wrap_angle(yaw - self.yaw) * share;
+        self.pitch += (pitch - self.pitch) * share;
+        (self.yaw, self.pitch)
     }
 }
 
@@ -1051,6 +1084,30 @@ pub fn interpolate_bodies(
 }
 
 #[cfg(test)]
+mod watched_aim_tests {
+    use super::*;
+
+    /// Breaks if the watched view snaps with the body, never arrives, turns the long way round,
+    /// or swings across from the last body watched instead of cutting.
+    #[test]
+    fn the_watched_view_eases_onto_its_aim_and_cuts_to_a_new_body() {
+        let (one, two) = (Entity::from_raw_u32(1).unwrap(), Entity::from_raw_u32(2).unwrap());
+        let mut aim = WatchedAim { whom: one, yaw: 3.0, pitch: 0.0 };
+        let (yaw, _) = aim.ease(one, -3.0, 0.0, WATCHED_EASE);
+        // From 3 to -3 the short way is up through pi, not down through zero.
+        assert!(yaw > 3.0, "turned the long way round: {yaw}");
+        let gap = std::f32::consts::TAU - 6.0;
+        assert!((yaw - 3.0 - gap * (1.0 - (-1.0f32).exp())).abs() < 1e-4, "one time constant did not close 63% of the turn");
+        for _ in 0..100 {
+            aim.ease(one, -3.0, 0.5, WATCHED_EASE);
+        }
+        let (yaw, pitch) = aim.ease(one, -3.0, 0.5, WATCHED_EASE);
+        assert!((yaw.rem_euclid(std::f32::consts::TAU) - (-3.0f32).rem_euclid(std::f32::consts::TAU)).abs() < 1e-3 && (pitch - 0.5).abs() < 1e-3);
+        assert_eq!(aim.ease(two, 1.0, -0.2, 0.0), (1.0, -0.2), "swung across to a new body");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
@@ -1304,6 +1361,7 @@ mod tests {
     fn first_person_puts_the_camera_at_the_eye() {
         let mut app = App::new();
         app.init_resource::<CameraPull>();
+        app.init_resource::<Time>();
         app.init_resource::<Time<Fixed>>();
         app.init_resource::<InputLatch>();
         app.insert_resource(open_room());
@@ -1335,6 +1393,7 @@ mod tests {
     fn the_view_is_aimed_by_the_latch_not_by_the_body() {
         let mut app = App::new();
         app.init_resource::<CameraPull>();
+        app.init_resource::<Time>();
         app.init_resource::<Time<Fixed>>();
         app.insert_resource(open_room());
         let yaw = 1.1;

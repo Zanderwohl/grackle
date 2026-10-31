@@ -142,12 +142,23 @@ campers and brawlers come out of one system with different numbers.
       not seen, one in front in the open is; a shot behind is heard
 
 ### Stage 6: think
-- [ ] `BotMind` with weights rolled per seat
-- [ ] Scored goals: health, armor, weapon or ammo, hunt, cover, ambush, roam
-- [ ] Commitment bonus, and thinking a few times a second plus on events
-- [ ] `Roam` retired as a goal of its own, kept as the fallback score
-- [ ] Tests: a hurt bot goes for health; it does not turn back for 1 more
+- [x] `BotMind` with weights rolled per seat (`Drives`)
+- [x] Scored goals: health, armor, weapon or ammo, hunt, cover, ambush, roam
+- [x] Commitment bonus, and thinking a few times a second plus on events
+- [x] `Roam` retired as a goal of its own, kept as the fallback score
+- [x] Tests: a hurt bot goes for health; it does not turn back for 1 more
       point; a bot that sees an enemy hunts it
+
+Built as `src/game/bot_think.rs`. Each score is a drive times a need times
+`1 / (1 + seconds / 5)` for anything travelled to; travel to pickups is the
+bake's distance field, in seconds. A hunt goes to where an enemy was last
+believed to be, a heard noise at half worth; cover is the least exposed cell
+within 10 m, wanted while hurt and under fire; an ambush is the nearest
+Ambush-rated cell, held for the bot's patience and then rested for 30 s. A
+goal that cannot be reached is rested for 3 s, and a hunt or a roam that
+arrives finds nothing and is rested until the memory is gone. A bot thinks
+every quarter second, spread by id, and at once when hurt, when it notices
+somebody new, when its route ends, or when its pickup is taken.
 
 ### Stage 7: fight
 - [ ] Target choice by temperament
