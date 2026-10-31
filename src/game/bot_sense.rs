@@ -245,7 +245,7 @@ const DASH: (f32, f32) = (0.3, 0.2);
 const FADED: f32 = 0.15;
 
 /// The step's look direction: yaw about world Y with `-Z` at zero, pitch positive up.
-fn look(yaw: f32, pitch: f32) -> Vec3 {
+pub fn look(yaw: f32, pitch: f32) -> Vec3 {
     let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
     Vec3::new(-yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos())
 }

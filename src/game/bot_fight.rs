@@ -16,7 +16,7 @@ use crate::common::projectile::ProjectileSpec;
 use crate::common::rotation::wrap_angle;
 use crate::common::weapon::{Ammo, Equipped, HitscanSpec, Mounted, WeaponAction, WeaponCatalog, WeaponId};
 use crate::game::bot::{aim_at, BotIntent, BotOf};
-use crate::game::bot_sense::{BotMind, BotSenses, Sense};
+use crate::game::bot_sense::{look, BotMind, BotSenses, Sense};
 use crate::game::bot_think::think;
 use crate::game::collision::CollisionWorld;
 use crate::game::death::Dying;
@@ -29,6 +29,8 @@ const BODY_WIDTH: f32 = 0.8;
 /// Seconds of flight at which a projectile is half as likely to land: a body sees it coming, and
 /// the longer it flies the more it can step aside, so it counts squared.
 const DODGE_SECONDS: f32 = 0.8;
+/// Seconds of reload at which a weapon with an empty clip is worth half as much as loaded.
+const EMPTY_CLIP_SECONDS: f32 = 0.4;
 /// Meters at which a hitscan shot from a bot is half as likely to land as point blank. A splash
 /// lands near enough without a perfect aim, a bullet does not.
 const AIM_FALLOFF: f32 = 40.0;
@@ -104,7 +106,7 @@ pub struct BotAim {
     tracked: f32,
     /// The direction the error leans, in radians round the aim.
     lean: f32,
-    /// Where the target was seen from last tick, for how fast it crosses the view.
+    /// Which way the target's body lay last tick, for how fast it crosses the view.
     last_bearing: Option<(f32, f32)>,
     /// `-1` left, `1` right, and seconds until it changes.
     strafe: f32,
@@ -120,11 +122,6 @@ pub fn turn_toward(from: (f32, f32), to: (f32, f32), step: f32) -> (f32, f32) {
     }
     let moved = gap / length * step;
     (from.0 + moved.x, from.1 + moved.y)
-}
-
-/// The step's look direction for `yaw` and `pitch`.
-fn look(yaw: f32, pitch: f32) -> Vec3 {
-    Vec3::new(-yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos())
 }
 
 /// Radians between two aims.
@@ -169,19 +166,20 @@ pub fn worth(mounted: &Mounted, distance: f32) -> f32 {
     }
 }
 
-/// The carried weapon with ammo best against a body `distance` away, and which button.
+/// A carried weapon against a body `distance` away: its better button and what that is worth,
+/// nothing with no ammo at all, and less while its clip is empty by the reload it needs first.
+fn armed(weapon: WeaponId, ammo: &Ammo, catalog: &WeaponCatalog, distance: f32) -> Option<(WeaponId, bool, f32)> {
+    let state = ammo.at(weapon).filter(|state| state.clip + state.reserve > 0)?;
+    let spec = catalog.get(weapon)?;
+    let (primary, secondary) = (worth(&spec.primary, distance), worth(&spec.secondary, distance));
+    let (alt, value) = if secondary > primary { (true, secondary) } else { (false, primary) };
+    let reload = if spec.magazine.clip.is_some() && state.clip == 0 { spec.magazine.reload } else { 0.0 };
+    Some((weapon, alt, value / (1.0 + reload / EMPTY_CLIP_SECONDS))).filter(|(.., value)| *value > 0.0)
+}
+
+/// The carried weapon best against a body `distance` away, and which button.
 pub fn best_weapon(carried: &[WeaponId], ammo: &Ammo, catalog: &WeaponCatalog, distance: f32) -> Option<(WeaponId, bool, f32)> {
-    carried
-        .iter()
-        .filter(|weapon| ammo.at(**weapon).is_some_and(|state| state.clip + state.reserve > 0))
-        .filter_map(|weapon| {
-            let spec = catalog.get(*weapon)?;
-            let primary = worth(&spec.primary, distance);
-            let secondary = worth(&spec.secondary, distance);
-            Some(if secondary > primary { (*weapon, true, secondary) } else { (*weapon, false, primary) })
-        })
-        .filter(|(_, _, worth)| *worth > 0.0)
-        .max_by(|a, b| a.2.total_cmp(&b.2))
+    carried.iter().filter_map(|weapon| armed(*weapon, ammo, catalog, distance)).max_by(|a, b| a.2.total_cmp(&b.2))
 }
 
 /// Where to put a shot at a body: led by the projectile's flight, lifted for its fall, and at
@@ -289,6 +287,7 @@ pub fn fight(
             intent.fire = false;
             intent.alt_fire = false;
             intent.strafe = 0.0;
+            intent.select = None;
             intent.reload = arms.is_some_and(|(equipped, ammo)| {
                 equipped.held().and_then(|held| Some((catalog.as_deref()?.get(held)?.magazine.clip?, ammo.at(held)?))).is_some_and(|(clip, state)| state.clip * 2 < clip && state.reserve > 0)
             });
@@ -304,13 +303,9 @@ pub fn fight(
         // With what.
         let choice = arms.zip(catalog.as_deref()).and_then(|((equipped, ammo), catalog)| {
             let best = best_weapon(equipped.carried(), ammo, catalog, distance)?;
-            let held = equipped.held().and_then(|held| {
-                let spec = catalog.get(held)?;
-                let (alt, worth) = [(false, worth(&spec.primary, distance)), (true, worth(&spec.secondary, distance))].into_iter().max_by(|a, b| a.1.total_cmp(&b.1))?;
-                Some((held, alt, worth))
-            });
+            let held = equipped.held().and_then(|held| armed(held, ammo, catalog, distance));
             let pick = match held {
-                Some(held) if held.2 > 0.0 && best.2 <= held.2 * SWITCH_GAIN => held,
+                Some(held) if best.2 <= held.2 * SWITCH_GAIN => held,
                 _ => best,
             };
             let action = if pick.1 { catalog.get(pick.0)?.secondary.action } else { catalog.get(pick.0)?.primary.action };
@@ -323,8 +318,11 @@ pub fn fight(
         let action = choice.map_or(WeaponAction::None, |(_, _, action, _)| action);
         let point = aim_point(&world, eye, center, feet, their.velocity, &action, gravity);
         let true_aim = aim_at(eye, point);
-        let crossing = aim.last_bearing.map_or(0.0, |last| angle_between(last, true_aim) / dt.max(1e-3));
-        aim.last_bearing = Some(true_aim);
+        // Off the body rather than the point, which jumps between feet and chest as the feet go
+        // in and out of view.
+        let bearing = aim_at(eye, center);
+        let crossing = aim.last_bearing.map_or(0.0, |last| angle_between(last, bearing) / dt.max(1e-3));
+        aim.last_bearing = Some(bearing);
         aim.lean += ERROR_DRIFT * dt;
         let error = skill.error * ((-aim.tracked / skill.settle).exp() + CROSSING_ERROR * crossing);
         let off = (true_aim.0 + error * aim.lean.cos(), true_aim.1 + error * aim.lean.sin());
@@ -456,6 +454,22 @@ mod tests {
         assert_eq!(pick(60.0), rifle);
         assert_eq!(pick(8.0), rockets);
         assert!(worth(&catalog.get(rockets).unwrap().primary, 2.0) == 0.0, "a rocket at its own feet");
+    }
+
+    /// Breaks if a bot holds on to a weapon it cannot fire, or swaps to one it must reload first:
+    /// an empty weapon is never picked, and a launcher with an empty clip loses to a loaded pistol
+    /// it beats when loaded.
+    #[test]
+    fn a_weapon_is_worth_only_the_ammo_it_has() {
+        let catalog = catalog();
+        let (shotgun, pistol, rockets) = (key(&catalog, "shotgun"), key(&catalog, "pistol"), key(&catalog, "rocket_launcher"));
+        let mut ammo = full(&catalog, &[shotgun, pistol, rockets]);
+        *ammo.at_mut(shotgun) = Default::default();
+        assert_eq!(armed(shotgun, &ammo, &catalog, 10.0), None, "an empty shotgun is worth something");
+        let carried = [pistol, rockets];
+        assert_eq!(best_weapon(&carried, &ammo, &catalog, 8.0).unwrap().0, rockets);
+        ammo.at_mut(rockets).clip = 0;
+        assert_eq!(best_weapon(&carried, &ammo, &catalog, 8.0).unwrap().0, pistol, "swapped to a launcher it must reload");
     }
 
     /// Breaks if a rocket is aimed where its target is rather than where it will be, or if a

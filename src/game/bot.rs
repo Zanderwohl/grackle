@@ -444,7 +444,10 @@ pub fn steer_bots(
             input.alt_attack = intent.alt_fire;
             input.alt_attack_held = intent.alt_fire;
             input.reload = intent.reload;
-            input.movement = (input.movement + Vec2::X * intent.strafe).clamp_length_max(1.0);
+            // A leap is replayed from where the bake started it, so its run-up stays on line.
+            if route.ahead().first().is_none_or(|link| link.leap.is_none()) {
+                input.movement = (input.movement + Vec2::X * intent.strafe).clamp_length_max(1.0);
+            }
             // The route's draw first: a rocket jump waits at its start for that launcher.
             input.select = input.select.or(intent.select);
         }
