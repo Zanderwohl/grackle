@@ -67,14 +67,15 @@ secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { 
 #
 # One in the clip, so the arc is a shot you commit to rather than one of four.
 # The reload is the weapon: everything about it is arranged so that a miss
-# costs you a second and a half.
+# costs you a second and a half. Half the splash at the edge, as every
+# explosive's, and no falloff: a long lob that lands is paid in full.
 [weapons.rpg]
 name_key = "weapon.names.rpg"
 bucket = 2
 deploy = 0.7
 model = "rpg"
 magazine = { clip = 1, reserve = 8, reload = 1.5 }
-primary = { cadence = { kind = "semi", interval = 0.8 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 34.0, gravity_factor = 1.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.2, damage = 110, splash_at_edge = 0.0, knockback = 11.0, radius = 0.14 } }
+primary = { cadence = { kind = "semi", interval = 0.8 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 34.0, gravity_factor = 1.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.2, damage = 110, splash_at_edge = 0.5, knockback = 11.0, radius = 0.14 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
 # The demoman's: pills that arc, tumble, bounce off a wall and go off on their
@@ -86,25 +87,29 @@ secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { 
 # sticky. A real stickybomb launcher wants an action nothing has yet: one that
 # sets bombs down and detonates them when told, rather than on a timer.
 #
-# Reloaded one round at a time, so firing out of a half-full clip is a choice.
+# Reloaded one round at a time, so firing out of a half-full clip is a choice;
+# the first takes 1.24 s, each after it 0.6. Half the splash at the 2.8 m edge,
+# and no ramp-up or falloff, as TF2's grenades.
 [weapons.pill_launcher]
 name_key = "weapon.names.pill_launcher"
 bucket = 2
 deploy = 0.5
 model = "pill_launcher"
-magazine = { clip = 4, reserve = 16, reload = 0.6, reload_one_at_a_time = true }
-primary = { cadence = { kind = "semi", interval = 0.6 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 23.0, gravity_factor = 1.0, air_resistance = 0.1, spin_rate = 12.0, max_bounces = 2, restitution = 0.45, max_lifetime = 2.3, explodes_at_last_bounce = true, explodes_at_lifetime_end = true, explosion_radius = 3.4, damage = 100, splash_at_edge = 0.0, knockback = 10.0, radius = 0.14 } }
+magazine = { clip = 4, reserve = 16, reload = 0.6, reload_one_at_a_time = true, first_reload = 1.24 }
+primary = { cadence = { kind = "semi", interval = 0.6 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 23.0, gravity_factor = 1.0, air_resistance = 0.1, spin_rate = 12.0, max_bounces = 2, restitution = 0.45, max_lifetime = 2.3, explodes_at_last_bounce = true, explodes_at_lifetime_end = true, explosion_radius = 2.8, damage = 100, splash_at_edge = 0.5, knockback = 10.0, radius = 0.14 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
-# Weak and quick, for finishing what something else started. Eight in the
-# clip, thirty-two in all. No headshot bonus: that is the laser rifle's.
+# Weak and quick, for finishing what something else started, and what arena
+# starts everybody with. Twelve in the clip, forty-eight in all, as TF2's. The
+# shotgun's lines: half again point blank, full at 5 m, half at 10 m and
+# beyond. No headshot bonus: that is the laser rifle's.
 [weapons.pistol]
 name_key = "weapon.names.pistol"
 bucket = 2
 deploy = 0.35
 model = "pistol"
-magazine = { clip = 8, reserve = 24, reload = 1.1 }
-primary = { cadence = { kind = "semi", interval = 0.33 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 120.0, damage = 15, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.35 } }
+magazine = { clip = 12, reserve = 36, reload = 1.25 }
+primary = { cadence = { kind = "semi", interval = 0.17 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 120.0, damage = 15, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.35, ramp_up = { near = 0.0, far = 5.0, scale = 1.5 }, falloff = { near = 5.0, far = 10.0, scale = 0.5 } } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
 # Nine pellets in a fixed 3×3 square that is a meter wide at thirty meters,
@@ -123,15 +128,20 @@ magazine = { clip = 6, reserve = 32, reload = 0.625, reload_one_at_a_time = true
 primary = { cadence = { kind = "semi", interval = 0.625 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 100.0, damage = 7, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.3, pellets = { across = 3, spread = 30.0 }, ramp_up = { near = 0.0, far = 5.0, scale = 1.5 }, falloff = { near = 5.0, far = 10.0, scale = 0.5 }, kill_shove = { speed = 10.0, lift = 3.0, radius = 1.2 } } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
-# No clip: the whole supply is loaded, and it never reloads.
+# No clip: the whole supply is loaded, and it never reloads. A puff is 125%
+# point blank, full at 2 m and half at the 6 m tip of the cone; afterburn is
+# not scaled. The secondary is the airblast: everything in a 5 m cone that may
+# be hurt is pushed 9 m/s along the aim and 4 m/s up, a hostile projectile in
+# it comes back yours at the speed it had, and a burning teammate is put out.
+# Each of those can be switched off or retuned on another weapon.
 [weapons.flamethrower]
 name_key = "weapon.names.flamethrower"
 bucket = 1
 deploy = 0.5
 model = "flamethrower"
 magazine = { reserve = 200, reload = 0.0 }
-primary = { cadence = { kind = "automatic", interval = 0.1 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "flame", range = 6.0, spread = 0.28, rays = 5, damage = 7, afterburn_duration = 6.0, afterburn_damage = 4, afterburn_interval = 0.5 } }
-secondary = { cadence = { kind = "automatic", interval = 0.75 }, cost = { kind = "ammo", rounds = 20 }, action = { kind = "extinguish", range = 6.0, spread = 0.28 } }
+primary = { cadence = { kind = "automatic", interval = 0.1 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "flame", range = 6.0, spread = 0.28, rays = 5, damage = 7, afterburn_duration = 6.0, afterburn_damage = 4, afterburn_interval = 0.5, ramp_up = { near = 0.0, far = 2.0, scale = 1.25 }, falloff = { near = 2.0, far = 6.0, scale = 0.5 } } }
+secondary = { cadence = { kind = "automatic", interval = 0.75 }, cost = { kind = "ammo", rounds = 20 }, action = { kind = "airblast", range = 5.0, spread = 0.5, push = 9.0, lift = 4.0, reflect = true, reflect_speed = 1.0, extinguish = true } }
 
 [weapons.medi_wrench]
 name_key = "weapon.names.medi_wrench"

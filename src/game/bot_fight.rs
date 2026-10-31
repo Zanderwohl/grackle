@@ -225,11 +225,11 @@ pub fn worth(mounted: &Mounted, distance: f32) -> f32 {
             let flight = distance / spec.initial_speed.max(1e-3);
             spec.damage as f32 * spec.scale_at(distance) / (1.0 + (flight / DODGE_SECONDS).powi(2)) / interval
         }
-        WeaponAction::Flame(FlameSpec { range_m, damage, afterburn_damage, afterburn_interval_s, .. }) => {
+        WeaponAction::Flame(spec @ FlameSpec { range_m, damage, afterburn_damage, afterburn_interval_s, .. }) => {
             if distance > range_m {
                 return 0.0;
             }
-            damage as f32 / interval + afterburn_damage as f32 / afterburn_interval_s.max(1e-3)
+            damage as f32 * spec.scale_at(distance) / interval + afterburn_damage as f32 / afterburn_interval_s.max(1e-3)
         }
         _ => 0.0,
     }

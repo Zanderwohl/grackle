@@ -135,11 +135,34 @@ impl PelletGrid {
     }
 }
 
-/// Stub.
+/// A gust from the muzzle: what it does to whatever is in its cone, each part optional, so one
+/// spec serves a flamethrower's compression blast and anything else that shoves.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
-pub struct ExtinguishSpec {
+pub struct AirblastSpec {
+    /// Meters from the eye.
     pub range: f32,
+    /// Half-angle, radians.
     pub spread: f32,
+    /// Meters per second given to a body it may hurt, along the aim.
+    #[serde(default)]
+    pub push: f32,
+    /// Meters per second up on top of `push`, so a body on the floor leaves it.
+    #[serde(default)]
+    pub lift: f32,
+    /// Whether a projectile somebody hostile fired is turned back along the aim and becomes
+    /// the airblaster's.
+    #[serde(default)]
+    pub reflect: bool,
+    /// Times its speed, a reflected projectile leaves at.
+    #[serde(default = "one")]
+    pub reflect_speed: f32,
+    /// Whether a burning teammate in the cone is put out.
+    #[serde(default)]
+    pub extinguish: bool,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 /// Stub.
@@ -173,7 +196,7 @@ pub enum WeaponAction {
     Hitscan(HitscanSpec),
     Projectile(ProjectileSpec),
     Flame(FlameSpec),
-    Extinguish(ExtinguishSpec),
+    Airblast(AirblastSpec),
     HealBeam(HealBeamSpec),
     Invulnerable(InvulnSpec),
     Scope(ScopeSpec),
@@ -190,6 +213,7 @@ impl WeaponAction {
             WeaponAction::Hitscan(_)
                 | WeaponAction::Projectile(_)
                 | WeaponAction::Flame(_)
+                | WeaponAction::Airblast(_)
                 | WeaponAction::None
         )
     }

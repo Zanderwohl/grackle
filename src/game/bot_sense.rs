@@ -178,6 +178,7 @@ pub fn sense(
         .filter_map(|effect| match *effect {
             Effect::Tracer { from, by, .. } => Some((from, HEARS_SHOTS, by)),
             Effect::Blast { at, .. } => Some((at, HEARS_BLASTS, None)),
+            Effect::Gust { from, by, .. } => Some((from, HEARS_SHOTS, by)),
             Effect::Fired { .. } => None,
         })
         .collect();

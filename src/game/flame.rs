@@ -79,7 +79,7 @@ pub fn fire_flame(
             damage.write(Damage {
                 target: hit.target,
                 source,
-                amount: spec.damage,
+                amount: (spec.damage as f32 * spec.scale_at(origin.distance(hit.point))).round() as u32,
                 point: hit.point,
                 from: Some(origin),
                 kill_shove: None,
@@ -239,6 +239,28 @@ mod tests {
         let messages = world.resource::<Messages<Damage>>();
         let mut cursor = messages.get_cursor();
         cursor.read(messages).copied().collect()
+    }
+
+    /// Breaks if a puff stops falling off toward the tip of the cone.
+    #[test]
+    fn a_puff_hurts_more_close_up() {
+        use crate::common::weapon::DistanceScale;
+        let spec = FlameSpec {
+            ramp_up: Some(DistanceScale { near: 0.0, far: 2.0, scale: 1.25 }),
+            falloff: Some(DistanceScale { near: 2.0, far: 6.0, scale: 0.5 }),
+            ..SPEC
+        };
+        let hurt = |away: f32| {
+            let mut world = a_world();
+            let shooter = a_shooter(&mut world);
+            a_body(&mut world, away, 0.0);
+            world.write_message(WeaponActionFired { shooter, button: crate::game::weapon::Button::Primary, action: WeaponAction::Flame(spec) });
+            world.run_system_once(fire_flame).unwrap();
+            asked_for(&mut world)[0].amount
+        };
+        // The hit is on the body's near face, 0.4 m short of its middle.
+        assert_eq!(hurt(0.9), 8, "7 at about 119% half a meter out");
+        assert_eq!(hurt(5.0), 5, "7 at about 68% at 4.6 m");
     }
 
     /// Breaks if lighting skips the team check, which `apply_damage` cannot

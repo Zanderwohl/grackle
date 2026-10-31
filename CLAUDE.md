@@ -1940,14 +1940,15 @@ the one writer of health. Invisible in a round except on `F6`.
 
 **An action is what one mouse button does; a weapon is a pair of them.**
 `WeaponAction` ([`src/common/weapon.rs`](src/common/weapon.rs)) is a hitscan, a
-projectile, a cone of flame, `None`, or one of four stubs — extinguish, heal
+projectile, a cone of flame, an airblast, `None`, or one of three stubs — heal
 beam, invuln, scope — that have their real specs and no behavior yet. A
 `Weapon` mounts one on each button, with a `Cadence` and a `Cost` per button
 and a `Magazine` for the whole thing. Adding a *weapon* is a row in a file;
 adding a *kind* of weapon is a variant and a system that answers for it.
 
 Damage over distance is two optional lines, `ramp_up` and `falloff`
-(`DistanceScale`), on a hitscan or a projectile, flat past their ends. A
+(`DistanceScale`), on a hitscan, a projectile or a flame, flat past their ends;
+a flame's scale its puff by the hit's distance and leave afterburn alone. A
 hitscan measures from the eye to each pellet's hit, scales each on its own and
 rounds a body's share once, after they are added; a projectile measures from
 where its shooter is to the blast, and never scales the shooter's own. Bots
@@ -2218,6 +2219,16 @@ it needed no new machinery for that: `burn` sits in `Deal` and writes a
   color is its team, an emissive term (`BURNING_GLOW`) is the one signal that
   reads the same on all four of them. A burning red pulling further toward
   red is a burning body you cannot see.
+
+**An airblast hurts nobody** ([`src/game/airblast.rs`](src/game/airblast.rs),
+`AirblastSpec`), so `apply_damage` never sees it and each of its parts asks
+`Allegiances` itself: a body it may hurt is pushed along the aim (an
+`Impulse`), a hostile projectile in the cone is turned along the aim and
+becomes the airblaster's — owner, shooter, and so whose distance its blast is
+scaled by — and a teammate on fire is put out. Each part is a field, so a
+weapon can push without reflecting. It runs in `Deal` before
+`step_projectiles`, so a rocket turned this tick flies back this tick, and its
+cone is an `Effect::Gust`, which bots hear like a shot.
 
 `ProjectileEmitter` fires a spec along its own forward on an interval.
 Nothing places one: the player's key for it is gone, and it is meant to come

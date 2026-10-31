@@ -20,6 +20,7 @@ use crate::common::weapon::{
 use crate::game::condition::Condition;
 use crate::game::damage::{DamagePlugin, DamageSystems};
 use crate::game::explosion::ExplosionPlugin;
+use crate::game::airblast::AirblastPlugin;
 use crate::game::flame::FlamePlugin;
 use crate::game::hitscan::HitscanPlugin;
 use crate::game::player::{Inputs, Player};
@@ -123,7 +124,7 @@ impl Plugin for WeaponPlugin {
         app
             // Damage plus the two things that read it.
             .add_plugins((DamagePlugin, ExplosionPlugin))
-            .add_plugins((HitscanPlugin, ProjectilePlugin, FlamePlugin))
+            .add_plugins((HitscanPlugin, ProjectilePlugin, FlamePlugin, AirblastPlugin))
             .add_message::<WeaponActionFired>()
             // Before every weapon and its damage. Switch, then reload, then
             // fire, so a reload finishing this tick feeds this tick's shot.

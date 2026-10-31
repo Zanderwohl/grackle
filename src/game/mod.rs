@@ -35,6 +35,7 @@ pub mod hat;
 pub mod held;
 pub mod hitbox;
 pub mod explosion;
+pub mod airblast;
 pub mod flame;
 pub mod flinch;
 pub mod forward_camera;
