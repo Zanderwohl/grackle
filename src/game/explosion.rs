@@ -24,14 +24,22 @@ use crate::game::ragdoll::{Push, RagdollShove};
 
 /// How long the debug sphere of a blast is drawn for, in seconds.
 pub const BLAST_MARK_LIFETIME: f32 = 0.35;
+/// How long an airblast's cone is drawn for, in seconds.
+pub const GUST_MARK_LIFETIME: f32 = 0.2;
 
-/// A drawing of an explosion that has already happened. Feedback only.
+/// A drawing of a blast or a gust that has already happened. Feedback only.
 #[derive(Component, Debug)]
-pub struct BlastMark {
-    pub at: Vec3,
-    pub radius: f32,
+pub struct EffectMark {
+    pub shape: MarkShape,
     /// Seconds.
     pub remaining: f32,
+    pub lifetime: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum MarkShape {
+    Blast { at: Vec3, radius: f32 },
+    Gust { from: Vec3, toward: Dir3, range: f32, spread: f32 },
 }
 
 pub struct ExplosionPlugin;
@@ -222,18 +230,22 @@ fn in_sight(world: &CollisionWorld, from: Vec3, to: Vec3, distance: f32) -> bool
 /// authority, `Effect` is relayed to clients.
 fn mark_blasts(mut commands: Commands, mut effects: MessageReader<Effect>) {
     for effect in effects.read() {
-        let Effect::Blast { at, radius } = *effect else { continue };
-        commands.spawn((
-            BlastMark { at, radius, remaining: BLAST_MARK_LIFETIME },
-            Name::new("Blast mark"),
-        ));
+        let (shape, lifetime) = match *effect {
+            Effect::Blast { at, radius } => (MarkShape::Blast { at, radius }, BLAST_MARK_LIFETIME),
+            Effect::Gust { from, toward, range, spread, .. } => {
+                let Ok(toward) = Dir3::new(toward) else { continue };
+                (MarkShape::Gust { from, toward, range, spread }, GUST_MARK_LIFETIME)
+            }
+            _ => continue,
+        };
+        commands.spawn((EffectMark { shape, remaining: lifetime, lifetime }, Name::new("Effect mark")));
     }
 }
 
 fn fade_blast_marks(
     mut commands: Commands,
     time: Res<Time>,
-    mut marks: Query<(Entity, &mut BlastMark)>,
+    mut marks: Query<(Entity, &mut EffectMark)>,
 ) {
     for (entity, mut mark) in &mut marks {
         mark.remaining -= time.delta_secs();
@@ -243,19 +255,23 @@ fn fade_blast_marks(
     }
 }
 
-/// A sphere the size of the damage radius.
-fn draw_blast_marks(mut gizmos: Gizmos, marks: Query<&BlastMark>) {
+/// A blast as a sphere the size of the damage radius, a gust as its cone.
+fn draw_blast_marks(mut gizmos: Gizmos, marks: Query<&EffectMark>) {
     for mark in &marks {
-        let alpha = (mark.remaining / BLAST_MARK_LIFETIME).clamp(0.0, 1.0);
-        gizmos.sphere(
-            Isometry3d::from_translation(mark.at),
-            mark.radius,
-            Color::srgba(1.0, 0.55, 0.1, alpha),
-        );
+        let alpha = (mark.remaining / mark.lifetime).clamp(0.0, 1.0);
+        match mark.shape {
+            MarkShape::Blast { at, radius } => {
+                gizmos.sphere(Isometry3d::from_translation(at), radius, Color::srgba(1.0, 0.55, 0.1, alpha));
+            }
+            MarkShape::Gust { from, toward, range, spread } => {
+                let (cone, isometry) = crate::game::flame::cone_gizmo(from, toward, range, spread);
+                gizmos.primitive_3d(&cone, isometry, Color::srgba(0.75, 0.9, 1.0, alpha * 0.6));
+            }
+        }
     }
 }
 
-fn clear_blast_marks(mut commands: Commands, marks: Query<Entity, With<BlastMark>>) {
+fn clear_blast_marks(mut commands: Commands, marks: Query<Entity, With<EffectMark>>) {
     for mark in &marks {
         commands.entity(mark).despawn();
     }

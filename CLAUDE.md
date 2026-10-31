@@ -2226,7 +2226,9 @@ it needed no new machinery for that: `burn` sits in `Deal` and writes a
 `Allegiances` itself: a body it may hurt is pushed along the aim (an
 `Impulse`), a hostile projectile in the cone is turned along the aim and
 becomes the airblaster's — owner, shooter, and so whose distance its blast is
-scaled by — and a teammate on fire is put out. Each part is a field, so a
+scaled by, its fuse and bounces starting again — and a teammate on fire is put
+out. A projectile's blast is measured from its shooter, or from where it was
+fired once they are gone. Each part is a field, so a
 weapon can push without reflecting. It runs in `Deal` before
 `step_projectiles`, so a rocket turned this tick flies back this tick, and its
 cone is an `Effect::Gust`, which bots hear like a shot.

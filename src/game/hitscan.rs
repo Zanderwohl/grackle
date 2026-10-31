@@ -189,7 +189,8 @@ pub fn fire_hitscan(
         for (asked, worth) in dealt.iter_mut().zip(worths) {
             asked.amount = worth.round() as u32;
         }
-        damage.write_batch(dealt);
+        // Scaled down to nothing is not a hit worth a number and a flinch.
+        damage.write_batch(dealt.into_iter().filter(|asked| asked.amount > 0));
     }
 }
 

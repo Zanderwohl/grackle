@@ -461,7 +461,8 @@ pub(crate) struct Shot {
 impl Shot {
     /// From the muzzle of `mover` as this tick's move left it.
     pub(crate) fn fire(launcher: Launcher, mover: &Mover) -> Self {
-        Shot { projectile: fired(launcher.rocket, aim(&mover.player), None, None), at: muzzle(mover.body.current, mover.stance, &mover.player) }
+        let at = muzzle(mover.body.current, mover.stance, &mover.player);
+        Shot { projectile: fired(launcher.rocket, at, aim(&mover.player), None, None), at }
     }
 
     /// One tick of flight, after the move. `None` while it flies; once its flight ends, the damage

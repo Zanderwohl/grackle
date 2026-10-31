@@ -68,8 +68,8 @@ pub struct Aim {
     pub error: f32,
     /// Seconds of tracking for the error to fall to a third of that.
     pub settle: f32,
-    /// Seconds for the aim to close most of a small gap: below its turn rate it slows as it
-    /// arrives, as a hand does, rather than stopping dead.
+    /// Seconds for the aim to close most of a small gap, so it slows as it arrives rather than
+    /// stopping dead.
     pub ease: f32,
     /// The share of a target's motion across the view the aim follows by itself, 0 to 1; the
     /// rest it catches up on, so a bot tracking a runner trails them a little.
@@ -157,8 +157,7 @@ impl Footwork {
 
 /// How a bot meets a projectile coming at it with an airblast in hand, rolled per seat inside its
 /// [`BotMind`]. Each projectile it sees coming is judged once: whether to try, and how early or
-/// late to press. Too early and the gust is spent before the rocket is in it; too late and the
-/// rocket lands first.
+/// late to press.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Reflexes {
     /// The chance it tries at all, 0 to 1.
@@ -392,24 +391,29 @@ pub fn fight(
             _ => None,
         });
         let reflecting = airblast.is_some_and(|spec| {
-            let coming = |entity: Entity| {
-                let (_, projectile, at) = projectiles.get(entity).ok()?;
+            let coming = |entity: Entity, projectile: &Projectile, at: Vec3| {
                 let hostile = projectile.shooter != Some(bot) && allegiances.may_hurt(projectile.source(), bot);
-                hostile.then(|| arriving(eye, at.current, projectile.velocity, projectile.spec.explosion_radius.max(1.0)))?
+                hostile.then(|| arriving(eye, at, projectile.velocity, projectile.spec.explosion_radius.max(1.0))).flatten().map(|arrival| (entity, at, arrival))
             };
-            if aim.incoming.is_some_and(|incoming| coming(incoming.projectile).is_none()) {
-                aim.incoming = None;
-            }
-            if aim.incoming.is_none() {
-                let seen = projectiles
-                    .iter()
-                    .filter(|(entity, _, at)| coming(*entity).is_some() && in_view(eye, player.yaw, player.pitch, at.current) && world.segment_clear(eye, at.current))
-                    .min_by(|a, b| eye.distance_squared(a.2.current).total_cmp(&eye.distance_squared(b.2.current)));
-                aim.incoming = seen.map(|(entity, ..)| mind.reflexes.judge(entity, now));
-            }
-            aim.incoming.is_some_and(|incoming| {
-                let ready = incoming.tries && now - incoming.seen_at >= mind.reaction;
-                ready && coming(incoming.projectile).is_some_and(|(seconds, closing)| presses(seconds, closing, spec.range, incoming.early))
+            let tracked = aim.incoming.and_then(|incoming| {
+                let (entity, projectile, at) = projectiles.get(incoming.projectile).ok()?;
+                coming(entity, projectile, at.current).map(|coming| (incoming, coming))
+            });
+            // Only something nearer than what it is already meeting is worth a ray.
+            let nearest = tracked.map_or(f32::INFINITY, |(_, (_, at, _))| eye.distance_squared(at));
+            let nearer = projectiles
+                .iter()
+                .filter(|(_, _, at)| eye.distance_squared(at.current) < nearest)
+                .filter_map(|(entity, projectile, at)| coming(entity, projectile, at.current))
+                .filter(|(_, at, _)| in_view(eye, player.yaw, player.pitch, *at) && world.segment_clear(eye, *at))
+                .min_by(|a, b| eye.distance_squared(a.1).total_cmp(&eye.distance_squared(b.1)));
+            let meeting = match nearer {
+                Some(seen) => Some((mind.reflexes.judge(seen.0, now), seen)),
+                None => tracked,
+            };
+            aim.incoming = meeting.map(|(incoming, _)| incoming);
+            meeting.is_some_and(|(incoming, (_, _, (seconds, closing)))| {
+                incoming.tries && now - incoming.seen_at >= mind.reaction && presses(seconds, closing, spec.range, incoming.early)
             })
         });
 
@@ -474,7 +478,8 @@ pub fn fight(
             let action = if pick.1 { catalog.get(pick.0)?.secondary.action } else { catalog.get(pick.0)?.primary.action };
             Some((pick.0, pick.1, action, equipped.held() == Some(pick.0)))
         });
-        intent.select = choice.filter(|(_, _, _, holding)| !holding).map(|(weapon, ..)| weapon);
+        // Drawing another weapon would put the airblast away before it goes off.
+        intent.select = choice.filter(|(_, _, _, holding)| !holding && !reflecting).map(|(weapon, ..)| weapon);
 
         let action = choice.map_or(WeaponAction::None, |(_, _, action, _)| action);
         let point = aim_point(&world, eye, center, feet, their.velocity, &action, gravity);
@@ -799,7 +804,7 @@ mod tests {
     }
 
     /// Breaks if legs get short enough to jitter, or footwork stops standing still or always
-    /// turns back: the rolls are what keep a bot from reading as a metronome.
+    /// turns back.
     #[test]
     fn a_fight_is_legs_long_enough_to_read() {
         let footwork = Footwork::default();

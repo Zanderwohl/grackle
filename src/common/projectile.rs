@@ -38,17 +38,18 @@ pub struct ProjectileSpec {
     /// Meters. Splash falls to `splash_at_edge` here and stops; shove falls to zero
     /// ([`crate::common::damage::falloff`]).
     pub explosion_radius: f32,
-    /// At the center of the blast, which is also what the body it hit squarely takes: there is
-    /// no direct-hit number apart from the splash.
+    /// At the center of the blast, and what the body it hit squarely takes.
     pub damage: u32,
     /// The share of `damage` a body at the edge of the radius takes, 0 to 1.
     #[serde(default)]
     pub splash_at_edge: f32,
     /// More damage to others close to the shooter, measured from the shooter to the blast.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Never skipped when empty: a projectile crosses the wire with postcard, which cannot read
+    /// a field left out.
+    #[serde(default)]
     pub ramp_up: Option<DistanceScale>,
     /// Less damage to others far from the shooter.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub falloff: Option<DistanceScale>,
     /// Speed given to a corpse at the center, in meters per second; a speed, not
     /// an impulse (see [`crate::game::ragdoll::RagdollShove`]).
@@ -106,7 +107,6 @@ impl ProjectileSpec {
 }
 
 impl ProjectileSpec {
-    /// What its blast is worth to others, times `damage`, `distance` meters from the shooter.
     pub fn scale_at(&self, distance: f32) -> f32 {
         distance_scale(self.ramp_up, self.falloff, distance)
     }

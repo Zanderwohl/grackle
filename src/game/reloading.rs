@@ -55,8 +55,9 @@ pub(crate) fn perform_reloads(
         if was != left {
             seen.0 = left;
         }
-        // A first round longer than the rest is told apart by how much is left.
-        let whole = catalog.held_by(equipped).map(|weapon| weapon.magazine.first_reload.filter(|_| left > weapon.magazine.reload).unwrap_or(weapon.magazine.reload));
+        // A reload rising from nothing is its first round; the next round of one goes round again
+        // from just above zero.
+        let whole = catalog.held_by(equipped).map(|weapon| weapon.magazine.first_reload.filter(|_| was <= 0.0).unwrap_or(weapon.magazine.reload));
         let Some(whole) = whole else {
             continue;
         };

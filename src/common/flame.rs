@@ -49,7 +49,6 @@ impl FlameSpec {
         falloff: None,
     };
 
-    /// What a puff `distance` meters from the eye is worth, times `damage`.
     pub fn scale_at(&self, distance: f32) -> f32 {
         distance_scale(self.ramp_up, self.falloff, distance)
     }

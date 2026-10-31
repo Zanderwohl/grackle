@@ -63,8 +63,7 @@ pub struct HitscanSpec {
     pub falloff: Option<DistanceScale>,
 }
 
-/// A straight line in damage over distance from the shooter, flat beyond either end. Ramp-up and
-/// falloff are one line each, so either can be had without the other.
+/// A straight line in damage over distance from the shooter, flat beyond either end.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct DistanceScale {
     /// Meters.
@@ -80,7 +79,6 @@ impl DistanceScale {
     }
 }
 
-/// What a hit `distance` meters from the shooter is worth, times its damage, under both lines.
 pub fn distance_scale(ramp_up: Option<DistanceScale>, falloff: Option<DistanceScale>, distance: f32) -> f32 {
     let ramp = ramp_up.map_or(1.0, |line| line.scale + (1.0 - line.scale) * line.along(distance));
     let fall = falloff.map_or(1.0, |line| 1.0 + (line.scale - 1.0) * line.along(distance));
@@ -88,7 +86,6 @@ pub fn distance_scale(ramp_up: Option<DistanceScale>, falloff: Option<DistanceSc
 }
 
 impl HitscanSpec {
-    /// What a hit `distance` meters from the shooter's eye is worth, times its damage.
     pub fn scale_at(&self, distance: f32) -> f32 {
         distance_scale(self.ramp_up, self.falloff, distance)
     }
@@ -135,8 +132,7 @@ impl PelletGrid {
     }
 }
 
-/// A gust from the muzzle: what it does to whatever is in its cone, each part optional, so one
-/// spec serves a flamethrower's compression blast and anything else that shoves.
+/// A cone from the eye that shoves, reflects and extinguishes, each part optional.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct AirblastSpec {
     /// Meters from the eye.
@@ -285,8 +281,7 @@ pub struct Magazine {
     /// once.
     #[serde(default)]
     pub reload_one_at_a_time: bool,
-    /// Seconds for the first round of a reload, where it differs from the rest: a hand going to
-    /// the pouch before it starts feeding them in.
+    /// Seconds for the first round of a reload, where it differs from the rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_reload: Option<f32>,
 }

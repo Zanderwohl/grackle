@@ -75,15 +75,11 @@ pub fn fire_flame(
                 continue;
             }
 
-            // No headshot multiplier for fire.
-            damage.write(Damage {
-                target: hit.target,
-                source,
-                amount: (spec.damage as f32 * spec.scale_at(origin.distance(hit.point))).round() as u32,
-                point: hit.point,
-                from: Some(origin),
-                kill_shove: None,
-            });
+            // No headshot multiplier for fire. Scaled down to nothing, it still lights.
+            let amount = (spec.damage as f32 * spec.scale_at(origin.distance(hit.point))).round() as u32;
+            if amount > 0 {
+                damage.write(Damage { target: hit.target, source, amount, point: hit.point, from: Some(origin), kill_shove: None });
+            }
 
             match alight.get_mut(hit.target) {
                 Ok(mut burning) => burning.relight(&spec, source),
@@ -130,22 +126,27 @@ pub fn burn(
     }
 }
 
-/// The cone gizmo for a flame fired from `origin` along `direction`.
+/// The cone gizmo for a cone of half-angle `spread` from `origin` along `direction`, `range`
+/// long: a flame's, or an airblast's.
 ///
 /// Bevy draws a [`Cone`] with its apex at local `+Y`, centered on the
 /// isometry. So `+Y` maps onto `-direction` and the center goes half a range
 /// out, putting the apex on the eye and the base at full range. Separate so a
 /// test can check the rotation.
-fn flame_cone(origin: Vec3, direction: Dir3, spec: &FlameSpec) -> (Cone, Isometry3d) {
+pub(crate) fn cone_gizmo(origin: Vec3, direction: Dir3, range: f32, spread: f32) -> (Cone, Isometry3d) {
     let cone = Cone {
-        radius: spec.range_m * spec.spread.tan(),
-        height: spec.range_m,
+        radius: range * spread.tan(),
+        height: range,
     };
     let isometry = Isometry3d::new(
-        origin + *direction * (spec.range_m * 0.5),
+        origin + *direction * (range * 0.5),
         Quat::from_rotation_arc(Vec3::Y, -*direction),
     );
     (cone, isometry)
+}
+
+fn flame_cone(origin: Vec3, direction: Dir3, spec: &FlameSpec) -> (Cone, Isometry3d) {
+    cone_gizmo(origin, direction, spec.range_m, spec.spread)
 }
 
 /// Reads `Equipped` rather than what was fired, because it draws between

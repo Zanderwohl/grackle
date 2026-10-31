@@ -436,8 +436,8 @@ pub fn steer_bots(
             input.movement = movement_toward(world, yaw);
             (input.yaw, input.pitch) = (yaw, pitch);
         } else if !leaping {
-            // Walking, a bot turns onto each link the way a person does rather than snapping onto
-            // it; fighting, its aim already turns at a rate. The route's direction is kept.
+            // Eased onto each link rather than snapped; the route's direction is kept. Fighting,
+            // the aim already turns at a rate.
             let world = Vec2::new(-input.yaw.sin(), -input.yaw.cos()) * input.movement.length();
             let aim = mind.map_or(Aim::default(), |mind| mind.aim);
             (input.yaw, input.pitch) = aim.ease_toward((player.yaw, player.pitch), (input.yaw, input.pitch), dt);

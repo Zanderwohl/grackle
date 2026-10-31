@@ -2,11 +2,11 @@
 //! hostile projectiles back as the airblaster's, and puts out burning teammates — whichever its
 //! spec asks for. Nothing is hurt, so `apply_damage` is never asked and each part checks
 //! [`Allegiances`] itself. A body or projectile is caught when it is ahead of the eye, within the
-//! range, inside the cone widened by its own size, and in sight.
+//! range, inside the cone widened by its own size, and in sight. Its cone is drawn with the
+//! blasts' marks, in [`crate::game::explosion`].
 
 use bevy::prelude::*;
 
-use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::damage::{DamageSource, PlayerId};
 use crate::common::effects::Effect;
@@ -24,10 +24,8 @@ use crate::game::weapon::WeaponActionFired;
 
 /// Meters a body's middle may be outside the cone and still be caught: about half a body.
 const BODY_ALLOWANCE: f32 = 0.4;
-/// Meters on top of a projectile's own radius, so a rocket is not threaded past by a hair.
+/// Meters on top of a projectile's own radius.
 const PROJECTILE_ALLOWANCE: f32 = 0.3;
-/// Seconds a gust's cone is drawn for.
-const GUST_LIFETIME: f32 = 0.2;
 
 pub struct AirblastPlugin;
 
@@ -36,10 +34,7 @@ impl Plugin for AirblastPlugin {
         app.add_systems(
             FixedUpdate,
             airblast.in_set(DamageSystems::Deal).before(crate::game::projectile::step_projectiles).after(crate::game::hitbox::update_hitboxes),
-        )
-        .add_systems(Update, (mark_gusts, fade_gusts))
-        .add_systems(PostUpdate, draw_gusts.run_if(in_state(AppMode::Play)))
-        .add_systems(OnExit(AppMode::Play), clear_gusts);
+        );
     }
 }
 
@@ -55,7 +50,6 @@ pub fn in_cone(from: Vec3, toward: Dir3, range: f32, spread: f32, point: Vec3, a
     across <= along * spread.tan() + allowance
 }
 
-/// One gust per [`WeaponActionFired`] carrying an airblast.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn airblast(
     mut commands: Commands,
@@ -95,7 +89,7 @@ pub fn airblast(
             for (mut projectile, at) in &mut projectiles {
                 let theirs = projectile.shooter != Some(shot.shooter) && allegiances.may_hurt(projectile.source(), shot.shooter);
                 if theirs && caught(at.current, projectile.spec.radius + PROJECTILE_ALLOWANCE) {
-                    reflect(&mut projectile, toward, spec.reflect_speed, id.copied(), shot.shooter);
+                    reflect(&mut projectile, at.current, toward, spec.reflect_speed, id.copied(), shot.shooter);
                 }
             }
         }
@@ -116,56 +110,16 @@ pub fn push(spec: &AirblastSpec, toward: Dir3) -> Vec3 {
     *toward * spec.push + Vec3::Y * spec.lift
 }
 
-/// Turns `projectile` along `toward` at `speed` times what it had, as `owner`'s from `shooter`,
-/// so its kill, its direct hits and its distance from the shooter are all the airblaster's now.
-pub fn reflect(projectile: &mut Projectile, toward: Dir3, speed: f32, owner: Option<PlayerId>, shooter: Entity) {
+/// Turns `projectile`, now `at`, along `toward` at `speed` times its speed, as `owner`'s from
+/// `shooter`. Its fuse and bounces start again, or a grenade turned late goes off on the
+/// airblaster.
+pub fn reflect(projectile: &mut Projectile, at: Vec3, toward: Dir3, speed: f32, owner: Option<PlayerId>, shooter: Entity) {
     projectile.velocity = *toward * projectile.velocity.length() * speed;
     projectile.owner = owner;
     projectile.shooter = Some(shooter);
-}
-
-/// A drawing of a gust that has already happened. Feedback only.
-#[derive(Component, Debug)]
-struct GustMark {
-    from: Vec3,
-    toward: Dir3,
-    range: f32,
-    spread: f32,
-    remaining: f32,
-}
-
-/// Reads [`Effect`], which reaches clients, rather than the shot, which does not.
-fn mark_gusts(mut commands: Commands, mut effects: MessageReader<Effect>) {
-    for effect in effects.read() {
-        let Effect::Gust { from, toward, range, spread, .. } = *effect else { continue };
-        let Ok(toward) = Dir3::new(toward) else { continue };
-        commands.spawn((GustMark { from, toward, range, spread, remaining: GUST_LIFETIME }, Name::new("Gust mark")));
-    }
-}
-
-fn fade_gusts(mut commands: Commands, time: Res<Time>, mut marks: Query<(Entity, &mut GustMark)>) {
-    for (entity, mut mark) in &mut marks {
-        mark.remaining -= time.delta_secs();
-        if mark.remaining <= 0.0 {
-            commands.entity(entity).despawn();
-        }
-    }
-}
-
-/// A cone with its apex on the eye, the way the flame's is drawn.
-fn draw_gusts(mut gizmos: Gizmos, marks: Query<&GustMark>) {
-    for mark in &marks {
-        let alpha = (mark.remaining / GUST_LIFETIME).clamp(0.0, 1.0) * 0.6;
-        let cone = Cone { radius: mark.range * mark.spread.tan(), height: mark.range };
-        let isometry = Isometry3d::new(mark.from + *mark.toward * (mark.range * 0.5), Quat::from_rotation_arc(Vec3::Y, -*mark.toward));
-        gizmos.primitive_3d(&cone, isometry, Color::srgba(0.75, 0.9, 1.0, alpha));
-    }
-}
-
-fn clear_gusts(mut commands: Commands, marks: Query<Entity, With<GustMark>>) {
-    for mark in &marks {
-        commands.entity(mark).despawn();
-    }
+    projectile.launched = at;
+    projectile.age = 0.0;
+    projectile.bounces = 0;
 }
 
 #[cfg(test)]
@@ -261,7 +215,7 @@ mod tests {
         let ally = a_body(&mut world, 31.0, 0.0, Team::Red);
         let rocket = |world: &mut World, by: Entity, at: Vec3| {
             let id = *world.get::<PlayerId>(by).unwrap();
-            world.spawn((fired(ProjectileSpec::ROCKET, Dir3::Z, Some(id), Some(by)), PhysicsBody { previous: at, current: at })).id()
+            world.spawn((fired(ProjectileSpec::ROCKET, at, Dir3::Z, Some(id), Some(by)), PhysicsBody { previous: at, current: at })).id()
         };
         let theirs = rocket(&mut world, enemy, Vec3::new(0.0, 1.6, -3.0));
         let friendly = rocket(&mut world, ally, Vec3::new(0.2, 1.6, -3.5));
@@ -270,6 +224,7 @@ mod tests {
         let theirs = world.get::<Projectile>(theirs).unwrap();
         assert_eq!(theirs.owner, Some(PlayerId(1)));
         assert_eq!(theirs.shooter, Some(shooter));
+        assert_eq!((theirs.age, theirs.launched), (0.0, Vec3::new(0.0, 1.6, -3.0)), "the fuse runs on from the enemy's shot");
         assert!((theirs.velocity - Vec3::NEG_Z * ProjectileSpec::ROCKET.initial_speed).length() < 1e-3, "{}", theirs.velocity);
         assert_eq!(world.get::<Projectile>(friendly).unwrap().shooter, Some(ally), "reflected a teammate's rocket");
     }
