@@ -22,6 +22,8 @@ pub enum Effect {
         by: Option<PlayerId>,
     },
     Blast { at: Vec3, radius: f32 },
+    /// An airblast's cone, from the eye along `toward` for `range` meters.
+    Gust { from: Vec3, toward: Vec3, range: f32, spread: f32, by: Option<PlayerId> },
     /// A weapon went off: every machine starts that body's recoil. The
     /// shooter's own machine has already started it from its own input.
     Fired { by: PlayerId, button: crate::game::weapon::Button },

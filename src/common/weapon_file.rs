@@ -310,12 +310,19 @@ mod tests {
                 shove_radius_m: 0.0,
                 pellets: None,
                 kill_shove: None,
+                ramp_up: None,
+                falloff: None,
             }),
             WeaponAction::Projectile(crate::common::projectile::ProjectileSpec::ROCKET),
             WeaponAction::Flame(crate::common::flame::FlameSpec::FLAMETHROWER),
-            WeaponAction::Extinguish(crate::common::weapon::ExtinguishSpec {
+            WeaponAction::Airblast(crate::common::weapon::AirblastSpec {
                 range: 0.0,
                 spread: 0.0,
+                push: 0.0,
+                lift: 0.0,
+                reflect: false,
+                reflect_speed: 1.0,
+                extinguish: false,
             }),
             WeaponAction::HealBeam(crate::common::weapon::HealBeamSpec {
                 range: 0.0,

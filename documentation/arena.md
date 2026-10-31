@@ -341,7 +341,7 @@ The shipped rocket launcher splashes 90, as TF2's does, so a rocket at your
 feet pushes 11.3 m/s standing and 16.8 m/s crouched, against a 7 m/s jump:
 about 2.6 and 5.8 times a jump's height. Fired as you jump, airborne, it
 pushes 22.6 m/s, and crouched it hits the 25.4 m/s cap. The launcher's
-`damage_splash` is the dial, and it is also what an enemy's splash costs.
+`damage` is the dial, and it is also what an enemy's splash costs.
 - **Mass, later.** Δv is the blast's number for every body today. A per-class
   knockback scale (heavier classes are shoved less) goes in `classes.toml` when
   there is more than one class to play.

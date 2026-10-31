@@ -24,6 +24,8 @@ use crate::common::swatch::Swatch;
 use crate::common::team::Team;
 use crate::game::respawn::{Identity, OurIdentity, Seat};
 use std::collections::HashMap;
+use crate::game::bot_fight::Aim;
+use crate::game::bot_sense::BotMind;
 use crate::game::nav::{CellId, Leap, Link, LinkKind, NavGraph};
 use crate::game::nav_field::Field;
 use crate::game::player::{step_player, Inputs, PhysicsBody, Player, PlayerInput};
@@ -396,14 +398,14 @@ pub fn steer_bots(
     rules: Option<Res<GameRules>>,
     mut bots: Query<
         (
-            (&PhysicsBody, &Stance, &Player, &BotIntent, Option<&RouteCosts>),
+            (&PhysicsBody, &Stance, &Player, &BotIntent, Option<&RouteCosts>, Option<&BotMind>),
             (&mut BotRoute, &mut Inputs, Option<(&Equipped, &Ammo, &Trigger)>, Option<&Damageable>, Option<&Armor>),
         ),
         With<BotOf>,
     >,
 ) {
     let dt = time.delta_secs();
-    for ((body, stance, player, intent, costs), (mut route, mut inputs, arms, health, armor)) in &mut bots {
+    for ((body, stance, player, intent, costs, mind), (mut route, mut inputs, arms, health, armor)) in &mut bots {
         let feet = feet_of(body, *stance);
         let loaded: Vec<WeaponId> = arms.map_or_else(Vec::new, |(equipped, ammo, _)| {
             equipped.carried().iter().copied().filter(|weapon| ammo.at(*weapon).is_some_and(|state| state.clip + state.reserve > 0)).collect()
@@ -433,6 +435,13 @@ pub fn steer_bots(
             let world = Vec2::new(-input.yaw.sin(), -input.yaw.cos()) * input.movement.length();
             input.movement = movement_toward(world, yaw);
             (input.yaw, input.pitch) = (yaw, pitch);
+        } else if !leaping {
+            // Eased onto each link rather than snapped; the route's direction is kept. Fighting,
+            // the aim already turns at a rate.
+            let world = Vec2::new(-input.yaw.sin(), -input.yaw.cos()) * input.movement.length();
+            let aim = mind.map_or(Aim::default(), |mind| mind.aim);
+            (input.yaw, input.pitch) = aim.ease_toward((player.yaw, player.pitch), (input.yaw, input.pitch), dt);
+            input.movement = movement_toward(world, input.yaw);
         }
         // A leap's own buttons are part of what makes it land, a rocket jump's crouch and shot
         // among them, so the intent's wait for it.
