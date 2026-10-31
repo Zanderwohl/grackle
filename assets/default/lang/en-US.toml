@@ -81,6 +81,7 @@ links = "Walks"
 leaps = "Drops and jumps"
 reach = "What can be reached"
 knockback = "Knockback"
+routes = "Pickups and traffic"
 sight = "Sightlines"
 
 [bakes.kind]

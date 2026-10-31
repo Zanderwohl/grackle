@@ -31,6 +31,10 @@ use crate::tool::bakes::BakeSystems;
 use crate::tool::nav_cache;
 use crate::tool::room::{Block, MapVolumes, Room, VolumeOrder};
 
+/// Thousandths of the bar for the surface, the floors, the walks, the leaps, the pruning and
+/// the fields, from how long each takes on Halls.
+const STAGE_SHARES: [usize; 6] = [5, 5, 30, 720, 5, 235];
+
 /// Cells linked per item, so progress moves while the links, the bulk of the work, are found.
 /// Walks and leaps are separate passes of batches, since a leap is kept only if walking is slower.
 const LINK_BATCH: usize = 256;
@@ -306,20 +310,28 @@ struct Job {
 impl BakeJob for Job {
     type Output = (NavGraph, Vec<Volume>);
 
+    /// In thousandths, each stage a fixed share filled by its own fraction: how much a stage
+    /// has to do is only known once it starts, and counting items let the total grow under a
+    /// bar already part full, which ran it back.
     fn progress(&self) -> (usize, usize) {
-        let batches = self.found.map_or(1, |found| found.div_ceil(LINK_BATCH));
-        let linked = if self.graph.is_some() {
-            2 * batches
-        } else {
-            self.links.len().div_ceil(LINK_BATCH) + self.leaps.len().div_ceil(LINK_BATCH)
-        };
-        let (fielded, fields) = match &self.fields {
-            Some(fields) if self.fielded => (fields.progress().1, fields.progress().1),
-            Some(fields) => fields.progress(),
-            None => (0, 1),
-        };
-        let completed = usize::from(self.world.is_some()) + usize::from(self.found.is_some()) + linked + usize::from(self.graph.is_some()) + fielded;
-        (completed, 3 + 2 * batches + fields)
+        let part = |(done, of): (usize, usize)| if of == 0 { 1.0 } else { (done as f32 / of as f32).min(1.0) };
+        let whole = |done: bool| if done { 1.0 } else { 0.0 };
+        let cells = self.found.unwrap_or(0);
+        let linked = self.graph.is_some();
+        let stages = [
+            (STAGE_SHARES[0], whole(self.world.is_some())),
+            (STAGE_SHARES[1], whole(self.found.is_some())),
+            (STAGE_SHARES[2], if linked { 1.0 } else { part((self.links.len(), cells)) * whole(self.found.is_some()) }),
+            (STAGE_SHARES[3], if linked { 1.0 } else { part((self.leaps.len(), cells)) * whole(self.found.is_some()) }),
+            (STAGE_SHARES[4], whole(linked)),
+            (STAGE_SHARES[5], match &self.fields {
+                Some(_) if self.fielded => 1.0,
+                Some(fields) => part(fields.progress()),
+                None => 0.0,
+            }),
+        ];
+        let completed = stages.iter().map(|(share, done)| *share as f32 * done).sum::<f32>().round() as usize;
+        (completed, STAGE_SHARES.iter().sum())
     }
 
     fn doing(&self) -> String {
@@ -329,6 +341,7 @@ impl BakeJob for Job {
             (Some(_), Some((cells, _))) if self.links.len() < cells.len() => get!("bakes.doing.links"),
             (Some(_), Some((cells, _))) if self.leaps.len() < cells.len() => get!("bakes.doing.leaps"),
             _ if self.fields.is_none() => get!("bakes.doing.reach"),
+            _ if self.fields.as_ref().is_some_and(FieldBake::routing) => get!("bakes.doing.routes"),
             _ => get!("bakes.doing.knockback"),
         }
     }
@@ -520,15 +533,20 @@ mod tests {
     #[test]
     fn progress_only_climbs_and_ends_complete() {
         let mut job = snapshot_of(vec![Volume::air(Room::new(Vec3::ZERO, Vec3::new(20.0, 3.0, 20.0)))]).job();
+        let share = |(done, of): (usize, usize)| done as f32 / of as f32;
         let mut last = job.progress();
+        let mut steps = 0;
         while !job.is_done() {
             job.step();
+            steps += 1;
             let now = job.progress();
-            assert!(now.0 > last.0, "a step made no progress: {last:?} then {now:?}");
+            assert_eq!(now.1, last.1, "the total changed under a bar already part full");
+            assert!(share(now) >= share(last), "the bar ran back: {last:?} then {now:?}");
             assert!(now.0 <= now.1, "completed passed scheduled: {now:?}");
             last = now;
         }
-        assert!(last.1 > 4, "a 20 m room was linked in one batch: {last:?}");
+        assert_eq!(last.0, last.1, "the bake ended short of a full bar");
+        assert!(steps > 4, "a 20 m room was linked in one batch");
         assert!(!job.finish().0.cells().is_empty());
     }
 

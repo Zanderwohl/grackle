@@ -55,7 +55,10 @@ still a prototype for feeling out room sizes: it has health and can shoot, and
 that is the whole of it.
 
 Bots can move but not think. A bot is a `BotSeat` holding an `Identity` the way
-a client's link does, served a body by `give_bodies_to_whoever_needs_one`; the
+a client's link does, served a body by `give_bodies_to_whoever_needs_one`. It
+has no picker, so it takes the seat Random would give a person
+(`team_choice::seat_for_a_bot`), and bots count in the balance people choose
+against; the
 body carries a `BotIntent` (where to go and look, which buttons) that
 `steer_bots` turns into its `Inputs` each tick, the component a keyboard fills,
 so nothing downstream can tell a bot from a person. Routes come from

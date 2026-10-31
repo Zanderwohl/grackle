@@ -25,6 +25,7 @@ use crate::common::game_rules::GameRules;
 use crate::common::net::{has_authority, NetRole};
 use crate::common::team::{Side, Team};
 use crate::editor::spawn_point::SpawnPointMarker;
+use crate::game::bot::BotSeat;
 use crate::game::death::Dying;
 use crate::game::player::Player;
 use crate::game::respawn::{team_name, Identity, OurIdentity, Seat};
@@ -183,12 +184,22 @@ fn seated<'a>(us: Option<&OurIdentity>, links: impl Iterator<Item = (Entity, &'a
         .collect()
 }
 
-fn tallies_without(teams: &[Team], here: &[(Chair, Identity)], who: PlayerId, points: &HashMap<PlayerId, i32>) -> Vec<TeamTally> {
+/// Bots count: a team of people beside a team of bots is not an even match.
+fn tallies_without(teams: &[Team], here: &[(Chair, Identity)], bots: &[Identity], who: PlayerId, points: &HashMap<PlayerId, i32>) -> Vec<TeamTally> {
     let others = here
         .iter()
-        .filter(|(_, other)| other.id != who)
-        .map(|(_, other)| (other.team(), points.get(&other.id).copied().unwrap_or(0)));
+        .map(|(_, other)| other)
+        .chain(bots)
+        .filter(|other| other.id != who)
+        .map(|other| (other.team(), points.get(&other.id).copied().unwrap_or(0)));
     tally(teams, others)
+}
+
+/// Where a bot sits: wherever Random would put a person, among everybody else already seated.
+pub fn seat_for_a_bot(teams: &[Team], others: impl IntoIterator<Item = Identity>, points: &HashMap<PlayerId, i32>, free_for_all: bool) -> Seat {
+    let tallies = tally(teams, others.into_iter().map(|other| (other.team(), points.get(&other.id).copied().unwrap_or(0))));
+    let offered = options(Seat::Choosing, !free_for_all, &tallies);
+    decide(TeamChoice::Random, &offered, &tallies, &mut rand::rng()).unwrap_or(Seat::Playing(None))
 }
 
 /// One request at a time, each against the seats the last left, so two joins
@@ -205,6 +216,7 @@ pub(crate) fn seat_whoever_chose(
     standings: Query<&Standing>,
     bodies: Query<(Entity, &PlayerId, &GlobalTransform), (With<Player>, Without<Dying>)>,
     mut kills: MessageWriter<Kill>,
+    bots: Query<&Identity, (With<BotSeat>, Without<ClientOf>)>,
 ) {
     let mut requests: Vec<(Chair, ChooseTeam)> = ours.read().map(|request| (Chair::Ours, *request)).collect();
     for (link, mut receiver) in &mut receivers {
@@ -216,6 +228,7 @@ pub(crate) fn seat_whoever_chose(
 
     let teams = teams_in_play(spawns.iter().map(|side| side.map(|side| side.0)));
     let points: HashMap<PlayerId, i32> = standings.iter().map(|standing| (standing.id, standing.points())).collect();
+    let bots: Vec<Identity> = bots.iter().copied().collect();
     for (chair, request) in requests {
         let here = seated(us.as_deref(), links.iter());
         let Some((_, who)) = here.iter().find(|(seat, _)| *seat == chair).copied() else { continue };
@@ -223,7 +236,7 @@ pub(crate) fn seat_whoever_chose(
             debug!("{} asked from a seat they have left; dropped", who.id);
             continue;
         }
-        let tallies = tallies_without(&teams, &here, who.id, &points);
+        let tallies = tallies_without(&teams, &here, &bots, who.id, &points);
         let offered = options(who.seat, rules.teams, &tallies);
         let seat = match decide(request.choice, &offered, &tallies, &mut rand::rng()) {
             Ok(seat) => seat,
@@ -279,12 +292,14 @@ pub(crate) fn offer_teams(
     rules: Res<GameRules>,
     spawns: Query<Option<&Side>, With<SpawnPointMarker>>,
     standings: Query<&Standing>,
+    bots: Query<&Identity, (With<BotSeat>, Without<ClientOf>)>,
 ) {
     let teams = teams_in_play(spawns.iter().map(|side| side.map(|side| side.0)));
     let points: HashMap<PlayerId, i32> = standings.iter().map(|standing| (standing.id, standing.points())).collect();
     let here = seated(us.as_deref(), links.iter().map(|(link, who, _)| (link, who)));
+    let bots: Vec<Identity> = bots.iter().copied().collect();
     for (chair, who) in &here {
-        let offer = options(who.seat, rules.teams, &tallies_without(&teams, &here, who.id, &points));
+        let offer = options(who.seat, rules.teams, &tallies_without(&teams, &here, &bots, who.id, &points));
         match *chair {
             Chair::Ours => {
                 ours.set_if_neq(offer);
@@ -379,12 +394,23 @@ mod tests {
     }
 
     /// Breaks if leaving your own team is not counted before joining another.
+    /// Breaks if bots are left out of the count, so a person joins the team the bots already fill.
+    #[test]
+    fn bots_are_counted_when_choosing() {
+        let me = Identity { id: PlayerId(1), seat: Seat::Choosing, color: 0 };
+        let bot = Identity { id: PlayerId(2), seat: Seat::Playing(Some(Team::Red)), color: 1 };
+        let here = [(Chair::Ours, me)];
+        let counts = tallies_without(&[Team::Red, Team::Blue], &here, &[bot], me.id, &HashMap::new());
+        assert_eq!(counts.iter().find(|tally| tally.team == Team::Red).unwrap().players, 1);
+        assert_eq!(seat_for_a_bot(&[Team::Red, Team::Blue], [bot], &HashMap::new(), false), Seat::Playing(Some(Team::Blue)));
+    }
+
     #[test]
     fn whoever_is_choosing_is_not_counted() {
         let me = Identity { id: PlayerId(1), seat: Seat::Playing(Some(Team::Blue)), color: 0 };
         let red = |id| Identity { id: PlayerId(id), seat: Seat::Playing(Some(Team::Red)), color: 0 };
         let here = [(Chair::Ours, me), (Chair::Link(Entity::PLACEHOLDER), red(2)), (Chair::Link(Entity::PLACEHOLDER), red(3))];
-        let counts = tallies_without(&[Team::Red, Team::Blue], &here, me.id, &HashMap::new());
+        let counts = tallies_without(&[Team::Red, Team::Blue], &here, &[], me.id, &HashMap::new());
         assert_eq!(counts, tallies(&[(Team::Red, 2, 0), (Team::Blue, 0, 0)]));
 
         let offer = options(me.seat, true, &counts);

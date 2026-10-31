@@ -233,6 +233,11 @@ impl FieldBake {
         (completed, scheduled)
     }
 
+    /// Past knockback, onto the distances to the pickups and the traffic between them.
+    pub fn routing(&self) -> bool {
+        self.knockback.len() == self.viewpoints.len()
+    }
+
     /// One item. True once only [`FieldBake::finish`] is left.
     pub fn step(&mut self, world: &CollisionWorld, graph: &NavGraph, triggers: &[TriggerVolume], rules: &MovementRules) -> bool {
         if self.knockback.len() < self.viewpoints.len() {

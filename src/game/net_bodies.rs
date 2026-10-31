@@ -23,6 +23,8 @@ use crate::game::player::{spawn_player, LocalPlayer, Player, Simulated, Spawn};
 use crate::game::bot::{BotIntent, BotOf, BotRoute, BotSeat, Roam, RouteCosts};
 use crate::game::weapon::AutoReload;
 use crate::game::respawn::{choose_spawn, placed_spawns, team_name, HueStart, Identity, OurIdentity, Seat};
+use crate::game::score::Standing;
+use crate::game::team_choice::{seat_for_a_bot, teams_in_play};
 
 /// Spawns bodies for connected clients and marks our own when it arrives.
 pub struct NetBodiesPlugin;
@@ -142,6 +144,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
     catalog: Res<WeaponCatalog>,
     timers: Option<Res<RespawnTimers>>,
     (seats, driven): (Query<(Entity, Option<&RouteCosts>), With<BotSeat>>, Query<&BotOf, With<Player>>),
+    standings: Query<&Standing>,
 ) {
     let waiting = |who: Identity| timers.as_deref().is_some_and(|timers| timers.waiting(who.id));
     if !role.as_deref().is_none_or(NetRole::is_authority) {
@@ -168,6 +171,9 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         hues.push(who.color);
         who
     };
+
+    // Everybody with a seat, for a bot to take one beside.
+    let mut seated: Vec<Identity> = identities.iter().copied().chain(us.as_deref().map(|us| us.0)).collect();
 
     if ours.is_empty() {
         // The identity outlives the body, so a respawn is the same player on
@@ -212,6 +218,10 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         spawn_body_for(&mut commands, spawn, (who, start), (link, peer.0), &rules, &catalog);
     }
 
+    // Taken as bots are seated this pass, so two bots seated together are not both counted
+    // as the team the other has not joined yet.
+    let points: std::collections::HashMap<PlayerId, i32> = standings.iter().map(|standing| (standing.id, standing.points())).collect();
+    let teams = teams_in_play(placed.iter().map(|spawn| spawn.side));
     for (seat, temperament) in &seats {
         if driven.iter().any(|of| of.0 == seat) {
             continue;
@@ -224,20 +234,21 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         });
         // Wrong about different places each life.
         let costs = RouteCosts { beliefs: rand::random(), ..costs };
-        // On the seat, as a client's is on its link.
-        let who = match identities.get(seat) {
-            Ok(who) => *who,
-            Err(_) => {
-                let who = meet(&mut ids);
-                commands.entity(seat).insert(who);
-                who
-            }
-        };
+        // On the seat, as a client's is on its link. A bot has no picker: it takes the seat
+        // Random would give a person.
+        let mut who = identities.get(seat).copied().unwrap_or_else(|_| meet(&mut ids));
+        if who.seat == Seat::Choosing {
+            let others = seated.iter().copied().filter(|other| other.id != who.id);
+            who.seat = seat_for_a_bot(&teams, others, &points, !rules.teams);
+            seated.retain(|other| other.id != who.id);
+            seated.push(who);
+            commands.entity(seat).insert(who);
+        }
         if waiting(who) {
             continue;
         }
-        let spawn = choose_spawn(&placed, who.team, &collision);
-        info!("Standing a bot's body up as {} on {}", who.id, team_name(who.team));
+        let spawn = choose_spawn(&placed, who.team(), &collision);
+        info!("Standing a bot's body up as {} on {}", who.id, team_name(who.team()));
         let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
         commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), costs, Roam::default(), Name::new("Bot")));
         if hosting {
@@ -376,6 +387,8 @@ mod tests {
         a_map(&mut world);
         let seat = world.spawn(BotSeat).id();
 
+        // The host has chosen Red, so the bot, which has no picker, takes the other side.
+        sit_down(&mut world, Seat::Playing(Some(Team::Red)));
         a_turn(&mut world);
         let bots = |world: &mut World| world.query_filtered::<(Entity, &BotOf, &PlayerId), (With<Player>, With<Simulated>)>().iter(world).map(|(body, of, id)| (body, of.0, *id)).collect::<Vec<_>>();
         let first = bots(&mut world);
@@ -383,6 +396,7 @@ mod tests {
         assert_eq!(first[0].1, seat);
         let who = *world.get::<Identity>(seat).expect("the identity is not on the seat");
         assert_eq!(first[0].2, who.id);
+        assert_eq!(who.seat, Seat::Playing(Some(Team::Blue)), "the bot did not take the open side");
         assert_eq!(world.query_filtered::<(), (With<Player>, With<LocalPlayer>)>().iter(&world).count(), 1, "the bot took the host's place");
 
         world.despawn(first[0].0);
