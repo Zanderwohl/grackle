@@ -533,6 +533,20 @@ viewports and the play camera — or a debug overlay from the eye would sit in
 the lens. `ForwardCameraPlugin` is added in
 `main.rs`, as `WorldPropPlugin` is, since the game's tests have no renderer.
 
+**The lens is drawn once at startup, out of sight.** Bevy compiles a pipeline
+the first time something draws with it, and on macOS and wasm it does so
+synchronously, on the frame: the first scoped weapon picked up was half a
+second of frozen screen. `warm_up_the_lens` stands up a camera set up as the
+forward camera is, on `render_layers::WARM_UP`, drawing a lens triangle whose
+corners are all one point, and `end_the_warm_up` takes both down a few frames
+after the shader loads. It has to match what it warms: the warm-up mesh is laid
+out as a baked lens is (`the_warm_up_lens_is_laid_out_like_the_scope_glass`),
+and its camera is HDR, perspective and default MSAA like the viewmodel camera,
+since those are the view's half of the pipeline key. Nothing else needed it —
+the world's materials, the sky and weapon models are all drawn by the editor's
+HDR perspective viewport, or by a pickup on the map, before any round — but a
+material that first appears mid-round would, and it joins the same way.
+
 The mode itself ([`view.rs`](src/prop/view.rs)) does three reversible things
 on the way in: the world is **hidden rather than unloaded** (a prop is
 centimeters across and a map is tens of meters, so leaving it in puts the prop
