@@ -59,13 +59,15 @@ fn main() {
                 primary_cursor_options: None,
                 exit_condition: ExitCondition::OnPrimaryClosed,
                 close_when_requested: true,
-            }),
+            })
+            .set(bevy::log::LogPlugin { custom_layer: grackle::common::log_file::layer, ..default() }),
         )
         .insert_resource(editor_params.net.clone())
         .insert_resource(StartInPlay(editor_params.start_playing))
         .insert_resource(StartupMap(editor_params.map.clone()))
         .insert_resource(StartSpectating(editor_params.start_spectating))
         .insert_resource(QuitAfterRounds(editor_params.rounds))
+        .init_resource::<grackle::game::telemetry::RecordRounds>()
         .insert_resource(StartInPropEditor(editor_params.start_modeling))
         .insert_resource(StartInAnimEditor(editor_params.start_animating))
         .insert_resource(StartInMaterialEditor(editor_params.start_texturing))

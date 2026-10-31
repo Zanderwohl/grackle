@@ -312,6 +312,7 @@ mod tests {
                 shooter,
                 button: Button::Primary,
                 action: WeaponAction::None,
+                weapon: None,
             });
         }
         world.run_system_once(announce_shots).unwrap();

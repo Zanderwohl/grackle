@@ -43,7 +43,7 @@ const HURT_GUESS: f32 = 10.0;
 const REACTION: std::ops::Range<f32> = 0.2..0.4;
 
 /// Rolled per seat and kept across lives, like [`RouteCosts`](crate::game::bot::RouteCosts).
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct BotMind {
     /// Seconds between noticing an enemy and acting on it; acting at once reads as cheating.
     pub reaction: f32,
@@ -461,6 +461,7 @@ mod tests {
             remaining: 90,
             point: Vec3::new(0.0, 1.0, 0.0),
             from: Some(muzzle),
+            cause: Default::default(),
         });
         world.run_system_once(sense).unwrap();
         let known = world.get::<BotSenses>(bot).unwrap().known[0];

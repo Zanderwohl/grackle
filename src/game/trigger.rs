@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 
 use crate::common::class::Stance;
-use crate::common::damage::{Damage, DamageSource, Kill};
+use crate::common::damage::{Cause, Damage, DamageSource, How, Kill};
 use crate::common::trigger::{TriggerEffect, TriggerVolume};
 use crate::editor::trigger::TRIGGER_COLOR;
 use crate::game::damage::DamageSystems;
@@ -94,7 +94,7 @@ fn act_on_bodies_in_triggers(
             None => 0,
         };
         if amount > 0 {
-            damage.write(Damage { target: body, source: DamageSource::World, amount, point: center, from: None, kill_shove: None });
+            damage.write(Damage { target: body, source: DamageSource::World, amount, point: center, from: None, kill_shove: None, cause: Cause::of(None, How::Trigger) });
         }
     }
 }

@@ -95,7 +95,19 @@ example), refusing a bad one at startup. **An unattended round** is
 a blueprint as its file, `--spectate` takes the Spectate seat each round,
 `--rounds N` quits once N rounds have ended (with `--play`, starting each
 next round as the last ends), and every round's standings are
-logged as a table as it ends (`rounds::report`). What a bot goes
+logged as a table as it ends (`rounds::report`). **Telemetry**
+([`src/game/telemetry.rs`](src/game/telemetry.rs), authority only) puts a RON
+line in the log per kill — victim, killer and assist with health, place and
+goal pulls, the weapon, how it killed, every attacker's share — and a
+`RoundRecord` at the round's end with each bot's temperament and the
+scoreboard; and, where the `editor` binary asks (`RecordRounds`, so tests write
+nothing), a JSON Lines file per round at `cache/rounds/{map}/{started}.jsonl`:
+spawns, hits, kills, pickups, goal changes (a retreat marked), first sightings
+and every body once a second. A hit knows its weapon because `Damage` and
+`DamageDealt` carry a `Cause` — weapon, how, reflected — from the trigger pull
+on, through projectiles, blasts and burns; nothing decides anything from it.
+The log itself goes to `logs/` too ([`src/common/log_file.rs`](src/common/log_file.rs)):
+one file per launch, split at 32 MiB, the newest 30 kept. What a bot goes
 for is `think`'s ([`src/game/bot_think.rs`](src/game/bot_think.rs)), the one
 writer of `BotIntent::goal`: health, armor, arms, a hunt, cover, an ambush or a
 roam, each scored by its temperament's `Drives`, the one it has getting a
@@ -160,7 +172,8 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map and demo-scene blueprints), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
-| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`. Safe to delete. |
+| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
+| `logs/` | Gitignored: the log's file drain, one file per launch. |
 
 ## Spawn points and class metrics
 

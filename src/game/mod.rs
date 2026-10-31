@@ -59,6 +59,7 @@ pub mod name_tag;
 pub mod pickup_beam;
 pub mod rounds;
 pub mod score;
+pub mod telemetry;
 pub mod spectate;
 pub mod tab_board;
 pub mod team_choice;
@@ -82,6 +83,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::game::hud::HudPlugin)
             .add_plugins(crate::game::score::ScorePlugin)
             .add_plugins(crate::game::rounds::RoundHistoryPlugin)
+            .add_plugins(crate::game::telemetry::TelemetryPlugin)
             .add_plugins(crate::game::tab_board::TabBoardPlugin)
             .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
@@ -835,6 +837,8 @@ mod tests {
             knockback: 9.0,
             source,
             direct: None,
+            weapon: None,
+            reflected: false,
         });
     }
 

@@ -50,7 +50,7 @@ const LOOK_AHEAD: f32 = 10.0;
 /// Meters to the side a bot checks there is floor before strafing that way.
 const STRAFE_CHECK: f32 = 1.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum Preference {
     Nearest,
     /// Whoever hurt it last.
@@ -60,7 +60,7 @@ pub enum Preference {
 }
 
 /// How well a bot shoots, rolled per seat inside its [`BotMind`].
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct Aim {
     /// Radians per second its aim turns at most.
     pub turn_rate: f32,
@@ -106,7 +106,7 @@ impl Aim {
 /// How a bot moves while it fights, rolled per seat inside its [`BotMind`]. A fight is legs: a
 /// strafe one way, or standing to aim, each held for a while. A full reversal takes a body about
 /// a fifth of a second, so legs much shorter than a second read as jittering, not dodging.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct Footwork {
     /// The share of legs spent strafing rather than standing, 0 to 1.
     pub restlessness: f32,
@@ -158,7 +158,7 @@ impl Footwork {
 /// How a bot meets a projectile coming at it with an airblast in hand, rolled per seat inside its
 /// [`BotMind`]. Each projectile it sees coming is judged once: whether to try, and how early or
 /// late to press.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct Reflexes {
     /// The chance it tries at all, 0 to 1.
     pub attempt: f32,

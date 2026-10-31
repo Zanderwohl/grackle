@@ -309,6 +309,7 @@ mod tests {
                 remaining: 80,
                 point: Vec3::ZERO,
                 from: Some(Vec3::X * 10.0),
+                cause: Default::default(),
             });
             app.update();
         };

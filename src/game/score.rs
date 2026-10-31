@@ -500,7 +500,7 @@ mod tests {
         let body = |world: &mut World, id: u64| world.spawn(PlayerId(id)).id();
         let (zero, one) = (body(&mut world, 0), body(&mut world, 1));
         let crate_ = world.spawn_empty().id();
-        let hit = |target, source, amount| DamageDealt { target, source, amount, remaining: 0, point: Vec3::ZERO, from: None };
+        let hit = |target, source, amount| DamageDealt { target, source, amount, remaining: 0, point: Vec3::ZERO, from: None, cause: Default::default() };
         world.write_message(hit(one, DamageSource::Player(PlayerId(0)), 40));
         world.write_message(hit(zero, DamageSource::Player(PlayerId(0)), 15));
         world.write_message(hit(crate_, DamageSource::Player(PlayerId(0)), 99));

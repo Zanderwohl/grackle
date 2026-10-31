@@ -60,6 +60,8 @@ impl FlameSpec {
 pub struct Burning {
     /// Whoever lit it most recently; afterburn is credited to them.
     pub source: DamageSource,
+    /// What lit it, for the afterburn's records.
+    pub weapon: Option<crate::common::weapon::WeaponId>,
     pub remaining_s: f32,
     pub damage: u32,
     pub interval_s: f32,
@@ -70,6 +72,7 @@ impl Burning {
     pub fn lit(spec: &FlameSpec, source: DamageSource) -> Self {
         Self {
             source,
+            weapon: None,
             remaining_s: spec.afterburn_duration_s,
             damage: spec.afterburn_damage,
             interval_s: spec.afterburn_interval_s,

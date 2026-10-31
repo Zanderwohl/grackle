@@ -84,7 +84,7 @@ pub struct BotIntent {
 /// enters is: time spent there is what is paid for, so risk is priced rather than forbidden, and a
 /// dangerous way that saves enough time is still taken. Skill and temperament are these weights,
 /// not a different pathfinder. A field not baked yet costs nothing.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct RouteCosts {
     /// Per 100 m² of exposure: at 1, a cell seen from 100 m² of floor costs its time twice over.
     pub exposure: f32,
@@ -206,7 +206,7 @@ impl BotRoute {
 }
 
 /// Where a body's feet are, from the center of its box.
-fn feet_of(body: &PhysicsBody, stance: Stance) -> Vec3 {
+pub(crate) fn feet_of(body: &PhysicsBody, stance: Stance) -> Vec3 {
     body.current - Vec3::Y * stance.half_extents().y
 }
 

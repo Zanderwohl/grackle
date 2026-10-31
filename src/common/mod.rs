@@ -24,6 +24,7 @@ pub mod projectile;
 pub mod mesh;
 pub mod skeleton;
 pub mod lang;
+pub mod log_file;
 pub mod map_sync;
 pub mod match_state;
 pub mod effects;

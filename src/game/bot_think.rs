@@ -79,7 +79,7 @@ impl Want {
 }
 
 /// How much each want matters to a bot, rolled per seat inside its [`BotMind`].
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct Drives {
     pub health: f32,
     pub armor: f32,
