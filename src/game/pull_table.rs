@@ -73,8 +73,7 @@ fn cells(font: &Handle<Font>) -> Vec<impl Bundle> {
         .collect()
 }
 
-/// Each want's name and pull, alphabetical by name, the chosen one undimmed. A want with nothing
-/// to go for has no pull.
+/// Alphabetical by name, with whether each is the chosen want.
 pub fn rows(thought: &BotThought) -> Vec<(String, String, bool)> {
     let mut rows: Vec<(String, String, bool)> = Want::ALL
         .iter()

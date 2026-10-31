@@ -42,7 +42,7 @@ const UNDER_FIRE: f32 = 2.0;
 /// less than where it stands that make one worth going to.
 const COVER_RADIUS: f32 = 10.0;
 const COVER_GAIN: f32 = 20.0;
-/// Meters within which an arrival at a place counts, the same as a match of two places.
+/// Meters within which two places are the same.
 const SAME_PLACE: f32 = 1.0;
 /// A heard noise is worth this much of a seen enemy to go and look at.
 const NOISE_WORTH: f32 = 0.5;
@@ -143,7 +143,6 @@ pub enum Offer {
 /// Everything a bot's choice is made from, as fractions where it can be.
 #[derive(Clone, Debug, Default)]
 pub struct Situation {
-    /// Health as a fraction of its maximum.
     pub health: f32,
     pub armor: f32,
     /// Ammo missing across what is carried, `0.0` full.
@@ -165,7 +164,6 @@ fn nearness(seconds: f32) -> f32 {
     1.0 / (1.0 + seconds.max(0.0) / TRAVEL_HALF)
 }
 
-/// Every want there is somewhere to go for, scored.
 pub fn candidates(situation: &Situation, drives: &Drives) -> Vec<Candidate> {
     let s = situation;
     let mut out = Vec::new();

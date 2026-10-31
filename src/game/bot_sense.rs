@@ -24,8 +24,7 @@ use crate::game::nav::NavGraph;
 use crate::game::player::{PhysicsBody, Player};
 use crate::tool::nav_bake::NavBake;
 
-/// Radians either side of where a bot looks that it sees across: a 90° view, so what is behind
-/// it, it notices only by hearing or being hit.
+/// Radians either side of the look: a 90° view.
 pub const HALF_VIEW: f32 = std::f32::consts::FRAC_PI_4;
 /// Radians above and below its look: wider, since a ledge overhead is somewhere a person glances.
 pub const HALF_VIEW_VERTICAL: f32 = std::f32::consts::FRAC_PI_3;
@@ -43,12 +42,10 @@ const HURT_GUESS: f32 = 10.0;
 /// Seconds between noticing something and acting on it, the range a temperament rolls in.
 const REACTION: std::ops::Range<f32> = 0.2..0.4;
 
-/// A bot's temperament for the brain, rolled per seat and kept across lives, beside its
-/// [`RouteCosts`](crate::game::bot::RouteCosts).
+/// Rolled per seat and kept across lives, like [`RouteCosts`](crate::game::bot::RouteCosts).
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct BotMind {
-    /// Seconds between noticing an enemy and acting on it. A bot that fires the frame somebody
-    /// rounds a corner reads as a cheat whatever its aim.
+    /// Seconds between noticing an enemy and acting on it; acting at once reads as cheating.
     pub reaction: f32,
     pub drives: Drives,
     pub aim: Aim,
@@ -66,16 +63,13 @@ impl BotMind {
     }
 }
 
-/// How an enemy was last noticed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sense {
     Seen,
-    /// Hit by them: only the direction the damage came from, which for a blast is the blast, as
-    /// the damage indicator shows a player.
+    /// Hit by them, which gives only the direction the damage came from.
     Hurt,
 }
 
-/// An enemy the bot knows of.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Known {
     pub who: PlayerId,
@@ -149,8 +143,7 @@ pub fn in_view(eye: Vec3, yaw: f32, pitch: f32, target: Vec3) -> bool {
     turned.abs() <= HALF_VIEW && (up - pitch).abs() <= HALF_VIEW_VERTICAL
 }
 
-/// Whether an eye sees any of `points`: in view, and with nothing solid between, by the test a
-/// shot is.
+/// In view and with nothing solid between, by the ray test a shot uses.
 pub fn sees(world: &CollisionWorld, eye: Vec3, yaw: f32, pitch: f32, points: &[Vec3]) -> bool {
     points.iter().any(|point| in_view(eye, yaw, pitch, *point) && world.segment_clear(eye, *point))
 }
@@ -244,7 +237,7 @@ const DASH: (f32, f32) = (0.3, 0.2);
 /// Least alpha an enemy about to be forgotten is drawn with, so it does not vanish before it is.
 const FADED: f32 = 0.15;
 
-/// The step's look direction: yaw about world Y with `-Z` at zero, pitch positive up.
+/// In [`in_view`]'s convention.
 pub fn look(yaw: f32, pitch: f32) -> Vec3 {
     let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
     Vec3::new(-yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos())
@@ -260,9 +253,8 @@ fn dashed(gizmos: &mut Gizmos, from: Vec3, to: Vec3, color: Color) {
     }
 }
 
-/// Each bot's view as [`in_view`] tests it, a box in azimuth and elevation about its look, and a
-/// line to each enemy it knows of: solid while seen, dashed when only hurt by them, fading as it
-/// forgets them.
+/// Each bot's view as [`in_view`] tests it, and a line to each enemy it knows of: solid while
+/// seen, dashed when only hurt by them, fading as it forgets.
 fn draw_bot_senses(
     show: Res<ShowBots>,
     time: Res<Time>,

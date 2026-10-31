@@ -1,8 +1,7 @@
 //! How a bot fights: whom it shoots at, where it aims, when it pulls the trigger and with what.
 //! The one writer of [`BotIntent`]'s `look_at`, `fire`, `alt_fire`, `select`, `reload` and
 //! `strafe`; [`think`](crate::game::bot_think::think) decides where it goes meanwhile. It aims
-//! only at what its [`BotSenses`] have in sight, turns at a limited rate, and its aim settles
-//! the longer it tracks. See "Fight" in documentation/bot-brain.md.
+//! only at what its [`BotSenses`] have in sight. See "Fight" in documentation/bot-brain.md.
 
 use bevy::prelude::*;
 
@@ -26,8 +25,8 @@ use crate::tool::nav_bake::NavBake;
 /// Meters a body is wide, for how much of a pellet pattern lands on it and how close an aim
 /// must be to hit.
 const BODY_WIDTH: f32 = 0.8;
-/// Seconds of flight at which a projectile is half as likely to land: a body sees it coming, and
-/// the longer it flies the more it can step aside, so it counts squared.
+/// Seconds of flight at which a projectile is half as likely to land, counted squared: the longer
+/// it flies, the further a body can step aside.
 const DODGE_SECONDS: f32 = 0.8;
 /// Seconds of reload at which a weapon with an empty clip is worth half as much as loaded.
 const EMPTY_CLIP_SECONDS: f32 = 0.4;
@@ -50,7 +49,6 @@ const STRAFE_SECONDS: std::ops::Range<f32> = 0.4..1.1;
 /// Meters to the side a bot checks there is floor before strafing that way.
 const STRAFE_CHECK: f32 = 1.0;
 
-/// Which enemy a bot would rather shoot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Preference {
     Nearest,
@@ -94,8 +92,7 @@ impl Aim {
     }
 }
 
-/// Where a bot is aiming and what it is aiming at. Its own, so aiming turns at a rate rather than
-/// jumping, and kept between ticks so the error settles as it tracks.
+/// Kept between ticks, so the aim turns at a rate and its error settles.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct BotAim {
     pub target: Option<Entity>,
@@ -124,7 +121,6 @@ pub fn turn_toward(from: (f32, f32), to: (f32, f32), step: f32) -> (f32, f32) {
     (from.0 + moved.x, from.1 + moved.y)
 }
 
-/// Radians between two aims.
 fn angle_between(a: (f32, f32), b: (f32, f32)) -> f32 {
     look(a.0, a.1).angle_between(look(b.0, b.1))
 }
@@ -247,8 +243,6 @@ pub fn fight(
         let eye = body.current + Vec3::Y * player.duck.eye_from_center(*stance);
         let skill = mind.aim;
 
-        // Whom: an enemy in sight, by temperament, the one already tracked kept unless another
-        // is much more wanted.
         let wanted = |entity: Entity, how: Sense| -> Option<f32> {
             let (them, _, their, _) = bodies.get(entity).ok()?;
             let distance = eye.distance(them.current).max(1.0);
@@ -282,7 +276,6 @@ pub fn fight(
         }
 
         let Some((them, their_stance, their, boxes)) = target.and_then(|target| bodies.get(target).ok()) else {
-            // Nothing to shoot: look where it walks, keep its hands free, and top up a clip.
             intent.look_at = None;
             intent.fire = false;
             intent.alt_fire = false;
@@ -300,7 +293,6 @@ pub fn fight(
         let feet = them.current - Vec3::Y * their_stance.half_extents().y;
         let distance = eye.distance(center);
 
-        // With what.
         let choice = arms.zip(catalog.as_deref()).and_then(|((equipped, ammo), catalog)| {
             let best = best_weapon(equipped.carried(), ammo, catalog, distance)?;
             let held = equipped.held().and_then(|held| armed(held, ammo, catalog, distance));
@@ -313,8 +305,6 @@ pub fn fight(
         });
         intent.select = choice.filter(|(_, _, _, holding)| !holding).map(|(weapon, ..)| weapon);
 
-        // Where: the point to put the shot, off by an error that settles as it tracks and grows
-        // as the target crosses the view.
         let action = choice.map_or(WeaponAction::None, |(_, _, action, _)| action);
         let point = aim_point(&world, eye, center, feet, their.velocity, &action, gravity);
         let true_aim = aim_at(eye, point);
@@ -329,14 +319,12 @@ pub fn fight(
         (aim.yaw, aim.pitch) = turn_toward((aim.yaw, aim.pitch), off, skill.turn_rate * dt);
         intent.look_at = Some(eye + look(aim.yaw, aim.pitch) * LOOK_AHEAD);
 
-        // When.
         let ready = choice.is_some_and(|(.., holding)| holding);
         let lands = ready && would_land(&world, eye, (aim.yaw, aim.pitch), point, tolerance(&action, distance), splash_of(&action));
         let alt = choice.is_some_and(|(_, alt, ..)| alt);
         intent.fire = lands && !alt;
         intent.alt_fire = lands && alt;
 
-        // Moving while fighting: side to side, onto floor the graph has and away from harm.
         aim.strafe_for -= dt;
         if aim.strafe_for <= 0.0 || aim.strafe == 0.0 {
             aim.strafe = if rand::random::<bool>() { 1.0 } else { -1.0 };
