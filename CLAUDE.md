@@ -1893,8 +1893,9 @@ damage, knockback, a source, and an optional direct hit) is written by anything
 that goes off, and `src/game/explosion.rs` is the only thing that knows what
 splash means. Three rules live there and a player notices immediately if any is
 wrong: a wall stops a blast (the same `ray_distance` that shortens a bullet), a
-direct hit takes the direct number *instead of* splash rather than on top of
-it, corpses are thrown `Push::Outward` rather than along, and each damage
+direct hit takes the blast's center once rather than splash on top of it —
+there is no separate direct-hit number — splash falls to the projectile's
+`splash_at_edge` share at the radius, corpses are thrown `Push::Outward` rather than along, and each damage
 number is anchored **over the body it hurt** rather than over the blast —
 every victim of one rocket shares the blast's center exactly, so numbers put
 there are superimposed rather than merely close and six hits read as one.
@@ -1945,13 +1946,15 @@ beam, invuln, scope — that have their real specs and no behavior yet. A
 and a `Magazine` for the whole thing. Adding a *weapon* is a row in a file;
 adding a *kind* of weapon is a variant and a system that answers for it.
 
-A hitscan's damage over distance is two optional lines, `ramp_up` and
-`falloff` (`DistanceScale`), each in meters from the eye to the hit, flat past
-its ends; each pellet is scaled on its own and a body's share is rounded once,
-after they are added. Bots weigh a weapon by the same curve.
+Damage over distance is two optional lines, `ramp_up` and `falloff`
+(`DistanceScale`), on a hitscan or a projectile, flat past their ends. A
+hitscan measures from the eye to each pellet's hit, scales each on its own and
+rounds a body's share once, after they are added; a projectile measures from
+where its shooter is to the blast, and never scales the shooter's own. Bots
+weigh a weapon by the same curve.
 
 `ProjectileSpec` ([`src/common/projectile.rs`](src/common/projectile.rs)) is
-fourteen numbers, and the rocket launcher's two barrels, the pipe bomb and the
+a handful of numbers, and the rocket launcher's two barrels, the pipe bomb and the
 TF2C-style RPG are all values of it. A grenade is a rocket that falls, spins,
 bounces and goes off on a timer.
 

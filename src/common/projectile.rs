@@ -11,6 +11,8 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::common::weapon::{distance_scale, DistanceScale};
+
 /// Everything that distinguishes one thrown weapon from another.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct ProjectileSpec {
@@ -33,13 +35,21 @@ pub struct ProjectileSpec {
     pub explodes_at_last_bounce: bool,
     /// Whether the fuse running out detonates it.
     pub explodes_at_lifetime_end: bool,
-    /// Meters. Splash and shove fall off to zero here
+    /// Meters. Splash falls to `splash_at_edge` here and stops; shove falls to zero
     /// ([`crate::common::damage::falloff`]).
     pub explosion_radius: f32,
-    /// Taken by the body hit directly, instead of splash rather than on top of it.
-    pub damage_direct_hit: u32,
-    /// Splash at the center; others in the radius take a share.
-    pub damage_splash: u32,
+    /// At the center of the blast, which is also what the body it hit squarely takes: there is
+    /// no direct-hit number apart from the splash.
+    pub damage: u32,
+    /// The share of `damage` a body at the edge of the radius takes, 0 to 1.
+    #[serde(default)]
+    pub splash_at_edge: f32,
+    /// More damage to others close to the shooter, measured from the shooter to the blast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ramp_up: Option<DistanceScale>,
+    /// Less damage to others far from the shooter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub falloff: Option<DistanceScale>,
     /// Speed given to a corpse at the center, in meters per second; a speed, not
     /// an impulse (see [`crate::game::ragdoll::RagdollShove`]).
     pub knockback: f32,
@@ -61,8 +71,10 @@ impl ProjectileSpec {
         explodes_at_last_bounce: true,
         explodes_at_lifetime_end: false,
         explosion_radius: 3.0,
-        damage_direct_hit: 90,
-        damage_splash: 60,
+        damage: 60,
+        splash_at_edge: 0.0,
+        ramp_up: None,
+        falloff: None,
         knockback: 9.0,
         radius: 0.12,
     };
@@ -84,11 +96,20 @@ impl ProjectileSpec {
         explodes_at_last_bounce: true,
         explodes_at_lifetime_end: true,
         explosion_radius: 3.4,
-        damage_direct_hit: 100,
-        damage_splash: 60,
+        damage: 60,
+        splash_at_edge: 0.0,
+        ramp_up: None,
+        falloff: None,
         knockback: 10.0,
         radius: 0.14,
     };
+}
+
+impl ProjectileSpec {
+    /// What its blast is worth to others, times `damage`, `distance` meters from the shooter.
+    pub fn scale_at(&self, distance: f32) -> f32 {
+        distance_scale(self.ramp_up, self.falloff, distance)
+    }
 }
 
 /// One step of flight, ignoring collisions. Returns `(velocity, displacement)`;

@@ -265,13 +265,18 @@ pub fn step_projectiles(
         let Some((ending, direct)) = ending else { continue };
         let spec = projectile.spec;
         if spec.detonates_on(ending) {
+            // From where the shooter is now, as TF2 measures it; with nobody left to measure
+            // from, the blast is worth what it says.
+            let from_shooter = shooter.and_then(|shooter| bodies.get(shooter).ok()).map(|(_, boxes)| boxes.body.center.distance(position));
             blasts.write(Explosion {
                 at: position,
                 radius: spec.explosion_radius,
-                damage: spec.damage_splash,
+                damage: spec.damage,
+                at_edge: spec.splash_at_edge,
+                scale: from_shooter.map_or(1.0, |distance| spec.scale_at(distance)),
                 knockback: spec.knockback,
                 source: projectile.source(),
-                direct: direct.map(|target| (target, spec.damage_direct_hit)),
+                direct,
             });
         }
 
@@ -761,7 +766,7 @@ mod tests {
         assert_eq!(went_off.len(), 1, "{went_off:?}");
         assert_eq!(
             went_off[0].direct,
-            Some((target, ProjectileSpec::ROCKET.damage_direct_hit))
+            Some(target)
         );
         assert!(went_off[0].at.z > -1.0, "it flew past the body to {}", went_off[0].at);
     }

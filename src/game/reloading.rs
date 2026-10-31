@@ -55,7 +55,9 @@ pub(crate) fn perform_reloads(
         if was != left {
             seen.0 = left;
         }
-        let Some(whole) = catalog.held_by(equipped).map(|weapon| weapon.magazine.reload) else {
+        // A first round longer than the rest is told apart by how much is left.
+        let whole = catalog.held_by(equipped).map(|weapon| weapon.magazine.first_reload.filter(|_| left > weapon.magazine.reload).unwrap_or(weapon.magazine.reload));
+        let Some(whole) = whole else {
             continue;
         };
 
@@ -109,7 +111,7 @@ mod tests {
             deploy: 0.0,
             primary: Mounted::EMPTY,
             secondary: Mounted::EMPTY,
-            magazine: Magazine { clip: Some(4), reserve: 8, reload: RELOAD_SECONDS, reload_one_at_a_time: false },
+            magazine: Magazine { clip: Some(4), reserve: 8, reload: RELOAD_SECONDS, reload_one_at_a_time: false, first_reload: None },
         });
         let mut loadout = Loadout::default();
         loadout.set(Slot::Primary, SlotChoices { permitted: vec![id], default: Some(id) });

@@ -2,7 +2,9 @@
 //! the same message so they all agree about splash.
 //!
 //! A wall stops a blast (the same [`CollisionWorld::ray_distance`] a bullet
-//! uses). A direct hit takes the direct number instead of splash. Corpses are
+//! uses). A direct hit takes the center once rather than splash on top of it; others take a share
+//! falling to the blast's edge share at the radius, scaled by how far the blast went off from
+//! the shooter, whose own blast is not. Corpses are
 //! thrown [`Push::Outward`] by the blast's `knockback`; a living body with an
 //! [`Impulse`] is pushed by the damage it took, as TF2 does — see
 //! [`knockback`]. A splash candidate is anything with [`Hitboxes`].
@@ -84,18 +86,19 @@ pub fn explode(
 
         // Something hit squarely is hurt whether or not it can be caught in
         // a blast; one that can is handled with the rest below.
-        if let Some((target, worth)) = blast.direct
+        if let Some(target) = blast.direct
             && !bodies.contains(target)
         {
-            damage.write(Damage { target, source: blast.source, amount: worth, point: blast.at, from: Some(blast.at), kill_shove: None });
+            let amount = scaled(blast, 1.0);
+            damage.write(Damage { target, source: blast.source, amount, point: blast.at, from: Some(blast.at), kill_shove: None });
         }
 
         for (entity, boxes, impulse, stance, player) in &mut bodies {
             let center = boxes.body.center;
-            let direct = blast.direct.filter(|(target, _)| *target == entity).map(|(_, worth)| worth);
+            let direct = blast.direct.filter(|target| *target == entity);
             let mine = allegiances.is_self(blast.source, entity);
             let amount = match direct {
-                Some(worth) => worth,
+                Some(_) => scaled(blast, 1.0),
                 None if mine => self_splash(blast, &boxes.body),
                 None => splash(blast, center),
             };
@@ -139,16 +142,26 @@ pub fn explode(
     }
 }
 
-/// Falling off from the body's center to nothing at the radius. Rounded, not
-/// truncated, so only the very edge rounds to zero.
+/// `blast`'s damage to somebody other than its source taking `share` of it.
+fn scaled(blast: &Explosion, share: f32) -> u32 {
+    (blast.damage as f32 * blast.scale * share).round() as u32
+}
+
+/// Falling off in a line from the blast to the body's center, down to the blast's edge share at
+/// the radius, and nothing past it.
 fn splash(blast: &Explosion, center: Vec3) -> u32 {
-    (blast.damage as f32 * falloff(center.distance(blast.at), blast.radius)).round() as u32
+    let distance = center.distance(blast.at);
+    if blast.radius <= 0.0 || distance > blast.radius {
+        return 0;
+    }
+    let toward_edge = 1.0 - falloff(distance, blast.radius);
+    scaled(blast, 1.0 - (1.0 - blast.at_edge.clamp(0.0, 1.0)) * toward_edge)
 }
 
 /// TF2's self-splash: caught if any of the box is inside the radius, measured
 /// to the nearer of the box's center and its feet, and never below
 /// [`SELF_SPLASH_FLOOR`]. Kinder than [`splash`] on purpose — it is what a
-/// rocket jump costs and how hard it throws.
+/// rocket jump costs and how hard it throws. Not scaled by distance, which is from the source.
 fn self_splash(blast: &Explosion, body: &Box3) -> u32 {
     let nearest = blast.at.clamp(body.center - body.half_extents, body.center + body.half_extents);
     if blast.radius <= 0.0 || nearest.distance(blast.at) > blast.radius {
@@ -165,7 +178,7 @@ fn self_splash(blast: &Explosion, body: &Box3) -> u32 {
 /// nav bake's rocket jumps, which have no entities to send messages about.
 #[allow(clippy::too_many_arguments)]
 pub fn own_blast(world: &CollisionWorld, at: Vec3, radius: f32, damage: u32, body: &Box3, crouched: bool, grounded: bool) -> (u32, Vec3) {
-    let blast = Explosion { at, radius, damage, knockback: 0.0, source: crate::common::damage::DamageSource::World, direct: None };
+    let blast = Explosion { at, radius, damage, at_edge: 0.0, scale: 1.0, knockback: 0.0, source: crate::common::damage::DamageSource::World, direct: None };
     let amount = self_splash(&blast, body);
     if amount == 0 || !in_sight(world, at, body.center, body.center.distance(at)) {
         return (0, Vec3::ZERO);
@@ -278,14 +291,30 @@ mod tests {
             .id()
     }
 
-    fn blast(at: Vec3, direct: Option<(Entity, u32)>) -> Explosion {
-        Explosion { at, radius: 4.0, damage: 60, knockback: 10.0, source: SHOOTER, direct }
+    fn blast(at: Vec3, direct: Option<Entity>) -> Explosion {
+        Explosion { at, radius: 4.0, damage: 60, at_edge: 0.0, scale: 1.0, knockback: 10.0, source: SHOOTER, direct }
     }
 
     fn damage_written(world: &mut World) -> Vec<Damage> {
         let messages = world.resource::<Messages<Damage>>();
         let mut cursor = messages.get_cursor();
         cursor.read(messages).copied().collect()
+    }
+
+    /// Breaks if the edge share stops holding the splash up to the radius, reaches past it, or the
+    /// distance from the shooter scales the shooter's own blast.
+    #[test]
+    fn splash_falls_to_its_edge_share_and_only_others_are_scaled_by_range() {
+        let floored = Explosion { at_edge: 0.5, ..blast(Vec3::ZERO, None) };
+        assert_eq!(splash(&floored, Vec3::ZERO), 60);
+        assert_eq!(splash(&floored, Vec3::new(2.0, 0.0, 0.0)), 45);
+        assert_eq!(splash(&floored, Vec3::new(4.0, 0.0, 0.0)), 30);
+        assert_eq!(splash(&floored, Vec3::new(4.1, 0.0, 0.0)), 0);
+
+        let near = Explosion { scale: 1.25, ..floored };
+        assert_eq!(splash(&near, Vec3::ZERO), 75);
+        let body = Box3 { center: Vec3::new(0.0, 1.0, 0.0), half_extents: Vec3::new(0.4, 1.0, 0.4) };
+        assert_eq!(self_splash(&near, &body), self_splash(&floored, &body));
     }
 
     #[test]
@@ -373,12 +402,12 @@ mod tests {
     fn a_direct_hit_on_something_with_no_hitboxes_still_hurts_it() {
         let mut world = a_world();
         let target = world.spawn_empty().id();
-        world.write_message(blast(Vec3::ZERO, Some((target, 90))));
+        world.write_message(blast(Vec3::ZERO, Some(target)));
 
         world.run_system_once(explode).unwrap();
 
         let hits = damage_written(&mut world);
-        assert_eq!(hits.iter().filter(|h| h.target == target).map(|h| h.amount).collect::<Vec<_>>(), vec![90]);
+        assert_eq!(hits.iter().filter(|h| h.target == target).map(|h| h.amount).collect::<Vec<_>>(), vec![60]);
     }
 
     #[test]
@@ -386,7 +415,7 @@ mod tests {
         let mut world = a_world();
         let target = body(&mut world, Vec3::new(0.0, 1.0, 0.0));
         let struck = Vec3::new(0.1, 1.6, 0.3);
-        world.write_message(blast(struck, Some((target, 90))));
+        world.write_message(blast(struck, Some(target)));
 
         world.run_system_once(explode).unwrap();
 
@@ -394,19 +423,19 @@ mod tests {
         assert_eq!(hits.iter().find(|h| h.target == target).unwrap().point, struck);
     }
 
-    /// Breaks if a direct hit also takes splash.
+    /// Breaks if a direct hit also takes splash, or takes less than the center.
     #[test]
-    fn a_direct_hit_takes_its_own_number_instead_of_the_splash() {
+    fn a_direct_hit_takes_the_center_once() {
         let mut world = a_world();
         let hit = body(&mut world, Vec3::new(0.2, 0.0, 0.0));
         let bystander = body(&mut world, Vec3::new(2.0, 0.0, 0.0));
-        world.write_message(blast(Vec3::ZERO, Some((hit, 90))));
+        world.write_message(blast(Vec3::ZERO, Some(hit)));
 
         world.run_system_once(explode).unwrap();
 
         let hits = damage_written(&mut world);
         assert_eq!(hits.iter().filter(|h| h.target == hit).count(), 1, "{hits:?}");
-        assert_eq!(hits.iter().find(|h| h.target == hit).unwrap().amount, 90);
+        assert_eq!(hits.iter().find(|h| h.target == hit).unwrap().amount, 60);
         assert!(hits.iter().any(|h| h.target == bystander), "the bystander was missed");
     }
 

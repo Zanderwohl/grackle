@@ -223,7 +223,7 @@ pub fn worth(mounted: &Mounted, distance: f32) -> f32 {
                 return 0.0;
             }
             let flight = distance / spec.initial_speed.max(1e-3);
-            spec.damage_direct_hit.max(spec.damage_splash) as f32 / (1.0 + (flight / DODGE_SECONDS).powi(2)) / interval
+            spec.damage as f32 * spec.scale_at(distance) / (1.0 + (flight / DODGE_SECONDS).powi(2)) / interval
         }
         WeaponAction::Flame(FlameSpec { range_m, damage, afterburn_damage, afterburn_interval_s, .. }) => {
             if distance > range_m {
@@ -242,7 +242,7 @@ fn armed(weapon: WeaponId, ammo: &Ammo, catalog: &WeaponCatalog, distance: f32) 
     let spec = catalog.get(weapon)?;
     let (primary, secondary) = (worth(&spec.primary, distance), worth(&spec.secondary, distance));
     let (alt, value) = if secondary > primary { (true, secondary) } else { (false, primary) };
-    let reload = if spec.magazine.clip.is_some() && state.clip == 0 { spec.magazine.reload } else { 0.0 };
+    let reload = if spec.magazine.clip.is_some() && state.clip == 0 { spec.magazine.first_reload.unwrap_or(spec.magazine.reload) } else { 0.0 };
     Some((weapon, alt, value / (1.0 + reload / EMPTY_CLIP_SECONDS))).filter(|(.., value)| *value > 0.0)
 }
 

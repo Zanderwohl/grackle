@@ -80,12 +80,17 @@ impl DistanceScale {
     }
 }
 
+/// What a hit `distance` meters from the shooter is worth, times its damage, under both lines.
+pub fn distance_scale(ramp_up: Option<DistanceScale>, falloff: Option<DistanceScale>, distance: f32) -> f32 {
+    let ramp = ramp_up.map_or(1.0, |line| line.scale + (1.0 - line.scale) * line.along(distance));
+    let fall = falloff.map_or(1.0, |line| 1.0 + (line.scale - 1.0) * line.along(distance));
+    ramp * fall
+}
+
 impl HitscanSpec {
     /// What a hit `distance` meters from the shooter's eye is worth, times its damage.
     pub fn scale_at(&self, distance: f32) -> f32 {
-        let ramp = self.ramp_up.map_or(1.0, |line| line.scale + (1.0 - line.scale) * line.along(distance));
-        let fall = self.falloff.map_or(1.0, |line| 1.0 + (line.scale - 1.0) * line.along(distance));
-        ramp * fall
+        distance_scale(self.ramp_up, self.falloff, distance)
     }
 }
 
@@ -256,6 +261,10 @@ pub struct Magazine {
     /// once.
     #[serde(default)]
     pub reload_one_at_a_time: bool,
+    /// Seconds for the first round of a reload, where it differs from the rest: a hand going to
+    /// the pouch before it starts feeding them in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_reload: Option<f32>,
 }
 
 impl Magazine {
@@ -264,6 +273,7 @@ impl Magazine {
         reserve: 0,
         reload: 0.0,
         reload_one_at_a_time: false,
+        first_reload: None,
     };
 }
 

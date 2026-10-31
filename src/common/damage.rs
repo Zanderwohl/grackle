@@ -238,15 +238,19 @@ pub struct Kill {
 pub struct Explosion {
     pub at: Vec3,
     pub radius: f32,
-    /// At the center.
+    /// At the center, before `scale`.
     pub damage: u32,
+    /// The share of `damage` at the edge of the radius, 0 to 1.
+    pub at_edge: f32,
+    /// Times `damage` for everybody but the source, by how far the blast went off from them.
+    pub scale: f32,
     /// Meters per second of corpse shove at the center. A living body is
     /// pushed by the damage it takes instead; see `crate::game::explosion`.
     pub knockback: f32,
     pub source: DamageSource,
-    /// The body hit squarely, which takes this amount instead of splash, not
-    /// on top of it.
-    pub direct: Option<(Entity, u32)>,
+    /// The body hit squarely, which takes the blast's center whether or not it
+    /// could be caught in one.
+    pub direct: Option<Entity>,
 }
 
 #[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

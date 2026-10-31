@@ -827,8 +827,10 @@ mod tests {
         app.world_mut().resource_mut::<Messages<Explosion>>().write(Explosion {
             at: feet,
             // The shipped rocket launcher's.
-            radius: 3.0,
+            radius: 2.8,
             damage: 90,
+            at_edge: 0.5,
+            scale: 1.0,
             knockback: 9.0,
             source,
             direct: None,
@@ -929,8 +931,12 @@ mod tests {
             latch(&mut app).0 = leap.input(tick_of_leap);
             tick(&mut app, 1);
         }
-        let landed = player_position(&mut app) - Vec3::Y * PLAYER_HALF.y;
-        assert!(landed.distance(baked) < 0.5, "baked to land at {baked}, landed at {landed}");
+        // A rocket jump lands crouched, and a wall can keep the landing off the middle of the cell
+        // it belongs to by up to a cell's spacing.
+        let stance = *app.world_mut().query_filtered::<&Stance, With<LocalPlayer>>().single(app.world()).unwrap();
+        let landed = player_position(&mut app) - Vec3::Y * stance.half_extents().y;
+        let (across, height) = ((landed - baked).xz().length(), (landed.y - baked.y).abs());
+        assert!(across < nav::SPACING && height < 0.1, "baked to land at {baked}, landed at {landed}");
     }
 
     #[test]

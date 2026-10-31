@@ -473,7 +473,7 @@ impl Shot {
         let spec = self.projectile.spec;
         let body = Box3 { center: mover.body.current, half_extents: mover.stance.half_extents() };
         Some(spec.detonates_on(ending).then(|| {
-            own_blast(world, position, spec.explosion_radius, spec.damage_splash, &body, mover.stance == Stance::Crouched, mover.player.on_ground())
+            own_blast(world, position, spec.explosion_radius, spec.damage, &body, mover.stance == Stance::Crouched, mover.player.on_ground())
         }))
     }
 }
