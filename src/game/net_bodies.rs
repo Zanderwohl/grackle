@@ -245,7 +245,7 @@ fn give_bodies_to_whoever_needs_one(
         let spawn = choose_spawn(&placed, who.team, &collision);
         info!("Standing a bot's body up as {} on {}", who.id, team_name(who.team));
         let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
-        commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), costs, Roam, Name::new("Bot")));
+        commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), costs, Roam::default(), Name::new("Bot")));
         if hosting {
             commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
         }

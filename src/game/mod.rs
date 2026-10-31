@@ -850,6 +850,72 @@ mod tests {
         assert!(launched > jumped, "a rocket at the feet reached {launched}, a jump {jumped}");
     }
 
+    /// Breaks if a baked rocket jump and a round disagree: the move, the shot's order after it,
+    /// its muzzle, its flight or its blast. A body on the ledge given the baked link's input, tick
+    /// by tick, through `pull_trigger`, `fire_projectiles`, `step_projectiles` and `explode`, lands
+    /// on the platform where the bake said it would.
+    #[test]
+    fn a_baked_rocket_jump_lands_in_a_round_where_the_bake_said() {
+        use crate::common::hitbox::{Box3, Hitboxes};
+        use crate::common::weapon::{WeaponAction, WeaponId};
+        use crate::common::world_surface::Volume;
+        use crate::game::collision::CollisionWorld;
+        use crate::game::damage::DamageSystems;
+        use crate::game::nav::{self, Launcher, Leaping, LinkKind};
+        use crate::game::projectile::{fire_projectiles, step_projectiles};
+        use crate::game::weapon::{pull_trigger, reload_weapons, select_weapons, WeaponActionFired};
+
+        let rooms = [
+            room(Vec3::new(-2.0, 0.0, -10.0), Vec3::new(2.0, 6.0, -7.7)),
+            room(Vec3::new(-2.0, -10.0, -7.7), Vec3::new(2.0, 6.0, -2.0)),
+            room(Vec3::new(-2.0, 0.0, -2.0), Vec3::new(2.0, 6.0, 2.0)),
+        ];
+        let catalog = crate::common::weapon_file::default_catalog();
+        let weapon = WeaponId::of("rocket_launcher");
+        let WeaponAction::Projectile(rocket) = catalog.get(weapon).expect("no rocket launcher shipped").primary.action else {
+            panic!("the rocket launcher fires no projectile");
+        };
+        let launcher = Launcher { weapon, rocket };
+        let mut world = CollisionWorld::default();
+        let faces = world.rebuild_volumes(&rooms.iter().cloned().map(Volume::air).collect::<Vec<_>>());
+        let rules = crate::common::movement_rules::MovementRules::default();
+        let graph = nav::graph_leaping(&world, &faces, &Leaping { launcher: Some(launcher), ..default() }, &rules, &[Vec3::new(0.25, 0.0, -9.25)]);
+        let onto_the_platform = |link: &&nav::Link| link.kind == LinkKind::RocketJump && graph.cells()[link.to as usize].feet.z > -2.0;
+        let (from, link) = (0..graph.cells().len() as nav::CellId)
+            .filter(|from| graph.cells()[*from as usize].feet.z < -7.7)
+            .find_map(|from| graph.links(from).iter().find(onto_the_platform).map(|link| (from, *link)))
+            .expect("no rocket jump from the ledge onto the platform");
+        let leap = link.leap.unwrap();
+        let baked = graph.cells()[link.to as usize].feet;
+
+        let mut app = headless(&rooms);
+        let start = graph.cells()[from as usize].feet;
+        app.world_mut().spawn((Transform::from_translation(start).with_rotation(Quat::from_rotation_y(leap.yaw)), SpawnPointMarker));
+        app.add_message::<WeaponActionFired>()
+            .add_message::<crate::common::damage::Explosion>()
+            .add_plugins(crate::game::damage::DamagePlugin)
+            .add_systems(FixedUpdate, (select_weapons, reload_weapons, pull_trigger).chain().after(step_player).before(DamageSystems::Deal))
+            .add_systems(FixedUpdate, (fire_projectiles, step_projectiles).chain().in_set(DamageSystems::Deal))
+            .add_systems(FixedUpdate, crate::game::explosion::explode.in_set(DamageSystems::Deal).after(step_projectiles))
+            // A headless body has no rig to box, so it is boxed as `update_hitboxes` boxes a body.
+            .add_systems(FixedUpdate, (|mut bodies: Query<(&PhysicsBody, &Stance, &mut Hitboxes)>| {
+                for (body, stance, mut boxes) in &mut bodies {
+                    boxes.body = Box3 { center: body.current, half_extents: stance.half_extents() };
+                }
+            }).after(step_player).before(DamageSystems::Deal));
+        enter(&mut app);
+        tick(&mut app, 30);
+        let held = app.world_mut().query_filtered::<&crate::common::weapon::Equipped, With<LocalPlayer>>().single(app.world()).unwrap().held();
+        assert_eq!(held, Some(weapon), "the body does not start holding the rocket launcher");
+
+        for tick_of_leap in 0..leap.ticks {
+            latch(&mut app).0 = leap.input(tick_of_leap);
+            tick(&mut app, 1);
+        }
+        let landed = player_position(&mut app) - Vec3::Y * PLAYER_HALF.y;
+        assert!(landed.distance(baked) < 0.5, "baked to land at {baked}, landed at {landed}");
+    }
+
     #[test]
     fn hurting_yourself_costs_what_the_mode_says() {
         let open = [room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 30.0, 10.0))];

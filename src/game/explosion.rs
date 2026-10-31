@@ -38,7 +38,9 @@ impl Plugin for ExplosionPlugin {
     fn build(&self, app: &mut App) {
         app
             .add_message::<Explosion>()
-            .add_systems(FixedUpdate, explode.in_set(DamageSystems::Deal))
+            // After the projectiles, so a shot fired this tick goes off this tick, and after the
+            // boxes, so it is measured from where this tick's step left each body.
+            .add_systems(FixedUpdate, explode.in_set(DamageSystems::Deal).after(crate::game::projectile::step_projectiles).after(crate::game::hitbox::update_hitboxes))
             .add_systems(Update, (mark_blasts, fade_blast_marks))
             .add_systems(
                 PostUpdate,
@@ -156,6 +158,19 @@ fn self_splash(blast: &Explosion, body: &Box3) -> u32 {
     let distance = body.center.distance(blast.at).min(feet.distance(blast.at));
     let share = 1.0 - (1.0 - SELF_SPLASH_FLOOR) * (distance / blast.radius).clamp(0.0, 1.0);
     (blast.damage as f32 * share).round() as u32
+}
+
+/// What a body's own blast of `damage` splash and `radius` at `at` does to it: the damage it
+/// takes and the push it gets. The rules [`explode`] applies to the blast's own source, for the
+/// nav bake's rocket jumps, which have no entities to send messages about.
+#[allow(clippy::too_many_arguments)]
+pub fn own_blast(world: &CollisionWorld, at: Vec3, radius: f32, damage: u32, body: &Box3, crouched: bool, grounded: bool) -> (u32, Vec3) {
+    let blast = Explosion { at, radius, damage, knockback: 0.0, source: crate::common::damage::DamageSource::World, direct: None };
+    let amount = self_splash(&blast, body);
+    if amount == 0 || !in_sight(world, at, body.center, body.center.distance(at)) {
+        return (0, Vec3::ZERO);
+    }
+    (amount, knockback(at, body.center, amount, true, crouched, grounded))
 }
 
 /// How fast a blast dealing `amount` throws a standing body, in meters per second.

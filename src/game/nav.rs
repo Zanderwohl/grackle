@@ -17,11 +17,17 @@ use crate::common::trigger::{TriggerEffect, TriggerVolume};
 use crate::common::movement_rules::MovementRules;
 use crate::common::world_surface::Face;
 use crate::constants::TICK_HZ;
+use crate::common::hitbox::Box3;
+use crate::common::projectile::ProjectileSpec;
+use crate::common::weapon::WeaponId;
 use crate::game::collision::CollisionWorld;
+use crate::game::explosion::own_blast;
+use crate::game::hitscan::aim;
+use crate::game::projectile::{advance, fired, muzzle, Projectile};
 use crate::game::condition::Condition;
 use crate::game::nav_field::{Field, Fields};
 use crate::game::player::{
-    running_speed, step, Mover, PhysicsBody, Player, PlayerInput, CROUCH_SPEED, PLAYER_HALF, STEP_HEIGHT, WALKABLE,
+    running_speed, step, Mover, PhysicsBody, Player, PlayerInput, CROUCH_SPEED, STEP_HEIGHT, WALKABLE,
 };
 
 /// Meters between cells along `x` and `z`.
@@ -69,11 +75,14 @@ pub enum LinkKind {
     /// Running off an edge. One way.
     Drop,
     Jump,
+    /// A jump on one's own rocket.
+    RocketJump,
 }
 
 /// The input that makes a drop or a jump, for a bot to replay rather than re-derive: run along
-/// `yaw` with sprint held for `ticks`, jumping on the first if `jump`, having arrived at
-/// `run_up`.
+/// `yaw` with sprint held for `ticks`, having arrived at `run_up`, and jump on tick `run_ticks` if
+/// `jump`. A rocket jump starts still, so what it needs of the bot is exactly reproducible, runs
+/// `run_ticks` to pick how far it goes, then jumps, crouches and fires `rocket` straight down.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Leap {
     pub yaw: f32,
@@ -81,11 +90,70 @@ pub struct Leap {
     pub run_up: f32,
     pub jump: bool,
     pub ticks: u32,
+    /// Ticks run before jumping.
+    pub run_ticks: u32,
+    /// The weapon fired at the feet, which must be held, deployed and loaded.
+    pub rocket: Option<WeaponId>,
+    /// What it costs in health, before a mode scales self-damage.
+    pub damage: u32,
 }
+
+/// Pitch a rocket jump fires at: straight down, short of the pole so yaw still means something.
+const STRAIGHT_DOWN: f32 = -std::f32::consts::FRAC_PI_2 + 0.01;
 
 impl Leap {
     pub fn input(&self, tick: u32) -> PlayerInput {
-        PlayerInput { movement: Vec2::Y, sprint: true, jump: self.jump && tick == 0, yaw: self.yaw, ..default() }
+        let rocket = self.rocket.is_some();
+        let fire = rocket && tick == self.run_ticks;
+        PlayerInput {
+            movement: Vec2::Y,
+            sprint: true,
+            jump: self.jump && tick == self.run_ticks,
+            crouch: rocket && tick >= self.run_ticks,
+            attack: fire,
+            attack_held: fire,
+            yaw: self.yaw,
+            pitch: if rocket { STRAIGHT_DOWN } else { 0.0 },
+            ..default()
+        }
+    }
+}
+
+/// A sphere a pickup is taken through, for a leap to pass through in flight.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Reach {
+    pub center: Vec3,
+    pub radius: f32,
+}
+
+impl Reach {
+    /// Whether a body's box, `center` and `half`, reaches into the sphere.
+    pub fn touches(&self, center: Vec3, half: Vec3) -> bool {
+        self.center.clamp(center - half, center + half).distance(self.center) <= self.radius
+    }
+}
+
+/// A weapon whose rocket a body can jump on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Launcher {
+    pub weapon: WeaponId,
+    pub rocket: ProjectileSpec,
+}
+
+/// What finding leaps reads beyond the walls.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Leaping<'a> {
+    pub triggers: &'a [TriggerVolume],
+    /// Per pickup, in the order [`crate::game::nav_field::Fields::pickups`] lists them.
+    pub reaches: &'a [Reach],
+    pub launcher: Option<Launcher>,
+}
+
+impl Leaping<'_> {
+    /// Per pickup, whether a body standing on some cell takes it, so a leap that grabs it in
+    /// flight is the only way to it rather than a detour.
+    pub fn on_foot(&self, cells: &[Cell]) -> Vec<bool> {
+        self.reaches.iter().map(|reach| cells.iter().any(|cell| reach.touches(center_on(cell.feet, cell.stance()), cell.stance().half_extents()))).collect()
     }
 }
 
@@ -97,6 +165,9 @@ pub struct Link {
     pub seconds: f32,
     /// For a drop or a jump.
     pub leap: Option<Leap>,
+    /// The pickup, by its place in [`crate::game::nav_field::Fields::pickups`], that the leap
+    /// takes in flight.
+    pub grabs: Option<u16>,
 }
 
 /// Its serde leaves out the columns, which [`NavGraph::columns`] rebuilds from the cells.
@@ -261,7 +332,7 @@ pub fn walk_links(world: &CollisionWorld, cells: &[Cell], columns: &HashMap<IVec
                 if let Some(kind) = walks(world, from, target) {
                     let meters = Vec2::new(target.feet.x - from.feet.x, target.feet.z - from.feet.z).length();
                     let speed = if kind == LinkKind::Crouch { CROUCH_SPEED } else { speed };
-                    links.push(Link { to, kind, seconds: meters / speed, leap: None });
+                    links.push(Link { to, kind, seconds: meters / speed, leap: None, grabs: None });
                 }
             }
         }
@@ -288,13 +359,48 @@ pub(crate) const TICK: f32 = 1.0 / TICK_HZ as f32;
 pub(crate) const MOST_TICKS: u32 = 3 * TICK_HZ as u32;
 /// Ticks a drop may run along the floor before it is given up as a run into a wall.
 const RUN_TICKS: u32 = TICK_HZ as u32 / 4;
+/// How long a rocket jump runs before it jumps, in ticks, each throwing it a different distance:
+/// a running start of a fraction of a second covers less than the run itself, so a gap is not
+/// overshot for want of a shorter one.
+const ROCKET_RUN_TICKS: [u32; 3] = [0, 3, 6];
+/// Meters ahead the floor must reach and must have given out by for a cell to rocket jump from:
+/// a run-up from nearer the edge runs off it before firing.
+const ROCKET_LOOKAHEAD: std::ops::Range<f32> = 1.0..2.0;
+
+/// Whether `cell` is as far along `ahead` as any cell on its floor in its square of two columns
+/// a side. Rocket jumps start only from these: a jump is long, its starts a band of cells deep,
+/// and one start in each meter of edge finds what the rest would. Ties are all kept, since any
+/// way of breaking one would not turn or mirror with the map.
+fn foremost_in_its_square(cells: &[Cell], columns: &HashMap<IVec2, Vec<CellId>>, cell: &Cell, ahead: Vec3) -> bool {
+    let square = cell.column.div_euclid(IVec2::splat(2)) * 2;
+    let along = |feet: Vec3| feet.xz().dot(ahead.xz());
+    [IVec2::ZERO, IVec2::X, IVec2::Y, IVec2::ONE]
+        .into_iter()
+        .filter_map(|offset| columns.get(&(square + offset)))
+        .flatten()
+        .map(|id| &cells[*id as usize])
+        .filter(|other| (other.feet.y - cell.feet.y).abs() <= STEP_HEIGHT)
+        .all(|other| along(other.feet) <= along(cell.feet) + SAME_FLOOR)
+}
+
 /// Seconds a leap must save over walking to the same cell to be worth a link; a running jump
 /// across a flat floor is a walk.
 const LEAP_SAVES: f32 = 0.5;
 
-/// Where a body standing on `feet` lands after `leap`'s input, and how many ticks it took. `None`
-/// if it never left the floor, never landed, or touched a Kill trigger.
-fn fly(world: &CollisionWorld, triggers: &[TriggerVolume], rules: &MovementRules, feet: Vec3, leap: Leap) -> Option<(Vec3, u32)> {
+/// How a leap went: where it landed, after how many ticks, the first pickup it passed through,
+/// and what its rocket cost.
+struct Flight {
+    landed: Vec3,
+    ticks: u32,
+    grabbed: Option<u16>,
+    damage: u32,
+}
+
+/// Where a body standing on `feet` lands after `leap`'s input. `None` if it never left the floor,
+/// never landed, or touched a Kill trigger. A rocket is fired and flown as a round does it, in the
+/// same tick and order: the move, then the shot from [`muzzle`], its flight by [`advance`], and its
+/// blast by [`own_blast`], which pushes the body on its next move.
+fn fly(world: &CollisionWorld, leaping: &Leaping, rules: &MovementRules, feet: Vec3, leap: Leap) -> Option<Flight> {
     let heading = Quat::from_rotation_y(leap.yaw) * Vec3::NEG_Z;
     let mut mover = Mover {
         player: Player { velocity: heading * leap.run_up, yaw: leap.yaw, ground: Some(Vec3::Y), ..default() },
@@ -303,23 +409,81 @@ fn fly(world: &CollisionWorld, triggers: &[TriggerVolume], rules: &MovementRules
     };
     let condition = Condition::default();
     let mut airborne = false;
+    let mut grabbed = None;
+    let mut rocket: Option<Shot> = None;
+    let mut damage = 0;
+    let mut kick = Vec3::ZERO;
     for tick in 0..MOST_TICKS {
-        step(&mut mover, Vec3::ZERO, &leap.input(tick), &condition, None, world, rules, TICK);
-        let center = mover.body.current;
-        let killed = triggers.iter().any(|trigger| trigger.effect == TriggerEffect::Kill && trigger.overlaps(center, PLAYER_HALF));
+        step(&mut mover, std::mem::take(&mut kick), &leap.input(tick), &condition, None, world, rules, TICK);
+        let (center, half) = (mover.body.current, mover.stance.half_extents());
+        let launcher = leap.launcher_of(leaping);
+        if tick == leap.run_ticks
+            && let Some(launcher) = launcher
+        {
+            rocket = Some(Shot::fire(launcher, &mover));
+        }
+        if let Some(shot) = rocket.as_mut()
+            && let Some(blast) = shot.tick(world, rules.fall(), &mover)
+        {
+            (damage, kick) = blast.unwrap_or_default();
+            // Thrown nothing, it is not a rocket jump; `leap_links` would drop it on landing.
+            if damage == 0 {
+                return None;
+            }
+            rocket = None;
+        }
+        let killed = leaping.triggers.iter().any(|trigger| trigger.effect == TriggerEffect::Kill && trigger.overlaps(center, half));
         if killed {
             return None;
         }
+        if grabbed.is_none() {
+            grabbed = leaping.reaches.iter().position(|reach| reach.touches(center, half)).map(|index| index as u16);
+        }
+        // Running up, or the rocket still in the air, the floor it stands on is not a landing.
+        let pending = tick < leap.run_ticks || rocket.is_some() || kick != Vec3::ZERO;
         if !mover.player.on_ground() {
             airborne = true;
-        } else if airborne {
-            return Some((center - Vec3::Y * PLAYER_HALF.y, tick + 1));
-        } else if tick >= RUN_TICKS {
+        } else if airborne && !pending {
+            return Some(Flight { landed: center - Vec3::Y * half.y, ticks: tick + 1, grabbed, damage });
+        } else if tick >= leap.run_ticks + RUN_TICKS && !pending {
             return None;
         }
     }
     None
 }
+
+/// A rocket fired at the feet, flown and set off as a round does it.
+pub(crate) struct Shot {
+    projectile: Projectile,
+    at: Vec3,
+}
+
+impl Shot {
+    /// From the muzzle of `mover` as this tick's move left it.
+    pub(crate) fn fire(launcher: Launcher, mover: &Mover) -> Self {
+        Shot { projectile: fired(launcher.rocket, aim(&mover.player), None, None), at: muzzle(mover.body.current, mover.stance, &mover.player) }
+    }
+
+    /// One tick of flight, after the move. `None` while it flies; once its flight ends, the damage
+    /// and push its blast gives `mover`, if it went off.
+    pub(crate) fn tick(&mut self, world: &CollisionWorld, gravity: f32, mover: &Mover) -> Option<Option<(u32, Vec3)>> {
+        let (position, ending) = advance(&mut self.projectile, self.at, world, gravity, TICK, |_, _| None);
+        self.at = position;
+        let (ending, _) = ending?;
+        let spec = self.projectile.spec;
+        let body = Box3 { center: mover.body.current, half_extents: mover.stance.half_extents() };
+        Some(spec.detonates_on(ending).then(|| {
+            own_blast(world, position, spec.explosion_radius, spec.damage_splash, &body, mover.stance == Stance::Crouched, mover.player.on_ground())
+        }))
+    }
+}
+
+impl Leap {
+    fn launcher_of(&self, leaping: &Leaping) -> Option<Launcher> {
+        leaping.launcher.filter(|launcher| self.rocket == Some(launcher.weapon))
+    }
+}
+
 
 /// Whether walking links get from `from` to `to` within `budget` seconds.
 fn walks_within(links: &[Vec<Link>], from: CellId, to: CellId, budget: f32) -> bool {
@@ -348,12 +512,14 @@ fn walks_within(links: &[Vec<Link>], from: CellId, to: CellId, budget: f32) -> b
 /// The drops and jumps out of `id`, tried along each of the eight headings in which it has no
 /// walking neighbor. `walking` is every cell's walk links, which decide both the headings and
 /// whether a leap is quicker than walking.
+#[allow(clippy::too_many_arguments)]
 pub fn leap_links(
     world: &CollisionWorld,
     cells: &[Cell],
     columns: &HashMap<IVec2, Vec<CellId>>,
     walking: &[Vec<Link>],
-    triggers: &[TriggerVolume],
+    leaping: &Leaping,
+    on_foot: &[bool],
     rules: &MovementRules,
     id: CellId,
 ) -> Vec<Link> {
@@ -369,23 +535,47 @@ pub fn leap_links(
         let ahead = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
         let neighbor = from.column + IVec2::new(ahead.x.round() as i32, ahead.z.round() as i32);
         let walked = walking[id as usize].iter().any(|link| cells[link.to as usize].column == neighbor);
-        if walked {
+        // A rocket jump needs floor under it while it runs up and fires, so it starts back from
+        // the edge: floor a meter on, and none past it, a gap or a wall to go over.
+        let floor_at = |meters: f32| cell_near(cells, columns, from.feet + ahead * meters).is_some();
+        let open_ahead = leaping.launcher.is_some()
+            && floor_at(ROCKET_LOOKAHEAD.start)
+            && !floor_at(ROCKET_LOOKAHEAD.end)
+            && foremost_in_its_square(cells, columns, from, ahead);
+        if walked && !open_ahead {
             continue;
         }
-        let tries = [
-            (LinkKind::Drop, Leap { yaw, run_up: speed, jump: false, ticks: 0 }),
-            (LinkKind::Jump, Leap { yaw, run_up: 0.0, jump: true, ticks: 0 }),
-            (LinkKind::Jump, Leap { yaw, run_up: speed, jump: true, ticks: 0 }),
-        ];
+        let plain = Leap { yaw, run_up: speed, jump: false, ticks: 0, run_ticks: 0, rocket: None, damage: 0 };
+        let mut tries = Vec::new();
+        if !walked {
+            tries.extend([
+                (LinkKind::Drop, plain),
+                (LinkKind::Jump, Leap { run_up: 0.0, jump: true, ..plain }),
+                (LinkKind::Jump, Leap { jump: true, ..plain }),
+            ]);
+        }
+        if let Some(launcher) = leaping.launcher.filter(|_| open_ahead) {
+            let rocket = Leap { run_up: 0.0, jump: true, rocket: Some(launcher.weapon), ..plain };
+            tries.extend(ROCKET_RUN_TICKS.map(|run_ticks| (LinkKind::RocketJump, Leap { run_ticks, ..rocket })));
+        }
         for (kind, leap) in tries {
-            let Some((landed, ticks)) = fly(world, triggers, rules, from.feet, leap) else { continue };
-            let Some(to) = cell_near(cells, columns, landed).filter(|to| !cells[*to as usize].crouched) else { continue };
-            let seconds = ticks as f32 * TICK;
+            let Some(flight) = fly(world, leaping, rules, from.feet, leap) else { continue };
+            let Some(to) = cell_near(cells, columns, flight.landed).filter(|to| !cells[*to as usize].crouched) else { continue };
+            let seconds = flight.ticks as f32 * TICK;
+            let leap = Leap { ticks: flight.ticks, damage: flight.damage, ..leap };
+            // Taking a pickup no cell reaches is worth any leap, however it lands.
+            let grabs = flight.grabbed.filter(|pickup| !on_foot.get(*pickup as usize).copied().unwrap_or(true));
+            if let Some(pickup) = grabs {
+                if !links.iter().any(|link| link.grabs == Some(pickup) && link.to == to) {
+                    links.push(Link { to, kind, seconds, leap: Some(leap), grabs: Some(pickup) });
+                }
+                continue;
+            }
             let known = walking[id as usize].iter().chain(&links).any(|link| link.to == to);
             if to == id || known || walks_within(walking, id, to, seconds + LEAP_SAVES) {
                 continue;
             }
-            links.push(Link { to, kind, seconds, leap: Some(Leap { ticks, ..leap }) });
+            links.push(Link { to, kind, seconds, leap: Some(leap), grabs: None });
         }
     }
     links
@@ -393,14 +583,20 @@ pub fn leap_links(
 
 /// The whole graph at once, for tests and tools; the bake runs the same pieces in steps.
 pub fn graph(world: &CollisionWorld, faces: &[Face], triggers: &[TriggerVolume], rules: &MovementRules, starts: &[Vec3]) -> NavGraph {
-    let cells = floor_cells(world, faces, triggers);
+    graph_leaping(world, faces, &Leaping { triggers, ..default() }, rules, starts)
+}
+
+/// [`graph`], with pickups to grab in flight and a launcher to rocket jump on.
+pub fn graph_leaping(world: &CollisionWorld, faces: &[Face], leaping: &Leaping, rules: &MovementRules, starts: &[Vec3]) -> NavGraph {
+    let cells = floor_cells(world, faces, leaping.triggers);
     let columns = columns(&cells);
     let speed = running_speed(rules);
+    let on_foot = leaping.on_foot(&cells);
     let walking: Vec<Vec<Link>> = (0..cells.len() as CellId).map(|id| walk_links(world, &cells, &columns, id, speed)).collect();
     let links = (0..cells.len() as CellId)
         .map(|id| {
             let mut links = walking[id as usize].clone();
-            links.extend(leap_links(world, &cells, &columns, &walking, triggers, rules, id));
+            links.extend(leap_links(world, &cells, &columns, &walking, leaping, &on_foot, rules, id));
             links
         })
         .collect();
@@ -484,26 +680,53 @@ impl NavGraph {
 
     /// The cheapest way from `from` to `to` along the links, or `None` if there is none. Each link
     /// costs its seconds plus whatever `extra` says entering it costs on top, in seconds and never
-    /// negative, which is where a caller weighs exposure, danger or anything a round has learned.
+    /// negative (an infinite one is a link the caller cannot take), which is where a caller weighs
+    /// exposure, danger, or anything a round has learned.
     ///
-    /// Dijkstra, stopping at `to`: a graph of a few thousand cells is searched in well under a
+    /// Dijkstra, stopping at the end: a graph of a few thousand cells is searched in well under a
     /// millisecond, and a heuristic would have to know the fastest a leap can cover ground.
     pub fn path(&self, from: CellId, to: CellId, extra: impl Fn(CellId, &Link) -> f32) -> Option<Vec<Link>> {
+        self.search(from, |at| at == to, None, extra)
+    }
+
+    /// The cheapest way from `from` to taking the pickup at `pickup` in
+    /// [`Fields::pickups`](crate::game::nav_field::Fields::pickups): to the cell it stands over, or
+    /// ending with a leap that takes it in flight.
+    pub fn path_to_pickup(&self, from: CellId, pickup: u16, extra: impl Fn(CellId, &Link) -> f32) -> Option<Vec<Link>> {
+        let over = self.fields.pickups.get(pickup as usize).and_then(|pickup| self.cell_at(pickup.feet));
+        self.search(from, |at| Some(at) == over, Some(pickup), extra)
+    }
+
+    /// Dijkstra from `from` until the cheapest of: a cell `ends` holds for, or a link out of one
+    /// reached that grabs `grabs`, which ends the path.
+    fn search(&self, from: CellId, ends: impl Fn(CellId) -> bool, grabs: Option<u16>, extra: impl Fn(CellId, &Link) -> f32) -> Option<Vec<Link>> {
         let count = self.cells.len();
-        if from as usize >= count || to as usize >= count {
+        if from as usize >= count {
             return None;
         }
         let mut seconds = vec![f32::INFINITY; count];
         let mut came_by: Vec<Option<(CellId, usize)>> = vec![None; count];
+        // The cheapest end found, with the grabbing link it ends with, if one.
+        let mut best: Option<(f32, CellId, Option<usize>)> = None;
         seconds[from as usize] = 0.0;
         let mut queue = BinaryHeap::from([Reverse((0u32, from))]);
         while let Some(Reverse((_, at))) = queue.pop() {
-            if at == to {
+            let cost = seconds[at as usize];
+            if best.is_some_and(|(least, ..)| least <= cost) {
                 break;
             }
-            let cost = seconds[at as usize];
+            if ends(at) {
+                best = Some((cost, at, None));
+                continue;
+            }
             for (index, link) in self.links(at).iter().enumerate() {
                 let next = cost + link.seconds + extra(link.to, link).max(0.0);
+                if grabs.is_some() && link.grabs == grabs {
+                    if next.is_finite() && best.is_none_or(|(least, ..)| next < least) {
+                        best = Some((next, at, Some(index)));
+                    }
+                    continue;
+                }
                 if next < seconds[link.to as usize] {
                     seconds[link.to as usize] = next;
                     came_by[link.to as usize] = Some((at, index));
@@ -511,11 +734,9 @@ impl NavGraph {
                 }
             }
         }
-        if !seconds[to as usize].is_finite() {
-            return None;
-        }
-        let mut path = Vec::new();
-        let mut at = to;
+        let (_, end, grab) = best?;
+        let mut path: Vec<Link> = grab.map(|index| self.links(end)[index]).into_iter().collect();
+        let mut at = end;
         while let Some((before, index)) = came_by[at as usize] {
             path.push(self.links(before)[index]);
             at = before;
@@ -528,6 +749,7 @@ impl NavGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::player::PLAYER_HALF;
     use crate::common::world_surface::Volume;
     use crate::tool::room::Room;
 
@@ -539,6 +761,102 @@ mod tests {
 
     fn room(min: Vec3, max: Vec3) -> Volume {
         Volume::air(Room::new(min, max))
+    }
+
+    /// The rocket launcher as `weapons.toml` ships it, for the leaps that need one.
+    fn launcher() -> Launcher {
+        Launcher { weapon: WeaponId::of("rocket_launcher"), rocket: ProjectileSpec::ROCKET }
+    }
+
+    /// Halls' BFG in small: a 4 m platform ringed by a 5.7 m gap over a kill floor, with a weapon
+    /// over the platform's middle.
+    fn an_island() -> (Vec<Volume>, TriggerVolume, Vec3) {
+        let volumes = vec![
+            room(Vec3::new(-10.0, -10.0, -10.0), Vec3::new(10.0, 6.0, 10.0)),
+            Volume::solid(Room::new(Vec3::new(-10.0, -10.0, -10.0), Vec3::new(10.0, 0.0, -7.7))),
+            Volume::solid(Room::new(Vec3::new(-2.0, -10.0, -2.0), Vec3::new(2.0, 0.0, 2.0))),
+        ];
+        let kill = TriggerVolume { min: Vec3::new(-10.0, -10.0, -10.0), max: Vec3::new(10.0, -9.0, 10.0), effect: TriggerEffect::Kill };
+        (volumes, kill, Vec3::new(0.25, 0.0, 0.25))
+    }
+
+    /// Breaks if a rocket jump is not baked, or is baked for a gap a jump already crosses: from
+    /// the ledge across 5.7 m to the platform, which no plain jump reaches, with what it costs.
+    #[test]
+    fn a_rocket_jump_crosses_a_gap_no_jump_can() {
+        let (volumes, kill, platform) = an_island();
+        let mut world = CollisionWorld::default();
+        let faces = world.rebuild_volumes(&volumes);
+        let rules = MovementRules::default();
+        let ledge = Vec3::new(0.25, 0.0, -8.25);
+        let plain = graph_leaping(&world, &faces, &Leaping { triggers: &[kill], ..default() }, &rules, &[ledge]);
+        assert!(plain.cell_at(platform).is_none(), "the platform was reached without a rocket");
+
+        let rockets = graph_leaping(&world, &faces, &Leaping { triggers: &[kill], reaches: &[], launcher: Some(launcher()) }, &rules, &[ledge]);
+        let island = rockets.cell_at(platform).expect("no rocket jump reaches the platform");
+        let path = rockets.path(rockets.cell_at(ledge).unwrap(), island, |_, _| 0.0).unwrap();
+        let jump = path.iter().find(|link| link.kind == LinkKind::RocketJump).expect("the way to the platform has no rocket jump in it");
+        let leap = jump.leap.unwrap();
+        assert_eq!(leap.rocket, Some(launcher().weapon));
+        assert!(leap.damage > 0, "a rocket jump that costs nothing");
+    }
+
+    /// Breaks if rocket jumps start from cells chosen by something that does not turn with the
+    /// map, as even columns did: the island turned a quarter has its rocket jumps from the same
+    /// cells turned.
+    #[test]
+    fn rocket_jumps_start_from_the_same_cells_turned() {
+        let (volumes, kill, _) = an_island();
+        let turn = |p: Vec3| Vec3::new(p.z, p.y, -p.x);
+        let turn_box = |min: Vec3, max: Vec3| (turn(min).min(turn(max)), turn(min).max(turn(max)));
+        let turned: Vec<Volume> = volumes
+            .iter()
+            .map(|volume| {
+                let (min, max) = volume.shape.bounds();
+                let (min, max) = turn_box(min, max);
+                Volume { shape: Room::new(min, max), fill: volume.fill }
+            })
+            .collect();
+        let (min, max) = turn_box(kill.min, kill.max);
+        let turned_kill = TriggerVolume { min, max, ..kill };
+        let starts = |volumes: &[Volume], kill: TriggerVolume, ledge: Vec3| {
+            let mut world = CollisionWorld::default();
+            let faces = world.rebuild_volumes(volumes);
+            let graph = graph_leaping(&world, &faces, &Leaping { triggers: &[kill], reaches: &[], launcher: Some(launcher()) }, &MovementRules::default(), &[ledge]);
+            let mut starts: Vec<[i32; 3]> = (0..graph.cells().len() as CellId)
+                .filter(|from| graph.links(*from).iter().any(|link| link.kind == LinkKind::RocketJump))
+                .map(|from| (graph.cells()[from as usize].feet * 100.0).round().as_ivec3().to_array())
+                .collect();
+            starts.sort();
+            starts
+        };
+        let ledge = Vec3::new(0.25, 0.0, -8.25);
+        let plain = starts(&volumes, kill, ledge);
+        assert!(!plain.is_empty(), "no rocket jumps to compare");
+        let mut expected: Vec<[i32; 3]> = plain.iter().map(|feet| (turn(IVec3::from_array(*feet).as_vec3() / 100.0) * 100.0).round().as_ivec3().to_array()).collect();
+        expected.sort();
+        assert_eq!(starts(&turned, turned_kill, turn(ledge)), expected);
+    }
+
+    /// Breaks if a pickup no cell reaches cannot be planned for: hung over a 2 m gap, it is taken
+    /// in flight by a jump across, kept as a link that grabs it.
+    #[test]
+    fn a_pickup_over_a_gap_is_taken_in_flight() {
+        let volumes = [
+            room(Vec3::new(0.0, -6.0, 0.0), Vec3::new(4.0, 4.0, 12.0)),
+            Volume::solid(Room::new(Vec3::new(0.0, -6.0, 0.0), Vec3::new(4.0, 0.0, 4.0))),
+            Volume::solid(Room::new(Vec3::new(0.0, -6.0, 6.0), Vec3::new(4.0, 0.0, 12.0))),
+        ];
+        let kill = TriggerVolume { min: Vec3::new(0.0, -6.0, 0.0), max: Vec3::new(4.0, -5.0, 12.0), effect: TriggerEffect::Kill };
+        let reach = Reach { center: Vec3::new(2.0, 1.0, 5.0), radius: 0.6 };
+        let mut world = CollisionWorld::default();
+        let faces = world.rebuild_volumes(&volumes);
+        let leaping = Leaping { triggers: &[kill], reaches: &[reach], launcher: None };
+        let graph = graph_leaping(&world, &faces, &leaping, &MovementRules::default(), &[Vec3::new(2.25, 0.0, 1.25)]);
+        assert_eq!(leaping.on_foot(graph.cells()), vec![false], "a cell reaches a pickup hung over the gap");
+        let grabs: Vec<&Link> = (0..graph.cells().len() as CellId).flat_map(|id| graph.links(id)).filter(|link| link.grabs == Some(0)).collect();
+        assert!(!grabs.is_empty(), "no leap takes the pickup over the gap");
+        assert!(grabs.iter().all(|link| link.leap.is_some()), "a walk takes a pickup in flight");
     }
 
     /// Breaks if a space only a crouched body fits is left off the graph or walked standing: a

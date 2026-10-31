@@ -19,7 +19,8 @@ use crate::editor::spawn_point::SpawnPointMarker;
 use crate::editor::weapon_pickup::WeaponPickupSpec;
 use crate::game::world_prop::{self, GivesWeapon, WorldProp};
 use crate::game::collision::CollisionWorld;
-use crate::game::nav::{self, Cell, CellId, Link, NavGraph};
+use crate::common::weapon::WeaponAction;
+use crate::game::nav::{self, Cell, CellId, Launcher, Leaping, Link, NavGraph, Reach};
 use crate::game::nav_field::{FieldBake, Pickup, Sight, SightBake};
 use crate::game::nav_rating::MapStatistics;
 use crate::game::player::running_speed;
@@ -85,6 +86,14 @@ impl NavBake {
 
     pub fn statistics(&self) -> &MapStatistics {
         &self.statistics
+    }
+
+    /// Holding `graph`, as if it had just been baked.
+    #[cfg(test)]
+    pub(crate) fn holding(graph: NavGraph) -> Self {
+        let mut bake = NavBake::default();
+        bake.replace(None, (graph, Vec::new()));
+        bake
     }
 
     fn replace(&mut self, hash: Option<u64>, (graph, volumes): (NavGraph, Vec<Volume>)) {
@@ -166,13 +175,31 @@ struct Snapshot {
     triggers: Vec<TriggerVolume>,
     spawns: Vec<Vec3>,
     pickups: Vec<Pickup>,
+    /// The weapon rocket jumps are baked for, if the catalog has one.
+    launcher: Option<Launcher>,
     rules: MovementRules,
     hash: u64,
 }
 
 impl Snapshot {
     fn job(&self) -> Job {
-        Job { snapshot: self.clone(), world: None, faces: Vec::new(), cells: None, found: None, links: Vec::new(), leaps: Vec::new(), graph: None, fields: None, fielded: false }
+        Job {
+            snapshot: self.clone(),
+            world: None,
+            faces: Vec::new(),
+            cells: None,
+            found: None,
+            on_foot: Vec::new(),
+            links: Vec::new(),
+            leaps: Vec::new(),
+            graph: None,
+            fields: None,
+            fielded: false,
+        }
+    }
+
+    fn reaches(&self) -> Vec<Reach> {
+        self.pickups.iter().map(|pickup| pickup.reach).collect()
     }
 }
 
@@ -214,8 +241,8 @@ impl NavInputs<'_, '_> {
         let mut pickups: Vec<Pickup> = self
             .weapon_pickups
             .iter()
-            .map(|(placed, spec)| Pickup { label: weapon(spec), feet: placed.translation })
-            .chain(self.prop_pickups.iter().map(|prop| Pickup { label: prop.model.clone(), feet: prop.at }))
+            .map(|(placed, spec)| Pickup::weapon(weapon(spec), placed.translation))
+            .chain(self.prop_pickups.iter().map(|prop| Pickup::prop(prop.model.clone(), prop.at)))
             .collect();
         pickups.sort_by(|a, b| a.label.cmp(&b.label).then(a.feet.to_array().partial_cmp(&b.feet.to_array()).unwrap_or(std::cmp::Ordering::Equal)));
         pickups
@@ -230,10 +257,30 @@ impl NavInputs<'_, '_> {
         spawns.sort_by(|a, b| a.to_array().partial_cmp(&b.to_array()).unwrap_or(std::cmp::Ordering::Equal));
         let rules = *self.rules;
         let pickups = self.pickups();
+        let launcher = self.launcher();
         // Debug writes an `f32` as its shortest exact decimal, so equal inputs hash equal.
-        let hash = nav_cache::stable_hash(&format!("{volumes:?}{props:?}{triggers:?}{spawns:?}{pickups:?}{rules:?}"));
-        Snapshot { volumes, props, triggers, spawns, pickups, rules, hash }
+        let hash = nav_cache::stable_hash(&format!("{volumes:?}{props:?}{triggers:?}{spawns:?}{pickups:?}{launcher:?}{rules:?}"));
+        Snapshot { volumes, props, triggers, spawns, pickups, launcher, rules, hash }
     }
+
+    fn launcher(&self) -> Option<Launcher> {
+        launcher_in(self.catalog.as_ref()?)
+    }
+}
+
+/// The flat-flying, splashing rocket that throws a body hardest, which is the one a rocket jump is
+/// worth baking for.
+fn launcher_in(catalog: &WeaponCatalog) -> Option<Launcher> {
+    catalog
+        .weapons
+        .iter()
+        .filter_map(|weapon| match weapon.primary.action {
+            WeaponAction::Projectile(rocket) if rocket.gravity_factor == 0.0 && rocket.explosion_radius > 0.0 && rocket.damage_splash > 0 => {
+                Some(Launcher { weapon: weapon.id, rocket })
+            }
+            _ => None,
+        })
+        .max_by_key(|launcher| launcher.rocket.damage_splash)
 }
 
 /// Items: the surface, the cells, a batch of walks and then of leaps per [`LINK_BATCH`] cells,
@@ -246,6 +293,8 @@ struct Job {
     cells: Option<(Vec<Cell>, std::collections::HashMap<IVec2, Vec<CellId>>)>,
     /// How many cells were found, kept once they are handed to the graph.
     found: Option<usize>,
+    /// Per pickup, whether some cell takes it standing.
+    on_foot: Vec<bool>,
     links: Vec<Vec<Link>>,
     leaps: Vec<Vec<Link>>,
     graph: Option<NavGraph>,
@@ -300,6 +349,8 @@ impl BakeJob for Job {
         let Some((cells, columns)) = &self.cells else {
             let cells = nav::floor_cells(world, &self.faces, &self.snapshot.triggers);
             let columns = nav::columns(&cells);
+            let reaches = self.snapshot.reaches();
+            self.on_foot = Leaping { triggers: &self.snapshot.triggers, reaches: &reaches, launcher: self.snapshot.launcher }.on_foot(&cells);
             self.found = Some(cells.len());
             self.cells = Some((cells, columns));
             return;
@@ -314,9 +365,11 @@ impl BakeJob for Job {
         }
         if self.leaps.len() < cells.len() {
             let end = (self.leaps.len() + LINK_BATCH).min(cells.len());
+            let snapshot = &self.snapshot;
+            let reaches = snapshot.reaches();
+            let leaping = Leaping { triggers: &snapshot.triggers, reaches: &reaches, launcher: snapshot.launcher };
             for id in self.leaps.len()..end {
-                let snapshot = &self.snapshot;
-                self.leaps.push(nav::leap_links(world, cells, columns, &self.links, &snapshot.triggers, &snapshot.rules, id as CellId));
+                self.leaps.push(nav::leap_links(world, cells, columns, &self.links, &leaping, &self.on_foot, &snapshot.rules, id as CellId));
             }
             return;
         }
@@ -460,7 +513,7 @@ mod tests {
     use crate::tool::bakes::{BakePlugin, RoomBake};
 
     fn snapshot_of(volumes: Vec<Volume>) -> Snapshot {
-        Snapshot { volumes, props: Vec::new(), triggers: Vec::new(), spawns: Vec::new(), pickups: Vec::new(), rules: MovementRules::default(), hash: 0 }
+        Snapshot { volumes, props: Vec::new(), triggers: Vec::new(), spawns: Vec::new(), pickups: Vec::new(), launcher: None, rules: MovementRules::default(), hash: 0 }
     }
 
     /// Breaks if a bar drawn from this job could run backwards or stop short.
@@ -535,7 +588,8 @@ mod tests {
                 props: Vec::new(),
                 triggers: triggers.iter().copied().collect(),
                 spawns: spawns.iter().map(|placed| placed.translation).collect(),
-                pickups: pickups.iter().map(|(placed, spec)| Pickup { label: format!("{:?}", spec.weapon), feet: placed.translation }).collect(),
+                pickups: pickups.iter().map(|(placed, spec)| Pickup::weapon(format!("{:?}", spec.weapon), placed.translation)).collect(),
+                launcher: launcher_in(&crate::common::weapon_file::default_catalog()),
                 rules: MovementRules::default(),
                 hash: 0,
             })

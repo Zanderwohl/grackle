@@ -17,7 +17,8 @@ use crate::common::trigger::{TriggerEffect, TriggerVolume};
 use crate::game::collision::CollisionWorld;
 use crate::game::condition::Condition;
 use crate::game::explosion::push_speed;
-use crate::game::nav::{cell_near, center_on, CellId, NavGraph, MOST_TICKS, SAME_FLOOR, SPACING, TICK};
+use crate::game::world_prop;
+use crate::game::nav::{cell_near, center_on, Reach, CellId, NavGraph, MOST_TICKS, SAME_FLOOR, SPACING, TICK};
 use crate::game::player::{step, Duck, Mover, PhysicsBody, Player, PlayerInput, STEP_HEIGHT};
 
 /// Columns per side of the square one viewpoint stands for.
@@ -83,6 +84,22 @@ pub enum Field {
 pub struct Pickup {
     pub label: String,
     pub feet: Vec3,
+    /// What it is taken through.
+    pub reach: Reach,
+}
+
+impl Pickup {
+    /// A weapon, taken through the sphere it hovers in.
+    pub fn weapon(label: String, feet: Vec3) -> Self {
+        let reach = Reach { center: feet + Vec3::Y * world_prop::WEAPON_HOVER, radius: world_prop::WEAPON_PICKUP_RADIUS };
+        Pickup { label, feet, reach }
+    }
+
+    /// A placed prop. Taken through its colliders, which the bake does not read; the sphere a prop
+    /// without them is taken through stands in.
+    pub fn prop(label: String, at: Vec3) -> Self {
+        Pickup { label, feet: at, reach: Reach { center: at, radius: world_prop::DEFAULT_PICKUP_RADIUS } }
+    }
 }
 
 /// One viewpoint in another's row.
@@ -229,11 +246,13 @@ impl FieldBake {
             self.links = Some((links_out(graph), links_into(graph)));
         } else if let Some((out, into)) = &self.links {
             if self.distances.len() < self.pickups.len() {
-                let distance = match graph.cell_at(self.pickups[self.distances.len()].feet) {
-                    Some(target) => travel(into, target),
-                    None => vec![f32::INFINITY; graph.cells().len()],
-                };
-                self.distances.push(distance);
+                // Taken standing over it, or in flight by a leap from wherever one starts.
+                let pickup = self.distances.len();
+                let over = graph.cell_at(self.pickups[pickup].feet).map(|cell| (cell, 0.0));
+                let leaps = (0..graph.cells().len() as CellId)
+                    .flat_map(|from| graph.links(from).iter().filter(|link| link.grabs == Some(pickup as u16)).map(move |link| (from, link.seconds)));
+                let seeds: Vec<(CellId, f32)> = over.into_iter().chain(leaps).collect();
+                self.distances.push(travel_from(into, &seeds));
             } else if self.from.len() < self.ends.len() {
                 let end = self.ends[self.from.len()];
                 self.from.push(travel(out, end));
@@ -587,9 +606,19 @@ fn links_out(graph: &NavGraph) -> Vec<Vec<(CellId, f32)>> {
 /// Seconds between `start` and every cell along `links`: from it over [`links_out`], to it over
 /// [`links_into`].
 fn travel(links: &[Vec<(CellId, f32)>], start: CellId) -> Vec<f32> {
+    travel_from(links, &[(start, 0.0)])
+}
+
+/// [`travel`] from several starts at once, each with the seconds it already costs.
+fn travel_from(links: &[Vec<(CellId, f32)>], starts: &[(CellId, f32)]) -> Vec<f32> {
     let mut seconds = vec![f32::INFINITY; links.len()];
-    seconds[start as usize] = 0.0;
-    let mut queue = BinaryHeap::from([Reverse((0u32, start))]);
+    let mut queue = BinaryHeap::new();
+    for &(start, already) in starts {
+        if already < seconds[start as usize] {
+            seconds[start as usize] = already;
+            queue.push(Reverse(((already * 1000.0) as u32, start)));
+        }
+    }
     while let Some(Reverse((_, at))) = queue.pop() {
         let cost = seconds[at as usize];
         for &(next_cell, time) in &links[at as usize] {
@@ -673,7 +702,7 @@ mod tests {
     /// Breaks if distance is measured over links backwards, or is not travel time.
     #[test]
     fn distance_to_a_pickup_grows_away_from_it() {
-        let pickup = Pickup { label: "here".into(), feet: Vec3::new(1.25, 0.0, 1.25) };
+        let pickup = Pickup::weapon("here".into(), Vec3::new(1.25, 0.0, 1.25));
         let graph = baked(&[room(Vec3::ZERO, Vec3::new(12.0, 4.0, 4.0))], &[], vec![pickup]);
         let near = at(&graph, Vec3::new(1.25, 0.0, 1.25), Field::Distance(0));
         let far = at(&graph, Vec3::new(10.75, 0.0, 1.25), Field::Distance(0));
@@ -746,8 +775,8 @@ mod tests {
     fn a_corridor_between_pickups_is_busy_and_a_side_room_is_not() {
         let volumes = [room(Vec3::ZERO, Vec3::new(20.0, 3.0, 2.0)), room(Vec3::new(8.0, 0.0, 2.0), Vec3::new(12.0, 3.0, 8.0))];
         let pickups = vec![
-            Pickup { label: "west".into(), feet: Vec3::new(0.75, 0.0, 0.75) },
-            Pickup { label: "east".into(), feet: Vec3::new(19.25, 0.0, 0.75) },
+            Pickup::weapon("west".into(), Vec3::new(0.75, 0.0, 0.75)),
+            Pickup::weapon("east".into(), Vec3::new(19.25, 0.0, 0.75)),
         ];
         let graph = baked(&volumes, &[], pickups);
         assert!(at(&graph, Vec3::new(5.25, 0.0, 0.75), Field::Traffic) > 0.99);

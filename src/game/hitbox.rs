@@ -13,7 +13,7 @@ use crate::common::app_mode::showing_the_world;
 use bevy::transform::TransformSystems;
 
 use crate::common::class::Stance;
-use crate::common::hitbox::{hitboxes, Hitboxes};
+use crate::common::hitbox::{hitboxes, Box3, Hitboxes};
 use crate::common::skeleton::state::ClipLibrary;
 use crate::common::skeleton::{
     animator_pose, AnimationClock, AnimationPhase, Gait, PoseInputs, Skeleton, SkeletonAnimator,
@@ -105,6 +105,9 @@ pub fn update_hitboxes(
             travel: gait.travel(),
         };
         let mut pose = animator_pose(skeleton, animator, &inputs, &root, clips, crouch);
+        // The body box is the hull, wherever a duck draws the feet: blasts and shots are measured
+        // from where the body is, not from where it is drawn catching up.
+        let hull = physics.zip(stance).map(|(physics, stance)| Box3 { center: physics.current, half_extents: stance.half_extents() });
         if let Some(stack) = stack {
             let still = AnimationState::from_requests(&BodyRequests {
                 crouching: requests.is_some_and(|requests| requests.crouching),
@@ -142,6 +145,9 @@ pub fn update_hitboxes(
         });
 
         *boxes = hitboxes(skeleton, &pose, &root, stance);
+        if let Some(hull) = hull {
+            boxes.body = hull;
+        }
     }
 }
 

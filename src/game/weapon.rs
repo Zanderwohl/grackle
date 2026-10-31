@@ -109,6 +109,11 @@ impl Trigger {
     pub fn deployed(&self) -> bool {
         self.deploying <= 0.0
     }
+
+    /// Whether the primary would fire now, ammo aside.
+    pub fn primary_ready(&self) -> bool {
+        self.deployed() && self.ready(Button::Primary)
+    }
 }
 
 pub struct WeaponPlugin;
@@ -126,6 +131,9 @@ impl Plugin for WeaponPlugin {
                 FixedUpdate,
                 (select_weapons, reload_weapons, pull_trigger)
                     .chain()
+                    // After the move, so a shot leaves from where this tick put the body: the
+                    // order the nav bake's rocket jumps are worked out in.
+                    .after(crate::game::player::step_player)
                     .before(DamageSystems::Deal)
                     .run_if(in_state(AppMode::Play))
                     .run_if(has_authority),

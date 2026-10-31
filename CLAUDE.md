@@ -63,7 +63,16 @@ so nothing downstream can tell a bot from a person. Routes come from
 replayed from the input the bake found it with (`src/game/bot.rs`). A cell
 only a crouched body fits is on the graph, marked `crouched`, reached by
 `Crouch` links and sampled crouched by every field; a bot ducks 1.5 m ahead of
-one, since the duck takes a fifth of a second before the box shrinks. The
+one, since the duck takes a fifth of a second before the box shrinks. A
+leap that passes through a pickup's sphere is kept as a link that `grabs` it
+when no cell takes it standing, and **rocket jumps** are baked for the
+catalog's flat rocket by firing it straight down on a jump from a standstill
+(`own_blast` is `explode`'s rule for one's own blast, without entities, and the
+shot is flown by `projectile::advance`, which `step_projectiles` runs too); a
+bot takes one only while it carries that launcher loaded and the jump would
+not kill it, unless its temperament's **shortsightedness** (a chance per plan,
+0 to 0.1) forgets to ask, and sets off from a standstill within 10 cm of the
+start with the launcher drawn. A `Goal` is a place or a pickup. The
 **Round** tab, right of Metadata, holds the server's `RoundSettings`
 ([`src/common/round_settings.rs`](src/common/round_settings.rs)) — not the
 map's, so neither saved nor sent: **slots**, the host and bots included, which
@@ -1750,6 +1759,14 @@ The order inside a tick is stated as **sets, not as named systems**
 | `Deal` | Everything that writes `Damage` or `Kill`: `fire_hitscan`, `step_projectiles`, `explode`, `fire_flame`, `burn`, `act_on_bodies_in_triggers`. |
 | `Apply` | `apply_damage`, and nothing else, ever. |
 | `Resolve` | `record_damage`, `announce_the_dead`, then `reap_the_dead`. |
+
+**A shot leaves after the move**: `pull_trigger` runs after `step_player`, a
+projectile is launched, flown its first tick and set off in the tick it is
+fired (`fire_projectiles` and `step_projectiles` chained, `explode` after
+them and after `update_hitboxes`), and the blast's push is taken on the next
+move. The nav bake's rocket jumps are worked out in that order, so it is not
+tidiness. A body's box for blasts and shots is its hull, wherever a duck
+draws the feet.
 
 A new damage source joins `Deal` and says nothing about what happens after it.
 Before the sets, `DamagePlugin` had to name every weapon so it could order

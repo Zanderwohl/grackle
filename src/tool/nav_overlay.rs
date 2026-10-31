@@ -41,6 +41,7 @@ const STEP: Color = Color::srgb(1.0, 0.85, 0.2);
 const DROP: Color = Color::srgb(0.9, 0.3, 0.9);
 const JUMP: Color = Color::srgb(0.3, 0.95, 0.4);
 const CROUCH: Color = Color::srgb(0.7, 0.5, 1.0);
+const ROCKET_JUMP: Color = Color::srgb(1.0, 0.35, 0.2);
 
 /// Share of routes at which the traffic scale is full.
 const TRAFFIC_FULL: f32 = 0.5;
@@ -351,6 +352,7 @@ fn link_mesh(graph: &NavGraph) -> Mesh {
                 LinkKind::Drop => DROP,
                 LinkKind::Jump => JUMP,
                 LinkKind::Crouch => CROUCH,
+                LinkKind::RocketJump => ROCKET_JUMP,
             }
             .to_linear()
             .to_f32_array();

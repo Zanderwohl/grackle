@@ -206,16 +206,17 @@ graph**: cells, links, knockback and pickup distances. Then **Sightlines**
 fitted onto it when it finishes, unless the graph was replaced meanwhile. A
 round waits only for the first. The overlay shows each as it is ready.
 
-Measured on Halls in a debug build (2 784 cells; `time_the_nav_bake` in
+Measured on Halls in a debug build (2 928 cells, the BFG platform among them now
+that rocket jumps reach it; `time_the_nav_bake` in
 `src/tool/nav_bake.rs` reports each stage for any map):
 
 | Stage | Seconds |
 | --- | --- |
 | Surface, floors, walks | 0.4 |
-| Drops and jumps | 4.6 |
-| Knockback | 2.3 |
-| **Nav graph in all** | **7.5** |
-| Sightlines | 19.9 |
+| Drops, jumps and rocket jumps | 10.1 |
+| Knockback | 2.4 |
+| **Nav graph in all** | **13.0** |
+| Sightlines | 21.0 |
 | Cover, height and the rest | 0.5 |
 
 Sightlines and knockback are cast between **viewpoints**, one per 1 m square
@@ -396,8 +397,31 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
       `Crouch` links at crouch speed, its viewpoint sees and is seen and is
       thrown as a crouched body in every row, and bots duck 1.5 m ahead of a
       crouch on their route; drawn violet in Cells and links
-- [ ] Leaps that pass through a pickup's sphere, so a pickup over a pit (the
-      BFG on Halls) can be planned for
+- [x] Leaps that pass through a pickup's sphere (its `Reach`): kept however
+      they land when no cell takes that pickup standing, so a pickup hung
+      over a gap is a goal; `NavGraph::path_to_pickup` and the pickup distance
+      fields end at a grab as well as at the cell under a pickup
+- [x] Rocket jumps (`LinkKind::RocketJump`), baked for the catalog's
+      hardest-throwing flat rocket: from a standstill, running 0, 3 or 6
+      ticks, then jumping, crouching and firing straight down. The shot is
+      fired, flown and set off as a round does it, in the round's order: the
+      move, then the shot from `projectile::muzzle`, its flight by
+      `projectile::advance`, its blast by `own_blast` from `explode`'s rules,
+      and the push on the next move. One whose blast misses its jumper is
+      not kept. Tried where there is floor a meter ahead and none two meters
+      ahead, from the cells of each 1 m square furthest along the heading,
+      ties kept, so the starts turn and mirror with the map. Halls' BFG
+      platform, past a 5.7 m gap no jump crosses, is reached this way.
+      `a_baked_rocket_jump_lands_in_a_round_where_the_bake_said` runs one
+      through `pull_trigger`, `fire_projectiles`, `step_projectiles` and
+      `explode`.
+- [x] Bots on rocket jumps: one is routed by only while the bot carries that
+      launcher loaded and the jump would not kill it, unless it is
+      shortsighted (a chance per plan, 0 to 0.1 by temperament, of not
+      asking); self-damage is priced; the launcher is drawn four links ahead
+      and beats an intent's weapon; the last meter is crouch-walked to within
+      10 cm of the start, and the bot sets off standing still with the
+      launcher ready
 - [ ] Chunked across frames on wasm (the jobs already step in batches; check
       the batch sizes against a frame once there is a wasm build)
 
@@ -425,6 +449,6 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
 - [x] `F8` draws each bot's route in its color
 
 ### Later
-- [ ] Rocket-jump links
+- [ ] Rocket jumps aimed off the vertical, and from a run, for distance
 - [ ] The brain: goals, utility scoring, hearing via `Effect`, aim and skill
       (its own plan)

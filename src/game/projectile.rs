@@ -134,9 +134,12 @@ impl Plugin for ProjectilePlugin {
         app
             // In `Deal`: `explode` turns these `Explosion`s into `Damage` in the
             // same tick.
+            // Chained, so a shot is launched, flies its first tick and goes off in the tick it is
+            // fired: the order the nav bake's rocket jumps are worked out in.
             .add_systems(
                 FixedUpdate,
                 (fire_projectiles, run_emitters, step_projectiles)
+                    .chain()
                     .in_set(DamageSystems::Deal),
             )
             // Drawing, so ungated: a client flies none of these and draws all.
@@ -169,21 +172,23 @@ pub fn launch(
 ) -> Entity {
     commands
         .spawn((
-            Projectile {
-                spec,
-                owner,
-                shooter,
-                velocity: *direction * spec.initial_speed,
-                spin: 0.0,
-                age: 0.0,
-                bounces: 0,
-            },
+            fired(spec, direction, owner, shooter),
             PhysicsBody::at(from),
             Transform::from_translation(from).with_scale(Vec3::splat(spec.radius)),
             Visibility::default(),
             Name::new("Projectile"),
         ))
         .id()
+}
+
+/// Where a body's shot leaves from: ahead of its eye along its aim.
+pub fn muzzle(center: Vec3, stance: Stance, player: &Player) -> Vec3 {
+    crate::game::hitscan::eye(center, stance, player.duck) + *crate::game::hitscan::aim(player) * MUZZLE_OFFSET
+}
+
+/// A projectile just fired along `direction`.
+pub fn fired(spec: ProjectileSpec, direction: Dir3, owner: Option<PlayerId>, shooter: Option<Entity>) -> Projectile {
+    Projectile { spec, owner, shooter, velocity: *direction * spec.initial_speed, spin: 0.0, age: 0.0, bounces: 0 }
 }
 
 /// Fires from the step's position, not the drawn one: an interpolated muzzle
@@ -200,15 +205,14 @@ pub fn fire_projectiles(
         let Ok((body, player, stance, id)) = shooters.get(shot.shooter) else { continue };
 
         let direction = crate::game::hitscan::aim(player);
-        let muzzle = crate::game::hitscan::eye(body.current, *stance, player.duck) + *direction * MUZZLE_OFFSET;
-        launch(&mut commands, spec, muzzle, direction, id.copied(), Some(shot.shooter));
+        launch(&mut commands, spec, muzzle(body.current, *stance, player), direction, id.copied(), Some(shot.shooter));
     }
 }
 
 /// Game time, so an emitter does not fire while somebody is in the editor.
 pub fn run_emitters(
     mut commands: Commands,
-    time: Res<Time<Fixed>>,
+    time: Res<Time>,
     mut emitters: Query<(&mut ProjectileEmitter, &GlobalTransform)>,
 ) {
     let dt = time.delta_secs();
@@ -236,7 +240,8 @@ pub fn run_emitters(
 /// Fly everything one tick, and detonate whatever stops flying.
 pub fn step_projectiles(
     mut commands: Commands,
-    time: Res<Time<Fixed>>,
+    // In `FixedUpdate` the plain clock is the fixed one, as `step_player` reads it.
+    time: Res<Time>,
     world: Res<CollisionWorld>,
     rules: Res<MovementRules>,
     mut projectiles: Query<(Entity, &mut Projectile, &mut PhysicsBody, &mut Transform)>,
@@ -249,77 +254,16 @@ pub fn step_projectiles(
     }
 
     for (entity, mut projectile, mut body, _transform) in &mut projectiles {
-        projectile.age += dt;
-        projectile.spin += projectile.spec.spin_rate * dt;
-
-        let spec = projectile.spec;
-        let (velocity, step) = fly(projectile.velocity, &spec, rules.fall(), dt);
-        projectile.velocity = velocity;
-
-        let mut position = body.current;
-        let mut travel = step;
-        let mut ending = None;
-
-        for _ in 0..MAX_CONTACTS {
-            let distance = travel.length();
-            let Ok(direction) = Dir3::new(travel) else { break };
-            let ray = Ray3d::new(position, direction);
-
-            // The muzzle is inside your own hitbox.
-            let others = bodies
-                .iter()
-                .filter(|(target, _)| Some(*target) != projectile.shooter)
-                .map(|(target, boxes)| (target, *boxes));
-
-            let body_hit = trace(&ray, distance, others);
-            let wall = world.ray_hit(&ray, distance);
-
-            // Nearest wins, or rockets pass through walls to bodies behind.
-            let body_first = match (&body_hit, &wall) {
-                (Some(hit), Some((wall, _))) => hit.distance <= *wall,
-                (Some(_), None) => true,
-                _ => false,
-            };
-
-            if body_first {
-                let hit = body_hit.expect("a body was nearer than the wall");
-                position = hit.point;
-                ending = Some((Ending::DirectHit, Some(hit.target)));
-                break;
-            }
-
-            let Some((reached, normal)) = wall else {
-                position += travel;
-                break;
-            };
-
-            let contact = ray.origin + *direction * reached;
-            if projectile.bounces >= spec.max_bounces {
-                // Stood off by its radius, so the blast's sight check does not
-                // find the wall between it and everything.
-                position = contact + normal * spec.radius;
-                ending = Some((Ending::LastBounce, None));
-                break;
-            }
-
-            projectile.bounces += 1;
-            projectile.velocity = bounce(projectile.velocity, normal, spec.restitution);
-            position = contact + normal * SKIN;
-            // The rest of the step, along the new direction. Speed lost to the
-            // bounce applies from next tick; the error is invisible.
-            travel = projectile.velocity.normalize_or_zero() * (distance - reached).max(0.0);
-        }
-
-        // Checked after the move, so a fuse ending mid-tick still traveled.
-        if ending.is_none() && projectile.age >= spec.max_lifetime {
-            ending = Some((Ending::Fuse, None));
-        }
+        let shooter = projectile.shooter;
+        // The muzzle is inside your own hitbox.
+        let others = || bodies.iter().filter(move |(target, _)| Some(*target) != shooter).map(|(target, boxes)| (target, *boxes));
+        let (position, ending) = advance(&mut projectile, body.current, &world, rules.fall(), dt, |ray, distance| trace(ray, distance, others()));
 
         body.previous = body.current;
         body.current = position;
 
         let Some((ending, direct)) = ending else { continue };
-
+        let spec = projectile.spec;
         if spec.detonates_on(ending) {
             blasts.write(Explosion {
                 at: position,
@@ -334,6 +278,78 @@ pub fn step_projectiles(
         // Its flight is over whether or not it went off.
         commands.entity(entity).despawn();
     }
+}
+
+/// One tick of a projectile's flight from `position`: where it ends up, and how its flight ended
+/// if it did, with the body it hit. Swept against the walls and against whatever `hits` finds
+/// along a ray, so the nav bake flies a rocket with nothing in the way the way a round does.
+pub fn advance(
+    projectile: &mut Projectile,
+    mut position: Vec3,
+    world: &CollisionWorld,
+    gravity: f32,
+    dt: f32,
+    mut hits: impl FnMut(&Ray3d, f32) -> Option<crate::common::hitscan::Hit<Entity>>,
+) -> (Vec3, Option<(Ending, Option<Entity>)>) {
+    projectile.age += dt;
+    projectile.spin += projectile.spec.spin_rate * dt;
+
+    let spec = projectile.spec;
+    let (velocity, step) = fly(projectile.velocity, &spec, gravity, dt);
+    projectile.velocity = velocity;
+
+    let mut travel = step;
+    let mut ending = None;
+
+    for _ in 0..MAX_CONTACTS {
+        let distance = travel.length();
+        let Ok(direction) = Dir3::new(travel) else { break };
+        let ray = Ray3d::new(position, direction);
+
+        let body_hit = hits(&ray, distance);
+        let wall = world.ray_hit(&ray, distance);
+
+        // Nearest wins, or rockets pass through walls to bodies behind.
+        let body_first = match (&body_hit, &wall) {
+            (Some(hit), Some((wall, _))) => hit.distance <= *wall,
+            (Some(_), None) => true,
+            _ => false,
+        };
+
+        if body_first {
+            let hit = body_hit.expect("a body was nearer than the wall");
+            position = hit.point;
+            ending = Some((Ending::DirectHit, Some(hit.target)));
+            break;
+        }
+
+        let Some((reached, normal)) = wall else {
+            position += travel;
+            break;
+        };
+
+        let contact = ray.origin + *direction * reached;
+        if projectile.bounces >= spec.max_bounces {
+            // Stood off by its radius, so the blast's sight check does not
+            // find the wall between it and everything.
+            position = contact + normal * spec.radius;
+            ending = Some((Ending::LastBounce, None));
+            break;
+        }
+
+        projectile.bounces += 1;
+        projectile.velocity = bounce(projectile.velocity, normal, spec.restitution);
+        position = contact + normal * SKIN;
+        // The rest of the step, along the new direction. Speed lost to the
+        // bounce applies from next tick; the error is invisible.
+        travel = projectile.velocity.normalize_or_zero() * (distance - reached).max(0.0);
+    }
+
+    // Checked after the move, so a fuse ending mid-tick still traveled.
+    if ending.is_none() && projectile.age >= spec.max_lifetime {
+        ending = Some((Ending::Fuse, None));
+    }
+    (position, ending)
 }
 
 /// One mesh and material for every projectile, scaled per projectile by the
@@ -667,7 +683,8 @@ mod tests {
         world.init_resource::<MovementRules>();
         world.init_resource::<Messages<Explosion>>();
 
-        let mut fixed = Time::<Fixed>::default();
+        // The clock `FixedUpdate` hands its systems: one tick a step.
+        let mut fixed = Time::<()>::default();
         fixed.advance_by(one_tick());
         world.insert_resource(fixed);
         world

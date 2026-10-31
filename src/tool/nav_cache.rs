@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::game::nav::NavGraph;
 
 /// Folded into every key.
-pub const FORMAT: u32 = 5;
+pub const FORMAT: u32 = 7;
 
 pub fn stable_hash(text: &str) -> u64 {
     fnv(&format!("{FORMAT}:{text}"))
@@ -149,7 +149,7 @@ mod tests {
         let faces = world.rebuild_volumes(&[Volume::air(Room::new(Vec3::ZERO, Vec3::new(6.0, 3.0, 4.0)))]);
         let rules = MovementRules::default();
         let mut graph = nav::graph(&world, &faces, &[], &rules, &[]);
-        let pickup = nav_field::Pickup { label: "rocket".into(), feet: Vec3::new(1.25, 0.0, 1.25) };
+        let pickup = nav_field::Pickup::weapon("rocket".into(), Vec3::new(1.25, 0.0, 1.25));
         graph.set_fields(nav_field::bake(&world, &graph, &[], &rules, vec![pickup], Vec::new()));
 
         let bytes = postcard::to_allocvec(&Cached { hash: 7, graph: graph.clone() }).unwrap();

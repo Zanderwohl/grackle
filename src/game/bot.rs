@@ -15,11 +15,14 @@ use crate::common::net::has_authority;
 use crate::common::round_settings::RoundSettings;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::Connected;
-use crate::common::weapon::WeaponId;
+use crate::common::damage::{through_armor, Armor, Damageable};
+use crate::common::game_rules::GameRules;
+use crate::common::weapon::{Ammo, Equipped, WeaponId};
+use crate::game::weapon::Trigger;
 use crate::common::player_color::PlayerColor;
 use crate::common::swatch::Swatch;
 use crate::common::team::Team;
-use crate::game::nav::{CellId, Link, LinkKind, NavGraph};
+use crate::game::nav::{CellId, Leap, Link, LinkKind, NavGraph};
 use crate::game::nav_field::Field;
 use crate::game::player::{step_player, Inputs, PhysicsBody, Player, PlayerInput};
 use crate::tool::nav_bake::NavBake;
@@ -46,11 +49,20 @@ pub struct BotSeat;
 #[derive(Component, Clone, Copy, Debug)]
 pub struct BotOf(pub Entity);
 
+/// Where a bot is going.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Goal {
+    /// To stand here, as feet.
+    Place(Vec3),
+    /// To take the pickup at this place in the baked pickups, standing or in flight.
+    Pickup(u16),
+}
+
 /// What a bot wants this tick, in the world's terms rather than the keyboard's.
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 pub struct BotIntent {
-    /// Where to stand, as feet. Walked to along the nav graph.
-    pub goal: Option<Vec3>,
+    /// Walked to along the nav graph.
+    pub goal: Option<Goal>,
     /// Where to look. With nothing, the bot looks the way it is going.
     pub look_at: Option<Vec3>,
     pub sprint: bool,
@@ -74,6 +86,11 @@ pub struct RouteCosts {
     pub danger: f32,
     /// Per 10 damage a second from a Hurt trigger.
     pub hurt: f32,
+    /// Per 10 damage a rocket jump does its jumper.
+    pub self_damage: f32,
+    /// The chance, each time it plans, that the bot forgets to ask whether a rocket jump would
+    /// kill it.
+    pub shortsightedness: f32,
     /// How wrong the bot can be about a stretch of floor, 0 to 1. At 1 a stretch may read as safe
     /// however dangerous it is, or as twice as risky, and dear even where nothing threatens.
     pub misjudgment: f32,
@@ -83,12 +100,14 @@ pub struct RouteCosts {
 
 impl Default for RouteCosts {
     fn default() -> Self {
-        RouteCosts { exposure: 0.5, danger: 4.0, hurt: 2.0, misjudgment: 0.0, beliefs: 0 }
+        RouteCosts { exposure: 0.5, danger: 4.0, hurt: 2.0, self_damage: 1.0, shortsightedness: 0.0, misjudgment: 0.0, beliefs: 0 }
     }
 }
 
 /// The range each weight of a [`RouteCosts::temperament`] is scaled by: some bots barely mind.
 const TEMPERAMENT: std::ops::Range<f32> = 0.1..1.5;
+/// The most shortsightedness a temperament rolls.
+const MOST_SHORTSIGHTEDNESS: f32 = 0.1;
 /// The most misjudgment a temperament rolls.
 const MOST_MISJUDGMENT: f32 = 0.8;
 /// Meters across a stretch of floor misjudged as one, so a mistake covers a corridor or a ledge
@@ -107,6 +126,8 @@ impl RouteCosts {
             exposure: roll(base.exposure),
             danger: roll(base.danger),
             hurt: roll(base.hurt),
+            self_damage: roll(base.self_damage),
+            shortsightedness: rand::random_range(0.0..MOST_SHORTSIGHTEDNESS),
             misjudgment: rand::random_range(0.0..MOST_MISJUDGMENT),
             beliefs: rand::random(),
         }
@@ -118,7 +139,8 @@ impl RouteCosts {
         let hurt = graph.cells()[cell as usize].hurt as f32;
         let risk = link.seconds * (self.exposure * field(Field::Exposure) / 100.0 + self.danger * field(Field::Knockback) + self.hurt * hurt / 10.0);
         let wrong = self.misjudgment * self.belief(graph.cells()[cell as usize].feet);
-        (risk * (1.0 + wrong) + link.seconds * PHANTOM_RISK * wrong.max(0.0)).max(0.0)
+        let hurt_self = link.leap.map_or(0.0, |leap| leap.damage as f32 / 10.0 * self.self_damage);
+        (risk * (1.0 + wrong) + link.seconds * PHANTOM_RISK * wrong.max(0.0)).max(0.0) + hurt_self
     }
 
     /// How wrong this bot is about the stretch of floor at `feet`, -1 to 1: the same for every cell
@@ -139,7 +161,7 @@ impl RouteCosts {
 #[derive(Component, Clone, Debug, Default)]
 pub struct BotRoute {
     /// The goal the route was planned to, and the graph it was planned on.
-    planned: Option<(Vec3, u64)>,
+    planned: Option<(Goal, u64)>,
     /// The cell the route starts from.
     from: Option<CellId>,
     links: Vec<Link>,
@@ -150,6 +172,10 @@ pub struct BotRoute {
     /// Nearest the next cell has been, and the seconds since it got nearer.
     closest: f32,
     stalled: f32,
+    /// Seconds waiting at a rocket jump's start for the launcher.
+    waited: f32,
+    /// This plan forgot to ask whether a rocket jump would kill the bot.
+    careless: bool,
 }
 
 impl BotRoute {
@@ -161,6 +187,11 @@ impl BotRoute {
     /// Planned, and nothing left to take: arrived, or the goal cannot be reached.
     pub fn is_done(&self) -> bool {
         self.planned.is_some() && self.ahead().is_empty()
+    }
+
+    /// Planned, and no way there was found.
+    pub fn is_lost(&self) -> bool {
+        self.planned.is_some() && self.links.is_empty()
     }
 
     fn forget(&mut self) {
@@ -193,8 +224,41 @@ fn movement_toward(direction: Vec2, yaw: f32) -> Vec2 {
     Vec2::new(direction.dot(right), direction.dot(forward)).clamp_length_max(1.0)
 }
 
-/// Plans `route` to `goal` from `feet` if what it was planned for has changed.
-fn plan(route: &mut BotRoute, graph: &NavGraph, generation: u64, feet: Vec3, goal: Option<Vec3>, costs: &RouteCosts) {
+/// What a bot has to hand for the route: how fast it is going, what it holds, whether that would
+/// fire now, and which weapons it could rocket jump on.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Gear<'a> {
+    /// Meters per second across the floor.
+    pub speed: f32,
+    pub held: Option<WeaponId>,
+    /// The held weapon is drawn, off its cooldown and loaded.
+    pub ready: bool,
+    /// Standing all the way up, as a baked rocket jump starts.
+    pub upright: bool,
+    pub health: u32,
+    pub armor: u32,
+    /// The mode's scale on hurting oneself.
+    pub self_damage: f32,
+    /// Carried with a round to fire.
+    pub loaded: &'a [WeaponId],
+}
+
+impl Gear<'_> {
+    /// A rocket jump needs its launcher loaded, and unless `careless`, a body it would not kill.
+    fn can_take(&self, link: &Link, careless: bool) -> bool {
+        let Some(leap) = link.leap.filter(|leap| leap.rocket.is_some()) else { return true };
+        leap.rocket.is_some_and(|rocket| self.loaded.contains(&rocket)) && (careless || !self.would_die(&leap))
+    }
+
+    fn would_die(&self, leap: &Leap) -> bool {
+        let hurt = (leap.damage as f32 * self.self_damage).round() as u32;
+        through_armor(hurt, self.armor) >= self.health
+    }
+}
+
+/// Plans `route` to `goal` from `feet` if what it was planned for has changed. A rocket jump the
+/// bot has nothing to fire for is a link it cannot take.
+fn plan(route: &mut BotRoute, graph: &NavGraph, generation: u64, feet: Vec3, goal: Option<Goal>, costs: &RouteCosts, gear: &Gear) {
     let Some(goal) = goal else {
         route.forget();
         return;
@@ -204,16 +268,35 @@ fn plan(route: &mut BotRoute, graph: &NavGraph, generation: u64, feet: Vec3, goa
     }
     route.forget();
     route.planned = Some((goal, generation));
-    let (Some(from), Some(to)) = (graph.cell_at(feet), graph.cell_at(goal)) else { return };
+    route.careless = rand::random::<f32>() < costs.shortsightedness;
+    let Some(from) = graph.cell_at(feet) else { return };
+    let careless = route.careless;
+    let extra = |cell, link: &Link| if gear.can_take(link, careless) { costs.extra(graph, cell, link) } else { f32::INFINITY };
+    let path = match goal {
+        Goal::Place(place) => graph.cell_at(place).and_then(|to| graph.path(from, to, extra)),
+        Goal::Pickup(pickup) => graph.path_to_pickup(from, pickup, extra),
+    };
     route.from = Some(from);
-    route.links = graph.path(from, to, |cell, link| costs.extra(graph, cell, link)).unwrap_or_default();
+    route.links = path.unwrap_or_default();
     route.closest = f32::INFINITY;
 }
+
+/// Meters per second under which a bot counts as standing still, to set off a rocket jump from.
+const STILL: f32 = 0.5;
+/// Meters from a rocket jump's start within which a bot crouch-walks the rest of the way, and
+/// within which it counts as there. A run-up of a few ticks from a stride past the start goes off
+/// the edge before it jumps.
+const ROCKET_APPROACH: f32 = 1.0;
+const ROCKET_ARRIVED: f32 = 0.1;
+/// Seconds a bot waits at a rocket jump's start for its launcher before planning again.
+const MOST_WAIT: f32 = 3.0;
+/// Links ahead within which a bot draws the launcher a rocket jump needs, so it has deployed.
+const DRAW_AHEAD: usize = 4;
 
 /// One tick of following `route`: the movement and facing it calls for, and whether to jump.
 /// A drop or a jump is replayed from the input the bake found it with, once the bot is on the
 /// cell it starts from.
-fn follow(route: &mut BotRoute, graph: &NavGraph, feet: Vec3, dt: f32) -> Option<PlayerInput> {
+fn follow(route: &mut BotRoute, graph: &NavGraph, feet: Vec3, gear: &Gear, dt: f32) -> Option<PlayerInput> {
     let cells = graph.cells();
     let link = *route.ahead().first()?;
     let start = match route.next.checked_sub(1) {
@@ -237,14 +320,37 @@ fn follow(route: &mut BotRoute, graph: &NavGraph, feet: Vec3, dt: f32) -> Option
     }
 
     let target = cells[link.to as usize].feet;
-    if matches!(link.kind, LinkKind::Drop | LinkKind::Jump) && link.leap.is_some() && reached(feet, start) {
-        route.leaping = Some(0);
-        return follow(route, graph, feet, dt);
+    let rocket = link.leap.and_then(|leap| leap.rocket);
+    let from_start = (start - feet).xz().length();
+    let level = (start.y - feet.y).abs() <= ARRIVED_HEIGHT;
+    if rocket.is_some() && level && from_start > ROCKET_ARRIVED && from_start < ROCKET_APPROACH {
+        let select = rocket.filter(|rocket| gear.held != Some(*rocket));
+        return Some(PlayerInput { movement: Vec2::Y, yaw: aim_at(feet, start).0, crouch: true, select, ..default() });
+    }
+    let at_start = if rocket.is_some() { level && from_start <= ROCKET_ARRIVED } else { reached(feet, start) };
+    if let Some(leap) = link.leap.filter(|_| at_start) {
+        // Hurt since it was planned: a bot that remembered to ask asks again.
+        if !gear.can_take(&link, route.careless) {
+            route.planned = None;
+            return None;
+        }
+        // A rocket jump starts still and upright, with the launcher drawn, so it goes as baked.
+        let set = leap.rocket.is_none_or(|rocket| gear.held == Some(rocket) && gear.ready && gear.upright && gear.speed < STILL);
+        if set {
+            route.waited = 0.0;
+            route.leaping = Some(0);
+            return follow(route, graph, feet, gear, dt);
+        }
+        route.waited += dt;
+        if route.waited > MOST_WAIT {
+            route.planned = None;
+        }
+        return Some(PlayerInput { yaw: leap.yaw, select: leap.rocket.filter(|rocket| gear.held != Some(*rocket)), ..default() });
     }
     if reached(feet, target) {
         route.next += 1;
         route.closest = f32::INFINITY;
-        return follow(route, graph, feet, dt);
+        return follow(route, graph, feet, gear, dt);
     }
 
     // A leap is set off from its start; anything else is walked straight at.
@@ -263,7 +369,9 @@ fn follow(route: &mut BotRoute, graph: &NavGraph, feet: Vec3, dt: f32) -> Option
     let low = |link: &Link| link.kind == LinkKind::Crouch || cells[link.to as usize].crouched;
     let crouch = route.ahead().iter().take_while(|link| (cells[link.to as usize].feet - feet).length() <= CROUCH_AHEAD).any(low)
         || graph.cell_at(feet).is_some_and(|here| cells[here as usize].crouched);
-    Some(PlayerInput { movement: Vec2::Y, yaw, crouch, ..default() })
+    let launcher = route.ahead().iter().take(DRAW_AHEAD).find_map(|link| link.leap.and_then(|leap| leap.rocket));
+    let select = launcher.filter(|rocket| gear.held != Some(*rocket));
+    Some(PlayerInput { movement: Vec2::Y, yaw, crouch, select, ..default() })
 }
 
 /// The cell a bot's route is heading for next, if it has one.
@@ -276,14 +384,36 @@ pub fn heading_for(route: &BotRoute) -> Option<CellId> {
 pub fn steer_bots(
     time: Res<Time>,
     nav: Option<Res<NavBake>>,
-    mut bots: Query<(&PhysicsBody, &Stance, &Player, &BotIntent, Option<&RouteCosts>, &mut BotRoute, &mut Inputs), With<BotOf>>,
+    rules: Option<Res<GameRules>>,
+    mut bots: Query<
+        (
+            (&PhysicsBody, &Stance, &Player, &BotIntent, Option<&RouteCosts>),
+            (&mut BotRoute, &mut Inputs, Option<(&Equipped, &Ammo, &Trigger)>, Option<&Damageable>, Option<&Armor>),
+        ),
+        With<BotOf>,
+    >,
 ) {
     let dt = time.delta_secs();
-    for (body, stance, player, intent, costs, mut route, mut inputs) in &mut bots {
+    for ((body, stance, player, intent, costs), (mut route, mut inputs, arms, health, armor)) in &mut bots {
         let feet = feet_of(body, *stance);
+        let loaded: Vec<WeaponId> = arms.map_or_else(Vec::new, |(equipped, ammo, _)| {
+            equipped.carried().iter().copied().filter(|weapon| ammo.at(*weapon).is_some_and(|state| state.clip + state.reserve > 0)).collect()
+        });
+        let gear = Gear {
+            speed: player.velocity.xz().length(),
+            held: arms.and_then(|(equipped, ..)| equipped.held()),
+            ready: arms.is_some_and(|(equipped, ammo, trigger)| {
+                trigger.primary_ready() && equipped.held().and_then(|held| ammo.at(held)).is_some_and(|state| state.clip > 0 && state.reloading <= 0.0)
+            }),
+            upright: *stance == Stance::Standing && player.duck.amount == 0.0,
+            health: health.map_or(u32::MAX, Damageable::health),
+            armor: armor.map_or(0, Armor::points),
+            self_damage: rules.as_deref().map_or(1.0, |rules| rules.0.self_damage),
+            loaded: &loaded,
+        };
         let walking = nav.as_deref().and_then(|nav| {
-            plan(&mut route, nav.graph(), nav.generation(), feet, intent.goal, &costs.copied().unwrap_or_default());
-            follow(&mut route, nav.graph(), feet, dt)
+            plan(&mut route, nav.graph(), nav.generation(), feet, intent.goal, &costs.copied().unwrap_or_default(), &gear);
+            follow(&mut route, nav.graph(), feet, &gear, dt)
         });
         let mut input = walking.unwrap_or(PlayerInput { yaw: player.yaw, pitch: player.pitch, ..default() });
         let leaping = route.leaping.is_some();
@@ -295,14 +425,19 @@ pub fn steer_bots(
             input.movement = movement_toward(world, yaw);
             (input.yaw, input.pitch) = (yaw, pitch);
         }
-        input.sprint |= intent.sprint;
-        input.crouch = (input.crouch || intent.crouch) && !leaping;
-        input.attack = intent.fire;
-        input.attack_held = intent.fire;
-        input.alt_attack = intent.alt_fire;
-        input.alt_attack_held = intent.alt_fire;
-        input.reload = intent.reload;
-        input.select = intent.select;
+        // A leap's own buttons are part of what makes it land, a rocket jump's crouch and shot
+        // among them, so the intent's wait for it.
+        if !leaping {
+            input.sprint |= intent.sprint;
+            input.crouch |= intent.crouch;
+            input.attack |= intent.fire;
+            input.attack_held |= intent.fire;
+            input.alt_attack = intent.alt_fire;
+            input.alt_attack_held = intent.alt_fire;
+            input.reload = intent.reload;
+            // The route's draw first: a rocket jump waits at its start for that launcher.
+            input.select = input.select.or(intent.select);
+        }
         inputs.0 = input;
     }
 }
@@ -344,7 +479,11 @@ fn draw_bot_routes(
         let lift = Vec3::Y * ROUTE_LIFT;
         let points = std::iter::once(feet_of(body, *stance)).chain(route.ahead().iter().map(|link| cells[link.to as usize].feet)).map(|feet| feet + lift);
         gizmos.linestrip(points, color);
-        if let Some(goal) = intent.goal {
+        let goal = intent.goal.and_then(|goal| match goal {
+            Goal::Place(place) => Some(place),
+            Goal::Pickup(pickup) => nav.graph().fields().pickups.get(pickup as usize).map(|pickup| pickup.reach.center - lift),
+        });
+        if let Some(goal) = goal {
             gizmos.circle(Isometry3d::new(goal + lift, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)), ARRIVED, color);
         }
     }
@@ -385,19 +524,42 @@ pub(crate) fn fill_empty_slots(
     }
 }
 
+/// One roaming goal in this many is a pickup rather than a place.
+const ROAM_TO_PICKUPS: u32 = 4;
+
+/// Seconds a roaming bot with no way to its goal waits before picking another. A bot stranded
+/// where nothing leads out would otherwise search the whole graph every tick.
+const ROAM_RETRY: f32 = 1.0;
+
 /// A placeholder until there is a brain: wanders from one random cell to another.
 #[derive(Component, Default, Debug)]
-pub struct Roam;
+pub struct Roam {
+    /// Seconds until a goal with no way to it is given up for another.
+    retry_in: f32,
+}
 
-fn roam(nav: Option<Res<NavBake>>, mut bots: Query<(&BotRoute, &mut BotIntent), With<Roam>>) {
+fn roam(time: Res<Time>, nav: Option<Res<NavBake>>, mut bots: Query<(&BotRoute, &mut BotIntent, &mut Roam)>) {
     let Some(nav) = nav else { return };
     let cells = nav.graph().cells();
     if cells.is_empty() {
         return;
     }
-    for (route, mut intent) in &mut bots {
+    for (route, mut intent, mut roam) in &mut bots {
+        roam.retry_in = (roam.retry_in - time.delta_secs()).max(0.0);
+        if route.is_lost() && roam.retry_in > 0.0 {
+            continue;
+        }
         if intent.goal.is_none() || route.is_done() {
-            intent.goal = Some(cells[rand::random_range(0..cells.len())].feet);
+            if route.is_lost() {
+                roam.retry_in = ROAM_RETRY;
+            }
+            // Now and then a pickup, so the leaps only a pickup is worth get taken.
+            let pickups = nav.graph().fields().pickups.len();
+            intent.goal = Some(if pickups > 0 && rand::random_range(0..ROAM_TO_PICKUPS) == 0 {
+                Goal::Pickup(rand::random_range(0..pickups) as u16)
+            } else {
+                Goal::Place(cells[rand::random_range(0..cells.len())].feet)
+            });
         }
     }
 }
@@ -575,6 +737,156 @@ mod tests {
         }
     }
 
+    /// Breaks if a bot cannot take a pickup only a rocket jump reaches: holding a loaded launcher,
+    /// it stops at the jump's start, waits for the launcher, and is thrown onto the platform by
+    /// its own blast, through the real step and explosion rules. Without one, it has no route.
+    #[test]
+    fn a_bot_rocket_jumps_to_a_pickup_on_an_island() {
+        use crate::common::projectile::ProjectileSpec;
+        use crate::common::trigger::{TriggerEffect, TriggerVolume};
+        use crate::game::nav::{Launcher, Leaping};
+        use crate::game::nav_field::{self, Pickup};
+        let volumes = [
+            Volume::air(Room::new(Vec3::new(-10.0, -10.0, -10.0), Vec3::new(10.0, 6.0, 10.0))),
+            Volume::solid(Room::new(Vec3::new(-10.0, -10.0, -10.0), Vec3::new(10.0, 0.0, -7.7))),
+            Volume::solid(Room::new(Vec3::new(-2.0, -10.0, -2.0), Vec3::new(2.0, 0.0, 2.0))),
+        ];
+        let kill = TriggerVolume { min: Vec3::new(-10.0, -10.0, -10.0), max: Vec3::new(10.0, -9.0, 10.0), effect: TriggerEffect::Kill };
+        let mut world = CollisionWorld::default();
+        let faces = world.rebuild_volumes(&volumes);
+        let rules = MovementRules::default();
+        let launcher = Launcher { weapon: WeaponId::of("rocket_launcher"), rocket: ProjectileSpec::ROCKET };
+        let prize = Pickup::weapon("bfg".into(), Vec3::new(0.25, 0.0, 0.25));
+        let start = Vec3::new(0.25, 0.0, -9.25);
+        let leaping = Leaping { triggers: &[kill], reaches: &[prize.reach], launcher: Some(launcher) };
+        let mut graph = nav::graph_leaping(&world, &faces, &leaping, &rules, &[start]);
+        graph.set_fields(nav_field::bake(&world, &graph, &[kill], &rules, vec![prize.clone()], Vec::new()));
+
+        let unarmed = Gear::default();
+        let mut route = BotRoute::default();
+        plan(&mut route, &graph, 0, start, Some(Goal::Pickup(0)), &RouteCosts::default(), &unarmed);
+        assert!(route.ahead().is_empty(), "a bot with no launcher was routed by a rocket jump");
+
+        let loaded = [launcher.weapon];
+        // Hurt enough that the jump would kill: careful, no route; shortsighted every time, the jump.
+        let hurt = Gear { health: 20, self_damage: 1.0, loaded: &loaded, ..default() };
+        let mut route = BotRoute::default();
+        plan(&mut route, &graph, 0, start, Some(Goal::Pickup(0)), &RouteCosts::default(), &hurt);
+        assert!(route.ahead().is_empty(), "a bot the jump would kill was routed by it");
+        let mut route = BotRoute::default();
+        plan(&mut route, &graph, 0, start, Some(Goal::Pickup(0)), &RouteCosts { shortsightedness: 1.0, ..default() }, &hurt);
+        assert!(!route.ahead().is_empty(), "a bot that forgot to look did not take the jump");
+
+        let mut mover = Mover { player: Player { ground: Some(Vec3::Y), ..default() }, body: PhysicsBody::at(crate::common::class::body_center_from_feet(start)), stance: Stance::Standing };
+        let mut route = BotRoute::default();
+        let mut held = None;
+        // The shot, as `pull_trigger`, `fire_projectiles`, `step_projectiles` and `explode` take
+        // it, after the move it was fired on; that agrees with a round is
+        // `a_baked_rocket_jump_lands_in_a_round_where_the_bake_said`.
+        let mut shot: Option<nav::Shot> = None;
+        let mut kick = Vec3::ZERO;
+        let dt = nav::TICK;
+        for _ in 0..(12.0 / dt) as u32 {
+            let feet = feet_of(&mover.body, mover.stance);
+            if prize.reach.touches(mover.body.current, mover.stance.half_extents()) {
+                return;
+            }
+            let upright = mover.stance == Stance::Standing && mover.player.duck.amount == 0.0;
+            let gear = Gear { speed: mover.player.velocity.xz().length(), held, ready: held.is_some(), upright, health: 150, armor: 0, self_damage: 1.0, loaded: &loaded };
+            plan(&mut route, &graph, 0, feet, Some(Goal::Pickup(0)), &RouteCosts::default(), &gear);
+            let input = follow(&mut route, &graph, feet, &gear, dt).unwrap_or_default();
+            held = input.select.or(held);
+            step(&mut mover, std::mem::take(&mut kick), &input, &Condition::default(), None, &world, &rules, dt);
+            if input.attack && held == Some(launcher.weapon) {
+                shot = Some(nav::Shot::fire(launcher, &mover));
+            }
+            if let Some(blast) = shot.as_mut().and_then(|shot| shot.tick(&world, rules.fall(), &mover)) {
+                kick = blast.unwrap_or_default().1;
+                shot = None;
+            }
+        }
+        panic!("the bot never took the pickup; it is at {}", feet_of(&mover.body, mover.stance));
+    }
+
+    /// Breaks if a goal with no way to it is rerolled every frame, so a stranded bot searches the
+    /// whole graph every tick: it waits [`ROAM_RETRY`] first.
+    #[test]
+    fn a_stranded_bot_waits_before_picking_another_goal() {
+        use bevy::ecs::system::RunSystemOnce;
+        let volumes = [Volume::air(Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0))), Volume::air(Room::new(Vec3::new(20.0, 0.0, 0.0), Vec3::new(24.0, 3.0, 4.0)))];
+        let mut world_collision = CollisionWorld::default();
+        let faces = world_collision.rebuild_volumes(&volumes);
+        let graph = nav::graph(&world_collision, &faces, &[], &MovementRules::default(), &[]);
+        let sealed = Goal::Place(Vec3::new(22.25, 0.0, 2.25));
+
+        let mut world = World::new();
+        world.insert_resource(NavBake::holding(graph.clone()));
+        world.init_resource::<Time>();
+        let mut route = BotRoute::default();
+        plan(&mut route, &graph, 0, Vec3::new(1.25, 0.0, 1.25), Some(sealed), &RouteCosts::default(), &Gear::default());
+        assert!(route.is_lost());
+        let bot = world.spawn((route, BotIntent { goal: Some(sealed), ..default() }, Roam::default())).id();
+        world.run_system_once(roam).unwrap();
+        let rerolled = world.get::<BotIntent>(bot).unwrap().goal;
+        assert_ne!(rerolled, Some(sealed), "a goal with no way to it was kept");
+        world.get_mut::<BotIntent>(bot).unwrap().goal = Some(sealed);
+        world.run_system_once(roam).unwrap();
+        assert_eq!(world.get::<BotIntent>(bot).unwrap().goal, Some(sealed), "a stranded bot picked again before waiting");
+    }
+
+    /// Breaks if a brain's weapon choice beats the route's: at a rocket jump's start the bot asks
+    /// for the launcher whatever the intent selects, or it waits there for a launcher it never holds.
+    #[test]
+    fn a_rocket_jumps_launcher_beats_the_intents_weapon() {
+        use bevy::ecs::system::RunSystemOnce;
+        use crate::common::projectile::ProjectileSpec;
+        use crate::game::nav::{Launcher, Leaping};
+        let volumes = [
+            Volume::air(Room::new(Vec3::new(-10.0, -10.0, -10.0), Vec3::new(10.0, 6.0, 10.0))),
+            Volume::solid(Room::new(Vec3::new(-10.0, -10.0, -10.0), Vec3::new(10.0, 0.0, -7.7))),
+            Volume::solid(Room::new(Vec3::new(-2.0, -10.0, -2.0), Vec3::new(2.0, 0.0, 2.0))),
+        ];
+        let mut world_collision = CollisionWorld::default();
+        let faces = world_collision.rebuild_volumes(&volumes);
+        let launcher = Launcher { weapon: WeaponId::of("rocket_launcher"), rocket: ProjectileSpec::ROCKET };
+        let leaping = Leaping { launcher: Some(launcher), ..default() };
+        let graph = nav::graph_leaping(&world_collision, &faces, &leaping, &MovementRules::default(), &[Vec3::new(0.25, 0.0, -9.25)]);
+        let island = graph.cells().iter().find(|cell| cell.feet.xz().length() < 1.0).unwrap().feet;
+        // Where the bot's own route sets off by rocket, so the launcher is the next thing it needs.
+        let loaded = [launcher.weapon];
+        let gear = Gear { health: 150, self_damage: 1.0, loaded: &loaded, ..default() };
+        let mut route = BotRoute::default();
+        plan(&mut route, &graph, 0, Vec3::new(0.25, 0.0, -9.25), Some(Goal::Place(island)), &RouteCosts::default(), &gear);
+        let jump = route.links.iter().position(|link| link.kind == LinkKind::RocketJump).expect("the route to the island has no rocket jump");
+        let start = match jump.checked_sub(1) {
+            Some(before) => graph.cells()[route.links[before].to as usize].feet,
+            None => graph.cells()[route.from.unwrap() as usize].feet,
+        };
+
+        let mut world = World::new();
+        world.insert_resource(NavBake::holding(graph));
+        world.init_resource::<Time>();
+        let other = WeaponId::of("shotgun");
+        let mut equipped = Equipped::carrying([launcher.weapon, other]);
+        equipped.select(other);
+        let mut ammo = Ammo::default();
+        ammo.at_mut(launcher.weapon).clip = 4;
+        let bot = world
+            .spawn((
+                BotOf(Entity::PLACEHOLDER),
+                Player { ground: Some(Vec3::Y), ..default() },
+                PhysicsBody::at(crate::common::class::body_center_from_feet(start)),
+                Stance::Standing,
+                BotIntent { goal: Some(Goal::Place(island)), select: Some(other), ..default() },
+                BotRoute::default(),
+                Inputs::default(),
+                (equipped, ammo, Trigger::default()),
+            ))
+            .id();
+        world.run_system_once(steer_bots).unwrap();
+        assert_eq!(world.get::<Inputs>(bot).unwrap().0.select, Some(launcher.weapon), "the intent's weapon beat the rocket jump's launcher");
+    }
+
     /// Breaks if a bot walks into a vent standing: it must duck ahead of the crouch links and come
     /// out the far side, driving `step` with nothing but what [`follow`] says.
     #[test]
@@ -602,8 +914,8 @@ mod tests {
                 assert!(crouched, "the bot came through the vent without ever crouching");
                 return;
             }
-            plan(&mut route, &graph, 0, feet, Some(goal), &RouteCosts::default());
-            let input = follow(&mut route, &graph, feet, dt).unwrap_or_default();
+            plan(&mut route, &graph, 0, feet, Some(Goal::Place(goal)), &RouteCosts::default(), &Gear::default());
+            let input = follow(&mut route, &graph, feet, &Gear::default(), dt).unwrap_or_default();
             crouched |= mover.stance == Stance::Crouched;
             step(&mut mover, Vec3::ZERO, &input, &Condition::default(), None, &world, &rules, dt);
         }
@@ -634,8 +946,8 @@ mod tests {
             if reached(feet, graph.cells()[graph.cell_at(goal).unwrap() as usize].feet) {
                 return;
             }
-            plan(&mut route, &graph, 0, feet, Some(goal), &RouteCosts::default());
-            let input = follow(&mut route, &graph, feet, dt).unwrap_or_default();
+            plan(&mut route, &graph, 0, feet, Some(Goal::Place(goal)), &RouteCosts::default(), &Gear::default());
+            let input = follow(&mut route, &graph, feet, &Gear::default(), dt).unwrap_or_default();
             step(&mut mover, Vec3::ZERO, &input, &Condition::default(), None, &world, &rules, dt);
         }
         panic!("the bot never reached the ledge; it is at {}", feet_of(&mover.body, mover.stance));

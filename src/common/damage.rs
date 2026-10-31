@@ -171,11 +171,19 @@ impl Armor {
     /// Takes [`ARMOR_ABSORBS`] of a hit, rounded up so a 1-point hit is not
     /// free of armor for ever, and returns what is left for health.
     pub fn soak(&mut self, amount: u32) -> u32 {
-        let wanted = (amount as f32 * ARMOR_ABSORBS).ceil() as u32;
-        let taken = wanted.min(self.points).min(amount);
-        self.points -= taken;
-        amount - taken
+        let through = through_armor(amount, self.points);
+        self.points -= amount - through;
+        through
     }
+}
+
+/// What of a hit of `amount` gets past `points` of armor to health, as [`Armor::soak`] works it.
+pub fn through_armor(amount: u32, points: u32) -> u32 {
+    let wanted = (amount as f32 * ARMOR_ABSORBS).ceil() as u32;
+    amount - wanted.min(points).min(amount)
+}
+
+impl Armor {
 }
 
 /// Linear from 1 at the center to 0 at `radius`. Shared by splash damage and
