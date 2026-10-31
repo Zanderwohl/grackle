@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn no_shipped_map_has_a_point_that_does_not_resolve() {
-        for name in ["new", "demo"] {
+        for name in ["new", "demo", "arena"] {
             let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
             let mut timeline = load(&path).unwrap().timeline;
             timeline.resolve_all();
@@ -359,7 +359,7 @@ mod tests {
     /// headroom. Do not pin coordinates here.
     #[test]
     fn a_new_map_can_be_stood_in_lit_and_spawned_into() {
-        for name in ["new", "demo"] {
+        for name in ["new", "demo", "arena"] {
             let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
             can_be_stood_in_lit_and_spawned_into(&path);
         }
@@ -402,5 +402,44 @@ mod tests {
                 .any(|feet| world.fits(body_center_from_feet(*feet), CLASS_HALF_EXTENTS)),
             "no spawn point in {path:?} has room to stand: {spawns:?}"
         );
+    }
+
+    /// Breaks if an arena spawn is wedged, or a body cannot walk from it to every other spawn and
+    /// up onto the platform: the stairs, doorways and ledges are what the map is.
+    #[test]
+    fn every_arena_spawn_stands_clear_and_walks_everywhere() {
+        use crate::common::class::{body_center_from_feet, CLASS_HALF_EXTENTS};
+        use crate::common::movement_rules::MovementRules;
+        use crate::game::collision::CollisionWorld;
+        use crate::game::nav;
+
+        let path = PathBuf::from(format!("assets/default/blueprints/arena.{MAP_BLUEPRINT_EXTENSION}"));
+        let mut timeline = load(&path).unwrap().timeline;
+        timeline.resolve_all();
+        let volumes: Vec<_> = timeline.active_features().flat_map(|(_, feature)| feature.object().volumes()).collect();
+        let mut world = CollisionWorld::default();
+        let faces = world.rebuild_volumes(&volumes);
+        let spawns: Vec<Vec3> = timeline
+            .active_features()
+            .filter(|(_, feature)| feature.object().type_key() == "spawn_point")
+            .map(|(_, feature)| feature.object().get_point("").unwrap())
+            .collect();
+        assert_eq!(spawns.len(), 8);
+        for feet in &spawns {
+            assert!(world.fits(body_center_from_feet(*feet), CLASS_HALF_EXTENTS), "the spawn at {feet} is wedged");
+        }
+
+        let graph = nav::graph(&world, &faces, &[], &MovementRules::default(), &spawns);
+        let platform = Vec3::new(0.0, 2.4, 0.0);
+        let places: Vec<(Vec3, nav::CellId)> = spawns
+            .iter()
+            .chain([&platform])
+            .map(|feet| (*feet, graph.cell_at(*feet).unwrap_or_else(|| panic!("nothing to stand on at {feet}"))))
+            .collect();
+        for (from, start) in &places {
+            for (to, end) in &places {
+                assert!(graph.path(*start, *end, |_, _| 0.0).is_some(), "no way from {from} to {to}");
+            }
+        }
     }
 }

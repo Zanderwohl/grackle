@@ -13,7 +13,7 @@ use crate::game::death::Dying;
 use crate::game::pause_menu::MouseHeld;
 use crate::game::player::{start_the_death_cam, DeathCam, InputLatch, LocalPlayer, OurLastBody, Player, Watched};
 use crate::game::respawn::Seat;
-use crate::game::team_choice::TeamOptions;
+use crate::game::team_choice::{ChooseTeam, TeamChoice, TeamOptions};
 use crate::game::team_picker::{overlook, OVERLOOK_PITCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +55,19 @@ impl SpectatorView {
     }
 }
 
+/// `--spectate`: each round, our seat goes straight from choosing to spectating.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct StartSpectating(pub bool);
+
+/// Asked every frame the offer says we are choosing, rather than once: before our identity exists
+/// a request is dropped, and on a client the offer is a round trip behind. Requests from a seat
+/// already left are dropped too.
+fn spectate_from_the_start(start: Res<StartSpectating>, offer: Res<TeamOptions>, mut requests: MessageWriter<ChooseTeam>) {
+    if start.0 && offer.seat == Seat::Choosing && offer.spectate {
+        requests.write(ChooseTeam { choice: TeamChoice::Spectate, from: Seat::Choosing });
+    }
+}
+
 pub struct SpectatePlugin;
 
 impl Plugin for SpectatePlugin {
@@ -62,6 +75,9 @@ impl Plugin for SpectatePlugin {
         app.init_resource::<SpectatorView>()
             .init_resource::<MouseHeld>()
             .init_resource::<TeamOptions>()
+            .init_resource::<StartSpectating>()
+            .add_message::<ChooseTeam>()
+            .add_systems(Update, spectate_from_the_start.run_if(in_state(AppMode::Play)))
             .add_systems(
                 Update,
                 // After the death cam, whose commands this overrides; before the view is decided.

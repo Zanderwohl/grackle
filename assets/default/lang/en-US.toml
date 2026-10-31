@@ -214,6 +214,8 @@ unresolved = "Does not resolve"
 title = "Round"
 slots = "Slots"
 fill_with_bots = "Fill empty slots with bots"
+time_limit = "Time limit"
+seconds = "{ seconds } s"
 
 [editor.rounds]
 title = "Rounds"

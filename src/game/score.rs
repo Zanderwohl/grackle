@@ -19,6 +19,7 @@ use crate::common::fonts::DisplayFont;
 use crate::common::game_rules::GameRules;
 use crate::common::net::{has_authority, NetRole};
 use crate::common::player_color::PlayerColor;
+use crate::common::round_settings::RoundSettings;
 use crate::common::player_settings::{settings_of, ClientSettings, PlayerSettings};
 use crate::common::team::Team;
 use crate::game::body_mesh::body_look;
@@ -173,7 +174,8 @@ impl Plugin for ScorePlugin {
                 .run_if(in_state(AppMode::Play))
                 .run_if(has_authority),
         )
-        .add_systems(OnEnter(AppMode::Play), clear_standings.run_if(has_authority))
+        .add_systems(OnEnter(AppMode::Play), (clear_standings, start_the_round_clock).run_if(has_authority))
+        .add_systems(Update, end_the_round_at_the_time_limit.run_if(in_state(AppMode::Play)).run_if(has_authority))
         .add_systems(
             Update,
             (spawn_the_scoreboard, fill_in_the_scoreboard).chain().run_if(in_state(AppMode::Play)),
@@ -285,6 +287,28 @@ fn end_the_round_at_the_frag_limit(
         return;
     }
     info!("{} reached {limit} frags; the round is over", winner.id);
+    next.set(AppMode::Editor);
+}
+
+/// Game seconds when the round under way started, for [`RoundSettings::time_limit`].
+#[derive(Resource)]
+struct RoundStarted(f32);
+
+fn start_the_round_clock(mut commands: Commands, time: Res<Time>) {
+    commands.insert_resource(RoundStarted(time.elapsed_secs()));
+}
+
+fn end_the_round_at_the_time_limit(
+    settings: Option<Res<RoundSettings>>,
+    started: Option<Res<RoundStarted>>,
+    time: Res<Time>,
+    mut next: ResMut<NextState<AppMode>>,
+) {
+    let (Some(limit), Some(started)) = (settings.and_then(|settings| settings.time_limit), started) else { return };
+    if time.elapsed_secs() - started.0 < limit || matches!(*next, NextState::Pending(_)) {
+        return;
+    }
+    info!("{limit} seconds are up; the round is over");
     next.set(AppMode::Editor);
 }
 
@@ -585,6 +609,23 @@ mod tests {
 
         world.get_mut::<Standing>(leader).unwrap().frags = 3;
         world.run_system_once(end_the_round_at_the_frag_limit).unwrap();
+        assert!(matches!(world.resource::<NextState<AppMode>>(), NextState::Pending(AppMode::Editor)));
+    }
+
+    #[test]
+    fn running_out_of_time_ends_the_round() {
+        let mut world = World::new();
+        world.init_resource::<NextState<AppMode>>();
+        world.insert_resource(RoundSettings { time_limit: Some(60.0), ..default() });
+        world.insert_resource(Time::<()>::default());
+        world.insert_resource(RoundStarted(0.0));
+
+        world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs(59));
+        world.run_system_once(end_the_round_at_the_time_limit).unwrap();
+        assert!(matches!(world.resource::<NextState<AppMode>>(), NextState::Unchanged));
+
+        world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs(1));
+        world.run_system_once(end_the_round_at_the_time_limit).unwrap();
         assert!(matches!(world.resource::<NextState<AppMode>>(), NextState::Pending(AppMode::Editor)));
     }
 }

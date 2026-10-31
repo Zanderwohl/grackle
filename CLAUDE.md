@@ -84,8 +84,17 @@ slots with bots**, which `fill_empty_slots` keeps true through a round as
 people come and go, with seats marked `FillsASlot`. **A bot never keeps
 anybody out**: the cap counts people only, so a slot a bot fills is open, and
 somebody joining takes a filler's seat and body in the same frame, before
-`give_bodies_to_whoever_needs_one` stands theirs up. `B` seats a bot by hand
-(counted against the slots) and `Shift+B` retires the newest. What a bot goes
+`give_bodies_to_whoever_needs_one` stands theirs up. A spectator takes no
+slot; somebody still choosing does. A **time limit** in seconds ends the round
+as the frag limit does. `B` seats a bot by hand
+(counted against the slots) and `Shift+B` retires the newest.
+`--server-config PATH` reads all of it, and bots to seat by hand, from a TOML
+file (`ServerConfig`; [`assets/default/servers/bot_arena.toml`](assets/default/servers/bot_arena.toml) is the
+example), refusing a bad one at startup. **An unattended round** is
+`--map PATH --server-config PATH --play --spectate --rounds 1`: `--map` opens
+a blueprint as its file, `--spectate` takes the Spectate seat each round,
+`--rounds N` quits once N rounds have ended, and every round's standings are
+logged as a table as it ends (`rounds::report`). What a bot goes
 for is `think`'s ([`src/game/bot_think.rs`](src/game/bot_think.rs)), the one
 writer of `BotIntent::goal`: health, armor, arms, a hunt, cover, an ambush or a
 roam, each scored by its temperament's `Drives`, the one it has getting a
@@ -147,7 +156,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map and demo-scene blueprints), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
-| `assets/default/` | The default pack: `lang/`, `blueprints/`. |
+| `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`. Safe to delete. |
 
@@ -192,7 +201,15 @@ nook on each side wall, Red's authored and Blue's made by a Mirror, with walls
 naming the `spawn_walls` role — the smallest map that exercises sides,
 mirroring and the palette at once. Both open untitled, so a save asks where.
 
-Both are text and diff like it. Still, don't edit them by saving over them
+**`arena.gmb`** (Foundry) is a free-for-all map for bots, opened with `--map`:
+a 40 m hall open to the sky, a stepped platform with the rocket launcher on
+it, a ledge up each side wall, a corridor behind each end wall, pillars and low
+walls, eight spawns, point-symmetric. Stair treads are a meter deep: on a
+narrower one the nav bake finds nowhere a body fits, and the flight is cut.
+`every_arena_spawn_stands_clear_and_walks_everywhere` walks the nav graph from
+each spawn to every other and onto the platform.
+
+All three are text and diff like it. Still, don't edit them by saving over them
 from the editor — they are written by
 `cargo run --bin new_map_template`
 ([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the

@@ -694,10 +694,21 @@ fn player_panel_ui(ui: &mut egui::Ui, settings: &mut PlayerSettings) -> bool {
     changed
 }
 
+/// What ticking Time limit starts at, in seconds.
+const DEFAULT_TIME_LIMIT: f32 = 600.0;
+
 fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
     egui::Grid::new("round_settings").num_columns(2).show(ui, |ui| {
         ui.label(get!("editor.round.slots"));
         ui.add(egui::DragValue::new(&mut settings.slots).range(1..=MOST_SLOTS));
+        ui.end_row();
+        let mut limited = settings.time_limit.is_some();
+        if ui.checkbox(&mut limited, get!("editor.round.time_limit")).changed() {
+            settings.time_limit = limited.then_some(DEFAULT_TIME_LIMIT);
+        }
+        if let Some(limit) = settings.time_limit.as_mut() {
+            ui.add(egui::DragValue::new(limit).range(1.0..=f32::MAX).speed(1.0).custom_formatter(|seconds, _| get!("editor.round.seconds", "seconds", seconds.round())));
+        }
         ui.end_row();
     });
     ui.checkbox(&mut settings.fill_with_bots, get!("editor.round.fill_with_bots"));

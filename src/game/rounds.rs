@@ -35,6 +35,8 @@ pub struct RoundHistory {
     /// The newest round still follows the standings: from its end until the
     /// next round starts.
     settling: bool,
+    /// Every round that has ended here, with standings or without.
+    ended: u32,
 }
 
 impl RoundHistory {
@@ -51,6 +53,10 @@ impl RoundHistory {
     }
 }
 
+/// `--rounds N`: the process exits once N rounds have ended here.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct QuitAfterRounds(pub Option<u32>);
+
 pub struct RoundHistoryPlugin;
 
 impl Plugin for RoundHistoryPlugin {
@@ -58,7 +64,8 @@ impl Plugin for RoundHistoryPlugin {
         app.init_resource::<RoundHistory>()
             .add_systems(OnEnter(AppMode::Play), start_the_clock)
             .add_systems(OnExit(AppMode::Play), record_the_round)
-            .add_systems(Update, settle_the_last_round.run_if(not(in_state(AppMode::Play))));
+            .init_resource::<QuitAfterRounds>()
+            .add_systems(Update, (settle_the_last_round, quit_after_enough_rounds).run_if(not(in_state(AppMode::Play))));
     }
 }
 
@@ -86,11 +93,45 @@ fn settle_the_last_round(
 /// A mode with no scoreboard has no standings, and leaves no round.
 fn record_the_round(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>, standings: Query<&Standing>) {
     let started = history.started.take();
+    history.ended += 1;
     if standings.is_empty() {
         return;
     }
     let length = started.map_or(0.0, |started| time.elapsed_secs() - started);
     history.record(ranked(standings.iter()).into_iter().cloned().collect(), length);
+    if let Some(round) = history.rounds.front() {
+        info!("{}", report(round));
+    }
+}
+
+/// The round's standings as a table for the log, which is where an unattended `--rounds` run's
+/// result is read from. On a client the final frag can still be in flight.
+pub fn report(round: &Round) -> String {
+    let seconds = round.length.round() as u32;
+    let mut report = format!("Round {} over after {}:{:02}", round.number, seconds / 60, seconds % 60);
+    report.push_str("\n  #  name                 frags  kills  deaths  assists  dealt  taken");
+    for (place, standing) in round.standings.iter().enumerate() {
+        report.push_str(&format!(
+            "\n  {:<2} {:<20} {:>5}  {:>5}  {:>6}  {:>7}  {:>5}  {:>5}",
+            place + 1,
+            standing.display_name(),
+            standing.frags,
+            standing.kills,
+            standing.deaths,
+            standing.assists,
+            standing.damage_dealt,
+            standing.damage_taken,
+        ));
+    }
+    report
+}
+
+/// A frame after the round is recorded, so it has reached the log.
+fn quit_after_enough_rounds(quit: Res<QuitAfterRounds>, history: Res<RoundHistory>, mut exit: MessageWriter<AppExit>) {
+    if quit.0.is_some_and(|rounds| history.ended >= rounds) {
+        info!("{} rounds played, as asked; quitting", history.ended);
+        exit.write(AppExit::Success);
+    }
 }
 
 #[cfg(test)]

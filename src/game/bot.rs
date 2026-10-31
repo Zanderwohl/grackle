@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::net::has_authority;
-use crate::common::round_settings::RoundSettings;
+use crate::common::round_settings::{BotsAtStartup, RoundSettings};
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::Connected;
 use crate::common::damage::{through_armor, Armor, Damageable};
@@ -22,7 +22,7 @@ use crate::game::weapon::Trigger;
 use crate::common::player_color::PlayerColor;
 use crate::common::swatch::Swatch;
 use crate::common::team::Team;
-use crate::game::respawn::{Identity, OurIdentity};
+use crate::game::respawn::{Identity, OurIdentity, Seat};
 use std::collections::HashMap;
 use crate::game::nav::{CellId, Leap, Link, LinkKind, NavGraph};
 use crate::game::nav_field::Field;
@@ -517,14 +517,16 @@ pub struct FillsASlot;
 pub(crate) fn fill_empty_slots(
     mut commands: Commands,
     settings: Res<RoundSettings>,
-    clients: Query<(), (With<ClientOf>, With<Connected>)>,
+    clients: Query<Option<&Identity>, (With<ClientOf>, With<Connected>)>,
     seats: Query<(Entity, Has<FillsASlot>, Option<&Identity>), With<BotSeat>>,
     identities: Query<&Identity>,
     us: Option<Res<OurIdentity>>,
     bodies: Query<(Entity, &BotOf)>,
 ) {
-    // The host is always playing: the authority is a solo game or a listen server.
-    let people = 1 + clients.iter().count();
+    // A spectator takes no slot. Somebody still choosing does, so a bot is not stood up only to
+    // be retired when they pick. The host is always here: the authority is solo or listening.
+    let watching = |who: Option<&Identity>| who.is_some_and(|who| who.seat == Seat::Spectating);
+    let people = usize::from(!watching(us.as_deref().map(|us| &us.0))) + clients.iter().filter(|who| !watching(*who)).count();
     let by_hand = seats.iter().filter(|(_, fills, _)| !fills).count();
     let mut fillers: Vec<(Entity, Option<Team>)> = seats.iter().filter(|(_, fills, _)| *fills).map(|(seat, _, who)| (seat, who.and_then(Identity::team))).collect();
     let wanted = settings.bots_to_fill(people, by_hand);
@@ -569,12 +571,20 @@ fn seat_bots_from_the_keyboard(mut commands: Commands, keys: Res<ButtonInput<Key
     }
 }
 
+/// `--server-config`'s `bots`, seated by hand.
+fn seat_the_startup_bots(mut commands: Commands, bots: Option<Res<BotsAtStartup>>) {
+    for _ in 0..bots.map_or(0, |bots| bots.0) {
+        commands.spawn((BotSeat, Name::new("Bot seat")));
+    }
+}
+
 pub struct BotPlugin;
 
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RoundSettings>()
             .init_resource::<ShowBots>()
+            .add_systems(Startup, seat_the_startup_bots)
             .add_systems(Update, (toggle_bot_routes, draw_bot_routes).chain().run_if(in_state(AppMode::Play)))
             .add_systems(FixedPreUpdate, steer_bots.run_if(has_authority).run_if(in_state(AppMode::Play)))
             .add_systems(FixedUpdate, retire_bots.before(step_player).run_if(has_authority))
@@ -643,7 +653,7 @@ mod tests {
     fn empty_slots_fill_with_bots_and_empty_again() {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
-        world.insert_resource(RoundSettings { slots: 4, fill_with_bots: true });
+        world.insert_resource(RoundSettings { slots: 4, fill_with_bots: true, ..default() });
         let run = |world: &mut World| {
             world.run_system_once(fill_empty_slots).unwrap();
             world.flush();
@@ -670,6 +680,19 @@ mod tests {
         world.resource_mut::<RoundSettings>().fill_with_bots = false;
         run(&mut world);
         assert_eq!(count(&mut world), (0, 1), "the fillers stayed with filling off, or the hand-seated bot went");
+    }
+
+    /// Breaks if a spectating host keeps a slot from the bots.
+    #[test]
+    fn a_spectator_takes_no_slot() {
+        use bevy::ecs::system::RunSystemOnce;
+        use crate::common::damage::PlayerId;
+        let mut world = World::new();
+        world.insert_resource(RoundSettings { slots: 4, fill_with_bots: true, ..default() });
+        world.insert_resource(OurIdentity(Identity { id: PlayerId(1), seat: Seat::Spectating, color: 0 }));
+        world.run_system_once(fill_empty_slots).unwrap();
+        world.flush();
+        assert_eq!(world.query_filtered::<(), With<BotSeat>>().iter(&world).count(), 4);
     }
 
     /// Breaks if a route ignores what its cells are like. Along a 40 m lip over a kill floor, plain
@@ -895,7 +918,7 @@ mod tests {
         use crate::game::respawn::Seat;
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
-        world.insert_resource(RoundSettings { slots: 4, fill_with_bots: true });
+        world.insert_resource(RoundSettings { slots: 4, fill_with_bots: true, ..default() });
         let on = |id, team| Identity { id: PlayerId(id), seat: Seat::Playing(Some(team)), color: 0 };
         world.insert_resource(OurIdentity(on(1, Team::Blue)));
         world.spawn((BotSeat, FillsASlot, on(2, Team::Red)));

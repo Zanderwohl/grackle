@@ -1,0 +1,16 @@
+# A server's round settings, for `--server-config`. Every key is optional and
+# defaults to what the Round tab starts with.
+#
+# `slots`           players in a round, the host and bots included, 1 to 32.
+# `fill_with_bots`  keep the slots nobody has taken filled with bots.
+# `bots`            bots seated by hand at startup, as `B` seats them: they
+#                   count against the slots and stay across rounds.
+# `time_limit`      seconds before the round ends; absent or 0 is no limit.
+#
+# This one fills a round with eight bots, the host spectating, for five minutes:
+#
+#     cargo run -- --map assets/default/blueprints/arena.gmb --server-config assets/default/servers/bot_arena.toml --play --spectate --rounds 1
+
+slots = 8
+fill_with_bots = true
+time_limit = 300
