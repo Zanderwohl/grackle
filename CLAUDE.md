@@ -93,7 +93,8 @@ file (`ServerConfig`; [`assets/default/servers/bot_arena.toml`](assets/default/s
 example), refusing a bad one at startup. **An unattended round** is
 `--map PATH --server-config PATH --play --spectate --rounds 1`: `--map` opens
 a blueprint as its file, `--spectate` takes the Spectate seat each round,
-`--rounds N` quits once N rounds have ended, and every round's standings are
+`--rounds N` quits once N rounds have ended (with `--play`, starting each
+next round as the last ends), and every round's standings are
 logged as a table as it ends (`rounds::report`). What a bot goes
 for is `think`'s ([`src/game/bot_think.rs`](src/game/bot_think.rs)), the one
 writer of `BotIntent::goal`: health, armor, arms, a hunt, cover, an ambush or a

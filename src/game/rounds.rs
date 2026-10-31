@@ -84,7 +84,7 @@ impl Plugin for RoundHistoryPlugin {
             .add_systems(OnEnter(AppMode::Play), start_the_clock)
             .add_systems(OnExit(AppMode::Play), record_the_round)
             .init_resource::<QuitAfterRounds>()
-            .add_systems(Update, (settle_the_last_round, quit_after_enough_rounds).run_if(not(in_state(AppMode::Play))));
+            .add_systems(Update, (settle_the_last_round, quit_after_enough_rounds, play_the_next_round).run_if(not(in_state(AppMode::Play))));
     }
 }
 
@@ -142,6 +142,22 @@ pub fn report(round: &Round) -> String {
         ));
     }
     report
+}
+
+/// `--play --rounds N` plays them back to back: each round after the first starts as the last
+/// ends. The first is `start_in_play`'s; a client follows the server's mode instead.
+fn play_the_next_round(
+    quit: Res<QuitAfterRounds>,
+    start: Option<Res<crate::common::app_mode::StartInPlay>>,
+    role: Option<Res<crate::common::net::NetRole>>,
+    history: Res<RoundHistory>,
+    mut next: ResMut<NextState<AppMode>>,
+) {
+    let more = quit.0.is_some_and(|rounds| (1..rounds).contains(&history.ended));
+    let authority = role.as_deref().is_none_or(crate::common::net::NetRole::is_authority);
+    if more && authority && start.is_some_and(|start| start.0) && matches!(*next, NextState::Unchanged) {
+        next.set(AppMode::Play);
+    }
 }
 
 /// A frame after the round is recorded, so it has reached the log.
@@ -243,5 +259,25 @@ mod tests {
         let history = app.world().resource::<RoundHistory>();
         assert_eq!(history.rounds().count(), KEPT_ROUNDS);
         assert_eq!(history.rounds().next().unwrap().number, KEPT_ROUNDS as u32 + 5);
+    }
+
+    /// Breaks if `--play --rounds N` stops in the editor after the first round, or plays one too many.
+    #[test]
+    fn rounds_asked_for_are_played_back_to_back() {
+        let mut app = app();
+        app.insert_resource(QuitAfterRounds(Some(2)));
+        app.insert_resource(crate::common::app_mode::StartInPlay(true));
+        let mode = |app: &App| *app.world().resource::<State<AppMode>>().get();
+
+        play_a_round(&mut app, &[standing(1, 3)]);
+        app.update();
+        app.update();
+        assert_eq!(mode(&app), AppMode::Play, "the second round did not start");
+
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Editor);
+        app.update();
+        app.update();
+        app.update();
+        assert_eq!(mode(&app), AppMode::Editor, "a third round started");
     }
 }
