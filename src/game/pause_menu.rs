@@ -13,13 +13,30 @@ pub struct PauseMenu {
     pub open: bool,
 }
 
+/// Which menus have the mouse. Each writes only its own flag, so neither
+/// rebuilds because the other changed.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MouseHeld {
+    pub pause: bool,
+    /// Written only by [`crate::game::team_picker`].
+    pub team_picker: bool,
+}
+
+impl MouseHeld {
+    pub fn any(&self) -> bool {
+        self.pause || self.team_picker
+    }
+}
+
 #[derive(Component)]
 struct PauseMenuRoot;
 
+const PAUSE_MENU_LAYER: i32 = 20;
+
 /// Run condition. `true` when the resource is missing, so the game layer runs
 /// in test apps without this plugin.
-pub fn not_paused(menu: Option<Res<PauseMenu>>) -> bool {
-    menu.is_none_or(|menu| !menu.open)
+pub fn not_paused(held: Option<Res<MouseHeld>>) -> bool {
+    held.is_none_or(|held| !held.any())
 }
 
 pub struct PauseMenuPlugin;
@@ -27,14 +44,17 @@ pub struct PauseMenuPlugin;
 impl Plugin for PauseMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PauseMenu>()
+            .init_resource::<MouseHeld>()
             .init_resource::<DisplayFont>()
             .add_systems(
                 Update,
                 (
                     toggle_pause.run_if(in_state(AppMode::Play)),
                     // Chained so the menu appears the same frame. Ungated so
-                    // it runs on the frame leaving Play closes the menu.
+                    // they run on the frame leaving Play closes the menu.
                     show_or_hide.run_if(resource_changed::<PauseMenu>),
+                    lend_the_mouse,
+                    capture_or_release.run_if(resource_changed::<MouseHeld>),
                 )
                     .chain(),
             )
@@ -48,15 +68,10 @@ fn toggle_pause(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<PauseMenu>) {
     }
 }
 
-/// Put the menu up or down and release or capture the mouse, in one system
-/// so the cursor and the menu cannot disagree.
 fn show_or_hide(
     mut commands: Commands,
     menu: Res<PauseMenu>,
     existing: Query<Entity, With<PauseMenuRoot>>,
-    window: Query<Entity, With<bevy::window::PrimaryWindow>>,
-    mode: Res<State<AppMode>>,
-    latch: Option<ResMut<crate::game::player::InputLatch>>,
     font: Res<DisplayFont>,
 ) {
     for root in &existing {
@@ -64,14 +79,10 @@ fn show_or_hide(
     }
 
     if menu.open {
-        // `gather_input` stops while paused, so held keys would stay held.
-        // Aim is kept.
-        if let Some(mut latch) = latch {
-            latch.0.release_controls();
-        }
-
         commands.spawn((
             PauseMenuRoot,
+            // Over the team picker, which may be up underneath.
+            GlobalZIndex(PAUSE_MENU_LAYER),
             Node {
                 position_type: PositionType::Absolute,
                 width: Val::Percent(100.0),
@@ -93,11 +104,35 @@ fn show_or_hide(
             )],
         ));
     }
+}
+
+fn lend_the_mouse(menu: Res<PauseMenu>, mut held: ResMut<MouseHeld>) {
+    if held.pause != menu.open {
+        held.pause = menu.open;
+    }
+}
+
+/// The one writer of the cursor while playing, so it cannot disagree with
+/// whichever menu is up.
+fn capture_or_release(
+    mut commands: Commands,
+    held: Res<MouseHeld>,
+    window: Query<Entity, With<bevy::window::PrimaryWindow>>,
+    mode: Res<State<AppMode>>,
+    latch: Option<ResMut<crate::game::player::InputLatch>>,
+) {
+    // `gather_input` stops while a menu is up, so held keys would stay held.
+    // Aim is kept.
+    if held.any()
+        && let Some(mut latch) = latch
+    {
+        latch.0.release_controls();
+    }
 
     // Only in Play: the resource's insertion counts as a change, and would
     // grab the cursor in the editor on the first frame.
     if *mode.get() == AppMode::Play {
-        crate::game::set_cursor_captured(&mut commands, &window, !menu.open);
+        crate::game::set_cursor_captured(&mut commands, &window, !held.any());
     }
 }
 

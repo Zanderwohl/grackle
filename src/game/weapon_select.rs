@@ -13,7 +13,7 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 
 use crate::common::weapon::{Equipped, WeaponCatalog, WeaponId, BUCKETS};
-use crate::game::pause_menu::PauseMenu;
+use crate::game::pause_menu::MouseHeld;
 use crate::game::player::{InputLatch, LocalPlayer};
 
 /// How long the selector stays up after the last choice.
@@ -119,7 +119,7 @@ pub fn choose_weapons(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mut wheel: MessageReader<MouseWheel>,
-    paused: Option<Res<PauseMenu>>,
+    paused: Option<Res<MouseHeld>>,
     catalog: Res<WeaponCatalog>,
     ours: Option<Single<(Entity, &Equipped), With<LocalPlayer>>>,
     mut selection: ResMut<WeaponSelection>,
@@ -133,7 +133,7 @@ pub fn choose_weapons(
         };
     }
 
-    let (Some(ours), false) = (ours, paused.is_some_and(|menu| menu.open)) else {
+    let (Some(ours), false) = (ours, paused.is_some_and(|held| held.any())) else {
         *travel = 0.0;
         selection.forget();
         return;

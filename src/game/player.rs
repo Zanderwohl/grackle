@@ -1,11 +1,13 @@
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::camera::Hdr;
 use bevy::input::mouse::MouseMotion;
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use bevy::time::Fixed;
 use lightyear::prelude::input::native::ActionState;
 
+use crate::common::render_layers;
 use crate::common::damage::{Armor, Damageable, Died, PlayerId, DEFAULT_HEALTH, DEFAULT_MAX_ARMOR};
 use crate::game::death::Dying;
 use crate::common::hitbox::Hitboxes;
@@ -469,22 +471,16 @@ pub fn spawn_player(
         Visibility::default(),
         Name::new("Player"),
     ));
-    if let Some(team) = who.team {
+    if let Some(team) = who.team() {
         body.insert(team);
     }
     body.id()
 }
 
-/// Hang a camera off whichever body this machine is looking out of.
-///
-/// Keyed on `LocalPlayer` rather than done in [`spawn_player`], because on a
-/// client the body arrives from the server.
-pub fn spawn_the_view(
-    mut commands: Commands,
-    bodies: Query<Entity, Added<LocalPlayer>>,
-    existing: Query<(), With<PlayerCamera>>,
-) {
-    if bodies.is_empty() || !existing.is_empty() {
+/// The view, for the whole match: up before there is a body, since the team
+/// picker comes first and is drawn through it, and kept across deaths.
+pub fn spawn_the_view(mut commands: Commands, existing: Query<(), With<PlayerCamera>>) {
+    if !existing.is_empty() {
         return;
     }
     commands.spawn((
@@ -497,6 +493,7 @@ pub fn spawn_the_view(
             fov: FIELD_OF_VIEW,
             ..default()
         }),
+        RenderLayers::from_layers(&[render_layers::WORLD, render_layers::GIZMOS]),
         Transform::default(),
         Name::new("View"),
         children![crate::game::hud::hud_camera()],
@@ -576,12 +573,12 @@ pub fn gather_input(
 /// skipped frames would apply all the motion at once on closing it.
 pub fn gather_aim(
     mut motion: MessageReader<MouseMotion>,
-    paused: Option<Res<crate::game::pause_menu::PauseMenu>>,
+    paused: Option<Res<crate::game::pause_menu::MouseHeld>>,
     mut latch: ResMut<InputLatch>,
 ) {
     // Drained first, so motion during a pause is discarded.
     let delta: Vec2 = motion.read().map(|event| event.delta).sum();
-    if paused.is_some_and(|menu| menu.open) || delta == Vec2::ZERO {
+    if paused.is_some_and(|held| held.any()) || delta == Vec2::ZERO {
         return;
     }
     let input = &mut latch.0;

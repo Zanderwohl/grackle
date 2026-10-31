@@ -18,7 +18,7 @@ use crate::common::swatch::{Ink, Swatch};
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, Path, ShapeMaterial, ShapeStyle};
 use crate::game::hud::GameHud;
-use crate::game::pause_menu::{not_paused, PauseMenu};
+use crate::game::pause_menu::{not_paused, MouseHeld};
 use crate::game::player::LocalPlayer;
 use crate::game::score::{ranked_by_points, Standing};
 use crate::get;
@@ -56,7 +56,7 @@ impl Plugin for TabBoardPlugin {
 
 /// Not while paused: the menu has the screen, and comes down onto the board
 /// again if Tab is still held.
-fn hold_the_board(keys: Res<ButtonInput<KeyCode>>, paused: Option<Res<PauseMenu>>, mut board: ResMut<TabBoard>) {
+fn hold_the_board(keys: Res<ButtonInput<KeyCode>>, paused: Option<Res<MouseHeld>>, mut board: ResMut<TabBoard>) {
     board.set_if_neq(TabBoard { up: keys.pressed(KeyCode::Tab) && not_paused(paused) });
 }
 
@@ -278,7 +278,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((bevy::state::app::StatesPlugin, bevy::input::InputPlugin))
             .init_state::<AppMode>()
-            .init_resource::<PauseMenu>()
+            .init_resource::<MouseHeld>()
             .add_plugins(TabBoardPlugin);
         app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
         app.update();
@@ -319,12 +319,12 @@ mod tests {
     fn pausing_over_the_board_does_not_leave_it_stuck() {
         let mut app = app();
         press(&mut app, true);
-        app.world_mut().resource_mut::<PauseMenu>().open = true;
+        app.world_mut().resource_mut::<MouseHeld>().pause = true;
         app.update();
         assert!(!up(&app));
 
         press(&mut app, false);
-        app.world_mut().resource_mut::<PauseMenu>().open = false;
+        app.world_mut().resource_mut::<MouseHeld>().pause = false;
         app.update();
         assert!(!up(&app));
     }

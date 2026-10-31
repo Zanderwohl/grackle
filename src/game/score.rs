@@ -24,7 +24,7 @@ use crate::common::team::Team;
 use crate::game::body_mesh::body_look;
 use crate::game::damage::DamageSystems;
 use crate::game::player::LocalPlayer;
-use crate::game::respawn::{HueStart, Identity, OurIdentity};
+use crate::game::respawn::{HueStart, Identity, OurIdentity, Seat};
 use crate::get;
 
 #[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -62,7 +62,7 @@ impl Standing {
         Self {
             id: who.id,
             name: name.to_owned(),
-            team: who.team,
+            team: who.team(),
             color: who.color(start),
             frags: 0,
             kills: 0,
@@ -202,10 +202,12 @@ fn keep_standings(
     // Made in the same command flush as the first identity.
     let Some(start) = start else { return };
     let unset = PlayerSettings::default();
+    // Nobody still choosing a team is in the round yet.
     let here: Vec<(Identity, &str)> = links
         .iter()
         .map(|(who, link)| (*who, settings_of(false, link, None, &unset).name.as_str()))
         .chain(us.map(|us| (us.0, settings_of(true, None, our_settings.as_deref(), &unset).name.as_str())))
+        .filter(|(who, _)| who.seat != Seat::Choosing)
         .collect();
 
     for (entity, mut standing) in &mut standings {
@@ -214,8 +216,8 @@ fn keep_standings(
             Some((who, name)) => {
                 let color = who.color(&start);
                 // Compared first: a written `Standing` is a packet.
-                if standing.team != who.team || standing.color != color || standing.name != *name {
-                    standing.team = who.team;
+                if standing.team != who.team() || standing.color != color || standing.name != *name {
+                    standing.team = who.team();
                     standing.color = color;
                     standing.name = (*name).to_owned();
                 }
@@ -550,7 +552,7 @@ mod tests {
     fn every_player_gets_one_standing_and_a_leaver_loses_theirs() {
         let mut world = World::new();
         world.insert_resource(HueStart(0.0));
-        let who = |id: u64, color: usize| Identity { id: PlayerId(id), team: None, color };
+        let who = |id: u64, color: usize| Identity { id: PlayerId(id), seat: crate::game::respawn::Seat::Playing(None), color };
         world.insert_resource(OurIdentity(who(0, 0)));
         let client = world.spawn(who(1, 1)).id();
 

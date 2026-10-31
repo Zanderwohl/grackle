@@ -23,6 +23,7 @@ use grackle::game::net_bodies::NetBodiesPlugin;
 use grackle::game::skeleton::SkeletonPlugin;
 use grackle::game::GamePlugin;
 use grackle::game::world_prop::WorldPropPlugin;
+use grackle::game::forward_camera::ForwardCameraPlugin;
 use grackle::anim::{AnimPlugin, StartInAnimEditor};
 use grackle::material::{MaterialEditorPlugin, StartInMaterialEditor};
 use grackle::prop::thumbnail::ThumbnailPlugin;
@@ -87,7 +88,7 @@ fn main() {
             PropEditorPlugin,
             (AnimPlugin, MaterialEditorPlugin),
             GamePlugin,
-            (WorldPropPlugin, ThumbnailPlugin),
+            (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin),
             SkeletonPlugin,
             (PerfPlugin, FontsPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))

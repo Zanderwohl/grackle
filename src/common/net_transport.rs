@@ -68,6 +68,7 @@ impl Plugin for NetTransportPlugin {
             // After the protocol, since it registers a channel and a message.
             .add_plugins(crate::common::match_state::MatchStatePlugin)
             .add_plugins(crate::common::player_settings::PlayerSettingsSyncPlugin)
+            .add_plugins(crate::game::team_choice::TeamChoiceSyncPlugin)
             .add_plugins(crate::common::map_sync::MapSyncPlugin)
             .add_plugins(crate::common::pack_sync::PackSyncPlugin)
             // A client told about a weapon but not its model draws empty hands.

@@ -143,7 +143,7 @@ tint = [
 
 [[features]]
 id = 5
-name = "Prism"
+name = "Scope glass"
 enabled = true
 
 [features.op]
@@ -168,11 +168,11 @@ rotation = [
 ]
 
 [features.op.surface]
-style = "metal"
+style = "forward_camera"
 tint = [
-    0.31200647,
-    0.56050867,
-    0.9332621,
+    0.53,
+    0.81,
+    0.92,
 ]
 
 [[features]]
@@ -246,10 +246,10 @@ carry_rotation = [
 
 [viewmodel]
 across = [
-    0.58,
-    -0.58,
+    0.36,
+    -0.45,
 ]
-depth = 0.45
+depth = 0.79
 rotation = [
     0.0,
     0.0,

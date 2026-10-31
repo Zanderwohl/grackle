@@ -90,7 +90,12 @@ impl ViewmodelSpec {
             self.across[1] * half_height,
             -self.depth,
         ))
-        .with_rotation(quat_from_euler(Vec3::from_array(self.rotation)))
+        .with_rotation(self.rotation())
+    }
+
+    /// The prop turned into the camera's frame.
+    pub fn rotation(&self) -> Quat {
+        quat_from_euler(Vec3::from_array(self.rotation))
     }
 }
 

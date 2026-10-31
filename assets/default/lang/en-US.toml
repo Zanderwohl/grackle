@@ -397,6 +397,11 @@ blue = "Blue"
 yellow = "Yellow"
 green = "Green"
 
+[team.picker]
+random = "Random"
+free_for_all = "Free for All"
+spectate = "Spectate"
+
 [animation.states]
 idle = "Idle"
 run_forward = "Run Forward"
@@ -844,6 +849,7 @@ wedge = "Wedge"
 metal = "Metal"
 plastic = "Plastic"
 wood = "Wood"
+forward_camera = "Forward camera"
 
 [prop.boolean]
 union = "Union"

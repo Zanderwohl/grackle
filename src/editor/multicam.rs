@@ -33,7 +33,7 @@ pub fn editor_only() -> RenderLayers {
 
 /// What the editor viewports draw, in both authoring modes.
 pub fn viewport_layers() -> RenderLayers {
-    RenderLayers::from_layers(&[render_layers::WORLD, EDITOR_ONLY_LAYER])
+    RenderLayers::from_layers(&[render_layers::WORLD, EDITOR_ONLY_LAYER, render_layers::GIZMOS])
 }
 
 /// Drawn over the map, since a handle behind a wall can still be picked.
