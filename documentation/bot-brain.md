@@ -161,13 +161,28 @@ every quarter second, spread by id, and at once when hurt, when it notices
 somebody new, when its route ends, or when its pickup is taken.
 
 ### Stage 7: fight
-- [ ] Target choice by temperament
-- [ ] Aim with a turn rate and an error that settles; leading projectiles;
+- [x] Target choice by temperament
+- [x] Aim with a turn rate and an error that settles; leading projectiles;
       splash at the feet
-- [ ] Fire only on a clear ray and within tolerance; weapon by range
-- [ ] Strafing while fighting
-- [ ] Tests: a bot turns onto a target at its turn rate, holds fire with a
+- [x] Fire only on a clear ray and within tolerance; weapon by range
+- [x] Strafing while fighting
+- [x] Tests: a bot turns onto a target at its turn rate, holds fire with a
       wall between, and hits a still target at range
+
+Built as `src/game/bot_fight.rs`, after `think` in the tick. A bot shoots
+only what its senses have in sight, preferring the nearest, its last
+attacker or whoever faces it by temperament (`Aim`, in `BotMind`), and keeps
+a target until another is half as wanted again. Its aim (`BotAim`) turns at
+3.5 to 9 rad/s, off by 0.03 to 0.14 rad when it finds somebody, settling to
+a third of that over 0.3 to 0.9 s, and growing with how fast the target
+crosses the view. A weapon is worth its damage per second at the range,
+hitscan halved by 40 m of it, a projectile by its flight time squared
+against 0.8 s, and nothing inside 1.2 times its own blast; it is switched
+to only when 1.3 times better than the one held. A rocket is led, lifted for
+its fall and put at the feet it can see, and never fired with a wall inside
+its blast. While fighting a bot strafes, flipping every 0.4 to 1.1 s, onto
+floor the graph has and that does not hurt. Out of a fight it tops up a
+clip less than half full.
 
 ### Stage 8: seeing what a bot thinks
 - [x] `F8` also draws each bot's view and a line to each enemy it senses:

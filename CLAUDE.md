@@ -54,7 +54,7 @@ There is a player body that walks, falls and jumps in `src/game/`, but it is
 still a prototype for feeling out room sizes: it has health and can shoot, and
 that is the whole of it.
 
-Bots move and choose where to go, but do not fight. A bot is a `BotSeat` holding an `Identity` the way
+Bots move, choose where to go, and fight. A bot is a `BotSeat` holding an `Identity` the way
 a client's link does, served a body by `give_bodies_to_whoever_needs_one`. It
 has no picker, so it takes the seat Random would give a person
 (`team_choice::seat_for_a_bot`), and bots count in the balance people choose
@@ -110,8 +110,12 @@ limits — is planned in [documentation/bot-brain.md](documentation/bot-brain.md
 Its senses are built (`src/game/bot_sense.rs`): **a bot never reads where an
 enemy is**, only its `BotSenses` — who is in its 90° view with a clear ray to
 them, what it heard (`Effect`s) and which way a hit came from — remembered for a few seconds
-and passed on only after its `BotMind`'s reaction time. `think` reads them; nothing
-aims or fires yet.
+and passed on only after its `BotMind`'s reaction time. `think` reads them, and
+`fight` ([`src/game/bot_fight.rs`](src/game/bot_fight.rs)) shoots only at what they
+have in sight: aim turning at a rate with an error that settles as it tracks,
+rockets led and put at the feet, fire held without a clear ray, the weapon by
+range, and a strafe onto floor the graph has. `steer_bots` adds the strafe across
+the look.
 
 There is a prop editor, which models the things a map and a class refer to.
 It is a third `AppMode` and the frontier next to it: the geometry it builds is

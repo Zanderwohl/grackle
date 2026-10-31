@@ -14,6 +14,7 @@ use crate::common::player_color::PlayerColor;
 use crate::common::swatch::Swatch;
 use crate::common::team::{hostile, Team};
 use crate::game::bot::{BotOf, ShowBots};
+use crate::game::bot_fight::Aim;
 use crate::game::bot_think::Drives;
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
@@ -50,17 +51,18 @@ pub struct BotMind {
     /// rounds a corner reads as a cheat whatever its aim.
     pub reaction: f32,
     pub drives: Drives,
+    pub aim: Aim,
 }
 
 impl Default for BotMind {
     fn default() -> Self {
-        BotMind { reaction: 0.3, drives: Drives::default() }
+        BotMind { reaction: 0.3, drives: Drives::default(), aim: Aim::default() }
     }
 }
 
 impl BotMind {
     pub fn temperament() -> Self {
-        BotMind { reaction: rand::random_range(REACTION), drives: Drives::temperament() }
+        BotMind { reaction: rand::random_range(REACTION), drives: Drives::temperament(), aim: Aim::temperament() }
     }
 }
 

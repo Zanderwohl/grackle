@@ -73,6 +73,8 @@ pub struct BotIntent {
     pub alt_fire: bool,
     pub reload: bool,
     pub select: Option<WeaponId>,
+    /// `-1` to `1`: sideways, across where it is looking, on top of the route.
+    pub strafe: f32,
 }
 
 /// How a bot weighs a route beyond the time it takes. Each link costs its seconds, and on top its
@@ -442,6 +444,7 @@ pub fn steer_bots(
             input.alt_attack = intent.alt_fire;
             input.alt_attack_held = intent.alt_fire;
             input.reload = intent.reload;
+            input.movement = (input.movement + Vec2::X * intent.strafe).clamp_length_max(1.0);
             // The route's draw first: a rocket jump waits at its start for that launcher.
             input.select = input.select.or(intent.select);
         }

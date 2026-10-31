@@ -24,6 +24,7 @@ pub mod body_mesh;
 pub mod bot;
 pub mod bot_sense;
 pub mod bot_think;
+pub mod bot_fight;
 pub mod pull_table;
 pub mod collision;
 pub mod condition;
