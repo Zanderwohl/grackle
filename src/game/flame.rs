@@ -75,15 +75,11 @@ pub fn fire_flame(
                 continue;
             }
 
-            // No headshot multiplier for fire.
-            damage.write(Damage {
-                target: hit.target,
-                source,
-                amount: spec.damage,
-                point: hit.point,
-                from: Some(origin),
-                kill_shove: None,
-            });
+            // No headshot multiplier for fire. Scaled down to nothing, it still lights.
+            let amount = (spec.damage as f32 * spec.scale_at(origin.distance(hit.point))).round() as u32;
+            if amount > 0 {
+                damage.write(Damage { target: hit.target, source, amount, point: hit.point, from: Some(origin), kill_shove: None });
+            }
 
             match alight.get_mut(hit.target) {
                 Ok(mut burning) => burning.relight(&spec, source),
@@ -130,22 +126,27 @@ pub fn burn(
     }
 }
 
-/// The cone gizmo for a flame fired from `origin` along `direction`.
+/// The cone gizmo for a cone of half-angle `spread` from `origin` along `direction`, `range`
+/// long: a flame's, or an airblast's.
 ///
 /// Bevy draws a [`Cone`] with its apex at local `+Y`, centered on the
 /// isometry. So `+Y` maps onto `-direction` and the center goes half a range
 /// out, putting the apex on the eye and the base at full range. Separate so a
 /// test can check the rotation.
-fn flame_cone(origin: Vec3, direction: Dir3, spec: &FlameSpec) -> (Cone, Isometry3d) {
+pub(crate) fn cone_gizmo(origin: Vec3, direction: Dir3, range: f32, spread: f32) -> (Cone, Isometry3d) {
     let cone = Cone {
-        radius: spec.range_m * spec.spread.tan(),
-        height: spec.range_m,
+        radius: range * spread.tan(),
+        height: range,
     };
     let isometry = Isometry3d::new(
-        origin + *direction * (spec.range_m * 0.5),
+        origin + *direction * (range * 0.5),
         Quat::from_rotation_arc(Vec3::Y, -*direction),
     );
     (cone, isometry)
+}
+
+fn flame_cone(origin: Vec3, direction: Dir3, spec: &FlameSpec) -> (Cone, Isometry3d) {
+    cone_gizmo(origin, direction, spec.range_m, spec.spread)
 }
 
 /// Reads `Equipped` rather than what was fired, because it draws between
@@ -239,6 +240,28 @@ mod tests {
         let messages = world.resource::<Messages<Damage>>();
         let mut cursor = messages.get_cursor();
         cursor.read(messages).copied().collect()
+    }
+
+    /// Breaks if a puff stops falling off toward the tip of the cone.
+    #[test]
+    fn a_puff_hurts_more_close_up() {
+        use crate::common::weapon::DistanceScale;
+        let spec = FlameSpec {
+            ramp_up: Some(DistanceScale { near: 0.0, far: 2.0, scale: 1.25 }),
+            falloff: Some(DistanceScale { near: 2.0, far: 6.0, scale: 0.5 }),
+            ..SPEC
+        };
+        let hurt = |away: f32| {
+            let mut world = a_world();
+            let shooter = a_shooter(&mut world);
+            a_body(&mut world, away, 0.0);
+            world.write_message(WeaponActionFired { shooter, button: crate::game::weapon::Button::Primary, action: WeaponAction::Flame(spec) });
+            world.run_system_once(fire_flame).unwrap();
+            asked_for(&mut world)[0].amount
+        };
+        // The hit is on the body's near face, 0.4 m short of its middle.
+        assert_eq!(hurt(0.9), 8, "7 at about 119% half a meter out");
+        assert_eq!(hurt(5.0), 5, "7 at about 68% at 4.6 m");
     }
 
     /// Breaks if lighting skips the team check, which `apply_damage` cannot

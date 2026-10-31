@@ -63,6 +63,9 @@ pub struct Projectile {
     #[reflect(ignore)]
     pub shooter: Option<Entity>,
     pub velocity: Vec3,
+    /// Where it was fired or last reflected from, which its blast's distance is measured from
+    /// once the shooter is gone.
+    pub launched: Vec3,
     /// Radians. Cosmetic.
     pub spin: f32,
     /// Seconds of game time in the air.
@@ -172,7 +175,7 @@ pub fn launch(
 ) -> Entity {
     commands
         .spawn((
-            fired(spec, direction, owner, shooter),
+            fired(spec, from, direction, owner, shooter),
             PhysicsBody::at(from),
             Transform::from_translation(from).with_scale(Vec3::splat(spec.radius)),
             Visibility::default(),
@@ -187,8 +190,8 @@ pub fn muzzle(center: Vec3, stance: Stance, player: &Player) -> Vec3 {
 }
 
 /// A projectile just fired along `direction`.
-pub fn fired(spec: ProjectileSpec, direction: Dir3, owner: Option<PlayerId>, shooter: Option<Entity>) -> Projectile {
-    Projectile { spec, owner, shooter, velocity: *direction * spec.initial_speed, spin: 0.0, age: 0.0, bounces: 0 }
+pub fn fired(spec: ProjectileSpec, from: Vec3, direction: Dir3, owner: Option<PlayerId>, shooter: Option<Entity>) -> Projectile {
+    Projectile { spec, owner, shooter, velocity: *direction * spec.initial_speed, launched: from, spin: 0.0, age: 0.0, bounces: 0 }
 }
 
 /// Fires from the step's position, not the drawn one: an interpolated muzzle
@@ -265,13 +268,17 @@ pub fn step_projectiles(
         let Some((ending, direct)) = ending else { continue };
         let spec = projectile.spec;
         if spec.detonates_on(ending) {
+            // From where the shooter is now, as TF2 measures it.
+            let from_shooter = shooter.and_then(|shooter| bodies.get(shooter).ok()).map_or(projectile.launched, |(_, boxes)| boxes.body.center).distance(position);
             blasts.write(Explosion {
                 at: position,
                 radius: spec.explosion_radius,
-                damage: spec.damage_splash,
+                damage: spec.damage,
+                at_edge: spec.splash_at_edge,
+                scale: spec.scale_at(from_shooter),
                 knockback: spec.knockback,
                 source: projectile.source(),
-                direct: direct.map(|target| (target, spec.damage_direct_hit)),
+                direct,
             });
         }
 
@@ -524,6 +531,7 @@ mod tests {
                 owner: None,
                 shooter: None,
                 velocity: Vec3::ZERO,
+                launched: Vec3::ZERO,
                 spin: 0.0,
                 age: 0.0,
                 bounces: 0,
@@ -552,6 +560,7 @@ mod tests {
                     owner: None,
                     shooter: None,
                     velocity: Vec3::ZERO,
+                    launched: Vec3::ZERO,
                     spin: 1.1,
                     age: 0.0,
                     bounces: 0,
@@ -579,6 +588,7 @@ mod tests {
             owner: None,
             shooter: None,
             velocity: Vec3::ZERO,
+            launched: Vec3::ZERO,
             spin: 0.0,
             age: 0.0,
             bounces: 0,
@@ -604,6 +614,7 @@ mod tests {
                     owner: Some(PlayerId(owner)),
                     shooter: None,
                     velocity: Vec3::NEG_Z * ProjectileSpec::ROCKET.initial_speed,
+                    launched: Vec3::ZERO,
                     spin: 0.0,
                     age: 0.0,
                     bounces: 0,
@@ -761,7 +772,7 @@ mod tests {
         assert_eq!(went_off.len(), 1, "{went_off:?}");
         assert_eq!(
             went_off[0].direct,
-            Some((target, ProjectileSpec::ROCKET.damage_direct_hit))
+            Some(target)
         );
         assert!(went_off[0].at.z > -1.0, "it flew past the body to {}", went_off[0].at);
     }
@@ -896,5 +907,18 @@ mod tests {
             world.flush();
         }
         assert_eq!(count(&mut world), 1, "the interval came and went");
+    }
+
+    /// Breaks if a field of a replicated projectile is skipped when empty: postcard reads every
+    /// field in order, so one left out garbles the rest on a client.
+    #[test]
+    fn a_projectile_survives_the_wire_encoding() {
+        for spec in [ProjectileSpec::ROCKET, ProjectileSpec::PIPE_BOMB] {
+            let sent = fired(spec, Vec3::new(1.0, 2.0, 3.0), Dir3::X, Some(PlayerId(4)), None);
+            let wire = postcard::to_allocvec(&sent).expect("a projectile goes on the wire");
+            let back: Projectile = postcard::from_bytes(&wire).expect("and comes back off it");
+            assert_eq!(back.spec, sent.spec);
+            assert_eq!((back.velocity, back.launched, back.owner), (sent.velocity, sent.launched, sent.owner));
+        }
     }
 }

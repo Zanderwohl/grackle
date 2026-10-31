@@ -173,15 +173,29 @@ Built as `src/game/bot_fight.rs`, after `think` in the tick. A bot shoots
 only what its senses have in sight, preferring the nearest, its last
 attacker or whoever faces it by temperament (`Aim`, in `BotMind`), and keeps
 a target until another is half as wanted again. Its aim (`BotAim`) turns at
-3.5 to 9 rad/s, off by 0.03 to 0.14 rad when it finds somebody, settling to
-a third of that over 0.3 to 0.9 s, and growing with how fast the target
-crosses the view. A weapon is worth its damage per second at the range,
-hitscan halved by 40 m of it, a projectile by its flight time squared
+3.5 to 9 rad/s while far and eases the last of the way over 0.06 to 0.16 s,
+following 55 to 90 % of the target's motion across the view by itself and
+catching up on the rest, so it trails a runner a little. It is off by 0.03 to
+0.14 rad when it finds somebody, starting past them along the flick and
+settling to a third of that over 0.3 to 0.9 s, the error drifting round at
+0.5 rad/s and growing with how fast the target crosses the view. A weapon is worth its damage per second at the range,
+hitscan scaled by its ramp-up and falloff and halved by 40 m of it, a projectile by its flight time squared
 against 0.8 s, and nothing inside 1.2 times its own blast; it is switched
 to only when 1.3 times better than the one held. A rocket is led, lifted for
 its fall and put at the feet it can see, and never fired with a wall inside
-its blast. While fighting a bot strafes, flipping every 0.4 to 1.1 s, onto
-floor the graph has and that does not hurt. Out of a fight it tops up a
+its blast. While fighting a bot moves in legs (`Footwork`):
+a strafe one way or standing to aim, each about 0.9 to 2 s, strafing 30 to
+85 % of them and going back the way it came 40 to 80 % of the time, starting
+0.35 s after it finds a target, onto floor the graph has and that does not
+hurt — a reversal takes a fifth of a second, so shorter legs read as jitter.
+Out of a fight it turns onto each link the way its aim does rather than
+snapping onto it. Holding an airblast that reflects, it meets a
+hostile projectile it sees coming within its blast radius (`Reflexes`): it
+tries for 15 to 85 % of them, after its reaction time, pressing when the
+projectile is 60 % of the gust's reach away, early or late by up to 0.04 to
+0.35 s — a sharp bot reflects nearly every 20 m/s rocket it tries for, a
+sloppy one about three in five, and on average a bot about two in five of
+those it sees. It does not turn to meet one. Out of a fight it tops up a
 clip less than half full.
 
 ### Stage 8: seeing what a bot thinks

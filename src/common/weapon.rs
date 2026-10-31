@@ -55,6 +55,40 @@ pub struct HitscanSpec {
     /// Thrown at the body only by the shot that kills it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kill_shove: Option<KillShoveSpec>,
+    /// More damage close up: `scale` times it at `near`, rising to full at `far`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ramp_up: Option<DistanceScale>,
+    /// Less damage far off: full at `near`, falling to `scale` times it at `far`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub falloff: Option<DistanceScale>,
+}
+
+/// A straight line in damage over distance from the shooter, flat beyond either end.
+#[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+pub struct DistanceScale {
+    /// Meters.
+    pub near: f32,
+    pub far: f32,
+    pub scale: f32,
+}
+
+impl DistanceScale {
+    /// 0 at or before `near`, 1 at or past `far`.
+    fn along(&self, distance: f32) -> f32 {
+        ((distance - self.near) / (self.far - self.near).max(1e-3)).clamp(0.0, 1.0)
+    }
+}
+
+pub fn distance_scale(ramp_up: Option<DistanceScale>, falloff: Option<DistanceScale>, distance: f32) -> f32 {
+    let ramp = ramp_up.map_or(1.0, |line| line.scale + (1.0 - line.scale) * line.along(distance));
+    let fall = falloff.map_or(1.0, |line| 1.0 + (line.scale - 1.0) * line.along(distance));
+    ramp * fall
+}
+
+impl HitscanSpec {
+    pub fn scale_at(&self, distance: f32) -> f32 {
+        distance_scale(self.ramp_up, self.falloff, distance)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
@@ -98,11 +132,33 @@ impl PelletGrid {
     }
 }
 
-/// Stub.
+/// A cone from the eye that shoves, reflects and extinguishes, each part optional.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
-pub struct ExtinguishSpec {
+pub struct AirblastSpec {
+    /// Meters from the eye.
     pub range: f32,
+    /// Half-angle, radians.
     pub spread: f32,
+    /// Meters per second given to a body it may hurt, along the aim.
+    #[serde(default)]
+    pub push: f32,
+    /// Meters per second up on top of `push`, so a body on the floor leaves it.
+    #[serde(default)]
+    pub lift: f32,
+    /// Whether a projectile somebody hostile fired is turned back along the aim and becomes
+    /// the airblaster's.
+    #[serde(default)]
+    pub reflect: bool,
+    /// Times its speed, a reflected projectile leaves at.
+    #[serde(default = "one")]
+    pub reflect_speed: f32,
+    /// Whether a burning teammate in the cone is put out.
+    #[serde(default)]
+    pub extinguish: bool,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 /// Stub.
@@ -136,7 +192,7 @@ pub enum WeaponAction {
     Hitscan(HitscanSpec),
     Projectile(ProjectileSpec),
     Flame(FlameSpec),
-    Extinguish(ExtinguishSpec),
+    Airblast(AirblastSpec),
     HealBeam(HealBeamSpec),
     Invulnerable(InvulnSpec),
     Scope(ScopeSpec),
@@ -153,6 +209,7 @@ impl WeaponAction {
             WeaponAction::Hitscan(_)
                 | WeaponAction::Projectile(_)
                 | WeaponAction::Flame(_)
+                | WeaponAction::Airblast(_)
                 | WeaponAction::None
         )
     }
@@ -224,6 +281,9 @@ pub struct Magazine {
     /// once.
     #[serde(default)]
     pub reload_one_at_a_time: bool,
+    /// Seconds for the first round of a reload, where it differs from the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_reload: Option<f32>,
 }
 
 impl Magazine {
@@ -232,6 +292,7 @@ impl Magazine {
         reserve: 0,
         reload: 0.0,
         reload_one_at_a_time: false,
+        first_reload: None,
     };
 }
 

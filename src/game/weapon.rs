@@ -20,6 +20,7 @@ use crate::common::weapon::{
 use crate::game::condition::Condition;
 use crate::game::damage::{DamagePlugin, DamageSystems};
 use crate::game::explosion::ExplosionPlugin;
+use crate::game::airblast::AirblastPlugin;
 use crate::game::flame::FlamePlugin;
 use crate::game::hitscan::HitscanPlugin;
 use crate::game::player::{Inputs, Player};
@@ -123,7 +124,7 @@ impl Plugin for WeaponPlugin {
         app
             // Damage plus the two things that read it.
             .add_plugins((DamagePlugin, ExplosionPlugin))
-            .add_plugins((HitscanPlugin, ProjectilePlugin, FlamePlugin))
+            .add_plugins((HitscanPlugin, ProjectilePlugin, FlamePlugin, AirblastPlugin))
             .add_message::<WeaponActionFired>()
             // Before every weapon and its damage. Switch, then reload, then
             // fire, so a reload finishing this tick feeds this tick's shot.
@@ -260,12 +261,13 @@ pub(crate) fn spend(
 
 /// Start a reload unless there is no clip, the clip is full, or the reserve is
 /// empty, so `reloading > 0` always means one that can finish.
-fn begin_reload(state: &mut crate::common::weapon::AmmoState, magazine: &Magazine) {
+/// `first` is a reload starting rather than going round again for the next round.
+fn begin_reload(state: &mut crate::common::weapon::AmmoState, magazine: &Magazine, first: bool) {
     let Some(size) = magazine.clip else { return };
     if state.reloading > 0.0 || state.clip >= size || state.reserve == 0 {
         return;
     }
-    state.reloading = magazine.reload;
+    state.reloading = if first { magazine.first_reload.unwrap_or(magazine.reload) } else { magazine.reload };
 }
 
 /// Start reloads, run them down, and move the rounds across. The only thing
@@ -293,7 +295,7 @@ pub fn reload_weapons(
 
         let unasked = auto.is_some_and(|auto| auto.0) && trigger.idle >= AUTO_RELOAD_AFTER;
         if input.reload || state.clip == 0 || unasked {
-            begin_reload(&mut state, &weapon.magazine);
+            begin_reload(&mut state, &weapon.magazine, true);
         }
 
         if state.reloading > 0.0 {
@@ -313,7 +315,7 @@ pub fn reload_weapons(
 
                 // `reload_one_at_a_time` goes round again until full.
                 if weapon.magazine.reload_one_at_a_time {
-                    begin_reload(&mut state, &weapon.magazine);
+                    begin_reload(&mut state, &weapon.magazine, false);
                 }
             }
         }
@@ -402,6 +404,8 @@ mod tests {
         shove_radius_m: 0.4,
         pellets: None,
         kill_shove: None,
+        ramp_up: None,
+        falloff: None,
     };
 
     fn a_world(catalog: WeaponCatalog) -> World {
@@ -495,7 +499,7 @@ mod tests {
         let mut world = a_world(one_weapon(weapon(
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted::EMPTY,
-            Magazine { clip: Some(12), reserve: 12, reload: 1.0, reload_one_at_a_time: false },
+            Magazine { clip: Some(12), reserve: 12, reload: 1.0, reload_one_at_a_time: false, first_reload: None },
         )));
         let shooter = a_shooter(&mut world);
         input(&mut world, shooter).attack = true;
@@ -519,7 +523,7 @@ mod tests {
         let mut world = a_world(one_weapon(weapon(
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted::EMPTY,
-            Magazine { clip: Some(4), reserve: 8, reload: 1.0, reload_one_at_a_time: false },
+            Magazine { clip: Some(4), reserve: 8, reload: 1.0, reload_one_at_a_time: false, first_reload: None },
         )));
         let shooter = a_shooter(&mut world);
         world.entity_mut(shooter).insert(AutoReload(auto));
@@ -551,7 +555,7 @@ mod tests {
         let mut world = a_world(one_weapon(weapon(
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted::EMPTY,
-            Magazine { clip: Some(4), reserve: 8, reload: 1.0, reload_one_at_a_time: false },
+            Magazine { clip: Some(4), reserve: 8, reload: 1.0, reload_one_at_a_time: false, first_reload: None },
         )));
         let shooter = a_shooter(&mut world);
         input(&mut world, shooter).attack = true;
@@ -576,7 +580,7 @@ mod tests {
         let mut world = a_world(one_weapon(weapon(
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted::EMPTY,
-            Magazine { clip: Some(12), reserve: 12, reload: 1.0, reload_one_at_a_time: false },
+            Magazine { clip: Some(12), reserve: 12, reload: 1.0, reload_one_at_a_time: false, first_reload: None },
         )));
         let shooter = a_shooter(&mut world);
         *world.get_mut::<Condition>(shooter).unwrap() = Condition::HUMILIATED;
@@ -762,7 +766,7 @@ mod tests {
             auto(WeaponAction::Hitscan(LASER), 0.1, 1),
             Mounted::EMPTY,
             // One shot, then nothing ever.
-            Magazine { clip: Some(1), reserve: 0, reload: 1.0, reload_one_at_a_time: false },
+            Magazine { clip: Some(1), reserve: 0, reload: 1.0, reload_one_at_a_time: false, first_reload: None },
         )));
         let shooter = a_shooter(&mut world);
         input(&mut world, shooter).attack_held = true;
@@ -787,7 +791,7 @@ mod tests {
         let mut world = a_world(one_weapon(weapon(
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted::EMPTY,
-            Magazine { clip: None, reserve: 10, reload: 0.0, reload_one_at_a_time: false },
+            Magazine { clip: None, reserve: 10, reload: 0.0, reload_one_at_a_time: false, first_reload: None },
         )));
         let shooter = a_shooter(&mut world);
         input(&mut world, shooter).attack = true;
@@ -805,7 +809,7 @@ mod tests {
         let mut world = a_world(one_weapon(weapon(
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted::EMPTY,
-            Magazine { clip: None, reserve: 10, reload: 0.0, reload_one_at_a_time: false },
+            Magazine { clip: None, reserve: 10, reload: 0.0, reload_one_at_a_time: false, first_reload: None },
         )));
         let shooter = a_shooter(&mut world);
         input(&mut world, shooter).reload = true;
@@ -830,7 +834,7 @@ mod tests {
                 cadence: Cadence::Semi { interval: 0.0 },
                 cost: Cost::Free,
             },
-            Magazine { clip: Some(0), reserve: 0, reload: 1.0, reload_one_at_a_time: false },
+            Magazine { clip: Some(0), reserve: 0, reload: 1.0, reload_one_at_a_time: false, first_reload: None },
         )));
         let shooter = a_shooter(&mut world);
         input(&mut world, shooter).attack = true;
@@ -849,7 +853,7 @@ mod tests {
         let mut world = a_world(one_weapon(weapon(
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted::EMPTY,
-            Magazine { clip: Some(4), reserve: 8, reload: 0.1, reload_one_at_a_time: false },
+            Magazine { clip: Some(4), reserve: 8, reload: 0.1, reload_one_at_a_time: false, first_reload: None },
         )));
         let shooter = a_shooter(&mut world);
 
@@ -877,7 +881,7 @@ mod tests {
         let mut world = a_world(one_weapon(weapon(
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted::EMPTY,
-            Magazine { clip: Some(4), reserve: 1, reload: 0.1, reload_one_at_a_time: false },
+            Magazine { clip: Some(4), reserve: 1, reload: 0.1, reload_one_at_a_time: false, first_reload: None },
         )));
         let shooter = a_shooter(&mut world);
 
@@ -903,7 +907,7 @@ mod tests {
         let mut world = a_world(one_weapon(weapon(
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted::EMPTY,
-            Magazine { clip: Some(1), reserve: 4, reload: 0.1, reload_one_at_a_time: false },
+            Magazine { clip: Some(1), reserve: 4, reload: 0.1, reload_one_at_a_time: false, first_reload: None },
         )));
         let shooter = a_shooter(&mut world);
 
@@ -1028,5 +1032,18 @@ mod tests {
             (expected..=expected + 1).contains(&ticks),
             "fired on tick {ticks}, deploy is {expected} ticks"
         );
+    }
+
+    /// Breaks if the first round of a reload stops taking its own time, or every round after it
+    /// does too.
+    #[test]
+    fn only_the_first_round_of_a_reload_takes_the_first_reload() {
+        let magazine = Magazine { clip: Some(4), reserve: 8, reload: 0.8, reload_one_at_a_time: true, first_reload: Some(0.92) };
+        let mut state = crate::common::weapon::AmmoState { clip: 0, reserve: 8, ..default() };
+        begin_reload(&mut state, &magazine, true);
+        assert_eq!(state.reloading, 0.92);
+        state.reloading = 0.0;
+        begin_reload(&mut state, &magazine, false);
+        assert_eq!(state.reloading, 0.8);
     }
 }

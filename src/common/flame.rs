@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::common::damage::DamageSource;
+use crate::common::weapon::{distance_scale, DistanceScale};
 
 /// Rate of fire is on [`crate::common::weapon::Mounted`], not here.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
@@ -26,6 +27,11 @@ pub struct FlameSpec {
     /// Between afterburn ticks.
     #[serde(rename = "afterburn_interval")]
     pub afterburn_interval_s: f32,
+    /// On a puff's damage, by meters from the eye to the hit. Not on the afterburn it leaves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ramp_up: Option<DistanceScale>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub falloff: Option<DistanceScale>,
 }
 
 impl FlameSpec {
@@ -39,7 +45,13 @@ impl FlameSpec {
         afterburn_duration_s: 6.0,
         afterburn_damage: 4,
         afterburn_interval_s: 0.5,
+        ramp_up: None,
+        falloff: None,
     };
+
+    pub fn scale_at(&self, distance: f32) -> f32 {
+        distance_scale(self.ramp_up, self.falloff, distance)
+    }
 }
 
 /// On the burning body rather than the shooter, so the fire outlives a

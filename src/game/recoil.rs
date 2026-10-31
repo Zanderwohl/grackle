@@ -201,7 +201,7 @@ mod tests {
                 cost: Cost::Ammo { rounds: 1 },
             },
             secondary: Mounted::EMPTY,
-            magazine: Magazine { clip: Some(4), reserve: 8, reload: 1.0, reload_one_at_a_time: false },
+            magazine: Magazine { clip: Some(4), reserve: 8, reload: 1.0, reload_one_at_a_time: false, first_reload: None },
         });
         let mut loadout = Loadout::default();
         loadout.set(Slot::Primary, SlotChoices { permitted: vec![id], default: Some(id) });

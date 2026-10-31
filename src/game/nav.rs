@@ -461,7 +461,8 @@ pub(crate) struct Shot {
 impl Shot {
     /// From the muzzle of `mover` as this tick's move left it.
     pub(crate) fn fire(launcher: Launcher, mover: &Mover) -> Self {
-        Shot { projectile: fired(launcher.rocket, aim(&mover.player), None, None), at: muzzle(mover.body.current, mover.stance, &mover.player) }
+        let at = muzzle(mover.body.current, mover.stance, &mover.player);
+        Shot { projectile: fired(launcher.rocket, at, aim(&mover.player), None, None), at }
     }
 
     /// One tick of flight, after the move. `None` while it flies; once its flight ends, the damage
@@ -473,7 +474,7 @@ impl Shot {
         let spec = self.projectile.spec;
         let body = Box3 { center: mover.body.current, half_extents: mover.stance.half_extents() };
         Some(spec.detonates_on(ending).then(|| {
-            own_blast(world, position, spec.explosion_radius, spec.damage_splash, &body, mover.stance == Stance::Crouched, mover.player.on_ground())
+            own_blast(world, position, spec.explosion_radius, spec.damage, &body, mover.stance == Stance::Crouched, mover.player.on_ground())
         }))
     }
 }

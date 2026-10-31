@@ -279,12 +279,12 @@ fn launcher_in(catalog: &WeaponCatalog) -> Option<Launcher> {
         .weapons
         .iter()
         .filter_map(|weapon| match weapon.primary.action {
-            WeaponAction::Projectile(rocket) if rocket.gravity_factor == 0.0 && rocket.explosion_radius > 0.0 && rocket.damage_splash > 0 => {
+            WeaponAction::Projectile(rocket) if rocket.gravity_factor == 0.0 && rocket.explosion_radius > 0.0 && rocket.damage > 0 => {
                 Some(Launcher { weapon: weapon.id, rocket })
             }
             _ => None,
         })
-        .max_by_key(|launcher| launcher.rocket.damage_splash)
+        .max_by_key(|launcher| launcher.rocket.damage)
 }
 
 /// Items: the surface, the cells, a batch of walks and then of leaps per [`LINK_BATCH`] cells,

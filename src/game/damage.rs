@@ -498,6 +498,8 @@ mod tests {
             at: center,
             radius: 4.0,
             damage: 60,
+            at_edge: 0.0,
+            scale: 1.0,
             knockback: 10.0,
             source: DamageSource::Player(PlayerId(2)),
             direct: None,
