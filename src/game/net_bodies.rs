@@ -21,6 +21,7 @@ use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{spawn_player, LocalPlayer, Player, Simulated, Spawn};
 use crate::game::bot::{BotIntent, BotOf, BotRoute, BotSeat, Roam, RouteCosts};
+use crate::game::bot_sense::{BotMind, BotSenses};
 use crate::game::weapon::AutoReload;
 use crate::game::respawn::{choose_spawn, placed_spawns, team_name, HueStart, Identity, OurIdentity, Seat};
 use crate::game::score::Standing;
@@ -143,7 +144,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
     rules: Res<GameRules>,
     catalog: Res<WeaponCatalog>,
     timers: Option<Res<RespawnTimers>>,
-    (seats, driven): (Query<(Entity, Option<&RouteCosts>), With<BotSeat>>, Query<&BotOf, With<Player>>),
+    (seats, driven): (Query<(Entity, Option<&RouteCosts>, Option<&BotMind>), With<BotSeat>>, Query<&BotOf, With<Player>>),
     standings: Query<&Standing>,
 ) {
     let waiting = |who: Identity| timers.as_deref().is_some_and(|timers| timers.waiting(who.id));
@@ -219,13 +220,18 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
 
     // Everybody seated, the points and the teams in play, worked out only once a bot needs a seat.
     let mut seating: Option<(Vec<Identity>, std::collections::HashMap<PlayerId, i32>, Vec<Team>)> = None;
-    for (seat, temperament) in &seats {
+    for (seat, temperament, mind) in &seats {
         if driven.iter().any(|of| of.0 == seat) {
             continue;
         }
         // On the seat, like the identity, so a bot keeps its temperament across lives.
         let costs = temperament.copied().unwrap_or_else(|| {
             let rolled = RouteCosts::temperament();
+            commands.entity(seat).insert(rolled);
+            rolled
+        });
+        let mind = mind.copied().unwrap_or_else(|| {
+            let rolled = BotMind::temperament();
             commands.entity(seat).insert(rolled);
             rolled
         });
@@ -257,7 +263,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         let spawn = choose_spawn(&placed, who.team(), &collision);
         info!("Standing a bot's body up as {} on {}", who.id, team_name(who.team()));
         let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
-        commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), costs, Roam::default(), Name::new("Bot")));
+        commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), costs, mind, BotSenses::default(), Roam::default(), Name::new("Bot")));
         if hosting {
             commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
         }

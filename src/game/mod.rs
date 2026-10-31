@@ -22,6 +22,7 @@ use crate::tool::room::{Block, MapVolumes, Room, VolumeOrder};
 
 pub mod body_mesh;
 pub mod bot;
+pub mod bot_sense;
 pub mod collision;
 pub mod condition;
 pub mod damage;

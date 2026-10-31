@@ -450,5 +450,5 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
 
 ### Later
 - [ ] Rocket jumps aimed off the vertical, and from a run, for distance
-- [ ] The brain: goals, utility scoring, hearing via `Effect`, aim and skill
-      (its own plan)
+- [ ] The brain: senses with a 90° view, utility-scored goals, aim and skill;
+      planned in [bot-brain.md](bot-brain.md)

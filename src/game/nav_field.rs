@@ -130,6 +130,19 @@ pub struct Sightlines {
     pub crouched_body: Vec<Vec<Seen>>,
 }
 
+impl Sightlines {
+    /// Whether an eye over `eye` might see a body over `body`: false only where the bake says no
+    /// eye height there sees any of the body, so it is a quick no and never a yes. Pairs beyond
+    /// [`SIGHT_RANGE`] were never cast and are a maybe.
+    pub fn could_see(&self, eye: CellId, body: CellId) -> bool {
+        let (Some(&from), Some(&to)) = (self.viewpoint_of.get(eye as usize), self.viewpoint_of.get(body as usize)) else { return true };
+        if from == to || self.viewpoints[from as usize].distance(self.viewpoints[to as usize]) > SIGHT_RANGE {
+            return true;
+        }
+        [&self.standing, &self.crouched_eye, &self.crouched_body].iter().any(|rows| rows[from as usize].iter().any(|seen| seen.viewpoint == to))
+    }
+}
+
 /// Per cell. A field not baked yet is empty.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Fields {

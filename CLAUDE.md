@@ -98,7 +98,14 @@ rolled again each life. `F8` draws each bot's route in its color. The nav graph 
 the third bake), with knockback, pickup distance, traffic and, as a fourth bake,
 sightlines on it (`src/game/nav_field.rs`), rated into kinds of place — cramped,
 precarious, an ambush — for the map's statistics (`src/game/nav_rating.rs`); all
-of it is drawn over the floor from its section of the Bakes panel. The plan is [documentation/bots.md](documentation/bots.md).
+of it is drawn over the floor from its section of the Bakes panel. The plan is
+[documentation/bots.md](documentation/bots.md). The brain — senses with a 90°
+view, goals scored by utility with a commitment bonus, and aim with human
+limits — is planned in [documentation/bot-brain.md](documentation/bot-brain.md).
+Its senses are built (`src/game/bot_sense.rs`): **a bot never reads where an
+enemy is**, only its `BotSenses` — who is in its 90° view with a clear ray to
+them, what it heard (`Effect`s) and who hurt it — remembered for a few seconds
+and passed on only after its `BotMind`'s reaction time. Nothing yet acts on them.
 
 There is a prop editor, which models the things a map and a class refer to.
 It is a third `AppMode` and the frontier next to it: the geometry it builds is
