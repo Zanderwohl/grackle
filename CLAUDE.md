@@ -1629,7 +1629,7 @@ Otherwise **the player chooses**
 match `Seat::Choosing` — on their `Identity`, with no body and no claim to one,
 so they count as dead — behind the **team picker**
 ([`src/game/team_picker.rs`](src/game/team_picker.rs)): Random, each team in
-play, and Spectate, which is offered and never open yet. A mode without teams
+play, and Spectate (see below). A mode without teams
 offers "Free for All", which is Random into no team. `.` brings it back
 mid-match. The teams in play are the `Side`s the spawn points are on, or Red
 and Blue on a map with fewer than two.
@@ -1652,6 +1652,34 @@ and Blue on a map with fewer than two.
   the view looks out from behind a spawn point (`overlook_while_choosing`, a
   `DeathCam` of nobody's), which is why `spawn_the_view` no longer waits for
   a body.
+
+**Spectating is a seat**, `Seat::Spectating`
+([`src/game/spectate.rs`](src/game/spectate.rs)): on no team, owed no body,
+with no `Standing` — so on neither scoreboard nor the Rounds tab — and
+counted in no team's balance, since a tally counts only teams. Only
+`Seat::Playing` is owed a body or a standing (`Seat::is_playing`); ask that
+rather than comparing against `Choosing`. Choosing it with a body kills the
+body like any switch, and choosing a team from `.` ends it. A client reads
+its seat off the server's `TeamOptions`, so the view below runs on every
+machine from what it is told.
+
+- **The view is a list, not cameras**: every spawn point (by entity), then
+  every living body's eye (by `PlayerId`), stepped with the left button and
+  back with the right, wrapping. `SpectatorView` holds the *target*, so a
+  death or a join rebuilds the list without moving the view; a target that
+  goes is replaced by whatever took its place in the list.
+- **A spawn is a `DeathCam`** of nobody's, framed by the same `overlook` the
+  picker uses. **An eye is `Watched`** on that body: `place_camera` looks out
+  of it at its eye, aimed by its replicated `Player.yaw`/`pitch`, ahead of
+  any `DeathCam`; `decide_the_view` cuts to first person; and its body and
+  held weapon are hidden from inside as our own are. The viewmodel, its arms,
+  kicks and reloads follow `Viewed` — ours or the watched body — so a
+  spectator sees what that player sees; the apparent muzzle stays ours.
+- **Nothing else reads the clicks.** With no body the latch's edges are
+  consumed by `write_client_inputs` with nothing to fire, and `watch`
+  ignores clicks while `MouseHeld`, so the click that closes the picker
+  does not also step the view. `watch` drops `OurLastBody` too: chosen, not
+  died, so there is no corpse to watch.
 
 **The animation grid does choose.** `RosterTeam` on the feature is a panel
 combo — *Striped* ("Four teams, then colors"), or one of the four. Striped

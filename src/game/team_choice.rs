@@ -8,6 +8,7 @@
 //!   a coin. A mode without teams offers only Random, as "Free for All".
 //! - Changing seat with a body kills it, credited to yourself, so it costs a
 //!   point and the respawn timer starts on the new team.
+//! - Spectating is a seat on no team, so it counts toward no team's numbers.
 //!
 //! Offers are per player: leaving a team is counted before joining one.
 
@@ -38,7 +39,6 @@ pub const MOST_AHEAD: usize = 2;
 pub enum TeamChoice {
     Random,
     Join(Team),
-    /// Offered and never open: there is nothing to watch from yet.
     Spectate,
 }
 
@@ -62,6 +62,7 @@ pub struct TeamOptions {
     /// Every team in play, and whether it may be joined now.
     pub open: Vec<(Team, bool)>,
     pub random: bool,
+    pub spectate: bool,
 }
 
 /// One team's numbers, not counting whoever is choosing.
@@ -114,8 +115,9 @@ pub fn random_team(candidates: &[TeamTally], rng: &mut impl rand::Rng) -> Option
 
 /// Your own team is never open, and Random never lands on it.
 pub fn options(seat: Seat, teams: bool, tallies: &[TeamTally]) -> TeamOptions {
+    let spectate = seat != Seat::Spectating;
     if !teams {
-        return TeamOptions { seat, teams, open: Vec::new(), random: seat == Seat::Choosing };
+        return TeamOptions { seat, teams, open: Vec::new(), random: !seat.is_playing(), spectate };
     }
     let current = seat.team();
     let open: Vec<(Team, bool)> = tallies
@@ -123,7 +125,7 @@ pub fn options(seat: Seat, teams: bool, tallies: &[TeamTally]) -> TeamOptions {
         .map(|tally| (tally.team, Some(tally.team) != current && may_join(tally.team, tallies)))
         .collect();
     let random = open.iter().any(|(_, open)| *open);
-    TeamOptions { seat, teams, open, random }
+    TeamOptions { seat, teams, open, random, spectate }
 }
 
 /// Where a choice puts somebody, by the same offer they were shown.
@@ -134,7 +136,8 @@ pub fn decide(
     rng: &mut impl rand::Rng,
 ) -> Result<Seat, &'static str> {
     match choice {
-        TeamChoice::Spectate => Err("spectating is not built yet"),
+        TeamChoice::Spectate if offered.spectate => Ok(Seat::Spectating),
+        TeamChoice::Spectate => Err("already spectating"),
         TeamChoice::Random if !offered.random => Err("there is nowhere else to go"),
         TeamChoice::Random if !offered.teams => Ok(Seat::Playing(None)),
         TeamChoice::Random => {
@@ -248,7 +251,10 @@ pub(crate) fn seat_whoever_chose(
         if seat == who.seat {
             continue;
         }
-        info!("{} joins {}", who.id, team_name(seat.team()));
+        match seat {
+            Seat::Spectating => info!("{} spectates", who.id),
+            _ => info!("{} joins {}", who.id, team_name(seat.team())),
+        }
         match chair {
             Chair::Ours => us.as_deref_mut().expect("found above").0.seat = seat,
             Chair::Link(link) => links.get_mut(link).expect("found above").1.seat = seat,
@@ -456,11 +462,25 @@ mod tests {
         assert!(decide(TeamChoice::Random, &again, &[], &mut rng).is_err(), "rejoined the team you are on");
     }
 
+    /// Breaks if a spectator is counted on a team, or cannot get back in.
     #[test]
-    fn nobody_may_spectate_yet() {
+    fn a_spectator_is_on_no_team_and_may_join_any() {
+        let mut rng = rand::rng();
         let counts = tallies(&[(Team::Red, 0, 0), (Team::Blue, 0, 0)]);
-        let offer = options(Seat::Choosing, true, &counts);
-        assert!(decide(TeamChoice::Spectate, &offer, &counts, &mut rand::rng()).is_err());
+        let offer = options(Seat::Playing(Some(Team::Red)), true, &counts);
+        assert_eq!(decide(TeamChoice::Spectate, &offer, &counts, &mut rng), Ok(Seat::Spectating));
+
+        let me = Identity { id: PlayerId(1), seat: Seat::Choosing, color: 0 };
+        let watcher = Identity { id: PlayerId(2), seat: Seat::Spectating, color: 1 };
+        let here = [(Chair::Ours, me), (Chair::Link(Entity::PLACEHOLDER), watcher)];
+        let counts = tallies_without(&[Team::Red, Team::Blue], &here, &[], me.id, &HashMap::new());
+        assert_eq!(counts, tallies(&[(Team::Red, 0, 0), (Team::Blue, 0, 0)]));
+
+        let watching = options(Seat::Spectating, true, &counts);
+        assert_eq!(watching.open, vec![(Team::Red, true), (Team::Blue, true)]);
+        assert!(watching.random);
+        assert!(decide(TeamChoice::Spectate, &watching, &counts, &mut rng).is_err(), "spectated twice");
+        assert_eq!(decide(TeamChoice::Random, &options(Seat::Spectating, false, &[]), &[], &mut rng), Ok(Seat::Playing(None)));
     }
 
     mod in_a_world {
@@ -532,6 +552,19 @@ mod tests {
             assert_eq!(kills.len(), 1);
             assert_eq!(kills[0].target, body);
             assert_eq!(kills[0].source, DamageSource::Player(PlayerId(1)), "credited to ourselves, so it costs a point");
+        }
+
+        #[test]
+        fn spectating_with_a_body_gives_it_up() {
+            let mut world = world_with_us(Seat::Playing(Some(Team::Red)));
+            world.spawn((Player::default(), PlayerId(1), Damageable::default(), GlobalTransform::default()));
+
+            ask(&mut world, TeamChoice::Spectate, Seat::Playing(Some(Team::Red)));
+
+            assert_eq!(our_seat(&world), Seat::Spectating);
+            assert_eq!(world.resource_mut::<Messages<Kill>>().drain().count(), 1);
+            ask(&mut world, TeamChoice::Join(Team::Blue), Seat::Spectating);
+            assert_eq!(our_seat(&world), Seat::Playing(Some(Team::Blue)), "a team did not end spectating");
         }
 
         #[test]

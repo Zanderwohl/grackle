@@ -284,6 +284,14 @@ pub struct Simulated;
 #[derive(Component, Default, Debug)]
 pub struct LocalPlayer;
 
+/// The body a spectator is looking out of. Hidden from inside like our own,
+/// and never alongside a [`LocalPlayer`].
+#[derive(Component, Default, Debug)]
+pub struct Watched;
+
+/// The body the view is inside: ours, or the one a spectator watches.
+pub type Viewed = Or<(With<LocalPlayer>, With<Watched>)>;
+
 /// Where the body is at fixed-step boundaries, so rendering can draw between
 ///
 /// Physics writes here and never to `Transform`; [`interpolate_bodies`] writes
@@ -646,7 +654,9 @@ pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut preference: ResMut<ViewP
 ///
 /// Runs after `interpolate_bodies`; earlier, it sits a frame behind the body.
 ///
-/// With no body, it orbits the [`DeathCam`] instead, still aimed by the latch.
+/// With no body, it looks out of the [`Watched`] one, aimed as that body
+/// aims, or else orbits the [`DeathCam`], still aimed by the latch.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn place_camera(
     pull: Res<CameraPull>,
     world: Res<CollisionWorld>,
@@ -654,8 +664,19 @@ pub fn place_camera(
     death_cam: Option<Res<DeathCam>>,
     fixed: Res<Time<Fixed>>,
     body: Option<Single<(&Transform, &Stance, &Player), (With<LocalPlayer>, Without<PlayerCamera>)>>,
+    watched: Option<Single<(&Transform, &Stance, &Player), (With<Watched>, Without<LocalPlayer>, Without<PlayerCamera>)>>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
+    if let (None, Some(watched)) = (&body, watched) {
+        let (transform, stance, player) = watched.into_inner();
+        let eye = transform.translation + Vec3::Y * player.drawn_duck(fixed.overstep_fraction()).eye_from_center(*stance);
+        let aim = Quat::from_rotation_y(player.yaw) * Quat::from_rotation_x(player.pitch);
+        for mut camera in &mut cameras {
+            camera.translation = eye;
+            camera.rotation = aim;
+        }
+        return;
+    }
     let pivot = match (body, death_cam) {
         // Ducking lowers the eye and the third-person pivot with it.
         (Some(body), _) => {

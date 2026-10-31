@@ -17,7 +17,7 @@ use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{ClipStack, Layer};
 use crate::common::taunt::{TauntId, TauntTurning, TauntWeapon, Taunts};
 use crate::game::player::{
-    CameraPull, DeathCam, Inputs, LocalPlayer, ViewMode, ViewPreference, CAMERA_PULL_SECONDS,
+    CameraPull, DeathCam, Inputs, LocalPlayer, ViewMode, ViewPreference, Watched, CAMERA_PULL_SECONDS,
 };
 
 /// Not an enum: a humiliated body may still taunt, as in TF2, and the taunt
@@ -153,13 +153,16 @@ pub fn end_taunts(
 /// third person until the camera is all the way back in the head.
 ///
 /// A [`DeathCam`] forces third person; the next body cuts back in rather
-/// than swinging, since it is somewhere else.
+/// than swinging, since it is somewhere else. Looking out of a [`Watched`]
+/// body is first person, cut to.
+#[allow(clippy::too_many_arguments)]
 pub fn decide_the_view(
     mut commands: Commands,
     time: Res<Time>,
     preference: Res<ViewPreference>,
     death_cam: Option<Res<DeathCam>>,
     ours: Option<Single<&Condition, With<LocalPlayer>>>,
+    watched: Query<(), With<Watched>>,
     mut pull: ResMut<CameraPull>,
     mut view: ResMut<ViewMode>,
 ) {
@@ -169,16 +172,18 @@ pub fn decide_the_view(
         commands.remove_resource::<DeathCam>();
     }
     let dead = death_cam.is_some() && !respawned;
+    let watching = ours.is_none() && !watched.is_empty();
     let forced = dead || ours.is_some_and(|condition| condition.forces_third_person());
-    let wanted = match forced {
-        true => ViewMode::ThirdPerson,
-        false => preference.0,
+    let wanted = match (watching, forced) {
+        (true, _) => ViewMode::FirstPerson,
+        (false, true) => ViewMode::ThirdPerson,
+        (false, false) => preference.0,
     };
     let out = match wanted {
         ViewMode::ThirdPerson => 1.0,
         ViewMode::FirstPerson => 0.0,
     };
-    let step = match respawned {
+    let step = match respawned || watching {
         true => 1.0,
         false => time.delta_secs() / CAMERA_PULL_SECONDS,
     };
