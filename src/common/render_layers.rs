@@ -27,6 +27,10 @@ pub const THUMBNAIL: usize = 3;
 /// forward camera does not.
 pub const GIZMOS: usize = 4;
 
+/// What is drawn once, out of sight, so its pipeline is compiled before it is
+/// needed. See [`crate::game::forward_camera`].
+pub const WARM_UP: usize = 5;
+
 /// The editor's 2D shape painter and the egui camera.
 pub const PAINTER: usize = 31;
 
@@ -36,7 +40,7 @@ mod tests {
 
     #[test]
     fn no_two_features_share_a_layer() {
-        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, PAINTER];
+        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, WARM_UP, PAINTER];
         for (i, a) in all.iter().enumerate() {
             for b in &all[i + 1..] {
                 assert_ne!(a, b, "two features claim layer {a}");

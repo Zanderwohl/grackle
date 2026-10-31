@@ -8,6 +8,10 @@
 //! *your* view would be wrong, and a lens in the world could be seen by the
 //! very camera writing the texture it samples.
 //!
+//! The lens and the forward camera are drawn once at startup, out of sight
+//! ([`warm_up_the_lens`]): pipelines compile on first draw, synchronously on
+//! macOS and wasm, and the first draw was otherwise picking up a scoped weapon.
+//!
 //! Added in `main.rs` beside `GamePlugin` rather than inside it, since the
 //! game's tests run with no render plugins to give a material to.
 
@@ -15,10 +19,13 @@ use bevy::asset::embedded_asset;
 use bevy::camera::{Hdr, RenderTarget};
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
+use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::NoFrustumCulling;
 use bevy::gizmos::config::GizmoConfigStore;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType, TextureFormat};
-use bevy::shader::ShaderRef;
+use bevy::shader::{Shader, ShaderRef};
 
 use crate::common::app_mode::AppMode;
 use crate::common::render_layers;
@@ -46,6 +53,12 @@ const LENS_FRINGE: f32 = 0.015;
 /// Before the viewmodel camera, which samples what this one drew.
 const FORWARD_CAMERA_ORDER: isize = PLAY_CAMERA_ORDER - 1;
 
+const LENS_SHADER: &str = "embedded://grackle/game/lens.wesl";
+
+/// Frames the warm-up stays up once the shader has loaded: the material, the
+/// mesh and the pipeline are each prepared a frame or so after what they need.
+const WARM_UP_FRAMES: u32 = 10;
+
 #[derive(Component)]
 pub struct ForwardCamera;
 
@@ -68,7 +81,7 @@ pub struct LensMaterial {
 
 impl Material for LensMaterial {
     fn fragment_shader() -> ShaderRef {
-        "embedded://grackle/game/lens.wesl".into()
+        LENS_SHADER.into()
     }
 }
 
@@ -118,7 +131,8 @@ impl Plugin for ForwardCameraPlugin {
         embedded_asset!(app, "lens.wesl");
         app.add_plugins(MaterialPlugin::<LensMaterial>::default())
             .init_resource::<Lenses>()
-            .add_systems(Startup, draw_gizmos_on_their_own_layer)
+            .add_systems(Startup, (draw_gizmos_on_their_own_layer, warm_up_the_lens))
+            .add_systems(Update, end_the_warm_up)
             .add_systems(
                 Update,
                 (swap_in_the_lenses, give_the_view_a_forward_camera, aim_the_forward_camera)
@@ -134,6 +148,85 @@ fn draw_gizmos_on_their_own_layer(mut store: ResMut<GizmoConfigStore>) {
     for (_, config, _) in store.iter_mut() {
         config.render_layers = RenderLayers::layer(render_layers::GIZMOS);
     }
+}
+
+/// Set up as the forward camera is, so the tonemapping and upscaling it needs
+/// are the same pipelines; its main pass matches the viewmodel camera's (HDR,
+/// perspective, default MSAA), which is what the lens is drawn by.
+#[derive(Component)]
+struct WarmUpCamera;
+
+#[derive(Component)]
+struct WarmUpLens;
+
+#[derive(Resource)]
+struct LensWarmUp {
+    shader: Handle<Shader>,
+    frames: u32,
+}
+
+/// Laid out as the baker lays a lens out — the pipeline is keyed on the vertex
+/// layout — with all three corners in one place, so nothing is rasterized.
+fn warm_up_mesh() -> Mesh {
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0, 0.0, -1.0]; 3])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 3])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.5, 0.5]; 3])
+        .with_inserted_indices(Indices::U32(vec![0, 1, 2]))
+}
+
+fn warm_up_the_lens(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut lenses: ResMut<Lenses>,
+    mut materials: ResMut<Assets<LensMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    // Not the lenses' own view: a pass may not sample what it is drawing into.
+    let target = images.add(Image::new_target_texture(4, 4, TextureFormat::Rgba16Float, None));
+    let layer = RenderLayers::layer(render_layers::WARM_UP);
+    commands.spawn((
+        WarmUpCamera,
+        Camera3d::default(),
+        Camera { order: FORWARD_CAMERA_ORDER, ..default() },
+        RenderTarget::Image(target.into()),
+        Hdr,
+        Tonemapping::None,
+        DebandDither::Disabled,
+        Projection::Perspective(PerspectiveProjection::default()),
+        layer.clone(),
+        Name::new("Lens warm-up camera"),
+    ));
+    commands.spawn((
+        WarmUpLens,
+        Mesh3d(meshes.add(warm_up_mesh())),
+        MeshMaterial3d(lenses.get(Tint::default(), &mut materials)),
+        layer,
+        NoFrustumCulling,
+        Name::new("Lens warm-up"),
+    ));
+    commands.insert_resource(LensWarmUp { shader: asset_server.load(LENS_SHADER), frames: 0 });
+}
+
+fn end_the_warm_up(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    warm_up: Option<ResMut<LensWarmUp>>,
+    drawn: Query<Entity, Or<(With<WarmUpCamera>, With<WarmUpLens>)>>,
+) {
+    let Some(mut warm_up) = warm_up else { return };
+    if !asset_server.is_loaded_with_dependencies(&warm_up.shader) {
+        return;
+    }
+    warm_up.frames += 1;
+    if warm_up.frames < WARM_UP_FRAMES {
+        return;
+    }
+    for entity in &drawn {
+        commands.entity(entity).despawn();
+    }
+    commands.remove_resource::<LensWarmUp>();
 }
 
 /// The viewmodel copies the body's materials, so its lens is swapped in here.
@@ -241,6 +334,23 @@ mod tests {
         assert!(world.get::<MeshMaterial3d<LensMaterial>>(glass).is_some(), "the glass is not a lens");
         assert!(world.get::<MeshMaterial3d<StandardMaterial>>(glass).is_none(), "the glass has two materials");
         assert!(world.get::<MeshMaterial3d<LensMaterial>>(barrel).is_none(), "the barrel became a lens");
+    }
+
+    #[test]
+    fn the_warm_up_lens_is_laid_out_like_the_scope_glass() {
+        let doc = crate::prop::document::parse(include_str!("../../assets/default/props/sniper_rifle.gpp")).unwrap();
+        let (_, glass) = crate::prop::baked::parts(&doc.evaluate())
+            .into_iter()
+            .find(|(surface, _)| surface.style == Style::ForwardCamera)
+            .expect("the rifle has no scope glass");
+        let warm = warm_up_mesh();
+        let layout = |mesh: &Mesh| {
+            let mut attributes: Vec<_> =
+                mesh.attributes().map(|(attribute, _)| (attribute.name, attribute.format)).collect();
+            attributes.sort_by_key(|(name, _)| *name);
+            (attributes, mesh.primitive_topology())
+        };
+        assert_eq!(layout(&warm), layout(&glass));
     }
 
     #[test]
