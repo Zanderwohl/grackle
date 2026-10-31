@@ -157,5 +157,6 @@ campers and brawlers come out of one system with different numbers.
       wall between, and hits a still target at range
 
 ### Stage 8: seeing what a bot thinks
-- [ ] `F8` also draws each bot's view cone, the enemies it senses (seen,
-      heard, remembered), and its goal's name over its head
+- [x] `F8` also draws each bot's view and a line to each enemy it senses:
+      solid while seen, dashed when only hurt by them, fading as it forgets
+- [ ] Noises heard, and the goal's name over its head

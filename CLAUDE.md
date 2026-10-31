@@ -94,7 +94,9 @@ forbidden. Each seat rolls its own temperament (every weight scaled by 0.1 to
 temperament also has a **misjudgment**, 0 to 0.8: each 4 m stretch of floor
 reads to the bot as safer or riskier than the bake says, even dear where
 nothing threatens, by a hash of the stretch and the bot's `beliefs`, which are
-rolled again each life. `F8` draws each bot's route in its color. The nav graph they walk — walks, steps, drops and jumps, the last two found by running the movement step — is baked (`src/game/nav.rs`,
+rolled again each life. `F8` draws each bot's route in its color, its view,
+and a line to each enemy it knows of: solid while seen, dashed when only hurt
+by them, fading as it forgets. The nav graph they walk — walks, steps, drops and jumps, the last two found by running the movement step — is baked (`src/game/nav.rs`,
 the third bake), with knockback, pickup distance, traffic and, as a fourth bake,
 sightlines on it (`src/game/nav_field.rs`), rated into kinds of place — cramped,
 precarious, an ambush — for the map's statistics (`src/game/nav_rating.rs`); all
@@ -407,8 +409,8 @@ its hitboxes are hidden from inside your own head, nobody else's are),
 **`F4`** toggles the hitbox gizmos and the debug laser aimed at them, and
 **`F6`** toggles the bone gizmos and the pickups' trigger volumes
 (green, dim while one restocks), **`F7`** shows the nav overlay picked in
-the Bakes panel, and **`F8`** draws each bot's route over the floor in its
-color. All four are off by default: they are debug
+the Bakes panel, and **`F8`** draws each bot's route over the floor, its view
+and what it senses, in its color. All four are off by default: they are debug
 views, and now that bodies have geometry none is what a player sees. `F3`
 is the perf overlay in both modes.
 

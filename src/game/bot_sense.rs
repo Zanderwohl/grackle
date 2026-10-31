@@ -10,8 +10,10 @@ use crate::common::damage::{DamageDealt, DamageSource, PlayerId};
 use crate::common::effects::Effect;
 use crate::common::hitbox::Hitboxes;
 use crate::common::net::has_authority;
+use crate::common::player_color::PlayerColor;
+use crate::common::swatch::Swatch;
 use crate::common::team::{hostile, Team};
-use crate::game::bot::BotOf;
+use crate::game::bot::{BotOf, ShowBots};
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::death::Dying;
@@ -219,18 +221,87 @@ pub fn sense(
     }
 }
 
+/// Meters out from the eye the view is drawn.
+const VIEW_DRAWN: f32 = 2.0;
+/// Segments along each arc of the view's far edge.
+const VIEW_ARC_STEPS: usize = 8;
+/// Meters of line, then of gap, in a dashed line.
+const DASH: (f32, f32) = (0.3, 0.2);
+/// Least alpha an enemy about to be forgotten is drawn with, so it does not vanish before it is.
+const FADED: f32 = 0.15;
+
+/// The step's look direction: yaw about world Y with `-Z` at zero, pitch positive up.
+fn look(yaw: f32, pitch: f32) -> Vec3 {
+    let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
+    Vec3::new(-yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos())
+}
+
+fn dashed(gizmos: &mut Gizmos, from: Vec3, to: Vec3, color: Color) {
+    let length = from.distance(to);
+    let along = (to - from).normalize_or_zero();
+    let mut at = 0.0;
+    while at < length {
+        gizmos.line(from + along * at, from + along * (at + DASH.0).min(length), color);
+        at += DASH.0 + DASH.1;
+    }
+}
+
+/// Each bot's view as [`in_view`] tests it, a box in azimuth and elevation about its look, and a
+/// line to each enemy it knows of: solid while seen, dashed when only hurt by them, fading as it
+/// forgets them.
+fn draw_bot_senses(
+    show: Res<ShowBots>,
+    time: Res<Time>,
+    mut gizmos: Gizmos,
+    bots: Query<(&PhysicsBody, &Stance, &Player, &BotSenses, Option<&Team>, Option<&PlayerColor>), With<BotOf>>,
+) {
+    if !show.0 {
+        return;
+    }
+    let now = time.elapsed_secs();
+    for (body, stance, player, senses, team, color) in &bots {
+        let color = Swatch::of_body(team.copied(), color.copied()).base;
+        let eye = body.current + Vec3::Y * player.duck.eye_from_center(*stance);
+        let at = |yaw: f32, pitch: f32| eye + look(player.yaw + yaw, player.pitch + pitch) * VIEW_DRAWN;
+        let (across, up) = (HALF_VIEW, HALF_VIEW_VERTICAL);
+        for (yaw, pitch) in [(-across, -up), (across, -up), (across, up), (-across, up)] {
+            gizmos.line(eye, at(yaw, pitch), color);
+        }
+        let steps = (0..=VIEW_ARC_STEPS).map(|step| step as f32 / VIEW_ARC_STEPS as f32 * 2.0 - 1.0);
+        for edge in [-up, up] {
+            gizmos.linestrip(steps.clone().map(|t| at(t * across, edge)), color);
+        }
+        for edge in [-across, across] {
+            gizmos.linestrip(steps.clone().map(|t| at(edge, t * up)), color);
+        }
+
+        for known in &senses.known {
+            let fade = if known.in_sight { 1.0 } else { (1.0 - (now - known.last) / REMEMBERS).max(FADED) };
+            let shade = color.with_alpha(fade);
+            match known.how {
+                Sense::Seen => gizmos.line(eye, known.at, shade),
+                Sense::Hurt => dashed(&mut gizmos, eye, known.at, shade),
+            }
+        }
+    }
+}
+
 pub struct BotSensePlugin;
 
 impl Plugin for BotSensePlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Effect>().add_message::<DamageDealt>().add_systems(
-            FixedUpdate,
-            sense
-                .after(DamageSystems::Apply)
-                .after(update_hitboxes)
-                .run_if(has_authority)
-                .run_if(in_state(AppMode::Play)),
-        );
+        app.add_message::<Effect>()
+            .add_message::<DamageDealt>()
+            .init_resource::<ShowBots>()
+            .add_systems(
+                FixedUpdate,
+                sense
+                    .after(DamageSystems::Apply)
+                    .after(update_hitboxes)
+                    .run_if(has_authority)
+                    .run_if(in_state(AppMode::Play)),
+            )
+            .add_systems(Update, draw_bot_senses.run_if(in_state(AppMode::Play)));
     }
 }
 
@@ -322,6 +393,20 @@ mod tests {
         assert_eq!(senses.noises.len(), 1);
         assert_eq!(senses.noises[0].at, from);
         assert!(senses.known.is_empty(), "a noise told the bot who made it");
+    }
+
+    /// Breaks if the drawn view and the tested one disagree: just inside each corner the debug
+    /// view draws is in view, and just outside is not.
+    #[test]
+    fn the_view_drawn_is_the_view_tested() {
+        let eye = Vec3::new(1.0, 1.6, -2.0);
+        for (yaw, pitch) in [(0.0, 0.0), (1.2, 0.2), (-2.5, -0.3)] {
+            for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                let corner = |k: f32| eye + look(yaw + sx * HALF_VIEW * k, pitch + sy * HALF_VIEW_VERTICAL * k) * 5.0;
+                assert!(in_view(eye, yaw, pitch, corner(0.98)), "inside the corner at {yaw}, {pitch}");
+                assert!(!in_view(eye, yaw, pitch, corner(1.02)), "outside the corner at {yaw}, {pitch}");
+            }
+        }
     }
 
     /// Breaks if a teammate is treated as an enemy.

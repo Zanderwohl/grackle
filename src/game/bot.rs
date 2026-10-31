@@ -453,11 +453,11 @@ fn retire_bots(mut commands: Commands, bodies: Query<(Entity, &BotOf)>, seats: Q
     }
 }
 
-/// Whether each bot's route is drawn over the floor. `F8` toggles it; off by default, a debug view.
+/// Whether each bot's route and senses are drawn. `F8` toggles it; off by default, a debug view.
 #[derive(Resource, Default, Debug)]
-pub struct ShowBotRoutes(pub bool);
+pub struct ShowBots(pub bool);
 
-fn toggle_bot_routes(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowBotRoutes>) {
+fn toggle_bot_routes(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowBots>) {
     if keys.just_pressed(KeyCode::F8) {
         show.0 = !show.0;
     }
@@ -469,7 +469,7 @@ const ROUTE_LIFT: f32 = 0.1;
 /// From each bot's feet through the cells it has yet to reach, to a ring at its goal, in the
 /// bot's own color. Routes live on the authority, so a client draws none.
 fn draw_bot_routes(
-    show: Res<ShowBotRoutes>,
+    show: Res<ShowBots>,
     nav: Option<Res<NavBake>>,
     mut gizmos: Gizmos,
     bots: Query<(&PhysicsBody, &Stance, &BotRoute, &BotIntent, Option<&Team>, Option<&PlayerColor>), With<BotOf>>,
@@ -603,7 +603,7 @@ pub struct BotPlugin;
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RoundSettings>()
-            .init_resource::<ShowBotRoutes>()
+            .init_resource::<ShowBots>()
             .add_systems(Update, (toggle_bot_routes, draw_bot_routes).chain().run_if(in_state(AppMode::Play)))
             .add_systems(FixedPreUpdate, steer_bots.run_if(has_authority).run_if(in_state(AppMode::Play)))
             .add_systems(FixedUpdate, retire_bots.before(step_player).run_if(has_authority))
