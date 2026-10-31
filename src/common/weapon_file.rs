@@ -310,6 +310,8 @@ mod tests {
                 shove_radius_m: 0.0,
                 pellets: None,
                 kill_shove: None,
+                ramp_up: None,
+                falloff: None,
             }),
             WeaponAction::Projectile(crate::common::projectile::ProjectileSpec::ROCKET),
             WeaponAction::Flame(crate::common::flame::FlameSpec::FLAMETHROWER),

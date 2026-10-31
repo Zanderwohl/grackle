@@ -402,6 +402,8 @@ mod tests {
         shove_radius_m: 0.4,
         pellets: None,
         kill_shove: None,
+        ramp_up: None,
+        falloff: None,
     };
 
     fn a_world(catalog: WeaponCatalog) -> World {

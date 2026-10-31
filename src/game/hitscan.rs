@@ -138,6 +138,8 @@ pub fn fire_hitscan(
         // One `Damage` per body per shot, not per pellet, so a blast at point
         // blank is one number and one flinch.
         let mut dealt: Vec<Damage> = Vec::new();
+        // Each body's share before rounding, so nine pellets at 3.5 are 32 rather than 36.
+        let mut worths: Vec<f32> = Vec::new();
 
         for offset in offsets {
             let direction =
@@ -157,17 +159,20 @@ pub fn fire_hitscan(
 
             let Some(hit) = hit else { continue };
 
-            let worth = damage_for(hit.zone, &spec);
-            match dealt.iter_mut().find(|asked| asked.target == hit.target) {
-                Some(asked) => asked.amount += worth,
-                None => dealt.push(Damage {
+            let worth = damage_for(hit.zone, &spec) as f32 * spec.scale_at(ray.origin.distance(hit.point));
+            match dealt.iter().position(|asked| asked.target == hit.target) {
+                Some(index) => worths[index] += worth,
+                None => {
+                    worths.push(worth);
+                    dealt.push(Damage {
                     target: hit.target,
                     source,
-                    amount: worth,
+                    amount: 0,
                     point: hit.point,
                     from: Some(ray.origin),
                     kill_shove,
-                }),
+                    });
+                }
             }
 
             // Written for every hit, fatal or not. Scaled by what the pellet
@@ -176,11 +181,14 @@ pub fn fire_hitscan(
             // and the joints drag the rest.
             shoves.write(RagdollShove {
                 at: hit.point,
-                push: Push::Along(*ray.direction * (worth as f32 * spec.shove_per_damage)),
+                push: Push::Along(*ray.direction * (worth * spec.shove_per_damage)),
                 radius: spec.shove_radius_m,
             });
         }
 
+        for (asked, worth) in dealt.iter_mut().zip(worths) {
+            asked.amount = worth.round() as u32;
+        }
         damage.write_batch(dealt);
     }
 }
@@ -343,6 +351,8 @@ mod tests {
         shove_radius_m: 0.4,
         pellets: None,
         kill_shove: None,
+        ramp_up: None,
+        falloff: None,
     };
 
     fn fire(world: &mut World, shooter: Entity) {
@@ -505,6 +515,8 @@ mod tests {
         shove_radius_m: 0.3,
         pellets: Some(crate::common::weapon::PelletGrid { across: 3, spread: 30.0 }),
         kill_shove: None,
+        ramp_up: None,
+        falloff: None,
     };
 
     /// Breaks if the pattern stops being a square of the stated width, or
@@ -562,6 +574,41 @@ mod tests {
         assert_eq!(asked.len(), 1, "{asked:?}");
         assert!(asked[0].amount < 9 * SHOTGUN.damage, "every pellet landed: {asked:?}");
         assert!(asked[0].amount >= SHOTGUN.damage, "nothing landed: {asked:?}");
+    }
+
+    const FALLING_SHOTGUN: HitscanSpec = HitscanSpec {
+        ramp_up: Some(crate::common::weapon::DistanceScale { near: 0.0, far: 5.0, scale: 1.5 }),
+        falloff: Some(crate::common::weapon::DistanceScale { near: 5.0, far: 10.0, scale: 0.5 }),
+        ..SHOTGUN
+    };
+
+    /// Breaks if either line bends, runs past its ends, or the two stop meeting at full damage.
+    #[test]
+    fn ramp_up_and_falloff_are_a_line_each() {
+        let at = |distance| FALLING_SHOTGUN.scale_at(distance);
+        assert_eq!(at(0.0), 1.5);
+        assert!((at(2.5) - 1.25).abs() < 1e-6);
+        assert_eq!(at(5.0), 1.0);
+        assert!((at(7.5) - 0.75).abs() < 1e-6);
+        assert_eq!(at(10.0), 0.5);
+        assert_eq!(at(40.0), 0.5);
+        assert_eq!(SHOTGUN.scale_at(40.0), 1.0, "no lines is flat");
+    }
+
+    /// Breaks if distance stops reaching the damage, or each pellet is rounded before they are
+    /// added up.
+    #[test]
+    fn a_shot_hurts_more_close_up_and_less_far_off() {
+        let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(1.0));
+        fire_action(&mut world, shooter, WeaponAction::Hitscan(FALLING_SHOTGUN));
+        let close = asked_for(&mut world)[0].amount;
+        assert!(close > 9 * SHOTGUN.damage && close <= 95, "{close}");
+
+        // At twenty meters the square is 67 cm wide, still inside the body, and every pellet
+        // is worth 3.5.
+        let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(20.0));
+        fire_action(&mut world, shooter, WeaponAction::Hitscan(FALLING_SHOTGUN));
+        assert_eq!(asked_for(&mut world)[0].amount, 32);
     }
 
     /// Breaks if the pitch sign is backwards.

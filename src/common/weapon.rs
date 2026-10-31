@@ -55,6 +55,38 @@ pub struct HitscanSpec {
     /// Thrown at the body only by the shot that kills it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kill_shove: Option<KillShoveSpec>,
+    /// More damage close up: `scale` times it at `near`, rising to full at `far`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ramp_up: Option<DistanceScale>,
+    /// Less damage far off: full at `near`, falling to `scale` times it at `far`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub falloff: Option<DistanceScale>,
+}
+
+/// A straight line in damage over distance from the shooter, flat beyond either end. Ramp-up and
+/// falloff are one line each, so either can be had without the other.
+#[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+pub struct DistanceScale {
+    /// Meters.
+    pub near: f32,
+    pub far: f32,
+    pub scale: f32,
+}
+
+impl DistanceScale {
+    /// 0 at or before `near`, 1 at or past `far`.
+    fn along(&self, distance: f32) -> f32 {
+        ((distance - self.near) / (self.far - self.near).max(1e-3)).clamp(0.0, 1.0)
+    }
+}
+
+impl HitscanSpec {
+    /// What a hit `distance` meters from the shooter's eye is worth, times its damage.
+    pub fn scale_at(&self, distance: f32) -> f32 {
+        let ramp = self.ramp_up.map_or(1.0, |line| line.scale + (1.0 - line.scale) * line.along(distance));
+        let fall = self.falloff.map_or(1.0, |line| 1.0 + (line.scale - 1.0) * line.along(distance));
+        ramp * fall
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]

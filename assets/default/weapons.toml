@@ -103,8 +103,10 @@ primary = { cadence = { kind = "semi", interval = 0.33 }, cost = { kind = "ammo"
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
 # Nine pellets in a fixed 3×3 square that is a meter wide at thirty meters,
-# seven apiece, so 63 at point blank and less the further the square opens past
-# a body. `reload` is per shell. `kill_shove` throws the body back off its feet,
+# seven apiece before distance, and fewer land the further the square opens past
+# a body. `ramp_up` and `falloff` are a line each in meters from the eye: half
+# again as much point blank, full at 5 m, half at 10 m and beyond — 95 point
+# blank, 63 at 5 m, 32 at 10 m if every pellet lands. `reload` is per shell. `kill_shove` throws the body back off its feet,
 # but only on the shot that kills it: meters per second along the aim, `lift`
 # straight up on top, over `radius` meters around the hit.
 [weapons.shotgun]
@@ -113,7 +115,7 @@ bucket = 1
 deploy = 0.5
 model = "shotgun"
 magazine = { clip = 6, reserve = 32, reload = 0.625, reload_one_at_a_time = true }
-primary = { cadence = { kind = "semi", interval = 0.625 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 100.0, damage = 7, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.3, pellets = { across = 3, spread = 30.0 }, kill_shove = { speed = 10.0, lift = 3.0, radius = 1.2 } } }
+primary = { cadence = { kind = "semi", interval = 0.625 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 100.0, damage = 7, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.3, pellets = { across = 3, spread = 30.0 }, ramp_up = { near = 0.0, far = 5.0, scale = 1.5 }, falloff = { near = 5.0, far = 10.0, scale = 0.5 }, kill_shove = { speed = 10.0, lift = 3.0, radius = 1.2 } } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
 # No clip: the whole supply is loaded, and it never reloads.
