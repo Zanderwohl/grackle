@@ -202,9 +202,14 @@ naming the `spawn_walls` role — the smallest map that exercises sides,
 mirroring and the palette at once. Both open untitled, so a save asks where.
 
 **`arena.gmb`** (Foundry) is a free-for-all map for bots, opened with `--map`:
-a 40 m hall open to the sky, a stepped platform with the rocket launcher on
-it, a ledge up each side wall, a corridor behind each end wall, pillars and low
-walls, eight spawns, point-symmetric. Stair treads are a meter deep: on a
+a 40 m hall open to the sky, a stepped platform in the middle ringed by a
+pinwheel of 6 m walls, a wall across each side of the ring, a ledge up each
+side wall, a corridor behind each end wall holding a rocket launcher, a kill pit
+on each side, and eight spawns in alcoves and corner nooks out of the hall's
+sight. Point-symmetric, with every weapon in pairs a half turn apart. Its
+layout was tuned against the nav bake's statistics: the first version was
+94% open floor with a mean exposure of 824 m², the perch and the rocket
+launcher on one spot and spawns on stages. Stair treads are a meter deep: on a
 narrower one the nav bake finds nowhere a body fits, and the flight is cut.
 `every_arena_spawn_stands_clear_and_walks_everywhere` walks the nav graph from
 each spawn to every other and onto the platform.
@@ -1728,10 +1733,17 @@ machine from what it is told.
   of it at its eye, aimed by its replicated `Player.yaw`/`pitch`, ahead of
   any `DeathCam`, eased onto that aim in yaw and pitch over `WATCHED_EASE`
   (a bot's aim jumps a quarter turn in a tick), cutting to a new body rather
-  than swinging; `decide_the_view` cuts to first person; and its body and
-  held weapon are hidden from inside as our own are. The viewmodel, its arms,
-  kicks and reloads follow `Viewed` — ours or the watched body — so a
-  spectator sees what that player sees; the apparent muzzle stays ours. Their
+  than swinging; and its body and held weapon are hidden from inside as our
+  own are. **Watching is playing without the controls**: everything that
+  shows a player their own body asks for `Viewed` — ours or the watched body
+  — rather than `LocalPlayer`. So `F` pulls the view out behind a watched
+  body as it would behind ours (one `place_camera` path, the pivot and aim
+  being all that differ), a watched body's condition forces third person as
+  ours would, the health, armor and ammo readouts and the HUD's color are its,
+  its row is lit on both scoreboards (which go up with the round, not with a
+  body), damage direction is its hits, and the viewmodel, its arms, kicks and
+  reloads are its; the apparent muzzle and the weapon selector stay ours,
+  since they answer this machine's input. Their
   name is on a name-tag panel at the bottom middle of the safe zone, with the
   goal under it for a bot (`name_whoever_is_watched`). With `F8` on, a
   watched bot's every want and its pull is a table top right of the window

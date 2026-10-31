@@ -24,8 +24,9 @@ use crate::common::player_settings::{settings_of, ClientSettings, PlayerSettings
 use crate::common::team::Team;
 use crate::game::body_mesh::body_look;
 use crate::game::damage::DamageSystems;
-use crate::game::player::LocalPlayer;
+use crate::game::player::{Player, Viewed};
 use crate::game::respawn::{HueStart, Identity, OurIdentity};
+use crate::game::rounds::RoundHistory;
 use crate::get;
 
 #[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -174,7 +175,7 @@ impl Plugin for ScorePlugin {
                 .run_if(in_state(AppMode::Play))
                 .run_if(has_authority),
         )
-        .add_systems(OnEnter(AppMode::Play), (clear_standings, start_the_round_clock).run_if(has_authority))
+        .add_systems(OnEnter(AppMode::Play), clear_standings.run_if(has_authority))
         .add_systems(Update, end_the_round_at_the_time_limit.run_if(in_state(AppMode::Play)).run_if(has_authority))
         .add_systems(
             Update,
@@ -290,22 +291,17 @@ fn end_the_round_at_the_frag_limit(
     next.set(AppMode::Editor);
 }
 
-/// Game seconds when the round under way started, for [`RoundSettings::time_limit`].
-#[derive(Resource)]
-struct RoundStarted(f32);
-
-fn start_the_round_clock(mut commands: Commands, time: Res<Time>) {
-    commands.insert_resource(RoundStarted(time.elapsed_secs()));
-}
-
+/// On the clock [`RoundHistory`] records a round's length by, so a limit of five minutes is a
+/// round the Rounds tab says lasted five.
 fn end_the_round_at_the_time_limit(
     settings: Option<Res<RoundSettings>>,
-    started: Option<Res<RoundStarted>>,
-    time: Res<Time>,
+    history: Option<Res<RoundHistory>>,
+    time: Res<Time<Real>>,
     mut next: ResMut<NextState<AppMode>>,
 ) {
-    let (Some(limit), Some(started)) = (settings.and_then(|settings| settings.time_limit), started) else { return };
-    if time.elapsed_secs() - started.0 < limit || matches!(*next, NextState::Pending(_)) {
+    let Some(limit) = settings.and_then(|settings| settings.time_limit) else { return };
+    let Some(elapsed) = history.and_then(|history| history.elapsed(time.elapsed_secs())) else { return };
+    if elapsed < limit || matches!(*next, NextState::Pending(_)) {
         return;
     }
     info!("{limit} seconds are up; the round is over");
@@ -319,14 +315,9 @@ const MARGIN: f32 = 16.0;
 #[derive(Component)]
 struct Scoreboard;
 
-/// Keyed on `Added<LocalPlayer>` like the HUD, because a client's body
-/// arrives from the server.
-fn spawn_the_scoreboard(
-    mut commands: Commands,
-    bodies: Query<Entity, Added<LocalPlayer>>,
-    existing: Query<(), With<Scoreboard>>,
-) {
-    if bodies.is_empty() || !existing.is_empty() {
+/// Up with the round, like the HUD, so a spectator has one too.
+fn spawn_the_scoreboard(mut commands: Commands, existing: Query<(), With<Scoreboard>>) {
+    if !existing.is_empty() {
         return;
     }
     commands.spawn((
@@ -348,7 +339,7 @@ fn spawn_the_scoreboard(
 }
 
 /// Rebuilt only when a standing changes, comes or goes, or when whose row is
-/// ours does.
+/// lit does: ours, or the body a spectator watches.
 #[allow(clippy::too_many_arguments)]
 fn fill_in_the_scoreboard(
     mut commands: Commands,
@@ -357,7 +348,7 @@ fn fill_in_the_scoreboard(
     standings: Query<&Standing>,
     changed: Query<(), Changed<Standing>>,
     mut removed: RemovedComponents<Standing>,
-    us: Query<&PlayerId, With<LocalPlayer>>,
+    us: Query<&PlayerId, (Viewed, With<Player>)>,
     mut boards: Query<(Entity, &mut Node, Option<&Children>), With<Scoreboard>>,
     mut drawn_for: Local<Option<PlayerId>>,
 ) {
@@ -617,14 +608,14 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<NextState<AppMode>>();
         world.insert_resource(RoundSettings { time_limit: Some(60.0), ..default() });
-        world.insert_resource(Time::<()>::default());
-        world.insert_resource(RoundStarted(0.0));
+        world.insert_resource(Time::<Real>::default());
+        world.insert_resource(RoundHistory::started_at(0.0));
 
-        world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs(59));
+        world.resource_mut::<Time<Real>>().advance_by(std::time::Duration::from_secs(59));
         world.run_system_once(end_the_round_at_the_time_limit).unwrap();
         assert!(matches!(world.resource::<NextState<AppMode>>(), NextState::Unchanged));
 
-        world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs(1));
+        world.resource_mut::<Time<Real>>().advance_by(std::time::Duration::from_secs(1));
         world.run_system_once(end_the_round_at_the_time_limit).unwrap();
         assert!(matches!(world.resource::<NextState<AppMode>>(), NextState::Pending(AppMode::Editor)));
     }

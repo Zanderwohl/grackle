@@ -18,7 +18,7 @@ Blueprint(
             azimuth: 135.0,
         ),
     ),
-    next_id: 73,
+    next_id: 97,
     features: [
         Feature(
             id: FeatureId(
@@ -1045,16 +1045,16 @@ Blueprint(
                                 _id: 0,
                             )),
                             point_key: "",
-                            x: Relative(9.25),
+                            x: Relative(8.75),
                             y: Relative(0.0),
-                            z: Relative(9.25),
+                            z: Relative(8.75),
                         ),
                         max: PointRef(
                             reference: None,
                             point_key: "",
-                            x: Relative(1.5),
+                            x: Relative(2.5),
                             y: Relative(12.0),
-                            z: Relative(1.5),
+                            z: Relative(2.5),
                         ),
                         max_base: OwnMin,
                     ),
@@ -1074,16 +1074,16 @@ Blueprint(
                                 _id: 0,
                             )),
                             point_key: "",
-                            x: Relative(-10.75),
+                            x: Relative(-11.25),
                             y: Relative(0.0),
-                            z: Relative(9.25),
+                            z: Relative(8.75),
                         ),
                         max: PointRef(
                             reference: None,
                             point_key: "",
-                            x: Relative(1.5),
+                            x: Relative(2.5),
                             y: Relative(12.0),
-                            z: Relative(1.5),
+                            z: Relative(2.5),
                         ),
                         max_base: OwnMin,
                     ),
@@ -1103,16 +1103,16 @@ Blueprint(
                                 _id: 0,
                             )),
                             point_key: "",
-                            x: Relative(9.25),
+                            x: Relative(8.75),
                             y: Relative(0.0),
-                            z: Relative(-10.75),
+                            z: Relative(-11.25),
                         ),
                         max: PointRef(
                             reference: None,
                             point_key: "",
-                            x: Relative(1.5),
+                            x: Relative(2.5),
                             y: Relative(12.0),
-                            z: Relative(1.5),
+                            z: Relative(2.5),
                         ),
                         max_base: OwnMin,
                     ),
@@ -1132,16 +1132,16 @@ Blueprint(
                                 _id: 0,
                             )),
                             point_key: "",
-                            x: Relative(-10.75),
+                            x: Relative(-11.25),
                             y: Relative(0.0),
-                            z: Relative(-10.75),
+                            z: Relative(-11.25),
                         ),
                         max: PointRef(
                             reference: None,
                             point_key: "",
-                            x: Relative(1.5),
+                            x: Relative(2.5),
                             y: Relative(12.0),
-                            z: Relative(1.5),
+                            z: Relative(2.5),
                         ),
                         max_base: OwnMin,
                     ),
@@ -1152,7 +1152,7 @@ Blueprint(
             id: FeatureId(
                 _id: 39,
             ),
-            name: Some("North Low Wall"),
+            name: Some("East Lane Wall"),
             object: {
                 "block": EditorBlock(
                     volume: EditorRoom(
@@ -1161,16 +1161,16 @@ Blueprint(
                                 _id: 0,
                             )),
                             point_key: "",
-                            x: Relative(-2.5),
+                            x: Relative(9.5),
                             y: Relative(0.0),
-                            z: Relative(-12.3),
+                            z: Relative(-0.3),
                         ),
                         max: PointRef(
                             reference: None,
                             point_key: "",
-                            x: Relative(5.0),
-                            y: Relative(1.1),
-                            z: Relative(0.6000004),
+                            x: Relative(3.5),
+                            y: Relative(6.0),
+                            z: Relative(0.6),
                         ),
                         max_base: OwnMin,
                     ),
@@ -1181,7 +1181,7 @@ Blueprint(
             id: FeatureId(
                 _id: 40,
             ),
-            name: Some("South Low Wall"),
+            name: Some("West Lane Wall"),
             object: {
                 "block": EditorBlock(
                     volume: EditorRoom(
@@ -1190,16 +1190,16 @@ Blueprint(
                                 _id: 0,
                             )),
                             point_key: "",
-                            x: Relative(-2.5),
+                            x: Relative(-13.0),
                             y: Relative(0.0),
-                            z: Relative(11.7),
+                            z: Relative(-0.3),
                         ),
                         max: PointRef(
                             reference: None,
                             point_key: "",
-                            x: Relative(5.0),
-                            y: Relative(1.1),
-                            z: Relative(0.6000004),
+                            x: Relative(3.5),
+                            y: Relative(6.0),
+                            z: Relative(0.6),
                         ),
                         max_base: OwnMin,
                     ),
@@ -1210,7 +1210,7 @@ Blueprint(
             id: FeatureId(
                 _id: 41,
             ),
-            name: Some("East Low Wall"),
+            name: Some("North Lane Wall"),
             object: {
                 "block": EditorBlock(
                     volume: EditorRoom(
@@ -1219,16 +1219,16 @@ Blueprint(
                                 _id: 0,
                             )),
                             point_key: "",
-                            x: Relative(11.7),
+                            x: Relative(-0.3),
                             y: Relative(0.0),
-                            z: Relative(-2.5),
+                            z: Relative(-13.0),
                         ),
                         max: PointRef(
                             reference: None,
                             point_key: "",
-                            x: Relative(0.6000004),
-                            y: Relative(1.1),
-                            z: Relative(5.0),
+                            x: Relative(0.6),
+                            y: Relative(6.0),
+                            z: Relative(3.5),
                         ),
                         max_base: OwnMin,
                     ),
@@ -1239,7 +1239,7 @@ Blueprint(
             id: FeatureId(
                 _id: 42,
             ),
-            name: Some("West Low Wall"),
+            name: Some("South Lane Wall"),
             object: {
                 "block": EditorBlock(
                     volume: EditorRoom(
@@ -1248,16 +1248,16 @@ Blueprint(
                                 _id: 0,
                             )),
                             point_key: "",
-                            x: Relative(-12.3),
+                            x: Relative(-0.3),
                             y: Relative(0.0),
-                            z: Relative(-2.5),
+                            z: Relative(9.5),
                         ),
                         max: PointRef(
                             reference: None,
                             point_key: "",
-                            x: Relative(0.6000004),
-                            y: Relative(1.1),
-                            z: Relative(5.0),
+                            x: Relative(0.6),
+                            y: Relative(6.0),
+                            z: Relative(3.5),
                         ),
                         max_base: OwnMin,
                     ),
@@ -1268,6 +1268,436 @@ Blueprint(
             id: FeatureId(
                 _id: 43,
             ),
+            name: Some("Pinwheel Wall 1"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(7.0),
+                            y: Relative(0.0),
+                            z: Relative(-9.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(0.5999999),
+                            y: Relative(6.0),
+                            z: Relative(7.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 44,
+            ),
+            name: Some("Pinwheel Wall 2"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(2.0),
+                            y: Relative(0.0),
+                            z: Relative(7.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(7.0),
+                            y: Relative(6.0),
+                            z: Relative(0.5999999),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 45,
+            ),
+            name: Some("Pinwheel Wall 3"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-7.6),
+                            y: Relative(0.0),
+                            z: Relative(2.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(0.5999999),
+                            y: Relative(6.0),
+                            z: Relative(7.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 46,
+            ),
+            name: Some("Pinwheel Wall 4"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-9.0),
+                            y: Relative(0.0),
+                            z: Relative(-7.6),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(7.0),
+                            y: Relative(6.0),
+                            z: Relative(0.5999999),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 47,
+            ),
+            name: Some("East Pit"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(10.0),
+                        y: Relative(-5.0),
+                        z: Relative(3.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(4.0),
+                        y: Relative(5.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("pit"),
+                        walls: Some("board_formed_concrete"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 48,
+            ),
+            name: Some("East Pit Floor"),
+            object: {
+                "trigger": EditorTrigger(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(10.0),
+                            y: Relative(-5.0),
+                            z: Relative(3.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(4.0),
+                            y: Relative(1.0),
+                            z: Relative(4.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                    effect: Kill,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 49,
+            ),
+            name: Some("West Pit"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-14.0),
+                        y: Relative(-5.0),
+                        z: Relative(-7.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(4.0),
+                        y: Relative(5.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("pit"),
+                        walls: Some("board_formed_concrete"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 50,
+            ),
+            name: Some("West Pit Floor"),
+            object: {
+                "trigger": EditorTrigger(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-14.0),
+                            y: Relative(-5.0),
+                            z: Relative(-7.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(4.0),
+                            y: Relative(1.0),
+                            z: Relative(4.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                    effect: Kill,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 51,
+            ),
+            name: Some("East Ledge Alcove"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(20.0),
+                        y: Relative(3.2),
+                        z: Relative(-2.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(3.0),
+                        y: Relative(2.9999998),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 52,
+            ),
+            name: Some("West Ledge Alcove"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-23.0),
+                        y: Relative(3.2),
+                        z: Relative(-2.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(3.0),
+                        y: Relative(2.9999998),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 53,
+            ),
+            name: Some("Corner Nook +1 +1"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(16.0),
+                        y: Relative(0.0),
+                        z: Relative(20.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(4.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 54,
+            ),
+            name: Some("Corner Nook -1 -1"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-20.0),
+                        y: Relative(0.0),
+                        z: Relative(-23.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(4.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 55,
+            ),
+            name: Some("Corner Nook +1 -1"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(16.0),
+                        y: Relative(0.0),
+                        z: Relative(-23.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(4.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 56,
+            ),
+            name: Some("Corner Nook -1 +1"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-20.0),
+                        y: Relative(0.0),
+                        z: Relative(20.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(4.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 57,
+            ),
             name: Some("Spawn 1"),
             object: {
                 "spawn_point": SpawnPoint(
@@ -1276,17 +1706,17 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(0.0),
-                        y: Relative(0.0),
-                        z: Relative(-22.0),
+                        x: Relative(21.5),
+                        y: Relative(3.2),
+                        z: Relative(0.0),
                     ),
-                    yaw: 3.1415925,
+                    yaw: 1.5707964,
                 ),
             },
         ),
         Feature(
             id: FeatureId(
-                _id: 44,
+                _id: 58,
             ),
             name: Some("Spawn 2"),
             object: {
@@ -1296,17 +1726,17 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(0.0),
-                        y: Relative(0.0),
-                        z: Relative(22.0),
+                        x: Relative(-21.5),
+                        y: Relative(3.2),
+                        z: Relative(0.0),
                     ),
-                    yaw: 0.0,
+                    yaw: -1.5707964,
                 ),
             },
         ),
         Feature(
             id: FeatureId(
-                _id: 45,
+                _id: 59,
             ),
             name: Some("Spawn 3"),
             object: {
@@ -1317,16 +1747,16 @@ Blueprint(
                         )),
                         point_key: "",
                         x: Relative(18.0),
-                        y: Relative(3.2),
-                        z: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(21.5),
                     ),
-                    yaw: 1.5707964,
+                    yaw: 0.69702137,
                 ),
             },
         ),
         Feature(
             id: FeatureId(
-                _id: 46,
+                _id: 60,
             ),
             name: Some("Spawn 4"),
             object: {
@@ -1337,16 +1767,16 @@ Blueprint(
                         )),
                         point_key: "",
                         x: Relative(-18.0),
-                        y: Relative(3.2),
-                        z: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(-21.5),
                     ),
-                    yaw: -1.5707964,
+                    yaw: -2.4445713,
                 ),
             },
         ),
         Feature(
             id: FeatureId(
-                _id: 47,
+                _id: 61,
             ),
             name: Some("Spawn 5"),
             object: {
@@ -1356,17 +1786,17 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(14.0),
+                        x: Relative(18.0),
                         y: Relative(0.0),
-                        z: Relative(-16.0),
+                        z: Relative(-21.5),
                     ),
-                    yaw: 2.4227626,
+                    yaw: 2.4445713,
                 ),
             },
         ),
         Feature(
             id: FeatureId(
-                _id: 48,
+                _id: 62,
             ),
             name: Some("Spawn 6"),
             object: {
@@ -1376,17 +1806,17 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(-14.0),
+                        x: Relative(-18.0),
                         y: Relative(0.0),
-                        z: Relative(16.0),
+                        z: Relative(21.5),
                     ),
-                    yaw: -0.71883,
+                    yaw: -0.69702137,
                 ),
             },
         ),
         Feature(
             id: FeatureId(
-                _id: 49,
+                _id: 63,
             ),
             name: Some("Spawn 7"),
             object: {
@@ -1396,17 +1826,17 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(-8.0),
+                        x: Relative(9.0),
                         y: Relative(0.0),
-                        z: Relative(-16.0),
+                        z: Relative(22.0),
                     ),
-                    yaw: -2.6779451,
+                    yaw: 0.38831872,
                 ),
             },
         ),
         Feature(
             id: FeatureId(
-                _id: 50,
+                _id: 64,
             ),
             name: Some("Spawn 8"),
             object: {
@@ -1416,17 +1846,37 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(8.0),
+                        x: Relative(-9.0),
                         y: Relative(0.0),
-                        z: Relative(16.0),
+                        z: Relative(-22.0),
                     ),
-                    yaw: 0.4636476,
+                    yaw: -2.753274,
                 ),
             },
         ),
         Feature(
             id: FeatureId(
-                _id: 51,
+                _id: 65,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(0.0),
+                        y: Relative(2.4),
+                        z: Relative(0.0),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "health_pack",
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 66,
             ),
             object: {
                 "prop": Prop(
@@ -1446,7 +1896,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 52,
+                _id: 67,
             ),
             object: {
                 "prop": Prop(
@@ -1466,7 +1916,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 53,
+                _id: 68,
             ),
             object: {
                 "prop": Prop(
@@ -1486,7 +1936,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 54,
+                _id: 69,
             ),
             object: {
                 "prop": Prop(
@@ -1506,7 +1956,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 55,
+                _id: 70,
             ),
             object: {
                 "prop": Prop(
@@ -1526,7 +1976,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 56,
+                _id: 71,
             ),
             object: {
                 "prop": Prop(
@@ -1546,7 +1996,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 57,
+                _id: 72,
             ),
             object: {
                 "prop": Prop(
@@ -1557,7 +2007,7 @@ Blueprint(
                         point_key: "",
                         x: Relative(13.0),
                         y: Relative(0.0),
-                        z: Relative(0.0),
+                        z: Relative(-1.0),
                     ),
                     rotation: Vec3(0.0, 0.0, 0.0),
                     model: "health_pack",
@@ -1566,7 +2016,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 58,
+                _id: 73,
             ),
             object: {
                 "prop": Prop(
@@ -1577,7 +2027,7 @@ Blueprint(
                         point_key: "",
                         x: Relative(-13.0),
                         y: Relative(0.0),
-                        z: Relative(0.0),
+                        z: Relative(1.0),
                     ),
                     rotation: Vec3(0.0, 0.0, 0.0),
                     model: "health_pack",
@@ -1586,7 +2036,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 59,
+                _id: 74,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -1596,10 +2046,10 @@ Blueprint(
                         )),
                         point_key: "",
                         x: Relative(0.0),
-                        y: Relative(2.4),
-                        z: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(22.0),
                     ),
-                    yaw: 0.0,
+                    yaw: 1.5707964,
                     weapon: "rocket_launcher",
                     respawn: 15.0,
                     ammo: 0.5,
@@ -1609,7 +2059,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 60,
+                _id: 75,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -1620,10 +2070,10 @@ Blueprint(
                         point_key: "",
                         x: Relative(0.0),
                         y: Relative(0.0),
-                        z: Relative(-14.5),
+                        z: Relative(-22.0),
                     ),
                     yaw: 1.5707964,
-                    weapon: "shotgun",
+                    weapon: "rocket_launcher",
                     respawn: 15.0,
                     ammo: 0.5,
                     style: tf2,
@@ -1632,30 +2082,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 61,
-            ),
-            object: {
-                "weapon_pickup": WeaponPickup(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(0.0),
-                        y: Relative(0.0),
-                        z: Relative(14.5),
-                    ),
-                    yaw: 1.5707964,
-                    weapon: "shotgun",
-                    respawn: 15.0,
-                    ammo: 0.5,
-                    style: tf2,
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 62,
+                _id: 76,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -1678,7 +2105,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 63,
+                _id: 77,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -1692,6 +2119,29 @@ Blueprint(
                         z: Relative(-22.0),
                     ),
                     yaw: 0.0,
+                    weapon: "flamethrower",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 78,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(5.5),
+                        y: Relative(0.0),
+                        z: Relative(-6.0),
+                    ),
+                    yaw: 0.0,
                     weapon: "rpg",
                     respawn: 15.0,
                     ammo: 0.5,
@@ -1701,7 +2151,76 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 64,
+                _id: 79,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-5.5),
+                        y: Relative(0.0),
+                        z: Relative(6.0),
+                    ),
+                    yaw: 0.0,
+                    weapon: "rpg",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 80,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(-14.5),
+                    ),
+                    yaw: 1.5707964,
+                    weapon: "shotgun",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 81,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(14.5),
+                    ),
+                    yaw: 1.5707964,
+                    weapon: "shotgun",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 82,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -1724,7 +2243,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 65,
+                _id: 83,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -1747,7 +2266,133 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 66,
+                _id: 84,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(21.5),
+                        y: Relative(5.8),
+                        z: Relative(0.0),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 85,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-21.5),
+                        y: Relative(5.8),
+                        z: Relative(0.0),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 86,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(18.0),
+                        y: Relative(2.6),
+                        z: Relative(21.5),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 87,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-18.0),
+                        y: Relative(2.6),
+                        z: Relative(-21.5),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 88,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(18.0),
+                        y: Relative(2.6),
+                        z: Relative(-21.5),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 89,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-18.0),
+                        y: Relative(2.6),
+                        z: Relative(21.5),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 90,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1768,7 +2413,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 67,
+                _id: 91,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1789,7 +2434,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 68,
+                _id: 92,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1810,7 +2455,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 69,
+                _id: 93,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1831,7 +2476,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 70,
+                _id: 94,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1852,7 +2497,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 71,
+                _id: 95,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1873,7 +2518,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 72,
+                _id: 96,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(

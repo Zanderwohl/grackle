@@ -215,7 +215,8 @@ title = "Round"
 slots = "Slots"
 fill_with_bots = "Fill empty slots with bots"
 time_limit = "Time limit"
-seconds = "{ seconds } s"
+# Shown after the number, not while it is typed.
+seconds_suffix = " s"
 
 [editor.rounds]
 title = "Rounds"

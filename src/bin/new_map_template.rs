@@ -16,11 +16,14 @@ use std::collections::BTreeMap;
 use std::f32::consts::{FRAC_PI_2, PI};
 use std::path::PathBuf;
 
-use bevy::prelude::Vec3;
+use bevy::prelude::{Vec2, Vec3};
 use grackle::constants::MAP_BLUEPRINT_EXTENSION;
 use grackle::common::sky::SKYBOX;
 use grackle::editor::animation_grid::{self, AnimationGrid};
 use grackle::editor::block::EditorBlock;
+use grackle::editor::trigger::EditorTrigger;
+use grackle::common::trigger::TriggerEffect;
+use grackle::material::pit::PIT;
 use grackle::editor::editable::{FeatureId, FeatureTimeline, PointRef};
 use grackle::editor::editor_room::EditorRoom;
 use grackle::tool::room::RoomSurfaces;
@@ -241,10 +244,17 @@ const CORRIDOR_DEPTH_M: f32 = 4.0;
 const CORRIDOR_HALF_LENGTH_M: f32 = 14.0;
 const CORRIDOR_HEIGHT_M: f32 = 4.0;
 const DOORWAY_M: f32 = 4.0;
+/// Over a ledge's eye, so the pinwheel blocks the ledges' view across the hall.
+const PINWHEEL_M: f32 = 6.0;
+const PIT_DEPTH_M: f32 = 5.0;
+/// How far a spawn alcove or corner nook runs back from the hall.
+const ALCOVE_DEPTH_M: f32 = 3.0;
 
-/// A square hall open to the sky, with a stepped platform in the middle, a ledge along each side
-/// wall, a corridor behind each end wall, pillars and low walls for cover. Point-symmetric about
-/// the origin, so no spawn is better placed than its opposite. Free for all, so nothing has a side.
+/// A square hall open to the sky, with a stepped platform in the middle ringed by a pinwheel of
+/// tall walls, a ledge along each side wall, a corridor behind each end wall, a kill pit on each
+/// side, pillars and a wall across each lane of the ring, and spawns tucked out of the hall's sight.
+/// Point-symmetric about the origin, so no spawn is better placed than its opposite. Free for all,
+/// so nothing has a side.
 fn arena() -> (FeatureTimeline, MapMetadata) {
     let mut timeline = FeatureTimeline::default();
     let origin = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
@@ -333,54 +343,103 @@ fn arena() -> (FeatureTimeline, MapMetadata) {
     }
 
     for (x, z) in [(10.0, 10.0), (-10.0, 10.0), (10.0, -10.0), (-10.0, -10.0)] {
-        volume(&mut timeline, &format!("Pillar {x:+} {z:+}"), Vec3::new(x - 0.75, 0.0, z - 0.75), Vec3::new(x + 0.75, HALL_HEIGHT_M, z + 0.75), None);
+        volume(&mut timeline, &format!("Pillar {x:+} {z:+}"), Vec3::new(x - 1.25, 0.0, z - 1.25), Vec3::new(x + 1.25, HALL_HEIGHT_M, z + 1.25), None);
     }
-    // Waist-high: cover to crouch behind, and low enough to jump.
+    // Across the middle of each side of the ring the pinwheel leaves, so none is one long lane; a
+    // gap is left at the outer end to get round.
     for (name, min, max) in [
-        ("North Low Wall", Vec3::new(-2.5, 0.0, -12.3), Vec3::new(2.5, 1.1, -11.7)),
-        ("South Low Wall", Vec3::new(-2.5, 0.0, 11.7), Vec3::new(2.5, 1.1, 12.3)),
-        ("East Low Wall", Vec3::new(11.7, 0.0, -2.5), Vec3::new(12.3, 1.1, 2.5)),
-        ("West Low Wall", Vec3::new(-12.3, 0.0, -2.5), Vec3::new(-11.7, 1.1, 2.5)),
+        ("East Lane Wall", Vec3::new(9.5, 0.0, -0.3), Vec3::new(13.0, PINWHEEL_M, 0.3)),
+        ("West Lane Wall", Vec3::new(-13.0, 0.0, -0.3), Vec3::new(-9.5, PINWHEEL_M, 0.3)),
+        ("North Lane Wall", Vec3::new(-0.3, 0.0, -13.0), Vec3::new(0.3, PINWHEEL_M, -9.5)),
+        ("South Lane Wall", Vec3::new(-0.3, 0.0, 9.5), Vec3::new(0.3, PINWHEEL_M, 13.0)),
     ] {
         volume(&mut timeline, name, min, max, None);
     }
 
-    // Each facing the middle; `yaw` zero faces -Z.
-    let spawns = [
-        Vec3::new(0.0, 0.0, -(HALL_M + CORRIDOR_DEPTH_M / 2.0)),
-        Vec3::new(0.0, 0.0, HALL_M + CORRIDOR_DEPTH_M / 2.0),
-        Vec3::new(HALL_M - LEDGE_DEPTH_M / 2.0, LEDGE_M, 0.0),
-        Vec3::new(-(HALL_M - LEDGE_DEPTH_M / 2.0), LEDGE_M, 0.0),
-        Vec3::new(14.0, 0.0, -16.0),
-        Vec3::new(-14.0, 0.0, 16.0),
-        Vec3::new(-8.0, 0.0, -16.0),
-        Vec3::new(8.0, 0.0, 16.0),
-    ];
+    // A pinwheel round the platform, too tall to see over from a ledge, so the hall is a ring of
+    // lanes rather than one sightline; each wall is the last turned a quarter about the middle.
+    let mut wall = (Vec2::new(7.0, -9.0), Vec2::new(7.6, -2.0));
+    for quarter in 0..4 {
+        let (min, max) = (wall.0.min(wall.1), wall.0.max(wall.1));
+        volume(&mut timeline, &format!("Pinwheel Wall {}", quarter + 1), Vec3::new(min.x, 0.0, min.y), Vec3::new(max.x, PINWHEEL_M, max.y), None);
+        wall = (wall.0.perp(), wall.1.perp());
+    }
+
+    // Beside each low wall, where a rocket off the ledge stairs or the platform can put a body.
+    let pit_surfaces = RoomSurfaces {
+        floor: Some(PIT.to_owned()),
+        walls: Some("board_formed_concrete".to_owned()),
+        ceiling: None,
+    };
+    for (side, sign) in [("East", 1.0_f32), ("West", -1.0)] {
+        let (a, b) = (sign * Vec2::new(10.0, 3.0), sign * Vec2::new(14.0, 7.0));
+        let (min, max) = (a.min(b), a.max(b));
+        volume(&mut timeline, &format!("{side} Pit"), Vec3::new(min.x, -PIT_DEPTH_M, min.y), Vec3::new(max.x, 0.0, max.y), Some(&pit_surfaces));
+        let floor = EditorRoom::from_min_and_size(at(min.x, -PIT_DEPTH_M, min.y), Vec3::new(max.x - min.x, 1.0, max.y - min.y));
+        let kill = timeline.apply_feature(Box::new(EditorTrigger::from_room(floor).with_effect(TriggerEffect::Kill)));
+        timeline.rename(kill, &format!("{side} Pit Floor"));
+    }
+
+    // Spawns stand out of the hall's sight: an alcove off each ledge, a nook in each corner, and
+    // the far end of each corridor. Each faces the middle; `yaw` zero faces -Z.
+    let nook = RoomSurfaces {
+        floor: Some("tread_plate".to_owned()),
+        walls: Some("plaster".to_owned()),
+        ceiling: Some("plaster".to_owned()),
+    };
+    let mut spawns = Vec::new();
+    let mut lights = Vec::new();
+    for (side, sign) in [("East", 1.0_f32), ("West", -1.0)] {
+        let (a, b) = (sign * HALL_M, sign * (HALL_M + ALCOVE_DEPTH_M));
+        volume(&mut timeline, &format!("{side} Ledge Alcove"), Vec3::new(a.min(b), LEDGE_M, -2.0), Vec3::new(a.max(b), LEDGE_M + 3.0, 2.0), Some(&nook));
+        let feet = Vec3::new(sign * (HALL_M + ALCOVE_DEPTH_M / 2.0), LEDGE_M, 0.0);
+        spawns.push(feet);
+        lights.push((feet + Vec3::Y * 2.6, 30_000.0, 8.0));
+    }
+    for (x, z) in [(1.0_f32, 1.0_f32), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0)] {
+        let (a, b) = (Vec2::new(x * (HALL_M - 4.0), z * HALL_M), Vec2::new(x * HALL_M, z * (HALL_M + ALCOVE_DEPTH_M)));
+        let (min, max) = (a.min(b), a.max(b));
+        volume(&mut timeline, &format!("Corner Nook {x:+} {z:+}"), Vec3::new(min.x, 0.0, min.y), Vec3::new(max.x, 3.0, max.y), Some(&nook));
+        let feet = Vec3::new(x * (HALL_M - 2.0), 0.0, z * (HALL_M + ALCOVE_DEPTH_M / 2.0));
+        spawns.push(feet);
+        lights.push((feet + Vec3::Y * 2.6, 30_000.0, 8.0));
+    }
+    for sign in [1.0_f32, -1.0] {
+        spawns.push(Vec3::new(sign * 9.0, 0.0, sign * (HALL_M + CORRIDOR_DEPTH_M / 2.0)));
+    }
     for (index, feet) in spawns.into_iter().enumerate() {
         let spawn = timeline.apply_feature(Box::new(SpawnPoint::from_point_ref(at(feet.x, feet.y, feet.z)).with_yaw(feet.x.atan2(feet.z))));
         timeline.rename(spawn, &format!("Spawn {}", index + 1));
     }
 
+    let corridor_middle = HALL_M + CORRIDOR_DEPTH_M / 2.0;
     let packs = [
-        ("health_pack", Vec3::new(-11.0, 0.0, -(HALL_M + CORRIDOR_DEPTH_M / 2.0))),
-        ("health_pack", Vec3::new(11.0, 0.0, HALL_M + CORRIDOR_DEPTH_M / 2.0)),
-        ("ammo_pack", Vec3::new(11.0, 0.0, -(HALL_M + CORRIDOR_DEPTH_M / 2.0))),
-        ("ammo_pack", Vec3::new(-11.0, 0.0, HALL_M + CORRIDOR_DEPTH_M / 2.0)),
+        ("health_pack", Vec3::new(0.0, PLATFORM_M, 0.0)),
+        ("health_pack", Vec3::new(-11.0, 0.0, -corridor_middle)),
+        ("health_pack", Vec3::new(11.0, 0.0, corridor_middle)),
+        ("ammo_pack", Vec3::new(11.0, 0.0, -corridor_middle)),
+        ("ammo_pack", Vec3::new(-11.0, 0.0, corridor_middle)),
         ("armor_pack", Vec3::new(HALL_M - LEDGE_DEPTH_M / 2.0, LEDGE_M, -9.0)),
         ("armor_pack", Vec3::new(-(HALL_M - LEDGE_DEPTH_M / 2.0), LEDGE_M, 9.0)),
-        ("health_pack", Vec3::new(13.0, 0.0, 0.0)),
-        ("health_pack", Vec3::new(-13.0, 0.0, 0.0)),
+        ("health_pack", Vec3::new(13.0, 0.0, -1.0)),
+        ("health_pack", Vec3::new(-13.0, 0.0, 1.0)),
     ];
     for (model, feet) in packs {
         timeline.apply_feature(Box::new(Prop::from_point_ref(at(feet.x, feet.y, feet.z)).with_model(model)));
     }
 
+    // In pairs a half turn apart, so neither half of the map is better armed. The rocket launchers
+    // are down the corridors rather than on the platform, so the best perch and the best splash
+    // are two trips.
     let weapons = [
-        ("rocket_launcher", Vec3::new(0.0, PLATFORM_M, 0.0), 0.0),
+        ("rocket_launcher", Vec3::new(0.0, 0.0, corridor_middle), FRAC_PI_2),
+        ("rocket_launcher", Vec3::new(0.0, 0.0, -corridor_middle), FRAC_PI_2),
+        ("flamethrower", Vec3::new(-6.0, 0.0, corridor_middle), 0.0),
+        ("flamethrower", Vec3::new(6.0, 0.0, -corridor_middle), 0.0),
+        ("rpg", Vec3::new(5.5, 0.0, -6.0), 0.0),
+        ("rpg", Vec3::new(-5.5, 0.0, 6.0), 0.0),
         ("shotgun", Vec3::new(0.0, 0.0, -14.5), FRAC_PI_2),
         ("shotgun", Vec3::new(0.0, 0.0, 14.5), FRAC_PI_2),
-        ("flamethrower", Vec3::new(-6.0, 0.0, HALL_M + CORRIDOR_DEPTH_M / 2.0), 0.0),
-        ("rpg", Vec3::new(6.0, 0.0, -(HALL_M + CORRIDOR_DEPTH_M / 2.0)), 0.0),
         ("pill_launcher", Vec3::new(HALL_M - LEDGE_DEPTH_M / 2.0, LEDGE_M, 9.0), 0.0),
         ("pill_launcher", Vec3::new(-(HALL_M - LEDGE_DEPTH_M / 2.0), LEDGE_M, -9.0), 0.0),
     ];
@@ -388,16 +447,16 @@ fn arena() -> (FeatureTimeline, MapMetadata) {
         timeline.apply_feature(Box::new(WeaponPickup::from_point_ref(at(feet.x, feet.y, feet.z)).with_weapon(weapon).with_yaw(yaw)));
     }
 
-    // The sky lights the hall; these light under the ledges and down the corridors.
-    let lights = [
+    // The sky lights the hall; these light the platform's shade, the corridors and the spawns.
+    lights.extend([
         (Vec3::new(0.0, 8.0, 0.0), 600_000.0, 30.0),
         (Vec3::new(14.0, 2.6, 0.0), 60_000.0, 12.0),
         (Vec3::new(-14.0, 2.6, 0.0), 60_000.0, 12.0),
-        (Vec3::new(-7.0, 3.5, -(HALL_M + CORRIDOR_DEPTH_M / 2.0)), 50_000.0, 12.0),
-        (Vec3::new(7.0, 3.5, -(HALL_M + CORRIDOR_DEPTH_M / 2.0)), 50_000.0, 12.0),
-        (Vec3::new(-7.0, 3.5, HALL_M + CORRIDOR_DEPTH_M / 2.0), 50_000.0, 12.0),
-        (Vec3::new(7.0, 3.5, HALL_M + CORRIDOR_DEPTH_M / 2.0), 50_000.0, 12.0),
-    ];
+        (Vec3::new(-7.0, 3.5, -corridor_middle), 50_000.0, 12.0),
+        (Vec3::new(7.0, 3.5, -corridor_middle), 50_000.0, 12.0),
+        (Vec3::new(-7.0, 3.5, corridor_middle), 50_000.0, 12.0),
+        (Vec3::new(7.0, 3.5, corridor_middle), 50_000.0, 12.0),
+    ]);
     for (point, intensity, range) in lights {
         let mut light = GracklePointLight::from_point_ref(at(point.x, point.y, point.z));
         light.intensity = intensity;

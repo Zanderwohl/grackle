@@ -30,7 +30,7 @@ use crate::common::swatch::{Ink, Swatch};
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, Path, ShapeMaterial, ShapeStyle};
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalog};
-use crate::game::player::LocalPlayer;
+use crate::game::player::{Player, Viewed};
 use crate::game::viewmodel::VIEWMODEL_CAMERA_ORDER;
 use crate::get;
 
@@ -504,7 +504,7 @@ fn dress_the_zones(
 /// Every frame, comparing first: a client is told its team after its body.
 #[allow(clippy::type_complexity)]
 fn paint_the_zones(
-    ours: Option<Single<(Option<&Team>, Option<&PlayerColor>), With<LocalPlayer>>>,
+    ours: Option<Single<(Option<&Team>, Option<&PlayerColor>), (Viewed, With<Player>)>>,
     zones: Query<&MaterialNode<ShapeMaterial>, With<HudZone>>,
     mut texts: Query<&mut TextColor, With<HudText>>,
     materials: Option<ResMut<Assets<ShapeMaterial>>>,
@@ -625,7 +625,7 @@ impl Readout {
 /// would be re-laid-out every frame.
 fn fill_in_the_readouts(
     catalog: Res<WeaponCatalog>,
-    body: Option<Single<(&Damageable, Option<&Armor>, &Equipped, &Ammo), With<LocalPlayer>>>,
+    body: Option<Single<(&Damageable, Option<&Armor>, &Equipped, &Ammo), Viewed>>,
     mut texts: Query<(&HudText, &mut Text, &mut Node)>,
     mut armor_readout: Query<&mut Node, (With<ArmorReadout>, Without<HudText>)>,
     mut armor_label: Query<&mut Text, (With<ArmorLabel>, Without<HudText>)>,
@@ -689,6 +689,7 @@ fn despawn_the_hud(mut commands: Commands, roots: Query<Entity, With<HudRoot>>) 
 mod tests {
     use super::*;
     use crate::common::weapon_file::default_catalog;
+    use crate::game::player::{LocalPlayer, Watched};
 
     fn carried_where(
         catalog: &WeaponCatalog,
@@ -759,6 +760,21 @@ mod tests {
         assert_eq!(visibility(&mut world), Visibility::Inherited);
         world.despawn(body);
         assert_eq!(visibility(&mut world), Visibility::Hidden);
+    }
+
+    /// Breaks if a spectator sees no readouts, or somebody else's, over the body they watch.
+    #[test]
+    fn a_spectator_reads_the_watched_bodys_health() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let (catalog, equipped, ammo) = mercenary();
+        let mut world = World::new();
+        world.insert_resource(catalog);
+        world.spawn((Damageable::with_health(40), equipped.clone(), ammo.clone()));
+        world.spawn((Watched, Damageable::with_health(73), equipped, ammo));
+        let text = world.spawn((HudText::Health, Text::default(), Node::default())).id();
+        world.run_system_once(fill_in_the_readouts).unwrap();
+        assert!(world.get::<Text>(text).unwrap().0.contains("73"), "{}", world.get::<Text>(text).unwrap().0);
     }
 
     /// Breaks if the lookup panics when `Equipped` arrives before the

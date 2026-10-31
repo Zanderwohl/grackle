@@ -707,7 +707,7 @@ fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
             settings.time_limit = limited.then_some(DEFAULT_TIME_LIMIT);
         }
         if let Some(limit) = settings.time_limit.as_mut() {
-            ui.add(egui::DragValue::new(limit).range(1.0..=f32::MAX).speed(1.0).custom_formatter(|seconds, _| get!("editor.round.seconds", "seconds", seconds.round())));
+            ui.add(egui::DragValue::new(limit).range(1.0..=f32::MAX).speed(1.0).max_decimals(0).suffix(get!("editor.round.seconds_suffix")));
         }
         ui.end_row();
     });
@@ -720,8 +720,7 @@ fn rounds_panel_ui(ui: &mut egui::Ui, history: &RoundHistory) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         for (index, round) in history.rounds().enumerate() {
             any = true;
-            let seconds = round.length.round() as u32;
-            let length = format!("{}:{:02}", seconds / 60, seconds % 60);
+            let length = round.length_text();
             egui::CollapsingHeader::new(get!("editor.rounds.round", "number", round.number, "length", length))
                 .id_salt(("round", round.number))
                 .default_open(index == 0)

@@ -429,7 +429,13 @@ mod tests {
             assert!(world.fits(body_center_from_feet(*feet), CLASS_HALF_EXTENTS), "the spawn at {feet} is wedged");
         }
 
-        let graph = nav::graph(&world, &faces, &[], &MovementRules::default(), &spawns);
+        // Walking alone, which is cheaper than the full bake and stricter: no drop or jump is
+        // needed to get anywhere.
+        let cells = nav::floor_cells(&world, &faces, &[]);
+        let columns = nav::columns(&cells);
+        let speed = crate::game::player::running_speed(&MovementRules::default());
+        let links = (0..cells.len() as nav::CellId).map(|id| nav::walk_links(&world, &cells, &columns, id, speed)).collect();
+        let graph = nav::NavGraph::reachable(cells, links, &spawns);
         let platform = Vec3::new(0.0, 2.4, 0.0);
         let places: Vec<(Vec3, nav::CellId)> = spawns
             .iter()

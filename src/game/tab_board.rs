@@ -19,7 +19,7 @@ use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, Path, ShapeMaterial, ShapeStyle};
 use crate::game::hud::GameHud;
 use crate::game::pause_menu::{not_paused, MouseHeld};
-use crate::game::player::LocalPlayer;
+use crate::game::player::{Player, Viewed};
 use crate::game::score::{ranked_by_points, Standing};
 use crate::get;
 
@@ -60,14 +60,10 @@ fn hold_the_board(keys: Res<ButtonInput<KeyCode>>, paused: Option<Res<MouseHeld>
     board.set_if_neq(TabBoard { up: keys.pressed(KeyCode::Tab) && not_paused(paused) });
 }
 
-/// Keyed on `Added<LocalPlayer>` like the HUD, so there is a camera to draw
-/// it; kept through deaths, so it can be held from the death cam.
-fn spawn_the_board(
-    mut commands: Commands,
-    bodies: Query<(), Added<LocalPlayer>>,
-    existing: Query<(), With<TabBoardRoot>>,
-) {
-    if bodies.is_empty() || !existing.is_empty() {
+/// Up with the round, like the HUD, so it can be held from the death cam or
+/// while spectating.
+fn spawn_the_board(mut commands: Commands, existing: Query<(), With<TabBoardRoot>>) {
+    if !existing.is_empty() {
         return;
     }
     commands.spawn((
@@ -104,7 +100,8 @@ fn show_the_board(
     }
 }
 
-/// Rebuilt only while up, on coming up and on any change to the standings.
+/// Rebuilt only while up, on coming up, on any change to the standings and
+/// when whose row is lit does.
 #[allow(clippy::too_many_arguments)]
 fn fill_in_the_board(
     mut commands: Commands,
@@ -113,17 +110,19 @@ fn fill_in_the_board(
     standings: Query<&Standing>,
     changed: Query<(), Changed<Standing>>,
     mut removed: RemovedComponents<Standing>,
-    us: Query<&PlayerId, With<LocalPlayer>>,
+    us: Query<&PlayerId, (Viewed, With<Player>)>,
     roots: Query<Entity, With<TabBoardRoot>>,
     materials: Option<ResMut<Assets<ShapeMaterial>>>,
     mut swatches: Local<HashMap<(Option<Team>, u32), Handle<ShapeMaterial>>>,
+    mut drawn_for: Local<Option<PlayerId>>,
 ) {
     let gone = removed.read().count() > 0;
     let Ok(root) = roots.single() else { return };
-    if !board.up || !(board.is_changed() || gone || !changed.is_empty()) {
+    let ours = us.single().ok().copied();
+    if !board.up || !(board.is_changed() || gone || !changed.is_empty() || *drawn_for != ours) {
         return;
     }
-    let ours = us.single().ok().copied();
+    *drawn_for = ours;
     let mut materials = materials;
     let font = &font.0;
 

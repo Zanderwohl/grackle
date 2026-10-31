@@ -166,6 +166,12 @@ impl EditorParams {
             _ => NetRole::Solo,
         };
 
+        // Checked here, as the config is: a map that will not open would start a round in nothing.
+        let map = matches.get_one::<PathBuf>("map").cloned();
+        if let Some(path) = &map {
+            crate::editor::save::load(path).map_err(|error| format!("--map {}: {error}", path.display()))?;
+        }
+
         let server = match matches.get_one::<PathBuf>("server_config") {
             Some(path) => {
                 let text = std::fs::read_to_string(path).map_err(|error| format!("--server-config {}: {error}", path.display()))?;
@@ -183,7 +189,7 @@ impl EditorParams {
             start_animating: matches.get_flag("anim"),
             start_texturing: matches.get_flag("material"),
             profile: matches.get_one::<u8>("profile").copied(),
-            map: matches.get_one::<PathBuf>("map").cloned(),
+            map,
             server,
             start_spectating: matches.get_flag("spectate"),
             rounds: matches.get_one::<u32>("rounds").copied(),
@@ -279,8 +285,10 @@ mod tests {
 
     #[test]
     fn an_unattended_round_is_spelled_out_in_flags() {
-        let params = parse(&["--play", "--map", "a.gmb", "--spectate", "--rounds", "2"]).unwrap();
-        assert_eq!(params.map, Some(PathBuf::from("a.gmb")));
+        let arena = "assets/default/blueprints/arena.gmb";
+        let params = parse(&["--play", "--map", arena, "--spectate", "--rounds", "2"]).unwrap();
+        assert_eq!(params.map, Some(PathBuf::from(arena)));
+        assert!(parse(&["--map", "assets/default/blueprints/no_such_map.gmb"]).is_err(), "a map that will not open was taken");
         assert!(params.start_spectating);
         assert_eq!(params.rounds, Some(2));
         assert!(parse(&["--rounds", "0"]).is_err());

@@ -26,6 +26,14 @@ pub struct Round {
     pub standings: Vec<Standing>,
 }
 
+impl Round {
+    /// Minutes and seconds, as the Rounds tab and the log show it.
+    pub fn length_text(&self) -> String {
+        let seconds = self.length.round() as u32;
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+}
+
 #[derive(Resource, Debug, Default)]
 pub struct RoundHistory {
     rounds: VecDeque<Round>,
@@ -40,6 +48,17 @@ pub struct RoundHistory {
 }
 
 impl RoundHistory {
+    /// Real seconds since the round under way started, `now` being `Time<Real>`'s; what both a
+    /// round's recorded length and its time limit are measured on.
+    pub fn elapsed(&self, now: f32) -> Option<f32> {
+        self.started.map(|started| now - started)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn started_at(started: f32) -> Self {
+        RoundHistory { started: Some(started), ..default() }
+    }
+
     /// Newest first.
     pub fn rounds(&self) -> impl Iterator<Item = &Round> {
         self.rounds.iter()
@@ -92,12 +111,12 @@ fn settle_the_last_round(
 
 /// A mode with no scoreboard has no standings, and leaves no round.
 fn record_the_round(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>, standings: Query<&Standing>) {
-    let started = history.started.take();
+    let length = history.elapsed(time.elapsed_secs()).unwrap_or(0.0);
+    history.started = None;
     history.ended += 1;
     if standings.is_empty() {
         return;
     }
-    let length = started.map_or(0.0, |started| time.elapsed_secs() - started);
     history.record(ranked(standings.iter()).into_iter().cloned().collect(), length);
     if let Some(round) = history.rounds.front() {
         info!("{}", report(round));
@@ -107,8 +126,7 @@ fn record_the_round(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>, st
 /// The round's standings as a table for the log, which is where an unattended `--rounds` run's
 /// result is read from. On a client the final frag can still be in flight.
 pub fn report(round: &Round) -> String {
-    let seconds = round.length.round() as u32;
-    let mut report = format!("Round {} over after {}:{:02}", round.number, seconds / 60, seconds % 60);
+    let mut report = format!("Round {} over after {}", round.number, round.length_text());
     report.push_str("\n  #  name                 frags  kills  deaths  assists  dealt  taken");
     for (place, standing) in round.standings.iter().enumerate() {
         report.push_str(&format!(

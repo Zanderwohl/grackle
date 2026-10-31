@@ -59,13 +59,15 @@ impl SpectatorView {
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub struct StartSpectating(pub bool);
 
-/// Asked every frame the offer says we are choosing, rather than once: before our identity exists
-/// a request is dropped, and on a client the offer is a round trip behind. Requests from a seat
-/// already left are dropped too.
-fn spectate_from_the_start(start: Res<StartSpectating>, offer: Res<TeamOptions>, mut requests: MessageWriter<ChooseTeam>) {
-    if start.0 && offer.seat == Seat::Choosing && offer.spectate {
+/// Asked once each time the offer says we are choosing and may spectate. Keyed on the offer rather
+/// than on entering Play: before our identity exists the offer cannot spectate, and on a client it
+/// is a round trip behind.
+fn spectate_from_the_start(start: Res<StartSpectating>, offer: Res<TeamOptions>, mut asked: Local<bool>, mut requests: MessageWriter<ChooseTeam>) {
+    let choosing = offer.seat == Seat::Choosing && offer.spectate;
+    if start.0 && choosing && !*asked {
         requests.write(ChooseTeam { choice: TeamChoice::Spectate, from: Seat::Choosing });
     }
+    *asked = choosing;
 }
 
 pub struct SpectatePlugin;

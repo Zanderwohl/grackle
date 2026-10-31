@@ -14,7 +14,8 @@ pub struct RoundSettings {
     /// it starts listening.
     pub slots: u32,
     pub fill_with_bots: bool,
-    /// Seconds of game time before the round ends; `None` runs it until the mode ends it.
+    /// Real seconds before the round ends, as the Rounds tab times it; `None` runs it until the
+    /// mode ends it.
     pub time_limit: Option<f32>,
 }
 
