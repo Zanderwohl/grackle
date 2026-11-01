@@ -6,6 +6,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
+use crate::common::round_settings::BotSkill;
 use crate::common::damage::{DamageDealt, DamageSource, PlayerId};
 use crate::common::effects::Effect;
 use crate::common::hitbox::Hitboxes;
@@ -60,8 +61,8 @@ impl Default for BotMind {
 }
 
 impl BotMind {
-    pub fn temperament() -> Self {
-        BotMind { reaction: rand::random_range(REACTION), drives: Drives::temperament(), aim: Aim::temperament(), footwork: Footwork::temperament(), reflexes: Reflexes::temperament() }
+    pub fn temperament(skill: BotSkill) -> Self {
+        BotMind { reaction: rand::random_range(REACTION), drives: Drives::temperament(skill), aim: Aim::temperament(skill), footwork: Footwork::temperament(), reflexes: Reflexes::temperament() }
     }
 }
 

@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 use crate::common::damage::{Died, NextPlayerId, PlayerId};
 use crate::common::game_rules::{GameRules, ModeRules};
+use crate::common::round_settings::RoundSettings;
 use crate::common::player_color::lowest_free;
 use crate::common::player_settings::{settings_of, ClientSettings, PlayerSettings};
 use crate::common::net::NetRole;
@@ -146,7 +147,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
     rules: Res<GameRules>,
     catalog: Res<WeaponCatalog>,
     timers: Option<Res<RespawnTimers>>,
-    (seats, driven): (Query<(Entity, Option<&RouteCosts>, Option<&BotMind>), With<BotSeat>>, Query<&BotOf, With<Player>>),
+    (seats, driven, round): (Query<(Entity, Option<&RouteCosts>, Option<&BotMind>), With<BotSeat>>, Query<&BotOf, With<Player>>, Option<Res<RoundSettings>>),
     standings: Query<&Standing>,
 ) {
     let waiting = |who: Identity| timers.as_deref().is_some_and(|timers| timers.waiting(who.id));
@@ -233,7 +234,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
             rolled
         });
         let mind = mind.copied().unwrap_or_else(|| {
-            let rolled = BotMind::temperament();
+            let rolled = BotMind::temperament(round.as_deref().map(|round| round.bot_skill).unwrap_or_default());
             commands.entity(seat).insert(rolled);
             rolled
         });

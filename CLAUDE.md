@@ -81,7 +81,10 @@ start with the launcher drawn. A `Goal` is a place or a pickup. The
 map's, so neither saved nor sent: **slots**, the host and bots included, which
 caps the clients a server takes from when it starts listening, and **fill empty
 slots with bots**, which `fill_empty_slots` keeps true through a round as
-people come and go, with seats marked `FillsASlot`. **A bot never keeps
+people come and go, with seats marked `FillsASlot`. **Bot skill** — Easy, Normal or Hard
+(`BotSkill`) — narrows the rolls of the traits that went with a high score:
+aim settle, ambush patience, roam and cover; every other trait rolls its whole
+range, and changing it rolls every bot's mind again at once. **A bot never keeps
 anybody out**: the cap counts people only, so a slot a bot fills is open, and
 somebody joining takes a filler's seat and body in the same frame, before
 `give_bodies_to_whoever_needs_one` stands theirs up. A spectator takes no

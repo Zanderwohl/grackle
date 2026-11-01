@@ -7,6 +7,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
+use crate::common::round_settings::{Better, BotSkill};
 use crate::common::damage::{Armor, Damageable, PlayerId};
 use crate::common::movement_rules::MovementRules;
 use crate::common::net::has_authority;
@@ -105,19 +106,20 @@ const DRIVE_SCALE: std::ops::Range<f32> = 0.5..1.5;
 const PATIENCE: std::ops::Range<f32> = 4.0..20.0;
 
 impl Drives {
-    pub fn temperament() -> Self {
+    pub fn temperament(skill: BotSkill) -> Self {
         let base = Drives::default();
         let roll = |drive: f32| drive * rand::random_range(DRIVE_SCALE);
+        let lean = |drive: f32, better| drive * rand::random_range(skill.within(DRIVE_SCALE, better));
         Drives {
             health: roll(base.health),
             armor: roll(base.armor),
             arms: roll(base.arms),
             hunt: roll(base.hunt),
-            cover: roll(base.cover),
+            cover: lean(base.cover, Better::Higher),
             ambush: roll(base.ambush),
-            roam: roll(base.roam),
+            roam: lean(base.roam, Better::Lower),
             stubbornness: roll(base.stubbornness),
-            patience: rand::random_range(PATIENCE),
+            patience: rand::random_range(skill.within(PATIENCE, Better::Higher)),
         }
     }
 }

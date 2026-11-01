@@ -7,6 +7,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
+use crate::common::round_settings::{Better, BotSkill};
 use crate::common::flame::FlameSpec;
 use crate::common::hitbox::Hitboxes;
 use crate::common::movement_rules::MovementRules;
@@ -90,12 +91,12 @@ const EASE: std::ops::Range<f32> = 0.06..0.16;
 const TRACKING: std::ops::Range<f32> = 0.55..0.9;
 
 impl Aim {
-    pub fn temperament() -> Self {
+    pub fn temperament(skill: BotSkill) -> Self {
         let preference = [Preference::Nearest, Preference::Attacker, Preference::Facing][rand::random_range(0..3)];
         Aim {
             turn_rate: rand::random_range(TURN_RATE),
             error: rand::random_range(AIM_ERROR),
-            settle: rand::random_range(SETTLE),
+            settle: rand::random_range(skill.within(SETTLE, Better::Lower)),
             ease: rand::random_range(EASE),
             tracking: rand::random_range(TRACKING),
             preference,

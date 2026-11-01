@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::net::has_authority;
-use crate::common::round_settings::{BotsAtStartup, RoundSettings};
+use crate::common::round_settings::{BotSkill, BotsAtStartup, RoundSettings};
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::Connected;
 use crate::common::damage::{through_armor, Armor, Damageable};
@@ -580,6 +580,22 @@ fn seat_bots_from_the_keyboard(mut commands: Commands, keys: Res<ButtonInput<Key
     }
 }
 
+/// Rolls every bot's mind again when the skill changes, and gives a bot standing in a round its
+/// new one at once rather than at its next life.
+fn reroll_for_the_skill(mut commands: Commands, settings: Res<RoundSettings>, mut last: Local<Option<BotSkill>>, seats: Query<Entity, With<BotSeat>>, bodies: Query<(Entity, &BotOf)>) {
+    let skill = settings.bot_skill;
+    if last.replace(skill).is_none_or(|was| was == skill) {
+        return;
+    }
+    for seat in &seats {
+        let mind = BotMind::temperament(skill);
+        commands.entity(seat).insert(mind);
+        for (body, _) in bodies.iter().filter(|(_, of)| of.0 == seat) {
+            commands.entity(body).insert(mind);
+        }
+    }
+}
+
 /// `--server-config`'s `bots`, seated by hand.
 fn seat_the_startup_bots(mut commands: Commands, bots: Option<Res<BotsAtStartup>>) {
     for _ in 0..bots.map_or(0, |bots| bots.0) {
@@ -597,6 +613,7 @@ impl Plugin for BotPlugin {
             .add_systems(Update, (toggle_bot_routes, draw_bot_routes).chain().run_if(in_state(AppMode::Play)))
             .add_systems(FixedPreUpdate, steer_bots.run_if(has_authority).run_if(in_state(AppMode::Play)))
             .add_systems(FixedUpdate, retire_bots.before(step_player).run_if(has_authority))
+            .add_systems(Update, reroll_for_the_skill.run_if(has_authority))
             .add_systems(Update, (seat_bots_from_the_keyboard, fill_empty_slots).chain().run_if(has_authority).run_if(in_state(AppMode::Play)));
     }
 }

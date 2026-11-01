@@ -20,7 +20,7 @@ use crate::common::class::Stance;
 use crate::common::damage::{Armor, DamageDealt, DamageSource, Damageable, Died, How, PlayerId};
 use crate::common::game_rules::GameRules;
 use crate::common::net::has_authority;
-use crate::common::round_settings::RoundSettings;
+use crate::common::round_settings::{BotSkill, RoundSettings};
 use crate::common::weapon::{Equipped, WeaponCatalog, WeaponId};
 use crate::game::bot::{BotIntent, BotOf, BotSeat, Goal, RouteCosts};
 use crate::game::bot_sense::{BotMind, BotSenses, Sense};
@@ -112,7 +112,7 @@ pub struct Sampled {
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
-    RoundStart { t: f32, round: u32, map: String, started: String, slots: u32, fill_with_bots: bool, time_limit: Option<f32>, frag_limit: Option<u32> },
+    RoundStart { t: f32, round: u32, map: String, started: String, slots: u32, fill_with_bots: bool, bot_skill: BotSkill, time_limit: Option<f32>, frag_limit: Option<u32> },
     /// The first time somebody is seen in the round.
     Player { t: f32, id: u64, name: String, bot: bool, temperament: Option<Temperament> },
     Spawn { t: f32, id: u64, at: [f32; 3], yaw: f32 },
@@ -270,6 +270,7 @@ fn open_the_round(
         started: now.to_rfc3339(),
         slots: settings.slots,
         fill_with_bots: settings.fill_with_bots,
+        bot_skill: settings.bot_skill,
         time_limit: settings.time_limit,
         frag_limit: rules.and_then(|rules| rules.frag_limit),
     });
