@@ -23,6 +23,11 @@ const SUN_RAYS: usize = 8;
 /// Rays per point across the hemisphere, for sky light and bounce.
 const GATHER_RAYS: usize = 64;
 
+/// Every constant a texel's light depends on, for keying the lightmap cache.
+pub fn tuning() -> [u32; 4] {
+    [LIFT.to_bits(), SUN_RADIUS.to_bits(), SUN_RAYS as u32, GATHER_RAYS as u32]
+}
+
 /// What lights the map from outside, in lightmap units: a lightmap texel is the irradiance over π,
 /// so that a value is what `GlobalAmbientLight::brightness` would be for the same look.
 #[derive(Clone, Copy, Debug)]

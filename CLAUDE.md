@@ -175,7 +175,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map and demo-scene blueprints), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
-| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
+| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
 | `logs/` | Gitignored: the log's file drain, one file per launch. |
 
 ## Spawn points and class metrics
@@ -1313,6 +1313,11 @@ and **light is replaced, never dropped**: `SunBake` keeps it by `Room` entity,
 which outlives every rebuild of its meshes, and a rebuilt room has its old light
 carried onto its new layout (`Atlas::carry_over`) until a bake lands — so F5 on
 an unchanged map is free. Only the clear beside the Sunlight button forgets it.
+Every bake is written to `cache/lightmap/{hash}.bin` and read back by a map
+whose snapshot hashes the same, as the nav graph is from `cache/nav/`
+([`src/tool/bake_cache.rs`](src/tool/bake_cache.rs)), so a map opens lit. Both
+keys are FNV (`common::stable_hash`), never `DefaultHasher`; after changing how
+either bakes, bump its `FORMAT`.
 The bake runs on the async compute pool from a copy of the faces; entering Play
 waits only when the light is stale. Each texel is the base ambient, the sun, and sky
 light plus one bounce gathered every meter (`LitSurface::ambient`). The

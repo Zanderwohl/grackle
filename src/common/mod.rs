@@ -51,6 +51,7 @@ pub mod movement_rules;
 pub mod grid;
 pub mod palette;
 pub mod sky;
+pub mod stable_hash;
 pub mod sunlight;
 pub mod lightmap;
 pub mod render_layers;
