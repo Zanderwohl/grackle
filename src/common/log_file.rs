@@ -25,7 +25,8 @@ pub fn layer(app: &mut App) -> Option<bevy::log::BoxedLayer> {
     use bevy::log::tracing_subscriber::{fmt, Layer};
 
     let stamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let file = match SplitFile::open(std::path::Path::new(DIRECTORY), format!("grackle_{stamp}")) {
+    // The process id too: a server and a client launched together would share one file.
+    let file = match SplitFile::open(std::path::Path::new(DIRECTORY), format!("grackle_{stamp}_{}", std::process::id())) {
         Ok(file) => file,
         Err(error) => {
             eprintln!("Not logging to {DIRECTORY}/: {error}");

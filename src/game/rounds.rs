@@ -45,6 +45,8 @@ pub struct RoundHistory {
     settling: bool,
     /// Every round that has ended here, with standings or without.
     ended: u32,
+    /// The last round was ended by a limit rather than by somebody leaving it.
+    ran_out: bool,
 }
 
 impl RoundHistory {
@@ -57,6 +59,11 @@ impl RoundHistory {
     #[cfg(test)]
     pub(crate) fn started_at(started: f32) -> Self {
         RoundHistory { started: Some(started), ..default() }
+    }
+
+    /// A limit ended the round under way, so `--play --rounds` goes on to the next.
+    pub fn run_out(&mut self) {
+        self.ran_out = true;
     }
 
     /// Newest first.
@@ -91,6 +98,7 @@ impl Plugin for RoundHistoryPlugin {
 fn start_the_clock(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>) {
     history.started = Some(time.elapsed_secs());
     history.settling = false;
+    history.ran_out = false;
 }
 
 /// Only on a change, and only to the standings: a round's length is when it
@@ -145,7 +153,8 @@ pub fn report(round: &Round) -> String {
 }
 
 /// `--play --rounds N` plays them back to back: each round after the first starts as the last
-/// ends. The first is `start_in_play`'s; a client follows the server's mode instead.
+/// ends at a limit. One left with F5 stays left. The first is `start_in_play`'s; a client follows
+/// the server's mode instead.
 fn play_the_next_round(
     quit: Res<QuitAfterRounds>,
     start: Option<Res<crate::common::app_mode::StartInPlay>>,
@@ -153,7 +162,7 @@ fn play_the_next_round(
     history: Res<RoundHistory>,
     mut next: ResMut<NextState<AppMode>>,
 ) {
-    let more = quit.0.is_some_and(|rounds| (1..rounds).contains(&history.ended));
+    let more = history.ran_out && quit.0.is_some_and(|rounds| (1..rounds).contains(&history.ended));
     let authority = role.as_deref().is_none_or(crate::common::net::NetRole::is_authority);
     if more && authority && start.is_some_and(|start| start.0) && matches!(*next, NextState::Unchanged) {
         next.set(AppMode::Play);
@@ -269,15 +278,32 @@ mod tests {
         app.insert_resource(crate::common::app_mode::StartInPlay(true));
         let mode = |app: &App| *app.world().resource::<State<AppMode>>().get();
 
+        let run_out = |app: &mut App| {
+            app.world_mut().resource_mut::<RoundHistory>().run_out();
+            app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Editor);
+            for _ in 0..3 {
+                app.update();
+            }
+        };
+
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        run_out(&mut app);
+        assert_eq!(mode(&app), AppMode::Play, "the second round did not start");
+
+        run_out(&mut app);
+        assert_eq!(mode(&app), AppMode::Editor, "a third round started");
+    }
+
+    /// Breaks if leaving a round with F5 under `--rounds` is answered by starting another.
+    #[test]
+    fn a_round_left_by_hand_is_not_followed_by_another() {
+        let mut app = app();
+        app.insert_resource(QuitAfterRounds(Some(3)));
+        app.insert_resource(crate::common::app_mode::StartInPlay(true));
         play_a_round(&mut app, &[standing(1, 3)]);
         app.update();
         app.update();
-        assert_eq!(mode(&app), AppMode::Play, "the second round did not start");
-
-        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Editor);
-        app.update();
-        app.update();
-        app.update();
-        assert_eq!(mode(&app), AppMode::Editor, "a third round started");
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Editor);
     }
 }

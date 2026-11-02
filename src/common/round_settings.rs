@@ -22,7 +22,7 @@ pub struct RoundSettings {
 
 impl Default for RoundSettings {
     fn default() -> Self {
-        RoundSettings { slots: 8, fill_with_bots: false, bot_skill: BotSkill::Normal, time_limit: None }
+        RoundSettings { slots: 8, fill_with_bots: false, bot_skill: BotSkill::default(), time_limit: None }
     }
 }
 
@@ -160,15 +160,19 @@ mod tests {
         assert!(ServerConfig::parse("bot_skill = \"expert\"").is_err());
     }
 
-    /// Breaks if a harder tier rolls a worse trait, or a tier strays outside the range.
+    /// Breaks if a harder tier rolls a worse trait, Normal is not between the other two, or a
+    /// tier strays outside the range.
     #[test]
     fn harder_bots_roll_the_better_end() {
-        let settle = 0.3..0.9;
-        let easy = BotSkill::Easy.within(settle.clone(), Better::Lower);
-        let hard = BotSkill::Hard.within(settle.clone(), Better::Lower);
-        assert!(hard.end < easy.start);
-        assert!(hard.start >= settle.start && easy.end <= settle.end);
-        let patience = 4.0..20.0;
-        assert!(BotSkill::Hard.within(patience.clone(), Better::Higher).start > BotSkill::Easy.within(patience, Better::Higher).end);
+        let range = 0.3..0.9;
+        let mid = |skill: BotSkill, better| {
+            let part = skill.within(range.clone(), better);
+            assert!(part.start >= range.start && part.end <= range.end && part.start < part.end, "{skill:?} strays from the range");
+            (part.start + part.end) / 2.0
+        };
+        let [easy, normal, hard] = BotSkill::ALL.map(|skill| mid(skill, Better::Lower));
+        assert!(hard < normal && normal < easy, "lower is better: {hard} {normal} {easy}");
+        let [easy, normal, hard] = BotSkill::ALL.map(|skill| mid(skill, Better::Higher));
+        assert!(easy < normal && normal < hard, "higher is better: {easy} {normal} {hard}");
     }
 }

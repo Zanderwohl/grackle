@@ -97,7 +97,7 @@ example), refusing a bad one at startup. **An unattended round** is
 `--map PATH --server-config PATH --play --spectate --rounds 1`: `--map` opens
 a blueprint as its file, `--spectate` takes the Spectate seat each round,
 `--rounds N` quits once N rounds have ended (with `--play`, starting each
-next round as the last ends), and every round's standings are
+next round as the last runs out; one left with F5 stays left), and every round's standings are
 logged as a table as it ends (`rounds::report`). **Telemetry**
 ([`src/game/telemetry.rs`](src/game/telemetry.rs), authority only) puts a RON
 line in the log per kill — victim, killer and assist with health, place and

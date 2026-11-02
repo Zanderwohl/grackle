@@ -280,6 +280,7 @@ fn record_healing(mut healed: MessageReader<Healed>, mut standings: Query<&mut S
 fn end_the_round_at_the_frag_limit(
     rules: Res<GameRules>,
     standings: Query<&Standing>,
+    history: Option<ResMut<RoundHistory>>,
     mut next: ResMut<NextState<AppMode>>,
 ) {
     let Some(limit) = rules.frag_limit else { return };
@@ -288,6 +289,9 @@ fn end_the_round_at_the_frag_limit(
         return;
     }
     info!("{} reached {limit} frags; the round is over", winner.id);
+    if let Some(mut history) = history {
+        history.run_out();
+    }
     next.set(AppMode::Editor);
 }
 
@@ -295,16 +299,18 @@ fn end_the_round_at_the_frag_limit(
 /// round the Rounds tab says lasted five.
 fn end_the_round_at_the_time_limit(
     settings: Option<Res<RoundSettings>>,
-    history: Option<Res<RoundHistory>>,
+    history: Option<ResMut<RoundHistory>>,
     time: Res<Time<Real>>,
     mut next: ResMut<NextState<AppMode>>,
 ) {
     let Some(limit) = settings.and_then(|settings| settings.time_limit) else { return };
-    let Some(elapsed) = history.and_then(|history| history.elapsed(time.elapsed_secs())) else { return };
+    let Some(mut history) = history else { return };
+    let Some(elapsed) = history.elapsed(time.elapsed_secs()) else { return };
     if elapsed < limit || matches!(*next, NextState::Pending(_)) {
         return;
     }
     info!("{limit} seconds are up; the round is over");
+    history.run_out();
     next.set(AppMode::Editor);
 }
 

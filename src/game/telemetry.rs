@@ -113,9 +113,12 @@ pub struct Sampled {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     RoundStart { t: f32, round: u32, map: String, started: String, slots: u32, fill_with_bots: bool, bot_skill: BotSkill, time_limit: Option<f32>, frag_limit: Option<u32> },
-    /// The first time somebody is seen in the round.
+    /// The first time somebody is seen in the round, and again whenever a bot's temperament is
+    /// rolled again.
     Player { t: f32, id: u64, name: String, bot: bool, temperament: Option<Temperament> },
     Spawn { t: f32, id: u64, at: [f32; 3], yaw: f32 },
+    /// The Round tab's bot skill changed mid-round.
+    Skill { t: f32, bot_skill: BotSkill },
     Damage { t: f32, target: Option<u64>, by: Option<u64>, amount: u32, remaining: u32, weapon: Option<String>, how: How, reflected: bool, at: [f32; 3] },
     Kill(KillRecord),
     Pickup { t: f32, by: Option<u64>, what: String, at: [f32; 3] },
@@ -145,7 +148,9 @@ struct Round {
     started: f32,
     next_sample: f32,
     people: HashMap<PlayerId, Last>,
-    announced: Vec<PlayerId>,
+    /// The temperament last written for each body seen, `None` for a person.
+    announced: HashMap<PlayerId, Option<Temperament>>,
+    bot_skill: BotSkill,
     wanted: HashMap<PlayerId, Want>,
     sightings: HashMap<(PlayerId, PlayerId), f32>,
     /// The hit that emptied each body, from `note_damage` to `note_kills`.
@@ -198,7 +203,7 @@ impl Plugin for TelemetryPlugin {
             .add_systems(OnEnter(AppMode::Play), open_the_round.run_if(has_authority))
             .add_systems(
                 Update,
-                (watch_bodies, note_damage, note_kills, note_pickups, note_thoughts, note_sightings, sample)
+                (note_the_skill, watch_bodies, note_damage, note_kills, note_pickups, note_thoughts, note_sightings, sample)
                     .chain()
                     .run_if(in_state(AppMode::Play))
                     .run_if(has_authority),
@@ -247,22 +252,37 @@ fn open_the_round(
     let number = round.number + 1;
     let map = map_name(metadata.as_deref(), file.as_deref());
     let now = chrono::Local::now();
-    *round = Round { number, map: map.clone(), started: time.elapsed_secs(), ..default() };
+    let settings = settings.as_deref().copied().unwrap_or_default();
+    *round = Round { number, map: map.clone(), started: time.elapsed_secs(), bot_skill: settings.bot_skill, ..default() };
     #[cfg(not(target_arch = "wasm32"))]
     if recording.is_some() {
         let directory = std::path::Path::new("cache/rounds").join(&map);
-        let path = directory.join(format!("{}.jsonl", now.format("%Y-%m-%d_%H-%M-%S")));
-        match std::fs::create_dir_all(&directory).and_then(|_| std::fs::File::create(&path)) {
-            Ok(opened) => {
+        let stamp = now.format("%Y-%m-%d_%H-%M-%S");
+        // Never over another round's file: two servers, or a round under a second long.
+        let opened = std::fs::create_dir_all(&directory).and_then(|_| {
+            let mut tries = (1..).map(|part| match part {
+                1 => directory.join(format!("{stamp}.jsonl")),
+                part => directory.join(format!("{stamp}.{part}.jsonl")),
+            });
+            loop {
+                let path = tries.next().expect("endless");
+                match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                    Ok(file) => break Ok((path, file)),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => break Err(error),
+                }
+            }
+        });
+        match opened {
+            Ok((path, opened)) => {
                 info!("Recording this round to {}", path.display());
                 round.file = Some(std::io::BufWriter::new(opened));
             }
-            Err(error) => warn!("Not recording this round to {}: {error}", path.display()),
+            Err(error) => warn!("Not recording this round to {}: {error}", directory.display()),
         }
     }
     #[cfg(target_arch = "wasm32")]
     let _ = recording;
-    let settings = settings.as_deref().copied().unwrap_or_default();
     round.write(&Event::RoundStart {
         t: 0.0,
         round: number,
@@ -312,9 +332,11 @@ fn watch_bodies(
             at: point(crate::game::bot::feet_of(body, *stance)),
             wants: thought.map(wants_of),
         };
-        if !round.announced.contains(id) {
-            round.announced.push(*id);
-            let temperament = temperament.map(|(route, mind)| Temperament { route: *route, mind: *mind });
+        let temperament = temperament.map(|(route, mind)| Temperament { route: *route, mind: *mind });
+        // Beliefs are rolled again each life, which is no new temperament.
+        let rolled = temperament.map(|temperament| Temperament { route: RouteCosts { beliefs: 0, ..temperament.route }, ..temperament });
+        if round.announced.get(id) != Some(&rolled) {
+            round.announced.insert(*id, rolled);
             round.write(&Event::Player { t, id: id.0, name, bot: temperament.is_some(), temperament });
         }
         if fresh.contains(entity) {
@@ -364,7 +386,8 @@ fn note_damage(mut round: ResMut<Round>, time: Res<Time>, mut dealt: MessageRead
             at: point(hit.point),
         };
         round.write(&event);
-        if hit.remaining == 0 {
+        // Only a person's: nothing else leaves a `Died` to take it back out.
+        if hit.remaining == 0 && target.is_some() {
             round.fatal.insert(hit.target, hit.cause);
         }
     }
@@ -453,6 +476,15 @@ fn note_sightings(mut round: ResMut<Round>, time: Res<Time>, bots: Query<(&Playe
                 round.write(&Event::Sight { t, by: id.0, of: known.who.0, distance });
             }
         }
+    }
+}
+
+fn note_the_skill(mut round: ResMut<Round>, time: Res<Time>, settings: Option<Res<RoundSettings>>) {
+    let Some(skill) = settings.map(|settings| settings.bot_skill) else { return };
+    if skill != round.bot_skill {
+        round.bot_skill = skill;
+        let t = time.elapsed_secs() - round.started;
+        round.write(&Event::Skill { t, bot_skill: skill });
     }
 }
 
@@ -554,5 +586,21 @@ mod tests {
         assert_eq!(kill.damage, vec![Share { by: Some(3), amount: 40 }, Share { by: Some(2), amount: 85 }]);
         assert_eq!(kill.distance, Some(10.0));
         assert!(round.written.iter().filter(|event| matches!(event, Event::Damage { .. })).count() == 2);
+    }
+    /// Breaks if a bot's temperament rolled again mid-round is not recorded, or a new life's
+    /// beliefs read as a new temperament.
+    #[test]
+    fn a_temperament_rolled_again_is_recorded_again() {
+        let mut app = App::new();
+        app.add_plugins(bevy::time::TimePlugin).init_resource::<Round>().add_systems(Update, watch_bodies);
+        let bot = app.world_mut().spawn((PlayerId(1), Player::default(), PhysicsBody::at(Vec3::Y), Stance::Standing, RouteCosts::default(), BotMind::default())).id();
+        app.update();
+        app.world_mut().entity_mut(bot).insert(RouteCosts { beliefs: 7, ..default() });
+        app.update();
+        app.world_mut().entity_mut(bot).insert(BotMind { reaction: 0.25, ..default() });
+        app.update();
+
+        let players = app.world().resource::<Round>().written.iter().filter(|event| matches!(event, Event::Player { .. })).count();
+        assert_eq!(players, 2);
     }
 }
