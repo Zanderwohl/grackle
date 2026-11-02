@@ -210,7 +210,7 @@ same-sized image into its existing texture — so no slot goes a frame unlit.
 - [x] Measure it on the demo scene: 3 rooms, 34 583 texels, 240 ms in a debug build with the sun alone and 740 ms with sky and bounce, so auto-bake is on
 - [x] Off the main thread, on the async compute pool; light kept and carried over until a bake replaces it; a clear beside the Sunlight button
 - [ ] Chunked across frames on wasm, where the pool runs a task in one go: chunks of 8 ms through `BackgroundBake`, not yet run in a browser
-- [ ] Cache under `cache/lightmap/` by content hash
+- [x] Cache under `cache/lightmap/` by content hash (`tool/bake_cache.rs`, shared with the nav graph); keyed by faces, sky, sun, sky time, the bake's constants and `FORMAT`
 - [ ] `DirectionalLight` on a `SUNLIT` layer; bodies join it by a ray from the chest
 - [ ] Ambient grid per room, sampled per body into a `MeshTag`
 - [ ] Tests: a closed room is unlit; a sky ceiling lights the floor under it and not the room next door, except by bounce; coplanar floors across a threshold bake the same values on both sides

@@ -229,7 +229,9 @@ impl<J: BakeJob> BackgroundBake<J> {
     }
 
     /// Takes `hash` as baked, by some other means than a bake: read back from a cache.
+    /// Drops any bake running, which would otherwise land over it.
     pub fn adopt(&mut self, hash: u64) {
+        self.running = None;
         self.baked = Some(hash);
         self.current = Some(hash);
         self.pending = None;

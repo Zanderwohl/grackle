@@ -44,6 +44,11 @@ const PADDING: i32 = 1;
 /// where a ray would start inside the wall it meets.
 const INSET: f32 = 0.08;
 
+/// Every constant a bake's output depends on, for keying the lightmap cache.
+pub fn tuning() -> [u32; 8] {
+    [TEXEL, BASE_AMBIENT, SUN_BRIGHTNESS, SKY_BRIGHTNESS, ALBEDO, AMBIENT_STEP, PADDING as f32, INSET].map(f32::to_bits)
+}
+
 /// The lattice's two in-plane axes for a surface facing along `normal`. Floors and ceilings are
 /// ruled in X and Z; walls along their run and down.
 fn axes(normal: Vec3) -> (Vec3, Vec3) {
@@ -221,10 +226,11 @@ impl Atlas {
     }
 }
 
-/// What a room's faces are, for telling whether a layout or a bake is still theirs.
+/// What a room's faces are, for telling whether a layout or a bake is still theirs. Stable across
+/// builds, since it keys the lightmap cache.
 pub fn faces_hash(faces: &[Face]) -> u64 {
     use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = crate::common::stable_hash::Fnv::default();
     for face in faces {
         face.vertices.len().hash(&mut hasher);
         for vertex in &face.vertices {
