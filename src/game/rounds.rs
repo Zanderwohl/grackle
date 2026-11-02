@@ -26,6 +26,14 @@ pub struct Round {
     pub standings: Vec<Standing>,
 }
 
+impl Round {
+    /// Minutes and seconds, as the Rounds tab and the log show it.
+    pub fn length_text(&self) -> String {
+        let seconds = self.length.round() as u32;
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+}
+
 #[derive(Resource, Debug, Default)]
 pub struct RoundHistory {
     rounds: VecDeque<Round>,
@@ -35,9 +43,29 @@ pub struct RoundHistory {
     /// The newest round still follows the standings: from its end until the
     /// next round starts.
     settling: bool,
+    /// Every round that has ended here, with standings or without.
+    ended: u32,
+    /// The last round was ended by a limit rather than by somebody leaving it.
+    ran_out: bool,
 }
 
 impl RoundHistory {
+    /// Real seconds since the round under way started, `now` being `Time<Real>`'s; what both a
+    /// round's recorded length and its time limit are measured on.
+    pub fn elapsed(&self, now: f32) -> Option<f32> {
+        self.started.map(|started| now - started)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn started_at(started: f32) -> Self {
+        RoundHistory { started: Some(started), ..default() }
+    }
+
+    /// A limit ended the round under way, so `--play --rounds` goes on to the next.
+    pub fn run_out(&mut self) {
+        self.ran_out = true;
+    }
+
     /// Newest first.
     pub fn rounds(&self) -> impl Iterator<Item = &Round> {
         self.rounds.iter()
@@ -51,6 +79,10 @@ impl RoundHistory {
     }
 }
 
+/// `--rounds N`: the process exits once N rounds have ended here.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct QuitAfterRounds(pub Option<u32>);
+
 pub struct RoundHistoryPlugin;
 
 impl Plugin for RoundHistoryPlugin {
@@ -58,13 +90,15 @@ impl Plugin for RoundHistoryPlugin {
         app.init_resource::<RoundHistory>()
             .add_systems(OnEnter(AppMode::Play), start_the_clock)
             .add_systems(OnExit(AppMode::Play), record_the_round)
-            .add_systems(Update, settle_the_last_round.run_if(not(in_state(AppMode::Play))));
+            .init_resource::<QuitAfterRounds>()
+            .add_systems(Update, (settle_the_last_round, quit_after_enough_rounds, play_the_next_round).run_if(not(in_state(AppMode::Play))));
     }
 }
 
 fn start_the_clock(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>) {
     history.started = Some(time.elapsed_secs());
     history.settling = false;
+    history.ran_out = false;
 }
 
 /// Only on a change, and only to the standings: a round's length is when it
@@ -85,12 +119,62 @@ fn settle_the_last_round(
 
 /// A mode with no scoreboard has no standings, and leaves no round.
 fn record_the_round(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>, standings: Query<&Standing>) {
-    let started = history.started.take();
+    let length = history.elapsed(time.elapsed_secs()).unwrap_or(0.0);
+    history.started = None;
+    history.ended += 1;
     if standings.is_empty() {
         return;
     }
-    let length = started.map_or(0.0, |started| time.elapsed_secs() - started);
     history.record(ranked(standings.iter()).into_iter().cloned().collect(), length);
+    if let Some(round) = history.rounds.front() {
+        info!("{}", report(round));
+    }
+}
+
+/// The round's standings as a table for the log, which is where an unattended `--rounds` run's
+/// result is read from. On a client the final frag can still be in flight.
+pub fn report(round: &Round) -> String {
+    let mut report = format!("Round {} over after {}", round.number, round.length_text());
+    report.push_str("\n  #  name                 frags  kills  deaths  assists  dealt  taken");
+    for (place, standing) in round.standings.iter().enumerate() {
+        report.push_str(&format!(
+            "\n  {:<2} {:<20} {:>5}  {:>5}  {:>6}  {:>7}  {:>5}  {:>5}",
+            place + 1,
+            standing.display_name(),
+            standing.frags,
+            standing.kills,
+            standing.deaths,
+            standing.assists,
+            standing.damage_dealt,
+            standing.damage_taken,
+        ));
+    }
+    report
+}
+
+/// `--play --rounds N` plays them back to back: each round after the first starts as the last
+/// ends at a limit. One left with F5 stays left. The first is `start_in_play`'s; a client follows
+/// the server's mode instead.
+fn play_the_next_round(
+    quit: Res<QuitAfterRounds>,
+    start: Option<Res<crate::common::app_mode::StartInPlay>>,
+    role: Option<Res<crate::common::net::NetRole>>,
+    history: Res<RoundHistory>,
+    mut next: ResMut<NextState<AppMode>>,
+) {
+    let more = history.ran_out && quit.0.is_some_and(|rounds| (1..rounds).contains(&history.ended));
+    let authority = role.as_deref().is_none_or(crate::common::net::NetRole::is_authority);
+    if more && authority && start.is_some_and(|start| start.0) && matches!(*next, NextState::Unchanged) {
+        next.set(AppMode::Play);
+    }
+}
+
+/// A frame after the round is recorded, so it has reached the log.
+fn quit_after_enough_rounds(quit: Res<QuitAfterRounds>, history: Res<RoundHistory>, mut exit: MessageWriter<AppExit>) {
+    if quit.0.is_some_and(|rounds| history.ended >= rounds) {
+        info!("{} rounds played, as asked; quitting", history.ended);
+        exit.write(AppExit::Success);
+    }
 }
 
 #[cfg(test)]
@@ -184,5 +268,42 @@ mod tests {
         let history = app.world().resource::<RoundHistory>();
         assert_eq!(history.rounds().count(), KEPT_ROUNDS);
         assert_eq!(history.rounds().next().unwrap().number, KEPT_ROUNDS as u32 + 5);
+    }
+
+    /// Breaks if `--play --rounds N` stops in the editor after the first round, or plays one too many.
+    #[test]
+    fn rounds_asked_for_are_played_back_to_back() {
+        let mut app = app();
+        app.insert_resource(QuitAfterRounds(Some(2)));
+        app.insert_resource(crate::common::app_mode::StartInPlay(true));
+        let mode = |app: &App| *app.world().resource::<State<AppMode>>().get();
+
+        let run_out = |app: &mut App| {
+            app.world_mut().resource_mut::<RoundHistory>().run_out();
+            app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Editor);
+            for _ in 0..3 {
+                app.update();
+            }
+        };
+
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        run_out(&mut app);
+        assert_eq!(mode(&app), AppMode::Play, "the second round did not start");
+
+        run_out(&mut app);
+        assert_eq!(mode(&app), AppMode::Editor, "a third round started");
+    }
+
+    /// Breaks if leaving a round with F5 under `--rounds` is answered by starting another.
+    #[test]
+    fn a_round_left_by_hand_is_not_followed_by_another() {
+        let mut app = app();
+        app.insert_resource(QuitAfterRounds(Some(3)));
+        app.insert_resource(crate::common::app_mode::StartInPlay(true));
+        play_a_round(&mut app, &[standing(1, 3)]);
+        app.update();
+        app.update();
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Editor);
     }
 }

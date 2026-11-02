@@ -13,7 +13,7 @@ use bevy::transform::TransformSystems;
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::effects::Effect;
-use crate::common::damage::{Damage, DamageSource, KillShove, PlayerId};
+use crate::common::damage::{Cause, Damage, DamageSource, How, KillShove, PlayerId};
 use crate::common::hitbox::Hitboxes;
 use crate::common::hitscan::{trace, Hit, HitZone};
 use crate::game::collision::CollisionWorld;
@@ -171,6 +171,7 @@ pub fn fire_hitscan(
                     point: hit.point,
                     from: Some(ray.origin),
                     kill_shove,
+                    cause: Cause::of(shot.weapon, How::Hitscan),
                     });
                 }
             }
@@ -365,6 +366,7 @@ mod tests {
             shooter,
             button: crate::game::weapon::Button::Primary,
             action,
+            weapon: None,
         });
         world.run_system_once(fire_hitscan).unwrap();
     }

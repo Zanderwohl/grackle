@@ -32,7 +32,7 @@ use crate::game::rounds::RoundHistory;
 use crate::get;
 use crate::tool::Tools;
 use crate::tool::bake_job::BakeProgress;
-use crate::common::round_settings::{RoundSettings, MOST_SLOTS};
+use crate::common::round_settings::{BotSkill, RoundSettings, MOST_SLOTS};
 use crate::tool::bake_progress::{self, Step};
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
 use crate::tool::sun_bake::{BakeSunlight, ClearSunlight, SunBake};
@@ -694,13 +694,36 @@ fn player_panel_ui(ui: &mut egui::Ui, settings: &mut PlayerSettings) -> bool {
     changed
 }
 
+/// What ticking Time limit starts at, in seconds.
+const DEFAULT_TIME_LIMIT: f32 = 600.0;
+
 fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
-    egui::Grid::new("round_settings").num_columns(2).show(ui, |ui| {
-        ui.label(get!("editor.round.slots"));
-        ui.add(egui::DragValue::new(&mut settings.slots).range(1..=MOST_SLOTS));
-        ui.end_row();
-    });
+    ui.heading(get!("editor.round.slots"));
+    ui.add(egui::DragValue::new(&mut settings.slots).range(1..=MOST_SLOTS));
+
+    ui.heading(get!("editor.round.bots"));
     ui.checkbox(&mut settings.fill_with_bots, get!("editor.round.fill_with_bots"));
+    let skill_name = |skill: BotSkill| match skill {
+        BotSkill::Easy => get!("editor.round.skill.easy"),
+        BotSkill::Normal => get!("editor.round.skill.normal"),
+        BotSkill::Hard => get!("editor.round.skill.hard"),
+    };
+    egui::ComboBox::from_label(get!("editor.round.skill.title")).selected_text(skill_name(settings.bot_skill)).show_ui(ui, |ui| {
+        for skill in BotSkill::ALL {
+            ui.selectable_value(&mut settings.bot_skill, skill, skill_name(skill));
+        }
+    });
+
+    ui.heading(get!("editor.round.time"));
+    ui.horizontal(|ui| {
+        let mut limited = settings.time_limit.is_some();
+        if ui.checkbox(&mut limited, get!("editor.round.time_limit")).changed() {
+            settings.time_limit = limited.then_some(DEFAULT_TIME_LIMIT);
+        }
+        if let Some(limit) = settings.time_limit.as_mut() {
+            ui.add(egui::DragValue::new(limit).range(1.0..=f32::MAX).speed(1.0).max_decimals(0).suffix(get!("editor.round.seconds_suffix")));
+        }
+    });
 }
 
 /// Newest first, the newest open.
@@ -709,8 +732,7 @@ fn rounds_panel_ui(ui: &mut egui::Ui, history: &RoundHistory) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         for (index, round) in history.rounds().enumerate() {
             any = true;
-            let seconds = round.length.round() as u32;
-            let length = format!("{}:{:02}", seconds / 60, seconds % 60);
+            let length = round.length_text();
             egui::CollapsingHeader::new(get!("editor.rounds.round", "number", round.number, "length", length))
                 .id_salt(("round", round.number))
                 .default_open(index == 0)

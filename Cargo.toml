@@ -66,6 +66,9 @@ egui_extras = { version = "0.36.1", default-features = false, features = ["svg"]
 # and nowhere else, which is a silent bug on a live connection.
 postcard = { version = "1.1.3", features = ["use-std"] }
 
+# Stamps each launch's log and each round's record; already in the tree.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
 # Not used from Rust: a direct dependency only so feature unification turns on
 # `wasm_js` for the copies bevy_egui, bevy_platform and rand_core pull in.
 # Paired with the `getrandom_backend` rustflag in `.cargo/config.toml`, which
@@ -78,6 +81,11 @@ getrandom = { version = "0.3.3", features = ["wasm_js"] }
 # stops the macOS 26 beta from tripping objc2's signature assertions. Scoped to
 # macOS because it is an Apple-only crate — declared unconditionally it broke
 # the build on every other target, wasm included.
+# The background writer behind the `logs/` drain. A browser tab has neither files nor threads,
+# so it logs to the console alone.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tracing-appender = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.1", features = ["relax-sign-encoding"] }
 

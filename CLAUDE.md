@@ -81,11 +81,36 @@ start with the launcher drawn. A `Goal` is a place or a pickup. The
 map's, so neither saved nor sent: **slots**, the host and bots included, which
 caps the clients a server takes from when it starts listening, and **fill empty
 slots with bots**, which `fill_empty_slots` keeps true through a round as
-people come and go, with seats marked `FillsASlot`. **A bot never keeps
+people come and go, with seats marked `FillsASlot`. **Bot skill** — Easy, Normal or Hard
+(`BotSkill`) — narrows the rolls of the traits that went with a high score:
+aim settle, ambush patience, roam and cover; every other trait rolls its whole
+range, and changing it rolls every bot's mind again at once. **A bot never keeps
 anybody out**: the cap counts people only, so a slot a bot fills is open, and
 somebody joining takes a filler's seat and body in the same frame, before
-`give_bodies_to_whoever_needs_one` stands theirs up. `B` seats a bot by hand
-(counted against the slots) and `Shift+B` retires the newest. What a bot goes
+`give_bodies_to_whoever_needs_one` stands theirs up. A spectator takes no
+slot; somebody still choosing does. A **time limit** in seconds ends the round
+as the frag limit does. `B` seats a bot by hand
+(counted against the slots) and `Shift+B` retires the newest.
+`--server-config PATH` reads all of it, and bots to seat by hand, from a TOML
+file (`ServerConfig`; [`assets/default/servers/bot_arena.toml`](assets/default/servers/bot_arena.toml) is the
+example), refusing a bad one at startup. **An unattended round** is
+`--map PATH --server-config PATH --play --spectate --rounds 1`: `--map` opens
+a blueprint as its file, `--spectate` takes the Spectate seat each round,
+`--rounds N` quits once N rounds have ended (with `--play`, starting each
+next round as the last runs out; one left with F5 stays left), and every round's standings are
+logged as a table as it ends (`rounds::report`). **Telemetry**
+([`src/game/telemetry.rs`](src/game/telemetry.rs), authority only) puts a RON
+line in the log per kill — victim, killer and assist with health, place and
+goal pulls, the weapon, how it killed, every attacker's share — and a
+`RoundRecord` at the round's end with each bot's temperament and the
+scoreboard; and, where the `editor` binary asks (`RecordRounds`, so tests write
+nothing), a JSON Lines file per round at `cache/rounds/{map}/{started}.jsonl`:
+spawns, hits, kills, pickups, goal changes (a retreat marked), first sightings
+and every body once a second. A hit knows its weapon because `Damage` and
+`DamageDealt` carry a `Cause` — weapon, how, reflected — from the trigger pull
+on, through projectiles, blasts and burns; nothing decides anything from it.
+The log itself goes to `logs/` too ([`src/common/log_file.rs`](src/common/log_file.rs)):
+one file per launch, split at 32 MiB, the newest 30 kept. What a bot goes
 for is `think`'s ([`src/game/bot_think.rs`](src/game/bot_think.rs)), the one
 writer of `BotIntent::goal`: health, armor, arms, a hunt, cover, an ambush or a
 roam, each scored by its temperament's `Drives`, the one it has getting a
@@ -148,9 +173,10 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map and demo-scene blueprints), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
-| `assets/default/` | The default pack: `lang/`, `blueprints/`. |
+| `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
-| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`. Safe to delete. |
+| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
+| `logs/` | Gitignored: the log's file drain, one file per launch. |
 
 ## Spawn points and class metrics
 
@@ -193,7 +219,20 @@ nook on each side wall, Red's authored and Blue's made by a Mirror, with walls
 naming the `spawn_walls` role — the smallest map that exercises sides,
 mirroring and the palette at once. Both open untitled, so a save asks where.
 
-Both are text and diff like it. Still, don't edit them by saving over them
+**`arena.gmb`** (Foundry) is a free-for-all map for bots, opened with `--map`:
+a 40 m hall open to the sky, a stepped platform in the middle ringed by a
+pinwheel of 6 m walls, a wall across each side of the ring, a ledge up each
+side wall, a corridor behind each end wall holding a rocket launcher, a kill pit
+on each side, and eight spawns in alcoves and corner nooks out of the hall's
+sight. Point-symmetric, with every weapon in pairs a half turn apart. Its
+layout was tuned against the nav bake's statistics: the first version was
+94% open floor with a mean exposure of 824 m², the perch and the rocket
+launcher on one spot and spawns on stages. Stair treads are a meter deep: on a
+narrower one the nav bake finds nowhere a body fits, and the flight is cut.
+`every_arena_spawn_stands_clear_and_walks_everywhere` walks the nav graph from
+each spawn to every other and onto the platform.
+
+All three are text and diff like it. Still, don't edit them by saving over them
 from the editor — they are written by
 `cargo run --bin new_map_template`
 ([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the
@@ -1712,10 +1751,17 @@ machine from what it is told.
   of it at its eye, aimed by its replicated `Player.yaw`/`pitch`, ahead of
   any `DeathCam`, eased onto that aim in yaw and pitch over `WATCHED_EASE`
   (a bot's aim jumps a quarter turn in a tick), cutting to a new body rather
-  than swinging; `decide_the_view` cuts to first person; and its body and
-  held weapon are hidden from inside as our own are. The viewmodel, its arms,
-  kicks and reloads follow `Viewed` — ours or the watched body — so a
-  spectator sees what that player sees; the apparent muzzle stays ours. Their
+  than swinging; and its body and held weapon are hidden from inside as our
+  own are. **Watching is playing without the controls**: everything that
+  shows a player their own body asks for `Viewed` — ours or the watched body
+  — rather than `LocalPlayer`. So `F` pulls the view out behind a watched
+  body as it would behind ours (one `place_camera` path, the pivot and aim
+  being all that differ), a watched body's condition forces third person as
+  ours would, the health, armor and ammo readouts and the HUD's color are its,
+  its row is lit on both scoreboards (which go up with the round, not with a
+  body), damage direction is its hits, and the viewmodel, its arms, kicks and
+  reloads are its; the apparent muzzle and the weapon selector stay ours,
+  since they answer this machine's input. Their
   name is on a name-tag panel at the bottom middle of the safe zone, with the
   goal under it for a bot (`name_whoever_is_watched`). With `F8` on, a
   watched bot's every want and its pull is a table top right of the window

@@ -62,6 +62,14 @@ pub struct Projectile {
     #[serde(skip)]
     #[reflect(ignore)]
     pub shooter: Option<Entity>,
+    /// What fired it, for the records of what it hits. Not sent, like `shooter`.
+    #[serde(skip)]
+    #[reflect(ignore)]
+    pub weapon: Option<crate::common::weapon::WeaponId>,
+    /// Airblasted back. Not sent, like `weapon`.
+    #[serde(skip)]
+    #[reflect(ignore)]
+    pub reflected: bool,
     pub velocity: Vec3,
     /// Where it was fired or last reflected from, which its blast's distance is measured from
     /// once the shooter is gone.
@@ -172,10 +180,11 @@ pub fn launch(
     direction: Dir3,
     owner: Option<PlayerId>,
     shooter: Option<Entity>,
+    weapon: Option<crate::common::weapon::WeaponId>,
 ) -> Entity {
     commands
         .spawn((
-            fired(spec, from, direction, owner, shooter),
+            Projectile { weapon, ..fired(spec, from, direction, owner, shooter) },
             PhysicsBody::at(from),
             Transform::from_translation(from).with_scale(Vec3::splat(spec.radius)),
             Visibility::default(),
@@ -191,7 +200,7 @@ pub fn muzzle(center: Vec3, stance: Stance, player: &Player) -> Vec3 {
 
 /// A projectile just fired along `direction`.
 pub fn fired(spec: ProjectileSpec, from: Vec3, direction: Dir3, owner: Option<PlayerId>, shooter: Option<Entity>) -> Projectile {
-    Projectile { spec, owner, shooter, velocity: *direction * spec.initial_speed, launched: from, spin: 0.0, age: 0.0, bounces: 0 }
+    Projectile { spec, owner, shooter, weapon: None, reflected: false, velocity: *direction * spec.initial_speed, launched: from, spin: 0.0, age: 0.0, bounces: 0 }
 }
 
 /// Fires from the step's position, not the drawn one: an interpolated muzzle
@@ -208,7 +217,7 @@ pub fn fire_projectiles(
         let Ok((body, player, stance, id)) = shooters.get(shot.shooter) else { continue };
 
         let direction = crate::game::hitscan::aim(player);
-        launch(&mut commands, spec, muzzle(body.current, *stance, player), direction, id.copied(), Some(shot.shooter));
+        launch(&mut commands, spec, muzzle(body.current, *stance, player), direction, id.copied(), Some(shot.shooter), shot.weapon);
     }
 }
 
@@ -234,6 +243,7 @@ pub fn run_emitters(
             placed.translation() + *direction * MUZZLE_OFFSET,
             direction,
             // Nobody fired it: `DamageSource::World`.
+            None,
             None,
             None,
         );
@@ -279,6 +289,8 @@ pub fn step_projectiles(
                 knockback: spec.knockback,
                 source: projectile.source(),
                 direct,
+                weapon: projectile.weapon,
+                reflected: projectile.reflected,
             });
         }
 
@@ -535,6 +547,8 @@ mod tests {
                 spin: 0.0,
                 age: 0.0,
                 bounces: 0,
+                weapon: None,
+                reflected: false,
             })
             .id();
 
@@ -564,6 +578,8 @@ mod tests {
                     spin: 1.1,
                     age: 0.0,
                     bounces: 0,
+                    weapon: None,
+                    reflected: false,
                 },
                 Transform::default(),
             ))
@@ -592,6 +608,8 @@ mod tests {
             spin: 0.0,
             age: 0.0,
             bounces: 0,
+            weapon: None,
+            reflected: false,
         }).id();
 
         world.run_system_once(clear_projectiles).unwrap();
@@ -618,6 +636,8 @@ mod tests {
                     spin: 0.0,
                     age: 0.0,
                     bounces: 0,
+                    weapon: None,
+                    reflected: false,
                 },
                 PhysicsBody::at(at),
                 Transform::from_translation(at),
@@ -728,6 +748,7 @@ mod tests {
             Dir3::new(direction).unwrap(),
             Some(PlayerId(4)),
             None,
+            None,
         );
         world.flush();
         entity
@@ -791,6 +812,7 @@ mod tests {
             Dir3::NEG_Z,
             Some(PlayerId(4)),
             Some(shooter),
+            None,
         );
         world.flush();
 

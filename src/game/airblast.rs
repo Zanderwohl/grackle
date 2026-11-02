@@ -117,6 +117,7 @@ pub fn reflect(projectile: &mut Projectile, at: Vec3, toward: Dir3, speed: f32, 
     projectile.velocity = *toward * projectile.velocity.length() * speed;
     projectile.owner = owner;
     projectile.shooter = Some(shooter);
+    projectile.reflected = true;
     projectile.launched = at;
     projectile.age = 0.0;
     projectile.bounces = 0;
@@ -159,7 +160,7 @@ mod tests {
     }
 
     fn gust(world: &mut World, shooter: Entity) {
-        world.write_message(WeaponActionFired { shooter, button: crate::game::weapon::Button::Secondary, action: WeaponAction::Airblast(SPEC) });
+        world.write_message(WeaponActionFired { shooter, button: crate::game::weapon::Button::Secondary, action: WeaponAction::Airblast(SPEC), weapon: None });
         world.run_system_once(airblast).unwrap();
         world.flush();
     }

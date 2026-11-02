@@ -7,6 +7,9 @@
 //! from one spot pile onto one indicator while it is up, rather than a
 //! shotgun drawing ten. Damage with no source (burning, the suicide key)
 //! draws none.
+//!
+//! The body is whichever we see out of: ours, or the one a spectator is
+//! watching. Changing to another body clears what was up for the last.
 
 use bevy::prelude::*;
 
@@ -14,7 +17,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::damage::DamageDealt;
 use crate::common::ui_shape::{Corner, Path, ShapeMaterial, ShapeStyle};
 use crate::game::hud::WindowSafeZone;
-use crate::game::player::{LocalPlayer, Player, PlayerCamera};
+use crate::game::player::{Player, PlayerCamera, Viewed};
 
 /// Seconds.
 const FADE_IN: f32 = 0.1;
@@ -134,20 +137,30 @@ fn trapezoid(width: f32, opacity: f32) -> ShapeMaterial {
 fn note_hits(
     mut commands: Commands,
     mut dealt: MessageReader<DamageDealt>,
-    us: Option<Single<Entity, (With<LocalPlayer>, With<Player>)>>,
-    mut indicators: Query<&mut Indicator>,
+    us: Option<Single<Entity, (Viewed, With<Player>)>>,
+    mut indicators: Query<(Entity, &mut Indicator)>,
     zone: Option<Single<Entity, With<WindowSafeZone>>>,
     materials: Option<ResMut<Assets<ShapeMaterial>>>,
+    mut seen_from: Local<Option<Entity>>,
 ) {
     let hits: Vec<DamageDealt> = dealt.read().copied().collect();
+    // Only a different body clears them: dying leaves the killing blow's up to fade.
+    if let Some(viewed) = us.as_deref().copied() {
+        if seen_from.is_some_and(|seen| seen != viewed) {
+            for (indicator, _) in &indicators {
+                commands.entity(indicator).despawn();
+            }
+        }
+        *seen_from = Some(viewed);
+    }
     let (Some(us), Some(zone), Some(mut materials)) = (us, zone, materials) else { return };
     for hit in hits {
         let Some(from) = hit.from else { continue };
         if hit.target != *us || hit.amount == 0 {
             continue;
         }
-        match indicators.iter_mut().find(|indicator| indicator.from.distance(from) < SAME_SOURCE) {
-            Some(mut indicator) => indicator.hit_again(from, hit.amount),
+        match indicators.iter_mut().find(|(_, indicator)| indicator.from.distance(from) < SAME_SOURCE) {
+            Some((_, mut indicator)) => indicator.hit_again(from, hit.amount),
             None => {
                 let indicator = Indicator::new(from, hit.amount);
                 let material = materials.add(trapezoid(indicator.width(), 0.0));
@@ -172,7 +185,7 @@ fn place_indicators(
     time: Res<Time>,
     zone: Option<Single<&ComputedNode, With<WindowSafeZone>>>,
     camera: Option<Single<&GlobalTransform, With<PlayerCamera>>>,
-    body: Option<Single<&GlobalTransform, (With<LocalPlayer>, With<Player>)>>,
+    body: Option<Single<&GlobalTransform, (Viewed, With<Player>)>>,
     mut indicators: Query<(
         Entity,
         &mut Indicator,
@@ -271,5 +284,49 @@ mod tests {
         assert!((right - Vec2::new(400.0 - DEPTH * 0.5, 0.0)).length() < 1e-3);
         let behind = placement(std::f32::consts::PI, half);
         assert!((behind - Vec2::new(0.0, 300.0 - DEPTH * 0.5)).length() < 1e-3);
+    }
+
+    /// Breaks if a spectator sees no hits on whoever they watch, the last body's hits stay up over
+    /// the next one's view, or a body going takes its last hit's indicator with it.
+    #[test]
+    fn a_spectator_sees_the_watched_bodys_hits_until_watching_another() {
+        use crate::common::damage::DamageSource;
+        use crate::game::player::Watched;
+
+        let mut app = App::new();
+        app.add_message::<DamageDealt>()
+            .init_resource::<Assets<ShapeMaterial>>()
+            .add_systems(Update, note_hits);
+        app.world_mut().spawn(WindowSafeZone);
+        let first = app.world_mut().spawn((Player::default(), Watched)).id();
+        let second = app.world_mut().spawn(Player::default()).id();
+        let count = |app: &mut App| app.world_mut().query::<&Indicator>().iter(app.world()).count();
+        let hit = |app: &mut App, target: Entity| {
+            app.world_mut().write_message(DamageDealt {
+                target,
+                source: DamageSource::World,
+                amount: 20,
+                remaining: 80,
+                point: Vec3::ZERO,
+                from: Some(Vec3::X * 10.0),
+                cause: Default::default(),
+            });
+            app.update();
+        };
+
+        app.update();
+        hit(&mut app, second);
+        assert_eq!(count(&mut app), 0, "a hit on somebody we are not watching drew");
+        hit(&mut app, first);
+        assert_eq!(count(&mut app), 1, "a hit on the watched body drew nothing");
+
+        // As our body going: nobody viewed, and the killing blow stays up to fade.
+        app.world_mut().entity_mut(first).remove::<Watched>();
+        app.update();
+        assert_eq!(count(&mut app), 1, "the indicator went with the body");
+
+        app.world_mut().entity_mut(second).insert(Watched);
+        app.update();
+        assert_eq!(count(&mut app), 0, "the last body's indicator stayed up");
     }
 }

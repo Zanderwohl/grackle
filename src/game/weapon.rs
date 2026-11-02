@@ -56,6 +56,8 @@ pub struct WeaponActionFired {
     pub shooter: Entity,
     pub button: Button,
     pub action: WeaponAction,
+    /// What it was fired from; `None` for a shot no weapon fired.
+    pub weapon: Option<WeaponId>,
 }
 
 /// Seconds until each button may fire again.
@@ -215,7 +217,7 @@ pub fn pull_trigger(
 
             trigger.arm(button, mounted.cadence.interval());
 
-            fired.write(WeaponActionFired { shooter, button, action: mounted.action });
+            fired.write(WeaponActionFired { shooter, button, action: mounted.action, weapon: Some(held) });
         }
 
         if ammo.at(held) != Some(&state) {

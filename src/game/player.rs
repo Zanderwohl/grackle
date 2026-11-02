@@ -647,16 +647,15 @@ pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut preference: ResMut<ViewP
     };
 }
 
-/// Put the view where the local body is, looking where the latch says.
+/// Put the view at an eye, or out behind it as far as [`CameraPull`] says: our
+/// body's, looking where the latch says, else the [`Watched`] one's, aimed as
+/// that body aims but eased onto it (see [`WATCHED_EASE`]), else the
+/// [`DeathCam`]'s pivot, aimed by the latch.
 ///
 /// Not a child of the body: its rotation comes from this machine's latch, so
 /// looking around never waits on a round-trip.
 ///
 /// Runs after `interpolate_bodies`; earlier, it sits a frame behind the body.
-///
-/// With no body, it looks out of the [`Watched`] one, aimed as that body
-/// aims but eased onto it (see [`WATCHED_EASE`]), or else orbits the
-/// [`DeathCam`], still aimed by the latch.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn place_camera(
     time: Res<Time>,
@@ -670,28 +669,29 @@ pub fn place_camera(
     watched: Option<Single<(Entity, &Transform, &Stance, &Player), (With<Watched>, Without<LocalPlayer>, Without<PlayerCamera>)>>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
-    if let (None, Some(watched)) = (&body, watched) {
-        let (whom, transform, stance, player) = watched.into_inner();
-        let eye = transform.translation + Vec3::Y * player.drawn_duck(fixed.overstep_fraction()).eye_from_center(*stance);
-        let aim = eased.get_or_insert(WatchedAim { whom, yaw: player.yaw, pitch: player.pitch }).ease(whom, player.yaw, player.pitch, time.delta_secs());
-        let aim = Quat::from_rotation_y(aim.0) * Quat::from_rotation_x(aim.1);
-        for mut camera in &mut cameras {
-            camera.translation = eye;
-            camera.rotation = aim;
-        }
-        return;
-    }
-    *eased = None;
-    let pivot = match (body, death_cam) {
-        // Ducking lowers the eye and the third-person pivot with it.
-        (Some(body), _) => {
-            let (transform, stance, player) = body.into_inner();
-            transform.translation + Vec3::Y * player.drawn_duck(fixed.overstep_fraction()).eye_from_center(*stance)
-        }
-        (None, Some(dead)) => dead.pivot,
-        (None, None) => return,
+    // Ducking lowers the eye and the third-person pivot with it.
+    let eye = |transform: &Transform, stance: &Stance, player: &Player| {
+        transform.translation + Vec3::Y * player.drawn_duck(fixed.overstep_fraction()).eye_from_center(*stance)
     };
-    let aim = Quat::from_rotation_y(latch.0.yaw) * Quat::from_rotation_x(latch.0.pitch);
+    let ours = (latch.0.yaw, latch.0.pitch);
+    // So watching the same body again starts on its aim rather than easing from the last time.
+    if watched.is_none() || body.is_some() {
+        *eased = None;
+    }
+    let (pivot, (yaw, pitch)) = match (body, watched, death_cam) {
+        (Some(body), _, _) => {
+            let (transform, stance, player) = body.into_inner();
+            (eye(transform, stance, player), ours)
+        }
+        (None, Some(watched), _) => {
+            let (whom, transform, stance, player) = watched.into_inner();
+            let aim = eased.get_or_insert(WatchedAim { whom, yaw: player.yaw, pitch: player.pitch }).ease(whom, player.yaw, player.pitch, time.delta_secs());
+            (eye(transform, stance, player), aim)
+        }
+        (None, None, Some(dead)) => (dead.pivot, ours),
+        (None, None, None) => return,
+    };
+    let aim = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch);
 
     let first = Transform::from_translation(pivot).with_rotation(aim);
     let third = Transform::from_translation(third_person_camera(pivot, aim, &world)).with_rotation(aim);

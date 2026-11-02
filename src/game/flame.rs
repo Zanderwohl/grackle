@@ -10,7 +10,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
-use crate::common::damage::{Damage, DamageSource, PlayerId};
+use crate::common::damage::{Cause, Damage, DamageSource, How, PlayerId};
 use crate::common::flame::{cone_directions, Burning, FlameSpec};
 use crate::common::hitbox::Hitboxes;
 use crate::common::team::Allegiances;
@@ -78,13 +78,16 @@ pub fn fire_flame(
             // No headshot multiplier for fire. Scaled down to nothing, it still lights.
             let amount = (spec.damage as f32 * spec.scale_at(origin.distance(hit.point))).round() as u32;
             if amount > 0 {
-                damage.write(Damage { target: hit.target, source, amount, point: hit.point, from: Some(origin), kill_shove: None });
+                damage.write(Damage { target: hit.target, source, amount, point: hit.point, from: Some(origin), kill_shove: None, cause: Cause::of(shot.weapon, How::Flame) });
             }
 
             match alight.get_mut(hit.target) {
-                Ok(mut burning) => burning.relight(&spec, source),
+                Ok(mut burning) => {
+                    burning.relight(&spec, source);
+                    burning.weapon = shot.weapon;
+                }
                 Err(_) => {
-                    commands.entity(hit.target).insert(Burning::lit(&spec, source));
+                    commands.entity(hit.target).insert(Burning { weapon: shot.weapon, ..Burning::lit(&spec, source) });
                 }
             }
         }
@@ -116,6 +119,7 @@ pub fn burn(
                 point: at,
                 from: None,
                 kill_shove: None,
+                cause: Cause::of(burning.weapon, How::Burn),
             });
         }
 
@@ -231,6 +235,7 @@ mod tests {
             shooter,
             button: crate::game::weapon::Button::Primary,
             action: WeaponAction::Flame(SPEC),
+            weapon: None,
         });
         world.run_system_once(fire_flame).unwrap();
         world.flush();
@@ -255,7 +260,7 @@ mod tests {
             let mut world = a_world();
             let shooter = a_shooter(&mut world);
             a_body(&mut world, away, 0.0);
-            world.write_message(WeaponActionFired { shooter, button: crate::game::weapon::Button::Primary, action: WeaponAction::Flame(spec) });
+            world.write_message(WeaponActionFired { shooter, button: crate::game::weapon::Button::Primary, action: WeaponAction::Flame(spec), weapon: None });
             world.run_system_once(fire_flame).unwrap();
             asked_for(&mut world)[0].amount
         };

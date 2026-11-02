@@ -1,6 +1,9 @@
 use clap::{Arg, ArgAction, Command};
 
+use std::path::PathBuf;
+
 use crate::common::net::{parse_endpoint, NetRole};
+use crate::common::round_settings::ServerConfig;
 use crate::constants::DEFAULT_PORT_TEXT;
 
 pub struct EditorParams {
@@ -14,6 +17,14 @@ pub struct EditorParams {
     pub start_texturing: bool,
     /// `--profile N`, 1–9; `None` is the usual player.
     pub profile: Option<u8>,
+    /// `--map PATH`: the blueprint opened in place of the new-map template.
+    pub map: Option<PathBuf>,
+    /// `--server-config PATH`, read and checked here so a bad file stops the process before it
+    /// opens a window.
+    pub server: Option<ServerConfig>,
+    pub start_spectating: bool,
+    /// `--rounds N`: quit once N rounds have ended.
+    pub rounds: Option<u32>,
 }
 
 impl EditorParams {
@@ -99,6 +110,35 @@ impl EditorParams {
                     .value_parser(clap::value_parser!(u8).range(1..=9))
                     .help("Play as profile N, 1-9, with its own name and settings.")
             )
+            .arg(
+                Arg::new("map")
+                    .long("map")
+                    .short('m')
+                    .value_name("PATH")
+                    .value_parser(clap::value_parser!(PathBuf))
+                    .help("Open this blueprint rather than a new map.")
+            )
+            .arg(
+                Arg::new("server_config")
+                    .long("server-config")
+                    .value_name("PATH")
+                    .value_parser(clap::value_parser!(PathBuf))
+                    .conflicts_with("connect")
+                    .help("Read the Round tab's settings, and bots to seat, from a TOML file.")
+            )
+            .arg(
+                Arg::new("spectate")
+                    .long("spectate")
+                    .action(ArgAction::SetTrue)
+                    .help("Spectate each round rather than choosing a team.")
+            )
+            .arg(
+                Arg::new("rounds")
+                    .long("rounds")
+                    .value_name("N")
+                    .value_parser(clap::value_parser!(u32).range(1..))
+                    .help("Quit once N rounds have ended, each logged with its standings.")
+            )
             .try_get_matches_from(args)
             // `--help` exits 0 on stdout rather than printing as a startup
             // error; everything else comes back as a string so it is testable.
@@ -126,6 +166,20 @@ impl EditorParams {
             _ => NetRole::Solo,
         };
 
+        // Checked here, as the config is: a map that will not open would start a round in nothing.
+        let map = matches.get_one::<PathBuf>("map").cloned();
+        if let Some(path) = &map {
+            crate::editor::save::load(path).map_err(|error| format!("--map {}: {error}", path.display()))?;
+        }
+
+        let server = match matches.get_one::<PathBuf>("server_config") {
+            Some(path) => {
+                let text = std::fs::read_to_string(path).map_err(|error| format!("--server-config {}: {error}", path.display()))?;
+                Some(ServerConfig::parse(&text).map_err(|error| format!("--server-config {}: {error}", path.display()))?)
+            }
+            None => None,
+        };
+
         Ok(Self {
             lang: lang.to_owned(),
             game_id: game_id.to_owned(),
@@ -135,6 +189,10 @@ impl EditorParams {
             start_animating: matches.get_flag("anim"),
             start_texturing: matches.get_flag("material"),
             profile: matches.get_one::<u8>("profile").copied(),
+            map,
+            server,
+            start_spectating: matches.get_flag("spectate"),
+            rounds: matches.get_one::<u32>("rounds").copied(),
         })
     }
 }
@@ -223,6 +281,27 @@ mod tests {
         assert!(parse(&["--prop", "--anim"]).is_err());
         assert!(parse(&["--material", "--prop"]).is_err());
         assert!(parse(&["--material", "--play"]).is_err());
+    }
+
+    #[test]
+    fn an_unattended_round_is_spelled_out_in_flags() {
+        let arena = "assets/default/blueprints/arena.gmb";
+        let params = parse(&["--play", "--map", arena, "--spectate", "--rounds", "2"]).unwrap();
+        assert_eq!(params.map, Some(PathBuf::from(arena)));
+        assert!(parse(&["--map", "assets/default/blueprints/no_such_map.gmb"]).is_err(), "a map that will not open was taken");
+        assert!(params.start_spectating);
+        assert_eq!(params.rounds, Some(2));
+        assert!(parse(&["--rounds", "0"]).is_err());
+        let params = parse(&[]).unwrap();
+        assert!(params.map.is_none() && params.server.is_none() && !params.start_spectating && params.rounds.is_none());
+    }
+
+    /// The shipped example has to parse, or the documented way to start a bot round fails.
+    #[test]
+    fn the_shipped_server_config_is_read() {
+        let params = parse(&["--server-config", "assets/default/servers/bot_arena.toml"]).unwrap();
+        assert!(params.server.unwrap().fill_with_bots);
+        assert!(parse(&["--server-config", "assets/default/servers/no_such_file.toml"]).is_err());
     }
 
     #[test]

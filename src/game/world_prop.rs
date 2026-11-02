@@ -47,6 +47,21 @@ pub struct Pickup {
     pub taken: bool,
 }
 
+/// Somebody took a pickup, for whoever keeps count; nothing that decides anything reads it.
+#[derive(Message, Clone, Debug, PartialEq)]
+pub struct PickupTaken {
+    pub by: Option<PlayerId>,
+    /// The prop's model, or a weapon pickup's weapon.
+    pub what: PickupWhat,
+    pub at: Vec3,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PickupWhat {
+    Prop(String),
+    Weapon(crate::common::weapon::WeaponId),
+}
+
 /// Seconds until a taken pickup is back.
 #[derive(Component)]
 struct Restock(f32);
@@ -121,6 +136,7 @@ pub struct WorldPropPlugin;
 impl Plugin for WorldPropPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Healed>()
+            .add_message::<PickupTaken>()
             .init_resource::<PropCache>()
             .init_resource::<SurfaceMaterials>()
             .add_plugins(crate::game::pickup_beam::PickupBeamPlugin)
@@ -551,6 +567,7 @@ fn take_pickups(
         With<Player>,
     >,
     mut healed: MessageWriter<Healed>,
+    mut taken: MessageWriter<PickupTaken>,
 ) {
     for (entity, prop, mut pickup, restock, gives) in &mut pickups {
         if pickup.taken {
@@ -607,6 +624,11 @@ fn take_pickups(
                 continue;
             }
             pickup.taken = true;
+            taken.write(PickupTaken {
+                by: id.copied(),
+                what: gives.map_or_else(|| PickupWhat::Prop(prop.model.clone()), |gives| PickupWhat::Weapon(gives.weapon)),
+                at: prop.at,
+            });
             commands.entity(entity).insert(Restock(respawn.max(0.0)));
             break;
         }

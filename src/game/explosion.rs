@@ -13,7 +13,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::effects::Effect;
-use crate::common::damage::{falloff, Damage, Explosion};
+use crate::common::damage::{falloff, Cause, Damage, Explosion, How};
 use crate::common::class::Stance;
 use crate::common::hitbox::{Box3, Hitboxes};
 use crate::common::team::Allegiances;
@@ -98,7 +98,7 @@ pub fn explode(
             && !bodies.contains(target)
         {
             let amount = scaled(blast, 1.0);
-            damage.write(Damage { target, source: blast.source, amount, point: blast.at, from: Some(blast.at), kill_shove: None });
+            damage.write(Damage { target, source: blast.source, amount, point: blast.at, from: Some(blast.at), kill_shove: None, cause: Cause { reflected: blast.reflected, ..Cause::of(blast.weapon, How::Direct) } });
         }
 
         for (entity, boxes, impulse, stance, player) in &mut bodies {
@@ -138,6 +138,7 @@ pub fn explode(
                 point: if direct.is_some() { blast.at } else { center },
                 from: Some(blast.at),
                 kill_shove: None,
+                cause: Cause { reflected: blast.reflected, ..Cause::of(blast.weapon, if direct.is_some() { How::Direct } else { How::Splash }) },
             });
         }
 
@@ -186,7 +187,7 @@ fn self_splash(blast: &Explosion, body: &Box3) -> u32 {
 /// nav bake's rocket jumps, which have no entities to send messages about.
 #[allow(clippy::too_many_arguments)]
 pub fn own_blast(world: &CollisionWorld, at: Vec3, radius: f32, damage: u32, body: &Box3, crouched: bool, grounded: bool) -> (u32, Vec3) {
-    let blast = Explosion { at, radius, damage, at_edge: 0.0, scale: 1.0, knockback: 0.0, source: crate::common::damage::DamageSource::World, direct: None };
+    let blast = Explosion { at, radius, damage, at_edge: 0.0, scale: 1.0, knockback: 0.0, source: crate::common::damage::DamageSource::World, direct: None, weapon: None, reflected: false };
     let amount = self_splash(&blast, body);
     if amount == 0 || !in_sight(world, at, body.center, body.center.distance(at)) {
         return (0, Vec3::ZERO);
@@ -308,7 +309,7 @@ mod tests {
     }
 
     fn blast(at: Vec3, direct: Option<Entity>) -> Explosion {
-        Explosion { at, radius: 4.0, damage: 60, at_edge: 0.0, scale: 1.0, knockback: 10.0, source: SHOOTER, direct }
+        Explosion { at, radius: 4.0, damage: 60, at_edge: 0.0, scale: 1.0, knockback: 10.0, source: SHOOTER, direct, weapon: None, reflected: false }
     }
 
     fn damage_written(world: &mut World) -> Vec<Damage> {
@@ -453,6 +454,24 @@ mod tests {
         assert_eq!(hits.iter().filter(|h| h.target == hit).count(), 1, "{hits:?}");
         assert_eq!(hits.iter().find(|h| h.target == hit).unwrap().amount, 60);
         assert!(hits.iter().any(|h| h.target == bystander), "the bystander was missed");
+    }
+
+    /// Breaks if a blast's hits lose the weapon that set it off, or splash reads as a direct hit.
+    #[test]
+    fn a_blasts_hits_name_their_weapon_and_whether_they_were_direct() {
+        use crate::common::damage::How;
+        let mut world = a_world();
+        let hit = body(&mut world, Vec3::new(0.2, 0.0, 0.0));
+        let bystander = body(&mut world, Vec3::new(2.0, 0.0, 0.0));
+        let weapon = Some(crate::common::weapon::WeaponId(9));
+        world.write_message(Explosion { weapon, reflected: true, ..blast(Vec3::ZERO, Some(hit)) });
+
+        world.run_system_once(explode).unwrap();
+
+        let hits = damage_written(&mut world);
+        let cause = |target| hits.iter().find(|h| h.target == target).unwrap().cause;
+        assert_eq!((cause(hit).weapon, cause(hit).how, cause(hit).reflected), (weapon, How::Direct, true));
+        assert_eq!((cause(bystander).weapon, cause(bystander).how), (weapon, How::Splash));
     }
 
     #[test]

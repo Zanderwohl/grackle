@@ -10,7 +10,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::common::damage::{Damage, DamageDealt, DamageLog, DamageSource, Damageable, Died, PlayerId};
+use crate::common::damage::{Cause, Damage, DamageDealt, DamageLog, DamageSource, Damageable, Died, How, PlayerId};
 use crate::common::skeleton::AnimationClock;
 use crate::game::player::Inputs;
 
@@ -30,6 +30,7 @@ pub fn suicide(
                 point: placed.translation(),
                 from: None,
                 kill_shove: None,
+                cause: Cause::of(None, How::Kill),
             });
         }
     }
@@ -149,6 +150,7 @@ mod tests {
             remaining: 0,
             point: Vec3::ZERO,
             from: None,
+            cause: Default::default(),
         });
         world.run_system_once(record_damage).unwrap();
         world.resource_mut::<Messages<DamageDealt>>().clear();

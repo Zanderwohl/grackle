@@ -13,7 +13,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
-use crate::common::damage::{Armor, Damage, DamageDealt, Damageable, Died, Kill};
+use crate::common::damage::{Armor, Cause, Damage, DamageDealt, Damageable, Died, How, Kill};
 use crate::common::game_rules::GameRules;
 use crate::common::team::Allegiances;
 use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage, suicide};
@@ -144,6 +144,7 @@ pub fn apply_damage(
             remaining: target.health(),
             point: request.point,
             from: request.from,
+            cause: request.cause,
         });
         // Lands on the corpse `raise_ragdolls` stands up later this tick.
         if let Some(shove) = request.kill_shove
@@ -173,6 +174,7 @@ pub fn apply_damage(
             remaining: 0,
             point: kill.point,
             from: None,
+            cause: Cause::of(None, How::Kill),
         });
     }
 }
@@ -284,6 +286,7 @@ mod tests {
             remaining: 70,
             point,
             from: None,
+            cause: Default::default(),
         }
     }
 
@@ -302,6 +305,7 @@ mod tests {
                 point: Vec3::Y,
                 from: None,
                 kill_shove: Some(crate::common::damage::KillShove { velocity: Vec3::NEG_Z * 10.0, radius: 1.0 }),
+                cause: Default::default(),
             });
         }
         world.run_system_once(apply_damage).unwrap();
@@ -337,6 +341,7 @@ mod tests {
             point: Vec3::Y,
             from: None,
             kill_shove: None,
+            cause: Default::default(),
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -373,6 +378,7 @@ mod tests {
             point: Vec3::ZERO,
             from: None,
             kill_shove: None,
+            cause: Default::default(),
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -402,6 +408,7 @@ mod tests {
             point: Vec3::ZERO,
             from: None,
             kill_shove: None,
+            cause: Default::default(),
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -419,7 +426,7 @@ mod tests {
         let mut armor = Armor::default();
         armor.add(50);
         let target = world.spawn((Damageable::with_health(100), armor)).id();
-        world.write_message(Damage { target, source: DamageSource::World, amount: 30, point: Vec3::ZERO, from: None, kill_shove: None });
+        world.write_message(Damage { target, source: DamageSource::World, amount: 30, point: Vec3::ZERO, from: None, kill_shove: None, cause: Default::default() });
 
         world.run_system_once(apply_damage).unwrap();
 
@@ -447,6 +454,7 @@ mod tests {
             point: Vec3::ZERO,
             from: None,
             kill_shove: None,
+            cause: Default::default(),
         });
 
         world.run_system_once(apply_damage).unwrap();
@@ -503,6 +511,8 @@ mod tests {
             knockback: 10.0,
             source: DamageSource::Player(PlayerId(2)),
             direct: None,
+            weapon: None,
+            reflected: false,
         });
 
         app.world_mut().run_schedule(FixedUpdate);

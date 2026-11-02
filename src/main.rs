@@ -8,6 +8,10 @@ use bevy_egui::{EguiPlugin};
 use bevy_vector_shapes::prelude::*;
 use grackle::{get, startup};
 use grackle::common::app_mode::StartInPlay;
+use grackle::common::round_settings::{BotsAtStartup, ServerConfig};
+use grackle::editor::editable::StartupMap;
+use grackle::game::rounds::QuitAfterRounds;
+use grackle::game::spectate::StartSpectating;
 use grackle::common::fonts::FontsPlugin;
 use grackle::common::ui_shape::UiShapePlugin;
 use grackle::common::lang::{change_lang_or_fallback, default_packs};
@@ -55,13 +59,20 @@ fn main() {
                 primary_cursor_options: None,
                 exit_condition: ExitCondition::OnPrimaryClosed,
                 close_when_requested: true,
-            }),
+            })
+            .set(bevy::log::LogPlugin { custom_layer: grackle::common::log_file::layer, ..default() }),
         )
         .insert_resource(editor_params.net.clone())
         .insert_resource(StartInPlay(editor_params.start_playing))
+        .insert_resource(StartupMap(editor_params.map.clone()))
+        .insert_resource(StartSpectating(editor_params.start_spectating))
+        .insert_resource(QuitAfterRounds(editor_params.rounds))
+        .init_resource::<grackle::game::telemetry::RecordRounds>()
         .insert_resource(StartInPropEditor(editor_params.start_modeling))
         .insert_resource(StartInAnimEditor(editor_params.start_animating))
         .insert_resource(StartInMaterialEditor(editor_params.start_texturing))
+        .insert_resource(editor_params.server.as_ref().map(ServerConfig::round).unwrap_or_default())
+        .insert_resource(BotsAtStartup(editor_params.server.as_ref().map_or(0, |server| server.bots)))
         .add_plugins((
             EguiPlugin::default(),
             Shape2dPlugin::default(),

@@ -19,12 +19,14 @@ use crate::common::fonts::DisplayFont;
 use crate::common::game_rules::GameRules;
 use crate::common::net::{has_authority, NetRole};
 use crate::common::player_color::PlayerColor;
+use crate::common::round_settings::RoundSettings;
 use crate::common::player_settings::{settings_of, ClientSettings, PlayerSettings};
 use crate::common::team::Team;
 use crate::game::body_mesh::body_look;
 use crate::game::damage::DamageSystems;
-use crate::game::player::LocalPlayer;
+use crate::game::player::{Player, Viewed};
 use crate::game::respawn::{HueStart, Identity, OurIdentity};
+use crate::game::rounds::RoundHistory;
 use crate::get;
 
 #[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -174,6 +176,7 @@ impl Plugin for ScorePlugin {
                 .run_if(has_authority),
         )
         .add_systems(OnEnter(AppMode::Play), clear_standings.run_if(has_authority))
+        .add_systems(Update, end_the_round_at_the_time_limit.run_if(in_state(AppMode::Play)).run_if(has_authority))
         .add_systems(
             Update,
             (spawn_the_scoreboard, fill_in_the_scoreboard).chain().run_if(in_state(AppMode::Play)),
@@ -277,6 +280,7 @@ fn record_healing(mut healed: MessageReader<Healed>, mut standings: Query<&mut S
 fn end_the_round_at_the_frag_limit(
     rules: Res<GameRules>,
     standings: Query<&Standing>,
+    history: Option<ResMut<RoundHistory>>,
     mut next: ResMut<NextState<AppMode>>,
 ) {
     let Some(limit) = rules.frag_limit else { return };
@@ -285,6 +289,28 @@ fn end_the_round_at_the_frag_limit(
         return;
     }
     info!("{} reached {limit} frags; the round is over", winner.id);
+    if let Some(mut history) = history {
+        history.run_out();
+    }
+    next.set(AppMode::Editor);
+}
+
+/// On the clock [`RoundHistory`] records a round's length by, so a limit of five minutes is a
+/// round the Rounds tab says lasted five.
+fn end_the_round_at_the_time_limit(
+    settings: Option<Res<RoundSettings>>,
+    history: Option<ResMut<RoundHistory>>,
+    time: Res<Time<Real>>,
+    mut next: ResMut<NextState<AppMode>>,
+) {
+    let Some(limit) = settings.and_then(|settings| settings.time_limit) else { return };
+    let Some(mut history) = history else { return };
+    let Some(elapsed) = history.elapsed(time.elapsed_secs()) else { return };
+    if elapsed < limit || matches!(*next, NextState::Pending(_)) {
+        return;
+    }
+    info!("{limit} seconds are up; the round is over");
+    history.run_out();
     next.set(AppMode::Editor);
 }
 
@@ -295,14 +321,9 @@ const MARGIN: f32 = 16.0;
 #[derive(Component)]
 struct Scoreboard;
 
-/// Keyed on `Added<LocalPlayer>` like the HUD, because a client's body
-/// arrives from the server.
-fn spawn_the_scoreboard(
-    mut commands: Commands,
-    bodies: Query<Entity, Added<LocalPlayer>>,
-    existing: Query<(), With<Scoreboard>>,
-) {
-    if bodies.is_empty() || !existing.is_empty() {
+/// Up with the round, like the HUD, so a spectator has one too.
+fn spawn_the_scoreboard(mut commands: Commands, existing: Query<(), With<Scoreboard>>) {
+    if !existing.is_empty() {
         return;
     }
     commands.spawn((
@@ -324,7 +345,7 @@ fn spawn_the_scoreboard(
 }
 
 /// Rebuilt only when a standing changes, comes or goes, or when whose row is
-/// ours does.
+/// lit does: ours, or the body a spectator watches.
 #[allow(clippy::too_many_arguments)]
 fn fill_in_the_scoreboard(
     mut commands: Commands,
@@ -333,7 +354,7 @@ fn fill_in_the_scoreboard(
     standings: Query<&Standing>,
     changed: Query<(), Changed<Standing>>,
     mut removed: RemovedComponents<Standing>,
-    us: Query<&PlayerId, With<LocalPlayer>>,
+    us: Query<&PlayerId, (Viewed, With<Player>)>,
     mut boards: Query<(Entity, &mut Node, Option<&Children>), With<Scoreboard>>,
     mut drawn_for: Local<Option<PlayerId>>,
 ) {
@@ -485,7 +506,7 @@ mod tests {
         let body = |world: &mut World, id: u64| world.spawn(PlayerId(id)).id();
         let (zero, one) = (body(&mut world, 0), body(&mut world, 1));
         let crate_ = world.spawn_empty().id();
-        let hit = |target, source, amount| DamageDealt { target, source, amount, remaining: 0, point: Vec3::ZERO, from: None };
+        let hit = |target, source, amount| DamageDealt { target, source, amount, remaining: 0, point: Vec3::ZERO, from: None, cause: Default::default() };
         world.write_message(hit(one, DamageSource::Player(PlayerId(0)), 40));
         world.write_message(hit(zero, DamageSource::Player(PlayerId(0)), 15));
         world.write_message(hit(crate_, DamageSource::Player(PlayerId(0)), 99));
@@ -585,6 +606,23 @@ mod tests {
 
         world.get_mut::<Standing>(leader).unwrap().frags = 3;
         world.run_system_once(end_the_round_at_the_frag_limit).unwrap();
+        assert!(matches!(world.resource::<NextState<AppMode>>(), NextState::Pending(AppMode::Editor)));
+    }
+
+    #[test]
+    fn running_out_of_time_ends_the_round() {
+        let mut world = World::new();
+        world.init_resource::<NextState<AppMode>>();
+        world.insert_resource(RoundSettings { time_limit: Some(60.0), ..default() });
+        world.insert_resource(Time::<Real>::default());
+        world.insert_resource(RoundHistory::started_at(0.0));
+
+        world.resource_mut::<Time<Real>>().advance_by(std::time::Duration::from_secs(59));
+        world.run_system_once(end_the_round_at_the_time_limit).unwrap();
+        assert!(matches!(world.resource::<NextState<AppMode>>(), NextState::Unchanged));
+
+        world.resource_mut::<Time<Real>>().advance_by(std::time::Duration::from_secs(1));
+        world.run_system_once(end_the_round_at_the_time_limit).unwrap();
         assert!(matches!(world.resource::<NextState<AppMode>>(), NextState::Pending(AppMode::Editor)));
     }
 }

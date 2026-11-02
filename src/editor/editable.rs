@@ -87,21 +87,32 @@ fn checkpoint_when_idle(
     }
 }
 
+/// `--map`: the blueprint to open in place of the new-map template.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct StartupMap(pub Option<PathBuf>);
+
+/// A `--map` is opened as its file, so a save writes back to it; the template opens untitled.
 fn load_startup_blueprint(
     mut features: ResMut<FeatureTimeline>,
     mut map_metadata: ResMut<MapMetadata>,
+    startup: Option<Res<StartupMap>>,
+    current: Option<ResMut<crate::editor::panels::CurrentFilePath>>,
 ) {
-    let path = PathBuf::from(format!(
+    let asked = startup.and_then(|startup| startup.0.clone());
+    let path = asked.clone().unwrap_or_else(|| PathBuf::from(format!(
         "assets/default/blueprints/new.{}",
         MAP_BLUEPRINT_EXTENSION
-    ));
+    )));
     match save::load(&path) {
         Ok(loaded) => {
             *features = loaded.timeline;
             *map_metadata = loaded.metadata;
-            info!("Loaded template from {:?}", path);
+            info!("Loaded {:?}", path);
+            if let (Some(_), Some(mut current)) = (&asked, current) {
+                current.path = Some(path);
+            }
         }
-        Err(e) => error!("Failed to load template {:?}: {}", path, e),
+        Err(e) => error!("Failed to load {:?}: {}", path, e),
     }
 }
 

@@ -17,7 +17,7 @@ use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{ClipStack, Layer};
 use crate::common::taunt::{TauntId, TauntTurning, TauntWeapon, Taunts};
 use crate::game::player::{
-    CameraPull, DeathCam, Inputs, LocalPlayer, ViewMode, ViewPreference, Watched, CAMERA_PULL_SECONDS,
+    CameraPull, DeathCam, Inputs, LocalPlayer, ViewMode, ViewPreference, Viewed, CAMERA_PULL_SECONDS,
 };
 
 /// Not an enum: a humiliated body may still taunt, as in TF2, and the taunt
@@ -152,38 +152,39 @@ pub fn end_taunts(
 /// never overwritten, so it returns when the condition ends. The view is
 /// third person until the camera is all the way back in the head.
 ///
-/// A [`DeathCam`] forces third person; the next body cuts back in rather
-/// than swinging, since it is somewhere else. Looking out of a [`Watched`]
-/// body is first person, cut to.
+/// The view is of the [`Viewed`] body, ours or a spectator's, whose condition
+/// forces it as ours would. A [`DeathCam`] forces third person; a new body
+/// to look out of is cut to rather than swung onto, since it is somewhere else.
 #[allow(clippy::too_many_arguments)]
 pub fn decide_the_view(
     mut commands: Commands,
     time: Res<Time>,
     preference: Res<ViewPreference>,
     death_cam: Option<Res<DeathCam>>,
-    ours: Option<Single<&Condition, With<LocalPlayer>>>,
-    watched: Query<(), With<Watched>>,
+    viewed: Option<Single<(Entity, Option<&Condition>, Has<LocalPlayer>), Viewed>>,
+    mut last_viewed: Local<Option<Entity>>,
     mut pull: ResMut<CameraPull>,
     mut view: ResMut<ViewMode>,
 ) {
+    let viewed = viewed.map(|viewed| viewed.into_inner());
     // A death cam only starts once our body is gone, so any body is a new one.
-    let respawned = death_cam.is_some() && ours.is_some();
+    let respawned = death_cam.is_some() && viewed.is_some_and(|(_, _, ours)| ours);
     if respawned {
         commands.remove_resource::<DeathCam>();
     }
     let dead = death_cam.is_some() && !respawned;
-    let watching = ours.is_none() && !watched.is_empty();
-    let forced = dead || ours.is_some_and(|condition| condition.forces_third_person());
-    let wanted = match (watching, forced) {
-        (true, _) => ViewMode::FirstPerson,
-        (false, true) => ViewMode::ThirdPerson,
-        (false, false) => preference.0,
-    };
+    let forced = dead || viewed.and_then(|(_, condition, _)| condition).is_some_and(|condition| condition.forces_third_person());
+    let wanted = if forced { ViewMode::ThirdPerson } else { preference.0 };
     let out = match wanted {
         ViewMode::ThirdPerson => 1.0,
         ViewMode::FirstPerson => 0.0,
     };
-    let step = match respawned || watching {
+    // A new body to look out of is cut to rather than swung onto: ours back, or a spectator
+    // stepping to somebody else.
+    let whom = viewed.map(|(whom, _, _)| whom);
+    let cut = respawned || (whom.is_some() && whom != *last_viewed);
+    *last_viewed = whom;
+    let step = match cut {
         true => 1.0,
         false => time.delta_secs() / CAMERA_PULL_SECONDS,
     };
@@ -299,7 +300,7 @@ mod tests {
 
     use super::*;
     use crate::common::skeleton::play::Playing;
-    use crate::game::player::PlayerInput;
+    use crate::game::player::{PlayerInput, Watched};
 
     /// A taunt's clip is authored standing.
     #[test]
@@ -338,7 +339,7 @@ mod tests {
     /// One frame of `seconds`, deciding the view.
     fn decide_after(world: &mut World, seconds: f32) {
         world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(seconds));
-        world.run_system_once(decide_the_view).unwrap();
+        world.run_system_cached(decide_the_view).unwrap();
     }
 
     /// Forced, and the preference is still there afterward.
@@ -361,8 +362,11 @@ mod tests {
     #[test]
     fn the_camera_swings_out_and_the_body_shows_until_it_is_back() {
         let mut world = a_view_world(ViewMode::FirstPerson);
-        let body = world.spawn((LocalPlayer, Condition::HUMILIATED)).id();
+        let body = world.spawn((LocalPlayer, Condition::default())).id();
         let pull = |world: &World| world.resource::<CameraPull>().0;
+        // A body seen for the first time is cut to; this one is already ours.
+        decide_after(&mut world, 0.0);
+        *world.get_mut::<Condition>(body).unwrap() = Condition::HUMILIATED;
 
         decide_after(&mut world, CAMERA_PULL_SECONDS / 2.0);
         assert!((pull(&world) - 0.5).abs() < 1e-4, "{}", pull(&world));
@@ -418,6 +422,25 @@ mod tests {
 
         decide_after(&mut world, 1.0);
         assert_eq!(*world.resource::<ViewMode>(), ViewMode::FirstPerson);
+    }
+
+    /// Breaks if a spectator cannot pull out to third person behind a watched body, swings from
+    /// one body to the next rather than cutting, or is not forced out by a humiliated one.
+    #[test]
+    fn a_spectator_chooses_the_view_of_a_watched_body() {
+        let mut world = a_view_world(ViewMode::ThirdPerson);
+        let first = world.spawn((Watched, Condition::default())).id();
+        decide_after(&mut world, 0.001);
+        assert_eq!(world.resource::<CameraPull>().0, 1.0, "the first body was swung onto");
+
+        world.resource_mut::<ViewPreference>().0 = ViewMode::FirstPerson;
+        decide_after(&mut world, CAMERA_PULL_SECONDS * 0.5);
+        assert!((world.resource::<CameraPull>().0 - 0.5).abs() < 1e-4, "F did not swing the view in");
+
+        world.entity_mut(first).remove::<Watched>();
+        world.spawn((Watched, Condition::HUMILIATED));
+        decide_after(&mut world, 0.001);
+        assert_eq!(world.resource::<CameraPull>().0, 1.0, "the next body was swung onto, or its humiliation ignored");
     }
 
     /// The clip goes on with the condition and is sent out with it, and a

@@ -211,6 +211,41 @@ pub struct Damage {
     pub from: Option<Vec3>,
     /// Thrown at the corpse only if this is the hit that kills, at `point`.
     pub kill_shove: Option<KillShove>,
+    pub cause: Cause,
+}
+
+/// What dealt a hit: carried from the trigger pull to the record so kills can be told apart, and
+/// read by nothing that decides anything.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cause {
+    /// The weapon fired, lit or launched; `None` for the map and for a kill nothing fired.
+    pub weapon: Option<crate::common::weapon::WeaponId>,
+    pub how: How,
+    /// Airblasted back: the source is whoever turned it, the weapon whoever fired it.
+    pub reflected: bool,
+}
+
+impl Cause {
+    pub fn of(weapon: Option<crate::common::weapon::WeaponId>, how: How) -> Self {
+        Cause { weapon, how, reflected: false }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum How {
+    #[default]
+    Other,
+    Hitscan,
+    /// A projectile's own body, before its blast.
+    Direct,
+    Splash,
+    Flame,
+    /// Afterburn.
+    Burn,
+    /// A Hurt trigger.
+    Trigger,
+    /// Emptied outright: a Kill trigger, a suicide, a team switch.
+    Kill,
 }
 
 /// A weapon cannot know whether a hit is fatal, only `apply_damage` can, so
@@ -251,6 +286,10 @@ pub struct Explosion {
     /// The body hit squarely, which takes the blast's center whether or not it
     /// could be caught in one.
     pub direct: Option<Entity>,
+    /// What went off.
+    pub weapon: Option<crate::common::weapon::WeaponId>,
+    /// Airblasted back before it went off.
+    pub reflected: bool,
 }
 
 #[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -262,6 +301,7 @@ pub struct DamageDealt {
     pub remaining: u32,
     pub point: Vec3,
     pub from: Option<Vec3>,
+    pub cause: Cause,
 }
 
 /// The entity in a relayed record is the sender's and must be mapped, or a
@@ -380,6 +420,7 @@ mod tests {
             remaining: 70,
             point: Vec3::new(1.0, 2.0, 3.0),
             from: None,
+            cause: Default::default(),
         };
         hit.map_entities(&mut Shift);
         assert_eq!(hit.target, Entity::from_raw_u32(107).unwrap());

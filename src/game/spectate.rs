@@ -13,7 +13,7 @@ use crate::game::death::Dying;
 use crate::game::pause_menu::MouseHeld;
 use crate::game::player::{start_the_death_cam, DeathCam, InputLatch, LocalPlayer, OurLastBody, Player, Watched};
 use crate::game::respawn::Seat;
-use crate::game::team_choice::TeamOptions;
+use crate::game::team_choice::{ChooseTeam, TeamChoice, TeamOptions};
 use crate::game::team_picker::{overlook, OVERLOOK_PITCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +55,21 @@ impl SpectatorView {
     }
 }
 
+/// `--spectate`: each round, our seat goes straight from choosing to spectating.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct StartSpectating(pub bool);
+
+/// Asked once each time the offer says we are choosing and may spectate. Keyed on the offer rather
+/// than on entering Play: before our identity exists the offer cannot spectate, and on a client it
+/// is a round trip behind.
+fn spectate_from_the_start(start: Res<StartSpectating>, offer: Res<TeamOptions>, mut asked: Local<bool>, mut requests: MessageWriter<ChooseTeam>) {
+    let choosing = offer.seat == Seat::Choosing && offer.spectate;
+    if start.0 && choosing && !*asked {
+        requests.write(ChooseTeam { choice: TeamChoice::Spectate, from: Seat::Choosing });
+    }
+    *asked = choosing;
+}
+
 pub struct SpectatePlugin;
 
 impl Plugin for SpectatePlugin {
@@ -62,6 +77,9 @@ impl Plugin for SpectatePlugin {
         app.init_resource::<SpectatorView>()
             .init_resource::<MouseHeld>()
             .init_resource::<TeamOptions>()
+            .init_resource::<StartSpectating>()
+            .add_message::<ChooseTeam>()
+            .add_systems(Update, spectate_from_the_start.run_if(in_state(AppMode::Play)))
             .add_systems(
                 Update,
                 // After the death cam, whose commands this overrides; before the view is decided.

@@ -213,7 +213,18 @@ unresolved = "Does not resolve"
 [editor.round]
 title = "Round"
 slots = "Slots"
+bots = "Bots"
 fill_with_bots = "Fill empty slots with bots"
+time = "Time"
+time_limit = "Time limit"
+# Shown after the number, not while it is typed.
+seconds_suffix = " s"
+
+[editor.round.skill]
+title = "Bot skill"
+easy = "Easy"
+normal = "Normal"
+hard = "Hard"
 
 [editor.rounds]
 title = "Rounds"
