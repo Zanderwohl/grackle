@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn no_shipped_map_has_a_point_that_does_not_resolve() {
-        for name in ["new", "demo", "arena"] {
+        for name in ["new", "demo", "arena", "cloister"] {
             let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
             let mut timeline = load(&path).unwrap().timeline;
             timeline.resolve_all();
@@ -359,7 +359,7 @@ mod tests {
     /// headroom. Do not pin coordinates here.
     #[test]
     fn a_new_map_can_be_stood_in_lit_and_spawned_into() {
-        for name in ["new", "demo", "arena"] {
+        for name in ["new", "demo", "arena", "cloister"] {
             let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
             can_be_stood_in_lit_and_spawned_into(&path);
         }
@@ -408,12 +408,24 @@ mod tests {
     /// up onto the platform: the stairs, doorways and ledges are what the map is.
     #[test]
     fn every_arena_spawn_stands_clear_and_walks_everywhere() {
+        stands_clear_and_walks_everywhere("arena", 8, &[Vec3::new(0.0, 2.4, 0.0)]);
+    }
+
+    /// Breaks if a Cloister spawn is wedged, or a body cannot walk from it to every other spawn, onto
+    /// the bridge, into the basin and down the tunnel.
+    #[test]
+    fn every_cloister_spawn_stands_clear_and_walks_everywhere() {
+        let places = [Vec3::new(0.0, 4.0, 0.0), Vec3::new(0.0, -1.2, 0.0), Vec3::new(0.0, -4.4, 0.0), Vec3::new(20.0, 4.0, 6.0), Vec3::new(-20.0, 4.0, -6.0)];
+        stands_clear_and_walks_everywhere("cloister", 8, &places);
+    }
+
+    fn stands_clear_and_walks_everywhere(name: &str, spawn_count: usize, places: &[Vec3]) {
         use crate::common::class::{body_center_from_feet, CLASS_HALF_EXTENTS};
         use crate::common::movement_rules::MovementRules;
         use crate::game::collision::CollisionWorld;
         use crate::game::nav;
 
-        let path = PathBuf::from(format!("assets/default/blueprints/arena.{MAP_BLUEPRINT_EXTENSION}"));
+        let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
         let mut timeline = load(&path).unwrap().timeline;
         timeline.resolve_all();
         let volumes: Vec<_> = timeline.active_features().flat_map(|(_, feature)| feature.object().volumes()).collect();
@@ -424,7 +436,7 @@ mod tests {
             .filter(|(_, feature)| feature.object().type_key() == "spawn_point")
             .map(|(_, feature)| feature.object().get_point("").unwrap())
             .collect();
-        assert_eq!(spawns.len(), 8);
+        assert_eq!(spawns.len(), spawn_count);
         for feet in &spawns {
             assert!(world.fits(body_center_from_feet(*feet), CLASS_HALF_EXTENTS), "the spawn at {feet} is wedged");
         }
@@ -436,10 +448,9 @@ mod tests {
         let speed = crate::game::player::running_speed(&MovementRules::default());
         let links = (0..cells.len() as nav::CellId).map(|id| nav::walk_links(&world, &cells, &columns, id, speed)).collect();
         let graph = nav::NavGraph::reachable(cells, links, &spawns);
-        let platform = Vec3::new(0.0, 2.4, 0.0);
         let places: Vec<(Vec3, nav::CellId)> = spawns
             .iter()
-            .chain([&platform])
+            .chain(places)
             .map(|feet| (*feet, graph.cell_at(*feet).unwrap_or_else(|| panic!("nothing to stand on at {feet}"))))
             .collect();
         for (from, start) in &places {

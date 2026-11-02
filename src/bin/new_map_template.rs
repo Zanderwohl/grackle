@@ -1,6 +1,6 @@
 //! Writes `assets/default/blueprints/new.gmb`, the map you get on opening the
-//! editor or from File → New, `demo.gmb`, File → Demo Scene, and `arena.gmb`,
-//! a free-for-all map for bots to fight over. Generated
+//! editor or from File → New, `demo.gmb`, File → Demo Scene, and `arena.gmb` and
+//! `cloister.gmb`, free-for-all maps for bots to fight over. Generated
 //! here rather than saved from the editor so their contents are reviewable as
 //! code. Run from the repo root:
 //!
@@ -73,6 +73,8 @@ fn main() {
     write("demo", &demo, &metadata);
     let (arena, metadata) = arena();
     write("arena", &arena, &metadata);
+    let (cloister, metadata) = cloister();
+    write("cloister", &cloister, &metadata);
 }
 
 /// A point at the origin, a room off it, a spawn on its floor and a light under its ceiling.
@@ -466,6 +468,200 @@ fn arena() -> (FeatureTimeline, MapMetadata) {
 
     let mut metadata = MapMetadata::default();
     metadata.display_name = Some("Foundry".to_owned());
+    metadata.authors = vec!["Claude".to_owned()];
+    (timeline, metadata)
+}
+
+/// Half the courtyard's length (east to west) and width.
+const COURT_X_M: f32 = 12.0;
+const COURT_Z_M: f32 = 10.0;
+/// The end halls run from the courtyard's wall to here.
+const HALL_END_M: f32 = 25.0;
+const INDOOR_HEIGHT_M: f32 = 3.6;
+/// The gallery's floor over each hall, and its ceiling.
+const GALLERY_M: f32 = 4.0;
+const GALLERY_TOP_M: f32 = 7.6;
+/// The tunnel under the courtyard: its floor and its ceiling.
+const TUNNEL_M: f32 = -4.4;
+const TUNNEL_TOP_M: f32 = -1.6;
+const TUNNEL_HALF_WIDTH_M: f32 = 1.25;
+const BASIN_DEPTH_M: f32 = 1.2;
+/// Over a crouched eye and under a standing one, so a half wall hides a body that ducks.
+const HALF_WALL_M: f32 = 1.3;
+
+/// A free-for-all map of several kinds of place, for bots: an open courtyard with a sunken basin
+/// and a bridge high across it, a two-story hall at each end with a gallery looking down through
+/// windows, a colonnade down each side, a tunnel under the courtyard, and spawn closets out of
+/// sight. Every piece is placed with its half turn about the origin, so no spawn is better placed
+/// than its opposite.
+fn cloister() -> (FeatureTimeline, MapMetadata) {
+    let mut timeline = FeatureTimeline::default();
+    let origin = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+    timeline.rename(origin, "Map Origin");
+    let at = |x: f32, y: f32, z: f32| PointRef::reference_with_offset(origin, x, y, z);
+
+    let paint = |floor: &str, walls: &str, ceiling: &str| RoomSurfaces {
+        floor: Some(floor.to_owned()),
+        walls: Some(walls.to_owned()),
+        ceiling: Some(ceiling.to_owned()),
+    };
+    let court = paint("concrete", "board_formed_concrete", SKYBOX);
+    let indoors = paint("tread_plate", "plaster", "plaster");
+    let gallery = paint("steel_plate", "plaster", "plaster");
+    let tunnel = paint("concrete", "board_formed_concrete", "board_formed_concrete");
+
+    // A box, and with `pair` its half turn too, named with a suffix when there are two.
+    let place = |timeline: &mut FeatureTimeline, name: &str, min: Vec3, max: Vec3, surfaces: Option<&RoomSurfaces>, pair: bool| {
+        let turned = (Vec3::new(-max.x, min.y, -max.z), Vec3::new(-min.x, max.y, -min.z));
+        let boxes = if pair { vec![(format!("{name} East"), min, max), (format!("{name} West"), turned.0, turned.1)] } else { vec![(name.to_owned(), min, max)] };
+        for (name, min, max) in boxes {
+            let room = EditorRoom::from_min_and_size(at(min.x, min.y, min.z), max - min);
+            let id = match surfaces {
+                Some(surfaces) => timeline.apply_feature(Box::new(room.with_surfaces(surfaces.clone()))),
+                None => timeline.apply_feature(Box::new(EditorBlock::from_room(room))),
+            };
+            timeline.rename(id, &name);
+        }
+    };
+    let v = Vec3::new;
+
+    place(&mut timeline, "Courtyard", v(-COURT_X_M, 0.0, -COURT_Z_M), v(COURT_X_M, 14.0, COURT_Z_M), Some(&court), false);
+    place(&mut timeline, "Basin", v(-5.0, -BASIN_DEPTH_M, -4.0), v(5.0, 0.0, 4.0), Some(&court), false);
+    // Into the basin from its east and west ends; its long sides are a jump.
+    place(&mut timeline, "Basin Upper Step", v(4.0, -BASIN_DEPTH_M, -4.0), v(5.0, -0.4, 4.0), None, true);
+    place(&mut timeline, "Basin Lower Step", v(3.0, -BASIN_DEPTH_M, -4.0), v(4.0, -0.8, 4.0), None, true);
+    place(&mut timeline, "Colonnade", v(-16.0, 0.0, COURT_Z_M), v(16.0, INDOOR_HEIGHT_M, COURT_Z_M + 4.0), Some(&indoors), true);
+    // Walled off from the courtyard but for three arches, so the colonnade is a lane of its own.
+    place(&mut timeline, "Colonnade Wall", v(-COURT_X_M, 0.0, COURT_Z_M - 0.5), v(COURT_X_M, INDOOR_HEIGHT_M, COURT_Z_M + 0.5), None, true);
+    for x in [-8.0_f32, 0.0, 8.0] {
+        place(&mut timeline, &format!("Colonnade Arch {x:+}"), v(x - 1.25, 0.0, COURT_Z_M - 0.5), v(x + 1.25, 2.8, COURT_Z_M + 0.5), Some(&indoors), true);
+    }
+    // A closet off each end of each colonnade: the north-east and south-west are dead ends and hold
+    // spawns; the other two are on the way round the hall and hold a pill launcher.
+    place(&mut timeline, "Armory Corner", v(16.0, 0.0, 11.0), v(20.0, 3.0, 14.0), Some(&indoors), true);
+    place(&mut timeline, "Spawn Corner", v(16.0, 0.0, -14.0), v(20.0, 3.0, -11.0), Some(&indoors), true);
+
+    place(&mut timeline, "Hall", v(13.0, 0.0, -COURT_Z_M), v(HALL_END_M, INDOOR_HEIGHT_M, COURT_Z_M), Some(&indoors), true);
+    place(&mut timeline, "Gallery", v(13.0, GALLERY_M, -COURT_Z_M), v(HALL_END_M, GALLERY_TOP_M, COURT_Z_M), Some(&gallery), true);
+    for (name, z) in [("North", -4.5_f32), ("South", 4.5)] {
+        place(&mut timeline, &format!("Hall {name} Doorway"), v(COURT_X_M, 0.0, z - 1.5), v(13.0, 3.0, z + 1.5), Some(&indoors), true);
+    }
+    // Windows with a sill a crouch hides behind, and a door out onto the balcony between them.
+    for (name, z) in [("North", -6.0_f32), ("South", 6.0)] {
+        place(&mut timeline, &format!("Gallery {name} Window"), v(COURT_X_M, GALLERY_M + HALF_WALL_M, z - 2.0), v(13.0, GALLERY_M + 3.0, z + 2.0), Some(&gallery), true);
+    }
+    place(&mut timeline, "Balcony Door", v(COURT_X_M, GALLERY_M, -1.5), v(13.0, GALLERY_M + 2.4, 1.5), Some(&gallery), true);
+    place(&mut timeline, "Balcony", v(9.5, 0.0, -2.5), v(COURT_X_M, GALLERY_M, 2.5), None, true);
+    place(&mut timeline, "Bridge", v(-9.5, GALLERY_M - 0.4, -1.25), v(9.5, GALLERY_M, 1.25), None, false);
+    place(&mut timeline, "Gallery Pillar", v(18.0, GALLERY_M, -3.0), v(20.0, GALLERY_TOP_M, 3.0), None, true);
+    for (name, z) in [("North", -4.5_f32), ("South", 4.5)] {
+        place(&mut timeline, &format!("Hall {name} Pillar"), v(17.5, 0.0, z - 0.5), v(18.5, INDOOR_HEIGHT_M, z + 0.5), None, true);
+    }
+
+    // Up to the gallery along the hall's north wall, climbing west.
+    let flight = (GALLERY_M / STEP_RISE_M).round() as usize;
+    let foot = HALL_END_M - 1.0;
+    place(&mut timeline, "Gallery Stairwell", v(foot - (flight - 1) as f32, 0.0, -COURT_Z_M), v(foot, GALLERY_TOP_M, -COURT_Z_M + 2.5), Some(&indoors), true);
+    for step in 1..flight {
+        let x = foot - step as f32;
+        place(&mut timeline, &format!("Gallery Step {step}"), v(x, 0.0, -COURT_Z_M), v(x + STEP_RUN_M, STEP_RISE_M * step as f32, -COURT_Z_M + 2.5), None, true);
+    }
+
+    // Down to the tunnel from the middle of the hall, descending west, railed on both sides.
+    place(&mut timeline, "Tunnel", v(-13.0, TUNNEL_M, -TUNNEL_HALF_WIDTH_M), v(13.0, TUNNEL_TOP_M, TUNNEL_HALF_WIDTH_M), Some(&tunnel), false);
+    let flight = (-TUNNEL_M / STEP_RISE_M).round() as usize;
+    let top = 22.0;
+    place(&mut timeline, "Tunnel Stairwell", v(13.0, TUNNEL_M, -TUNNEL_HALF_WIDTH_M), v(top, INDOOR_HEIGHT_M, TUNNEL_HALF_WIDTH_M), Some(&tunnel), true);
+    for step in 1..flight {
+        let x = top - step as f32;
+        place(&mut timeline, &format!("Tunnel Step {step}"), v(x, TUNNEL_M, -TUNNEL_HALF_WIDTH_M), v(x + STEP_RUN_M, -STEP_RISE_M * step as f32, TUNNEL_HALF_WIDTH_M), None, true);
+    }
+    for (name, z) in [("North", -TUNNEL_HALF_WIDTH_M - 0.35), ("South", TUNNEL_HALF_WIDTH_M)] {
+        place(&mut timeline, &format!("Tunnel Rail {name}"), v(13.0, 0.0, z), v(top, 1.0, z + 0.35), None, true);
+    }
+    place(&mut timeline, "Tunnel Alcove", v(4.0, TUNNEL_M, TUNNEL_HALF_WIDTH_M), v(7.0, TUNNEL_TOP_M, TUNNEL_HALF_WIDTH_M + 3.0), Some(&tunnel), true);
+
+    // A way round the hall: its closet runs on into a passage to the colonnade's corner closet.
+    place(&mut timeline, "Hall Closet", v(HALL_END_M, 0.0, 5.0), v(HALL_END_M + 3.0, 3.0, 11.0), Some(&indoors), true);
+    place(&mut timeline, "Back Passage", v(20.0, 0.0, 11.0), v(HALL_END_M + 3.0, 3.0, 14.0), Some(&indoors), true);
+    place(&mut timeline, "Hall Closet Screen", v(HALL_END_M, 0.0, 7.0), v(HALL_END_M + 0.5, 3.0, COURT_Z_M), None, true);
+    place(&mut timeline, "Gallery Closet", v(HALL_END_M, GALLERY_M, -2.0), v(HALL_END_M + 3.0, GALLERY_M + 3.0, 2.0), Some(&gallery), true);
+
+    // Cover in the courtyard: half walls to duck behind and crates to stand behind.
+    place(&mut timeline, "Court Half Wall", v(5.5, 0.0, 5.5), v(9.0, HALF_WALL_M, 6.0), None, true);
+    place(&mut timeline, "Court Low Wall", v(-1.75, 0.0, 6.75), v(1.75, HALF_WALL_M, 7.25), None, true);
+    place(&mut timeline, "Court Crates", v(6.5, 0.0, -7.0), v(8.0, 3.0, -5.5), None, true);
+    // Before each hall doorway, so stepping out of one is not stepping in front of the whole courtyard.
+    for (name, z) in [("North", -4.5_f32), ("South", 4.5)] {
+        place(&mut timeline, &format!("Doorway {name} Screen"), v(9.5, 0.0, z - 1.25), v(10.2, 3.0, z + 1.25), None, true);
+    }
+    // A meter a jump from the courtyard up onto the balcony, beside the bridge.
+    for (step, x) in [(1, 5.0_f32), (2, 6.5), (3, 8.0)] {
+        place(&mut timeline, &format!("Balcony Crate {step}"), v(x, 0.0, 1.6), v(x + 1.5, step as f32, 3.1), None, true);
+    }
+
+    let half_turn = |p: Vec3| Vec3::new(-p.x, p.y, -p.z);
+    let spawns = [v(18.5, 0.0, -12.5), v(26.75, 0.0, 10.0), v(26.5, GALLERY_M, 0.0), v(5.5, TUNNEL_M, 3.5)];
+    for (index, feet) in spawns.iter().flat_map(|feet| [*feet, half_turn(*feet)]).enumerate() {
+        let spawn = timeline.apply_feature(Box::new(SpawnPoint::from_point_ref(at(feet.x, feet.y, feet.z)).with_yaw(feet.x.atan2(feet.z))));
+        timeline.rename(spawn, &format!("Spawn {}", index + 1));
+    }
+
+    let packs = [
+        ("armor_pack", v(0.0, -BASIN_DEPTH_M, 0.0), false),
+        ("health_pack", v(0.0, TUNNEL_M, 0.0), false),
+        ("health_pack", v(14.5, 0.0, 12.0), true),
+        ("health_pack", v(22.0, GALLERY_M, -4.0), true),
+        ("ammo_pack", v(17.0, 0.0, 12.5), true),
+    ];
+    for (model, feet, pair) in packs {
+        for feet in if pair { vec![feet, half_turn(feet)] } else { vec![feet] } {
+            timeline.apply_feature(Box::new(Prop::from_point_ref(at(feet.x, feet.y, feet.z)).with_model(model)));
+        }
+    }
+    let weapons = [
+        ("laser_rifle", v(19.5, GALLERY_M, 6.0), 0.0),
+        ("rocket_launcher", v(8.0, TUNNEL_M, 0.0), FRAC_PI_2),
+        ("shotgun", v(0.0, 0.0, 12.0), FRAC_PI_2),
+        ("flamethrower", v(23.0, 0.0, 12.5), FRAC_PI_2),
+        ("rpg", v(10.75, GALLERY_M, 0.0), 0.0),
+        ("pill_launcher", v(19.0, 0.0, 12.5), FRAC_PI_2),
+    ];
+    for (weapon, feet, yaw) in weapons {
+        for feet in [feet, half_turn(feet)] {
+            timeline.apply_feature(Box::new(WeaponPickup::from_point_ref(at(feet.x, feet.y, feet.z)).with_weapon(weapon).with_yaw(yaw)));
+        }
+    }
+
+    // The sky lights the courtyard; these light what is roofed.
+    let lights = [
+        (v(19.0, 3.1, -6.0), 60_000.0, 12.0),
+        (v(19.0, 3.1, 6.0), 60_000.0, 12.0),
+        (v(16.0, 7.1, 0.0), 60_000.0, 12.0),
+        (v(22.0, 7.1, -6.0), 50_000.0, 10.0),
+        (v(22.0, 7.1, 6.0), 50_000.0, 10.0),
+        (v(8.0, 3.1, 12.0), 40_000.0, 10.0),
+        (v(-2.0, 3.1, 12.0), 40_000.0, 10.0),
+        (v(18.0, 2.6, 12.5), 25_000.0, 6.0),
+        (v(18.0, 2.6, -12.5), 25_000.0, 6.0),
+        (v(26.5, 2.6, 8.0), 25_000.0, 6.0),
+        (v(23.0, 2.6, 12.5), 25_000.0, 6.0),
+        (v(26.5, GALLERY_M + 2.6, 0.0), 25_000.0, 6.0),
+        (v(5.0, TUNNEL_TOP_M - 0.3, 0.0), 30_000.0, 9.0),
+        (v(11.0, TUNNEL_TOP_M - 0.3, 0.0), 30_000.0, 9.0),
+        (v(5.5, TUNNEL_TOP_M - 0.3, 3.5), 15_000.0, 5.0),
+    ];
+    for (point, intensity, range) in lights {
+        for point in [point, half_turn(point)] {
+            let mut light = GracklePointLight::from_point_ref(at(point.x, point.y, point.z));
+            light.intensity = intensity;
+            light.range = range;
+            timeline.apply_feature(Box::new(light));
+        }
+    }
+
+    let mut metadata = MapMetadata::default();
+    metadata.display_name = Some("Cloister".to_owned());
     metadata.authors = vec!["Claude".to_owned()];
     (timeline, metadata)
 }

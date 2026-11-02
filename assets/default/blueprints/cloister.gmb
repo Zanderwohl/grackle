@@ -1,0 +1,4754 @@
+Blueprint(
+    metadata: Metadata(
+        display_name: Some("Cloister"),
+        authors: [
+            "Claude",
+        ],
+        game_mode: "arena",
+        movement: Movement(
+            sprint: Always,
+            gravity: 20.0,
+        ),
+        palette: Palette(
+            roles: {},
+        ),
+        sky: Day,
+        sun: SunPosition(
+            altitude: 50.0,
+            azimuth: 135.0,
+        ),
+    ),
+    next_id: 175,
+    features: [
+        Feature(
+            id: FeatureId(
+                _id: 0,
+            ),
+            name: Some("Map Origin"),
+            object: {
+                "global_point": GlobalPoint(
+                    location: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Absolute(0.0),
+                        y: Absolute(0.0),
+                        z: Absolute(0.0),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 1,
+            ),
+            name: Some("Courtyard"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-12.0),
+                        y: Relative(0.0),
+                        z: Relative(-10.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(24.0),
+                        y: Relative(14.0),
+                        z: Relative(20.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("concrete"),
+                        walls: Some("board_formed_concrete"),
+                        ceiling: Some("skybox"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 2,
+            ),
+            name: Some("Basin"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-5.0),
+                        y: Relative(-1.2),
+                        z: Relative(-4.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(10.0),
+                        y: Relative(1.2),
+                        z: Relative(8.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("concrete"),
+                        walls: Some("board_formed_concrete"),
+                        ceiling: Some("skybox"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 3,
+            ),
+            name: Some("Basin Upper Step East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(4.0),
+                            y: Relative(-1.2),
+                            z: Relative(-4.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(0.8000001),
+                            z: Relative(8.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 4,
+            ),
+            name: Some("Basin Upper Step West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-5.0),
+                            y: Relative(-1.2),
+                            z: Relative(-4.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(0.8000001),
+                            z: Relative(8.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 5,
+            ),
+            name: Some("Basin Lower Step East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(3.0),
+                            y: Relative(-1.2),
+                            z: Relative(-4.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(0.40000004),
+                            z: Relative(8.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 6,
+            ),
+            name: Some("Basin Lower Step West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-4.0),
+                            y: Relative(-1.2),
+                            z: Relative(-4.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(0.40000004),
+                            z: Relative(8.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 7,
+            ),
+            name: Some("Colonnade East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-16.0),
+                        y: Relative(0.0),
+                        z: Relative(10.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(32.0),
+                        y: Relative(3.6),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 8,
+            ),
+            name: Some("Colonnade West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-16.0),
+                        y: Relative(0.0),
+                        z: Relative(-14.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(32.0),
+                        y: Relative(3.6),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 9,
+            ),
+            name: Some("Colonnade Wall East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-12.0),
+                            y: Relative(0.0),
+                            z: Relative(9.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(24.0),
+                            y: Relative(3.6),
+                            z: Relative(1.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 10,
+            ),
+            name: Some("Colonnade Wall West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-12.0),
+                            y: Relative(0.0),
+                            z: Relative(-10.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(24.0),
+                            y: Relative(3.6),
+                            z: Relative(1.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 11,
+            ),
+            name: Some("Colonnade Arch -8 East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-9.25),
+                        y: Relative(0.0),
+                        z: Relative(9.5),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(2.5),
+                        y: Relative(2.8),
+                        z: Relative(1.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 12,
+            ),
+            name: Some("Colonnade Arch -8 West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(6.75),
+                        y: Relative(0.0),
+                        z: Relative(-10.5),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(2.5),
+                        y: Relative(2.8),
+                        z: Relative(1.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 13,
+            ),
+            name: Some("Colonnade Arch +0 East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-1.25),
+                        y: Relative(0.0),
+                        z: Relative(9.5),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(2.5),
+                        y: Relative(2.8),
+                        z: Relative(1.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 14,
+            ),
+            name: Some("Colonnade Arch +0 West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-1.25),
+                        y: Relative(0.0),
+                        z: Relative(-10.5),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(2.5),
+                        y: Relative(2.8),
+                        z: Relative(1.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 15,
+            ),
+            name: Some("Colonnade Arch +8 East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(6.75),
+                        y: Relative(0.0),
+                        z: Relative(9.5),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(2.5),
+                        y: Relative(2.8),
+                        z: Relative(1.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 16,
+            ),
+            name: Some("Colonnade Arch +8 West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-9.25),
+                        y: Relative(0.0),
+                        z: Relative(-10.5),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(2.5),
+                        y: Relative(2.8),
+                        z: Relative(1.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 17,
+            ),
+            name: Some("Armory Corner East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(16.0),
+                        y: Relative(0.0),
+                        z: Relative(11.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(4.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 18,
+            ),
+            name: Some("Armory Corner West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-20.0),
+                        y: Relative(0.0),
+                        z: Relative(-14.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(4.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 19,
+            ),
+            name: Some("Spawn Corner East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(16.0),
+                        y: Relative(0.0),
+                        z: Relative(-14.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(4.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 20,
+            ),
+            name: Some("Spawn Corner West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-20.0),
+                        y: Relative(0.0),
+                        z: Relative(11.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(4.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 21,
+            ),
+            name: Some("Hall East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(13.0),
+                        y: Relative(0.0),
+                        z: Relative(-10.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(12.0),
+                        y: Relative(3.6),
+                        z: Relative(20.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 22,
+            ),
+            name: Some("Hall West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-25.0),
+                        y: Relative(0.0),
+                        z: Relative(-10.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(12.0),
+                        y: Relative(3.6),
+                        z: Relative(20.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 23,
+            ),
+            name: Some("Gallery East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(13.0),
+                        y: Relative(4.0),
+                        z: Relative(-10.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(12.0),
+                        y: Relative(3.6),
+                        z: Relative(20.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("steel_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 24,
+            ),
+            name: Some("Gallery West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-25.0),
+                        y: Relative(4.0),
+                        z: Relative(-10.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(12.0),
+                        y: Relative(3.6),
+                        z: Relative(20.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("steel_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 25,
+            ),
+            name: Some("Hall North Doorway East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(12.0),
+                        y: Relative(0.0),
+                        z: Relative(-6.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(1.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 26,
+            ),
+            name: Some("Hall North Doorway West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-13.0),
+                        y: Relative(0.0),
+                        z: Relative(3.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(1.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 27,
+            ),
+            name: Some("Hall South Doorway East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(12.0),
+                        y: Relative(0.0),
+                        z: Relative(3.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(1.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 28,
+            ),
+            name: Some("Hall South Doorway West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-13.0),
+                        y: Relative(0.0),
+                        z: Relative(-6.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(1.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 29,
+            ),
+            name: Some("Gallery North Window East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(12.0),
+                        y: Relative(5.3),
+                        z: Relative(-8.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(1.0),
+                        y: Relative(1.6999998),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("steel_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 30,
+            ),
+            name: Some("Gallery North Window West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-13.0),
+                        y: Relative(5.3),
+                        z: Relative(4.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(1.0),
+                        y: Relative(1.6999998),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("steel_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 31,
+            ),
+            name: Some("Gallery South Window East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(12.0),
+                        y: Relative(5.3),
+                        z: Relative(4.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(1.0),
+                        y: Relative(1.6999998),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("steel_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 32,
+            ),
+            name: Some("Gallery South Window West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-13.0),
+                        y: Relative(5.3),
+                        z: Relative(-8.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(1.0),
+                        y: Relative(1.6999998),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("steel_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 33,
+            ),
+            name: Some("Balcony Door East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(12.0),
+                        y: Relative(4.0),
+                        z: Relative(-1.5),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(1.0),
+                        y: Relative(2.4),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("steel_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 34,
+            ),
+            name: Some("Balcony Door West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-13.0),
+                        y: Relative(4.0),
+                        z: Relative(-1.5),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(1.0),
+                        y: Relative(2.4),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("steel_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 35,
+            ),
+            name: Some("Balcony East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(9.5),
+                            y: Relative(0.0),
+                            z: Relative(-2.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(2.5),
+                            y: Relative(4.0),
+                            z: Relative(5.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 36,
+            ),
+            name: Some("Balcony West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-12.0),
+                            y: Relative(0.0),
+                            z: Relative(-2.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(2.5),
+                            y: Relative(4.0),
+                            z: Relative(5.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 37,
+            ),
+            name: Some("Bridge"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-9.5),
+                            y: Relative(3.6),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(19.0),
+                            y: Relative(0.4000001),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 38,
+            ),
+            name: Some("Gallery Pillar East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(18.0),
+                            y: Relative(4.0),
+                            z: Relative(-3.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(2.0),
+                            y: Relative(3.6),
+                            z: Relative(6.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 39,
+            ),
+            name: Some("Gallery Pillar West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-20.0),
+                            y: Relative(4.0),
+                            z: Relative(-3.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(2.0),
+                            y: Relative(3.6),
+                            z: Relative(6.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 40,
+            ),
+            name: Some("Hall North Pillar East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(17.5),
+                            y: Relative(0.0),
+                            z: Relative(-5.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(3.6),
+                            z: Relative(1.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 41,
+            ),
+            name: Some("Hall North Pillar West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-18.5),
+                            y: Relative(0.0),
+                            z: Relative(4.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(3.6),
+                            z: Relative(1.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 42,
+            ),
+            name: Some("Hall South Pillar East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(17.5),
+                            y: Relative(0.0),
+                            z: Relative(4.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(3.6),
+                            z: Relative(1.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 43,
+            ),
+            name: Some("Hall South Pillar West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-18.5),
+                            y: Relative(0.0),
+                            z: Relative(-5.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(3.6),
+                            z: Relative(1.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 44,
+            ),
+            name: Some("Gallery Stairwell East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(15.0),
+                        y: Relative(0.0),
+                        z: Relative(-10.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(9.0),
+                        y: Relative(7.6),
+                        z: Relative(2.5),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 45,
+            ),
+            name: Some("Gallery Stairwell West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-24.0),
+                        y: Relative(0.0),
+                        z: Relative(7.5),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(9.0),
+                        y: Relative(7.6),
+                        z: Relative(2.5),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 46,
+            ),
+            name: Some("Gallery Step 1 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(23.0),
+                            y: Relative(0.0),
+                            z: Relative(-10.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(0.4),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 47,
+            ),
+            name: Some("Gallery Step 1 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-24.0),
+                            y: Relative(0.0),
+                            z: Relative(7.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(0.4),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 48,
+            ),
+            name: Some("Gallery Step 2 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(22.0),
+                            y: Relative(0.0),
+                            z: Relative(-10.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(0.8),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 49,
+            ),
+            name: Some("Gallery Step 2 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-23.0),
+                            y: Relative(0.0),
+                            z: Relative(7.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(0.8),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 50,
+            ),
+            name: Some("Gallery Step 3 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(21.0),
+                            y: Relative(0.0),
+                            z: Relative(-10.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(1.2),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 51,
+            ),
+            name: Some("Gallery Step 3 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-22.0),
+                            y: Relative(0.0),
+                            z: Relative(7.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(1.2),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 52,
+            ),
+            name: Some("Gallery Step 4 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(20.0),
+                            y: Relative(0.0),
+                            z: Relative(-10.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(1.6),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 53,
+            ),
+            name: Some("Gallery Step 4 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-21.0),
+                            y: Relative(0.0),
+                            z: Relative(7.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(1.6),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 54,
+            ),
+            name: Some("Gallery Step 5 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(19.0),
+                            y: Relative(0.0),
+                            z: Relative(-10.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(2.0),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 55,
+            ),
+            name: Some("Gallery Step 5 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-20.0),
+                            y: Relative(0.0),
+                            z: Relative(7.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(2.0),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 56,
+            ),
+            name: Some("Gallery Step 6 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(18.0),
+                            y: Relative(0.0),
+                            z: Relative(-10.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(2.4),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 57,
+            ),
+            name: Some("Gallery Step 6 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-19.0),
+                            y: Relative(0.0),
+                            z: Relative(7.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(2.4),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 58,
+            ),
+            name: Some("Gallery Step 7 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(17.0),
+                            y: Relative(0.0),
+                            z: Relative(-10.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(2.8),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 59,
+            ),
+            name: Some("Gallery Step 7 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-18.0),
+                            y: Relative(0.0),
+                            z: Relative(7.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(2.8),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 60,
+            ),
+            name: Some("Gallery Step 8 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(16.0),
+                            y: Relative(0.0),
+                            z: Relative(-10.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(3.2),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 61,
+            ),
+            name: Some("Gallery Step 8 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-17.0),
+                            y: Relative(0.0),
+                            z: Relative(7.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(3.2),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 62,
+            ),
+            name: Some("Gallery Step 9 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(15.0),
+                            y: Relative(0.0),
+                            z: Relative(-10.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(3.6000001),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 63,
+            ),
+            name: Some("Gallery Step 9 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-16.0),
+                            y: Relative(0.0),
+                            z: Relative(7.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(3.6000001),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 64,
+            ),
+            name: Some("Tunnel"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-13.0),
+                        y: Relative(-4.4),
+                        z: Relative(-1.25),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(26.0),
+                        y: Relative(2.8000002),
+                        z: Relative(2.5),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("concrete"),
+                        walls: Some("board_formed_concrete"),
+                        ceiling: Some("board_formed_concrete"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 65,
+            ),
+            name: Some("Tunnel Stairwell East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(13.0),
+                        y: Relative(-4.4),
+                        z: Relative(-1.25),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(9.0),
+                        y: Relative(8.0),
+                        z: Relative(2.5),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("concrete"),
+                        walls: Some("board_formed_concrete"),
+                        ceiling: Some("board_formed_concrete"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 66,
+            ),
+            name: Some("Tunnel Stairwell West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-22.0),
+                        y: Relative(-4.4),
+                        z: Relative(-1.25),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(9.0),
+                        y: Relative(8.0),
+                        z: Relative(2.5),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("concrete"),
+                        walls: Some("board_formed_concrete"),
+                        ceiling: Some("board_formed_concrete"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 67,
+            ),
+            name: Some("Tunnel Step 1 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(21.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(4.0),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 68,
+            ),
+            name: Some("Tunnel Step 1 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-22.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(4.0),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 69,
+            ),
+            name: Some("Tunnel Step 2 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(20.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(3.6000001),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 70,
+            ),
+            name: Some("Tunnel Step 2 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-21.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(3.6000001),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 71,
+            ),
+            name: Some("Tunnel Step 3 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(19.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(3.2),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 72,
+            ),
+            name: Some("Tunnel Step 3 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-20.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(3.2),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 73,
+            ),
+            name: Some("Tunnel Step 4 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(18.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(2.8000002),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 74,
+            ),
+            name: Some("Tunnel Step 4 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-19.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(2.8000002),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 75,
+            ),
+            name: Some("Tunnel Step 5 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(17.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(2.4),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 76,
+            ),
+            name: Some("Tunnel Step 5 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-18.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(2.4),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 77,
+            ),
+            name: Some("Tunnel Step 6 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(16.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(2.0),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 78,
+            ),
+            name: Some("Tunnel Step 6 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-17.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(2.0),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 79,
+            ),
+            name: Some("Tunnel Step 7 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(15.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(1.6000001),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 80,
+            ),
+            name: Some("Tunnel Step 7 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-16.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(1.6000001),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 81,
+            ),
+            name: Some("Tunnel Step 8 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(14.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(1.2),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 82,
+            ),
+            name: Some("Tunnel Step 8 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-15.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(1.2),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 83,
+            ),
+            name: Some("Tunnel Step 9 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(13.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(0.79999995),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 84,
+            ),
+            name: Some("Tunnel Step 9 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-14.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(0.79999995),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 85,
+            ),
+            name: Some("Tunnel Step 10 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(12.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(0.4000001),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 86,
+            ),
+            name: Some("Tunnel Step 10 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-13.0),
+                            y: Relative(-4.4),
+                            z: Relative(-1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.0),
+                            y: Relative(0.4000001),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 87,
+            ),
+            name: Some("Tunnel Rail North East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(13.0),
+                            y: Relative(0.0),
+                            z: Relative(-1.6),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(9.0),
+                            y: Relative(1.0),
+                            z: Relative(0.35000002),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 88,
+            ),
+            name: Some("Tunnel Rail North West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-22.0),
+                            y: Relative(0.0),
+                            z: Relative(1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(9.0),
+                            y: Relative(1.0),
+                            z: Relative(0.35000002),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 89,
+            ),
+            name: Some("Tunnel Rail South East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(13.0),
+                            y: Relative(0.0),
+                            z: Relative(1.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(9.0),
+                            y: Relative(1.0),
+                            z: Relative(0.35000002),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 90,
+            ),
+            name: Some("Tunnel Rail South West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-22.0),
+                            y: Relative(0.0),
+                            z: Relative(-1.6),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(9.0),
+                            y: Relative(1.0),
+                            z: Relative(0.35000002),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 91,
+            ),
+            name: Some("Tunnel Alcove East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(4.0),
+                        y: Relative(-4.4),
+                        z: Relative(1.25),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(3.0),
+                        y: Relative(2.8000002),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("concrete"),
+                        walls: Some("board_formed_concrete"),
+                        ceiling: Some("board_formed_concrete"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 92,
+            ),
+            name: Some("Tunnel Alcove West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-7.0),
+                        y: Relative(-4.4),
+                        z: Relative(-4.25),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(3.0),
+                        y: Relative(2.8000002),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("concrete"),
+                        walls: Some("board_formed_concrete"),
+                        ceiling: Some("board_formed_concrete"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 93,
+            ),
+            name: Some("Hall Closet East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(25.0),
+                        y: Relative(0.0),
+                        z: Relative(5.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(3.0),
+                        y: Relative(3.0),
+                        z: Relative(6.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 94,
+            ),
+            name: Some("Hall Closet West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-28.0),
+                        y: Relative(0.0),
+                        z: Relative(-11.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(3.0),
+                        y: Relative(3.0),
+                        z: Relative(6.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 95,
+            ),
+            name: Some("Back Passage East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(20.0),
+                        y: Relative(0.0),
+                        z: Relative(11.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(8.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 96,
+            ),
+            name: Some("Back Passage West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-28.0),
+                        y: Relative(0.0),
+                        z: Relative(-14.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(8.0),
+                        y: Relative(3.0),
+                        z: Relative(3.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 97,
+            ),
+            name: Some("Hall Closet Screen East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(25.0),
+                            y: Relative(0.0),
+                            z: Relative(7.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(0.5),
+                            y: Relative(3.0),
+                            z: Relative(3.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 98,
+            ),
+            name: Some("Hall Closet Screen West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-25.5),
+                            y: Relative(0.0),
+                            z: Relative(-10.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(0.5),
+                            y: Relative(3.0),
+                            z: Relative(3.0),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 99,
+            ),
+            name: Some("Gallery Closet East"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(25.0),
+                        y: Relative(4.0),
+                        z: Relative(-2.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(3.0),
+                        y: Relative(3.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("steel_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 100,
+            ),
+            name: Some("Gallery Closet West"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-28.0),
+                        y: Relative(4.0),
+                        z: Relative(-2.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(3.0),
+                        y: Relative(3.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("steel_plate"),
+                        walls: Some("plaster"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 101,
+            ),
+            name: Some("Court Half Wall East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(5.5),
+                            y: Relative(0.0),
+                            z: Relative(5.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(3.5),
+                            y: Relative(1.3),
+                            z: Relative(0.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 102,
+            ),
+            name: Some("Court Half Wall West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-9.0),
+                            y: Relative(0.0),
+                            z: Relative(-6.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(3.5),
+                            y: Relative(1.3),
+                            z: Relative(0.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 103,
+            ),
+            name: Some("Court Low Wall East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-1.75),
+                            y: Relative(0.0),
+                            z: Relative(6.75),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(3.5),
+                            y: Relative(1.3),
+                            z: Relative(0.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 104,
+            ),
+            name: Some("Court Low Wall West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-1.75),
+                            y: Relative(0.0),
+                            z: Relative(-7.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(3.5),
+                            y: Relative(1.3),
+                            z: Relative(0.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 105,
+            ),
+            name: Some("Court Crates East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(6.5),
+                            y: Relative(0.0),
+                            z: Relative(-7.0),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.5),
+                            y: Relative(3.0),
+                            z: Relative(1.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 106,
+            ),
+            name: Some("Court Crates West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-8.0),
+                            y: Relative(0.0),
+                            z: Relative(5.5),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.5),
+                            y: Relative(3.0),
+                            z: Relative(1.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 107,
+            ),
+            name: Some("Doorway North Screen East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(9.5),
+                            y: Relative(0.0),
+                            z: Relative(-5.75),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(0.6999998),
+                            y: Relative(3.0),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 108,
+            ),
+            name: Some("Doorway North Screen West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-10.2),
+                            y: Relative(0.0),
+                            z: Relative(3.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(0.6999998),
+                            y: Relative(3.0),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 109,
+            ),
+            name: Some("Doorway South Screen East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(9.5),
+                            y: Relative(0.0),
+                            z: Relative(3.25),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(0.6999998),
+                            y: Relative(3.0),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 110,
+            ),
+            name: Some("Doorway South Screen West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-10.2),
+                            y: Relative(0.0),
+                            z: Relative(-5.75),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(0.6999998),
+                            y: Relative(3.0),
+                            z: Relative(2.5),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 111,
+            ),
+            name: Some("Balcony Crate 1 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(5.0),
+                            y: Relative(0.0),
+                            z: Relative(1.6),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.5),
+                            y: Relative(1.0),
+                            z: Relative(1.4999999),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 112,
+            ),
+            name: Some("Balcony Crate 1 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-6.5),
+                            y: Relative(0.0),
+                            z: Relative(-3.1),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.5),
+                            y: Relative(1.0),
+                            z: Relative(1.4999999),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 113,
+            ),
+            name: Some("Balcony Crate 2 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(6.5),
+                            y: Relative(0.0),
+                            z: Relative(1.6),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.5),
+                            y: Relative(2.0),
+                            z: Relative(1.4999999),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 114,
+            ),
+            name: Some("Balcony Crate 2 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-8.0),
+                            y: Relative(0.0),
+                            z: Relative(-3.1),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.5),
+                            y: Relative(2.0),
+                            z: Relative(1.4999999),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 115,
+            ),
+            name: Some("Balcony Crate 3 East"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(8.0),
+                            y: Relative(0.0),
+                            z: Relative(1.6),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.5),
+                            y: Relative(3.0),
+                            z: Relative(1.4999999),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 116,
+            ),
+            name: Some("Balcony Crate 3 West"),
+            object: {
+                "block": EditorBlock(
+                    volume: EditorRoom(
+                        min: PointRef(
+                            reference: Some(FeatureId(
+                                _id: 0,
+                            )),
+                            point_key: "",
+                            x: Relative(-9.5),
+                            y: Relative(0.0),
+                            z: Relative(-3.1),
+                        ),
+                        max: PointRef(
+                            reference: None,
+                            point_key: "",
+                            x: Relative(1.5),
+                            y: Relative(3.0),
+                            z: Relative(1.4999999),
+                        ),
+                        max_base: OwnMin,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 117,
+            ),
+            name: Some("Spawn 1"),
+            object: {
+                "spawn_point": SpawnPoint(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(18.5),
+                        y: Relative(0.0),
+                        z: Relative(-12.5),
+                    ),
+                    yaw: 2.16501,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 118,
+            ),
+            name: Some("Spawn 2"),
+            object: {
+                "spawn_point": SpawnPoint(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-18.5),
+                        y: Relative(0.0),
+                        z: Relative(12.5),
+                    ),
+                    yaw: -0.97658265,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 119,
+            ),
+            name: Some("Spawn 3"),
+            object: {
+                "spawn_point": SpawnPoint(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(26.75),
+                        y: Relative(0.0),
+                        z: Relative(10.0),
+                    ),
+                    yaw: 1.2130502,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 120,
+            ),
+            name: Some("Spawn 4"),
+            object: {
+                "spawn_point": SpawnPoint(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-26.75),
+                        y: Relative(0.0),
+                        z: Relative(-10.0),
+                    ),
+                    yaw: -1.9285424,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 121,
+            ),
+            name: Some("Spawn 5"),
+            object: {
+                "spawn_point": SpawnPoint(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(26.5),
+                        y: Relative(4.0),
+                        z: Relative(0.0),
+                    ),
+                    yaw: 1.5707964,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 122,
+            ),
+            name: Some("Spawn 6"),
+            object: {
+                "spawn_point": SpawnPoint(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-26.5),
+                        y: Relative(4.0),
+                        z: Relative(-0.0),
+                    ),
+                    yaw: -1.5707964,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 123,
+            ),
+            name: Some("Spawn 7"),
+            object: {
+                "spawn_point": SpawnPoint(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(5.5),
+                        y: Relative(-4.4),
+                        z: Relative(3.5),
+                    ),
+                    yaw: 1.0040671,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 124,
+            ),
+            name: Some("Spawn 8"),
+            object: {
+                "spawn_point": SpawnPoint(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-5.5),
+                        y: Relative(-4.4),
+                        z: Relative(-3.5),
+                    ),
+                    yaw: -2.1375256,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 125,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(0.0),
+                        y: Relative(-1.2),
+                        z: Relative(0.0),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "armor_pack",
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 126,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(0.0),
+                        y: Relative(-4.4),
+                        z: Relative(0.0),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "health_pack",
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 127,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(14.5),
+                        y: Relative(0.0),
+                        z: Relative(12.0),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "health_pack",
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 128,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-14.5),
+                        y: Relative(0.0),
+                        z: Relative(-12.0),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "health_pack",
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 129,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(22.0),
+                        y: Relative(4.0),
+                        z: Relative(-4.0),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "health_pack",
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 130,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-22.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "health_pack",
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 131,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(17.0),
+                        y: Relative(0.0),
+                        z: Relative(12.5),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "ammo_pack",
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 132,
+            ),
+            object: {
+                "prop": Prop(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-17.0),
+                        y: Relative(0.0),
+                        z: Relative(-12.5),
+                    ),
+                    rotation: Vec3(0.0, 0.0, 0.0),
+                    model: "ammo_pack",
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 133,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(19.5),
+                        y: Relative(4.0),
+                        z: Relative(6.0),
+                    ),
+                    yaw: 0.0,
+                    weapon: "laser_rifle",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 134,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-19.5),
+                        y: Relative(4.0),
+                        z: Relative(-6.0),
+                    ),
+                    yaw: 0.0,
+                    weapon: "laser_rifle",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 135,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(8.0),
+                        y: Relative(-4.4),
+                        z: Relative(0.0),
+                    ),
+                    yaw: 1.5707964,
+                    weapon: "rocket_launcher",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 136,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-8.0),
+                        y: Relative(-4.4),
+                        z: Relative(-0.0),
+                    ),
+                    yaw: 1.5707964,
+                    weapon: "rocket_launcher",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 137,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(12.0),
+                    ),
+                    yaw: 1.5707964,
+                    weapon: "shotgun",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 138,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-0.0),
+                        y: Relative(0.0),
+                        z: Relative(-12.0),
+                    ),
+                    yaw: 1.5707964,
+                    weapon: "shotgun",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 139,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(23.0),
+                        y: Relative(0.0),
+                        z: Relative(12.5),
+                    ),
+                    yaw: 1.5707964,
+                    weapon: "flamethrower",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 140,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-23.0),
+                        y: Relative(0.0),
+                        z: Relative(-12.5),
+                    ),
+                    yaw: 1.5707964,
+                    weapon: "flamethrower",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 141,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(10.75),
+                        y: Relative(4.0),
+                        z: Relative(0.0),
+                    ),
+                    yaw: 0.0,
+                    weapon: "rpg",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 142,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-10.75),
+                        y: Relative(4.0),
+                        z: Relative(-0.0),
+                    ),
+                    yaw: 0.0,
+                    weapon: "rpg",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 143,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(19.0),
+                        y: Relative(0.0),
+                        z: Relative(12.5),
+                    ),
+                    yaw: 1.5707964,
+                    weapon: "pill_launcher",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 144,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-19.0),
+                        y: Relative(0.0),
+                        z: Relative(-12.5),
+                    ),
+                    yaw: 1.5707964,
+                    weapon: "pill_launcher",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 145,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(19.0),
+                        y: Relative(3.1),
+                        z: Relative(-6.0),
+                    ),
+                    intensity: 60000.0,
+                    radius: 0.1,
+                    range: 12.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 146,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-19.0),
+                        y: Relative(3.1),
+                        z: Relative(6.0),
+                    ),
+                    intensity: 60000.0,
+                    radius: 0.1,
+                    range: 12.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 147,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(19.0),
+                        y: Relative(3.1),
+                        z: Relative(6.0),
+                    ),
+                    intensity: 60000.0,
+                    radius: 0.1,
+                    range: 12.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 148,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-19.0),
+                        y: Relative(3.1),
+                        z: Relative(-6.0),
+                    ),
+                    intensity: 60000.0,
+                    radius: 0.1,
+                    range: 12.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 149,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(16.0),
+                        y: Relative(7.1),
+                        z: Relative(0.0),
+                    ),
+                    intensity: 60000.0,
+                    radius: 0.1,
+                    range: 12.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 150,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-16.0),
+                        y: Relative(7.1),
+                        z: Relative(-0.0),
+                    ),
+                    intensity: 60000.0,
+                    radius: 0.1,
+                    range: 12.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 151,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(22.0),
+                        y: Relative(7.1),
+                        z: Relative(-6.0),
+                    ),
+                    intensity: 50000.0,
+                    radius: 0.1,
+                    range: 10.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 152,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-22.0),
+                        y: Relative(7.1),
+                        z: Relative(6.0),
+                    ),
+                    intensity: 50000.0,
+                    radius: 0.1,
+                    range: 10.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 153,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(22.0),
+                        y: Relative(7.1),
+                        z: Relative(6.0),
+                    ),
+                    intensity: 50000.0,
+                    radius: 0.1,
+                    range: 10.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 154,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-22.0),
+                        y: Relative(7.1),
+                        z: Relative(-6.0),
+                    ),
+                    intensity: 50000.0,
+                    radius: 0.1,
+                    range: 10.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 155,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(8.0),
+                        y: Relative(3.1),
+                        z: Relative(12.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 10.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 156,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-8.0),
+                        y: Relative(3.1),
+                        z: Relative(-12.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 10.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 157,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-2.0),
+                        y: Relative(3.1),
+                        z: Relative(12.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 10.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 158,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(2.0),
+                        y: Relative(3.1),
+                        z: Relative(-12.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 10.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 159,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(18.0),
+                        y: Relative(2.6),
+                        z: Relative(12.5),
+                    ),
+                    intensity: 25000.0,
+                    radius: 0.1,
+                    range: 6.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 160,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-18.0),
+                        y: Relative(2.6),
+                        z: Relative(-12.5),
+                    ),
+                    intensity: 25000.0,
+                    radius: 0.1,
+                    range: 6.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 161,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(18.0),
+                        y: Relative(2.6),
+                        z: Relative(-12.5),
+                    ),
+                    intensity: 25000.0,
+                    radius: 0.1,
+                    range: 6.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 162,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-18.0),
+                        y: Relative(2.6),
+                        z: Relative(12.5),
+                    ),
+                    intensity: 25000.0,
+                    radius: 0.1,
+                    range: 6.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 163,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(26.5),
+                        y: Relative(2.6),
+                        z: Relative(8.0),
+                    ),
+                    intensity: 25000.0,
+                    radius: 0.1,
+                    range: 6.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 164,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-26.5),
+                        y: Relative(2.6),
+                        z: Relative(-8.0),
+                    ),
+                    intensity: 25000.0,
+                    radius: 0.1,
+                    range: 6.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 165,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(23.0),
+                        y: Relative(2.6),
+                        z: Relative(12.5),
+                    ),
+                    intensity: 25000.0,
+                    radius: 0.1,
+                    range: 6.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 166,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-23.0),
+                        y: Relative(2.6),
+                        z: Relative(-12.5),
+                    ),
+                    intensity: 25000.0,
+                    radius: 0.1,
+                    range: 6.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 167,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(26.5),
+                        y: Relative(6.6),
+                        z: Relative(0.0),
+                    ),
+                    intensity: 25000.0,
+                    radius: 0.1,
+                    range: 6.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 168,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-26.5),
+                        y: Relative(6.6),
+                        z: Relative(-0.0),
+                    ),
+                    intensity: 25000.0,
+                    radius: 0.1,
+                    range: 6.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 169,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(-1.9000001),
+                        z: Relative(0.0),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 9.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 170,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-5.0),
+                        y: Relative(-1.9000001),
+                        z: Relative(-0.0),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 9.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 171,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(11.0),
+                        y: Relative(-1.9000001),
+                        z: Relative(0.0),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 9.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 172,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-11.0),
+                        y: Relative(-1.9000001),
+                        z: Relative(-0.0),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 9.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 173,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(5.5),
+                        y: Relative(-1.9000001),
+                        z: Relative(3.5),
+                    ),
+                    intensity: 15000.0,
+                    radius: 0.1,
+                    range: 5.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 174,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-5.5),
+                        y: Relative(-1.9000001),
+                        z: Relative(-3.5),
+                    ),
+                    intensity: 15000.0,
+                    radius: 0.1,
+                    range: 5.0,
+                ),
+            },
+        ),
+    ],
+)

@@ -172,7 +172,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/material/` | The material editor: texture-graph's panels as an authoring mode. See "Editing a material". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map and demo-scene blueprints), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena and cloister blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
@@ -232,7 +232,16 @@ narrower one the nav bake finds nowhere a body fits, and the flight is cut.
 `every_arena_spawn_stands_clear_and_walks_everywhere` walks the nav graph from
 each spawn to every other and onto the platform.
 
-All three are text and diff like it. Still, don't edit them by saving over them
+**`cloister.gmb`** (Cloister) is a second free-for-all map, of distinct kinds of place: an open
+courtyard with a sunken basin holding the armor and a bridge high across it between two balconies,
+a two-story hall at each end with a gallery looking down through crouch-high windows, a colonnade
+down each side walled off but for three arches, a tunnel under the courtyard, and a passage behind
+each hall that is the way round it. Half-turn symmetric, every piece placed with its turn. It was
+tuned against bot rounds: the first version ran every route through the halls (31% of the time,
+36% of the deaths) and its spawns on a through-route were the ones camped.
+`every_cloister_spawn_stands_clear_and_walks_everywhere` walks it as the arena's test does.
+
+All four are text and diff like it. Still, don't edit them by saving over them
 from the editor — they are written by
 `cargo run --bin new_map_template`
 ([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the
