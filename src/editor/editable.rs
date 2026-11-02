@@ -794,7 +794,7 @@ impl FeatureTimeline {
     }
 
     /// In order, so each feature resolves against parents already resolved.
-    pub(crate) fn resolve_all(&mut self) {
+    pub fn resolve_all(&mut self) {
         for id in self.feature_order.clone() {
             if let Some(mut feature) = self.features.remove(&id) {
                 feature.object.resolve_references(&self.features);
