@@ -2,6 +2,24 @@
 
 A Bevy engine and editor for quake-style shooters, aimed at the browser.
 
+## Writing style
+
+In all responses, aim to be specific and clear, avoiding metaphor and simile. Straightforward
+grammar without too much recursion is important. The following table gives examples of writing
+tics that make you hard to understand, as well as examples with corrections.
+
+| Tic | Example | Better |
+| --- | --- | --- |
+| Negation-first reveal | It is not a wrong answer. It is a non-answer. | It does not answer the question. |
+| Significance designation | It is the leg that answers the actual question. | This leg compares the two configurations on identical hardware, so it isolates the effect we’re testing. |
+| Abstraction agency | Median hides it. / The table shows it. | The median stays flat, so the spike appears only in the p99 values. / In Table 2, rows 3–5 run about twice as slow as the rest. |
+| Deferred noun | Five of those six rows are one cluster. The sixth is not. | Five of the six rows come from cluster A, but the sixth comes from cluster B. |
+| Coy or thesis-shaped header | What "exhausted" means / The one gap that does clear the bar | Definition of "exhausted" / Memory bandwidth gap (above threshold) |
+| Aphoristic closer | It is the kind of number that looks like evidence and is not. | This figure comes from a single run with no variance estimate, so it can’t support the conclusion. |
+| Straw-man knockdown | "It thinks twice as long" is the obvious reading, and it is wrong. | The output is twice as long, but most of the extra tokens restate the prompt. |
+| Fragment cadence | Six legs. One GPU, one server build, one sampler, one question set. | All six legs ran on the same GPU, server build, sampler, and question set. |
+| Dressed metaphor | That is information loss wearing the costume of a style fix. | The change was labeled a style fix, but it removes the units column, so readers lose information. |
+
 ## What this is for
 
 The target game is a variation on TF2 crossed with Ultimate Chicken Horse: teams
