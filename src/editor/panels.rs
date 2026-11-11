@@ -691,6 +691,13 @@ fn player_panel_ui(ui: &mut egui::Ui, settings: &mut PlayerSettings) -> bool {
             .changed();
     });
     changed |= ui.checkbox(&mut settings.auto_reload, get!("editor.player.auto_reload")).changed();
+    changed |= ui
+        .add(
+            egui::Slider::new(&mut settings.field_of_view, crate::common::player_settings::FIELD_OF_VIEW_RANGE)
+                .text(get!("editor.player.field_of_view"))
+                .suffix("\u{b0}"),
+        )
+        .changed();
     changed
 }
 

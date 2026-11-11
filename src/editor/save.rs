@@ -179,6 +179,7 @@ mod tests {
     use crate::editor::prop::Prop;
     use crate::editor::spawn_point::SpawnPoint;
     use crate::editor::weapon_pickup::WeaponPickup;
+    use crate::editor::spectator_camera::{SpectatorCamera, Viewers};
     use crate::editor::trigger::EditorTrigger;
     use crate::editor::block::EditorBlock;
     use crate::common::trigger::TriggerEffect;
@@ -216,6 +217,13 @@ mod tests {
         timeline.apply_feature(Box::new(SpawnPoint::new(3.0, 0.0, -4.0).with_yaw(1.25)));
         timeline.apply_feature(Box::new(Prop::new(2.0, 3.0, -1.0).with_rotation(Vec3::new(0.25, -1.5, 0.75))));
         timeline.apply_feature(Box::new(WeaponPickup::new(1.0, 0.0, 5.0).with_weapon("rpg").with_yaw(0.5)));
+        timeline.apply_feature(Box::new(
+            SpectatorCamera::from_point_ref(PointRef::reference_with_offset(max, 0.0, 1.0, 0.0))
+                .with_rotation(Vec3::new(-0.5, 2.0, 0.0))
+                .with_fov(70.0)
+                .with_order(3)
+                .with_viewers(Viewers { blue: false, unassigned: false, ..Default::default() }),
+        ));
         timeline.apply_feature(Box::new(
             EditorTrigger::from_room(EditorRoom::from_min_and_size(
                 PointRef::reference_with_offset(min, 0.0, -1.0, 0.0),

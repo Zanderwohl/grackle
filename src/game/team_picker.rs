@@ -15,7 +15,8 @@ use crate::common::team::Side;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::pause_menu::MouseHeld;
-use crate::game::player::{fallback_spawn, DeathCam, InputLatch, LocalPlayer, OurLastBody};
+use crate::game::player::{fallback_spawn, DeathCam, InputLatch, LocalPlayer, OurLastBody, ThroughCamera};
+use crate::game::spectate::{cameras_for, through, Cameras};
 use crate::game::respawn::{placed_spawns, Seat};
 use crate::game::team_choice::{ChooseTeam, TeamChoice, TeamOptions};
 use crate::get;
@@ -102,8 +103,9 @@ fn put_it_down(mut picker: ResMut<TeamPicker>, mut held: ResMut<MouseHeld>) {
     held.team_picker = false;
 }
 
-/// With no body and no death to watch, the view orbits a spawn point: a
-/// [`DeathCam`] of nobody's, so the next body takes it down. Not while
+/// With no body and no death to watch, the view looks out of the first
+/// spectator camera our seat may use, else orbits a spawn point: a
+/// [`DeathCam`] of nobody's. The next body takes either down. Not while
 /// [`OurLastBody`] is held, as a death cam is about to start. A spectator's
 /// view is [`crate::game::spectate`]'s.
 #[allow(clippy::too_many_arguments)]
@@ -112,12 +114,32 @@ fn overlook_while_choosing(
     offer: Res<TeamOptions>,
     ours: Query<(), With<LocalPlayer>>,
     death_cam: Option<Res<DeathCam>>,
+    looking_through: Option<Res<ThroughCamera>>,
     last: Option<Res<OurLastBody>>,
     spawns: Query<(&Transform, Option<&Side>), With<SpawnPointMarker>>,
+    cameras: Cameras,
     collision: Res<CollisionWorld>,
     mut latch: ResMut<InputLatch>,
 ) {
-    if !ours.is_empty() || death_cam.is_some() || last.is_some() || offer.seat == Seat::Spectating {
+    let dead = death_cam.as_deref().is_some_and(|cam| cam.whose.is_some());
+    if !ours.is_empty() || dead || last.is_some() || offer.seat == Seat::Spectating {
+        return;
+    }
+    let mut ranked = cameras_for(&cameras, offer.seat);
+    ranked.sort_by_key(|(camera, rank)| (*rank, camera.index()));
+    if let Some(wanted) = ranked.first().and_then(|(camera, _)| through(&cameras, *camera)) {
+        if death_cam.is_some() {
+            commands.remove_resource::<DeathCam>();
+        }
+        if looking_through.as_deref() != Some(&wanted) {
+            commands.insert_resource(wanted);
+        }
+        return;
+    }
+    if looking_through.is_some() {
+        commands.remove_resource::<ThroughCamera>();
+    }
+    if death_cam.is_some() {
         return;
     }
     // A client's map can arrive after the round starts.

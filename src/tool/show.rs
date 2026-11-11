@@ -12,6 +12,7 @@ pub struct GizmoVisibility {
     pub point_lights: bool,
     pub spawn_points: bool,
     pub props: bool,
+    pub spectator_cameras: bool,
     pub animation_displays: bool,
     pub animation_grids: bool,
     pub mirrors: bool,
@@ -27,6 +28,7 @@ impl Default for GizmoVisibility {
             point_lights: true,
             spawn_points: true,
             props: true,
+            spectator_cameras: true,
             animation_displays: true,
             animation_grids: true,
             mirrors: true,
@@ -45,6 +47,7 @@ impl GizmoVisibility {
             "grackle_point_light" => self.point_lights,
             "spawn_point" => self.spawn_points,
             "prop" | "weapon_pickup" => self.props,
+            "spectator_camera" => self.spectator_cameras,
             "animation_display" => self.animation_displays,
             "animation_grid" => self.animation_grids,
             "mirror" => self.mirrors,
@@ -83,6 +86,7 @@ impl ShowPlugin {
         ui.checkbox(&mut gizmo_visibility.point_lights, get!("show.gizmos_point_lights"));
         ui.checkbox(&mut gizmo_visibility.spawn_points, get!("show.gizmos_spawn_points"));
         ui.checkbox(&mut gizmo_visibility.props, get!("show.gizmos_props"));
+        ui.checkbox(&mut gizmo_visibility.spectator_cameras, get!("show.gizmos_spectator_cameras"));
         ui.checkbox(&mut gizmo_visibility.animation_displays, get!("show.gizmos_animation_displays"));
         ui.checkbox(&mut gizmo_visibility.animation_grids, get!("show.gizmos_animation_grids"));
         ui.checkbox(&mut gizmo_visibility.mirrors, get!("show.gizmos_mirrors"));
@@ -96,7 +100,7 @@ impl ShowPlugin {
         mut gizmos: Gizmos,
     ) {
         if !visibility.points && !visibility.rooms && !visibility.point_lights
-            && !visibility.spawn_points && !visibility.props && !visibility.animation_displays
+            && !visibility.spawn_points && !visibility.props && !visibility.spectator_cameras && !visibility.animation_displays
             && !visibility.animation_grids && !visibility.mirrors && !visibility.triggers && !visibility.blocks
         {
             return;

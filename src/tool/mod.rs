@@ -35,6 +35,7 @@ pub mod point_placement;
 pub mod mirror;
 pub mod prop;
 pub mod weapon_pickup;
+pub mod spectator_camera;
 pub mod rotate_drag;
 pub mod retarget;
 pub mod room;
@@ -72,6 +73,7 @@ impl Plugin for ToolPlugin {
             .add_plugins(PointDragPlugin)
             .add_plugins(RotateDragPlugin)
             .add_plugins(PropPlugin)
+            .add_plugins(spectator_camera::SpectatorCameraPlugin)
             .add_plugins(weapon_pickup::WeaponPickupPlugin)
             .add_plugins(MirrorPlugin)
             .add_plugins(AnimationDisplayPlugin)
@@ -118,6 +120,7 @@ pub enum Tools {
     Point,
     PointLight,
     SpawnPoint,
+    SpectatorCamera,
     Prop,
     WeaponPickup,
     AnimationDisplay,
@@ -139,6 +142,7 @@ impl Tools {
             Self::Point => get!("tools.point"),
             Self::PointLight => get!("tools.point_light"),
             Self::SpawnPoint => get!("tools.spawn_point"),
+            Self::SpectatorCamera => get!("tools.spectator_camera"),
             Self::Prop => get!("tools.prop"),
             Self::WeaponPickup => get!("tools.weapon_pickup"),
             Self::AnimationDisplay => get!("tools.animation_display"),
@@ -160,6 +164,7 @@ impl Tools {
             Self::Point => "axes",
             Self::PointLight => "light_bulb",
             Self::SpawnPoint => "t_pose",
+            Self::SpectatorCamera => "film_camera",
             Self::Prop => "mug",
             Self::WeaponPickup => "rifle",
             Self::AnimationDisplay => "runner",
@@ -226,7 +231,7 @@ enum ToolGroup {
 /// Every tool but the hidden ones, once each.
 const TOOLBAR: &[ToolGroup] = &[
     ToolGroup::One(Tools::Select),
-    ToolGroup::Split("points", &[Tools::Point, Tools::PointLight, Tools::SpawnPoint]),
+    ToolGroup::Split("points", &[Tools::Point, Tools::PointLight, Tools::SpawnPoint, Tools::SpectatorCamera]),
     ToolGroup::Split("props", &[Tools::Prop, Tools::WeaponPickup]),
     ToolGroup::Cluster(&[Tools::Room, Tools::Block, Tools::Trigger, Tools::Footprint]),
     ToolGroup::One(Tools::Mirror),

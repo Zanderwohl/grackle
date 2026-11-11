@@ -178,7 +178,7 @@ impl Plugin for GamePlugin {
             .add_systems(RunFixedMainLoop, (interpolate_bodies, crate::game::skeleton::follow_ducks)
                 .chain()
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop))
-            .add_systems(RunFixedMainLoop, (face_bodies, follow_our_corpse, place_camera)
+            .add_systems(RunFixedMainLoop, (face_bodies, follow_our_corpse, place_camera, crate::game::player::widen_the_view)
                 .chain()
                 .after(interpolate_bodies)
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
@@ -264,6 +264,7 @@ fn leave_play(
     commands.remove_resource::<OurIdentity>();
     commands.remove_resource::<crate::game::respawn::HueStart>();
     commands.remove_resource::<crate::game::player::DeathCam>();
+    commands.remove_resource::<crate::game::player::ThroughCamera>();
     commands.remove_resource::<crate::game::player::OurLastBody>();
 
     for mut camera in &mut editor_cameras {
