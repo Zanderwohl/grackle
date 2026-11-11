@@ -18,13 +18,12 @@ use crate::get;
 pub const DEFAULT_ORDER: u32 = 1000;
 /// Degrees, vertical.
 pub const DEFAULT_FOV: f32 = 90.0;
-/// Degrees, vertical: past these the picture is a keyhole or a fisheye.
+/// Degrees, vertical.
 pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 10.0..=150.0;
 
 const COLOR: Color = Color::srgb(0.75, 0.45, 0.95);
 /// Meters: how far out the gizmo's frustum is drawn.
 const FRUSTUM_LENGTH: f32 = 0.8;
-/// The gizmo's frustum is drawn 16:9, the usual window.
 const FRUSTUM_ASPECT: f32 = 16.0 / 9.0;
 /// Half-extents of the body box, in the camera's own frame.
 const BODY: Vec3 = Vec3::new(0.12, 0.12, 0.2);
@@ -78,8 +77,7 @@ impl Viewers {
     }
 }
 
-/// On the entity a [`SpectatorCamera`] drives, beside its `Transform`, on
-/// every machine: map content, so a client lists the same cameras.
+/// On every machine, since cameras are map content: a client lists the same ones.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct SpectatorCameraSpec {
     /// Radians, vertical.
@@ -178,14 +176,13 @@ impl FeatureTrait for SpectatorCamera {
         "spectator_camera"
     }
 
-    /// A box for the body and the frustum it sees, out of `-Z`, with a tick
-    /// on its top edge so a roll reads.
+    /// The frustum looks out of `-Z`; the tick on its top edge shows roll.
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let rotation = quat_from_euler(self.rotation);
         let at = self.resolved_location;
         gizmos.cube(Transform::from_translation(at + rotation * Vec3::Z * BODY.z).with_rotation(rotation).with_scale(BODY * 2.0), COLOR);
 
-        let corners = frustum_corners(self.fov.to_radians(), FRUSTUM_LENGTH).map(|corner| at + rotation * corner);
+        let corners = frustum_corners(self.fov_radians(), FRUSTUM_LENGTH).map(|corner| at + rotation * corner);
         for (index, corner) in corners.iter().enumerate() {
             gizmos.line(at, *corner, COLOR);
             gizmos.line(*corner, corners[(index + 1) % 4], COLOR);
@@ -207,7 +204,7 @@ impl FeatureTrait for SpectatorCamera {
     fn apply_to_entity(&mut self, commands: &mut Commands, entity: Entity) {
         commands.entity(entity).insert((
             Transform::from_translation(self.resolved_location).with_rotation(quat_from_euler(self.rotation)),
-            SpectatorCameraSpec { fov: self.fov.to_radians(), order: self.order, viewers: self.viewers },
+            SpectatorCameraSpec { fov: self.fov_radians(), order: self.order, viewers: self.viewers },
         ));
     }
 
@@ -286,8 +283,7 @@ impl FeatureTrait for SpectatorCamera {
         true
     }
 
-    /// Turned, never reflected, as a prop is. Who may look keeps its teams:
-    /// those are the mapper's to set on each copy's source.
+    /// Turned, never reflected, as a prop is. Viewers are not swapped between teams.
     fn mirror(&mut self, mirroring: &Mirroring) -> bool {
         self.resolved_location = mirroring.point(self.resolved_location);
         self.rotation = euler_from_quat(mirroring.rotation(quat_from_euler(self.rotation)));
@@ -324,6 +320,12 @@ impl SpectatorCamera {
             resolved_location: Vec3::ZERO,
             entity: None,
         }
+    }
+
+    /// Clamped here too: a blueprint is text, and a width of 0 or past 180 is
+    /// a degenerate projection.
+    fn fov_radians(&self) -> f32 {
+        self.fov.clamp(*FOV_RANGE.start(), *FOV_RANGE.end()).to_radians()
     }
 
     fn at(mut self, resolved: Vec3) -> Self {
@@ -377,6 +379,14 @@ mod tests {
         let no_one_unassigned = Viewers { unassigned: false, ..default() };
         assert!(!no_one_unassigned.admits(Seat::Choosing) && !no_one_unassigned.admits(Seat::Spectating));
         assert!(no_one_unassigned.admits(Seat::Playing(None)), "free for all is its own box");
+    }
+
+    #[test]
+    fn a_width_out_of_range_reaches_the_view_clamped() {
+        for (fov, wanted) in [(0.0, *FOV_RANGE.start()), (500.0, *FOV_RANGE.end())] {
+            let got = SpectatorCamera::new(0.0, 0.0, 0.0).with_fov(fov).fov_radians();
+            assert!((got - wanted.to_radians()).abs() < 1e-6, "{fov} came out as {got}");
+        }
     }
 
     /// A camera from before a field existed still reads, at that field's default.

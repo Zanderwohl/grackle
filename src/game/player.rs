@@ -735,9 +735,8 @@ impl WatchedAim {
     }
 }
 
-/// A placed spectator camera the view is looking out of, exactly, at its own
-/// field of view. Ahead of a [`DeathCam`], behind any body; taken down by
-/// `decide_the_view` when a body of ours arrives.
+/// The view out of a spectator camera. Written only by
+/// [`crate::game::spectate::look_through`].
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct ThroughCamera {
     pub translation: Vec3,
@@ -746,16 +745,15 @@ pub struct ThroughCamera {
     pub fov: f32,
 }
 
-/// Radians, vertical: the player's own, out of a body or anywhere else but a
-/// spectator camera. Bevy measures it vertically, where Source's 90 is
+/// Radians, vertical: the player's own. Bevy measures it vertically, where Source's 90 is
 /// horizontal at 4:3, so 90 here is wider than Source's.
 pub fn our_field_of_view(settings: Option<&crate::common::player_settings::PlayerSettings>) -> f32 {
     let degrees = settings.map_or(crate::common::player_settings::DEFAULT_FIELD_OF_VIEW, |settings| settings.field_of_view);
     (degrees as f32).to_radians()
 }
 
-/// The one writer of the view's field of view, worked out afresh each frame
-/// from what it looks out of, so nothing has to remember a width to put back.
+/// The one writer of the view's field of view. Derived every frame, so nothing
+/// has to restore a width afterward.
 pub fn widen_the_view(
     settings: Option<Res<crate::common::player_settings::PlayerSettings>>,
     through: Option<Res<ThroughCamera>>,

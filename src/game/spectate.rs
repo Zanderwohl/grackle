@@ -33,9 +33,9 @@ pub enum Viewpoint {
 /// is or was copied from, then which copy (0 for the original).
 pub type CameraRank = (u32, u64, usize);
 
-/// Bodies by id, then cameras by rank, then — only with no camera — spawns
-/// by index, so the order does not hang on archetypes. Not `Entity`'s own
-/// order, which is not its index's.
+/// Bodies by id, then cameras by rank, then spawns by index only when there
+/// is no camera. Indexes rather than `Entity`'s own order, which is not its
+/// index's, so the order does not depend on archetypes.
 pub fn viewpoints(
     bodies: impl IntoIterator<Item = PlayerId>,
     cameras: impl IntoIterator<Item = (Entity, CameraRank)>,
@@ -44,7 +44,7 @@ pub fn viewpoints(
     let mut bodies: Vec<PlayerId> = bodies.into_iter().collect();
     bodies.sort();
     let mut cameras: Vec<(Entity, CameraRank)> = cameras.into_iter().collect();
-    cameras.sort_by_key(|(camera, rank)| (*rank, camera.index()));
+    rank(&mut cameras);
     let mut spawns: Vec<Entity> = match cameras.is_empty() {
         true => spawns.into_iter().collect(),
         false => Vec::new(),
@@ -55,13 +55,18 @@ pub fn viewpoints(
     bodies.chain(cameras).chain(spawns.into_iter().map(Viewpoint::Spawn)).collect()
 }
 
+/// The entity index breaks ties, so the order is the same every frame.
+fn rank(cameras: &mut [(Entity, CameraRank)]) {
+    cameras.sort_by_key(|(camera, rank)| (*rank, camera.index()));
+}
+
 /// Every spectator camera standing, Mirror copies included.
 pub type Cameras<'w, 's> =
     Query<'w, 's, (Entity, &'static Transform, &'static SpectatorCameraSpec, Option<&'static FeatureTag>, Option<&'static MirrorCopy>)>;
 
 /// The cameras `seat` may look through, ranked.
 pub fn cameras_for(cameras: &Cameras, seat: Seat) -> Vec<(Entity, CameraRank)> {
-    cameras
+    let mut admitted: Vec<(Entity, CameraRank)> = cameras
         .iter()
         .filter(|(_, _, spec, _, _)| spec.viewers.admits(seat))
         .map(|(camera, _, spec, tag, copy)| {
@@ -72,10 +77,11 @@ pub fn cameras_for(cameras: &Cameras, seat: Seat) -> Vec<(Entity, CameraRank)> {
             };
             (camera, (spec.order, feature, image))
         })
-        .collect()
+        .collect();
+    rank(&mut admitted);
+    admitted
 }
 
-/// The view out of `camera`, if it still stands.
 pub fn through(cameras: &Cameras, camera: Entity) -> Option<ThroughCamera> {
     let (_, placed, spec, _, _) = cameras.get(camera).ok()?;
     Some(ThroughCamera { translation: placed.translation, rotation: placed.rotation, fov: spec.fov })
@@ -130,7 +136,11 @@ impl Plugin for SpectatePlugin {
             .add_systems(
                 Update,
                 // After the death cam, whose commands this overrides; before the view is decided.
-                watch.after(start_the_death_cam).before(crate::game::condition::decide_the_view).run_if(in_state(AppMode::Play)),
+                (watch, look_through)
+                    .chain()
+                    .after(start_the_death_cam)
+                    .before(crate::game::condition::decide_the_view)
+                    .run_if(in_state(AppMode::Play)),
             )
             .add_systems(OnExit(AppMode::Play), |mut view: ResMut<SpectatorView>| *view = SpectatorView::default());
     }
@@ -152,7 +162,6 @@ fn watch(
     bodies: Query<(Entity, &PlayerId), (With<Player>, Without<Dying>)>,
     watched: Query<Entity, With<Watched>>,
     death_cam: Option<Res<DeathCam>>,
-    looking_through: Option<Res<ThroughCamera>>,
     last: Option<Res<OurLastBody>>,
     mut latch: ResMut<InputLatch>,
 ) {
@@ -183,16 +192,6 @@ fn watch(
     let was = view.at;
     view.follow(&list, by);
 
-    let wanted = match view.at {
-        Some(Viewpoint::Camera(camera)) => through(&cameras, camera),
-        _ => None,
-    };
-    match wanted {
-        Some(wanted) if looking_through.as_deref() != Some(&wanted) => commands.insert_resource(wanted),
-        None if looking_through.is_some() => commands.remove_resource::<ThroughCamera>(),
-        _ => {}
-    }
-
     match view.at {
         Some(Viewpoint::Spawn(spawn)) => {
             watching(None, &mut commands);
@@ -219,6 +218,37 @@ fn watch(
             }
         }
         None => watching(None, &mut commands),
+    }
+}
+
+/// The one writer of [`ThroughCamera`]. None with a body of ours or while
+/// dead; while spectating, the camera [`SpectatorView`] is on; otherwise the
+/// first camera the seat may use.
+#[allow(clippy::too_many_arguments)]
+pub fn look_through(
+    mut commands: Commands,
+    offer: Res<TeamOptions>,
+    view: Res<SpectatorView>,
+    ours: Query<(), With<LocalPlayer>>,
+    death_cam: Option<Res<DeathCam>>,
+    last: Option<Res<OurLastBody>>,
+    cameras: Cameras,
+    current: Option<Res<ThroughCamera>>,
+) {
+    let dead = last.is_some() || death_cam.is_some_and(|cam| cam.whose.is_some());
+    let wanted = match (ours.is_empty(), offer.seat) {
+        (false, _) => None,
+        (true, Seat::Spectating) => match view.at {
+            Some(Viewpoint::Camera(camera)) => through(&cameras, camera),
+            _ => None,
+        },
+        (true, _) if dead => None,
+        (true, seat) => cameras_for(&cameras, seat).first().and_then(|(camera, _)| through(&cameras, *camera)),
+    };
+    match wanted {
+        Some(wanted) if current.as_deref() != Some(&wanted) => commands.insert_resource(wanted),
+        None if current.is_some() => commands.remove_resource::<ThroughCamera>(),
+        _ => {}
     }
 }
 
@@ -288,5 +318,43 @@ mod tests {
 
         view.follow(&[], 0);
         assert_eq!(view.at, None);
+    }
+
+    /// Breaks if the view stays in a camera after stepping off it, a body or a
+    /// death, or looks through one shut to its seat.
+    #[test]
+    fn the_view_looks_through_a_camera_only_while_it_should() {
+        use bevy::ecs::system::RunSystemOnce;
+        use crate::common::team::Team;
+        use crate::editor::spectator_camera::Viewers;
+
+        let mut world = World::new();
+        world.insert_resource(TeamOptions { seat: Seat::Spectating, ..default() });
+        world.init_resource::<SpectatorView>();
+        let spec = |order, viewers| SpectatorCameraSpec { fov: 1.0, order, viewers };
+        let late = world.spawn((Transform::from_xyz(1.0, 0.0, 0.0), spec(7, Viewers::default()), FeatureTag { feature_id: 1 })).id();
+        world
+            .spawn((Transform::from_xyz(2.0, 0.0, 0.0), spec(3, Viewers { red: false, ..default() }), FeatureTag { feature_id: 2 }));
+        let through = |world: &mut World| {
+            world.run_system_once(look_through).unwrap();
+            world.get_resource::<ThroughCamera>().map(|through| through.translation.x)
+        };
+
+        world.resource_mut::<SpectatorView>().at = Some(Viewpoint::Camera(late));
+        assert_eq!(through(&mut world), Some(1.0), "the camera the spectator is on was not looked through");
+        world.resource_mut::<SpectatorView>().at = Some(Viewpoint::Spawn(late));
+        assert_eq!(through(&mut world), None, "stepping off the camera left the view in it");
+
+        world.resource_mut::<TeamOptions>().seat = Seat::Playing(Some(Team::Blue));
+        assert_eq!(through(&mut world), Some(2.0), "waiting for a body, not the first camera by order");
+        world.resource_mut::<TeamOptions>().seat = Seat::Playing(Some(Team::Red));
+        assert_eq!(through(&mut world), Some(1.0), "a camera shut to Red was looked through by Red");
+
+        world.insert_resource(DeathCam { pivot: Vec3::ZERO, whose: Some(PlayerId(1)) });
+        assert_eq!(through(&mut world), None, "a camera took the death cam's place");
+        world.remove_resource::<DeathCam>();
+
+        world.spawn(LocalPlayer);
+        assert_eq!(through(&mut world), None, "a body of ours was looked past");
     }
 }

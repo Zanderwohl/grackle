@@ -210,8 +210,19 @@ pub fn dress_the_viewmodel(
     mut views: Query<(Entity, &mut Viewmodel)>,
     cameras: Query<Entity, With<ViewmodelCamera>>,
 ) {
-    let Ok(held) = held.single() else { return };
     let Ok(camera) = cameras.single() else { return };
+    // Otherwise the last body's weapon stays on the camera.
+    let Ok(held) = held.single() else {
+        for (_, mut viewmodel) in &mut views {
+            if viewmodel.showing.is_some() {
+                viewmodel.showing = None;
+                for part in viewmodel.parts.drain(..) {
+                    commands.entity(part).despawn();
+                }
+            }
+        }
+        return;
+    };
 
     for (_, mut viewmodel) in &mut views {
         let wanted = Some(held.showing());
@@ -499,8 +510,7 @@ fn eye_space(skeleton: &Skeleton) -> Transform {
     Transform::from_translation(-eye)
 }
 
-/// And only out of a body: a spectator camera is first person too, and the
-/// parts of the last body looked out of are still on the camera.
+/// And only out of a body: a spectator camera is first person too.
 fn show_it_only_in_first_person(
     view: Res<ViewMode>,
     viewed: Query<(), Viewed>,
@@ -529,8 +539,7 @@ mod tests {
     use super::*;
 
 
-    /// Breaks if a view out of no body, a spectator camera's, still draws
-    /// the last body's weapon.
+    /// Breaks if a spectator camera's view draws a weapon.
     #[test]
     fn the_viewmodel_is_drawn_only_out_of_a_body() {
         let mut world = World::new();

@@ -33,7 +33,7 @@ pub struct PlayerSettings {
     pub name: String,
     /// Reload a short clip after a second without firing.
     pub auto_reload: bool,
-    /// Degrees, vertical: the view out of a body, ours or one watched.
+    /// Degrees, vertical.
     pub field_of_view: u32,
 }
 

@@ -153,8 +153,7 @@ pub fn end_taunts(
 /// third person until the camera is all the way back in the head.
 ///
 /// The view is of the [`Viewed`] body, ours or a spectator's, whose condition
-/// forces it as ours would. A [`DeathCam`] forces third person, and it and a
-/// `ThroughCamera` go when a body of ours arrives; a new body
+/// forces it as ours would. A [`DeathCam`] forces third person; a new body
 /// to look out of is cut to rather than swung onto, since it is somewhere else.
 #[allow(clippy::too_many_arguments)]
 pub fn decide_the_view(
@@ -162,7 +161,6 @@ pub fn decide_the_view(
     time: Res<Time>,
     preference: Res<ViewPreference>,
     death_cam: Option<Res<DeathCam>>,
-    through: Option<Res<crate::game::player::ThroughCamera>>,
     viewed: Option<Single<(Entity, Option<&Condition>, Has<LocalPlayer>), Viewed>>,
     mut last_viewed: Local<Option<Entity>>,
     mut pull: ResMut<CameraPull>,
@@ -173,9 +171,6 @@ pub fn decide_the_view(
     let respawned = death_cam.is_some() && viewed.is_some_and(|(_, _, ours)| ours);
     if respawned {
         commands.remove_resource::<DeathCam>();
-    }
-    if through.is_some() && viewed.is_some_and(|(_, _, ours)| ours) {
-        commands.remove_resource::<crate::game::player::ThroughCamera>();
     }
     let dead = death_cam.is_some() && !respawned;
     let forced = dead || viewed.and_then(|(_, condition, _)| condition).is_some_and(|condition| condition.forces_third_person());

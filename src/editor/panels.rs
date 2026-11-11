@@ -691,13 +691,23 @@ fn player_panel_ui(ui: &mut egui::Ui, settings: &mut PlayerSettings) -> bool {
             .changed();
     });
     changed |= ui.checkbox(&mut settings.auto_reload, get!("editor.player.auto_reload")).changed();
-    changed |= ui
-        .add(
-            egui::Slider::new(&mut settings.field_of_view, crate::common::player_settings::FIELD_OF_VIEW_RANGE)
-                .text(get!("editor.player.field_of_view"))
-                .suffix("\u{b0}"),
-        )
-        .changed();
+    // Held aside while dragged: every change saves the file and goes to the server.
+    let id = ui.id().with("field_of_view");
+    let mut fov = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(settings.field_of_view);
+    let response = ui.add(
+        egui::Slider::new(&mut fov, crate::common::player_settings::FIELD_OF_VIEW_RANGE)
+            .text(get!("editor.player.field_of_view"))
+            .suffix("\u{b0}"),
+    );
+    if response.dragged() {
+        ui.data_mut(|data| data.insert_temp(id, fov));
+    } else {
+        ui.data_mut(|data| data.remove::<u32>(id));
+        if fov != settings.field_of_view {
+            settings.field_of_view = fov;
+            changed = true;
+        }
+    }
     changed
 }
 
