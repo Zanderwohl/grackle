@@ -18,7 +18,7 @@ Blueprint(
             azimuth: 135.0,
         ),
     ),
-    next_id: 4,
+    next_id: 5,
     features: [
         Feature(
             id: FeatureId(
@@ -102,6 +102,37 @@ Blueprint(
                     intensity: 1000000.0,
                     radius: 0.1,
                     range: 20.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 4,
+            ),
+            name: Some("Overlook Camera"),
+            object: {
+                "spectator_camera": SpectatorCamera(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 1,
+                        )),
+                        point_key: "top_plane_center",
+                        x: Relative(7.0),
+                        y: Relative(-0.5),
+                        z: Relative(7.0),
+                    ),
+                    rotation: Vec3(-0.33983693, 0.7853982, 0.0),
+                    fov: 90.0,
+                    order: 1000,
+                    viewers: Viewers(
+                        unassigned: true,
+                        free_for_all: true,
+                        red: true,
+                        blue: true,
+                        yellow: true,
+                        green: true,
+                        local_team: true,
+                    ),
                 ),
             },
         ),

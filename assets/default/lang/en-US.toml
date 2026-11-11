@@ -314,6 +314,7 @@ order = "Order"
 viewers = "Seen through by"
 unassigned = "Unassigned"
 free_for_all = "Free for all"
+local_team = "Local team"
 
 [editor.features.prop]
 title = "Prop"

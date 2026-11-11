@@ -39,20 +39,24 @@ pub struct Viewers {
     pub blue: bool,
     pub yellow: bool,
     pub green: bool,
+    /// On a camera with a `Side` from a Mirror, only that side's team of the
+    /// teams. Seats on no team are not limited by it.
+    pub local_team: bool,
 }
 
 impl Default for Viewers {
     fn default() -> Self {
-        Self { unassigned: true, free_for_all: true, red: true, blue: true, yellow: true, green: true }
+        Self { unassigned: true, free_for_all: true, red: true, blue: true, yellow: true, green: true, local_team: true }
     }
 }
 
 impl Viewers {
-    pub fn admits(&self, seat: Seat) -> bool {
+    /// `side` is the camera's.
+    pub fn admits(&self, seat: Seat, side: Option<Team>) -> bool {
         match seat {
             Seat::Choosing | Seat::Spectating => self.unassigned,
             Seat::Playing(None) => self.free_for_all,
-            Seat::Playing(Some(team)) => *self.team(team),
+            Seat::Playing(Some(team)) => *self.team(team) && !(self.local_team && side.is_some_and(|side| side != team)),
         }
     }
 
@@ -65,7 +69,7 @@ impl Viewers {
         }
     }
 
-    fn rows(&mut self) -> [(&mut bool, String); 6] {
+    fn rows(&mut self) -> [(&mut bool, String); 7] {
         [
             (&mut self.unassigned, get!("editor.features.spectator_camera.unassigned")),
             (&mut self.free_for_all, get!("editor.features.spectator_camera.free_for_all")),
@@ -73,6 +77,7 @@ impl Viewers {
             (&mut self.blue, Team::Blue.name()),
             (&mut self.yellow, Team::Yellow.name()),
             (&mut self.green, Team::Green.name()),
+            (&mut self.local_team, get!("editor.features.spectator_camera.local_team")),
         ]
     }
 }
@@ -283,7 +288,8 @@ impl FeatureTrait for SpectatorCamera {
         true
     }
 
-    /// Turned, never reflected, as a prop is. Viewers are not swapped between teams.
+    /// Turned, never reflected, as a prop is. Local Team follows the copy's own
+    /// `Side`; the team boxes are not swapped.
     fn mirror(&mut self, mirroring: &Mirroring) -> bool {
         self.resolved_location = mirroring.point(self.resolved_location);
         self.rotation = euler_from_quat(mirroring.rotation(quat_from_euler(self.rotation)));
@@ -370,15 +376,32 @@ mod tests {
             Seat::Playing(Some(Team::Yellow)),
             Seat::Playing(Some(Team::Green)),
         ];
-        assert!(seats.iter().all(|seat| Viewers::default().admits(*seat)));
+        assert!(seats.iter().all(|seat| Viewers::default().admits(*seat, None)));
 
         let only_red = Viewers { red: false, ..default() };
-        let shut: Vec<Seat> = seats.into_iter().filter(|seat| !only_red.admits(*seat)).collect();
+        let shut: Vec<Seat> = seats.into_iter().filter(|seat| !only_red.admits(*seat, None)).collect();
         assert_eq!(shut, vec![Seat::Playing(Some(Team::Red))]);
 
         let no_one_unassigned = Viewers { unassigned: false, ..default() };
-        assert!(!no_one_unassigned.admits(Seat::Choosing) && !no_one_unassigned.admits(Seat::Spectating));
-        assert!(no_one_unassigned.admits(Seat::Playing(None)), "free for all is its own box");
+        assert!(!no_one_unassigned.admits(Seat::Choosing, None) && !no_one_unassigned.admits(Seat::Spectating, None));
+        assert!(no_one_unassigned.admits(Seat::Playing(None), None), "free for all is its own box");
+    }
+
+    /// Breaks if Local Team lets another team through a sided camera, or
+    /// limits seats on no team.
+    #[test]
+    fn local_team_keeps_a_sided_camera_to_its_side() {
+        let blue_side = Some(Team::Blue);
+        let local = Viewers::default();
+        assert!(local.admits(Seat::Playing(Some(Team::Blue)), blue_side));
+        assert!(!local.admits(Seat::Playing(Some(Team::Red)), blue_side), "Red looked through Blue's camera");
+        assert!(local.admits(Seat::Spectating, blue_side) && local.admits(Seat::Playing(None), blue_side));
+        assert!(local.admits(Seat::Playing(Some(Team::Red)), None), "an unsided camera was limited");
+
+        let open = Viewers { local_team: false, ..default() };
+        assert!(open.admits(Seat::Playing(Some(Team::Red)), blue_side));
+        let blue_shut = Viewers { blue: false, ..default() };
+        assert!(!blue_shut.admits(Seat::Playing(Some(Team::Blue)), blue_side), "its own side's box was ignored");
     }
 
     #[test]

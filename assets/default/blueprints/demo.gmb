@@ -28,7 +28,7 @@ Blueprint(
             azimuth: 135.0,
         ),
     ),
-    next_id: 19,
+    next_id: 21,
     features: [
         Feature(
             id: FeatureId(
@@ -119,6 +119,37 @@ Blueprint(
             id: FeatureId(
                 _id: 4,
             ),
+            name: Some("Overview Camera"),
+            object: {
+                "spectator_camera": SpectatorCamera(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 2,
+                        )),
+                        point_key: "top_plane_center",
+                        x: Relative(-15.5),
+                        y: Relative(-0.5),
+                        z: Relative(-6.5),
+                    ),
+                    rotation: Vec3(-0.31624773, -1.9678757, 0.0),
+                    fov: 90.0,
+                    order: 1000,
+                    viewers: Viewers(
+                        unassigned: true,
+                        free_for_all: true,
+                        red: true,
+                        blue: true,
+                        yellow: true,
+                        green: true,
+                        local_team: true,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 5,
+            ),
             object: {
                 "spawn_point": SpawnPoint(
                     location: PointRef(
@@ -136,7 +167,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 5,
+                _id: 6,
             ),
             object: {
                 "animation_grid": AnimationGrid(
@@ -156,7 +187,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 6,
+                _id: 7,
             ),
             object: {
                 "prop": Prop(
@@ -176,7 +207,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 7,
+                _id: 8,
             ),
             object: {
                 "prop": Prop(
@@ -196,7 +227,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 8,
+                _id: 9,
             ),
             object: {
                 "prop": Prop(
@@ -216,7 +247,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 9,
+                _id: 10,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -239,7 +270,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 10,
+                _id: 11,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -262,7 +293,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 11,
+                _id: 12,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -285,7 +316,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 12,
+                _id: 13,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -308,7 +339,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 13,
+                _id: 14,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -331,7 +362,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 14,
+                _id: 15,
             ),
             object: {
                 "weapon_pickup": WeaponPickup(
@@ -354,7 +385,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 15,
+                _id: 16,
             ),
             object: {
                 "editor_room": EditorRoom(
@@ -385,13 +416,13 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 16,
+                _id: 17,
             ),
             object: {
                 "spawn_point": SpawnPoint(
                     location: PointRef(
                         reference: Some(FeatureId(
-                            _id: 15,
+                            _id: 16,
                         )),
                         point_key: "bottom_plane_center",
                         x: Relative(0.0),
@@ -404,13 +435,13 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 17,
+                _id: 18,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
                     location: PointRef(
                         reference: Some(FeatureId(
-                            _id: 15,
+                            _id: 16,
                         )),
                         point_key: "bottom_plane_center",
                         x: Relative(0.0),
@@ -425,7 +456,38 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 18,
+                _id: 19,
+            ),
+            name: Some("Nook Camera"),
+            object: {
+                "spectator_camera": SpectatorCamera(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 16,
+                        )),
+                        point_key: "bottom_plane_center",
+                        x: Relative(0.7),
+                        y: Relative(2.5),
+                        z: Relative(0.0),
+                    ),
+                    rotation: Vec3(-0.08454375, 1.5707964, 0.0),
+                    fov: 90.0,
+                    order: 1000,
+                    viewers: Viewers(
+                        unassigned: true,
+                        free_for_all: true,
+                        red: true,
+                        blue: true,
+                        yellow: true,
+                        green: true,
+                        local_team: true,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 20,
             ),
             object: {
                 "mirror": Mirror(
@@ -441,13 +503,16 @@ Blueprint(
                     symmetry: MirrorX,
                     sources: [
                         FeatureId(
-                            _id: 15,
-                        ),
-                        FeatureId(
                             _id: 16,
                         ),
                         FeatureId(
                             _id: 17,
+                        ),
+                        FeatureId(
+                            _id: 18,
+                        ),
+                        FeatureId(
+                            _id: 19,
                         ),
                     ],
                     teams: (Red, Blue),

@@ -1763,7 +1763,10 @@ machine from what it is told.
   placed feature like a prop — a `PointRef` and a turn — with a field of
   view, an `Order` (lower first; ties by feature id, a Mirror copy after
   its source) and a box per seat that may use it: unassigned (choosing or
-  spectating), free for all, and each team. Looking out of one is a
+  spectating), free for all, and each team. **Local Team** (on by default)
+  splits on a Mirror as a palette role does: a camera with a `Side` admits
+  only that team of the teams, so a copy is its own side's camera; seats on
+  no team, and unsided cameras, are not limited by it. Looking out of one is a
   `ThroughCamera` resource, written only by `look_through` and placed
   exactly by `place_camera` ahead of a `DeathCam`; `widen_the_view` is the one writer of the view's field of
   view, the camera's while looking through one and the player's own

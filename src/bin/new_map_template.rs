@@ -36,6 +36,7 @@ use grackle::common::palette::{Palette, RolePaint};
 use grackle::common::team::Team;
 use grackle::editor::mirror::{Mirror, Symmetry};
 use grackle::editor::spawn_point::SpawnPoint;
+use grackle::editor::spectator_camera::SpectatorCamera;
 use grackle::editor::weapon_pickup::WeaponPickup;
 
 /// Clear floor between the grid and the walls: enough to back away and see a
@@ -91,7 +92,13 @@ fn new_map() -> FeatureTimeline {
     let mut light = GracklePointLight::from_point_ref(under_the_ceiling);
     light.intensity = 1_000_000.0;
     let light = timeline.apply_feature(Box::new(light));
-    for (id, name) in [(origin, "Map Origin"), (room, "Starter Room"), (spawn, "Spawn Point"), (light, "Starter Light")] {
+    // A high corner, looking down at the middle of the floor; the room is 16 by 4 by 16.
+    let mut corner = PointRef::reference_with_offset(room, 7.0, -0.5, 7.0);
+    corner.point_key = "top_plane_center".to_owned();
+    let overlook = timeline.apply_feature(Box::new(
+        SpectatorCamera::from_point_ref(corner).with_rotation(looking(Vec3::new(15.0, 3.5, 15.0), Vec3::new(8.0, 0.0, 8.0))),
+    ));
+    for (id, name) in [(origin, "Map Origin"), (room, "Starter Room"), (spawn, "Spawn Point"), (light, "Starter Light"), (overlook, "Overlook Camera")] {
         timeline.rename(id, name);
     }
     timeline
@@ -140,6 +147,15 @@ fn demo_scene() -> (FeatureTimeline, MapMetadata) {
     // Reaches the far corner of whatever size the room came out.
     light.range = (room_max - room_min).length();
     timeline.apply_feature(Box::new(light));
+
+    // High behind the spawn, looking over the grid.
+    let behind = Vec3::new(-(half.x - 0.5), ROOM_HEIGHT_M - 0.5, -(half.z - 0.5));
+    let mut up_there = PointRef::reference_with_offset(room, behind.x, -0.5, behind.z);
+    up_there.point_key = "top_plane_center".to_owned();
+    let overview = timeline.apply_feature(Box::new(
+        SpectatorCamera::from_point_ref(up_there).with_rotation(looking(behind, Vec3::ZERO)),
+    ));
+    timeline.rename(overview, "Overview Camera");
 
     // Facing +Z, toward the grid.
     timeline.apply_feature(Box::new(
@@ -202,10 +218,18 @@ fn demo_scene() -> (FeatureTimeline, MapMetadata) {
     nook_light.radius = 0.3;
     nook_light.range = 8.0;
     let nook_light = timeline.apply_feature(Box::new(nook_light));
+    // At the back of the nook, looking out into the room. Local to Red, so the Mirror's copy is
+    // Blue's.
+    let nook_eye = Vec3::new(0.7, 2.5, 0.0);
+    let nook_floor = Vec3::new(half.x + NOOK_M.x / 2.0, 0.0, 0.0);
+    let nook_camera = timeline.apply_feature(Box::new(
+        SpectatorCamera::from_point_ref(on_the_floor(nook, nook_eye)).with_rotation(looking(nook_floor + nook_eye, Vec3::Y)),
+    ));
+    timeline.rename(nook_camera, "Nook Camera");
     timeline.apply_feature(Box::new(
         Mirror::new(on_the_floor(room, Vec3::ZERO))
             .with_symmetry(Symmetry::MirrorX)
-            .with_sources(vec![nook, nook_spawn, nook_light])
+            .with_sources(vec![nook, nook_spawn, nook_light, nook_camera])
             .with_teams(Team::Red, Team::Blue),
     ));
 
@@ -466,6 +490,20 @@ fn arena() -> (FeatureTimeline, MapMetadata) {
         timeline.apply_feature(Box::new(light));
     }
 
+    // High over the middle of each wall, looking at the platform: down the axes, which clear the
+    // lane walls and miss the pinwheel and the pillars.
+    for (name, from) in [
+        ("North", Vec3::new(0.0, 10.0, -(HALL_M - 1.0))),
+        ("South", Vec3::new(0.0, 10.0, HALL_M - 1.0)),
+        ("East", Vec3::new(HALL_M - 1.0, 10.0, 0.0)),
+        ("West", Vec3::new(-(HALL_M - 1.0), 10.0, 0.0)),
+    ] {
+        let camera = timeline.apply_feature(Box::new(
+            SpectatorCamera::from_point_ref(at(from.x, from.y, from.z)).with_rotation(looking(from, Vec3::new(0.0, PLATFORM_M, 0.0))),
+        ));
+        timeline.rename(camera, &format!("{name} Camera"));
+    }
+
     let mut metadata = MapMetadata::default();
     metadata.display_name = Some("Foundry".to_owned());
     metadata.authors = vec!["Claude".to_owned()];
@@ -660,6 +698,19 @@ fn cloister() -> (FeatureTimeline, MapMetadata) {
         }
     }
 
+    // A corner of the courtyard looking down into the basin, and a corner of the hall looking
+    // across it to the doorways, each with its half turn.
+    let cameras = [
+        ("Courtyard", v(11.0, 10.0, -9.0), v(0.0, -BASIN_DEPTH_M, 0.0)),
+        ("Hall", v(24.5, 3.1, 9.5), v(14.0, 0.5, -5.0)),
+    ];
+    for (name, from, to) in cameras {
+        for (end, from, to) in [("East", from, to), ("West", half_turn(from), half_turn(to))] {
+            let camera = timeline.apply_feature(Box::new(SpectatorCamera::from_point_ref(at(from.x, from.y, from.z)).with_rotation(looking(from, to))));
+            timeline.rename(camera, &format!("{name} Camera {end}"));
+        }
+    }
+
     let mut metadata = MapMetadata::default();
     metadata.display_name = Some("Cloister".to_owned());
     metadata.authors = vec!["Claude".to_owned()];
@@ -677,6 +728,13 @@ fn write(name: &str, timeline: &FeatureTimeline, metadata: &MapMetadata) {
             std::process::exit(1);
         }
     }
+}
+
+/// Pitch and yaw, in a spectator camera's axis order, from `from` toward `to`. Yaw zero looks
+/// down -Z.
+fn looking(from: Vec3, to: Vec3) -> Vec3 {
+    let toward = (to - from).normalize();
+    Vec3::new(toward.y.asin(), (-toward.x).atan2(-toward.z), 0.0)
 }
 
 fn on_the_floor(room: FeatureId, offset: Vec3) -> PointRef {

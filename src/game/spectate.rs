@@ -8,6 +8,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::damage::PlayerId;
+use crate::common::team::Side;
 use crate::editor::editable::FeatureTag;
 use crate::editor::mirror::MirrorCopy;
 use crate::editor::spawn_point::SpawnPointMarker;
@@ -61,15 +62,18 @@ fn rank(cameras: &mut [(Entity, CameraRank)]) {
 }
 
 /// Every spectator camera standing, Mirror copies included.
-pub type Cameras<'w, 's> =
-    Query<'w, 's, (Entity, &'static Transform, &'static SpectatorCameraSpec, Option<&'static FeatureTag>, Option<&'static MirrorCopy>)>;
+pub type Cameras<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static Transform, &'static SpectatorCameraSpec, Option<&'static FeatureTag>, Option<&'static MirrorCopy>, Option<&'static Side>),
+>;
 
 /// The cameras `seat` may look through, ranked.
 pub fn cameras_for(cameras: &Cameras, seat: Seat) -> Vec<(Entity, CameraRank)> {
     let mut admitted: Vec<(Entity, CameraRank)> = cameras
         .iter()
-        .filter(|(_, _, spec, _, _)| spec.viewers.admits(seat))
-        .map(|(camera, _, spec, tag, copy)| {
+        .filter(|(_, _, spec, _, _, side)| spec.viewers.admits(seat, side.map(|side| side.0)))
+        .map(|(camera, _, spec, tag, copy, _)| {
             let (feature, image) = match (tag, copy) {
                 (_, Some(copy)) => (copy.source._id(), copy.image + 1),
                 (Some(tag), None) => (tag.feature_id, 0),
@@ -83,7 +87,7 @@ pub fn cameras_for(cameras: &Cameras, seat: Seat) -> Vec<(Entity, CameraRank)> {
 }
 
 pub fn through(cameras: &Cameras, camera: Entity) -> Option<ThroughCamera> {
-    let (_, placed, spec, _, _) = cameras.get(camera).ok()?;
+    let (_, placed, spec, ..) = cameras.get(camera).ok()?;
     Some(ThroughCamera { translation: placed.translation, rotation: placed.rotation, fov: spec.fov })
 }
 
@@ -349,6 +353,9 @@ mod tests {
         assert_eq!(through(&mut world), Some(2.0), "waiting for a body, not the first camera by order");
         world.resource_mut::<TeamOptions>().seat = Seat::Playing(Some(Team::Red));
         assert_eq!(through(&mut world), Some(1.0), "a camera shut to Red was looked through by Red");
+        world.entity_mut(late).insert(Side(Team::Blue));
+        assert_eq!(through(&mut world), None, "Red looked through a camera local to Blue");
+        world.entity_mut(late).remove::<Side>();
 
         world.insert_resource(DeathCam { pivot: Vec3::ZERO, whose: Some(PlayerId(1)) });
         assert_eq!(through(&mut world), None, "a camera took the death cam's place");
