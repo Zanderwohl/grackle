@@ -1,5 +1,5 @@
-//! What the person at this machine has chosen about how they play: a name and
-//! whether to reload unasked. Edited in the map editor's Player tab, kept in
+//! What the person at this machine has chosen about how they play: a name,
+//! whether to reload unasked and how wide they see. Edited in the map editor's Player tab, kept in
 //! the user pack, and sent to the server, which is where it is acted on.
 //! `--profile N` keeps a second set in a file of its own, so two copies on one
 //! machine can be two players.
@@ -22,6 +22,10 @@ const SETTINGS_FILE: &str = "player.toml";
 /// Characters; a longer name is cut, here and on the server.
 pub const NAME_LIMIT: usize = 24;
 
+/// Degrees, vertical.
+pub const DEFAULT_FIELD_OF_VIEW: u32 = 90;
+pub const FIELD_OF_VIEW_RANGE: std::ops::RangeInclusive<u32> = 60..=120;
+
 #[derive(Resource, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PlayerSettings {
@@ -29,11 +33,13 @@ pub struct PlayerSettings {
     pub name: String,
     /// Reload a short clip after a second without firing.
     pub auto_reload: bool,
+    /// Degrees, vertical.
+    pub field_of_view: u32,
 }
 
 impl Default for PlayerSettings {
     fn default() -> Self {
-        Self { name: String::new(), auto_reload: true }
+        Self { name: String::new(), auto_reload: true, field_of_view: DEFAULT_FIELD_OF_VIEW }
     }
 }
 
@@ -43,6 +49,7 @@ impl PlayerSettings {
     pub fn cleaned(mut self) -> Self {
         let printable: String = self.name.chars().filter(|c| !c.is_control()).collect();
         self.name = printable.trim().chars().take(NAME_LIMIT).collect();
+        self.field_of_view = self.field_of_view.clamp(*FIELD_OF_VIEW_RANGE.start(), *FIELD_OF_VIEW_RANGE.end());
         self
     }
 }
@@ -180,21 +187,21 @@ mod tests {
 
     #[test]
     fn a_name_loses_its_control_characters() {
-        let broken = PlayerSettings { name: "a\n\n\tb\u{7}".into(), auto_reload: true }.cleaned();
+        let broken = PlayerSettings { name: "a\n\n\tb\u{7}".into(), auto_reload: true, ..Default::default() }.cleaned();
         assert_eq!(broken.name, "ab");
     }
 
     #[test]
     fn a_name_is_trimmed_and_cut() {
-        let long = PlayerSettings { name: format!("  {}  ", "x".repeat(40)), auto_reload: true }.cleaned();
+        let long = PlayerSettings { name: format!("  {}  ", "x".repeat(40)), auto_reload: true, ..Default::default() }.cleaned();
         assert_eq!(long.name, "x".repeat(NAME_LIMIT));
     }
 
     #[test]
     fn settings_come_from_wherever_the_player_is() {
         let fallback = PlayerSettings::default();
-        let local = PlayerSettings { name: "host".into(), auto_reload: false };
-        let client = ClientSettings(PlayerSettings { name: "guest".into(), auto_reload: true });
+        let local = PlayerSettings { name: "host".into(), auto_reload: false, ..Default::default() };
+        let client = ClientSettings(PlayerSettings { name: "guest".into(), auto_reload: true, ..Default::default() });
         assert_eq!(settings_of(true, Some(&client), Some(&local), &fallback).name, "host");
         assert_eq!(settings_of(false, Some(&client), Some(&local), &fallback).name, "guest");
         assert_eq!(*settings_of(false, None, Some(&local), &fallback), fallback);
@@ -205,6 +212,6 @@ mod tests {
     #[test]
     fn a_settings_file_missing_a_field_keeps_the_rest() {
         let read: PlayerSettings = toml::from_str("name = \"zandy\"\n").unwrap();
-        assert_eq!(read, PlayerSettings { name: "zandy".into(), auto_reload: true });
+        assert_eq!(read, PlayerSettings { name: "zandy".into(), auto_reload: true, ..Default::default() });
     }
 }

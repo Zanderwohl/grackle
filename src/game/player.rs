@@ -83,9 +83,6 @@ const KNOCKBACK_SLIDE: f32 = 0.2;
 /// clear the collision skin, which is where a step leaves a body standing.
 const GROUND_PROBE: f32 = 0.02;
 const MOUSE_SENSITIVITY: f32 = 0.0022;
-/// Vertical field of view. Bevy measures FOV vertically, where Source's 90 is
-/// horizontal at 4:3, so this is wider than Source's.
-const FIELD_OF_VIEW: f32 = std::f32::consts::FRAC_PI_2;
 /// Short of straight up and down, so the view never flips over.
 const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 
@@ -498,7 +495,7 @@ pub fn spawn_the_view(mut commands: Commands, existing: Query<(), With<PlayerCam
         Hdr,
         Tonemapping::TonyMcMapface,
         Projection::Perspective(PerspectiveProjection {
-            fov: FIELD_OF_VIEW,
+            fov: our_field_of_view(None),
             ..default()
         }),
         RenderLayers::from_layers(&[render_layers::WORLD, render_layers::GIZMOS]),
@@ -649,8 +646,8 @@ pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut preference: ResMut<ViewP
 
 /// Put the view at an eye, or out behind it as far as [`CameraPull`] says: our
 /// body's, looking where the latch says, else the [`Watched`] one's, aimed as
-/// that body aims but eased onto it (see [`WATCHED_EASE`]), else the
-/// [`DeathCam`]'s pivot, aimed by the latch.
+/// that body aims but eased onto it (see [`WATCHED_EASE`]), else exactly at a
+/// [`ThroughCamera`], else the [`DeathCam`]'s pivot, aimed by the latch.
 ///
 /// Not a child of the body: its rotation comes from this machine's latch, so
 /// looking around never waits on a round-trip.
@@ -664,6 +661,7 @@ pub fn place_camera(
     world: Res<CollisionWorld>,
     latch: Res<InputLatch>,
     death_cam: Option<Res<DeathCam>>,
+    through: Option<Res<ThroughCamera>>,
     fixed: Res<Time<Fixed>>,
     body: Option<Single<(&Transform, &Stance, &Player), (With<LocalPlayer>, Without<PlayerCamera>)>>,
     watched: Option<Single<(Entity, &Transform, &Stance, &Player), (With<Watched>, Without<LocalPlayer>, Without<PlayerCamera>)>>,
@@ -687,6 +685,13 @@ pub fn place_camera(
             let (whom, transform, stance, player) = watched.into_inner();
             let aim = eased.get_or_insert(WatchedAim { whom, yaw: player.yaw, pitch: player.pitch }).ease(whom, player.yaw, player.pitch, time.delta_secs());
             (eye(transform, stance, player), aim)
+        }
+        (None, None, _) if let Some(through) = through => {
+            for mut camera in &mut cameras {
+                camera.translation = through.translation;
+                camera.rotation = through.rotation;
+            }
+            return;
         }
         (None, None, Some(dead)) => (dead.pivot, ours),
         (None, None, None) => return,
@@ -727,6 +732,41 @@ impl WatchedAim {
         self.yaw += crate::common::rotation::wrap_angle(yaw - self.yaw) * share;
         self.pitch += (pitch - self.pitch) * share;
         (self.yaw, self.pitch)
+    }
+}
+
+/// The view out of a spectator camera. Written only by
+/// [`crate::game::spectate::look_through`].
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct ThroughCamera {
+    pub translation: Vec3,
+    pub rotation: Quat,
+    /// Radians, vertical.
+    pub fov: f32,
+}
+
+/// Radians, vertical: the player's own. Bevy measures it vertically, where Source's 90 is
+/// horizontal at 4:3, so 90 here is wider than Source's.
+pub fn our_field_of_view(settings: Option<&crate::common::player_settings::PlayerSettings>) -> f32 {
+    let degrees = settings.map_or(crate::common::player_settings::DEFAULT_FIELD_OF_VIEW, |settings| settings.field_of_view);
+    (degrees as f32).to_radians()
+}
+
+/// The one writer of the view's field of view. Derived every frame, so nothing
+/// has to restore a width afterward.
+pub fn widen_the_view(
+    settings: Option<Res<crate::common::player_settings::PlayerSettings>>,
+    through: Option<Res<ThroughCamera>>,
+    mut projections: Query<&mut Projection, With<PlayerCamera>>,
+) {
+    let fov = through.map_or_else(|| our_field_of_view(settings.as_deref()), |through| through.fov);
+    for mut projection in &mut projections {
+        if let Projection::Perspective(perspective) = projection.as_ref()
+            && perspective.fov != fov
+            && let Projection::Perspective(perspective) = projection.as_mut()
+        {
+            perspective.fov = fov;
+        }
     }
 }
 
@@ -1113,6 +1153,29 @@ mod tests {
 
     use super::*;
     use crate::tool::room::Room;
+
+    /// Breaks if a spectator camera's width outlives looking through it.
+    #[test]
+    fn the_view_is_as_wide_as_what_it_looks_out_of() {
+        use crate::common::player_settings::PlayerSettings;
+        let mut world = World::new();
+        world.insert_resource(PlayerSettings { field_of_view: 100, ..default() });
+        let view = world.spawn((PlayerCamera, Projection::Perspective(PerspectiveProjection::default()))).id();
+        let fov = |world: &mut World| {
+            world.run_system_once(widen_the_view).unwrap();
+            match world.get::<Projection>(view).unwrap() {
+                Projection::Perspective(perspective) => perspective.fov,
+                _ => unreachable!(),
+            }
+        };
+        assert!((fov(&mut world) - 100f32.to_radians()).abs() < 1e-6, "our own setting was not used");
+
+        world.insert_resource(ThroughCamera { translation: Vec3::ZERO, rotation: Quat::IDENTITY, fov: 0.5 });
+        assert_eq!(fov(&mut world), 0.5, "the camera's width was not used");
+
+        world.remove_resource::<ThroughCamera>();
+        assert!((fov(&mut world) - 100f32.to_radians()).abs() < 1e-6, "the camera's width stayed on");
+    }
 
     /// Breaks if the fallback stands a body in the room's middle whatever is
     /// there.

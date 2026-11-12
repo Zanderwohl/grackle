@@ -44,7 +44,7 @@ When an icon ships, check its box.
 | [x] | `squares_in_circle` | Four squares in a circle | Circle pattern |
 | [x] | `ground_square` | Flat square on the ground, in isometric view | Plane |
 | [x] | `pencil` | Pencil | Sketch |
-| [x] | `film_camera` | Film camera with a big reel on top | Frame, Frame selected |
+| [x] | `film_camera` | Film camera with a big reel on top | Frame, Frame selected, Spectator Camera |
 | [x] | `check_mark` | Check mark | Done, Finish sketch |
 | [x] | `trash_can` | Trash can, macOS style | Cancel, Delete |
 | [x] | `diagonal_line` | Diagonal line from lower left to top right | Line |

@@ -210,8 +210,19 @@ pub fn dress_the_viewmodel(
     mut views: Query<(Entity, &mut Viewmodel)>,
     cameras: Query<Entity, With<ViewmodelCamera>>,
 ) {
-    let Ok(held) = held.single() else { return };
     let Ok(camera) = cameras.single() else { return };
+    // Otherwise the last body's weapon stays on the camera.
+    let Ok(held) = held.single() else {
+        for (_, mut viewmodel) in &mut views {
+            if viewmodel.showing.is_some() {
+                viewmodel.showing = None;
+                for part in viewmodel.parts.drain(..) {
+                    commands.entity(part).despawn();
+                }
+            }
+        }
+        return;
+    };
 
     for (_, mut viewmodel) in &mut views {
         let wanted = Some(held.showing());
@@ -499,11 +510,13 @@ fn eye_space(skeleton: &Skeleton) -> Transform {
     Transform::from_translation(-eye)
 }
 
+/// And only out of a body: a spectator camera is first person too.
 fn show_it_only_in_first_person(
     view: Res<ViewMode>,
+    viewed: Query<(), Viewed>,
     mut cameras: Query<&mut Camera, With<ViewmodelCamera>>,
 ) {
-    let wanted = !view.shows_own_body();
+    let wanted = !view.shows_own_body() && !viewed.is_empty();
     for mut camera in &mut cameras {
         // Assigned only on change, so the camera is not dirtied every frame.
         if camera.is_active != wanted {
@@ -525,6 +538,20 @@ mod tests {
 
     use super::*;
 
+
+    /// Breaks if a spectator camera's view draws a weapon.
+    #[test]
+    fn the_viewmodel_is_drawn_only_out_of_a_body() {
+        let mut world = World::new();
+        world.insert_resource(ViewMode::FirstPerson);
+        let camera = world.spawn((ViewmodelCamera, Camera::default())).id();
+        world.run_system_once(show_it_only_in_first_person).unwrap();
+        assert!(!world.get::<Camera>(camera).unwrap().is_active, "drawn with no body to look out of");
+
+        world.spawn(crate::game::player::Watched);
+        world.run_system_once(show_it_only_in_first_person).unwrap();
+        assert!(world.get::<Camera>(camera).unwrap().is_active, "not drawn out of a watched body");
+    }
 
     /// An arm that comes up short is left where it was, so a weapon floats in
     /// front of hands elsewhere. A viewmodel is not a hold, so the body tests

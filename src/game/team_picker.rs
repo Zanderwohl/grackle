@@ -16,6 +16,7 @@ use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::pause_menu::MouseHeld;
 use crate::game::player::{fallback_spawn, DeathCam, InputLatch, LocalPlayer, OurLastBody};
+use crate::game::spectate::{cameras_for, Cameras};
 use crate::game::respawn::{placed_spawns, Seat};
 use crate::game::team_choice::{ChooseTeam, TeamChoice, TeamOptions};
 use crate::get;
@@ -104,8 +105,9 @@ fn put_it_down(mut picker: ResMut<TeamPicker>, mut held: ResMut<MouseHeld>) {
 
 /// With no body and no death to watch, the view orbits a spawn point: a
 /// [`DeathCam`] of nobody's, so the next body takes it down. Not while
-/// [`OurLastBody`] is held, as a death cam is about to start. A spectator's
-/// view is [`crate::game::spectate`]'s.
+/// [`OurLastBody`] is held, as a death cam is about to start, nor while our
+/// seat may use a spectator camera, which `look_through` puts the view in.
+/// A spectator's view is [`crate::game::spectate`]'s.
 #[allow(clippy::too_many_arguments)]
 fn overlook_while_choosing(
     mut commands: Commands,
@@ -114,10 +116,21 @@ fn overlook_while_choosing(
     death_cam: Option<Res<DeathCam>>,
     last: Option<Res<OurLastBody>>,
     spawns: Query<(&Transform, Option<&Side>), With<SpawnPointMarker>>,
+    cameras: Cameras,
     collision: Res<CollisionWorld>,
     mut latch: ResMut<InputLatch>,
 ) {
-    if !ours.is_empty() || death_cam.is_some() || last.is_some() || offer.seat == Seat::Spectating {
+    let dead = death_cam.as_deref().is_some_and(|cam| cam.whose.is_some());
+    if !ours.is_empty() || dead || last.is_some() || offer.seat == Seat::Spectating {
+        return;
+    }
+    if !cameras_for(&cameras, offer.seat).is_empty() {
+        if death_cam.is_some() {
+            commands.remove_resource::<DeathCam>();
+        }
+        return;
+    }
+    if death_cam.is_some() {
         return;
     }
     // A client's map can arrive after the round starts.

@@ -179,6 +179,7 @@ mod tests {
     use crate::editor::prop::Prop;
     use crate::editor::spawn_point::SpawnPoint;
     use crate::editor::weapon_pickup::WeaponPickup;
+    use crate::editor::spectator_camera::{SpectatorCamera, Viewers};
     use crate::editor::trigger::EditorTrigger;
     use crate::editor::block::EditorBlock;
     use crate::common::trigger::TriggerEffect;
@@ -216,6 +217,13 @@ mod tests {
         timeline.apply_feature(Box::new(SpawnPoint::new(3.0, 0.0, -4.0).with_yaw(1.25)));
         timeline.apply_feature(Box::new(Prop::new(2.0, 3.0, -1.0).with_rotation(Vec3::new(0.25, -1.5, 0.75))));
         timeline.apply_feature(Box::new(WeaponPickup::new(1.0, 0.0, 5.0).with_weapon("rpg").with_yaw(0.5)));
+        timeline.apply_feature(Box::new(
+            SpectatorCamera::from_point_ref(PointRef::reference_with_offset(max, 0.0, 1.0, 0.0))
+                .with_rotation(Vec3::new(-0.5, 2.0, 0.0))
+                .with_fov(70.0)
+                .with_order(3)
+                .with_viewers(Viewers { blue: false, unassigned: false, local_team: false, ..Default::default() }),
+        ));
         timeline.apply_feature(Box::new(
             EditorTrigger::from_room(EditorRoom::from_min_and_size(
                 PointRef::reference_with_offset(min, 0.0, -1.0, 0.0),
@@ -402,6 +410,39 @@ mod tests {
                 .any(|feet| world.fits(body_center_from_feet(*feet), CLASS_HALF_EXTENTS)),
             "no spawn point in {path:?} has room to stand: {spawns:?}"
         );
+    }
+
+    /// Breaks if a shipped map has no spectator camera, or one stands in a wall or looks
+    /// straight into one.
+    #[test]
+    fn every_shipped_camera_stands_in_the_air_and_looks_out() {
+        use bevy::prelude::{Dir3, Ray3d};
+        use crate::common::rotation::quat_from_euler;
+        use crate::game::collision::CollisionWorld;
+
+        for name in ["new", "demo", "arena", "cloister"] {
+            let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
+            let mut timeline = load(&path).unwrap().timeline;
+            timeline.resolve_all();
+            let objects: Vec<_> = timeline
+                .active_features()
+                .flat_map(|(_, feature)| std::iter::once(feature.object()).chain(feature.object().standing_copies().into_iter().map(|copy| copy.object)))
+                .collect();
+            let volumes: Vec<_> = objects.iter().flat_map(|object| object.volumes()).collect();
+            let mut world = CollisionWorld::default();
+            world.rebuild_volumes(&volumes);
+            let cameras: Vec<(Vec3, Vec3)> = objects
+                .iter()
+                .filter(|object| object.type_key() == "spectator_camera")
+                .map(|object| (object.get_point("").unwrap(), object.euler_angles()))
+                .collect();
+            assert!(!cameras.is_empty(), "{name} has no spectator camera");
+            for (at, angles) in cameras {
+                assert!(world.fits(at, Vec3::splat(0.15)), "{name}'s camera at {at} is in a wall");
+                let ahead = Ray3d::new(at, Dir3::new(quat_from_euler(angles) * Vec3::NEG_Z).unwrap());
+                assert!(world.ray_distance(&ahead, 4.0).is_none(), "{name}'s camera at {at} looks into a wall");
+            }
+        }
     }
 
     /// Breaks if an arena spawn is wedged, or a body cannot walk from it to every other spawn and

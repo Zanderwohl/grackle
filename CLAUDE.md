@@ -1741,9 +1741,9 @@ and Blue on a map with fewer than two.
   without either menu rebuilding on the other's change. A choice closes the
   picker only once the seat it was asked from is left, so a refusal leaves it
   up showing the new offer. Before any body,
-  the view looks out from behind a spawn point (`overlook_while_choosing`, a
-  `DeathCam` of nobody's), which is why `spawn_the_view` no longer waits for
-  a body.
+  the view looks out of the first spectator camera the seat may use, else
+  from behind a spawn point (`overlook_while_choosing`, a `DeathCam` of
+  nobody's), which is why `spawn_the_view` no longer waits for a body.
 
 **Spectating is a seat**, `Seat::Spectating`
 ([`src/game/spectate.rs`](src/game/spectate.rs)): on no team, owed no body,
@@ -1755,9 +1755,24 @@ body like any switch, and choosing a team from `.` ends it. A client reads
 its seat off the server's `TeamOptions`, so the view below runs on every
 machine from what it is told.
 
-- **The view is a list, not cameras**: every spawn point (by entity), then
-  every living body's eye (by `PlayerId`), stepped with the left button and
-  back with the right, wrapping. `SpectatorView` holds the *target*, so a
+- **The view is a list, not cameras**: every living body's eye (by
+  `PlayerId`), then every **spectator camera** the seat may look through —
+  or every spawn point (by entity) on a map with none — stepped with the
+  left button and back with the right, wrapping. A `SpectatorCamera`
+  ([`src/editor/spectator_camera.rs`](src/editor/spectator_camera.rs)) is a
+  placed feature like a prop — a `PointRef` and a turn — with a field of
+  view, an `Order` (lower first; ties by feature id, a Mirror copy after
+  its source) and a box per seat that may use it: unassigned (choosing or
+  spectating), free for all, and each team. **Local Team** (on by default)
+  splits on a Mirror as a palette role does: a camera with a `Side` admits
+  only that team of the teams, so a copy is its own side's camera; seats on
+  no team, and unsided cameras, are not limited by it. Looking out of one is a
+  `ThroughCamera` resource, written only by `look_through` and placed
+  exactly by `place_camera` ahead of a `DeathCam`; `widen_the_view` is the one writer of the view's field of
+  view, the camera's while looking through one and the player's own
+  `field_of_view` setting otherwise, derived each frame so nothing has to
+  put a width back. A seat waiting for a body looks out of the first camera
+  it may use before it falls back to overlooking a spawn. `SpectatorView` holds the *target*, so a
   death or a join rebuilds the list without moving the view; a target that
   goes is replaced by whatever took its place in the list.
 - **A spawn is a `DeathCam`** of nobody's, framed by the same `overlook` the
@@ -2810,7 +2825,7 @@ machine, and things happen in it.
 The core abstraction is `FeatureTrait` in
 [`src/editor/editable.rs`](src/editor/editable.rs) — a `#[typetag::serde]`
 trait object. Implementors today: `GlobalPoint`, `GracklePointLight`,
-`EditorRoom`, `FootprintRoom`, `EditorTrigger`, `EditorBlock`, `SpawnPoint`, `Prop`, `WeaponPickup`,
+`EditorRoom`, `FootprintRoom`, `EditorTrigger`, `EditorBlock`, `SpawnPoint`, `SpectatorCamera`, `Prop`, `WeaponPickup`,
 `AnimationDisplay`, `AnimationGrid` and `Mirror`.
 
 A feature does not store bare coordinates. It stores `PointRef`s, which are

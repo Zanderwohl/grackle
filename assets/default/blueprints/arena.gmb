@@ -18,7 +18,7 @@ Blueprint(
             azimuth: 135.0,
         ),
     ),
-    next_id: 97,
+    next_id: 101,
     features: [
         Feature(
             id: FeatureId(
@@ -2534,6 +2534,130 @@ Blueprint(
                     intensity: 50000.0,
                     radius: 0.1,
                     range: 12.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 97,
+            ),
+            name: Some("North Camera"),
+            object: {
+                "spectator_camera": SpectatorCamera(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(0.0),
+                        y: Relative(10.0),
+                        z: Relative(-19.0),
+                    ),
+                    rotation: Vec3(-0.38050634, -3.1415925, 0.0),
+                    fov: 90.0,
+                    order: 1000,
+                    viewers: Viewers(
+                        unassigned: true,
+                        free_for_all: true,
+                        red: true,
+                        blue: true,
+                        yellow: true,
+                        green: true,
+                        local_team: true,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 98,
+            ),
+            name: Some("South Camera"),
+            object: {
+                "spectator_camera": SpectatorCamera(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(0.0),
+                        y: Relative(10.0),
+                        z: Relative(19.0),
+                    ),
+                    rotation: Vec3(-0.38050634, -0.0, 0.0),
+                    fov: 90.0,
+                    order: 1000,
+                    viewers: Viewers(
+                        unassigned: true,
+                        free_for_all: true,
+                        red: true,
+                        blue: true,
+                        yellow: true,
+                        green: true,
+                        local_team: true,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 99,
+            ),
+            name: Some("East Camera"),
+            object: {
+                "spectator_camera": SpectatorCamera(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(19.0),
+                        y: Relative(10.0),
+                        z: Relative(0.0),
+                    ),
+                    rotation: Vec3(-0.38050634, 1.5707964, 0.0),
+                    fov: 90.0,
+                    order: 1000,
+                    viewers: Viewers(
+                        unassigned: true,
+                        free_for_all: true,
+                        red: true,
+                        blue: true,
+                        yellow: true,
+                        green: true,
+                        local_team: true,
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 100,
+            ),
+            name: Some("West Camera"),
+            object: {
+                "spectator_camera": SpectatorCamera(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-19.0),
+                        y: Relative(10.0),
+                        z: Relative(0.0),
+                    ),
+                    rotation: Vec3(-0.38050634, -1.5707964, 0.0),
+                    fov: 90.0,
+                    order: 1000,
+                    viewers: Viewers(
+                        unassigned: true,
+                        free_for_all: true,
+                        red: true,
+                        blue: true,
+                        yellow: true,
+                        green: true,
+                        local_team: true,
+                    ),
                 ),
             },
         ),
