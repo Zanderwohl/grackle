@@ -27,8 +27,7 @@ const EXTRA: Color32 = Color32::from_rgb(120, 160, 230);
 
 const KEY_WIDTH: f32 = 220.0;
 
-/// What a file dialog came back with. On a background thread, like the other editors', so not
-/// wasm-ready.
+/// On a background thread, like the other editors', so not wasm-ready.
 enum DialogResult {
     Save(PathBuf),
     Open(PathBuf),
@@ -49,7 +48,7 @@ enum Dialog {
     Discard { open: PathBuf },
 }
 
-/// The tree and each leaf's marks, rebuilt when the document's generation moves.
+/// Rebuilt when the document's generation moves.
 #[derive(Default)]
 struct Tree {
     generation: Option<u64>,
@@ -688,7 +687,7 @@ fn handle_edit(action: Option<EditAction>, editor: &mut LangEditor) {
     }
 }
 
-/// New, open and save. Quit is the caller's. Called every frame, to collect a dialog's answer.
+/// Quit is the caller's. Called every frame, to collect a dialog's answer.
 fn handle_files(action: Option<FileAction>, editor: &mut LangEditor, state: &mut LangUi, dialog: &LangFileDialog) {
     if action == Some(FileAction::New) {
         editor.open(Default::default(), None);

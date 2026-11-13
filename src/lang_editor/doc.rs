@@ -16,7 +16,6 @@ pub fn valid_segment(segment: &str) -> bool {
     !segment.is_empty() && segment.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-/// `None` if any segment is invalid or the text is empty.
 pub fn parse_path(text: &str) -> Option<KeyPath> {
     let path: KeyPath = text.trim().split('.').map(str::to_string).collect();
     path.iter().all(|segment| valid_segment(segment)).then_some(path)
@@ -42,7 +41,7 @@ impl LangError {
     }
 }
 
-/// A leaf as shown: strings are edited, anything else is shown as written.
+/// Strings are edited; anything else is shown as written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Leaf {
     Text(String),
@@ -77,7 +76,7 @@ impl LangDoc {
         self.doc.to_string()
     }
 
-    /// Every leaf, in the order the file holds them.
+    /// In file order.
     pub fn leaves(&self) -> Vec<(KeyPath, Leaf)> {
         let mut out = Vec::new();
         collect(self.doc.as_table(), &mut Vec::new(), &mut out);
@@ -125,9 +124,8 @@ impl LangDoc {
         self.insert(path, text)
     }
 
-    /// A new key at the end of its table. Tables on the way that do not exist are made: dotted
-    /// under a dotted table, as `[headers]` otherwise, and a new header lands after its parent's
-    /// last table (`toml_edit` places a table with no position after whatever precedes it).
+    /// At the end of its table. Missing tables are made dotted under a dotted table and as
+    /// `[headers]` otherwise; `toml_edit` writes a table with no position after its parent's last.
     pub fn insert(&mut self, path: &[String], text: &str) -> Result<(), LangError> {
         if path.is_empty() || !path.iter().all(|segment| valid_segment(segment)) {
             return Err(LangError::BadKey);
@@ -154,7 +152,7 @@ impl LangDoc {
         Ok(())
     }
 
-    /// Renames the last segment of `path`, a leaf or a whole subtree, in place.
+    /// Renames the last segment of `path`, keeping its place.
     pub fn rename(&mut self, path: &[String], to: &str) -> Result<(), LangError> {
         if !valid_segment(to) {
             return Err(LangError::BadKey);
@@ -192,7 +190,7 @@ impl LangDoc {
         Ok(())
     }
 
-    /// Removes a leaf or subtree, and any table it leaves empty.
+    /// Also removes any table this leaves empty.
     pub fn remove(&mut self, path: &[String]) -> bool {
         let Some((last, parents)) = path.split_last() else { return false };
         let removed = self.table_mut(parents).and_then(|table| table.remove(last)).is_some();
@@ -356,7 +354,6 @@ impl Node {
         self.children[at].add(path, depth + 1);
     }
 
-    /// Leaves at or under this node.
     pub fn leaves<'a>(&'a self, into: &mut Vec<&'a Node>) {
         if self.leaf {
             into.push(self);

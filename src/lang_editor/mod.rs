@@ -70,12 +70,11 @@ impl LangEditor {
         self.generation += 1;
     }
 
-    /// The file's stem; an untitled file is taken for a translation.
     pub fn code(&self) -> Option<String> {
         code_of(self.path.as_deref()?)
     }
 
-    /// What the open file is checked against; `None` when it is an `en-US` itself.
+    /// `None` when the open file is an `en-US` itself. An untitled file counts as a translation.
     pub fn reference(&self) -> Option<&Reference> {
         let is_reference = self.code().as_deref() == Some(FALLBACK_LANG);
         (!is_reference && !self.reference.is_empty()).then_some(&self.reference)
@@ -169,7 +168,6 @@ impl LangEditor {
         self.path = Some(path);
     }
 
-    /// The file is gone from disk, so what is open is untitled and unsaved.
     pub fn mark_deleted(&mut self) {
         self.path = None;
         self.clean.clear();
@@ -191,12 +189,11 @@ pub fn save(path: &Path, doc: &LangDoc) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
     std::fs::write(path, doc.text()).map_err(|e| format!("{}: {e}", path.display()))?;
-    // Cheap: a few small files, parsed once.
     remerge(&default_packs());
     Ok(())
 }
 
-/// Every pack's lang files, the default pack first.
+/// The default pack first.
 pub fn scan(packs: &[PathBuf]) -> Vec<LangFile> {
     packs.iter().rev().flat_map(|pack| lang_files(pack)).collect()
 }

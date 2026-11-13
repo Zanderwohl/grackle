@@ -518,8 +518,7 @@ impl MulticamPlugin {
         Self::calculate_resize(&mut cameras, &state, &window);
     }
     
-    /// A mode that takes the whole window would have them draw for nobody; the next mode that shows
-    /// them switches them back on.
+    /// In a full-window mode. A mode that shows them switches them back on.
     fn switch_off(mut cameras: Query<&mut Camera, With<Multicam>>) {
         for mut camera in &mut cameras {
             if camera.is_active {
