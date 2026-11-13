@@ -752,6 +752,7 @@ editor = "Map Editor"
 prop = "Prop Editor"
 animation = "Animation Editor"
 material = "Material Editor"
+lang = "Lang Editor"
 play = "Play"
 
 # Every authoring mode's File pulldown. The entries mean whatever the thing
@@ -782,6 +783,54 @@ untitled = "Untitled prop"
 
 [material]
 untitled = "Untitled material"
+
+[lang_editor]
+untitled = "Untitled lang file"
+filter = "Filter"
+problems_only = "Problems only"
+add_key = "Add key…"
+rename = "Rename…"
+remove = "Remove"
+copy_reference = "Copy from en-US"
+no_keys = "No keys."
+
+[lang_editor.browser]
+open = "Open"
+duplicate = "Duplicate…"
+delete = "Delete…"
+empty = "No lang files."
+
+[lang_editor.count]
+missing = "{ count } missing"
+stub = "{ count } stubs"
+placeholders = "{ count } placeholder mismatches"
+extra = "{ count } not in en-US"
+
+[lang_editor.mark]
+missing = "missing"
+stub = "stub"
+placeholders = "placeholders"
+placeholders_detail = "en-US: { reference }\nHere: { here }"
+extra = "not in en-US"
+
+[lang_editor.dialog]
+key = "Key"
+value = "Value"
+code = "Language code"
+pack = "Pack"
+ok = "OK"
+cancel = "Cancel"
+delete = "Delete { file } from disk?"
+unsaved = "Unsaved changes"
+discard = "Open { file } and discard the changes to this file?"
+
+[lang_editor.error]
+bad_key = "A key is letters, digits, _ and -, joined by dots."
+bad_code = "A language code is letters, digits, _ and -."
+exists = "`{ key }` already exists."
+not_a_table = "`{ key }` holds a value, so nothing can go under it."
+missing = "`{ key }` is not in the file."
+file_exists = "{ file } already exists."
 
 [prop.menu]
 frame = "Frame"

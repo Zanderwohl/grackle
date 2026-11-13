@@ -23,7 +23,6 @@ use texture_graph_core::{FileMetadata, Graph, TextureGraphFile};
 use texture_graph_editor::{EditCmd, Editor};
 
 use crate::common::app_mode::AppMode;
-use crate::editor::multicam::Multicam;
 
 pub const MATERIALS_DIR: &str = "materials";
 pub use texture_graph_core::FILE_EXTENSION;
@@ -245,14 +244,6 @@ fn publish_saved_materials(
     }
 }
 
-/// The panels cover the window, so the viewports would draw for nobody. The next mode that shows
-/// them switches them back on.
-fn switch_the_viewports_off(mut cameras: Query<&mut Camera, With<Multicam>>) {
-    for mut camera in &mut cameras {
-        camera.is_active = false;
-    }
-}
-
 pub struct MaterialEditorPlugin;
 
 impl Plugin for MaterialEditorPlugin {
@@ -266,7 +257,7 @@ impl Plugin for MaterialEditorPlugin {
             // Ungated: it has to run in whatever mode the process started in.
             .add_systems(Update, start_in_the_material_editor)
             .add_systems(Update, picker::publish_choices.run_if(in_state(AppMode::Editor)))
-            .add_systems(OnEnter(AppMode::Material), (switch_the_viewports_off, share_bevys_gpu))
+            .add_systems(OnEnter(AppMode::Material), share_bevys_gpu)
             .add_plugins((gpu::MaterialGpuPlugin, ui::MaterialUiPlugin, sky::SkyPlugin));
     }
 }

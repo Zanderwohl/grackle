@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::{error, warn};
@@ -109,6 +109,18 @@ fn load_merged(lang: &str, packs: &[PathBuf]) -> Result<toml::Value, String> {
     Ok(toml::Value::Table(merged))
 }
 
+/// One language across every pack, merged as the loader merges it, without the English base.
+pub fn merged_layer(lang: &str, packs: &[PathBuf]) -> toml::Table {
+    let mut merged = toml::Table::new();
+    merge_layer(&mut merged, lang, packs);
+    merged
+}
+
+/// The `{ name }` slots a template fills.
+pub fn placeholders_in(text: &str) -> std::collections::BTreeSet<String> {
+    TEMPLATE_REGEX.captures_iter(text).map(|found| found[1].to_string()).collect()
+}
+
 /// Returns how many files contributed.
 fn merge_layer(merged: &mut toml::Table, lang: &str, packs: &[PathBuf]) -> usize {
     let mut contributed = 0;
@@ -177,26 +189,42 @@ pub struct Language {
     pub name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LangFile {
+    pub pack: PathBuf,
+    pub path: PathBuf,
+    /// The file stem, e.g. `de-DE`.
+    pub code: String,
+    /// The file's own `language.name`.
+    pub name: Option<String>,
+}
+
+/// One pack's lang files, sorted by code.
+pub fn lang_files(pack: &Path) -> Vec<LangFile> {
+    let Ok(entries) = fs::read_dir(pack.join("lang")) else { return Vec::new() };
+    let mut files: Vec<LangFile> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
+        .filter_map(|path| {
+            let code = path.file_stem()?.to_str()?.to_string();
+            let name = fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+                .and_then(|table| table.get("language")?.get("name")?.as_str().map(str::to_string));
+            Some(LangFile { pack: pack.to_path_buf(), path, code, name })
+        })
+        .collect();
+    files.sort_by(|a, b| a.code.cmp(&b.code));
+    files
+}
+
 /// Sorted by code. A file with no readable `language.name` still appears,
 /// under its code. When packs disagree on a name, the highest priority wins.
 pub fn available_languages(packs: &[PathBuf]) -> Vec<Language> {
     let mut languages: Vec<Language> = Vec::new();
 
     for pack in packs.iter().rev() {
-        let lang_dir = pack.join("lang");
-        let Ok(entries) = fs::read_dir(&lang_dir) else { continue };
-        for path in entries.filter_map(|entry| entry.ok()).map(|entry| entry.path()) {
-            if !path.extension().is_some_and(|ext| ext == "toml") {
-                continue;
-            }
-            let Some(code) = path.file_stem().and_then(|stem| stem.to_str()) else { continue };
-            let name = fs::read_to_string(&path)
-                .ok()
-                .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
-                .and_then(|table| {
-                    table.get("language")?.get("name")?.as_str().map(str::to_string)
-                });
-
+        for LangFile { code, name, .. } in lang_files(pack) {
             match languages.iter_mut().find(|language| language.code == code) {
                 Some(language) => {
                     if let Some(name) = name {
@@ -204,8 +232,8 @@ pub fn available_languages(packs: &[PathBuf]) -> Vec<Language> {
                     }
                 }
                 None => languages.push(Language {
-                    code: code.to_string(),
-                    name: name.unwrap_or_else(|| code.to_string()),
+                    name: name.unwrap_or_else(|| code.clone()),
+                    code,
                 }),
             }
         }
@@ -365,7 +393,7 @@ pub(crate) fn switching_language() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeSet, HashSet};
+    use std::collections::BTreeSet;
 
     #[test]
     fn test_get_template() {
@@ -467,16 +495,14 @@ mod tests {
         path.split('.').try_fold(value, |current, key| current.get(key))
     }
 
-    fn placeholders(value: &toml::Value) -> HashSet<String> {
+    fn placeholders(value: &toml::Value) -> BTreeSet<String> {
         let text = match value {
             toml::Value::String(text) => text.clone(),
             toml::Value::Array(items) => items.iter()
                 .filter_map(|item| item.as_str()).collect::<Vec<_>>().join(" "),
             _ => String::new(),
         };
-        TEMPLATE_REGEX.captures_iter(&text)
-            .map(|found| found[1].to_string())
-            .collect()
+        placeholders_in(&text)
     }
 
     /// Fails if a translation drops or renames a `{ slot }`. Only keys the
