@@ -792,7 +792,6 @@ add_key = "Add key…"
 rename = "Rename…"
 remove = "Remove"
 copy_reference = "Copy from en-US"
-is_reference = "This is a reference file; nothing is checked against it."
 no_keys = "No keys."
 
 [lang_editor.browser]
@@ -815,7 +814,7 @@ placeholders_detail = "en-US: { reference }\nHere: { here }"
 extra = "not in en-US"
 
 [lang_editor.dialog]
-key = "Key, dotted"
+key = "Key"
 value = "Value"
 code = "Language code"
 pack = "Pack"

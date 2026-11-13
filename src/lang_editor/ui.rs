@@ -280,9 +280,6 @@ fn keys_panel(ui: &mut Ui, editor: &mut LangEditor, state: &mut LangUi) {
             ui.colored_label(EXTRA, get!("lang_editor.count.extra", "count", extra));
         }
     });
-    if !comparing {
-        ui.weak(get!("lang_editor.is_reference"));
-    }
     ui.separator();
 
     let filter = state.filter.trim().to_lowercase();
