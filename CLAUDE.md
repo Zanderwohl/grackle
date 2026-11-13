@@ -170,6 +170,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls, placed props, hats. |
 | `src/prop/` | The prop editor: a CSG kernel, the modeling feature list, and the mode around it. |
 | `src/material/` | The material editor: texture-graph's panels as an authoring mode. See "Editing a material". |
+| `src/lang_editor/` | The lang editor: a pack's strings for one language. See "Editing a lang file". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena and cloister blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
@@ -257,7 +258,7 @@ is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop`, `Animation`, `Material` or `Play`, iterable in that order, which is
+`Prop`, `Animation`, `Material`, `Lang` or `Play`, iterable in that order, which is
 the Mode menu's order. **`F5` swaps between the map editor and Play, and nothing
 else** — the only way back to the editor, as `Escape` belongs to the pause
 menu. From the prop editor it is answered with a line in the log rather than
@@ -1126,6 +1127,29 @@ rooms paint with them — see "Materials on rooms".
   sRGB-encoded bytes in `Rgba8Unorm` (storage writes cannot be sRGB);
   bevy_egui blends in linear space, so drawn as they are every preview is
   washed out, with no error.
+
+## Editing a lang file
+
+`AppMode::Lang` ([`src/lang_editor/`](src/lang_editor/)) edits one
+`assets/<pack>/lang/<code>.toml` — from the Mode menu or `--lang-editor` — and
+takes the whole window, as the material editor does. A browser on the left
+lists every pack's lang files (open, duplicate into a chosen pack, delete
+after asking); the rest is the file's dotted keys as a tree, with `en-US`
+beside each value.
+
+- **The file is edited through `toml_edit`**, not re-serialized, so an edit
+  touches only its own line: order, comments, dotted keys and `[headers]`
+  survive. A new key goes at the end of its table; a new table is dotted under
+  a dotted one and a header otherwise, landing after its parent's last table.
+  `every_shipped_file_survives_a_save_unchanged` pins the round trip.
+- **Checked against every pack's `en-US`, merged** (`lang::merged_layer`):
+  keys missing from the file, `MISSING <key>` stubs from `ensure_lang`, `{ name }`
+  slots that differ (`lang::placeholders_in`, the check
+  `every_language_keeps_its_placeholders` makes) and keys `en-US` lacks. An
+  `en-US` file is checked against nothing.
+- Undo is whole-file text snapshots taken when idle, as the map's is. **Saving
+  remerges the strings in force** (`remerge`), so the editor's own labels change
+  at once; that is a few small files parsed.
 
 ## Materials on rooms
 

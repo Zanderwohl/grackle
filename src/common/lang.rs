@@ -109,6 +109,18 @@ fn load_merged(lang: &str, packs: &[PathBuf]) -> Result<toml::Value, String> {
     Ok(toml::Value::Table(merged))
 }
 
+/// One language across every pack, merged as the loader merges it, without the English base.
+pub fn merged_layer(lang: &str, packs: &[PathBuf]) -> toml::Table {
+    let mut merged = toml::Table::new();
+    merge_layer(&mut merged, lang, packs);
+    merged
+}
+
+/// The `{ name }` slots a template fills.
+pub fn placeholders_in(text: &str) -> std::collections::BTreeSet<String> {
+    TEMPLATE_REGEX.captures_iter(text).map(|found| found[1].to_string()).collect()
+}
+
 /// Returns how many files contributed.
 fn merge_layer(merged: &mut toml::Table, lang: &str, packs: &[PathBuf]) -> usize {
     let mut contributed = 0;
@@ -365,7 +377,7 @@ pub(crate) fn switching_language() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeSet, HashSet};
+    use std::collections::BTreeSet;
 
     #[test]
     fn test_get_template() {
@@ -467,16 +479,14 @@ mod tests {
         path.split('.').try_fold(value, |current, key| current.get(key))
     }
 
-    fn placeholders(value: &toml::Value) -> HashSet<String> {
+    fn placeholders(value: &toml::Value) -> BTreeSet<String> {
         let text = match value {
             toml::Value::String(text) => text.clone(),
             toml::Value::Array(items) => items.iter()
                 .filter_map(|item| item.as_str()).collect::<Vec<_>>().join(" "),
             _ => String::new(),
         };
-        TEMPLATE_REGEX.captures_iter(&text)
-            .map(|found| found[1].to_string())
-            .collect()
+        placeholders_in(&text)
     }
 
     /// Fails if a translation drops or renames a `{ slot }`. Only keys the

@@ -30,6 +30,7 @@ use grackle::game::world_prop::WorldPropPlugin;
 use grackle::game::forward_camera::ForwardCameraPlugin;
 use grackle::anim::{AnimPlugin, StartInAnimEditor};
 use grackle::material::{MaterialEditorPlugin, StartInMaterialEditor};
+use grackle::lang_editor::{LangEditorPlugin, StartInLangEditor};
 use grackle::prop::thumbnail::ThumbnailPlugin;
 use grackle::prop::{PropEditorPlugin, StartInPropEditor};
 use grackle::tool::ToolPlugin;
@@ -71,6 +72,7 @@ fn main() {
         .insert_resource(StartInPropEditor(editor_params.start_modeling))
         .insert_resource(StartInAnimEditor(editor_params.start_animating))
         .insert_resource(StartInMaterialEditor(editor_params.start_texturing))
+        .insert_resource(StartInLangEditor(editor_params.start_translating))
         .insert_resource(editor_params.server.as_ref().map(ServerConfig::round).unwrap_or_default())
         .insert_resource(BotsAtStartup(editor_params.server.as_ref().map_or(0, |server| server.bots)))
         .add_plugins((
@@ -97,7 +99,7 @@ fn main() {
             EditorStepsPlugin,
             ToolPlugin,
             PropEditorPlugin,
-            (AnimPlugin, MaterialEditorPlugin),
+            (AnimPlugin, MaterialEditorPlugin, LangEditorPlugin),
             GamePlugin,
             (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin),
             SkeletonPlugin,
