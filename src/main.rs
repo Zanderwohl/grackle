@@ -97,7 +97,7 @@ fn main() {
             EditorStepsPlugin,
             ToolPlugin,
             PropEditorPlugin,
-            (AnimPlugin, MaterialEditorPlugin),
+            (AnimPlugin, MaterialEditorPlugin, grackle::weapon_editor::WeaponEditorPlugin),
             GamePlugin,
             (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin),
             SkeletonPlugin,

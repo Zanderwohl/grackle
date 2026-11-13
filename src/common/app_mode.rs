@@ -26,6 +26,8 @@ pub enum AppMode {
     Animation,
     /// A texture-graph: a surface for the map, edited on its own.
     Material,
+    /// Every pack's `weapons.toml`.
+    Weapon,
     Play,
 }
 
@@ -33,13 +35,16 @@ impl AppMode {
     /// Ask this rather than matching variants, so a new authoring mode joins
     /// in one place.
     pub fn is_authoring(self) -> bool {
-        matches!(self, AppMode::Editor | AppMode::Prop | AppMode::Animation | AppMode::Material)
+        matches!(
+            self,
+            AppMode::Editor | AppMode::Prop | AppMode::Animation | AppMode::Material | AppMode::Weapon
+        )
     }
 
-    /// Whether the four 3D viewports are drawn. The material editor takes the
-    /// whole window; nothing in a map can show a material yet.
+    /// Whether the four 3D viewports are drawn. The material and weapon
+    /// editors take the whole window.
     pub fn shows_the_viewports(self) -> bool {
-        self.is_authoring() && self != AppMode::Material
+        self.is_authoring() && !matches!(self, AppMode::Material | AppMode::Weapon)
     }
 
     /// For gizmo overlays: the prop modes hide the world's entities, but a
@@ -60,6 +65,7 @@ impl AppMode {
             AppMode::Prop => get!("app_mode.prop"),
             AppMode::Animation => get!("app_mode.animation"),
             AppMode::Material => get!("app_mode.material"),
+            AppMode::Weapon => get!("app_mode.weapon"),
             AppMode::Play => get!("app_mode.play"),
         }
     }
@@ -181,6 +187,7 @@ mod tests {
         assert!(!AppMode::Prop.shows_the_world());
         assert!(!AppMode::Animation.shows_the_world());
         assert!(!AppMode::Material.shows_the_world());
+        assert!(!AppMode::Weapon.shows_the_world());
     }
 
     /// Fails if the material editor's full-window panels are drawn over live viewports, or if
@@ -206,7 +213,7 @@ mod tests {
         let host = NetRole::Listen { port: 1 };
         let client = NetRole::Client { host: "example".into(), port: 1 };
         for role in [&host, &client] {
-            for mode in [AppMode::Prop, AppMode::Animation, AppMode::Material] {
+            for mode in [AppMode::Prop, AppMode::Animation, AppMode::Material, AppMode::Weapon] {
                 assert!(!mode.selectable_from(AppMode::Editor, Some(role)), "{mode:?} offered to {role:?}");
             }
             // A host that was modeling when it started hosting can still get back.

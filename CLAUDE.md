@@ -170,6 +170,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls, placed props, hats. |
 | `src/prop/` | The prop editor: a CSG kernel, the modeling feature list, and the mode around it. |
 | `src/material/` | The material editor: texture-graph's panels as an authoring mode. See "Editing a material". |
+| `src/weapon_editor/` | The weapon editor: every pack's `weapons.toml`, edited and written back in place. See "Editing a weapon". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena and cloister blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
@@ -257,7 +258,7 @@ is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop`, `Animation`, `Material` or `Play`, iterable in that order, which is
+`Prop`, `Animation`, `Material`, `Weapon` or `Play`, iterable in that order, which is
 the Mode menu's order. **`F5` swaps between the map editor and Play, and nothing
 else** — the only way back to the editor, as `Escape` belongs to the pause
 menu. From the prop editor it is answered with a line in the log rather than
@@ -1088,6 +1089,32 @@ so the head bone's own odd rest rotation never reaches a hat's numbers. Which
 hat is a class's is `hat` on its entry in `loadouts.toml`. In Fit a hat stays
 at the origin and the figure stands under it, inverted through the same
 `hat_transform` the game uses.
+
+## Editing a weapon
+
+`AppMode::Weapon` ([`src/weapon_editor/`](src/weapon_editor/)) edits every
+pack's `weapons.toml` as one document. The plan and what is left is
+[documentation/weapon-editor.md](documentation/weapon-editor.md); today it is a
+list and a handful of fields, with the reflected form and the range to come.
+
+- **The draft is the catalog while the mode is open.** Entering stashes the
+  published `WeaponCatalog` (`PublishedCatalog`) and puts `catalog_of` the
+  draft in its place, rebuilt whenever the undo checkpoint moves; leaving puts
+  the stash back. Saving writes and then publishes, so F5 plays what is on
+  disk. Not offered while networked, so a half-edited catalog is never sent.
+- **One loader, two callers.** `weapon_file` reads each pack into `PackWeapon`s
+  (`read_pack_weapons`), and `catalog_of` and `problems` apply one rule
+  (`problem`) to both the startup catalog and the draft, so the editor lists
+  exactly what the loader would drop.
+- **Saving edits the file in place** (`weapon_editor::save`, `toml_edit`): an
+  untouched weapon is not touched, an edited one is merged three ways (the
+  file's tree, what it parsed to, the edit) so only changed values move, a
+  key serde ignores is kept, a deleted weapon takes its leading comment, and
+  floats are written as their `f32`'s shortest decimal.
+  `saving_an_untouched_catalog_changes_no_bytes` is the guard. Each weapon goes
+  back to the pack it came from, and only packs that changed are written.
+- **The catalog has no file to Save As**, so File offers Save and Quit, and
+  `Ctrl+Shift+S` is a save.
 
 ## Editing a material
 

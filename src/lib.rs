@@ -8,3 +8,4 @@ pub mod tool;
 pub mod prop;
 pub mod game;
 pub mod unlock;
+pub mod weapon_editor;

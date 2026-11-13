@@ -209,7 +209,7 @@ fn toggle_mode(
         AppMode::Editor => AppMode::Play,
         AppMode::Play => AppMode::Editor,
         // No wildcard: a new mode should have to decide what F5 means to it.
-        mode @ (AppMode::Prop | AppMode::Animation | AppMode::Material) => {
+        mode @ (AppMode::Prop | AppMode::Animation | AppMode::Material | AppMode::Weapon) => {
             info!(
                 "F5 swaps the map editor and Play; use the Mode menu to leave {}.",
                 mode.name(),

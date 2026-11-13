@@ -35,19 +35,47 @@ struct WeaponFile {
     weapons: BTreeMap<String, WeaponEntry>,
 }
 
-/// [`Weapon`] minus the id, which is the key.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct WeaponEntry {
-    name_key: String,
+/// [`Weapon`] minus the id, which is the key. Public for the weapon editor,
+/// which edits these and writes them back.
+///
+/// Field order is the order a new entry is written in, which is the shipped
+/// file's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeaponEntry {
+    pub name_key: String,
     /// Not checked here: that would mean reading every model in the pack at
     /// startup. A bad name draws nothing.
     #[serde(default)]
-    model: Option<String>,
-    bucket: u8,
-    deploy: f32,
-    primary: Mounted,
-    secondary: Mounted,
-    magazine: Magazine,
+    pub model: Option<String>,
+    pub bucket: u8,
+    pub deploy: f32,
+    pub magazine: Magazine,
+    pub primary: Mounted,
+    pub secondary: Mounted,
+}
+
+impl WeaponEntry {
+    pub fn into_weapon(self, key: &str) -> Weapon {
+        Weapon {
+            id: WeaponId::of(key),
+            key: key.to_string(),
+            name_key: self.name_key,
+            model: self.model,
+            bucket: self.bucket,
+            deploy: self.deploy,
+            primary: self.primary,
+            secondary: self.secondary,
+            magazine: self.magazine,
+        }
+    }
+}
+
+/// A weapon as a pack file states it, before it has met the other packs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PackWeapon {
+    pub pack: PathBuf,
+    pub key: String,
+    pub entry: WeaponEntry,
 }
 
 /// Keyed by [`Class::key`].
@@ -80,17 +108,83 @@ struct SlotEntry {
 /// Lowest priority first. A missing file is normal; one that will not parse
 /// is logged.
 pub fn load_catalog(assets: &Assets, packs: &[PathBuf]) -> WeaponCatalog {
-    let mut catalog = WeaponCatalog::default();
+    catalog_of(assets, packs, &read_pack_weapons(assets, packs))
+}
 
+/// Every pack's weapons as written, lowest priority first and in key order
+/// within a pack.
+pub fn read_pack_weapons(assets: &Assets, packs: &[PathBuf]) -> Vec<PackWeapon> {
+    let mut weapons = Vec::new();
     for pack in packs {
-        load_weapons(assets, pack, &mut catalog);
+        let Some(text) = read(assets, pack, WEAPONS_FILE) else { continue };
+        match parse_weapons(&text) {
+            Ok(entries) => weapons.extend(entries.into_iter().map(|(key, entry)| PackWeapon {
+                pack: pack.clone(),
+                key,
+                entry,
+            })),
+            Err(e) => error!("{}/{WEAPONS_FILE} will not parse: {e}", pack.display()),
+        }
+    }
+    weapons
+}
+
+pub fn parse_weapons(text: &str) -> Result<Vec<(String, WeaponEntry)>, String> {
+    let file: WeaponFile = toml::from_str(text).map_err(|e| e.to_string())?;
+    Ok(file.weapons.into_iter().collect())
+}
+
+/// The catalog these weapons make, with every pack's loadouts read against
+/// them. A weapon that fails [`problems`] is left out, with a line saying why.
+pub fn catalog_of(assets: &Assets, packs: &[PathBuf], weapons: &[PackWeapon]) -> WeaponCatalog {
+    let mut catalog = WeaponCatalog::default();
+    for weapon in weapons {
+        match problem(&catalog, weapon) {
+            Some(why) => error!("{}/{WEAPONS_FILE}: {why}; ignoring it", weapon.pack.display()),
+            None => catalog.insert(weapon.entry.clone().into_weapon(&weapon.key)),
+        }
     }
     // A separate pass, so a loadout can name a weapon from a later pack.
     for pack in packs {
         load_loadouts(assets, pack, &mut catalog);
     }
-
     catalog
+}
+
+/// Why each weapon would be left out of the catalog, in the order given.
+/// What the loader logs and what the weapon editor lists are this.
+pub fn problems(weapons: &[PackWeapon]) -> Vec<(usize, String)> {
+    let mut catalog = WeaponCatalog::default();
+    let mut found = Vec::new();
+    for (index, weapon) in weapons.iter().enumerate() {
+        match problem(&catalog, weapon) {
+            Some(why) => found.push((index, why)),
+            None => catalog.insert(weapon.entry.clone().into_weapon(&weapon.key)),
+        }
+    }
+    found
+}
+
+/// Against the weapons accepted so far.
+fn problem(catalog: &WeaponCatalog, weapon: &PackWeapon) -> Option<String> {
+    let PackWeapon { key, entry, .. } = weapon;
+    // A hash collision, not an override: an override reuses the name and
+    // so the `name_key` would normally match.
+    if let Some(already) = catalog.get(WeaponId::of(key))
+        && already.name_key != entry.name_key
+    {
+        return Some(format!("{key} collides with {}, already loaded", already.key));
+    }
+    if !(1..=BUCKETS).contains(&entry.bucket) {
+        return Some(format!(
+            "{key} is in bucket {}, which no key selects (1–{BUCKETS})",
+            entry.bucket
+        ));
+    }
+    if !(entry.deploy >= 0.0) {
+        return Some(format!("{key} deploys in {} s", entry.deploy));
+    }
+    None
 }
 
 fn read(assets: &Assets, pack: &Path, file: &str) -> Option<String> {
@@ -108,64 +202,6 @@ fn read(assets: &Assets, pack: &Path, file: &str) -> Option<String> {
             error!("{}/{file} is not valid UTF-8: {e}", pack.display());
             None
         }
-    }
-}
-
-fn load_weapons(assets: &Assets, pack: &Path, catalog: &mut WeaponCatalog) {
-    let Some(text) = read(assets, pack, WEAPONS_FILE) else { return };
-
-    let file: WeaponFile = match toml::from_str(&text) {
-        Ok(file) => file,
-        Err(e) => {
-            error!("{}/{WEAPONS_FILE} will not parse: {e}", pack.display());
-            return;
-        }
-    };
-
-    for (name, entry) in file.weapons {
-        let id = WeaponId::of(&name);
-
-        // A hash collision, not an override: an override reuses the name and
-        // so the `name_key` would normally match.
-        if let Some(already) = catalog.get(id) {
-            if already.name_key != entry.name_key {
-                error!(
-                    "{}/{WEAPONS_FILE}: {name} collides with a weapon already loaded; ignoring it",
-                    pack.display()
-                );
-                continue;
-            }
-        }
-
-        if !(1..=BUCKETS).contains(&entry.bucket) {
-            error!(
-                "{}/{WEAPONS_FILE}: {name} is in bucket {}, which no key selects (1–{BUCKETS}); \
-                 ignoring it",
-                pack.display(),
-                entry.bucket
-            );
-            continue;
-        }
-        if !(entry.deploy >= 0.0) {
-            error!(
-                "{}/{WEAPONS_FILE}: {name} deploys in {} s; ignoring it",
-                pack.display(),
-                entry.deploy
-            );
-            continue;
-        }
-
-        catalog.insert(Weapon {
-            id,
-            key: name.clone(),
-            name_key: entry.name_key,
-            model: entry.model,
-            bucket: entry.bucket,
-            deploy: entry.deploy,
-            primary: entry.primary,
-            secondary: entry.secondary,
-            magazine: entry.magazine,
-        });
     }
 }
 

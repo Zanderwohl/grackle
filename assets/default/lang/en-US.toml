@@ -752,6 +752,7 @@ editor = "Map Editor"
 prop = "Prop Editor"
 animation = "Animation Editor"
 material = "Material Editor"
+weapon = "Weapon Editor"
 play = "Play"
 
 # Every authoring mode's File pulldown. The entries mean whatever the thing
@@ -1079,3 +1080,16 @@ title = "Palette"
 unsided = "No side"
 add = "Add"
 new_role = "role"
+
+[weapon_editor]
+primary = "Primary"
+secondary = "Secondary"
+
+[weapon_editor.fields]
+name_key = "Name key"
+model = "Model"
+bucket = "Bucket"
+deploy = "Deploy"
+clip = "Clip"
+reserve = "Reserve"
+reload = "Reload"
