@@ -242,6 +242,10 @@ impl Plugin for MulticamPlugin {
                 Update,
                 Self::set_camera_viewports.run_if(crate::common::app_mode::showing_the_viewports),
             )
+            .add_systems(
+                Update,
+                Self::switch_off.run_if(not(crate::common::app_mode::showing_the_viewports)),
+            )
             .add_systems(Update, Self::debug_boxes.run_if(in_state(AppMode::Editor)))
             .add_systems(Update, label_spectating.run_if(resource_changed::<crate::common::net::NetRole>))
             // After transform propagation, so gizmos use this frame's global transforms.
@@ -514,6 +518,16 @@ impl MulticamPlugin {
         Self::calculate_resize(&mut cameras, &state, &window);
     }
     
+    /// A mode that takes the whole window would have them draw for nobody; the next mode that shows
+    /// them switches them back on.
+    fn switch_off(mut cameras: Query<&mut Camera, With<Multicam>>) {
+        for mut camera in &mut cameras {
+            if camera.is_active {
+                camera.is_active = false;
+            }
+        }
+    }
+
     fn calculate_resize(cameras: &mut Query<(&mut Camera, &Multicam)>, state: &Res<MulticamState>, window: &Window) {
         let window_size = window.physical_size();
 

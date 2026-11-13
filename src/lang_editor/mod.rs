@@ -12,8 +12,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::lang::{default_packs, merged_layer, remerge, FALLBACK_LANG, LANG_DIR};
-use crate::editor::multicam::Multicam;
+use crate::common::lang::{default_packs, lang_files, merged_layer, remerge, LangFile, FALLBACK_LANG, LANG_DIR};
 use doc::{LangDoc, Reference};
 
 pub const LANG_SUBDIR: &str = "lang";
@@ -87,7 +86,7 @@ impl LangEditor {
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty() || (self.unsettled && self.doc.text() != self.checkpoint)
+        !self.undo.is_empty() || self.unsettled
     }
 
     pub fn can_redo(&self) -> bool {
@@ -197,36 +196,9 @@ pub fn save(path: &Path, doc: &LangDoc) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LangFile {
-    pub pack: PathBuf,
-    pub path: PathBuf,
-    pub code: String,
-    /// The file's own `language.name`.
-    pub name: Option<String>,
-}
-
-/// Every pack's lang files, the default pack first, each pack's sorted by code.
+/// Every pack's lang files, the default pack first.
 pub fn scan(packs: &[PathBuf]) -> Vec<LangFile> {
-    let mut files = Vec::new();
-    for pack in packs.iter().rev() {
-        let Ok(entries) = std::fs::read_dir(pack.join(LANG_SUBDIR)) else { continue };
-        let mut found: Vec<LangFile> = entries
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| path.extension().is_some_and(|ext| ext == FILE_EXTENSION))
-            .filter_map(|path| {
-                let code = code_of(&path)?;
-                let name = std::fs::read_to_string(&path)
-                    .ok()
-                    .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
-                    .and_then(|table| table.get("language")?.get("name")?.as_str().map(str::to_string));
-                Some(LangFile { pack: pack.clone(), path, code, name })
-            })
-            .collect();
-        found.sort_by(|a, b| a.code.cmp(&b.code));
-        files.extend(found);
-    }
-    files
+    packs.iter().rev().flat_map(|pack| lang_files(pack)).collect()
 }
 
 /// `--lang-editor`. A resource rather than an initial state, so entering goes through
@@ -247,13 +219,6 @@ fn start_in_the_lang_editor(
     *done = true;
 }
 
-/// The panels cover the window. The next mode that shows the viewports switches them back on.
-fn switch_the_viewports_off(mut cameras: Query<&mut Camera, With<Multicam>>) {
-    for mut camera in &mut cameras {
-        camera.is_active = false;
-    }
-}
-
 pub struct LangEditorPlugin;
 
 impl Plugin for LangEditorPlugin {
@@ -262,7 +227,6 @@ impl Plugin for LangEditorPlugin {
             .init_resource::<StartInLangEditor>()
             // Ungated: it has to run in whatever mode the process started in.
             .add_systems(Update, start_in_the_lang_editor)
-            .add_systems(OnEnter(AppMode::Lang), switch_the_viewports_off)
             .add_plugins(ui::LangUiPlugin);
     }
 }
