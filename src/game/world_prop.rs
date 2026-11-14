@@ -7,6 +7,8 @@
 //! feature that names a model, and every machine draws and collides with those.
 
 use bevy::prelude::*;
+
+use crate::common::air_lit::LitMaterial;
 use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
@@ -149,6 +151,7 @@ pub struct WorldPropPlugin;
 
 impl Plugin for WorldPropPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::air_lit::ensure(app);
         app.add_message::<Healed>()
             .add_message::<PickupTaken>()
             .init_resource::<PropCache>()
@@ -316,7 +319,7 @@ fn kit_world_props(
     mut cache: ResMut<PropCache>,
     mut surfaces: ResMut<SurfaceMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     mut clips: ResMut<Assets<Clip>>,
     instances: Query<(Entity, &WorldProp, Option<&Kitted>, Has<Damageable>, Has<Pickup>), Without<GivesWeapon>>,
 ) {
@@ -370,7 +373,7 @@ fn dress_world_props(
     mut cache: ResMut<PropCache>,
     mut surfaces: ResMut<SurfaceMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     mut clips: ResMut<Assets<Clip>>,
     instances: Query<(Entity, &WorldProp, Option<&DrawnProp>, Option<&Pickup>, Has<GivesWeapon>)>,
     mut parts: Query<&mut Visibility, With<WorldPropPart>>,
@@ -1033,7 +1036,7 @@ mod tests {
         let world = app.world_mut();
         world.resource_scope(|world, mut cache: Mut<PropCache>| {
             world.resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
-                world.resource_scope(|world, mut materials: Mut<Assets<StandardMaterial>>| {
+                world.resource_scope(|world, mut materials: Mut<Assets<LitMaterial>>| {
                     world.resource_scope(|world, mut surfaces: Mut<SurfaceMaterials>| {
                         let mut clips = world.resource_mut::<Assets<Clip>>();
                         cache.adopt(name, doc, &mut meshes, &mut materials, &mut surfaces, &mut clips, None);

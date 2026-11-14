@@ -17,31 +17,32 @@ use std::path::{Path, PathBuf};
 use crate::common::skeleton::clip::{Clip, ClipSet};
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
 use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
+use crate::common::air_lit::{lit, LitMaterial};
 use crate::prop::rig::PropRig;
 use crate::prop::surface::{Style, Surface};
 
 /// Materials cached per surface for the life of the process, since a drag
 /// rebuilds the prop every frame.
 #[derive(Resource, Default)]
-pub struct SurfaceMaterials(Vec<(Surface, Handle<StandardMaterial>)>);
+pub struct SurfaceMaterials(Vec<(Surface, Handle<LitMaterial>)>);
 
 impl SurfaceMaterials {
     pub fn get(
         &mut self,
         surface: Surface,
-        materials: &mut Assets<StandardMaterial>,
-    ) -> Handle<StandardMaterial> {
+        materials: &mut Assets<LitMaterial>,
+    ) -> Handle<LitMaterial> {
         match self.0.iter().find(|(known, _)| *known == surface) {
             Some((_, handle)) => handle.clone(),
             None => {
-                let handle = materials.add(surface.material());
+                let handle = materials.add(lit(surface.material()));
                 self.0.push((surface, handle.clone()));
                 handle
             }
         }
     }
 
-    pub fn surface_of(&self, material: AssetId<StandardMaterial>) -> Option<Surface> {
+    pub fn surface_of(&self, material: AssetId<LitMaterial>) -> Option<Surface> {
         self.0.iter().find(|(_, handle)| handle.id() == material).map(|(surface, _)| *surface)
     }
 }
@@ -129,7 +130,7 @@ fn lens_uvs(positions: &[[f32; 3]], indices: &[u32], facing: Quat) -> Vec<[f32; 
 #[derive(Clone)]
 pub struct BakedPart {
     pub mesh: Handle<Mesh>,
-    pub material: Handle<StandardMaterial>,
+    pub material: Handle<LitMaterial>,
     /// Into [`BakedProp::rig`]; `None` rides on the prop itself.
     pub bone: Option<usize>,
 }
@@ -176,7 +177,7 @@ impl PropCache {
         name: &str,
         packs: &PackAssets,
         meshes: &mut Assets<Mesh>,
-        materials: &mut Assets<StandardMaterial>,
+        materials: &mut Assets<LitMaterial>,
         surfaces: &mut SurfaceMaterials,
         clips: &mut Assets<Clip>,
     ) -> Option<&BakedProp> {
@@ -220,7 +221,7 @@ impl PropCache {
         name: &str,
         doc: &PropDoc,
         meshes: &mut Assets<Mesh>,
-        materials: &mut Assets<StandardMaterial>,
+        materials: &mut Assets<LitMaterial>,
         surfaces: &mut SurfaceMaterials,
         clips: &mut Assets<Clip>,
         file: Option<&Path>,
@@ -240,7 +241,7 @@ fn bake(
     name: &str,
     packs: &PackAssets,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<LitMaterial>,
     surfaces: &mut SurfaceMaterials,
     clips: &mut Assets<Clip>,
 ) -> Option<BakedProp> {
@@ -288,7 +289,7 @@ fn bake_doc(
     name: &str,
     doc: &PropDoc,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<LitMaterial>,
     surfaces: &mut SurfaceMaterials,
     clips: BTreeMap<String, Handle<Clip>>,
 ) -> BakedProp {

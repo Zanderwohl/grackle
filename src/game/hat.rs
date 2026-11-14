@@ -7,6 +7,8 @@
 
 use bevy::prelude::*;
 
+use crate::common::air_lit::LitMaterial;
+
 use crate::common::assets::Assets as PackAssets;
 use crate::common::class::Class;
 use crate::common::skeleton::clip::Clip;
@@ -36,6 +38,7 @@ pub struct HatPlugin;
 
 impl Plugin for HatPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::air_lit::ensure(app);
         app.init_resource::<PropCache>()
             .init_resource::<SurfaceMaterials>()
             .add_systems(Update, dress_hats)
@@ -53,7 +56,7 @@ fn dress_hats(
     mut cache: ResMut<PropCache>,
     mut surfaces: ResMut<SurfaceMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     mut clips: ResMut<Assets<Clip>>,
     view: Res<ViewMode>,
     bodies: Query<(Entity, &Class, Has<LocalPlayer>, Option<&WornHat>), With<Skeleton>>,

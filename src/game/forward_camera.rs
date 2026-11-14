@@ -24,6 +24,8 @@ use bevy::camera::visibility::NoFrustumCulling;
 use bevy::gizmos::config::GizmoConfigStore;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
+
+use crate::common::air_lit::LitMaterial;
 use bevy::render::render_resource::{AsBindGroup, ShaderType, TextureFormat};
 use bevy::shader::{Shader, ShaderRef};
 
@@ -234,7 +236,7 @@ fn swap_in_the_lenses(
     surfaces: Res<SurfaceMaterials>,
     mut lenses: ResMut<Lenses>,
     mut materials: ResMut<Assets<LensMaterial>>,
-    parts: Query<(Entity, &MeshMaterial3d<StandardMaterial>), Added<ViewmodelPart>>,
+    parts: Query<(Entity, &MeshMaterial3d<LitMaterial>), Added<ViewmodelPart>>,
 ) {
     for (part, material) in &parts {
         let Some(surface) = surfaces.surface_of(material.id()) else { continue };
@@ -243,7 +245,7 @@ fn swap_in_the_lenses(
         }
         commands
             .entity(part)
-            .remove::<MeshMaterial3d<StandardMaterial>>()
+            .remove::<MeshMaterial3d<LitMaterial>>()
             .insert(MeshMaterial3d(lenses.get(surface.tint, &mut materials)));
     }
 }
@@ -316,7 +318,7 @@ mod tests {
     fn only_a_forward_camera_part_is_given_the_lens() {
         let mut world = World::new();
         world.init_resource::<Assets<Image>>();
-        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<Assets<LitMaterial>>();
         world.init_resource::<Assets<LensMaterial>>();
         world.init_resource::<SurfaceMaterials>();
         world.init_resource::<Lenses>();
@@ -331,7 +333,7 @@ mod tests {
         world.run_system_once(swap_in_the_lenses).unwrap();
 
         assert!(world.get::<MeshMaterial3d<LensMaterial>>(glass).is_some(), "the glass is not a lens");
-        assert!(world.get::<MeshMaterial3d<StandardMaterial>>(glass).is_none(), "the glass has two materials");
+        assert!(world.get::<MeshMaterial3d<LitMaterial>>(glass).is_none(), "the glass has two materials");
         assert!(world.get::<MeshMaterial3d<LensMaterial>>(barrel).is_none(), "the barrel became a lens");
     }
 

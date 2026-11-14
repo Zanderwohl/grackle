@@ -54,6 +54,8 @@ pub mod sky;
 pub mod stable_hash;
 pub mod sunlight;
 pub mod lightmap;
+pub mod air_light;
+pub mod air_lit;
 pub mod render_layers;
 pub mod shortcuts;
 pub mod reorder;

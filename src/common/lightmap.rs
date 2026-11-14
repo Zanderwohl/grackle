@@ -8,21 +8,21 @@
 
 use bevy::prelude::*;
 
-use crate::common::sky::SkyTime;
+use crate::common::sky::{Brightness, SkyTime};
 use crate::common::sunlight::{Daylight, LitSurface};
 use crate::common::world_surface::Face;
 
 /// Meters per lightmap texel.
 pub const TEXEL: f32 = 0.25;
 
-/// What a texel no light reaches is lit with, in `GlobalAmbientLight::brightness` units: a
-/// lightmap replaces the ambient term on the meshes that carry one.
+/// The default [`Brightness`](crate::common::sky::Brightness) ambient, in
+/// `GlobalAmbientLight::brightness` units: a lightmap replaces the ambient term on its meshes.
 pub const BASE_AMBIENT: f32 = 100.0;
 
-/// What the sun adds to a surface square on to it, in the same units.
+/// The default sun brightness, in the same units.
 pub const SUN_BRIGHTNESS: f32 = 1500.0;
 
-/// What a sky color of 1 is worth, in the same units.
+/// The default sky brightness, in the same units.
 pub const SKY_BRIGHTNESS: f32 = 600.0;
 
 /// Of every surface, for the bounce.
@@ -32,8 +32,8 @@ pub const ALBEDO: f32 = 0.4;
 /// interpolated between. On the same lattice, so neighbors across a threshold share samples too.
 const AMBIENT_STEP: f32 = 4.0;
 
-pub fn daylight(toward: Vec3, sky: SkyTime) -> Daylight {
-    Daylight { toward, sun: SUN_BRIGHTNESS, sky, sky_brightness: SKY_BRIGHTNESS, albedo: ALBEDO }
+pub fn daylight(toward: Vec3, sky: SkyTime, brightness: Brightness) -> Daylight {
+    Daylight { toward, base: brightness.ambient, sun: brightness.sun, sky, sky_brightness: brightness.sky, albedo: ALBEDO }
 }
 
 /// Texels round a chart sampled at its face's edge, so bilinear filtering at the edge reads the
@@ -45,8 +45,8 @@ const PADDING: i32 = 1;
 const INSET: f32 = 0.08;
 
 /// Every constant a bake's output depends on, for keying the lightmap cache.
-pub fn tuning() -> [u32; 8] {
-    [TEXEL, BASE_AMBIENT, SUN_BRIGHTNESS, SKY_BRIGHTNESS, ALBEDO, AMBIENT_STEP, PADDING as f32, INSET].map(f32::to_bits)
+pub fn tuning() -> [u32; 5] {
+    [TEXEL, ALBEDO, AMBIENT_STEP, PADDING as f32, INSET].map(f32::to_bits)
 }
 
 /// The lattice's two in-plane axes for a surface facing along `normal`. Floors and ceilings are
@@ -141,7 +141,7 @@ impl Atlas {
     /// Light per texel, row by row from the top of the atlas. `sky` is per face: a sky face is not
     /// lightmapped, and its texels are left at the base.
     pub fn bake(&self, faces: &[Face], sky: &[bool], surface: &LitSurface, light: &Daylight) -> Vec<Vec3> {
-        let mut texels = vec![Vec3::splat(BASE_AMBIENT); (self.size.x * self.size.y) as usize];
+        let mut texels = vec![Vec3::splat(light.base); (self.size.x * self.size.y) as usize];
         for (index, (face, chart)) in faces.iter().zip(&self.charts).enumerate() {
             if sky[index] {
                 continue;
@@ -179,7 +179,7 @@ impl Atlas {
                     let center = chart.origin.as_vec2() + Vec2::new(i as f32, j as f32) + 0.5;
                     let sun = if n_dot_l > 0.0 { surface.sun_reaching(sample_at(center), normal, light.toward) } else { 0.0 };
                     let at = (chart.at.y + j) * self.size.x + chart.at.x + i;
-                    texels[at as usize] = BASE_AMBIENT + light.sun * n_dot_l * sun + ambient(center);
+                    texels[at as usize] = light.base + light.sun * n_dot_l * sun + ambient(center);
                 }
             }
         }
@@ -193,8 +193,8 @@ impl Atlas {
     /// a lattice, so a texel is copied from the old chart in the same plane where there is one, else
     /// from the nearest parallel one — a dragged wall keeps its light — and clamped onto that
     /// chart's edge where it runs past it. Surface with nothing parallel before is the base.
-    pub fn carry_over(&self, old: &Atlas, old_light: &[Vec3]) -> Vec<Vec3> {
-        let mut light = vec![Vec3::splat(BASE_AMBIENT); (self.size.x * self.size.y) as usize];
+    pub fn carry_over(&self, old: &Atlas, old_light: &[Vec3], base: f32) -> Vec<Vec3> {
+        let mut light = vec![Vec3::splat(base); (self.size.x * self.size.y) as usize];
         for chart in &self.charts {
             let mut parallel: Vec<&Chart> =
                 old.charts.iter().filter(|other| other.normal.dot(chart.normal) > 0.999).collect();
@@ -346,7 +346,7 @@ mod tests {
     }
 
     fn day(altitude: f32, azimuth: f32) -> Daylight {
-        daylight(SunPosition { altitude, azimuth }.toward(), SkyTime::Day)
+        daylight(SunPosition { altitude, azimuth }.toward(), SkyTime::Day, Brightness::default())
     }
 
     /// A courtyard open to the sky with a low room off its east side, as in `sunlight`'s tests.
@@ -381,7 +381,7 @@ mod tests {
     fn a_night_sky_lights_less_than_a_day_one() {
         let toward = SunPosition { altitude: 45.0, azimuth: 270.0 }.toward();
         // Out of the sun, so only the sky differs.
-        let at = |sky| floor_light(&courtyard(), &[0], &daylight(toward, sky), 0, 1.0, 0.3);
+        let at = |sky| floor_light(&courtyard(), &[0], &daylight(toward, sky, Brightness::default()), 0, 1.0, 0.3);
         assert!(at(SkyTime::Night) < at(SkyTime::Day), "{} {}", at(SkyTime::Night), at(SkyTime::Day));
     }
 
@@ -419,7 +419,7 @@ mod tests {
 
         let (old_faces, old_atlas, old_light) = bake(Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0)));
         let (faces, atlas, _) = bake(Room::new(Vec3::ZERO, Vec3::new(5.0, 3.0, 4.0)));
-        let carried = atlas.carry_over(&old_atlas, &old_light);
+        let carried = atlas.carry_over(&old_atlas, &old_light, BASE_AMBIENT);
 
         let floor = Vec3::new(1.1, 0.0, 2.1);
         assert_eq!(at(&faces, &atlas, &carried, Vec3::Y, floor), at(&old_faces, &old_atlas, &old_light, Vec3::Y, floor));
@@ -429,5 +429,13 @@ mod tests {
             at(&old_faces, &old_atlas, &old_light, Vec3::NEG_X, was),
             "the wall that moved lost its light"
         );
+    }
+
+    #[test]
+    fn a_closed_room_is_the_maps_ambient() {
+        let rooms = [Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0))];
+        let night = Brightness { ambient: 12.5, sun: 200.0, sky: 40.0 };
+        let light = daylight(SunPosition { altitude: 70.0, azimuth: 10.0 }.toward(), SkyTime::Night, night);
+        assert_eq!(floor_light(&rooms, &[], &light, 0, 2.0, 2.0), 12.5);
     }
 }

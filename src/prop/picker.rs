@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+
+use crate::common::air_lit::LitMaterial;
 use bevy_egui::{egui, EguiContexts, EguiTextureHandle};
 
 use super::baked::{PropCache, SurfaceMaterials};
@@ -32,7 +34,7 @@ pub struct PropPreviews<'w, 's> {
     packs: Res<'w, PackAssets>,
     surfaces: ResMut<'w, SurfaceMaterials>,
     meshes: ResMut<'w, Assets<Mesh>>,
-    materials: ResMut<'w, Assets<StandardMaterial>>,
+    materials: ResMut<'w, Assets<LitMaterial>>,
     clips: ResMut<'w, Assets<Clip>>,
     thumbnails: Option<ResMut<'w, Thumbnails>>,
     /// The file each name is read from, `None` when no pack has one.

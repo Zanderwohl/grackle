@@ -12,6 +12,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
+use crate::common::lightmap::{BASE_AMBIENT, SKY_BRIGHTNESS, SUN_BRIGHTNESS};
 use crate::editor::map_metadata::MapMetadata;
 use crate::get;
 
@@ -124,11 +125,44 @@ impl SunPosition {
     }
 }
 
+/// In `GlobalAmbientLight::brightness` units, which a lightmap texel shares.
+#[derive(Resource, Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Brightness {
+    /// What a surface gets with no sun or sky reaching it. At least [`LEAST_AMBIENT`].
+    pub ambient: f32,
+    /// On a surface square on to the sun.
+    pub sun: f32,
+    /// What a sky color of 1 is worth.
+    pub sky: f32,
+}
+
+impl Default for Brightness {
+    fn default() -> Self {
+        Self { ambient: BASE_AMBIENT, sun: SUN_BRIGHTNESS, sky: SKY_BRIGHTNESS }
+    }
+}
+
+/// A body's ambient is drawn as a multiple of the ambient, so it cannot be zero.
+pub const LEAST_AMBIENT: f32 = 1.0;
+
+impl Brightness {
+    pub fn clamped(self) -> Self {
+        Self { ambient: self.ambient.max(LEAST_AMBIENT), sun: self.sun.max(0.0), sky: self.sky.max(0.0) }
+    }
+}
+
 /// Ungated, as [`publish_palette`](crate::common::palette::publish_palette) is.
-pub fn publish_sky(metadata: Res<MapMetadata>, mut sky: ResMut<SkyTime>, mut sun: ResMut<SunPosition>) {
+pub fn publish_sky(
+    metadata: Res<MapMetadata>,
+    mut sky: ResMut<SkyTime>,
+    mut sun: ResMut<SunPosition>,
+    mut brightness: ResMut<Brightness>,
+) {
     if metadata.is_changed() {
         sky.set_if_neq(metadata.sky);
         sun.set_if_neq(metadata.sun);
+        brightness.set_if_neq(metadata.brightness.clamped());
     }
 }
 
@@ -161,6 +195,12 @@ mod tests {
                 assert!(close, "{sky:?} at {elevation} is {drawn:?}, authored {authored:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_brightness_from_a_file_is_kept_drawable() {
+        let clamped = Brightness { ambient: 0.0, sun: -5.0, sky: 300.0 }.clamped();
+        assert_eq!(clamped, Brightness { ambient: LEAST_AMBIENT, sun: 0.0, sky: 300.0 });
     }
 
     #[test]

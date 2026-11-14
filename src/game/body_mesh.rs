@@ -13,6 +13,8 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
+use crate::common::air_lit::{self, lit, LitMaterial};
+
 use crate::common::flame::Burning;
 use crate::common::skeleton::mesh::body_meshes;
 use crate::common::skeleton::rig::Build;
@@ -87,24 +89,26 @@ pub fn body_look(
 /// One material per look: four teams alight or not is eight materials, not
 /// one per body.
 #[derive(Resource, Default)]
-pub struct BodyMaterials(HashMap<([u8; 4], bool), Handle<StandardMaterial>>);
+pub struct BodyMaterials {
+    made: HashMap<([u8; 4], bool), Handle<LitMaterial>>,
+}
 
 impl BodyMaterials {
     /// `pub(crate)` for the viewmodel's arms.
     pub(crate) fn get(
         &mut self,
         look: BodyLook,
-        materials: &mut Assets<StandardMaterial>,
-    ) -> Handle<StandardMaterial> {
-        self.0
+        materials: &mut Assets<LitMaterial>,
+    ) -> Handle<LitMaterial> {
+        self.made
             .entry(look.key())
             .or_insert_with(|| {
-                materials.add(StandardMaterial {
+                materials.add(lit(StandardMaterial {
                     base_color: look.color,
                     emissive: if look.burning { BURNING_GLOW } else { LinearRgba::BLACK },
                     perceptual_roughness: 0.85,
                     ..default()
-                })
+                }))
             })
             .clone()
     }
@@ -157,8 +161,8 @@ pub struct BodyMeshPlugin;
 
 impl Plugin for BodyMeshPlugin {
     fn build(&self, app: &mut App) {
-        app
-            .init_resource::<BodyMeshCache>()
+        air_lit::ensure(app);
+        app.init_resource::<BodyMeshCache>()
             .init_resource::<BodyMaterials>()
             // `recolor_bodies` after the build, so a body lit on the frame it
             // is dressed ends up lit.
@@ -178,7 +182,7 @@ fn build_body_meshes(
     mut meshes: ResMut<Assets<Mesh>>,
     mut cache: ResMut<BodyMeshCache>,
     mut palette: ResMut<BodyMaterials>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     bodies: Query<
         (
             Entity,
@@ -236,11 +240,11 @@ fn build_body_meshes(
 /// ten times a second.
 fn recolor_bodies(
     mut palette: ResMut<BodyMaterials>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     mut extinguished: RemovedComponents<Burning>,
     lit: Query<Entity, Added<Burning>>,
     bodies: Query<(&BodyMesh, Option<&Team>, Option<&PlayerColor>, Option<&BodyTint>, Option<&Burning>)>,
-    mut parts: Query<&mut MeshMaterial3d<StandardMaterial>>,
+    mut parts: Query<&mut MeshMaterial3d<LitMaterial>>,
 ) {
     // Both edges, or a body stays scorched after the fire is out.
     for body in lit.iter().chain(extinguished.read()) {
@@ -505,7 +509,7 @@ mod tests {
         let material = |body: Entity| {
             let part = app.world().get::<BodyMesh>(body).expect("dressed").parts[0];
             app.world()
-                .get::<MeshMaterial3d<StandardMaterial>>(part)
+                .get::<MeshMaterial3d<LitMaterial>>(part)
                 .expect("a part is painted")
                 .0
                 .clone()
@@ -514,7 +518,7 @@ mod tests {
         assert_eq!(material(first), material(second), "two green bodies, two materials");
         assert_ne!(material(plain), material(first), "the tint was ignored");
         // The default and the green, and nothing else.
-        assert_eq!(app.world().resource::<BodyMaterials>().0.len(), 2);
+        assert_eq!(app.world().resource::<BodyMaterials>().made.len(), 2);
     }
 
     /// Changing build replaces the old parts rather than keeping them.

@@ -23,9 +23,12 @@ const SUN_RAYS: usize = 8;
 /// Rays per point across the hemisphere, for sky light and bounce.
 const GATHER_RAYS: usize = 64;
 
+/// Rays per point in the air, over the whole sphere.
+const AIR_RAYS: usize = 64;
+
 /// Every constant a texel's light depends on, for keying the lightmap cache.
-pub fn tuning() -> [u32; 4] {
-    [LIFT.to_bits(), SUN_RADIUS.to_bits(), SUN_RAYS as u32, GATHER_RAYS as u32]
+pub fn tuning() -> [u32; 5] {
+    [LIFT.to_bits(), SUN_RADIUS.to_bits(), SUN_RAYS as u32, GATHER_RAYS as u32, AIR_RAYS as u32]
 }
 
 /// What lights the map from outside, in lightmap units: a lightmap texel is the irradiance over π,
@@ -34,6 +37,7 @@ pub fn tuning() -> [u32; 4] {
 pub struct Daylight {
     /// Unit, toward the sun.
     pub toward: Vec3,
+    pub base: f32,
     /// On a surface square on to the sun.
     pub sun: f32,
     pub sky: SkyTime,
@@ -101,6 +105,11 @@ impl LitSurface {
         None
     }
 
+    /// One ray at the sun's center, cheap enough for every body every frame.
+    pub fn sees_sun(&self, point: Vec3, toward: Vec3) -> bool {
+        self.first_hit(point, toward).is_some_and(|(face, _)| self.sky[face])
+    }
+
     /// How much of the sun's disc a point on the surface sees, 0 to 1. `normal` points into the
     /// air and `toward` at the sun. Not `N·L`-weighted: that is lighting, and this is visibility.
     pub fn sun_reaching(&self, point: Vec3, normal: Vec3, toward: Vec3) -> f32 {
@@ -134,22 +143,48 @@ impl LitSurface {
                 // irradiance over π.
                 let (x, y) = sunflower(i, GATHER_RAYS);
                 let direction = (u * x + v * y + normal * (1.0 - x * x - y * y).max(0.0).sqrt()).normalize();
-                let Some((face, t)) = self.first_hit(origin, direction) else { return Vec3::ZERO };
-                if self.sky[face] {
-                    return light.sky.color_at(direction.y).to_vec3() * light.sky_brightness;
-                }
-                let bounced = &self.faces[face];
-                let facing = bounced.plane.normal.dot(light.toward);
-                if facing <= 0.0 {
-                    return Vec3::ZERO;
-                }
-                let at = origin + direction * t + bounced.plane.normal * LIFT;
-                let sunlit = self.first_hit(at, light.toward).is_some_and(|(face, _)| self.sky[face]);
-                if sunlit { Vec3::splat(light.sun * facing * light.albedo) } else { Vec3::ZERO }
+                self.incoming(origin, direction, light)
             })
             .sum();
         total / GATHER_RAYS as f32
     }
+
+    /// [`Self::ambient`] averaged over the whole sphere: what a surface facing any way there gets on
+    /// average.
+    pub fn ambient_in_air(&self, point: Vec3, light: &Daylight) -> Vec3 {
+        let total: Vec3 = (0..AIR_RAYS).map(|i| self.incoming(point, spiral(i, AIR_RAYS), light)).sum();
+        total / AIR_RAYS as f32
+    }
+
+    fn incoming(&self, origin: Vec3, direction: Vec3, light: &Daylight) -> Vec3 {
+        let Some((face, t)) = self.first_hit(origin, direction) else { return Vec3::ZERO };
+        if self.sky[face] {
+            return light.sky.color_at(direction.y).to_vec3() * light.sky_brightness;
+        }
+        let bounced = &self.faces[face];
+        let facing = bounced.plane.normal.dot(light.toward);
+        if facing <= 0.0 {
+            return Vec3::ZERO;
+        }
+        let at = origin + direction * t + bounced.plane.normal * LIFT;
+        let sunlit = self.first_hit(at, light.toward).is_some_and(|(face, _)| self.sky[face]);
+        if sunlit { Vec3::splat(light.sun * facing * light.albedo) } else { Vec3::ZERO }
+    }
+
+    /// A ray up and a ray down both meet a face from its air side. A point in the slab between two
+    /// stacked rooms passes too, which costs a sample no body reads.
+    pub fn encloses(&self, point: Vec3) -> bool {
+        self.first_hit(point, Vec3::Y).is_some() && self.first_hit(point, Vec3::NEG_Y).is_some()
+    }
+}
+
+/// The `i`th of `n` directions spread evenly over the unit sphere.
+fn spiral(i: usize, n: usize) -> Vec3 {
+    const GOLDEN_ANGLE: f32 = 2.399_963;
+    let y = 1.0 - 2.0 * (i as f32 + 0.5) / n as f32;
+    let radius = (1.0 - y * y).max(0.0).sqrt();
+    let angle = i as f32 * GOLDEN_ANGLE;
+    Vec3::new(radius * angle.cos(), y, radius * angle.sin())
 }
 
 /// The `i`th of `n` points spread evenly over the unit disc, the same every time so a bake is

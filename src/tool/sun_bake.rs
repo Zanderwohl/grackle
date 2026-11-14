@@ -27,10 +27,11 @@ use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
+use crate::common::air_light::AirLight;
 use crate::common::app_mode::AppMode;
 use crate::common::lightmap::{self, daylight, Atlas};
 use crate::common::palette::Palette;
-use crate::common::sky::{SkyTime, SunPosition, SKYBOX};
+use crate::common::sky::{Brightness, SkyTime, SunPosition, SKYBOX};
 use crate::common::stable_hash::Fnv;
 use crate::common::sunlight::{self, Daylight, LitSurface};
 use crate::common::team::Side;
@@ -41,7 +42,7 @@ use crate::tool::bake_job::{self, BackgroundBake, BakeJob, BakeKind, BakeProgres
 use crate::tool::bakes::{BakePlugin, BakeSystems, BakedRoomGeometry, RoomBake, RoomSlotMesh};
 use crate::tool::room::{Block, Room, RoomSlot, RoomSurfaces};
 
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 
 const CACHE_FOLDER: &str = "lightmap";
 
@@ -49,6 +50,8 @@ const CACHE_FOLDER: &str = "lightmap";
 pub struct SunBake {
     /// The light standing now, by `Room` entity. May since have been carried onto new layouts.
     lit: HashMap<Entity, RoomLight>,
+    /// Kept like `lit` until a bake replaces it.
+    air: AirLight,
     bake: BackgroundBake<Job>,
     /// The last snapshot looked for on disk, so a miss is not read again every frame.
     looked_up: Option<u64>,
@@ -58,7 +61,7 @@ pub struct SunBake {
 
 impl Default for SunBake {
     fn default() -> Self {
-        Self { lit: HashMap::new(), bake: BackgroundBake::new(true), looked_up: None, use_disk: true }
+        Self { lit: HashMap::new(), air: AirLight::default(), bake: BackgroundBake::new(true), looked_up: None, use_disk: true }
     }
 }
 
@@ -75,11 +78,16 @@ impl SunBake {
         self.bake.is_baking()
     }
 
+    pub fn air(&self) -> &AirLight {
+        &self.air
+    }
+
     /// Lands every room of a bake, as one replacement for the whole map's light. A room whose
     /// layout is the one already lit is written into the same image, so its `Lightmap` never
     /// changes: Bevy reads a new handle only by a removal and an insertion, a frame unlit.
-    fn land(&mut self, baked: Vec<BakedLight>, images: &mut Assets<Image>) {
-        for room in baked {
+    fn land(&mut self, baked: BakedSun, images: &mut Assets<Image>) {
+        self.air = baked.air;
+        for room in baked.rooms {
             let new = lightmap_image(room.atlas.size, &room.light);
             let image = match self.lit.get(&room.room).filter(|old| old.faces_hash == room.faces_hash) {
                 Some(old) if images.insert(&old.image, new.clone()).is_ok() => old.image.clone(),
@@ -93,12 +101,12 @@ impl SunBake {
     }
 
     /// Writes a finished bake to disk, then lands it.
-    fn landed(&mut self, baked: Vec<BakedLight>, images: &mut Assets<Image>) {
+    fn landed(&mut self, baked: BakedSun, images: &mut Assets<Image>) {
         if self.use_disk
             && let Some(hash) = self.bake.baked()
         {
-            let rooms = baked.iter().map(|room| CachedRoom { faces_hash: room.faces_hash, light: room.light.clone() });
-            bake_cache::write(CACHE_FOLDER, hash, rooms.collect::<Vec<_>>());
+            let rooms = baked.rooms.iter().map(|room| CachedRoom { faces_hash: room.faces_hash, light: room.light.clone() });
+            bake_cache::write(CACHE_FOLDER, hash, CachedSun { rooms: rooms.collect(), air: baked.air.to_list() });
         }
         self.land(baked, images);
     }
@@ -109,12 +117,12 @@ impl SunBake {
             return;
         }
         self.looked_up = Some(snapshot.hash);
-        let Some(cached) = bake_cache::read::<Vec<CachedRoom>>(CACHE_FOLDER, snapshot.hash) else { return };
+        let Some(cached) = bake_cache::read::<CachedSun>(CACHE_FOLDER, snapshot.hash) else { return };
         let Some(baked) = snapshot.from_cache(cached, bakes) else {
             warn!("Ignoring cached sunlight {:016x}: it does not fit the rooms", snapshot.hash);
             return;
         };
-        info!("Read sunlight for {} room(s) from the cache", baked.len());
+        info!("Read sunlight for {} room(s) from the cache", baked.rooms.len());
         self.bake.adopt(snapshot.hash);
         self.land(baked, images);
     }
@@ -123,6 +131,61 @@ impl SunBake {
     fn using_the_disk(&mut self, use_disk: bool) {
         self.use_disk = use_disk;
     }
+}
+
+/// The map's surface for the sun on things that move, rebuilt when the faces or the sky paint
+/// change rather than waiting for a bake.
+#[derive(Resource, Default)]
+pub struct OpenSky {
+    surface: Option<LitSurface>,
+    /// What `surface` was built from: every room's faces hash and sky slots.
+    built_from: Option<u64>,
+}
+
+impl OpenSky {
+    #[cfg(test)]
+    pub(crate) fn of(surface: LitSurface) -> Self {
+        Self { surface: Some(surface), built_from: None }
+    }
+
+    pub fn sees_sun(&self, point: Vec3, toward: Vec3) -> bool {
+        self.surface.as_ref().is_some_and(|surface| surface.sees_sun(point, toward))
+    }
+
+    fn refresh(&mut self, snapshot: &Snapshot, bakes: &Query<(Entity, &BakedRoomGeometry)>) {
+        let mut hasher = Fnv::default();
+        for (_, _, faces_hash, is_sky) in &snapshot.rooms {
+            (faces_hash, is_sky).hash(&mut hasher);
+        }
+        let built_from = hasher.finish();
+        if self.built_from == Some(built_from) {
+            return;
+        }
+        let (mut faces, mut sky) = (Vec::new(), Vec::new());
+        for (entity, _, _, is_sky) in &snapshot.rooms {
+            let Ok((_, baked)) = bakes.get(*entity) else { continue };
+            sky.extend(sky_per_face(&baked.faces, *is_sky));
+            faces.extend(baked.faces.iter().cloned());
+        }
+        self.surface = Some(LitSurface::from_faces(faces, sky));
+        self.built_from = Some(built_from);
+    }
+}
+
+fn sky_per_face(faces: &[Face], is_sky: [bool; 3]) -> Vec<bool> {
+    faces
+        .iter()
+        .map(|face| {
+            let slot = RoomSlot::of(face.plane.normal);
+            is_sky[RoomSlot::ALL.iter().position(|s| *s == slot).expect("every slot is in ALL")]
+        })
+        .collect()
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedSun {
+    rooms: Vec<CachedRoom>,
+    air: Vec<(IVec3, Vec3)>,
 }
 
 /// One room's light as written to disk. Its atlas is not: it is [`Atlas::of`] its faces.
@@ -149,6 +212,11 @@ struct RoomLight {
     image: Handle<Image>,
 }
 
+struct BakedSun {
+    rooms: Vec<BakedLight>,
+    air: AirLight,
+}
+
 /// What a bake hands back for a room. Images are made on the main thread, when it lands.
 struct BakedLight {
     room: Entity,
@@ -173,6 +241,7 @@ impl Snapshot {
         palette: &Palette,
         sun: &SunPosition,
         sky: SkyTime,
+        brightness: Brightness,
     ) -> Snapshot {
         let toward = sun.toward();
         let mut rooms: Vec<(Entity, Entity, u64, [bool; 3])> = bakes
@@ -194,22 +263,24 @@ impl Snapshot {
         sunlight::tuning().hash(&mut hasher);
         toward.to_array().map(f32::to_bits).hash(&mut hasher);
         sky.hash(&mut hasher);
+        [brightness.ambient, brightness.sun, brightness.sky].map(f32::to_bits).hash(&mut hasher);
         for (_, _, faces_hash, is_sky) in &rooms {
             (faces_hash, is_sky).hash(&mut hasher);
         }
-        Snapshot { rooms, light: daylight(toward, sky), hash: hasher.finish() }
+        Snapshot { rooms, light: daylight(toward, sky, brightness), hash: hasher.finish() }
     }
 
     /// Each room's cached light on the layout its faces chart to now, or `None` if any room has
     /// none or it does not fit. Matched by place, since a bake is written in snapshot order and
     /// rooms may share a faces hash (no faces of their own).
-    fn from_cache(&self, cached: Vec<CachedRoom>, bakes: &Query<(Entity, &BakedRoomGeometry)>) -> Option<Vec<BakedLight>> {
-        if cached.len() != self.rooms.len() {
+    fn from_cache(&self, cached: CachedSun, bakes: &Query<(Entity, &BakedRoomGeometry)>) -> Option<BakedSun> {
+        if cached.rooms.len() != self.rooms.len() {
             return None;
         }
-        self.rooms
+        let rooms = self
+            .rooms
             .iter()
-            .zip(cached)
+            .zip(cached.rooms)
             .map(|((entity, room, faces_hash, _), cached)| {
                 let (_, baked) = bakes.get(*entity).ok()?;
                 let atlas = Atlas::of(&baked.faces);
@@ -217,7 +288,8 @@ impl Snapshot {
                 (cached.faces_hash == *faces_hash && light.len() == (atlas.size.x * atlas.size.y) as usize)
                     .then_some(BakedLight { room: *room, faces_hash: *faces_hash, atlas, light })
             })
-            .collect()
+            .collect::<Option<Vec<_>>>()?;
+        Some(BakedSun { rooms, air: AirLight::from_list(cached.air) })
     }
 
     fn job(&self, bakes: &Query<(Entity, &BakedRoomGeometry)>, labels: &VolumeLabels) -> Job {
@@ -226,18 +298,18 @@ impl Snapshot {
             .iter()
             .filter_map(|(entity, room, faces_hash, is_sky)| {
                 let (_, baked) = bakes.get(*entity).ok()?;
-                let sky = baked
-                    .faces
-                    .iter()
-                    .map(|face| {
-                        let slot = RoomSlot::of(face.plane.normal);
-                        is_sky[RoomSlot::ALL.iter().position(|s| *s == slot).expect("every slot is in ALL")]
-                    })
-                    .collect();
-                Some(JobRoom { room: *room, label: labels.label(*room), faces: baked.faces.clone(), sky, faces_hash: *faces_hash })
+                let sky = sky_per_face(&baked.faces, *is_sky);
+                Some(JobRoom {
+                    room: *room,
+                    label: labels.label(*room),
+                    faces: baked.faces.clone(),
+                    air: baked.air,
+                    sky,
+                    faces_hash: *faces_hash,
+                })
             })
             .collect();
-        Job { rooms, light: self.light, surface: None, baked: Vec::new(), busy: Duration::ZERO }
+        Job { rooms, light: self.light, surface: None, baked: Vec::new(), air: None, busy: Duration::ZERO }
     }
 }
 
@@ -245,32 +317,35 @@ struct JobRoom {
     room: Entity,
     label: String,
     faces: Vec<Face>,
+    air: Option<(Vec3, Vec3)>,
     sky: Vec<bool>,
     faces_hash: u64,
 }
 
 /// Everything a bake reads, copied out of the world so it can run elsewhere. The first item is the
-/// whole map's surface, which every room's rays are cast against; then a room an item.
+/// whole map's surface, which every room's rays are cast against; then a room an item; then the
+/// light in the air.
 struct Job {
     rooms: Vec<JobRoom>,
     light: Daylight,
     surface: Option<LitSurface>,
     baked: Vec<BakedLight>,
+    air: Option<AirLight>,
     /// Time spent stepping, not counting a wasm bake's waits between chunks.
     busy: Duration,
 }
 
 impl BakeJob for Job {
-    type Output = Vec<BakedLight>;
+    type Output = BakedSun;
 
     fn progress(&self) -> (usize, usize) {
-        (usize::from(self.surface.is_some()) + self.baked.len(), 1 + self.rooms.len())
+        (usize::from(self.surface.is_some()) + self.baked.len() + usize::from(self.air.is_some()), 2 + self.rooms.len())
     }
 
     fn doing(&self) -> String {
         match self.surface {
             None => get!("bakes.doing.surface"),
-            Some(_) => self.rooms.get(self.baked.len()).map(|room| room.label.clone()).unwrap_or_default(),
+            Some(_) => self.rooms.get(self.baked.len()).map(|room| room.label.clone()).unwrap_or_else(|| get!("bakes.doing.air")),
         }
     }
 
@@ -280,14 +355,14 @@ impl BakeJob for Job {
         self.busy += started.elapsed();
     }
 
-    fn finish(self) -> Vec<BakedLight> {
+    fn finish(self) -> BakedSun {
         info!(
             "Baked sunlight for {} room(s), {} texels, in {:.0} ms",
             self.baked.len(),
             self.baked.iter().map(|room| room.light.len()).sum::<usize>(),
             self.busy.as_secs_f32() * 1000.0
         );
-        self.baked
+        BakedSun { rooms: self.baked, air: self.air.unwrap_or_default() }
     }
 }
 
@@ -299,7 +374,11 @@ impl Job {
             self.surface = Some(LitSurface::from_faces(faces, sky));
             return;
         };
-        let room = &self.rooms[self.baked.len()];
+        let Some(room) = self.rooms.get(self.baked.len()) else {
+            let bounds: Vec<(Vec3, Vec3)> = self.rooms.iter().filter_map(|room| room.air).collect();
+            self.air = Some(AirLight::bake(&bounds, surface, &self.light));
+            return;
+        };
         let atlas = Atlas::of(&room.faces);
         let light = atlas.bake(&room.faces, &room.sky, surface, &self.light);
         self.baked.push(BakedLight { room: room.room, faces_hash: room.faces_hash, atlas, light });
@@ -331,6 +410,7 @@ fn carry_light_over(
     mut state: ResMut<SunBake>,
     bakes: Query<&BakedRoomGeometry>,
     rooms: Query<(), Or<(With<Room>, With<Block>)>>,
+    brightness: Res<Brightness>,
     mut images: ResMut<Assets<Image>>,
 ) {
     state.lit.retain(|room, _| rooms.contains(*room));
@@ -340,7 +420,7 @@ fn carry_light_over(
             continue;
         }
         let atlas = Atlas::of(&baked.faces);
-        let light = atlas.carry_over(&old.atlas, &old.light);
+        let light = atlas.carry_over(&old.atlas, &old.light, brightness.ambient);
         let image = images.add(lightmap_image(atlas.size, &light));
         state.lit.insert(baked.room, RoomLight { faces_hash: baked.faces_hash, atlas, light, image });
     }
@@ -359,18 +439,22 @@ fn auto_bake_sunlight(
     palette: Res<Palette>,
     sun: Res<SunPosition>,
     sky: Res<SkyTime>,
+    brightness: Res<Brightness>,
     edited: Query<(), Or<(Changed<BakedRoomGeometry>, Changed<RoomSurfaces>, Changed<Side>)>>,
     mut rebuilt: RemovedComponents<BakedRoomGeometry>,
     mut images: ResMut<Assets<Image>>,
+    mut open_sky: ResMut<OpenSky>,
 ) {
     let state = &mut *state;
     let inputs_changed = rebuilt.read().count() > 0
         || !edited.is_empty()
         || palette.is_changed()
         || sun.is_changed()
-        || sky.is_changed();
+        || sky.is_changed()
+        || brightness.is_changed();
     if clears.read().count() > 0 {
         state.lit.clear();
+        state.air = AirLight::default();
         state.bake.forget();
         info!("Cleared the sunlight");
     }
@@ -380,12 +464,20 @@ fn auto_bake_sunlight(
     if let Some(baked) = state.bake.poll() {
         state.landed(baked, &mut images);
     }
-    // Half-rebuilt rooms leave holes for light to come through. With nothing to bake, a snapshot
-    // only tells stale from up to date, so it is taken only on a change.
-    if !rooms.is_settled() || !(state.bake.would_bake() || inputs_changed) {
+    // Half-rebuilt rooms leave holes for light to come through, so the bake waits for them. The sun
+    // on things that move is drawn live and does not wait.
+    if !rooms.is_settled() {
+        if inputs_changed {
+            open_sky.refresh(&Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness), &bakes);
+        }
         return;
     }
-    let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky);
+    // With nothing to bake, a snapshot only says whether the light is stale.
+    if !(state.bake.would_bake() || inputs_changed) {
+        return;
+    }
+    let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness);
+    open_sky.refresh(&snapshot, &bakes);
     state.take_from_cache(&snapshot, &bakes, &mut images);
     state.bake.update(snapshot.hash, rooms.is_settled(), time.elapsed_secs(), || snapshot.job(&bakes, &labels));
 }
@@ -401,9 +493,12 @@ fn bake_sunlight_for_the_round(
     palette: Res<Palette>,
     sun: Res<SunPosition>,
     sky: Res<SkyTime>,
+    brightness: Res<Brightness>,
     mut images: ResMut<Assets<Image>>,
+    mut open_sky: ResMut<OpenSky>,
 ) {
-    let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky);
+    let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness);
+    open_sky.refresh(&snapshot, &bakes);
     state.take_from_cache(&snapshot, &bakes, &mut images);
     if let Some(baked) = state.bake.for_the_round(snapshot.hash, || snapshot.job(&bakes, &labels)) {
         state.landed(baked, &mut images);
@@ -463,6 +558,7 @@ pub struct SunBakePlugin;
 impl Plugin for SunBakePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SunBake>()
+            .init_resource::<OpenSky>()
             .add_message::<BakeSunlight>()
             .add_message::<ClearSunlight>()
             // Ungated, as the room bake is: the map can change during a round.
@@ -501,7 +597,7 @@ mod tests {
         app.init_asset::<Mesh>();
         app.init_asset::<StandardMaterial>();
         app.init_asset::<Image>();
-        app.init_resource::<Palette>().init_resource::<SunPosition>().init_resource::<SkyTime>();
+        app.init_resource::<Palette>().init_resource::<SunPosition>().init_resource::<SkyTime>().init_resource::<Brightness>();
         app.add_plugins((GamePlugin, BakePlugin, SunBakePlugin));
         app.world_mut().resource_mut::<RoomBake>().set_auto(false);
         app.world_mut().resource_mut::<SunBake>().set_auto(false);
@@ -557,6 +653,17 @@ mod tests {
         assert_eq!(lightmaps(&app), first);
     }
 
+    #[test]
+    fn a_round_after_the_brightness_changed_bakes_again() {
+        let mut app = headless();
+        enter(&mut app, AppMode::Play);
+        let before = light(&app);
+        enter(&mut app, AppMode::Editor);
+        app.world_mut().resource_mut::<Brightness>().ambient = 20.0;
+        enter(&mut app, AppMode::Play);
+        assert_ne!(light(&app), before, "the ambient changed and the light did not");
+    }
+
     /// With the sun's auto-bake off nothing will replace it, and a reshaped room still keeps the
     /// light it had, laid onto its new layout.
     #[test]
@@ -602,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bake_reports_the_surface_and_each_room_as_it_goes() {
+    fn a_bake_reports_the_surface_each_room_and_the_air_as_it_goes() {
         let mut app = headless();
         app.world_mut().write_message(CalculateRoomGeometry);
         app.update();
@@ -619,7 +726,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let done = status(&app);
-        assert_eq!((done.completed, done.scheduled), (2, 2), "the surface, then the one room");
+        assert_eq!((done.completed, done.scheduled), (3, 3), "the surface, the one room, then the air");
     }
 
     /// A second launch on the same map, as a second app, takes the light off disk without baking.

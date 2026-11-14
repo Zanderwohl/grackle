@@ -1543,7 +1543,15 @@ The bake runs on the async compute pool from a copy of the faces; entering Play
 waits only when the light is stale. Each texel is the base ambient, the sun, and sky
 light plus one bounce gathered every meter (`LitSurface::ambient`). The
 lightmap replaces the ambient on walls, so `GlobalAmbientLight` lights only
-what moves.
+what moves. **Things that move are lit where they stand** ([`src/game/sunlit.rs`](src/game/sunlit.rs)):
+each one's meshes get a `MeshTag` packing whether one ray from it reaches sky
+in `OpenSky` and the bake's `AirLight` (the gather on a 2 m world lattice) at
+that point, and their `LitMaterial` ([`src/common/air_lit.rs`](src/common/air_lit.rs)) —
+body parts, every prop surface, projectiles — adds the sun and scales its
+ambient by it. A plugin that makes one calls `air_lit::ensure`, since those
+plugins also stand alone in tests. **Not a `DirectionalLight`**: Bevy applies one to every mesh a camera
+draws whatever the mesh's render layers, so it lit every wall unshadowed and
+washed the lightmaps out.
 
 **Every bake reports the same way**
 ([`src/tool/bake_job.rs`](src/tool/bake_job.rs)): a `BakeStatus` per
@@ -3146,7 +3154,9 @@ Saves write through a `.bak` and restore it on failure.
 
 **Map settings** are the metadata header (`MapMetadata`, saved as
 `SavedMetadata`): a display name (`None` falls back to the file name),
-authors, game mode, and a movement section — the sprint policy (Always by
+authors, game mode, the sky (`SkyTime`), the sun's position and how bright the
+ambient, sun and sky are (`Brightness`, see [documentation/sun.md](documentation/sun.md)),
+and a movement section — the sprint policy (Always by
 default, which makes Shift do nothing, as does Disabled) and gravity in
 m/s². A setting added later is `#[serde(default)]`, so older maps open with
 its default. The game never reads `MapMetadata`: `publish_movement_rules` is
