@@ -230,3 +230,17 @@ share = 0.4
 [[look]]
 bone = "head"
 share = 0.6
+
+# Turned back against the legs when they swing toward where the body is going: the body
+# faces halfway, the head the aim.
+[[twist]]
+bone = "spine"
+share = 0.5
+
+[[twist]]
+bone = "neck"
+share = 0.25
+
+[[twist]]
+bone = "head"
+share = 0.25

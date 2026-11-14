@@ -230,6 +230,13 @@ impl Gait {
     /// frame, over `dt` seconds, on legs `leg` meters long. Scaling by leg length
     /// keeps different builds in step as a fraction of their own stride.
     pub fn advance(&mut self, moved: Vec2, leg: f32, dt: f32) {
+        self.advance_stepping(moved, leg, dt, |gait| (gait.shape(), gait.travel()));
+    }
+
+    /// [`Gait::advance`], with the feet stepping in a shape and direction of `stepping`'s choice:
+    /// a state's own shape, and the travel as the legs see it when they turn. Asked after the
+    /// velocity is updated.
+    pub fn advance_stepping(&mut self, moved: Vec2, leg: f32, dt: f32, stepping: impl FnOnce(&Gait) -> (GaitShape, Vec2)) {
         if leg <= 0.0 || dt <= 0.0 {
             return;
         }
@@ -237,7 +244,8 @@ impl Gait {
         let measured = moved / dt / leg;
         self.velocity += (measured - self.velocity) * (dt / SPEED_SMOOTHING).min(1.0);
 
-        let stride = self.shape().stride_per_cycle(self.travel()) * leg;
+        let (shape, travel) = stepping(self);
+        let stride = shape.stride_per_cycle(travel) * leg;
         self.phase = (self.phase + moved.length() / stride).rem_euclid(1.0);
     }
 

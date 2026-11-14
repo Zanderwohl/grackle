@@ -246,6 +246,16 @@ taunts it has a clip for. `--class KEY` plays every body as that class until
 a class can be picked (`PlayAs`, read by `publish_game_rules`). The humanoid's
 own tests loop over `ClassBuilds::humanoids()`.
 
+**Legs turn toward where a body is going; the body above takes it back.**
+`ik::ducked_pose` swings the legs 0.75 of the way to the travel (from the
+measured `Gait`, so every viewer agrees; backing up turns them toward the way
+it backs from) and turns each bone in the rig's `twist` list back by its share:
+the humanoid's chest faces halfway, its head the aim, and the grip brings the
+arms to the weapon, which is placed from the aim. On a rig with a `twist`, a
+strafe steps as a run (`with_turned_legs`), so its strafe clips do not play.
+`advance_gaits` measures the stride in the turned legs' frame and the state's
+own shape (`ik::stepping`), or the planted foot slides.
+
 A chain of three or more bones (a limb's `between`) is solved by FABRIK within
 each joint's limit, at a fixed round count so every machine agrees; two bones
 stay on the exact solver. A clip's `LookAt` turns a bone toward a target, and

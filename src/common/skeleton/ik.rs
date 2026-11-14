@@ -14,7 +14,9 @@ use crate::common::class::CROUCH_HEIGHT;
 use crate::common::skeleton::anatomy::PerFoot;
 use crate::common::skeleton::gait::FootOffset;
 use crate::common::skeleton::interpolation::Interpolation;
-use std::f32::consts::PI;
+use std::f32::consts::{FRAC_PI_2, PI};
+#[cfg(test)]
+use std::f32::consts::FRAC_PI_4;
 
 use crate::common::skeleton::joints::JointLimit;
 use crate::common::skeleton::rig::{bone, Bone, Pose, Skeleton};
@@ -343,9 +345,95 @@ pub fn animator_pose(
     Pose::lerp(&leaving, &arriving, Interpolation::SmoothStep.ease(animator.blend()))
 }
 
+/// How much of the way toward where the body is going its legs turn. The rest is a step at an
+/// angle, which the gait already takes.
+const LEG_TURN: f32 = 0.75;
+
+/// How far a body's legs turn from its aim toward where it is going, radians, positive to its
+/// right. Backing up turns them toward the way it backs from. Zero for a rig with no
+/// [`Anatomy::twist`](super::anatomy::Anatomy::twist) to take the turn back up the body.
+///
+/// A function of the state and the measured travel, so every viewer agrees and the turn lags a
+/// flick of the aim by the travel's own smoothing. Which way a strafe-and-back body faces is
+/// the state's to decide, and a change is blended as any change of state is.
+pub fn leg_turn(skeleton: &Skeleton, state: AnimationState, inputs: &PoseInputs) -> f32 {
+    if skeleton.anatomy().twist.is_empty() || !state.uses_gait() {
+        return 0.0;
+    }
+    let travel = state.travel(inputs);
+    let ahead = if state.backs_up() { -travel } else { travel };
+    ahead.x.atan2(ahead.y).clamp(-FRAC_PI_2, FRAC_PI_2) * LEG_TURN
+}
+
+/// `travel`, `x` right and `y` forwards, as seen from legs turned `turn` to the right.
+pub fn travel_from_legs(travel: Vec2, turn: f32) -> Vec2 {
+    let (sin, cos) = turn.sin_cos();
+    Vec2::new(travel.x * cos - travel.y * sin, travel.x * sin + travel.y * cos)
+}
+
+/// Where a body's steps are measured: the state they are taken in, and the travel from the legs.
+pub fn stepping(skeleton: &Skeleton, state: AnimationState, inputs: &PoseInputs) -> (AnimationState, Vec2) {
+    let turn = leg_turn(skeleton, state, inputs);
+    let stepped = match skeleton.anatomy().twist.is_empty() {
+        true => state,
+        false => state.with_turned_legs(),
+    };
+    (stepped, travel_from_legs(state.travel(inputs), turn))
+}
+
 /// `state` done `crouch` of the way from standing to crouched, 0 to 1. `None` takes the state as
 /// it is, for a body with no duck of its own, whose state alone says whether it is crouched.
+///
+/// The legs turn toward where the body is going ([`leg_turn`]) and the body above them turns
+/// back by [`Anatomy::twist`](super::anatomy::Anatomy::twist), so the head faces the aim.
 pub fn ducked_pose(
+    skeleton: &Skeleton,
+    state: AnimationState,
+    inputs: &PoseInputs,
+    root: &Transform,
+    clips: Option<&ClipLibrary>,
+    crouch: Option<f32>,
+) -> Pose {
+    let turn = leg_turn(skeleton, state, inputs);
+    let (stepped, travel) = stepping(skeleton, state, inputs);
+    if turn == 0.0 && stepped == state {
+        return facing_pose(skeleton, state, inputs, root, clips, crouch);
+    }
+    // Rightward is a negative turn about +Y.
+    let legs = Quat::from_rotation_y(-turn);
+    let legs_root = Transform { rotation: root.rotation * legs, ..*root };
+    let mut pose = facing_pose(skeleton, stepped, &PoseInputs { travel, ..*inputs }, &legs_root, clips, crouch);
+    unturn_the_root(skeleton, &mut pose, legs);
+    twist_back(skeleton, &mut pose, root, turn);
+    pose
+}
+
+/// Restate a pose built under a root turned by `legs` as the same placement under the unturned
+/// root: every bone stays where it was in the world.
+fn unturn_the_root(skeleton: &Skeleton, pose: &mut Pose, legs: Quat) {
+    let hip = skeleton.anatomy().hip;
+    let Some(first) = skeleton.bones().iter().find(|bone| bone.parent.is_none()) else { return };
+    // The root bone's head swings round the turn's axis too; the offset carries it there. Only
+    // the first root's, since a pose has one offset.
+    let offset = pose.root_offset * hip + first.head;
+    pose.root_offset = (legs * offset - first.head) / hip;
+    for bone in skeleton.bones().iter().filter(|bone| bone.parent.is_none()) {
+        pose.set(bone.name, bone.rest.inverse() * legs * bone.rest * pose.joint(bone.name));
+    }
+}
+
+/// Turn each twist bone back about the root's vertical by its share of `turn`.
+fn twist_back(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, turn: f32) {
+    let up = root.rotation * Vec3::Y;
+    for &(index, share) in &skeleton.anatomy().twist {
+        let bone = &skeleton.bones()[index];
+        let posed = skeleton.posed_bone(pose, root, index).rotation;
+        set_world_rotation(skeleton, pose, root, bone.name, Quat::from_axis_angle(up, turn * share) * posed);
+    }
+}
+
+/// [`ducked_pose`] with the legs facing the way the body does.
+fn facing_pose(
     skeleton: &Skeleton,
     state: AnimationState,
     inputs: &PoseInputs,
@@ -945,5 +1033,105 @@ mod tests {
 
         let idling = finish_pose(&skeleton, AnimationState::Idle, &inputs, &root, None);
         assert_ne!(idling.joint(bone::THIGH_L), Quat::IDENTITY, "the idle was never corrected");
+    }
+
+    /// How far a bone has turned about the vertical from where it rests, radians, positive to
+    /// the body's right.
+    fn turn_of(skeleton: &Skeleton, pose: &Pose, root: &Transform, name: &str) -> f32 {
+        let index = skeleton.index_of(name).unwrap();
+        let rest = skeleton.posed_bone(&Pose::rest(), root, index).rotation;
+        let ahead = skeleton.posed_bone(pose, root, index).rotation * rest.inverse() * Vec3::NEG_Z;
+        ahead.x.atan2(-ahead.z)
+    }
+
+    /// The legs swing most of the way toward a strafe, the chest halfway back, and the head
+    /// faces the aim; backing up diagonally turns the legs toward the way the body backs from.
+    #[test]
+    fn a_strafe_turns_the_legs_and_the_head_keeps_the_aim() {
+        use super::super::rig::bone;
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let root = Transform::IDENTITY;
+        let tolerance = 6f32.to_radians();
+        let back_left = Vec2::new(-1.0, -1.0).normalize();
+        for (state, travel, legs) in [
+            (AnimationState::StrafeRight, Vec2::X, FRAC_PI_2 * LEG_TURN),
+            (AnimationState::StrafeLeft, Vec2::NEG_X, -FRAC_PI_2 * LEG_TURN),
+            (AnimationState::CrouchStrafeRight, Vec2::X, FRAC_PI_2 * LEG_TURN),
+            (AnimationState::RunBackward, back_left, FRAC_PI_4 * LEG_TURN),
+            (AnimationState::RunForward, Vec2::Y, 0.0),
+        ] {
+            for step in 0..8 {
+                let inputs = PoseInputs { stride: step as f32 / 8.0, speed: 6.0, travel, ..default() };
+                assert!((leg_turn(&skeleton, state, &inputs) - legs).abs() < 1e-5, "{state:?}");
+                let pose = ducked_pose(&skeleton, state, &inputs, &root, None, None);
+                for (name, wanted) in [(bone::PELVIS, legs), (bone::CHEST, legs * 0.5), (bone::HEAD, 0.0)] {
+                    let turned = turn_of(&skeleton, &pose, &root, name);
+                    assert!(
+                        (turned - wanted).abs() < tolerance,
+                        "{state:?}: {name} turned {:.1}°, not {:.1}°",
+                        turned.to_degrees(),
+                        wanted.to_degrees()
+                    );
+                }
+            }
+        }
+    }
+
+    /// A planted foot holds still in the world through a turned stride: the stride advances by
+    /// the turned legs' own steps, as `advance_gaits` measures them.
+    #[test]
+    fn a_planted_foot_holds_through_a_turned_stride() {
+        use super::super::gait::{feet_offsets, Gait};
+        use super::super::rig::bone;
+        let builds = crate::common::class::ClassBuilds::shipped();
+        for class in builds.humanoids() {
+            let skeleton = builds.rig_for(class);
+            let leg = leg_length(&skeleton);
+            let dt = 1.0 / 64.0;
+            for (state, travel) in [
+                (AnimationState::StrafeRight, Vec2::X),
+                (AnimationState::CrouchStrafeLeft, Vec2::NEG_X),
+                (AnimationState::RunForward, Vec2::new(1.0, 1.0).normalize()),
+                (AnimationState::RunBackward, Vec2::new(1.0, -1.0).normalize()),
+            ] {
+                let speed = if state.ducks() { 2.0 } else { 6.0 };
+                let mut gait = Gait::default();
+                let mut at = Vec2::ZERO;
+                let mut was: Option<Vec3> = None;
+                for tick in 0..200 {
+                    let moved = travel * speed * leg * dt;
+                    at += moved;
+                    gait.advance_stepping(moved, leg, dt, |gait| {
+                        let inputs = PoseInputs { speed: gait.speed(), travel: gait.travel(), ..default() };
+                        let (stepped, travel) = stepping(&skeleton, state, &inputs);
+                        (stepped.stride_shape(&inputs), travel)
+                    });
+                    // Past the speed's smoothing, so the stride is steady.
+                    if tick < 64 {
+                        continue;
+                    }
+                    let inputs = PoseInputs { stride: gait.phase(), speed: gait.speed(), travel: gait.travel(), ..default() };
+                    let root = Transform::from_xyz(at.x, 0.0, -at.y);
+                    let pose = ducked_pose(&skeleton, state, &inputs, &root, None, None);
+                    let ankle = skeleton
+                        .posed_bones(&pose, &root)
+                        .into_iter()
+                        .find(|posed| posed.name == bone::SHIN_L)
+                        .unwrap()
+                        .tail;
+                    let (stepped, legs_travel) = stepping(&skeleton, state, &inputs);
+                    let shape = stepped.stride_shape(&inputs);
+                    let planted = feet_offsets(gait.phase(), legs_travel, shape, skeleton.anatomy())[0].lift == 0.0;
+                    if let (true, Some(was)) = (planted, was) {
+                        assert!(
+                            (ankle - was).length() < 2e-3,
+                            "{state:?} on {class:?}: the planted foot slid {:.4} m",
+                            (ankle - was).length()
+                        );
+                    }
+                    was = planted.then_some(ankle);
+                }
+            }
+        }
     }
 }

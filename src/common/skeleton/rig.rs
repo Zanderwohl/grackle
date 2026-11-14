@@ -618,6 +618,11 @@ fn humanoid_anatomy(bones: &[Bone], proportions: Proportions) -> super::anatomy:
             .into_iter()
             .filter_map(|(name, share)| Some((index(name)?, share)))
             .collect(),
+        // The chest faces halfway between the legs and the aim.
+        twist: [(bone::CHEST, 0.5), (bone::NECK, 0.2), (bone::HEAD, 0.3)]
+            .into_iter()
+            .filter_map(|(name, share)| Some((index(name)?, share)))
+            .collect(),
         // Forearms and hands only: an upper arm runs back to a shoulder beside the camera and at a
         // 5 mm near plane reads as a slab in the screen corner.
         viewmodel: [(bone::FOREARM_R, 0), (bone::HAND_R, 0), (bone::FOREARM_L, 1), (bone::HAND_L, 1)]

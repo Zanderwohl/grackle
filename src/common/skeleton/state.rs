@@ -343,9 +343,29 @@ impl AnimationState {
         )
     }
 
+    /// Whether the body faces away from where it is going.
+    pub fn backs_up(&self) -> bool {
+        matches!(self, AnimationState::RunBackward | AnimationState::CrouchWalkBackward)
+    }
+
+    /// The state whose steps a body with turning legs takes: a strafe is a run with the legs
+    /// swung toward it.
+    pub fn with_turned_legs(&self) -> AnimationState {
+        match self {
+            AnimationState::StrafeLeft | AnimationState::StrafeRight => AnimationState::RunForward,
+            AnimationState::CrouchStrafeLeft | AnimationState::CrouchStrafeRight => AnimationState::CrouchWalk,
+            other => *other,
+        }
+    }
+
+    /// The shape the feet step in, which the stride's phase must advance by or they slide.
+    pub fn stride_shape(&self, inputs: &PoseInputs) -> super::gait::GaitShape {
+        self.gait_style(inputs).shape
+    }
+
     /// Measured travel where there is any, else the state's own direction: a
     /// display standing still has nothing to measure.
-    fn travel(&self, inputs: &PoseInputs) -> Vec2 {
+    pub fn travel(&self, inputs: &PoseInputs) -> Vec2 {
         if inputs.travel == Vec2::ZERO {
             direction_of(*self)
         } else {

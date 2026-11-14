@@ -41,6 +41,9 @@ pub struct RigFile {
     pub mount: Option<MountEntry>,
     #[serde(default)]
     pub look: Vec<LookEntry>,
+    /// Bones that turn back against the legs; see `Anatomy::twist`. Shaped as `look` is.
+    #[serde(default)]
+    pub twist: Vec<LookEntry>,
     #[serde(default)]
     pub viewmodel: Vec<ViewmodelEntry>,
     pub measures: Measures,
@@ -326,6 +329,7 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
             .map(|mount| Ok::<_, String>((bone(&mount.bone)?, Vec3::from_array(mount.offset) * uniform)))
             .transpose()?,
         look: file.look.iter().map(|look| Ok((bone(&look.bone)?, look.share))).collect::<Result<_, String>>()?,
+        twist: file.twist.iter().map(|twist| Ok((bone(&twist.bone)?, twist.share))).collect::<Result<_, String>>()?,
         viewmodel: file.viewmodel.iter().map(|entry| Ok((bone(&entry.bone)?, entry.hand))).collect::<Result<_, String>>()?,
         regions,
         region_names,
