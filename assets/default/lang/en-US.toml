@@ -254,6 +254,9 @@ gravity = "Gravity"
 sky = "Sky"
 sun_altitude = "Sun altitude"
 sun_azimuth = "Sun azimuth"
+ambient = "Ambient"
+sun_brightness = "Sun brightness"
+sky_brightness = "Sky brightness"
 
 [editor.features.global_point]
 title = "Global Point"

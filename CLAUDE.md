@@ -3113,7 +3113,9 @@ Saves write through a `.bak` and restore it on failure.
 
 **Map settings** are the metadata header (`MapMetadata`, saved as
 `SavedMetadata`): a display name (`None` falls back to the file name),
-authors, game mode, and a movement section — the sprint policy (Always by
+authors, game mode, the sky (`SkyTime`), the sun's position and how bright the
+ambient, sun and sky are (`Brightness`, see [documentation/sun.md](documentation/sun.md)),
+and a movement section — the sprint policy (Always by
 default, which makes Shift do nothing, as does Disabled) and gravity in
 m/s². A setting added later is `#[serde(default)]`, so older maps open with
 its default. The game never reads `MapMetadata`: `publish_movement_rules` is

@@ -31,7 +31,7 @@ use crate::common::air_light::AirLight;
 use crate::common::app_mode::AppMode;
 use crate::common::lightmap::{self, daylight, Atlas};
 use crate::common::palette::Palette;
-use crate::common::sky::{SkyTime, SunPosition, SKYBOX};
+use crate::common::sky::{Brightness, SkyTime, SunPosition, SKYBOX};
 use crate::common::stable_hash::Fnv;
 use crate::common::sunlight::{self, Daylight, LitSurface};
 use crate::common::team::Side;
@@ -240,6 +240,7 @@ impl Snapshot {
         palette: &Palette,
         sun: &SunPosition,
         sky: SkyTime,
+        brightness: Brightness,
     ) -> Snapshot {
         let toward = sun.toward();
         let mut rooms: Vec<(Entity, Entity, u64, [bool; 3])> = bakes
@@ -261,10 +262,11 @@ impl Snapshot {
         sunlight::tuning().hash(&mut hasher);
         toward.to_array().map(f32::to_bits).hash(&mut hasher);
         sky.hash(&mut hasher);
+        [brightness.ambient, brightness.sun, brightness.sky].map(f32::to_bits).hash(&mut hasher);
         for (_, _, faces_hash, is_sky) in &rooms {
             (faces_hash, is_sky).hash(&mut hasher);
         }
-        Snapshot { rooms, light: daylight(toward, sky), hash: hasher.finish() }
+        Snapshot { rooms, light: daylight(toward, sky, brightness), hash: hasher.finish() }
     }
 
     /// Each room's cached light on the layout its faces chart to now, or `None` if any room has
@@ -399,6 +401,7 @@ fn carry_light_over(
     mut state: ResMut<SunBake>,
     bakes: Query<&BakedRoomGeometry>,
     rooms: Query<(), Or<(With<Room>, With<Block>)>>,
+    brightness: Res<Brightness>,
     mut images: ResMut<Assets<Image>>,
 ) {
     state.lit.retain(|room, _| rooms.contains(*room));
@@ -408,7 +411,7 @@ fn carry_light_over(
             continue;
         }
         let atlas = Atlas::of(&baked.faces);
-        let light = atlas.carry_over(&old.atlas, &old.light);
+        let light = atlas.carry_over(&old.atlas, &old.light, brightness.ambient);
         let image = images.add(lightmap_image(atlas.size, &light));
         state.lit.insert(baked.room, RoomLight { faces_hash: baked.faces_hash, atlas, light, image });
     }
@@ -427,6 +430,7 @@ fn auto_bake_sunlight(
     palette: Res<Palette>,
     sun: Res<SunPosition>,
     sky: Res<SkyTime>,
+    brightness: Res<Brightness>,
     edited: Query<(), Or<(Changed<BakedRoomGeometry>, Changed<RoomSurfaces>, Changed<Side>)>>,
     mut rebuilt: RemovedComponents<BakedRoomGeometry>,
     mut images: ResMut<Assets<Image>>,
@@ -437,7 +441,8 @@ fn auto_bake_sunlight(
         || !edited.is_empty()
         || palette.is_changed()
         || sun.is_changed()
-        || sky.is_changed();
+        || sky.is_changed()
+        || brightness.is_changed();
     if clears.read().count() > 0 {
         state.lit.clear();
         state.air = AirLight::default();
@@ -455,7 +460,7 @@ fn auto_bake_sunlight(
     if !rooms.is_settled() || !(state.bake.would_bake() || inputs_changed) {
         return;
     }
-    let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky);
+    let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness);
     open_sky.refresh(&snapshot, &bakes);
     state.take_from_cache(&snapshot, &bakes, &mut images);
     state.bake.update(snapshot.hash, rooms.is_settled(), time.elapsed_secs(), || snapshot.job(&bakes, &labels));
@@ -472,10 +477,11 @@ fn bake_sunlight_for_the_round(
     palette: Res<Palette>,
     sun: Res<SunPosition>,
     sky: Res<SkyTime>,
+    brightness: Res<Brightness>,
     mut images: ResMut<Assets<Image>>,
     mut open_sky: ResMut<OpenSky>,
 ) {
-    let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky);
+    let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness);
     open_sky.refresh(&snapshot, &bakes);
     state.take_from_cache(&snapshot, &bakes, &mut images);
     if let Some(baked) = state.bake.for_the_round(snapshot.hash, || snapshot.job(&bakes, &labels)) {
@@ -575,7 +581,7 @@ mod tests {
         app.init_asset::<Mesh>();
         app.init_asset::<StandardMaterial>();
         app.init_asset::<Image>();
-        app.init_resource::<Palette>().init_resource::<SunPosition>().init_resource::<SkyTime>();
+        app.init_resource::<Palette>().init_resource::<SunPosition>().init_resource::<SkyTime>().init_resource::<Brightness>();
         app.add_plugins((GamePlugin, BakePlugin, SunBakePlugin));
         app.world_mut().resource_mut::<RoomBake>().set_auto(false);
         app.world_mut().resource_mut::<SunBake>().set_auto(false);
@@ -629,6 +635,18 @@ mod tests {
         assert_ne!(light(&app), before, "the sun moved and the light did not");
         // Written into the image already drawn, so no slot loses its lightmap to a new handle.
         assert_eq!(lightmaps(&app), first);
+    }
+
+    /// The map's brightness is part of what was baked, so changing it between rounds bakes again.
+    #[test]
+    fn a_round_after_the_brightness_changed_bakes_again() {
+        let mut app = headless();
+        enter(&mut app, AppMode::Play);
+        let before = light(&app);
+        enter(&mut app, AppMode::Editor);
+        app.world_mut().resource_mut::<Brightness>().ambient = 20.0;
+        enter(&mut app, AppMode::Play);
+        assert_ne!(light(&app), before, "the ambient changed and the light did not");
     }
 
     /// With the sun's auto-bake off nothing will replace it, and a reshaped room still keeps the

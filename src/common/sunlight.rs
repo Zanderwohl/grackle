@@ -37,6 +37,8 @@ pub fn tuning() -> [u32; 5] {
 pub struct Daylight {
     /// Unit, toward the sun.
     pub toward: Vec3,
+    /// What a surface no light reaches gets.
+    pub base: f32,
     /// On a surface square on to the sun.
     pub sun: f32,
     pub sky: SkyTime,

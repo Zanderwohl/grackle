@@ -161,6 +161,14 @@ matters for their mode.
 Azimuth is degrees clockwise from north (`-Z`) seen from above, so 90° is
 east (`+X`); altitude is degrees above the horizon.
 
+**How bright it is** is a map setting too (`Brightness`): the ambient every
+surface and body starts from, the sun on a surface square on to it, and what a
+sky color of 1 is worth, all in `GlobalAmbientLight::brightness` units. They
+default to 100, 1500 and 600, the numbers every map used before. They are part
+of what is baked, so changing one bakes again, and the global ambient follows
+the map's, which is what lightmapped walls ignore and things that move scale
+their own ambient against. The ambient is kept above zero for that reason.
+
 ### Things that move
 
 Bodies, corpses, projectiles and placed props are not lightmapped
@@ -220,7 +228,7 @@ same-sized image into its existing texture — so no slot goes a frame unlit.
 - [x] One function resolving a slot to its material name (`Palette::paint`), shared by `paint_rooms` and the bake
 - [x] A ray accelerator over the map's faces (`sunlight::LitSurface`, on the collision `Grid`, now in `common`)
 - [x] Sun altitude and azimuth in the map settings
-- [ ] Base ambient as a map setting, replacing `main.rs`'s fixed `GlobalAmbientLight`
+- [x] Ambient, sun and sky brightness as map settings (`Brightness`); the global ambient follows the map's
 - [x] Charting: faces onto a lattice fixed by their plane, packed per room, padded; `UV_1` written by `bake_one` (`common/lightmap.rs`)
 - [x] Sun visibility per point, across the sun's disc (`LitSurface::sun_reaching`)
 - [x] Sun visibility per texel, at its center; supersample if edges step
@@ -235,4 +243,4 @@ same-sized image into its existing texture — so no slot goes a frame unlit.
 - [x] The sun on bodies, in their shader, by a ray from the chest; the viewmodel's arms with the local body
 - [x] Ambient in the air on a 2 m world lattice, baked last, sampled per body into a `MeshTag` that scales a body's ambient
 - [x] Sun and ambient on props, projectiles and held weapons: one `LitMaterial` for everything that moves
-- [ ] Tests: a closed room is unlit; a sky ceiling lights the floor under it and not the room next door, except by bounce; coplanar floors across a threshold bake the same values on both sides
+- [x] Tests: a closed room is unlit; a sky ceiling lights the floor under it and not the room next door, except by bounce; coplanar floors across a threshold bake the same values on both sides

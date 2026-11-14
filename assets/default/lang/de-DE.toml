@@ -106,6 +106,9 @@ gravity = "Schwerkraft"
 sky = "Himmel"
 sun_altitude = "Sonnenhöhe"
 sun_azimuth = "Sonnenazimut"
+ambient = "Umgebungslicht"
+sun_brightness = "Sonnenhelligkeit"
+sky_brightness = "Himmelshelligkeit"
 
 [editor.features.global_point]
 title = "Globaler Punkt"

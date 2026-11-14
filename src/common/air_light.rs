@@ -9,14 +9,13 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use crate::common::lightmap::BASE_AMBIENT;
 use crate::common::sunlight::{Daylight, LitSurface};
 use crate::common::world_surface::Face;
 
 /// Meters between samples. Coarse on purpose: ambient light is smooth, and a body is a meter wide.
 pub const AIR_STEP: f32 = 2.0;
 
-/// In lightmap units: [`BASE_AMBIENT`] plus sky and one bounce, as a texel is.
+/// In lightmap units: the map's ambient plus sky and one bounce, as a texel is.
 #[derive(Resource, Default, Clone, Debug, PartialEq)]
 pub struct AirLight {
     samples: HashMap<IVec3, Vec3>,
@@ -38,7 +37,7 @@ impl AirLight {
                         }
                         let point = world(cell);
                         if surface.encloses(point) {
-                            samples.insert(cell, Vec3::splat(BASE_AMBIENT) + surface.ambient_in_air(point, light));
+                            samples.insert(cell, Vec3::splat(light.base) + surface.ambient_in_air(point, light));
                         }
                     }
                 }
@@ -117,7 +116,8 @@ pub fn pack(ambient: Vec3, sunlit: bool) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::lightmap::daylight;
+    use crate::common::lightmap::{daylight, BASE_AMBIENT};
+    use crate::common::sky::Brightness;
     use crate::common::sky::{SkyTime, SunPosition};
     use crate::common::world_surface::room_share;
     use crate::tool::room::{Room, RoomSlot};
@@ -148,7 +148,7 @@ mod tests {
         let surface = LitSurface::build(rooms, is_sky);
         let shares: Vec<Vec<Face>> = (0..rooms.len()).map(|index| room_share(rooms, index)).collect();
         let shares: Vec<&[Face]> = shares.iter().map(Vec::as_slice).collect();
-        AirLight::bake(&shares, &surface, &daylight(SunPosition { altitude: 60.0, azimuth: 90.0 }.toward(), SkyTime::Day))
+        AirLight::bake(&shares, &surface, &daylight(SunPosition { altitude: 60.0, azimuth: 90.0 }.toward(), SkyTime::Day, Brightness::default()))
     }
 
     #[test]

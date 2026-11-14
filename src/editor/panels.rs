@@ -13,7 +13,7 @@ use strum::IntoEnumIterator;
 use strum_macros::Display;
 use crate::common::mode::GameMode;
 use crate::common::movement_rules::SprintPolicy;
-use crate::common::sky::SkyTime;
+use crate::common::sky::{SkyTime, LEAST_AMBIENT};
 use crate::common::shortcuts::chords;
 use crate::common::toolbar;
 use crate::common::net::{NetRequest, NetRole};
@@ -834,6 +834,18 @@ fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata) {
 
                 ui.label(get!("editor.metadata.sun_azimuth"));
                 ui.add(egui::DragValue::new(&mut meta.sun.azimuth).range(0.0..=360.0).speed(1.0).suffix("°"));
+                ui.end_row();
+
+                ui.label(get!("editor.metadata.ambient"));
+                ui.add(egui::DragValue::new(&mut meta.brightness.ambient).range(LEAST_AMBIENT..=2000.0).speed(1.0));
+                ui.end_row();
+
+                ui.label(get!("editor.metadata.sun_brightness"));
+                ui.add(egui::DragValue::new(&mut meta.brightness.sun).range(0.0..=20000.0).speed(10.0));
+                ui.end_row();
+
+                ui.label(get!("editor.metadata.sky_brightness"));
+                ui.add(egui::DragValue::new(&mut meta.brightness.sky).range(0.0..=10000.0).speed(5.0));
                 ui.end_row();
 
                 ui.label(get!("editor.metadata.authors"));

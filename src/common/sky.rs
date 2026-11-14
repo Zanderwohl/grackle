@@ -12,6 +12,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
+use crate::common::lightmap::{BASE_AMBIENT, SKY_BRIGHTNESS, SUN_BRIGHTNESS};
 use crate::editor::map_metadata::MapMetadata;
 use crate::get;
 
@@ -124,11 +125,40 @@ impl SunPosition {
     }
 }
 
+/// How strong the light from outside is, in `GlobalAmbientLight::brightness` units, which a
+/// lightmap texel shares. Set by the mapper, so a night map can have a dim moon and dim corners.
+#[derive(Resource, Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Brightness {
+    /// What every surface and body gets with no sun or sky reaching it. Above zero: a body's
+    /// ambient is drawn as a multiple of it.
+    pub ambient: f32,
+    /// What the sun adds to a surface square on to it.
+    pub sun: f32,
+    /// What a sky color of 1 is worth.
+    pub sky: f32,
+}
+
+impl Default for Brightness {
+    fn default() -> Self {
+        Self { ambient: BASE_AMBIENT, sun: SUN_BRIGHTNESS, sky: SKY_BRIGHTNESS }
+    }
+}
+
+/// The least [`Brightness::ambient`] the panel offers.
+pub const LEAST_AMBIENT: f32 = 1.0;
+
 /// Ungated, as [`publish_palette`](crate::common::palette::publish_palette) is.
-pub fn publish_sky(metadata: Res<MapMetadata>, mut sky: ResMut<SkyTime>, mut sun: ResMut<SunPosition>) {
+pub fn publish_sky(
+    metadata: Res<MapMetadata>,
+    mut sky: ResMut<SkyTime>,
+    mut sun: ResMut<SunPosition>,
+    mut brightness: ResMut<Brightness>,
+) {
     if metadata.is_changed() {
         sky.set_if_neq(metadata.sky);
         sun.set_if_neq(metadata.sun);
+        brightness.set_if_neq(metadata.brightness);
     }
 }
 
