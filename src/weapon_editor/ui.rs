@@ -3,18 +3,18 @@
 //! [documentation/weapon-editor.md](../../documentation/weapon-editor.md).
 
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Id, LayerId, Ui, UiBuilder, UiKind};
+use bevy_egui::egui::{self, Id, LayerId, Ui, UiBuilder};
 use bevy_egui::EguiContexts;
 
 use super::{save_the_draft, PublishedCatalog, WeaponEditor};
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::assets::{default_packs, Assets};
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
-use crate::common::file_menu::FileAction;
+use crate::common::file_menu::{file_menu, FileAction};
 use crate::common::net::NetRole;
 use crate::common::shortcuts::chords;
 use crate::common::weapon::{Magazine, Mounted, WeaponAction, BUCKETS};
-use crate::common::weapon_file::{problems, read_pack_weapons, WeaponEntry};
+use crate::common::weapon_file::{read_pack_weapons, WeaponEntry};
 use crate::get;
 
 pub struct WeaponUiPlugin;
@@ -62,18 +62,7 @@ fn panels(
     let mut requests = Requests::default();
     egui::Panel::top("weapon_menu_bar").resizable(false).show(&mut window_ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button(get!("file.menu.title"), |ui| {
-                for action in FILE_ACTIONS {
-                    let mut button = egui::Button::new(get!(action.name_key()));
-                    if let Some(chord) = action.chord() {
-                        button = button.shortcut_text(chord.hint());
-                    }
-                    if ui.add(button).clicked() {
-                        ui.close_kind(UiKind::Menu);
-                        requests.file = Some(*action);
-                    }
-                }
-            });
+            file_menu(ui, FILE_ACTIONS, &mut requests.file);
             edit_menu(ui, edit_availability(&editor), &mut requests.edit);
             // This system is gated on `AppMode::Weapon`.
             mode_menu(ui, AppMode::Weapon, role.as_deref(), &mut requests.mode);
@@ -103,7 +92,7 @@ fn panels(
         next_mode.set(mode);
     }
     match requests.file {
-        Some(FileAction::Save) => save_the_draft(&mut editor, &assets, &mut published),
+        Some(FileAction::Save) => save_the_draft(&mut editor, &mut published),
         Some(FileAction::Quit) => {
             info!("Quitting, as asked");
             exit.write(AppExit::Success);
@@ -159,10 +148,15 @@ fn pack_name(pack: &std::path::Path) -> String {
 
 /// Whether anything changed.
 fn settings(ui: &mut Ui, editor: &mut WeaponEditor) -> bool {
-    let problems = problems(&editor.weapons);
     let Some(index) = editor.selected.filter(|index| *index < editor.weapons.len()) else {
         return false;
     };
+    let problems: Vec<String> = editor
+        .problems
+        .iter()
+        .filter(|(at, _)| *at == index)
+        .map(|(_, problem)| problem.describe())
+        .collect();
     let weapon = &mut editor.weapons[index];
     let mut changed = false;
 
@@ -179,10 +173,10 @@ fn settings(ui: &mut Ui, editor: &mut WeaponEditor) -> bool {
         (get!("weapon_editor.primary"), &weapon.entry.primary),
         (get!("weapon_editor.secondary"), &weapon.entry.secondary),
     ] {
-        ui.label(format!("{label}: {}", action_kind(mounted)));
+        ui.label(format!("{label}: {}", get!(format!("weapon_editor.kinds.{}", action_kind(mounted)))));
     }
 
-    for (_, why) in problems.iter().filter(|(at, _)| *at == index) {
+    for why in problems {
         ui.colored_label(ui.visuals().error_fg_color, why);
     }
     changed
@@ -204,11 +198,11 @@ fn entry_rows(ui: &mut Ui, entry: &mut WeaponEntry) -> bool {
     ui.end_row();
 
     ui.label(get!("weapon_editor.fields.bucket"));
-    changed |= ui.add(egui::DragValue::new(&mut entry.bucket).range(1..=BUCKETS)).changed();
+    changed |= ui.add(egui::DragValue::new(&mut entry.bucket).range(1..=BUCKETS).clamp_existing_to_range(false)).changed();
     ui.end_row();
 
     ui.label(get!("weapon_editor.fields.deploy"));
-    changed |= ui.add(egui::DragValue::new(&mut entry.deploy).range(0.0..=10.0).speed(0.01).suffix(" s")).changed();
+    changed |= ui.add(egui::DragValue::new(&mut entry.deploy).range(0.0..=10.0).clamp_existing_to_range(false).speed(0.01).suffix(" s")).changed();
     ui.end_row();
 
     changed |= magazine_rows(ui, &mut entry.magazine);
@@ -226,23 +220,23 @@ fn magazine_rows(ui: &mut Ui, magazine: &mut Magazine) -> bool {
             changed = true;
         }
         if let Some(clip) = &mut magazine.clip {
-            changed |= ui.add(egui::DragValue::new(clip).range(1..=999)).changed();
+            changed |= ui.add(egui::DragValue::new(clip).range(1..=999).clamp_existing_to_range(false)).changed();
         }
     });
     ui.end_row();
 
     ui.label(get!("weapon_editor.fields.reserve"));
-    changed |= ui.add(egui::DragValue::new(&mut magazine.reserve).range(0..=9999)).changed();
+    changed |= ui.add(egui::DragValue::new(&mut magazine.reserve).range(0..=9999).clamp_existing_to_range(false)).changed();
     ui.end_row();
 
     ui.label(get!("weapon_editor.fields.reload"));
-    changed |= ui.add(egui::DragValue::new(&mut magazine.reload).range(0.0..=10.0).speed(0.01).suffix(" s")).changed();
+    changed |= ui.add(egui::DragValue::new(&mut magazine.reload).range(0.0..=10.0).clamp_existing_to_range(false).speed(0.01).suffix(" s")).changed();
     ui.end_row();
 
     changed
 }
 
-/// The serde tag, which is what the file says.
+/// The serde tag, which is what the file says, and the last part of its lang key.
 fn action_kind(mounted: &Mounted) -> &'static str {
     match mounted.action {
         WeaponAction::Hitscan(_) => "hitscan",
@@ -276,7 +270,7 @@ fn weapon_shortcuts(
     );
     // Save As has nowhere else to save to, so it is a save too.
     if chords.save || chords.save_as {
-        save_the_draft(&mut editor, &assets, &mut published);
+        save_the_draft(&mut editor, &mut published);
     }
 }
 

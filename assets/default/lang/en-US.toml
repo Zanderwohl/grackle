@@ -1093,3 +1093,18 @@ deploy = "Deploy"
 clip = "Clip"
 reserve = "Reserve"
 reload = "Reload"
+
+[weapon_editor.kinds]
+hitscan = "Hitscan"
+projectile = "Projectile"
+flame = "Flame"
+airblast = "Airblast"
+heal_beam = "Heal beam"
+invulnerable = "Invulnerable"
+scope = "Scope"
+none = "None"
+
+[weapon_editor.problems]
+collides = "{ key } collides with { with }, already loaded, and is left out"
+bucket = "{ key } is in bucket { bucket }, which no key selects (1–{ most }), and is left out"
+deploy = "{ key } deploys in { deploy } s, and is left out"

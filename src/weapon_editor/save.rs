@@ -56,14 +56,23 @@ pub fn rewrite(original: &str, weapons: &[(String, WeaponEntry)]) -> Result<Stri
     Ok(doc.to_string())
 }
 
-/// Authoring side, so `std::fs`. A missing file is written from nothing.
-pub fn save_pack(pack: &Path, weapons: &[(String, WeaponEntry)]) -> Result<(), String> {
+/// Authoring side, so `std::fs`. A missing file is written from nothing. `expected` is what the
+/// draft believes the file holds; a file changed on disk since is refused rather than written
+/// over, since `rewrite` would drop what was added and undo what was edited there.
+pub fn save_pack(
+    pack: &Path,
+    weapons: &[(String, WeaponEntry)],
+    expected: &[(String, WeaponEntry)],
+) -> Result<(), String> {
     let path = pack.join(WEAPONS_FILE);
     let original = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
+    if !holds(&original, expected) {
+        return Err(format!("{} changed on disk since it was read; revert to pick it up", path.display()));
+    }
     let text = rewrite(&original, weapons).map_err(|e| format!("{}: {e}", path.display()))?;
     if text == original {
         return Ok(());
@@ -73,6 +82,18 @@ pub fn save_pack(pack: &Path, weapons: &[(String, WeaponEntry)]) -> Result<(), S
     let partial = path.with_extension("toml.partial");
     std::fs::write(&partial, text).map_err(|e| format!("{}: {e}", partial.display()))?;
     std::fs::rename(&partial, &path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Whether `text` parses to exactly `expected`, in any order.
+fn holds(text: &str, expected: &[(String, WeaponEntry)]) -> bool {
+    let on_disk = match text.trim().is_empty() {
+        true => Vec::new(),
+        false => match parse_weapons(text) {
+            Ok(weapons) => weapons,
+            Err(_) => return false,
+        },
+    };
+    on_disk.len() == expected.len() && expected.iter().all(|weapon| on_disk.contains(weapon))
 }
 
 fn to_table(entry: &WeaponEntry) -> Result<toml::Table, String> {
@@ -124,7 +145,8 @@ fn convert(value: &toml::Value) -> Value {
     match value {
         toml::Value::String(s) => Value::from(s.as_str()),
         toml::Value::Integer(i) => Value::from(*i),
-        toml::Value::Float(f) => Value::from(shortest(*f)),
+        // Every float in a weapon is an `f32`, widened on the way through serde.
+        toml::Value::Float(f) => Value::from(crate::prop::nice_f32::widen(*f as f32)),
         toml::Value::Boolean(b) => Value::from(*b),
         toml::Value::Datetime(d) => Value::from(d.to_string()),
         toml::Value::Array(items) => Value::Array(items.iter().map(convert).collect::<Array>()),
@@ -136,14 +158,6 @@ fn convert(value: &toml::Value) -> Value {
             Value::InlineTable(inline)
         }
     }
-}
-
-/// Every float in a weapon is an `f32`, widened on the way through serde: `0.8` arrives as
-/// `0.800000011920929`. Its own shortest decimal, read as an `f64`, writes as `0.8`. Lossless
-/// for an `f32`; would round an `f64` field, of which there are none.
-fn shortest(widened: f64) -> f64 {
-    let narrow = widened as f32;
-    format!("{narrow}").parse().unwrap_or(widened)
 }
 
 #[cfg(test)]
@@ -241,6 +255,17 @@ mod tests {
         let written = rewrite(text, &weapons).expect("rewrites");
         assert!(!written.contains("model"), "{written}");
         assert!(written.contains("note = \"mine\""), "{written}");
+    }
+
+    #[test]
+    fn a_file_changed_since_it_was_read_is_noticed() {
+        let (text, weapons) = shipped();
+        assert!(holds(&text, &weapons));
+        assert!(!holds(&text, &weapons[1..]), "a weapon added on disk went unnoticed");
+        let mut edited = weapons.clone();
+        edited[0].1.deploy += 1.0;
+        assert!(!holds(&text, &edited), "a weapon edited on disk went unnoticed");
+        assert!(holds("", &[]));
     }
 
     #[test]

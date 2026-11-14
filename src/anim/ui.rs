@@ -1173,7 +1173,7 @@ fn panels(
         .show(&mut viewport_ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 // `mode_menu` names `AppMode::Animation` outright: this system is gated on it.
-                file_menu(ui, false, &mut tabs.file);
+                file_menu(ui, crate::common::file_menu::DOCUMENT, &mut tabs.file);
                 let available = edit_availability(tabs.anim.source, tabs.editor, tabs.body);
                 edit_menu(ui, available, &mut tabs.edit);
                 mode_menu(ui, AppMode::Animation, role.as_deref(), tabs.mode);

@@ -16,7 +16,10 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::assets::default_packs;
 use crate::common::weapon::WeaponCatalog;
-use crate::common::weapon_file::{catalog_of, read_pack_weapons, PackWeapon};
+use crate::common::weapon_file::{
+    catalog_with, problems, read_loadouts, read_pack_weapons, LoadoutFiles, PackWeapon, WeaponEntry,
+    WeaponProblem,
+};
 use crate::editor::multicam::Multicam;
 
 const UNDO_DEPTH: usize = 256;
@@ -37,6 +40,11 @@ pub struct WeaponEditor {
     loaded: bool,
     /// Bumped whenever the checkpoint moves, which is when the catalog is rebuilt.
     pub generation: u64,
+    /// The generation the catalog and `problems` were last built from.
+    played: Option<u64>,
+    /// Read when the mode opens; nothing here edits them.
+    loadouts: LoadoutFiles,
+    pub problems: Vec<(usize, WeaponProblem)>,
 }
 
 impl WeaponEditor {
@@ -116,9 +124,17 @@ impl WeaponEditor {
         self.settle();
     }
 
-    pub fn mark_saved(&mut self) {
-        self.checkpoint_when_idle(true);
-        self.clean = self.checkpoint.clone();
+    /// `pack` now holds what the checkpoint says it does. Per pack, so a save that wrote one pack
+    /// and failed on another is not dirty about the one it wrote.
+    pub fn mark_saved(&mut self, pack: &std::path::Path) {
+        self.clean = self
+            .packs()
+            .iter()
+            .flat_map(|of| {
+                let from = if of == pack { &self.checkpoint } else { &self.clean };
+                from.iter().filter(move |weapon| &weapon.pack == of).cloned()
+            })
+            .collect();
     }
 
     /// Every pack a weapon is in or could go to, lowest priority first.
@@ -133,8 +149,9 @@ impl WeaponEditor {
     }
 
     /// The packs whose weapons differ from what was last read or saved, each with what it should
-    /// now hold.
-    pub fn changed_packs(&self) -> Vec<(PathBuf, Vec<(String, crate::common::weapon_file::WeaponEntry)>)> {
+    /// now hold and what it held.
+    #[allow(clippy::type_complexity)]
+    pub fn changed_packs(&self) -> Vec<(PathBuf, Vec<(String, WeaponEntry)>, Vec<(String, WeaponEntry)>)> {
         let of = |weapons: &[PackWeapon], pack: &PathBuf| -> Vec<(String, _)> {
             weapons
                 .iter()
@@ -145,8 +162,8 @@ impl WeaponEditor {
         self.packs()
             .into_iter()
             .filter_map(|pack| {
-                let now = of(&self.checkpoint, &pack);
-                (now != of(&self.clean, &pack)).then_some((pack, now))
+                let (now, was) = (of(&self.checkpoint, &pack), of(&self.clean, &pack));
+                (now != was).then_some((pack, now, was))
             })
             .collect()
     }
@@ -167,24 +184,26 @@ fn open_the_draft(
     for mut camera in &mut cameras {
         camera.is_active = false;
     }
-    if !editor.loaded {
+    // An unsaved draft is kept; a clean one is read again, so edits made on disk meanwhile show.
+    if !editor.loaded || !editor.dirty() {
         editor.open(read_pack_weapons(&assets, &default_packs()));
     }
+    editor.loadouts = read_loadouts(&assets, &editor.packs());
     published.0 = Some(catalog.clone());
-    *catalog = catalog_of(&assets, &editor.packs(), &editor.weapons);
+    editor.played = None;
+    play(&mut editor, &mut catalog);
 }
 
-fn play_the_draft(
-    editor: Res<WeaponEditor>,
-    assets: Res<crate::common::assets::Assets>,
-    mut catalog: ResMut<WeaponCatalog>,
-    mut played: Local<Option<u64>>,
-) {
-    if *played == Some(editor.generation) {
-        return;
+fn play_the_draft(mut editor: ResMut<WeaponEditor>, mut catalog: ResMut<WeaponCatalog>) {
+    if editor.played != Some(editor.generation) {
+        play(&mut editor, &mut catalog);
     }
-    *played = Some(editor.generation);
-    *catalog = catalog_of(&assets, &editor.packs(), &editor.weapons);
+}
+
+fn play(editor: &mut WeaponEditor, catalog: &mut WeaponCatalog) {
+    editor.played = Some(editor.generation);
+    *catalog = catalog_with(&editor.weapons, &editor.loadouts);
+    editor.problems = problems(&editor.weapons);
 }
 
 fn put_back_the_published(mut catalog: ResMut<WeaponCatalog>, mut published: ResMut<PublishedCatalog>) {
@@ -193,29 +212,20 @@ fn put_back_the_published(mut catalog: ResMut<WeaponCatalog>, mut published: Res
     }
 }
 
-/// Writes every pack that changed, then publishes. A pack that fails is logged and the draft
-/// stays dirty, so nothing reads as saved that is not on disk.
-pub fn save_the_draft(
-    editor: &mut WeaponEditor,
-    assets: &crate::common::assets::Assets,
-    published: &mut PublishedCatalog,
-) {
+/// Writes every pack that changed, then publishes what is on disk. A pack that fails is logged
+/// and stays dirty, so nothing reads as saved that is not.
+pub fn save_the_draft(editor: &mut WeaponEditor, published: &mut PublishedCatalog) {
     editor.checkpoint_when_idle(true);
-    let mut failed = false;
-    for (pack, weapons) in editor.changed_packs() {
-        match save::save_pack(&pack, &weapons) {
-            Ok(()) => info!("Saved {} weapons to {}", weapons.len(), pack.display()),
-            Err(e) => {
-                error!("Saving weapons: {e}");
-                failed = true;
+    for (pack, weapons, was) in editor.changed_packs() {
+        match save::save_pack(&pack, &weapons, &was) {
+            Ok(()) => {
+                info!("Saved {} weapons to {}", weapons.len(), pack.display());
+                editor.mark_saved(&pack);
             }
+            Err(e) => error!("Saving weapons: {e}"),
         }
     }
-    if failed {
-        return;
-    }
-    editor.mark_saved();
-    published.0 = Some(catalog_of(assets, &editor.packs(), &editor.weapons));
+    published.0 = Some(catalog_with(&editor.clean, &editor.loadouts));
 }
 
 pub struct WeaponEditorPlugin;
@@ -273,6 +283,19 @@ mod tests {
     }
 
     #[test]
+    fn a_pack_that_saved_is_clean_though_another_failed() {
+        let mut editor = opened();
+        let pack = editor.weapons[0].pack.clone();
+        editor.weapons[0].entry.deploy += 1.0;
+        editor.edited();
+        editor.checkpoint_when_idle(true);
+        editor.mark_saved(std::path::Path::new("assets/nowhere"));
+        assert!(editor.dirty(), "a pack nobody wrote reads as saved");
+        editor.mark_saved(&pack);
+        assert!(!editor.dirty());
+    }
+
+    #[test]
     fn revert_is_one_undo_step() {
         let mut editor = opened();
         let fresh = editor.weapons.clone();
@@ -289,7 +312,11 @@ mod tests {
     #[test]
     fn the_untouched_draft_is_the_shipped_catalog() {
         let editor = opened();
-        let draft = catalog_of(&crate::common::assets::Assets::default(), &editor.packs(), &editor.weapons);
+        let draft = crate::common::weapon_file::catalog_of(
+            &crate::common::assets::Assets::default(),
+            &editor.packs(),
+            &editor.weapons,
+        );
         assert_eq!(draft, default_catalog());
     }
 

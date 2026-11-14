@@ -26,6 +26,11 @@ pub enum FileAction {
     Quit,
 }
 
+/// What a mode editing one document offers: everything but the map editor's
+/// Demo Scene.
+pub const DOCUMENT: &[FileAction] =
+    &[FileAction::New, FileAction::Save, FileAction::SaveAs, FileAction::Open, FileAction::Quit];
+
 /// Menu order. Quit sits apart because it is the one that cannot be undone.
 pub const ALL: &[FileAction] = &[
     FileAction::New,
@@ -77,13 +82,12 @@ impl FileAction {
 }
 
 /// `request` rather than a return value, so a caller drawing several menus
-/// can answer them after the borrow on its document is dropped. `demo_scene`
-/// offers [`FileAction::DemoScene`], which only the map editor has.
-pub fn file_menu(ui: &mut egui::Ui, demo_scene: bool, request: &mut Option<FileAction>) {
+/// can answer them after the borrow on its document is dropped. `actions` is
+/// what this mode offers, in [`ALL`]'s order.
+pub fn file_menu(ui: &mut egui::Ui, actions: &[FileAction], request: &mut Option<FileAction>) {
     ui.menu_button(get!("file.menu.title"), |ui| {
-        for action in ALL {
+        for action in actions {
             match action {
-                FileAction::DemoScene if !demo_scene => continue,
                 // Quit throws work away without asking, so it gets the gap.
                 FileAction::DemoScene | FileAction::Quit => {
                     ui.separator();
