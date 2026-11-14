@@ -14,7 +14,10 @@ use crate::common::class::CROUCH_HEIGHT;
 use crate::common::skeleton::anatomy::PerFoot;
 use crate::common::skeleton::gait::FootOffset;
 use crate::common::skeleton::interpolation::Interpolation;
-use crate::common::skeleton::rig::{bone, Pose, Skeleton};
+use std::f32::consts::PI;
+
+use crate::common::skeleton::joints::JointLimit;
+use crate::common::skeleton::rig::{bone, Bone, Pose, Skeleton};
 use crate::common::skeleton::clip::{Clip, StateAnimation};
 use crate::common::skeleton::play::{apply, Frames, Regions};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary, PoseInputs, SkeletonAnimator};
@@ -33,9 +36,17 @@ pub struct Chain {
     pub middle: &'static [&'static str],
     pub lower: &'static str,
     pub tip: Option<&'static str>,
+    /// Bit `i`: the joint at the head of bone `i` (root first) bends away from the pole. Only a
+    /// digitigrade hock, bit 2 of three bones, is solved that way.
+    pub away: u32,
 }
 
 impl Chain {
+    /// Three bones, the knee toward the pole and the hock away.
+    pub fn is_digitigrade(&self) -> bool {
+        self.middle.len() == 1 && self.away == 1 << 2
+    }
+
     /// Root first, without the tip.
     pub fn bones(&self) -> impl Iterator<Item = &'static str> + '_ {
         std::iter::once(self.upper).chain(self.middle.iter().copied()).chain(std::iter::once(self.lower))
@@ -47,6 +58,7 @@ pub const LEFT_LEG: Chain = Chain {
     middle: &[],
     lower: bone::SHIN_L,
     tip: Some(bone::FOOT_L),
+    away: 0,
 };
 
 pub const RIGHT_LEG: Chain = Chain {
@@ -54,6 +66,7 @@ pub const RIGHT_LEG: Chain = Chain {
     middle: &[],
     lower: bone::SHIN_R,
     tip: Some(bone::FOOT_R),
+    away: 0,
 };
 
 pub const LEFT_ARM: Chain = Chain {
@@ -61,6 +74,7 @@ pub const LEFT_ARM: Chain = Chain {
     middle: &[],
     lower: bone::FOREARM_L,
     tip: Some(bone::HAND_L),
+    away: 0,
 };
 
 pub const RIGHT_ARM: Chain = Chain {
@@ -68,6 +82,7 @@ pub const RIGHT_ARM: Chain = Chain {
     middle: &[],
     lower: bone::FOREARM_R,
     tip: Some(bone::HAND_R),
+    away: 0,
 };
 
 /// What happened when a chain was asked to reach somewhere.
@@ -93,6 +108,9 @@ pub fn solve(
     target: Vec3,
     pole: Vec3,
 ) -> Reach {
+    if chain.is_digitigrade() {
+        return digitigrade(skeleton, pose, root, chain, target, pole);
+    }
     if !chain.middle.is_empty() {
         return fabrik(skeleton, pose, root, chain, target, pole);
     }
@@ -106,30 +124,46 @@ pub fn solve(
     // Only the bones read are placed, and the tip before its joints are rewritten.
     let joint = skeleton.posed_bone(pose, root, upper).head;
     let (first, second) = (bones[upper].length, bones[lower].length);
-    let parent = match bones[upper].parent {
-        Some(parent) => skeleton.posed_bone(pose, root, parent).rotation,
-        None => root.rotation,
+    let parent = parent_rotation(skeleton, pose, root, upper);
+    let tip = held_tip(skeleton, pose, root, chain);
+    let Some(bent) = bend(joint, target, pole, first, second, (first - second).abs(), first + second) else {
+        return Reach::Impossible;
     };
-    let tip = chain.tip.and_then(|tip| {
-        let index = skeleton.index_of(tip)?;
-        Some((tip, index, skeleton.posed_bone(pose, root, index).rotation))
-    });
 
+    // Roll from the hinge, not the pole: a bone near-parallel to the pole (a
+    // shin in a deep crouch) flips its frame half a turn. See `aim`.
+    let upper_rotation = aim(bent.upper, bent.axis);
+    let lower_rotation = aim(bent.lower, bent.axis);
+
+    // World orientation to rest-relative, parent-frame rotation.
+    pose.set(chain.upper, (parent * bones[upper].rest).inverse() * upper_rotation);
+    pose.set(chain.lower, (upper_rotation * bones[lower].rest).inverse() * lower_rotation);
+    keep_tip(skeleton, pose, tip, lower_rotation);
+    bent.reach
+}
+
+/// Two bones from `joint` toward `target`, bent toward `pole`. `near` and `far` bound the end's
+/// distance from `joint`.
+struct Bent {
+    axis: Vec3,
+    upper: Vec3,
+    lower: Vec3,
+    reach: Reach,
+}
+
+fn bend(joint: Vec3, target: Vec3, pole: Vec3, first: f32, second: f32, near: f32, far: f32) -> Option<Bent> {
     let to_target = target - joint;
     let distance = to_target.length();
     if distance < 1e-5 {
-        return Reach::Impossible;
+        return None;
     }
     let direction = to_target / distance;
 
     // See `STRAIGHT_MARGIN`.
-    let reach = first + second;
-    let usable = distance.clamp((first - second).abs() + STRAIGHT_MARGIN, reach - STRAIGHT_MARGIN);
+    let usable = distance.clamp(near + STRAIGHT_MARGIN, (far - STRAIGHT_MARGIN).max(near + STRAIGHT_MARGIN));
 
     // Law of cosines: the first bone's angle off the line to the target.
-    let cosine = ((first * first + usable * usable - second * second) / (2.0 * first * usable))
-        .clamp(-1.0, 1.0);
-    let bend = cosine.acos();
+    let cosine = ((first * first + usable * usable - second * second) / (2.0 * first * usable)).clamp(-1.0, 1.0);
 
     let axis = direction.cross(pole);
     let axis = if axis.length_squared() < 1e-8 {
@@ -139,31 +173,32 @@ pub fn solve(
         axis.normalize()
     };
 
-    let upper_direction = Quat::from_axis_angle(axis, bend) * direction;
-    let elbow = joint + upper_direction * first;
+    let upper = Quat::from_axis_angle(axis, cosine.acos()) * direction;
+    let elbow = joint + upper * first;
     let end = joint + direction * usable;
-    let lower_direction = (end - elbow).normalize_or_zero();
-    if lower_direction == Vec3::ZERO {
-        return Reach::Impossible;
+    let lower = (end - elbow).try_normalize()?;
+    let reach = if distance <= far + STRAIGHT_MARGIN { Reach::Reached } else { Reach::Short };
+    Some(Bent { axis, upper, lower, reach })
+}
+
+fn parent_rotation(skeleton: &Skeleton, pose: &Pose, root: &Transform, index: usize) -> Quat {
+    match skeleton.bones()[index].parent {
+        Some(parent) => skeleton.posed_bone(pose, root, parent).rotation,
+        None => root.rotation,
     }
+}
 
-    // Roll from the hinge, not the pole: a bone near-parallel to the pole (a
-    // shin in a deep crouch) flips its frame half a turn. See `aim`.
-    let upper_rotation = aim(upper_direction, axis);
-    let lower_rotation = aim(lower_direction, axis);
+/// The chain's tip and its world rotation, read before the chain is rewritten.
+fn held_tip(skeleton: &Skeleton, pose: &Pose, root: &Transform, chain: &Chain) -> Option<(&'static str, usize, Quat)> {
+    let tip = chain.tip?;
+    let index = skeleton.index_of(tip)?;
+    Some((tip, index, skeleton.posed_bone(pose, root, index).rotation))
+}
 
-    // World orientation to rest-relative, parent-frame rotation.
-    pose.set(chain.upper, (parent * bones[upper].rest).inverse() * upper_rotation);
-    pose.set(chain.lower, (upper_rotation * bones[lower].rest).inverse() * lower_rotation);
-
+/// Restores what [`held_tip`] read, under the tip's parent's new `rotation`.
+fn keep_tip(skeleton: &Skeleton, pose: &mut Pose, tip: Option<(&'static str, usize, Quat)>, rotation: Quat) {
     if let Some((tip, index, was)) = tip {
-        pose.set(tip, (lower_rotation * bones[index].rest).inverse() * was);
-    }
-
-    if distance <= reach + STRAIGHT_MARGIN {
-        Reach::Reached
-    } else {
-        Reach::Short
+        pose.set(tip, (rotation * skeleton.bones()[index].rest).inverse() * was);
     }
 }
 
@@ -248,10 +283,17 @@ pub fn elbow_pole(side: f32) -> Vec3 {
     Vec3::new(0.35 * side, -0.85, 0.55).normalize()
 }
 
-/// Fully extended length, excluding the tip.
+/// Fully extended, or a digitigrade leg at its straightest; excludes the tip.
 pub fn chain_length(skeleton: &Skeleton, chain: &Chain) -> f32 {
-    let bones = skeleton.bones();
-    chain.bones().filter_map(|name| skeleton.index_of(name)).map(|index| bones[index].length).sum()
+    reach_of(skeleton.bones(), chain)
+}
+
+/// [`chain_length`] for a rig still being built.
+pub fn reach_of(bones: &[Bone], chain: &Chain) -> f32 {
+    if let Some(leg) = chain.is_digitigrade().then(|| DigitigradeLeg::of(bones, chain).ok()).flatten() {
+        return leg.far;
+    }
+    chain.bones().filter_map(|name| bones.iter().find(|bone| bone.name == name)).map(|bone| bone.length).sum()
 }
 
 /// The unit a gait's strides are measured in.
@@ -457,6 +499,89 @@ fn clip_pose(
     pose
 }
 
+/// A thigh, shin and metatarsus at rest, in the plane the leg bends in. The metatarsus keeps its
+/// rest angle to the thigh, so the two act as one rigid bone, `upper + lower·e^(i·hock)`, and the
+/// leg solves as two bones.
+#[derive(Clone, Copy, Debug)]
+pub struct DigitigradeLeg {
+    thigh: usize,
+    shin: usize,
+    meta: usize,
+    /// Thigh plus metatarsus, meters.
+    first: f32,
+    middle: f32,
+    /// Turns about the hinge: the thigh's from `first`, the metatarsus's from the thigh.
+    offset: f32,
+    hock: f32,
+    /// The ankle's distance from the hip, meters, within the knee's and hock's stops.
+    pub near: f32,
+    pub far: f32,
+}
+
+impl DigitigradeLeg {
+    /// Errs unless each bone is the child of the one before and the knee and hock rest as turns
+    /// about the thigh's `+X`, so the leg has one bend plane.
+    pub fn of(bones: &[Bone], chain: &Chain) -> Result<Self, String> {
+        let find = |name: &str| bones.iter().position(|bone| bone.name == name).ok_or_else(|| format!("no bone called {name}"));
+        let thigh = find(chain.upper)?;
+        let shin = find(chain.middle.first().ok_or("a digitigrade leg needs a shin")?)?;
+        let meta = find(chain.lower)?;
+        if bones[shin].parent != Some(thigh) || bones[meta].parent != Some(shin) {
+            return Err(format!("{}, {} and {} are not each the child of the one before", chain.upper, bones[shin].name, chain.lower));
+        }
+        for joint in [shin, meta] {
+            if (bones[joint].rest * Vec3::X).distance(Vec3::X) > 1e-3 {
+                return Err(format!("{} does not rest in its parent's bend plane", bones[joint].name));
+            }
+        }
+        let angle = |direction: Vec3| direction.z.atan2(direction.y);
+        let knee = angle(bones[shin].rest * Vec3::Y);
+        let hock = angle(bones[shin].rest * bones[meta].rest * Vec3::Y);
+        let (upper, middle, lower) = (bones[thigh].length, bones[shin].length, bones[meta].length);
+        let (along, across) = (upper + lower * hock.cos(), lower * hock.sin());
+        let (first, offset) = (along.hypot(across), across.atan2(along));
+
+        // The hock turns as far as the knee, the other way, so both stops limit the knee.
+        let stops = |joint: usize| match bones[joint].limit {
+            JointLimit::Hinge(hinge) => (hinge.min, hinge.max),
+            _ => (-PI, PI),
+        };
+        let ((knee_min, knee_max), (hock_min, hock_max)) = (stops(shin), stops(meta));
+        let (least, most) = (knee_min.max(-hock_max), knee_max.min(-hock_min));
+        // Unsigned: the shin stays on its rest side, and a smaller angle puts the ankle further
+        // from the hip.
+        let side = (knee - offset).signum();
+        let (a, b) = ((knee + least - offset) * side, (knee + most - offset) * side);
+        let (open, folded) = (a.min(b).clamp(0.0, PI), a.max(b).clamp(0.0, PI));
+        let span = |angle: f32| (first * first + middle * middle + 2.0 * first * middle * angle.cos()).max(0.0).sqrt();
+        Ok(DigitigradeLeg { thigh, shin, meta, first, middle, offset, hock, near: span(folded), far: span(open) })
+    }
+}
+
+/// Exact, so every machine poses it the same. Out of reach straightens the [`DigitigradeLeg`],
+/// not the real chain.
+fn digitigrade(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain, target: Vec3, pole: Vec3) -> Reach {
+    let bones = skeleton.bones();
+    let Ok(leg) = DigitigradeLeg::of(bones, chain) else { return Reach::Impossible };
+    let hip = skeleton.posed_bone(pose, root, leg.thigh).head;
+    let parent = parent_rotation(skeleton, pose, root, leg.thigh);
+    let tip = held_tip(skeleton, pose, root, chain);
+    let Some(bent) = bend(hip, target, pole, leg.first, leg.middle, leg.near, leg.far) else {
+        return Reach::Impossible;
+    };
+
+    let thigh_direction = Quat::from_axis_angle(bent.axis, -leg.offset) * bent.upper;
+    let meta_direction = Quat::from_axis_angle(bent.axis, leg.hock) * thigh_direction;
+    let thigh_rotation = aim(thigh_direction, bent.axis);
+    let shin_rotation = aim(bent.lower, bent.axis);
+    let meta_rotation = aim(meta_direction, bent.axis);
+    pose.set(chain.upper, (parent * bones[leg.thigh].rest).inverse() * thigh_rotation);
+    pose.set(bones[leg.shin].name, (thigh_rotation * bones[leg.shin].rest).inverse() * shin_rotation);
+    pose.set(chain.lower, (shin_rotation * bones[leg.meta].rest).inverse() * meta_rotation);
+    keep_tip(skeleton, pose, tip, meta_rotation);
+    bent.reach
+}
+
 /// Rounds of [`fabrik`]: positions, then rotations through each joint's limit, then positions
 /// again from where the limits left the joints. Fixed, so a hitbox rebuilt on the tick is the
 /// same on every machine.
@@ -492,6 +617,15 @@ fn fabrik(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain,
     if (target - base).length() < 1e-5 {
         return Reach::Impossible;
     }
+    // One roll reference, square to the bend plane: per bone, `bone × pole` vanishes along the
+    // pole. Kept on the side of the first bone's rest hinge, since `(target - base) × pole`
+    // reverses as the target crosses the pole.
+    let rest_hinge = parent_rotation(skeleton, pose, root, indices[0]) * bones[indices[0]].rest * Vec3::X;
+    let hinge = match (target - base).cross(pole).try_normalize() {
+        Some(hinge) if hinge.dot(rest_hinge) < 0.0 => -hinge,
+        Some(hinge) => hinge,
+        None => rest_hinge,
+    };
 
     for round in 0..FABRIK_ROUNDS {
         let mut points = joints(pose);
@@ -529,7 +663,7 @@ fn fabrik(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain,
             let frame = parent * bone.rest;
             let wanted = (points[at + 1] - head).normalize_or(frame * Vec3::Y);
             let allowed = frame * bone.limit.nearest(frame.inverse() * wanted);
-            let rotation = aim(allowed, allowed.cross(pole));
+            let rotation = aim(allowed, hinge);
             pose.set(bone.name, frame.inverse() * rotation);
         }
     }

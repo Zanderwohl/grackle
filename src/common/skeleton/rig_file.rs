@@ -66,6 +66,10 @@ pub struct BoneEntry {
     /// A joint kind from `joints::limit_named`; absent is narrow.
     #[serde(default)]
     pub limit: Option<String>,
+    /// A hinge's stops in degrees from rest, instead of a `limit`, for a joint that rests bent:
+    /// named kinds are measured from straight.
+    #[serde(default)]
+    pub stops: Option<[f32; 2]>,
     /// A shape from `mesh::profile_named`.
     #[serde(default)]
     pub profile: Option<String>,
@@ -88,6 +92,10 @@ pub struct LimbEntry {
     /// In the body's frame. Absent is forward for a limb that straightens, else an elbow's.
     #[serde(default)]
     pub pole: Option<[f32; 3]>,
+    /// Bones whose head joint bends away from the pole; only a three-bone leg's `lower`, the
+    /// hock, is accepted.
+    #[serde(default)]
+    pub bends_away: Vec<String>,
     #[serde(default)]
     pub straightens: bool,
 }
@@ -190,9 +198,14 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
 
     let mut builder = Builder::default();
     for (bone, (head, tail)) in file.bones.iter().zip(&placed) {
-        let limit = match &bone.limit {
-            Some(kind) => super::joints::limit_named(kind).ok_or_else(|| format!("bone {}: no joint called {kind}", bone.name))?,
-            None => super::joints::limit_named("unlisted").unwrap_or(super::joints::JointLimit::Fixed),
+        let limit = match (&bone.limit, bone.stops) {
+            (Some(_), Some(_)) => return Err(format!("bone {}: both a limit and stops", bone.name)),
+            (Some(kind), None) => super::joints::limit_named(kind).ok_or_else(|| format!("bone {}: no joint called {kind}", bone.name))?,
+            (None, Some([min, max])) if min <= 0.0 && 0.0 <= max => {
+                super::joints::JointLimit::Hinge(super::joints::Hinge { min: min.to_radians(), max: max.to_radians() })
+            }
+            (None, Some(_)) => return Err(format!("bone {}: its stops leave out its rest", bone.name)),
+            (None, None) => super::joints::limit_named("unlisted").unwrap_or(super::joints::JointLimit::Fixed),
         };
         let profile = match &bone.profile {
             Some(kind) => super::mesh::profile_named(kind).ok_or_else(|| format!("bone {}: no shape called {kind}", bone.name))?,
@@ -244,19 +257,38 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
             if let Some(tip) = &limb.tip {
                 bone(tip)?;
             }
+            let order: Vec<&String> =
+                std::iter::once(&limb.upper).chain(&limb.between).chain(std::iter::once(&limb.lower)).collect();
+            let mut away = 0u32;
+            for name in &limb.bends_away {
+                match order.iter().position(|bone| *bone == name) {
+                    Some(2) if order.len() == 3 => away |= 1 << 2,
+                    _ => {
+                        return Err(format!(
+                            "limb {}: only a three-bone leg's last joint bends away, not {name}'s",
+                            limb.name
+                        ))
+                    }
+                }
+            }
             let pole = match (limb.pole, limb.straightens) {
                 (Some(pole), _) => Vec3::from_array(pole),
                 (None, true) => Vec3::NEG_Z,
                 (None, false) => super::ik::elbow_pole(limb.side),
             };
+            let chain = Chain {
+                upper: intern(&limb.upper),
+                middle: intern_list(&limb.between),
+                lower: intern(&limb.lower),
+                tip: limb.tip.as_deref().map(intern),
+                away,
+            };
+            if chain.is_digitigrade() {
+                super::ik::DigitigradeLeg::of(&bones, &chain).map_err(|problem| format!("limb {}: {problem}", limb.name))?;
+            }
             Ok(Limb {
                 name: intern(&limb.name),
-                chain: Chain {
-                    upper: intern(&limb.upper),
-                    middle: intern_list(&limb.between),
-                    lower: intern(&limb.lower),
-                    tip: limb.tip.as_deref().map(intern),
-                },
+                chain,
                 side: limb.side,
                 pole,
                 region: regions[upper],
@@ -274,10 +306,7 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
     for (slot, name) in hands.iter_mut().zip(&file.hands) {
         *slot = Some(limb(name)?);
     }
-    let reach = |limb: usize| {
-        let chain = &limbs[limb].chain;
-        chain.bones().filter_map(|name| bones.iter().find(|bone| bone.name == name)).map(|bone| bone.length).sum::<f32>()
-    };
+    let reach = |limb: usize| super::ik::reach_of(&bones, &limbs[limb].chain);
     let leg = reach(limb(&file.measures.leg)?);
     let arm = match &file.measures.arm {
         Some(name) => reach(limb(name)?),
@@ -312,7 +341,7 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
 mod tests {
     use super::*;
     use crate::common::assets::{default_packs, Assets};
-    use crate::common::skeleton::ik::{finish_pose, plant_feet, Reach};
+    use crate::common::skeleton::ik::{finish_pose, plant_feet, solve, Reach};
     use crate::common::skeleton::rig::Pose;
     use crate::common::skeleton::state::{AnimationState, PoseInputs};
 
@@ -441,7 +470,7 @@ to = [0.0, -0.6, 0.1]
 
         let pelvis = rig.posed_bone(&Pose::rest(), &root, rig.index_of("pelvis").unwrap());
         let wanted = pelvis.tail + pelvis.rotation * Vec3::new(0.0, -0.6, 0.1);
-        let ankle = rig.posed_bone(&pose, &root, rig.index_of("shin.l").unwrap()).tail;
+        let ankle = rig.posed_bone(&pose, &root, rig.index_of("metatarsus.l").unwrap()).tail;
         assert!(ankle.distance(wanted) < 1e-3, "the ankle is {} m off a target on the pelvis", ankle.distance(wanted));
     }
 
@@ -462,7 +491,6 @@ to = [0.0, -0.6, 0.1]
     /// same every time, and points straight at what it cannot reach.
     #[test]
     fn a_longer_limb_reaches_within_its_joints() {
-        use crate::common::skeleton::ik::solve;
         let rig = sized(1.6, &[]);
         let tail = *rig.anatomy().limb("tail").expect("the strider's tail is a limb");
         assert_eq!(tail.chain.middle, ["tail.2"]);
@@ -495,6 +523,145 @@ to = [0.0, -0.6, 0.1]
         assert_eq!(solve(&rig, &mut stretched, &root, &tail.chain, far, pole), Reach::Short);
         let tip = rig.posed_bone(&stretched, &root, rig.index_of("tail.3").unwrap()).tail;
         assert!(tip.is_finite() && (tip - base).normalize().dot(Vec3::Z) > 0.99, "a short tail does not point at its target");
+    }
+
+    /// Breaks if the hock bends forward with the knee, or a roll flips mid-stride.
+    #[test]
+    fn a_digitigrade_leg_keeps_its_knee_forward_and_its_hock_back() {
+        let rig = sized(1.6, &[("leg", 1.1)]);
+        let root = Transform::from_xyz(2.0, 0.0, -1.0).with_rotation(Quat::from_rotation_y(0.7));
+        let forward = root.rotation * Vec3::NEG_Z;
+        let at = |pose: &Pose, name: &str| rig.posed_bone(pose, &root, rig.index_of(name).unwrap());
+        for (state, speed, travel) in [
+            (AnimationState::Idle, 0.0, Vec2::ZERO),
+            (AnimationState::RunForward, 4.5, Vec2::Y),
+            (AnimationState::RunForward, 7.5, Vec2::Y),
+            (AnimationState::RunBackward, 4.5, Vec2::NEG_Y),
+            (AnimationState::StrafeLeft, 4.5, Vec2::NEG_X),
+            (AnimationState::CrouchWalk, 3.0, Vec2::Y),
+        ] {
+            let mut previous: Option<Pose> = None;
+            for step in 0..200 {
+                let inputs = PoseInputs { stride: step as f32 / 200.0, speed, travel, ..default() };
+                let pose = finish_pose(&rig, state, &inputs, &root, None);
+                for side in ["l", "r"] {
+                    let hip = at(&pose, &format!("thigh.{side}")).head;
+                    let ankle = at(&pose, &format!("metatarsus.{side}")).tail;
+                    let line = (ankle - hip).normalize();
+                    // Ahead of the hip-to-ankle line; 16 mm at full stretch on this build.
+                    let ahead = |point: Vec3| {
+                        let off = point - hip;
+                        (off - line * off.dot(line)).dot(forward)
+                    };
+                    let knee = ahead(at(&pose, &format!("shin.{side}")).head);
+                    let hock = ahead(at(&pose, &format!("metatarsus.{side}")).head);
+                    assert!(knee > 0.005, "{state:?} at {step}: the {side} knee is {knee} m ahead");
+                    assert!(hock < -0.005, "{state:?} at {step}: the {side} hock is {} m behind", -hock);
+                }
+                if let Some(before) = &previous {
+                    for bone in rig.bones() {
+                        let turned = before.joint(bone.name).angle_between(pose.joint(bone.name));
+                        assert!(turned < 0.2, "{} turns {turned:.2} rad in a step of {state:?}", bone.name);
+                    }
+                }
+                previous = Some(pose);
+            }
+        }
+    }
+
+    /// Fails if `stops` or `bends_away` is misread.
+    #[test]
+    fn a_rig_file_states_stops_and_which_joints_bend_away() {
+        let rig = sized(1.6, &[]);
+        let shin = &rig.bones()[rig.index_of("shin.l").unwrap()];
+        assert_eq!(
+            shin.limit,
+            crate::common::skeleton::joints::JointLimit::Hinge(crate::common::skeleton::joints::Hinge {
+                min: (-80.0f32).to_radians(),
+                max: 55.0f32.to_radians()
+            })
+        );
+        let leg = rig.anatomy().limb("left_leg").unwrap().chain;
+        assert_eq!(leg.away, 1 << 2, "the hock is the third bone's head");
+
+        let mut file = strider();
+        file.limbs[0].bends_away = vec!["thigh.l".into()];
+        assert!(build_rig(&file, &Build { rig: Some("strider".into()), ..default() }).is_err());
+        let mut file = strider();
+        let shin = file.bones.iter().position(|bone| bone.name == "shin.l").unwrap();
+        file.bones[shin].stops = Some([10.0, 20.0]);
+        assert!(build_rig(&file, &Build { rig: Some("strider".into()), ..default() }).is_err());
+    }
+
+    /// Fails if a reversed knee or a splayed digitigrade leg loads.
+    #[test]
+    fn a_rig_file_refuses_a_leg_it_cannot_solve() {
+        let build = Build { rig: Some("strider".into()), ..default() };
+        let mut reversed = strider();
+        reversed.limbs[0].bends_away = vec!["shin.l".into()];
+        assert!(build_rig(&reversed, &build).is_err(), "a reversed knee loaded");
+
+        let mut splayed = strider();
+        let meta = splayed.bones.iter().position(|bone| bone.name == "metatarsus.l").unwrap();
+        splayed.bones[meta].tail[0] -= 0.1;
+        let foot = splayed.bones.iter().position(|bone| bone.name == "foot.l").unwrap();
+        splayed.bones[foot].head[0] -= 0.1;
+        assert!(build_rig(&splayed, &build).is_err(), "a splayed digitigrade leg loaded");
+    }
+
+    /// Breaks if the solve passes the stops the ragdoll enforces, or the leg cannot reach its own
+    /// length.
+    #[test]
+    fn a_digitigrade_leg_stays_inside_its_stops_and_reaches_its_length() {
+        let rig = sized(1.6, &[]);
+        let root = Transform::IDENTITY;
+        let leg = *rig.anatomy().limb("left_leg").unwrap();
+        let hip = rig.posed_bone(&Pose::rest(), &root, rig.index_of("thigh.l").unwrap()).head;
+        assert!((rig.anatomy().leg - crate::common::skeleton::ik::chain_length(&rig, &leg.chain)).abs() < 1e-6);
+
+        for step in 0..=40 {
+            let turn = Quat::from_rotation_x(step as f32 / 40.0 * 2.4 - 1.2);
+            for distance in [0.1, 0.3, 0.5, 0.7, rig.anatomy().leg * 0.999, 1.5] {
+                let target = hip + turn * Vec3::NEG_Y * distance;
+                let mut pose = Pose::rest();
+                let reach = solve(&rig, &mut pose, &root, &leg.chain, target, leg.pole);
+                for name in ["shin.l", "metatarsus.l"] {
+                    let index = rig.index_of(name).unwrap();
+                    let bone = &rig.bones()[index];
+                    let parent = rig.posed_bone(&pose, &root, bone.parent.unwrap()).rotation;
+                    let along = (parent * bone.rest).inverse() * rig.posed_bone(&pose, &root, index).rotation * Vec3::Y;
+                    assert!(bone.limit.nearest(along).distance(along) < 1e-3, "{name} is past its stops reaching {distance} m");
+                }
+                if distance < 1.0 && distance > 0.4 {
+                    assert_eq!(reach, Reach::Reached, "{distance} m is within the leg's {} m", rig.anatomy().leg);
+                    let ankle = rig.posed_bone(&pose, &root, rig.index_of("metatarsus.l").unwrap()).tail;
+                    assert!(ankle.distance(target) < 1e-3, "the ankle is {} m off", ankle.distance(target));
+                }
+            }
+        }
+    }
+
+    /// Breaks if the tail rolls half a turn as its target passes over its base.
+    #[test]
+    fn a_tail_swept_over_its_base_does_not_roll_over() {
+        let rig = sized(1.6, &[]);
+        let tail = *rig.anatomy().limb("tail").unwrap();
+        let root = Transform::IDENTITY;
+        let base = rig.posed_bone(&Pose::rest(), &root, rig.index_of("tail.1").unwrap()).head;
+        let mut previous: Option<Pose> = None;
+        for step in 0..=60 {
+            let along = step as f32 / 60.0 * 0.6 - 0.3;
+            let target = base + Vec3::new(0.0, 0.45, along);
+            let mut pose = Pose::rest();
+            solve(&rig, &mut pose, &root, &tail.chain, target, Vec3::Y);
+            if let Some(before) = &previous {
+                for name in tail.chain.bones() {
+                    let turned = before.joint(name).angle_between(pose.joint(name));
+                    assert!(turned < 0.5, "{name} turns {turned:.2} rad as the target passes {along} m over the base");
+                }
+            }
+            previous = Some(pose);
+        }
     }
 
     /// Feet let go by a clip's plant weight are where the walk put them, not on the floor.
@@ -535,7 +702,7 @@ to = [0.0, -0.6, 0.1]
 
         let pelvis = rig.posed_bone(&Pose::rest(), &root, rig.index_of("pelvis").unwrap());
         let wanted = in_body.lerp(pelvis.tail + pelvis.rotation * on_pelvis, 0.5);
-        let ankle = rig.posed_bone(&pose, &root, rig.index_of("shin.l").unwrap()).tail;
+        let ankle = rig.posed_bone(&pose, &root, rig.index_of("metatarsus.l").unwrap()).tail;
         assert!(ankle.distance(wanted) < 1e-3, "the ankle is {} m off the halfway point", ankle.distance(wanted));
     }
 }

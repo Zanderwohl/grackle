@@ -235,8 +235,12 @@ A clip names a rig's parts by name: an effector's `chain` is any limb
 after the six every rig has (`Anatomy::region_names`); a taunt's claims are
 names, resolved against each body's rig as it taunts.
 
-**`Class::Strider`** is the first class on a rig file: two legs, a neck, a tail
-and no hands, so its weapon rides on the rig's `mount` and nothing grips. A
+**`Class::Strider`** is the first class on a rig file: two digitigrade legs, a
+neck, a tail and no hands, so its weapon rides on the rig's `mount` and nothing
+grips. A limb's `bends_away` names the joint that bends away from its pole,
+and only a three-bone leg's last (knee forward, hock back) is accepted: it is
+solved exactly by `ik::digitigrade`, the metatarsus keeping its rest angle to
+the thigh, within the knee's and hock's own hinge `stops`. A
 taunt names another rig's clip in its `rigs`, and a body is offered only the
 taunts it has a clip for. `--class KEY` plays every body as that class until
 a class can be picked (`PlayAs`, read by `publish_game_rules`). The humanoid's
