@@ -17,7 +17,7 @@
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
-use crate::common::app_mode::{showing_the_world, AppMode};
+use crate::common::app_mode::showing_the_world;
 use crate::common::class::Stance;
 use crate::common::damage::PlayerId;
 use crate::common::class::{Class, ClassBuilds};
@@ -82,7 +82,7 @@ impl Plugin for SkeletonPlugin {
             .add_systems(Startup, crate::common::layer_file::load_layers_at_startup)
             .add_systems(Update, (
                 describe_player_bodies
-                    .run_if(in_state(AppMode::Play))
+                    .run_if(crate::common::app_mode::simulating)
                     .run_if(crate::common::net::has_authority),
                 // Not gated on `AppMode::Play`: a replicated body can arrive
                 // before this process has finished entering the round, and a
@@ -148,7 +148,7 @@ impl Plugin for GameTimePlugin {
                     advance_gaits.after(step_player),
                 ).run_if(not(lightyear::prelude::is_in_rollback)),
                 follow_stance.after(step_player),
-            ).run_if(in_state(AppMode::Play)))
+            ).run_if(crate::common::app_mode::simulating))
         ;
     }
 }
@@ -588,6 +588,8 @@ pub fn draw_skeletons(
 mod tests {
     use crate::common::skeleton::rig::{bone, default_humanoid};
     use lightyear::prelude::input::native::ActionState;
+
+    use crate::common::app_mode::AppMode;
 
     use crate::game::player::PlayerInput;
 

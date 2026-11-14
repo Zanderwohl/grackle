@@ -51,7 +51,8 @@ impl Plugin for HitboxPlugin {
                 PostUpdate,
                 draw_hitboxes
                     .after(TransformSystems::Propagate)
-                    .run_if(showing_the_world),
+                    .run_if(showing_the_world)
+                    .run_if(resource_exists::<GizmoConfigStore>),
             )
         ;
     }

@@ -76,7 +76,7 @@ impl Plugin for DamagePlugin {
                 FixedUpdate,
                 (DamageSystems::Deal, DamageSystems::Apply, DamageSystems::Resolve)
                     .chain()
-                    .run_if(in_state(AppMode::Play))
+                    .run_if(crate::common::app_mode::simulating)
                     .run_if(has_authority),
             )
             .add_systems(FixedUpdate, apply_damage.in_set(DamageSystems::Apply))
@@ -92,9 +92,10 @@ impl Plugin for DamagePlugin {
             .add_systems(Update, (spawn_damage_numbers, fade_damage_numbers, announce_deaths).chain())
             .add_systems(
                 EguiPrimaryContextPass,
-                draw_damage_numbers.run_if(in_state(AppMode::Play)),
+                draw_damage_numbers.run_if(crate::common::app_mode::simulating),
             )
             .add_systems(OnExit(AppMode::Play), clear_damage_numbers)
+            .add_systems(OnExit(AppMode::Weapon), clear_damage_numbers)
         ;
     }
 }

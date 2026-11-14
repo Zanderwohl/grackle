@@ -35,19 +35,47 @@ struct WeaponFile {
     weapons: BTreeMap<String, WeaponEntry>,
 }
 
-/// [`Weapon`] minus the id, which is the key.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct WeaponEntry {
-    name_key: String,
+/// [`Weapon`] minus the id, which is the key. Public for the weapon editor,
+/// which edits these and writes them back.
+///
+/// Field order is the order a new entry is written in, which is the shipped
+/// file's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeaponEntry {
+    pub name_key: String,
     /// Not checked here: that would mean reading every model in the pack at
     /// startup. A bad name draws nothing.
     #[serde(default)]
-    model: Option<String>,
-    bucket: u8,
-    deploy: f32,
-    primary: Mounted,
-    secondary: Mounted,
-    magazine: Magazine,
+    pub model: Option<String>,
+    pub bucket: u8,
+    pub deploy: f32,
+    pub magazine: Magazine,
+    pub primary: Mounted,
+    pub secondary: Mounted,
+}
+
+impl WeaponEntry {
+    pub fn into_weapon(self, key: &str) -> Weapon {
+        Weapon {
+            id: WeaponId::of(key),
+            key: key.to_string(),
+            name_key: self.name_key,
+            model: self.model,
+            bucket: self.bucket,
+            deploy: self.deploy,
+            primary: self.primary,
+            secondary: self.secondary,
+            magazine: self.magazine,
+        }
+    }
+}
+
+/// A weapon as a pack file states it, before it has met the other packs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PackWeapon {
+    pub pack: PathBuf,
+    pub key: String,
+    pub entry: WeaponEntry,
 }
 
 /// Keyed by [`Class::key`].
@@ -80,17 +108,175 @@ struct SlotEntry {
 /// Lowest priority first. A missing file is normal; one that will not parse
 /// is logged.
 pub fn load_catalog(assets: &Assets, packs: &[PathBuf]) -> WeaponCatalog {
-    let mut catalog = WeaponCatalog::default();
+    catalog_of(assets, packs, &read_pack_weapons(assets, packs))
+}
 
+/// Every pack's weapons as written, lowest priority first and in key order
+/// within a pack.
+pub fn read_pack_weapons(assets: &Assets, packs: &[PathBuf]) -> Vec<PackWeapon> {
+    let mut weapons = Vec::new();
     for pack in packs {
-        load_weapons(assets, pack, &mut catalog);
+        let Some(text) = read(assets, pack, WEAPONS_FILE) else { continue };
+        match parse_weapons(&text) {
+            Ok(entries) => weapons.extend(entries.into_iter().map(|(key, entry)| PackWeapon {
+                pack: pack.clone(),
+                key,
+                entry,
+            })),
+            Err(e) => error!("{}/{WEAPONS_FILE} will not parse: {e}", pack.display()),
+        }
+    }
+    weapons
+}
+
+pub fn parse_weapons(text: &str) -> Result<Vec<(String, WeaponEntry)>, String> {
+    let file: WeaponFile = toml::from_str(text).map_err(|e| e.to_string())?;
+    Ok(file.weapons.into_iter().collect())
+}
+
+/// Every pack's loadouts as written, read once so a catalog can be rebuilt
+/// from them without touching the disk.
+#[derive(Debug, Clone, Default)]
+pub struct LoadoutFiles(Vec<(PathBuf, LoadoutFile)>);
+
+impl LoadoutFiles {
+    /// Each class slot that may carry or starts with `key`.
+    pub fn naming(&self, key: &str) -> Vec<(PathBuf, String, Slot)> {
+        let mut found = Vec::new();
+        for (pack, file) in &self.0 {
+            for (class, entry) in &file.loadouts {
+                for (slot, choices) in &entry.slots {
+                    if choices.permitted.iter().any(|name| name == key) || choices.default.as_deref() == Some(key) {
+                        found.push((pack.clone(), class.clone(), *slot));
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// As these files would read with each `(from, to)` weapon renamed, in order.
+    pub fn renamed(&self, renames: &[(String, String)]) -> LoadoutFiles {
+        let mut files = self.clone();
+        for (_, file) in &mut files.0 {
+            for entry in file.loadouts.values_mut() {
+                for choices in entry.slots.values_mut() {
+                    for (from, to) in renames {
+                        for name in choices.permitted.iter_mut().chain(choices.default.iter_mut()) {
+                            if name == from {
+                                *name = to.clone();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        files
+    }
+}
+
+pub fn read_loadouts(assets: &Assets, packs: &[PathBuf]) -> LoadoutFiles {
+    let mut files = Vec::new();
+    for pack in packs {
+        let Some(text) = read(assets, pack, LOADOUTS_FILE) else { continue };
+        match toml::from_str(&text) {
+            Ok(file) => files.push((pack.clone(), file)),
+            Err(e) => error!("{}/{LOADOUTS_FILE} will not parse: {e}", pack.display()),
+        }
+    }
+    LoadoutFiles(files)
+}
+
+/// The catalog these weapons make, with every pack's loadouts read against
+/// them. A weapon with a [`WeaponProblem`] is left out, with a line saying why.
+pub fn catalog_of(assets: &Assets, packs: &[PathBuf], weapons: &[PackWeapon]) -> WeaponCatalog {
+    catalog_with(weapons, &read_loadouts(assets, packs))
+}
+
+pub fn catalog_with(weapons: &[PackWeapon], loadouts: &LoadoutFiles) -> WeaponCatalog {
+    let mut catalog = WeaponCatalog::default();
+    for weapon in weapons {
+        match problem(&catalog, weapon) {
+            Some(why) => error!("{}/{WEAPONS_FILE}: {why}; ignoring it", weapon.pack.display()),
+            None => catalog.insert(weapon.entry.clone().into_weapon(&weapon.key)),
+        }
     }
     // A separate pass, so a loadout can name a weapon from a later pack.
-    for pack in packs {
-        load_loadouts(assets, pack, &mut catalog);
+    for (pack, file) in &loadouts.0 {
+        apply_loadouts(pack, file, &mut catalog);
     }
-
     catalog
+}
+
+/// Why a weapon is left out of the catalog.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WeaponProblem {
+    Collides { key: String, with: String },
+    Bucket { key: String, bucket: u8 },
+    Deploy { key: String, deploy: f32 },
+}
+
+/// English, for the log.
+impl std::fmt::Display for WeaponProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WeaponProblem::Collides { key, with } => write!(f, "{key} collides with {with}, already loaded"),
+            WeaponProblem::Bucket { key, bucket } => {
+                write!(f, "{key} is in bucket {bucket}, which no key selects (1–{BUCKETS})")
+            }
+            WeaponProblem::Deploy { key, deploy } => write!(f, "{key} deploys in {deploy} s"),
+        }
+    }
+}
+
+impl WeaponProblem {
+    /// Through the lang layer, for the weapon editor.
+    pub fn describe(&self) -> String {
+        match self {
+            WeaponProblem::Collides { key, with } => {
+                crate::get!("weapon_editor.problems.collides", "key", key, "with", with)
+            }
+            WeaponProblem::Bucket { key, bucket } => {
+                crate::get!("weapon_editor.problems.bucket", "key", key, "bucket", bucket, "most", BUCKETS)
+            }
+            WeaponProblem::Deploy { key, deploy } => {
+                crate::get!("weapon_editor.problems.deploy", "key", key, "deploy", deploy)
+            }
+        }
+    }
+}
+
+/// Why each weapon would be left out of the catalog, in the order given.
+/// What the loader logs and what the weapon editor lists are this.
+pub fn problems(weapons: &[PackWeapon]) -> Vec<(usize, WeaponProblem)> {
+    let mut catalog = WeaponCatalog::default();
+    let mut found = Vec::new();
+    for (index, weapon) in weapons.iter().enumerate() {
+        match problem(&catalog, weapon) {
+            Some(why) => found.push((index, why)),
+            None => catalog.insert(weapon.entry.clone().into_weapon(&weapon.key)),
+        }
+    }
+    found
+}
+
+/// Against the weapons accepted so far.
+fn problem(catalog: &WeaponCatalog, weapon: &PackWeapon) -> Option<WeaponProblem> {
+    let PackWeapon { key, entry, .. } = weapon;
+    // A hash collision, not an override: an override reuses the name and
+    // so the `name_key` would normally match.
+    if let Some(already) = catalog.get(WeaponId::of(key))
+        && already.name_key != entry.name_key
+    {
+        return Some(WeaponProblem::Collides { key: key.clone(), with: already.key.clone() });
+    }
+    if !(1..=BUCKETS).contains(&entry.bucket) {
+        return Some(WeaponProblem::Bucket { key: key.clone(), bucket: entry.bucket });
+    }
+    if !(entry.deploy >= 0.0) {
+        return Some(WeaponProblem::Deploy { key: key.clone(), deploy: entry.deploy });
+    }
+    None
 }
 
 fn read(assets: &Assets, pack: &Path, file: &str) -> Option<String> {
@@ -111,92 +297,24 @@ fn read(assets: &Assets, pack: &Path, file: &str) -> Option<String> {
     }
 }
 
-fn load_weapons(assets: &Assets, pack: &Path, catalog: &mut WeaponCatalog) {
-    let Some(text) = read(assets, pack, WEAPONS_FILE) else { return };
-
-    let file: WeaponFile = match toml::from_str(&text) {
-        Ok(file) => file,
-        Err(e) => {
-            error!("{}/{WEAPONS_FILE} will not parse: {e}", pack.display());
-            return;
-        }
-    };
-
-    for (name, entry) in file.weapons {
-        let id = WeaponId::of(&name);
-
-        // A hash collision, not an override: an override reuses the name and
-        // so the `name_key` would normally match.
-        if let Some(already) = catalog.get(id) {
-            if already.name_key != entry.name_key {
-                error!(
-                    "{}/{WEAPONS_FILE}: {name} collides with a weapon already loaded; ignoring it",
-                    pack.display()
-                );
-                continue;
-            }
-        }
-
-        if !(1..=BUCKETS).contains(&entry.bucket) {
-            error!(
-                "{}/{WEAPONS_FILE}: {name} is in bucket {}, which no key selects (1–{BUCKETS}); \
-                 ignoring it",
-                pack.display(),
-                entry.bucket
-            );
-            continue;
-        }
-        if !(entry.deploy >= 0.0) {
-            error!(
-                "{}/{WEAPONS_FILE}: {name} deploys in {} s; ignoring it",
-                pack.display(),
-                entry.deploy
-            );
-            continue;
-        }
-
-        catalog.insert(Weapon {
-            id,
-            key: name.clone(),
-            name_key: entry.name_key,
-            model: entry.model,
-            bucket: entry.bucket,
-            deploy: entry.deploy,
-            primary: entry.primary,
-            secondary: entry.secondary,
-            magazine: entry.magazine,
-        });
-    }
-}
-
-fn load_loadouts(assets: &Assets, pack: &Path, catalog: &mut WeaponCatalog) {
-    let Some(text) = read(assets, pack, LOADOUTS_FILE) else { return };
-
-    let file: LoadoutFile = match toml::from_str(&text) {
-        Ok(file) => file,
-        Err(e) => {
-            error!("{}/{LOADOUTS_FILE} will not parse: {e}", pack.display());
-            return;
-        }
-    };
-
-    for (key, entry) in file.loadouts {
-        let Some(class) = Class::named(&key) else {
+fn apply_loadouts(pack: &Path, file: &LoadoutFile, catalog: &mut WeaponCatalog) {
+    for (key, entry) in &file.loadouts {
+        let Some(class) = Class::named(key) else {
             error!("{}/{LOADOUTS_FILE}: no class called {key}", pack.display());
             continue;
         };
 
         let mut loadout = Loadout {
-            hat: entry.hat,
+            hat: entry.hat.clone(),
             health: entry.health.filter(|health| *health > 0),
             armor: entry.armor,
             ..default()
         };
-        for (slot, entry) in entry.slots {
-            let Some(choices) = slot_choices(catalog, &key, slot, &entry, pack) else {
+        for (slot, entry) in &entry.slots {
+            let Some(choices) = slot_choices(catalog, key, *slot, entry, pack) else {
                 continue;
             };
-            loadout.set(slot, choices);
+            loadout.set(*slot, choices);
         }
         catalog.set_loadout(class, loadout);
     }

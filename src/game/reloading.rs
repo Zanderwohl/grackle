@@ -8,7 +8,6 @@
 
 use bevy::prelude::*;
 
-use crate::common::app_mode::AppMode;
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalog};
 use crate::game::held::{perform_weapon_clips, HeldModel, Performance, WeaponClip};
 use crate::game::player::{LocalPlayer, Watched};
@@ -27,7 +26,7 @@ impl Plugin for ReloadingPlugin {
             perform_reloads
                 .after(crate::game::recoil::start_recoil)
                 .before(perform_weapon_clips)
-                .run_if(in_state(AppMode::Play)),
+                .run_if(crate::common::app_mode::simulating),
         );
     }
 }

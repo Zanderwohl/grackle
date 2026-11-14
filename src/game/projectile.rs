@@ -168,6 +168,7 @@ impl Plugin for ProjectilePlugin {
             )
             .init_resource::<ProjectileAssets>()
             .add_systems(OnExit(AppMode::Play), clear_projectiles)
+            .add_systems(OnExit(AppMode::Weapon), clear_projectiles)
         ;
     }
 }

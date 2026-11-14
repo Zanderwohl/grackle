@@ -129,7 +129,7 @@ impl Plugin for ViewmodelPlugin {
                 find_the_apparent_muzzle
                     .after(place_camera)
                     .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
-                    .run_if(in_state(AppMode::Play)),
+                    .run_if(crate::common::app_mode::simulating),
             )
             .add_systems(OnExit(AppMode::Play), |mut muzzle: ResMut<ApparentMuzzle>| {
                 muzzle.0 = None;
@@ -146,7 +146,7 @@ impl Plugin for ViewmodelPlugin {
                 show_it_only_in_first_person,
             )
                 .chain()
-                .run_if(in_state(AppMode::Play)),
+                .run_if(crate::common::app_mode::simulating),
         );
     }
 }

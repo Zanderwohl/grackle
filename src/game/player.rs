@@ -286,6 +286,11 @@ pub struct LocalPlayer;
 #[derive(Component, Default, Debug)]
 pub struct Watched;
 
+/// A watched body whose view follows its aim exactly, rather than easing onto it: the weapon
+/// editor's shooter, whose shots must leave from the middle of the view.
+#[derive(Component, Default, Debug)]
+pub struct UneasedAim;
+
 /// The body the view is inside: ours, or the one a spectator watches.
 pub type Viewed = Or<(With<LocalPlayer>, With<Watched>)>;
 
@@ -664,7 +669,7 @@ pub fn place_camera(
     through: Option<Res<ThroughCamera>>,
     fixed: Res<Time<Fixed>>,
     body: Option<Single<(&Transform, &Stance, &Player), (With<LocalPlayer>, Without<PlayerCamera>)>>,
-    watched: Option<Single<(Entity, &Transform, &Stance, &Player), (With<Watched>, Without<LocalPlayer>, Without<PlayerCamera>)>>,
+    watched: Option<Single<(Entity, &Transform, &Stance, &Player, Has<UneasedAim>), (With<Watched>, Without<LocalPlayer>, Without<PlayerCamera>)>>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
     // Ducking lowers the eye and the third-person pivot with it.
@@ -682,8 +687,11 @@ pub fn place_camera(
             (eye(transform, stance, player), ours)
         }
         (None, Some(watched), _) => {
-            let (whom, transform, stance, player) = watched.into_inner();
-            let aim = eased.get_or_insert(WatchedAim { whom, yaw: player.yaw, pitch: player.pitch }).ease(whom, player.yaw, player.pitch, time.delta_secs());
+            let (whom, transform, stance, player, uneased) = watched.into_inner();
+            let aim = match uneased {
+                true => (player.yaw, player.pitch),
+                false => eased.get_or_insert(WatchedAim { whom, yaw: player.yaw, pitch: player.pitch }).ease(whom, player.yaw, player.pitch, time.delta_secs()),
+            };
             (eye(transform, stance, player), aim)
         }
         (None, None, _) if let Some(through) = through => {

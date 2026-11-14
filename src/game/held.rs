@@ -8,7 +8,6 @@
 
 use bevy::prelude::*;
 
-use crate::common::app_mode::AppMode;
 use crate::common::assets::Assets as PackAssets;
 use crate::common::class::Class;
 use std::collections::BTreeMap;
@@ -223,7 +222,7 @@ impl Plugin for HeldWeaponPlugin {
             .init_resource::<crate::common::clip_file::NamedClips>()
             .add_systems(Startup, load_shared_weapon_clips)
             .add_systems(Update, (dress_held_weapons, show_held_weapons).chain())
-            .add_systems(Update, bake_what_we_carry.run_if(in_state(AppMode::Play)))
+            .add_systems(Update, bake_what_we_carry.run_if(crate::common::app_mode::simulating))
             // Before propagation, with the bone meshes, or a held part is drawn
             // a frame behind the hand.
             .add_systems(

@@ -812,6 +812,8 @@ editor = "Map Editor"
 prop = "Prop Editor"
 animation = "Animation Editor"
 material = "Material Editor"
+weapon = "Weapon Editor"
+lang = "Lang Editor"
 play = "Play"
 
 # Every authoring mode's File pulldown. The entries mean whatever the thing
@@ -842,6 +844,54 @@ untitled = "Untitled prop"
 
 [material]
 untitled = "Untitled material"
+
+[lang_editor]
+untitled = "Untitled lang file"
+filter = "Filter"
+problems_only = "Problems only"
+add_key = "Add key…"
+rename = "Rename…"
+remove = "Remove"
+copy_reference = "Copy from en-US"
+no_keys = "No keys."
+
+[lang_editor.browser]
+open = "Open"
+duplicate = "Duplicate…"
+delete = "Delete…"
+empty = "No lang files."
+
+[lang_editor.count]
+missing = "{ count } missing"
+stub = "{ count } stubs"
+placeholders = "{ count } placeholder mismatches"
+extra = "{ count } not in en-US"
+
+[lang_editor.mark]
+missing = "missing"
+stub = "stub"
+placeholders = "placeholders"
+placeholders_detail = "en-US: { reference }\nHere: { here }"
+extra = "not in en-US"
+
+[lang_editor.dialog]
+key = "Key"
+value = "Value"
+code = "Language code"
+pack = "Pack"
+ok = "OK"
+cancel = "Cancel"
+delete = "Delete { file } from disk?"
+unsaved = "Unsaved changes"
+discard = "Open { file } and discard the changes to this file?"
+
+[lang_editor.error]
+bad_key = "A key is letters, digits, _ and -, joined by dots."
+bad_code = "A language code is letters, digits, _ and -."
+exists = "`{ key }` already exists."
+not_a_table = "`{ key }` holds a value, so nothing can go under it."
+missing = "`{ key }` is not in the file."
+file_exists = "{ file } already exists."
 
 [prop.menu]
 frame = "Frame"
@@ -1154,3 +1204,177 @@ title = "Palette"
 unsided = "No side"
 add = "Add"
 new_role = "role"
+
+[weapon_editor]
+primary = "Primary"
+secondary = "Secondary"
+magazine = "Magazine"
+model = "Model"
+model_none = "None"
+model_missing = "No pack has this model"
+open_in_prop = "Open in Prop Editor"
+open_in_animation = "Open in Animation Editor"
+prop_unsaved = "The prop editor has unsaved changes to another prop"
+
+[weapon_editor.range]
+play = "Play"
+pause = "Pause"
+restart = "Restart"
+previous = "Previous beat"
+next = "Next beat"
+speed = "Speed"
+
+[weapon_editor.beats]
+shoot = "{ button } at { distance } m"
+shoot_strafing = "{ button } at a strafer, { distance } m"
+burn = "{ button }, then afterburn"
+push = "{ button } pushes"
+reflect = "{ button } reflects a rocket"
+extinguish = "{ button } puts out a teammate"
+rocket_jump = "{ button } rocket jump"
+stub = "{ button }: no behavior yet"
+deploy = "Draw"
+reload = "Empty and reload"
+
+[weapon_editor.outcome]
+hits = "{ beat }: { hits } hits, { damage } damage"
+killed = ", killed at { seconds } s"
+reflected = ", reflected"
+not_reflected = ", not reflected"
+speed = ", fastest { speed } m/s"
+
+[weapon_editor.tabs]
+weapons = "Weapons"
+weapon = "Weapon"
+
+[weapon_editor.browser]
+new = "New"
+duplicate = "Duplicate"
+override = "Override in pack"
+rename = "Rename"
+delete = "Delete"
+pack = "Pack"
+ok = "OK"
+cancel = "Cancel"
+rename_loadouts = "Rename in loadouts too"
+confirm_delete = "Delete { key }"
+
+[weapon_editor.key]
+malformed = "Lowercase letters, digits and underscores only"
+taken = "Already a weapon's key"
+
+[weapon_editor.named_by]
+nothing = "Nothing names it"
+loadout = "{ class }'s { slot } slot, in { pack }"
+pickup = "{ name }, in the open map"
+
+[weapon_editor.muzzle]
+yes = "Has a muzzle"
+no = "No muzzle"
+
+[weapon_editor.clips]
+fire = "Fire"
+alt_fire = "Alt fire"
+recoil = "Recoil"
+alt_recoil = "Alt recoil"
+reload = "Reload"
+body_reload = "Reload (third person)"
+deploy = "Deploy"
+
+[weapon_editor.clip_state]
+own = "Its own"
+shared = "Shared"
+none = "None"
+
+[weapon_editor.fields]
+key = "Key"
+name_key = "Name key"
+model = "Model"
+bucket = "Bucket"
+deploy = "Deploy"
+clip = "Clip"
+reserve = "Reserve"
+reload = "Reload"
+reload_one_at_a_time = "One round at a time"
+first_reload = "First round"
+action = "Action"
+cadence = "Cadence"
+cost = "Cost"
+interval = "Interval"
+rounds = "Rounds"
+fraction = "Charge"
+range = "Range"
+range_m = "Range"
+damage = "Damage"
+headshot_multiplier = "Headshot ×"
+shove_per_damage = "Shove per damage"
+shove_radius_m = "Shove radius"
+pellets = "Pellets"
+across = "Across"
+spread = "Spread"
+kill_shove = "Kill shove"
+speed = "Speed"
+lift = "Lift"
+radius = "Radius"
+radius_m = "Radius"
+ramp_up = "Ramp-up"
+falloff = "Falloff"
+near = "Near"
+far = "Far"
+scale = "Scale"
+initial_speed = "Speed"
+gravity_factor = "Gravity"
+air_resistance = "Air resistance"
+spin_rate = "Spin"
+max_bounces = "Bounces"
+restitution = "Restitution"
+max_lifetime = "Fuse"
+explodes_at_last_bounce = "Explodes at last bounce"
+explodes_at_lifetime_end = "Explodes at fuse end"
+explosion_radius = "Blast radius"
+splash_at_edge = "Splash at edge"
+knockback = "Knockback"
+rays = "Rays"
+afterburn_duration_s = "Afterburn"
+afterburn_damage = "Afterburn damage"
+afterburn_interval_s = "Afterburn interval"
+push = "Push"
+reflect = "Reflects"
+reflect_speed = "Reflect speed"
+extinguish = "Extinguishes"
+heal_per_second = "Heal per second"
+duration = "Duration"
+cooldown = "Cooldown"
+zoom = "Zoom"
+
+[weapon_editor.variants]
+hitscan = "Hitscan"
+projectile = "Projectile"
+flame = "Flame"
+airblast = "Airblast"
+heal_beam = "Heal beam"
+invulnerable = "Invulnerable"
+scope = "Scope"
+none = "None"
+semi = "Semi-automatic"
+automatic = "Automatic"
+free = "Free"
+ammo = "Ammo"
+charge = "Charge"
+
+[weapon_editor.units]
+meters = " m"
+seconds = " s"
+meters_per_second = " m/s"
+degrees = "°"
+radians_per_second = " rad/s"
+per_second = " /s"
+times = "×"
+fraction = ""
+ratio = ":1"
+meters_per_second_per_damage = " m/s per damage"
+
+[weapon_editor.problems]
+collides = "{ key } collides with { with }, already loaded, and is left out"
+bucket = "{ key } is in bucket { bucket }, which no key selects (1–{ most }), and is left out"
+deploy = "{ key } deploys in { deploy } s, and is left out"
